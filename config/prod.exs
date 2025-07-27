@@ -7,8 +7,7 @@ config :livechain, LivechainWeb.Endpoint,
   url: [host: "example.com", port: 80],
   cache_static_manifest: "priv/static/cache_manifest.json"
 
-# Configures Swoosh API Client
-config :swoosh, api_client: Swoosh.ApiClient.Finch, finch_name: Livechain.Finch
+# Email configuration removed - not needed for this application
 
 # Do not print debug messages in production
 config :logger, level: :info
