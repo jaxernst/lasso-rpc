@@ -27,7 +27,8 @@ defmodule Livechain.MixProject do
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},
       {:plug_cowboy, "~> 2.5"},
-      {:broadway, "~> 1.0"}
+      {:broadway, "~> 1.0"},
+      {:yaml_elixir, "~> 2.9"}
     ]
   end
 end

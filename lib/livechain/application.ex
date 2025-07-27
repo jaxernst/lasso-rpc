@@ -10,10 +10,13 @@ defmodule Livechain.Application do
     children = [
       # Start PubSub for real-time messaging
       {Phoenix.PubSub, name: Livechain.PubSub},
-      
+
+      # Start process registry for centralized process management
+      {Livechain.RPC.ProcessRegistry, name: Livechain.RPC.ProcessRegistry},
+
       # Start the WebSocket supervisor
       Livechain.RPC.WSSupervisor,
-      
+
       # Start Phoenix endpoint
       LivechainWeb.Endpoint
     ]
@@ -21,6 +24,11 @@ defmodule Livechain.Application do
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Livechain.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    with {:ok, supervisor} <- Supervisor.start_link(children, opts) do
+      # Attach telemetry handlers after supervisor is started
+      Livechain.Telemetry.attach_default_handlers()
+      {:ok, supervisor}
+    end
   end
 end

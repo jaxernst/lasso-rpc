@@ -1,0 +1,251 @@
+# Livechain Chain Configuration
+# Defines multiple RPC providers per blockchain for redundancy and speed optimization
+
+chains:
+  ethereum:
+    chain_id: 1
+    name: "Ethereum Mainnet"
+    block_time: 12000 # Average block time in ms
+
+    # Provider pool - multiple providers for redundancy
+    providers:
+      - id: "ethereum_infura"
+        name: "Infura"
+        priority: 1 # Lower number = higher priority
+        type: "paid" # paid, public, dedicated
+        url: "https://mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000 # requests per day
+        latency_target: 100 # target latency in ms
+        reliability: 0.999 # expected uptime
+
+      - id: "ethereum_alchemy"
+        name: "Alchemy"
+        priority: 2
+        type: "paid"
+        url: "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        ws_url: "wss://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        api_key_required: true
+        rate_limit: 300000
+        latency_target: 80
+        reliability: 0.999
+
+      - id: "ethereum_ankr"
+        name: "Ankr Public"
+        priority: 3
+        type: "public"
+        url: "https://rpc.ankr.com/eth"
+        ws_url: "wss://rpc.ankr.com/eth/ws"
+        api_key_required: false
+        rate_limit: 500 # much lower for public
+        latency_target: 200
+        reliability: 0.95
+
+      - id: "ethereum_llamarpc"
+        name: "LlamaRPC"
+        priority: 4
+        type: "public"
+        url: "https://eth.llamarpc.com"
+        ws_url: "wss://eth.llamarpc.com"
+        api_key_required: false
+        rate_limit: 200
+        latency_target: 300
+        reliability: 0.90
+
+    # Connection settings
+    connection:
+      heartbeat_interval: 30000
+      reconnect_interval: 5000
+      max_reconnect_attempts: 10
+      subscription_topics: ["newHeads", "logs"]
+
+    # Aggregation settings
+    aggregation:
+      deduplication_window: 2000 # ms to wait for duplicate messages
+      min_confirmations: 1 # minimum providers that must confirm
+      max_providers: 3 # maximum concurrent providers to use
+      max_cache_size: 10000 # maximum number of cached messages
+
+  base:
+    chain_id: 8453
+    name: "Base Mainnet"
+    block_time: 2000
+
+    providers:
+      - id: "base_publicnode"
+        name: "PublicNode"
+        priority: 1
+        type: "public"
+        url: "https://base-rpc.publicnode.com"
+        ws_url: "wss://base-rpc.publicnode.com"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 150
+        reliability: 0.98
+
+      - id: "base_ankr"
+        name: "Ankr Base"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ankr.com/base"
+        ws_url: "wss://rpc.ankr.com/base/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 200
+        reliability: 0.95
+
+      - id: "base_infura"
+        name: "Infura Base"
+        priority: 3
+        type: "paid"
+        url: "https://base-mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://base-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000
+        latency_target: 100
+        reliability: 0.999
+
+      - id: "base_alchemy"
+        name: "Alchemy Base"
+        priority: 4
+        type: "paid"
+        url: "https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        ws_url: "wss://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        api_key_required: true
+        rate_limit: 300000
+        latency_target: 80
+        reliability: 0.999
+
+    connection:
+      heartbeat_interval: 20000 # Base is faster, more frequent heartbeats
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 1000 # Faster chain, shorter window
+      min_confirmations: 1
+      max_providers: 4
+
+  polygon:
+    chain_id: 137
+    name: "Polygon"
+    block_time: 2100
+
+    providers:
+      - id: "polygon_infura"
+        name: "Infura Polygon"
+        priority: 1
+        type: "paid"
+        url: "https://polygon-mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://polygon-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000
+        latency_target: 120
+        reliability: 0.999
+
+      - id: "polygon_alchemy"
+        name: "Alchemy Polygon"
+        priority: 2
+        type: "paid"
+        url: "https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        ws_url: "wss://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        api_key_required: true
+        rate_limit: 300000
+        latency_target: 100
+        reliability: 0.999
+
+      - id: "polygon_ankr"
+        name: "Ankr Polygon"
+        priority: 3
+        type: "public"
+        url: "https://rpc.ankr.com/polygon"
+        ws_url: "wss://rpc.ankr.com/polygon/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 250
+        reliability: 0.93
+
+    connection:
+      heartbeat_interval: 25000
+      reconnect_interval: 4000
+      max_reconnect_attempts: 12
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 1500
+      min_confirmations: 1
+      max_providers: 3
+
+  arbitrum:
+    chain_id: 42161
+    name: "Arbitrum One"
+    block_time: 1000 # Very fast blocks
+
+    providers:
+      - id: "arbitrum_infura"
+        name: "Infura Arbitrum"
+        priority: 1
+        type: "paid"
+        url: "https://arbitrum-mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://arbitrum-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000
+        latency_target: 100
+        reliability: 0.999
+
+      - id: "arbitrum_alchemy"
+        name: "Alchemy Arbitrum"
+        priority: 2
+        type: "paid"
+        url: "https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        ws_url: "wss://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        api_key_required: true
+        rate_limit: 300000
+        latency_target: 80
+        reliability: 0.999
+
+      - id: "arbitrum_ankr"
+        name: "Ankr Arbitrum"
+        priority: 3
+        type: "public"
+        url: "https://rpc.ankr.com/arbitrum"
+        ws_url: "wss://rpc.ankr.com/arbitrum/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 200
+        reliability: 0.94
+
+    connection:
+      heartbeat_interval: 15000 # Very frequent for fast chain
+      reconnect_interval: 2000
+      max_reconnect_attempts: 20
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 500 # Very short for fast blocks
+      min_confirmations: 1
+      max_providers: 3
+
+# Global settings
+global:
+  # Health check configuration
+  health_check:
+    interval: 30000 # Health check every 30 seconds
+    timeout: 10000 # 10 second timeout for health checks
+    failure_threshold: 3 # Mark unhealthy after 3 failures
+    recovery_threshold: 2 # Mark healthy after 2 successes
+
+  # Provider management
+  provider_management:
+    auto_failover: true # Automatically failover on provider failure
+    load_balancing: "priority" # priority, round_robin, latency_based
+    provider_rotation: 300000 # Rotate providers every 5 minutes for testing
+
+  # Message deduplication
+  deduplication:
+    enabled: true
+    algorithm: "content_hash" # content_hash, block_hash, sequence_number
+    cache_size: 10000 # Number of recent messages to cache
+    cache_ttl: 60000 # Cache TTL in ms

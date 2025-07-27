@@ -266,26 +266,77 @@ defmodule Livechain.RPC.WSConnection do
     %{state | pending_messages: []}
   end
 
-  defp handle_websocket_message(%{"method" => "eth_subscription", "params" => %{"result" => block_data, "subscription" => _sub_id}} = message, state) do
+  defp handle_websocket_message(
+         %{
+           "method" => "eth_subscription",
+           "params" => %{"result" => block_data, "subscription" => _sub_id}
+         } = message,
+         state
+       ) do
     # Handle new block subscription notifications
     Logger.debug("Received new block: #{inspect(block_data)}")
+
+    # Send to MessageAggregator for deduplication and speed optimization
+    chain_name = get_chain_name(state.endpoint.chain_id)
+    received_at = System.monotonic_time(:millisecond)
     
-    # Broadcast to Phoenix PubSub for real-time clients
+    # Send to raw messages channel for aggregation
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "raw_messages:#{chain_name}",
+      {:raw_message, state.endpoint.id, message, received_at}
+    )
+
+    # Also maintain backward compatibility
     broadcast_block_to_channels(state.endpoint, block_data)
-    
+
     {:ok, state}
   end
 
   defp handle_websocket_message(%{"method" => "eth_subscription"} = message, state) do
     # Handle other subscription notifications
     Logger.debug("Received subscription: #{inspect(message)}")
+    
+    # Send all subscription messages through aggregator
+    chain_name = get_chain_name(state.endpoint.chain_id)
+    received_at = System.monotonic_time(:millisecond)
+    
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "raw_messages:#{chain_name}",
+      {:raw_message, state.endpoint.id, message, received_at}
+    )
+    
     {:ok, state}
   end
 
   defp handle_websocket_message(message, state) do
     # Handle other RPC responses
     Logger.debug("Received message: #{inspect(message)}")
+    
+    # Send through aggregator for consistency
+    chain_name = get_chain_name(state.endpoint.chain_id)
+    received_at = System.monotonic_time(:millisecond)
+    
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "raw_messages:#{chain_name}",
+      {:raw_message, state.endpoint.id, message, received_at}
+    )
+    
     {:ok, state}
+  end
+  
+  defp get_chain_name(chain_id) do
+    case chain_id do
+      1 -> "ethereum"
+      137 -> "polygon"
+      42_161 -> "arbitrum"
+      56 -> "bsc"
+      8453 -> "base"
+      84532 -> "base_sepolia"
+      _ -> "unknown"
+    end
   end
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
@@ -296,13 +347,16 @@ defmodule Livechain.RPC.WSConnection do
 
   defp broadcast_block_to_channels(endpoint, block_data) do
     # Map chain_id to chain name for PubSub topics
-    chain_name = case endpoint.chain_id do
-      1 -> "ethereum"
-      137 -> "polygon"
-      42_161 -> "arbitrum"
-      56 -> "bsc"
-      _ -> "unknown"
-    end
+    chain_name =
+      case endpoint.chain_id do
+        1 -> "ethereum"
+        137 -> "polygon"
+        42_161 -> "arbitrum"
+        56 -> "bsc"
+        8453 -> "base"
+        84532 -> "base_sepolia"
+        _ -> "unknown"
+      end
 
     # Broadcast to general blockchain channel
     Phoenix.PubSub.broadcast(
