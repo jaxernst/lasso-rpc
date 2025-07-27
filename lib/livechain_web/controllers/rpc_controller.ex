@@ -88,7 +88,7 @@ defmodule LivechainWeb.RPCController do
     {:ok, nil}
   end
   
-  defp handle_rpc_method("eth_blockNumber", [], chain) do
+  defp handle_rpc_method("eth_blockNumber", [], _chain) do
     {:ok, "0x" <> Integer.to_string(:rand.uniform(20_000_000), 16)}
   end
   

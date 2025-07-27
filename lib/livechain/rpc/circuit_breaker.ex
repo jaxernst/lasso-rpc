@@ -66,9 +66,9 @@ defmodule Livechain.RPC.CircuitBreaker do
 
     state = %__MODULE__{
       provider_id: provider_id,
-      failure_threshold: config.failure_threshold || 5,
-      recovery_timeout: config.recovery_timeout || 60_000,
-      success_threshold: config.success_threshold || 2,
+      failure_threshold: Map.get(config, :failure_threshold, 5),
+      recovery_timeout: Map.get(config, :recovery_timeout, 60_000),
+      success_threshold: Map.get(config, :success_threshold, 2),
       state: :closed,
       failure_count: 0,
       last_failure_time: nil,

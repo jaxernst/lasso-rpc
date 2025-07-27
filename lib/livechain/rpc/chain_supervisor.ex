@@ -33,11 +33,13 @@ defmodule Livechain.RPC.ChainSupervisor do
   Gets the status of all providers for a chain.
   """
   def get_chain_status(chain_name) do
-    case ProviderPool.get_status(chain_name) do
-      {:ok, status} -> status
-      {:error, reason} -> 
-        Logger.error("Failed to get chain status for #{chain_name}: #{reason}")
-        %{error: reason}
+    try do
+      case ProviderPool.get_status(chain_name) do
+        {:ok, status} -> status
+        {:error, reason} -> 
+          Logger.error("Failed to get chain status for #{chain_name}: #{reason}")
+          %{error: reason}
+      end
     catch
       :exit, {:noproc, _} -> %{error: :chain_not_started}
     end

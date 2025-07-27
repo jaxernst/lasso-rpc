@@ -14,6 +14,12 @@ defmodule Livechain.Application do
       # Start process registry for centralized process management
       {Livechain.RPC.ProcessRegistry, name: Livechain.RPC.ProcessRegistry},
 
+      # Start dynamic supervisor for chain supervisors
+      {DynamicSupervisor, strategy: :one_for_one, name: Livechain.RPC.Supervisor},
+
+      # Start the chain manager for orchestrating all blockchain connections
+      Livechain.RPC.ChainManager,
+
       # Start the WebSocket supervisor
       Livechain.RPC.WSSupervisor,
 

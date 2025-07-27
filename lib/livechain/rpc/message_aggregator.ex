@@ -14,7 +14,6 @@ defmodule Livechain.RPC.MessageAggregator do
   use GenServer
   require Logger
 
-  alias Livechain.Config.ChainConfig
 
   defstruct [
     :chain_name,
@@ -79,7 +78,7 @@ defmodule Livechain.RPC.MessageAggregator do
       message_cache: %{},
       cache_refs: %{},
       cache_size: 0,
-      max_cache_size: chain_config.aggregation.max_cache_size || 10_000,
+      max_cache_size: Map.get(chain_config.aggregation, :max_cache_size, 10_000),
       stats: %Stats{}
     }
 

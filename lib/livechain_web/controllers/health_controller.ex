@@ -6,7 +6,7 @@ defmodule LivechainWeb.HealthController do
     health_status = %{
       status: "healthy",
       timestamp: DateTime.utc_now(),
-      uptime: System.uptime() |> trunc(),
+      uptime: System.monotonic_time(:second),
       version: Application.spec(:livechain, :vsn) |> to_string()
     }
 

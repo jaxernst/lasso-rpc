@@ -11,7 +11,7 @@ defmodule LivechainWeb.StatusController do
       system: %{
         status: "operational",
         timestamp: DateTime.utc_now(),
-        uptime: System.uptime() |> trunc(),
+        uptime: System.monotonic_time(:second),
         memory_usage: :erlang.memory(),
         process_count: :erlang.system_info(:process_count)
       },

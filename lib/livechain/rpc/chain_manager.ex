@@ -220,7 +220,7 @@ defmodule Livechain.RPC.ChainManager do
   
   # Private functions
   
-  defp start_chain_supervisor(state, chain_name, chain_config) do
+  defp start_chain_supervisor(_state, chain_name, chain_config) do
     case ChainConfig.validate_chain_config(chain_config) do
       :ok ->
         spec = {ChainSupervisor, {chain_name, chain_config}}
