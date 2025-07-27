@@ -266,10 +266,19 @@ defmodule Livechain.RPC.WSConnection do
     %{state | pending_messages: []}
   end
 
+  defp handle_websocket_message(%{"method" => "eth_subscription", "params" => %{"result" => block_data, "subscription" => _sub_id}} = message, state) do
+    # Handle new block subscription notifications
+    Logger.debug("Received new block: #{inspect(block_data)}")
+    
+    # Broadcast to Phoenix PubSub for real-time clients
+    broadcast_block_to_channels(state.endpoint, block_data)
+    
+    {:ok, state}
+  end
+
   defp handle_websocket_message(%{"method" => "eth_subscription"} = message, state) do
-    # Handle subscription notifications
+    # Handle other subscription notifications
     Logger.debug("Received subscription: #{inspect(message)}")
-    # Here you would typically broadcast to subscribers
     {:ok, state}
   end
 
@@ -283,5 +292,30 @@ defmodule Livechain.RPC.WSConnection do
 
   defp via_name(connection_id) do
     {:via, :global, {:connection, connection_id}}
+  end
+
+  defp broadcast_block_to_channels(endpoint, block_data) do
+    # Map chain_id to chain name for PubSub topics
+    chain_name = case endpoint.chain_id do
+      1 -> "ethereum"
+      137 -> "polygon"
+      42_161 -> "arbitrum"
+      56 -> "bsc"
+      _ -> "unknown"
+    end
+
+    # Broadcast to general blockchain channel
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "blockchain:#{chain_name}",
+      %{event: "new_block", payload: block_data}
+    )
+
+    # Broadcast to specific event type channel
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "blockchain:#{chain_name}:blocks",
+      %{event: "new_block", payload: block_data}
+    )
   end
 end

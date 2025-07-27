@@ -8,8 +8,14 @@ defmodule Livechain.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      # Start PubSub for real-time messaging
+      {Phoenix.PubSub, name: Livechain.PubSub},
+      
       # Start the WebSocket supervisor
-      Livechain.RPC.WSSupervisor
+      Livechain.RPC.WSSupervisor,
+      
+      # Start Phoenix endpoint
+      LivechainWeb.Endpoint
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

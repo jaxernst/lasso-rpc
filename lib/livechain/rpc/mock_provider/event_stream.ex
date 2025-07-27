@@ -137,7 +137,7 @@ defmodule Livechain.RPC.MockProvider.EventStream do
     {:via, :global, {:event_stream, name}}
   end
 
-  defp generate_subscription_id(topic) do
+  defp generate_subscription_id(_topic) do
     :crypto.strong_rand_bytes(8)
     |> Base.encode16(case: :lower)
     |> then(&"0x#{&1}")

@@ -131,7 +131,11 @@ defmodule Livechain.RPC.MockWSEndpoint do
       # Arbitrum
       arbitrum = Livechain.RPC.MockWSEndpoint.arbitrum()
   """
-  def ethereum_mainnet(opts \\ []) do
+  def ethereum_mainnet() do
+    ethereum_mainnet([])
+  end
+
+  def ethereum_mainnet(opts) do
     new(
       [
         id: "mock_ethereum_mainnet",
@@ -143,7 +147,11 @@ defmodule Livechain.RPC.MockWSEndpoint do
     )
   end
 
-  def polygon(opts \\ []) do
+  def polygon() do
+    polygon([])
+  end
+
+  def polygon(opts) do
     new(
       [
         id: "mock_polygon",
@@ -155,7 +163,11 @@ defmodule Livechain.RPC.MockWSEndpoint do
     )
   end
 
-  def arbitrum(opts \\ []) do
+  def arbitrum() do
+    arbitrum([])
+  end
+
+  def arbitrum(opts) do
     new(
       [
         id: "mock_arbitrum",
@@ -167,7 +179,11 @@ defmodule Livechain.RPC.MockWSEndpoint do
     )
   end
 
-  def bsc(opts \\ []) do
+  def bsc() do
+    bsc([])
+  end
+
+  def bsc(opts) do
     new(
       [
         id: "mock_bsc",

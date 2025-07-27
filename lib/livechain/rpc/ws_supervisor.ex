@@ -138,31 +138,15 @@ defmodule Livechain.RPC.WSSupervisor do
   def list_connections do
     __MODULE__
     |> DynamicSupervisor.which_children()
-    |> Enum.map(fn {_id, pid, :worker, [WSConnection]} ->
-      case Process.alive?(pid) do
-        true ->
-          case WSConnection.status(pid) do
-            %{connected: true} = status ->
-              %{
-                id: status.endpoint_id,
-                name: get_connection_name(pid),
-                status: :connected,
-                reconnect_attempts: status.reconnect_attempts,
-                subscriptions: status.subscriptions
-              }
+    |> Enum.map(fn
+      {_id, pid, :worker, [WSConnection]} ->
+        get_connection_status(pid, WSConnection)
 
-            %{connected: false} = status ->
-              %{
-                id: status.endpoint_id,
-                name: get_connection_name(pid),
-                status: :disconnected,
-                reconnect_attempts: status.reconnect_attempts
-              }
-          end
+      {_id, pid, :worker, [MockWSConnection]} ->
+        get_connection_status(pid, MockWSConnection)
 
-        false ->
-          %{id: "unknown", name: "Unknown", status: :dead}
-      end
+      {_id, _pid, :worker, [other]} ->
+        %{id: "unknown", name: "Unknown (#{inspect(other)})", status: :unknown}
     end)
   end
 
@@ -223,7 +207,7 @@ defmodule Livechain.RPC.WSSupervisor do
   # Server Callbacks
 
   @impl true
-  def init(opts) do
+  def init(_opts) do
     Logger.info("Starting WebSocket supervisor")
 
     DynamicSupervisor.init(
@@ -246,6 +230,55 @@ defmodule Livechain.RPC.WSSupervisor do
 
       pid when is_pid(pid) ->
         {:ok, pid}
+    end
+  end
+
+  defp get_connection_status(pid, connection_module) do
+    case Process.alive?(pid) do
+      true ->
+        status_result = try do
+          connection_module.status(pid)
+        catch
+          :exit, _ ->
+            # If calling with pid fails, try calling with a GenServer call
+            try do
+              GenServer.call(pid, :status)
+            rescue
+              _ -> %{connected: false, error: "status_unavailable"}
+            end
+        rescue
+          _ -> %{connected: false, error: "status_unavailable"}
+        end
+
+        case status_result do
+          %{connected: true} = status ->
+            %{
+              id: Map.get(status, :endpoint_id, "unknown"),
+              name: get_connection_name(pid),
+              status: :connected,
+              reconnect_attempts: Map.get(status, :reconnect_attempts, 0),
+              subscriptions: Map.get(status, :subscriptions, 0)
+            }
+
+          %{connected: false} = status ->
+            %{
+              id: Map.get(status, :endpoint_id, "unknown"),
+              name: get_connection_name(pid),
+              status: :disconnected,
+              reconnect_attempts: Map.get(status, :reconnect_attempts, 0)
+            }
+
+          other ->
+            %{
+              id: "unknown",
+              name: get_connection_name(pid),
+              status: :unknown,
+              details: other
+            }
+        end
+
+      false ->
+        %{id: "unknown", name: "Dead process", status: :dead}
     end
   end
 

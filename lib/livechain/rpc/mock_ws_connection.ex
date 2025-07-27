@@ -9,7 +9,7 @@ defmodule Livechain.RPC.MockWSConnection do
   use GenServer
   require Logger
 
-  alias Livechain.RPC.MockWSEndpoint
+  alias Livechain.RPC.{MockWSEndpoint, MockProvider}
 
   # Client API
 

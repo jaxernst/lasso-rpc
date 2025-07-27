@@ -37,7 +37,7 @@ defmodule Livechain.RPC.MockProvider do
   use GenServer
   require Logger
 
-  alias Livechain.RPC.MockProvider.{BlockGenerator, TransactionGenerator, EventStream}
+  alias Livechain.RPC.MockProvider.{BlockGenerator, EventStream}
 
   # Client API
 
@@ -137,6 +137,7 @@ defmodule Livechain.RPC.MockProvider do
       subscribers: MapSet.new(),
       block_generator: nil,
       event_stream: nil,
+      provider_pid: nil,
       stats: %{
         total_requests: 0,
         successful_requests: 0,
@@ -314,9 +315,15 @@ defmodule Livechain.RPC.MockProvider do
   def handle_info({:new_block, block_number, block_data}, state) do
     state = %{state | current_block: block_number}
 
-    if state.enable_events do
+    state = if state.enable_events do
       EventStream.broadcast(state.event_stream, "newHeads", block_data)
-      state = update_event_stats(state)
+      
+      # Also broadcast to Phoenix PubSub for channels
+      broadcast_to_channels(state, "new_block", block_data)
+      
+      update_event_stats(state)
+    else
+      state
     end
 
     {:noreply, state}
@@ -455,7 +462,7 @@ defmodule Livechain.RPC.MockProvider do
     {:ok, "0x#{Integer.to_string(balance, 16)}"}
   end
 
-  defp handle_rpc_method("eth_subscribe", [topic], state) do
+  defp handle_rpc_method("eth_subscribe", [_topic], _state) do
     subscription_id = "0x#{:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)}"
     {:ok, subscription_id}
   end
@@ -466,5 +473,30 @@ defmodule Livechain.RPC.MockProvider do
 
   defp handle_rpc_method(_method, _params, _state) do
     {:error, "Method not implemented in mock provider"}
+  end
+
+  defp broadcast_to_channels(state, event_type, data) do
+    # Map chain_id to chain name for PubSub topics
+    chain_name = case state.chain_id do
+      1 -> "ethereum"
+      137 -> "polygon"
+      42_161 -> "arbitrum"
+      56 -> "bsc"
+      _ -> "unknown"
+    end
+
+    # Broadcast to general blockchain channel
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "blockchain:#{chain_name}",
+      %{event: event_type, payload: data}
+    )
+
+    # Broadcast to specific event type channel
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "blockchain:#{chain_name}:blocks",
+      %{event: event_type, payload: data}
+    )
   end
 end

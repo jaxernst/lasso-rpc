@@ -22,7 +22,12 @@ defmodule Livechain.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:websockex, "~> 0.4"},
+      {:phoenix, "~> 1.7"},
+      {:phoenix_pubsub, "~> 2.1"},
+      {:plug_cowboy, "~> 2.5"},
+      {:broadway, "~> 1.0"}
     ]
   end
 end

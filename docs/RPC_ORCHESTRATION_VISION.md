@@ -1,150 +1,220 @@
-# Livechain: RPC Orchestration Service Vision
+# ChainPulse: Live-First Blockchain Event Streaming
 
 ## Overview
 
-Livechain is designed to be a high-reliability RPC orchestration service that provides live blockchain data feeds with enterprise-grade reliability, performance, and scalability. The service acts as an intelligent layer between applications and blockchain networks, offering unified access to multiple chains with advanced features.
+ChainPulse is a lightweight, Elixir-based middleware for **real-time blockchain event streaming** with robust RPC failover. It delivers curated, low-latency event feeds (e.g., token transfers, NFT mints) across multiple chains (Ethereum, Arbitrum, Solana) via a hybrid API approach, tailored for Viem/Wagmi-based consumer applications.
+
+## Problem Statement
+
+Crypto engineers at our studio waste time wrestling with:
+- **Unreliable RPC providers** causing app downtime
+- **Building custom event listeners** for each consumer app
+- **Fragile data pipelines** that break on provider failures
+- **Cross-chain complexity** when building multi-network features
+
+This leads to development delays and unreliable user experiences in consumer apps like Farcaster and Coinbase-style dApps.
 
 ## Core Vision
 
 ### 🎯 Primary Goals
 
-1. **High Reliability**: 99.9%+ uptime with intelligent failover and redundancy
-2. **Real-time Data**: Live blockchain feeds with minimal latency
-3. **Multi-Chain Support**: Unified API for Ethereum, Polygon, Arbitrum, BSC, and more
-4. **Enterprise Ready**: Production-grade monitoring, alerting, and scaling
-5. **Developer Friendly**: Simple APIs with comprehensive documentation
+1. **Sub-Second Latency**: Real-time event delivery for consumer applications
+2. **RPC Failover**: Seamless switching between providers (Infura, Alchemy, etc.)
+3. **Curated Event Feeds**: Pre-processed, structured events (USDC transfers, NFT mints)
+4. **Multi-Chain Support**: Unified API across EVM and non-EVM chains
+5. **Viem Integration**: Drop-in compatibility with existing Viem/Wagmi frontends
 
 ### 🏗️ Architecture Principles
 
-- **Fault Isolation**: Individual connection failures don't affect others
-- **Horizontal Scaling**: Can handle thousands of concurrent connections
-- **Intelligent Routing**: Smart load balancing and failover
-- **Observability**: Comprehensive monitoring and alerting
-- **Security**: Rate limiting, authentication, and data validation
+- **Live-First Design**: Events over RPC calls, streaming over polling
+- **Fault Isolation**: Individual connection failures don't affect others  
+- **Event Curation**: Transform raw logs into structured, actionable events
+- **Hybrid API**: Standard JSON-RPC compatibility + enhanced streaming layer
+- **Developer Experience**: Minimal integration effort, maximum value
 
 ## Technical Architecture
 
-### Core Components
+### Hybrid API Design
+
+ChainPulse provides **two complementary layers**:
+
+#### **Layer 1: Standard JSON-RPC** (Viem Compatible)
+```
+/rpc/ethereum     # Drop-in replacement for Infura/Alchemy
+/rpc/arbitrum     # Standard eth_getLogs, eth_subscribe, etc.
+```
+
+#### **Layer 2: Enhanced Event Streaming** (ChainPulse Value)
+```
+/stream/events    # Curated, cross-chain event feeds
+/stream/tokens    # ERC-20 transfer streams with USD values
+/stream/nfts      # NFT mint/transfer streams with metadata
+```
+
+### Core Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Livechain Service                       │
+│                     ChainPulse Service                     │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
-│  │   Load      │  │   Health    │  │   Metrics   │      │
-│  │  Balancer   │  │   Monitor   │  │  Collector  │      │
+│  │ Standard    │  │  Enhanced   │  │   Viem SDK  │      │
+│  │ JSON-RPC    │  │  Streaming  │  │Integration  │      │
+│  │   Layer     │  │    Layer    │  │    Layer    │      │
 │  └─────────────┘  └─────────────┘  └─────────────┘      │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
-│  │ Ethereum    │  │   Polygon   │  │  Arbitrum   │      │
-│  │ Supervisor  │  │ Supervisor  │  │ Supervisor  │      │
+│  │  Broadway   │  │   Event     │  │    ETS      │      │
+│  │ Pipelines   │  │ Processing  │  │   Cache     │      │
 │  └─────────────┘  └─────────────┘  └─────────────┘      │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│  │ Ethereum    │  │  Arbitrum   │  │   Solana    │      │
+│  │RPC Failover │  │RPC Failover │  │RPC Failover │      │
+│  └─────────────┘  └─────────────┘  └─────────────┘      │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│  │   Infura    │  │   Alchemy   │  │   Public    │      │
 │  │ Connection  │  │ Connection  │  │ Connection  │      │
-│  │ Pool 1      │  │ Pool 2      │  │ Pool N      │      │
+│  │    Pool     │  │    Pool     │  │    Pool     │      │
 │  └─────────────┘  └─────────────┘  └─────────────┘      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Features
 
-#### 1. **Intelligent Connection Management**
-
-- **Connection Pooling**: Multiple connections per chain for redundancy
-- **Automatic Failover**: Seamless switching between providers
-- **Health Monitoring**: Real-time connection health checks
+#### 1. **RPC Failover** (Foundation Layer)
+- **Multi-Provider Support**: Elixir supervisors manage Infura, Alchemy, public RPC pools
+- **Automatic Failover**: Seamless switching on provider failure for uninterrupted data
+- **Health Monitoring**: Real-time connection health checks and circuit breakers
 - **Load Balancing**: Distribute requests across healthy connections
 
-#### 2. **Real-time Data Streaming**
+#### 2. **Real-Time Event Streaming** (Value Layer)
+- **Phoenix Channels**: Handle thousands of concurrent WebSocket subscriptions
+- **Sub-Second Delivery**: Structured events (e.g., USDC Transfer) delivered in <1 second
+- **Broadway Pipelines**: Normalize events across EVM and non-EVM chains
+- **Event Curation**: Transform raw logs into actionable, structured data
 
-- **WebSocket Subscriptions**: Live block, transaction, and event feeds
-- **Event Aggregation**: Combine events from multiple sources
-- **Data Validation**: Ensure data integrity and consistency
-- **Rate Limiting**: Protect against abuse and overload
+#### 3. **Viem Integration** (Developer Experience)
+- **Standard JSON-RPC**: Drop-in replacement for existing Viem/Wagmi apps
+- **Enhanced Streaming**: chainpulse-viem SDK for curated event subscriptions
+- **Minimal Integration**: eth_subscribe, eth_getLogs compatibility
+- **Progressive Enhancement**: Start with standard RPC, upgrade to enhanced features
 
-#### 3. **Advanced Reliability Features**
-
-- **Circuit Breakers**: Prevent cascade failures
-- **Retry Logic**: Intelligent retry with exponential backoff
-- **Dead Letter Queues**: Handle failed requests gracefully
-- **Data Caching**: Reduce load on blockchain nodes
-
-#### 4. **Monitoring & Observability**
-
-- **Metrics Collection**: Request rates, latencies, error rates
-- **Health Checks**: Endpoint and connection health monitoring
-- **Alerting**: Proactive notification of issues
-- **Logging**: Comprehensive audit trail
+#### 4. **Fault Tolerance** (Production Ready)
+- **OTP Supervisors**: Individual connection failures don't cascade
+- **ETS Caching**: Handle reorgs and temporary network issues
+- **Reorg Safety**: Event deduplication and ordering guarantees
+- **Circuit Breakers**: Prevent cascade failures across provider networks
 
 ## API Design
 
-### REST API Endpoints
+### Hybrid API Structure
 
-```elixir
-# Health and Status
-GET /health                    # Overall service health
-GET /status                    # Detailed service status
-GET /metrics                   # Prometheus metrics
-
-# Blockchain Data
-GET /v1/chains                # List supported chains
-GET /v1/chains/{chain}/status # Chain-specific status
-GET /v1/chains/{chain}/blocks/latest # Latest block
-GET /v1/chains/{chain}/blocks/{number} # Specific block
-
-# WebSocket API
-WS /v1/ws/{chain}            # WebSocket endpoint
+#### **Standard JSON-RPC Layer** (Viem Compatible)
+```bash
+# Standard Ethereum JSON-RPC (drop-in replacement)
+WS /rpc/ethereum              # Standard WebSocket RPC
+WS /rpc/arbitrum              # Per-chain standard endpoints
+POST /rpc/ethereum            # HTTP RPC for simple calls
 ```
 
-### WebSocket Events
+**Standard Methods Supported:**
+- `eth_subscribe` / `eth_unsubscribe`
+- `eth_getLogs` with filtering
+- `eth_getBlockByNumber` / `eth_getBlockByHash`
+- `eth_getTransactionReceipt`
+- `eth_newFilter` / `eth_getFilterLogs`
+
+#### **Enhanced Streaming Layer** (ChainPulse Value)
+```bash
+# Curated event streams
+WS /stream/events             # Multi-chain curated events
+WS /stream/tokens             # ERC-20 transfers with USD values
+WS /stream/nfts               # NFT events with metadata
+WS /stream/defi               # DeFi protocol events
+
+# Management API
+GET /api/health               # Service health
+GET /api/chains               # Supported chains/providers
+GET /api/events/types         # Available curated event types
+```
+
+### Standard JSON-RPC Events
 
 ```json
 {
-  "type": "block",
+  "jsonrpc": "2.0",
+  "method": "eth_subscription",
+  "params": {
+    "subscription": "0x123...",
+    "result": {
+      "address": "0xa0b86a33e6441...",
+      "topics": ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"],
+      "data": "0x000000000000000000000000000000000000000000000000016345785d8a0000",
+      "blockNumber": "0x12345",
+      "transactionHash": "0xabc..."
+    }
+  }
+}
+```
+
+### Enhanced ChainPulse Events
+
+```json
+{
+  "type": "USDC_TRANSFER",
   "chain": "ethereum",
+  "blockNumber": 18500000,
+  "timestamp": 1703001234,
   "data": {
-    "number": "0x12345",
-    "hash": "0x...",
-    "timestamp": "0x...",
-    "transactions": [...]
+    "from": "0x123...",
+    "to": "0x456...",
+    "amount": "1000000000",
+    "amountUSD": "1000.00",
+    "txHash": "0xabc...",
+    "gasUsed": 65000
   }
 }
 ```
 
 ## Implementation Roadmap
 
-### Phase 1: Foundation (Current)
+### Phase 1: Foundation ✅ **COMPLETED**
 
-- ✅ Mock RPC provider system
-- ✅ Basic WebSocket connection management
-- ✅ Connection supervision and fault isolation
-- 🔄 Multi-provider support
-- 🔄 Health monitoring
+- ✅ **Phoenix Channels Infrastructure**: Real-time WebSocket streaming
+- ✅ **OTP Supervision Trees**: Fault-tolerant GenServer architecture  
+- ✅ **Multi-Chain Support**: Ethereum, Polygon, Arbitrum, BSC ready
+- ✅ **Mock Provider System**: Comprehensive development/testing environment
+- ✅ **HTTP API**: Health, status, and chain management endpoints
 
-### Phase 2: Reliability (Next)
+### Phase 2: Hybrid API Layer 🔄 **IN PROGRESS**
 
-- 🔄 Circuit breaker implementation
-- 🔄 Intelligent failover
-- 🔄 Connection pooling
-- 🔄 Retry logic with backoff
-- 🔄 Rate limiting
+#### Standard JSON-RPC Layer (2-3 days)
+- 🔄 **JSON-RPC WebSocket Handler**: Standard eth_subscribe, eth_getLogs  
+- 🔄 **Viem Compatibility**: Drop-in replacement for Infura/Alchemy
+- 🔄 **HTTP RPC Endpoint**: POST /rpc/ethereum for simple calls
+- 🔄 **Provider Failover**: Multi-provider redundancy per chain
 
-### Phase 3: Performance (Future)
+#### Enhanced Streaming Layer (1-2 weeks)  
+- 🔄 **Broadway Pipelines**: Event processing and normalization
+- 🔄 **Event Schema**: USDC_TRANSFER, NFT_MINT, etc. structured events
+- 🔄 **Cross-Chain Events**: Unified event format across EVM chains
+- 🔄 **USD Value Integration**: Real-time price feeds for token amounts
 
-- 🔄 Data caching layer
-- 🔄 Load balancing
-- 🔄 Horizontal scaling
-- 🔄 Performance optimization
-- 🔄 Advanced metrics
+### Phase 3: Production Features (2-3 weeks)
 
-### Phase 4: Enterprise (Future)
+- 🔄 **ETS Caching**: Reorg handling and event deduplication
+- 🔄 **Circuit Breakers**: Provider failure protection
+- 🔄 **Performance Optimization**: Sub-second event delivery
+- 🔄 **chainpulse-viem SDK**: TypeScript SDK for frontend integration
 
-- 🔄 Authentication & authorization
-- 🔄 Advanced monitoring
-- 🔄 API documentation
-- 🔄 SDK development
-- 🔄 Production deployment
+### Phase 4: MVP Deployment (1 week)
+
+- 🔄 **Production Config**: Environment-based provider management
+- 🔄 **Monitoring**: Metrics, alerting, observability
+- 🔄 **Documentation**: API docs and integration guides
+- 🔄 **Load Testing**: Validate performance targets
 
 ## Mock Provider Features
 
@@ -255,37 +325,73 @@ connections = Livechain.RPC.WSSupervisor.list_connections()
 - **Message Queues**: RabbitMQ for event processing
 - **CDN**: CloudFlare for global distribution
 
-## Success Metrics
+## Success Metrics & MVP Targets
 
-### Reliability
+### Performance Targets (MVP)
+- **Event Latency**: <1 second from blockchain to client
+- **RPC Failover**: <5 seconds to switch providers  
+- **Concurrent Connections**: 1,000+ WebSocket clients
+- **Multi-Chain Events**: Ethereum + Arbitrum unified streaming
 
-- **Uptime**: 99.9%+ availability
-- **Error Rate**: <0.1% failed requests
-- **Recovery Time**: <30 seconds for failover
+### Developer Experience Goals
+- **Drop-in Compatibility**: Existing Viem apps work without changes
+- **Enhanced Value**: 50% less code for common event patterns
+- **Integration Time**: <30 minutes from npm install to first events
+- **Studio Adoption**: 3+ internal projects using ChainPulse feeds
 
-### Performance
+### Business Impact (3 Month Goal)
+- **Development Velocity**: 25% faster feature delivery for consumer apps
+- **Provider Costs**: 40% reduction in RPC provider bills
+- **Reliability**: Zero provider-related outages for consumer apps
+- **Time to Market**: Faster launches for new blockchain features
 
-- **Latency**: <100ms for most requests
-- **Throughput**: 10,000+ requests/second
-- **Concurrency**: 1,000+ simultaneous connections
+## Technical Validation
 
-### Developer Experience
+### MVP Test Cases
+1. **Viem Integration**: Existing dApp connects without code changes
+2. **Event Curation**: USDC transfers delivered with USD values <1s
+3. **Failover**: Infura outage doesn't affect app (switches to Alchemy)
+4. **Multi-Chain**: Single subscription receives Ethereum + Arbitrum events
+5. **Load Test**: 1000 concurrent WebSocket connections streaming events
 
-- **API Simplicity**: Easy to integrate
-- **Documentation**: Comprehensive guides
-- **SDK Support**: Multiple language SDKs
+### Success Criteria
+- ✅ **Foundation Built**: Phoenix + OTP architecture proven
+- 🔄 **Standard Layer**: JSON-RPC compatibility with Viem  
+- 🔄 **Enhanced Layer**: Curated events outperform raw log parsing
+- 🔄 **Production Ready**: Handles studio traffic without issues
 
-## Next Steps
+## Why Elixir/Phoenix for ChainPulse
 
-1. **Complete Mock System**: Finish the mock provider implementation
-2. **Add Real Providers**: Integrate with actual RPC endpoints
-3. **Implement Reliability**: Add circuit breakers and failover
-4. **Build Monitoring**: Add comprehensive metrics and alerting
-5. **Create Documentation**: Develop API documentation and guides
-6. **Deploy MVP**: Get a minimal viable product running
+**BEAM VM Advantages:**
+- **Concurrency**: Handle thousands of WebSocket connections efficiently
+- **Fault Tolerance**: OTP supervisors prevent cascade failures
+- **Real-Time**: Phoenix Channels built for sub-second event delivery
+- **Maintenance**: Less code than Node.js/Go/Rust alternatives
 
-## Conclusion
+**Competitive Edge:**
+- **Live-First Design**: Events over polling, streaming over batching
+- **Multi-Chain Native**: EVM + Solana support from day one
+- **Studio Integration**: Built specifically for our Viem/Wagmi stack
+- **Operational Excellence**: Self-healing infrastructure with OTP
 
-Livechain aims to become the go-to solution for reliable blockchain data access. By providing a unified, high-reliability interface to multiple blockchain networks, we can enable developers to build robust applications without worrying about the complexities of blockchain infrastructure.
+## Next Steps: Phase 2 Implementation
 
-The mock provider system provides an excellent foundation for testing and development, while the architectural vision ensures we can scale to meet enterprise demands. The focus on reliability, performance, and developer experience will make Livechain an essential tool in the blockchain ecosystem.
+### Standard JSON-RPC Layer (Week 1)
+1. **JSON-RPC Handler**: WebSocket endpoint at `/rpc/ethereum`
+2. **Method Routing**: eth_subscribe, eth_getLogs, eth_getBlockByNumber
+3. **Viem Testing**: Verify drop-in compatibility
+4. **Provider Failover**: Multi-Infura/Alchemy connection pools
+
+### Enhanced Streaming Layer (Week 2-3)  
+1. **Broadway Pipeline**: Event processing infrastructure
+2. **ERC-20 Schema**: USDC_TRANSFER with USD values
+3. **NFT Schema**: NFT_MINT/TRANSFER with metadata
+4. **Multi-Chain**: Unified events across Ethereum + Arbitrum
+
+### Production Hardening (Week 4)
+1. **ETS Caching**: Reorg handling and deduplication
+2. **Performance**: Sub-second latency optimization
+3. **Monitoring**: Metrics, alerts, observability
+4. **Studio Deployment**: Internal testing with real dApps
+
+ChainPulse represents a paradigm shift from reactive RPC calls to proactive event streams, positioning our studio at the forefront of real-time blockchain development.

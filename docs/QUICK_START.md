@@ -2,17 +2,17 @@
 
 ## Overview
 
-This guide will help you get started with Livechain's mock RPC system for testing and development. The mock system provides realistic blockchain data simulation without requiring actual network connections.
+This guide will help you get started with Livechain's real-time blockchain data streaming system. Livechain combines mock providers for development with Phoenix Channels for scalable WebSocket connections to client applications.
 
 ## Prerequisites
 
 - Elixir 1.18+ installed
 - Mix (comes with Elixir)
-- Basic understanding of Elixir/Erlang
+- Node.js (for WebSocket testing with wscat)
 
 ## Installation
 
-1. **Clone the repository** (if not already done):
+1. **Clone the repository**:
 
    ```bash
    git clone <repository-url>
@@ -32,18 +32,36 @@ This guide will help you get started with Livechain's mock RPC system for testin
 
 ## Quick Start
 
-### 1. Start the Application
+### Option 1: Automated Demo
+
+The fastest way to see Livechain in action:
 
 ```bash
-# Start the application in the console
+# Run the comprehensive demo
+mix run -e "Livechain.TestRunner.run_live_demo(60)"
+```
+
+This starts:
+- Mock blockchain providers (Ethereum, Polygon)
+- Phoenix WebSocket server on port 4000
+- HTTP API endpoints
+- Real-time block generation and broadcasting
+
+### Option 2: Manual Setup
+
+For hands-on exploration:
+
+#### 1. Start Interactive Session
+
+```bash
 iex -S mix
 ```
 
-### 2. Create Mock Endpoints
+#### 2. Create Mock Blockchain Endpoints
 
 ```elixir
 # Import the required modules
-alias Livechain.RPC.{MockWSEndpoint, WSSupervisor, MockProvider}
+alias Livechain.RPC.{MockWSEndpoint, WSSupervisor}
 
 # Create mock endpoints for different networks
 ethereum = MockWSEndpoint.ethereum_mainnet()
@@ -53,7 +71,7 @@ arbitrum = MockWSEndpoint.arbitrum()
 # Or create custom endpoints
 custom = MockWSEndpoint.new(
   id: "my_custom_chain",
-  name: "My Custom Chain",
+  name: "My Custom Chain", 
   chain_id: 12345,
   block_time: 5_000,      # 5 seconds between blocks
   failure_rate: 0.01,     # 1% failure rate
@@ -61,98 +79,210 @@ custom = MockWSEndpoint.new(
 )
 ```
 
-### 3. Start Connections
+#### 3. Start Blockchain Connections
 
 ```elixir
 # Start connections to the mock providers
 {:ok, _ethereum_pid} = WSSupervisor.start_connection(ethereum)
 {:ok, _polygon_pid} = WSSupervisor.start_connection(polygon)
 {:ok, _arbitrum_pid} = WSSupervisor.start_connection(arbitrum)
+
+# Check connection status
+WSSupervisor.list_connections()
 ```
 
-### 4. Make RPC Calls
+#### 4. Start Phoenix WebSocket Server
+
+```elixir
+# Start the Phoenix endpoint for WebSocket connections
+{:ok, _endpoint_pid} = LivechainWeb.Endpoint.start_link()
+```
+
+## WebSocket Client Testing
+
+### Install WebSocket Client
+
+```bash
+npm install -g wscat
+```
+
+### Connect Multiple Clients
+
+Open multiple terminals and run:
+
+```bash
+# Terminal 1 - Ethereum client
+wscat -c "ws://localhost:4000/socket/websocket"
+
+# Terminal 2 - Polygon client  
+wscat -c "ws://localhost:4000/socket/websocket"
+
+# Terminal 3 - Multi-chain client
+wscat -c "ws://localhost:4000/socket/websocket"
+```
+
+### Join Blockchain Channels
+
+In each WebSocket client, send:
+
+```json
+# Join Ethereum channel
+{"topic":"blockchain:ethereum","event":"phx_join","payload":{},"ref":"1"}
+
+# Join Polygon channel
+{"topic":"blockchain:polygon","event":"phx_join","payload":{},"ref":"2"}
+```
+
+### Subscribe to Real-Time Events
+
+```json
+# Subscribe to Ethereum blocks
+{"topic":"blockchain:ethereum","event":"subscribe","payload":{"type":"blocks"},"ref":"3"}
+
+# Subscribe to Polygon blocks
+{"topic":"blockchain:polygon","event":"subscribe","payload":{"type":"blocks"},"ref":"4"}
+```
+
+### Watch Real-Time Data! 🎉
+
+You should now see live blockchain data streaming to all connected clients:
+
+```json
+{
+  "event": "new_block",
+  "payload": {
+    "chain_id": "ethereum",
+    "block": {
+      "number": "0x123",
+      "hash": "0xabc...",
+      "timestamp": "0x...",
+      "transactions": [...]
+    }
+  }
+}
+```
+
+## HTTP API Testing
+
+Test the REST endpoints:
+
+```bash
+# System health
+curl http://localhost:4000/api/health
+
+# Detailed system status
+curl http://localhost:4000/api/status
+
+# List supported chains
+curl http://localhost:4000/api/chains
+
+# Specific chain status
+curl http://localhost:4000/api/chains/1/status  # Ethereum
+curl http://localhost:4000/api/chains/137/status  # Polygon
+```
+
+## Advanced Usage
+
+### Direct RPC Calls to Mock Providers
 
 ```elixir
 # Get the latest block number
-{:ok, block_number} = MockProvider.call(ethereum.mock_provider, "eth_blockNumber")
-IO.puts("Latest block: #{block_number}")
+{:ok, block_number} = Livechain.RPC.MockProvider.call(
+  ethereum.mock_provider, 
+  "eth_blockNumber"
+)
 
 # Get a specific block
-{:ok, block} = MockProvider.call(ethereum.mock_provider, "eth_getBlockByNumber", ["latest", false])
-IO.puts("Block hash: #{block["hash"]}")
+{:ok, block} = Livechain.RPC.MockProvider.call(
+  ethereum.mock_provider,
+  "eth_getBlockByNumber", 
+  ["latest", false]
+)
 
 # Get account balance
-address = "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6"
-{:ok, balance} = MockProvider.call(ethereum.mock_provider, "eth_getBalance", [address, "latest"])
-IO.puts("Balance: #{balance}")
+{:ok, balance} = Livechain.RPC.MockProvider.call(
+  ethereum.mock_provider,
+  "eth_getBalance", 
+  ["0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6", "latest"]
+)
 ```
 
-### 5. Subscribe to Events
+### Real Blockchain Connections
+
+For production use with real RPC providers:
 
 ```elixir
-# Subscribe to new blocks
-MockProvider.subscribe(ethereum.mock_provider, "newHeads")
+alias Livechain.RPC.RealEndpoints
 
-# The mock provider will automatically generate new blocks
-# and broadcast them to subscribers
+# Using Infura (requires API key)
+ethereum_real = RealEndpoints.ethereum_mainnet_infura("your_infura_api_key")
+
+# Using public endpoints
+ethereum_public = RealEndpoints.ethereum_mainnet_public()
+
+# Start real connection
+{:ok, _pid} = WSSupervisor.start_connection(ethereum_real)
 ```
 
-### 6. Monitor Status
+### Monitor System Status
 
 ```elixir
 # List all active connections
 connections = WSSupervisor.list_connections()
+
+# Get detailed connection info
 Enum.each(connections, fn conn ->
   IO.puts("#{conn.name}: #{conn.status}")
+  IO.puts("  Reconnect attempts: #{conn.reconnect_attempts}")
+  IO.puts("  Subscriptions: #{conn.subscriptions}")
 end)
-
-# Get detailed provider statistics
-{:ok, stats} = MockProvider.status(ethereum.mock_provider)
-IO.puts("Total requests: #{stats.stats.total_requests}")
-IO.puts("Success rate: #{stats.stats.successful_requests / max(stats.stats.total_requests, 1) * 100}%")
 ```
 
-## Running the Test Script
+## Phoenix Channels Architecture
 
-For a comprehensive demonstration, run the included test script:
+### How It Works
 
-```bash
-elixir test_mock_rpc.exs
+Livechain uses a two-tier architecture:
+
+1. **GenServers** connect to blockchain RPC nodes and handle data ingestion
+2. **Phoenix Channels** handle WebSocket connections from client applications  
+3. **Phoenix PubSub** broadcasts data from GenServers to all connected clients
+
+```
+[Blockchain RPC] ←→ [GenServer] → [PubSub] → [Phoenix Channel] ←→ [Your App]
 ```
 
-This script will:
+### Multi-Client Broadcasting
 
-- Create multiple mock endpoints
-- Start connections
-- Make various RPC calls
-- Test subscriptions
-- Demonstrate failure simulation
-- Show statistics
+When a new block arrives:
+1. GenServer receives it from the blockchain
+2. Broadcasts to PubSub topic `"blockchain:ethereum"`
+3. All subscribed Phoenix Channels receive the event
+4. Channels push the data to their WebSocket clients
+5. **All connected clients get the same data simultaneously**
+
+### Supported Channels
+
+- `blockchain:ethereum` - Ethereum mainnet data
+- `blockchain:polygon` - Polygon network data
+- `blockchain:arbitrum` - Arbitrum network data
+- `blockchain:bsc` - Binance Smart Chain data
+
+### Channel Events
+
+- `new_block` - New blockchain blocks
+- `new_transaction` - New transactions
+- `chain_status` - Connection status updates
 
 ## Configuration Options
 
 ### Mock Provider Configuration
 
 ```elixir
-# Basic configuration
-provider = MockWSEndpoint.new(
-  id: "my_provider",
-  name: "My Provider",
-  chain_id: 1,
-  block_time: 12_000,        # 12 seconds between blocks
-  failure_rate: 0.01,        # 1% failure rate
-  latency_range: {50, 200},  # 50-200ms latency
-  enable_events: true        # Enable event streaming
-)
-```
-
-### Advanced Configuration
-
-```elixir
 # High-performance configuration
 fast_provider = MockWSEndpoint.new(
   id: "fast_provider",
-  name: "Fast Provider",
+  name: "Fast Provider", 
   chain_id: 137,
   block_time: 2_000,         # 2 seconds between blocks
   failure_rate: 0.001,       # 0.1% failure rate
@@ -172,132 +302,152 @@ failure_provider = MockWSEndpoint.new(
 )
 ```
 
+### Real Provider Configuration
+
+```elixir
+# Production configuration with Infura
+config :livechain,
+  infura_api_key: System.get_env("INFURA_API_KEY"),
+  alchemy_api_key: System.get_env("ALCHEMY_API_KEY")
+```
+
 ## Supported RPC Methods
 
-The mock provider supports the following Ethereum RPC methods:
-
 ### Block Methods
-
 - `eth_blockNumber` - Get latest block number
 - `eth_getBlockByNumber` - Get block by number
 - `eth_getBlockByHash` - Get block by hash
 
 ### Account Methods
-
 - `eth_getBalance` - Get account balance
 - `eth_getTransactionCount` - Get transaction count
 - `eth_getCode` - Get contract code
 
 ### Transaction Methods
-
 - `eth_getTransactionByHash` - Get transaction by hash
 - `eth_getTransactionReceipt` - Get transaction receipt
 
-### Subscription Methods
-
-- `eth_subscribe` - Subscribe to events
-- `eth_unsubscribe` - Unsubscribe from events
-
-## Event Types
-
-The mock provider generates the following events:
-
-- `newHeads` - New block headers
-- `logs` - Contract event logs
-- `pendingTransactions` - Pending transactions
-
 ## Troubleshooting
 
-### Common Issues
+### WebSocket Connection Issues
 
-1. **Connection not starting**:
+```bash
+# Test WebSocket connectivity
+wscat -c "ws://localhost:4000/socket/websocket"
+```
 
-   ```elixir
-   # Check if the supervisor is running
-   Process.whereis(Livechain.RPC.WSSupervisor)
+### Phoenix Channel Issues
 
-   # Check for errors in the logs
-   # Look for error messages in the console
-   ```
+```elixir
+# Check if Phoenix endpoint is running
+Process.whereis(LivechainWeb.Endpoint)
 
-2. **RPC calls failing**:
+# Restart if needed
+LivechainWeb.Endpoint.start_link()
+```
 
-   ```elixir
-   # Check provider status
-   {:ok, status} = MockProvider.status(provider.mock_provider)
-   IO.inspect(status)
+### Blockchain Connection Issues
 
-   # Verify the provider is running
-   Process.alive?(provider.mock_provider)
-   ```
+```elixir
+# Check blockchain connections
+Livechain.RPC.WSSupervisor.list_connections()
 
-3. **No events received**:
-
-   ```elixir
-   # Check if events are enabled
-   IO.inspect(provider.enable_events)
-
-   # Verify subscription
-   MockProvider.subscribe(provider.mock_provider, "newHeads")
-   ```
+# Check specific connection status
+Livechain.RPC.WSSupervisor.connection_status("ethereum_mainnet_public")
+```
 
 ### Debug Mode
 
-Enable debug logging to see more detailed information:
+```elixir
+# Enable debug logging
+Logger.configure(level: :debug)
+
+# Monitor PubSub messages
+Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:ethereum")
+```
+
+## Example Applications
+
+### JavaScript WebSocket Client
+
+```javascript
+// Connect to Livechain
+const socket = new WebSocket('ws://localhost:4000/socket/websocket');
+
+socket.onopen = function() {
+  // Join Ethereum channel
+  const joinMessage = {
+    topic: "blockchain:ethereum",
+    event: "phx_join", 
+    payload: {},
+    ref: "1"
+  };
+  socket.send(JSON.stringify(joinMessage));
+};
+
+socket.onmessage = function(event) {
+  const data = JSON.parse(event.data);
+  
+  if (data.event === "new_block") {
+    console.log("New Ethereum block:", data.payload.block);
+    // Update your UI with new block data
+  }
+};
+```
+
+### Elixir GenServer Client
 
 ```elixir
-# In your IEx session
-Logger.configure(level: :debug)
+defmodule MyBlockchainClient do
+  use GenServer
+
+  def start_link(_) do
+    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+  end
+
+  def init(state) do
+    # Subscribe to Ethereum blocks via PubSub
+    Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:ethereum")
+    {:ok, state}
+  end
+
+  def handle_info(%{event: "new_block", payload: block_data}, state) do
+    IO.puts("Received new block: #{block_data["number"]}")
+    # Process block data here
+    {:noreply, state}
+  end
+end
+```
+
+## Production Deployment
+
+### Docker Compose
+
+```yaml
+version: '3.8'
+services:
+  livechain:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      - INFURA_API_KEY=${INFURA_API_KEY}
+      - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+    restart: unless-stopped
+```
+
+### Environment Variables
+
+```bash
+export INFURA_API_KEY="your_infura_api_key"
+export ALCHEMY_API_KEY="your_alchemy_api_key"
+export SECRET_KEY_BASE="your_secret_key_base"
 ```
 
 ## Next Steps
 
-1. **Explore the API**: Try different RPC methods and parameters
-2. **Test Failure Scenarios**: Create providers with high failure rates
-3. **Build Your Application**: Integrate the mock system into your development workflow
-4. **Read the Documentation**: Check out the full vision document for architectural details
-5. **Contribute**: Help improve the mock system or add new features
-
-## Support
-
-- **Documentation**: Check the `docs/` directory for detailed guides
-- **Issues**: Report bugs or request features through the issue tracker
-- **Discussions**: Join the community discussions for help and ideas
-
-## Example Applications
-
-### Simple Block Monitor
-
-```elixir
-defmodule BlockMonitor do
-  def start_monitoring do
-    # Create and start a mock provider
-    provider = Livechain.RPC.MockWSEndpoint.ethereum_mainnet()
-    {:ok, _pid} = Livechain.RPC.WSSupervisor.start_connection(provider)
-
-    # Subscribe to new blocks
-    Livechain.RPC.MockProvider.subscribe(provider.mock_provider, "newHeads")
-
-    # Monitor blocks
-    monitor_blocks(provider.mock_provider)
-  end
-
-  defp monitor_blocks(provider) do
-    receive do
-      {:websocket_message, message} ->
-        case Jason.decode(message) do
-          {:ok, %{"method" => "eth_subscription", "params" => %{"result" => block}}} ->
-            IO.puts("New block: #{block["number"]} (#{block["hash"]})")
-          _ ->
-            :ok
-        end
-        monitor_blocks(provider)
-    end
-  end
-end
-
-# Start monitoring
-BlockMonitor.start_monitoring()
-```
-
-This example shows how to create a simple block monitoring application using the mock RPC system.
+1. **Multi-Client Testing**: Connect multiple WebSocket clients simultaneously
+2. **Build Your Frontend**: Integrate with React, Vue, or any WebSocket-capable framework
+3. **Scale Horizontally**: Deploy multiple Livechain instances with load balancing
+4. **Add Custom Chains**: Extend support for additional blockchain networks
+5. **Monitoring**: Set up metrics and alerting for production use
