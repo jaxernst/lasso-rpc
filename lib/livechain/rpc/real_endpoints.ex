@@ -100,4 +100,79 @@ defmodule Livechain.RPC.RealEndpoints do
       subscription_topics: ["newHeads"]
     )
   end
+
+  @doc """
+  Creates a Base mainnet endpoint using the official Base public RPC.
+  
+  Note: This is a public RPC that may be rate-limited.
+  """
+  def base_mainnet_public() do
+    WSEndpoint.new(
+      id: "base_mainnet_public",
+      name: "Base Mainnet (Public)",
+      url: "https://base-rpc.publicnode.com",
+      ws_url: "wss://base-rpc.publicnode.com",
+      chain_id: 8453,
+      heartbeat_interval: 30_000,
+      reconnect_interval: 10_000,
+      max_reconnect_attempts: 5,
+      subscription_topics: ["newHeads", "logs"]
+    )
+  end
+
+  @doc """
+  Creates a Base mainnet endpoint using Ankr's public RPC.
+  
+  Note: This is a public RPC that may be rate-limited.
+  """
+  def base_mainnet_ankr() do
+    WSEndpoint.new(
+      id: "base_mainnet_ankr", 
+      name: "Base Mainnet (Ankr)",
+      url: "https://rpc.ankr.com/base",
+      ws_url: "wss://rpc.ankr.com/base/ws",
+      chain_id: 8453,
+      heartbeat_interval: 30_000,
+      reconnect_interval: 10_000,
+      max_reconnect_attempts: 5,
+      subscription_topics: ["newHeads", "logs"]
+    )
+  end
+
+  @doc """
+  Creates a Base mainnet endpoint using Infura.
+  """
+  def base_mainnet_infura(api_key) do
+    WSEndpoint.new(
+      id: "base_mainnet_infura",
+      name: "Base Mainnet (Infura)",
+      url: "https://base-mainnet.infura.io/v3/#{api_key}",
+      ws_url: "wss://base-mainnet.infura.io/ws/v3/#{api_key}",
+      chain_id: 8453,
+      api_key: api_key,
+      heartbeat_interval: 30_000,
+      reconnect_interval: 5_000,
+      max_reconnect_attempts: 10,
+      subscription_topics: ["newHeads", "logs"]
+    )
+  end
+
+  @doc """
+  Creates a Base sepolia testnet endpoint using the official Base public RPC.
+  
+  Note: This is a public RPC that may be rate-limited.
+  """
+  def base_sepolia_public() do
+    WSEndpoint.new(
+      id: "base_sepolia_public",
+      name: "Base Sepolia (Public)",
+      url: "https://sepolia.base.org",
+      ws_url: "wss://sepolia.base.org",
+      chain_id: 84532,
+      heartbeat_interval: 30_000,
+      reconnect_interval: 10_000,
+      max_reconnect_attempts: 5,
+      subscription_topics: ["newHeads", "logs"]
+    )
+  end
 end
