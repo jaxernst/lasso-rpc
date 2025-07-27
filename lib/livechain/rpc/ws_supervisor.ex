@@ -236,19 +236,20 @@ defmodule Livechain.RPC.WSSupervisor do
   defp get_connection_status(pid, connection_module) do
     case Process.alive?(pid) do
       true ->
-        status_result = try do
-          connection_module.status(pid)
-        catch
-          :exit, _ ->
-            # If calling with pid fails, try calling with a GenServer call
-            try do
-              GenServer.call(pid, :status)
-            rescue
-              _ -> %{connected: false, error: "status_unavailable"}
-            end
-        rescue
-          _ -> %{connected: false, error: "status_unavailable"}
-        end
+        status_result =
+          try do
+            connection_module.status(pid)
+          rescue
+            _ -> %{connected: false, error: "status_unavailable"}
+          catch
+            :exit, _ ->
+              # If calling with pid fails, try calling with a GenServer call
+              try do
+                GenServer.call(pid, :status)
+              rescue
+                _ -> %{connected: false, error: "status_unavailable"}
+              end
+          end
 
         case status_result do
           %{connected: true} = status ->

@@ -28,7 +28,10 @@ defmodule Livechain.MixProject do
       {:phoenix_pubsub, "~> 2.1"},
       {:plug_cowboy, "~> 2.5"},
       {:broadway, "~> 1.0"},
-      {:yaml_elixir, "~> 2.9"}
+      {:yaml_elixir, "~> 2.9"},
+      {:phoenix_live_dashboard, "~> 0.8", only: :dev},
+      {:telemetry_metrics, "~> 0.6"},
+      {:telemetry_poller, "~> 1.0"}
     ]
   end
 end

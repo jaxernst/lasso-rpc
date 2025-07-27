@@ -14,7 +14,6 @@ defmodule Livechain.RPC.MessageAggregator do
   use GenServer
   require Logger
 
-
   defstruct [
     :chain_name,
     :chain_config,
@@ -109,24 +108,6 @@ defmodule Livechain.RPC.MessageAggregator do
   end
 
   @impl true
-  def handle_call(:get_stats, _from, state) do
-    {:reply, state.stats, state}
-  end
-
-  @impl true
-  def handle_call(:reset_cache, _from, state) do
-    # Clear all timers
-    Enum.each(state.cache_refs, fn {_key, ref} ->
-      Process.cancel_timer(ref)
-    end)
-
-    new_state = %{state | message_cache: %{}, cache_refs: %{}, stats: %Stats{}}
-
-    Logger.info("Reset message cache and stats for #{state.chain_name}")
-    {:reply, :ok, new_state}
-  end
-
-  @impl true
   def handle_info({:cache_cleanup, cache_key}, state) do
     new_state = remove_from_cache(state, cache_key)
     {:noreply, new_state}
@@ -155,6 +136,24 @@ defmodule Livechain.RPC.MessageAggregator do
     schedule_cache_cleanup()
 
     {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_call(:get_stats, _from, state) do
+    {:reply, state.stats, state}
+  end
+
+  @impl true
+  def handle_call(:reset_cache, _from, state) do
+    # Clear all timers
+    Enum.each(state.cache_refs, fn {_key, ref} ->
+      Process.cancel_timer(ref)
+    end)
+
+    new_state = %{state | message_cache: %{}, cache_refs: %{}, stats: %Stats{}}
+
+    Logger.info("Reset message cache and stats for #{state.chain_name}")
+    {:reply, :ok, new_state}
   end
 
   # Private functions
