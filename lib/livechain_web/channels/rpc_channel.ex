@@ -12,7 +12,7 @@ defmodule LivechainWeb.RPCChannel do
   use LivechainWeb, :channel
   require Logger
 
-  alias Livechain.RPC.{WSSupervisor, RPCMethod}
+  alias Livechain.RPC.WSSupervisor
 
   @impl true
   def join("rpc:" <> chain, _payload, socket) do
@@ -129,7 +129,7 @@ defmodule LivechainWeb.RPCChannel do
         # Subscribe to block updates for this chain
         Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:#{socket.assigns.chain}")
         
-        socket = update_subscriptions(socket, subscription_id, "newHeads")
+        _socket = update_subscriptions(socket, subscription_id, "newHeads")
         {:subscription, subscription_id}
         
       "logs" ->
@@ -137,7 +137,7 @@ defmodule LivechainWeb.RPCChannel do
         filter = List.first(params, %{})
         Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:#{socket.assigns.chain}:logs")
         
-        socket = update_subscriptions(socket, subscription_id, {"logs", filter})
+        _socket = update_subscriptions(socket, subscription_id, {"logs", filter})
         {:subscription, subscription_id}
         
       _ ->
@@ -151,12 +151,12 @@ defmodule LivechainWeb.RPCChannel do
         {:ok, false}
         
       {_subscription_type, updated_subscriptions} ->
-        socket = assign(socket, :subscriptions, updated_subscriptions)
+        _socket = assign(socket, :subscriptions, updated_subscriptions)
         {:ok, true}
     end
   end
 
-  defp handle_rpc_method("eth_getLogs", [filter], socket) do
+  defp handle_rpc_method("eth_getLogs", [filter], _socket) do
     # For now, return empty logs - will be implemented with real provider integration
     # In production, this would query the blockchain connection for the chain
     Logger.debug("eth_getLogs called with filter: #{inspect(filter)}")
@@ -168,7 +168,7 @@ defmodule LivechainWeb.RPCChannel do
     chain = socket.assigns.chain
     
     case get_chain_connection(chain) do
-      {:ok, connection_pid} ->
+      {:ok, _connection_pid} ->
         # For now, return mock data - will integrate with real connections
         {:ok, %{
           "number" => block_number,
@@ -182,13 +182,13 @@ defmodule LivechainWeb.RPCChannel do
     end
   end
 
-  defp handle_rpc_method("eth_getTransactionReceipt", [tx_hash], socket) do
+  defp handle_rpc_method("eth_getTransactionReceipt", [tx_hash], _socket) do
     Logger.debug("eth_getTransactionReceipt called for: #{tx_hash}")
     # For now, return null - will be implemented with real provider integration
     {:ok, nil}
   end
 
-  defp handle_rpc_method("eth_blockNumber", [], socket) do
+  defp handle_rpc_method("eth_blockNumber", [], _socket) do
     # Return latest block number for this chain
     {:ok, "0x" <> Integer.to_string(:rand.uniform(20_000_000), 16)}
   end

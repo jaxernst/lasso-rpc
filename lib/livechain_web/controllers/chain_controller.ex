@@ -1,7 +1,7 @@
 defmodule LivechainWeb.ChainController do
   use LivechainWeb, :controller
 
-  alias Livechain.RPC.{WSSupervisor, MockWSEndpoint}
+  alias Livechain.RPC.WSSupervisor
 
   @supported_chains %{
     "1" => %{name: "Ethereum Mainnet", function: :ethereum_mainnet},
