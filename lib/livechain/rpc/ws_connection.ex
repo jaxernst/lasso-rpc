@@ -1,0 +1,287 @@
+defmodule Livechain.RPC.WSConnection do
+  @moduledoc """
+  A GenServer that manages a single WebSocket connection to a blockchain RPC endpoint.
+
+  This process handles:
+  - WebSocket connection lifecycle
+  - Automatic reconnection on failure
+  - Heartbeat/ping to keep connection alive
+  - Subscription management
+  - Message routing and handling
+
+  Each WebSocket connection runs in its own process, allowing for:
+  - Fault isolation (one connection failure doesn't affect others)
+  - Independent reconnection strategies
+  - Process supervision and monitoring
+  """
+
+  use GenServer, restart: :permanent
+  require Logger
+
+  alias Livechain.RPC.WSEndpoint
+
+  # Client API
+
+  @doc """
+  Starts a new WebSocket connection process.
+
+  ## Examples
+
+      iex> {:ok, pid} = Livechain.RPC.WSConnection.start_link(endpoint)
+      iex> Process.alive?(pid)
+      true
+  """
+  def start_link(%WSEndpoint{} = endpoint) do
+    GenServer.start_link(__MODULE__, endpoint, name: via_name(endpoint.id))
+  end
+
+  @doc """
+  Sends a message to the WebSocket connection.
+
+  ## Examples
+
+      iex> Livechain.RPC.WSConnection.send_message("ethereum_ws", %{method: "eth_blockNumber"})
+      :ok
+  """
+  def send_message(connection_id, message) do
+    GenServer.cast(via_name(connection_id), {:send_message, message})
+  end
+
+  @doc """
+  Subscribes to a topic on the WebSocket connection.
+
+  ## Examples
+
+      iex> Livechain.RPC.WSConnection.subscribe("ethereum_ws", "newHeads")
+      :ok
+  """
+  def subscribe(connection_id, topic) do
+    GenServer.cast(via_name(connection_id), {:subscribe, topic})
+  end
+
+  @doc """
+  Gets the current connection status.
+
+  ## Examples
+
+      iex> Livechain.RPC.WSConnection.status("ethereum_ws")
+      %{connected: true, endpoint_id: "ethereum_ws", reconnect_attempts: 0}
+  """
+  def status(connection_id) do
+    GenServer.call(via_name(connection_id), :status)
+  end
+
+  # Server Callbacks
+
+  @impl true
+  def init(%WSEndpoint{} = endpoint) do
+    Logger.info("Starting WebSocket connection for #{endpoint.name} (#{endpoint.id})")
+
+    state = %{
+      endpoint: endpoint,
+      connection: nil,
+      connected: false,
+      reconnect_attempts: 0,
+      subscriptions: MapSet.new(),
+      pending_messages: [],
+      heartbeat_ref: nil
+    }
+
+    # Start the connection process
+    {:ok, state, {:continue, :connect}}
+  end
+
+  @impl true
+  def handle_continue(:connect, state) do
+    case connect_to_websocket(state.endpoint) do
+      {:ok, connection} ->
+        Logger.info("Connected to WebSocket: #{state.endpoint.name}")
+        state = %{state | connection: connection, connected: true, reconnect_attempts: 0}
+        state = schedule_heartbeat(state)
+        state = send_pending_messages(state)
+        {:noreply, state}
+
+      {:error, reason} ->
+        Logger.error("Failed to connect to WebSocket: #{reason}")
+        state = schedule_reconnect(state)
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:send_message, message}, %{connected: true, connection: connection} = state) do
+    case WebSockex.send_frame(connection, {:text, Jason.encode!(message)}) do
+      :ok ->
+        {:noreply, state}
+
+      {:error, reason} ->
+        Logger.error("Failed to send message: #{reason}")
+        state = %{state | pending_messages: [message | state.pending_messages]}
+        {:noreply, state}
+    end
+  end
+
+  def handle_cast({:send_message, message}, state) do
+    # Queue message for when we reconnect
+    state = %{state | pending_messages: [message | state.pending_messages]}
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:subscribe, topic}, state) do
+    subscription_message = %{
+      "jsonrpc" => "2.0",
+      "id" => generate_id(),
+      "method" => "eth_subscribe",
+      "params" => [topic]
+    }
+
+    GenServer.cast(self(), {:send_message, subscription_message})
+    state = %{state | subscriptions: MapSet.put(state.subscriptions, topic)}
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_call(:status, _from, state) do
+    status = %{
+      connected: state.connected,
+      endpoint_id: state.endpoint.id,
+      reconnect_attempts: state.reconnect_attempts,
+      subscriptions: MapSet.size(state.subscriptions),
+      pending_messages: length(state.pending_messages)
+    }
+
+    {:reply, status, state}
+  end
+
+  @impl true
+  def handle_info({:heartbeat}, state) do
+    if state.connected do
+      # Send ping to keep connection alive
+      WebSockex.send_frame(state.connection, :ping)
+      state = schedule_heartbeat(state)
+      {:noreply, state}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:reconnect}, state) do
+    Logger.info("Attempting to reconnect to #{state.endpoint.name}")
+    {:noreply, state, {:continue, :connect}}
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
+    Logger.warning("WebSocket connection lost: #{inspect(reason)}")
+    state = %{state | connected: false, connection: nil}
+    state = schedule_reconnect(state)
+    {:noreply, state}
+  end
+
+  # WebSocket event handlers (WebSockex callbacks)
+
+  def handle_connect(_conn, state) do
+    Logger.info("WebSocket connected: #{state.endpoint.name}")
+    {:ok, state}
+  end
+
+  def handle_frame({:text, message}, state) do
+    case Jason.decode(message) do
+      {:ok, decoded} ->
+        handle_websocket_message(decoded, state)
+
+      {:error, reason} ->
+        Logger.error("Failed to decode WebSocket message: #{reason}")
+        {:ok, state}
+    end
+  end
+
+  def handle_frame({:binary, data}, state) do
+    Logger.debug("Received binary frame: #{byte_size(data)} bytes")
+    {:ok, state}
+  end
+
+  def handle_frame({:ping, payload}, state) do
+    Logger.debug("Received ping, sending pong")
+    {:reply, {:pong, payload}, state}
+  end
+
+  def handle_frame({:pong, _payload}, state) do
+    Logger.debug("Received pong")
+    {:ok, state}
+  end
+
+  def handle_frame({:close, code, reason}, state) do
+    Logger.info("WebSocket closed: #{code} - #{reason}")
+    {:ok, state}
+  end
+
+  def handle_disconnect(%{reason: reason}, state) do
+    Logger.warning("WebSocket disconnected: #{inspect(reason)}")
+    state = %{state | connected: false, connection: nil}
+    state = schedule_reconnect(state)
+    {:reconnect, state}
+  end
+
+  # Private functions
+
+  defp connect_to_websocket(endpoint) do
+    WebSockex.start_link(
+      endpoint.ws_url,
+      __MODULE__,
+      endpoint,
+      name: {:via, :global, {:connection, endpoint.id}}
+    )
+  end
+
+  defp schedule_heartbeat(state) do
+    if state.heartbeat_ref do
+      Process.cancel_timer(state.heartbeat_ref)
+    end
+
+    ref = Process.send_after(self(), {:heartbeat}, state.endpoint.heartbeat_interval)
+    %{state | heartbeat_ref: ref}
+  end
+
+  defp schedule_reconnect(state) do
+    if state.reconnect_attempts < state.endpoint.max_reconnect_attempts do
+      delay = state.endpoint.reconnect_interval * (state.reconnect_attempts + 1)
+      Process.send_after(self(), {:reconnect}, delay)
+      %{state | reconnect_attempts: state.reconnect_attempts + 1}
+    else
+      Logger.error("Max reconnection attempts reached for #{state.endpoint.name}")
+      state
+    end
+  end
+
+  defp send_pending_messages(%{pending_messages: []} = state), do: state
+
+  defp send_pending_messages(%{pending_messages: messages} = state) do
+    Enum.each(messages, fn message ->
+      GenServer.cast(self(), {:send_message, message})
+    end)
+
+    %{state | pending_messages: []}
+  end
+
+  defp handle_websocket_message(%{"method" => "eth_subscription"} = message, state) do
+    # Handle subscription notifications
+    Logger.debug("Received subscription: #{inspect(message)}")
+    # Here you would typically broadcast to subscribers
+    {:ok, state}
+  end
+
+  defp handle_websocket_message(message, state) do
+    # Handle other RPC responses
+    Logger.debug("Received message: #{inspect(message)}")
+    {:ok, state}
+  end
+
+  defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+
+  defp via_name(connection_id) do
+    {:via, :global, {:connection, connection_id}}
+  end
+end
