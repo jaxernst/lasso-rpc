@@ -1,6 +1,20 @@
 defmodule LivechainWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :livechain
 
+  # The session will be stored in the cookie and signed,
+  # this means its contents can be read but not tampered with.
+  # Set :encryption_salt if you would also like to encrypt it.
+  @session_options [
+    store: :cookie,
+    key: "_livechain_key",
+    signing_salt: "FvHQmKTwY0gU9P0aH8gi9M5rO4+q2qIIhpKjLlMcOqfeN4YubVHibH/rbN3e7OMH",
+    same_site: "Lax"
+  ]
+
+  # LiveView socket for real-time updates
+  socket "/live", Phoenix.LiveView.Socket,
+    websocket: [connect_info: [session: @session_options]]
+
   # WebSocket configuration
   socket "/socket", LivechainWeb.UserSocket,
     websocket: true,
@@ -22,16 +36,6 @@ defmodule LivechainWeb.Endpoint do
   socket "/rpc/bsc", LivechainWeb.RPCSocket,
     websocket: [path: "/", params: %{"chain" => "bsc"}],
     longpoll: false
-
-  # The session will be stored in the cookie and signed,
-  # this means its contents can be read but not tampered with.
-  # Set :encryption_salt if you would also like to encrypt it.
-  @session_options [
-    store: :cookie,
-    key: "_livechain_key",
-    signing_salt: "QxjVyFyh",
-    same_site: "Lax"
-  ]
 
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
