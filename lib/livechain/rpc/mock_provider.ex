@@ -54,7 +54,9 @@ defmodule Livechain.RPC.MockProvider do
   - `enable_events`: Whether to enable event streaming (default: true)
   """
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: via_name(opts[:name] || "mock_provider"))
+    # Create unique name to avoid conflicts
+    unique_name = "#{opts[:name] || "mock_provider"}_#{System.system_time(:millisecond)}"
+    GenServer.start_link(__MODULE__, opts, name: via_name(unique_name))
   end
 
   @doc """
@@ -335,7 +337,8 @@ defmodule Livechain.RPC.MockProvider do
   # Private functions
 
   defp via_name(name) do
-    {:via, :global, {:mock_provider, name}}
+    # Use a simple atom name to avoid global registry conflicts
+    String.to_atom("mock_provider_#{name}")
   end
 
   defp simulate_latency(fun, {min_latency, max_latency}) do

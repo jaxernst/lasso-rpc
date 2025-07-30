@@ -62,6 +62,11 @@ defmodule Livechain.RPC.WSSupervisor do
         case DynamicSupervisor.start_child(__MODULE__, spec) do
           {:ok, pid} ->
             Logger.info("Started WebSocket connection: #{endpoint.name} (#{endpoint.id})")
+            broadcast_connection_event(:started, endpoint.id, %{
+              id: endpoint.id,
+              name: endpoint.name,
+              status: :starting
+            })
             {:ok, pid}
 
           {:error, {:already_started, pid}} ->
@@ -87,6 +92,11 @@ defmodule Livechain.RPC.WSSupervisor do
         case DynamicSupervisor.start_child(__MODULE__, spec) do
           {:ok, pid} ->
             Logger.info("Started mock WebSocket connection: #{endpoint.name} (#{endpoint.id})")
+            broadcast_connection_event(:started, endpoint.id, %{
+              id: endpoint.id,
+              name: endpoint.name,
+              status: :starting
+            })
             {:ok, pid}
 
           {:error, {:already_started, pid}} ->
@@ -116,7 +126,12 @@ defmodule Livechain.RPC.WSSupervisor do
     case find_connection(connection_id) do
       {:ok, pid} ->
         Logger.info("Stopping WebSocket connection: #{connection_id}")
-        DynamicSupervisor.terminate_child(__MODULE__, pid)
+        result = DynamicSupervisor.terminate_child(__MODULE__, pid)
+        broadcast_connection_event(:stopped, connection_id, %{
+          id: connection_id,
+          status: :stopped
+        })
+        result
 
       {:error, :not_found} ->
         Logger.warning("WebSocket connection not found: #{connection_id}")
@@ -217,10 +232,30 @@ defmodule Livechain.RPC.WSSupervisor do
     )
   end
 
+  @doc """
+  Broadcasts connection status updates to all interested LiveViews.
+  """
+  def broadcast_connection_status_update do
+    connections = list_connections()
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "ws_connections",
+      {:connection_status_update, connections}
+    )
+  end
+
   # Private functions
 
   defp validate_endpoint(endpoint) do
     WSEndpoint.validate(endpoint)
+  end
+
+  defp broadcast_connection_event(event_type, connection_id, data) do
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "ws_connections",
+      {:connection_event, event_type, connection_id, data}
+    )
   end
 
   defp find_connection(connection_id) do
@@ -255,7 +290,7 @@ defmodule Livechain.RPC.WSSupervisor do
           %{connected: true} = status ->
             %{
               id: Map.get(status, :endpoint_id, "unknown"),
-              name: get_connection_name(pid),
+              name: Map.get(status, :endpoint_name, get_connection_name(pid)),
               status: :connected,
               reconnect_attempts: Map.get(status, :reconnect_attempts, 0),
               subscriptions: Map.get(status, :subscriptions, 0)
