@@ -146,6 +146,9 @@ defmodule Livechain.RPC.MockProvider do
       }
     }
 
+    # Set provider_pid first
+    state = %{state | provider_pid: self()}
+
     # Start block generator if events are enabled
     state =
       if enable_events do
@@ -157,7 +160,7 @@ defmodule Livechain.RPC.MockProvider do
 
     # Start event stream
     {:ok, event_stream} = EventStream.start_link(state)
-    state = %{state | event_stream: event_stream, provider_pid: self()}
+    state = %{state | event_stream: event_stream}
 
     {:ok, state}
   end
