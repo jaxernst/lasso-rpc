@@ -37,6 +37,10 @@ defmodule Livechain.RPC.MockWSConnection do
   @doc """
   Gets the current connection status.
   """
+  def status(pid_or_connection_id) when is_pid(pid_or_connection_id) do
+    GenServer.call(pid_or_connection_id, :status)
+  end
+  
   def status(connection_id) do
     GenServer.call(via_name(connection_id), :status)
   end
@@ -48,21 +52,30 @@ defmodule Livechain.RPC.MockWSConnection do
     Logger.info("Starting mock WebSocket connection for #{endpoint.name} (#{endpoint.id})")
 
     # Start the mock provider
-    endpoint = MockWSEndpoint.start_mock_provider(endpoint)
+    case MockWSEndpoint.start_mock_provider(endpoint) do
+      %MockWSEndpoint{} = updated_endpoint ->
+        state = %{
+          endpoint: updated_endpoint,
+          connected: true,
+          reconnect_attempts: 0,
+          subscriptions: MapSet.new(),
+          pending_messages: [],
+          heartbeat_ref: nil,
+          last_seen: DateTime.utc_now()
+        }
 
-    state = %{
-      endpoint: endpoint,
-      connected: true,
-      reconnect_attempts: 0,
-      subscriptions: MapSet.new(),
-      pending_messages: [],
-      heartbeat_ref: nil
-    }
+        # Broadcast initial connected status
+        broadcast_status_change(state, :connected)
 
-    # Schedule heartbeat
-    state = schedule_heartbeat(state)
+        # Schedule heartbeat
+        state = schedule_heartbeat(state)
 
-    {:ok, state}
+        {:ok, state}
+
+      {:error, reason} ->
+        Logger.error("Failed to start mock provider for #{endpoint.name}: #{inspect(reason)}")
+        {:stop, reason}
+    end
   end
 
   @impl true
@@ -105,9 +118,11 @@ defmodule Livechain.RPC.MockWSConnection do
     status = %{
       connected: state.connected,
       endpoint_id: state.endpoint.id,
+      endpoint_name: state.endpoint.name,
       reconnect_attempts: state.reconnect_attempts,
       subscriptions: MapSet.size(state.subscriptions),
-      pending_messages: length(state.pending_messages)
+      pending_messages: length(state.pending_messages),
+      last_seen: state.last_seen
     }
 
     {:reply, status, state}
@@ -116,9 +131,11 @@ defmodule Livechain.RPC.MockWSConnection do
   @impl true
   def handle_info({:heartbeat}, state) do
     if state.connected do
-      # Simulate heartbeat
+      # Simulate heartbeat and update last seen
       Logger.debug("Mock WebSocket heartbeat for #{state.endpoint.name}")
-      state = schedule_heartbeat(state)
+      state = state
+      |> Map.put(:last_seen, DateTime.utc_now())
+      |> schedule_heartbeat()
       {:noreply, state}
     else
       {:noreply, state}
@@ -135,7 +152,7 @@ defmodule Livechain.RPC.MockWSConnection do
   # Private functions
 
   defp via_name(connection_id) do
-    {:via, :global, {:mock_connection, connection_id}}
+    {:via, :global, {:connection, connection_id}}
   end
 
   defp schedule_heartbeat(state) do
@@ -145,5 +162,19 @@ defmodule Livechain.RPC.MockWSConnection do
 
     ref = Process.send_after(self(), {:heartbeat}, state.endpoint.heartbeat_interval)
     %{state | heartbeat_ref: ref}
+  end
+
+  defp broadcast_status_change(state, status) do
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "ws_connections",
+      {:connection_status_changed, state.endpoint.id, %{
+        id: state.endpoint.id,
+        name: state.endpoint.name,
+        status: status,
+        reconnect_attempts: state.reconnect_attempts,
+        subscriptions: MapSet.size(state.subscriptions)
+      }}
+    )
   end
 end

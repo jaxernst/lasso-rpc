@@ -97,12 +97,14 @@ defmodule Livechain.RPC.WSConnection do
       {:ok, connection} ->
         Logger.info("Connected to WebSocket: #{state.endpoint.name}")
         state = %{state | connection: connection, connected: true, reconnect_attempts: 0}
+        broadcast_status_change(state, :connected)
         state = schedule_heartbeat(state)
         state = send_pending_messages(state)
         {:noreply, state}
 
       {:error, reason} ->
         Logger.error("Failed to connect to WebSocket: #{reason}")
+        broadcast_status_change(state, :disconnected)
         state = schedule_reconnect(state)
         {:noreply, state}
     end
@@ -176,6 +178,7 @@ defmodule Livechain.RPC.WSConnection do
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
     Logger.warning("WebSocket connection lost: #{inspect(reason)}")
     state = %{state | connected: false, connection: nil}
+    broadcast_status_change(state, :disconnected)
     state = schedule_reconnect(state)
     {:noreply, state}
   end
@@ -370,6 +373,20 @@ defmodule Livechain.RPC.WSConnection do
       Livechain.PubSub,
       "blockchain:#{chain_name}:blocks",
       %{event: "new_block", payload: block_data}
+    )
+  end
+
+  defp broadcast_status_change(state, status) do
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "ws_connections",
+      {:connection_status_changed, state.endpoint.id, %{
+        id: state.endpoint.id,
+        name: state.endpoint.name,
+        status: status,
+        reconnect_attempts: state.reconnect_attempts,
+        subscriptions: MapSet.size(state.subscriptions)
+      }}
     )
   end
 end

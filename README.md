@@ -13,7 +13,8 @@ ChainPulse is a lightweight, Elixir-based middleware for real-time blockchain ev
 - ⚡ **Viem Compatible**: Drop-in replacement for existing Viem/Wagmi apps
 - 🏗️ **Broadway Pipelines**: Multi-chain event normalization  
 - 🛡️ **OTP Fault Tolerance**: Individual failures don't cascade
-- 🧪 **Development Ready**: Comprehensive mock system for testing
+- 🧪 **Development Ready**: Comprehensive mock system with real-time dashboard
+- 📊 **Live Monitoring**: Web dashboard showing connection status, timestamps, and metrics
 
 ## 🏛️ Architecture
 
@@ -22,9 +23,11 @@ ChainPulse is a lightweight, Elixir-based middleware for real-time blockchain ev
 ```
 
 - **GenServers**: Manage individual blockchain RPC connections with automatic reconnection
-- **Phoenix PubSub**: Efficient message broadcasting across the system
+- **Phoenix PubSub**: Efficient message broadcasting across the system  
 - **Phoenix Channels**: Handle thousands of concurrent WebSocket client connections
+- **LiveView Dashboard**: Real-time web interface showing connection status and metrics
 - **HTTP API**: RESTful interface for system status and blockchain data
+- **Integrated Simulator**: Auto-starts in dev/test environments for realistic connection testing
 
 ## 🚀 Quick Start
 
@@ -48,8 +51,11 @@ ChainPulse is a lightweight, Elixir-based middleware for real-time blockchain ev
 
 3. **Start the application**:
    ```bash
-   mix run -e "Livechain.TestRunner.run_live_demo()"
+   mix phx.server
    ```
+
+4. **View the WebSocket Connection Dashboard**:
+   Open http://localhost:4000 to see the real-time connection monitoring interface.
 
 ### 🌐 WebSocket Client Testing
 
@@ -93,30 +99,41 @@ curl http://localhost:4000/api/chains/1/status
 
 ## 📖 Documentation
 
-- [Quick Start Guide](docs/QUICK_START.md) - Get up and running in minutes
-- [RPC Orchestration Vision](docs/RPC_ORCHESTRATION_VISION.md) - Architecture deep dive
+- [WebSocket Simulator Guide](SIMULATOR.md) - Development simulator with real-time dashboard
+- [RPC Orchestration Vision](docs/RPC_ORCHESTRATION_VISION.md) - Architecture deep dive  
 - [API Documentation](#) - Complete API reference (coming soon)
 
 ## 🛠️ Development
 
-### Mock Provider System
+### Real-Time Connection Dashboard
 
-Perfect for development and testing:
+The development environment includes an auto-starting simulator with live dashboard:
+
+```bash
+# Start Phoenix with integrated simulator
+mix phx.server
+
+# View dashboard at http://localhost:4000
+# - Real-time connection status
+# - Live "last seen" timestamps  
+# - Connection failures and reconnections
+# - Multiple blockchain networks (Ethereum, Polygon, Arbitrum, BSC)
+```
+
+Control the simulator from IEx:
 
 ```elixir
-# Start interactive session
-iex -S mix
+# View statistics  
+Livechain.Simulator.get_stats()
 
-# Create mock endpoints
-ethereum = Livechain.RPC.MockWSEndpoint.ethereum_mainnet()
-polygon = Livechain.RPC.MockWSEndpoint.polygon()
+# Change simulation intensity
+Livechain.Simulator.switch_mode("intense")  # High activity, failures
+Livechain.Simulator.switch_mode("calm")     # Stable connections  
+Livechain.Simulator.switch_mode("normal")   # Balanced (default)
 
-# Start connections
-Livechain.RPC.WSSupervisor.start_connection(ethereum)
-Livechain.RPC.WSSupervisor.start_connection(polygon)
-
-# Check status
-Livechain.RPC.WSSupervisor.list_connections()
+# Manual control
+Livechain.Simulator.stop_simulation()
+Livechain.Simulator.start_simulation()
 ```
 
 ### Real Blockchain Connections
