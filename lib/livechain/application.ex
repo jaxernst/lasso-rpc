@@ -62,7 +62,7 @@ defmodule Livechain.Application do
     case Process.whereis(Livechain.Simulator) do
       pid when is_pid(pid) ->
         Livechain.Simulator.start_simulation()
-        Logger.info("🎮 Auto-started WebSocket connection simulator in #{Mix.env()} environment")
+        Logger.info("Auto-started WebSocket connection simulator")
       nil ->
         Logger.debug("Simulator not found in process registry")
     end

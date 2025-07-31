@@ -61,7 +61,7 @@ defmodule Livechain.RPC.WSSupervisor do
 
         case DynamicSupervisor.start_child(__MODULE__, spec) do
           {:ok, pid} ->
-            Logger.info("Started WebSocket connection: #{endpoint.name} (#{endpoint.id})")
+            Logger.debug("Started WebSocket connection: #{endpoint.name}")
             broadcast_connection_event(:started, endpoint.id, %{
               id: endpoint.id,
               name: endpoint.name,
@@ -92,7 +92,7 @@ defmodule Livechain.RPC.WSSupervisor do
 
         case DynamicSupervisor.start_child(__MODULE__, spec) do
           {:ok, pid} ->
-            Logger.info("Started mock WebSocket connection: #{endpoint.name} (#{endpoint.id})")
+            Logger.debug("Started mock WebSocket connection: #{endpoint.name}")
             broadcast_connection_event(:started, endpoint.id, %{
               id: endpoint.id,
               name: endpoint.name,
@@ -127,7 +127,7 @@ defmodule Livechain.RPC.WSSupervisor do
   def stop_connection(connection_id) do
     case find_connection(connection_id) do
       {:ok, pid} ->
-        Logger.info("Stopping WebSocket connection: #{connection_id}")
+        Logger.debug("Stopping WebSocket connection: #{connection_id}")
         result = DynamicSupervisor.terminate_child(__MODULE__, pid)
         broadcast_connection_event(:stopped, connection_id, %{
           id: connection_id,
@@ -226,7 +226,7 @@ defmodule Livechain.RPC.WSSupervisor do
 
   @impl true
   def init(_opts) do
-    Logger.info("Starting WebSocket supervisor")
+    Logger.debug("Starting WebSocket supervisor")
 
     DynamicSupervisor.init(
       strategy: :one_for_one,
@@ -241,7 +241,6 @@ defmodule Livechain.RPC.WSSupervisor do
   """
   def broadcast_connection_status_update do
     connections = list_connections()
-    IO.puts("🔔 Broadcasting connection_status_update with #{length(connections)} connections")
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",
@@ -256,7 +255,6 @@ defmodule Livechain.RPC.WSSupervisor do
   end
 
   defp broadcast_connection_event(event_type, connection_id, data) do
-    IO.puts("🔔 Broadcasting connection_event: #{event_type} for #{connection_id}")
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",

@@ -119,14 +119,14 @@ defmodule Livechain.Simulator do
       }
     }
     
-    Logger.info("🎮 WebSocket Connection Simulator initialized (#{mode} mode)")
+    Logger.debug("WebSocket Connection Simulator initialized (#{mode} mode)")
     
     {:ok, state}
   end
 
   @impl true
   def handle_cast(:start_simulation, state) do
-    Logger.info("🚀 Starting WebSocket connection simulation (#{state.mode} mode)...")
+    Logger.info("Starting WebSocket simulation (#{state.mode} mode)")
     
     # Cancel existing timers
     state = cancel_all_timers(state)
@@ -148,7 +148,7 @@ defmodule Livechain.Simulator do
 
   @impl true
   def handle_cast(:stop_simulation, state) do
-    Logger.info("🛑 Stopping WebSocket connection simulation...")
+    Logger.info("Stopping WebSocket simulation")
     
     # Stop all active connections
     Enum.each(state.active_connections, fn {connection_id, _chain} ->
@@ -170,7 +170,7 @@ defmodule Livechain.Simulator do
 
   @impl true
   def handle_cast({:switch_mode, new_mode}, state) do
-    Logger.info("🔄 Switching simulation mode: #{state.mode} → #{new_mode}")
+    Logger.info("Switching simulation mode: #{state.mode} → #{new_mode}")
     
     # Stop current simulation
     GenServer.cast(self(), :stop_simulation)
@@ -188,7 +188,7 @@ defmodule Livechain.Simulator do
   @impl true
   def handle_cast({:update_config, new_config}, state) do
     updated_config = Map.merge(state.config, new_config)
-    Logger.info("Updated simulator configuration: #{inspect(new_config)}")
+    Logger.debug("Updated simulator configuration: #{inspect(new_config)}")
     {:noreply, %{state | config: updated_config}}
   end
 
@@ -259,7 +259,7 @@ defmodule Livechain.Simulator do
 
     case WSSupervisor.start_connection(endpoint) do
       {:ok, _pid} ->
-        Logger.info("🔄 Reconnected #{chain_name}: #{new_connection_id}")
+        Logger.debug("Reconnected #{chain_name}: #{new_connection_id}")
 
         # Schedule new lifecycle
         lifetime = random_lifetime(state.config)
@@ -277,7 +277,7 @@ defmodule Livechain.Simulator do
         {:noreply, state}
 
       {:error, reason} ->
-        Logger.error("❌ Reconnection failed for #{chain_name}: #{inspect(reason)}")
+        Logger.warning("Reconnection failed for #{chain_name}: #{inspect(reason)}")
         {:noreply, state}
     end
   end
@@ -302,7 +302,7 @@ defmodule Livechain.Simulator do
       # Start the connection
       case WSSupervisor.start_connection(endpoint) do
         {:ok, _pid} ->
-          Logger.info("📡 Spawned #{chain_name} connection: #{connection_id}")
+          Logger.debug("Spawned #{chain_name} connection: #{connection_id}")
           
           # Schedule connection lifecycle event
           lifetime = random_lifetime(state.config)
@@ -318,7 +318,7 @@ defmodule Livechain.Simulator do
           state
           
         {:error, reason} ->
-          Logger.error("❌ Failed to spawn #{chain_name} connection: #{inspect(reason)}")
+          Logger.warning("Failed to spawn #{chain_name} connection: #{inspect(reason)}")
           state
       end
     end
@@ -335,19 +335,19 @@ defmodule Livechain.Simulator do
         is_failure = :rand.uniform() < state.config.connection_failure_rate
         
         if is_failure do
-          Logger.warning("⚠️  Connection #{connection_id} (#{chain_name}) failed!")
+          Logger.debug("Connection #{connection_id} (#{chain_name}) failed")
           state = %{state | stats: %{state.stats | total_failures: state.stats.total_failures + 1}}
           
           # Maybe reconnect
           if :rand.uniform() < state.config.reconnection_probability do
             # Schedule reconnection
             Process.send_after(self(), {:reconnect, connection_id, chain_name}, 2_000)
-            Logger.info("🔄 Scheduled reconnection for #{connection_id}")
+            Logger.debug("Scheduled reconnection for #{connection_id}")
           end
           
           stop_connection_and_cleanup(connection_id, state)
         else
-          Logger.info("✅ Connection #{connection_id} (#{chain_name}) completed normal lifecycle")
+          Logger.debug("Connection #{connection_id} (#{chain_name}) completed lifecycle")
           stop_connection_and_cleanup(connection_id, state)
         end
     end
@@ -393,7 +393,6 @@ defmodule Livechain.Simulator do
         {:new_event, event}
       )
       
-      Logger.debug("📢 Broadcasted #{event.event_type} event for #{chain_name}")
     end
     
     state

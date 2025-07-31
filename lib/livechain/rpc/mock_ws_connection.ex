@@ -49,7 +49,7 @@ defmodule Livechain.RPC.MockWSConnection do
 
   @impl true
   def init(%MockWSEndpoint{} = endpoint) do
-    Logger.info("Starting mock WebSocket connection for #{endpoint.name} (#{endpoint.id})")
+    Logger.debug("Starting mock WebSocket connection for #{endpoint.name}")
 
     # Start the mock provider
     case MockWSEndpoint.start_mock_provider(endpoint) do
@@ -96,7 +96,6 @@ defmodule Livechain.RPC.MockWSConnection do
              ) do
           {:ok, result} ->
             # Simulate response
-            Logger.debug("Mock RPC response: #{inspect(result)}")
             {:noreply, state}
 
           {:error, reason} ->
@@ -132,7 +131,6 @@ defmodule Livechain.RPC.MockWSConnection do
   def handle_info({:heartbeat}, state) do
     if state.connected do
       # Simulate heartbeat and update last seen
-      Logger.debug("Mock WebSocket heartbeat for #{state.endpoint.name}")
       state = state
       |> Map.put(:last_seen, DateTime.utc_now())
       |> schedule_heartbeat()
@@ -145,7 +143,6 @@ defmodule Livechain.RPC.MockWSConnection do
   @impl true
   def handle_info({:websocket_message, message}, state) do
     # Handle incoming WebSocket messages (from mock provider)
-    Logger.debug("Mock WebSocket received: #{message}")
     {:noreply, state}
   end
 
@@ -165,7 +162,6 @@ defmodule Livechain.RPC.MockWSConnection do
   end
 
   defp broadcast_status_change(state, status) do
-    IO.puts("🔔 Broadcasting connection_status_changed: #{status} for #{state.endpoint.id}")
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",
