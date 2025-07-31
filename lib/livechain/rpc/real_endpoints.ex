@@ -1,7 +1,7 @@
 defmodule Livechain.RPC.RealEndpoints do
   @moduledoc """
   Helper module for creating real blockchain endpoint configurations.
-  
+
   This module provides functions to create WSEndpoint configurations
   for connecting to real blockchain RPC providers.
   """
@@ -10,7 +10,7 @@ defmodule Livechain.RPC.RealEndpoints do
 
   @doc """
   Creates an Ethereum mainnet endpoint using Infura.
-  
+
   You'll need an Infura API key to use this.
   """
   def ethereum_mainnet_infura(api_key) do
@@ -48,7 +48,7 @@ defmodule Livechain.RPC.RealEndpoints do
 
   @doc """
   Creates an Ethereum mainnet endpoint using a public RPC.
-  
+
   Note: Public RPCs may be less reliable and have rate limits.
   """
   def ethereum_mainnet_public() do
@@ -103,7 +103,7 @@ defmodule Livechain.RPC.RealEndpoints do
 
   @doc """
   Creates a Base mainnet endpoint using the official Base public RPC.
-  
+
   Note: This is a public RPC that may be rate-limited.
   """
   def base_mainnet_public() do
@@ -122,12 +122,12 @@ defmodule Livechain.RPC.RealEndpoints do
 
   @doc """
   Creates a Base mainnet endpoint using Ankr's public RPC.
-  
+
   Note: This is a public RPC that may be rate-limited.
   """
   def base_mainnet_ankr() do
     WSEndpoint.new(
-      id: "base_mainnet_ankr", 
+      id: "base_mainnet_ankr",
       name: "Base Mainnet (Ankr)",
       url: "https://rpc.ankr.com/base",
       ws_url: "wss://rpc.ankr.com/base/ws",
@@ -159,7 +159,7 @@ defmodule Livechain.RPC.RealEndpoints do
 
   @doc """
   Creates a Base sepolia testnet endpoint using the official Base public RPC.
-  
+
   Note: This is a public RPC that may be rate-limited.
   """
   def base_sepolia_public() do

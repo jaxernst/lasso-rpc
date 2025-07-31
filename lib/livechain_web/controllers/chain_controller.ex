@@ -11,13 +11,14 @@ defmodule LivechainWeb.ChainController do
   }
 
   def index(conn, _params) do
-    chains = Enum.map(@supported_chains, fn {chain_id, info} ->
-      %{
-        chain_id: chain_id,
-        name: info.name,
-        supported: true
-      }
-    end)
+    chains =
+      Enum.map(@supported_chains, fn {chain_id, info} ->
+        %{
+          chain_id: chain_id,
+          name: info.name,
+          supported: true
+        }
+      end)
 
     json(conn, %{chains: chains})
   end
@@ -32,27 +33,30 @@ defmodule LivechainWeb.ChainController do
       chain_info ->
         # Get connection status for this chain
         connections = WSSupervisor.list_connections()
-        chain_connection = Enum.find(connections, fn conn ->
-          String.contains?(String.downcase(conn.name), String.downcase(chain_info.name))
-        end)
 
-        status = if chain_connection do
-          %{
-            chain_id: chain_id,
-            name: chain_info.name,
-            connected: chain_connection.status == :connected,
-            reconnect_attempts: chain_connection.reconnect_attempts || 0,
-            subscriptions: chain_connection.subscriptions || 0
-          }
-        else
-          %{
-            chain_id: chain_id,
-            name: chain_info.name,
-            connected: false,
-            reconnect_attempts: 0,
-            subscriptions: 0
-          }
-        end
+        chain_connection =
+          Enum.find(connections, fn conn ->
+            String.contains?(String.downcase(conn.name), String.downcase(chain_info.name))
+          end)
+
+        status =
+          if chain_connection do
+            %{
+              chain_id: chain_id,
+              name: chain_info.name,
+              connected: chain_connection.status == :connected,
+              reconnect_attempts: chain_connection.reconnect_attempts || 0,
+              subscriptions: chain_connection.subscriptions || 0
+            }
+          else
+            %{
+              chain_id: chain_id,
+              name: chain_info.name,
+              connected: false,
+              reconnect_attempts: 0,
+              subscriptions: 0
+            }
+          end
 
         json(conn, status)
     end

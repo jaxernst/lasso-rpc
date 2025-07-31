@@ -270,8 +270,12 @@ defmodule LivechainWeb.NetworkLive do
   end
 
   # Import helper functions from OrchestrationLive
-  defdelegate calculate_spiral_position(index, center_x, center_y), to: LivechainWeb.OrchestrationLive
-  defdelegate calculate_satellite_position(center_x, center_y, distance, index, total_satellites), to: LivechainWeb.OrchestrationLive
+  defdelegate calculate_spiral_position(index, center_x, center_y),
+    to: LivechainWeb.OrchestrationLive
+
+  defdelegate calculate_satellite_position(center_x, center_y, distance, index, total_satellites),
+    to: LivechainWeb.OrchestrationLive
+
   defdelegate extract_chain_from_provider(provider_id), to: LivechainWeb.OrchestrationLive
   defdelegate detect_message_type(message), to: LivechainWeb.OrchestrationLive
   defdelegate event_color(type), to: LivechainWeb.OrchestrationLive

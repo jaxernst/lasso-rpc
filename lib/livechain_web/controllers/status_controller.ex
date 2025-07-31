@@ -6,7 +6,7 @@ defmodule LivechainWeb.StatusController do
   def status(conn, _params) do
     # Get detailed system status
     connections = WSSupervisor.list_connections()
-    
+
     status = %{
       system: %{
         status: "operational",

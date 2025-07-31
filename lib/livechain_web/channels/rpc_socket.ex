@@ -1,24 +1,24 @@
 defmodule LivechainWeb.RPCSocket do
   @moduledoc """
   WebSocket handler for standard Ethereum JSON-RPC.
-  
+
   Provides Viem-compatible WebSocket endpoints at:
   - /rpc/ethereum
   - /rpc/arbitrum
   - /rpc/polygon
-  
+
   Supports standard methods:
   - eth_subscribe / eth_unsubscribe
   - eth_getLogs
   - eth_getBlockByNumber
   - eth_getTransactionReceipt
   """
-  
+
   use Phoenix.Socket
   require Logger
 
   ## Channels
-  channel "rpc:*", LivechainWeb.RPCChannel
+  channel("rpc:*", LivechainWeb.RPCChannel)
 
   @impl true
   def connect(%{"chain" => chain}, socket, _connect_info) do
@@ -27,14 +27,14 @@ defmodule LivechainWeb.RPCSocket do
         Logger.info("JSON-RPC client connected to chain: #{chain}")
         socket = assign(socket, :chain, chain)
         {:ok, socket}
-        
+
       false ->
         Logger.warning("Invalid chain requested: #{chain}")
         :error
     end
   end
 
-  @impl true  
+  @impl true
   def connect(_params, _socket, _connect_info) do
     Logger.warning("Missing chain parameter in RPC connection")
     :error

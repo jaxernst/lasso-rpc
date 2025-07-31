@@ -46,7 +46,7 @@ defmodule Livechain.Config.MockConnections do
         latency_target: provider.latency_target || 150,
         rate_limit: provider.rate_limit || 1000,
         subscription_topics: ["newHeads", "logs", "newPendingTransactions"],
-        
+
         # Mock-specific configuration
         mock_config: %{
           simulate_reconnects: true,
@@ -67,23 +67,79 @@ defmodule Livechain.Config.MockConnections do
   def create_fallback_mock_connections do
     [
       # Ethereum Mainnet
-      create_mock_endpoint("ethereum_infura", "Infura Ethereum", "ethereum", 1, 12000, 0.999, 100),
-      create_mock_endpoint("ethereum_alchemy", "Alchemy Ethereum", "ethereum", 1, 12000, 0.999, 80),
+      create_mock_endpoint(
+        "ethereum_infura",
+        "Infura Ethereum",
+        "ethereum",
+        1,
+        12000,
+        0.999,
+        100
+      ),
+      create_mock_endpoint(
+        "ethereum_alchemy",
+        "Alchemy Ethereum",
+        "ethereum",
+        1,
+        12000,
+        0.999,
+        80
+      ),
       create_mock_endpoint("ethereum_ankr", "Ankr Ethereum", "ethereum", 1, 12000, 0.95, 200),
 
       # Polygon
       create_mock_endpoint("polygon_infura", "Infura Polygon", "polygon", 137, 2100, 0.999, 120),
-      create_mock_endpoint("polygon_alchemy", "Alchemy Polygon", "polygon", 137, 2100, 0.999, 100),
+      create_mock_endpoint(
+        "polygon_alchemy",
+        "Alchemy Polygon",
+        "polygon",
+        137,
+        2100,
+        0.999,
+        100
+      ),
       create_mock_endpoint("polygon_ankr", "Ankr Polygon", "polygon", 137, 2100, 0.93, 250),
 
       # Arbitrum One
-      create_mock_endpoint("arbitrum_infura", "Infura Arbitrum", "arbitrum", 42161, 1000, 0.999, 100),
-      create_mock_endpoint("arbitrum_alchemy", "Alchemy Arbitrum", "arbitrum", 42161, 1000, 0.999, 80),
+      create_mock_endpoint(
+        "arbitrum_infura",
+        "Infura Arbitrum",
+        "arbitrum",
+        42161,
+        1000,
+        0.999,
+        100
+      ),
+      create_mock_endpoint(
+        "arbitrum_alchemy",
+        "Alchemy Arbitrum",
+        "arbitrum",
+        42161,
+        1000,
+        0.999,
+        80
+      ),
       create_mock_endpoint("arbitrum_ankr", "Ankr Arbitrum", "arbitrum", 42161, 1000, 0.94, 200),
 
       # Optimism
-      create_mock_endpoint("optimism_infura", "Infura Optimism", "optimism", 10, 2000, 0.999, 110),
-      create_mock_endpoint("optimism_alchemy", "Alchemy Optimism", "optimism", 10, 2000, 0.999, 90),
+      create_mock_endpoint(
+        "optimism_infura",
+        "Infura Optimism",
+        "optimism",
+        10,
+        2000,
+        0.999,
+        110
+      ),
+      create_mock_endpoint(
+        "optimism_alchemy",
+        "Alchemy Optimism",
+        "optimism",
+        10,
+        2000,
+        0.999,
+        90
+      ),
       create_mock_endpoint("optimism_ankr", "Ankr Optimism", "optimism", 10, 2000, 0.96, 180),
 
       # Base
@@ -97,9 +153,33 @@ defmodule Livechain.Config.MockConnections do
       create_mock_endpoint("bsc_nodereal", "NodeReal BSC", "bsc", 56, 3000, 0.97, 170),
 
       # Avalanche
-      create_mock_endpoint("avalanche_infura", "Infura Avalanche", "avalanche", 43114, 2000, 0.999, 120),
-      create_mock_endpoint("avalanche_ankr", "Ankr Avalanche", "avalanche", 43114, 2000, 0.96, 180),
-      create_mock_endpoint("avalanche_public", "Avalanche Public", "avalanche", 43114, 2000, 0.94, 200),
+      create_mock_endpoint(
+        "avalanche_infura",
+        "Infura Avalanche",
+        "avalanche",
+        43114,
+        2000,
+        0.999,
+        120
+      ),
+      create_mock_endpoint(
+        "avalanche_ankr",
+        "Ankr Avalanche",
+        "avalanche",
+        43114,
+        2000,
+        0.96,
+        180
+      ),
+      create_mock_endpoint(
+        "avalanche_public",
+        "Avalanche Public",
+        "avalanche",
+        43114,
+        2000,
+        0.94,
+        200
+      ),
 
       # zkSync Era
       create_mock_endpoint("zksync_infura", "Infura zkSync", "zksync", 324, 1000, 0.999, 100),
@@ -108,11 +188,19 @@ defmodule Livechain.Config.MockConnections do
 
       # Linea
       create_mock_endpoint("linea_infura", "Infura Linea", "linea", 59144, 12000, 0.999, 120),
-      create_mock_endpoint("linea_consensys", "Consensys Linea", "linea", 59144, 12000, 0.97, 150),
+      create_mock_endpoint(
+        "linea_consensys",
+        "Consensys Linea",
+        "linea",
+        59144,
+        12000,
+        0.97,
+        150
+      ),
 
       # Scroll
-      create_mock_endpoint("scroll_ankr", "Ankr Scroll", "scroll", 534352, 3000, 0.95, 200),
-      create_mock_endpoint("scroll_public", "Scroll Public", "scroll", 534352, 3000, 0.96, 180),
+      create_mock_endpoint("scroll_ankr", "Ankr Scroll", "scroll", 534_352, 3000, 0.95, 200),
+      create_mock_endpoint("scroll_public", "Scroll Public", "scroll", 534_352, 3000, 0.96, 180),
 
       # Mantle
       create_mock_endpoint("mantle_public", "Mantle Public", "mantle", 5000, 1000, 0.96, 150),
@@ -140,28 +228,28 @@ defmodule Livechain.Config.MockConnections do
   """
   def start_all_mock_connections do
     endpoints = create_all_mock_connections()
-    
+
     Logger.info("Starting #{length(endpoints)} mock WebSocket connections...")
-    
-    results = 
+
+    results =
       endpoints
       |> Enum.map(fn endpoint ->
         case Livechain.RPC.WSSupervisor.start_connection(endpoint) do
           {:ok, _pid} ->
             Logger.debug("Started mock connection: #{endpoint.name}")
             {:ok, endpoint.id}
-          
+
           {:error, reason} ->
             Logger.warning("Failed to start mock connection #{endpoint.name}: #{inspect(reason)}")
             {:error, endpoint.id, reason}
         end
       end)
-    
+
     successes = Enum.count(results, fn {result, _} -> result == :ok end)
     failures = Enum.count(results, fn {result, _} -> result == :error end)
-    
+
     Logger.info("Mock connections started: #{successes} successful, #{failures} failed")
-    
+
     {:ok, %{started: successes, failed: failures, results: results}}
   end
 
@@ -170,13 +258,13 @@ defmodule Livechain.Config.MockConnections do
   """
   def stop_all_mock_connections do
     connections = Livechain.RPC.WSSupervisor.list_connections()
-    
-    mock_connections = 
+
+    mock_connections =
       connections
       |> Enum.filter(fn conn -> String.contains?(conn.name || "", "Mock") end)
-    
+
     Logger.info("Stopping #{length(mock_connections)} mock WebSocket connections...")
-    
+
     results =
       mock_connections
       |> Enum.map(fn conn ->
@@ -184,24 +272,32 @@ defmodule Livechain.Config.MockConnections do
           :ok ->
             Logger.debug("Stopped mock connection: #{conn.name}")
             {:ok, conn.id}
-          
+
           {:error, reason} ->
             Logger.warning("Failed to stop mock connection #{conn.name}: #{inspect(reason)}")
             {:error, conn.id, reason}
         end
       end)
-    
+
     successes = Enum.count(results, fn {result, _} -> result == :ok end)
     failures = Enum.count(results, fn {result, _} -> result == :error end)
-    
+
     Logger.info("Mock connections stopped: #{successes} successful, #{failures} failed")
-    
+
     {:ok, %{stopped: successes, failed: failures, results: results}}
   end
 
   # Private helper functions
 
-  defp create_mock_endpoint(id, name, chain_name, chain_id, block_time, reliability, latency_target) do
+  defp create_mock_endpoint(
+         id,
+         name,
+         chain_name,
+         chain_id,
+         block_time,
+         reliability,
+         latency_target
+       ) do
     %MockWSEndpoint{
       id: id,
       name: "#{name} (Mock)",
@@ -212,9 +308,8 @@ defmodule Livechain.Config.MockConnections do
       provider_type: if(reliability > 0.98, do: "paid", else: "public"),
       reliability: reliability,
       latency_target: latency_target,
-      rate_limit: if(reliability > 0.98, do: 100000, else: 1000),
+      rate_limit: if(reliability > 0.98, do: 100_000, else: 1000),
       subscription_topics: ["newHeads", "logs", "newPendingTransactions"],
-      
       mock_config: %{
         simulate_reconnects: true,
         simulate_failures: reliability < 0.98,
@@ -231,11 +326,16 @@ defmodule Livechain.Config.MockConnections do
     # Calculate how often to generate mock messages based on block time
     # More frequent messages for faster chains
     case block_time do
-      time when time <= 1000 -> 500   # Very fast chains: message every 500ms
-      time when time <= 2000 -> 1000  # Fast chains: message every 1000ms  
-      time when time <= 3000 -> 1500  # Medium chains: message every 1500ms
-      time when time <= 5000 -> 2500  # Slower chains: message every 2500ms
-      _ -> 5000                       # Very slow chains: message every 5000ms
+      # Very fast chains: message every 500ms
+      time when time <= 1000 -> 500
+      # Fast chains: message every 1000ms  
+      time when time <= 2000 -> 1000
+      # Medium chains: message every 1500ms
+      time when time <= 3000 -> 1500
+      # Slower chains: message every 2500ms
+      time when time <= 5000 -> 2500
+      # Very slow chains: message every 5000ms
+      _ -> 5000
     end
   end
 end

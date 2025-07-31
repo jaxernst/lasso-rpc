@@ -18,13 +18,14 @@ defmodule LivechainWeb.CoreComponents do
 
   @doc """
   Renders a status indicator badge.
-  
+
   ## Examples
-  
+
       <.status_badge status={:connected} />
       <.status_badge status={:disconnected} />
   """
-  attr :status, :atom, required: true
+  attr(:status, :atom, required: true)
+
   def status_badge(assigns) do
     ~H"""
     <span class={[
@@ -46,20 +47,21 @@ defmodule LivechainWeb.CoreComponents do
         <:col :let={user} label="username"><%= user.username %></:col>
       </.table>
   """
-  attr :id, :string, required: true
-  attr :rows, :list, required: true
-  attr :row_id, :any, default: nil, doc: "the function for generating the row id"
-  attr :row_click, :any, default: nil, doc: "the function for handling phx-click on each row"
+  attr(:id, :string, required: true)
+  attr(:rows, :list, required: true)
+  attr(:row_id, :any, default: nil, doc: "the function for generating the row id")
+  attr(:row_click, :any, default: nil, doc: "the function for handling phx-click on each row")
 
-  attr :row_item, :any,
+  attr(:row_item, :any,
     default: &Function.identity/1,
     doc: "the function for mapping each row before calling the :col and :action slots"
+  )
 
   slot :col, required: true do
-    attr :label, :string
+    attr(:label, :string)
   end
 
-  slot :action, doc: "the slot for showing user actions in the last table column"
+  slot(:action, doc: "the slot for showing user actions in the last table column")
 
   def table(assigns) do
     assigns =
@@ -134,13 +136,13 @@ defmodule LivechainWeb.CoreComponents do
       <.flash kind={:info} flash={@flash} />
       <.flash kind={:info} phx-mounted={show("#flash")}>Welcome Back!</.flash>
   """
-  attr :id, :string, doc: "the optional id of flash container"
-  attr :flash, :map, default: %{}, doc: "the map of flash messages"
-  attr :title, :string, default: nil
-  attr :kind, :atom, values: [:info, :error], doc: "used for styling and flash lookup"
-  attr :rest, :global, doc: "the arbitrary HTML attributes to add to the flash container"
+  attr(:id, :string, doc: "the optional id of flash container")
+  attr(:flash, :map, default: %{}, doc: "the map of flash messages")
+  attr(:title, :string, default: nil)
+  attr(:kind, :atom, values: [:info, :error], doc: "used for styling and flash lookup")
+  attr(:rest, :global, doc: "the arbitrary HTML attributes to add to the flash container")
 
-  slot :inner_block, doc: "the optional inner block that renders the flash message"
+  slot(:inner_block, doc: "the optional inner block that renders the flash message")
 
   def flash(assigns) do
     assigns = assign_new(assigns, :id, fn -> "flash-#{assigns.kind}" end)
@@ -178,8 +180,8 @@ defmodule LivechainWeb.CoreComponents do
 
       <.flash_group flash={@flash} />
   """
-  attr :flash, :map, required: true, doc: "the map of flash messages"
-  attr :id, :string, default: "flash-group", doc: "the optional id of flash container"
+  attr(:flash, :map, required: true, doc: "the map of flash messages")
+  attr(:id, :string, default: "flash-group", doc: "the optional id of flash container")
 
   def flash_group(assigns) do
     ~H"""
@@ -230,8 +232,8 @@ defmodule LivechainWeb.CoreComponents do
       <.icon name="hero-x-mark-solid" />
       <.icon name="hero-arrow-path" class="ml-1 w-3 h-3 animate-spin" />
   """
-  attr :name, :string, required: true
-  attr :class, :string, default: nil
+  attr(:name, :string, required: true)
+  attr(:class, :string, default: nil)
 
   def icon(%{name: "hero-" <> _} = assigns) do
     ~H"""

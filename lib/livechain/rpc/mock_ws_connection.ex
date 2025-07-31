@@ -40,7 +40,7 @@ defmodule Livechain.RPC.MockWSConnection do
   def status(pid_or_connection_id) when is_pid(pid_or_connection_id) do
     GenServer.call(pid_or_connection_id, :status)
   end
-  
+
   def status(connection_id) do
     GenServer.call(via_name(connection_id), :status)
   end
@@ -131,9 +131,11 @@ defmodule Livechain.RPC.MockWSConnection do
   def handle_info({:heartbeat}, state) do
     if state.connected do
       # Simulate heartbeat and update last seen
-      state = state
-      |> Map.put(:last_seen, DateTime.utc_now())
-      |> schedule_heartbeat()
+      state =
+        state
+        |> Map.put(:last_seen, DateTime.utc_now())
+        |> schedule_heartbeat()
+
       {:noreply, state}
     else
       {:noreply, state}
@@ -165,13 +167,14 @@ defmodule Livechain.RPC.MockWSConnection do
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",
-      {:connection_status_changed, state.endpoint.id, %{
-        id: state.endpoint.id,
-        name: state.endpoint.name,
-        status: status,
-        reconnect_attempts: state.reconnect_attempts,
-        subscriptions: MapSet.size(state.subscriptions)
-      }}
+      {:connection_status_changed, state.endpoint.id,
+       %{
+         id: state.endpoint.id,
+         name: state.endpoint.name,
+         status: status,
+         reconnect_attempts: state.reconnect_attempts,
+         subscriptions: MapSet.size(state.subscriptions)
+       }}
     )
   end
 end

@@ -62,6 +62,7 @@ defmodule Livechain.TestRunner do
     case Process.whereis(LivechainWeb.Endpoint) do
       nil ->
         IO.puts("⚠️  Phoenix endpoint not running, starting it...")
+
         case LivechainWeb.Endpoint.start_link() do
           {:ok, _pid} -> IO.puts("✅ Phoenix endpoint started")
           {:error, reason} -> IO.puts("❌ Failed to start Phoenix: #{inspect(reason)}")

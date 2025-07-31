@@ -1,15 +1,14 @@
 defmodule LivechainWeb.OrchestrationLive do
   use LivechainWeb, :live_view
-  
+
   # Use custom observatory layout without width constraints
   def mount(_params, _session, socket) do
     socket = assign(socket, :layout, {LivechainWeb.Layouts, "observatory"})
     mount_logic(socket)
   end
-  
-  defp mount_logic(socket) do
 
-  alias Livechain.RPC.WSSupervisor
+  defp mount_logic(socket) do
+    alias Livechain.RPC.WSSupervisor
 
     if connected?(socket) do
       # Subscribe to WebSocket connection events for real-time updates
@@ -316,8 +315,10 @@ defmodule LivechainWeb.OrchestrationLive do
         angle = 2 * :math.pi() * position_in_ring / positions_in_ring
 
         # Distance from center increases with each ring (in viewport units)
-        radius_vw = ring * 15 + 10  # Use viewport width units for responsiveness
-        radius_vh = ring * 12 + 8   # Use viewport height units for responsiveness
+        # Use viewport width units for responsiveness
+        radius_vw = ring * 15 + 10
+        # Use viewport height units for responsiveness
+        radius_vh = ring * 12 + 8
 
         # Calculate offset from center using CSS calc()
         x_offset = radius_vw * :math.cos(angle)
@@ -363,26 +364,26 @@ defmodule LivechainWeb.OrchestrationLive do
   def calculate_satellite_position(center_x, center_y, distance, index, total_satellites) do
     # Position WebSocket connections in a circle around their blockchain node
     angle = 2 * :math.pi() * index / max(total_satellites, 1)
-    
+
     # Handle both pixel and percentage/calc positioning
     case {center_x, center_y} do
       {x, y} when is_binary(x) and is_binary(y) ->
         # For CSS calc() positioning, use CSS transforms with pixel offsets
         x_offset = distance * :math.cos(angle)
         y_offset = distance * :math.sin(angle)
-        
+
         satellite_x = "calc(#{x} + #{round(x_offset)}px)"
         satellite_y = "calc(#{y} + #{round(y_offset)}px)"
-        
+
         {satellite_x, satellite_y}
-      
+
       {x, y} when is_number(x) and is_number(y) ->
         # Fallback for numeric positioning
         satellite_x = x + distance * :math.cos(angle)
         satellite_y = y + distance * :math.sin(angle)
-        
+
         {round(satellite_x), round(satellite_y)}
-      
+
       _ ->
         # Default fallback
         {"50%", "50%"}
@@ -461,6 +462,7 @@ defmodule LivechainWeb.OrchestrationLive do
 
   def extract_chain_from_connection_name(name) do
     name_lower = String.downcase(name)
+
     cond do
       String.contains?(name_lower, "ethereum") -> "ethereum"
       String.contains?(name_lower, "polygon") -> "polygon"

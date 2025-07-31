@@ -320,16 +320,17 @@ defmodule Livechain.RPC.MockProvider do
   def handle_info({:new_block, block_number, block_data}, state) do
     state = %{state | current_block: block_number}
 
-    state = if state.enable_events do
-      EventStream.broadcast(state.event_stream, "newHeads", block_data)
-      
-      # Also broadcast to Phoenix PubSub for channels
-      broadcast_to_channels(state, "new_block", block_data)
-      
-      update_event_stats(state)
-    else
-      state
-    end
+    state =
+      if state.enable_events do
+        EventStream.broadcast(state.event_stream, "newHeads", block_data)
+
+        # Also broadcast to Phoenix PubSub for channels
+        broadcast_to_channels(state, "new_block", block_data)
+
+        update_event_stats(state)
+      else
+        state
+      end
 
     {:noreply, state}
   end
@@ -483,13 +484,14 @@ defmodule Livechain.RPC.MockProvider do
 
   defp broadcast_to_channels(state, event_type, data) do
     # Map chain_id to chain name for PubSub topics
-    chain_name = case state.chain_id do
-      1 -> "ethereum"
-      137 -> "polygon"
-      42_161 -> "arbitrum"
-      56 -> "bsc"
-      _ -> "unknown"
-    end
+    chain_name =
+      case state.chain_id do
+        1 -> "ethereum"
+        137 -> "polygon"
+        42_161 -> "arbitrum"
+        56 -> "bsc"
+        _ -> "unknown"
+      end
 
     # Broadcast to general blockchain channel
     Phoenix.PubSub.broadcast(
