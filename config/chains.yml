@@ -228,6 +228,468 @@ chains:
       min_confirmations: 1
       max_providers: 3
 
+  optimism:
+    chain_id: 10
+    name: "Optimism Mainnet"
+    block_time: 2000
+
+    providers:
+      - id: "optimism_infura"
+        name: "Infura Optimism"
+        priority: 1
+        type: "paid"
+        url: "https://optimism-mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://optimism-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000
+        latency_target: 110
+        reliability: 0.999
+
+      - id: "optimism_alchemy"
+        name: "Alchemy Optimism"
+        priority: 2
+        type: "paid"
+        url: "https://opt-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        ws_url: "wss://opt-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        api_key_required: true
+        rate_limit: 300000
+        latency_target: 90
+        reliability: 0.999
+
+      - id: "optimism_ankr"
+        name: "Ankr Optimism"
+        priority: 3
+        type: "public"
+        url: "https://rpc.ankr.com/optimism"
+        ws_url: "wss://rpc.ankr.com/optimism/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 180
+        reliability: 0.96
+
+    connection:
+      heartbeat_interval: 20000
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 1000
+      min_confirmations: 1
+      max_providers: 3
+
+  bsc:
+    chain_id: 56
+    name: "BNB Smart Chain"
+    block_time: 3000
+
+    providers:
+      - id: "bsc_binance"
+        name: "Binance BSC"
+        priority: 1
+        type: "public"
+        url: "https://bsc-dataseed1.binance.org"
+        ws_url: "wss://bsc-ws-node.nariox.org:443/ws/v3"
+        api_key_required: false
+        rate_limit: 2000
+        latency_target: 150
+        reliability: 0.98
+
+      - id: "bsc_ankr"
+        name: "Ankr BSC"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ankr.com/bsc"
+        ws_url: "wss://rpc.ankr.com/bsc/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 200
+        reliability: 0.95
+
+      - id: "bsc_nodereal"
+        name: "NodeReal BSC"
+        priority: 3
+        type: "public"
+        url: "https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3"
+        ws_url: "wss://bsc-mainnet.nodereal.io/ws/v1/64a9df0874fb4a93b9d0a3849de012d3"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 170
+        reliability: 0.97
+
+    connection:
+      heartbeat_interval: 25000
+      reconnect_interval: 4000
+      max_reconnect_attempts: 12
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 1500
+      min_confirmations: 1
+      max_providers: 3
+
+  avalanche:
+    chain_id: 43114
+    name: "Avalanche C-Chain"
+    block_time: 2000
+
+    providers:
+      - id: "avalanche_infura"
+        name: "Infura Avalanche"
+        priority: 1
+        type: "paid"
+        url: "https://avalanche-mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://avalanche-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000
+        latency_target: 120
+        reliability: 0.999
+
+      - id: "avalanche_ankr"
+        name: "Ankr Avalanche"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ankr.com/avalanche"
+        ws_url: "wss://rpc.ankr.com/avalanche/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 180
+        reliability: 0.96
+
+      - id: "avalanche_public"
+        name: "Avalanche Public"
+        priority: 3
+        type: "public"
+        url: "https://api.avax.network/ext/bc/C/rpc"
+        ws_url: "wss://api.avax.network/ext/bc/C/ws"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 200
+        reliability: 0.94
+
+    connection:
+      heartbeat_interval: 20000
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 1000
+      min_confirmations: 1
+      max_providers: 3
+
+  zksync:
+    chain_id: 324
+    name: "zkSync Era"
+    block_time: 1000
+
+    providers:
+      - id: "zksync_infura"
+        name: "Infura zkSync"
+        priority: 1
+        type: "paid"
+        url: "https://zksync-mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://zksync-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000
+        latency_target: 100
+        reliability: 0.999
+
+      - id: "zksync_ankr"
+        name: "Ankr zkSync"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ankr.com/zksync_era"
+        ws_url: "wss://rpc.ankr.com/zksync_era/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 150
+        reliability: 0.96
+
+      - id: "zksync_public"
+        name: "zkSync Public"
+        priority: 3
+        type: "public"
+        url: "https://mainnet.era.zksync.io"
+        ws_url: "wss://mainnet.era.zksync.io/ws"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 180
+        reliability: 0.95
+
+    connection:
+      heartbeat_interval: 15000
+      reconnect_interval: 2000
+      max_reconnect_attempts: 20
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 500
+      min_confirmations: 1
+      max_providers: 3
+
+  linea:
+    chain_id: 59144
+    name: "Linea Mainnet"
+    block_time: 12000
+
+    providers:
+      - id: "linea_infura"
+        name: "Infura Linea"
+        priority: 1
+        type: "paid"
+        url: "https://linea-mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://linea-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000
+        latency_target: 120
+        reliability: 0.999
+
+      - id: "linea_consensys"
+        name: "Consensys Linea"
+        priority: 2
+        type: "public"
+        url: "https://rpc.linea.build"
+        ws_url: "wss://rpc.linea.build"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 150
+        reliability: 0.97
+
+    connection:
+      heartbeat_interval: 30000
+      reconnect_interval: 5000
+      max_reconnect_attempts: 10
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 2000
+      min_confirmations: 1
+      max_providers: 2
+
+  scroll:
+    chain_id: 534352
+    name: "Scroll Mainnet"
+    block_time: 3000
+
+    providers:
+      - id: "scroll_ankr"
+        name: "Ankr Scroll"
+        priority: 1
+        type: "public"
+        url: "https://rpc.ankr.com/scroll"
+        ws_url: "wss://rpc.ankr.com/scroll/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 200
+        reliability: 0.95
+
+      - id: "scroll_public"
+        name: "Scroll Public"
+        priority: 2
+        type: "public"
+        url: "https://rpc.scroll.io"
+        ws_url: "wss://wss-rpc.scroll.io/ws"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 180
+        reliability: 0.96
+
+    connection:
+      heartbeat_interval: 25000
+      reconnect_interval: 4000
+      max_reconnect_attempts: 12
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 1500
+      min_confirmations: 1
+      max_providers: 2
+
+  mantle:
+    chain_id: 5000
+    name: "Mantle Network"
+    block_time: 1000
+
+    providers:
+      - id: "mantle_public"
+        name: "Mantle Public"
+        priority: 1
+        type: "public"
+        url: "https://rpc.mantle.xyz"
+        ws_url: "wss://ws.mantle.xyz"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 150
+        reliability: 0.96
+
+      - id: "mantle_ankr"
+        name: "Ankr Mantle"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ankr.com/mantle"
+        ws_url: "wss://rpc.ankr.com/mantle/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 200
+        reliability: 0.94
+
+    connection:
+      heartbeat_interval: 15000
+      reconnect_interval: 2000
+      max_reconnect_attempts: 20
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 500
+      min_confirmations: 1
+      max_providers: 2
+
+  blast:
+    chain_id: 81457
+    name: "Blast Mainnet"
+    block_time: 2000
+
+    providers:
+      - id: "blast_infura"
+        name: "Infura Blast"
+        priority: 1
+        type: "paid"
+        url: "https://blast-mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://blast-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000
+        latency_target: 110
+        reliability: 0.999
+
+      - id: "blast_public"
+        name: "Blast Public"
+        priority: 2
+        type: "public"
+        url: "https://rpc.blast.io"
+        ws_url: "wss://ws.blast.io"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 160
+        reliability: 0.96
+
+    connection:
+      heartbeat_interval: 20000
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 1000
+      min_confirmations: 1
+      max_providers: 2
+
+  mode:
+    chain_id: 34443
+    name: "Mode Network"
+    block_time: 2000
+
+    providers:
+      - id: "mode_public"
+        name: "Mode Public"
+        priority: 1
+        type: "public"
+        url: "https://mainnet.mode.network"
+        ws_url: "wss://ws.mainnet.mode.network"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 170
+        reliability: 0.95
+
+    connection:
+      heartbeat_interval: 20000
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 1000
+      min_confirmations: 1
+      max_providers: 1
+
+  fantom:
+    chain_id: 250
+    name: "Fantom Opera"
+    block_time: 1000
+
+    providers:
+      - id: "fantom_ankr"
+        name: "Ankr Fantom"
+        priority: 1
+        type: "public"
+        url: "https://rpc.ankr.com/fantom"
+        ws_url: "wss://rpc.ankr.com/fantom/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 180
+        reliability: 0.95
+
+      - id: "fantom_public"
+        name: "Fantom Public"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ftm.tools"
+        ws_url: "wss://wsapi.fantom.network"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 200
+        reliability: 0.93
+
+    connection:
+      heartbeat_interval: 15000
+      reconnect_interval: 2000
+      max_reconnect_attempts: 20
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 500
+      min_confirmations: 1
+      max_providers: 2
+
+  celo:
+    chain_id: 42220
+    name: "Celo Mainnet"
+    block_time: 5000
+
+    providers:
+      - id: "celo_infura"
+        name: "Infura Celo"
+        priority: 1
+        type: "paid"
+        url: "https://celo-mainnet.infura.io/v3/${INFURA_API_KEY}"
+        ws_url: "wss://celo-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
+        api_key_required: true
+        rate_limit: 100000
+        latency_target: 140
+        reliability: 0.999
+
+      - id: "celo_ankr"
+        name: "Ankr Celo"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ankr.com/celo"
+        ws_url: "wss://rpc.ankr.com/celo/ws"
+        api_key_required: false
+        rate_limit: 500
+        latency_target: 220
+        reliability: 0.94
+
+    connection:
+      heartbeat_interval: 30000
+      reconnect_interval: 5000
+      max_reconnect_attempts: 10
+      subscription_topics: ["newHeads", "logs"]
+
+    aggregation:
+      deduplication_window: 2500
+      min_confirmations: 1
+      max_providers: 2
+
 # Global settings
 global:
   # Health check configuration
