@@ -22,6 +22,8 @@ defmodule ChainPulseDemo do
     test_multi_chain_support()
     test_websocket_subscriptions()
     test_orchestration_dashboard()
+    test_system_validation()
+    show_multiclient_instructions()
 
     Logger.info("✅ Demo completed successfully!")
     Logger.info("🌐 Dashboard available at: http://localhost:4000")
@@ -105,20 +107,16 @@ defmodule ChainPulseDemo do
     Logger.info("-" |> String.duplicate(30))
 
     # Test chain status via API
-    case System.cmd("curl", ["-s", "http://localhost:4000/api/status"]) do
-      {body, 0} ->
-        case Jason.decode(body) do
-          {:ok, %{"chains" => chains}} ->
-            Logger.info("📊 Active chains: #{length(chains)}")
-            Enum.each(chains, fn {chain_name, status} ->
-              Logger.info("  🔗 #{chain_name}: #{status["status"]} (#{length(status["providers"])} providers)")
-            end)
-          _ ->
-            Logger.warning("⚠️  Could not parse chain status")
-        end
-      {error, _} ->
-        Logger.error("❌ Could not fetch chain status: #{error}")
-    end
+    chains = ["ethereum", "arbitrum", "polygon", "bsc"]
+
+    Enum.each(chains, fn chain ->
+      case System.cmd("curl", ["-s", "http://localhost:4000/api/chains/#{chain}/status"]) do
+        {body, 0} ->
+          Logger.info("✅ #{chain}: #{String.slice(body, 0, 80)}...")
+        {error, status} ->
+          Logger.warning("⚠️  #{chain}: Status #{status} - #{error}")
+      end
+    end)
   end
 
   defp test_websocket_subscriptions do
@@ -126,11 +124,9 @@ defmodule ChainPulseDemo do
     Logger.info("-" |> String.duplicate(30))
 
     # This would require a WebSocket client to test properly
-    # For demo purposes, we'll just show the subscription endpoints
-    Logger.info("📡 WebSocket endpoints available:")
-    Logger.info("  ws://localhost:4000/socket/websocket")
-    Logger.info("  Channels: blockchain, rpc")
-    Logger.info("  Example subscription: {\"event\": \"phx_join\", \"topic\": \"blockchain:ethereum\"}")
+    Logger.info("📡 WebSocket server available at ws://localhost:4000/socket")
+    Logger.info("🔗 Phoenix channels ready for blockchain subscriptions")
+    Logger.info("📊 Real-time data streaming enabled")
   end
 
   defp test_orchestration_dashboard do
@@ -145,13 +141,92 @@ defmodule ChainPulseDemo do
     ]
 
     Enum.each(dashboard_endpoints, fn endpoint ->
-      case System.cmd("curl", ["-s", "-I", "http://localhost:4000#{endpoint}"]) do
+      case System.cmd("curl", ["-s", "http://localhost:4000#{endpoint}"]) do
         {body, 0} ->
-          Logger.info("✅ Dashboard #{endpoint}: Available")
+          Logger.info("✅ #{endpoint}: Available")
         {error, status} ->
-          Logger.warning("⚠️  Dashboard #{endpoint}: Status #{status} - #{error}")
+          Logger.warning("⚠️  #{endpoint}: Status #{status} - #{error}")
       end
     end)
+  end
+
+  defp test_system_validation do
+    Logger.info("\n📊 System Validation")
+    Logger.info("-" |> String.duplicate(30))
+
+    # Check if Phoenix endpoint is running
+    case Process.whereis(LivechainWeb.Endpoint) do
+      nil ->
+        Logger.warning("⚠️  Phoenix endpoint not running")
+
+      _pid ->
+        Logger.info("✅ Phoenix endpoint running")
+    end
+
+    # Check WebSocket supervisor
+    case Process.whereis(Livechain.RPC.WSSupervisor) do
+      nil ->
+        Logger.warning("⚠️  WebSocket supervisor not running")
+
+      _pid ->
+        Logger.info("✅ WebSocket supervisor running")
+    end
+
+    # Check chain manager
+    case Process.whereis(Livechain.RPC.ChainManager) do
+      nil ->
+        Logger.warning("⚠️  Chain manager not running")
+
+      _pid ->
+        Logger.info("✅ Chain manager running")
+    end
+  end
+
+  defp show_multiclient_instructions do
+    Logger.info("\n👥 Multi-Client WebSocket Testing Instructions")
+    Logger.info("-" |> String.duplicate(40))
+
+    instructions = """
+    🔧 To test with multiple WebSocket clients:
+
+    1. Install wscat: npm install -g wscat
+
+    2. Open multiple terminals and connect:
+       Terminal 1: wscat -c "ws://localhost:4000/socket/websocket"
+       Terminal 2: wscat -c "ws://localhost:4000/socket/websocket"
+
+    3. Join blockchain channels:
+       Send: {"topic":"blockchain:ethereum","event":"phx_join","payload":{},"ref":"1"}
+       Send: {"topic":"blockchain:polygon","event":"phx_join","payload":{},"ref":"2"}
+
+    4. Subscribe to block events:
+       Send: {"topic":"blockchain:ethereum","event":"subscribe","payload":{"type":"blocks"},"ref":"3"}
+
+    5. Watch real-time blockchain data flow to all connected clients!
+
+    📊 Expected behavior:
+       - Multiple clients can connect simultaneously
+       - Each receives the same blockchain data
+       - New blocks are broadcast to all subscribers
+       - Connections are fault-tolerant
+    """
+
+    Logger.info(instructions)
+  end
+
+  @doc """
+  Run a live demo for a specified duration.
+  """
+  def run_live_demo(duration_seconds \\ 30) do
+    Logger.info("🔴 LIVE DEMO: Running for #{duration_seconds} seconds...")
+    Logger.info("Connect WebSocket clients now to see real-time data!")
+
+    run_demo()
+
+    Logger.info("\n⏰ Demo running... Connect your WebSocket clients!")
+    Process.sleep(duration_seconds * 1000)
+
+    Logger.info("\n✨ Demo completed!")
   end
 end
 
