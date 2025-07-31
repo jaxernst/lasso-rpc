@@ -7,7 +7,7 @@ defmodule LivechainWeb.UserSocket do
   # assign values that can be accessed by your channel topics.
 
   ## Channels
-  channel "blockchain:*", LivechainWeb.BlockchainChannel
+  channel("blockchain:*", LivechainWeb.BlockchainChannel)
 
   # Socket params are passed from the client and can
   # be used to verify and authenticate a user. After

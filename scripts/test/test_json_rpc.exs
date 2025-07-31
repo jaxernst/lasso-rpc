@@ -10,6 +10,7 @@ result = System.cmd("curl", [
   "-H", "Content-Type: application/json",
   "-d", "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}",
   "http://localhost:4000/rpc/ethereum"
+
 ])
 
 case result do

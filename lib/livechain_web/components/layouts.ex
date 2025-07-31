@@ -10,5 +10,5 @@ defmodule LivechainWeb.Layouts do
   """
   use LivechainWeb, :html
 
-  embed_templates "layouts/*"
+  embed_templates("layouts/*")
 end

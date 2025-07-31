@@ -62,11 +62,13 @@ defmodule Livechain.RPC.WSSupervisor do
         case DynamicSupervisor.start_child(__MODULE__, spec) do
           {:ok, pid} ->
             Logger.debug("Started WebSocket connection: #{endpoint.name}")
+
             broadcast_connection_event(:started, endpoint.id, %{
               id: endpoint.id,
               name: endpoint.name,
               status: :starting
             })
+
             broadcast_connection_status_update()
             {:ok, pid}
 
@@ -93,11 +95,13 @@ defmodule Livechain.RPC.WSSupervisor do
         case DynamicSupervisor.start_child(__MODULE__, spec) do
           {:ok, pid} ->
             Logger.debug("Started mock WebSocket connection: #{endpoint.name}")
+
             broadcast_connection_event(:started, endpoint.id, %{
               id: endpoint.id,
               name: endpoint.name,
               status: :starting
             })
+
             broadcast_connection_status_update()
             {:ok, pid}
 
@@ -129,10 +133,12 @@ defmodule Livechain.RPC.WSSupervisor do
       {:ok, pid} ->
         Logger.debug("Stopping WebSocket connection: #{connection_id}")
         result = DynamicSupervisor.terminate_child(__MODULE__, pid)
+
         broadcast_connection_event(:stopped, connection_id, %{
           id: connection_id,
           status: :stopped
         })
+
         Task.start(fn -> broadcast_connection_status_update() end)
         result
 
@@ -235,12 +241,12 @@ defmodule Livechain.RPC.WSSupervisor do
     )
   end
 
-
   @doc """
   Broadcasts connection status updates to all interested LiveViews.
   """
   def broadcast_connection_status_update do
     connections = list_connections()
+
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",

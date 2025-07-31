@@ -13,9 +13,10 @@ defmodule LivechainWeb.Endpoint do
   ]
 
   # LiveView socket for real-time updates
-  socket "/live", Phoenix.LiveView.Socket,
+  socket("/live", Phoenix.LiveView.Socket,
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
+  )
 
   # WebSocket configuration
   socket("/socket", LivechainWeb.UserSocket,
@@ -45,11 +46,12 @@ defmodule LivechainWeb.Endpoint do
   )
 
   # Serve at "/" the static files from "priv/static" directory.
-  plug Plug.Static,
+  plug(Plug.Static,
     at: "/",
     from: :livechain,
     gzip: false,
     only: LivechainWeb.static_paths()
+  )
 
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
