@@ -82,9 +82,12 @@ defmodule LivechainWeb do
 
   defp html_helpers do
     quote do
+      # Translation
+      use Gettext, backend: LivechainWeb.Gettext
+
       # HTML escaping functionality
       import Phoenix.HTML
-      # Core UI components and translation
+      # Core UI components
       import LivechainWeb.CoreComponents
 
       # Shortcut for generating JS commands

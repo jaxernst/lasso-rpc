@@ -165,6 +165,7 @@ defmodule Livechain.RPC.MockWSConnection do
   end
 
   defp broadcast_status_change(state, status) do
+    IO.puts("🔔 Broadcasting connection_status_changed: #{status} for #{state.endpoint.id}")
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",
