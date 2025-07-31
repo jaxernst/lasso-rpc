@@ -20,8 +20,5 @@ defmodule LivechainWeb.Gettext do
 
   See the [Gettext Docs](https://hexdocs.pm/gettext) for detailed usage.
   """
-  def translate_error({msg, _opts}) do
-    # For now, just return the message without translation
-    msg
-  end
+  use Gettext.Backend, otp_app: :livechain
 end

@@ -7,56 +7,72 @@ defmodule LivechainWeb.Endpoint do
   @session_options [
     store: :cookie,
     key: "_livechain_key",
+    # TODO: Put in env var
     signing_salt: "FvHQmKTwY0gU9P0aH8gi9M5rO4+q2qIIhpKjLlMcOqfeN4YubVHibH/rbN3e7OMH",
     same_site: "Lax"
   ]
 
   # LiveView socket for real-time updates
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]]
+    websocket: [connect_info: [session: @session_options]],
+    longpoll: [connect_info: [session: @session_options]]
 
   # WebSocket configuration
-  socket "/socket", LivechainWeb.UserSocket,
+  socket("/socket", LivechainWeb.UserSocket,
     websocket: true,
     longpoll: false
+  )
 
   # JSON-RPC WebSocket endpoints for Viem compatibility
-  socket "/rpc/ethereum", LivechainWeb.RPCSocket,
+  socket("/rpc/ethereum", LivechainWeb.RPCSocket,
     websocket: [path: "/", params: %{"chain" => "ethereum"}],
     longpoll: false
+  )
 
-  socket "/rpc/arbitrum", LivechainWeb.RPCSocket,
+  socket("/rpc/arbitrum", LivechainWeb.RPCSocket,
     websocket: [path: "/", params: %{"chain" => "arbitrum"}],
     longpoll: false
+  )
 
-  socket "/rpc/polygon", LivechainWeb.RPCSocket,
+  socket("/rpc/polygon", LivechainWeb.RPCSocket,
     websocket: [path: "/", params: %{"chain" => "polygon"}],
     longpoll: false
+  )
 
-  socket "/rpc/bsc", LivechainWeb.RPCSocket,
+  socket("/rpc/bsc", LivechainWeb.RPCSocket,
     websocket: [path: "/", params: %{"chain" => "bsc"}],
     longpoll: false
+  )
+
+  # Serve at "/" the static files from "priv/static" directory.
+  plug Plug.Static,
+    at: "/",
+    from: :livechain,
+    gzip: false,
+    only: LivechainWeb.static_paths()
 
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
   if code_reloading? do
-    plug Phoenix.CodeReloader
+    plug(Phoenix.CodeReloader)
   end
 
-  plug Phoenix.LiveDashboard.RequestLogger,
+  plug(Phoenix.LiveDashboard.RequestLogger,
     param_key: "request_logger",
     cookie_key: "request_logger"
+  )
 
-  plug Plug.RequestId
-  plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
+  plug(Plug.RequestId)
+  plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
-  plug Plug.Parsers,
+  plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()
+  )
 
-  plug Plug.MethodOverride
-  plug Plug.Head
-  plug Plug.Session, @session_options
-  plug LivechainWeb.Router
+  plug(Plug.MethodOverride)
+  plug(Plug.Head)
+  plug(Plug.Session, @session_options)
+  plug(LivechainWeb.Router)
 end

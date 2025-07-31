@@ -67,6 +67,7 @@ defmodule Livechain.RPC.WSSupervisor do
               name: endpoint.name,
               status: :starting
             })
+            broadcast_connection_status_update()
             {:ok, pid}
 
           {:error, {:already_started, pid}} ->
@@ -97,6 +98,7 @@ defmodule Livechain.RPC.WSSupervisor do
               name: endpoint.name,
               status: :starting
             })
+            broadcast_connection_status_update()
             {:ok, pid}
 
           {:error, {:already_started, pid}} ->
@@ -131,6 +133,7 @@ defmodule Livechain.RPC.WSSupervisor do
           id: connection_id,
           status: :stopped
         })
+        Task.start(fn -> broadcast_connection_status_update() end)
         result
 
       {:error, :not_found} ->
@@ -232,11 +235,13 @@ defmodule Livechain.RPC.WSSupervisor do
     )
   end
 
+
   @doc """
   Broadcasts connection status updates to all interested LiveViews.
   """
   def broadcast_connection_status_update do
     connections = list_connections()
+    IO.puts("🔔 Broadcasting connection_status_update with #{length(connections)} connections")
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",
@@ -251,6 +256,7 @@ defmodule Livechain.RPC.WSSupervisor do
   end
 
   defp broadcast_connection_event(event_type, connection_id, data) do
+    IO.puts("🔔 Broadcasting connection_event: #{event_type} for #{connection_id}")
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",
@@ -293,7 +299,8 @@ defmodule Livechain.RPC.WSSupervisor do
               name: Map.get(status, :endpoint_name, get_connection_name(pid)),
               status: :connected,
               reconnect_attempts: Map.get(status, :reconnect_attempts, 0),
-              subscriptions: Map.get(status, :subscriptions, 0)
+              subscriptions: Map.get(status, :subscriptions, 0),
+              last_seen: Map.get(status, :last_seen)
             }
 
           %{connected: false} = status ->
@@ -301,7 +308,8 @@ defmodule Livechain.RPC.WSSupervisor do
               id: Map.get(status, :endpoint_id, "unknown"),
               name: get_connection_name(pid),
               status: :disconnected,
-              reconnect_attempts: Map.get(status, :reconnect_attempts, 0)
+              reconnect_attempts: Map.get(status, :reconnect_attempts, 0),
+              last_seen: Map.get(status, :last_seen)
             }
 
           other ->

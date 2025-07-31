@@ -5,11 +5,17 @@ defmodule LivechainWeb.OrchestrationLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    IO.puts("🔌 LiveView mount - connected?: #{connected?(socket)}, PID: #{inspect(self())}")
+
     if connected?(socket) do
       # Subscribe to WebSocket connection events for real-time updates
+      IO.puts("✅ LiveView subscribing to PubSub topic: ws_connections")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "ws_connections")
       # Schedule periodic updates for timestamps
       Process.send_after(self(), :tick, 1000)
+      IO.puts("✅ LiveView setup complete - should receive live updates now!")
+    else
+      IO.puts("📄 Static render - no live connection yet")
     end
 
     {:ok, fetch_connections(socket)}
@@ -17,23 +23,25 @@ defmodule LivechainWeb.OrchestrationLive do
 
   @impl true
   def handle_info({:connection_status_update, connections}, socket) do
-    socket = 
+    socket =
       socket
       |> assign(:connections, connections)
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
-    
+
     {:noreply, socket}
   end
 
-  @impl true  
-  def handle_info({:connection_event, _event_type, _connection_id, _data}, socket) do
+  @impl true
+  def handle_info({:connection_event, event_type, connection_id, _data}, socket) do
     # Refresh all connections when any connection event occurs
+    IO.puts("LiveView received connection_event: #{event_type} for #{connection_id}")
     {:noreply, fetch_connections(socket)}
   end
 
   @impl true
-  def handle_info({:connection_status_changed, _connection_id, _connection_data}, socket) do
+  def handle_info({:connection_status_changed, connection_id, _connection_data}, socket) do
     # Refresh all connections when any connection status changes
+    IO.puts("LiveView received connection_status_changed for #{connection_id}")
     {:noreply, fetch_connections(socket)}
   end
 
@@ -63,13 +71,22 @@ defmodule LivechainWeb.OrchestrationLive do
           </p>
         </div>
         <div class="mt-4 sm:ml-16 sm:mt-0 sm:flex-none">
-          <button
-            type="button"
-            phx-click="refresh"
-            class="block rounded-md bg-indigo-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-          >
-            Refresh
-          </button>
+          <div class="flex space-x-2">
+            <button
+              type="button"
+              phx-click="refresh"
+              class="block rounded-md bg-indigo-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+            >
+              Refresh
+            </button>
+            <button
+              type="button"
+              phx-click="test_connection"
+              class="block rounded-md bg-green-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-green-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600"
+            >
+              Test PubSub
+            </button>
+          </div>
         </div>
       </div>
 
@@ -84,7 +101,7 @@ defmodule LivechainWeb.OrchestrationLive do
                 <:col :let={connection} label="Name">
                   <div class="flex items-center space-x-2">
                     <span><%= connection.name %></span>
-                    <div class="flex-shrink-0 w-2 h-2 bg-green-400 rounded-full animate-pulse" 
+                    <div class="flex-shrink-0 w-2 h-2 bg-green-400 rounded-full animate-pulse"
                          :if={connection.status == :connected}
                          title="Live connection">
                     </div>
@@ -157,12 +174,25 @@ defmodule LivechainWeb.OrchestrationLive do
 
   @impl true
   def handle_event("refresh", _params, socket) do
+    IO.puts("Refreshing connections...")
     {:noreply, fetch_connections(socket)}
+  end
+
+  @impl true
+  def handle_event("test_connection", _params, socket) do
+    # Manually trigger a status broadcast to test PubSub
+    IO.puts("Manually triggering connection status broadcast...")
+    WSSupervisor.broadcast_connection_status_update()
+    {:noreply, socket}
   end
 
   defp fetch_connections(socket) do
     connections = WSSupervisor.list_connections()
-    
+
+    IO.puts(
+      "Fetched #{length(connections)} connections: #{inspect(Enum.map(connections, & &1.id))}"
+    )
+
     socket
     |> assign(:connections, connections)
     |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
@@ -171,9 +201,12 @@ defmodule LivechainWeb.OrchestrationLive do
 
   defp format_last_seen(connection) do
     case Map.get(connection, :last_seen) do
-      nil -> "Unknown"
+      nil ->
+        "Unknown"
+
       last_seen ->
         diff_seconds = DateTime.diff(DateTime.utc_now(), last_seen, :second)
+
         cond do
           diff_seconds < 60 -> "#{diff_seconds}s ago"
           diff_seconds < 3600 -> "#{div(diff_seconds, 60)}m ago"
