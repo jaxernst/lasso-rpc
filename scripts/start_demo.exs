@@ -8,7 +8,7 @@ IO.puts """
 ═══════════════════════════════════════════════════════════════
 
 This demo will start:
-✅ Mock blockchain providers (Ethereum, Polygon)  
+✅ Mock blockchain providers (Ethereum, Polygon)
 ✅ Phoenix WebSocket server on port 4000
 ✅ HTTP API endpoints
 ✅ Real-time block generation and broadcasting
@@ -17,11 +17,11 @@ Ready to test with multiple WebSocket clients!
 """
 
 # Run the demo
-Livechain.TestRunner.run_live_demo(120)  # Run for 2 minutes
+ChainPulseDemo.run_live_demo(120)  # Run for 2 minutes
 
 IO.puts """
 
-🎉 Demo completed! 
+🎉 Demo completed!
 
 To continue testing:
 1. Install wscat: npm install -g wscat
