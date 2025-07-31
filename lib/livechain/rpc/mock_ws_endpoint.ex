@@ -37,6 +37,7 @@ defmodule Livechain.RPC.MockWSEndpoint do
           name: String.t(),
           url: String.t(),
           chain_id: non_neg_integer(),
+          chain_name: String.t(),
           api_key: String.t() | nil,
           timeout: non_neg_integer(),
           max_retries: non_neg_integer(),
@@ -47,12 +48,19 @@ defmodule Livechain.RPC.MockWSEndpoint do
           max_reconnect_attempts: non_neg_integer() | :infinity,
           subscription_topics: [String.t()],
 
+          # Provider characteristics
+          provider_type: String.t(),
+          reliability: float(),
+          latency_target: non_neg_integer(),
+          rate_limit: non_neg_integer(),
+
           # Mock-specific fields
           mock_provider: pid() | nil,
           block_time: non_neg_integer(),
           failure_rate: float(),
           latency_range: {non_neg_integer(), non_neg_integer()},
-          enable_events: boolean()
+          enable_events: boolean(),
+          mock_config: map()
         }
 
   defstruct [
@@ -61,6 +69,7 @@ defmodule Livechain.RPC.MockWSEndpoint do
     :name,
     :url,
     :chain_id,
+    :chain_name,
     :api_key,
     :ws_url,
     timeout: 30_000,
@@ -71,12 +80,19 @@ defmodule Livechain.RPC.MockWSEndpoint do
     max_reconnect_attempts: :infinity,
     subscription_topics: [],
 
+    # Provider characteristics
+    provider_type: "public",
+    reliability: 0.95,
+    latency_target: 150,
+    rate_limit: 1000,
+
     # Mock-specific fields
     mock_provider: nil,
     block_time: 12_000,
-    failure_rate: 0.0,
+    failure_rate: 0.05,
     latency_range: {50, 200},
-    enable_events: true
+    enable_events: true,
+    mock_config: %{}
   ]
 
   @doc """

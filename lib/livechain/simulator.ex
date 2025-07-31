@@ -10,8 +10,9 @@ defmodule Livechain.Simulator do
   require Logger
   
   alias Livechain.RPC.{WSSupervisor, MockWSEndpoint}
+  alias Livechain.Config.MockConnections
 
-  # Available blockchain networks for simulation
+  # Available blockchain networks for simulation - now using comprehensive config
   @available_chains [
     {:ethereum, &MockWSEndpoint.ethereum_mainnet/1},
     {:polygon, &MockWSEndpoint.polygon/1},
@@ -100,6 +101,18 @@ defmodule Livechain.Simulator do
 
   def update_config(new_config) do
     GenServer.cast(__MODULE__, {:update_config, new_config})
+  end
+
+  @doc """
+  Starts all configured mock connections from the comprehensive chains.yml configuration.
+  This provides a more realistic simulation environment.
+  """
+  def start_all_mock_connections do
+    GenServer.cast(__MODULE__, :start_all_mock_connections)
+  end
+
+  def stop_all_mock_connections do
+    GenServer.cast(__MODULE__, :stop_all_mock_connections)
   end
 
   ## GenServer Callbacks
@@ -205,6 +218,40 @@ defmodule Livechain.Simulator do
   @impl true
   def handle_call(:get_mode, _from, state) do
     {:reply, state.mode, state}
+  end
+
+  @impl true
+  def handle_cast(:start_all_mock_connections, state) do
+    Logger.info("Starting all configured mock WebSocket connections...")
+    
+    Task.start(fn ->
+      case MockConnections.start_all_mock_connections() do
+        {:ok, %{started: started, failed: failed}} ->
+          Logger.info("Mock connections started: #{started} successful, #{failed} failed")
+        
+        {:error, reason} ->
+          Logger.error("Failed to start mock connections: #{inspect(reason)}")
+      end
+    end)
+    
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast(:stop_all_mock_connections, state) do
+    Logger.info("Stopping all mock WebSocket connections...")
+    
+    Task.start(fn ->
+      case MockConnections.stop_all_mock_connections() do
+        {:ok, %{stopped: stopped, failed: failed}} ->
+          Logger.info("Mock connections stopped: #{stopped} successful, #{failed} failed")
+        
+        {:error, reason} ->
+          Logger.error("Failed to stop mock connections: #{inspect(reason)}")
+      end
+    end)
+    
+    {:noreply, state}
   end
 
   @impl true

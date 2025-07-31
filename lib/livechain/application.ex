@@ -61,8 +61,13 @@ defmodule Livechain.Application do
   defp start_simulator_process do
     case Process.whereis(Livechain.Simulator) do
       pid when is_pid(pid) ->
+        # Start all configured mock connections for a comprehensive demo
+        Livechain.Simulator.start_all_mock_connections()
+        Logger.info("Auto-started comprehensive mock WebSocket connections")
+        
+        # Also start the dynamic simulator for additional variety
         Livechain.Simulator.start_simulation()
-        Logger.info("Auto-started WebSocket connection simulator")
+        Logger.info("Auto-started dynamic WebSocket connection simulator")
       nil ->
         Logger.debug("Simulator not found in process registry")
     end

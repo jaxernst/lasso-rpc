@@ -19,6 +19,8 @@ defmodule LivechainWeb.Router do
 
     live "/", OrchestrationLive
     live "/orchestration", OrchestrationLive
+    live "/network", NetworkLive
+    live "/table", TableLive
   end
 
   scope "/api", LivechainWeb do
