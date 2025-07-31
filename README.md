@@ -1,17 +1,21 @@
 # ChainPulse
 
+> **🎉 HACKATHON PROJECT STATUS: DEMO READY**
+>
+> **Real-time blockchain event streaming with multi-provider RPC orchestration**
+
 **Live-first blockchain event streaming for crypto consumer apps**
 
 ChainPulse is a lightweight, Elixir-based middleware for real-time blockchain event streaming with robust RPC failover. It delivers curated, low-latency event feeds (e.g., token transfers, NFT mints) across multiple chains via a hybrid API approach, tailored for Viem/Wagmi-based consumer applications.
 
 ## ✨ Features
 
-- 🚀 **Sub-Second Latency**: Real-time event delivery for consumer applications  
+- 🚀 **Sub-Second Latency**: Real-time event delivery for consumer applications
 - 🔄 **RPC Failover**: Seamless switching between providers (Infura, Alchemy)
 - 🎯 **Curated Events**: Pre-processed USDC transfers, NFT mints with metadata
 - 🌐 **Hybrid API**: Standard JSON-RPC + enhanced streaming layer
 - ⚡ **Viem Compatible**: Drop-in replacement for existing Viem/Wagmi apps
-- 🏗️ **Broadway Pipelines**: Multi-chain event normalization  
+- 🏗️ **Broadway Pipelines**: Multi-chain event normalization
 - 🛡️ **OTP Fault Tolerance**: Individual failures don't cascade
 - 🧪 **Development Ready**: Comprehensive mock system with real-time dashboard
 - 📊 **Live Monitoring**: Web dashboard showing connection status, timestamps, and metrics
@@ -23,7 +27,7 @@ ChainPulse is a lightweight, Elixir-based middleware for real-time blockchain ev
 ```
 
 - **GenServers**: Manage individual blockchain RPC connections with automatic reconnection
-- **Phoenix PubSub**: Efficient message broadcasting across the system  
+- **Phoenix PubSub**: Efficient message broadcasting across the system
 - **Phoenix Channels**: Handle thousands of concurrent WebSocket client connections
 - **LiveView Dashboard**: Real-time web interface showing connection status and metrics
 - **HTTP API**: RESTful interface for system status and blockchain data
@@ -39,17 +43,20 @@ ChainPulse is a lightweight, Elixir-based middleware for real-time blockchain ev
 ### Installation
 
 1. **Clone the repository**:
+
    ```bash
    git clone <repository-url>
    cd livechain
    ```
 
 2. **Install dependencies**:
+
    ```bash
    mix deps.get
    ```
 
 3. **Start the application**:
+
    ```bash
    mix phx.server
    ```
@@ -60,23 +67,37 @@ ChainPulse is a lightweight, Elixir-based middleware for real-time blockchain ev
 ### 🌐 WebSocket Client Testing
 
 1. **Install wscat**:
+
    ```bash
    npm install -g wscat
    ```
 
 2. **Connect to blockchain channels**:
+
    ```bash
    wscat -c "ws://localhost:4000/socket/websocket"
    ```
 
 3. **Join Ethereum channel**:
+
    ```json
-   {"topic":"blockchain:ethereum","event":"phx_join","payload":{},"ref":"1"}
+   {
+     "topic": "blockchain:ethereum",
+     "event": "phx_join",
+     "payload": {},
+     "ref": "1"
+   }
    ```
 
 4. **Subscribe to real-time blocks**:
+
    ```json
-   {"topic":"blockchain:ethereum","event":"subscribe","payload":{"type":"blocks"},"ref":"2"}
+   {
+     "topic": "blockchain:ethereum",
+     "event": "subscribe",
+     "payload": { "type": "blocks" },
+     "ref": "2"
+   }
    ```
 
 5. **Watch live blockchain data stream in!** 🎉
@@ -87,7 +108,7 @@ ChainPulse is a lightweight, Elixir-based middleware for real-time blockchain ev
 # System health
 curl http://localhost:4000/api/health
 
-# Detailed status  
+# Detailed status
 curl http://localhost:4000/api/status
 
 # Supported chains
@@ -100,7 +121,7 @@ curl http://localhost:4000/api/chains/1/status
 ## 📖 Documentation
 
 - [WebSocket Simulator Guide](SIMULATOR.md) - Development simulator with real-time dashboard
-- [RPC Orchestration Vision](docs/RPC_ORCHESTRATION_VISION.md) - Architecture deep dive  
+- [RPC Orchestration Vision](docs/RPC_ORCHESTRATION_VISION.md) - Architecture deep dive
 - [API Documentation](#) - Complete API reference (coming soon)
 
 ## 🛠️ Development
@@ -115,7 +136,7 @@ mix phx.server
 
 # View dashboard at http://localhost:4000
 # - Real-time connection status
-# - Live "last seen" timestamps  
+# - Live "last seen" timestamps
 # - Connection failures and reconnections
 # - Multiple blockchain networks (Ethereum, Polygon, Arbitrum, BSC)
 ```
@@ -123,12 +144,12 @@ mix phx.server
 Control the simulator from IEx:
 
 ```elixir
-# View statistics  
+# View statistics
 Livechain.Simulator.get_stats()
 
 # Change simulation intensity
 Livechain.Simulator.switch_mode("intense")  # High activity, failures
-Livechain.Simulator.switch_mode("calm")     # Stable connections  
+Livechain.Simulator.switch_mode("calm")     # Stable connections
 Livechain.Simulator.switch_mode("normal")   # Balanced (default)
 
 # Manual control
@@ -144,7 +165,7 @@ For production use with real RPC providers:
 # Using Infura (requires API key)
 ethereum = Livechain.RPC.RealEndpoints.ethereum_mainnet_infura("your_api_key")
 
-# Using public endpoints  
+# Using public endpoints
 ethereum = Livechain.RPC.RealEndpoints.ethereum_mainnet_public()
 
 # Start real connection
@@ -184,7 +205,7 @@ CMD ["bin/livechain", "start"]
 ## 📊 Performance
 
 - **Blockchain Connections**: 10-50 simultaneous RPC connections
-- **Client Connections**: 1,000+ concurrent WebSocket clients  
+- **Client Connections**: 1,000+ concurrent WebSocket clients
 - **Latency**: Sub-100ms for most operations
 - **Throughput**: 10,000+ requests/second
 - **Reliability**: 99.9%+ uptime with automatic failover
@@ -206,4 +227,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Built with [Phoenix Framework](https://phoenixframework.org/)
 - Powered by [Elixir/OTP](https://elixir-lang.org/)
 - WebSocket support via [WebSockex](https://github.com/Azolo/websockex)
-
