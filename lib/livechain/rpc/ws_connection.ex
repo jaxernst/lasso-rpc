@@ -282,7 +282,7 @@ defmodule Livechain.RPC.WSConnection do
     # Send to MessageAggregator for deduplication and speed optimization
     chain_name = get_chain_name(state.endpoint.chain_id)
     received_at = System.monotonic_time(:millisecond)
-    
+
     # Send to raw messages channel for aggregation
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
@@ -299,37 +299,37 @@ defmodule Livechain.RPC.WSConnection do
   defp handle_websocket_message(%{"method" => "eth_subscription"} = message, state) do
     # Handle other subscription notifications
     Logger.debug("Received subscription: #{inspect(message)}")
-    
+
     # Send all subscription messages through aggregator
     chain_name = get_chain_name(state.endpoint.chain_id)
     received_at = System.monotonic_time(:millisecond)
-    
+
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "raw_messages:#{chain_name}",
       {:raw_message, state.endpoint.id, message, received_at}
     )
-    
+
     {:ok, state}
   end
 
   defp handle_websocket_message(message, state) do
     # Handle other RPC responses
     Logger.debug("Received message: #{inspect(message)}")
-    
+
     # Send through aggregator for consistency
     chain_name = get_chain_name(state.endpoint.chain_id)
     received_at = System.monotonic_time(:millisecond)
-    
+
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "raw_messages:#{chain_name}",
       {:raw_message, state.endpoint.id, message, received_at}
     )
-    
+
     {:ok, state}
   end
-  
+
   defp get_chain_name(chain_id) do
     case chain_id do
       1 -> "ethereum"
@@ -380,13 +380,191 @@ defmodule Livechain.RPC.WSConnection do
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",
-      {:connection_status_changed, state.endpoint.id, %{
-        id: state.endpoint.id,
-        name: state.endpoint.name,
-        status: status,
-        reconnect_attempts: state.reconnect_attempts,
-        subscriptions: MapSet.size(state.subscriptions)
-      }}
+      {:connection_status_changed, state.endpoint.id,
+       %{
+         id: state.endpoint.id,
+         name: state.endpoint.name,
+         status: status,
+         reconnect_attempts: state.reconnect_attempts,
+         subscriptions: MapSet.size(state.subscriptions)
+       }}
     )
+  end
+
+  # JSON-RPC method implementations
+
+  @doc """
+  Gets logs for a specific filter.
+  """
+  def get_logs(connection_id, filter) do
+    GenServer.call(via_name(connection_id), {:get_logs, filter})
+  end
+
+  @doc """
+  Gets block by number.
+  """
+  def get_block_by_number(connection_id, block_number, include_transactions) do
+    GenServer.call(
+      via_name(connection_id),
+      {:get_block_by_number, block_number, include_transactions}
+    )
+  end
+
+  @doc """
+  Gets the latest block number.
+  """
+  def get_block_number(connection_id) do
+    GenServer.call(via_name(connection_id), {:get_block_number})
+  end
+
+  @doc """
+  Gets balance for an address.
+  """
+  def get_balance(connection_id, address, block) do
+    GenServer.call(via_name(connection_id), {:get_balance, address, block})
+  end
+
+  # GenServer callbacks for JSON-RPC methods
+
+  @impl true
+  def handle_call({:get_logs, filter}, _from, state) do
+    request = %{
+      jsonrpc: "2.0",
+      method: "eth_getLogs",
+      params: [filter],
+      id: generate_id()
+    }
+
+    case send_json_rpc_request(state, request) do
+      {:ok, response} -> {:reply, {:ok, response["result"] || []}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_block_by_number, block_number, include_transactions}, _from, state) do
+    request = %{
+      jsonrpc: "2.0",
+      method: "eth_getBlockByNumber",
+      params: [block_number, include_transactions],
+      id: generate_id()
+    }
+
+    case send_json_rpc_request(state, request) do
+      {:ok, response} -> {:reply, {:ok, response["result"]}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_block_number}, _from, state) do
+    request = %{
+      jsonrpc: "2.0",
+      method: "eth_blockNumber",
+      params: [],
+      id: generate_id()
+    }
+
+    case send_json_rpc_request(state, request) do
+      {:ok, response} -> {:reply, {:ok, response["result"]}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_balance, address, block}, _from, state) do
+    request = %{
+      jsonrpc: "2.0",
+      method: "eth_getBalance",
+      params: [address, block],
+      id: generate_id()
+    }
+
+    case send_json_rpc_request(state, request) do
+      {:ok, response} -> {:reply, {:ok, response["result"]}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp send_json_rpc_request(state, request) do
+    case state.websocket_pid do
+      nil ->
+        {:error, :not_connected}
+
+      pid ->
+        try do
+          # For now, return mock data since we're using mock connections
+          # In production, this would send the actual request via WebSocket
+          mock_json_rpc_response(request)
+        catch
+          :exit, _ -> {:error, :connection_lost}
+          :error, reason -> {:error, reason}
+        end
+    end
+  end
+
+  defp mock_json_rpc_response(%{method: "eth_getLogs"}) do
+    {:ok,
+     %{
+       "jsonrpc" => "2.0",
+       "id" => "mock_id",
+       "result" => [
+         %{
+           "address" => "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+           "topics" => [
+             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+           ],
+           "data" => "0x0000000000000000000000000000000000000000000000000000000000000001",
+           "blockNumber" => "0x123456",
+           "transactionHash" =>
+             "0x" <> (:crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)),
+           "transactionIndex" => "0x0",
+           "blockHash" => "0x" <> (:crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)),
+           "logIndex" => "0x0",
+           "removed" => false
+         }
+       ]
+     }}
+  end
+
+  defp mock_json_rpc_response(%{method: "eth_getBlockByNumber"}) do
+    {:ok,
+     %{
+       "jsonrpc" => "2.0",
+       "id" => "mock_id",
+       "result" => %{
+         "number" => "0x123456",
+         "hash" => "0x" <> (:crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)),
+         "timestamp" => "0x" <> Integer.to_string(System.system_time(:second), 16),
+         "transactions" => []
+       }
+     }}
+  end
+
+  defp mock_json_rpc_response(%{method: "eth_blockNumber"}) do
+    {:ok,
+     %{
+       "jsonrpc" => "2.0",
+       "id" => "mock_id",
+       "result" => "0x" <> Integer.to_string(:rand.uniform(20_000_000), 16)
+     }}
+  end
+
+  defp mock_json_rpc_response(%{method: "eth_getBalance"}) do
+    {:ok,
+     %{
+       "jsonrpc" => "2.0",
+       "id" => "mock_id",
+       "result" => "0x" <> Integer.to_string(:rand.uniform(1_000_000_000_000_000_000), 16)
+     }}
+  end
+
+  defp mock_json_rpc_response(_) do
+    {:ok,
+     %{
+       "jsonrpc" => "2.0",
+       "id" => "mock_id",
+       "result" => nil
+     }}
   end
 end

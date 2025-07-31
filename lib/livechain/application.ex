@@ -8,27 +8,31 @@ defmodule Livechain.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      # Start PubSub for real-time messaging
-      {Phoenix.PubSub, name: Livechain.PubSub},
+    children =
+      [
+        # Start PubSub for real-time messaging
+        {Phoenix.PubSub, name: Livechain.PubSub},
 
-      # Start process registry for centralized process management
-      {Livechain.RPC.ProcessRegistry, name: Livechain.RPC.ProcessRegistry},
+        # Start process registry for centralized process management
+        {Livechain.RPC.ProcessRegistry, name: Livechain.RPC.ProcessRegistry},
 
-      # Start dynamic supervisor for chain supervisors
-      {DynamicSupervisor, strategy: :one_for_one, name: Livechain.RPC.Supervisor},
+        # Start dynamic supervisor for chain supervisors
+        {DynamicSupervisor, strategy: :one_for_one, name: Livechain.RPC.Supervisor},
 
-      # Start the chain manager for orchestrating all blockchain connections
-      Livechain.RPC.ChainManager,
+        # Start the chain manager for orchestrating all blockchain connections
+        Livechain.RPC.ChainManager,
 
-      # Start the WebSocket supervisor
-      Livechain.RPC.WSSupervisor,
+        # Start the WebSocket supervisor
+        Livechain.RPC.WSSupervisor,
 
-      # Start Phoenix endpoint
-      LivechainWeb.Endpoint
+        # Start the subscription manager for JSON-RPC subscriptions
+        Livechain.RPC.SubscriptionManager,
 
-      # Add simulator to children if in dev/test
-    ] ++ maybe_add_simulator()
+        # Start Phoenix endpoint
+        LivechainWeb.Endpoint
+
+        # Add simulator to children if in dev/test
+      ] ++ maybe_add_simulator()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
@@ -37,12 +41,12 @@ defmodule Livechain.Application do
     with {:ok, supervisor} <- Supervisor.start_link(children, opts) do
       # Attach telemetry handlers after supervisor is started
       Livechain.Telemetry.attach_default_handlers()
-      
+
       # Auto-start simulator in dev/test environments
       if Mix.env() in [:dev, :test] do
         start_simulator_process()
       end
-      
+
       {:ok, supervisor}
     end
   end
@@ -52,6 +56,7 @@ defmodule Livechain.Application do
     case Mix.env() do
       env when env in [:dev, :test] ->
         [{Livechain.Simulator, mode: "normal"}]
+
       _ ->
         []
     end
@@ -64,10 +69,11 @@ defmodule Livechain.Application do
         # Start all configured mock connections for a comprehensive demo
         Livechain.Simulator.start_all_mock_connections()
         Logger.info("Auto-started comprehensive mock WebSocket connections")
-        
+
         # Also start the dynamic simulator for additional variety
         Livechain.Simulator.start_simulation()
         Logger.info("Auto-started dynamic WebSocket connection simulator")
+
       nil ->
         Logger.debug("Simulator not found in process registry")
     end
