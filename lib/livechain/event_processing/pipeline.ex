@@ -220,6 +220,20 @@ defmodule Livechain.EventProcessing.Pipeline do
       "events:all",
       {:structured_event, event}
     )
+
+    # Publish to Broadway processing channel for dashboard
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "broadway:processed",
+      {:broadway_processed, event}
+    )
+
+    # Also publish to chain-specific Broadway channel
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "broadway:#{event.chain}",
+      {:broadway_processed, event}
+    )
   end
 
   defp calculate_total_usd_value(events) do

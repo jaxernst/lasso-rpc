@@ -106,6 +106,28 @@ defmodule Livechain.EventProcessing.Producer do
   end
 
   @impl true
+  def handle_info(%{payload: payload, event: "new_block"}, state) do
+    Logger.debug("Producer received mock block event for #{state.chain}")
+    
+    event = create_event(payload, "mock_provider", state.chain)
+    new_events = :queue.in(event, state.events)
+    new_state = %{state | events: new_events}
+    
+    dispatch_events(new_state)
+  end
+
+  @impl true
+  def handle_info(%{payload: payload} = message, state) do
+    Logger.debug("Producer received mock message for #{state.chain}: #{inspect(Map.keys(message))}")
+    
+    event = create_event(payload, "mock_provider", state.chain)
+    new_events = :queue.in(event, state.events)
+    new_state = %{state | events: new_events}
+    
+    dispatch_events(new_state)
+  end
+
+  @impl true
   def handle_info(message, state) do
     Logger.debug("Producer received unhandled message: #{inspect(message)}")
     {:noreply, [], state}
