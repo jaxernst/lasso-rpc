@@ -31,6 +31,7 @@ defmodule Livechain.MixProject do
       {:gettext, "~> 0.20"},
       {:plug_cowboy, "~> 2.5"},
       {:broadway, "~> 1.0"},
+      {:decimal, "~> 2.0"},
       {:yaml_elixir, "~> 2.9"},
       {:phoenix_live_dashboard, "~> 0.8", only: :dev},
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},

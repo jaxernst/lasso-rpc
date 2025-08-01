@@ -20,6 +20,12 @@ defmodule LivechainWeb.OrchestrationLive do
       Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:arbitrum")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:bsc")
 
+      # Subscribe to structured events from Broadway pipelines
+      Phoenix.PubSub.subscribe(Livechain.PubSub, "events:all")
+      
+      # Subscribe to analytics metrics
+      Phoenix.PubSub.subscribe(Livechain.PubSub, "analytics:metrics")
+
       # Schedule periodic updates for timestamps
       Process.send_after(self(), :tick, 1000)
     end
@@ -28,6 +34,8 @@ defmodule LivechainWeb.OrchestrationLive do
       socket
       |> fetch_connections()
       |> assign(:live_events, [])
+      |> assign(:structured_events, [])
+      |> assign(:analytics_metrics, %{})
       |> assign(:selected_chain, nil)
       |> assign(:selected_provider, nil)
       |> assign(:view_mode, :topology)
@@ -74,6 +82,50 @@ defmodule LivechainWeb.OrchestrationLive do
     updated_events = [event | socket.assigns.live_events] |> Enum.take(50)
 
     {:noreply, assign(socket, :live_events, updated_events)}
+  end
+
+  @impl true
+  def handle_info({:structured_event, event}, socket) do
+    # Add structured event from Broadway pipeline
+    structured_event = %{
+      id: System.unique_integer([:positive]),
+      timestamp: DateTime.utc_now(),
+      type: event.type,
+      chain: event.chain,
+      usd_value: Map.get(event, :usd_value),
+      data: event
+    }
+
+    # Keep only last 30 structured events
+    updated_events = [structured_event | socket.assigns.structured_events] |> Enum.take(30)
+
+    {:noreply, assign(socket, :structured_events, updated_events)}
+  end
+
+  @impl true
+  def handle_info({:metrics_batch, metrics}, socket) do
+    # Update analytics metrics
+    current_metrics = socket.assigns.analytics_metrics
+
+    updated_metrics = Enum.reduce(metrics, current_metrics, fn metric, acc ->
+      chain = Map.get(metric, :chain, "unknown")
+      
+      chain_metrics = Map.get(acc, chain, %{
+        events_count: 0,
+        total_usd_value: 0.0,
+        last_updated: 0
+      })
+
+      updated_chain_metrics = %{
+        events_count: chain_metrics.events_count + Map.get(metric, :count, 0),
+        total_usd_value: chain_metrics.total_usd_value + Map.get(metric, :total_usd_value, 0.0),
+        last_updated: System.system_time(:millisecond)
+      }
+
+      Map.put(acc, chain, updated_chain_metrics)
+    end)
+
+    {:noreply, assign(socket, :analytics_metrics, updated_metrics)}
   end
 
   @impl true
@@ -177,6 +229,51 @@ defmodule LivechainWeb.OrchestrationLive do
             <% else %>
               <div class="text-xs text-gray-500 text-center py-2">
                 No live events yet - waiting for WebSocket messages...
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
+      <!-- Structured Events & Analytics -->
+      <div class="bg-blue-900 text-white flex-shrink-0">
+        <div class="px-6 py-2">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="text-sm font-semibold text-blue-300">Broadway Pipeline Events</h2>
+            <div class="flex items-center space-x-4">
+              <!-- Analytics Summary -->
+              <div class="flex items-center space-x-3 text-xs">
+                <%= for {chain, metrics} <- @analytics_metrics do %>
+                  <div class="flex items-center space-x-1">
+                    <span class="text-blue-200"><%= String.upcase(chain) %>:</span>
+                    <span class="text-green-400 font-mono"><%= metrics.events_count %></span>
+                    <%= if metrics.total_usd_value > 0 do %>
+                      <span class="text-yellow-400 font-mono">$<%= Float.round(metrics.total_usd_value, 0) |> trunc() %></span>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+              <span class="text-xs text-blue-400"><%= length(@structured_events) %> structured</span>
+            </div>
+          </div>
+
+          <div class="overflow-hidden" style="height: 28px;">
+            <%= if length(@structured_events) > 0 do %>
+              <div class="flex space-x-4 animate-marquee">
+                <%= for event <- @structured_events |> Enum.take(8) do %>
+                  <div class="flex-shrink-0 bg-blue-800 rounded-lg px-3 py-1 text-xs whitespace-nowrap">
+                    <span class={"font-medium #{structured_event_color(event.type)}"}>[<%= String.upcase(event.chain) %>]</span>
+                    <span class="text-blue-200 ml-1"><%= format_structured_event(event) %></span>
+                    <%= if event.usd_value do %>
+                      <span class="text-yellow-300 ml-1 font-mono">$<%= Float.round(event.usd_value, 2) %></span>
+                    <% end %>
+                    <span class="text-blue-400 ml-2"><%= format_timestamp(event.timestamp) %></span>
+                  </div>
+                <% end %>
+              </div>
+            <% else %>
+              <div class="text-xs text-blue-400 text-center py-2">
+                No structured events yet - Broadway pipelines processing...
               </div>
             <% end %>
           </div>
@@ -452,6 +549,24 @@ defmodule LivechainWeb.OrchestrationLive do
       diff when diff < 60 -> "#{diff}s"
       diff when diff < 3600 -> "#{div(diff, 60)}m"
       _ -> DateTime.to_time(timestamp) |> Time.to_string() |> String.slice(0..7)
+    end
+  end
+
+  def structured_event_color(:erc20_transfer), do: "text-green-300"
+  def structured_event_color(:nft_transfer), do: "text-purple-300"
+  def structured_event_color(:native_transfer), do: "text-blue-300"
+  def structured_event_color(:block), do: "text-yellow-300"
+  def structured_event_color(:transaction), do: "text-indigo-300"
+  def structured_event_color(_), do: "text-gray-300"
+
+  def format_structured_event(event) do
+    case event.type do
+      :erc20_transfer -> "Token Transfer"
+      :nft_transfer -> "NFT Transfer"
+      :native_transfer -> "Native Transfer"
+      :block -> "New Block"
+      :transaction -> "Transaction"
+      _ -> "Event"
     end
   end
 

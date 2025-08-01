@@ -1,12 +1,10 @@
 # ChainPulse
 
-> **🎉 HACKATHON PROJECT STATUS: DEMO READY**
->
 > **Real-time blockchain event streaming with multi-provider RPC orchestration**
 
 **Live-first blockchain event streaming for crypto consumer apps**
 
-ChainPulse is a lightweight, Elixir-based middleware for real-time blockchain event streaming with robust RPC failover. It delivers curated, low-latency event feeds (e.g., token transfers, NFT mints) across multiple chains via a hybrid API approach, tailored for Viem/Wagmi-based consumer applications.
+ChainPulse is a lightweight, Elixir-based orchestration service for real-time blockchain event streaming with robust RPC failover. It delivers curated, low-latency event feeds (e.g., token transfers, NFT mints) across multiple chains via a hybrid API approach, tailored for Viem/Wagmi-based consumer applications (ethereum json-rpc clients).
 
 ## ✨ Features
 
@@ -217,10 +215,6 @@ CMD ["bin/livechain", "start"]
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 

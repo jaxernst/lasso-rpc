@@ -81,46 +81,54 @@ defmodule LivechainWeb.RPCChannel do
     {:reply, {:ok, response}, socket}
   end
 
-  # Handle subscription notifications from blockchain connections
+  # Handle subscription notifications from message aggregator
   @impl true
-  def handle_info(%{event: "new_block", payload: block_data}, socket) do
-    # Send subscription notifications to client
-    socket.assigns.subscriptions
-    |> Enum.filter(fn {_sub_id, sub_type} -> sub_type == "newHeads" end)
-    |> Enum.each(fn {subscription_id, _} ->
-      notification = %{
-        "jsonrpc" => "2.0",
-        "method" => "eth_subscription",
-        "params" => %{
-          "subscription" => subscription_id,
-          "result" => block_data
-        }
-      }
+  def handle_info({:fastest_message, provider_id, message}, socket) do
+    # Process aggregated messages from MessageAggregator
+    case detect_message_type(message) do
+      :block ->
+        send_block_subscription(socket, message)
 
-      push(socket, "rpc_notification", notification)
-    end)
+      :log ->
+        send_log_subscription(socket, message)
+
+      :transaction ->
+        send_transaction_subscription(socket, message)
+
+      _ ->
+        Logger.debug("Unhandled message type from #{provider_id}: #{inspect(message)}")
+    end
 
     {:noreply, socket}
   end
 
   @impl true
+  def handle_info({:blockchain_message, message}, socket) do
+    # Handle direct blockchain messages
+    case detect_message_type(message) do
+      :block ->
+        send_block_subscription(socket, message)
+
+      :log ->
+        send_log_subscription(socket, message)
+
+      _ ->
+        :ok
+    end
+
+    {:noreply, socket}
+  end
+
+  # Legacy handlers for backwards compatibility
+  @impl true
+  def handle_info(%{event: "new_block", payload: block_data}, socket) do
+    send_block_subscription(socket, block_data)
+    {:noreply, socket}
+  end
+
+  @impl true
   def handle_info(%{event: "new_log", payload: log_data}, socket) do
-    # Send log subscription notifications to client
-    socket.assigns.subscriptions
-    |> Enum.filter(fn {_sub_id, sub_type} -> sub_type == "logs" end)
-    |> Enum.each(fn {subscription_id, _} ->
-      notification = %{
-        "jsonrpc" => "2.0",
-        "method" => "eth_subscription",
-        "params" => %{
-          "subscription" => subscription_id,
-          "result" => log_data
-        }
-      }
-
-      push(socket, "rpc_notification", notification)
-    end)
-
+    send_log_subscription(socket, log_data)
     {:noreply, socket}
   end
 
@@ -161,42 +169,103 @@ defmodule LivechainWeb.RPCChannel do
     end
   end
 
-  defp handle_rpc_method("eth_getLogs", [filter], _socket) do
-    # For now, return empty logs - will be implemented with real provider integration
-    # In production, this would query the blockchain connection for the chain
-    Logger.debug("eth_getLogs called with filter: #{inspect(filter)}")
-    {:ok, []}
+  defp handle_rpc_method("eth_getLogs", [filter], socket) do
+    chain = socket.assigns.chain
+    Logger.debug("eth_getLogs called with filter: #{inspect(filter)} for chain: #{chain}")
+
+    case Livechain.RPC.ChainManager.get_logs(chain, filter) do
+      {:ok, logs} ->
+        {:ok, logs}
+
+      {:error, reason} ->
+        Logger.warning("Failed to get logs for #{chain}: #{reason}")
+        {:error, "Failed to get logs: #{reason}"}
+    end
   end
 
   defp handle_rpc_method("eth_getBlockByNumber", [block_number, include_transactions], socket) do
-    # Route to blockchain connection for this chain
     chain = socket.assigns.chain
+    Logger.debug("eth_getBlockByNumber called: #{block_number} for chain: #{chain}")
 
-    case get_chain_connection(chain) do
-      {:ok, _connection_pid} ->
-        # For now, return mock data - will integrate with real connections
-        {:ok,
-         %{
-           "number" => block_number,
-           "hash" => "0x" <> (:crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)),
-           "timestamp" => "0x" <> Integer.to_string(System.system_time(:second), 16),
-           "transactions" => if(include_transactions, do: [], else: [])
-         }}
+    case Livechain.RPC.ChainManager.get_block_by_number(chain, block_number, include_transactions) do
+      {:ok, block} ->
+        {:ok, block}
+
+      {:error, reason} ->
+        Logger.warning("Failed to get block for #{chain}: #{reason}")
+        {:error, "Failed to get block: #{reason}"}
+    end
+  end
+
+  defp handle_rpc_method("eth_getTransactionReceipt", [tx_hash], socket) do
+    chain = socket.assigns.chain
+    Logger.debug("eth_getTransactionReceipt called for: #{tx_hash} on chain: #{chain}")
+    
+    # For now, delegate to get_logs with transaction hash filter
+    filter = %{"topics" => [], "address" => [], "transactionHash" => tx_hash}
+    
+    case Livechain.RPC.ChainManager.get_logs(chain, filter) do
+      {:ok, logs} when length(logs) > 0 ->
+        # Extract receipt information from logs
+        log = List.first(logs)
+        receipt = %{
+          "transactionHash" => tx_hash,
+          "blockNumber" => Map.get(log, "blockNumber"),
+          "blockHash" => Map.get(log, "blockHash"),
+          "status" => "0x1",
+          "gasUsed" => "0x5208",
+          "logs" => logs
+        }
+        {:ok, receipt}
+
+      {:ok, []} ->
+        {:ok, nil}
+
+      {:error, reason} ->
+        Logger.warning("Failed to get transaction receipt for #{chain}: #{reason}")
+        {:error, "Failed to get transaction receipt: #{reason}"}
+    end
+  end
+
+  defp handle_rpc_method("eth_blockNumber", [], socket) do
+    chain = socket.assigns.chain
+    Logger.debug("eth_blockNumber called for chain: #{chain}")
+
+    case Livechain.RPC.ChainManager.get_block_number(chain) do
+      {:ok, block_number} ->
+        {:ok, block_number}
+
+      {:error, reason} ->
+        Logger.warning("Failed to get block number for #{chain}: #{reason}")
+        {:error, "Failed to get block number: #{reason}"}
+    end
+  end
+
+  defp handle_rpc_method("eth_getBalance", [address, block], socket) do
+    chain = socket.assigns.chain
+    Logger.debug("eth_getBalance called for address: #{address} on chain: #{chain}")
+
+    case Livechain.RPC.ChainManager.get_balance(chain, address, block) do
+      {:ok, balance} ->
+        {:ok, balance}
+
+      {:error, reason} ->
+        Logger.warning("Failed to get balance for #{chain}: #{reason}")
+        {:error, "Failed to get balance: #{reason}"}
+    end
+  end
+
+  defp handle_rpc_method("eth_chainId", [], socket) do
+    chain = socket.assigns.chain
+    Logger.debug("eth_chainId called for chain: #{chain}")
+
+    case get_chain_id(chain) do
+      {:ok, chain_id} ->
+        {:ok, chain_id}
 
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  defp handle_rpc_method("eth_getTransactionReceipt", [tx_hash], _socket) do
-    Logger.debug("eth_getTransactionReceipt called for: #{tx_hash}")
-    # For now, return null - will be implemented with real provider integration
-    {:ok, nil}
-  end
-
-  defp handle_rpc_method("eth_blockNumber", [], _socket) do
-    # Return latest block number for this chain
-    {:ok, "0x" <> Integer.to_string(:rand.uniform(20_000_000), 16)}
   end
 
   defp handle_rpc_method(method, _params, _socket) do
@@ -258,4 +327,161 @@ defmodule LivechainWeb.RPCChannel do
 
     assign(socket, :subscriptions, updated_subscriptions)
   end
+
+  # Get chain ID from configuration
+  defp get_chain_id(chain_name) do
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        case Map.get(config.chains, chain_name) do
+          %{chain_id: chain_id} when is_integer(chain_id) ->
+            {:ok, "0x" <> Integer.to_string(chain_id, 16)}
+          
+          %{chain_id: chain_id} when is_binary(chain_id) ->
+            {:ok, chain_id}
+          
+          nil ->
+            {:error, "Chain not configured: #{chain_name}"}
+          
+          _ ->
+            {:error, "Invalid chain configuration for: #{chain_name}"}
+        end
+      
+      {:error, _reason} ->
+        {:error, "Failed to load chain configuration"}
+    end
+  end
+
+  # Subscription notification helpers
+  defp send_block_subscription(socket, block_data) do
+    socket.assigns.subscriptions
+    |> Enum.filter(fn {_sub_id, sub_type} -> sub_type == "newHeads" end)
+    |> Enum.each(fn {subscription_id, _} ->
+      notification = %{
+        "jsonrpc" => "2.0",
+        "method" => "eth_subscription",
+        "params" => %{
+          "subscription" => subscription_id,
+          "result" => extract_block_data(block_data)
+        }
+      }
+
+      push(socket, "rpc_notification", notification)
+    end)
+  end
+
+  defp send_log_subscription(socket, log_data) do
+    socket.assigns.subscriptions
+    |> Enum.filter(fn {_sub_id, sub_type} -> 
+      case sub_type do
+        "logs" -> true
+        {"logs", _filter} -> true
+        _ -> false
+      end
+    end)
+    |> Enum.each(fn {subscription_id, _} ->
+      notification = %{
+        "jsonrpc" => "2.0",
+        "method" => "eth_subscription",
+        "params" => %{
+          "subscription" => subscription_id,
+          "result" => extract_log_data(log_data)
+        }
+      }
+
+      push(socket, "rpc_notification", notification)
+    end)
+  end
+
+  defp send_transaction_subscription(socket, tx_data) do
+    socket.assigns.subscriptions
+    |> Enum.filter(fn {_sub_id, sub_type} -> sub_type == "newPendingTransactions" end)
+    |> Enum.each(fn {subscription_id, _} ->
+      notification = %{
+        "jsonrpc" => "2.0",
+        "method" => "eth_subscription",
+        "params" => %{
+          "subscription" => subscription_id,
+          "result" => extract_transaction_data(tx_data)
+        }
+      }
+
+      push(socket, "rpc_notification", notification)
+    end)
+  end
+
+  # Message type detection based on content using pattern matching
+  defp detect_message_type(message) when is_map(message) do
+    case message do
+      # New block message (direct result)
+      %{"result" => %{"hash" => _hash, "number" => _number}} ->
+        :block
+
+      # Subscription message with block data that has transaction hash (log)
+      %{"params" => %{"result" => %{"hash" => _hash, "transactionHash" => _tx_hash}}} ->
+        :log
+
+      # Subscription message with block data that has block number (block)
+      %{"params" => %{"result" => %{"hash" => _hash, "number" => _number}}} ->
+        :block
+
+      # Log message (transaction-based)
+      %{"params" => %{"result" => %{"transactionHash" => _tx_hash}}} ->
+        :log
+
+      # Transaction message (string result - typically a hash)
+      %{"params" => %{"result" => result}} when is_binary(result) ->
+        :transaction
+
+      _ ->
+        :other
+    end
+  end
+
+  defp detect_message_type(_), do: :other
+
+  # Data extraction helpers for subscriptions using pattern matching
+  defp extract_block_data(message) when is_map(message) do
+    case message do
+      %{"result" => result} when is_map(result) ->
+        result
+
+      %{"params" => %{"result" => result}} ->
+        result
+
+      _ ->
+        message
+    end
+  end
+
+  defp extract_block_data(data), do: data
+
+  defp extract_log_data(message) when is_map(message) do
+    case message do
+      %{"params" => %{"result" => result}} ->
+        result
+
+      %{"result" => result} ->
+        result
+
+      _ ->
+        message
+    end
+  end
+
+  defp extract_log_data(data), do: data
+
+  defp extract_transaction_data(message) when is_map(message) do
+    case message do
+      %{"params" => %{"result" => result}} ->
+        result
+
+      %{"result" => result} ->
+        result
+
+      _ ->
+        message
+    end
+  end
+
+  defp extract_transaction_data(data), do: data
 end

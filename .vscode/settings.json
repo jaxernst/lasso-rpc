@@ -3,22 +3,31 @@
     "elixirLS.formatOnSave": true,
     "elixirLS.fetchDeps": true,
     "elixirLS.mixEnv": "dev",
-    "elixirLS.dialyzerEnabled": true,
-    "elixirLS.dialyzerFormat": "dialyxir_long",
-    "elixirLS.dialyzerWarnOpts": [
-        "error_handling",
-        "underspecs"
-    ],
+    "elixirLS.dialyzerEnabled": false,
     "elixirLS.autoBuild": true,
     "elixirLS.showSpecs": true,
     "elixirLS.signatureAfterComplete": true,
     "elixirLS.enableTestLenses": true,
     "elixirLS.enableDebugger": true,
+    "elixirLS.projectDir": ".",
+    "elixirLS.incrementalDialyzer": false,
+    "elixirLS.suggestSpecs": false,
+    "elixirLS.autoInsertRequiredAlias": true,
     "editor.formatOnSave": true,
     "editor.formatOnPaste": true,
     "editor.formatOnType": false,
+    "editor.quickSuggestions": {
+        "other": true,
+        "comments": false,
+        "strings": false
+    },
     "[elixir]": {
         "editor.formatOnSave": true,
-        "editor.defaultFormatter": "JakeBecker.elixir-ls"
+        "editor.defaultFormatter": "JakeBecker.elixir-ls",
+        "editor.quickSuggestions": {
+            "other": true,
+            "comments": false,
+            "strings": false
+        }
     }
 } 
