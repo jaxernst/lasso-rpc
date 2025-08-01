@@ -255,22 +255,27 @@ defmodule LivechainWeb.RPCController do
     {:error, -32600, "Invalid Request"}
   end
 
-  defp get_chain_id("ethereum"), do: {:ok, "0x1"}
-  defp get_chain_id("arbitrum"), do: {:ok, "0xa4b1"}
-  defp get_chain_id("polygon"), do: {:ok, "0x89"}
-  defp get_chain_id("bsc"), do: {:ok, "0x38"}
-  defp get_chain_id("base"), do: {:ok, "0x2105"}
-  defp get_chain_id("optimism"), do: {:ok, "0xa"}
-  defp get_chain_id("avalanche"), do: {:ok, "0xa86a"}
-  defp get_chain_id("zksync"), do: {:ok, "0x144"}
-  defp get_chain_id("linea"), do: {:ok, "0xe708"}
-  defp get_chain_id("scroll"), do: {:ok, "0x82750"}
-  defp get_chain_id("mantle"), do: {:ok, "0x1388"}
-  defp get_chain_id("blast"), do: {:ok, "0x13e31"}
-  defp get_chain_id("mode"), do: {:ok, "0x86a7"}
-  defp get_chain_id("fantom"), do: {:ok, "0xfa"}
-  defp get_chain_id("celo"), do: {:ok, "0xa4ec"}
-  defp get_chain_id(_), do: {:error, "Unknown chain"}
+  defp get_chain_id(chain_name) do
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        case Map.get(config.chains, chain_name) do
+          %{chain_id: chain_id} when is_integer(chain_id) ->
+            {:ok, "0x" <> Integer.to_string(chain_id, 16)}
+          
+          %{chain_id: chain_id} when is_binary(chain_id) ->
+            {:ok, chain_id}
+          
+          nil ->
+            {:error, "Chain not configured: #{chain_name}"}
+          
+          _ ->
+            {:error, "Invalid chain configuration for: #{chain_name}"}
+        end
+      
+      {:error, _reason} ->
+        {:error, "Failed to load chain configuration"}
+    end
+  end
 
   defp read_json_body(conn) do
     case read_body(conn) do

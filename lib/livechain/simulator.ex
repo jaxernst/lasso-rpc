@@ -246,13 +246,8 @@ defmodule Livechain.Simulator do
     Logger.info("Stopping all mock WebSocket connections...")
 
     Task.start(fn ->
-      case MockConnections.stop_all_mock_connections() do
-        {:ok, %{stopped: stopped, failed: failed}} ->
-          Logger.info("Mock connections stopped: #{stopped} successful, #{failed} failed")
-
-        {:error, reason} ->
-          Logger.error("Failed to stop mock connections: #{inspect(reason)}")
-      end
+      {:ok, %{stopped: stopped, failed: failed}} = MockConnections.stop_all_mock_connections()
+      Logger.info("Mock connections stopped: #{stopped} successful, #{failed} failed")
     end)
 
     {:noreply, state}

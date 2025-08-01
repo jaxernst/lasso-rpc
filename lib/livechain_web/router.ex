@@ -36,6 +36,16 @@ defmodule LivechainWeb.Router do
     get("/chains/:chain_id/status", ChainController, :status)
     get("/chains/:chain_id/blocks/latest", BlockController, :latest)
     get("/chains/:chain_id/blocks/:number", BlockController, :show)
+
+    # Analytics endpoints
+    scope "/analytics", as: :analytics do
+      get("/overview", AnalyticsController, :overview)
+      get("/tokens/volume", AnalyticsController, :token_volume)
+      get("/nft/activity", AnalyticsController, :nft_activity)
+      get("/chains/comparison", AnalyticsController, :chain_comparison)
+      get("/real-time/events", AnalyticsController, :realtime_events)
+      get("/performance", AnalyticsController, :performance_metrics)
+    end
   end
 
   # HTTP JSON-RPC endpoints for Viem compatibility
