@@ -291,4 +291,54 @@ defmodule LivechainWeb.CoreComponents do
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
+
+        # Collapsible Section Component
+  def collapsible_section(assigns) do
+    # Determine colors based on section_id
+    {header_gradient, content_bg, border_color} = case assigns.section_id do
+      "live_stream" -> {"from-gray-900 to-black", "bg-gray-900", "border-gray-700"}
+      "broadway_events" -> {"from-blue-900 to-blue-800", "bg-blue-900", "border-blue-700"}
+      "network_topology" -> {"from-purple-900 to-purple-800", "bg-purple-900", "border-purple-700"}
+      _ -> {"from-gray-800 to-gray-900", "bg-gray-900", "border-gray-700"}
+    end
+
+    assigns = assign(assigns, :header_gradient, header_gradient)
+    assigns = assign(assigns, :content_bg, content_bg)
+    assigns = assign(assigns, :border_color, border_color)
+
+    ~H"""
+    <div class="mb-4">
+      <button
+        type="button"
+        phx-click="toggle_section"
+        phx-value-section={@section_id}
+        class={"w-full flex items-center justify-between p-4 text-left bg-gradient-to-r #{@header_gradient} text-white rounded-t-lg hover:scale-[1.02] transition-all duration-300 ease-out shadow-lg"}
+      >
+        <div class="flex items-center space-x-3">
+          <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-white bg-opacity-10 flex items-center justify-center">
+            <%= render_slot(@icon) %>
+          </div>
+          <div>
+            <h3 class="text-lg font-semibold"><%= @title %></h3>
+            <p class="text-sm text-gray-300"><%= @subtitle %></p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-2">
+          <span class="text-sm text-gray-300"><%= @count %></span>
+          <div class={"flex-shrink-0 w-5 h-5 transform transition-transform duration-300 ease-out #{if @is_open, do: "rotate-180", else: ""}"}>
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </div>
+      </button>
+
+      <div class={"overflow-hidden transition-all duration-500 ease-out #{if @is_open, do: "max-h-96 opacity-100", else: "max-h-0 opacity-0"}"}>
+        <div class={"#{@content_bg} border-t #{@border_color} rounded-b-lg"}>
+          <%= render_slot(@inner_block) %>
+        </div>
+      </div>
+    </div>
+    """
+  end
 end
