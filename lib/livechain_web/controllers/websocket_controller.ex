@@ -3,8 +3,6 @@ defmodule LivechainWeb.WebSocketController do
 
   def connect(conn, %{"chain_id" => chain_id}) do
     # TODO: Implement actual WebSocket connection handling
-    # This would typically involve upgrading the connection to WebSocket
-    # and setting up real-time event streaming
 
     conn
     |> put_status(:ok)

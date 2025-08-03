@@ -1,20 +1,3 @@
-<header class="px-4 sm:px-6 lg:px-8">
-  <div class="flex items-center justify-between border-b border-zinc-100 py-3 text-sm">
-    <div class="flex items-center gap-4">
-      <a href="/">
-        <h1 class="text-lg font-semibold text-zinc-900">ChainPulse</h1>
-      </a>
-      <p class="bg-brand/5 text-brand rounded-full px-2 font-medium leading-6">
-        v<%= Application.spec(:livechain, :vsn) %>
-      </p>
-    </div>
-    <div class="flex items-center gap-4 font-semibold leading-6 text-zinc-900">
-      <a href="/orchestration" class="hover:text-zinc-700">
-        Dashboard
-      </a>
-    </div>
-  </div>
-</header>
 <main class="">
   <div class="">
     <.flash_group flash={@flash} />

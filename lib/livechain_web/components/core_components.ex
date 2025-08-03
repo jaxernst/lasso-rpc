@@ -292,7 +292,7 @@ defmodule LivechainWeb.CoreComponents do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
 
-        # Collapsible Section Component
+  # Collapsible Section Component  
   def collapsible_section(assigns) do
     # Determine colors based on section_id
     {header_gradient, content_bg, border_color} = case assigns.section_id do
@@ -307,12 +307,10 @@ defmodule LivechainWeb.CoreComponents do
     assigns = assign(assigns, :border_color, border_color)
 
     ~H"""
-    <div class="mb-4">
+    <div class="mb-4 group hover:scale-[1.02] transition-all duration-300 ease-out" id={"collapsible-#{@section_id}"} phx-hook="CollapsibleSection">
       <button
         type="button"
-        phx-click="toggle_section"
-        phx-value-section={@section_id}
-        class={"w-full flex items-center justify-between p-4 text-left bg-gradient-to-r #{@header_gradient} text-white rounded-t-lg hover:scale-[1.02] transition-all duration-300 ease-out shadow-lg"}
+        class={"w-full flex items-center justify-between p-4 text-left bg-gradient-to-r #{@header_gradient} text-white rounded-t-lg shadow-lg hover:shadow-xl transition-shadow duration-200"}
       >
         <div class="flex items-center space-x-3">
           <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-white bg-opacity-10 flex items-center justify-center">
@@ -325,7 +323,7 @@ defmodule LivechainWeb.CoreComponents do
         </div>
         <div class="flex items-center space-x-2">
           <span class="text-sm text-gray-300"><%= @count %></span>
-          <div class={"flex-shrink-0 w-5 h-5 transform transition-transform duration-300 ease-out #{if @is_open, do: "rotate-180", else: ""}"}>
+          <div class="flex-shrink-0 w-5 h-5 transform transition-transform duration-200 ease-out">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
             </svg>
@@ -333,8 +331,23 @@ defmodule LivechainWeb.CoreComponents do
         </div>
       </button>
 
-      <div class={"overflow-hidden transition-all duration-500 ease-out #{if @is_open, do: "max-h-96 opacity-100", else: "max-h-0 opacity-0"}"}>
-        <div class={"#{@content_bg} border-t #{@border_color} rounded-b-lg"}>
+      <div class={"#{@content_bg} border-t #{@border_color} rounded-b-lg transition-all duration-300 ease-out overflow-hidden h-12"}>
+        <div class="p-3 grid-pattern">
+          <div class="flex items-center justify-center h-full">
+            <div class="text-center">
+              <div class="text-lg opacity-50 mb-1">
+                <%= case @section_id do
+                  "live_stream" -> "⚡"
+                  "broadway_events" -> "🔄"
+                  "network_topology" -> "🌐"
+                  _ -> "📁"
+                end %>
+              </div>
+              <p class="text-xs text-gray-400">Click to expand <%= @title %></p>
+            </div>
+          </div>
+        </div>
+        <div class="p-4 grid-pattern" style="display: none;">
           <%= render_slot(@inner_block) %>
         </div>
       </div>
