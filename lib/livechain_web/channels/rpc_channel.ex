@@ -200,10 +200,10 @@ defmodule LivechainWeb.RPCChannel do
   defp handle_rpc_method("eth_getTransactionReceipt", [tx_hash], socket) do
     chain = socket.assigns.chain
     Logger.debug("eth_getTransactionReceipt called for: #{tx_hash} on chain: #{chain}")
-    
+
     # For now, delegate to get_logs with transaction hash filter
     filter = %{"topics" => [], "address" => [], "transactionHash" => tx_hash}
-    
+
     case Livechain.RPC.ChainManager.get_logs(chain, filter) do
       {:ok, logs} when length(logs) > 0 ->
         # Extract receipt information from logs
@@ -335,17 +335,17 @@ defmodule LivechainWeb.RPCChannel do
         case Map.get(config.chains, chain_name) do
           %{chain_id: chain_id} when is_integer(chain_id) ->
             {:ok, "0x" <> Integer.to_string(chain_id, 16)}
-          
+
           %{chain_id: chain_id} when is_binary(chain_id) ->
             {:ok, chain_id}
-          
+
           nil ->
             {:error, "Chain not configured: #{chain_name}"}
-          
+
           _ ->
             {:error, "Invalid chain configuration for: #{chain_name}"}
         end
-      
+
       {:error, _reason} ->
         {:error, "Failed to load chain configuration"}
     end
@@ -365,13 +365,14 @@ defmodule LivechainWeb.RPCChannel do
         }
       }
 
+      IO.inspect(notification, label: "send_block_subscription")
       push(socket, "rpc_notification", notification)
     end)
   end
 
   defp send_log_subscription(socket, log_data) do
     socket.assigns.subscriptions
-    |> Enum.filter(fn {_sub_id, sub_type} -> 
+    |> Enum.filter(fn {_sub_id, sub_type} ->
       case sub_type do
         "logs" -> true
         {"logs", _filter} -> true

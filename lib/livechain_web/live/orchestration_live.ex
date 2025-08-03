@@ -7,33 +7,32 @@ defmodule LivechainWeb.OrchestrationLive do
   end
 
   defp mount_logic(socket) do
-    if connected?(socket) do
+    if false && connected?(socket) do
+
       # Subscribe to WebSocket connection events for real-time updates
       Phoenix.PubSub.subscribe(Livechain.PubSub, "ws_connections")
 
       # Subscribe to live message streams for the event feed
       Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:ethereum")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:polygon")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:arbitrum")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:bsc")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:polygon")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:arbitrum")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:bsc")
 
       # Also subscribe to direct blockchain channels as fallback
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:ethereum")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:polygon")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:arbitrum")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:bsc")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:ethereum")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:polygon")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:arbitrum")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:bsc")
 
       # Subscribe to structured events from Broadway pipelines
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "broadway:processed")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "broadway:ethereum")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "broadway:polygon")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "broadway:arbitrum")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "broadway:processed")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "broadway:ethereum")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "broadway:polygon")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "broadway:arbitrum")
 
       # Subscribe to analytics metrics
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "analytics:metrics")
+      # Phoenix.PubSub.subscribe(Livechain.PubSub, "analytics:metrics")
 
-      # Schedule periodic updates for timestamps
-      Process.send_after(self(), :tick, 1000)
     end
 
     initial_state =
@@ -46,11 +45,6 @@ defmodule LivechainWeb.OrchestrationLive do
       |> assign(:selected_provider, nil)
       |> assign(:view_mode, :topology)
       |> assign(:event_filter, :all)
-      |> assign(:open_sections, %{
-        "live_stream" => true,
-        "broadway_events" => true,
-        "network_topology" => true
-      })
 
     {:ok, initial_state}
   end
@@ -67,14 +61,26 @@ defmodule LivechainWeb.OrchestrationLive do
 
   @impl true
   def handle_info({:connection_event, _event_type, _connection_id, _data}, socket) do
-    # Refresh all connections when any connection event occurs
-    {:noreply, fetch_connections(socket)}
+    # Throttle connection updates to prevent excessive re-renders
+    if Process.get(:pending_connection_update) do
+      {:noreply, socket}
+    else
+      Process.put(:pending_connection_update, true)
+      Process.send_after(self(), :flush_connections, 500)
+      {:noreply, fetch_connections(socket)}
+    end
   end
 
   @impl true
   def handle_info({:connection_status_changed, _connection_id, _connection_data}, socket) do
-    # Refresh all connections when any connection status changes
-    {:noreply, fetch_connections(socket)}
+    # Throttle connection updates to prevent excessive re-renders
+    if Process.get(:pending_connection_update) do
+      {:noreply, socket}
+    else
+      Process.put(:pending_connection_update, true)
+      Process.send_after(self(), :flush_connections, 500)
+      {:noreply, fetch_connections(socket)}
+    end
   end
 
   @impl true
@@ -92,7 +98,39 @@ defmodule LivechainWeb.OrchestrationLive do
     # Keep only last 50 events
     updated_events = [event | socket.assigns.live_events] |> Enum.take(50)
 
-    {:noreply, assign(socket, :live_events, updated_events)}
+    # Only update if we don't have a pending update
+    if Process.get(:pending_event_update) do
+      {:noreply, socket}
+    else
+      Process.put(:pending_event_update, true)
+      Process.send_after(self(), :flush_events, 100)
+      {:noreply, assign(socket, :live_events, updated_events)}
+    end
+  end
+
+  @impl true
+  def handle_info(%{payload: payload} = message, socket) when is_map(payload) do
+    # Handle block events with payload structure
+    event = %{
+      id: System.unique_integer([:positive]),
+      timestamp: DateTime.utc_now(),
+      provider_id: "blockchain",
+      chain: extract_chain_from_message(message),
+      message: message,
+      type: :block
+    }
+
+    # Keep only last 50 events
+    updated_events = [event | socket.assigns.live_events] |> Enum.take(50)
+
+    # Only update if we don't have a pending update
+    if Process.get(:pending_event_update) do
+      {:noreply, socket}
+    else
+      Process.put(:pending_event_update, true)
+      Process.send_after(self(), :flush_events, 100)
+      {:noreply, assign(socket, :live_events, updated_events)}
+    end
   end
 
   @impl true
@@ -110,7 +148,14 @@ defmodule LivechainWeb.OrchestrationLive do
     # Keep only last 50 events
     updated_events = [event | socket.assigns.live_events] |> Enum.take(50)
 
-    {:noreply, assign(socket, :live_events, updated_events)}
+    # Only update if we don't have a pending update
+    if Process.get(:pending_event_update) do
+      {:noreply, socket}
+    else
+      Process.put(:pending_event_update, true)
+      Process.send_after(self(), :flush_events, 100)
+      {:noreply, assign(socket, :live_events, updated_events)}
+    end
   end
 
   @impl true
@@ -128,7 +173,14 @@ defmodule LivechainWeb.OrchestrationLive do
     # Keep only last 30 structured events
     updated_events = [structured_event | socket.assigns.structured_events] |> Enum.take(30)
 
-    {:noreply, assign(socket, :structured_events, updated_events)}
+    # Only update if we don't have a pending structured update
+    if Process.get(:pending_structured_update) do
+      {:noreply, socket}
+    else
+      Process.put(:pending_structured_update, true)
+      Process.send_after(self(), :flush_structured_events, 150)
+      {:noreply, assign(socket, :structured_events, updated_events)}
+    end
   end
 
   @impl true
@@ -144,7 +196,15 @@ defmodule LivechainWeb.OrchestrationLive do
     }
 
     updated_events = [structured_event | socket.assigns.structured_events] |> Enum.take(30)
-    {:noreply, assign(socket, :structured_events, updated_events)}
+
+    # Only update if we don't have a pending structured update
+    if Process.get(:pending_structured_update) do
+      {:noreply, socket}
+    else
+      Process.put(:pending_structured_update, true)
+      Process.send_after(self(), :flush_structured_events, 150)
+      {:noreply, assign(socket, :structured_events, updated_events)}
+    end
   end
 
   @impl true
@@ -180,6 +240,34 @@ defmodule LivechainWeb.OrchestrationLive do
     socket = assign(socket, :current_time, DateTime.utc_now())
     {:noreply, socket}
   end
+
+  @impl true
+  def handle_info(:flush_events, socket) do
+    # Clear the pending update flag and trigger a render
+    Process.delete(:pending_event_update)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info(:flush_structured_events, socket) do
+    # Clear the pending structured update flag and trigger a render
+    Process.delete(:pending_structured_update)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info(:flush_connections, socket) do
+    # Clear the pending connection update flag and trigger a render
+    Process.delete(:pending_connection_update)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info(message, socket) do
+    # Catch-all handler for unexpected messages
+    {:noreply, socket}
+  end
+
 
   @impl true
   def render(assigns) do
@@ -245,10 +333,10 @@ defmodule LivechainWeb.OrchestrationLive do
         <div class="flex items-center justify-between w-full">
           <div class="flex items-center space-x-4">
             <div class="flex items-center space-x-3">
-              <h1 class="text-2xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">The Observatory</h1>
+              <h1 class="text-2xl leading-none font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">ChainPulse</h1>
               <div class="flex items-center space-x-1">
-                <div class="flex-shrink-0 w-3 h-3 bg-emerald-400 rounded-full animate-pulse"></div>
-                <span class="text-sm font-medium text-emerald-600">LIVE</span>
+                <div class="flex-shrink-0 w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+                <span class="text-xs font-medium text-emerald-600">LIVE</span>
               </div>
             </div>
           </div>
@@ -303,21 +391,20 @@ defmodule LivechainWeb.OrchestrationLive do
       </div>
 
       <!-- Collapsible Sections Container -->
-      <div class="flex-1 p-6 space-y-4 overflow-y-auto">
+      <div class="flex-1 p-6 flex flex-col space-y-4 overflow-y-auto min-h-0">
         <!-- Live Message Stream Section (Black) -->
         <.collapsible_section
           section_id="live_stream"
           title="Live Message Stream"
           subtitle="Real-time WebSocket messages from blockchain networks"
           count={length(@live_events)}
-          is_open={@open_sections["live_stream"]}
         >
           <:icon>
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </:icon>
-          <div class="p-4 grid-pattern">
+          <div class="w-full">
             <div class="flex items-center justify-between mb-3">
               <div class="flex items-center space-x-2">
                 <select phx-change="filter_events" class="bg-gray-800 text-white text-xs rounded px-2 py-1 border-gray-700">
@@ -360,14 +447,13 @@ defmodule LivechainWeb.OrchestrationLive do
           title="Broadway Pipeline Events"
           subtitle="Structured events processed through data pipelines"
           count={length(@structured_events)}
-          is_open={@open_sections["broadway_events"]}
         >
           <:icon>
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
             </svg>
           </:icon>
-          <div class="p-4 grid-pattern">
+          <div class="w-full">
             <div class="flex items-center justify-between mb-3">
               <div class="flex items-center space-x-4">
                 <!-- Analytics Summary -->
@@ -423,16 +509,15 @@ defmodule LivechainWeb.OrchestrationLive do
           title="Network Topology"
           subtitle="Real-time blockchain network connections and status"
           count={map_size(group_connections_by_chain(@connections))}
-          is_open={@open_sections["network_topology"]}
         >
           <:icon>
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3" />
             </svg>
           </:icon>
-          <div class="p-4 grid-pattern">
+
+          <div class="w-full">
             <%= if @view_mode == :topology do %>
-              <.network_topology connections={@connections} selected_chain={@selected_chain} selected_provider={@selected_provider} />
             <% else %>
               <.connection_table connections={@connections} current_time={@current_time} />
             <% end %>
@@ -447,17 +532,13 @@ defmodule LivechainWeb.OrchestrationLive do
             <% end %>
           </div>
         </.collapsible_section>
+        <.network_topology connections={@connections} selected_chain={@selected_chain} selected_provider={@selected_provider} />
       </div>
     </div>
     """
   end
 
-  @impl true
-  def handle_event("toggle_section", %{"section" => section_id}, socket) do
-    current_state = socket.assigns.open_sections[section_id] || false
-    updated_sections = Map.put(socket.assigns.open_sections, section_id, !current_state)
-    {:noreply, assign(socket, :open_sections, updated_sections)}
-  end
+
 
   @impl true
   def handle_event("refresh", _params, socket) do
@@ -553,8 +634,13 @@ defmodule LivechainWeb.OrchestrationLive do
 
   @impl true
   def handle_event("toggle_view", %{"mode" => mode}, socket) do
-    view_mode = String.to_atom(mode)
-    {:noreply, assign(socket, :view_mode, view_mode)}
+    # log socket state and mode
+    case mode do
+      "topology" ->
+        {:noreply, assign(socket, :view_mode, :topology)}
+      "table" ->
+        {:noreply, assign(socket, :view_mode, :table)}
+    end
   end
 
   @impl true

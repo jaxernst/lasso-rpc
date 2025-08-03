@@ -21,6 +21,7 @@ defmodule LivechainWeb.Router do
     live("/orchestration", OrchestrationLive)
     live("/network", NetworkLive)
     live("/table", TableLive)
+    live("/minimal_state", MinimalStateLive)
   end
 
   scope "/api", LivechainWeb do
@@ -48,7 +49,7 @@ defmodule LivechainWeb.Router do
     end
   end
 
-  # HTTP JSON-RPC endpoints for Viem compatibility
+  # HTTP ethereum JSON-RPC endpoints for onchain app clients
   scope "/rpc", LivechainWeb do
     pipe_through(:api)
 

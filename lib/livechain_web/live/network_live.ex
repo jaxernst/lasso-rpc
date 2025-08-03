@@ -3,13 +3,10 @@ defmodule LivechainWeb.NetworkLive do
 
   alias Livechain.RPC.WSSupervisor
 
-  # Use custom observatory layout without width constraints
+  @impl true
   def mount(_params, _session, socket) do
-    socket = assign(socket, :layout, {LivechainWeb.Layouts, "observatory"})
-    mount_logic(socket)
-  end
+    # socket = assign(socket, :layout, {LivechainWeb.Layouts, "observatory"})
 
-  defp mount_logic(socket) do
     if connected?(socket) do
       # Subscribe to WebSocket connection events for real-time updates
       Phoenix.PubSub.subscribe(Livechain.PubSub, "ws_connections")
