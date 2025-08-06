@@ -239,18 +239,20 @@ defmodule LivechainWeb.AnalyticsController do
     ]
 
     # Filter by chain and apply timeframe multipliers
-    multiplier = case timeframe do
-      "1h" -> 0.04
-      "24h" -> 1.0
-      "7d" -> 7.2
-      _ -> 1.0
-    end
+    multiplier =
+      case timeframe do
+        "1h" -> 0.04
+        "24h" -> 1.0
+        "7d" -> 7.2
+        _ -> 1.0
+      end
 
     base_volumes
     |> Enum.map(fn token ->
-      %{token | 
-        volume_usd: Float.round(token.volume_usd * multiplier, 2),
-        transfers: round(token.transfers * multiplier)
+      %{
+        token
+        | volume_usd: Float.round(token.volume_usd * multiplier, 2),
+          transfers: round(token.transfers * multiplier)
       }
     end)
     |> Enum.take(limit)
@@ -259,25 +261,27 @@ defmodule LivechainWeb.AnalyticsController do
   defp get_total_volume_usd(chain, timeframe) do
     # Mock calculation
     base_volume = 5_500_000.0
-    
-    multiplier = case timeframe do
-      "1h" -> 0.04
-      "24h" -> 1.0
-      "7d" -> 7.2
-      _ -> 1.0
-    end
+
+    multiplier =
+      case timeframe do
+        "1h" -> 0.04
+        "24h" -> 1.0
+        "7d" -> 7.2
+        _ -> 1.0
+      end
 
     Float.round(base_volume * multiplier, 2)
   end
 
   defp get_hourly_volume_breakdown(chain, timeframe) do
     # Generate mock hourly data
-    hours = case timeframe do
-      "1h" -> 1
-      "24h" -> 24
-      "7d" -> 24 * 7
-      _ -> 24
-    end
+    hours =
+      case timeframe do
+        "1h" -> 1
+        "24h" -> 24
+        "7d" -> 24 * 7
+        _ -> 24
+      end
 
     1..hours
     |> Enum.map(fn hour ->
@@ -291,19 +295,21 @@ defmodule LivechainWeb.AnalyticsController do
 
   defp get_nft_transfer_count(chain, timeframe) do
     base_count = 1_250
-    
-    multiplier = case timeframe do
-      "1h" -> 0.04
-      "24h" -> 1.0
-      "7d" -> 7.2
-      _ -> 1.0
-    end
+
+    multiplier =
+      case timeframe do
+        "1h" -> 0.04
+        "24h" -> 1.0
+        "7d" -> 7.2
+        _ -> 1.0
+      end
 
     round(base_count * multiplier)
   end
 
   defp get_active_nft_collections(chain, timeframe) do
-    145  # Mock active collections
+    # Mock active collections
+    145
   end
 
   defp get_top_nft_collections(chain, timeframe, limit) do
@@ -318,12 +324,13 @@ defmodule LivechainWeb.AnalyticsController do
   end
 
   defp get_nft_activity_by_hour(chain, timeframe) do
-    hours = case timeframe do
-      "1h" -> 1
-      "24h" -> 24
-      "7d" -> 24 * 7
-      _ -> 24
-    end
+    hours =
+      case timeframe do
+        "1h" -> 1
+        "24h" -> 24
+        "7d" -> 24 * 7
+        _ -> 24
+      end
 
     1..hours
     |> Enum.map(fn hour ->
@@ -337,7 +344,7 @@ defmodule LivechainWeb.AnalyticsController do
 
   defp get_chain_comparison_metrics(timeframe) do
     chains = ["ethereum", "polygon", "arbitrum", "bsc", "optimism"]
-    
+
     Enum.map(chains, fn chain ->
       %{
         chain: chain,
@@ -350,11 +357,13 @@ defmodule LivechainWeb.AnalyticsController do
   end
 
   defp get_cross_chain_event_count(timeframe) do
-    45_230  # Mock total
+    # Mock total
+    45_230
   end
 
   defp get_cross_chain_volume_usd(timeframe) do
-    8_750_000.0  # Mock total USD volume
+    # Mock total USD volume
+    8_750_000.0
   end
 
   defp get_most_active_chain(timeframe) do
@@ -366,7 +375,8 @@ defmodule LivechainWeb.AnalyticsController do
   end
 
   defp get_current_events_per_second do
-    :rand.uniform(200) + 50  # Mock real-time EPS
+    # Mock real-time EPS
+    :rand.uniform(200) + 50
   end
 
   defp get_active_pipeline_count do
@@ -390,12 +400,12 @@ defmodule LivechainWeb.AnalyticsController do
     |> Enum.map(fn i ->
       event_types = [:erc20_transfer, :nft_transfer, :block, :transaction]
       chains = ["ethereum", "polygon", "arbitrum"]
-      
+
       %{
         id: i,
         type: Enum.random(event_types),
         chain: Enum.random(chains),
-        timestamp: System.system_time(:millisecond) - (:rand.uniform(60_000)),
+        timestamp: System.system_time(:millisecond) - :rand.uniform(60_000),
         usd_value: if(Enum.random([true, false]), do: :rand.uniform(10_000), else: nil)
       }
     end)
@@ -450,12 +460,12 @@ defmodule LivechainWeb.AnalyticsController do
 
   defp get_provider_health_metrics do
     providers = ["infura", "alchemy", "quicknode"]
-    
+
     Enum.map(providers, fn provider ->
       %{
         provider: provider,
         status: "healthy",
-        uptime_percent: 99.5 + (:rand.uniform() * 0.5),
+        uptime_percent: 99.5 + :rand.uniform() * 0.5,
         average_response_time_ms: 150 + :rand.uniform(100),
         requests_per_minute: 450 + :rand.uniform(200)
       }

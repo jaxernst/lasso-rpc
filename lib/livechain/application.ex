@@ -41,7 +41,6 @@ defmodule Livechain.Application do
       ] ++ maybe_add_simulator() ++ maybe_add_broadway_pipelines()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Livechain.Supervisor]
 
     with {:ok, supervisor} <- Supervisor.start_link(children, opts) do
@@ -50,7 +49,7 @@ defmodule Livechain.Application do
 
       # Auto-start simulator in dev/test environments
       if Mix.env() in [:dev, :test] do
-        start_simulator_process()
+        # start_simulator_process()
         start_broadway_pipelines()
       end
 
@@ -102,12 +101,12 @@ defmodule Livechain.Application do
   defp start_broadway_pipelines do
     # Start Broadway pipelines for commonly used chains
     chains = ["ethereum", "polygon", "arbitrum"]
-    
+
     Enum.each(chains, fn chain ->
       case DynamicSupervisor.start_child(
-        Livechain.EventProcessing.Supervisor,
-        {Livechain.EventProcessing.Pipeline, chain}
-      ) do
+             Livechain.EventProcessing.Supervisor,
+             {Livechain.EventProcessing.Pipeline, chain}
+           ) do
         {:ok, _pid} ->
           Logger.info("Started Broadway pipeline for #{chain}")
 

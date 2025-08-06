@@ -23,11 +23,18 @@
     },
     "[elixir]": {
         "editor.formatOnSave": true,
-        "editor.defaultFormatter": "JakeBecker.elixir-ls",
+        "editor.defaultFormatter": "elixir-lsp.elixir-ls",
         "editor.quickSuggestions": {
             "other": true,
             "comments": false,
             "strings": false
         }
+    },
+    "[heex]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "elixir-lsp.elixir-ls"
+    },
+    "files.associations": {
+        "*.heex": "heex"
     }
 } 

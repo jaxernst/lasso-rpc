@@ -261,17 +261,17 @@ defmodule LivechainWeb.RPCController do
         case Map.get(config.chains, chain_name) do
           %{chain_id: chain_id} when is_integer(chain_id) ->
             {:ok, "0x" <> Integer.to_string(chain_id, 16)}
-          
+
           %{chain_id: chain_id} when is_binary(chain_id) ->
             {:ok, chain_id}
-          
+
           nil ->
             {:error, "Chain not configured: #{chain_name}"}
-          
+
           _ ->
             {:error, "Invalid chain configuration for: #{chain_name}"}
         end
-      
+
       {:error, _reason} ->
         {:error, "Failed to load chain configuration"}
     end

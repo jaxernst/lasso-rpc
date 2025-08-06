@@ -56,10 +56,11 @@ defmodule Livechain.ArchitectureTest do
 
       # Lookup should fail - could be either :process_dead or :not_found
       result = ProcessRegistry.lookup(registry, :test_type, "dying_id")
+
       assert result in [
-        {:error, :process_dead}, 
-        {:error, :not_found}
-      ]
+               {:error, :process_dead},
+               {:error, :not_found}
+             ]
     end
   end
 
@@ -200,13 +201,14 @@ defmodule Livechain.ArchitectureTest do
       # Get specific chain status
       chain_status = ChainManager.get_chain_status("ethereum")
       assert is_map(chain_status)
-      
+
       # The chain might still be starting up, so we check if it has the expected structure
       # or is reporting an expected error state
       case chain_status do
-        %{error: _} -> 
+        %{error: _} ->
           # Chain is not yet running, which is acceptable in test environment
           assert true
+
         _ ->
           # Chain is running, verify it has the expected structure
           assert Map.has_key?(chain_status, :total_providers)
@@ -216,7 +218,7 @@ defmodule Livechain.ArchitectureTest do
     test "provider failover simulation" do
       # Load configuration first
       {:ok, _started_count} = ChainManager.start_all_chains()
-      
+
       # Start a specific chain
       {:ok, _pid} = ChainManager.start_chain("ethereum")
 

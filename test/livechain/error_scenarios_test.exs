@@ -34,11 +34,12 @@ defmodule Livechain.ErrorScenariosTest do
 
       {:ok, _pid} = CircuitBreaker.start_link({provider_id, config})
 
-            # Simulate consecutive failures
+      # Simulate consecutive failures
       for i <- 1..3 do
-        result = CircuitBreaker.call(provider_id, fn ->
-          raise "Simulated failure #{i}"
-        end)
+        result =
+          CircuitBreaker.call(provider_id, fn ->
+            raise "Simulated failure #{i}"
+          end)
 
         # Circuit breaker should return an error (format may vary)
         assert {:error, _} = result
@@ -81,8 +82,10 @@ defmodule Livechain.ErrorScenariosTest do
       malformed_inputs = [
         "not json at all",
         "{invalid json}",
-        "[1,2,3,",  # Incomplete array
-        "{\"key\": \"value\"",  # Incomplete object
+        # Incomplete array
+        "[1,2,3,",
+        # Incomplete object
+        "{\"key\": \"value\"",
         "null",
         "",
         nil
@@ -138,13 +141,14 @@ defmodule Livechain.ErrorScenariosTest do
       # Test with many concurrent operations
       try do
         # Create many processes
-        processes = for _i <- 1..100 do
-          spawn(fn ->
-            Process.sleep(100)
-            # Simulate some work
-            Enum.map(1..1000, &(&1 * 2))
-          end)
-        end
+        processes =
+          for _i <- 1..100 do
+            spawn(fn ->
+              Process.sleep(100)
+              # Simulate some work
+              Enum.map(1..1000, &(&1 * 2))
+            end)
+          end
 
         # Wait for completion
         Enum.each(processes, &Process.monitor/1)

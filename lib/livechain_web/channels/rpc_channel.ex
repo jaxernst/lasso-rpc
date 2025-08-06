@@ -208,6 +208,7 @@ defmodule LivechainWeb.RPCChannel do
       {:ok, logs} when length(logs) > 0 ->
         # Extract receipt information from logs
         log = List.first(logs)
+
         receipt = %{
           "transactionHash" => tx_hash,
           "blockNumber" => Map.get(log, "blockNumber"),
@@ -216,6 +217,7 @@ defmodule LivechainWeb.RPCChannel do
           "gasUsed" => "0x5208",
           "logs" => logs
         }
+
         {:ok, receipt}
 
       {:ok, []} ->

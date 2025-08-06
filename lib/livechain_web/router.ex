@@ -17,11 +17,10 @@ defmodule LivechainWeb.Router do
   scope "/", LivechainWeb do
     pipe_through(:browser)
 
-    live("/", OrchestrationLive)
+    live("/", Dashboard)
     live("/orchestration", OrchestrationLive)
     live("/network", NetworkLive)
     live("/table", TableLive)
-    live("/minimal_state", MinimalStateLive)
   end
 
   scope "/api", LivechainWeb do

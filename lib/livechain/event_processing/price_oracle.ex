@@ -82,7 +82,7 @@ defmodule Livechain.EventProcessing.PriceOracle do
   @impl true
   def init(opts) do
     cache_ttl = Keyword.get(opts, :cache_ttl, @default_cache_ttl)
-    
+
     state = %__MODULE__{
       price_cache: %{},
       cache_ttl: cache_ttl,
@@ -143,7 +143,7 @@ defmodule Livechain.EventProcessing.PriceOracle do
   @impl true
   def handle_info(:fetch_prices, state) do
     Logger.debug("Fetching latest cryptocurrency prices")
-    
+
     new_cache = fetch_all_prices(state.price_cache)
     new_state = %{state | price_cache: new_cache, last_update: System.system_time(:millisecond)}
 
@@ -157,7 +157,7 @@ defmodule Livechain.EventProcessing.PriceOracle do
 
   defp get_cached_token_price(state, token_address, chain) do
     cache_key = {:token, chain, String.downcase(token_address)}
-    
+
     case Map.get(state.price_cache, cache_key) do
       {price, timestamp} ->
         if System.system_time(:millisecond) - timestamp < state.cache_ttl do
@@ -173,7 +173,7 @@ defmodule Livechain.EventProcessing.PriceOracle do
 
   defp get_cached_native_price(state, chain) do
     cache_key = {:native, chain}
-    
+
     case Map.get(state.price_cache, cache_key) do
       {price, timestamp} ->
         if System.system_time(:millisecond) - timestamp < state.cache_ttl do
@@ -252,20 +252,21 @@ defmodule Livechain.EventProcessing.PriceOracle do
 
   defp fetch_all_prices(current_cache) do
     timestamp = System.system_time(:millisecond)
-    
-    # Fetch native token prices
-    native_prices = @native_tokens
-    |> Enum.map(fn {chain, symbol} ->
-      case fetch_price_by_symbol(symbol) do
-        {:ok, price} ->
-          {{:native, chain}, {price, timestamp}}
 
-        {:error, _} ->
-          nil
-      end
-    end)
-    |> Enum.filter(&(&1 != nil))
-    |> Enum.into(%{})
+    # Fetch native token prices
+    native_prices =
+      @native_tokens
+      |> Enum.map(fn {chain, symbol} ->
+        case fetch_price_by_symbol(symbol) do
+          {:ok, price} ->
+            {{:native, chain}, {price, timestamp}}
+
+          {:error, _} ->
+            nil
+        end
+      end)
+      |> Enum.filter(&(&1 != nil))
+      |> Enum.into(%{})
 
     # Merge with current cache (keeping non-expired entries)
     Map.merge(current_cache, native_prices)

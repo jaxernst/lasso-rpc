@@ -67,7 +67,7 @@ defmodule Livechain.EventProcessing.Producer do
   @impl true
   def handle_demand(demand, state) do
     Logger.debug("Broadway producer received demand: #{demand} for chain: #{state.chain}")
-    
+
     new_state = %{state | demand: state.demand + demand}
     dispatch_events(new_state)
   end
@@ -75,55 +75,57 @@ defmodule Livechain.EventProcessing.Producer do
   @impl true
   def handle_info({:fastest_message, provider_id, message}, state) do
     Logger.debug("Producer received fastest message from #{provider_id} for #{state.chain}")
-    
+
     event = create_event(message, provider_id, state.chain)
     new_events = :queue.in(event, state.events)
     new_state = %{state | events: new_events}
-    
+
     dispatch_events(new_state)
   end
 
   @impl true
   def handle_info({:blockchain_message, message}, state) do
     Logger.debug("Producer received blockchain message for #{state.chain}")
-    
+
     event = create_event(message, "unknown", state.chain)
     new_events = :queue.in(event, state.events)
     new_state = %{state | events: new_events}
-    
+
     dispatch_events(new_state)
   end
 
   @impl true
   def handle_info({:raw_message, provider_id, message, received_at}, state) do
     Logger.debug("Producer received raw message from #{provider_id} for #{state.chain}")
-    
+
     event = create_event_with_timestamp(message, provider_id, state.chain, received_at)
     new_events = :queue.in(event, state.events)
     new_state = %{state | events: new_events}
-    
+
     dispatch_events(new_state)
   end
 
   @impl true
   def handle_info(%{payload: payload, event: "new_block"}, state) do
     Logger.debug("Producer received mock block event for #{state.chain}")
-    
+
     event = create_event(payload, "mock_provider", state.chain)
     new_events = :queue.in(event, state.events)
     new_state = %{state | events: new_events}
-    
+
     dispatch_events(new_state)
   end
 
   @impl true
   def handle_info(%{payload: payload} = message, state) do
-    Logger.debug("Producer received mock message for #{state.chain}: #{inspect(Map.keys(message))}")
-    
+    Logger.debug(
+      "Producer received mock message for #{state.chain}: #{inspect(Map.keys(message))}"
+    )
+
     event = create_event(payload, "mock_provider", state.chain)
     new_events = :queue.in(event, state.events)
     new_state = %{state | events: new_events}
-    
+
     dispatch_events(new_state)
   end
 
@@ -156,28 +158,30 @@ defmodule Livechain.EventProcessing.Producer do
 
   defp create_event_with_timestamp(message, provider_id, chain, received_at) do
     # Ensure message has metadata
-    enriched_message = if is_map(message) do
-      livechain_meta = Map.get(message, "_livechain_meta", %{})
-      
-      updated_meta = Map.merge(livechain_meta, %{
-        "provider_id" => provider_id,
-        "chain_name" => chain,
-        "received_at" => received_at,
-        "producer_processed_at" => System.system_time(:millisecond)
-      })
+    enriched_message =
+      if is_map(message) do
+        livechain_meta = Map.get(message, "_livechain_meta", %{})
 
-      Map.put(message, "_livechain_meta", updated_meta)
-    else
-      %{
-        "raw_data" => message,
-        "_livechain_meta" => %{
-          "provider_id" => provider_id,
-          "chain_name" => chain,
-          "received_at" => received_at,
-          "producer_processed_at" => System.system_time(:millisecond)
+        updated_meta =
+          Map.merge(livechain_meta, %{
+            "provider_id" => provider_id,
+            "chain_name" => chain,
+            "received_at" => received_at,
+            "producer_processed_at" => System.system_time(:millisecond)
+          })
+
+        Map.put(message, "_livechain_meta", updated_meta)
+      else
+        %{
+          "raw_data" => message,
+          "_livechain_meta" => %{
+            "provider_id" => provider_id,
+            "chain_name" => chain,
+            "received_at" => received_at,
+            "producer_processed_at" => System.system_time(:millisecond)
+          }
         }
-      }
-    end
+      end
 
     # Add event metadata for Broadway processing
     %{

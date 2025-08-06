@@ -73,14 +73,15 @@ defmodule Livechain.EventProcessing.Manager do
       nil ->
         case start_broadway_pipeline(chain_name) do
           {:ok, pid} ->
-            new_pipelines = Map.put(state.pipelines, chain_name, %{
-              pid: pid,
-              started_at: System.system_time(:millisecond),
-              status: :running
-            })
-            
+            new_pipelines =
+              Map.put(state.pipelines, chain_name, %{
+                pid: pid,
+                started_at: System.system_time(:millisecond),
+                status: :running
+              })
+
             new_state = %{state | pipelines: new_pipelines}
-            
+
             Logger.info("Started Broadway pipeline for #{chain_name}")
             {:reply, {:ok, pid}, new_state}
 
@@ -101,10 +102,10 @@ defmodule Livechain.EventProcessing.Manager do
               started_at: System.system_time(:millisecond),
               status: :running
             }
-            
+
             new_pipelines = Map.put(state.pipelines, chain_name, updated_pipeline)
             new_state = %{state | pipelines: new_pipelines}
-            
+
             {:reply, {:ok, pid}, new_state}
 
           {:error, reason} ->
@@ -125,7 +126,7 @@ defmodule Livechain.EventProcessing.Manager do
             updated_pipeline = Map.put(state.pipelines[chain_name], :status, :stopped)
             new_pipelines = Map.put(state.pipelines, chain_name, updated_pipeline)
             new_state = %{state | pipelines: new_pipelines}
-            
+
             Logger.info("Stopped Broadway pipeline for #{chain_name}")
             {:reply, :ok, new_state}
 
@@ -140,18 +141,21 @@ defmodule Livechain.EventProcessing.Manager do
 
   @impl true
   def handle_call(:get_pipeline_status, _from, state) do
-    status = state.pipelines
-    |> Enum.map(fn {chain_name, pipeline_info} ->
-      %{
-        chain: chain_name,
-        status: pipeline_info.status,
-        started_at: pipeline_info.started_at,
-        uptime_ms: if(pipeline_info.status == :running, 
-          do: System.system_time(:millisecond) - pipeline_info.started_at, 
-          else: 0),
-        stats: Map.get(state.stats, chain_name, %{})
-      }
-    end)
+    status =
+      state.pipelines
+      |> Enum.map(fn {chain_name, pipeline_info} ->
+        %{
+          chain: chain_name,
+          status: pipeline_info.status,
+          started_at: pipeline_info.started_at,
+          uptime_ms:
+            if(pipeline_info.status == :running,
+              do: System.system_time(:millisecond) - pipeline_info.started_at,
+              else: 0
+            ),
+          stats: Map.get(state.stats, chain_name, %{})
+        }
+      end)
 
     {:reply, status, state}
   end
@@ -164,25 +168,28 @@ defmodule Livechain.EventProcessing.Manager do
   @impl true
   def handle_info({:metrics_batch, metrics}, state) do
     # Update pipeline statistics from metrics
-    new_stats = Enum.reduce(metrics, state.stats, fn metric, acc_stats ->
-      # Extract chain from metric context if available
-      chain = Map.get(metric, :chain, "unknown")
-      
-      current_chain_stats = Map.get(acc_stats, chain, %{
-        events_processed: 0,
-        total_usd_value: 0.0,
-        last_updated: 0
-      })
+    new_stats =
+      Enum.reduce(metrics, state.stats, fn metric, acc_stats ->
+        # Extract chain from metric context if available
+        chain = Map.get(metric, :chain, "unknown")
 
-      updated_chain_stats = %{
-        current_chain_stats |
-        events_processed: current_chain_stats.events_processed + Map.get(metric, :count, 0),
-        total_usd_value: current_chain_stats.total_usd_value + Map.get(metric, :total_usd_value, 0.0),
-        last_updated: System.system_time(:millisecond)
-      }
+        current_chain_stats =
+          Map.get(acc_stats, chain, %{
+            events_processed: 0,
+            total_usd_value: 0.0,
+            last_updated: 0
+          })
 
-      Map.put(acc_stats, chain, updated_chain_stats)
-    end)
+        updated_chain_stats = %{
+          current_chain_stats
+          | events_processed: current_chain_stats.events_processed + Map.get(metric, :count, 0),
+            total_usd_value:
+              current_chain_stats.total_usd_value + Map.get(metric, :total_usd_value, 0.0),
+            last_updated: System.system_time(:millisecond)
+        }
+
+        Map.put(acc_stats, chain, updated_chain_stats)
+      end)
 
     {:noreply, %{state | stats: new_stats}}
   end
@@ -190,13 +197,14 @@ defmodule Livechain.EventProcessing.Manager do
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, reason}, state) do
     # Handle pipeline process crashes
-    crashed_chain = state.pipelines
-    |> Enum.find(fn {_chain, info} -> info.pid == pid end)
+    crashed_chain =
+      state.pipelines
+      |> Enum.find(fn {_chain, info} -> info.pid == pid end)
 
     case crashed_chain do
       {chain_name, _info} ->
         Logger.error("Broadway pipeline for #{chain_name} crashed: #{reason}")
-        
+
         updated_pipeline = %{
           pid: nil,
           started_at: 0,
@@ -204,16 +212,16 @@ defmodule Livechain.EventProcessing.Manager do
           crash_reason: reason,
           crashed_at: System.system_time(:millisecond)
         }
-        
+
         new_pipelines = Map.put(state.pipelines, chain_name, updated_pipeline)
         new_state = %{state | pipelines: new_pipelines}
-        
+
         # Optionally restart automatically
         if should_auto_restart?(reason) do
           Logger.info("Auto-restarting Broadway pipeline for #{chain_name}")
           send(self(), {:restart_pipeline, chain_name})
         end
-        
+
         {:noreply, new_state}
 
       nil ->
@@ -232,10 +240,10 @@ defmodule Livechain.EventProcessing.Manager do
           started_at: System.system_time(:millisecond),
           status: :running
         }
-        
+
         new_pipelines = Map.put(state.pipelines, chain_name, updated_pipeline)
         new_state = %{state | pipelines: new_pipelines}
-        
+
         Logger.info("Successfully restarted Broadway pipeline for #{chain_name}")
         {:noreply, new_state}
 
@@ -268,7 +276,8 @@ defmodule Livechain.EventProcessing.Manager do
       :normal -> false
       :shutdown -> false
       {:shutdown, _} -> false
-      _ -> true  # Restart for unexpected crashes
+      # Restart for unexpected crashes
+      _ -> true
     end
   end
 end
