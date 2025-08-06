@@ -11,7 +11,7 @@ defmodule Livechain.EventProcessing.EventEnricher do
   """
 
   require Logger
-  
+
   alias Livechain.EventProcessing.{EventClassifier, ContractRegistry, TokenRegistry}
 
   @doc """
@@ -28,7 +28,7 @@ defmodule Livechain.EventProcessing.EventEnricher do
   # Base enrichment for all events
   defp add_base_enrichment(event, event_type) do
     metadata = EventClassifier.get_metadata(event, event_type)
-    
+
     Map.merge(event, %{
       __enriched: true,
       __enriched_at: System.system_time(:millisecond),
@@ -61,10 +61,11 @@ defmodule Livechain.EventProcessing.EventEnricher do
   defp enrich_erc20_transfer(event) do
     metadata = event.classification_metadata
 
-    token_info = case metadata.token_address do
-      nil -> %{}
-      address -> get_token_info(address, event.chain)
-    end
+    token_info =
+      case metadata.token_address do
+        nil -> %{}
+        address -> get_token_info(address, event.chain)
+      end
 
     parsed_amount = parse_token_amount(metadata.amount, token_info.decimals || 18)
 
@@ -84,10 +85,11 @@ defmodule Livechain.EventProcessing.EventEnricher do
   defp enrich_nft_transfer(event) do
     metadata = event.classification_metadata
 
-    contract_info = case metadata.contract_address do
-      nil -> %{}
-      address -> get_nft_contract_info(address, event.chain)
-    end
+    contract_info =
+      case metadata.contract_address do
+        nil -> %{}
+        address -> get_nft_contract_info(address, event.chain)
+      end
 
     event
     |> Map.merge(%{
@@ -125,12 +127,13 @@ defmodule Livechain.EventProcessing.EventEnricher do
   # Contract metadata enrichment
   defp add_contract_metadata(event) do
     contracts_to_lookup = extract_contract_addresses(event)
-    
-    contract_metadata = contracts_to_lookup
-    |> Enum.map(fn address -> 
-      {address, get_contract_metadata(address, event.chain)}
-    end)
-    |> Enum.into(%{})
+
+    contract_metadata =
+      contracts_to_lookup
+      |> Enum.map(fn address ->
+        {address, get_contract_metadata(address, event.chain)}
+      end)
+      |> Enum.into(%{})
 
     Map.put(event, :contract_metadata, contract_metadata)
   end
@@ -138,12 +141,13 @@ defmodule Livechain.EventProcessing.EventEnricher do
   # Timing metadata
   defp add_timing_metadata(event) do
     now = System.system_time(:millisecond)
-    
+
     # Calculate processing latency from original message timestamp
-    processing_latency = case get_original_timestamp(event) do
-      nil -> nil
-      original_timestamp -> now - original_timestamp
-    end
+    processing_latency =
+      case get_original_timestamp(event) do
+        nil -> nil
+        original_timestamp -> now - original_timestamp
+      end
 
     Map.merge(event, %{
       processed_at: now,
@@ -176,11 +180,13 @@ defmodule Livechain.EventProcessing.EventEnricher do
     %{
       name: "Unknown Collection",
       symbol: "UNK",
-      type: "ERC721"  # or "ERC1155"
+      # or "ERC1155"
+      type: "ERC721"
     }
   end
 
   defp parse_token_amount(nil, _decimals), do: "0"
+
   defp parse_token_amount(amount_hex, decimals) when is_binary(amount_hex) do
     try do
       amount_hex
@@ -204,10 +210,10 @@ defmodule Livechain.EventProcessing.EventEnricher do
   defp add_address_labels(event) do
     # Add human-readable labels for known addresses
     labels = %{}
-    
+
     # Would query address registry in production
     # labels = AddressRegistry.get_labels([event.from_address, event.to_address])
-    
+
     Map.put(event, :address_labels, labels)
   end
 
@@ -256,9 +262,9 @@ defmodule Livechain.EventProcessing.EventEnricher do
         try do
           gas_limit_int = String.to_integer(String.trim_leading(gas_limit, "0x"), 16)
           gas_price_int = String.to_integer(String.trim_leading(gas_price, "0x"), 16)
-          
+
           max_fee = gas_limit_int * gas_price_int
-          
+
           gas_analysis = %{
             gas_limit_int: gas_limit_int,
             gas_price_gwei: gas_price_int / 1_000_000_000,
@@ -280,20 +286,23 @@ defmodule Livechain.EventProcessing.EventEnricher do
     # Extract all contract addresses mentioned in the event
     addresses = []
 
-    addresses = case Map.get(event, :token_address) do
-      nil -> addresses
-      addr -> [addr | addresses]
-    end
+    addresses =
+      case Map.get(event, :token_address) do
+        nil -> addresses
+        addr -> [addr | addresses]
+      end
 
-    addresses = case Map.get(event, :contract_address) do
-      nil -> addresses
-      addr -> [addr | addresses]
-    end
+    addresses =
+      case Map.get(event, :contract_address) do
+        nil -> addresses
+        addr -> [addr | addresses]
+      end
 
-    addresses = case Map.get(event, :to_address) do
-      nil -> addresses
-      addr -> [addr | addresses]
-    end
+    addresses =
+      case Map.get(event, :to_address) do
+        nil -> addresses
+        addr -> [addr | addresses]
+      end
 
     Enum.uniq(addresses)
   end

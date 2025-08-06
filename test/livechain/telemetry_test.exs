@@ -4,7 +4,7 @@ defmodule Livechain.TelemetryTest do
   """
 
   use ExUnit.Case, async: true
-  
+
   alias Livechain.Telemetry
 
   describe "telemetry event emission" do
@@ -25,7 +25,8 @@ defmodule Livechain.TelemetryTest do
     end
 
     test "emit_websocket_lifecycle/3 executes without error" do
-      assert :ok = Telemetry.emit_websocket_lifecycle("conn_123", :connected, %{chain: "ethereum"})
+      assert :ok =
+               Telemetry.emit_websocket_lifecycle("conn_123", :connected, %{chain: "ethereum"})
     end
 
     test "emit_cache_operation/4 executes without error" do
@@ -49,9 +50,9 @@ defmodule Livechain.TelemetryTest do
     test "attach_default_handlers/0 succeeds" do
       # Detach first in case they're already attached
       Telemetry.detach_handlers()
-      
+
       assert :ok = Telemetry.attach_default_handlers()
-      
+
       # Clean up
       Telemetry.detach_handlers()
     end
@@ -59,7 +60,7 @@ defmodule Livechain.TelemetryTest do
     test "detach_handlers/0 succeeds" do
       # Attach first to have something to detach
       Telemetry.attach_default_handlers()
-      
+
       assert :ok = Telemetry.detach_handlers()
     end
   end

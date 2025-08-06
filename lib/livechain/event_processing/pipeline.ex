@@ -67,18 +67,17 @@ defmodule Livechain.EventProcessing.Pipeline do
     try do
       # Classify the event type
       event_type = EventClassifier.classify(event)
-      
+
       # Enrich with additional metadata
       enriched_event = EventEnricher.enrich(event, event_type)
-      
+
       # Add USD pricing for token transfers
       priced_event = add_usd_pricing(enriched_event, event_type)
-      
+
       # Add routing information for batchers
       message
       |> Broadway.Message.put_data(priced_event)
       |> add_batcher_routing(event_type)
-      
     rescue
       error ->
         Logger.error("Failed to process event: #{inspect(error)}")
@@ -90,15 +89,15 @@ defmodule Livechain.EventProcessing.Pipeline do
   def handle_batch(:analytics, messages, _batch_info, _context) do
     # Batch process events for analytics storage
     events = Enum.map(messages, & &1.data)
-    
+
     Logger.info("Processing #{length(events)} events for analytics")
-    
+
     # Store in time-series database (implement later)
     # Livechain.Analytics.store_events(events)
-    
+
     # Publish aggregated metrics
     publish_analytics_metrics(events)
-    
+
     messages
   end
 
@@ -106,12 +105,12 @@ defmodule Livechain.EventProcessing.Pipeline do
   def handle_batch(:notifications, messages, _batch_info, _context) do
     # Process events that need immediate notification
     events = Enum.map(messages, & &1.data)
-    
+
     Logger.info("Processing #{length(events)} events for notifications")
-    
+
     # Publish to real-time channels
     Enum.each(events, &publish_real_time_event/1)
-    
+
     messages
   end
 
@@ -121,10 +120,10 @@ defmodule Livechain.EventProcessing.Pipeline do
     case event_type do
       :erc20_transfer ->
         add_token_usd_value(event)
-        
+
       :native_transfer ->
         add_native_usd_value(event)
-        
+
       _ ->
         event
     end
@@ -134,9 +133,8 @@ defmodule Livechain.EventProcessing.Pipeline do
     with {:ok, token_address} <- Map.fetch(event, :token_address),
          {:ok, amount} <- Map.fetch(event, :amount),
          {:ok, usd_price} <- PriceOracle.get_token_price(token_address, event.chain) do
-      
       usd_value = calculate_usd_value(amount, usd_price, event.decimals || 18)
-      
+
       Map.put(event, :usd_value, usd_value)
     else
       _ ->
@@ -147,9 +145,8 @@ defmodule Livechain.EventProcessing.Pipeline do
   defp add_native_usd_value(event) do
     with {:ok, amount} <- Map.fetch(event, :amount),
          {:ok, usd_price} <- PriceOracle.get_native_price(event.chain) do
-      
       usd_value = calculate_usd_value(amount, usd_price, 18)
-      
+
       Map.put(event, :usd_value, usd_value)
     else
       _ ->
@@ -169,10 +166,10 @@ defmodule Livechain.EventProcessing.Pipeline do
     case event_type do
       type when type in [:erc20_transfer, :native_transfer, :nft_transfer] ->
         Broadway.Message.put_batcher(message, :notifications)
-        
+
       type when type in [:block, :transaction] ->
         Broadway.Message.put_batcher(message, :analytics)
-        
+
       _ ->
         Broadway.Message.put_batcher(message, :analytics)
     end
@@ -180,16 +177,17 @@ defmodule Livechain.EventProcessing.Pipeline do
 
   defp publish_analytics_metrics(events) do
     # Group events by type and calculate metrics
-    metrics = events
-    |> Enum.group_by(& &1.type)
-    |> Enum.map(fn {type, type_events} ->
-      %{
-        type: type,
-        count: length(type_events),
-        total_usd_value: calculate_total_usd_value(type_events),
-        timestamp: System.system_time(:millisecond)
-      }
-    end)
+    metrics =
+      events
+      |> Enum.group_by(& &1.type)
+      |> Enum.map(fn {type, type_events} ->
+        %{
+          type: type,
+          count: length(type_events),
+          total_usd_value: calculate_total_usd_value(type_events),
+          timestamp: System.system_time(:millisecond)
+        }
+      end)
 
     # Publish metrics to analytics channel
     Phoenix.PubSub.broadcast(

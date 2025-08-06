@@ -295,12 +295,20 @@ defmodule LivechainWeb.CoreComponents do
   # Collapsible Section Component  
   def collapsible_section(assigns) do
     # Determine colors based on section_id
-    {header_gradient, content_bg, border_color} = case assigns.section_id do
-      "live_stream" -> {"from-gray-900 to-black", "bg-gray-900", "border-gray-700"}
-      "broadway_events" -> {"from-blue-900 to-blue-800", "bg-blue-900", "border-blue-700"}
-      "network_topology" -> {"from-purple-900 to-purple-800", "bg-purple-900", "border-purple-700"}
-      _ -> {"from-gray-800 to-gray-900", "bg-gray-900", "border-gray-700"}
-    end
+    {header_gradient, content_bg, border_color} =
+      case assigns.section_id do
+        "live_stream" ->
+          {"from-gray-900 to-black", "bg-gray-900", "border-gray-700"}
+
+        "broadway_events" ->
+          {"from-blue-900 to-blue-800", "bg-blue-900", "border-blue-700"}
+
+        "network_topology" ->
+          {"from-purple-900 to-purple-800", "bg-purple-900", "border-purple-700"}
+
+        _ ->
+          {"from-gray-800 to-gray-900", "bg-gray-900", "border-gray-700"}
+      end
 
     assigns = assign(assigns, :header_gradient, header_gradient)
     assigns = assign(assigns, :content_bg, content_bg)

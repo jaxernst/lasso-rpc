@@ -1,14 +1,14 @@
 defmodule LivechainWeb.OrchestrationLive do
   use LivechainWeb, :live_view
 
+  @impl true
   def mount(_params, _session, socket) do
     socket = assign(socket, :layout, {LivechainWeb.Layouts, "observatory"})
     mount_logic(socket)
   end
 
   defp mount_logic(socket) do
-    if false && connected?(socket) do
-
+    if connected?(socket) do
       # Subscribe to WebSocket connection events for real-time updates
       Phoenix.PubSub.subscribe(Livechain.PubSub, "ws_connections")
 
@@ -32,7 +32,6 @@ defmodule LivechainWeb.OrchestrationLive do
 
       # Subscribe to analytics metrics
       # Phoenix.PubSub.subscribe(Livechain.PubSub, "analytics:metrics")
-
     end
 
     initial_state =
@@ -45,6 +44,7 @@ defmodule LivechainWeb.OrchestrationLive do
       |> assign(:selected_provider, nil)
       |> assign(:view_mode, :topology)
       |> assign(:event_filter, :all)
+      |> assign(:active_tab, :live_feed)
 
     {:ok, initial_state}
   end
@@ -212,23 +212,25 @@ defmodule LivechainWeb.OrchestrationLive do
     # Update analytics metrics
     current_metrics = socket.assigns.analytics_metrics
 
-    updated_metrics = Enum.reduce(metrics, current_metrics, fn metric, acc ->
-      chain = Map.get(metric, :chain, "unknown")
+    updated_metrics =
+      Enum.reduce(metrics, current_metrics, fn metric, acc ->
+        chain = Map.get(metric, :chain, "unknown")
 
-      chain_metrics = Map.get(acc, chain, %{
-        events_count: 0,
-        total_usd_value: 0.0,
-        last_updated: 0
-      })
+        chain_metrics =
+          Map.get(acc, chain, %{
+            events_count: 0,
+            total_usd_value: 0.0,
+            last_updated: 0
+          })
 
-      updated_chain_metrics = %{
-        events_count: chain_metrics.events_count + Map.get(metric, :count, 0),
-        total_usd_value: chain_metrics.total_usd_value + Map.get(metric, :total_usd_value, 0.0),
-        last_updated: System.system_time(:millisecond)
-      }
+        updated_chain_metrics = %{
+          events_count: chain_metrics.events_count + Map.get(metric, :count, 0),
+          total_usd_value: chain_metrics.total_usd_value + Map.get(metric, :total_usd_value, 0.0),
+          last_updated: System.system_time(:millisecond)
+        }
 
-      Map.put(acc, chain, updated_chain_metrics)
-    end)
+        Map.put(acc, chain, updated_chain_metrics)
+      end)
 
     {:noreply, assign(socket, :analytics_metrics, updated_metrics)}
   end
@@ -268,11 +270,10 @@ defmodule LivechainWeb.OrchestrationLive do
     {:noreply, socket}
   end
 
-
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="h-screen w-screen bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden flex flex-col">
+    <div class="flex h-screen w-screen flex-col overflow-hidden">
       <style>
         @keyframes slideInLeft {
           from {
@@ -282,6 +283,17 @@ defmodule LivechainWeb.OrchestrationLive do
           to {
             opacity: 1;
             transform: translateX(0);
+          }
+        }
+
+        @keyframes slideInUp {
+          from {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
           }
         }
 
@@ -326,62 +338,93 @@ defmodule LivechainWeb.OrchestrationLive do
             linear-gradient(90deg, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
           background-size: 20px 20px;
         }
-      </style>
 
+        .tab-content {
+          background-image:
+            linear-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+          background-size: 50px 50px;
+        }
+      </style>
       <!-- Header with controls -->
-      <div class="bg-white/80 backdrop-blur-sm shadow-sm border-b border-gray-200 px-6 py-4 flex-shrink-0">
-        <div class="flex items-center justify-between w-full">
-          <div class="flex items-center space-x-4">
+      <div class="bg-white/95 z-10 flex-shrink-0 border-b border-gray-200 px-6 py-4 shadow-lg backdrop-blur-sm">
+        <div class="flex w-full items-center justify-between">
+          <div class="flex items-center space-x-6">
             <div class="flex items-center space-x-3">
-              <h1 class="text-2xl leading-none font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">ChainPulse</h1>
+              <h1 class="bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-2xl font-bold leading-none text-transparent">
+                ChainPulse
+              </h1>
               <div class="flex items-center space-x-1">
-                <div class="flex-shrink-0 w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+                <div class="h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-emerald-400"></div>
                 <span class="text-xs font-medium text-emerald-600">LIVE</span>
               </div>
+            </div>
+            <!-- Tab Navigation -->
+            <div class="flex items-center space-x-1 rounded-lg bg-gray-100 p-1">
+              <button
+                phx-click="switch_tab"
+                phx-value-tab="live_feed"
+                class={"#{if @active_tab == :live_feed, do: "bg-white text-gray-900 shadow-sm", else: "text-gray-500 hover:text-gray-900"} rounded-md px-4 py-2 text-sm font-medium transition-all duration-200"}
+              >
+                <svg class="mr-1 inline h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M13 10V3L4 14h7v7l9-11h-7z"
+                  />
+                </svg>
+                Live Feed
+              </button>
+              <button
+                phx-click="switch_tab"
+                phx-value-tab="network"
+                class={"#{if @active_tab == :network, do: "bg-white text-gray-900 shadow-sm", else: "text-gray-500 hover:text-gray-900"} rounded-md px-4 py-2 text-sm font-medium transition-all duration-200"}
+              >
+                <svg class="mr-1 inline h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"
+                  />
+                </svg>
+                Network
+              </button>
             </div>
           </div>
 
           <div class="flex items-center space-x-4">
             <!-- Connection stats -->
             <div class="text-sm text-gray-600">
-              <span class="font-medium"><%= length(@connections) %></span> connections
-              <span class="ml-2 font-medium text-emerald-600"><%= Enum.count(@connections, &(&1.status == :connected)) %></span> active
+              <span class="font-medium"><%= length(@connections) %></span>
+              connections
+              <span class="ml-2 font-medium text-emerald-600">
+                <%= Enum.count(@connections, &(&1.status == :connected)) %>
+              </span>
+              active
             </div>
-
-            <!-- View mode toggle -->
-            <div class="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
-              <button
-                phx-click="toggle_view"
-                phx-value-mode="topology"
-                class={"px-3 py-1 text-sm font-medium rounded-md transition-all duration-200 #{if @view_mode == :topology, do: "bg-white text-gray-900 shadow-sm", else: "text-gray-500 hover:text-gray-900"}"}
-              >
-                Network
-              </button>
-              <button
-                phx-click="toggle_view"
-                phx-value-mode="table"
-                class={"px-3 py-1 text-sm font-medium rounded-md transition-all duration-200 #{if @view_mode == :table, do: "bg-white text-gray-900 shadow-sm", else: "text-gray-500 hover:text-gray-900"}"}
-              >
-                Table
-              </button>
-            </div>
-
             <!-- Control buttons -->
             <div class="flex space-x-2">
               <button
                 type="button"
                 phx-click="refresh"
-                class="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-500 transition-all duration-200 transform hover:scale-105 shadow-sm"
+                class="transform rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:scale-105 hover:bg-indigo-500"
               >
-                <svg class="w-4 h-4 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                <svg class="mr-1 inline h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
                 </svg>
                 Refresh
               </button>
               <button
                 type="button"
                 phx-click="clear_events"
-                class="px-4 py-2 bg-gray-600 text-white text-sm font-medium rounded-lg hover:bg-gray-500 transition-all duration-200 shadow-sm"
+                class="rounded-lg bg-gray-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:bg-gray-500"
               >
                 Clear
               </button>
@@ -389,156 +432,28 @@ defmodule LivechainWeb.OrchestrationLive do
           </div>
         </div>
       </div>
-
-      <!-- Collapsible Sections Container -->
-      <div class="flex-1 p-6 flex flex-col space-y-4 overflow-y-auto min-h-0">
-        <!-- Live Message Stream Section (Black) -->
-        <.collapsible_section
-          section_id="live_stream"
-          title="Live Message Stream"
-          subtitle="Real-time WebSocket messages from blockchain networks"
-          count={length(@live_events)}
-        >
-          <:icon>
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          </:icon>
-          <div class="w-full">
-            <div class="flex items-center justify-between mb-3">
-              <div class="flex items-center space-x-2">
-                <select phx-change="filter_events" class="bg-gray-800 text-white text-xs rounded px-2 py-1 border-gray-700">
-                  <option value="all">All Events</option>
-                  <option value="blocks">Blocks Only</option>
-                  <option value="transactions">Transactions</option>
-                  <option value="errors">Errors</option>
-                </select>
-                <span class="text-xs text-gray-400"><%= length(@live_events) %> events</span>
-              </div>
-            </div>
-
-            <!-- Horizontal scrollable event stream -->
-            <div class="overflow-x-auto scrollbar-thin scrollbar-track-gray-800 scrollbar-thumb-gray-600" style="height: 40px;">
-              <%= if length(@live_events) > 0 do %>
-                <div class="flex space-x-3 pb-2" style="width: max-content;">
-                  <%= for {event, index} <- @live_events |> Enum.take(50) |> Enum.with_index() do %>
-                    <div
-                      class="flex-shrink-0 bg-gray-800 rounded-lg px-3 py-1 text-xs whitespace-nowrap transition-all duration-300 ease-out shadow-sm"
-                      style="animation: slideInLeft 0.3s ease-out #{index * 0.05}s both;"
-                    >
-                      <span class={"font-medium #{event_color(event.type)}"}>[<%= String.upcase(event.chain) %>]</span>
-                      <span class="text-gray-300 ml-1"><%= format_event_message(event) %></span>
-                      <span class="text-gray-500 ml-2"><%= format_timestamp(event.timestamp) %></span>
-                    </div>
-                  <% end %>
-                </div>
-              <% else %>
-                <div class="text-xs text-gray-500 text-center py-2">
-                  No live events yet - waiting for WebSocket messages...
-                </div>
-              <% end %>
-            </div>
-          </div>
-        </.collapsible_section>
-
-        <!-- Broadway Pipeline Events Section (Blue) -->
-        <.collapsible_section
-          section_id="broadway_events"
-          title="Broadway Pipeline Events"
-          subtitle="Structured events processed through data pipelines"
-          count={length(@structured_events)}
-        >
-          <:icon>
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-            </svg>
-          </:icon>
-          <div class="w-full">
-            <div class="flex items-center justify-between mb-3">
-              <div class="flex items-center space-x-4">
-                <!-- Analytics Summary -->
-                <div class="flex items-center space-x-3 text-xs">
-                  <%= if map_size(@analytics_metrics) > 0 do %>
-                    <%= for {chain, metrics} <- @analytics_metrics do %>
-                      <div class="flex items-center space-x-1">
-                        <span class="text-blue-200"><%= String.upcase(chain) %>:</span>
-                        <span class="text-emerald-400 font-mono"><%= metrics.events_count %></span>
-                        <%= if metrics.total_usd_value > 0 do %>
-                          <span class="text-yellow-400 font-mono">$<%= Float.round(metrics.total_usd_value, 0) |> trunc() %></span>
-                        <% end %>
-                      </div>
-                    <% end %>
-                  <% else %>
-                    <span class="text-blue-300 text-xs">Analytics loading...</span>
-                  <% end %>
-                </div>
-                <span class="text-xs text-blue-400"><%= length(@structured_events) %> structured</span>
-              </div>
-            </div>
-
-            <!-- Horizontal scrollable structured events -->
-            <div class="overflow-x-auto scrollbar-thin scrollbar-track-blue-800 scrollbar-thumb-blue-600" style="height: 40px;">
-              <%= if length(@structured_events) > 0 do %>
-                <div class="flex space-x-3 pb-2" style="width: max-content;">
-                  <%= for {event, index} <- @structured_events |> Enum.take(30) |> Enum.with_index() do %>
-                    <div
-                      class="flex-shrink-0 bg-blue-800 rounded-lg px-3 py-1 text-xs whitespace-nowrap transition-all duration-300 ease-out shadow-sm"
-                      style="animation: slideInLeft 0.3s ease-out #{index * 0.05}s both;"
-                    >
-                      <span class={"font-medium #{structured_event_color(event.type)}"}>[<%= String.upcase(event.chain) %>]</span>
-                      <span class="text-blue-200 ml-1"><%= format_structured_event(event) %></span>
-                      <%= if event.usd_value do %>
-                        <span class="text-yellow-300 ml-1 font-mono">$<%= Float.round(event.usd_value, 2) %></span>
-                      <% end %>
-                      <span class="text-blue-400 ml-2"><%= format_timestamp(event.timestamp) %></span>
-                    </div>
-                  <% end %>
-                </div>
-              <% else %>
-                <div class="text-xs text-blue-400 text-center py-2">
-                  No structured events yet - Broadway pipelines processing...
-                </div>
-              <% end %>
-            </div>
-          </div>
-        </.collapsible_section>
-
-        <!-- Network Topology Section (Purple) -->
-        <.collapsible_section
-          section_id="network_topology"
-          title="Network Topology"
-          subtitle="Real-time blockchain network connections and status"
-          count={map_size(group_connections_by_chain(@connections))}
-        >
-          <:icon>
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3" />
-            </svg>
-          </:icon>
-
-          <div class="w-full">
-            <%= if @view_mode == :topology do %>
-            <% else %>
-              <.connection_table connections={@connections} current_time={@current_time} />
-            <% end %>
-
-            <!-- Detail Panel -->
-            <%= if @selected_chain || @selected_provider do %>
-              <.detail_panel
-                selected_chain={@selected_chain}
-                selected_provider={@selected_provider}
-                connections={@connections}
-              />
-            <% end %>
-          </div>
-        </.collapsible_section>
-        <.network_topology connections={@connections} selected_chain={@selected_chain} selected_provider={@selected_provider} />
+      <!-- Tab Content -->
+      <div class="flex-1 overflow-hidden">
+        <%= if @active_tab == :live_feed do %>
+          <.live_feed_tab
+            live_events={@live_events}
+            structured_events={@structured_events}
+            analytics_metrics={@analytics_metrics}
+            event_filter={@event_filter}
+          />
+        <% else %>
+          <.network_tab
+            connections={@connections}
+            selected_chain={@selected_chain}
+            selected_provider={@selected_provider}
+            view_mode={@view_mode}
+            current_time={@current_time}
+          />
+        <% end %>
       </div>
     </div>
     """
   end
-
-
 
   @impl true
   def handle_event("refresh", _params, socket) do
@@ -638,9 +553,16 @@ defmodule LivechainWeb.OrchestrationLive do
     case mode do
       "topology" ->
         {:noreply, assign(socket, :view_mode, :topology)}
+
       "table" ->
         {:noreply, assign(socket, :view_mode, :table)}
     end
+  end
+
+  @impl true
+  def handle_event("switch_tab", %{"tab" => tab}, socket) do
+    tab_atom = String.to_atom(tab)
+    {:noreply, assign(socket, :active_tab, tab_atom)}
   end
 
   @impl true
@@ -781,7 +703,9 @@ defmodule LivechainWeb.OrchestrationLive do
   def extract_chain_from_message(message) do
     # Try to extract chain info from message metadata
     case message do
-      %{"_livechain_meta" => %{"chain_name" => chain}} -> chain
+      %{"_livechain_meta" => %{"chain_name" => chain}} ->
+        chain
+
       %{"chainId" => chain_id} when is_integer(chain_id) ->
         case chain_id do
           1 -> "ethereum"
@@ -790,7 +714,9 @@ defmodule LivechainWeb.OrchestrationLive do
           56 -> "bsc"
           _ -> "unknown"
         end
-      _ -> "unknown"
+
+      _ ->
+        "unknown"
     end
   end
 
@@ -905,31 +831,294 @@ defmodule LivechainWeb.OrchestrationLive do
     end
   end
 
-  # Component functions
+  # Tab Components
 
-  def network_topology(assigns) do
+  def live_feed_tab(assigns) do
+    ~H"""
+    <div class="tab-content flex h-full w-full flex-col overflow-hidden bg-gradient-to-br from-gray-900 to-black">
+      <!-- Live Events Section - Top Half -->
+      <div class="flex-1 overflow-hidden p-6">
+        <div class="bg-gray-900/50 h-full overflow-hidden rounded-lg border border-gray-700 shadow-2xl backdrop-blur-sm">
+          <div class="border-b border-gray-700 bg-gradient-to-r from-gray-900 to-black p-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-3">
+                <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-white bg-opacity-10">
+                  <svg
+                    class="h-5 w-5 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M13 10V3L4 14h7v7l9-11h-7z"
+                    />
+                  </svg>
+                </div>
+                <div>
+                  <h3 class="text-lg font-semibold text-white">Live Message Stream</h3>
+                  <p class="text-sm text-gray-300">
+                    Real-time WebSocket messages from blockchain networks
+                  </p>
+                </div>
+              </div>
+              <div class="flex items-center space-x-4">
+                <select
+                  phx-change="filter_events"
+                  class="rounded border-gray-700 bg-gray-800 px-2 py-1 text-xs text-white"
+                >
+                  <option value="all">All Events</option>
+                  <option value="blocks">Blocks Only</option>
+                  <option value="transactions">Transactions</option>
+                  <option value="errors">Errors</option>
+                </select>
+                <span class="text-sm text-gray-300"><%= length(@live_events) %> events</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="h-full overflow-hidden p-6">
+            <%= if length(@live_events) > 0 do %>
+              <div class="scrollbar-thin scrollbar-track-gray-800 scrollbar-thumb-gray-600 grid h-full grid-cols-1 gap-2 overflow-y-auto">
+                <%= for {event, index} <- @live_events |> Enum.take(50) |> Enum.with_index() do %>
+                  <div
+                    class="bg-gray-800/60 rounded-lg border border-gray-700 px-4 py-3 shadow-sm backdrop-blur-sm transition-all duration-300 ease-out hover:border-gray-600"
+                    style="animation: slideInUp 0.3s ease-out #{index * 0.02}s both;"
+                  >
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center space-x-3">
+                        <span class={"#{chain_badge_color(event.chain)} inline-flex items-center rounded-full px-2 py-1 text-xs font-medium"}>
+                          <%= String.upcase(event.chain) %>
+                        </span>
+                        <span class={"#{event_color(event.type)} text-sm font-medium"}>
+                          <%= format_event_message(event) %>
+                        </span>
+                        <span class="text-xs text-gray-400"><%= event.provider_id %></span>
+                      </div>
+                      <span class="text-xs text-gray-500">
+                        <%= format_timestamp(event.timestamp) %>
+                      </span>
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+            <% else %>
+              <div class="flex h-full items-center justify-center">
+                <div class="text-center">
+                  <div class="mb-4 text-4xl text-gray-600">⚡</div>
+                  <p class="text-gray-400">No live events yet - waiting for WebSocket messages...</p>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+      <!-- Broadway Events Section - Bottom Half -->
+      <div class="flex-1 overflow-hidden p-6 pt-0">
+        <div class="bg-blue-900/50 h-full overflow-hidden rounded-lg border border-blue-700 shadow-2xl backdrop-blur-sm">
+          <div class="border-b border-blue-700 bg-gradient-to-r from-blue-900 to-blue-800 p-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-3">
+                <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-white bg-opacity-10">
+                  <svg
+                    class="h-5 w-5 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                    />
+                  </svg>
+                </div>
+                <div>
+                  <h3 class="text-lg font-semibold text-white">Broadway Pipeline Events</h3>
+                  <p class="text-sm text-blue-200">
+                    Structured events processed through data pipelines
+                  </p>
+                </div>
+              </div>
+              <div class="flex items-center space-x-4">
+                <!-- Analytics Summary -->
+                <div class="flex items-center space-x-3 text-xs">
+                  <%= if map_size(@analytics_metrics) > 0 do %>
+                    <%= for {chain, metrics} <- @analytics_metrics do %>
+                      <div class="flex items-center space-x-1">
+                        <span class="text-blue-200"><%= String.upcase(chain) %>:</span>
+                        <span class="font-mono text-emerald-400"><%= metrics.events_count %></span>
+                        <%= if metrics.total_usd_value > 0 do %>
+                          <span class="font-mono text-yellow-400">
+                            $<%= Float.round(metrics.total_usd_value, 0) |> trunc() %>
+                          </span>
+                        <% end %>
+                      </div>
+                    <% end %>
+                  <% else %>
+                    <span class="text-xs text-blue-300">Analytics loading...</span>
+                  <% end %>
+                </div>
+                <span class="text-sm text-blue-200"><%= length(@structured_events) %> events</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="h-full overflow-hidden p-6">
+            <%= if length(@structured_events) > 0 do %>
+              <div class="scrollbar-thin scrollbar-track-blue-800 scrollbar-thumb-blue-600 grid h-full grid-cols-1 gap-2 overflow-y-auto">
+                <%= for {event, index} <- @structured_events |> Enum.take(30) |> Enum.with_index() do %>
+                  <div
+                    class="bg-blue-800/60 rounded-lg border border-blue-700 px-4 py-3 shadow-sm backdrop-blur-sm transition-all duration-300 ease-out hover:border-blue-600"
+                    style="animation: slideInUp 0.3s ease-out #{index * 0.02}s both;"
+                  >
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center space-x-3">
+                        <span class={"#{chain_badge_color(event.chain)} inline-flex items-center rounded-full px-2 py-1 text-xs font-medium"}>
+                          <%= String.upcase(event.chain) %>
+                        </span>
+                        <span class={"#{structured_event_color(event.type)} text-sm font-medium"}>
+                          <%= format_structured_event(event) %>
+                        </span>
+                        <%= if event.usd_value do %>
+                          <span class="font-mono text-sm text-yellow-300">
+                            $<%= Float.round(event.usd_value, 2) %>
+                          </span>
+                        <% end %>
+                      </div>
+                      <span class="text-xs text-blue-400">
+                        <%= format_timestamp(event.timestamp) %>
+                      </span>
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+            <% else %>
+              <div class="flex h-full items-center justify-center">
+                <div class="text-center">
+                  <div class="mb-4 text-4xl text-blue-600">🔄</div>
+                  <p class="text-blue-300">
+                    No structured events yet - Broadway pipelines processing...
+                  </p>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  def network_tab(assigns) do
+    ~H"""
+    <div class="tab-content relative h-full w-full overflow-hidden bg-gradient-to-br from-purple-900 to-purple-800">
+      <%= if @view_mode == :topology do %>
+        <.network_topology_fullscreen
+          connections={@connections}
+          selected_chain={@selected_chain}
+          selected_provider={@selected_provider}
+        />
+      <% else %>
+        <div class="h-full p-6">
+          <div class="bg-purple-900/50 h-full overflow-hidden rounded-lg border border-purple-700 shadow-2xl backdrop-blur-sm">
+            <div class="border-b border-purple-700 bg-gradient-to-r from-purple-900 to-purple-800 p-4">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                  <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-white bg-opacity-10">
+                    <svg
+                      class="h-5 w-5 text-white"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"
+                      />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 class="text-lg font-semibold text-white">Network Connections</h3>
+                    <p class="text-sm text-purple-200">
+                      Detailed table view of all blockchain connections
+                    </p>
+                  </div>
+                </div>
+                <div class="flex items-center space-x-2">
+                  <button
+                    phx-click="toggle_view"
+                    phx-value-mode="topology"
+                    class="rounded-md bg-purple-700 px-3 py-1 text-sm font-medium text-white transition-all duration-200 hover:bg-purple-600"
+                  >
+                    Switch to Topology
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="h-full overflow-auto p-6">
+              <.connection_table connections={@connections} current_time={@current_time} />
+            </div>
+          </div>
+        </div>
+      <% end %>
+      <!-- Detail Panel -->
+      <%= if @selected_chain || @selected_provider do %>
+        <.detail_panel
+          selected_chain={@selected_chain}
+          selected_provider={@selected_provider}
+          connections={@connections}
+        />
+      <% end %>
+    </div>
+    """
+  end
+
+  def network_topology_fullscreen(assigns) do
     assigns = assign(assigns, :chains, group_connections_by_chain(assigns.connections))
 
     ~H"""
-    <div class="h-full w-full bg-gradient-to-br from-slate-50 to-slate-100 relative overflow-hidden">
+    <div class="relative h-full w-full overflow-hidden">
       <!-- Background grid pattern -->
-      <div class="absolute inset-0 opacity-30" style="background-image: radial-gradient(circle, #e5e7eb 1px, transparent 1px); background-size: 50px 50px;"></div>
-
+      <div
+        class="absolute inset-0 opacity-20"
+        style="background-image: radial-gradient(circle, #e0e7ff 1px, transparent 1px); background-size: 50px 50px;"
+      >
+      </div>
+      <!-- View Toggle -->
+      <div class="absolute top-6 left-6 z-50">
+        <button
+          phx-click="toggle_view"
+          phx-value-mode="table"
+          class="bg-purple-700/80 rounded-lg border border-purple-600 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm transition-all duration-200 hover:bg-purple-600"
+        >
+          Switch to Table View
+        </button>
+      </div>
       <!-- Debug info -->
-      <div class="absolute top-4 left-4 bg-white/90 backdrop-blur-sm p-3 rounded-lg text-xs font-mono z-50 shadow-sm border border-gray-200">
-        Total connections: <%= length(@connections) %><br/>
-        Chains found: <%= map_size(@chains) %><br/>
-        Chain groups: <%= inspect(Map.keys(@chains)) %>
+      <div class="bg-purple-900/90 font-mono absolute top-6 right-6 z-50 rounded-lg border border-purple-700 p-3 text-xs text-white shadow-lg backdrop-blur-sm">
+        Total connections: <%= length(@connections) %><br />
+        Chains found: <%= map_size(@chains) %><br /> Chain groups: <%= inspect(Map.keys(@chains)) %>
       </div>
 
       <%= if map_size(@chains) == 0 do %>
         <!-- No connections fallback -->
-        <div class="flex items-center justify-center h-full">
+        <div class="flex h-full items-center justify-center">
           <div class="text-center">
-            <div class="text-6xl text-gray-400 mb-4">🔗</div>
-            <h2 class="text-xl font-semibold text-gray-700 mb-2">No Blockchain Connections</h2>
-            <p class="text-gray-500">Start some WebSocket connections to see the network topology</p>
-            <button phx-click="test_connection" class="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 transition-all duration-200">
+            <div class="mb-4 text-6xl text-purple-400">🔗</div>
+            <h2 class="mb-2 text-xl font-semibold text-white">No Blockchain Connections</h2>
+            <p class="text-purple-200">
+              Start some WebSocket connections to see the network topology
+            </p>
+            <button
+              phx-click="test_connection"
+              class="mt-4 rounded-lg bg-purple-600 px-4 py-2 text-white transition-all duration-200 hover:bg-purple-500"
+            >
               Test Connection
             </button>
           </div>
@@ -939,26 +1128,25 @@ defmodule LivechainWeb.OrchestrationLive do
         <%= for {{chain_name, chain_connections}, index} <- @chains |> Enum.with_index() do %>
           <% {x, y} = calculate_spiral_position(index, "50%", "50%") %>
           <% radius = 40 + min(length(chain_connections) * 3, 20) %>
-
           <!-- Chain node -->
           <div
-            class={"absolute cursor-pointer transform -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-gray-700 transition-all duration-300 hover:scale-105 shadow-lg #{if @selected_chain == chain_name, do: "animate-pulse"}"}
+            class={"#{if @selected_chain == chain_name, do: "animate-pulse"} border-white/20 absolute -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-4 shadow-xl transition-all duration-300 hover:scale-105"}
             style={"left: #{x}; top: #{y}; width: #{radius * 2}px; height: #{radius * 2}px; background-color: #{chain_color(chain_name)};"}
             phx-click="select_chain"
             phx-value-chain={chain_name}
           >
-            <div class="flex flex-col items-center justify-center h-full text-white">
+            <div class="flex h-full flex-col items-center justify-center text-white">
               <div class="text-sm font-bold"><%= String.upcase(chain_name) %></div>
               <div class="text-xs"><%= length(chain_connections) %> connections</div>
             </div>
           </div>
-
           <!-- Provider nodes positioned around the chain node -->
           <%= for {connection, conn_index} <- Enum.with_index(chain_connections) do %>
-            <% {provider_x, provider_y} = calculate_satellite_position(x, y, radius + 35, conn_index, length(chain_connections)) %>
+            <% {provider_x, provider_y} =
+              calculate_satellite_position(x, y, radius + 35, conn_index, length(chain_connections)) %>
 
             <div
-              class={"absolute cursor-pointer transform -translate-x-1/2 -translate-y-1/2 w-6 h-6 rounded-full border-2 border-gray-700 transition-all duration-300 hover:scale-110 shadow-sm #{if @selected_provider == connection.id, do: "animate-bounce"}"}
+              class={"#{if @selected_provider == connection.id, do: "animate-bounce"} border-white/30 absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-2 shadow-lg transition-all duration-300 hover:scale-110"}
               style={"left: #{provider_x}; top: #{provider_y}; background-color: #{provider_status_color(connection.status)};"}
               phx-click="select_provider"
               phx-value-provider={connection.id}
@@ -966,15 +1154,16 @@ defmodule LivechainWeb.OrchestrationLive do
             >
               <!-- Reconnect attempts indicator -->
               <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
-                <div class="absolute -top-1 -right-1 w-3 h-3 bg-yellow-500 rounded-full flex items-center justify-center">
-                  <span class="text-xs font-bold text-white" style="font-size: 8px;"><%= connection.reconnect_attempts %></span>
+                <div class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500">
+                  <span class="text-xs font-bold text-white" style="font-size: 8px;">
+                    <%= connection.reconnect_attempts %>
+                  </span>
                 </div>
               <% end %>
             </div>
-
             <!-- Provider label -->
             <div
-              class="absolute text-xs text-gray-700 transform -translate-x-1/2 pointer-events-none"
+              class="text-white/80 pointer-events-none absolute -translate-x-1/2 transform text-xs font-medium"
               style={"left: #{provider_x}; top: calc(#{provider_y} + 20px); font-size: 10px;"}
             >
               <%= String.slice(connection.name, 0..8) %>
@@ -982,21 +1171,124 @@ defmodule LivechainWeb.OrchestrationLive do
           <% end %>
         <% end %>
       <% end %>
-
       <!-- Legend -->
-      <div class="absolute bottom-6 right-6 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg p-4 border border-gray-200">
-        <h3 class="text-sm font-semibold text-gray-900 mb-2">Network Status</h3>
-        <div class="space-y-1 text-xs">
+      <div class="bg-purple-900/90 absolute right-6 bottom-6 rounded-lg border border-purple-700 p-4 shadow-xl backdrop-blur-sm">
+        <h3 class="mb-2 text-sm font-semibold text-white">Network Status</h3>
+        <div class="space-y-1 text-xs text-white">
           <div class="flex items-center space-x-2">
-            <div class="w-3 h-3 bg-emerald-500 rounded-full"></div>
+            <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
             <span>Connected</span>
           </div>
           <div class="flex items-center space-x-2">
-            <div class="w-3 h-3 bg-yellow-500 rounded-full"></div>
+            <div class="h-3 w-3 rounded-full bg-yellow-500"></div>
             <span>Reconnecting</span>
           </div>
           <div class="flex items-center space-x-2">
-            <div class="w-3 h-3 bg-red-500 rounded-full"></div>
+            <div class="h-3 w-3 rounded-full bg-red-500"></div>
+            <span>Disconnected</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Component functions
+
+  def network_topology(assigns) do
+    assigns = assign(assigns, :chains, group_connections_by_chain(assigns.connections))
+
+    ~H"""
+    <div class="relative h-full w-full overflow-hidden bg-gradient-to-br from-slate-50 to-slate-100">
+      <!-- Background grid pattern -->
+      <div
+        class="absolute inset-0 opacity-30"
+        style="background-image: radial-gradient(circle, #e5e7eb 1px, transparent 1px); background-size: 50px 50px;"
+      >
+      </div>
+      <!-- Debug info -->
+      <div class="bg-white/90 font-mono absolute top-4 left-4 z-50 rounded-lg border border-gray-200 p-3 text-xs shadow-sm backdrop-blur-sm">
+        Total connections: <%= length(@connections) %><br />
+        Chains found: <%= map_size(@chains) %><br /> Chain groups: <%= inspect(Map.keys(@chains)) %>
+      </div>
+
+      <%= if map_size(@chains) == 0 do %>
+        <!-- No connections fallback -->
+        <div class="flex h-full items-center justify-center">
+          <div class="text-center">
+            <div class="mb-4 text-6xl text-gray-400">🔗</div>
+            <h2 class="mb-2 text-xl font-semibold text-gray-700">No Blockchain Connections</h2>
+            <p class="text-gray-500">Start some WebSocket connections to see the network topology</p>
+            <button
+              phx-click="test_connection"
+              class="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-white transition-all duration-200 hover:bg-indigo-500"
+            >
+              Test Connection
+            </button>
+          </div>
+        </div>
+      <% else %>
+        <!-- Interactive nodes with spiral grid layout -->
+        <%= for {{chain_name, chain_connections}, index} <- @chains |> Enum.with_index() do %>
+          <% {x, y} = calculate_spiral_position(index, "50%", "50%") %>
+          <% radius = 40 + min(length(chain_connections) * 3, 20) %>
+          <!-- Chain node -->
+          <div
+            class={"#{if @selected_chain == chain_name, do: "animate-pulse"} absolute -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-4 border-gray-700 shadow-lg transition-all duration-300 hover:scale-105"}
+            style={"left: #{x}; top: #{y}; width: #{radius * 2}px; height: #{radius * 2}px; background-color: #{chain_color(chain_name)};"}
+            phx-click="select_chain"
+            phx-value-chain={chain_name}
+          >
+            <div class="flex h-full flex-col items-center justify-center text-white">
+              <div class="text-sm font-bold"><%= String.upcase(chain_name) %></div>
+              <div class="text-xs"><%= length(chain_connections) %> connections</div>
+            </div>
+          </div>
+          <!-- Provider nodes positioned around the chain node -->
+          <%= for {connection, conn_index} <- Enum.with_index(chain_connections) do %>
+            <% {provider_x, provider_y} =
+              calculate_satellite_position(x, y, radius + 35, conn_index, length(chain_connections)) %>
+
+            <div
+              class={"#{if @selected_provider == connection.id, do: "animate-bounce"} absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-2 border-gray-700 shadow-sm transition-all duration-300 hover:scale-110"}
+              style={"left: #{provider_x}; top: #{provider_y}; background-color: #{provider_status_color(connection.status)};"}
+              phx-click="select_provider"
+              phx-value-provider={connection.id}
+              title={connection.name}
+            >
+              <!-- Reconnect attempts indicator -->
+              <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
+                <div class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500">
+                  <span class="text-xs font-bold text-white" style="font-size: 8px;">
+                    <%= connection.reconnect_attempts %>
+                  </span>
+                </div>
+              <% end %>
+            </div>
+            <!-- Provider label -->
+            <div
+              class="pointer-events-none absolute -translate-x-1/2 transform text-xs text-gray-700"
+              style={"left: #{provider_x}; top: calc(#{provider_y} + 20px); font-size: 10px;"}
+            >
+              <%= String.slice(connection.name, 0..8) %>
+            </div>
+          <% end %>
+        <% end %>
+      <% end %>
+      <!-- Legend -->
+      <div class="bg-white/90 absolute right-6 bottom-6 rounded-lg border border-gray-200 p-4 shadow-lg backdrop-blur-sm">
+        <h3 class="mb-2 text-sm font-semibold text-gray-900">Network Status</h3>
+        <div class="space-y-1 text-xs">
+          <div class="flex items-center space-x-2">
+            <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
+            <span>Connected</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <div class="h-3 w-3 rounded-full bg-yellow-500"></div>
+            <span>Reconnecting</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <div class="h-3 w-3 rounded-full bg-red-500"></div>
             <span>Disconnected</span>
           </div>
         </div>
@@ -1010,12 +1302,15 @@ defmodule LivechainWeb.OrchestrationLive do
     <div class="h-full w-full overflow-auto">
       <div class="p-6">
         <%= if length(@connections) == 0 do %>
-          <div class="flex items-center justify-center h-96">
+          <div class="flex h-96 items-center justify-center">
             <div class="text-center">
-              <div class="text-6xl text-gray-400 mb-4">⚡</div>
-              <h2 class="text-xl font-semibold text-gray-700 mb-2">No Active Connections</h2>
+              <div class="mb-4 text-6xl text-gray-400">⚡</div>
+              <h2 class="mb-2 text-xl font-semibold text-gray-700">No Active Connections</h2>
               <p class="text-gray-500">WebSocket connections will appear here when started</p>
-              <button phx-click="test_connection" class="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 transition-all duration-200">
+              <button
+                phx-click="test_connection"
+                class="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-white transition-all duration-200 hover:bg-indigo-500"
+              >
                 Test Connection
               </button>
             </div>
@@ -1024,19 +1319,21 @@ defmodule LivechainWeb.OrchestrationLive do
           <div class="overflow-hidden bg-white shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
             <.table id="connections" rows={@connections} row_id={fn connection -> connection.id end}>
               <:col :let={connection} label="ID">
-                <code class="text-sm font-mono text-gray-900"><%= connection.id %></code>
+                <code class="font-mono text-sm text-gray-900"><%= connection.id %></code>
               </:col>
               <:col :let={connection} label="Name">
                 <div class="flex items-center space-x-2">
                   <span><%= connection.name %></span>
-                  <div class="flex-shrink-0 w-2 h-2 bg-emerald-400 rounded-full animate-pulse"
-                       :if={connection.status == :connected}
-                       title="Live connection">
+                  <div
+                    :if={connection.status == :connected}
+                    class="h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-emerald-400"
+                    title="Live connection"
+                  >
                   </div>
                 </div>
               </:col>
               <:col :let={connection} label="Chain">
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
                   <%= extract_chain_from_connection_name(connection.name) %>
                 </span>
               </:col>
@@ -1068,13 +1365,18 @@ defmodule LivechainWeb.OrchestrationLive do
 
   def detail_panel(assigns) do
     ~H"""
-    <div class="absolute right-0 top-0 h-full w-96 bg-white/95 backdrop-blur-sm shadow-xl border-l border-gray-200 z-10 transform transition-transform duration-300">
+    <div class="bg-white/95 absolute top-0 right-0 z-10 h-full w-96 transform border-l border-gray-200 shadow-xl backdrop-blur-sm transition-transform duration-300">
       <div class="p-6">
-        <div class="flex items-center justify-between mb-4">
+        <div class="mb-4 flex items-center justify-between">
           <h2 class="text-lg font-semibold text-gray-900">Details</h2>
           <button phx-click="close_detail" class="text-gray-400 hover:text-gray-600">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -1103,16 +1405,16 @@ defmodule LivechainWeb.OrchestrationLive do
     ~H"""
     <div class="space-y-4">
       <div>
-        <h3 class="text-lg font-medium text-gray-900 capitalize"><%= @chain %> Chain</h3>
+        <h3 class="text-lg font-medium capitalize text-gray-900"><%= @chain %> Chain</h3>
         <p class="text-sm text-gray-500">Detailed view of all providers</p>
       </div>
 
       <div class="grid grid-cols-2 gap-4">
-        <div class="bg-gray-50 rounded-lg p-3">
+        <div class="rounded-lg bg-gray-50 p-3">
           <div class="text-2xl font-bold text-gray-900"><%= length(@chain_connections) %></div>
           <div class="text-sm text-gray-500">Total Providers</div>
         </div>
-        <div class="bg-gray-50 rounded-lg p-3">
+        <div class="rounded-lg bg-gray-50 p-3">
           <div class="text-2xl font-bold text-emerald-600">
             <%= Enum.count(@chain_connections, &(&1.status == :connected)) %>
           </div>
@@ -1123,7 +1425,7 @@ defmodule LivechainWeb.OrchestrationLive do
       <div class="space-y-3">
         <h4 class="font-medium text-gray-900">Providers</h4>
         <%= for connection <- @chain_connections do %>
-          <div class="border border-gray-200 rounded-lg p-3">
+          <div class="rounded-lg border border-gray-200 p-3">
             <div class="flex items-center justify-between">
               <span class="font-medium text-gray-900"><%= connection.name %></span>
               <.connection_status_badge status={connection.status} />
@@ -1152,28 +1454,32 @@ defmodule LivechainWeb.OrchestrationLive do
         </div>
 
         <div class="space-y-3">
-          <div class="bg-gray-50 rounded-lg p-3">
+          <div class="rounded-lg bg-gray-50 p-3">
             <div class="flex items-center justify-between">
               <span class="text-sm font-medium text-gray-700">Status</span>
               <.connection_status_badge status={@connection.status} />
             </div>
           </div>
 
-          <div class="bg-gray-50 rounded-lg p-3">
+          <div class="rounded-lg bg-gray-50 p-3">
             <div class="flex items-center justify-between">
               <span class="text-sm font-medium text-gray-700">Reconnect Attempts</span>
-              <span class="text-sm text-gray-900"><%= Map.get(@connection, :reconnect_attempts, 0) %></span>
+              <span class="text-sm text-gray-900">
+                <%= Map.get(@connection, :reconnect_attempts, 0) %>
+              </span>
             </div>
           </div>
 
-          <div class="bg-gray-50 rounded-lg p-3">
+          <div class="rounded-lg bg-gray-50 p-3">
             <div class="flex items-center justify-between">
               <span class="text-sm font-medium text-gray-700">Active Subscriptions</span>
-              <span class="text-sm text-gray-900"><%= Map.get(@connection, :subscriptions, 0) %></span>
+              <span class="text-sm text-gray-900">
+                <%= Map.get(@connection, :subscriptions, 0) %>
+              </span>
             </div>
           </div>
 
-          <div class="bg-gray-50 rounded-lg p-3">
+          <div class="rounded-lg bg-gray-50 p-3">
             <div class="flex items-center justify-between">
               <span class="text-sm font-medium text-gray-700">Last Seen</span>
               <span class="text-sm text-gray-900"><%= format_last_seen(@connection) %></span>
@@ -1182,7 +1488,7 @@ defmodule LivechainWeb.OrchestrationLive do
         </div>
       </div>
     <% else %>
-      <div class="text-center py-8">
+      <div class="py-8 text-center">
         <p class="text-gray-500">Provider not found</p>
       </div>
     <% end %>
@@ -1190,6 +1496,29 @@ defmodule LivechainWeb.OrchestrationLive do
   end
 
   # Color helper functions
+
+  def chain_badge_color("ethereum"), do: "bg-blue-100 text-blue-800"
+  def chain_badge_color("polygon"), do: "bg-purple-100 text-purple-800"
+  def chain_badge_color("arbitrum"), do: "bg-cyan-100 text-cyan-800"
+  def chain_badge_color("optimism"), do: "bg-red-100 text-red-800"
+  def chain_badge_color("base"), do: "bg-indigo-100 text-indigo-800"
+  def chain_badge_color("bsc"), do: "bg-yellow-100 text-yellow-800"
+  def chain_badge_color("avalanche"), do: "bg-red-100 text-red-800"
+  def chain_badge_color("zksync"), do: "bg-slate-100 text-slate-800"
+  def chain_badge_color("linea"), do: "bg-gray-100 text-gray-800"
+  def chain_badge_color("scroll"), do: "bg-orange-100 text-orange-800"
+  def chain_badge_color("mantle"), do: "bg-black text-white"
+  def chain_badge_color("blast"), do: "bg-lime-100 text-lime-800"
+  def chain_badge_color("mode"), do: "bg-lime-100 text-lime-800"
+  def chain_badge_color("fantom"), do: "bg-blue-100 text-blue-800"
+  def chain_badge_color("celo"), do: "bg-green-100 text-green-800"
+  def chain_badge_color("eth"), do: "bg-blue-100 text-blue-800"
+  def chain_badge_color("poly"), do: "bg-purple-100 text-purple-800"
+  def chain_badge_color("arb"), do: "bg-cyan-100 text-cyan-800"
+  def chain_badge_color("op"), do: "bg-red-100 text-red-800"
+  def chain_badge_color("unknown"), do: "bg-gray-100 text-gray-800"
+  def chain_badge_color(_), do: "bg-gray-100 text-gray-800"
+
   def chain_color("ethereum"), do: "#627EEA"
   def chain_color("polygon"), do: "#8247E5"
   def chain_color("arbitrum"), do: "#28A0F0"
@@ -1219,15 +1548,7 @@ defmodule LivechainWeb.OrchestrationLive do
 
   def connection_status_badge(assigns) do
     ~H"""
-    <span class={[
-      "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium",
-      case @status do
-        :connected -> "bg-emerald-100 text-emerald-800"
-        :disconnected -> "bg-red-100 text-red-800"
-        :connecting -> "bg-yellow-100 text-yellow-800"
-        _ -> "bg-gray-100 text-gray-800"
-      end
-    ]}>
+    <span class={["inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium", case(@status, do: ->(:connected, "bg-emerald-100 text-emerald-800"), ->(:disconnected, "bg-red-100 text-red-800"), ->(:connecting, "bg-yellow-100 text-yellow-800"), ->(_, "bg-gray-100 text-gray-800"))]}>
       <%= case @status do
         :connected -> "Connected"
         :disconnected -> "Disconnected"

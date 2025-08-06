@@ -61,10 +61,12 @@ defmodule Livechain.EventProcessing.EventClassifier do
   defp is_block_event?(event) do
     # Check for block-like structure
     case event do
-      %{"result" => %{"hash" => hash, "number" => number}} when is_binary(hash) and is_binary(number) ->
+      %{"result" => %{"hash" => hash, "number" => number}}
+      when is_binary(hash) and is_binary(number) ->
         String.starts_with?(hash, "0x") and String.starts_with?(number, "0x")
 
-      %{"params" => %{"result" => %{"hash" => hash, "number" => number}}} when is_binary(hash) and is_binary(number) ->
+      %{"params" => %{"result" => %{"hash" => hash, "number" => number}}}
+      when is_binary(hash) and is_binary(number) ->
         String.starts_with?(hash, "0x") and String.starts_with?(number, "0x")
 
       _ ->
@@ -114,7 +116,8 @@ defmodule Livechain.EventProcessing.EventClassifier do
 
   defp is_nft_transfer?(event) do
     case get_log_topics(event) do
-      [topic0 | _] when topic0 in [@erc721_transfer_signature, @erc1155_transfer_single_signature] ->
+      [topic0 | _]
+      when topic0 in [@erc721_transfer_signature, @erc1155_transfer_single_signature] ->
         # Additional checks to distinguish from ERC-20
         case get_log_topics(event) do
           # ERC-721: Transfer(address,address,uint256) with 4 topics (including token ID)
@@ -133,7 +136,8 @@ defmodule Livechain.EventProcessing.EventClassifier do
     # Has transaction data or logs indicating contract interaction
     case event do
       %{"params" => %{"result" => %{"input" => input}}} when is_binary(input) ->
-        String.length(input) > 10  # More than just "0x" + 4-byte selector
+        # More than just "0x" + 4-byte selector
+        String.length(input) > 10
 
       _ ->
         has_contract_logs?(event)
