@@ -7,6 +7,7 @@ defmodule Livechain.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
+      listeners: [Phoenix.CodeReloader],
       deps: deps()
     ]
   end
@@ -24,18 +25,19 @@ defmodule Livechain.MixProject do
     [
       {:jason, "~> 1.4"},
       {:websockex, "~> 0.4"},
-      {:phoenix, "~> 1.7"},
+      {:phoenix, "~> 1.8"},
       {:phoenix_pubsub, "~> 2.1"},
-      {:phoenix_live_view, "~> 0.20"},
-      {:phoenix_html, "~> 3.3"},
+      {:phoenix_live_view, "~> 1.1"},
+      {:phoenix_html, "~> 4.0"},
       {:gettext, "~> 0.20"},
-      {:plug_cowboy, "~> 2.5"},
+      {:plug_cowboy, "~> 2.6"},
       {:broadway, "~> 1.0"},
       {:decimal, "~> 2.0"},
       {:yaml_elixir, "~> 2.9"},
       {:phoenix_live_dashboard, "~> 0.8", only: :dev},
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.2.0", runtime: Mix.env() == :dev},
+      {:tailwind_formatter, "~> 0.4.2", only: :dev},
       {:telemetry_metrics, "~> 0.6"},
       {:telemetry_poller, "~> 1.0"}
     ]

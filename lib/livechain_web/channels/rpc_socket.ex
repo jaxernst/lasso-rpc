@@ -21,7 +21,10 @@ defmodule LivechainWeb.RPCSocket do
   channel("rpc:*", LivechainWeb.RPCChannel)
 
   @impl true
-  def connect(%{"chain" => chain}, socket, _connect_info) do
+  def connect(_params, socket, connect_info) do
+    # Extract chain from the socket path
+    chain = extract_chain_from_connect_info(connect_info)
+
     case valid_chain?(chain) do
       true ->
         Logger.info("JSON-RPC client connected to chain: #{chain}")
@@ -34,10 +37,22 @@ defmodule LivechainWeb.RPCSocket do
     end
   end
 
-  @impl true
-  def connect(_params, _socket, _connect_info) do
-    Logger.warning("Missing chain parameter in RPC connection")
-    :error
+  defp extract_chain_from_connect_info(connect_info) do
+    # Try to extract chain from the URI path
+    case connect_info do
+      %{uri: %{path: path}} when is_binary(path) ->
+        case String.split(path, "/") do
+          ["", "rpc", chain | _] -> chain
+          _ -> "unknown"
+        end
+
+      _ ->
+        # Fallback: try to get from params
+        case connect_info do
+          %{params: %{"chain" => chain}} -> chain
+          _ -> "unknown"
+        end
+    end
   end
 
   @impl true

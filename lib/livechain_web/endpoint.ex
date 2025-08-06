@@ -26,22 +26,22 @@ defmodule LivechainWeb.Endpoint do
 
   # JSON-RPC WebSocket endpoints for Viem compatibility
   socket("/rpc/ethereum", LivechainWeb.RPCSocket,
-    websocket: [path: "/", params: %{"chain" => "ethereum"}],
+    websocket: [path: "/"],
     longpoll: false
   )
 
   socket("/rpc/arbitrum", LivechainWeb.RPCSocket,
-    websocket: [path: "/", params: %{"chain" => "arbitrum"}],
+    websocket: [path: "/"],
     longpoll: false
   )
 
   socket("/rpc/polygon", LivechainWeb.RPCSocket,
-    websocket: [path: "/", params: %{"chain" => "polygon"}],
+    websocket: [path: "/"],
     longpoll: false
   )
 
   socket("/rpc/bsc", LivechainWeb.RPCSocket,
-    websocket: [path: "/", params: %{"chain" => "bsc"}],
+    websocket: [path: "/"],
     longpoll: false
   )
 

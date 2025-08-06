@@ -49,7 +49,7 @@ defmodule Livechain.Application do
 
       # Auto-start simulator in dev/test environments
       if Mix.env() in [:dev, :test] do
-        # start_simulator_process()
+        start_simulator_process()
         start_broadway_pipelines()
       end
 
