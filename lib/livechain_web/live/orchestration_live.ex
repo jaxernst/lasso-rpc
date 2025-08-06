@@ -1548,14 +1548,19 @@ defmodule LivechainWeb.OrchestrationLive do
 
   def connection_status_badge(assigns) do
     ~H"""
-    <span class={["inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium", case(@status, do: ->(:connected, "bg-emerald-100 text-emerald-800"), ->(:disconnected, "bg-red-100 text-red-800"), ->(:connecting, "bg-yellow-100 text-yellow-800"), ->(_, "bg-gray-100 text-gray-800"))]}>
-      <%= case @status do
-        :connected -> "Connected"
-        :disconnected -> "Disconnected"
-        :connecting -> "Connecting"
-        _ -> "Unknown"
-      end %>
+    <span class={["inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium", connection_status_class(@status)]}>
+      <%= connection_status_text(@status) %>
     </span>
     """
   end
+
+  defp connection_status_class(:connected), do: "bg-emerald-100 text-emerald-800"
+  defp connection_status_class(:disconnected), do: "bg-red-100 text-red-800"
+  defp connection_status_class(:connecting), do: "bg-yellow-100 text-yellow-800"
+  defp connection_status_class(_), do: "bg-gray-100 text-gray-800"
+
+  defp connection_status_text(:connected), do: "Connected"
+  defp connection_status_text(:disconnected), do: "Disconnected"
+  defp connection_status_text(:connecting), do: "Connecting"
+  defp connection_status_text(_), do: "Unknown"
 end

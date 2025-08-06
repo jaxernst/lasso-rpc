@@ -28,10 +28,7 @@ defmodule LivechainWeb.CoreComponents do
 
   def status_badge(assigns) do
     ~H"""
-    <span class={[
-      "inline-flex items-center px-2 py-1 rounded-full text-xs font-medium",
-      status_color(@status)
-    ]}>
+    <span class={["inline-flex items-center rounded-full px-2 py-1 text-xs font-medium", status_color(@status)]}>
       <%= status_text(@status) %>
     </span>
     """
@@ -72,9 +69,9 @@ defmodule LivechainWeb.CoreComponents do
     ~H"""
     <div class="overflow-y-auto px-4 sm:overflow-visible sm:px-0">
       <table class="w-[40rem] mt-11 sm:w-full">
-        <thead class="text-sm text-left leading-6 text-zinc-500">
+        <thead class="text-left text-sm leading-6 text-zinc-500">
           <tr>
-            <th :for={col <- @col} class="p-0 pb-4 pr-6 font-normal"><%= col[:label] %></th>
+            <th :for={col <- @col} class="p-0 pr-6 pb-4 font-normal"><%= col[:label] %></th>
             <th :if={@action != []} class="relative p-0 pb-4">
               <span class="sr-only">Actions</span>
             </th>
@@ -153,11 +150,7 @@ defmodule LivechainWeb.CoreComponents do
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
-      class={[
-        "fixed top-2 right-2 mr-2 w-80 sm:w-96 z-50 rounded-lg p-3 ring-1",
-        @kind == :info && "bg-emerald-50 text-emerald-800 ring-emerald-500 fill-cyan-900",
-        @kind == :error && "bg-rose-50 text-rose-900 shadow-md ring-rose-500 fill-rose-900"
-      ]}
+      class={["fixed top-2 right-2 z-50 mr-2 w-80 rounded-lg p-3 ring-1 sm:w-96", @kind == :info && "bg-emerald-50 fill-cyan-900 text-emerald-800 ring-emerald-500", @kind == :error && "bg-rose-50 fill-rose-900 text-rose-900 shadow-md ring-rose-500"]}
       {@rest}
     >
       <p :if={@title} class="flex items-center gap-1.5 text-sm font-semibold leading-6">
@@ -292,7 +285,7 @@ defmodule LivechainWeb.CoreComponents do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
 
-  # Collapsible Section Component  
+  # Collapsible Section Component
   def collapsible_section(assigns) do
     # Determine colors based on section_id
     {header_gradient, content_bg, border_color} =
@@ -315,13 +308,17 @@ defmodule LivechainWeb.CoreComponents do
     assigns = assign(assigns, :border_color, border_color)
 
     ~H"""
-    <div class="mb-4 group hover:scale-[1.02] transition-all duration-300 ease-out" id={"collapsible-#{@section_id}"} phx-hook="CollapsibleSection">
+    <div
+      class="group mb-4 transition-all duration-300 ease-out hover:scale-[1.02]"
+      id={"collapsible-#{@section_id}"}
+      phx-hook="CollapsibleSection"
+    >
       <button
         type="button"
-        class={"w-full flex items-center justify-between p-4 text-left bg-gradient-to-r #{@header_gradient} text-white rounded-t-lg shadow-lg hover:shadow-xl transition-shadow duration-200"}
+        class={"#{@header_gradient} flex w-full items-center justify-between rounded-t-lg bg-gradient-to-r p-4 text-left text-white shadow-lg transition-shadow duration-200 hover:shadow-xl"}
       >
         <div class="flex items-center space-x-3">
-          <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-white bg-opacity-10 flex items-center justify-center">
+          <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-white bg-opacity-10">
             <%= render_slot(@icon) %>
           </div>
           <div>
@@ -331,19 +328,24 @@ defmodule LivechainWeb.CoreComponents do
         </div>
         <div class="flex items-center space-x-2">
           <span class="text-sm text-gray-300"><%= @count %></span>
-          <div class="flex-shrink-0 w-5 h-5 transform transition-transform duration-200 ease-out">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          <div class="h-5 w-5 flex-shrink-0 transform transition-transform duration-200 ease-out">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M19 9l-7 7-7-7"
+              />
             </svg>
           </div>
         </div>
       </button>
 
-      <div class={"#{@content_bg} border-t #{@border_color} rounded-b-lg transition-all duration-300 ease-out overflow-hidden h-12"}>
-        <div class="p-3 grid-pattern">
-          <div class="flex items-center justify-center h-full">
+      <div class={"#{@content_bg} #{@border_color} h-12 overflow-hidden rounded-b-lg border-t transition-all duration-300 ease-out"}>
+        <div class="grid-pattern p-3">
+          <div class="flex h-full items-center justify-center">
             <div class="text-center">
-              <div class="text-lg opacity-50 mb-1">
+              <div class="mb-1 text-lg opacity-50">
                 <%= case @section_id do
                   "live_stream" -> "⚡"
                   "broadway_events" -> "🔄"
@@ -355,10 +357,60 @@ defmodule LivechainWeb.CoreComponents do
             </div>
           </div>
         </div>
-        <div class="p-4 grid-pattern" style="display: none;">
+        <div class="grid-pattern p-4" style="display: none;">
           <%= render_slot(@inner_block) %>
         </div>
       </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders a modern tab switcher component with dark theme and purple accents.
+
+  ## Examples
+
+      <.tab_switcher
+        id="main-tabs"
+        tabs={[
+          %{id: "live_feed", label: "Live Feed", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
+          %{id: "network", label: "Network", icon: "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"},
+          %{id: "simulator", label: "Simulator", icon: "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"}
+        ]}
+        active_tab={@active_tab}
+      />
+  """
+  attr(:id, :string, required: true, doc: "unique identifier for the tab switcher")
+  attr(:tabs, :list, required: true, doc: "list of tab maps with id, label, and icon keys")
+  attr(:active_tab, :string, required: true, doc: "currently active tab id")
+  attr(:class, :string, default: "", doc: "additional CSS classes")
+
+  def tab_switcher(assigns) do
+    ~H"""
+    <div class={["bg-gray-900/50 border-gray-700/50 flex items-center space-x-1 rounded-xl border p-1.5 backdrop-blur-sm", @class]}>
+      <%= for tab <- @tabs do %>
+        <button
+          phx-click="switch_tab"
+          phx-value-tab={tab.id}
+          class={["relative flex items-center space-x-2 overflow-hidden rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200", if(@active_tab == tab.id,
+    do: "shadow-purple-500/25 bg-gradient-to-r from-purple-600 to-purple-500 text-white shadow-lg",
+    else: "text-gray-300 hover:bg-gray-800/50 hover:text-white")]}
+        >
+          <%= if @active_tab == tab.id do %>
+            <div class="from-purple-600/20 to-purple-500/20 absolute inset-0 rounded-lg bg-gradient-to-r">
+            </div>
+          <% end %>
+          <svg
+            class={["h-4 w-4", if(@active_tab == tab.id, do: "text-white", else: "text-gray-400")]}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={tab.icon} />
+          </svg>
+          <span class="relative z-10"><%= tab.label %></span>
+        </button>
+      <% end %>
     </div>
     """
   end

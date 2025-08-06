@@ -2,10 +2,20 @@
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
+/* Ensure proper height inheritance for full-screen layouts */
+html,
+body {
+  height: 100%;
+}
+
+body {
+  min-height: 100vh;
+}
+
 .grid-pattern {
   background-image: radial-gradient(
     circle at 1px 1px,
-    rgba(255, 255, 255, 0.1) 1px,
+    rgba(255, 255, 255, 0.15) 1px,
     transparent 0
   );
   background-size: 20px 20px;
