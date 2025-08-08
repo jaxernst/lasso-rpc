@@ -200,35 +200,51 @@ GET /api/events/types         # Available curated event types
 - ✅ **Mock Provider System**: Comprehensive development/testing environment
 - ✅ **HTTP API**: Health, status, and chain management endpoints
 
-### Phase 2: Hybrid API Layer 🔄 **IN PROGRESS**
+### Phase 2: Practical Dashboard & Core Features 🔄 **IN PROGRESS**
 
-#### Standard JSON-RPC Layer (2-3 days)
+#### Dashboard Redesign (Weeks 1-4)
+
+- 🔄 **Live System Tab**: Real-time monitoring, network topology, event feed
+- 🔄 **Live Test Tab**: Interactive end-to-end testing platform
+- 🔄 **Provider Management**: Enhanced visualization of all configured providers
+- 🔄 **System Metrics**: Performance monitoring and health dashboards
+
+#### Standard JSON-RPC Layer (Weeks 5-7)
 
 - 🔄 **JSON-RPC WebSocket Handler**: Standard eth_subscribe, eth_getLogs
 - 🔄 **Viem Compatibility**: Drop-in replacement for Infura/Alchemy
 - 🔄 **HTTP RPC Endpoint**: POST /rpc/ethereum for simple calls
 - 🔄 **Provider Failover**: Multi-provider redundancy per chain
 
-#### Enhanced Streaming Layer (1-2 weeks)
+### Phase 3: Enhanced Features (Weeks 8-10)
 
-- 🔄 **Broadway Pipelines**: Event processing and normalization
+#### Advanced Testing Capabilities
+
+- 🔄 **Load Testing Suite**: Configurable multi-connection stress tests
+- 🔄 **Failover Simulation**: Automated provider failure testing
+- 🔄 **Performance Benchmarking**: Provider comparison and optimization
+- 🔄 **Test Automation**: Scheduled and continuous testing scenarios
+
+#### Stream Processing (Stretch Goal)
+
+- 🔄 **Stream Builder**: Interactive event stream configuration (requires scoping)
 - 🔄 **Event Schema**: USDC_TRANSFER, NFT_MINT, etc. structured events
 - 🔄 **Cross-Chain Events**: Unified event format across EVM chains
 - 🔄 **USD Value Integration**: Real-time price feeds for token amounts
 
-### Phase 3: Production Features (2-3 weeks)
+### Phase 4: Production Features (Weeks 11-12)
 
 - 🔄 **ETS Caching**: Reorg handling and event deduplication
 - 🔄 **Circuit Breakers**: Provider failure protection
 - 🔄 **Performance Optimization**: Sub-second event delivery
-- 🔄 **chainpulse-viem SDK**: TypeScript SDK for frontend integration
-
-### Phase 4: MVP Deployment (1 week)
-
 - 🔄 **Production Config**: Environment-based provider management
+
+### Phase 5: MVP Deployment (Week 13)
+
 - 🔄 **Monitoring**: Metrics, alerting, observability
 - 🔄 **Documentation**: API docs and integration guides
 - 🔄 **Load Testing**: Validate performance targets
+- 🔄 **Demo Preparation**: Finalize presentation and showcase materials
 
 ## Mock Provider Features
 
