@@ -2,7 +2,7 @@ defmodule LivechainWeb.Dashboard do
   use LivechainWeb, :live_view
 
   alias Livechain.RPC.WSSupervisor
-  import LivechainWeb.NetworkTopology
+  alias LivechainWeb.NetworkTopology
 
   @impl true
   def mount(_params, _session, socket) do
@@ -162,7 +162,7 @@ defmodule LivechainWeb.Dashboard do
   def network_tab_content(assigns) do
     ~H"""
     <div class="h-full w-full">
-      <.network_topology
+      <NetworkTopology.nodes_display
         id="network-topology"
         connections={@connections}
         selected_chain={@selected_chain}
@@ -205,6 +205,7 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def handle_event("select_provider", %{"provider" => provider}, socket) do
+    IO.puts("select_provider: #{provider}")
     {:noreply, assign(socket, :selected_provider, provider)}
   end
 

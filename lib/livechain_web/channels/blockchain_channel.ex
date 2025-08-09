@@ -38,14 +38,9 @@ defmodule LivechainWeb.BlockchainChannel do
   use LivechainWeb, :channel
   require Logger
 
-  alias Livechain.RPC.{WSSupervisor, MockWSEndpoint}
+  alias Livechain.RPC.WSSupervisor
 
-  @supported_chains %{
-    "ethereum" => :ethereum_mainnet,
-    "polygon" => :polygon,
-    "arbitrum" => :arbitrum,
-    "bsc" => :bsc
-  }
+  # Dynamic chain support loaded from configuration
 
   @impl true
   def join("blockchain:" <> chain_id, _payload, socket) do
@@ -61,7 +56,8 @@ defmodule LivechainWeb.BlockchainChannel do
       {:ok, %{chain_id: chain_id, status: "connected"}, socket}
     else
       Logger.warning("Unsupported chain requested: #{chain_id}")
-      {:error, %{reason: "unsupported_chain", supported: Map.keys(@supported_chains)}}
+      supported_chains = get_supported_chain_names()
+      {:error, %{reason: "unsupported_chain", supported: supported_chains}}
     end
   end
 
@@ -160,37 +156,93 @@ defmodule LivechainWeb.BlockchainChannel do
   # Private functions
 
   defp chain_supported?(chain_id) do
-    Map.has_key?(@supported_chains, chain_id)
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        Map.has_key?(config.chains, chain_id)
+
+      {:error, _reason} ->
+        # Fallback to basic validation if config loading fails
+        chain_id in ["ethereum", "arbitrum", "polygon", "bsc"]
+    end
+  end
+
+  defp get_supported_chain_names do
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        Map.keys(config.chains)
+
+      {:error, _reason} ->
+        ["ethereum", "arbitrum", "polygon", "bsc"]
+    end
   end
 
   defp ensure_chain_connection(chain_id) do
-    case Map.get(@supported_chains, chain_id) do
-      nil ->
-        Logger.error("Unsupported chain: #{chain_id}")
-        :error
+    if chain_supported?(chain_id) do
+      # Check if connection already exists
+      connections = WSSupervisor.list_connections()
+      existing = Enum.find(connections, &String.contains?(&1.name, chain_id))
 
-      chain_function ->
-        # Check if connection already exists
-        connections = WSSupervisor.list_connections()
-        existing = Enum.find(connections, &String.contains?(&1.name, chain_id))
+      if existing do
+        Logger.debug("Chain connection already exists for #{chain_id}")
+        :ok
+      else
+        # Create and start new connection using configured providers
+        case get_chain_endpoint(chain_id) do
+          {:ok, endpoint} ->
+            case WSSupervisor.start_connection(endpoint) do
+              {:ok, _pid} ->
+                Logger.info("Started new chain connection for #{chain_id}")
+                :ok
 
-        if existing do
-          Logger.debug("Chain connection already exists for #{chain_id}")
-          :ok
-        else
-          # Create and start new connection
-          endpoint = apply(MockWSEndpoint, chain_function, [])
+              {:error, reason} ->
+                Logger.error("Failed to start chain connection for #{chain_id}: #{inspect(reason)}")
+                :error
+            end
 
-          case WSSupervisor.start_connection(endpoint) do
-            {:ok, _pid} ->
-              Logger.info("Started new chain connection for #{chain_id}")
-              :ok
-
-            {:error, reason} ->
-              Logger.error("Failed to start chain connection for #{chain_id}: #{inspect(reason)}")
-              :error
-          end
+          {:error, reason} ->
+            Logger.error("Failed to get endpoint for chain #{chain_id}: #{reason}")
+            :error
         end
+      end
+    else
+      Logger.error("Unsupported chain: #{chain_id}")
+      :error
+    end
+  end
+
+  defp get_chain_endpoint(chain_id) do
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        case Livechain.Config.ChainConfig.get_chain_config(config, chain_id) do
+          {:ok, chain_config} ->
+            # Get the first available provider for this chain
+            case Livechain.Config.ChainConfig.get_available_providers(chain_config) do
+              [provider | _] ->
+                # Create endpoint struct using the Livechain.RPC.WSEndpoint
+                endpoint = %Livechain.RPC.WSEndpoint{
+                  id: provider.id,
+                  name: provider.name,
+                  url: provider.url,
+                  ws_url: provider.ws_url,
+                  chain_id: chain_config.chain_id,
+                  api_key: nil,
+                  reconnect_interval: chain_config.connection.reconnect_interval,
+                  heartbeat_interval: chain_config.connection.heartbeat_interval,
+                  max_reconnect_attempts: chain_config.connection.max_reconnect_attempts,
+                  subscription_topics: chain_config.connection.subscription_topics
+                }
+                {:ok, endpoint}
+
+              [] ->
+                {:error, "No available providers for chain #{chain_id}"}
+            end
+
+          {:error, :chain_not_found} ->
+            {:error, "Chain #{chain_id} not found in configuration"}
+        end
+
+      {:error, reason} ->
+        {:error, "Failed to load configuration: #{reason}"}
     end
   end
 end

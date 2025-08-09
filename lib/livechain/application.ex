@@ -49,7 +49,7 @@ defmodule Livechain.Application do
 
       # Auto-start simulator in dev/test environments
       if Mix.env() in [:dev, :test] do
-        start_simulator_process()
+        # start_simulator_process()
         start_broadway_pipelines()
       end
 
@@ -99,8 +99,8 @@ defmodule Livechain.Application do
 
   # Helper function to start Broadway pipelines for active chains
   defp start_broadway_pipelines do
-    # Start Broadway pipelines for commonly used chains
-    chains = ["ethereum", "polygon", "arbitrum"]
+    # Start Broadway pipelines for all configured chains
+    chains = get_configured_chain_names()
 
     Enum.each(chains, fn chain ->
       case DynamicSupervisor.start_child(
@@ -117,5 +117,18 @@ defmodule Livechain.Application do
           Logger.error("Failed to start Broadway pipeline for #{chain}: #{reason}")
       end
     end)
+  end
+
+  # TODO: No need to fallback to pre-defined chains. We should just fail if the config is not loaded.
+  defp get_configured_chain_names do
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        Map.keys(config.chains)
+
+      {:error, reason} ->
+        Logger.error("Failed to load chain configuration: #{reason}")
+        # Fallback to default chains if config loading fails
+        ["ethereum", "polygon", "arbitrum"]
+    end
   end
 end

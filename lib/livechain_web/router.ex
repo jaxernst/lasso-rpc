@@ -48,18 +48,17 @@ defmodule LivechainWeb.Router do
     end
   end
 
-  # HTTP ethereum JSON-RPC endpoints for onchain app clients
+  # HTTP JSON-RPC endpoints for onchain app clients
   scope "/rpc", LivechainWeb do
     pipe_through(:api)
 
+    # Generic endpoint for any configured chain
+    post("/:chain_id", RPCController, :rpc)
+
+    # Backward compatibility endpoints
     post("/ethereum", RPCController, :ethereum)
     post("/arbitrum", RPCController, :arbitrum)
     post("/polygon", RPCController, :polygon)
     post("/bsc", RPCController, :bsc)
-  end
-
-  # WebSocket endpoint for real-time subscriptions
-  scope "/ws", LivechainWeb do
-    get("/:chain_id", WebSocketController, :connect)
   end
 end

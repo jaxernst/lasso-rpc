@@ -58,7 +58,15 @@ defmodule LivechainWeb.RPCSocket do
   @impl true
   def id(socket), do: "rpc_socket:#{socket.assigns.chain}"
 
-  # Supported chains for JSON-RPC compatibility
-  defp valid_chain?(chain) when chain in ["ethereum", "arbitrum", "polygon", "bsc"], do: true
-  defp valid_chain?(_), do: false
+  # Validate chain against configured chains
+  defp valid_chain?(chain) do
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        Map.has_key?(config.chains, chain)
+
+      {:error, _reason} ->
+        # Fallback to basic validation if config loading fails
+        chain in ["ethereum", "arbitrum", "polygon", "bsc"]
+    end
+  end
 end

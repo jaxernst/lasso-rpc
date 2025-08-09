@@ -58,7 +58,6 @@ chains:
       heartbeat_interval: 30000
       reconnect_interval: 5000
       max_reconnect_attempts: 10
-      subscription_topics: ["newHeads", "logs"]
 
     # Aggregation settings
     aggregation:
@@ -66,6 +65,12 @@ chains:
       min_confirmations: 1 # minimum providers that must confirm
       max_providers: 3 # maximum concurrent providers to use
       max_cache_size: 10000 # maximum number of cached messages
+
+    # Subscription failover settings (optional - will use defaults if not specified)
+    failover:
+      max_backfill_blocks: 100        # max blocks to backfill on provider failover
+      backfill_timeout: 30000         # max time to spend backfilling (ms)
+      enabled: true                   # enable/disable backfill feature
 
   base:
     chain_id: 8453
@@ -121,7 +126,6 @@ chains:
       heartbeat_interval: 20000 # Base is faster, more frequent heartbeats
       reconnect_interval: 3000
       max_reconnect_attempts: 15
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 1000 # Faster chain, shorter window
@@ -171,7 +175,6 @@ chains:
       heartbeat_interval: 25000
       reconnect_interval: 4000
       max_reconnect_attempts: 12
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 1500
@@ -221,7 +224,6 @@ chains:
       heartbeat_interval: 15000 # Very frequent for fast chain
       reconnect_interval: 2000
       max_reconnect_attempts: 20
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 500 # Very short for fast blocks
@@ -271,7 +273,6 @@ chains:
       heartbeat_interval: 20000
       reconnect_interval: 3000
       max_reconnect_attempts: 15
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 1000
@@ -321,7 +322,6 @@ chains:
       heartbeat_interval: 25000
       reconnect_interval: 4000
       max_reconnect_attempts: 12
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 1500
@@ -371,7 +371,6 @@ chains:
       heartbeat_interval: 20000
       reconnect_interval: 3000
       max_reconnect_attempts: 15
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 1000
@@ -421,7 +420,6 @@ chains:
       heartbeat_interval: 15000
       reconnect_interval: 2000
       max_reconnect_attempts: 20
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 500
@@ -460,7 +458,6 @@ chains:
       heartbeat_interval: 30000
       reconnect_interval: 5000
       max_reconnect_attempts: 10
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 2000
@@ -499,7 +496,6 @@ chains:
       heartbeat_interval: 25000
       reconnect_interval: 4000
       max_reconnect_attempts: 12
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 1500
@@ -538,7 +534,6 @@ chains:
       heartbeat_interval: 15000
       reconnect_interval: 2000
       max_reconnect_attempts: 20
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 500
@@ -577,7 +572,6 @@ chains:
       heartbeat_interval: 20000
       reconnect_interval: 3000
       max_reconnect_attempts: 15
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 1000
@@ -605,7 +599,6 @@ chains:
       heartbeat_interval: 20000
       reconnect_interval: 3000
       max_reconnect_attempts: 15
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 1000
@@ -644,7 +637,6 @@ chains:
       heartbeat_interval: 15000
       reconnect_interval: 2000
       max_reconnect_attempts: 20
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 500
@@ -683,7 +675,6 @@ chains:
       heartbeat_interval: 30000
       reconnect_interval: 5000
       max_reconnect_attempts: 10
-      subscription_topics: ["newHeads", "logs"]
 
     aggregation:
       deduplication_window: 2500
