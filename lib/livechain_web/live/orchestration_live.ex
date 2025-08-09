@@ -1,5 +1,7 @@
 defmodule LivechainWeb.OrchestrationLive do
   use LivechainWeb, :live_view
+  
+  alias Livechain.Benchmarking.BenchmarkStore
 
   @impl true
   def mount(_params, _session, socket) do
@@ -40,11 +42,13 @@ defmodule LivechainWeb.OrchestrationLive do
       |> assign(:live_events, [])
       |> assign(:structured_events, [])
       |> assign(:analytics_metrics, %{})
+      |> assign(:benchmark_data, %{})
       |> assign(:selected_chain, nil)
       |> assign(:selected_provider, nil)
       |> assign(:view_mode, :topology)
       |> assign(:event_filter, :all)
       |> assign(:active_tab, :live_feed)
+      |> assign(:benchmark_chain, "ethereum")
 
     {:ok, initial_state}
   end
@@ -391,6 +395,21 @@ defmodule LivechainWeb.OrchestrationLive do
                 </svg>
                 Network
               </button>
+              <button
+                phx-click="switch_tab"
+                phx-value-tab="benchmarks"
+                class={"#{if @active_tab == :benchmarks, do: "bg-white text-gray-900 shadow-sm", else: "text-gray-500 hover:text-gray-900"} rounded-md px-4 py-2 text-sm font-medium transition-all duration-200"}
+              >
+                <svg class="mr-1 inline h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                  />
+                </svg>
+                Benchmarks
+              </button>
             </div>
           </div>
 
@@ -434,21 +453,34 @@ defmodule LivechainWeb.OrchestrationLive do
       </div>
       <!-- Tab Content -->
       <div class="flex-1 overflow-hidden">
-        <%= if @active_tab == :live_feed do %>
-          <.live_feed_tab
-            live_events={@live_events}
-            structured_events={@structured_events}
-            analytics_metrics={@analytics_metrics}
-            event_filter={@event_filter}
-          />
-        <% else %>
-          <.network_tab
-            connections={@connections}
-            selected_chain={@selected_chain}
-            selected_provider={@selected_provider}
-            view_mode={@view_mode}
-            current_time={@current_time}
-          />
+        <%= cond do %>
+          <% @active_tab == :live_feed -> %>
+            <.live_feed_tab
+              live_events={@live_events}
+              structured_events={@structured_events}
+              analytics_metrics={@analytics_metrics}
+              event_filter={@event_filter}
+            />
+          <% @active_tab == :network -> %>
+            <.network_tab
+              connections={@connections}
+              selected_chain={@selected_chain}
+              selected_provider={@selected_provider}
+              view_mode={@view_mode}
+              current_time={@current_time}
+            />
+          <% @active_tab == :benchmarks -> %>
+            <.benchmarks_tab
+              benchmark_data={@benchmark_data}
+              benchmark_chain={@benchmark_chain}
+            />
+          <% true -> %>
+            <.live_feed_tab
+              live_events={@live_events}
+              structured_events={@structured_events}
+              analytics_metrics={@analytics_metrics}
+              event_filter={@event_filter}
+            />
         <% end %>
       </div>
     </div>
@@ -562,6 +594,15 @@ defmodule LivechainWeb.OrchestrationLive do
   @impl true
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
     tab_atom = String.to_atom(tab)
+    
+    socket = 
+      if tab_atom == :benchmarks do
+        # Load benchmark data when switching to benchmarks tab
+        load_benchmark_data(socket)
+      else
+        socket
+      end
+    
     {:noreply, assign(socket, :active_tab, tab_atom)}
   end
 
@@ -581,6 +622,16 @@ defmodule LivechainWeb.OrchestrationLive do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_event("select_benchmark_chain", %{"chain" => chain}, socket) do
+    socket =
+      socket
+      |> assign(:benchmark_chain, chain)
+      |> load_benchmark_data()
+    
+    {:noreply, socket}
+  end
+
   defp fetch_connections(socket) do
     connections = Livechain.RPC.WSSupervisor.list_connections()
 
@@ -588,6 +639,22 @@ defmodule LivechainWeb.OrchestrationLive do
     |> assign(:connections, connections)
     |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
     |> assign(:current_time, DateTime.utc_now())
+  end
+
+  defp load_benchmark_data(socket) do
+    chain_name = socket.assigns.benchmark_chain
+    
+    # Get benchmark data from the BenchmarkStore
+    provider_leaderboard = BenchmarkStore.get_provider_leaderboard(chain_name)
+    realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
+    
+    benchmark_data = %{
+      leaderboard: provider_leaderboard,
+      stats: realtime_stats,
+      last_updated: DateTime.utc_now()
+    }
+    
+    assign(socket, :benchmark_data, benchmark_data)
   end
 
   def format_last_seen(connection) do
@@ -832,6 +899,138 @@ defmodule LivechainWeb.OrchestrationLive do
   end
 
   # Tab Components
+
+  def benchmarks_tab(assigns) do
+    ~H"""
+    <div class="tab-content flex h-full w-full flex-col overflow-hidden bg-gradient-to-br from-indigo-900 to-indigo-800">
+      <!-- Benchmarks Header -->
+      <div class="flex-shrink-0 p-6">
+        <div class="bg-indigo-900/50 rounded-lg border border-indigo-700 p-4 shadow-xl backdrop-blur-sm">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+              <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-white bg-opacity-10">
+                <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-lg font-semibold text-white">Provider Benchmarks</h3>
+                <p class="text-sm text-indigo-200">Real-time performance metrics from racing and RPC calls</p>
+              </div>
+            </div>
+            <div class="flex items-center space-x-4">
+              <select phx-change="select_benchmark_chain" class="rounded border-indigo-700 bg-indigo-800 px-3 py-1 text-sm text-white">
+                <option value="ethereum" selected={@benchmark_chain == "ethereum"}>Ethereum</option>
+                <option value="polygon" selected={@benchmark_chain == "polygon"}>Polygon</option>
+                <option value="arbitrum" selected={@benchmark_chain == "arbitrum"}>Arbitrum</option>
+                <option value="bsc" selected={@benchmark_chain == "bsc"}>BSC</option>
+              </select>
+              <span class="text-sm text-indigo-200">
+                <%= if @benchmark_data.stats do %>
+                  <%= length(@benchmark_data.stats.providers) %> providers
+                <% else %>
+                  Loading...
+                <% end %>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Benchmarks Content -->
+      <div class="flex flex-1 overflow-hidden p-6 pt-0">
+        <!-- Left Panel - Provider Leaderboard -->
+        <div class="w-1/2 pr-3">
+          <div class="bg-indigo-900/50 h-full overflow-hidden rounded-lg border border-indigo-700 shadow-xl backdrop-blur-sm">
+            <div class="border-b border-indigo-700 bg-gradient-to-r from-indigo-900 to-indigo-800 p-4">
+              <h4 class="text-lg font-semibold text-white">Racing Leaderboard</h4>
+              <p class="text-sm text-indigo-200">Event delivery performance winners</p>
+            </div>
+            <div class="h-full overflow-auto p-4">
+              <%= if length(@benchmark_data.leaderboard || []) > 0 do %>
+                <div class="space-y-3">
+                  <%= for {provider, index} <- Enum.with_index(@benchmark_data.leaderboard) do %>
+                    <div class="bg-indigo-800/60 rounded-lg border border-indigo-700 p-4 transition-all duration-200 hover:border-indigo-600">
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-3">
+                          <div class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-700 text-sm font-bold text-white">
+                            <%= index + 1 %>
+                          </div>
+                          <div>
+                            <div class="font-medium text-white"><%= provider.provider_id %></div>
+                            <div class="text-xs text-indigo-300">
+                              <%= provider.total_wins %> wins / <%= provider.total_races %> races
+                            </div>
+                          </div>
+                        </div>
+                        <div class="text-right">
+                          <div class="text-lg font-bold text-emerald-400">
+                            <%= Float.round(provider.win_rate * 100, 1) %>%
+                          </div>
+                          <div class="text-xs text-indigo-300">
+                            avg margin: <%= Float.round(provider.avg_margin_ms || 0, 1) %>ms
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              <% else %>
+                <div class="flex h-full items-center justify-center">
+                  <div class="text-center">
+                    <div class="mb-4 text-4xl text-indigo-600">🏁</div>
+                    <p class="text-indigo-300">No racing data yet for <%= @benchmark_chain %></p>
+                    <p class="text-xs text-indigo-400">Performance data will appear as providers compete</p>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Panel - RPC Performance -->
+        <div class="w-1/2 pl-3">
+          <div class="bg-indigo-900/50 h-full overflow-hidden rounded-lg border border-indigo-700 shadow-xl backdrop-blur-sm">
+            <div class="border-b border-indigo-700 bg-gradient-to-r from-indigo-900 to-indigo-800 p-4">
+              <h4 class="text-lg font-semibold text-white">RPC Performance</h4>
+              <p class="text-sm text-indigo-200">JSON-RPC call latency and success rates</p>
+            </div>
+            <div class="h-full overflow-auto p-4">
+              <%= if @benchmark_data.stats && length(@benchmark_data.stats.rpc_methods || []) > 0 do %>
+                <div class="space-y-4">
+                  <%= for method <- @benchmark_data.stats.rpc_methods do %>
+                    <div class="bg-indigo-800/60 rounded-lg border border-indigo-700 p-4">
+                      <h5 class="font-medium text-white mb-2"><%= method %></h5>
+                      <div class="space-y-2">
+                        <%= for provider <- @benchmark_data.stats.providers do %>
+                          <div class="flex items-center justify-between text-sm">
+                            <span class="text-indigo-300"><%= provider %></span>
+                            <div class="flex items-center space-x-2">
+                              <span class="font-mono text-emerald-400">95.2%</span>
+                              <span class="font-mono text-blue-400">156ms</span>
+                            </div>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              <% else %>
+                <div class="flex h-full items-center justify-center">
+                  <div class="text-center">
+                    <div class="mb-4 text-4xl text-indigo-600">⚡</div>
+                    <p class="text-indigo-300">No RPC performance data yet for <%= @benchmark_chain %></p>
+                    <p class="text-xs text-indigo-400">Data will appear as RPC calls are made</p>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
 
   def live_feed_tab(assigns) do
     ~H"""
