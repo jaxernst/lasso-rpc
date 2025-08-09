@@ -9,10 +9,15 @@ defmodule Livechain.RPC.MessageAggregator do
 
   The aggregator maintains a sliding window cache of recent messages to detect
   duplicates while keeping memory usage bounded.
+
+  Racing metrics are captured to track which provider delivers events fastest,
+  providing valuable benchmarking data for provider performance analysis.
   """
 
   use GenServer
   require Logger
+  
+  alias Livechain.Benchmarking.BenchmarkStore
 
   defstruct [
     :chain_name,
@@ -160,21 +165,30 @@ defmodule Livechain.RPC.MessageAggregator do
 
   defp process_blockchain_message(state, provider_id, message, received_at) do
     message_key = generate_message_key(message)
+    event_type = extract_event_type(message)
 
     case Map.get(state.message_cache, message_key) do
       nil ->
         # First time seeing this message - forward it immediately and cache it
         forward_message(state.chain_name, provider_id, message, received_at)
 
+        # Record racing victory
+        BenchmarkStore.record_event_race_win(state.chain_name, provider_id, event_type, received_at)
+
         cache_message(state, message_key, message, received_at, provider_id)
         |> update_forwarded_stats()
 
-      {_cached_msg, _cached_time, cached_provider} ->
+      {_cached_msg, cached_time, cached_provider} ->
         # Duplicate message - log and increment stats
+        margin_ms = received_at - cached_time
+        
         Logger.debug(
           "Deduplicated message from #{provider_id} (original from #{cached_provider}) " <>
-            "for #{state.chain_name}: #{message_key}"
+            "for #{state.chain_name}: #{message_key}, margin: #{margin_ms}ms"
         )
+
+        # Record racing loss with margin
+        BenchmarkStore.record_event_race_loss(state.chain_name, provider_id, event_type, received_at, margin_ms)
 
         update_deduplicated_stats(state)
     end
@@ -220,6 +234,46 @@ defmodule Livechain.RPC.MessageAggregator do
     |> Base.encode16(case: :lower)
     # First 16 chars for efficiency
     |> String.slice(0..15)
+  end
+
+  defp extract_event_type(message) do
+    cond do
+      # New block subscription (newHeads)
+      is_map(message) and Map.get(message, "method") == "eth_subscription" and
+        is_map(message["params"]) and 
+        (Map.has_key?(message["params"]["result"], "hash") or 
+         Map.has_key?(message["params"]["result"], "number")) ->
+        "newHeads"
+
+      # Transaction logs
+      is_map(message) and Map.get(message, "method") == "eth_subscription" and
+        is_map(message["params"]) and Map.has_key?(message["params"]["result"], "topics") ->
+        "logs"
+
+      # Pending transactions
+      is_map(message) and Map.get(message, "method") == "eth_subscription" and
+        is_map(message["params"]) and 
+        (Map.has_key?(message["params"]["result"], "from") or
+         Map.has_key?(message["params"]["result"], "to")) ->
+        "pendingTransactions"
+
+      # Sync status updates
+      is_map(message) and Map.get(message, "method") == "eth_subscription" and
+        is_map(message["params"]) and Map.has_key?(message["params"]["result"], "syncing") ->
+        "syncing"
+
+      # JSON-RPC response messages (non-subscription)
+      is_map(message) and Map.has_key?(message, "result") and Map.has_key?(message, "id") ->
+        "rpc_response"
+
+      # Generic subscription events
+      is_map(message) and Map.get(message, "method") == "eth_subscription" ->
+        "subscription"
+
+      # Fallback for unknown message types
+      true ->
+        "unknown"
+    end
   end
 
   defp forward_message(chain_name, provider_id, message, received_at) do

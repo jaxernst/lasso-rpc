@@ -19,6 +19,7 @@ defmodule Livechain.RPC.WSConnection do
   require Logger
 
   alias Livechain.RPC.WSEndpoint
+  alias Livechain.Benchmarking.BenchmarkStore
 
   # Client API
 
@@ -428,6 +429,8 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def handle_call({:get_logs, filter}, _from, state) do
+    start_time = System.monotonic_time(:millisecond)
+
     request = %{
       jsonrpc: "2.0",
       method: "eth_getLogs",
@@ -436,13 +439,50 @@ defmodule Livechain.RPC.WSConnection do
     }
 
     case send_json_rpc_request(state, request) do
-      {:ok, response} -> {:reply, {:ok, response["result"] || []}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:ok, response} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+        chain_name = get_chain_name(state.endpoint.chain_id)
+
+        # Safe benchmark recording with error handling
+        try do
+          BenchmarkStore.record_rpc_call(
+            chain_name,
+            state.endpoint.id,
+            "eth_getLogs",
+            duration,
+            :success
+          )
+        rescue
+          e -> Logger.error("Failed to record benchmark for eth_getLogs success: #{inspect(e)}")
+        end
+
+        {:reply, {:ok, response["result"] || []}, state}
+
+      {:error, reason} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+        chain_name = get_chain_name(state.endpoint.chain_id)
+
+        # Safe benchmark recording with error handling
+        try do
+          BenchmarkStore.record_rpc_call(
+            chain_name,
+            state.endpoint.id,
+            "eth_getLogs",
+            duration,
+            :error
+          )
+        rescue
+          e -> Logger.error("Failed to record benchmark for eth_getLogs error: #{inspect(e)}")
+        end
+
+        {:reply, {:error, reason}, state}
     end
   end
 
   @impl true
   def handle_call({:get_block_by_number, block_number, include_transactions}, _from, state) do
+    start_time = System.monotonic_time(:millisecond)
+
     request = %{
       jsonrpc: "2.0",
       method: "eth_getBlockByNumber",
@@ -451,13 +491,57 @@ defmodule Livechain.RPC.WSConnection do
     }
 
     case send_json_rpc_request(state, request) do
-      {:ok, response} -> {:reply, {:ok, response["result"]}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:ok, response} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+        chain_name = get_chain_name(state.endpoint.chain_id)
+
+        # Safe benchmark recording with error handling
+        try do
+          BenchmarkStore.record_rpc_call(
+            chain_name,
+            state.endpoint.id,
+            "eth_getBlockByNumber",
+            duration,
+            :success
+          )
+        rescue
+          e ->
+            Logger.error(
+              "Failed to record benchmark for eth_getBlockByNumber success: #{inspect(e)}"
+            )
+        end
+
+        {:reply, {:ok, response["result"]}, state}
+
+      {:error, reason} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+        chain_name = get_chain_name(state.endpoint.chain_id)
+
+        # TODO: Could this be pushed to a queue for processing? I want to avoid blocking (but maybe this doesn't even block so let's analyze whether this could be meaningfully improved).
+        # Safe benchmark recording with error handling
+        try do
+          BenchmarkStore.record_rpc_call(
+            chain_name,
+            state.endpoint.id,
+            "eth_getBlockByNumber",
+            duration,
+            :error
+          )
+        rescue
+          e ->
+            Logger.error(
+              "Failed to record benchmark for eth_getBlockByNumber error: #{inspect(e)}"
+            )
+        end
+
+        {:reply, {:error, reason}, state}
     end
   end
 
   @impl true
   def handle_call({:get_block_number}, _from, state) do
+    start_time = System.monotonic_time(:millisecond)
+
     request = %{
       jsonrpc: "2.0",
       method: "eth_blockNumber",
@@ -466,13 +550,51 @@ defmodule Livechain.RPC.WSConnection do
     }
 
     case send_json_rpc_request(state, request) do
-      {:ok, response} -> {:reply, {:ok, response["result"]}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:ok, response} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+        chain_name = get_chain_name(state.endpoint.chain_id)
+
+        # Safe benchmark recording with error handling
+        try do
+          BenchmarkStore.record_rpc_call(
+            chain_name,
+            state.endpoint.id,
+            "eth_blockNumber",
+            duration,
+            :success
+          )
+        rescue
+          e ->
+            Logger.error("Failed to record benchmark for eth_blockNumber success: #{inspect(e)}")
+        end
+
+        {:reply, {:ok, response["result"]}, state}
+
+      {:error, reason} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+        chain_name = get_chain_name(state.endpoint.chain_id)
+
+        # Safe benchmark recording with error handling
+        try do
+          BenchmarkStore.record_rpc_call(
+            chain_name,
+            state.endpoint.id,
+            "eth_blockNumber",
+            duration,
+            :error
+          )
+        rescue
+          e -> Logger.error("Failed to record benchmark for eth_blockNumber error: #{inspect(e)}")
+        end
+
+        {:reply, {:error, reason}, state}
     end
   end
 
   @impl true
   def handle_call({:get_balance, address, block}, _from, state) do
+    start_time = System.monotonic_time(:millisecond)
+
     request = %{
       jsonrpc: "2.0",
       method: "eth_getBalance",
@@ -481,8 +603,44 @@ defmodule Livechain.RPC.WSConnection do
     }
 
     case send_json_rpc_request(state, request) do
-      {:ok, response} -> {:reply, {:ok, response["result"]}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:ok, response} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+        chain_name = get_chain_name(state.endpoint.chain_id)
+
+        # Safe benchmark recording with error handling
+        try do
+          BenchmarkStore.record_rpc_call(
+            chain_name,
+            state.endpoint.id,
+            "eth_getBalance",
+            duration,
+            :success
+          )
+        rescue
+          e ->
+            Logger.error("Failed to record benchmark for eth_getBalance success: #{inspect(e)}")
+        end
+
+        {:reply, {:ok, response["result"]}, state}
+
+      {:error, reason} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+        chain_name = get_chain_name(state.endpoint.chain_id)
+
+        # Safe benchmark recording with error handling
+        try do
+          BenchmarkStore.record_rpc_call(
+            chain_name,
+            state.endpoint.id,
+            "eth_getBalance",
+            duration,
+            :error
+          )
+        rescue
+          e -> Logger.error("Failed to record benchmark for eth_getBalance error: #{inspect(e)}")
+        end
+
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -495,6 +653,7 @@ defmodule Livechain.RPC.WSConnection do
         try do
           # For now, return mock data since we're using mock connections
           # In production, this would send the actual request via WebSocket
+          # TODO: Replace mocks
           mock_json_rpc_response(request)
         catch
           :exit, _ -> {:error, :connection_lost}
@@ -503,7 +662,7 @@ defmodule Livechain.RPC.WSConnection do
     end
   end
 
-  defp mock_json_rpc_response(%{method: "eth_getLogs"}) do
+  defp mock_ssjson_rpc_response(%{method: "eth_getLogs"}) do
     {:ok,
      %{
        "jsonrpc" => "2.0",

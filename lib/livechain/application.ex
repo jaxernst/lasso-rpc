@@ -13,6 +13,12 @@ defmodule Livechain.Application do
         # Start PubSub for real-time messaging
         {Phoenix.PubSub, name: Livechain.PubSub},
 
+        # Start benchmark store for performance metrics
+        Livechain.Benchmarking.BenchmarkStore,
+
+        # Start benchmark persistence for historical data
+        Livechain.Benchmarking.Persistence,
+
         # Start process registry for centralized process management
         {Livechain.RPC.ProcessRegistry, name: Livechain.RPC.ProcessRegistry},
 
