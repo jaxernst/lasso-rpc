@@ -16,6 +16,7 @@ ChainPulse is a blockchain RPC orchestration platform built with Elixir/Phoenix 
 - **Telemetry**: Performance monitoring and metrics collection
 - **Mock Provider System**: Full development and testing environment
 - **Basic LiveView Dashboard**: Initial orchestration monitoring interface
+- **RPC Provider Benchmarking**: Passive performance tracking and racing metrics
 
 ### 🔄 **In Development: Practical Dashboard & Testing**
 - **Live System Dashboard**: Real-time monitoring, network topology, system health
@@ -26,7 +27,7 @@ ChainPulse is a blockchain RPC orchestration platform built with Elixir/Phoenix 
 ### 🔄 **Planned for Full JSON-RPC Compliance**
 - **JSON-RPC API Endpoints**: Standard HTTP/WebSocket JSON-RPC handlers
 - **Real Provider Connections**: Actual connections to Infura, Alchemy, etc.
-- **Provider Benchmarking**: Latency and reliability measurement system
+- **Advanced Provider Benchmarking**: Database persistence and predictive analytics
 - **Load Balancing**: Request routing based on provider performance
 - **Stream Processing**: Enhanced event curation and multi-chain aggregation
 
@@ -72,7 +73,10 @@ Phoenix Application
 Phoenix Application
 ├── JSON-RPC Controller (HTTP endpoints)
 ├── JSON-RPC WebSocket Handler (subscription management)
-├── Provider Benchmarker (performance measurement)
+├── Provider Benchmarking System (passive performance tracking)
+│   ├── BenchmarkStore (ETS metrics collection)
+│   ├── Persistence (snapshot storage)
+│   └── Dashboard Integration (live visualization)
 ├── Load Balancer (request routing)
 ├── Analytics Engine (data collection & analysis)
 └── [Existing Infrastructure]
@@ -93,11 +97,12 @@ WS /channels/events         # Real-time event streams
 WS /channels/chain/{name}   # Chain-specific events
 ```
 
-### Analytics API (new)
+### Analytics & Benchmarking API (new)
 ```
-GET /api/providers          # Provider status and performance
-GET /api/analytics/requests # Request volume and patterns
-GET /api/analytics/costs    # Cost analysis and optimization
+GET /api/providers            # Provider status and performance
+GET /api/benchmarks/:chain    # Provider benchmarking data for specific chain
+GET /api/analytics/requests   # Request volume and patterns  
+GET /api/analytics/costs      # Cost analysis and optimization
 ```
 
 ## Implementation Dependencies
@@ -160,7 +165,8 @@ GET /api/analytics/costs    # Cost analysis and optimization
 ### For Infrastructure
 - Reduced single-point-of-failure risk
 - Cost optimization through intelligent routing
-- Performance optimization through provider benchmarking
+- Data-driven provider selection through passive benchmarking
+- Real-time performance monitoring and historical analysis
 - Comprehensive monitoring and analytics
 
 ## Existing Strengths to Leverage
