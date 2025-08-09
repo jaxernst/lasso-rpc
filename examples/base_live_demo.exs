@@ -1,7 +1,8 @@
 #!/usr/bin/env elixir
 
+# TODO: The framing of this dmeo is not right, and while this is a useful websocket connection demo, it doesn't even use livechain and could probably be removed or reworked to service a more useful demo.
 # Base Network Live Streaming Demo
-# 
+#
 # This script demonstrates real-time blockchain event streaming from Base network
 # using Livechain's WebSocket connection capabilities.
 #
@@ -31,27 +32,33 @@ defmodule BaseLiveDemo do
     case WebSockex.start_link(@base_mainnet_ws, __MODULE__, %{}) do
       {:ok, pid} ->
         Logger.info("✅ Connected to Base mainnet!")
-        
+
         # Subscribe to new block headers
-        subscribe_to_new_heads(pid)
-        
+        # subscribe_to_new_heads(pid)
+
         # Subscribe to USDC transfer events on Base
         subscribe_to_usdc_transfers(pid)
-        
+
         # Keep the demo running for 60 seconds
         Logger.info("🔄 Streaming events for 60 seconds...")
         Process.sleep(60_000)
-        
+
         Logger.info("🛑 Demo completed!")
         WebSockex.cast(pid, :close)
-        
+
       {:error, reason} ->
         Logger.error("❌ Failed to connect: #{inspect(reason)}")
     end
   end
 
+  @impl WebSockex.Handler
   def handle_connect(_conn, state) do
     Logger.info("🔗 WebSocket connected to Base network")
+    {:ok, state}
+  end
+
+  def handle_frame(frame, state) do
+    IO.inspect(frame)
     {:ok, state}
   end
 
@@ -60,15 +67,15 @@ defmodule BaseLiveDemo do
       {:ok, %{"method" => "eth_subscription", "params" => params}} ->
         handle_subscription_event(params)
         {:ok, state}
-        
+
       {:ok, %{"result" => result, "id" => id}} ->
         Logger.debug("📬 Subscription result for #{id}: #{inspect(result)}")
         {:ok, state}
-        
+
       {:ok, data} ->
         Logger.debug("📨 Other message: #{inspect(data)}")
         {:ok, state}
-        
+
       {:error, reason} ->
         Logger.error("❌ Failed to decode message: #{reason}")
         {:ok, state}
@@ -87,7 +94,7 @@ defmodule BaseLiveDemo do
       "method" => "eth_subscribe",
       "params" => ["newHeads"]
     }
-    
+
     WebSockex.send_frame(pid, {:text, Jason.encode!(subscription)})
     Logger.info("📡 Subscribed to new block headers")
   end
@@ -100,14 +107,14 @@ defmodule BaseLiveDemo do
         "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef" # Transfer event signature
       ]
     }
-    
+
     subscription = %{
-      "jsonrpc" => "2.0", 
+      "jsonrpc" => "2.0",
       "id" => "usdc_transfers",
       "method" => "eth_subscribe",
       "params" => ["logs", usdc_filter]
     }
-    
+
     WebSockex.send_frame(pid, {:text, Jason.encode!(subscription)})
     Logger.info("💰 Subscribed to USDC transfers on Base")
   end
@@ -115,7 +122,7 @@ defmodule BaseLiveDemo do
   defp handle_subscription_event(%{"result" => block_data, "subscription" => _sub_id}) when is_map(block_data) do
     block_number = Map.get(block_data, "number", "unknown")
     block_hash = Map.get(block_data, "hash", "unknown")
-    
+
     if Map.has_key?(block_data, "number") do
       # This is a new block
       block_num = String.to_integer(String.slice(block_number, 2..-1), 16)
