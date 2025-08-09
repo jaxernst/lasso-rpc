@@ -265,7 +265,7 @@ defmodule LivechainWeb.OrchestrationLive do
   end
 
   @impl true
-  def handle_info(message, socket) do
+  def handle_info(_message, socket) do
     # Catch-all handler for unexpected messages
     {:noreply, socket}
   end

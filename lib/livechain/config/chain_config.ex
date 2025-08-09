@@ -8,16 +8,32 @@ defmodule Livechain.Config.ChainConfig do
 
   require Logger
 
+  @type t :: %__MODULE__{
+    chain_id: non_neg_integer(),
+    name: String.t(),
+    block_time: non_neg_integer(),
+    providers: [Provider.t()],
+    connection: Connection.t(),
+    aggregation: Aggregation.t(),
+    failover: Failover.t()
+  }
+
   defstruct [
     :chain_id,
     :name,
     :block_time,
     :providers,
     :connection,
-    :aggregation
+    :aggregation,
+    :failover
   ]
 
   defmodule Config do
+    @type t :: %__MODULE__{
+      chains: %{String.t() => ChainConfig.t()},
+      global: Global.t()
+    }
+
     defstruct [
       :chains,
       :global
@@ -25,6 +41,19 @@ defmodule Livechain.Config.ChainConfig do
   end
 
   defmodule Provider do
+    @type t :: %__MODULE__{
+      id: String.t(),
+      name: String.t(),
+      priority: non_neg_integer(),
+      type: String.t(), # "paid" | "public" | "dedicated"
+      url: String.t(),
+      ws_url: String.t(),
+      api_key_required: boolean(),
+      rate_limit: non_neg_integer(),
+      latency_target: non_neg_integer(),
+      reliability: float()
+    }
+
     defstruct [
       :id,
       :name,
@@ -40,19 +69,44 @@ defmodule Livechain.Config.ChainConfig do
   end
 
   defmodule Connection do
+    @type t :: %__MODULE__{
+      heartbeat_interval: non_neg_integer(), # milliseconds
+      reconnect_interval: non_neg_integer(),  # milliseconds
+      max_reconnect_attempts: non_neg_integer()
+    }
+
     defstruct [
       :heartbeat_interval,
       :reconnect_interval,
-      :max_reconnect_attempts,
-      :subscription_topics
+      :max_reconnect_attempts
     ]
   end
 
   defmodule Aggregation do
+    @type t :: %__MODULE__{
+      deduplication_window: non_neg_integer(), # milliseconds
+      min_confirmations: non_neg_integer(),     # min providers that must confirm
+      max_providers: non_neg_integer()          # max concurrent providers to use
+    }
+
     defstruct [
       :deduplication_window,
       :min_confirmations,
       :max_providers
+    ]
+  end
+
+  defmodule Failover do
+    @type t :: %__MODULE__{
+      max_backfill_blocks: non_neg_integer(),    # max blocks to backfill on failover  
+      backfill_timeout: non_neg_integer(),       # max time to spend backfilling (ms)
+      enabled: boolean()                         # enable/disable backfill feature
+    }
+
+    defstruct [
+      max_backfill_blocks: 100,
+      backfill_timeout: 30_000,
+      enabled: true
     ]
   end
 
@@ -207,7 +261,8 @@ defmodule Livechain.Config.ChainConfig do
       block_time: chain_data["block_time"],
       providers: parse_providers(chain_data["providers"]),
       connection: parse_connection(chain_data["connection"]),
-      aggregation: parse_aggregation(chain_data["aggregation"])
+      aggregation: parse_aggregation(chain_data["aggregation"]),
+      failover: parse_failover(chain_data["failover"])
     }
   end
 
@@ -232,8 +287,7 @@ defmodule Livechain.Config.ChainConfig do
     %Connection{
       heartbeat_interval: connection_data["heartbeat_interval"],
       reconnect_interval: connection_data["reconnect_interval"],
-      max_reconnect_attempts: connection_data["max_reconnect_attempts"],
-      subscription_topics: connection_data["subscription_topics"]
+      max_reconnect_attempts: connection_data["max_reconnect_attempts"]
     }
   end
 
@@ -242,6 +296,19 @@ defmodule Livechain.Config.ChainConfig do
       deduplication_window: aggregation_data["deduplication_window"],
       min_confirmations: aggregation_data["min_confirmations"],
       max_providers: aggregation_data["max_providers"]
+    }
+  end
+
+  defp parse_failover(nil) do
+    # Use default values if no failover config provided
+    %__MODULE__.Failover{}
+  end
+
+  defp parse_failover(failover_data) do
+    %__MODULE__.Failover{
+      max_backfill_blocks: Map.get(failover_data, "max_backfill_blocks", 100),
+      backfill_timeout: Map.get(failover_data, "backfill_timeout", 30_000),
+      enabled: Map.get(failover_data, "enabled", true)
     }
   end
 

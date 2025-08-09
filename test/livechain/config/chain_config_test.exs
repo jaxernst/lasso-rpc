@@ -120,8 +120,7 @@ defmodule Livechain.Config.ChainConfigTest do
         connection: %ChainConfig.Connection{
           heartbeat_interval: 15000,
           reconnect_interval: 2000,
-          max_reconnect_attempts: 10,
-          subscription_topics: ["newHeads"]
+          max_reconnect_attempts: 10
         },
         aggregation: %ChainConfig.Aggregation{
           deduplication_window: 500,

@@ -1,6 +1,6 @@
 defmodule LivechainWeb.RPCController do
   @moduledoc """
-  JSON-RPC controller providing Viem-compatible endpoints for blockchain interactions.
+  Ethereum JSON-RPC controller providing Viem-compatible endpoints for blockchain interactions.
 
   This controller implements the Ethereum JSON-RPC specification to provide
   drop-in compatibility with Viem, Wagmi, and other Ethereum client libraries.
@@ -20,12 +20,12 @@ defmodule LivechainWeb.RPCController do
   alias Livechain.RPC.SubscriptionManager
 
   @doc """
-  Handle Ethereum JSON-RPC requests.
+  Handle JSON-RPC requests for any supported chain.
   """
-  def ethereum(conn, _params) do
-    case read_json_body(conn) do
-      {:ok, params} ->
-        handle_json_rpc(conn, params, "ethereum")
+  def rpc(conn, %{"chain_id" => chain_id}) do
+    case resolve_chain_name(chain_id) do
+      {:ok, chain_name} ->
+        handle_chain_rpc(conn, chain_name)
 
       {:error, reason} ->
         conn
@@ -33,8 +33,8 @@ defmodule LivechainWeb.RPCController do
         |> json(%{
           jsonrpc: "2.0",
           error: %{
-            code: -32700,
-            message: "Parse error: #{reason}"
+            code: -32602,
+            message: "Unsupported chain: #{reason}"
           },
           id: nil
         })
@@ -42,56 +42,29 @@ defmodule LivechainWeb.RPCController do
   end
 
   @doc """
-  Handle Arbitrum JSON-RPC requests.
+  Handle Ethereum JSON-RPC requests (backward compatibility).
   """
-  def arbitrum(conn, _params) do
-    case read_json_body(conn) do
-      {:ok, params} ->
-        handle_json_rpc(conn, params, "arbitrum")
-
-      {:error, reason} ->
-        conn
-        |> put_status(:bad_request)
-        |> json(%{
-          jsonrpc: "2.0",
-          error: %{
-            code: -32700,
-            message: "Parse error: #{reason}"
-          },
-          id: nil
-        })
-    end
-  end
+  def ethereum(conn, _params), do: handle_chain_rpc(conn, "ethereum")
 
   @doc """
-  Handle Polygon JSON-RPC requests.
+  Handle Arbitrum JSON-RPC requests (backward compatibility).
   """
-  def polygon(conn, _params) do
-    case read_json_body(conn) do
-      {:ok, params} ->
-        handle_json_rpc(conn, params, "polygon")
-
-      {:error, reason} ->
-        conn
-        |> put_status(:bad_request)
-        |> json(%{
-          jsonrpc: "2.0",
-          error: %{
-            code: -32700,
-            message: "Parse error: #{reason}"
-          },
-          id: nil
-        })
-    end
-  end
+  def arbitrum(conn, _params), do: handle_chain_rpc(conn, "arbitrum")
 
   @doc """
-  Handle BSC JSON-RPC requests.
+  Handle Polygon JSON-RPC requests (backward compatibility).
   """
-  def bsc(conn, _params) do
+  def polygon(conn, _params), do: handle_chain_rpc(conn, "polygon")
+
+  @doc """
+  Handle BSC JSON-RPC requests (backward compatibility).
+  """
+  def bsc(conn, _params), do: handle_chain_rpc(conn, "bsc")
+
+  defp handle_chain_rpc(conn, chain_name) do
     case read_json_body(conn) do
       {:ok, params} ->
-        handle_json_rpc(conn, params, "bsc")
+        handle_json_rpc(conn, params, chain_name)
 
       {:error, reason} ->
         conn
@@ -255,21 +228,69 @@ defmodule LivechainWeb.RPCController do
     {:error, -32600, "Invalid Request"}
   end
 
+  defp resolve_chain_name(chain_identifier) do
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        cond do
+          is_binary(chain_identifier) and Map.has_key?(config.chains, chain_identifier) ->
+            {:ok, chain_identifier}
+
+          is_integer(chain_identifier) ->
+            case find_chain_by_id(config, chain_identifier) do
+              {:ok, chain_name} -> {:ok, chain_name}
+              :not_found -> {:error, "Chain ID #{chain_identifier} not configured"}
+            end
+
+          is_binary(chain_identifier) ->
+            case Integer.parse(chain_identifier) do
+              {chain_id, ""} ->
+                case find_chain_by_id(config, chain_id) do
+                  {:ok, chain_name} -> {:ok, chain_name}
+                  :not_found -> {:error, "Chain ID #{chain_id} not configured"}
+                end
+
+              _ ->
+                {:error, "Invalid chain identifier: #{chain_identifier}"}
+            end
+
+          true ->
+            {:error, "Invalid chain identifier format"}
+        end
+
+      {:error, _reason} ->
+        {:error, "Failed to load chain configuration"}
+    end
+  end
+
+  defp find_chain_by_id(config, chain_id) do
+    case Enum.find(config.chains, fn {_name, chain_config} ->
+           chain_config.chain_id == chain_id
+         end) do
+      {chain_name, _config} -> {:ok, chain_name}
+      nil -> :not_found
+    end
+  end
+
   defp get_chain_id(chain_name) do
     case Livechain.Config.ChainConfig.load_config() do
       {:ok, config} ->
-        case Map.get(config.chains, chain_name) do
-          %{chain_id: chain_id} when is_integer(chain_id) ->
-            {:ok, "0x" <> Integer.to_string(chain_id, 16)}
+        case Livechain.Config.ChainConfig.get_chain_config(config, chain_name) do
+          {:ok, chain_config} ->
+            chain_id = chain_config.chain_id
 
-          %{chain_id: chain_id} when is_binary(chain_id) ->
-            {:ok, chain_id}
+            cond do
+              is_integer(chain_id) ->
+                {:ok, "0x" <> Integer.to_string(chain_id, 16)}
 
-          nil ->
+              is_binary(chain_id) ->
+                {:ok, chain_id}
+
+              true ->
+                {:error, "Invalid chain ID format for: #{chain_name}"}
+            end
+
+          {:error, :chain_not_found} ->
             {:error, "Chain not configured: #{chain_name}"}
-
-          _ ->
-            {:error, "Invalid chain configuration for: #{chain_name}"}
         end
 
       {:error, _reason} ->

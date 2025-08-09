@@ -1,7 +1,7 @@
 defmodule LivechainWeb.NetworkTopology do
   @moduledoc """
-  Network topology visualization component for displaying blockchain connections
-  in an interactive spiral grid layout.
+  Network topology visualization component for displaying blockchain rpc connections
+  in an interactive grid layout.
   """
 
   use Phoenix.Component
@@ -39,7 +39,7 @@ defmodule LivechainWeb.NetworkTopology do
 
   attr(:class, :string, default: "", doc: "additional CSS classes")
 
-  def network_topology(assigns) do
+  def nodes_display(assigns) do
     assigns = assign(assigns, :chains, group_connections_by_chain(assigns.connections))
 
     ~H"""
@@ -50,87 +50,74 @@ defmodule LivechainWeb.NetworkTopology do
       #   Chains found: <%= map_size(@chains) %><br /> Chain groups: <%= inspect(Map.keys(@chains)) %>
       # </div>
       -->
-      <%= if map_size(@chains) == 0 do %>
-        <!-- No connections fallback -->
-        <div class="flex h-full items-center justify-center">
-          <div class="text-center">
-            <div class="mb-4 text-6xl text-purple-400">🔗</div>
-            <h2 class="mb-2 text-xl font-semibold text-white">No Blockchain Connections</h2>
-            <p class="text-purple-200">
-              Start some WebSocket connections to see the network topology
-            </p>
-            <button
-              phx-click={@on_test_connection}
-              class="mt-4 rounded-lg bg-purple-600 px-4 py-2 text-white transition-all duration-200 hover:bg-purple-500"
-            >
-              Test Connection
-            </button>
+
+        <!-- Interactive nodes with spiral grid layout -->
+      <%= for {{chain_name, chain_connections}, index} <- @chains |> Enum.with_index() do %>
+        <% {x, y} = calculate_spiral_position(index, "50%", "50%") %>
+        <% radius = 40 + min(length(chain_connections) * 3, 20) %>
+        <!-- Chain node -->
+        <div
+          class={"#{if @selected_chain == chain_name, do: "animate-pulse"} border-white/20 absolute -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-4 shadow-xl transition-all duration-300 hover:scale-105"}
+          style={"left: #{x}; top: #{y}; width: #{radius * 2}px; height: #{radius * 2}px; background-color: #{chain_color(chain_name)};"}
+          phx-click={@on_chain_select}
+          phx-value-chain={chain_name}
+        >
+          <div class="flex h-full flex-col items-center justify-center text-white">
+            <div class="text-sm font-bold"><%= String.upcase(chain_name) %></div>
+            <div class="text-xs"><%= length(chain_connections) %> connections</div>
           </div>
         </div>
-      <% else %>
-        <!-- Interactive nodes with spiral grid layout -->
-        <%= for {{chain_name, chain_connections}, index} <- @chains |> Enum.with_index() do %>
-          <% {x, y} = calculate_spiral_position(index, "50%", "50%") %>
-          <% radius = 40 + min(length(chain_connections) * 3, 20) %>
-          <!-- Chain node -->
-          <div
-            class={"#{if @selected_chain == chain_name, do: "animate-pulse"} border-white/20 absolute -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-4 shadow-xl transition-all duration-300 hover:scale-105"}
-            style={"left: #{x}; top: #{y}; width: #{radius * 2}px; height: #{radius * 2}px; background-color: #{chain_color(chain_name)};"}
-            phx-click={@on_chain_select}
-            phx-value-chain={chain_name}
-          >
-            <div class="flex h-full flex-col items-center justify-center text-white">
-              <div class="text-sm font-bold"><%= String.upcase(chain_name) %></div>
-              <div class="text-xs"><%= length(chain_connections) %> connections</div>
-            </div>
-          </div>
-          <!-- Provider nodes positioned around the chain node -->
-          <%= for {connection, conn_index} <- Enum.with_index(chain_connections) do %>
-            <% {provider_x, provider_y} =
-              calculate_satellite_position(x, y, radius + 35, conn_index, length(chain_connections)) %>
+        <!-- Provider nodes positioned around the chain node -->
+        <%= for {connection, conn_index} <- Enum.with_index(chain_connections) do %>
+          <% {provider_x, provider_y} =
+            calculate_satellite_position(x, y, radius + 35, conn_index, length(chain_connections)) %>
 
-            <div
-              class={"#{if @selected_provider == connection.id, do: "animate-bounce"} border-white/30 absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-2 shadow-lg transition-all duration-300 hover:scale-110"}
-              style={"left: #{provider_x}; top: #{provider_y}; background-color: #{provider_status_color(connection.status)};"}
-              phx-click={@on_provider_select}
-              phx-value-provider={connection.id}
-              title={connection.name}
-            >
-              <!-- Reconnect attempts indicator -->
-              <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
-                <div class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500">
-                  <span class="text-xs font-bold text-white" style="font-size: 8px;">
-                    <%= connection.reconnect_attempts %>
-                  </span>
-                </div>
-              <% end %>
-            </div>
-            <!-- Provider label -->
-            <div
-              class="text-white/80 pointer-events-none absolute -translate-x-1/2 transform text-xs font-medium"
-              style={"left: #{provider_x}; top: calc(#{provider_y} + 20px); font-size: 10px;"}
-            >
-              <%= String.slice(connection.name, 0..8) %>
-            </div>
-          <% end %>
+          <div
+            class={"#{if @selected_provider == connection.id, do: "animate-bounce"} border-white/30 absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-2 shadow-lg transition-all duration-300 hover:scale-110"}
+            style={"left: #{provider_x}; top: #{provider_y}; background-color: #{provider_status_color(connection.status)};"}
+            phx-click={@on_provider_select}
+            phx-value-provider={connection.id}
+            title={connection.name}
+          >
+            <!-- Reconnect attempts indicator -->
+            <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
+              <div class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500">
+                <span class="text-xs font-bold text-white" style="font-size: 8px;">
+                  <%= connection.reconnect_attempts %>
+                </span>
+              </div>
+            <% end %>
+          </div>
+          <!-- Provider label -->
+          <div
+            class="text-white/80 pointer-events-none absolute -translate-x-1/2 transform text-xs font-medium"
+            style={"left: #{provider_x}; top: calc(#{provider_y} + 20px); font-size: 10px;"}
+          >
+            <%= String.slice(connection.name, 0..8) %>
+          </div>
         <% end %>
       <% end %>
-      <!-- Legend -->
-      <div class="bg-purple-900/90 absolute right-6 bottom-6 rounded-lg border border-purple-700 p-4 shadow-xl backdrop-blur-sm">
-        <h3 class="mb-2 text-sm font-semibold text-white">Network Status</h3>
-        <div class="space-y-1 text-xs text-white">
-          <div class="flex items-center space-x-2">
-            <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
-            <span>Connected</span>
-          </div>
-          <div class="flex items-center space-x-2">
-            <div class="h-3 w-3 rounded-full bg-yellow-500"></div>
-            <span>Reconnecting</span>
-          </div>
-          <div class="flex items-center space-x-2">
-            <div class="h-3 w-3 rounded-full bg-red-500"></div>
-            <span>Disconnected</span>
-          </div>
+    </div>
+    """
+  end
+
+  def legend(assigns) do
+    ~H"""
+    <!-- Legend -->
+    <div class="bg-purple-900/90 absolute right-6 bottom-6 rounded-lg border border-purple-700 p-4 shadow-xl backdrop-blur-sm">
+      <h3 class="mb-2 text-sm font-semibold text-white">Network Status</h3>
+      <div class="space-y-1 text-xs text-white">
+        <div class="flex items-center space-x-2">
+          <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
+          <span>Connected</span>
+        </div>
+        <div class="flex items-center space-x-2">
+          <div class="h-3 w-3 rounded-full bg-yellow-500"></div>
+          <span>Reconnecting</span>
+        </div>
+        <div class="flex items-center space-x-2">
+          <div class="h-3 w-3 rounded-full bg-red-500"></div>
+          <span>Disconnected</span>
         </div>
       </div>
     </div>
