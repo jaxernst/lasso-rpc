@@ -2,6 +2,7 @@ defmodule LivechainWeb.RPCSocket do
   @moduledoc """
   WebSocket handler for standard Ethereum JSON-RPC.
 
+  # TODO: 'Viem compatible' is the wrong way to describe this. 'Viem compatible' just means that it follows the ethereum JSON-RPC spec.
   Provides Viem-compatible WebSocket endpoints at:
   - /rpc/ethereum
   - /rpc/arbitrum
@@ -64,6 +65,7 @@ defmodule LivechainWeb.RPCSocket do
       {:ok, config} ->
         Map.has_key?(config.chains, chain)
 
+      # TODO: Should not use fallbacks here (config is the source of truth).
       {:error, _reason} ->
         # Fallback to basic validation if config loading fails
         chain in ["ethereum", "arbitrum", "polygon", "bsc"]

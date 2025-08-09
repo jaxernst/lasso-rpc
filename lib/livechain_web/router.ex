@@ -56,6 +56,7 @@ defmodule LivechainWeb.Router do
     post("/:chain_id", RPCController, :rpc)
 
     # Backward compatibility endpoints
+    # TODO: Remove these endpoints and remove handlers - only need the generic one.
     post("/ethereum", RPCController, :ethereum)
     post("/arbitrum", RPCController, :arbitrum)
     post("/polygon", RPCController, :polygon)
