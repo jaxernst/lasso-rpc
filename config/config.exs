@@ -12,6 +12,12 @@ config :livechain, LivechainWeb.Endpoint,
   live_view: [signing_salt: "QxjVyFyh"],
   secret_key_base: "YourSecretKeyBaseHere" <> String.duplicate("a", 32)
 
+# Default provider selection strategy
+config :livechain, :provider_selection_strategy, :leaderboard
+
+# Default HTTP client adapter
+config :livechain, :http_client, Livechain.RPC.HttpClient.Finch
+
 # Configure JSON library
 config :phoenix, :json_library, Jason
 

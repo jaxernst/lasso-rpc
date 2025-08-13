@@ -105,8 +105,12 @@ defmodule Livechain.RPC.ChainManager do
   Gets logs for a specific chain with filter.
   """
   def get_logs(chain_name, filter) do
-    case ChainSupervisor.get_logs(chain_name, filter) do
-      {:ok, logs} -> {:ok, logs}
+    # Fallback to first available provider
+    with {:ok, [provider_id | _]} <- get_available_providers(chain_name),
+         {:ok, result} <- forward_rpc_request(chain_name, provider_id, "eth_getLogs", [filter]) do
+      {:ok, result}
+    else
+      {:ok, []} -> {:error, :no_providers_available}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -115,8 +119,15 @@ defmodule Livechain.RPC.ChainManager do
   Gets block by number for a specific chain.
   """
   def get_block_by_number(chain_name, block_number, include_transactions) do
-    case ChainSupervisor.get_block_by_number(chain_name, block_number, include_transactions) do
-      {:ok, block} -> {:ok, block}
+    with {:ok, [provider_id | _]} <- get_available_providers(chain_name),
+         {:ok, result} <-
+           forward_rpc_request(chain_name, provider_id, "eth_getBlockByNumber", [
+             block_number,
+             include_transactions
+           ]) do
+      {:ok, result}
+    else
+      {:ok, []} -> {:error, :no_providers_available}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -125,8 +136,11 @@ defmodule Livechain.RPC.ChainManager do
   Gets the latest block number for a specific chain.
   """
   def get_block_number(chain_name) do
-    case ChainSupervisor.get_block_number(chain_name) do
-      {:ok, block_number} -> {:ok, block_number}
+    with {:ok, [provider_id | _]} <- get_available_providers(chain_name),
+         {:ok, result} <- forward_rpc_request(chain_name, provider_id, "eth_blockNumber", []) do
+      {:ok, result}
+    else
+      {:ok, []} -> {:error, :no_providers_available}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -135,8 +149,12 @@ defmodule Livechain.RPC.ChainManager do
   Gets balance for an address on a specific chain.
   """
   def get_balance(chain_name, address, block) do
-    case ChainSupervisor.get_balance(chain_name, address, block) do
-      {:ok, balance} -> {:ok, balance}
+    with {:ok, [provider_id | _]} <- get_available_providers(chain_name),
+         {:ok, result} <-
+           forward_rpc_request(chain_name, provider_id, "eth_getBalance", [address, block]) do
+      {:ok, result}
+    else
+      {:ok, []} -> {:error, :no_providers_available}
       {:error, reason} -> {:error, reason}
     end
   end

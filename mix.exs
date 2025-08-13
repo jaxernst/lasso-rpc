@@ -40,7 +40,8 @@ defmodule Livechain.MixProject do
       {:tailwind, "~> 0.2.0", runtime: Mix.env() == :dev},
       {:tailwind_formatter, "~> 0.4.2", only: :dev},
       {:telemetry_metrics, "~> 0.6"},
-      {:telemetry_poller, "~> 1.0"}
+      {:telemetry_poller, "~> 1.0"},
+      {:mox, "~> 1.0", only: :test}
     ]
   end
 end

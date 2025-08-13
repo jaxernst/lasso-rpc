@@ -9,14 +9,14 @@ defmodule Livechain.Config.ChainConfig do
   require Logger
 
   @type t :: %__MODULE__{
-    chain_id: non_neg_integer(),
-    name: String.t(),
-    block_time: non_neg_integer(),
-    providers: [Provider.t()],
-    connection: Connection.t(),
-    aggregation: Aggregation.t(),
-    failover: Failover.t()
-  }
+          chain_id: non_neg_integer(),
+          name: String.t(),
+          block_time: non_neg_integer(),
+          providers: [Provider.t()],
+          connection: Connection.t(),
+          aggregation: Aggregation.t(),
+          failover: Failover.t()
+        }
 
   defstruct [
     :chain_id,
@@ -30,9 +30,9 @@ defmodule Livechain.Config.ChainConfig do
 
   defmodule Config do
     @type t :: %__MODULE__{
-      chains: %{String.t() => ChainConfig.t()},
-      global: Global.t()
-    }
+            chains: %{String.t() => ChainConfig.t()},
+            global: Global.t()
+          }
 
     defstruct [
       :chains,
@@ -42,17 +42,19 @@ defmodule Livechain.Config.ChainConfig do
 
   defmodule Provider do
     @type t :: %__MODULE__{
-      id: String.t(),
-      name: String.t(),
-      priority: non_neg_integer(),
-      type: String.t(), # "paid" | "public" | "dedicated"
-      url: String.t(),
-      ws_url: String.t(),
-      api_key_required: boolean(),
-      rate_limit: non_neg_integer(),
-      latency_target: non_neg_integer(),
-      reliability: float()
-    }
+            id: String.t(),
+            name: String.t(),
+            priority: non_neg_integer(),
+            # "paid" | "public" | "dedicated"
+            type: String.t(),
+            url: String.t(),
+            ws_url: String.t(),
+            api_key_required: boolean(),
+            rate_limit: non_neg_integer(),
+            latency_target: non_neg_integer(),
+            reliability: float(),
+            region: String.t() | nil
+          }
 
     defstruct [
       :id,
@@ -64,16 +66,19 @@ defmodule Livechain.Config.ChainConfig do
       :api_key_required,
       :rate_limit,
       :latency_target,
-      :reliability
+      :reliability,
+      :region
     ]
   end
 
   defmodule Connection do
     @type t :: %__MODULE__{
-      heartbeat_interval: non_neg_integer(), # milliseconds
-      reconnect_interval: non_neg_integer(),  # milliseconds
-      max_reconnect_attempts: non_neg_integer()
-    }
+            # milliseconds
+            heartbeat_interval: non_neg_integer(),
+            # milliseconds
+            reconnect_interval: non_neg_integer(),
+            max_reconnect_attempts: non_neg_integer()
+          }
 
     defstruct [
       :heartbeat_interval,
@@ -84,10 +89,13 @@ defmodule Livechain.Config.ChainConfig do
 
   defmodule Aggregation do
     @type t :: %__MODULE__{
-      deduplication_window: non_neg_integer(), # milliseconds
-      min_confirmations: non_neg_integer(),     # min providers that must confirm
-      max_providers: non_neg_integer()          # max concurrent providers to use
-    }
+            # milliseconds
+            deduplication_window: non_neg_integer(),
+            # min providers that must confirm
+            min_confirmations: non_neg_integer(),
+            # max concurrent providers to use
+            max_providers: non_neg_integer()
+          }
 
     defstruct [
       :deduplication_window,
@@ -98,16 +106,17 @@ defmodule Livechain.Config.ChainConfig do
 
   defmodule Failover do
     @type t :: %__MODULE__{
-      max_backfill_blocks: non_neg_integer(),    # max blocks to backfill on failover  
-      backfill_timeout: non_neg_integer(),       # max time to spend backfilling (ms)
-      enabled: boolean()                         # enable/disable backfill feature
-    }
+            # max blocks to backfill on failover
+            max_backfill_blocks: non_neg_integer(),
+            # max time to spend backfilling (ms)
+            backfill_timeout: non_neg_integer(),
+            # enable/disable backfill feature
+            enabled: boolean()
+          }
 
-    defstruct [
-      max_backfill_blocks: 100,
-      backfill_timeout: 30_000,
-      enabled: true
-    ]
+    defstruct max_backfill_blocks: 100,
+              backfill_timeout: 30_000,
+              enabled: true
   end
 
   defmodule Global do
@@ -278,7 +287,8 @@ defmodule Livechain.Config.ChainConfig do
         api_key_required: provider_data["api_key_required"],
         rate_limit: provider_data["rate_limit"],
         latency_target: provider_data["latency_target"],
-        reliability: provider_data["reliability"]
+        reliability: provider_data["reliability"],
+        region: provider_data["region"]
       }
     end)
   end
