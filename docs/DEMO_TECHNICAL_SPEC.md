@@ -1,305 +1,171 @@
-# ChainPulse Demo: Technical Feature Specification
+# ChainPulse Demo: Technical Feature Specification (Updated)
 
-## Core Technical Features for Demonstration
+## Demo Goals
 
-### **1. Real-Time Provider Racing System**
-
-#### **MessageAggregator Racing Algorithm**
-
-- **File**: `lib/livechain/rpc/message_aggregator.ex:166-195`
-- **Functionality**: Message deduplication with microsecond-precision racing detection
-- **Demo Requirements**:
-  - Multiple real providers (Infura, Alchemy) connected to Ethereum mainnet
-  - Live block event racing with accurate timing measurements
-  - Racing margins displayed in milliseconds
-  - Win/loss tracking per provider per event type
-
-#### **Technical Implementation Details**:
-
-```elixir
-# Racing detection logic:
-case Map.get(state.message_cache, message_key) do
-  nil ->
-    # First provider wins - record victory with timestamp
-    BenchmarkStore.record_event_race_win(chain_name, provider_id, event_type, received_at)
-  {_cached_msg, cached_time, cached_provider} ->
-    # Calculate precise timing margin for losing provider
-    margin_ms = received_at - cached_time
-    BenchmarkStore.record_event_race_loss(chain_name, provider_id, event_type, received_at, margin_ms)
-end
-```
-
-#### **Demo Data Requirements**:
-
-- Live Ethereum mainnet new block events (`newHeads`)
-- Multiple provider connections racing same events
-- Timing precision to millisecond accuracy
-- Historical race data accumulation
+- Showcase a pragmatic, latency-based RPC orchestration MVP with strong reliability and observability.
+- Demonstrate provider health, routing decisions, percentiles, and event racing (WS) clearly.
+- Provide interactive controls to run tests, simulate failures, and observe system responses in real time.
 
 ---
 
-### **2. Circuit Breaker Fault Tolerance**
+## Tabs and Features
 
-#### **State Machine Implementation**
+### 1) Live Dashboard (Real-time Monitoring)
 
-- **File**: `lib/livechain/rpc/circuit_breaker.ex:83-99`
-- **Functionality**: Three-state circuit breaker (closed → open → half-open)
-- **Demo Requirements**:
-  - Simulated provider failures
-  - Automatic state transitions
-  - Recovery testing with timeout logic
-  - Failover to healthy providers
+- KPIs (global and per-chain)
 
-#### **Technical State Transitions**:
+  - Requests/min, error rate, p50/p90/p99 (overall), healthy providers, open breakers, providers cooling, last failover time
+  - Sources:
+    - `Livechain.RPC.ChainManager.get_status/0`
+    - `Livechain.RPC.ProviderPool.get_status(chain)`
+    - `Livechain.Benchmarking.BenchmarkStore.get_realtime_stats(chain)`
+    - New PubSub: `"routing:decisions"`
 
-```elixir
-case state.state do
-  :closed -> execute_call(fun, state)           # Normal operation
-  :open ->
-    if should_attempt_recovery?(state) do
-      new_state = %{state | state: :half_open}  # Try recovery
-      execute_call(fun, new_state)
-    else
-      {:reply, {:error, :circuit_open}, state}  # Reject requests
-    end
-  :half_open -> execute_call(fun, state)        # Test recovery
-end
-```
+- Provider Health Grid (per-chain)
 
-#### **Demo Scenarios**:
+  - Columns: provider, status (healthy/unhealthy/cooling), circuit state (open/half-open/closed), avg latency (EMA), error rate (EMA), p90 (if available), cooldown remaining, last error
+  - Sources:
+    - `ProviderPool.get_status(chain)`
+    - `CircuitBreaker.get_state(provider_id)`
+    - `BenchmarkStore.get_rpc_method_performance(chain, method)` (aggregate p90 across common methods)
 
-- Kill Infura connection → circuit opens → traffic routes to Alchemy
-- Recovery after timeout → half-open state → successful calls close circuit
-- Multiple provider failures → cascading failover logic
+- RPC Performance by Method (with percentiles)
 
----
+  - Methods table: method, p50, p90, p99, success rate, recent call count
+  - On select: provider comparison panel ranked by p90 (or avg), highlight currently selected-by-latency provider
+  - Source:
+    - `BenchmarkStore.get_rpc_method_performance(chain, method)` (use percentiles if available; fallback to avg)
 
-### **3. Provider Performance Scoring Algorithm**
+- Event Racing Leaderboard (WS only)
 
-#### **Mathematical Scoring Function**
+  - Per event type (e.g., `newHeads`): provider win-rate, avg loss margin
+  - Note clearly: WS racing is not used for HTTP provider selection
+  - Source:
+    - `BenchmarkStore.get_provider_leaderboard(chain)`
 
-- **File**: `lib/livechain/benchmarking/benchmark_store.ex:656-663`
-- **Functionality**: Multi-factor performance scoring with confidence weighting
-- **Demo Requirements**:
-  - Real performance data from multiple providers
-  - Live score calculations
-  - Ranking stability over time
-  - Score-based routing decisions
+- Routing Decisions Stream (last 50)
 
-#### **Algorithm Implementation**:
+  - Entry: ts, chain, method, strategy, chosen provider, duration_ms, result, failover_count
+  - Source: new PubSub `"routing:decisions"` emitted by `RPCController` after each request
 
-```elixir
-defp calculate_provider_score(win_rate, avg_margin_ms, total_races) do
-  confidence_factor = :math.log10(max(total_races, 1))  # More races = higher confidence
-  margin_penalty = if avg_margin_ms > 0, do: 1 / (1 + avg_margin_ms / 100), else: 1.0
-  win_rate * margin_penalty * confidence_factor
-end
-```
+- All-Chains Topology + Activity
+  - Use `LivechainWeb.NetworkTopology.nodes_display/1` to show chains with active WS connections
+  - Overlay recent HTTP activity (last 60s) as heat halos on provider nodes; badges for error-rate threshold breaches or breaker open
+  - Sources:
+    - `Livechain.RPC.WSSupervisor.list_connections/0`
+    - Aggregated recent decisions from `"routing:decisions"`
 
-#### **Demo Metrics**:
+### 2) Live Test (Controls)
 
-- Provider win rates (percentage of races won)
-- Average timing margins when losing
-- Confidence factors based on sample size
-- Real-time score updates and rankings
+- Quick Call Runner
 
----
+  - Inputs: chains (multi-select), method (eth_blockNumber, eth_getBalance, eth_getLogs, eth_call), strategy override (latency/cheapest/priority/round_robin), iterations, concurrency, timeout
+  - Output: summary (success rate, p50/p90/p99, error breakdown), provider hit counts, mini latency timeline
+  - Impl: `Task.Supervisor.async_stream_nolink` with HTTP client behaviour stub/real client; stream results to LiveView
 
-### **4. ETS-Based High-Performance Data Storage**
+- Failure Drills
 
-#### **Memory Management System**
+  - Buttons: open/close circuit (per provider), mark provider unhealthy (simulate), trigger cooldown (simulate 429)
+  - Actions:
+    - `Livechain.RPC.CircuitBreaker.open/close(provider_id)`
+    - `Livechain.RPC.ProviderPool.trigger_failover(chain, provider_id)`
+    - Helper/API to set cooldown in `ProviderPool`
 
-- **File**: `lib/livechain/benchmarking/benchmark_store.ex:673-700`
-- **Functionality**: Bounded ETS tables with automatic cleanup
-- **Demo Requirements**:
-  - High-frequency metric ingestion (multiple events per second)
-  - Memory bounds enforcement
-  - Efficient data retrieval for dashboard
-  - Cleanup operations without service interruption
+- Strategy Toggles
 
-#### **Technical Implementation**:
+  - App default strategy override; per-request override in Quick Call
+  - Action: `Application.put_env(:livechain, :provider_selection_strategy, ...)`
 
-```elixir
-# Per-chain ETS tables:
-racing_table = :"racing_metrics_#{chain_name}"    # Detailed race entries
-rpc_table = :"rpc_metrics_#{chain_name}"         # RPC call performance
-score_table = :"provider_scores_#{chain_name}"   # Aggregated scores
+- Maintenance/Health
+  - Buttons: run active health checks, reset metrics (clear recent windows), re-evaluate provider status
+  - Actions:
+    - Cast to `ProviderPool` to perform health probes
+    - `BenchmarkStore.cleanup_old_entries(chain)`
+    - Helper to clear cooldowns and close breakers
 
-# Memory management:
-if current_size >= @max_entries_per_chain do
-  # Remove 10% oldest entries to make room
-  entries_to_remove = div(@max_entries_per_chain, 10)
-  cleanup_oldest_entries(table_name, entries_to_remove)
-end
-```
+### 3) System Health (BEAM Observability)
 
-#### **Demo Data Flows**:
+- VM Overview
 
-- Racing metrics: timestamp, provider_id, event_type, result, margin_ms
-- RPC metrics: timestamp, provider_id, method, duration_ms, success/failure
-- Score aggregation: wins, losses, average margins, confidence factors
+  - CPU schedulers utilization, total run queue lengths, total processes, memory (total/atom/binary/ets/processes)
+  - Sources: `:erlang.system_info/1`, `:erlang.memory/0`, `:erlang.statistics/1`, via `:telemetry_poller`
+
+- ETS and Process Hot-spots
+
+  - ETS table sizes (BenchmarkStore), growth rate; top processes by message queue length; mailbox growth alerts
+  - Sources: `:ets.info/2`, `:erlang.processes/0` + sampled `:erlang.process_info/2`
+
+- Telemetry Events
+  - Counters: routed requests, failures, breaker open/close, cooldown start/stop; p99 over last 5 minutes
+  - Emit from `RPCController`, `ProviderPool`, `CircuitBreaker`; aggregate in-memory for the demo
 
 ---
 
-### **5. Phoenix LiveView Real-Time Dashboard**
+## Data, Events, and APIs
 
-#### **Live Data Visualization Requirements**
+- PubSub topics (new)
 
-- **File**: `lib/livechain_web/live/orchestration_live.ex` (Benchmarks tab)
-- **Functionality**: Real-time provider performance visualization
-- **Demo Requirements**:
-  - Live racing leaderboard updates
-  - Provider performance metrics matrix
-  - Chain selection and filtering
-  - Real-time chart updates (not static data)
+  - `"routing:decisions"`: `%{ts, chain, method, strategy, provider_id, duration_ms, result, failover_count}`
+  - `"provider_pool:events"`: `%{ts, chain, provider_id, event: :unhealthy|:healthy|:cooldown_start|:cooldown_end, details}`
+  - Existing: `"ws_connections"`
 
-#### **Technical Components**
-
-```elixir
-# Real data integration (not hardcoded):
-def load_benchmark_data(socket) do
-  chain_name = socket.assigns.benchmark_chain
-  provider_leaderboard = BenchmarkStore.get_provider_leaderboard(chain_name)
-  realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
-  # ... actual data from ETS tables
-end
-```
-
-#### **Dashboard Features to Demo**
-
-- **Racing Leaderboard**: Live provider rankings with win rates
-- **Performance Matrix**: RPC call latencies by provider and method
-- **Chain Switching**: Ethereum, Polygon, Arbitrum performance comparison
-- **Real-Time Updates**: Data refreshes as new events arrive
+- Queries
+  - `ChainManager.get_status/0` and `get_chain_status/1`
+  - `ProviderPool.get_status(chain)`
+  - `BenchmarkStore.get_realtime_stats(chain)`
+  - `BenchmarkStore.get_rpc_method_performance(chain, method)` (percentiles/avg + success_rate)
+  - `CircuitBreaker.get_state(provider_id)`
+  - `WSSupervisor.list_connections/0`
 
 ---
 
-### **6. Multi-Provider JSON-RPC Integration**
+## Minimal Wiring Required
 
-#### **Real Provider Connections**
-
-- **Files**: `lib/livechain/rpc/ws_connection.ex`, `lib/livechain/rpc/real_endpoints.ex`
-- **Functionality**: Actual connections to Infura, Alchemy, other RPC providers
-- **Demo Requirements**:
-  - Working API key configuration
-  - Multiple providers per chain
-  - Standard JSON-RPC method support
-  - Provider pool management
-
-#### **Technical Implementation Needed**:
-
-```elixir
-# Real endpoint configuration:
-ethereum_infura = %WSEndpoint{
-  id: "infura_ethereum",
-  name: "Infura Ethereum",
-  chain_id: 1,
-  url: "wss://mainnet.infura.io/ws/v3/#{api_key}",
-  provider_type: :infura
-}
-
-ethereum_alchemy = %WSEndpoint{
-  id: "alchemy_ethereum",
-  name: "Alchemy Ethereum",
-  chain_id: 1,
-  url: "wss://eth-mainnet.alchemyapi.io/v2/#{api_key}",
-  provider_type: :alchemy
-}
-```
-
-#### **JSON-RPC Methods to Support**
-
-- `eth_subscribe("newHeads")` - Block subscriptions for racing
-- `eth_getLogs` - Historical log queries with benchmarking
-- `eth_getBlockByNumber` - Block data retrieval
-- `eth_getBalance` - Account balance queries
+- Emit `"routing:decisions"` at the end of `RPCController.forward_rpc_request/4` (and in failover): include method, strategy (resolved), provider, duration, result, failover_count
+- Emit `"provider_pool:events"` from `ProviderPool` on status/cooldown transitions
+- Optional: add Telemetry spans/counters for routed requests and provider selection decisions
 
 ---
 
-### **7. Provider Selection Strategies (New)**
+## Acceptance Criteria
 
-#### **Feature Overview**
-
-- Pluggable strategy for selecting providers when forwarding HTTP JSON-RPC:
-  - `:leaderboard` (default): highest score from `BenchmarkStore`
-  - `:priority`: first available provider by configured priority
-  - `:round_robin`: rotate among available providers
-  - Future: `:cheapest`, `:latency_based`, hybrid
-
-#### **Configuration**
-
-```elixir
-# config/config.exs
-config :livechain, :provider_selection_strategy, :leaderboard
-# Alternatives: :priority | :round_robin
-```
-
-#### **Demo Plan**
-
-- Live toggle strategy to showcase different routing behaviors:
-
-  1. Start with `:leaderboard` and display current leader on the dashboard
-  2. Switch to `:priority` at runtime (using `Application.put_env/3` in a console or a small admin control) and demonstrate deterministic routing to priority-1 provider
-  3. Switch to `:round_robin` and show sequential routing across available providers (e.g., via a simple `eth_blockNumber` loop)
-  4. Simulate a provider failure; observe automatic failover and how each strategy reacts
-
-- Visualizations to show during demo:
-
-  - Current strategy label on the dashboard
-  - Per-request annotations (provider used) in a lightweight request log panel
-  - Leaderboard scores vs chosen provider to illustrate strategy difference
-
-- Scripted commands for the demo:
-
-```elixir
-# In IEx attached to the running app
-Application.put_env(:livechain, :provider_selection_strategy, :leaderboard)
-Application.put_env(:livechain, :provider_selection_strategy, :priority)
-Application.put_env(:livechain, :provider_selection_strategy, :round_robin)
-```
-
-- HTTP examples to trigger routing:
-
-```bash
-# Repeated block number calls to observe rotation/selection
-for i in {1..10}; do
-  curl -s -X POST http://localhost:4000/rpc/ethereum \
-    -H 'Content-Type: application/json' \
-    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' >/dev/null; \
-  sleep 0.5; \
-  done
-```
-
-- Success criteria:
-  - Strategy switching changes provider selection behavior in real time
-  - Failover continues to work under each strategy
-  - Dashboard reflects racing metrics and provider selections
+- Live Dashboard shows:
+  - Up-to-date KPIs; provider grid with breaker/cooldown state; RPC method p50/p90/p99 + success rates; WS racing leaderboard; routing decisions stream; topology with active WS and recent HTTP heat halos
+- Live Test:
+  - Runs multi-chain tests; strategy override works; failure drills immediately visible in grid/decisions; maintenance buttons take effect
+- System Health:
+  - BEAM metrics update at a safe cadence (1–5s); ETS/process hot spots list; telemetry counters trend visibly
+- Smooth rendering: throttle bursts via PubSub debouncing; no long blocking on UI
 
 ---
 
-## Performance and Scale Targets for Demo
+## Example Snippets
 
-### **Racing Performance**
+- Routing decision broadcast (controller):
 
-- **Event processing**: 100+ events/second per chain
-- **Timing precision**: ±1ms accuracy for meaningful benchmarks
-- **Memory usage**: <50MB for 24 hours of racing data
-- **Dashboard updates**: <100ms latency for new race results
+```elixir
+Phoenix.PubSub.broadcast(
+  Livechain.PubSub,
+  "routing:decisions",
+  %{ts: System.system_time(:millisecond), chain: chain, method: method, strategy: to_string(strategy), provider_id: provider_id, duration_ms: duration_ms, result: :success, failover_count: failovers}
+)
+```
 
-### **Provider Management**
+- Provider pool event broadcast:
 
-- **Concurrent providers**: 2-4 providers per chain
-- **Supported chains**: Ethereum, Polygon, Arbitrum
-- **Connection health**: <5 second detection of provider failures
-- **Failover time**: <1 second to switch providers
-
-### **System Reliability**
-
-- **Circuit breaker response**: <100ms to open on failure
-- **Process restart**: <500ms recovery from GenServer crash
-- **Data persistence**: No race data loss during normal operation
-- **Dashboard availability**: 99%+ uptime during demo period
+```elixir
+Phoenix.PubSub.broadcast(
+  Livechain.PubSub,
+  "provider_pool:events",
+  %{ts: System.system_time(:millisecond), chain: state.chain_name, provider_id: provider_id, event: :cooldown_start, details: %{until: cooldown_until}}
+)
+```
 
 ---
 
-This specification focuses on the core technical implementations that showcase the engineering depth and algorithmic sophistication of the ChainPulse system.
+## Optional Enhancements (time permitting)
+
+- Percentiles everywhere: when absent, display avg with an indicator
+- Consistency sampling: occasional dual-provider checks to detect divergent results
+- Dashboard filters: by chain, method, provider state
+- Export: download recent routing decisions and metrics as JSON for analysis

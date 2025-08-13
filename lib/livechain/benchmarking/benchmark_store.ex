@@ -214,9 +214,9 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
   def handle_call({:get_provider_leaderboard, chain_name}, _from, state) do
     result = 
       if Map.has_key?(state.score_tables, chain_name) do
-        calculate_leaderboard(chain_name)
+        {:ok, calculate_leaderboard(chain_name)}
       else
-        []
+        {:ok, []}
       end
     
     {:reply, result, state}
@@ -383,26 +383,54 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
           successes = if result == :success, do: 1, else: 0
           total = 1
           avg_duration = duration_ms
+          # Initialize recent latencies list for percentile calculation (keep last 100 samples)
+          recent_latencies = [duration_ms]
           
-          :ets.insert(score_table, {key, successes, total, avg_duration, System.monotonic_time(:millisecond)})
+          :ets.insert(score_table, {key, successes, total, avg_duration, recent_latencies, System.monotonic_time(:millisecond)})
           
-        [{_key, successes, total, avg_duration, _last_updated}] ->
+        [{_key, successes, total, avg_duration, recent_latencies, _last_updated}] ->
           # Update existing entry
           new_successes = if result == :success, do: successes + 1, else: successes
           new_total = total + 1
           new_avg_duration = (avg_duration * total + duration_ms) / new_total
           
-          :ets.insert(score_table, {key, new_successes, new_total, new_avg_duration, System.monotonic_time(:millisecond)})
+          # Update recent latencies (keep last 100 samples for percentile calculation)
+          updated_latencies = [duration_ms | recent_latencies] |> Enum.take(100)
+          
+          :ets.insert(score_table, {key, new_successes, new_total, new_avg_duration, updated_latencies, System.monotonic_time(:millisecond)})
+          
+        # Handle legacy entries without recent_latencies field
+        [{_key, successes, total, avg_duration, last_updated}] when not is_list(last_updated) ->
+          # Migrate old format to new format
+          new_successes = if result == :success, do: successes + 1, else: successes
+          new_total = total + 1
+          new_avg_duration = (avg_duration * new_total + duration_ms) / (new_total + 1)
+          # Initialize recent latencies with current duration
+          recent_latencies = [duration_ms]
+          
+          :ets.insert(score_table, {key, new_successes, new_total, new_avg_duration, recent_latencies, System.monotonic_time(:millisecond)})
           
         multiple_entries ->
           Logger.warning("Multiple RPC score entries found for #{inspect(key)}: #{length(multiple_entries)}")
-          # Use the first entry and continue
-          [{_key, successes, total, avg_duration, _last_updated}] = Enum.take(multiple_entries, 1)
+          # Use the first entry and continue with migration if needed
+          [{_key, successes, total, avg_duration, field4, field5}] = Enum.take(multiple_entries, 1)
+          
+          {recent_latencies, last_updated} = 
+            case {field4, field5} do
+              {recent_list, timestamp} when is_list(recent_list) and is_integer(timestamp) ->
+                {recent_list, timestamp}
+              {timestamp, nil} when is_integer(timestamp) ->
+                {[duration_ms], timestamp}
+              _ ->
+                {[duration_ms], System.monotonic_time(:millisecond)}
+            end
+          
           new_successes = if result == :success, do: successes + 1, else: successes
           new_total = total + 1
           new_avg_duration = (avg_duration * total + duration_ms) / new_total
+          updated_latencies = [duration_ms | recent_latencies] |> Enum.take(100)
           
-          :ets.insert(score_table, {key, new_successes, new_total, new_avg_duration, System.monotonic_time(:millisecond)})
+          :ets.insert(score_table, {key, new_successes, new_total, new_avg_duration, updated_latencies, System.monotonic_time(:millisecond)})
       end
     rescue
       e -> 
@@ -702,5 +730,85 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
       :exit, reason -> 
         Logger.error("Table #{table_name} may not exist: #{inspect(reason)}")
     end
+  end
+
+  @doc """
+  Gets RPC method performance including percentiles for a provider.
+  """
+  def get_rpc_method_performance_with_percentiles(chain_name, provider_id, method) do
+    GenServer.call(__MODULE__, {:get_rpc_performance_with_percentiles, chain_name, provider_id, method})
+  end
+
+  @impl true
+  def handle_call({:get_rpc_performance_with_percentiles, chain_name, provider_id, method}, _from, state) do
+    result = 
+      if Map.has_key?(state.score_tables, chain_name) do
+        get_rpc_performance_with_percentiles_data(chain_name, provider_id, method)
+      else
+        nil
+      end
+    
+    {:reply, result, state}
+  end
+
+  defp get_rpc_performance_with_percentiles_data(chain_name, provider_id, method) do
+    score_table = score_table_name(chain_name)
+    key = {provider_id, method, :rpc}
+    
+    case :ets.lookup(score_table, key) do
+      [{_key, successes, total, avg_duration, recent_latencies, last_updated}] when is_list(recent_latencies) ->
+        success_rate = if total > 0, do: successes / total, else: 0.0
+        percentiles = calculate_percentiles(recent_latencies)
+        
+        %{
+          provider_id: provider_id,
+          method: method,
+          success_rate: success_rate,
+          total_calls: total,
+          avg_duration_ms: avg_duration,
+          percentiles: percentiles,
+          last_updated: last_updated
+        }
+      
+      [{_key, successes, total, avg_duration, last_updated}] ->
+        # Legacy format without percentiles
+        success_rate = if total > 0, do: successes / total, else: 0.0
+        
+        %{
+          provider_id: provider_id,
+          method: method,
+          success_rate: success_rate,
+          total_calls: total,
+          avg_duration_ms: avg_duration,
+          percentiles: %{p50: avg_duration, p90: avg_duration, p99: avg_duration},
+          last_updated: last_updated
+        }
+      
+      [] ->
+        nil
+    end
+  end
+
+  defp calculate_percentiles(latencies) when length(latencies) < 2 do
+    # Not enough data for meaningful percentiles
+    case latencies do
+      [single] -> %{p50: single, p90: single, p99: single}
+      [] -> %{p50: 0, p90: 0, p99: 0}
+    end
+  end
+
+  defp calculate_percentiles(latencies) do
+    sorted = Enum.sort(latencies)
+    count = length(sorted)
+    
+    p50_index = max(0, round(count * 0.5) - 1)
+    p90_index = max(0, round(count * 0.9) - 1) 
+    p99_index = max(0, round(count * 0.99) - 1)
+    
+    %{
+      p50: Enum.at(sorted, p50_index, 0),
+      p90: Enum.at(sorted, p90_index, 0),
+      p99: Enum.at(sorted, p99_index, 0)
+    }
   end
 end

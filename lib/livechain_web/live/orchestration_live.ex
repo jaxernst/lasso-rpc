@@ -642,7 +642,7 @@ defmodule LivechainWeb.OrchestrationLive do
     chain_name = socket.assigns.benchmark_chain
 
     # Get benchmark data from the BenchmarkStore
-    provider_leaderboard = BenchmarkStore.get_provider_leaderboard(chain_name)
+    {:ok, provider_leaderboard} = BenchmarkStore.get_provider_leaderboard(chain_name)
     realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
 
     benchmark_data = %{

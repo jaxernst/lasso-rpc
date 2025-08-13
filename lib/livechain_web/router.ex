@@ -51,8 +51,7 @@ defmodule LivechainWeb.Router do
     pipe_through(:api)
 
     # Strategy-specific endpoint (e.g., /rpc/cheapest/ethereum)
-    post("/fastest/:chain_id", RPCController, :rpc)
-    post("/cheapest/:chain_id", RPCController, :rpc)
+    post("/:strategy/:chain_id", RPCController, :rpc)
 
     # Generic endpoint for any configured chain (backward compatible)
     post("/:chain_id", RPCController, :rpc)

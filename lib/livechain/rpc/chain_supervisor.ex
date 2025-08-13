@@ -21,7 +21,7 @@ defmodule Livechain.RPC.ChainSupervisor do
   require Logger
 
   alias Livechain.Config.ChainConfig
-  alias Livechain.RPC.{WSConnection, WSEndpoint, MessageAggregator, ProviderPool}
+  alias Livechain.RPC.{WSConnection, WSEndpoint, MessageAggregator, ProviderPool, CircuitBreaker}
 
   @doc """
   Starts a ChainSupervisor for a specific blockchain.
@@ -148,10 +148,10 @@ defmodule Livechain.RPC.ChainSupervisor do
   This is the core function for HTTP RPC forwarding with provider selection.
   """
   def forward_rpc_request(chain_name, provider_id, method, params) do
-    case WSConnection.forward_rpc_request(provider_id, method, params) do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, reason}
-    end
+    # Wrap the RPC request with circuit breaker protection
+    CircuitBreaker.call(provider_id, fn ->
+      WSConnection.forward_rpc_request(provider_id, method, params)
+    end, 30_000)
   end
 
   defp get_best_provider(chain_name) do
@@ -203,6 +203,10 @@ defmodule Livechain.RPC.ChainSupervisor do
     providers_to_start = Enum.take(available_providers, max_providers)
 
     Enum.each(providers_to_start, fn provider ->
+      # Start circuit breaker for this provider
+      start_circuit_breaker(provider)
+      
+      # Start provider connection
       start_provider_connection(chain_name, provider, chain_config)
     end)
 
@@ -235,6 +239,26 @@ defmodule Livechain.RPC.ChainSupervisor do
 
       {:error, reason} ->
         Logger.error("Failed to start WSConnection for #{provider.name}: #{reason}")
+    end
+  end
+
+  defp start_circuit_breaker(provider) do
+    # Circuit breaker configuration
+    circuit_config = %{
+      failure_threshold: 5,
+      recovery_timeout: 60_000,
+      success_threshold: 2
+    }
+
+    case CircuitBreaker.start_link({provider.id, circuit_config}) do
+      {:ok, _pid} ->
+        Logger.info("Started circuit breaker for provider #{provider.id}")
+
+      {:error, {:already_started, _pid}} ->
+        Logger.debug("Circuit breaker for #{provider.id} already running")
+
+      {:error, reason} ->
+        Logger.error("Failed to start circuit breaker for #{provider.id}: #{reason}")
     end
   end
 
