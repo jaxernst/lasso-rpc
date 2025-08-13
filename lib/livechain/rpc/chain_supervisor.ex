@@ -15,8 +15,6 @@ defmodule Livechain.RPC.ChainSupervisor do
   └── ProviderPool (Health & Failover)
   """
 
-  # TODO: Why does this chain supervisor have 'get_balance', 'get_logs' and other ethereum json rpc methods? This seems mostly unrelated to actually supervising chain connections. Don't we already have an api to forward json rpc requests to rpc providers?
-
   use Supervisor
   require Logger
 
@@ -77,89 +75,30 @@ defmodule Livechain.RPC.ChainSupervisor do
   end
 
   @doc """
-  Subscribes to events on all active providers for a chain.
-  """
-  def subscribe_to_events(chain_name, topic) do
-    active_providers = get_active_providers(chain_name)
-
-    Enum.each(active_providers, fn provider_id ->
-      WSConnection.subscribe(provider_id, topic)
-    end)
-
-    Logger.info(
-      "Subscribed to #{topic} on #{length(active_providers)} providers for #{chain_name}"
-    )
-  end
-
-  @doc """
-  Gets logs for a chain with filter.
-  """
-  def get_logs(chain_name, filter) do
-    case get_best_provider(chain_name) do
-      {:ok, provider_id} ->
-        WSConnection.get_logs(provider_id, filter)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  Gets block by number for a chain.
-  """
-  def get_block_by_number(chain_name, block_number, include_transactions) do
-    case get_best_provider(chain_name) do
-      {:ok, provider_id} ->
-        WSConnection.get_block_by_number(provider_id, block_number, include_transactions)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  Gets the latest block number for a chain.
-  """
-  def get_block_number(chain_name) do
-    case get_best_provider(chain_name) do
-      {:ok, provider_id} ->
-        WSConnection.get_block_number(provider_id)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  Gets balance for an address on a chain.
-  """
-  def get_balance(chain_name, address, block) do
-    case get_best_provider(chain_name) do
-      {:ok, provider_id} ->
-        WSConnection.get_balance(provider_id, address, block)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
   Forwards an RPC request to a specific provider on this chain.
   This is the core function for HTTP RPC forwarding with provider selection.
   """
+  @spec forward_rpc_request(String.t(), String.t(), String.t(), list()) ::
+          {:ok, any()} | {:error, term()}
   def forward_rpc_request(chain_name, provider_id, method, params) do
-    # Wrap the RPC request with circuit breaker protection
-    CircuitBreaker.call(provider_id, fn ->
-      WSConnection.forward_rpc_request(provider_id, method, params)
-    end, 30_000)
-  end
+    # Build minimal provider config for HTTP client
+    with {:ok, config} <- Livechain.Config.ChainConfig.load_config(),
+         {:ok, chain_config} <- Livechain.Config.ChainConfig.get_chain_config(config, chain_name),
+         provider <- Enum.find(chain_config.providers, &(&1.id == provider_id)),
+         true <- not is_nil(provider) do
+      http_provider = %{url: provider.url, api_key: provider.api_key}
+      timeout_ms = Livechain.Config.MethodPolicy.timeout_for(method)
 
-  defp get_best_provider(chain_name) do
-    active_providers = get_active_providers(chain_name)
-
-    case active_providers do
-      [] -> {:error, :no_providers_available}
-      [provider_id | _] -> {:ok, provider_id}
+      CircuitBreaker.call(
+        provider_id,
+        fn ->
+          Livechain.RPC.HttpClient.request(http_provider, method, params, timeout_ms)
+        end,
+        timeout_ms + 1_000
+      )
+      |> normalize_breaker_result()
+    else
+      _ -> {:error, {:client_error, "Provider not found or chain config missing"}}
     end
   end
 
@@ -205,7 +144,7 @@ defmodule Livechain.RPC.ChainSupervisor do
     Enum.each(providers_to_start, fn provider ->
       # Start circuit breaker for this provider
       start_circuit_breaker(provider)
-      
+
       # Start provider connection
       start_provider_connection(chain_name, provider, chain_config)
     end)
@@ -224,7 +163,7 @@ defmodule Livechain.RPC.ChainSupervisor do
       heartbeat_interval: chain_config.connection.heartbeat_interval,
       reconnect_interval: chain_config.connection.reconnect_interval,
       max_reconnect_attempts: chain_config.connection.max_reconnect_attempts,
-      subscription_topics: chain_config.connection.subscription_topics
+      subscription_topics: Map.get(chain_config.connection, :subscription_topics, ["newHeads"])
     }
 
     # Start the connection under the dynamic supervisor
@@ -269,4 +208,8 @@ defmodule Livechain.RPC.ChainSupervisor do
   defp connection_supervisor_name(chain_name) do
     :"#{chain_name}_connection_supervisor"
   end
+
+  defp normalize_breaker_result({:reply, {:ok, result}, _state}), do: {:ok, result}
+  defp normalize_breaker_result({:reply, {:error, reason}, _state}), do: {:error, reason}
+  defp normalize_breaker_result({:reply, other, _state}), do: {:error, other}
 end

@@ -73,19 +73,16 @@ defmodule Livechain.RPC.WSConnection do
   end
 
   @doc """
-  Forwards an RPC request to the provider via HTTP.
-  This is used for HTTP RPC forwarding from the RPC controller.
-  """
-  def forward_rpc_request(connection_id, method, params) do
-    GenServer.call(via_name(connection_id), {:forward_rpc_request, method, params})
-  end
-
-  @doc """
   Performs a health check request to a provider endpoint.
   Used by ProviderPool for active health monitoring.
   """
   def health_check_request(endpoint, method \\ "eth_chainId", params \\ []) do
-    make_http_rpc_request(endpoint, method, params)
+    Livechain.RPC.HttpClient.request(
+      %{url: endpoint.url, api_key: endpoint.api_key},
+      method,
+      params,
+      5_000
+    )
   end
 
   # Server Callbacks
@@ -171,23 +168,6 @@ defmodule Livechain.RPC.WSConnection do
     }
 
     {:reply, status, state}
-  end
-
-  @impl true
-  def handle_call({:forward_rpc_request, method, params}, _from, state) do
-    case make_http_rpc_request(state.endpoint, method, params) do
-      {:ok, result} ->
-        {:reply, {:ok, result}, state}
-
-      {:error, reason} ->
-        Logger.error("RPC request failed",
-          endpoint: state.endpoint.id,
-          method: method,
-          reason: reason
-        )
-
-        {:reply, {:error, reason}, state}
-    end
   end
 
   @impl true
@@ -366,128 +346,26 @@ defmodule Livechain.RPC.WSConnection do
     {:ok, state}
   end
 
-  # TODO: use ChainConfig instead of hardcoded names
+  # Resolve chain name via config
   defp get_chain_name(chain_id) do
-    case chain_id do
-      1 -> "ethereum"
-      137 -> "polygon"
-      42_161 -> "arbitrum"
-      56 -> "bsc"
-      8453 -> "base"
-      84532 -> "base_sepolia"
-      _ -> "unknown"
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        case Enum.find(config.chains, fn {_name, chain_config} ->
+               chain_config.chain_id == chain_id
+             end) do
+          {name, _} -> name
+          nil -> "unknown"
+        end
+
+      {:error, _} ->
+        "unknown"
     end
   end
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
-  @doc """
-  Get timeout in milliseconds for a specific RPC method.
-  Heavy methods get longer timeouts than quick ones.
-  """
-  defp get_method_timeout(method) do
-    case method do
-      # Heavy methods that can take a long time
-      "eth_getLogs" -> 60_000          # 60 seconds
-      "eth_getFilterLogs" -> 60_000    # 60 seconds
-      "eth_newFilter" -> 30_000        # 30 seconds
-      "debug_traceTransaction" -> 120_000  # 2 minutes
-      "debug_traceBlock" -> 120_000    # 2 minutes
-      
-      # Medium methods
-      "eth_getBlockByNumber" -> 30_000     # 30 seconds
-      "eth_getBlockByHash" -> 30_000       # 30 seconds
-      "eth_getTransactionByHash" -> 20_000 # 20 seconds
-      "eth_getTransactionReceipt" -> 20_000 # 20 seconds
-      "eth_call" -> 20_000                 # 20 seconds
-      "eth_estimateGas" -> 20_000          # 20 seconds
-      
-      # Quick methods
-      "eth_blockNumber" -> 10_000      # 10 seconds
-      "eth_chainId" -> 5_000           # 5 seconds
-      "eth_gasPrice" -> 10_000         # 10 seconds
-      "eth_getBalance" -> 15_000       # 15 seconds
-      "eth_getTransactionCount" -> 15_000  # 15 seconds
-      "eth_getCode" -> 15_000          # 15 seconds
-      "net_version" -> 5_000           # 5 seconds
-      "web3_clientVersion" -> 5_000    # 5 seconds
-      
-      # Default for unknown methods
-      _ -> 30_000                      # 30 seconds default
-    end
-  end
-
   defp via_name(connection_id) do
     {:via, :global, {:connection, connection_id}}
-  end
-
-  @doc """
-  Makes an HTTP RPC request to the provider's endpoint.
-  """
-  defp make_http_rpc_request(endpoint, method, params) do
-    # Build the JSON-RPC request
-    request_id = generate_id()
-
-    request_body = %{
-      "jsonrpc" => "2.0",
-      "method" => method,
-      "params" => params,
-      "id" => request_id
-    }
-
-    # Convert to JSON and make HTTP request
-    case Jason.encode(request_body) do
-      {:ok, json_body} ->
-        headers = [
-          {"content-type", "application/json"},
-          {"accept", "application/json"}
-        ]
-
-        # Add Authorization header if API key is provided
-        headers = 
-          if endpoint.api_key do
-            [{"authorization", "Bearer #{endpoint.api_key}"} | headers]
-          else
-            headers
-          end
-
-        # Create HTTP request
-        request = Finch.build(:post, endpoint.url, headers, json_body)
-
-        # Execute request with method-specific timeout
-        timeout_ms = get_method_timeout(method)
-        case Finch.request(request, Livechain.Finch, receive_timeout: timeout_ms) do
-          {:ok, %Finch.Response{status: status, body: body}} when status in 200..299 ->
-            case Jason.decode(body) do
-              {:ok, response} ->
-                # Check for JSON-RPC rate limit errors
-                case response do
-                  %{"error" => %{"code" => code}} when code in [-32005, -32000] ->
-                    # Many providers use -32005 or -32000 for rate limits
-                    {:error, {:rate_limit, response["error"]["message"] || "Rate limit exceeded"}}
-                  _ ->
-                    {:ok, response}
-                end
-              {:error, decode_error} ->
-                {:error, {:decode_error, "Failed to decode response: #{inspect(decode_error)}"}}
-            end
-
-          {:ok, %Finch.Response{status: 429, body: body}} ->
-            {:error, {:rate_limit, "HTTP 429: #{body}"}}
-
-          {:ok, %Finch.Response{status: status, body: body}} when status >= 500 ->
-            {:error, {:server_error, "HTTP #{status}: #{body}"}}
-
-          {:ok, %Finch.Response{status: status, body: body}} ->
-            {:error, {:client_error, "HTTP #{status}: #{body}"}}
-
-          {:error, reason} ->
-            {:error, {:network_error, "Request failed: #{inspect(reason)}"}}
-        end
-
-      {:error, reason} ->
-        {:error, "Failed to encode request: #{inspect(reason)}"}
-    end
   end
 
   defp broadcast_block_to_channels(endpoint, block_data) do
@@ -531,340 +409,5 @@ defmodule Livechain.RPC.WSConnection do
          subscriptions: MapSet.size(state.subscriptions)
        }}
     )
-  end
-
-  # JSON-RPC method implementations
-
-  @doc """
-  Gets logs for a specific filter.
-  """
-  def get_logs(connection_id, filter) do
-    GenServer.call(via_name(connection_id), {:get_logs, filter})
-  end
-
-  @doc """
-  Gets block by number.
-  """
-  def get_block_by_number(connection_id, block_number, include_transactions) do
-    GenServer.call(
-      via_name(connection_id),
-      {:get_block_by_number, block_number, include_transactions}
-    )
-  end
-
-  @doc """
-  Gets the latest block number.
-  """
-  def get_block_number(connection_id) do
-    GenServer.call(via_name(connection_id), {:get_block_number})
-  end
-
-  @doc """
-  Gets balance for an address.
-  """
-  def get_balance(connection_id, address, block) do
-    GenServer.call(via_name(connection_id), {:get_balance, address, block})
-  end
-
-  # GenServer callbacks for JSON-RPC methods
-
-  @impl true
-  def handle_call({:get_logs, filter}, _from, state) do
-    start_time = System.monotonic_time(:millisecond)
-
-    request = %{
-      jsonrpc: "2.0",
-      method: "eth_getLogs",
-      params: [filter],
-      id: generate_id()
-    }
-
-    case send_json_rpc_request(state, request) do
-      {:ok, response} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        chain_name = get_chain_name(state.endpoint.chain_id)
-
-        # Safe benchmark recording with error handling
-        try do
-          BenchmarkStore.record_rpc_call(
-            chain_name,
-            state.endpoint.id,
-            "eth_getLogs",
-            duration,
-            :success
-          )
-        rescue
-          e -> Logger.error("Failed to record benchmark for eth_getLogs success: #{inspect(e)}")
-        end
-
-        {:reply, {:ok, response["result"] || []}, state}
-
-      {:error, reason} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        chain_name = get_chain_name(state.endpoint.chain_id)
-
-        # Safe benchmark recording with error handling
-        try do
-          BenchmarkStore.record_rpc_call(
-            chain_name,
-            state.endpoint.id,
-            "eth_getLogs",
-            duration,
-            :error
-          )
-        rescue
-          e -> Logger.error("Failed to record benchmark for eth_getLogs error: #{inspect(e)}")
-        end
-
-        {:reply, {:error, reason}, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_block_by_number, block_number, include_transactions}, _from, state) do
-    start_time = System.monotonic_time(:millisecond)
-
-    request = %{
-      jsonrpc: "2.0",
-      method: "eth_getBlockByNumber",
-      params: [block_number, include_transactions],
-      id: generate_id()
-    }
-
-    case send_json_rpc_request(state, request) do
-      {:ok, response} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        chain_name = get_chain_name(state.endpoint.chain_id)
-
-        # Safe benchmark recording with error handling
-        try do
-          BenchmarkStore.record_rpc_call(
-            chain_name,
-            state.endpoint.id,
-            "eth_getBlockByNumber",
-            duration,
-            :success
-          )
-        rescue
-          e ->
-            Logger.error(
-              "Failed to record benchmark for eth_getBlockByNumber success: #{inspect(e)}"
-            )
-        end
-
-        {:reply, {:ok, response["result"]}, state}
-
-      {:error, reason} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        chain_name = get_chain_name(state.endpoint.chain_id)
-
-        # TODO: Could this be pushed to a queue for processing? I want to avoid blocking (but maybe this doesn't even block so let's analyze whether this could be meaningfully improved).
-        # Safe benchmark recording with error handling
-        try do
-          BenchmarkStore.record_rpc_call(
-            chain_name,
-            state.endpoint.id,
-            "eth_getBlockByNumber",
-            duration,
-            :error
-          )
-        rescue
-          e ->
-            Logger.error(
-              "Failed to record benchmark for eth_getBlockByNumber error: #{inspect(e)}"
-            )
-        end
-
-        {:reply, {:error, reason}, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_block_number}, _from, state) do
-    start_time = System.monotonic_time(:millisecond)
-
-    request = %{
-      jsonrpc: "2.0",
-      method: "eth_blockNumber",
-      params: [],
-      id: generate_id()
-    }
-
-    case send_json_rpc_request(state, request) do
-      {:ok, response} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        chain_name = get_chain_name(state.endpoint.chain_id)
-
-        # Safe benchmark recording with error handling
-        try do
-          BenchmarkStore.record_rpc_call(
-            chain_name,
-            state.endpoint.id,
-            "eth_blockNumber",
-            duration,
-            :success
-          )
-        rescue
-          e ->
-            Logger.error("Failed to record benchmark for eth_blockNumber success: #{inspect(e)}")
-        end
-
-        {:reply, {:ok, response["result"]}, state}
-
-      {:error, reason} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        chain_name = get_chain_name(state.endpoint.chain_id)
-
-        # Safe benchmark recording with error handling
-        try do
-          BenchmarkStore.record_rpc_call(
-            chain_name,
-            state.endpoint.id,
-            "eth_blockNumber",
-            duration,
-            :error
-          )
-        rescue
-          e -> Logger.error("Failed to record benchmark for eth_blockNumber error: #{inspect(e)}")
-        end
-
-        {:reply, {:error, reason}, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_balance, address, block}, _from, state) do
-    start_time = System.monotonic_time(:millisecond)
-
-    request = %{
-      jsonrpc: "2.0",
-      method: "eth_getBalance",
-      params: [address, block],
-      id: generate_id()
-    }
-
-    case send_json_rpc_request(state, request) do
-      {:ok, response} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        chain_name = get_chain_name(state.endpoint.chain_id)
-
-        # Safe benchmark recording with error handling
-        try do
-          BenchmarkStore.record_rpc_call(
-            chain_name,
-            state.endpoint.id,
-            "eth_getBalance",
-            duration,
-            :success
-          )
-        rescue
-          e ->
-            Logger.error("Failed to record benchmark for eth_getBalance success: #{inspect(e)}")
-        end
-
-        {:reply, {:ok, response["result"]}, state}
-
-      {:error, reason} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        chain_name = get_chain_name(state.endpoint.chain_id)
-
-        # Safe benchmark recording with error handling
-        try do
-          BenchmarkStore.record_rpc_call(
-            chain_name,
-            state.endpoint.id,
-            "eth_getBalance",
-            duration,
-            :error
-          )
-        rescue
-          e -> Logger.error("Failed to record benchmark for eth_getBalance error: #{inspect(e)}")
-        end
-
-        {:reply, {:error, reason}, state}
-    end
-  end
-
-  defp send_json_rpc_request(state, request) do
-    case state.connection do
-      nil ->
-        {:error, :not_connected}
-
-      _connection ->
-        try do
-          # For now, return mock data since we're using mock connections
-          # In production, this would send the actual request via WebSocket
-          # TODO: Replace mocks
-          mock_json_rpc_response(request)
-        catch
-          :exit, _ -> {:error, :connection_lost}
-          :error, reason -> {:error, reason}
-        end
-    end
-  end
-
-  defp mock_json_rpc_response(%{method: "eth_getLogs"}) do
-    {:ok,
-     %{
-       "jsonrpc" => "2.0",
-       "id" => "mock_id",
-       "result" => [
-         %{
-           "address" => "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-           "topics" => [
-             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-           ],
-           "data" => "0x0000000000000000000000000000000000000000000000000000000000000001",
-           "blockNumber" => "0x123456",
-           "transactionHash" =>
-             "0x" <> (:crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)),
-           "transactionIndex" => "0x0",
-           "blockHash" => "0x" <> (:crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)),
-           "logIndex" => "0x0",
-           "removed" => false
-         }
-       ]
-     }}
-  end
-
-  defp mock_json_rpc_response(%{method: "eth_getBlockByNumber"}) do
-    {:ok,
-     %{
-       "jsonrpc" => "2.0",
-       "id" => "mock_id",
-       "result" => %{
-         "number" => "0x123456",
-         "hash" => "0x" <> (:crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)),
-         "timestamp" => "0x" <> Integer.to_string(System.system_time(:second), 16),
-         "transactions" => []
-       }
-     }}
-  end
-
-  defp mock_json_rpc_response(%{method: "eth_blockNumber"}) do
-    {:ok,
-     %{
-       "jsonrpc" => "2.0",
-       "id" => "mock_id",
-       "result" => "0x" <> Integer.to_string(:rand.uniform(20_000_000), 16)
-     }}
-  end
-
-  defp mock_json_rpc_response(%{method: "eth_getBalance"}) do
-    {:ok,
-     %{
-       "jsonrpc" => "2.0",
-       "id" => "mock_id",
-       "result" => "0x" <> Integer.to_string(:rand.uniform(1_000_000_000_000_000_000), 16)
-     }}
-  end
-
-  defp mock_json_rpc_response(_) do
-    {:ok,
-     %{
-       "jsonrpc" => "2.0",
-       "id" => "mock_id",
-       "result" => nil
-     }}
   end
 end

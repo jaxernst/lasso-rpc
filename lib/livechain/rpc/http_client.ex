@@ -1,0 +1,40 @@
+defmodule Livechain.RPC.HttpClient do
+  @moduledoc """
+  Behaviour for HTTP JSON-RPC clients used to contact upstream RPC providers.
+
+  Implementations must perform a single JSON-RPC HTTP request with a
+  per-call timeout and return either a decoded JSON map or a typed error.
+
+  This module also provides a small facade for dispatching to the configured
+  adapter. Configure with:
+
+      config :livechain, :http_client, Livechain.RPC.HttpClient.Finch
+  """
+
+  @type provider_config :: %{required(:url) => String.t(), optional(:api_key) => String.t()}
+  @type json_map :: map()
+  @type method :: String.t()
+  @type params :: list()
+  @type timeout_ms :: non_neg_integer()
+  @type error_reason ::
+          {:rate_limit, String.t()}
+          | {:server_error, String.t()}
+          | {:client_error, String.t()}
+          | {:network_error, String.t()}
+          | {:decode_error, String.t()}
+
+  @callback request(provider_config, method, params, timeout_ms) ::
+              {:ok, json_map} | {:error, error_reason}
+
+  # Facade to configured adapter
+  @spec request(provider_config, method, params, timeout_ms) ::
+          {:ok, json_map} | {:error, error_reason}
+  def request(provider_config, method, params, timeout_ms) do
+    adapter()
+    |> apply(:request, [provider_config, method, params, timeout_ms])
+  end
+
+  defp adapter do
+    Application.get_env(:livechain, :http_client, Livechain.RPC.HttpClient.Finch)
+  end
+end
