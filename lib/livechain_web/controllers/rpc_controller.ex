@@ -332,13 +332,18 @@ defmodule LivechainWeb.RPCController do
 
     case select_best_provider(chain, method, strategy) do
       {:ok, provider_id} ->
+        # Measure request duration
+        start_time = System.monotonic_time(:millisecond)
+        
         case ChainManager.forward_rpc_request(chain, provider_id, method, params) do
           {:ok, result} ->
-            record_rpc_success(chain, provider_id, method)
+            duration_ms = System.monotonic_time(:millisecond) - start_time
+            record_rpc_success(chain, provider_id, method, duration_ms)
             {:ok, result}
 
           {:error, reason} ->
-            record_rpc_failure(chain, provider_id, method, reason)
+            duration_ms = System.monotonic_time(:millisecond) - start_time
+            record_rpc_failure(chain, provider_id, method, reason, duration_ms)
 
             case try_failover(chain, method, params, [provider_id]) do
               {:ok, result} -> {:ok, result}
@@ -352,7 +357,7 @@ defmodule LivechainWeb.RPCController do
   end
 
   defp default_provider_strategy do
-    Application.get_env(:livechain, :provider_selection_strategy, :leaderboard)
+    Application.get_env(:livechain, :provider_selection_strategy, :latency)
   end
 
   defp parse_strategy(nil), do: nil
@@ -362,6 +367,10 @@ defmodule LivechainWeb.RPCController do
       "leaderboard" -> :leaderboard
       "priority" -> :priority
       "round_robin" -> :round_robin
+      "latency" -> :latency
+      "latency_based" -> :latency
+      "fastest" -> :latency  # "fastest" is an alias for latency-based selection
+      "cheapest" -> :cheapest
       _ -> nil
     end
   end
@@ -409,6 +418,62 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
+  defp select_best_provider(chain, _method, :latency) do
+    case Livechain.RPC.ProviderPool.get_best_provider(chain) do
+      nil -> 
+        # Fallback to priority if no provider selected by pool
+        select_best_provider(chain, :ignored, :priority)
+      provider_id -> 
+        {:ok, provider_id}
+    end
+  end
+
+  defp select_best_provider(chain, _method, :cheapest) do
+    case ChainManager.get_available_providers(chain) do
+      {:ok, []} ->
+        {:error, "No providers available"}
+
+      {:ok, providers} ->
+        # Get chain config to check provider types
+        with {:ok, config} <- Livechain.Config.ChainConfig.load_config(),
+             chain_config when not is_nil(chain_config) <- Map.get(config.chains, chain) do
+          
+          # First try public providers
+          public_providers = filter_providers_by_type(chain_config.providers, providers, "public")
+          
+          case public_providers do
+            [] ->
+              # No public providers available, use paid providers
+              paid_providers = filter_providers_by_type(chain_config.providers, providers, "paid")
+              case paid_providers do
+                [] -> {:error, "No providers available"}
+                [provider_id | _] -> {:ok, provider_id}
+              end
+            _ ->
+              # Round-robin among public providers
+              idx = rem(System.monotonic_time(:millisecond), length(public_providers))
+              {:ok, Enum.at(public_providers, idx)}
+          end
+        else
+          _ -> 
+            # Fallback to priority if config can't be loaded
+            select_best_provider(chain, :ignored, :priority)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Helper function to filter providers by type (public, paid, dedicated)
+  defp filter_providers_by_type(provider_configs, available_provider_ids, desired_type) do
+    provider_configs
+    |> Enum.filter(fn provider -> 
+      provider.type == desired_type and provider.id in available_provider_ids
+    end)
+    |> Enum.map(& &1.id)
+  end
+
   # Failover and benchmarking helpers remain the same
 
   @doc """
@@ -430,13 +495,18 @@ defmodule LivechainWeb.RPCController do
               provider: next_provider
             )
 
+            # Measure failover request duration
+            start_time = System.monotonic_time(:millisecond)
+            
             case ChainManager.forward_rpc_request(chain, next_provider, method, params) do
               {:ok, result} ->
-                record_rpc_success(chain, next_provider, method)
+                duration_ms = System.monotonic_time(:millisecond) - start_time
+                record_rpc_success(chain, next_provider, method, duration_ms)
                 {:ok, result}
 
               {:error, reason} ->
-                record_rpc_failure(chain, next_provider, method, reason)
+                duration_ms = System.monotonic_time(:millisecond) - start_time
+                record_rpc_failure(chain, next_provider, method, reason, duration_ms)
                 try_failover(chain, method, params, [next_provider | excluded_providers])
             end
         end
@@ -449,15 +519,23 @@ defmodule LivechainWeb.RPCController do
   @doc """
   Record successful RPC call for performance benchmarking.
   """
-  defp record_rpc_success(chain, provider_id, method) do
-    BenchmarkStore.record_rpc_call(chain, provider_id, method, 0, :success)
+  defp record_rpc_success(chain, provider_id, method, duration_ms) do
+    # Record in BenchmarkStore for historical analysis
+    BenchmarkStore.record_rpc_call(chain, provider_id, method, duration_ms, :success)
+    
+    # Update ProviderPool with real-time metrics for provider selection
+    Livechain.RPC.ProviderPool.report_success(chain, provider_id, duration_ms)
   end
 
   @doc """
   Record failed RPC call for performance benchmarking.
   """
-  defp record_rpc_failure(chain, provider_id, method, _reason) do
-    BenchmarkStore.record_rpc_call(chain, provider_id, method, 0, :error)
+  defp record_rpc_failure(chain, provider_id, method, reason, duration_ms) do
+    # Record in BenchmarkStore for historical analysis
+    BenchmarkStore.record_rpc_call(chain, provider_id, method, duration_ms, :error)
+    
+    # Update ProviderPool with failure information for provider selection
+    Livechain.RPC.ProviderPool.report_failure(chain, provider_id, reason)
   end
 
   defp resolve_chain_name(chain_identifier) do

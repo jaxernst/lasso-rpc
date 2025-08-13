@@ -80,6 +80,14 @@ defmodule Livechain.RPC.WSConnection do
     GenServer.call(via_name(connection_id), {:forward_rpc_request, method, params})
   end
 
+  @doc """
+  Performs a health check request to a provider endpoint.
+  Used by ProviderPool for active health monitoring.
+  """
+  def health_check_request(endpoint, method \\ "eth_chainId", params \\ []) do
+    make_http_rpc_request(endpoint, method, params)
+  end
+
   # Server Callbacks
 
   @impl true
@@ -373,12 +381,48 @@ defmodule Livechain.RPC.WSConnection do
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
+  @doc """
+  Get timeout in milliseconds for a specific RPC method.
+  Heavy methods get longer timeouts than quick ones.
+  """
+  defp get_method_timeout(method) do
+    case method do
+      # Heavy methods that can take a long time
+      "eth_getLogs" -> 60_000          # 60 seconds
+      "eth_getFilterLogs" -> 60_000    # 60 seconds
+      "eth_newFilter" -> 30_000        # 30 seconds
+      "debug_traceTransaction" -> 120_000  # 2 minutes
+      "debug_traceBlock" -> 120_000    # 2 minutes
+      
+      # Medium methods
+      "eth_getBlockByNumber" -> 30_000     # 30 seconds
+      "eth_getBlockByHash" -> 30_000       # 30 seconds
+      "eth_getTransactionByHash" -> 20_000 # 20 seconds
+      "eth_getTransactionReceipt" -> 20_000 # 20 seconds
+      "eth_call" -> 20_000                 # 20 seconds
+      "eth_estimateGas" -> 20_000          # 20 seconds
+      
+      # Quick methods
+      "eth_blockNumber" -> 10_000      # 10 seconds
+      "eth_chainId" -> 5_000           # 5 seconds
+      "eth_gasPrice" -> 10_000         # 10 seconds
+      "eth_getBalance" -> 15_000       # 15 seconds
+      "eth_getTransactionCount" -> 15_000  # 15 seconds
+      "eth_getCode" -> 15_000          # 15 seconds
+      "net_version" -> 5_000           # 5 seconds
+      "web3_clientVersion" -> 5_000    # 5 seconds
+      
+      # Default for unknown methods
+      _ -> 30_000                      # 30 seconds default
+    end
+  end
+
   defp via_name(connection_id) do
     {:via, :global, {:connection, connection_id}}
   end
 
   @doc """
-  Makes an RPC request via WebSocket to the provider's endpoint.
+  Makes an HTTP RPC request to the provider's endpoint.
   """
   defp make_http_rpc_request(endpoint, method, params) do
     # Build the JSON-RPC request
@@ -391,15 +435,58 @@ defmodule Livechain.RPC.WSConnection do
       "id" => request_id
     }
 
-    # Convert to JSON and send via WebSocket
+    # Convert to JSON and make HTTP request
     case Jason.encode(request_body) do
       {:ok, json_body} ->
-        # For now, return a mock response since we need to implement proper WebSocket RPC handling
-        # This is a placeholder until we implement the full WebSocket RPC request/response system
-        {:ok, "mock_response_for_#{method}"}
+        headers = [
+          {"content-type", "application/json"},
+          {"accept", "application/json"}
+        ]
+
+        # Add Authorization header if API key is provided
+        headers = 
+          if endpoint.api_key do
+            [{"authorization", "Bearer #{endpoint.api_key}"} | headers]
+          else
+            headers
+          end
+
+        # Create HTTP request
+        request = Finch.build(:post, endpoint.url, headers, json_body)
+
+        # Execute request with method-specific timeout
+        timeout_ms = get_method_timeout(method)
+        case Finch.request(request, Livechain.Finch, receive_timeout: timeout_ms) do
+          {:ok, %Finch.Response{status: status, body: body}} when status in 200..299 ->
+            case Jason.decode(body) do
+              {:ok, response} ->
+                # Check for JSON-RPC rate limit errors
+                case response do
+                  %{"error" => %{"code" => code}} when code in [-32005, -32000] ->
+                    # Many providers use -32005 or -32000 for rate limits
+                    {:error, {:rate_limit, response["error"]["message"] || "Rate limit exceeded"}}
+                  _ ->
+                    {:ok, response}
+                end
+              {:error, decode_error} ->
+                {:error, {:decode_error, "Failed to decode response: #{inspect(decode_error)}"}}
+            end
+
+          {:ok, %Finch.Response{status: 429, body: body}} ->
+            {:error, {:rate_limit, "HTTP 429: #{body}"}}
+
+          {:ok, %Finch.Response{status: status, body: body}} when status >= 500 ->
+            {:error, {:server_error, "HTTP #{status}: #{body}"}}
+
+          {:ok, %Finch.Response{status: status, body: body}} ->
+            {:error, {:client_error, "HTTP #{status}: #{body}"}}
+
+          {:error, reason} ->
+            {:error, {:network_error, "Request failed: #{inspect(reason)}"}}
+        end
 
       {:error, reason} ->
-        {:error, "Failed to encode request: #{reason}"}
+        {:error, "Failed to encode request: #{inspect(reason)}"}
     end
   end
 
@@ -699,11 +786,11 @@ defmodule Livechain.RPC.WSConnection do
   end
 
   defp send_json_rpc_request(state, request) do
-    case state.websocket_pid do
+    case state.connection do
       nil ->
         {:error, :not_connected}
 
-      pid ->
+      _connection ->
         try do
           # For now, return mock data since we're using mock connections
           # In production, this would send the actual request via WebSocket
@@ -716,7 +803,7 @@ defmodule Livechain.RPC.WSConnection do
     end
   end
 
-  defp mock_ssjson_rpc_response(%{method: "eth_getLogs"}) do
+  defp mock_json_rpc_response(%{method: "eth_getLogs"}) do
     {:ok,
      %{
        "jsonrpc" => "2.0",

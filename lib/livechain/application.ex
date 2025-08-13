@@ -13,6 +13,9 @@ defmodule Livechain.Application do
         # Start PubSub for real-time messaging
         {Phoenix.PubSub, name: Livechain.PubSub},
 
+        # Start Finch HTTP client for RPC provider requests
+        {Finch, name: Livechain.Finch},
+
         # Start benchmark store for performance metrics
         Livechain.Benchmarking.BenchmarkStore,
 
