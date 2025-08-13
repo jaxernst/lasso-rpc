@@ -1,65 +1,57 @@
-# ChainPulse Documentation
+# ChainPulse
 
-> **Intelligent blockchain RPC orchestration platform for crypto development teams**
+High-performance RPC orchestration and benchmarking for EVM chains.
 
-ChainPulse is a **blockchain RPC orchestration platform** that provides **intelligent multi-provider management**, **real-time event streaming**, **automatic failover**, and **performance optimization** through passive benchmarking and load balancing.
+## Features
 
-## 📖 **Quick Navigation**
+- Multi-provider orchestration with passive racing and failover
+- Real-time WebSocket subscriptions for `newHeads` and `logs`
+- HTTP JSON-RPC proxy for read-only methods
+- Pluggable provider selection strategies (leaderboard, priority, round_robin)
+- Live dashboard with provider performance metrics
 
-### **Demo & Getting Started**
+## Usage
 
-- **[Getting Started](GETTING_STARTED.md)** - Setup and basic usage
+### HTTP vs WebSocket
 
-### **Technical Reference**
+- WebSocket (WS): Subscriptions only (e.g., `eth_subscribe`, `eth_unsubscribe`). Also supports generic forwarding of read-only methods using the same selection/failover logic as HTTP.
+- HTTP (POST /rpc/:chain): Read-only methods proxied to upstream providers.
+  - WS-only methods over HTTP return a JSON-RPC error with a hint to use WS.
 
-- **[Architecture](ARCHITECTURE.md)** - Core technical design and algorithms
-- **[API Reference](API_REFERENCE.md)** - Working endpoints and examples
-- **[Demo Technical Spec](DEMO_TECHNICAL_SPEC.md)** - Features for hackathon demonstration
+### Provider Selection Strategy
 
-### **Development**
+The orchestrator uses a pluggable strategy to pick providers when forwarding HTTP calls.
 
-- **[Development Guide](development/)** - Implementation details and roadmap
+- Default: `:leaderboard` (highest score from BenchmarkStore)
+- Alternatives: `:priority`, `:round_robin`
 
----
+Configure via:
 
-## 🎯 **What ChainPulse Does**
+```elixir
+# config/config.exs
+config :livechain, :provider_selection_strategy, :leaderboard
+# :priority or :round_robin also supported
+```
 
-### **Core Platform Capabilities**
+### Examples
 
-1. **RPC Orchestration** - Multi-provider racing, intelligent routing, automatic failover
-2. **Real-time Event Streaming** - Sub-second blockchain event delivery with curated feeds
-3. **JSON-RPC Compatibility** - Drop-in replacement for Infura/Alchemy with enhanced capabilities
-4. **Performance Intelligence** - Passive benchmarking and cost optimization insights
-5. **Multi-Chain Support** - Unified API across 15+ blockchain networks
-6. **Fault-Tolerant Architecture** - Elixir/OTP supervision with circuit breakers
+```bash
+# Latest block number via HTTP proxy
+curl -X POST http://localhost:4000/rpc/ethereum \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
 
-### **Competitive Advantages**
-
-- **vs The Graph**: Real-time (sub-second) vs minutes of indexing delay, free hosting vs $100+/month
-- **vs Alchemy/Infura**: Multi-provider failover vs single-point-of-failure, built-in analytics vs external tools
-- **vs Custom Solutions**: 10x faster time-to-market, self-healing architecture, handles 10,000+ connections
-
-### **Demo Highlights**
-
-- **Live RPC orchestration** - Watch multiple providers compete with intelligent routing
-- **Real-time event streaming** - Sub-second blockchain event feeds with filtering
-- **Automatic failover demonstrations** - Seamless provider switching under failure conditions
-- **Performance analytics dashboard** - Real metrics on provider speed, reliability, and costs
-- **Elixir/BEAM observability** - System internals, process monitoring, and scalability metrics
-
----
-
-## 🏗️ **Current Implementation Status**
-
-### **✅ Working Foundation**
-
-- **OTP supervision architecture** - Fault-tolerant process management
-- **Multi-chain configuration** - Ethereum, Polygon, Arbitrum, BSC support
-- **Circuit breakers** - Automatic failover logic
-- **Message aggregation** - Event deduplication with racing metrics
-- **Phoenix LiveView dashboard** - Real-time visualization framework
-- **Passive benchmarking** - Performance tracking without synthetic load
-
-### **🔄 In Active Development**
-
-- **Real provider integration** - Infura, Alchemy, other RPC connections
+```javascript
+// Subscribe to new block headers over WS
+const ws = new WebSocket("ws://localhost:4000/rpc/ethereum");
+ws.onopen = () =>
+  ws.send(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "eth_subscribe",
+      params: ["newHeads"],
+      id: 1,
+    })
+  );
+```

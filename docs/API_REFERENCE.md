@@ -54,9 +54,16 @@ POST /rpc/ethereum
 WebSocket: ws://localhost:4000/rpc/ethereum
 ```
 
-### **Supported Methods**
+### **HTTP vs WebSocket Behavior**
 
-Currently implemented JSON-RPC methods:
+- **HTTP (POST /rpc/:chain)**: Read-only JSON-RPC methods are forwarded to upstream providers via the orchestration layer. Subscriptions are not supported over HTTP.
+- **WebSocket (ws://.../rpc/:chain)**: Supports both real-time JSON-RPC subscriptions (`eth_subscribe`, `eth_unsubscribe`) and generic forwarding of read-only JSON-RPC methods using the same provider selection and failover logic as HTTP.
+
+If a WS-only method is called over HTTP, the service returns a JSON-RPC error with a hint to use the WebSocket endpoint.
+
+### **Supported Methods (HTTP & WS)**
+
+Currently implemented and forwarded JSON-RPC methods include but are not limited to:
 
 #### **Block Queries**
 
@@ -99,19 +106,7 @@ curl -X POST http://localhost:4000/rpc/ethereum \
   }'
 ```
 
-### **Other Chains**
-
-Similar endpoints available for:
-
-- **Polygon**: `/rpc/polygon`
-- **Arbitrum**: `/rpc/arbitrum`
-- **BSC**: `/rpc/bsc`
-
----
-
-## WebSocket Subscriptions
-
-### **Standard Ethereum Subscriptions**
+### **WebSocket Subscriptions (WS)**
 
 ```javascript
 // WebSocket connection
@@ -142,6 +137,25 @@ ws.send(
   })
 );
 ```
+
+---
+
+## Provider Selection Strategy
+
+The orchestrator uses a pluggable provider selection strategy when forwarding JSON-RPC calls over both HTTP and WebSocket.
+
+- **Default**: `:leaderboard` (highest score from `BenchmarkStore`)
+- **Alternatives**: `:priority`, `:round_robin`
+
+Configuration:
+
+```elixir
+# config/config.exs
+config :livechain, :provider_selection_strategy, :leaderboard
+# :priority or :round_robin can be used instead
+```
+
+Future strategies (planned): `:cheapest`, `:latency_based`, hybrid strategies.
 
 ---
 

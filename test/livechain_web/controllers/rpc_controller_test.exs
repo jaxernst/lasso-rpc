@@ -3,17 +3,11 @@ defmodule LivechainWeb.RPCControllerTest do
   Integration tests for the RPC controller endpoints.
   """
 
+  # TODO: Expand cases to test that RPC requests can be made for chains configured in ChainConfig
+
   use ExUnit.Case, async: true
 
   describe "RPC controller module" do
-    test "module exists and has expected functions" do
-      assert Code.ensure_loaded?(LivechainWeb.RPCController)
-      assert function_exported?(LivechainWeb.RPCController, :ethereum, 2)
-      assert function_exported?(LivechainWeb.RPCController, :arbitrum, 2)
-      assert function_exported?(LivechainWeb.RPCController, :polygon, 2)
-      assert function_exported?(LivechainWeb.RPCController, :bsc, 2)
-    end
-
     test "can process JSON-RPC requests" do
       # Test that the module can handle basic JSON-RPC requests
       request = %{

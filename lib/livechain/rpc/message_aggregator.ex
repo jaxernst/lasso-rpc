@@ -16,11 +16,12 @@ defmodule Livechain.RPC.MessageAggregator do
 
   use GenServer
   require Logger
-  
+
   alias Livechain.Benchmarking.BenchmarkStore
 
   defstruct [
     :chain_name,
+    # TODO: Why do we store the chain config in this module struct? (Should already have config loaded)
     :chain_config,
     :message_cache,
     :cache_refs,
@@ -173,7 +174,12 @@ defmodule Livechain.RPC.MessageAggregator do
         forward_message(state.chain_name, provider_id, message, received_at)
 
         # Record racing victory
-        BenchmarkStore.record_event_race_win(state.chain_name, provider_id, event_type, received_at)
+        BenchmarkStore.record_event_race_win(
+          state.chain_name,
+          provider_id,
+          event_type,
+          received_at
+        )
 
         cache_message(state, message_key, message, received_at, provider_id)
         |> update_forwarded_stats()
@@ -181,14 +187,20 @@ defmodule Livechain.RPC.MessageAggregator do
       {_cached_msg, cached_time, cached_provider} ->
         # Duplicate message - log and increment stats
         margin_ms = received_at - cached_time
-        
+
         Logger.debug(
           "Deduplicated message from #{provider_id} (original from #{cached_provider}) " <>
             "for #{state.chain_name}: #{message_key}, margin: #{margin_ms}ms"
         )
 
         # Record racing loss with margin
-        BenchmarkStore.record_event_race_loss(state.chain_name, provider_id, event_type, received_at, margin_ms)
+        BenchmarkStore.record_event_race_loss(
+          state.chain_name,
+          provider_id,
+          event_type,
+          received_at,
+          margin_ms
+        )
 
         update_deduplicated_stats(state)
     end
@@ -240,9 +252,9 @@ defmodule Livechain.RPC.MessageAggregator do
     cond do
       # New block subscription (newHeads)
       is_map(message) and Map.get(message, "method") == "eth_subscription" and
-        is_map(message["params"]) and 
-        (Map.has_key?(message["params"]["result"], "hash") or 
-         Map.has_key?(message["params"]["result"], "number")) ->
+        is_map(message["params"]) and
+          (Map.has_key?(message["params"]["result"], "hash") or
+             Map.has_key?(message["params"]["result"], "number")) ->
         "newHeads"
 
       # Transaction logs
@@ -252,9 +264,9 @@ defmodule Livechain.RPC.MessageAggregator do
 
       # Pending transactions
       is_map(message) and Map.get(message, "method") == "eth_subscription" and
-        is_map(message["params"]) and 
-        (Map.has_key?(message["params"]["result"], "from") or
-         Map.has_key?(message["params"]["result"], "to")) ->
+        is_map(message["params"]) and
+          (Map.has_key?(message["params"]["result"], "from") or
+             Map.has_key?(message["params"]["result"], "to")) ->
         "pendingTransactions"
 
       # Sync status updates

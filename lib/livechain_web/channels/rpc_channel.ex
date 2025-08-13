@@ -13,6 +13,8 @@ defmodule LivechainWeb.RPCChannel do
   require Logger
 
   alias Livechain.RPC.WSSupervisor
+  alias Livechain.RPC.ChainManager
+  alias Livechain.Benchmarking.BenchmarkStore
 
   @impl true
   def join("rpc:" <> chain, _payload, socket) do
@@ -169,112 +171,93 @@ defmodule LivechainWeb.RPCChannel do
     end
   end
 
+  # Prefer generic forwarding path for reads; keep legacy specific handlers for now
   defp handle_rpc_method("eth_getLogs", [filter], socket) do
-    chain = socket.assigns.chain
-    Logger.debug("eth_getLogs called with filter: #{inspect(filter)} for chain: #{chain}")
-
-    case Livechain.RPC.ChainManager.get_logs(chain, filter) do
-      {:ok, logs} ->
-        {:ok, logs}
-
-      {:error, reason} ->
-        Logger.warning("Failed to get logs for #{chain}: #{reason}")
-        {:error, "Failed to get logs: #{reason}"}
-    end
+    forward_over_ws(socket.assigns.chain, "eth_getLogs", [filter])
   end
 
   defp handle_rpc_method("eth_getBlockByNumber", [block_number, include_transactions], socket) do
-    chain = socket.assigns.chain
-    Logger.debug("eth_getBlockByNumber called: #{block_number} for chain: #{chain}")
-
-    case Livechain.RPC.ChainManager.get_block_by_number(chain, block_number, include_transactions) do
-      {:ok, block} ->
-        {:ok, block}
-
-      {:error, reason} ->
-        Logger.warning("Failed to get block for #{chain}: #{reason}")
-        {:error, "Failed to get block: #{reason}"}
-    end
-  end
-
-  defp handle_rpc_method("eth_getTransactionReceipt", [tx_hash], socket) do
-    chain = socket.assigns.chain
-    Logger.debug("eth_getTransactionReceipt called for: #{tx_hash} on chain: #{chain}")
-
-    # For now, delegate to get_logs with transaction hash filter
-    filter = %{"topics" => [], "address" => [], "transactionHash" => tx_hash}
-
-    case Livechain.RPC.ChainManager.get_logs(chain, filter) do
-      {:ok, logs} when length(logs) > 0 ->
-        # Extract receipt information from logs
-        log = List.first(logs)
-
-        receipt = %{
-          "transactionHash" => tx_hash,
-          "blockNumber" => Map.get(log, "blockNumber"),
-          "blockHash" => Map.get(log, "blockHash"),
-          "status" => "0x1",
-          "gasUsed" => "0x5208",
-          "logs" => logs
-        }
-
-        {:ok, receipt}
-
-      {:ok, []} ->
-        {:ok, nil}
-
-      {:error, reason} ->
-        Logger.warning("Failed to get transaction receipt for #{chain}: #{reason}")
-        {:error, "Failed to get transaction receipt: #{reason}"}
-    end
+    forward_over_ws(socket.assigns.chain, "eth_getBlockByNumber", [
+      block_number,
+      include_transactions
+    ])
   end
 
   defp handle_rpc_method("eth_blockNumber", [], socket) do
-    chain = socket.assigns.chain
-    Logger.debug("eth_blockNumber called for chain: #{chain}")
-
-    case Livechain.RPC.ChainManager.get_block_number(chain) do
-      {:ok, block_number} ->
-        {:ok, block_number}
-
-      {:error, reason} ->
-        Logger.warning("Failed to get block number for #{chain}: #{reason}")
-        {:error, "Failed to get block number: #{reason}"}
-    end
+    forward_over_ws(socket.assigns.chain, "eth_blockNumber", [])
   end
 
   defp handle_rpc_method("eth_getBalance", [address, block], socket) do
-    chain = socket.assigns.chain
-    Logger.debug("eth_getBalance called for address: #{address} on chain: #{chain}")
-
-    case Livechain.RPC.ChainManager.get_balance(chain, address, block) do
-      {:ok, balance} ->
-        {:ok, balance}
-
-      {:error, reason} ->
-        Logger.warning("Failed to get balance for #{chain}: #{reason}")
-        {:error, "Failed to get balance: #{reason}"}
-    end
+    forward_over_ws(socket.assigns.chain, "eth_getBalance", [address, block])
   end
 
   defp handle_rpc_method("eth_chainId", [], socket) do
-    chain = socket.assigns.chain
-    Logger.debug("eth_chainId called for chain: #{chain}")
+    case get_chain_id(socket.assigns.chain) do
+      {:ok, chain_id} -> {:ok, chain_id}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-    case get_chain_id(chain) do
-      {:ok, chain_id} ->
-        {:ok, chain_id}
+  # Generic forwarding catchall for read-only JSON-RPC methods over WS
+  defp handle_rpc_method(method, params, socket) do
+    forward_over_ws(socket.assigns.chain, method, params)
+  end
+
+  # Helper functions
+
+  defp forward_over_ws(chain, method, params) do
+    with {:ok, provider_id} <- select_best_provider(chain, method, default_provider_strategy()),
+         {:ok, result} <- ChainManager.forward_rpc_request(chain, provider_id, method, params) do
+      BenchmarkStore.record_rpc_call(chain, provider_id, method, 0, :success)
+      {:ok, result}
+    else
+      {:error, reason} ->
+        {:error, "RPC forwarding failed: #{inspect(reason)}"}
+
+      other ->
+        {:error, "RPC forwarding failed: #{inspect(other)}"}
+    end
+  end
+
+  defp default_provider_strategy do
+    Application.get_env(:livechain, :provider_selection_strategy, :leaderboard)
+  end
+
+  defp select_best_provider(chain, method, :leaderboard) do
+    case BenchmarkStore.get_provider_leaderboard(chain) do
+      {:ok, [_ | _] = leaderboard} ->
+        [best | _] = Enum.sort_by(leaderboard, & &1.score, :desc)
+        {:ok, best.provider_id}
+
+      {:ok, []} ->
+        select_best_provider(chain, method, :priority)
+
+      {:error, _} ->
+        select_best_provider(chain, method, :priority)
+    end
+  end
+
+  defp select_best_provider(chain, _method, :priority) do
+    case ChainManager.get_available_providers(chain) do
+      {:ok, [provider_id | _]} -> {:ok, provider_id}
+      {:ok, []} -> {:error, :no_providers}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp select_best_provider(chain, _method, :round_robin) do
+    case ChainManager.get_available_providers(chain) do
+      {:ok, []} ->
+        {:error, :no_providers}
+
+      {:ok, providers} ->
+        idx = rem(System.monotonic_time(:millisecond), length(providers))
+        {:ok, Enum.at(providers, idx)}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
-
-  defp handle_rpc_method(method, _params, _socket) do
-    {:error, "Method not supported: #{method}"}
-  end
-
-  # Helper functions
 
   defp ensure_chain_connection(chain) do
     # Check if we have an active connection for this chain

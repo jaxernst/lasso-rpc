@@ -1,6 +1,7 @@
 defmodule LivechainWeb.ChainController do
   use LivechainWeb, :controller
 
+  # TODO: This controller should use ChainConfig (the hardcoded chains map is bad form)
   alias Livechain.RPC.WSSupervisor
 
   @supported_chains %{

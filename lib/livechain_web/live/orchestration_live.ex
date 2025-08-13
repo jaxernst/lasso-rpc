@@ -1,6 +1,6 @@
 defmodule LivechainWeb.OrchestrationLive do
   use LivechainWeb, :live_view
-  
+
   alias Livechain.Benchmarking.BenchmarkStore
 
   @impl true
@@ -470,10 +470,7 @@ defmodule LivechainWeb.OrchestrationLive do
               current_time={@current_time}
             />
           <% @active_tab == :benchmarks -> %>
-            <.benchmarks_tab
-              benchmark_data={@benchmark_data}
-              benchmark_chain={@benchmark_chain}
-            />
+            <.benchmarks_tab benchmark_data={@benchmark_data} benchmark_chain={@benchmark_chain} />
           <% true -> %>
             <.live_feed_tab
               live_events={@live_events}
@@ -594,15 +591,15 @@ defmodule LivechainWeb.OrchestrationLive do
   @impl true
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
     tab_atom = String.to_atom(tab)
-    
-    socket = 
+
+    socket =
       if tab_atom == :benchmarks do
         # Load benchmark data when switching to benchmarks tab
         load_benchmark_data(socket)
       else
         socket
       end
-    
+
     {:noreply, assign(socket, :active_tab, tab_atom)}
   end
 
@@ -628,7 +625,7 @@ defmodule LivechainWeb.OrchestrationLive do
       socket
       |> assign(:benchmark_chain, chain)
       |> load_benchmark_data()
-    
+
     {:noreply, socket}
   end
 
@@ -643,17 +640,17 @@ defmodule LivechainWeb.OrchestrationLive do
 
   defp load_benchmark_data(socket) do
     chain_name = socket.assigns.benchmark_chain
-    
+
     # Get benchmark data from the BenchmarkStore
     provider_leaderboard = BenchmarkStore.get_provider_leaderboard(chain_name)
     realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
-    
+
     benchmark_data = %{
       leaderboard: provider_leaderboard,
       stats: realtime_stats,
       last_updated: DateTime.utc_now()
     }
-    
+
     assign(socket, :benchmark_data, benchmark_data)
   end
 
@@ -910,16 +907,26 @@ defmodule LivechainWeb.OrchestrationLive do
             <div class="flex items-center space-x-3">
               <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-white bg-opacity-10">
                 <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                  />
                 </svg>
               </div>
               <div>
                 <h3 class="text-lg font-semibold text-white">Provider Benchmarks</h3>
-                <p class="text-sm text-indigo-200">Real-time performance metrics from racing and RPC calls</p>
+                <p class="text-sm text-indigo-200">
+                  Real-time performance metrics from racing and RPC calls
+                </p>
               </div>
             </div>
             <div class="flex items-center space-x-4">
-              <select phx-change="select_benchmark_chain" class="rounded border-indigo-700 bg-indigo-800 px-3 py-1 text-sm text-white">
+              <select
+                phx-change="select_benchmark_chain"
+                class="rounded border-indigo-700 bg-indigo-800 px-3 py-1 text-sm text-white"
+              >
                 <option value="ethereum" selected={@benchmark_chain == "ethereum"}>Ethereum</option>
                 <option value="polygon" selected={@benchmark_chain == "polygon"}>Polygon</option>
                 <option value="arbitrum" selected={@benchmark_chain == "arbitrum"}>Arbitrum</option>
@@ -936,7 +943,6 @@ defmodule LivechainWeb.OrchestrationLive do
           </div>
         </div>
       </div>
-
       <!-- Benchmarks Content -->
       <div class="flex flex-1 overflow-hidden p-6 pt-0">
         <!-- Left Panel - Provider Leaderboard -->
@@ -980,14 +986,15 @@ defmodule LivechainWeb.OrchestrationLive do
                   <div class="text-center">
                     <div class="mb-4 text-4xl text-indigo-600">🏁</div>
                     <p class="text-indigo-300">No racing data yet for <%= @benchmark_chain %></p>
-                    <p class="text-xs text-indigo-400">Performance data will appear as providers compete</p>
+                    <p class="text-xs text-indigo-400">
+                      Performance data will appear as providers compete
+                    </p>
                   </div>
                 </div>
               <% end %>
             </div>
           </div>
         </div>
-
         <!-- Right Panel - RPC Performance -->
         <div class="w-1/2 pl-3">
           <div class="bg-indigo-900/50 h-full overflow-hidden rounded-lg border border-indigo-700 shadow-xl backdrop-blur-sm">
@@ -1000,7 +1007,7 @@ defmodule LivechainWeb.OrchestrationLive do
                 <div class="space-y-4">
                   <%= for method <- @benchmark_data.stats.rpc_methods do %>
                     <div class="bg-indigo-800/60 rounded-lg border border-indigo-700 p-4">
-                      <h5 class="font-medium text-white mb-2"><%= method %></h5>
+                      <h5 class="mb-2 font-medium text-white"><%= method %></h5>
                       <div class="space-y-2">
                         <%= for provider <- @benchmark_data.stats.providers do %>
                           <div class="flex items-center justify-between text-sm">
@@ -1019,7 +1026,9 @@ defmodule LivechainWeb.OrchestrationLive do
                 <div class="flex h-full items-center justify-center">
                   <div class="text-center">
                     <div class="mb-4 text-4xl text-indigo-600">⚡</div>
-                    <p class="text-indigo-300">No RPC performance data yet for <%= @benchmark_chain %></p>
+                    <p class="text-indigo-300">
+                      No RPC performance data yet for <%= @benchmark_chain %>
+                    </p>
                     <p class="text-xs text-indigo-400">Data will appear as RPC calls are made</p>
                   </div>
                 </div>

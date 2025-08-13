@@ -141,6 +141,29 @@ defmodule Livechain.RPC.ChainManager do
     end
   end
 
+  @doc """
+  Forwards an RPC request to a specific provider on a chain.
+  This is the core function for HTTP RPC forwarding with provider selection.
+  """
+  def forward_rpc_request(chain_name, provider_id, method, params) do
+    case ChainSupervisor.forward_rpc_request(chain_name, provider_id, method, params) do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Gets all available providers for a specific chain.
+  Returns a list of provider IDs that are currently available.
+  """
+  def get_available_providers(chain_name) do
+    case ChainSupervisor.get_active_providers(chain_name) do
+      providers when is_list(providers) -> {:ok, providers}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :failed_to_get_providers}
+    end
+  end
+
   # GenServer callbacks
 
   @impl true

@@ -29,6 +29,8 @@ defmodule Livechain.RPC.WSSupervisor do
 
   alias Livechain.RPC.{WSEndpoint, WSConnection, MockWSEndpoint, MockWSConnection}
 
+  # TODO: How could we rework this module to avoid duplicative code that explicity reference mock ws connections ws real ws connections? Shouldn't this treat both the same?
+
   # Client API
 
   @doc """

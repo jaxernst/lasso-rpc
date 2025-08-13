@@ -34,8 +34,6 @@ defmodule LivechainWeb.Router do
     # Chain endpoints
     get("/chains", ChainController, :index)
     get("/chains/:chain_id/status", ChainController, :status)
-    get("/chains/:chain_id/blocks/latest", BlockController, :latest)
-    get("/chains/:chain_id/blocks/:number", BlockController, :show)
 
     # Analytics endpoints
     scope "/analytics", as: :analytics do
@@ -48,18 +46,15 @@ defmodule LivechainWeb.Router do
     end
   end
 
-  # HTTP JSON-RPC endpoints for onchain app clients
+  # HTTP JSON-RPC endpoints
   scope "/rpc", LivechainWeb do
     pipe_through(:api)
 
-    # Generic endpoint for any configured chain
-    post("/:chain_id", RPCController, :rpc)
+    # Strategy-specific endpoint (e.g., /rpc/cheapest/ethereum)
+    post("/fastest/:chain_id", RPCController, :rpc)
+    post("/cheapest/:chain_id", RPCController, :rpc)
 
-    # Backward compatibility endpoints
-    # TODO: Remove these endpoints and remove handlers - only need the generic one.
-    post("/ethereum", RPCController, :ethereum)
-    post("/arbitrum", RPCController, :arbitrum)
-    post("/polygon", RPCController, :polygon)
-    post("/bsc", RPCController, :bsc)
+    # Generic endpoint for any configured chain (backward compatible)
+    post("/:chain_id", RPCController, :rpc)
   end
 end
