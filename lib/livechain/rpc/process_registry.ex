@@ -6,6 +6,8 @@ defmodule Livechain.RPC.ProcessRegistry do
   replacing global registry usage with a more robust solution.
   """
 
+  # TODO: Is this process registry used throughout the codebase and implemented correctly? ARCHITECTURE_IMPROVEMENTS.md has this module documented as being an improved way to manage process naming/referencing, but I'm not sure the implementation has been completed (I'm just not familiar with the 'via_name' connventions so I"m not sure if that was the old way or the new way)
+
   use GenServer
   require Logger
 

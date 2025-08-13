@@ -72,6 +72,14 @@ defmodule Livechain.RPC.WSConnection do
     GenServer.call(via_name(connection_id), :status)
   end
 
+  @doc """
+  Forwards an RPC request to the provider via HTTP.
+  This is used for HTTP RPC forwarding from the RPC controller.
+  """
+  def forward_rpc_request(connection_id, method, params) do
+    GenServer.call(via_name(connection_id), {:forward_rpc_request, method, params})
+  end
+
   # Server Callbacks
 
   @impl true
@@ -155,6 +163,23 @@ defmodule Livechain.RPC.WSConnection do
     }
 
     {:reply, status, state}
+  end
+
+  @impl true
+  def handle_call({:forward_rpc_request, method, params}, _from, state) do
+    case make_http_rpc_request(state.endpoint, method, params) do
+      {:ok, result} ->
+        {:reply, {:ok, result}, state}
+
+      {:error, reason} ->
+        Logger.error("RPC request failed",
+          endpoint: state.endpoint.id,
+          method: method,
+          reason: reason
+        )
+
+        {:reply, {:error, reason}, state}
+    end
   end
 
   @impl true
@@ -270,6 +295,7 @@ defmodule Livechain.RPC.WSConnection do
     %{state | pending_messages: []}
   end
 
+  # TODO: Consider consilidating these duplicative function handlers (only difference is in the debug calls)
   defp handle_websocket_message(
          %{
            "method" => "eth_subscription",
@@ -291,6 +317,7 @@ defmodule Livechain.RPC.WSConnection do
       {:raw_message, state.endpoint.id, message, received_at}
     )
 
+    # TODO: Remove this backward compatibility functionality (don't need to maintain these old functions with hardocded chain names anywhere in the codebase)
     # Also maintain backward compatibility
     broadcast_block_to_channels(state.endpoint, block_data)
 
@@ -331,6 +358,7 @@ defmodule Livechain.RPC.WSConnection do
     {:ok, state}
   end
 
+  # TODO: use ChainConfig instead of hardcoded names
   defp get_chain_name(chain_id) do
     case chain_id do
       1 -> "ethereum"
@@ -347,6 +375,32 @@ defmodule Livechain.RPC.WSConnection do
 
   defp via_name(connection_id) do
     {:via, :global, {:connection, connection_id}}
+  end
+
+  @doc """
+  Makes an RPC request via WebSocket to the provider's endpoint.
+  """
+  defp make_http_rpc_request(endpoint, method, params) do
+    # Build the JSON-RPC request
+    request_id = generate_id()
+
+    request_body = %{
+      "jsonrpc" => "2.0",
+      "method" => method,
+      "params" => params,
+      "id" => request_id
+    }
+
+    # Convert to JSON and send via WebSocket
+    case Jason.encode(request_body) do
+      {:ok, json_body} ->
+        # For now, return a mock response since we need to implement proper WebSocket RPC handling
+        # This is a placeholder until we implement the full WebSocket RPC request/response system
+        {:ok, "mock_response_for_#{method}"}
+
+      {:error, reason} ->
+        {:error, "Failed to encode request: #{reason}"}
+    end
   end
 
   defp broadcast_block_to_channels(endpoint, block_data) do

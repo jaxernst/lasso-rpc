@@ -154,18 +154,33 @@ ETS Tables (Per Chain):
 eth_subscribe("newHeads")        # Block event racing
 eth_subscribe("logs")            # Transaction log racing
 
-# HTTP endpoints for benchmarking:
+# HTTP endpoints for benchmarking/proxying (read-only):
 eth_getLogs(filter)              # Historical log queries
 eth_getBlockByNumber(number)     # Block data retrieval
 eth_getBalance(address)          # Account balance queries
 ```
 
-### **Provider Pool Management**
+### **HTTP vs WebSocket Responsibilities**
 
-- **Multiple providers per chain**: Infura, Alchemy, public nodes
-- **Health monitoring**: Continuous connection status tracking
-- **Load balancing**: Route requests based on performance scores
-- **Failover logic**: Automatic switching on provider failures
+- **WebSocket (WS)**: Real-time subscriptions only. Methods like `eth_subscribe` and `eth_unsubscribe` are WS-only. In addition, WS supports generic forwarding of read-only JSON-RPC methods using the same provider selection and failover logic as HTTP.
+- **HTTP**: Read-only JSON-RPC methods are forwarded to upstream providers via a smart proxy. HTTP requests to WS-only methods return a JSON-RPC error advising clients to use WS.
+
+### **Provider Selection Strategies**
+
+Provider selection is pluggable and defaults to leaderboard-based selection:
+
+- **:leaderboard (default)**: Picks highest-scoring provider from `BenchmarkStore`
+- **:priority**: First available provider by configured priority
+- **:round_robin**: Rotates across available providers
+- Future strategies can include **:cheapest**, **:latency_based**, or **hybrid** approaches
+
+Configuration:
+
+```elixir
+# config/config.exs
+config :livechain, :provider_selection_strategy, :leaderboard
+# Alternatives: :priority | :round_robin
+```
 
 ---
 

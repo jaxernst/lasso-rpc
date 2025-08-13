@@ -15,6 +15,8 @@ defmodule Livechain.RPC.ChainSupervisor do
   └── ProviderPool (Health & Failover)
   """
 
+  # TODO: Why does this chain supervisor have 'get_balance', 'get_logs' and other ethereum json rpc methods? This seems mostly unrelated to actually supervising chain connections. Don't we already have an api to forward json rpc requests to rpc providers?
+
   use Supervisor
   require Logger
 
@@ -141,6 +143,17 @@ defmodule Livechain.RPC.ChainSupervisor do
     end
   end
 
+  @doc """
+  Forwards an RPC request to a specific provider on this chain.
+  This is the core function for HTTP RPC forwarding with provider selection.
+  """
+  def forward_rpc_request(chain_name, provider_id, method, params) do
+    case WSConnection.forward_rpc_request(provider_id, method, params) do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp get_best_provider(chain_name) do
     active_providers = get_active_providers(chain_name)
 
@@ -165,10 +178,11 @@ defmodule Livechain.RPC.ChainSupervisor do
       # Start ProviderPool for health monitoring
       {ProviderPool, {chain_name, chain_config}},
 
-      # Start WSConnection for each available provider
+      # Start dynamic supervisor to manage WS connections
       {DynamicSupervisor, strategy: :one_for_one, name: connection_supervisor_name(chain_name)}
     ]
 
+    # Start WSConnection for each available provider
     with {:ok, supervisor_pid} <- Supervisor.init(children, strategy: :one_for_one) do
       # Start provider connections after supervisor is ready
       spawn_link(fn -> start_provider_connections(chain_name, chain_config) end)

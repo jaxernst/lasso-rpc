@@ -51,7 +51,6 @@ defmodule BaseLiveDemo do
     end
   end
 
-  @impl WebSockex.Handler
   def handle_connect(_conn, state) do
     Logger.info("🔗 WebSocket connected to Base network")
     {:ok, state}

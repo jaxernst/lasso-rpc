@@ -153,7 +153,7 @@ end
   - Chain selection and filtering
   - Real-time chart updates (not static data)
 
-#### **Technical Components**:
+#### **Technical Components**
 
 ```elixir
 # Real data integration (not hardcoded):
@@ -165,7 +165,7 @@ def load_benchmark_data(socket) do
 end
 ```
 
-#### **Dashboard Features to Demo**:
+#### **Dashboard Features to Demo**
 
 - **Racing Leaderboard**: Live provider rankings with win rates
 - **Performance Matrix**: RPC call latencies by provider and method
@@ -207,7 +207,7 @@ ethereum_alchemy = %WSEndpoint{
 }
 ```
 
-#### **JSON-RPC Methods to Support**:
+#### **JSON-RPC Methods to Support**
 
 - `eth_subscribe("newHeads")` - Block subscriptions for racing
 - `eth_getLogs` - Historical log queries with benchmarking
@@ -216,63 +216,64 @@ ethereum_alchemy = %WSEndpoint{
 
 ---
 
-### **7. OTP Supervision Architecture**
+### **7. Provider Selection Strategies (New)**
 
-#### **Process Hierarchy Demonstration**
+#### **Feature Overview**
 
-- **Files**: `lib/livechain/application.ex`, `lib/livechain/rpc/chain_supervisor.ex`
-- **Functionality**: Fault-tolerant process supervision with restart strategies
-- **Demo Requirements**:
-  - Process tree visualization
-  - Crash recovery demonstration
-  - Supervision strategy explanation
-  - Health monitoring integration
+- Pluggable strategy for selecting providers when forwarding HTTP JSON-RPC:
+  - `:leaderboard` (default): highest score from `BenchmarkStore`
+  - `:priority`: first available provider by configured priority
+  - `:round_robin`: rotate among available providers
+  - Future: `:cheapest`, `:latency_based`, hybrid
 
-#### **Technical Architecture**:
+#### **Configuration**
 
 ```elixir
-# Supervision tree:
-Livechain.Application
-├── Livechain.RPC.ChainManager
-├── Livechain.RPC.ChainSupervisor (per chain)
-│   ├── Livechain.RPC.WSConnection (per provider)
-│   ├── Livechain.RPC.MessageAggregator
-│   └── Livechain.RPC.ProviderPool
-├── Livechain.Benchmarking.BenchmarkStore
-└── Livechain.Benchmarking.Persistence
+# config/config.exs
+config :livechain, :provider_selection_strategy, :leaderboard
+# Alternatives: :priority | :round_robin
 ```
 
----
+#### **Demo Plan**
 
-## Critical Technical Fixes Required for Demo
+- Live toggle strategy to showcase different routing behaviors:
 
-### **1. Provider Integration (BLOCKING)**
+  1. Start with `:leaderboard` and display current leader on the dashboard
+  2. Switch to `:priority` at runtime (using `Application.put_env/3` in a console or a small admin control) and demonstrate deterministic routing to priority-1 provider
+  3. Switch to `:round_robin` and show sequential routing across available providers (e.g., via a simple `eth_blockNumber` loop)
+  4. Simulate a provider failure; observe automatic failover and how each strategy reacts
 
-- Implement missing `get_chain_name/1` function in WSConnection
-- Add real provider endpoint configuration
-- Fix subscription_topics KeyError in chain supervisor
-- Test actual Infura/Alchemy connections
+- Visualizations to show during demo:
 
-### **2. Dashboard Data Integration (HIGH PRIORITY)**
+  - Current strategy label on the dashboard
+  - Per-request annotations (provider used) in a lightweight request log panel
+  - Leaderboard scores vs chosen provider to illustrate strategy difference
 
-- Replace hardcoded values with real BenchmarkStore data
-- Connect racing metrics to dashboard visualization
-- Implement real-time data updates via LiveView
-- Add chain switching functionality
+- Scripted commands for the demo:
 
-### **3. Benchmarking System Validation (HIGH PRIORITY)**
+```elixir
+# In IEx attached to the running app
+Application.put_env(:livechain, :provider_selection_strategy, :leaderboard)
+Application.put_env(:livechain, :provider_selection_strategy, :priority)
+Application.put_env(:livechain, :provider_selection_strategy, :round_robin)
+```
 
-- Test racing algorithm with real provider data
-- Validate scoring algorithm mathematical correctness
-- Ensure ETS table cleanup works under load
-- Verify timing precision and accuracy
+- HTTP examples to trigger routing:
 
-### **4. JSON-RPC Method Coverage (MEDIUM PRIORITY)**
+```bash
+# Repeated block number calls to observe rotation/selection
+for i in {1..10}; do
+  curl -s -X POST http://localhost:4000/rpc/ethereum \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' >/dev/null; \
+  sleep 0.5; \
+  done
+```
 
-- Complete eth_subscribe implementation
-- Add remaining standard JSON-RPC methods
-- Test Viem/ethers.js compatibility
-- Handle error cases gracefully
+- Success criteria:
+  - Strategy switching changes provider selection behavior in real time
+  - Failover continues to work under each strategy
+  - Dashboard reflects racing metrics and provider selections
 
 ---
 

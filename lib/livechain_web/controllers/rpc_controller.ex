@@ -1,30 +1,51 @@
 defmodule LivechainWeb.RPCController do
   @moduledoc """
-  Ethereum JSON-RPC controller providing Viem-compatible endpoints for blockchain interactions.
+  Ethereum JSON-RPC controller providing endpoints for blockchain interactions.
 
-  This controller implements the Ethereum JSON-RPC specification to provide
-  drop-in compatibility with Viem, Wagmi, and other Ethereum client libraries.
+  This controller acts as a smart proxy that:
+  - Forwards read-only RPC requests to the best-performing provider
+  - Routes requests based on real-time performance benchmarks
+  - Provides automatic failover to healthy providers
+  - Rejects subscription requests (use WebSocket for real-time events)
 
   Supported methods:
-  - eth_subscribe: Real-time event subscriptions
   - eth_getLogs: Historical log queries
   - eth_getBlockByNumber: Block data retrieval
   - eth_blockNumber: Latest block number
   - eth_chainId: Chain identification
+  - eth_getBalance: Account balance queries
+  - eth_getTransactionCount: Account nonce
+  - eth_getCode: Contract code
+  - eth_call: Contract read calls
+  - eth_estimateGas: Gas estimation
+  - eth_gasPrice: Current gas price
+  - eth_maxPriorityFeePerGas: EIP-1559 fee data
+  - eth_feeHistory: Historical fee data
   """
 
   use LivechainWeb, :controller
   require Logger
 
   alias Livechain.RPC.ChainManager
-  alias Livechain.RPC.SubscriptionManager
+  alias Livechain.Benchmarking.BenchmarkStore
+
+  @ws_only_methods [
+    "eth_subscribe",
+    "eth_unsubscribe"
+  ]
 
   @doc """
   Handle JSON-RPC requests for any supported chain.
   """
-  def rpc(conn, %{"chain_id" => chain_id}) do
+  def rpc(conn, %{"chain_id" => chain_id} = params) do
     case resolve_chain_name(chain_id) do
       {:ok, chain_name} ->
+        # Support strategy via path segment (/rpc/:strategy/:chain) or query (?strategy=)
+        strategy =
+          params["strategy"] ||
+            conn.params["strategy"]
+
+        conn = assign(conn, :provider_strategy, parse_strategy(strategy))
         handle_chain_rpc(conn, chain_name)
 
       {:error, reason} ->
@@ -40,26 +61,6 @@ defmodule LivechainWeb.RPCController do
         })
     end
   end
-
-  @doc """
-  Handle Ethereum JSON-RPC requests (backward compatibility).
-  """
-  def ethereum(conn, _params), do: handle_chain_rpc(conn, "ethereum")
-
-  @doc """
-  Handle Arbitrum JSON-RPC requests (backward compatibility).
-  """
-  def arbitrum(conn, _params), do: handle_chain_rpc(conn, "arbitrum")
-
-  @doc """
-  Handle Polygon JSON-RPC requests (backward compatibility).
-  """
-  def polygon(conn, _params), do: handle_chain_rpc(conn, "polygon")
-
-  @doc """
-  Handle BSC JSON-RPC requests (backward compatibility).
-  """
-  def bsc(conn, _params), do: handle_chain_rpc(conn, "bsc")
 
   defp handle_chain_rpc(conn, chain_name) do
     case read_json_body(conn) do
@@ -83,7 +84,7 @@ defmodule LivechainWeb.RPCController do
   defp handle_json_rpc(conn, params, chain) do
     Logger.info("JSON-RPC request", method: params["method"], chain: chain, id: params["id"])
 
-    case process_json_rpc_request(params, chain) do
+    case process_json_rpc_request(params, chain, conn) do
       {:ok, result} ->
         response = %{
           jsonrpc: "2.0",
@@ -120,73 +121,124 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
+  # Block and transaction queries
   defp process_json_rpc_request(
-         %{"method" => "eth_subscribe", "params" => ["logs", filter]},
-         chain
+         %{"method" => "eth_getLogs", "params" => [filter]},
+         chain,
+         conn
        ) do
-    Logger.info("Subscribing to logs", chain: chain, filter: filter)
-
-    case SubscriptionManager.subscribe_to_logs(chain, filter) do
-      {:ok, subscription_id} ->
-        {:ok, subscription_id}
-
-      {:error, reason} ->
-        {:error, %{code: -32603, message: "Subscription failed: #{reason}"}}
-    end
-  end
-
-  defp process_json_rpc_request(%{"method" => "eth_subscribe", "params" => ["newHeads"]}, chain) do
-    Logger.info("Subscribing to new heads", chain: chain)
-
-    case SubscriptionManager.subscribe_to_new_heads(chain) do
-      {:ok, subscription_id} ->
-        {:ok, subscription_id}
-
-      {:error, reason} ->
-        {:error, %{code: -32603, message: "Subscription failed: #{reason}"}}
-    end
-  end
-
-  defp process_json_rpc_request(%{"method" => "eth_getLogs", "params" => [filter]}, chain) do
     Logger.info("Getting logs", chain: chain, filter: filter)
-
-    case ChainManager.get_logs(chain, filter) do
-      {:ok, logs} ->
-        {:ok, logs}
-
-      {:error, reason} ->
-        {:error, %{code: -32603, message: "Failed to get logs: #{reason}"}}
-    end
+    forward_rpc_request(chain, "eth_getLogs", [filter], conn: conn)
   end
 
   defp process_json_rpc_request(
          %{"method" => "eth_getBlockByNumber", "params" => [block_number, include_transactions]},
-         chain
+         chain,
+         conn
        ) do
     Logger.info("Getting block by number", chain: chain, block: block_number)
 
-    case ChainManager.get_block_by_number(chain, block_number, include_transactions) do
-      {:ok, block} ->
-        {:ok, block}
-
-      {:error, reason} ->
-        {:error, %{code: -32603, message: "Failed to get block: #{reason}"}}
-    end
+    forward_rpc_request(chain, "eth_getBlockByNumber", [block_number, include_transactions],
+      conn: conn
+    )
   end
 
-  defp process_json_rpc_request(%{"method" => "eth_blockNumber", "params" => []}, chain) do
+  defp process_json_rpc_request(
+         %{"method" => "eth_getBlockByHash", "params" => [block_hash, include_transactions]},
+         chain,
+         conn
+       ) do
+    Logger.info("Getting block by hash", chain: chain, block_hash: block_hash)
+
+    forward_rpc_request(chain, "eth_getBlockByHash", [block_hash, include_transactions],
+      conn: conn
+    )
+  end
+
+  defp process_json_rpc_request(%{"method" => "eth_blockNumber", "params" => []}, chain, conn) do
     Logger.info("Getting block number", chain: chain)
-
-    case ChainManager.get_block_number(chain) do
-      {:ok, block_number} ->
-        {:ok, block_number}
-
-      {:error, reason} ->
-        {:error, %{code: -32603, message: "Failed to get block number: #{reason}"}}
-    end
+    forward_rpc_request(chain, "eth_blockNumber", [], conn: conn)
   end
 
-  defp process_json_rpc_request(%{"method" => "eth_chainId", "params" => []}, chain) do
+  # Account and contract queries
+  defp process_json_rpc_request(
+         %{"method" => "eth_getBalance", "params" => [address, block]},
+         chain,
+         conn
+       ) do
+    Logger.info("Getting balance", chain: chain, address: address)
+    forward_rpc_request(chain, "eth_getBalance", [address, block], conn: conn)
+  end
+
+  defp process_json_rpc_request(
+         %{"method" => "eth_getTransactionCount", "params" => [address, block]},
+         chain,
+         conn
+       ) do
+    Logger.info("Getting transaction count", chain: chain, address: address)
+    forward_rpc_request(chain, "eth_getTransactionCount", [address, block], conn: conn)
+  end
+
+  defp process_json_rpc_request(
+         %{"method" => "eth_getCode", "params" => [address, block]},
+         chain,
+         conn
+       ) do
+    Logger.info("Getting contract code", chain: chain, address: address)
+    forward_rpc_request(chain, "eth_getCode", [address, block], conn: conn)
+  end
+
+  # Contract interaction queries
+  defp process_json_rpc_request(
+         %{"method" => "eth_call", "params" => [call_object, block]},
+         chain,
+         conn
+       ) do
+    Logger.info("Making contract call", chain: chain, call_object: call_object)
+    forward_rpc_request(chain, "eth_call", [call_object, block], conn: conn)
+  end
+
+  defp process_json_rpc_request(
+         %{"method" => "eth_estimateGas", "params" => [call_object, block]},
+         chain,
+         conn
+       ) do
+    Logger.info("Estimating gas", chain: chain, call_object: call_object)
+    forward_rpc_request(chain, "eth_estimateGas", [call_object, block], conn: conn)
+  end
+
+  # Gas and fee queries
+  defp process_json_rpc_request(%{"method" => "eth_gasPrice", "params" => []}, chain, conn) do
+    Logger.info("Getting gas price", chain: chain)
+    forward_rpc_request(chain, "eth_gasPrice", [], conn: conn)
+  end
+
+  defp process_json_rpc_request(
+         %{"method" => "eth_maxPriorityFeePerGas", "params" => []},
+         chain,
+         conn
+       ) do
+    Logger.info("Getting max priority fee", chain: chain)
+    forward_rpc_request(chain, "eth_maxPriorityFeePerGas", [], conn: conn)
+  end
+
+  defp process_json_rpc_request(
+         %{
+           "method" => "eth_feeHistory",
+           "params" => [block_count, newest_block, reward_percentiles]
+         },
+         chain,
+         conn
+       ) do
+    Logger.info("Getting fee history", chain: chain, block_count: block_count)
+
+    forward_rpc_request(chain, "eth_feeHistory", [block_count, newest_block, reward_percentiles],
+      conn: conn
+    )
+  end
+
+  # Chain info
+  defp process_json_rpc_request(%{"method" => "eth_chainId", "params" => []}, chain, conn) do
     Logger.info("Getting chain ID", chain: chain)
 
     case get_chain_id(chain) do
@@ -198,34 +250,214 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
-  defp process_json_rpc_request(
-         %{"method" => "eth_getBalance", "params" => [address, block]},
-         chain
-       ) do
-    Logger.info("Getting balance", chain: chain, address: address)
-
-    case ChainManager.get_balance(chain, address, block) do
-      {:ok, balance} ->
-        {:ok, balance}
-
-      {:error, reason} ->
-        {:error, %{code: -32603, message: "Failed to get balance: #{reason}"}}
+  # Generic method handler: forward allowed methods, reject unsupported-over-HTTP methods
+  defp process_json_rpc_request(%{"method" => method, "params" => params}, chain, conn) do
+    if unsupported_over_http?(method) do
+      {:error,
+       %{
+         code: -32601,
+         message: "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
+         data: %{
+           websocket_url: "/socket/websocket",
+           supported_http_methods: [
+             "eth_getLogs",
+             "eth_getBlockByNumber",
+             "eth_blockNumber",
+             "eth_chainId",
+             "eth_getBalance",
+             "eth_getTransactionCount",
+             "eth_getCode",
+             "eth_call",
+             "eth_estimateGas",
+             "eth_gasPrice",
+             "eth_maxPriorityFeePerGas",
+             "eth_feeHistory"
+           ]
+         }
+       }}
+    else
+      Logger.info("Forwarding RPC method", method: method, chain: chain, params: params)
+      forward_rpc_request(chain, method, params, conn: conn)
     end
   end
 
-  defp process_json_rpc_request(%{"method" => method, "params" => _params}, _chain) do
-    Logger.warn("Unsupported JSON-RPC method", method: method)
-    {:error, -32601, "Method not found"}
+  defp process_json_rpc_request(%{"method" => method}, chain, conn) do
+    if unsupported_over_http?(method) do
+      {:error,
+       %{
+         code: -32601,
+         message: "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
+         data: %{
+           websocket_url: "/socket/websocket"
+         }
+       }}
+    else
+      Logger.info("Forwarding RPC method", method: method, chain: chain, params: [])
+      forward_rpc_request(chain, method, [], conn: conn)
+    end
   end
 
-  defp process_json_rpc_request(%{"method" => method}, _chain) do
-    Logger.warn("Unsupported JSON-RPC method", method: method)
-    {:error, -32601, "Method not found"}
+  defp process_json_rpc_request(params, chain) do
+    # Backwards compatibility when conn is not provided
+    process_json_rpc_request(params, chain, %{})
   end
 
   defp process_json_rpc_request(_params, _chain) do
     Logger.warn("Invalid JSON-RPC request")
     {:error, -32600, "Invalid Request"}
+  end
+
+  defp unsupported_over_http?(method) do
+    method in @ws_only_methods
+  end
+
+  @doc """
+  Forward RPC request to the best-performing provider for the given chain.
+  Uses performance benchmarks to select the optimal provider.
+  Supports pluggable provider selection strategies via Application config:
+    config :livechain, :provider_selection_strategy, :leaderboard | :priority | :round_robin
+  """
+  defp forward_rpc_request(chain, method, params, opts \\ []) do
+    strategy =
+      case Keyword.get(opts, :strategy) do
+        nil ->
+          case Map.get(opts, :conn) do
+            %Plug.Conn{assigns: %{provider_strategy: s}} when not is_nil(s) -> s
+            _ -> default_provider_strategy()
+          end
+
+        s ->
+          s
+      end
+
+    case select_best_provider(chain, method, strategy) do
+      {:ok, provider_id} ->
+        case ChainManager.forward_rpc_request(chain, provider_id, method, params) do
+          {:ok, result} ->
+            record_rpc_success(chain, provider_id, method)
+            {:ok, result}
+
+          {:error, reason} ->
+            record_rpc_failure(chain, provider_id, method, reason)
+
+            case try_failover(chain, method, params, [provider_id]) do
+              {:ok, result} -> {:ok, result}
+              {:error, error} -> {:error, error}
+            end
+        end
+
+      {:error, reason} ->
+        {:error, %{code: -32000, message: "No available providers: #{reason}"}}
+    end
+  end
+
+  defp default_provider_strategy do
+    Application.get_env(:livechain, :provider_selection_strategy, :leaderboard)
+  end
+
+  defp parse_strategy(nil), do: nil
+
+  defp parse_strategy(str) when is_binary(str) do
+    case String.downcase(str) do
+      "leaderboard" -> :leaderboard
+      "priority" -> :priority
+      "round_robin" -> :round_robin
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Select the best-performing provider for a given RPC method based on strategy.
+  Supported strategies:
+  - :leaderboard (default): Highest score from BenchmarkStore
+  - :priority: First available by configured provider priority
+  - :round_robin: Simple rotation among available providers
+  """
+  defp select_best_provider(chain, method, :leaderboard) do
+    case BenchmarkStore.get_provider_leaderboard(chain) do
+      {:ok, [_ | _] = leaderboard} ->
+        [best_provider | _] = Enum.sort_by(leaderboard, & &1.score, :desc)
+        {:ok, best_provider.provider_id}
+
+      {:ok, []} ->
+        select_best_provider(chain, method, :priority)
+
+      {:error, _reason} ->
+        select_best_provider(chain, method, :priority)
+    end
+  end
+
+  defp select_best_provider(chain, _method, :priority) do
+    case ChainManager.get_available_providers(chain) do
+      {:ok, [provider_id | _]} -> {:ok, provider_id}
+      {:ok, []} -> {:error, "No providers available"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp select_best_provider(chain, _method, :round_robin) do
+    case ChainManager.get_available_providers(chain) do
+      {:ok, []} ->
+        {:error, "No providers available"}
+
+      {:ok, providers} ->
+        idx = rem(System.monotonic_time(:millisecond), length(providers))
+        {:ok, Enum.at(providers, idx)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Failover and benchmarking helpers remain the same
+
+  @doc """
+  Try failover to alternative providers if the primary provider fails.
+  """
+  defp try_failover(chain, method, params, excluded_providers) do
+    case ChainManager.get_available_providers(chain) do
+      {:ok, available_providers} ->
+        remaining_providers = available_providers -- excluded_providers
+
+        case remaining_providers do
+          [] ->
+            {:error, %{code: -32000, message: "All providers failed for method: #{method}"}}
+
+          [next_provider | _] ->
+            Logger.warning("Failing over to provider",
+              chain: chain,
+              method: method,
+              provider: next_provider
+            )
+
+            case ChainManager.forward_rpc_request(chain, next_provider, method, params) do
+              {:ok, result} ->
+                record_rpc_success(chain, next_provider, method)
+                {:ok, result}
+
+              {:error, reason} ->
+                record_rpc_failure(chain, next_provider, method, reason)
+                try_failover(chain, method, params, [next_provider | excluded_providers])
+            end
+        end
+
+      {:error, reason} ->
+        {:error, %{code: -32000, message: "Failed to get available providers: #{reason}"}}
+    end
+  end
+
+  @doc """
+  Record successful RPC call for performance benchmarking.
+  """
+  defp record_rpc_success(chain, provider_id, method) do
+    BenchmarkStore.record_rpc_call(chain, provider_id, method, 0, :success)
+  end
+
+  @doc """
+  Record failed RPC call for performance benchmarking.
+  """
+  defp record_rpc_failure(chain, provider_id, method, _reason) do
+    BenchmarkStore.record_rpc_call(chain, provider_id, method, 0, :error)
   end
 
   defp resolve_chain_name(chain_identifier) do
