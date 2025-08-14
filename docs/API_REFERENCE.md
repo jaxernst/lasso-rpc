@@ -1,4 +1,4 @@
-# ChainPulse API Reference
+# Livechain API Reference
 
 ## Health & Status Endpoints
 

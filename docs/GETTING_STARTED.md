@@ -44,7 +44,6 @@ Application.put_env(:livechain, :provider_selection_strategy, :leaderboard)
 ## TODO / Next Steps
 
 - Add rate-limit aware selection and backoff (track 429s per provider/method; temporary deprioritization)
-- Implement real WS RPC request/response correlation (currently mocked in forwarding path)
 - Add cost metadata per provider to support `:cheapest` strategy
 - Enhance failover heuristics (jitter, exponential backoff, rolling window health)
 - Extend method coverage and add write-ops with proper auth/guardrails

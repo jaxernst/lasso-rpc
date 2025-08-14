@@ -1,5 +1,28 @@
 # ChainPulse Demo: Technical Feature Specification
 
+## Brief
+
+Building a technical demo for a hackathon project - this demo should show off some of the core/fundamental components of livechain - a BLock Node RPC provider orchestration service.
+
+The demo will use Phoenix Livewviews to give an impressive realtime view into the livechain system
+
+## Goals + Ideas to show/demo ('what' to show)
+
+- Overview info for all available providers
+- Live Provider activity groupd by chain
+- Live websocket connections to providers
+- Live client connections
+- RPC method call stream
+  - Include the chain, response time, and provider the call was routed to
+- Any relevant system pubsub streams that might be interesting
+- Live latest blocks for chains (shows blocks live updating)
+- Average latencies + other relevant JSON RPC call performance grouped by method, comparing the latency difference by 'strategy' used (i.e. compare the 'cheapest' responses with the 'fastest' responses)
+- Elixir/BEAM VM stats (memory, processes, etc.)
+
+Desired + Possible Interactive elements:
+
+- Some interactive 'testing' controls to simulate client loads, failure conditions, and other neat demonstrations that can show off interesting properties of the system such as failover, connection redundancy, fault tolerance, etc.
+
 ## UI Structure for Demo
 
 ### Tabs

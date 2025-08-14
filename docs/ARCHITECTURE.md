@@ -1,14 +1,27 @@
-# ChainPulse Architecture
+# Livechain Architecture
 
 ## Core Technical Design
 
 ### **System Overview**
 
-ChainPulse is an Elixir/OTP application that provides intelligent RPC provider orchestration through **passive benchmarking** and **automatic failover**. The system races multiple RPC providers against each other to measure real-world performance and routes traffic based on actual speed and reliability data.
+Livechain is an Elixir/OTP application that provides intelligent RPC provider orchestration through **passive benchmarking** and **automatic failover**. The system races multiple RPC providers against each other to measure real-world performance and routes traffic based on actual speed and reliability data.
+
+### **Core Capabilities**
+
+- Multi-provider orchestration with pluggable provider selection strategies (default `:leaderboard`; also `:priority`, `:round_robin`)
+- WS + HTTP JSON-RPC proxy for all standard read-only methods; WS also supports real-time subscriptions (`eth_subscribe`, `eth_unsubscribe`)
+- Strong failover across HTTP and WS via per-provider circuit breakers and provider pools
+- Passive provider benchmarking on a per-chain and per-method basis with event racing for lowest-latency delivery
+- Live dashboard with real-time insights, provider performance metrics, chain status, and a system load simulator
 
 ### **Key Innovation: Passive Provider Racing**
 
-Instead of synthetic benchmarks, ChainPulse deduplicates identical events from multiple providers and measures which provider delivers them fastest. This provides real-world performance data without artificial load.
+Instead of synthetic benchmarks, Livechain deduplicates identical events from multiple providers and measures which provider delivers them fastest in real time. This produces production-grounded performance data without introducing artificial load.
+
+- Deterministic message keys (block/tx hashes or content digests) enable identical-event detection
+- Microsecond-level timing to compute precise win/loss margins
+- First-wins forwarding: clients receive the earliest provider's message; subsequent arrivals update scores
+- Memory-bounded cache preserves race integrity with predictable resource usage
 
 ---
 
