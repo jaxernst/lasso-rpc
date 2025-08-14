@@ -45,7 +45,11 @@ defmodule LivechainWeb.RPCController do
           params["strategy"] ||
             conn.params["strategy"]
 
-        conn = assign(conn, :provider_strategy, parse_strategy(strategy))
+        parsed = parse_strategy(strategy)
+        conn = assign(conn, :provider_strategy, parsed)
+
+        maybe_publish_strategy_event(chain_name, parsed)
+
         handle_chain_rpc(conn, chain_name)
 
       {:error, reason} ->
@@ -62,23 +66,32 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
-  defp handle_chain_rpc(conn, chain_name) do
-    case read_json_body(conn) do
-      {:ok, params} ->
-        handle_json_rpc(conn, params, chain_name)
+  defp maybe_publish_strategy_event(_chain, nil), do: :ok
 
-      {:error, reason} ->
-        conn
-        |> put_status(:bad_request)
-        |> json(%{
-          jsonrpc: "2.0",
-          error: %{
-            code: -32700,
-            message: "Parse error: #{reason}"
-          },
-          id: nil
-        })
+  defp maybe_publish_strategy_event(chain, strategy) do
+    default = Application.get_env(:livechain, :provider_selection_strategy, :leaderboard)
+
+    if strategy != default do
+      Phoenix.PubSub.broadcast(
+        Livechain.PubSub,
+        "strategy:events",
+        %{
+          ts: System.system_time(:millisecond),
+          scope: {:chain, chain},
+          from: default,
+          to: strategy,
+          reason: :request_override
+        }
+      )
+    else
+      :ok
     end
+  end
+
+  defp handle_chain_rpc(conn, chain_name) do
+    # Phoenix has already parsed the JSON body into conn.params
+    params = conn.params
+    handle_json_rpc(conn, params, chain_name)
   end
 
   defp handle_json_rpc(conn, params, chain) do
@@ -95,13 +108,21 @@ defmodule LivechainWeb.RPCController do
         json(conn, response)
 
       {:error, error} ->
+        error_data = %{
+          code: error.code || -32603,
+          message: error.message || "Internal error"
+        }
+        
+        # Only include data field if it exists
+        error_data = if Map.has_key?(error, :data) do
+          Map.put(error_data, :data, error.data)
+        else
+          error_data
+        end
+        
         response = %{
           jsonrpc: "2.0",
-          error: %{
-            code: error.code || -32603,
-            message: error.message || "Internal error",
-            data: error.data
-          },
+          error: error_data,
           id: params["id"]
         }
 
@@ -250,6 +271,26 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
+  # Debug method for chain status
+  defp process_json_rpc_request(%{"method" => "debug_chains", "params" => []}, _chain, _conn) do
+    case ChainManager.get_status() do
+      status when is_map(status) ->
+        {:ok, status}
+      error ->
+        {:error, %{code: -32603, message: "Failed to get chain status: #{inspect(error)}"}}
+    end
+  end
+
+  # Debug method to manually start chains
+  defp process_json_rpc_request(%{"method" => "debug_start_chains", "params" => []}, _chain, _conn) do
+    case ChainManager.start_all_chains() do
+      {:ok, started_count} ->
+        {:ok, %{started_count: started_count, message: "Started #{started_count} chain supervisors"}}
+      {:error, reason} ->
+        {:error, %{code: -32603, message: "Failed to start chains: #{inspect(reason)}"}}
+    end
+  end
+
   # Generic method handler: forward allowed methods, reject unsupported-over-HTTP methods
   defp process_json_rpc_request(%{"method" => method, "params" => params}, chain, conn) do
     if unsupported_over_http?(method) do
@@ -321,7 +362,7 @@ defmodule LivechainWeb.RPCController do
     strategy =
       case Keyword.get(opts, :strategy) do
         nil ->
-          case Map.get(opts, :conn) do
+          case Keyword.get(opts, :conn) do
             %Plug.Conn{assigns: %{provider_strategy: s}} when not is_nil(s) -> s
             _ -> default_provider_strategy()
           end
@@ -331,7 +372,7 @@ defmodule LivechainWeb.RPCController do
       end
 
     region_filter =
-      case Map.get(opts, :conn) do
+      case Keyword.get(opts, :conn) do
         %Plug.Conn{} = conn ->
           Plug.Conn.get_req_header(conn, "x-livechain-region") |> List.first()
 
@@ -642,6 +683,10 @@ defmodule LivechainWeb.RPCController do
     select_best_provider(chain, method, :round_robin)
   end
 
+  defp select_best_provider(chain, method, :leaderboard, _region) do
+    select_best_provider(chain, method, :leaderboard)
+  end
+
   # Failover and benchmarking helpers remain the same
 
   @doc """
@@ -832,7 +877,7 @@ defmodule LivechainWeb.RPCController do
       {:ok, body, _conn} ->
         case Jason.decode(body) do
           {:ok, params} -> {:ok, params}
-          {:error, reason} -> {:error, "Invalid JSON: #{reason}"}
+          {:error, reason} -> {:error, "Invalid JSON: #{inspect(reason)}"}
         end
 
       {:more, _body, _conn} ->

@@ -1,4 +1,4 @@
-- Is the process registry + global naming system setup to follow best Elixir practices for a highly scalable and fault tolerant system like the one I'm building? I'm not sure what the relationship is between the ProcessRegistry, :global store, GenServers conventions, supervisors, etc. I found this from the genserver docs about naming and process management, but I'm not sure we're following these conventions? I also see the 'ProcessRegistry' does not seem to be used that much in the codebase so I'm not sure if its been fully migrated to:
+1. Is the process registry + global naming system setup to follow best Elixir practices for a highly scalable and fault tolerant system like the one I'm building? I'm not sure what the relationship is between the ProcessRegistry, :global store, GenServers conventions, supervisors, etc. I found this from the genserver docs about naming and process management, but I'm not sure we're following these conventions? I also see the 'ProcessRegistry' does not seem to be used that much in the codebase so I'm not sure if its been fully migrated to:
 
 ```
 (in genserver docs)
@@ -14,3 +14,5 @@ an atom - the GenServer is registered locally (to the current node) with the giv
 
 If there is an interest to register dynamic names locally, do not use atoms, as atoms are never garbage-collected and therefore dynamically generated atoms won't be garbage-collected. For such cases, you can set up your own local registry by using the Registry module.
 ```
+
+2. How do we consider regionality across our system when it comes to latency measurements and benchmarking? We currently have 'region' config for providers, but this could be misguided and not very useful for big node rpc providers that are multi-region. It would be nice to support advanced regionality awareness in this system - somethings like 'discovering' the lowest latency json rpc method returns relative to the livechain node that is forward the request). So then if this platform was multiregion, they ar

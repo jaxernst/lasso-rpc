@@ -21,3 +21,6 @@ livechain-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+
+# Node modules
+/assets/node_modules/

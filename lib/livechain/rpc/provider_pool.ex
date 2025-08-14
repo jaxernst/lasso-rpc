@@ -45,6 +45,7 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   defmodule PoolStats do
+    @derive Jason.Encoder
     defstruct total_providers: 0,
               healthy_providers: 0,
               active_providers: 0,
@@ -716,7 +717,7 @@ defmodule Livechain.RPC.ProviderPool do
     # Use eth_chainId as a lightweight health check method
     endpoint = %{
       url: provider_config.url,
-      api_key: provider_config.api_key
+      api_key: nil  # For public endpoints, no API key needed
     }
 
     # Delegate to configured HttpClient adapter

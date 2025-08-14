@@ -120,6 +120,8 @@ defmodule Livechain.RPC.CircuitBreaker do
             provider_id: state.provider_id
           })
 
+          publish_circuit_event(state.provider_id, :open, :half_open, :attempt_recovery)
+
           execute_call(fun, new_state)
         else
           {:reply, {:error, :circuit_open}, state}
@@ -151,6 +153,8 @@ defmodule Livechain.RPC.CircuitBreaker do
       provider_id: state.provider_id
     })
 
+    publish_circuit_event(state.provider_id, state.state, :open, :manual_open)
+
     new_state = %{state | state: :open, last_failure_time: System.monotonic_time(:millisecond)}
     {:noreply, new_state}
   end
@@ -162,6 +166,8 @@ defmodule Livechain.RPC.CircuitBreaker do
     :telemetry.execute([:livechain, :circuit_breaker, :close], %{count: 1}, %{
       provider_id: state.provider_id
     })
+
+    publish_circuit_event(state.provider_id, state.state, :closed, :manual_close)
 
     new_state = %{
       state
@@ -204,6 +210,8 @@ defmodule Livechain.RPC.CircuitBreaker do
             provider_id: state.provider_id
           })
 
+          publish_circuit_event(state.provider_id, :half_open, :closed, :recovered)
+
           new_state = %{
             state
             | state: :closed,
@@ -239,6 +247,8 @@ defmodule Livechain.RPC.CircuitBreaker do
             provider_id: state.provider_id
           })
 
+          publish_circuit_event(state.provider_id, :closed, :open, :failure_threshold_exceeded)
+
           new_state = %{
             state
             | state: :open,
@@ -262,6 +272,8 @@ defmodule Livechain.RPC.CircuitBreaker do
           provider_id: state.provider_id
         })
 
+        publish_circuit_event(state.provider_id, :half_open, :open, :reopen_due_to_failure)
+
         new_state = %{
           state
           | state: :open,
@@ -283,6 +295,20 @@ defmodule Livechain.RPC.CircuitBreaker do
         current_time = System.monotonic_time(:millisecond)
         current_time - last_failure >= state.recovery_timeout
     end
+  end
+
+  defp publish_circuit_event(provider_id, from, to, reason) do
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "circuit:events",
+      %{
+        ts: System.system_time(:millisecond),
+        provider_id: provider_id,
+        from: from,
+        to: to,
+        reason: reason
+      }
+    )
   end
 
   defp via_name(provider_id) do

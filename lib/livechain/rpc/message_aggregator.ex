@@ -173,6 +173,11 @@ defmodule Livechain.RPC.MessageAggregator do
         # First time seeing this message - forward it immediately and cache it
         forward_message(state.chain_name, provider_id, message, received_at)
 
+        # Emit new block compact event for newHeads
+        if event_type == "newHeads" do
+          emit_block_compact(state.chain_name, provider_id, message, 0)
+        end
+
         # Record racing victory
         BenchmarkStore.record_event_race_win(
           state.chain_name,
@@ -193,6 +198,11 @@ defmodule Livechain.RPC.MessageAggregator do
             "for #{state.chain_name}: #{message_key}, margin: #{margin_ms}ms"
         )
 
+        # Emit duplicate arrival margin for newHeads to power racing insights
+        if event_type == "newHeads" do
+          emit_block_compact(state.chain_name, provider_id, message, margin_ms)
+        end
+
         # Record racing loss with margin
         BenchmarkStore.record_event_race_loss(
           state.chain_name,
@@ -205,6 +215,39 @@ defmodule Livechain.RPC.MessageAggregator do
         update_deduplicated_stats(state)
     end
   end
+
+  defp emit_block_compact(chain_name, provider_id, message, margin_ms) do
+    block = extract_block_data(message)
+
+    compact = %{
+      ts: System.system_time(:millisecond),
+      chain: chain_name,
+      block_number: Map.get(block, "number"),
+      hash: Map.get(block, "hash"),
+      tx_count:
+        (block["transactions"] && length(block["transactions"])) ||
+          Map.get(block, "transactions", []) |> length(),
+      provider_first: provider_id,
+      margin_ms: margin_ms
+    }
+
+    Phoenix.PubSub.broadcast(Livechain.PubSub, "blocks:new:#{chain_name}", compact)
+  end
+
+  defp extract_block_data(message) when is_map(message) do
+    case message do
+      %{"result" => result} when is_map(result) ->
+        result
+
+      %{"params" => %{"result" => result}} ->
+        result
+
+      _ ->
+        message
+    end
+  end
+
+  defp extract_block_data(data), do: data
 
   defp generate_message_key(message) do
     # Generate a unique key based on message content

@@ -117,9 +117,17 @@ defmodule Livechain.RPC.WSConnection do
         {:noreply, state}
 
       {:error, reason} ->
-        Logger.error("Failed to connect to WebSocket: #{reason}")
+        Logger.error("Failed to connect to WebSocket: #{inspect(reason)}")
         broadcast_status_change(state, :disconnected)
         state = schedule_reconnect(state)
+        {:noreply, state}
+
+      {:already_started, pid} ->
+        Logger.info("WebSocket connection already exists for #{state.endpoint.name}, using existing connection")
+        state = %{state | connection: pid, connected: true, reconnect_attempts: 0}
+        broadcast_status_change(state, :connected)
+        state = schedule_heartbeat(state)
+        state = send_pending_messages(state)
         {:noreply, state}
     end
   end
@@ -298,6 +306,18 @@ defmodule Livechain.RPC.WSConnection do
     chain_name = get_chain_name(state.endpoint.chain_id)
     received_at = System.monotonic_time(:millisecond)
 
+    # Telemetry: message received
+    :telemetry.execute(
+      [
+        :livechain,
+        :ws,
+        :message,
+        :received
+      ],
+      %{count: 1},
+      %{chain: chain_name, provider_id: state.endpoint.id, event_type: :newHeads}
+    )
+
     # Send to raw messages channel for aggregation
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
@@ -320,6 +340,17 @@ defmodule Livechain.RPC.WSConnection do
     chain_name = get_chain_name(state.endpoint.chain_id)
     received_at = System.monotonic_time(:millisecond)
 
+    :telemetry.execute(
+      [
+        :livechain,
+        :ws,
+        :message,
+        :received
+      ],
+      %{count: 1},
+      %{chain: chain_name, provider_id: state.endpoint.id, event_type: :subscription}
+    )
+
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "raw_messages:#{chain_name}",
@@ -336,6 +367,17 @@ defmodule Livechain.RPC.WSConnection do
     # Send through aggregator for consistency
     chain_name = get_chain_name(state.endpoint.chain_id)
     received_at = System.monotonic_time(:millisecond)
+
+    :telemetry.execute(
+      [
+        :livechain,
+        :ws,
+        :message,
+        :received
+      ],
+      %{count: 1},
+      %{chain: chain_name, provider_id: state.endpoint.id, event_type: :other}
+    )
 
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
