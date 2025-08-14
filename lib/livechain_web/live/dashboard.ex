@@ -724,7 +724,8 @@ defmodule LivechainWeb.Dashboard do
   def handle_event("sim_http_start", _params, socket) do
     # Push event to JS hook with defaults; future: make dynamic via form controls
     opts = %{
-      chains: ["base", "arbitrum"],
+      # Use chain IDs instead of names: Base=8453, Arbitrum=42161
+      chains: ["8453", "42161"],
       methods: ["eth_blockNumber", "eth_getBalance"],
       rps: 5,
       concurrency: 4,
@@ -744,7 +745,8 @@ defmodule LivechainWeb.Dashboard do
   @impl true
   def handle_event("sim_ws_start", _params, socket) do
     opts = %{
-      chains: ["base", "arbitrum"],
+      # Use chain IDs instead of names: Base=8453, Arbitrum=42161
+      chains: ["8453", "42161"],
       connections: 2,
       topics: ["newHeads"],
       durationMs: 30_000

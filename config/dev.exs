@@ -12,8 +12,15 @@ config :livechain, LivechainWeb.Endpoint,
     tailwind: {Tailwind, :install_and_run, [:livechain, ~w(--watch)]}
   ]
 
-# Do not include metadata nor timestamps in development logs
-config :logger, :console, format: "[$level] $message\n", level: :error
+# Enhanced logging for development debugging
+config :logger, :console,
+  format: "[$level] $message\n",
+  level: :debug,
+  metadata: [:request_id, :mfa]
+
+# Enable detailed Phoenix logging
+config :phoenix, :logger, true
+config :phoenix, :serve_endpoints, true
 
 # Set a higher stacktrace during development. Avoid configuring such
 # in production as building large stacktraces may be expensive.

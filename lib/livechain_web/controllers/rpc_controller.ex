@@ -37,32 +37,52 @@ defmodule LivechainWeb.RPCController do
   @doc """
   Handle JSON-RPC requests for any supported chain.
   """
-  def rpc(conn, %{"chain_id" => chain_id} = params) do
-    case resolve_chain_name(chain_id) do
-      {:ok, chain_name} ->
-        # Support strategy via path segment (/rpc/:strategy/:chain) or query (?strategy=)
-        strategy =
-          params["strategy"] ||
-            conn.params["strategy"]
+  def rpc(conn, params) do
+    # Debug: Log what parameters we actually receive
+    Logger.info("RPC request received", params: inspect(params), path: conn.request_path)
 
-        parsed = parse_strategy(strategy)
-        conn = assign(conn, :provider_strategy, parsed)
+    case Map.get(params, "chain_id") do
+      nil ->
+        Logger.error("Missing chain_id parameter", params: inspect(params))
 
-        maybe_publish_strategy_event(chain_name, parsed)
-
-        handle_chain_rpc(conn, chain_name)
-
-      {:error, reason} ->
         conn
         |> put_status(:bad_request)
         |> json(%{
           jsonrpc: "2.0",
           error: %{
             code: -32602,
-            message: "Unsupported chain: #{reason}"
+            message: "Missing chain_id parameter"
           },
           id: nil
         })
+
+      chain_id ->
+        case resolve_chain_name(chain_id) do
+          {:ok, chain_name} ->
+            # Support strategy via path segment (/rpc/:strategy/:chain) or query (?strategy=)
+            strategy =
+              params["strategy"] ||
+                conn.params["strategy"]
+
+            parsed = parse_strategy(strategy)
+            conn = assign(conn, :provider_strategy, parsed)
+
+            maybe_publish_strategy_event(chain_name, parsed)
+
+            handle_chain_rpc(conn, chain_name)
+
+          {:error, reason} ->
+            conn
+            |> put_status(:bad_request)
+            |> json(%{
+              jsonrpc: "2.0",
+              error: %{
+                code: -32602,
+                message: "Unsupported chain: #{reason}"
+              },
+              id: nil
+            })
+        end
     end
   end
 
@@ -112,14 +132,15 @@ defmodule LivechainWeb.RPCController do
           code: error.code || -32603,
           message: error.message || "Internal error"
         }
-        
+
         # Only include data field if it exists
-        error_data = if Map.has_key?(error, :data) do
-          Map.put(error_data, :data, error.data)
-        else
-          error_data
-        end
-        
+        error_data =
+          if Map.has_key?(error, :data) do
+            Map.put(error_data, :data, error.data)
+          else
+            error_data
+          end
+
         response = %{
           jsonrpc: "2.0",
           error: error_data,
@@ -276,16 +297,23 @@ defmodule LivechainWeb.RPCController do
     case ChainManager.get_status() do
       status when is_map(status) ->
         {:ok, status}
+
       error ->
         {:error, %{code: -32603, message: "Failed to get chain status: #{inspect(error)}"}}
     end
   end
 
   # Debug method to manually start chains
-  defp process_json_rpc_request(%{"method" => "debug_start_chains", "params" => []}, _chain, _conn) do
+  defp process_json_rpc_request(
+         %{"method" => "debug_start_chains", "params" => []},
+         _chain,
+         _conn
+       ) do
     case ChainManager.start_all_chains() do
       {:ok, started_count} ->
-        {:ok, %{started_count: started_count, message: "Started #{started_count} chain supervisors"}}
+        {:ok,
+         %{started_count: started_count, message: "Started #{started_count} chain supervisors"}}
+
       {:error, reason} ->
         {:error, %{code: -32603, message: "Failed to start chains: #{inspect(reason)}"}}
     end

@@ -1,5 +1,6 @@
 defmodule LivechainWeb.Router do
   use LivechainWeb, :router
+  require Logger
 
   pipeline :browser do
     plug(:accepts, ["html"])
@@ -11,6 +12,12 @@ defmodule LivechainWeb.Router do
   end
 
   pipeline :api do
+    plug(:accepts, ["json"])
+  end
+
+  # Debug pipeline for RPC endpoints
+  pipeline :api_with_logging do
+    plug(Plug.Logger, log: :info)
     plug(:accepts, ["json"])
   end
 
@@ -46,9 +53,9 @@ defmodule LivechainWeb.Router do
     end
   end
 
-  # HTTP JSON-RPC endpoints
+  # HTTP JSON-RPC endpoints with enhanced logging
   scope "/rpc", LivechainWeb do
-    pipe_through(:api)
+    pipe_through(:api_with_logging)
 
     # Strategy-specific endpoint (e.g., /rpc/cheapest/ethereum)
     post("/:strategy/:chain_id", RPCController, :rpc)
