@@ -25,6 +25,7 @@ defmodule Livechain.RPC.ChainManager do
   ]
 
   defmodule GlobalStats do
+    @derive Jason.Encoder
     defstruct total_chains: 0,
               active_chains: 0,
               total_providers: 0,
@@ -211,16 +212,41 @@ defmodule Livechain.RPC.ChainManager do
         # Start chain supervisors for each configured chain
         results =
           Enum.map(config.chains, fn {chain_name, chain_config} ->
-            start_chain_supervisor(new_state, chain_name, chain_config)
+            case start_chain_supervisor(new_state, chain_name, chain_config) do
+              {:ok, pid} = result ->
+                Logger.info("✓ Chain supervisor started successfully: #{chain_name}")
+                {chain_name, result}
+              {:error, reason} = result ->
+                Logger.error("✗ Chain supervisor failed to start: #{chain_name} - #{inspect(reason)}")
+                {chain_name, result}
+            end
           end)
 
-        successful_starts = Enum.count(results, &match?({:ok, _}, &1))
+        # Build the chain_supervisors map from successful starts
+        successful_supervisors =
+          results
+          |> Enum.filter(fn {_, result} -> match?({:ok, _}, result) end)
+          |> Enum.into(%{}, fn {chain_name, {:ok, pid}} -> {chain_name, pid} end)
+
+        successful_starts = map_size(successful_supervisors)
+        failed_starts = Enum.count(results, fn {_, result} -> match?({:error, _}, result) end)
+
+        if failed_starts > 0 do
+          failed_chains = 
+            results
+            |> Enum.filter(fn {_, result} -> match?({:error, _}, result) end)
+            |> Enum.map(fn {chain_name, _} -> chain_name end)
+          
+          Logger.error("Failed chains: #{Enum.join(failed_chains, ", ")}")
+        end
 
         Logger.info(
-          "Successfully started #{successful_starts}/#{map_size(config.chains)} chain supervisors"
+          "Chain supervisor startup complete: #{successful_starts}/#{map_size(config.chains)} successful, #{failed_starts} failed"
         )
 
-        {:reply, {:ok, successful_starts}, new_state}
+        # Update state with both config and successful chain supervisors
+        final_state = %{new_state | chain_supervisors: successful_supervisors}
+        {:reply, {:ok, successful_starts}, final_state}
 
       {:error, reason} ->
         Logger.error("Failed to load chain configuration: #{reason}")

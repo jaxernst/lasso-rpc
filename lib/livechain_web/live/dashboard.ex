@@ -6,12 +6,25 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def mount(_params, _session, socket) do
-    socket = assign(socket, :active_tab, "dashboard")
+    socket = assign(socket, :active_tab, "overview")
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Livechain.PubSub, "ws_connections")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "routing:decisions")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "provider_pool:events")
+      Phoenix.PubSub.subscribe(Livechain.PubSub, "clients:events")
+      Phoenix.PubSub.subscribe(Livechain.PubSub, "circuit:events")
+
+      # Subscribe to compact block events per configured chain
+      case Livechain.Config.ChainConfig.load_config() do
+        {:ok, cfg} ->
+          Enum.each(Map.keys(cfg.chains), fn chain ->
+            Phoenix.PubSub.subscribe(Livechain.PubSub, "blocks:new:#{chain}")
+          end)
+
+        _ ->
+          :ok
+      end
 
       # Enable scheduler wall time if supported (for utilization metrics)
       try do
@@ -37,10 +50,16 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:selected_provider, nil)
       |> assign(:routing_events, [])
       |> assign(:provider_events, [])
+      |> assign(:client_events, [])
+      |> assign(:latest_blocks, [])
       |> assign(:demo_running, false)
       |> assign(:sampler_running, false)
       |> assign(:sampler_ref, nil)
       |> assign(:vm_metrics, %{})
+      |> assign(:sim_stats, %{
+        http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0},
+        ws: %{open: 0}
+      })
 
     {:ok, initial_state}
   end
@@ -121,6 +140,51 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, socket}
   end
 
+  # Client connection events
+  @impl true
+  def handle_info(%{ts: _t, event: ev, chain: chain, transport: transport} = msg, socket)
+      when is_map(msg) do
+    entry = %{
+      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      chain: chain,
+      transport: transport,
+      event: ev,
+      ip: Map.get(msg, :remote_ip) || Map.get(msg, "remote_ip")
+    }
+
+    socket = update(socket, :client_events, fn list -> [entry | Enum.take(list, 99)] end)
+    {:noreply, socket}
+  end
+
+  # Circuit breaker events
+  @impl true
+  def handle_info(%{ts: _t, provider_id: pid, from: from, to: to, reason: reason} = _evt, socket) do
+    entry = %{
+      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      chain: "n/a",
+      provider_id: pid,
+      event: "circuit: #{from} -> #{to} (#{reason})"
+    }
+
+    socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, 99)] end)
+    {:noreply, socket}
+  end
+
+  # Compact block events
+  @impl true
+  def handle_info(%{chain: chain, block_number: bn} = blk, socket) when is_map(blk) do
+    entry = %{
+      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      chain: chain,
+      block_number: bn,
+      provider_first: Map.get(blk, :provider_first) || Map.get(blk, "provider_first"),
+      margin_ms: Map.get(blk, :margin_ms) || Map.get(blk, "margin_ms")
+    }
+
+    socket = update(socket, :latest_blocks, fn list -> [entry | Enum.take(list, 19)] end)
+    {:noreply, socket}
+  end
+
   # VM metrics ticker
   @impl true
   def handle_info(:vm_metrics_tick, socket) do
@@ -179,7 +243,7 @@ defmodule LivechainWeb.Dashboard do
                     </div>
                   </div>
                   <div class="flex items-center space-x-2">
-                    <h1 class="text-2xl font-bold text-white">ChainPulse</h1>
+                    <h1 class="text-2xl font-bold text-white">Lasso RPC</h1>
                     <div class="flex -translate-y-1.5 items-center space-x-1">
                       <div class="h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-emerald-400">
                       </div>
@@ -196,13 +260,16 @@ defmodule LivechainWeb.Dashboard do
             <.tab_switcher
               id="main-tabs"
               tabs={[
-                %{id: "dashboard", label: "Live Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
+                %{id: "overview", label: "Overview", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
                 %{
-                  id: "live_test",
-                  label: "Live Test",
+                  id: "network",
+                  label: "Network Explorer",
                   icon: "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3"
                 },
-                %{id: "metrics", label: "System Metrics", icon: "M15 4m0 13V4m-6 3l6-3"}
+                %{id: "streams", label: "Streams", icon: "M15 4m0 13V4m-6 3l6-3"},
+                %{id: "benchmarks", label: "Benchmarks", icon: "M3 3h18M9 7l6-3M9 17l6-3"},
+                %{id: "simulator", label: "Simulator", icon: "M4 6h16M4 10h16M4 14h16"},
+                %{id: "system", label: "System", icon: "M15 4m0 13V4m-6 3l6-3"}
               ]}
               active_tab={@active_tab}
             />
@@ -213,15 +280,32 @@ defmodule LivechainWeb.Dashboard do
     <!-- Content Section -->
       <div class="grid-pattern flex-1 overflow-hidden">
         <%= case @active_tab do %>
-          <% "dashboard" -> %>
-            <.dashboard_tab_content
+          <% "overview" -> %>
+            <.overview_tab_content
               connections={@connections}
               routing_events={@routing_events}
               provider_events={@provider_events}
             />
-          <% "live_test" -> %>
-            <.live_test_tab_content demo_running={@demo_running} sampler_running={@sampler_running} />
-          <% "metrics" -> %>
+          <% "network" -> %>
+            <.network_tab_content
+              connections={@connections}
+              selected_chain={@selected_chain}
+              selected_provider={@selected_provider}
+            />
+          <% "streams" -> %>
+            <.streams_tab_content
+              routing_events={@routing_events}
+              provider_events={@provider_events}
+            />
+          <% "benchmarks" -> %>
+            <.benchmarks_tab_content />
+          <% "simulator" -> %>
+            <.simulator_tab_content
+              demo_running={@demo_running}
+              sampler_running={@sampler_running}
+              sim_stats={@sim_stats}
+            />
+          <% "system" -> %>
             <.metrics_tab_content
               connections={@connections}
               routing_events={@routing_events}
@@ -235,7 +319,7 @@ defmodule LivechainWeb.Dashboard do
     """
   end
 
-  def dashboard_tab_content(assigns) do
+  def overview_tab_content(assigns) do
     ~H"""
     <div class="flex h-full w-full flex-col gap-4 p-4">
       <!-- Topology and quick stats -->
@@ -296,9 +380,90 @@ defmodule LivechainWeb.Dashboard do
     """
   end
 
-  def live_test_tab_content(assigns) do
+  def network_tab_content(assigns) do
     ~H"""
     <div class="flex h-full w-full flex-col gap-4 p-4">
+      <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3 lg:col-span-2">
+          <div class="mb-2 text-sm font-semibold text-gray-300">Network topology</div>
+          <NetworkTopology.nodes_display
+            id="network-topology"
+            connections={@connections}
+            selected_chain={@selected_chain}
+            selected_provider={@selected_provider}
+            on_chain_select="select_chain"
+            on_provider_select="select_provider"
+            on_test_connection="test_connection"
+          />
+        </div>
+        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
+          <div class="mb-2 text-sm font-semibold text-gray-300">Details</div>
+          <div class="text-xs text-gray-400">
+            <div>
+              Selected chain: <span class="text-purple-300">{@selected_chain || "(none)"}</span>
+            </div>
+            <div>
+              Selected provider:
+              <span class="text-emerald-300">{@selected_provider || "(none)"}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  def streams_tab_content(assigns) do
+    ~H"""
+    <div class="flex h-full w-full flex-col gap-4 p-4">
+      <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
+          <div class="mb-2 text-sm font-semibold text-gray-300">RPC call stream</div>
+          <div class="h-[32rem] overflow-auto">
+            <%= for e <- @routing_events do %>
+              <div class="mb-1 text-xs text-gray-400">
+                <span class="text-gray-500">[{e.ts}]</span>
+                chain=<span class="text-purple-300"><%= e.chain %></span> method=<span class="text-sky-300"><%= e.method %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> dur=<span class="text-yellow-300"><%= e.duration_ms %>ms</span> result=<span><%= e.result %></span> failovers=<span><%= e.failovers %></span>
+              </div>
+            <% end %>
+          </div>
+        </div>
+        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
+          <div class="mb-2 text-sm font-semibold text-gray-300">System event stream</div>
+          <div class="h-[32rem] overflow-auto">
+            <%= for e <- @provider_events do %>
+              <div class="mb-1 text-xs text-gray-400">
+                <span class="text-gray-500">[{e.ts}]</span>
+                chain=<span class="text-purple-300"><%= e.chain %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> event=<span class="text-orange-300"><%= e.event %></span>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  def benchmarks_tab_content(assigns) do
+    ~H"""
+    <div class="flex h-full w-full flex-col gap-4 p-4">
+      <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-6">
+        <div class="text-sm font-semibold text-gray-300">Benchmarks</div>
+        <div class="mt-2 text-xs text-gray-400">
+          Coming soon: provider leaderboard, method x provider latency heatmap, and strategy comparisons.
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  def simulator_tab_content(assigns) do
+    ~H"""
+    <div
+      id="simulator-control"
+      phx-hook="SimulatorControl"
+      class="flex h-full w-full flex-col gap-4 p-4"
+    >
       <div class="flex items-center justify-between">
         <div class="flex gap-2">
           <button
@@ -327,34 +492,54 @@ defmodule LivechainWeb.Dashboard do
         </div>
       </div>
 
-      <div class="flex items-center justify-between">
-        <div class="flex gap-2">
-          <button
-            phx-click="start_sampler"
-            disabled={@sampler_running}
-            class="rounded bg-indigo-600 px-3 py-1 text-white disabled:opacity-50"
-          >
-            Start Routing Sampler
-          </button>
-          <button
-            phx-click="stop_sampler"
-            disabled={!@sampler_running}
-            class="rounded bg-gray-700 px-3 py-1 text-white disabled:opacity-50"
-          >
-            Stop Routing Sampler
-          </button>
-          <button phx-click="emit_cooldown" class="rounded bg-amber-600 px-3 py-1 text-white">
-            Emit Cooldown
-          </button>
-          <button phx-click="emit_healthy" class="rounded bg-teal-600 px-3 py-1 text-white">
-            Emit Healthy
-          </button>
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
+          <div class="mb-2 text-sm font-semibold text-gray-300">HTTP Load</div>
+          <div class="flex flex-wrap items-center gap-2 text-sm">
+            <button phx-click="sim_http_start" class="rounded bg-indigo-600 px-3 py-1 text-white">
+              Start HTTP
+            </button>
+            <button phx-click="sim_http_stop" class="rounded bg-gray-700 px-3 py-1 text-white">
+              Stop HTTP
+            </button>
+            <span class="text-gray-400">RPS: 5, Methods: eth_blockNumber/eth_getBalance</span>
+          </div>
+          <div class="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-400">
+            <div>
+              Success:
+              <span class="text-emerald-400">
+                {@sim_stats.http["success"] || @sim_stats.http[:success]}
+              </span>
+            </div>
+            <div>
+              Errors:
+              <span class="text-rose-400">{@sim_stats.http["error"] || @sim_stats.http[:error]}</span>
+            </div>
+            <div>
+              Avg:
+              <span class="text-yellow-300">
+                {(@sim_stats.http["avgLatencyMs"] || @sim_stats.http[:avgLatencyMs] || 0.0)
+                |> to_float()
+                |> Float.round(1)} ms
+              </span>
+            </div>
+          </div>
         </div>
-        <div class="text-sm text-gray-400">
-          Sampler:
-          <span class={[(@sampler_running && "text-emerald-400") || "text-red-400"]}>
-            {if @sampler_running, do: "running", else: "stopped"}
-          </span>
+        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
+          <div class="mb-2 text-sm font-semibold text-gray-300">WebSocket Load</div>
+          <div class="flex flex-wrap items-center gap-2 text-sm">
+            <button phx-click="sim_ws_start" class="rounded bg-purple-600 px-3 py-1 text-white">
+              Start WS
+            </button>
+            <button phx-click="sim_ws_stop" class="rounded bg-gray-700 px-3 py-1 text-white">
+              Stop WS
+            </button>
+            <span class="text-gray-400">Conns: 2, Topic: newHeads</span>
+          </div>
+          <div class="mt-2 text-xs text-gray-400">
+            Open:
+            <span class="text-emerald-400">{@sim_stats.ws["open"] || @sim_stats.ws[:open]}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -535,7 +720,56 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_event("sim_http_start", _params, socket) do
+    # Push event to JS hook with defaults; future: make dynamic via form controls
+    opts = %{
+      chains: ["base", "arbitrum"],
+      methods: ["eth_blockNumber", "eth_getBalance"],
+      rps: 5,
+      concurrency: 4,
+      durationMs: 30_000
+    }
+
+    socket = push_event(socket, "sim_start_http", opts)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("sim_http_stop", _params, socket) do
+    socket = push_event(socket, "sim_stop_http", %{})
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("sim_ws_start", _params, socket) do
+    opts = %{
+      chains: ["base", "arbitrum"],
+      connections: 2,
+      topics: ["newHeads"],
+      durationMs: 30_000
+    }
+
+    socket = push_event(socket, "sim_start_ws", opts)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("sim_ws_stop", _params, socket) do
+    socket = push_event(socket, "sim_stop_ws", %{})
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("sim_stats", %{"http" => http, "ws" => ws}, socket) do
+    {:noreply, assign(socket, :sim_stats, %{http: http, ws: ws})}
+  end
+
   # Helper functions
+
+  defp to_float(value) when is_integer(value), do: value * 1.0
+  defp to_float(value) when is_float(value), do: value
+  defp to_float(_), do: 0.0
 
   defp fetch_connections(socket) do
     connections = Livechain.RPC.WSSupervisor.list_connections()

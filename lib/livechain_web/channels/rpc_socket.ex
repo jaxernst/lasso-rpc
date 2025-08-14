@@ -22,7 +22,7 @@ defmodule LivechainWeb.RPCSocket do
   channel("rpc:*", LivechainWeb.RPCChannel)
 
   @impl true
-  def connect(_params, socket, connect_info) do
+  def connect(params, socket, connect_info) do
     # Extract chain from the socket path
     chain = extract_chain_from_connect_info(connect_info)
 
@@ -30,12 +30,45 @@ defmodule LivechainWeb.RPCSocket do
       true ->
         Logger.info("JSON-RPC client connected to chain: #{chain}")
         socket = assign(socket, :chain, chain)
+
+        publish_client_event(:client_connected, chain, connect_info)
+
         {:ok, socket}
 
       false ->
         Logger.warning("Invalid chain requested: #{chain}")
         :error
     end
+  end
+
+  @impl true
+  def terminate(_reason, socket) do
+    chain = Map.get(socket.assigns, :chain, "unknown")
+    publish_client_event(:client_disconnected, chain, %{})
+    :ok
+  end
+
+  defp publish_client_event(event, chain, connect_info) do
+    remote_ip =
+      case connect_info do
+        %{peer_data: %{address: {a, b, c, d}}} ->
+          Enum.join([a, b, c, d], ".")
+
+        _ ->
+          nil
+      end
+
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "clients:events",
+      %{
+        ts: System.system_time(:millisecond),
+        event: event,
+        chain: chain,
+        transport: :ws,
+        remote_ip: remote_ip
+      }
+    )
   end
 
   defp extract_chain_from_connect_info(connect_info) do

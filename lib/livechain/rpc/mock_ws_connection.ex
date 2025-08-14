@@ -94,8 +94,8 @@ defmodule Livechain.RPC.MockWSConnection do
                message["method"],
                message["params"] || []
              ) do
-          {:ok, result} ->
-            # Simulate response
+          {:ok, _result} ->
+            # Simulate response (no-op)
             {:noreply, state}
 
           {:error, reason} ->
@@ -145,7 +145,34 @@ defmodule Livechain.RPC.MockWSConnection do
   @impl true
   def handle_info({:websocket_message, message}, state) do
     # Handle incoming WebSocket messages (from mock provider)
-    {:noreply, state}
+    case Jason.decode(message) do
+      {:ok, decoded} ->
+        chain_name = get_chain_name(state.endpoint.chain_id)
+        received_at = System.monotonic_time(:millisecond)
+
+        :telemetry.execute(
+          [
+            :livechain,
+            :ws,
+            :message,
+            :received
+          ],
+          %{count: 1},
+          %{chain: chain_name, provider_id: state.endpoint.id, event_type: :mock}
+        )
+
+        Phoenix.PubSub.broadcast(
+          Livechain.PubSub,
+          "raw_messages:#{chain_name}",
+          {:raw_message, state.endpoint.id, decoded, received_at}
+        )
+
+        {:noreply, state}
+
+      {:error, reason} ->
+        Logger.error("Failed to decode mock WebSocket message: #{inspect(reason)}")
+        {:noreply, state}
+    end
   end
 
   # Private functions
@@ -176,5 +203,15 @@ defmodule Livechain.RPC.MockWSConnection do
          subscriptions: MapSet.size(state.subscriptions)
        }}
     )
+  end
+
+  defp get_chain_name(chain_id) do
+    case chain_id do
+      1 -> "ethereum"
+      137 -> "polygon"
+      42_161 -> "arbitrum"
+      56 -> "bsc"
+      _ -> "unknown"
+    end
   end
 end

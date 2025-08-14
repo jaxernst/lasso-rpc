@@ -56,6 +56,14 @@ defmodule Livechain.Application do
       # Attach telemetry handlers after supervisor is started
       Livechain.Telemetry.attach_default_handlers()
 
+      # Start all configured chains
+      case Livechain.RPC.ChainManager.start_all_chains() do
+        {:ok, started_count} ->
+          Logger.info("Started #{started_count} chain supervisors")
+        {:error, reason} ->
+          Logger.error("Failed to start chain supervisors: #{reason}")
+      end
+
       # Auto-start simulator in dev/test environments
       if Mix.env() in [:dev, :test] do
         # start_simulator_process()

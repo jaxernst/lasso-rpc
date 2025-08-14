@@ -464,17 +464,17 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     racing_scores = 
       score_table
       |> :ets.tab2list()
-      |> Enum.filter(fn {{_provider_id, _event_type, type}, _wins, _total, _avg, _updated} -> 
+      |> Enum.filter(fn {{_provider_id, _event_type, type}, _wins, _total, _avg, _samples, _updated} -> 
            type == :racing 
          end)
-      |> Enum.group_by(fn {{provider_id, _event_type, _type}, _wins, _total, _avg, _updated} -> 
+      |> Enum.group_by(fn {{provider_id, _event_type, _type}, _wins, _total, _avg, _samples, _updated} -> 
            provider_id 
          end)
     
     # Calculate overall scores for each provider
     Enum.map(racing_scores, fn {provider_id, entries} ->
       {total_wins, total_races, weighted_avg_margin} = 
-        Enum.reduce(entries, {0, 0, 0.0}, fn {{_pid, _et, _type}, wins, total, avg_margin, _updated}, {acc_wins, acc_total, acc_margin} ->
+        Enum.reduce(entries, {0, 0, 0.0}, fn {{_pid, _et, _type}, wins, total, avg_margin, _samples, _updated}, {acc_wins, acc_total, acc_margin} ->
           {acc_wins + wins, acc_total + total, acc_margin + (avg_margin * total)}
         end)
       
@@ -500,18 +500,18 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     provider_entries = 
       score_table
       |> :ets.tab2list()
-      |> Enum.filter(fn {{pid, _event_type, _type}, _wins, _total, _avg, _updated} -> 
+      |> Enum.filter(fn {{pid, _event_type, _type}, _wins, _total, _avg, _samples, _updated} -> 
            pid == provider_id 
          end)
     
     # Group by type (racing vs rpc)
     {racing_entries, rpc_entries} = 
-      Enum.split_with(provider_entries, fn {{_pid, _key, type}, _wins, _total, _avg, _updated} -> 
+      Enum.split_with(provider_entries, fn {{_pid, _key, type}, _wins, _total, _avg, _samples, _updated} -> 
         type == :racing 
       end)
     
     racing_metrics = 
-      Enum.map(racing_entries, fn {{_pid, event_type, _type}, wins, total, avg_margin, last_updated} ->
+      Enum.map(racing_entries, fn {{_pid, event_type, _type}, wins, total, avg_margin, _samples, last_updated} ->
         %{
           event_type: event_type,
           wins: wins,
@@ -523,7 +523,7 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
       end)
     
     rpc_metrics = 
-      Enum.map(rpc_entries, fn {{_pid, method, _type}, successes, total, avg_duration, last_updated} ->
+      Enum.map(rpc_entries, fn {{_pid, method, _type}, successes, total, avg_duration, _samples, last_updated} ->
         %{
           method: method,
           successes: successes,

@@ -100,28 +100,6 @@ chains:
         latency_target: 200
         reliability: 0.95
 
-      - id: "base_infura"
-        name: "Infura Base"
-        priority: 3
-        type: "paid"
-        url: "https://base-mainnet.infura.io/v3/${INFURA_API_KEY}"
-        ws_url: "wss://base-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
-        api_key_required: true
-        rate_limit: 100000
-        latency_target: 100
-        reliability: 0.999
-
-      - id: "base_alchemy"
-        name: "Alchemy Base"
-        priority: 4
-        type: "paid"
-        url: "https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-        ws_url: "wss://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-        api_key_required: true
-        rate_limit: 300000
-        latency_target: 80
-        reliability: 0.999
-
     connection:
       heartbeat_interval: 20000 # Base is faster, more frequent heartbeats
       reconnect_interval: 3000
@@ -187,38 +165,27 @@ chains:
     block_time: 1000 # Very fast blocks
 
     providers:
-      - id: "arbitrum_infura"
-        name: "Infura Arbitrum"
+      - id: "arbitrum_official"
+        name: "Arbitrum Official"
         priority: 1
-        type: "paid"
-        url: "https://arbitrum-mainnet.infura.io/v3/${INFURA_API_KEY}"
-        ws_url: "wss://arbitrum-mainnet.infura.io/ws/v3/${INFURA_API_KEY}"
-        api_key_required: true
-        rate_limit: 100000
-        latency_target: 100
-        reliability: 0.999
-
-      - id: "arbitrum_alchemy"
-        name: "Alchemy Arbitrum"
-        priority: 2
-        type: "paid"
-        url: "https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-        ws_url: "wss://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-        api_key_required: true
-        rate_limit: 300000
-        latency_target: 80
-        reliability: 0.999
-
-      - id: "arbitrum_ankr"
-        name: "Ankr Arbitrum"
-        priority: 3
         type: "public"
-        url: "https://rpc.ankr.com/arbitrum"
-        ws_url: "wss://rpc.ankr.com/arbitrum/ws"
+        url: "https://arb1.arbitrum.io/rpc"
+        ws_url: "wss://arb1.arbitrum.io/ws"
+        api_key_required: false
+        rate_limit: 1000
+        latency_target: 150
+        reliability: 0.98
+
+      - id: "arbitrum_blastapi"
+        name: "BlastAPI Arbitrum"
+        priority: 2
+        type: "public"
+        url: "https://arbitrum-one.public.blastapi.io"
+        ws_url: "wss://arbitrum-one.public.blastapi.io"
         api_key_required: false
         rate_limit: 500
         latency_target: 200
-        reliability: 0.94
+        reliability: 0.95
 
     connection:
       heartbeat_interval: 15000 # Very frequent for fast chain

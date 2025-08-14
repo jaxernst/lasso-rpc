@@ -4,6 +4,9 @@ import "phoenix_html";
 import { Socket } from "phoenix";
 import { LiveSocket } from "phoenix_live_view";
 
+// Simulator module
+import * as LassoSim from "./lasso_simulator";
+
 // Collapsible Section Hook
 const CollapsibleSection = {
   mounted() {
@@ -15,7 +18,7 @@ const CollapsibleSection = {
     this.arrow = this.button.querySelector("svg").parentElement;
 
     this.button.addEventListener("click", () => this.toggle());
-    
+
     // Initialize in open state
     this.expand();
   },
@@ -47,6 +50,44 @@ const CollapsibleSection = {
   },
 };
 
+const SimulatorControl = {
+  mounted() {
+    console.log("SimulatorControl hook mounted");
+    this.httpTimer = null;
+    this.wsHandles = [];
+
+    this.handleEvent("sim_start_http", (opts) => {
+      console.log("sim_start_http received with opts:", opts);
+      LassoSim.startHttpLoad(opts);
+    });
+
+    this.handleEvent("sim_stop_http", () => {
+      LassoSim.stopHttpLoad();
+    });
+
+    this.handleEvent("sim_start_ws", (opts) => {
+      console.log("sim_start_ws received with opts:", opts);
+      LassoSim.startWsLoad(opts);
+    });
+
+    this.handleEvent("sim_stop_ws", () => {
+      LassoSim.stopWsLoad();
+    });
+
+    this.statsInterval = setInterval(() => {
+      if (this.el.isConnected && this.pushEvent) {
+        const stats = LassoSim.activeStats();
+        this.pushEvent("sim_stats", stats);
+      }
+    }, 1000);
+  },
+  destroyed() {
+    clearInterval(this.statsInterval);
+    LassoSim.stopHttpLoad();
+    LassoSim.stopWsLoad();
+  },
+};
+
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");
@@ -55,6 +96,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
   params: { _csrf_token: csrfToken },
   hooks: {
     CollapsibleSection,
+    SimulatorControl,
   },
 });
 

@@ -86,7 +86,7 @@ defmodule Livechain.RPC.ChainSupervisor do
          {:ok, chain_config} <- Livechain.Config.ChainConfig.get_chain_config(config, chain_name),
          provider <- Enum.find(chain_config.providers, &(&1.id == provider_id)),
          true <- not is_nil(provider) do
-      http_provider = %{url: provider.url, api_key: provider.api_key}
+      http_provider = %{url: provider.url, api_key: nil}
       timeout_ms = Livechain.Config.MethodPolicy.timeout_for(method)
 
       CircuitBreaker.call(
@@ -176,6 +176,11 @@ defmodule Livechain.RPC.ChainSupervisor do
         # Register with ProviderPool
         ProviderPool.register_provider(chain_name, provider.id, pid, provider)
 
+      {:error, {:already_started, pid}} ->
+        Logger.info("WSConnection for #{provider.name} (#{provider.id}) already exists, using existing connection")
+        # Register with ProviderPool using existing pid
+        ProviderPool.register_provider(chain_name, provider.id, pid, provider)
+
       {:error, reason} ->
         Logger.error("Failed to start WSConnection for #{provider.name}: #{reason}")
     end
@@ -209,6 +214,9 @@ defmodule Livechain.RPC.ChainSupervisor do
     :"#{chain_name}_connection_supervisor"
   end
 
+  defp normalize_breaker_result({:ok, {:ok, result}}), do: {:ok, result}
+  defp normalize_breaker_result({:ok, {:error, reason}}), do: {:error, reason}
+  defp normalize_breaker_result({:error, reason}), do: {:error, reason}
   defp normalize_breaker_result({:reply, {:ok, result}, _state}), do: {:ok, result}
   defp normalize_breaker_result({:reply, {:error, reason}, _state}), do: {:error, reason}
   defp normalize_breaker_result({:reply, other, _state}), do: {:error, other}
