@@ -1,14 +1,16 @@
-# ChainPulse
+# Livechain
 
-High-performance RPC orchestration and benchmarking for EVM chains.
+High-performance, scalable, and fault tolerant RPC orchestration service for EVM chains.
 
-## Features
+## Core Features + Selling points
 
-- Multi-provider orchestration with passive racing and failover
-- Real-time WebSocket subscriptions for `newHeads` and `logs`
-- HTTP JSON-RPC proxy for read-only methods
-- Pluggable provider selection strategies (leaderboard, priority, round_robin)
-- Live dashboard with provider performance metrics
+- Multi-provider orchestration with smart routing based on pluggable provider routing strategies (leaderboard, priority, round_robin)
+- Scalable + reliable real-time RPC support with websockets feeds
+- Strong failover properties for provider connection issues across http and ws
+- WS + HTTP JSON-RPC proxy to support all standard readonly rpc methods supported by providers
+- Passive provider benchmarking on a per-chain, per JSON rpc method basis
+- Support for provider 'racing' to for maximally low latency modes ('fastest response possible' mode)
+- Live dashboard with deep system insights, live chain info + status, provider performance metrics, and system load simulation hub
 
 ## Usage
 
