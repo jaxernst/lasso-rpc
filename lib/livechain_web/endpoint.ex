@@ -24,27 +24,12 @@ defmodule LivechainWeb.Endpoint do
     longpoll: false
   )
 
-  # JSON-RPC WebSocket endpoints for Viem compatibility
-  # COMMENTED OUT: These conflict with HTTP POST routes
-  # socket("/rpc/ethereum", LivechainWeb.RPCSocket,
-  #   websocket: [path: "/"],
-  #   longpoll: false
-  # )
-
-  # socket("/rpc/arbitrum", LivechainWeb.RPCSocket,
-  #   websocket: [path: "/"],
-  #   longpoll: false
-  # )
-
-  # socket("/rpc/polygon", LivechainWeb.RPCSocket,
-  #   websocket: [path: "/"],
-  #   longpoll: false
-  # )
-
-  # socket("/rpc/bsc", LivechainWeb.RPCSocket,
-  #   websocket: [path: "/"],
-  #   longpoll: false
-  # )
+  # JSON-RPC WebSocket endpoints with route parameters
+  # Using /ws/rpc/:chain_id path to avoid conflicts with HTTP /rpc/:chain_id
+  socket("/ws/rpc/:chain_id", LivechainWeb.RPCSocket,
+    websocket: [path: "/"],
+    longpoll: false
+  )
 
   # Serve at "/" the static files from "priv/static" directory.
   plug(Plug.Static,

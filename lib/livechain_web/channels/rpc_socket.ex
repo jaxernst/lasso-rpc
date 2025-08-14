@@ -72,16 +72,23 @@ defmodule LivechainWeb.RPCSocket do
   end
 
   defp extract_chain_from_connect_info(connect_info) do
-    # Try to extract chain from the URI path
+    # First, try to extract chain from route parameters (new parameterized route)
     case connect_info do
+      %{params: %{"chain_id" => chain_id}} when is_binary(chain_id) ->
+        chain_id
+
       %{uri: %{path: path}} when is_binary(path) ->
+        # Fallback: extract from path for legacy routes
         case String.split(path, "/") do
+          # Handle /ws/rpc/:chain_id pattern
+          ["", "ws", "rpc", chain | _] -> chain
+          # Handle legacy /rpc/:chain pattern
           ["", "rpc", chain | _] -> chain
           _ -> "unknown"
         end
 
       _ ->
-        # Fallback: try to get from params
+        # Last fallback: try params with different key
         case connect_info do
           %{params: %{"chain" => chain}} -> chain
           _ -> "unknown"
