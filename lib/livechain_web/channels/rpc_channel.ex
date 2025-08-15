@@ -14,6 +14,7 @@ defmodule LivechainWeb.RPCChannel do
 
   alias Livechain.RPC.WSSupervisor
   alias Livechain.RPC.ChainManager
+  alias Livechain.RPC.SubscriptionManager
   alias Livechain.Benchmarking.BenchmarkStore
 
   @impl true
@@ -83,77 +84,46 @@ defmodule LivechainWeb.RPCChannel do
     {:reply, {:ok, response}, socket}
   end
 
-  # Handle subscription notifications from message aggregator
+  # Handle subscription notifications from SubscriptionManager
   @impl true
-  def handle_info({:fastest_message, provider_id, message}, socket) do
-    # Process aggregated messages from MessageAggregator
-    case detect_message_type(message) do
-      :block ->
-        send_block_subscription(socket, message)
-
-      :log ->
-        send_log_subscription(socket, message)
-
-      :transaction ->
-        send_transaction_subscription(socket, message)
-
-      _ ->
-        Logger.debug("Unhandled message type from #{provider_id}: #{inspect(message)}")
-    end
-
+  def handle_info({:subscription_event, notification}, socket) do
+    # Forward the subscription notification directly to the client
+    push(socket, "rpc_notification", notification)
     {:noreply, socket}
   end
 
-  @impl true
-  def handle_info({:blockchain_message, message}, socket) do
-    # Handle direct blockchain messages
-    case detect_message_type(message) do
-      :block ->
-        send_block_subscription(socket, message)
-
-      :log ->
-        send_log_subscription(socket, message)
-
-      _ ->
-        :ok
-    end
-
-    {:noreply, socket}
-  end
-
-  # Legacy handlers for backwards compatibility
-  @impl true
-  def handle_info(%{event: "new_block", payload: block_data}, socket) do
-    send_block_subscription(socket, block_data)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info(%{event: "new_log", payload: log_data}, socket) do
-    send_log_subscription(socket, log_data)
-    {:noreply, socket}
-  end
 
   # JSON-RPC method handlers
 
   defp handle_rpc_method("eth_subscribe", [subscription_type | params], socket) do
-    subscription_id = generate_subscription_id()
-
     case subscription_type do
       "newHeads" ->
-        # Subscribe to block updates for this chain
-        Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:#{socket.assigns.chain}")
-
-        _socket = update_subscriptions(socket, subscription_id, "newHeads")
-        {:subscription, subscription_id}
+        case SubscriptionManager.subscribe_to_new_heads(socket.assigns.chain) do
+          {:ok, subscription_id} ->
+            # Subscribe to the per-subscription topic
+            Phoenix.PubSub.subscribe(Livechain.PubSub, "subscription:#{subscription_id}")
+            
+            _socket = update_subscriptions(socket, subscription_id, "newHeads")
+            {:subscription, subscription_id}
+            
+          {:error, reason} ->
+            {:error, "Failed to create newHeads subscription: #{reason}"}
+        end
 
       "logs" ->
-        # Subscribe to log updates with optional filtering
         filter = List.first(params, %{})
-        Phoenix.PubSub.subscribe(Livechain.PubSub, "blockchain:#{socket.assigns.chain}:logs")
-
-        _socket = update_subscriptions(socket, subscription_id, {"logs", filter})
-        {:subscription, subscription_id}
+        
+        case SubscriptionManager.subscribe_to_logs(socket.assigns.chain, filter) do
+          {:ok, subscription_id} ->
+            # Subscribe to the per-subscription topic
+            Phoenix.PubSub.subscribe(Livechain.PubSub, "subscription:#{subscription_id}")
+            
+            _socket = update_subscriptions(socket, subscription_id, {"logs", filter})
+            {:subscription, subscription_id}
+            
+          {:error, reason} ->
+            {:error, "Failed to create logs subscription: #{reason}"}
+        end
 
       _ ->
         {:error, "Unsupported subscription type: #{subscription_type}"}
@@ -166,6 +136,12 @@ defmodule LivechainWeb.RPCChannel do
         {:ok, false}
 
       {_subscription_type, updated_subscriptions} ->
+        # Unsubscribe from SubscriptionManager
+        SubscriptionManager.unsubscribe(subscription_id)
+        
+        # Unsubscribe from per-subscription topic
+        Phoenix.PubSub.unsubscribe(Livechain.PubSub, "subscription:#{subscription_id}")
+        
         _socket = assign(socket, :subscriptions, updated_subscriptions)
         {:ok, true}
     end
@@ -336,138 +312,5 @@ defmodule LivechainWeb.RPCChannel do
     end
   end
 
-  # Subscription notification helpers
-  defp send_block_subscription(socket, block_data) do
-    socket.assigns.subscriptions
-    |> Enum.filter(fn {_sub_id, sub_type} -> sub_type == "newHeads" end)
-    |> Enum.each(fn {subscription_id, _} ->
-      notification = %{
-        "jsonrpc" => "2.0",
-        "method" => "eth_subscription",
-        "params" => %{
-          "subscription" => subscription_id,
-          "result" => extract_block_data(block_data)
-        }
-      }
 
-      IO.inspect(notification, label: "send_block_subscription")
-      push(socket, "rpc_notification", notification)
-    end)
-  end
-
-  defp send_log_subscription(socket, log_data) do
-    socket.assigns.subscriptions
-    |> Enum.filter(fn {_sub_id, sub_type} ->
-      case sub_type do
-        "logs" -> true
-        {"logs", _filter} -> true
-        _ -> false
-      end
-    end)
-    |> Enum.each(fn {subscription_id, _} ->
-      notification = %{
-        "jsonrpc" => "2.0",
-        "method" => "eth_subscription",
-        "params" => %{
-          "subscription" => subscription_id,
-          "result" => extract_log_data(log_data)
-        }
-      }
-
-      push(socket, "rpc_notification", notification)
-    end)
-  end
-
-  defp send_transaction_subscription(socket, tx_data) do
-    socket.assigns.subscriptions
-    |> Enum.filter(fn {_sub_id, sub_type} -> sub_type == "newPendingTransactions" end)
-    |> Enum.each(fn {subscription_id, _} ->
-      notification = %{
-        "jsonrpc" => "2.0",
-        "method" => "eth_subscription",
-        "params" => %{
-          "subscription" => subscription_id,
-          "result" => extract_transaction_data(tx_data)
-        }
-      }
-
-      push(socket, "rpc_notification", notification)
-    end)
-  end
-
-  # Message type detection based on content using pattern matching
-  defp detect_message_type(message) when is_map(message) do
-    case message do
-      # New block message (direct result)
-      %{"result" => %{"hash" => _hash, "number" => _number}} ->
-        :block
-
-      # Subscription message with block data that has transaction hash (log)
-      %{"params" => %{"result" => %{"hash" => _hash, "transactionHash" => _tx_hash}}} ->
-        :log
-
-      # Subscription message with block data that has block number (block)
-      %{"params" => %{"result" => %{"hash" => _hash, "number" => _number}}} ->
-        :block
-
-      # Log message (transaction-based)
-      %{"params" => %{"result" => %{"transactionHash" => _tx_hash}}} ->
-        :log
-
-      # Transaction message (string result - typically a hash)
-      %{"params" => %{"result" => result}} when is_binary(result) ->
-        :transaction
-
-      _ ->
-        :other
-    end
-  end
-
-  defp detect_message_type(_), do: :other
-
-  # Data extraction helpers for subscriptions using pattern matching
-  defp extract_block_data(message) when is_map(message) do
-    case message do
-      %{"result" => result} when is_map(result) ->
-        result
-
-      %{"params" => %{"result" => result}} ->
-        result
-
-      _ ->
-        message
-    end
-  end
-
-  defp extract_block_data(data), do: data
-
-  defp extract_log_data(message) when is_map(message) do
-    case message do
-      %{"params" => %{"result" => result}} ->
-        result
-
-      %{"result" => result} ->
-        result
-
-      _ ->
-        message
-    end
-  end
-
-  defp extract_log_data(data), do: data
-
-  defp extract_transaction_data(message) when is_map(message) do
-    case message do
-      %{"params" => %{"result" => result}} ->
-        result
-
-      %{"result" => result} ->
-        result
-
-      _ ->
-        message
-    end
-  end
-
-  defp extract_transaction_data(data), do: data
 end

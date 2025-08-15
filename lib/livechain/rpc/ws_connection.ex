@@ -19,6 +19,7 @@ defmodule Livechain.RPC.WSConnection do
   require Logger
 
   alias Livechain.RPC.WSEndpoint
+  alias Livechain.RPC.CircuitBreaker
   alias Livechain.Benchmarking.BenchmarkStore
 
   # Client API
@@ -91,8 +92,12 @@ defmodule Livechain.RPC.WSConnection do
   def init(%WSEndpoint{} = endpoint) do
     Logger.info("Starting WebSocket connection for #{endpoint.name} (#{endpoint.id})")
 
+    # Cache chain name at startup to avoid config loading on hot path
+    chain_name = resolve_chain_name(endpoint.chain_id)
+
     state = %{
       endpoint: endpoint,
+      chain_name: chain_name,
       connection: nil,
       connected: false,
       reconnect_attempts: 0,
@@ -110,6 +115,11 @@ defmodule Livechain.RPC.WSConnection do
     case connect_to_websocket(state.endpoint) do
       {:ok, connection} ->
         Logger.info("Connected to WebSocket: #{state.endpoint.name}")
+        Process.monitor(connection)
+        
+        # Report successful connection to circuit breaker
+        CircuitBreaker.record_success(state.endpoint.id)
+        
         state = %{state | connection: connection, connected: true, reconnect_attempts: 0}
         broadcast_status_change(state, :connected)
         state = schedule_heartbeat(state)
@@ -118,6 +128,10 @@ defmodule Livechain.RPC.WSConnection do
 
       {:error, reason} ->
         Logger.error("Failed to connect to WebSocket: #{inspect(reason)}")
+        
+        # Report connection failure to circuit breaker
+        CircuitBreaker.record_failure(state.endpoint.id)
+        
         broadcast_status_change(state, :disconnected)
         state = schedule_reconnect(state)
         {:noreply, state}
@@ -127,6 +141,7 @@ defmodule Livechain.RPC.WSConnection do
           "WebSocket connection already exists for #{state.endpoint.name}, using existing connection"
         )
 
+        Process.monitor(pid)
         state = %{state | connection: pid, connected: true, reconnect_attempts: 0}
         broadcast_status_change(state, :connected)
         state = schedule_heartbeat(state)
@@ -143,6 +158,10 @@ defmodule Livechain.RPC.WSConnection do
 
       {:error, reason} ->
         Logger.error("Failed to send message: #{reason}")
+        
+        # Report send failure to circuit breaker
+        CircuitBreaker.record_failure(state.endpoint.id)
+        
         state = %{state | pending_messages: [message | state.pending_messages]}
         {:noreply, state}
     end
@@ -202,6 +221,10 @@ defmodule Livechain.RPC.WSConnection do
   @impl true
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
     Logger.warning("WebSocket connection lost: #{inspect(reason)}")
+    
+    # Report disconnect as failure to circuit breaker
+    CircuitBreaker.record_failure(state.endpoint.id)
+    
     state = %{state | connected: false, connection: nil}
     broadcast_status_change(state, :disconnected)
     state = schedule_reconnect(state)
@@ -259,7 +282,7 @@ defmodule Livechain.RPC.WSConnection do
     WebSockex.start_link(
       endpoint.ws_url,
       __MODULE__,
-      endpoint
+      %{endpoint: endpoint}
     )
   end
 
@@ -273,13 +296,24 @@ defmodule Livechain.RPC.WSConnection do
   end
 
   defp schedule_reconnect(state) do
-    if state.reconnect_attempts < state.endpoint.max_reconnect_attempts do
-      delay = state.endpoint.reconnect_interval * (state.reconnect_attempts + 1)
-      Process.send_after(self(), {:reconnect}, delay)
-      %{state | reconnect_attempts: state.reconnect_attempts + 1}
-    else
-      Logger.error("Max reconnection attempts reached for #{state.endpoint.name}")
-      state
+    max_attempts = state.endpoint.max_reconnect_attempts
+    
+    cond do
+      max_attempts == :infinity ->
+        delay = min(state.endpoint.reconnect_interval * (state.reconnect_attempts + 1), 30_000)
+        jitter = :rand.uniform(1000)
+        Process.send_after(self(), {:reconnect}, delay + jitter)
+        %{state | reconnect_attempts: state.reconnect_attempts + 1}
+        
+      state.reconnect_attempts < max_attempts ->
+        delay = min(state.endpoint.reconnect_interval * (state.reconnect_attempts + 1), 30_000)
+        jitter = :rand.uniform(1000)
+        Process.send_after(self(), {:reconnect}, delay + jitter)
+        %{state | reconnect_attempts: state.reconnect_attempts + 1}
+        
+      true ->
+        Logger.error("Max reconnection attempts reached for #{state.endpoint.name}")
+        state
     end
   end
 
@@ -305,7 +339,6 @@ defmodule Livechain.RPC.WSConnection do
     Logger.debug("Received new block: #{inspect(block_data)}")
 
     # Send to MessageAggregator for deduplication and speed optimization
-    chain_name = get_chain_name(state.endpoint.chain_id)
     received_at = System.monotonic_time(:millisecond)
 
     # Telemetry: message received
@@ -317,19 +350,17 @@ defmodule Livechain.RPC.WSConnection do
         :received
       ],
       %{count: 1},
-      %{chain: chain_name, provider_id: state.endpoint.id, event_type: :newHeads}
+      %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :newHeads}
     )
 
     # Send to raw messages channel for aggregation
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
-      "raw_messages:#{chain_name}",
+      "raw_messages:#{state.chain_name}",
       {:raw_message, state.endpoint.id, message, received_at}
     )
 
-    # TODO: Remove this backward compatibility functionality (don't need to maintain these old functions with hardocded chain names anywhere in the codebase)
-    # Also maintain backward compatibility
-    broadcast_block_to_channels(state.endpoint, block_data)
+    # Backward compatibility removed - all events now route through MessageAggregator
 
     {:ok, state}
   end
@@ -339,7 +370,6 @@ defmodule Livechain.RPC.WSConnection do
     Logger.debug("Received subscription: #{inspect(message)}")
 
     # Send all subscription messages through aggregator
-    chain_name = get_chain_name(state.endpoint.chain_id)
     received_at = System.monotonic_time(:millisecond)
 
     :telemetry.execute(
@@ -350,12 +380,12 @@ defmodule Livechain.RPC.WSConnection do
         :received
       ],
       %{count: 1},
-      %{chain: chain_name, provider_id: state.endpoint.id, event_type: :subscription}
+      %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :subscription}
     )
 
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
-      "raw_messages:#{chain_name}",
+      "raw_messages:#{state.chain_name}",
       {:raw_message, state.endpoint.id, message, received_at}
     )
 
@@ -367,7 +397,6 @@ defmodule Livechain.RPC.WSConnection do
     Logger.debug("Received message: #{inspect(message)}")
 
     # Send through aggregator for consistency
-    chain_name = get_chain_name(state.endpoint.chain_id)
     received_at = System.monotonic_time(:millisecond)
 
     :telemetry.execute(
@@ -378,20 +407,20 @@ defmodule Livechain.RPC.WSConnection do
         :received
       ],
       %{count: 1},
-      %{chain: chain_name, provider_id: state.endpoint.id, event_type: :other}
+      %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :other}
     )
 
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
-      "raw_messages:#{chain_name}",
+      "raw_messages:#{state.chain_name}",
       {:raw_message, state.endpoint.id, message, received_at}
     )
 
     {:ok, state}
   end
 
-  # Resolve chain name via config
-  defp get_chain_name(chain_id) do
+  # Resolve chain name via config at startup
+  defp resolve_chain_name(chain_id) do
     case Livechain.Config.ChainConfig.load_config() do
       {:ok, config} ->
         case Enum.find(config.chains, fn {_name, chain_config} ->
@@ -412,33 +441,6 @@ defmodule Livechain.RPC.WSConnection do
     {:via, Registry, {Livechain.Registry, {:ws_conn, connection_id}}}
   end
 
-  defp broadcast_block_to_channels(endpoint, block_data) do
-    # Map chain_id to chain name for PubSub topics
-    chain_name =
-      case endpoint.chain_id do
-        1 -> "ethereum"
-        137 -> "polygon"
-        42_161 -> "arbitrum"
-        56 -> "bsc"
-        8453 -> "base"
-        84532 -> "base_sepolia"
-        _ -> "unknown"
-      end
-
-    # Broadcast to general blockchain channel
-    Phoenix.PubSub.broadcast(
-      Livechain.PubSub,
-      "blockchain:#{chain_name}",
-      %{event: "new_block", payload: block_data}
-    )
-
-    # Broadcast to specific event type channel
-    Phoenix.PubSub.broadcast(
-      Livechain.PubSub,
-      "blockchain:#{chain_name}:blocks",
-      %{event: "new_block", payload: block_data}
-    )
-  end
 
   defp broadcast_status_change(state, status) do
     Phoenix.PubSub.broadcast(

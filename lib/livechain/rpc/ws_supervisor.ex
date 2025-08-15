@@ -187,7 +187,7 @@ defmodule Livechain.RPC.WSSupervisor do
   def connection_status(connection_id) do
     case find_connection(connection_id) do
       {:ok, pid} ->
-        WSConnection.status(pid)
+        GenServer.call(pid, :status)
 
       {:error, :not_found} ->
         {:error, :not_found}
@@ -277,22 +277,19 @@ defmodule Livechain.RPC.WSSupervisor do
     end
   end
 
-  defp get_connection_status(pid, connection_module) do
+  defp get_connection_status(pid, _connection_module) do
     case Process.alive?(pid) do
       true ->
         status_result =
           try do
-            connection_module.status(pid)
-          rescue
-            _ -> %{connected: false, error: "status_unavailable"}
+            GenServer.call(pid, :status, 5_000)
           catch
-            :exit, _ ->
-              # If calling with pid fails, try calling with a GenServer call
-              try do
-                GenServer.call(pid, :status)
-              rescue
-                _ -> %{connected: false, error: "status_unavailable"}
-              end
+            :exit, {:timeout, _} ->
+              %{connected: false, error: "status_timeout"}
+            :exit, {:noproc, _} ->
+              %{connected: false, error: "process_dead"}
+            :exit, {reason, _} ->
+              %{connected: false, error: "call_failed", reason: reason}
           end
 
         case status_result do
