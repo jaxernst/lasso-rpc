@@ -441,6 +441,6 @@ defmodule Livechain.RPC.MessageAggregator do
   end
 
   defp via_name(chain_name) do
-    {:via, :global, {:message_aggregator, chain_name}}
+    {:via, Registry, {Livechain.Registry, {:message_aggregator, chain_name}}}
   end
 end

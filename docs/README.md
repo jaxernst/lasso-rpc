@@ -4,7 +4,7 @@ High-performance, scalable, and fault tolerant RPC orchestration service for EVM
 
 ## Core Features + Selling points
 
-- Multi-provider orchestration with smart routing based on pluggable provider routing strategies (leaderboard, priority, round_robin)
+- Multi-provider orchestration with smart routing based on pluggable provider routing strategies (fastest, cheapest, round_robin)
 - Scalable + reliable real-time RPC support with websockets feeds
 - Strong failover properties for provider connection issues across http and ws
 - WS + HTTP JSON-RPC proxy to support all standard readonly rpc methods supported by providers

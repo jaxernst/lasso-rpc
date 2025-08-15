@@ -134,7 +134,7 @@ defmodule Livechain.RPC.MockProvider.EventStream do
   # Private functions
 
   defp via_name(name) do
-    {:via, :global, {:event_stream, name}}
+    {:via, Registry, {Livechain.Registry, {:event_stream, name}}}
   end
 
   defp generate_subscription_id(_topic) do

@@ -25,6 +25,23 @@ Instead of synthetic benchmarks, Livechain deduplicates identical events from mu
 
 ---
 
+## Regionality and Latency-Aware Routing
+
+Livechain is designed to operate as a regional-first platform: clients connect to the nearest Livechain node, which then selects the lowest-latency upstream provider using region-local metrics.
+
+- **Client proximity**: Use geo routing at the edge (DNS or managed LB) to land clients on the closest region.
+- **Region-local benchmarking**: Maintain per-region leaderboards and latency/error metrics; prefer the top provider for that region and method.
+- **Persistent connections**: Keep warm HTTP pools and provider WebSockets to minimize handshakes and reduce hop latency.
+- **Failover without regressions**: Circuit breakers, cooldowns, and provider pools ensure graceful rotation to the next best provider.
+- **Minimal overhead**: Hot-path selection and routing are in-memory (ETS/Registry); typical added latency is single-digit milliseconds, often offset by better upstream choice.
+
+Separation of concerns:
+
+- **BEAM/Elixir**: Selection logic, benchmarking, circuit breaking, WS/HTTP proxying, telemetry (region-tagged), and per-region supervision (using `Registry`).
+- **Infrastructure**: Global ingress/geo routing (DNS/LB), TLS termination and WS stickiness, environment config (`LIVECHAIN_REGION`), scaling, and observability stack.
+
+---
+
 ## OTP Supervision Architecture
 
 ```

@@ -123,7 +123,10 @@ defmodule Livechain.RPC.WSConnection do
         {:noreply, state}
 
       {:already_started, pid} ->
-        Logger.info("WebSocket connection already exists for #{state.endpoint.name}, using existing connection")
+        Logger.info(
+          "WebSocket connection already exists for #{state.endpoint.name}, using existing connection"
+        )
+
         state = %{state | connection: pid, connected: true, reconnect_attempts: 0}
         broadcast_status_change(state, :connected)
         state = schedule_heartbeat(state)
@@ -256,8 +259,7 @@ defmodule Livechain.RPC.WSConnection do
     WebSockex.start_link(
       endpoint.ws_url,
       __MODULE__,
-      endpoint,
-      name: {:via, :global, {:connection, endpoint.id}}
+      endpoint
     )
   end
 
@@ -407,7 +409,7 @@ defmodule Livechain.RPC.WSConnection do
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
   defp via_name(connection_id) do
-    {:via, :global, {:connection, connection_id}}
+    {:via, Registry, {Livechain.Registry, {:ws_conn, connection_id}}}
   end
 
   defp broadcast_block_to_channels(endpoint, block_data) do
