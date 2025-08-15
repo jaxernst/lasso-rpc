@@ -271,12 +271,9 @@ defmodule Livechain.RPC.WSSupervisor do
   end
 
   defp find_connection(connection_id) do
-    case :global.whereis_name({:connection, connection_id}) do
-      :undefined ->
-        {:error, :not_found}
-
-      pid when is_pid(pid) ->
-        {:ok, pid}
+    case Registry.lookup(Livechain.Registry, {:ws_conn, connection_id}) do
+      [{pid, _}] -> {:ok, pid}
+      _ -> {:error, :not_found}
     end
   end
 

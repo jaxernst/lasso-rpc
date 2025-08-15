@@ -75,7 +75,7 @@ defmodule Livechain.RPC.MockProvider.BlockGenerator do
   # Private functions
 
   defp via_name(name) do
-    {:via, :global, {:block_generator, name}}
+    {:via, Registry, {Livechain.Registry, {:block_generator, name}}}
   end
 
   defp generate_block_data(block_number, chain_id) do

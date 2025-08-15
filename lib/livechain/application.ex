@@ -28,6 +28,10 @@ defmodule Livechain.Application do
         # Start price oracle for USD pricing
         Livechain.EventProcessing.PriceOracle,
 
+        # Add a local Registry for dynamic process names (high-cardinality)
+        {Registry,
+         keys: :unique, name: Livechain.Registry, partitions: System.schedulers_online()},
+
         # Start dynamic supervisor for chain supervisors
         {DynamicSupervisor, strategy: :one_for_one, name: Livechain.RPC.Supervisor},
 
@@ -60,6 +64,7 @@ defmodule Livechain.Application do
       case Livechain.RPC.ChainManager.start_all_chains() do
         {:ok, started_count} ->
           Logger.info("Started #{started_count} chain supervisors")
+
         {:error, reason} ->
           Logger.error("Failed to start chain supervisors: #{reason}")
       end

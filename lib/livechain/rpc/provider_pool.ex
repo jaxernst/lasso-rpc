@@ -717,7 +717,8 @@ defmodule Livechain.RPC.ProviderPool do
     # Use eth_chainId as a lightweight health check method
     endpoint = %{
       url: provider_config.url,
-      api_key: nil  # For public endpoints, no API key needed
+      # For public endpoints, no API key needed
+      api_key: nil
     }
 
     # Delegate to configured HttpClient adapter
@@ -745,7 +746,7 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   def via_name(chain_name) do
-    {:via, :global, {:provider_pool, chain_name}}
+    {:via, Registry, {Livechain.Registry, {:provider_pool, chain_name}}}
   end
 
   # Config helpers with safe defaults

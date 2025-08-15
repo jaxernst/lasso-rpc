@@ -177,7 +177,10 @@ defmodule Livechain.RPC.ChainSupervisor do
         ProviderPool.register_provider(chain_name, provider.id, pid, provider)
 
       {:error, {:already_started, pid}} ->
-        Logger.info("WSConnection for #{provider.name} (#{provider.id}) already exists, using existing connection")
+        Logger.info(
+          "WSConnection for #{provider.name} (#{provider.id}) already exists, using existing connection"
+        )
+
         # Register with ProviderPool using existing pid
         ProviderPool.register_provider(chain_name, provider.id, pid, provider)
 
@@ -207,7 +210,7 @@ defmodule Livechain.RPC.ChainSupervisor do
   end
 
   defp via_name(chain_name) do
-    {:via, :global, {:chain_supervisor, chain_name}}
+    {:via, Registry, {Livechain.Registry, {:chain_supervisor, chain_name}}}
   end
 
   defp connection_supervisor_name(chain_name) do

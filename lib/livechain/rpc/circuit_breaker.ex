@@ -312,6 +312,6 @@ defmodule Livechain.RPC.CircuitBreaker do
   end
 
   defp via_name(provider_id) do
-    {:via, :global, {:circuit_breaker, provider_id}}
+    {:via, Registry, {Livechain.Registry, {:circuit_breaker, provider_id}}}
   end
 end

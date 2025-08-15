@@ -178,7 +178,7 @@ defmodule Livechain.RPC.MockWSConnection do
   # Private functions
 
   defp via_name(connection_id) do
-    {:via, :global, {:connection, connection_id}}
+    {:via, Registry, {Livechain.Registry, {:ws_conn, connection_id}}}
   end
 
   defp schedule_heartbeat(state) do
