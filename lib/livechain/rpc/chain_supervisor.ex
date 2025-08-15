@@ -81,11 +81,9 @@ defmodule Livechain.RPC.ChainSupervisor do
   @spec forward_rpc_request(String.t(), String.t(), String.t(), list()) ::
           {:ok, any()} | {:error, term()}
   def forward_rpc_request(chain_name, provider_id, method, params) do
-    # Build minimal provider config for HTTP client
     with {:ok, config} <- Livechain.Config.ChainConfig.load_config(),
          {:ok, chain_config} <- Livechain.Config.ChainConfig.get_chain_config(config, chain_name),
-         provider <- Enum.find(chain_config.providers, &(&1.id == provider_id)),
-         true <- not is_nil(provider) do
+         %{} = provider <- Enum.find(chain_config.providers, &(&1.id == provider_id)) do
       http_provider = %{url: provider.url, api_key: nil}
       timeout_ms = Livechain.Config.MethodPolicy.timeout_for(method)
 
@@ -98,7 +96,11 @@ defmodule Livechain.RPC.ChainSupervisor do
       )
       |> normalize_breaker_result()
     else
-      _ -> {:error, {:client_error, "Provider not found or chain config missing"}}
+      nil ->
+        {:error, {:client_error, "Provider not found: #{provider_id}"}}
+      
+      {:error, reason} ->
+        {:error, {:client_error, "Chain config error: #{inspect(reason)}"}}
     end
   end
 
@@ -121,19 +123,21 @@ defmodule Livechain.RPC.ChainSupervisor do
       {DynamicSupervisor, strategy: :one_for_one, name: connection_supervisor_name(chain_name)}
     ]
 
-    # Start WSConnection for each available provider
-    with {:ok, supervisor_pid} <- Supervisor.init(children, strategy: :one_for_one) do
-      # Start provider connections after supervisor is ready
-      spawn_link(fn -> start_provider_connections(chain_name, chain_config) end)
-      {:ok, supervisor_pid}
+    # Start supervisor first, then start provider connections via :continue
+    case Supervisor.init(children, strategy: :one_for_one) do
+      {:ok, supervisor_pid} ->
+        # Schedule provider connections to start after supervisor is ready
+        send(self(), {:continue, {:start_provider_connections, chain_name, chain_config}})
+        {:ok, supervisor_pid}
+        
+      error ->
+        error
     end
   end
 
-  # Private functions
-
-  defp start_provider_connections(chain_name, chain_config) do
-    # Wait for supervisor to be fully started
-    Process.sleep(100)
+  @impl true
+  def handle_continue({:start_provider_connections, chain_name, chain_config}, state) do
+    # Start provider connections deterministically
 
     available_providers = ChainConfig.get_available_providers(chain_config)
     max_providers = chain_config.aggregation.max_providers
@@ -150,7 +154,10 @@ defmodule Livechain.RPC.ChainSupervisor do
     end)
 
     Logger.info("Started #{length(providers_to_start)} provider connections for #{chain_name}")
+    {:noreply, state}
   end
+
+  # Private functions
 
   defp start_provider_connection(chain_name, provider, chain_config) do
     # Convert provider config to WSEndpoint - URLs are already resolved by ChainConfig
