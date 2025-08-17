@@ -220,11 +220,6 @@ defmodule Livechain.Simulator.Simulator do
   end
 
   @impl true
-  def handle_call(:get_mode, _from, state) do
-    {:reply, state.mode, state}
-  end
-
-  @impl true
   def handle_cast(:start_all_mock_connections, state) do
     Logger.info("Starting all configured mock WebSocket connections...")
 
@@ -232,13 +227,15 @@ defmodule Livechain.Simulator.Simulator do
       case MockConnections.start_all_mock_connections() do
         {:ok, %{started: started, failed: failed}} ->
           Logger.info("Mock connections started: #{started} successful, #{failed} failed")
-
-        {:error, reason} ->
-          Logger.error("Failed to start mock connections: #{inspect(reason)}")
       end
     end)
 
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_call(:get_mode, _from, state) do
+    {:reply, state.mode, state}
   end
 
   @impl true

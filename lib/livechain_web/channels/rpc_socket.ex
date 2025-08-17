@@ -22,7 +22,7 @@ defmodule LivechainWeb.RPCSocket do
   channel("rpc:*", LivechainWeb.RPCChannel)
 
   @impl true
-  def connect(params, socket, connect_info) do
+  def connect(_params, socket, connect_info) do
     # Extract chain from the socket path
     chain = extract_chain_from_connect_info(connect_info)
 
