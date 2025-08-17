@@ -666,7 +666,7 @@ defmodule Livechain.RPC.ProviderPool do
     update_active_providers(new_state)
   end
 
-  defp perform_provider_health_check(provider_id, provider, state) do
+  defp perform_provider_health_check(provider_id, provider, _state) do
     # Skip health check if provider is in cooldown
     current_time = System.monotonic_time(:millisecond)
 

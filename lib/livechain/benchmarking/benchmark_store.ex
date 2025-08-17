@@ -970,9 +970,9 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     # Create snapshots before cleanup for all tracked chains
     Enum.each(state.chains, fn chain_name ->
       # Avoid self-call; call private directly
-      _snapshot = create_performance_snapshot_private(chain_name)
+      snapshot = create_performance_snapshot_private(chain_name)
       alias Livechain.Benchmarking.Persistence
-      Persistence.save_snapshot(chain_name, _snapshot)
+      Persistence.save_snapshot(chain_name, snapshot)
     end)
 
     # Then cleanup old entries
@@ -1260,7 +1260,7 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
           [{_key, successes, total, avg_duration, field4, field5}] =
             Enum.take(multiple_entries, 1)
 
-          {recent_latencies, last_updated} =
+          {recent_latencies, _last_updated} =
             case {field4, field5} do
               {recent_list, timestamp} when is_list(recent_list) and is_integer(timestamp) ->
                 {recent_list, timestamp}
@@ -1298,7 +1298,7 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     end
   end
 
-  defp cleanup_table_by_timestamp(table_name, cutoff_time, position) do
+  defp cleanup_table_by_timestamp(table_name, cutoff_time, _position) do
     # Use ets:select to find and delete old entries efficiently
     match_spec = [{{:"$1", :"$2", :"$3", :"$4", :"$5"}, [{:<, :"$1", cutoff_time}], [true]}]
 

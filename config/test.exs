@@ -19,3 +19,11 @@ config :phoenix, :plug_init_mode, :runtime
 config :livechain,
   enable_simulator: true,
   environment: :test
+
+# Configure Phoenix PubSub for testing  
+config :livechain, Livechain.PubSub,
+  adapter: Phoenix.PubSub.PG
+
+# Configure process registry for testing
+config :livechain, Livechain.RPC.ProcessRegistry,
+  partitions: 1
