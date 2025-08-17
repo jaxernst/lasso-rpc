@@ -29,7 +29,7 @@ defmodule LivechainWeb.CoreComponents do
   def status_badge(assigns) do
     ~H"""
     <span class={["inline-flex items-center rounded-full px-2 py-1 text-xs font-medium", status_color(@status)]}>
-      <%= status_text(@status) %>
+      {status_text(@status)}
     </span>
     """
   end
@@ -71,7 +71,7 @@ defmodule LivechainWeb.CoreComponents do
       <table class="w-[40rem] mt-11 sm:w-full">
         <thead class="text-left text-sm leading-6 text-zinc-500">
           <tr>
-            <th :for={col <- @col} class="p-0 pr-6 pb-4 font-normal"><%= col[:label] %></th>
+            <th :for={col <- @col} class="p-0 pr-6 pb-4 font-normal">{col[:label]}</th>
             <th :if={@action != []} class="relative p-0 pb-4">
               <span class="sr-only">Actions</span>
             </th>
@@ -91,7 +91,7 @@ defmodule LivechainWeb.CoreComponents do
               <div class="block py-4 pr-6">
                 <span class="absolute -inset-y-px right-0 -left-4 group-hover:bg-zinc-50 sm:rounded-l-xl" />
                 <span class={["relative", i == 0 && "font-semibold text-zinc-900"]}>
-                  <%= render_slot(col, @row_item.(row)) %>
+                  {render_slot(col, @row_item.(row))}
                 </span>
               </div>
             </td>
@@ -102,7 +102,7 @@ defmodule LivechainWeb.CoreComponents do
                   :for={action <- @action}
                   class="relative ml-4 font-semibold leading-6 text-zinc-900 hover:text-zinc-700"
                 >
-                  <%= render_slot(action, @row_item.(row)) %>
+                  {render_slot(action, @row_item.(row))}
                 </span>
               </div>
             </td>
@@ -156,9 +156,9 @@ defmodule LivechainWeb.CoreComponents do
       <p :if={@title} class="flex items-center gap-1.5 text-sm font-semibold leading-6">
         <.icon :if={@kind == :info} name="hero-information-circle-mini" class="h-4 w-4" />
         <.icon :if={@kind == :error} name="hero-exclamation-circle-mini" class="h-4 w-4" />
-        <%= @title %>
+        {@title}
       </p>
-      <p class="mt-2 text-sm leading-5"><%= msg %></p>
+      <p class="mt-2 text-sm leading-5">{msg}</p>
       <button type="button" class="group absolute top-1 right-1 p-2" aria-label="close">
         <.icon name="hero-x-mark-solid" class="h-5 w-5 opacity-40 group-hover:opacity-70" />
       </button>
@@ -293,9 +293,6 @@ defmodule LivechainWeb.CoreComponents do
         "live_stream" ->
           {"from-gray-900 to-black", "bg-gray-900", "border-gray-700"}
 
-        "broadway_events" ->
-          {"from-blue-900 to-blue-800", "bg-blue-900", "border-blue-700"}
-
         "network_topology" ->
           {"from-purple-900 to-purple-800", "bg-purple-900", "border-purple-700"}
 
@@ -319,15 +316,15 @@ defmodule LivechainWeb.CoreComponents do
       >
         <div class="flex items-center space-x-3">
           <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-white bg-opacity-10">
-            <%= render_slot(@icon) %>
+            {render_slot(@icon)}
           </div>
           <div>
-            <h3 class="text-lg font-semibold"><%= @title %></h3>
-            <p class="text-sm text-gray-300"><%= @subtitle %></p>
+            <h3 class="text-lg font-semibold">{@title}</h3>
+            <p class="text-sm text-gray-300">{@subtitle}</p>
           </div>
         </div>
         <div class="flex items-center space-x-2">
-          <span class="text-sm text-gray-300"><%= @count %></span>
+          <span class="text-sm text-gray-300">{@count}</span>
           <div class="h-5 w-5 flex-shrink-0 transform transition-transform duration-200 ease-out">
             <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -346,19 +343,18 @@ defmodule LivechainWeb.CoreComponents do
           <div class="flex h-full items-center justify-center">
             <div class="text-center">
               <div class="mb-1 text-lg opacity-50">
-                <%= case @section_id do
+                {case @section_id do
                   "live_stream" -> "⚡"
-                  "broadway_events" -> "🔄"
                   "network_topology" -> "🌐"
                   _ -> "📁"
-                end %>
+                end}
               </div>
-              <p class="text-xs text-gray-400">Click to expand <%= @title %></p>
+              <p class="text-xs text-gray-400">Click to expand {@title}</p>
             </div>
           </div>
         </div>
         <div class="grid-pattern p-4" style="display: none;">
-          <%= render_slot(@inner_block) %>
+          {render_slot(@inner_block)}
         </div>
       </div>
     </div>
@@ -408,7 +404,7 @@ defmodule LivechainWeb.CoreComponents do
           >
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={tab.icon} />
           </svg>
-          <span class="relative z-10"><%= tab.label %></span>
+          <span class="relative z-10">{tab.label}</span>
         </button>
       <% end %>
     </div>

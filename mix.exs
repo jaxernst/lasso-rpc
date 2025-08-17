@@ -31,7 +31,6 @@ defmodule Livechain.MixProject do
       {:phoenix_html, "~> 4.0"},
       {:gettext, "~> 0.20"},
       {:plug_cowboy, "~> 2.6"},
-      {:broadway, "~> 1.0"},
       {:decimal, "~> 2.0"},
       {:yaml_elixir, "~> 2.9"},
       {:finch, "~> 0.18"},

@@ -27,9 +27,8 @@ defmodule Livechain.RPC.WSSupervisor do
   use DynamicSupervisor
   require Logger
 
-  alias Livechain.RPC.{WSEndpoint, WSConnection, MockWSEndpoint, MockWSConnection}
-
-  # TODO: How could we rework this module to avoid duplicative code that explicity reference mock ws connections ws real ws connections? Shouldn't this treat both the same?
+  alias Livechain.RPC.{WSEndpoint, WSConnection}
+  alias Livechain.Simulator.MockWSEndpoint
 
   # Client API
 
@@ -90,36 +89,7 @@ defmodule Livechain.RPC.WSSupervisor do
   end
 
   def start_connection(%MockWSEndpoint{} = endpoint) do
-    case MockWSEndpoint.validate(endpoint) do
-      {:ok, validated_endpoint} ->
-        spec = {MockWSConnection, validated_endpoint}
-
-        case DynamicSupervisor.start_child(__MODULE__, spec) do
-          {:ok, pid} ->
-            Logger.debug("Started mock WebSocket connection: #{endpoint.name}")
-
-            broadcast_connection_event(:started, endpoint.id, %{
-              id: endpoint.id,
-              name: endpoint.name,
-              status: :starting
-            })
-
-            broadcast_connection_status_update()
-            {:ok, pid}
-
-          {:error, {:already_started, pid}} ->
-            Logger.warning("Mock WebSocket connection already started: #{endpoint.id}")
-            {:ok, pid}
-
-          {:error, reason} ->
-            Logger.error("Failed to start mock WebSocket connection: #{inspect(reason)}")
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        Logger.error("Invalid mock endpoint configuration: #{reason}")
-        {:error, reason}
-    end
+    {:error, "MockWSConnection has been removed - use real WSConnection instead"}
   end
 
   @doc """
@@ -167,9 +137,6 @@ defmodule Livechain.RPC.WSSupervisor do
     |> Enum.map(fn
       {_id, pid, :worker, [WSConnection]} ->
         get_connection_status(pid, WSConnection)
-
-      {_id, pid, :worker, [MockWSConnection]} ->
-        get_connection_status(pid, MockWSConnection)
 
       {_id, _pid, :worker, [other]} ->
         %{id: "unknown", name: "Unknown (#{inspect(other)})", status: :unknown}
@@ -286,8 +253,10 @@ defmodule Livechain.RPC.WSSupervisor do
           catch
             :exit, {:timeout, _} ->
               %{connected: false, error: "status_timeout"}
+
             :exit, {:noproc, _} ->
               %{connected: false, error: "process_dead"}
+
             :exit, {reason, _} ->
               %{connected: false, error: "call_failed", reason: reason}
           end

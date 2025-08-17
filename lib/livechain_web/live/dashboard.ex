@@ -782,8 +782,8 @@ defmodule LivechainWeb.Dashboard do
   end
 
   defp start_demo_connections do
-    eth = Livechain.RPC.MockWSEndpoint.ethereum_mainnet(subscription_topics: ["newHeads"])
-    poly = Livechain.RPC.MockWSEndpoint.polygon(subscription_topics: ["newHeads"])
+    eth = Livechain.Simulator.MockWSEndpoint.ethereum_mainnet(subscription_topics: ["newHeads"])
+    poly = Livechain.Simulator.MockWSEndpoint.polygon(subscription_topics: ["newHeads"])
 
     _ = Livechain.RPC.WSSupervisor.start_connection(eth)
     _ = Livechain.RPC.WSSupervisor.start_connection(poly)

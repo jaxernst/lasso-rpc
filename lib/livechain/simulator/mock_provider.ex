@@ -1,4 +1,4 @@
-defmodule Livechain.RPC.MockProvider do
+defmodule Livechain.Simulator.MockProvider do
   @moduledoc """
   A mock RPC provider that simulates blockchain data feeds for testing and development.
 
@@ -37,7 +37,7 @@ defmodule Livechain.RPC.MockProvider do
   use GenServer
   require Logger
 
-  alias Livechain.RPC.MockProvider.{BlockGenerator, EventStream}
+  alias Livechain.Simulator.MockProvider.{BlockGenerator, EventStream}
 
   # Client API
 

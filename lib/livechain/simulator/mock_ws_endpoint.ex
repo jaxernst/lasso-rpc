@@ -1,4 +1,4 @@
-defmodule Livechain.RPC.MockWSEndpoint do
+defmodule Livechain.Simulator.MockWSEndpoint do
   @moduledoc """
   A mock WebSocket endpoint that simulates blockchain RPC connections.
 
@@ -29,7 +29,8 @@ defmodule Livechain.RPC.MockWSEndpoint do
       {:ok, _pid} = Livechain.RPC.WSSupervisor.start_connection(endpoint)
   """
 
-  alias Livechain.RPC.{WSEndpoint, MockProvider}
+  alias Livechain.RPC.WSEndpoint
+  alias Livechain.Simulator.MockProvider
 
   @type t :: %__MODULE__{
           # Inherit from WSEndpoint

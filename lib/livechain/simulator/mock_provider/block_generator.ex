@@ -1,4 +1,4 @@
-defmodule Livechain.RPC.MockProvider.BlockGenerator do
+defmodule Livechain.Simulator.MockProvider.BlockGenerator do
   @moduledoc """
   Generates simulated blockchain blocks at regular intervals.
 

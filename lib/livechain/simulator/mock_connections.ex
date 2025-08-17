@@ -1,4 +1,4 @@
-defmodule Livechain.Config.MockConnections do
+defmodule Livechain.Simulator.MockConnections do
   @moduledoc """
   Configuration module for creating mock WebSocket connections for all supported blockchain networks.
 
@@ -7,7 +7,7 @@ defmodule Livechain.Config.MockConnections do
   visualization and connection management features.
   """
 
-  alias Livechain.RPC.MockWSEndpoint
+  alias Livechain.Simulator.MockWSEndpoint
   require Logger
 
   @doc """
@@ -328,7 +328,7 @@ defmodule Livechain.Config.MockConnections do
     case block_time do
       # Very fast chains: message every 500ms
       time when time <= 1000 -> 500
-      # Fast chains: message every 1000ms  
+      # Fast chains: message every 1000ms
       time when time <= 2000 -> 1000
       # Medium chains: message every 1500ms
       time when time <= 3000 -> 1500

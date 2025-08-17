@@ -311,6 +311,26 @@ defmodule Livechain.RPC.CircuitBreaker do
     )
   end
 
+  @doc """
+  Record a successful operation for the circuit breaker.
+  """
+  def record_success(provider_id) do
+    case GenServer.whereis(via_name(provider_id)) do
+      nil -> {:error, :not_found}
+      _pid -> GenServer.call(via_name(provider_id), {:call, fn -> {:ok, :success} end})
+    end
+  end
+
+  @doc """
+  Record a failed operation for the circuit breaker.
+  """
+  def record_failure(provider_id) do
+    case GenServer.whereis(via_name(provider_id)) do
+      nil -> {:error, :not_found}
+      _pid -> GenServer.call(via_name(provider_id), {:call, fn -> {:error, :failure} end})
+    end
+  end
+
   defp via_name(provider_id) do
     {:via, Registry, {Livechain.Registry, {:circuit_breaker, provider_id}}}
   end
