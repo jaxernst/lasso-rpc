@@ -38,11 +38,11 @@ defmodule Livechain.Application do
         # Start dynamic supervisor for Broadway pipelines
         {DynamicSupervisor, strategy: :one_for_one, name: Livechain.EventProcessing.Supervisor},
 
-        # Start the chain manager for orchestrating all blockchain connections
-        Livechain.RPC.ChainManager,
+        # Start configuration store for centralized config caching
+        Livechain.Config.ConfigStore,
 
-        # Start the WebSocket supervisor
-        Livechain.RPC.WSSupervisor,
+        # Start the chain registry for lifecycle management only
+        Livechain.RPC.ChainRegistry,
 
         # Start the subscription manager for JSON-RPC subscriptions
         Livechain.RPC.SubscriptionManager,
@@ -61,7 +61,7 @@ defmodule Livechain.Application do
       Livechain.Telemetry.attach_default_handlers()
 
       # Start all configured chains
-      case Livechain.RPC.ChainManager.start_all_chains() do
+      case Livechain.RPC.ChainRegistry.start_all_chains() do
         {:ok, started_count} ->
           Logger.info("Started #{started_count} chain supervisors")
 
@@ -102,22 +102,6 @@ defmodule Livechain.Application do
     end
   end
 
-  # Helper function to start and activate the simulator
-  defp start_simulator_process do
-    case Process.whereis(Livechain.Simulator) do
-      pid when is_pid(pid) ->
-        # Start all configured mock connections for a comprehensive demo
-        Livechain.Simulator.start_all_mock_connections()
-        Logger.info("Auto-started comprehensive mock WebSocket connections")
-
-        # Also start the dynamic simulator for additional variety
-        Livechain.Simulator.start_simulation()
-        Logger.info("Auto-started dynamic WebSocket connection simulator")
-
-      nil ->
-        Logger.debug("Simulator not found in process registry")
-    end
-  end
 
   # Helper function to start Broadway pipelines for active chains
   defp start_broadway_pipelines do
@@ -141,16 +125,8 @@ defmodule Livechain.Application do
     end)
   end
 
-  # TODO: No need to fallback to pre-defined chains. We should just fail if the config is not loaded.
   defp get_configured_chain_names do
-    case Livechain.Config.ChainConfig.load_config() do
-      {:ok, config} ->
-        Map.keys(config.chains)
-
-      {:error, reason} ->
-        Logger.error("Failed to load chain configuration: #{reason}")
-        # Fallback to default chains if config loading fails
-        ["ethereum", "polygon", "arbitrum"]
-    end
+    # Use ConfigStore instead of loading config directly
+    Livechain.Config.ConfigStore.list_chains()
   end
 end

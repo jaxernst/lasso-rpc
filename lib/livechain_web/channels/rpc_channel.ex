@@ -12,9 +12,8 @@ defmodule LivechainWeb.RPCChannel do
   use LivechainWeb, :channel
   require Logger
 
-  alias Livechain.RPC.WSSupervisor
-  alias Livechain.RPC.ChainManager
-  alias Livechain.RPC.SubscriptionManager
+  alias Livechain.RPC.{Selection, ChainSupervisor, SubscriptionManager}
+  alias Livechain.Config.ConfigStore
   alias Livechain.Benchmarking.BenchmarkStore
 
   @impl true
@@ -145,22 +144,22 @@ defmodule LivechainWeb.RPCChannel do
 
   # Prefer generic forwarding path for reads; keep legacy specific handlers for now
   defp handle_rpc_method("eth_getLogs", [filter], socket) do
-    forward_over_ws(socket.assigns.chain, "eth_getLogs", [filter])
+    forward_read_call(socket.assigns.chain, "eth_getLogs", [filter])
   end
 
   defp handle_rpc_method("eth_getBlockByNumber", [block_number, include_transactions], socket) do
-    forward_over_ws(socket.assigns.chain, "eth_getBlockByNumber", [
+    forward_read_call(socket.assigns.chain, "eth_getBlockByNumber", [
       block_number,
       include_transactions
     ])
   end
 
   defp handle_rpc_method("eth_blockNumber", [], socket) do
-    forward_over_ws(socket.assigns.chain, "eth_blockNumber", [])
+    forward_read_call(socket.assigns.chain, "eth_blockNumber", [])
   end
 
   defp handle_rpc_method("eth_getBalance", [address, block], socket) do
-    forward_over_ws(socket.assigns.chain, "eth_getBalance", [address, block])
+    forward_read_call(socket.assigns.chain, "eth_getBalance", [address, block])
   end
 
   defp handle_rpc_method("eth_chainId", [], socket) do
@@ -172,16 +171,31 @@ defmodule LivechainWeb.RPCChannel do
 
   # Generic forwarding catchall for read-only JSON-RPC methods over WS
   defp handle_rpc_method(method, params, socket) do
-    forward_over_ws(socket.assigns.chain, method, params)
+    forward_read_call(socket.assigns.chain, method, params)
   end
 
   # Helper functions
 
-  defp forward_over_ws(chain, method, params) do
-    with {:ok, provider_id} <- select_best_provider(chain, method, default_provider_strategy()),
-         {:ok, result} <- ChainManager.forward_rpc_request(chain, provider_id, method, params) do
-      BenchmarkStore.record_rpc_call(chain, provider_id, method, 0, :success)
-      {:ok, result}
+  # Forward read calls from WS clients via HTTP upstream for lower latency
+  # and simpler, reliable semantics. Subscriptions remain WS upstream.
+  defp forward_read_call(chain, method, params) do
+    strategy = default_provider_strategy()
+
+    with {:ok, provider_id} <-
+           Selection.pick_provider(chain, method, strategy: strategy, protocol: :http) do
+      start_ms = System.monotonic_time(:millisecond)
+      result = forward_via_http(chain, provider_id, method, params)
+      dur_ms = System.monotonic_time(:millisecond) - start_ms
+
+      case result do
+        {:ok, value} ->
+          BenchmarkStore.record_rpc_call(chain, provider_id, method, dur_ms, :success)
+          {:ok, value}
+
+        {:error, reason} ->
+          BenchmarkStore.record_rpc_call(chain, provider_id, method, dur_ms, :error)
+          {:error, "RPC forwarding failed: #{inspect(reason)}"}
+      end
     else
       {:error, reason} ->
         {:error, "RPC forwarding failed: #{inspect(reason)}"}
@@ -191,56 +205,13 @@ defmodule LivechainWeb.RPCChannel do
     end
   end
 
+  # Perform the actual HTTP upstream request
+  defp forward_via_http(chain, provider_id, method, params) do
+    ChainSupervisor.forward_rpc_request(chain, provider_id, method, params)
+  end
+
   defp default_provider_strategy do
     Application.get_env(:livechain, :provider_selection_strategy, :leaderboard)
-  end
-
-  defp select_best_provider(chain, method, :leaderboard) do
-    case BenchmarkStore.get_provider_leaderboard(chain) do
-      {:ok, [_ | _] = leaderboard} ->
-        [best | _] = Enum.sort_by(leaderboard, & &1.score, :desc)
-        {:ok, best.provider_id}
-
-      {:ok, []} ->
-        select_best_provider(chain, method, :priority)
-
-      {:error, _} ->
-        select_best_provider(chain, method, :priority)
-    end
-  end
-
-  defp select_best_provider(chain, _method, :priority) do
-    # Prefer active providers from ProviderPool; fallback to static config if not running
-    case Livechain.RPC.ChainManager.get_available_providers(chain) do
-      {:ok, [provider_id | _]} -> {:ok, provider_id}
-      _ -> select_provider_from_config(chain)
-    end
-  end
-
-  defp select_best_provider(chain, _method, :round_robin) do
-    case Livechain.RPC.ChainManager.get_available_providers(chain) do
-      {:ok, []} ->
-        select_provider_from_config(chain)
-
-      {:ok, providers} ->
-        idx = rem(System.monotonic_time(:millisecond), length(providers))
-        {:ok, Enum.at(providers, idx)}
-
-      {:error, _reason} ->
-        select_provider_from_config(chain)
-    end
-  end
-
-  defp select_provider_from_config(chain) do
-    with {:ok, cfg} <- Livechain.Config.ChainConfig.load_config(),
-         %{providers: providers} <- Map.get(cfg.chains, chain) do
-      case providers do
-        [%{id: id} | _] -> {:ok, id}
-        _ -> {:error, :no_providers}
-      end
-    else
-      _ -> {:error, :no_providers}
-    end
   end
 
   defp update_subscriptions(socket, subscription_id, subscription_type) do
@@ -250,26 +221,20 @@ defmodule LivechainWeb.RPCChannel do
     assign(socket, :subscriptions, updated_subscriptions)
   end
 
-  # Get chain ID from configuration
+  # Get chain ID from ConfigStore
   defp get_chain_id(chain_name) do
-    case Livechain.Config.ChainConfig.load_config() do
-      {:ok, config} ->
-        case Map.get(config.chains, chain_name) do
-          %{chain_id: chain_id} when is_integer(chain_id) ->
-            {:ok, "0x" <> Integer.to_string(chain_id, 16)}
+    case ConfigStore.get_chain(chain_name) do
+      {:ok, %{chain_id: chain_id}} when is_integer(chain_id) ->
+        {:ok, "0x" <> Integer.to_string(chain_id, 16)}
 
-          %{chain_id: chain_id} when is_binary(chain_id) ->
-            {:ok, chain_id}
+      {:ok, %{chain_id: chain_id}} when is_binary(chain_id) ->
+        {:ok, chain_id}
 
-          nil ->
-            {:error, "Chain not configured: #{chain_name}"}
+      {:error, :not_found} ->
+        {:error, "Chain not configured: #{chain_name}"}
 
-          _ ->
-            {:error, "Invalid chain configuration for: #{chain_name}"}
-        end
-
-      {:error, _reason} ->
-        {:error, "Failed to load chain configuration"}
+      {:ok, _} ->
+        {:error, "Invalid chain configuration for: #{chain_name}"}
     end
   end
 end

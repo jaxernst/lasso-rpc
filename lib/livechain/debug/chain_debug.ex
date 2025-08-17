@@ -4,15 +4,15 @@ defmodule Livechain.Debug.ChainDebug do
   """
 
   require Logger
-  alias Livechain.RPC.{ChainManager, ChainSupervisor}
+  alias Livechain.RPC.ChainRegistry
 
   def debug_all_chains do
     Logger.info("=== Chain Debug Report ===")
     
-    case ChainManager.get_status() do
+    case ChainRegistry.get_status() do
       status when is_map(status) ->
-        Logger.info("Total configured chains: #{status.total_chains}")
-        Logger.info("Active chain supervisors: #{status.active_chains}")
+        Logger.info("Total configured chains: #{status.total_configured_chains}")
+        Logger.info("Active chain supervisors: #{status.running_chains}")
         
         if Map.has_key?(status, :chains) and is_list(status.chains) do
           status.chains

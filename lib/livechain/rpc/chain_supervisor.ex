@@ -18,7 +18,7 @@ defmodule Livechain.RPC.ChainSupervisor do
   use Supervisor
   require Logger
 
-  alias Livechain.Config.ChainConfig
+  alias Livechain.Config.{ChainConfig, ConfigStore}
   alias Livechain.RPC.{WSConnection, WSEndpoint, MessageAggregator, ProviderPool, CircuitBreaker}
 
   @doc """
@@ -81,26 +81,34 @@ defmodule Livechain.RPC.ChainSupervisor do
   @spec forward_rpc_request(String.t(), String.t(), String.t(), list()) ::
           {:ok, any()} | {:error, term()}
   def forward_rpc_request(chain_name, provider_id, method, params) do
-    with {:ok, config} <- Livechain.Config.ChainConfig.load_config(),
-         {:ok, chain_config} <- Livechain.Config.ChainConfig.get_chain_config(config, chain_name),
-         %{} = provider <- Enum.find(chain_config.providers, &(&1.id == provider_id)) do
-      http_provider = %{url: provider.url, api_key: nil}
-      timeout_ms = Livechain.Config.MethodPolicy.timeout_for(method)
+    # Use ConfigStore instead of loading config on hot path
+    case ConfigStore.get_provider(chain_name, provider_id) do
+      {:ok, provider} ->
+        http_url =
+          cond do
+            is_binary(Map.get(provider, :http_url)) -> Map.get(provider, :http_url)
+            is_binary(Map.get(provider, :url)) -> Map.get(provider, :url)
+            true -> nil
+          end
 
-      CircuitBreaker.call(
-        provider_id,
-        fn ->
-          Livechain.RPC.HttpClient.request(http_provider, method, params, timeout_ms)
-        end,
-        timeout_ms + 1_000
-      )
-      |> normalize_breaker_result()
-    else
-      nil ->
+        if is_nil(http_url) do
+          {:error, {:client_error, "Provider has no HTTP URL configured: #{provider_id}"}}
+        else
+          http_provider = %{url: http_url, api_key: Map.get(provider, :api_key)}
+          timeout_ms = Livechain.Config.MethodPolicy.timeout_for(method)
+
+          safe_breaker_call(
+            provider_id,
+            fn ->
+              Livechain.RPC.HttpClient.request(http_provider, method, params, timeout_ms)
+            end,
+            timeout_ms + 1_000
+          )
+          |> normalize_breaker_result()
+        end
+
+      {:error, :not_found} ->
         {:error, {:client_error, "Provider not found: #{provider_id}"}}
-      
-      {:error, reason} ->
-        {:error, {:client_error, "Chain config error: #{inspect(reason)}"}}
     end
   end
 
@@ -123,22 +131,17 @@ defmodule Livechain.RPC.ChainSupervisor do
       {DynamicSupervisor, strategy: :one_for_one, name: connection_supervisor_name(chain_name)}
     ]
 
-    # Start supervisor first, then start provider connections via :continue
-    case Supervisor.init(children, strategy: :one_for_one) do
-      {:ok, supervisor_pid} ->
-        # Schedule provider connections to start after supervisor is ready
-        send(self(), {:continue, {:start_provider_connections, chain_name, chain_config}})
-        {:ok, supervisor_pid}
-        
-      error ->
-        error
-    end
+    # Start provider connections synchronously after supervisor is initialized
+    spawn_link(fn -> start_provider_connections_async(chain_name, chain_config) end)
+
+    Supervisor.init(children, strategy: :one_for_one)
   end
 
-  @impl true
-  def handle_continue({:start_provider_connections, chain_name, chain_config}, state) do
+  # Asynchronously start provider connections after supervisor is ready
+  defp start_provider_connections_async(chain_name, chain_config) do
+    # Give supervisor time to fully initialize
+    Process.sleep(100)
     # Start provider connections deterministically
-
     available_providers = ChainConfig.get_available_providers(chain_config)
     max_providers = chain_config.aggregation.max_providers
 
@@ -154,7 +157,6 @@ defmodule Livechain.RPC.ChainSupervisor do
     end)
 
     Logger.info("Started #{length(providers_to_start)} provider connections for #{chain_name}")
-    {:noreply, state}
   end
 
   # Private functions
@@ -230,4 +232,19 @@ defmodule Livechain.RPC.ChainSupervisor do
   defp normalize_breaker_result({:reply, {:ok, result}, _state}), do: {:ok, result}
   defp normalize_breaker_result({:reply, {:error, reason}, _state}), do: {:error, reason}
   defp normalize_breaker_result({:reply, other, _state}), do: {:error, other}
+
+  defp safe_breaker_call(provider_id, fun, timeout) do
+    try do
+      CircuitBreaker.call(provider_id, fun, timeout)
+    catch
+      :exit, {:noproc, _} ->
+        # Circuit breaker not running; execute function directly
+        {:ok,
+         try do
+           fun.()
+         catch
+           kind, error -> {:error, {kind, error}}
+         end}
+    end
+  end
 end
