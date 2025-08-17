@@ -321,6 +321,9 @@ defmodule Livechain.RPC.SubscriptionManager do
   @doc """
   Handle provider failover - migrate all subscriptions from failed provider to healthy ones.
   This is the core function for bulletproof subscription continuity.
+
+  TODO: This may not work properly as designed
+
   """
   @impl true
   def handle_call(

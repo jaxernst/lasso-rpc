@@ -41,7 +41,7 @@ defmodule Livechain.RPC.Selection do
     case pool_selection(chain_name, method, strategy, protocol, exclude) do
       {:ok, provider_id} = result ->
         Logger.debug("Selected provider via pool: #{provider_id} for #{chain_name}.#{method}")
-        
+
         :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
           chain: chain_name,
           method: method,
@@ -50,11 +50,14 @@ defmodule Livechain.RPC.Selection do
           provider_id: provider_id,
           selection_type: :pool_based
         })
-        
+
         result
 
       {:error, reason} ->
-        Logger.debug("Pool selection failed (#{reason}), falling back to config-based selection")
+        Logger.debug(
+          "Pool selection failed (#{inspect(reason)}), falling back to config-based selection"
+        )
+
         config_selection(chain_name, method, protocol, exclude)
     end
   end
@@ -85,7 +88,7 @@ defmodule Livechain.RPC.Selection do
         {:ok, filtered}
 
       {:error, reason} ->
-        Logger.debug("Failed to get active providers from pool: #{reason}")
+        Logger.debug("Failed to get active providers from pool: #{inspect(reason)}")
         # Fall back to config-based provider list
         config_based_providers(chain_name, protocol, exclude)
 
@@ -147,7 +150,7 @@ defmodule Livechain.RPC.Selection do
         Logger.debug(
           "Selected provider via config fallback: #{first_provider} for #{chain_name}.#{method}"
         )
-        
+
         :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
           chain: chain_name,
           method: method,
@@ -167,7 +170,7 @@ defmodule Livechain.RPC.Selection do
           reason: reason,
           selection_type: :config_based
         })
-        
+
         {:error, reason}
     end
   end
@@ -178,8 +181,8 @@ defmodule Livechain.RPC.Selection do
       {:ok, providers} ->
         available_providers =
           providers
-          |> Enum.filter(&supports_protocol?(&1, protocol))
-          |> Enum.reject(&(&1.id in exclude))
+          |> Enum.filter(fn provider -> supports_protocol?(provider, protocol) end)
+          |> Enum.reject(fn provider -> provider.id in exclude end)
           |> Enum.sort_by(& &1.priority)
           |> Enum.map(& &1.id)
 
@@ -190,25 +193,22 @@ defmodule Livechain.RPC.Selection do
     end
   end
 
-  # Filter provider IDs by protocol and exclusions
   defp filter_providers_by_protocol_and_exclusions(chain_name, provider_ids, protocol, exclude) do
     provider_ids
     |> Enum.reject(&(&1 in exclude))
-    |> Enum.filter(&provider_available?(chain_name, &1, protocol))
+    |> Enum.filter(fn provider_id ->
+      case ConfigStore.get_provider(chain_name, provider_id) do
+        {:ok, provider_config} -> supports_protocol?(provider_config, protocol)
+        _ -> false
+      end
+    end)
   end
 
-  # Check if provider supports the required protocol
-  defp supports_protocol?(_provider_config, :both), do: true
+  defp supports_protocol?(provider, :both),
+    do: supports_protocol?(provider, :http) and supports_protocol?(provider, :ws)
 
-  defp supports_protocol?(provider_config, :http) do
-    # HTTP support requires either url or http_url
-    not is_nil(provider_config.url) or not is_nil(Map.get(provider_config, :http_url))
-  end
+  defp supports_protocol?(provider, :http),
+    do: is_binary(Map.get(provider, :http_url)) or is_binary(Map.get(provider, :url))
 
-  defp supports_protocol?(provider_config, :ws) do
-    # WS support requires ws_url
-    not is_nil(provider_config.ws_url)
-  end
-
-  defp supports_protocol?(_provider_config, _unknown_protocol), do: false
+  defp supports_protocol?(provider, :ws), do: is_binary(Map.get(provider, :ws_url))
 end

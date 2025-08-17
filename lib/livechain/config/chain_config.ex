@@ -238,6 +238,12 @@ defmodule Livechain.Config.ChainConfig do
       System.get_env("ALCHEMY_API_KEY") != nil
   end
 
+  # Handle WSEndpoint structs (used in tests) - always available for testing
+  defp provider_available?(%Livechain.RPC.WSEndpoint{}), do: true
+
+  # Fallback for unknown provider types
+  defp provider_available?(_), do: false
+
   defp parse_config(yaml_data) do
     with {:ok, chains} <- parse_chains(yaml_data["chains"]),
          {:ok, global} <- parse_global(yaml_data["global"]) do

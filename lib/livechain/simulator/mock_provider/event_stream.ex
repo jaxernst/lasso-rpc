@@ -1,4 +1,4 @@
-defmodule Livechain.RPC.MockProvider.EventStream do
+defmodule Livechain.Simulator.MockProvider.EventStream do
   @moduledoc """
   Manages event streaming and broadcasting to subscribers.
 

@@ -116,10 +116,10 @@ defmodule Livechain.RPC.WSConnection do
       {:ok, connection} ->
         Logger.info("Connected to WebSocket: #{state.endpoint.name}")
         Process.monitor(connection)
-        
+
         # Report successful connection to circuit breaker
         CircuitBreaker.record_success(state.endpoint.id)
-        
+
         state = %{state | connection: connection, connected: true, reconnect_attempts: 0}
         broadcast_status_change(state, :connected)
         state = schedule_heartbeat(state)
@@ -128,10 +128,10 @@ defmodule Livechain.RPC.WSConnection do
 
       {:error, reason} ->
         Logger.error("Failed to connect to WebSocket: #{inspect(reason)}")
-        
+
         # Report connection failure to circuit breaker
         CircuitBreaker.record_failure(state.endpoint.id)
-        
+
         broadcast_status_change(state, :disconnected)
         state = schedule_reconnect(state)
         {:noreply, state}
@@ -158,10 +158,10 @@ defmodule Livechain.RPC.WSConnection do
 
       {:error, reason} ->
         Logger.error("Failed to send message: #{reason}")
-        
+
         # Report send failure to circuit breaker
         CircuitBreaker.record_failure(state.endpoint.id)
-        
+
         state = %{state | pending_messages: [message | state.pending_messages]}
         {:noreply, state}
     end
@@ -221,10 +221,10 @@ defmodule Livechain.RPC.WSConnection do
   @impl true
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
     Logger.warning("WebSocket connection lost: #{inspect(reason)}")
-    
+
     # Report disconnect as failure to circuit breaker
     CircuitBreaker.record_failure(state.endpoint.id)
-    
+
     state = %{state | connected: false, connection: nil}
     broadcast_status_change(state, :disconnected)
     state = schedule_reconnect(state)
@@ -297,20 +297,20 @@ defmodule Livechain.RPC.WSConnection do
 
   defp schedule_reconnect(state) do
     max_attempts = state.endpoint.max_reconnect_attempts
-    
+
     cond do
       max_attempts == :infinity ->
         delay = min(state.endpoint.reconnect_interval * (state.reconnect_attempts + 1), 30_000)
         jitter = :rand.uniform(1000)
         Process.send_after(self(), {:reconnect}, delay + jitter)
         %{state | reconnect_attempts: state.reconnect_attempts + 1}
-        
+
       state.reconnect_attempts < max_attempts ->
         delay = min(state.endpoint.reconnect_interval * (state.reconnect_attempts + 1), 30_000)
         jitter = :rand.uniform(1000)
         Process.send_after(self(), {:reconnect}, delay + jitter)
         %{state | reconnect_attempts: state.reconnect_attempts + 1}
-        
+
       true ->
         Logger.error("Max reconnection attempts reached for #{state.endpoint.name}")
         state
@@ -440,7 +440,6 @@ defmodule Livechain.RPC.WSConnection do
   defp via_name(connection_id) do
     {:via, Registry, {Livechain.Registry, {:ws_conn, connection_id}}}
   end
-
 
   defp broadcast_status_change(state, status) do
     Phoenix.PubSub.broadcast(

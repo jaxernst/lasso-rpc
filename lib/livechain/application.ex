@@ -25,18 +25,12 @@ defmodule Livechain.Application do
         # Start process registry for centralized process management
         {Livechain.RPC.ProcessRegistry, name: Livechain.RPC.ProcessRegistry},
 
-        # Start price oracle for USD pricing
-        Livechain.EventProcessing.PriceOracle,
-
         # Add a local Registry for dynamic process names (high-cardinality)
         {Registry,
          keys: :unique, name: Livechain.Registry, partitions: System.schedulers_online()},
 
         # Start dynamic supervisor for chain supervisors
         {DynamicSupervisor, strategy: :one_for_one, name: Livechain.RPC.Supervisor},
-
-        # Start dynamic supervisor for Broadway pipelines
-        {DynamicSupervisor, strategy: :one_for_one, name: Livechain.EventProcessing.Supervisor},
 
         # Start configuration store for centralized config caching
         Livechain.Config.ConfigStore,
@@ -51,7 +45,7 @@ defmodule Livechain.Application do
         LivechainWeb.Endpoint
 
         # Add simulator to children if in dev/test
-      ] ++ maybe_add_simulator() ++ maybe_add_broadway_pipelines()
+      ] ++ maybe_add_simulator()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     opts = [strategy: :one_for_one, name: Livechain.Supervisor]
@@ -72,7 +66,6 @@ defmodule Livechain.Application do
       # Auto-start simulator in dev/test environments
       if Mix.env() in [:dev, :test] do
         # start_simulator_process()
-        start_broadway_pipelines()
       end
 
       {:ok, supervisor}
@@ -88,45 +81,5 @@ defmodule Livechain.Application do
       _ ->
         []
     end
-  end
-
-  # Helper function to conditionally include Broadway pipelines
-  defp maybe_add_broadway_pipelines do
-    case Mix.env() do
-      env when env in [:dev, :test] ->
-        # Start Broadway pipelines for common chains in development
-        []
-
-      _ ->
-        []
-    end
-  end
-
-
-  # Helper function to start Broadway pipelines for active chains
-  defp start_broadway_pipelines do
-    # Start Broadway pipelines for all configured chains
-    chains = get_configured_chain_names()
-
-    Enum.each(chains, fn chain ->
-      case DynamicSupervisor.start_child(
-             Livechain.EventProcessing.Supervisor,
-             {Livechain.EventProcessing.Pipeline, chain}
-           ) do
-        {:ok, _pid} ->
-          Logger.info("Started Broadway pipeline for #{chain}")
-
-        {:error, {:already_started, _pid}} ->
-          Logger.debug("Broadway pipeline for #{chain} already running")
-
-        {:error, reason} ->
-          Logger.error("Failed to start Broadway pipeline for #{chain}: #{reason}")
-      end
-    end)
-  end
-
-  defp get_configured_chain_names do
-    # Use ConfigStore instead of loading config directly
-    Livechain.Config.ConfigStore.list_chains()
   end
 end
