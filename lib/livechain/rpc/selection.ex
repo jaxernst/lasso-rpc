@@ -1,0 +1,214 @@
+defmodule Livechain.RPC.Selection do
+  @moduledoc """
+  Unified provider selection module that handles all provider picking logic.
+
+  This module provides a single interface for selecting providers across
+  different protocols (HTTP vs WS) and fallback strategies. It first tries
+  to use the ProviderPool for intelligent selection, then falls back to
+  ConfigStore-based selection if the pool is unavailable.
+
+  Selection strategies:
+  - Pool-based (preferred): Uses ProviderPool health and performance data
+  - Config-based (fallback): Uses static configuration priority ordering
+
+  This eliminates the need for channels/controllers to load configuration
+  or directly manage provider selection logic.
+  """
+
+  require Logger
+
+  alias Livechain.Config.ConfigStore
+  alias Livechain.RPC.ProviderPool
+
+  @doc """
+  Picks the best provider for a given chain and method.
+
+  Options:
+  - `:strategy` - Selection strategy (:leaderboard, :priority, :round_robin)
+  - `:protocol` - Required protocol (:http, :ws, :both)
+  - `:exclude` - List of provider IDs to exclude
+
+  Returns {:ok, provider_id} or {:error, reason}
+  """
+  @spec pick_provider(String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def pick_provider(chain_name, method, opts \\ []) do
+    strategy = Keyword.get(opts, :strategy, :leaderboard)
+    protocol = Keyword.get(opts, :protocol, :both)
+    exclude = Keyword.get(opts, :exclude, [])
+
+    # Try pool-based selection first
+    case pool_selection(chain_name, method, strategy, protocol, exclude) do
+      {:ok, provider_id} = result ->
+        Logger.debug("Selected provider via pool: #{provider_id} for #{chain_name}.#{method}")
+        
+        :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
+          chain: chain_name,
+          method: method,
+          strategy: strategy,
+          protocol: protocol,
+          provider_id: provider_id,
+          selection_type: :pool_based
+        })
+        
+        result
+
+      {:error, reason} ->
+        Logger.debug("Pool selection failed (#{reason}), falling back to config-based selection")
+        config_selection(chain_name, method, protocol, exclude)
+    end
+  end
+
+  @doc """
+  Gets all available providers for a chain, respecting protocol requirements.
+
+  Returns providers in priority order (pool-based if available, config-based otherwise).
+  """
+  @spec get_available_providers(String.t(), keyword()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def get_available_providers(chain_name, opts \\ []) do
+    protocol = Keyword.get(opts, :protocol, :both)
+    exclude = Keyword.get(opts, :exclude, [])
+
+    # Try to get providers from pool first
+    case ProviderPool.get_active_providers(chain_name) do
+      provider_ids when is_list(provider_ids) ->
+        # Filter by protocol and exclusions
+        filtered =
+          filter_providers_by_protocol_and_exclusions(
+            chain_name,
+            provider_ids,
+            protocol,
+            exclude
+          )
+
+        {:ok, filtered}
+
+      {:error, reason} ->
+        Logger.debug("Failed to get active providers from pool: #{reason}")
+        # Fall back to config-based provider list
+        config_based_providers(chain_name, protocol, exclude)
+
+      _ ->
+        # Fall back to config-based provider list
+        config_based_providers(chain_name, protocol, exclude)
+    end
+  end
+
+  @doc """
+  Checks if a specific provider is available for the given chain and protocol.
+  """
+  @spec provider_available?(String.t(), String.t(), atom()) :: boolean()
+  def provider_available?(chain_name, provider_id, protocol \\ :both) do
+    case ConfigStore.get_provider(chain_name, provider_id) do
+      {:ok, provider_config} ->
+        supports_protocol?(provider_config, protocol)
+
+      {:error, :not_found} ->
+        false
+    end
+  end
+
+  ## Private Functions
+
+  # Pool-based selection (preferred when pool is available)
+  defp pool_selection(chain_name, method, strategy, protocol, exclude) do
+    case ProviderPool.get_best_provider(chain_name, strategy, method) do
+      {:ok, provider_id} ->
+        # Verify the selected provider meets our criteria
+        if provider_id in exclude do
+          {:error, :selected_provider_excluded}
+        else
+          case ConfigStore.get_provider(chain_name, provider_id) do
+            {:ok, provider_config} ->
+              if supports_protocol?(provider_config, protocol) do
+                {:ok, provider_id}
+              else
+                {:error, :selected_provider_wrong_protocol}
+              end
+
+            {:error, reason} ->
+              {:error, {:provider_config_error, reason}}
+          end
+        end
+
+      {:error, reason} ->
+        {:error, {:pool_selection_failed, reason}}
+    end
+  end
+
+  # Config-based selection (fallback when pool is unavailable)
+  defp config_selection(chain_name, method, protocol, exclude) do
+    case config_based_providers(chain_name, protocol, exclude) do
+      {:ok, []} ->
+        {:error, :no_available_providers}
+
+      {:ok, [first_provider | _]} ->
+        Logger.debug(
+          "Selected provider via config fallback: #{first_provider} for #{chain_name}.#{method}"
+        )
+        
+        :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
+          chain: chain_name,
+          method: method,
+          strategy: :config_fallback,
+          protocol: protocol,
+          provider_id: first_provider,
+          selection_type: :config_based
+        })
+
+        {:ok, first_provider}
+
+      {:error, reason} ->
+        :telemetry.execute([:livechain, :selection, :failure], %{count: 1}, %{
+          chain: chain_name,
+          method: method,
+          protocol: protocol,
+          reason: reason,
+          selection_type: :config_based
+        })
+        
+        {:error, reason}
+    end
+  end
+
+  # Get providers from config in priority order
+  defp config_based_providers(chain_name, protocol, exclude) do
+    case ConfigStore.get_providers(chain_name) do
+      {:ok, providers} ->
+        available_providers =
+          providers
+          |> Enum.filter(&supports_protocol?(&1, protocol))
+          |> Enum.reject(&(&1.id in exclude))
+          |> Enum.sort_by(& &1.priority)
+          |> Enum.map(& &1.id)
+
+        {:ok, available_providers}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Filter provider IDs by protocol and exclusions
+  defp filter_providers_by_protocol_and_exclusions(chain_name, provider_ids, protocol, exclude) do
+    provider_ids
+    |> Enum.reject(&(&1 in exclude))
+    |> Enum.filter(&provider_available?(chain_name, &1, protocol))
+  end
+
+  # Check if provider supports the required protocol
+  defp supports_protocol?(_provider_config, :both), do: true
+
+  defp supports_protocol?(provider_config, :http) do
+    # HTTP support requires either url or http_url
+    not is_nil(provider_config.url) or not is_nil(Map.get(provider_config, :http_url))
+  end
+
+  defp supports_protocol?(provider_config, :ws) do
+    # WS support requires ws_url
+    not is_nil(provider_config.ws_url)
+  end
+
+  defp supports_protocol?(_provider_config, _unknown_protocol), do: false
+end
