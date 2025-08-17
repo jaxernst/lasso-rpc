@@ -51,7 +51,14 @@ defmodule Livechain.RPC.ChainManager do
   end
 
   @doc """
-  Starts a specific chain supervisor.
+  Ensures configuration is loaded for the manager.
+  """
+  def ensure_loaded do
+    GenServer.call(__MODULE__, :ensure_loaded)
+  end
+
+  @doc """
+  Starts a specific chain supervisor, loading config on demand if needed.
   """
   def start_chain(chain_name) do
     GenServer.call(__MODULE__, {:start_chain, chain_name})
@@ -216,8 +223,12 @@ defmodule Livechain.RPC.ChainManager do
               {:ok, pid} = result ->
                 Logger.info("✓ Chain supervisor started successfully: #{chain_name}")
                 {chain_name, result}
+
               {:error, reason} = result ->
-                Logger.error("✗ Chain supervisor failed to start: #{chain_name} - #{inspect(reason)}")
+                Logger.error(
+                  "✗ Chain supervisor failed to start: #{chain_name} - #{inspect(reason)}"
+                )
+
                 {chain_name, result}
             end
           end)
@@ -232,11 +243,11 @@ defmodule Livechain.RPC.ChainManager do
         failed_starts = Enum.count(results, fn {_, result} -> match?({:error, _}, result) end)
 
         if failed_starts > 0 do
-          failed_chains = 
+          failed_chains =
             results
             |> Enum.filter(fn {_, result} -> match?({:error, _}, result) end)
             |> Enum.map(fn {chain_name, _} -> chain_name end)
-          
+
           Logger.error("Failed chains: #{Enum.join(failed_chains, ", ")}")
         end
 
@@ -255,7 +266,34 @@ defmodule Livechain.RPC.ChainManager do
   end
 
   @impl true
+  def handle_call(:ensure_loaded, _from, state) do
+    case state.config do
+      nil ->
+        case ChainConfig.load_config() do
+          {:ok, config} -> {:reply, :ok, %{state | config: config}}
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
+
+      _ ->
+        {:reply, :ok, state}
+    end
+  end
+
+  @impl true
   def handle_call({:start_chain, chain_name}, _from, state) do
+    # Ensure config is loaded
+    state =
+      case state.config do
+        nil ->
+          case ChainConfig.load_config() do
+            {:ok, config} -> %{state | config: config}
+            {:error, _} -> state
+          end
+
+        _ ->
+          state
+      end
+
     case get_chain_config(state, chain_name) do
       {:ok, chain_config} ->
         case start_chain_supervisor(state, chain_name, chain_config) do

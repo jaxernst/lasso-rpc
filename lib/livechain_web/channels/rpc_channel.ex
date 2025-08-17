@@ -24,9 +24,6 @@ defmodule LivechainWeb.RPCChannel do
     socket = assign(socket, :chain, chain)
     socket = assign(socket, :subscriptions, %{})
 
-    # Ensure we have a blockchain connection for this chain
-    ensure_chain_connection(chain)
-
     {:ok, %{status: "connected", chain: chain}, socket}
   end
 
@@ -92,7 +89,6 @@ defmodule LivechainWeb.RPCChannel do
     {:noreply, socket}
   end
 
-
   # JSON-RPC method handlers
 
   defp handle_rpc_method("eth_subscribe", [subscription_type | params], socket) do
@@ -102,25 +98,25 @@ defmodule LivechainWeb.RPCChannel do
           {:ok, subscription_id} ->
             # Subscribe to the per-subscription topic
             Phoenix.PubSub.subscribe(Livechain.PubSub, "subscription:#{subscription_id}")
-            
+
             _socket = update_subscriptions(socket, subscription_id, "newHeads")
             {:subscription, subscription_id}
-            
+
           {:error, reason} ->
             {:error, "Failed to create newHeads subscription: #{reason}"}
         end
 
       "logs" ->
         filter = List.first(params, %{})
-        
+
         case SubscriptionManager.subscribe_to_logs(socket.assigns.chain, filter) do
           {:ok, subscription_id} ->
             # Subscribe to the per-subscription topic
             Phoenix.PubSub.subscribe(Livechain.PubSub, "subscription:#{subscription_id}")
-            
+
             _socket = update_subscriptions(socket, subscription_id, {"logs", filter})
             {:subscription, subscription_id}
-            
+
           {:error, reason} ->
             {:error, "Failed to create logs subscription: #{reason}"}
         end
@@ -138,10 +134,10 @@ defmodule LivechainWeb.RPCChannel do
       {_subscription_type, updated_subscriptions} ->
         # Unsubscribe from SubscriptionManager
         SubscriptionManager.unsubscribe(subscription_id)
-        
+
         # Unsubscribe from per-subscription topic
         Phoenix.PubSub.unsubscribe(Livechain.PubSub, "subscription:#{subscription_id}")
-        
+
         _socket = assign(socket, :subscriptions, updated_subscriptions)
         {:ok, true}
     end
@@ -214,72 +210,37 @@ defmodule LivechainWeb.RPCChannel do
   end
 
   defp select_best_provider(chain, _method, :priority) do
-    case ChainManager.get_available_providers(chain) do
+    # Prefer active providers from ProviderPool; fallback to static config if not running
+    case Livechain.RPC.ChainManager.get_available_providers(chain) do
       {:ok, [provider_id | _]} -> {:ok, provider_id}
-      {:ok, []} -> {:error, :no_providers}
-      {:error, reason} -> {:error, reason}
+      _ -> select_provider_from_config(chain)
     end
   end
 
   defp select_best_provider(chain, _method, :round_robin) do
-    case ChainManager.get_available_providers(chain) do
+    case Livechain.RPC.ChainManager.get_available_providers(chain) do
       {:ok, []} ->
-        {:error, :no_providers}
+        select_provider_from_config(chain)
 
       {:ok, providers} ->
         idx = rem(System.monotonic_time(:millisecond), length(providers))
         {:ok, Enum.at(providers, idx)}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _reason} ->
+        select_provider_from_config(chain)
     end
   end
 
-  defp ensure_chain_connection(chain) do
-    # Check if we have an active connection for this chain
-    connections = WSSupervisor.list_connections()
-
-    existing =
-      Enum.find(connections, fn conn ->
-        String.contains?(String.downcase(conn.name || ""), chain)
-      end)
-
-    if existing do
-      Logger.debug("Using existing connection for #{chain}")
-      :ok
-    else
-      Logger.info("Starting new connection for #{chain}")
-      # Start a mock connection for this chain
-      endpoint =
-        case chain do
-          "ethereum" -> Livechain.RPC.MockWSEndpoint.ethereum_mainnet()
-          "arbitrum" -> Livechain.RPC.MockWSEndpoint.arbitrum()
-          "polygon" -> Livechain.RPC.MockWSEndpoint.polygon()
-          "bsc" -> Livechain.RPC.MockWSEndpoint.bsc()
-          _ -> nil
-        end
-
-      if endpoint do
-        WSSupervisor.start_connection(endpoint)
-      else
-        {:error, :unsupported_chain}
+  defp select_provider_from_config(chain) do
+    with {:ok, cfg} <- Livechain.Config.ChainConfig.load_config(),
+         %{providers: providers} <- Map.get(cfg.chains, chain) do
+      case providers do
+        [%{id: id} | _] -> {:ok, id}
+        _ -> {:error, :no_providers}
       end
+    else
+      _ -> {:error, :no_providers}
     end
-  end
-
-  defp get_chain_connection(chain) do
-    connections = WSSupervisor.list_connections()
-
-    case Enum.find(connections, fn conn ->
-           String.contains?(String.downcase(conn.name || ""), chain)
-         end) do
-      nil -> {:error, :no_connection}
-      connection -> {:ok, connection}
-    end
-  end
-
-  defp generate_subscription_id do
-    "0x" <> (:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower))
   end
 
   defp update_subscriptions(socket, subscription_id, subscription_type) do
@@ -311,6 +272,4 @@ defmodule LivechainWeb.RPCChannel do
         {:error, "Failed to load chain configuration"}
     end
   end
-
-
 end
