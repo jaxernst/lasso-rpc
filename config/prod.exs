@@ -12,4 +12,9 @@ config :livechain, LivechainWeb.Endpoint,
 # Do not print debug messages in production
 config :logger, level: :info
 
+# Disable simulator in production - use real providers only
+config :livechain,
+  enable_simulator: false,
+  environment: :prod
+
 # Runtime production config is handled by runtime.exs

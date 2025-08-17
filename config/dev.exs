@@ -28,3 +28,8 @@ config :phoenix, :stacktrace_depth, 20
 
 # Initialize plugs at runtime for faster development compilation
 config :phoenix, :plug_init_mode, :runtime
+
+# Enable simulator in development for demos and testing
+config :livechain,
+  enable_simulator: true,
+  environment: :dev

@@ -14,3 +14,8 @@ config :logger, level: :warning
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
+
+# Enable simulator in test environment
+config :livechain,
+  enable_simulator: true,
+  environment: :test

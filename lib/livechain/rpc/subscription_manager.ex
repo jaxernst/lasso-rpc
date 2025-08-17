@@ -148,7 +148,7 @@ defmodule Livechain.RPC.SubscriptionManager do
 
     # Subscribe to aggregated events from MessageAggregator
     # We'll subscribe to specific chains as subscriptions are created
-    
+
     # Subscribe to provider pool events for failover handling
     Phoenix.PubSub.subscribe(Livechain.PubSub, "provider_pool:events")
 
@@ -197,7 +197,7 @@ defmodule Livechain.RPC.SubscriptionManager do
 
     # Ensure chain is running and subscribe to events
     ensure_chain_subscription(chain, filter)
-    
+
     # Trigger upstream subscription to provider
     trigger_upstream_subscription(chain, :logs, filter)
 
@@ -251,7 +251,7 @@ defmodule Livechain.RPC.SubscriptionManager do
 
     # Ensure chain is running and subscribe to new heads
     ensure_chain_subscription(chain, :new_heads)
-    
+
     # Trigger upstream subscription to provider
     trigger_upstream_subscription(chain, :newHeads, nil)
 
@@ -680,11 +680,11 @@ defmodule Livechain.RPC.SubscriptionManager do
     # Handle aggregated events from MessageAggregator
     chain_name = extract_chain_from_message(message)
     event_type = detect_subscription_event_type(message)
-    
+
     if chain_name && event_type do
       GenServer.cast(self(), {:handle_event, chain_name, event_type, message})
     end
-    
+
     {:noreply, state}
   end
 
@@ -702,12 +702,12 @@ defmodule Livechain.RPC.SubscriptionManager do
       chain: chain,
       provider_id: provider_id
     )
-    
+
     # Get healthy providers for failover
     case ChainManager.get_available_providers(chain) do
       {:ok, healthy_providers} ->
         GenServer.call(self(), {:handle_provider_failover, chain, provider_id, healthy_providers})
-        
+
       {:error, reason} ->
         Logger.error("Failed to get healthy providers for failover",
           chain: chain,
@@ -715,7 +715,7 @@ defmodule Livechain.RPC.SubscriptionManager do
           reason: reason
         )
     end
-    
+
     {:noreply, state}
   end
 
@@ -727,21 +727,14 @@ defmodule Livechain.RPC.SubscriptionManager do
   end
 
   defp ensure_chain_subscription(chain, filter) do
-    # Ensure the chain is running
-    case ChainManager.get_chain_status(chain) do
-      {:ok, %{status: :running}} ->
-        # Chain is already running, subscribe to events
-        subscribe_to_chain_events(chain, filter)
+    # Ensure the chain manager has loaded configuration
+    _ = Livechain.RPC.ChainManager.ensure_loaded()
 
-      _ ->
-        # Start the chain if it's not running
-        case ChainManager.start_chain(chain) do
-          {:ok, _} ->
-            subscribe_to_chain_events(chain, filter)
-
-          {:error, reason} ->
-            Logger.error("Failed to start chain", chain: chain, reason: reason)
-        end
+    # Try to start the chain supervisor idempotently. If already started, proceed.
+    case Livechain.RPC.ChainManager.start_chain(chain) do
+      {:ok, _} -> subscribe_to_chain_events(chain, filter)
+      {:error, {:already_started, _}} -> subscribe_to_chain_events(chain, filter)
+      {:error, _reason} -> subscribe_to_chain_events(chain, filter)
     end
   end
 
@@ -854,6 +847,7 @@ defmodule Livechain.RPC.SubscriptionManager do
       _ -> nil
     end
   end
+
   defp extract_chain_from_message(_), do: nil
 
   defp detect_subscription_event_type(message) when is_map(message) do
@@ -861,56 +855,59 @@ defmodule Livechain.RPC.SubscriptionManager do
       # newHeads subscription event
       %{"method" => "eth_subscription", "params" => %{"result" => %{"number" => _}}} ->
         :newHeads
-        
-      # logs subscription event  
+
+      # logs subscription event
       %{"method" => "eth_subscription", "params" => %{"result" => %{"transactionHash" => _}}} ->
         :logs
-        
+
       # Direct block result (not subscription)
       %{"result" => %{"number" => _}} ->
         :newHeads
-        
+
       _ ->
         :other
     end
   end
+
   defp detect_subscription_event_type(_), do: :other
 
   defp trigger_upstream_subscription(chain, subscription_type, filter) do
     # Get best provider for this chain to send the subscription request
     case ChainManager.get_available_providers(chain) do
       {:ok, [provider_id | _]} ->
-        subscription_params = case subscription_type do
-          :newHeads -> ["newHeads"]
-          :logs -> ["logs", filter || %{}]
-        end
-        
+        subscription_params =
+          case subscription_type do
+            :newHeads -> ["newHeads"]
+            :logs -> ["logs", filter || %{}]
+          end
+
         subscription_message = %{
           "jsonrpc" => "2.0",
           "id" => generate_request_id(),
-          "method" => "eth_subscribe", 
+          "method" => "eth_subscribe",
           "params" => subscription_params
         }
-        
+
         # Send subscription request to the provider via WSConnection
         case Registry.lookup(Livechain.Registry, {:ws_conn, provider_id}) do
           [{pid, _}] ->
             GenServer.cast(pid, {:send_message, subscription_message})
-            Logger.debug("Sent upstream subscription request to #{provider_id}", 
-              chain: chain, 
+
+            Logger.debug("Sent upstream subscription request to #{provider_id}",
+              chain: chain,
               type: subscription_type
             )
-            
+
           [] ->
             Logger.warning("Provider connection not found for upstream subscription",
               chain: chain,
               provider_id: provider_id
             )
         end
-        
+
       {:ok, []} ->
         Logger.error("No providers available for upstream subscription", chain: chain)
-        
+
       {:error, reason} ->
         Logger.error("Failed to get providers for upstream subscription",
           chain: chain,
