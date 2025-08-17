@@ -27,6 +27,12 @@ ExUnit.configure(
   max_cases: 1
 )
 
+# Global test setup to ensure clean state
+ExUnit.after_suite(fn _ ->
+  # Clean up any remaining processes and state
+  TestHelper.global_cleanup()
+end)
+
 # Helper to ensure clean test state
 defmodule TestHelper do
   @moduledoc """
@@ -34,14 +40,95 @@ defmodule TestHelper do
   """
 
   def ensure_clean_state() do
-    # Clean benchmark store
+    # Clean benchmark store if it's running
     try do
-      # Clear metrics for common test chains
-      Enum.each(["ethereum", "polygon", "testnet", "test_chain"], fn chain ->
-        Livechain.Benchmarking.BenchmarkStore.clear_chain_metrics(chain)
+      case GenServer.whereis(Livechain.Benchmarking.BenchmarkStore) do
+        nil ->
+          :ok
+
+        _pid ->
+          # Clear metrics for common test chains
+          Enum.each(
+            ["ethereum", "polygon", "testnet", "test_chain", "integration_test_chain"],
+            fn chain ->
+              Livechain.Benchmarking.BenchmarkStore.clear_chain_metrics(chain)
+            end
+          )
+      end
+    rescue
+      _ -> :ok
+    end
+
+    # Clean subscription manager state if it's running
+    try do
+      case GenServer.whereis(Livechain.RPC.SubscriptionManager) do
+        nil ->
+          :ok
+
+        _pid ->
+          # Get all current subscriptions and unsubscribe them
+          subscriptions = Livechain.RPC.SubscriptionManager.get_subscriptions()
+
+          Enum.each(subscriptions, fn {sub_id, _sub} ->
+            Livechain.RPC.SubscriptionManager.unsubscribe(sub_id)
+          end)
+      end
+    rescue
+      _ -> :ok
+    end
+  end
+
+  def global_cleanup() do
+    # Stop any running GenServers that might have been started during tests
+    try do
+      # Stop test-specific processes
+      case GenServer.whereis(Livechain.RPC.SubscriptionManagerTest.MockChainManager) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal, 1000)
+      end
+    rescue
+      _ -> :ok
+    end
+
+    # Clean up ETS tables
+    try do
+      [:subscriptions, :event_cache]
+      |> Enum.each(fn table ->
+        case :ets.whereis(table) do
+          :undefined -> :ok
+          _ -> :ets.delete_all_objects(table)
+        end
       end)
     rescue
       _ -> :ok
+    end
+  end
+
+  def ensure_test_environment_ready() do
+    # Wait for critical services to be available with proper timeout
+    wait_for_service(Livechain.PubSub, "PubSub")
+    wait_for_service(Livechain.Registry, "Registry")
+    wait_for_service(Livechain.RPC.ProcessRegistry, "ProcessRegistry")
+    :ok
+  end
+
+  defp wait_for_service(service_name, description) do
+    case GenServer.whereis(service_name) do
+      nil ->
+        # Wait up to 2 seconds for the service to start
+        case Enum.find_value(1..20, fn _ ->
+               Process.sleep(100)
+               GenServer.whereis(service_name)
+             end) do
+          nil ->
+            raise "#{description} service not available after timeout"
+
+          _pid ->
+            :ok
+        end
+
+      _pid ->
+        :ok
     end
   end
 
