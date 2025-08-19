@@ -12,9 +12,8 @@ defmodule LivechainWeb.RPCChannel do
   use LivechainWeb, :channel
   require Logger
 
-  alias Livechain.RPC.{Selection, ChainSupervisor, SubscriptionManager}
+  alias Livechain.RPC.{SubscriptionManager, Failover}
   alias Livechain.Config.ConfigStore
-  alias Livechain.Benchmarking.BenchmarkStore
 
   @impl true
   def join("rpc:" <> chain, _payload, socket) do
@@ -33,6 +32,8 @@ defmodule LivechainWeb.RPCChannel do
         socket
       ) do
     Logger.debug("JSON-RPC call: #{method} with params: #{inspect(params)}")
+
+    IO.puts("handle_in: #{method} with params: #{inspect(params)}")
 
     response =
       case handle_rpc_method(method, params, socket) do
@@ -176,42 +177,31 @@ defmodule LivechainWeb.RPCChannel do
 
   # Helper functions
 
-  # Forward read calls from WS clients via HTTP upstream for lower latency
-  # and simpler, reliable semantics. Subscriptions remain WS upstream.
+  # Forward read calls from WS clients with full failover support
+  # Uses the same failover logic as HTTP for seamless error recovery
   defp forward_read_call(chain, method, params) do
     strategy = default_provider_strategy()
+    
+    failover_opts = [
+      strategy: strategy,
+      protocol: :http
+    ]
 
-    with {:ok, provider_id} <-
-           Selection.pick_provider(chain, method, strategy: strategy, protocol: :http) do
-      start_ms = System.monotonic_time(:millisecond)
-      result = forward_via_http(chain, provider_id, method, params)
-      dur_ms = System.monotonic_time(:millisecond) - start_ms
+    case Failover.execute_with_failover(chain, method, params, failover_opts) do
+      {:ok, result} ->
+        {:ok, result}
 
-      case result do
-        {:ok, value} ->
-          BenchmarkStore.record_rpc_call(chain, provider_id, method, dur_ms, :success)
-          {:ok, value}
+      {:error, %{message: message}} ->
+        {:error, "RPC forwarding failed: #{message}"}
 
-        {:error, reason} ->
-          BenchmarkStore.record_rpc_call(chain, provider_id, method, dur_ms, :error)
-          {:error, "RPC forwarding failed: #{inspect(reason)}"}
-      end
-    else
       {:error, reason} ->
         {:error, "RPC forwarding failed: #{inspect(reason)}"}
-
-      other ->
-        {:error, "RPC forwarding failed: #{inspect(other)}"}
     end
   end
 
-  # Perform the actual HTTP upstream request
-  defp forward_via_http(chain, provider_id, method, params) do
-    ChainSupervisor.forward_rpc_request(chain, provider_id, method, params)
-  end
 
   defp default_provider_strategy do
-    Application.get_env(:livechain, :provider_selection_strategy, :leaderboard)
+    Application.get_env(:livechain, :provider_selection_strategy, :cheapest)
   end
 
   defp update_subscriptions(socket, subscription_id, subscription_type) do

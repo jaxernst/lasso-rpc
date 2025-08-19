@@ -45,7 +45,9 @@ defmodule Livechain.Application do
         LivechainWeb.Endpoint
 
         # Add simulator to children if in dev/test
-      ] ++ maybe_add_simulator()
+      ]
+
+    # ++ maybe_add_simulator()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     opts = [strategy: :one_for_one, name: Livechain.Supervisor]

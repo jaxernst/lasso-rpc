@@ -80,9 +80,6 @@ defmodule Integration.FailoverTest do
           url: "https://reliable-provider.example.com",
           ws_url: "wss://reliable-provider.example.com/ws",
           api_key_required: false,
-          rate_limit: 1000,
-          latency_target: 100,
-          reliability: 0.99,
           region: "us-east-1"
         },
         %Provider{
@@ -93,9 +90,6 @@ defmodule Integration.FailoverTest do
           url: "https://unreliable-provider.example.com",
           ws_url: "wss://unreliable-provider.example.com/ws",
           api_key_required: false,
-          rate_limit: 500,
-          latency_target: 200,
-          reliability: 0.80,
           region: "us-east-1"
         },
         %Provider{
@@ -106,9 +100,6 @@ defmodule Integration.FailoverTest do
           url: "https://failing-provider.example.com",
           ws_url: "wss://failing-provider.example.com/ws",
           api_key_required: false,
-          rate_limit: 100,
-          latency_target: 500,
-          reliability: 0.10,
           region: "us-east-1"
         },
         %Provider{
@@ -119,9 +110,6 @@ defmodule Integration.FailoverTest do
           url: "https://slow-provider.example.com",
           ws_url: "wss://slow-provider.example.com/ws",
           api_key_required: false,
-          rate_limit: 200,
-          latency_target: 1000,
-          reliability: 0.95,
           region: "us-west-1"
         }
       ]
@@ -418,9 +406,6 @@ defmodule Integration.FailoverTest do
               url: "https://failing-provider.example.com",
               ws_url: "wss://failing-provider.example.com/ws",
               api_key_required: false,
-              rate_limit: 100,
-              latency_target: 500,
-              reliability: 0.10,
               region: "us-east-1"
             }
           ]

@@ -42,16 +42,15 @@ defmodule Livechain.Simulator.MockConnections do
         chain_name: chain_name,
         block_time: chain_config.block_time,
         provider_type: provider.type,
-        reliability: provider.reliability || 0.95,
-        latency_target: provider.latency_target || 150,
-        rate_limit: provider.rate_limit || 1000,
         subscription_topics: ["newHeads", "logs", "newPendingTransactions"],
 
         # Mock-specific configuration
         mock_config: %{
           simulate_reconnects: true,
-          simulate_failures: provider.reliability < 0.98,
-          failure_rate: 1.0 - (provider.reliability || 0.95),
+          # Public providers are less reliable
+          simulate_failures: provider.type == "public",
+          # 5% for public, 1% for paid
+          failure_rate: if(provider.type == "public", do: 0.05, else: 0.01),
           message_frequency: calculate_message_frequency(chain_config.block_time),
           generate_blocks: true,
           generate_transactions: true,
@@ -72,33 +71,27 @@ defmodule Livechain.Simulator.MockConnections do
         "Infura Ethereum",
         "ethereum",
         1,
-        12000,
-        0.999,
-        100
+        12000
       ),
       create_mock_endpoint(
         "ethereum_alchemy",
         "Alchemy Ethereum",
         "ethereum",
         1,
-        12000,
-        0.999,
-        80
+        12000
       ),
-      create_mock_endpoint("ethereum_ankr", "Ankr Ethereum", "ethereum", 1, 12000, 0.95, 200),
+      create_mock_endpoint("ethereum_ankr", "Ankr Ethereum", "ethereum", 1, 12000),
 
       # Polygon
-      create_mock_endpoint("polygon_infura", "Infura Polygon", "polygon", 137, 2100, 0.999, 120),
+      create_mock_endpoint("polygon_infura", "Infura Polygon", "polygon", 137, 2100),
       create_mock_endpoint(
         "polygon_alchemy",
         "Alchemy Polygon",
         "polygon",
         137,
-        2100,
-        0.999,
-        100
+        2100
       ),
-      create_mock_endpoint("polygon_ankr", "Ankr Polygon", "polygon", 137, 2100, 0.93, 250),
+      create_mock_endpoint("polygon_ankr", "Ankr Polygon", "polygon", 137, 2100),
 
       # Arbitrum One
       create_mock_endpoint(
@@ -106,20 +99,16 @@ defmodule Livechain.Simulator.MockConnections do
         "Infura Arbitrum",
         "arbitrum",
         42161,
-        1000,
-        0.999,
-        100
+        1000
       ),
       create_mock_endpoint(
         "arbitrum_alchemy",
         "Alchemy Arbitrum",
         "arbitrum",
         42161,
-        1000,
-        0.999,
-        80
+        1000
       ),
-      create_mock_endpoint("arbitrum_ankr", "Ankr Arbitrum", "arbitrum", 42161, 1000, 0.94, 200),
+      create_mock_endpoint("arbitrum_ankr", "Ankr Arbitrum", "arbitrum", 42161, 1000),
 
       # Optimism
       create_mock_endpoint(
@@ -127,30 +116,26 @@ defmodule Livechain.Simulator.MockConnections do
         "Infura Optimism",
         "optimism",
         10,
-        2000,
-        0.999,
-        110
+        2000
       ),
       create_mock_endpoint(
         "optimism_alchemy",
         "Alchemy Optimism",
         "optimism",
         10,
-        2000,
-        0.999,
-        90
+        2000
       ),
-      create_mock_endpoint("optimism_ankr", "Ankr Optimism", "optimism", 10, 2000, 0.96, 180),
+      create_mock_endpoint("optimism_ankr", "Ankr Optimism", "optimism", 10, 2000),
 
       # Base
-      create_mock_endpoint("base_publicnode", "PublicNode Base", "base", 8453, 2000, 0.98, 150),
-      create_mock_endpoint("base_infura", "Infura Base", "base", 8453, 2000, 0.999, 100),
-      create_mock_endpoint("base_alchemy", "Alchemy Base", "base", 8453, 2000, 0.999, 80),
+      create_mock_endpoint("base_publicnode", "PublicNode Base", "base", 8453, 2000),
+      create_mock_endpoint("base_infura", "Infura Base", "base", 8453, 2000),
+      create_mock_endpoint("base_alchemy", "Alchemy Base", "base", 8453, 2000),
 
       # BNB Smart Chain
-      create_mock_endpoint("bsc_binance", "Binance BSC", "bsc", 56, 3000, 0.98, 150),
-      create_mock_endpoint("bsc_ankr", "Ankr BSC", "bsc", 56, 3000, 0.95, 200),
-      create_mock_endpoint("bsc_nodereal", "NodeReal BSC", "bsc", 56, 3000, 0.97, 170),
+      create_mock_endpoint("bsc_binance", "Binance BSC", "bsc", 56, 3000),
+      create_mock_endpoint("bsc_ankr", "Ankr BSC", "bsc", 56, 3000),
+      create_mock_endpoint("bsc_nodereal", "NodeReal BSC", "bsc", 56, 3000),
 
       # Avalanche
       create_mock_endpoint(
@@ -158,68 +143,60 @@ defmodule Livechain.Simulator.MockConnections do
         "Infura Avalanche",
         "avalanche",
         43114,
-        2000,
-        0.999,
-        120
+        2000
       ),
       create_mock_endpoint(
         "avalanche_ankr",
         "Ankr Avalanche",
         "avalanche",
         43114,
-        2000,
-        0.96,
-        180
+        2000
       ),
       create_mock_endpoint(
         "avalanche_public",
         "Avalanche Public",
         "avalanche",
         43114,
-        2000,
-        0.94,
-        200
+        2000
       ),
 
       # zkSync Era
-      create_mock_endpoint("zksync_infura", "Infura zkSync", "zksync", 324, 1000, 0.999, 100),
-      create_mock_endpoint("zksync_ankr", "Ankr zkSync", "zksync", 324, 1000, 0.96, 150),
-      create_mock_endpoint("zksync_public", "zkSync Public", "zksync", 324, 1000, 0.95, 180),
+      create_mock_endpoint("zksync_infura", "Infura zkSync", "zksync", 324, 1000),
+      create_mock_endpoint("zksync_ankr", "Ankr zkSync", "zksync", 324, 1000),
+      create_mock_endpoint("zksync_public", "zkSync Public", "zksync", 324, 1000),
 
       # Linea
-      create_mock_endpoint("linea_infura", "Infura Linea", "linea", 59144, 12000, 0.999, 120),
+      create_mock_endpoint("linea_infura", "Infura Linea", "linea", 59144, 12000),
       create_mock_endpoint(
         "linea_consensys",
         "Consensys Linea",
         "linea",
         59144,
-        12000,
-        0.97,
-        150
+        12000
       ),
 
       # Scroll
-      create_mock_endpoint("scroll_ankr", "Ankr Scroll", "scroll", 534_352, 3000, 0.95, 200),
-      create_mock_endpoint("scroll_public", "Scroll Public", "scroll", 534_352, 3000, 0.96, 180),
+      create_mock_endpoint("scroll_ankr", "Ankr Scroll", "scroll", 534_352, 3000),
+      create_mock_endpoint("scroll_public", "Scroll Public", "scroll", 534_352, 3000),
 
       # Mantle
-      create_mock_endpoint("mantle_public", "Mantle Public", "mantle", 5000, 1000, 0.96, 150),
-      create_mock_endpoint("mantle_ankr", "Ankr Mantle", "mantle", 5000, 1000, 0.94, 200),
+      create_mock_endpoint("mantle_public", "Mantle Public", "mantle", 5000, 1000),
+      create_mock_endpoint("mantle_ankr", "Ankr Mantle", "mantle", 5000, 1000),
 
       # Blast
-      create_mock_endpoint("blast_infura", "Infura Blast", "blast", 81457, 2000, 0.999, 110),
-      create_mock_endpoint("blast_public", "Blast Public", "blast", 81457, 2000, 0.96, 160),
+      create_mock_endpoint("blast_infura", "Infura Blast", "blast", 81457, 2000),
+      create_mock_endpoint("blast_public", "Blast Public", "blast", 81457, 2000),
 
       # Mode
-      create_mock_endpoint("mode_public", "Mode Public", "mode", 34443, 2000, 0.95, 170),
+      create_mock_endpoint("mode_public", "Mode Public", "mode", 34443, 2000),
 
       # Fantom
-      create_mock_endpoint("fantom_ankr", "Ankr Fantom", "fantom", 250, 1000, 0.95, 180),
-      create_mock_endpoint("fantom_public", "Fantom Public", "fantom", 250, 1000, 0.93, 200),
+      create_mock_endpoint("fantom_ankr", "Ankr Fantom", "fantom", 250, 1000),
+      create_mock_endpoint("fantom_public", "Fantom Public", "fantom", 250, 1000),
 
       # Celo
-      create_mock_endpoint("celo_infura", "Infura Celo", "celo", 42220, 5000, 0.999, 140),
-      create_mock_endpoint("celo_ankr", "Ankr Celo", "celo", 42220, 5000, 0.94, 220)
+      create_mock_endpoint("celo_infura", "Infura Celo", "celo", 42220, 5000),
+      create_mock_endpoint("celo_ankr", "Ankr Celo", "celo", 42220, 5000)
     ]
   end
 
@@ -294,9 +271,7 @@ defmodule Livechain.Simulator.MockConnections do
          name,
          chain_name,
          chain_id,
-         block_time,
-         reliability,
-         latency_target
+         block_time
        ) do
     %MockWSEndpoint{
       id: id,
@@ -305,15 +280,15 @@ defmodule Livechain.Simulator.MockConnections do
       chain_id: chain_id,
       chain_name: chain_name,
       block_time: block_time,
-      provider_type: if(reliability > 0.98, do: "paid", else: "public"),
-      reliability: reliability,
-      latency_target: latency_target,
-      rate_limit: if(reliability > 0.98, do: 100_000, else: 1000),
+      # All fallback endpoints are public
+      provider_type: "public",
       subscription_topics: ["newHeads", "logs", "newPendingTransactions"],
       mock_config: %{
         simulate_reconnects: true,
-        simulate_failures: reliability < 0.98,
-        failure_rate: 1.0 - reliability,
+        # Public providers simulate failures
+        simulate_failures: true,
+        # 5% failure rate for public providers
+        failure_rate: 0.05,
         message_frequency: calculate_message_frequency(block_time),
         generate_blocks: true,
         generate_transactions: true,

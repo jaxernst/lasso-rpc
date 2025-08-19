@@ -127,7 +127,9 @@ defmodule Livechain.RPC.WSConnection do
         {:noreply, state}
 
       {:error, reason} ->
-        Logger.error("Failed to connect to WebSocket: #{inspect(reason)}")
+        Logger.error(
+          "Failed to connect to #{state.endpoint.name} (WebSocket): #{inspect(reason)}"
+        )
 
         # Report connection failure to circuit breaker
         CircuitBreaker.record_failure(state.endpoint.id)

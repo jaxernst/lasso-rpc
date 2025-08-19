@@ -20,21 +20,18 @@ defmodule Livechain.RPC.ProviderPoolTest do
     }
   end
 
-  defp provider_struct(attrs) do
+  defp provider_struct(attrs \\ []) do
     struct(
       ChainConfig.Provider,
       Map.merge(
         %{
-          id: nil,
-          name: nil,
+          id: "test_provider",
+          name: "Test Provider",
           priority: 1,
           type: "public",
           url: "http://example",
           ws_url: "ws://example",
           api_key_required: false,
-          rate_limit: 0,
-          latency_target: 100,
-          reliability: 1.0,
           region: "us"
         },
         attrs
@@ -43,8 +40,8 @@ defmodule Livechain.RPC.ProviderPoolTest do
   end
 
   test "EMA updates on success and failure, cooldown on rate limit" do
-    p1 = provider_struct(%{id: "p1", name: "P1", priority: 1, latency_target: 100, region: "us"})
-    p2 = provider_struct(%{id: "p2", name: "P2", priority: 2, latency_target: 200, region: "us"})
+    p1 = provider_struct(%{id: "p1", name: "P1", priority: 1, region: "us"})
+    p2 = provider_struct(%{id: "p2", name: "P2", priority: 2, region: "us"})
     chain_config = base_chain_config([p1, p2])
 
     {:ok, _pid} = ProviderPool.start_link({"testnet", chain_config})
@@ -69,8 +66,8 @@ defmodule Livechain.RPC.ProviderPoolTest do
   end
 
   test ":latency strategy prefers lowest latency meeting success-rate threshold" do
-    p1 = provider_struct(%{id: "p1", name: "P1", priority: 2, latency_target: 200, region: "us"})
-    p2 = provider_struct(%{id: "p2", name: "P2", priority: 1, latency_target: 50, region: "us"})
+    p1 = provider_struct(%{id: "p1", name: "P1", priority: 2, region: "us"})
+    p2 = provider_struct(%{id: "p2", name: "P2", priority: 1, region: "us"})
     chain_config = base_chain_config([p1, p2])
 
     {:ok, _pid} = ProviderPool.start_link({"testnet_lat", chain_config})
@@ -103,7 +100,6 @@ defmodule Livechain.RPC.ProviderPoolTest do
         name: "PUB US",
         priority: 3,
         type: "public",
-        latency_target: 100,
         region: "us"
       })
 
@@ -113,7 +109,6 @@ defmodule Livechain.RPC.ProviderPoolTest do
         name: "PAID US",
         priority: 1,
         type: "paid",
-        latency_target: 80,
         region: "us"
       })
 
@@ -123,7 +118,6 @@ defmodule Livechain.RPC.ProviderPoolTest do
         name: "PUB EU",
         priority: 2,
         type: "public",
-        latency_target: 90,
         region: "eu"
       })
 

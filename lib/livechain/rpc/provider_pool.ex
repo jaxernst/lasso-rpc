@@ -14,6 +14,7 @@ defmodule Livechain.RPC.ProviderPool do
   require Logger
 
   alias Livechain.Config.ChainConfig
+  alias Livechain.Benchmarking.BenchmarkStore
 
   defstruct [
     :chain_name,
@@ -25,6 +26,7 @@ defmodule Livechain.RPC.ProviderPool do
   ]
 
   defmodule ProviderState do
+    @derive Jason.Encoder
     defstruct [
       :id,
       :config,
@@ -34,8 +36,6 @@ defmodule Livechain.RPC.ProviderPool do
       :last_health_check,
       :consecutive_failures,
       :consecutive_successes,
-      :avg_latency,
-      :error_rate,
       :last_error,
       # Cooldown fields for rate limit handling
       :cooldown_until,
@@ -57,7 +57,7 @@ defmodule Livechain.RPC.ProviderPool do
 
   @type chain_name :: String.t()
   @type provider_id :: String.t()
-  @type strategy :: :priority | :round_robin | :latency | :cheapest
+  @type strategy :: :priority | :round_robin | :fastest | :cheapest
 
   @doc """
   Starts the ProviderPool for a chain.
@@ -174,8 +174,6 @@ defmodule Livechain.RPC.ProviderPool do
       last_health_check: System.monotonic_time(:millisecond),
       consecutive_failures: 0,
       consecutive_successes: 0,
-      avg_latency: provider_config.latency_target,
-      error_rate: 0.0,
       last_error: nil,
       cooldown_until: nil,
       cooldown_count: 0,
@@ -240,8 +238,6 @@ defmodule Livechain.RPC.ProviderPool do
             id: id,
             name: provider.config.name,
             status: provider.status,
-            latency: provider.avg_latency,
-            error_rate: provider.error_rate,
             consecutive_failures: provider.consecutive_failures,
             last_health_check: provider.last_health_check
           }
@@ -353,8 +349,8 @@ defmodule Livechain.RPC.ProviderPool do
             |> List.first()
             |> Map.get(:id)
 
-          "latency_based" ->
-            choose_lowest_latency_with_success_guard(providers)
+          "fastest" ->
+            choose_fastest_provider_with_benchmarks(state, providers)
 
           "round_robin" ->
             providers
@@ -392,8 +388,8 @@ defmodule Livechain.RPC.ProviderPool do
             |> Enum.at(rem(state.stats.total_requests, length(providers)))
             |> Map.get(:id)
 
-          :latency ->
-            choose_lowest_latency_with_success_guard(providers)
+          :fastest ->
+            choose_fastest_provider_with_benchmarks(state, providers)
 
           :cheapest ->
             # Prefer public providers; if none, fallback to paid
@@ -420,25 +416,41 @@ defmodule Livechain.RPC.ProviderPool do
     |> Map.get(:id)
   end
 
-  defp choose_lowest_latency_with_success_guard(providers) do
-    min_success_rate = 0.95
-
-    eligible =
-      providers
-      |> Enum.filter(fn provider -> 1.0 - provider.error_rate >= min_success_rate end)
-
-    case eligible do
+  defp choose_fastest_provider_with_benchmarks(state, providers) do
+    # Get provider leaderboard data from BenchmarkStore
+    case BenchmarkStore.get_provider_leaderboard(state.chain_name) do
       [] ->
+        # Fall back to priority-based selection when no benchmark data available
+        Logger.debug("No benchmark data available for #{state.chain_name}, falling back to priority")
         providers
-        |> Enum.sort_by(& &1.avg_latency)
+        |> Enum.sort_by(& &1.config.priority)
         |> List.first()
         |> Map.get(:id)
 
-      qualified ->
-        qualified
-        |> Enum.sort_by(& &1.avg_latency)
-        |> List.first()
-        |> Map.get(:id)
+      leaderboard ->
+        # Filter providers by those in our available list and sort by performance score
+        provider_ids = MapSet.new(Enum.map(providers, & &1.id))
+        
+        best_provider = 
+          leaderboard
+          |> Enum.filter(&(MapSet.member?(provider_ids, &1.provider_id)))
+          |> Enum.filter(&(&1.win_rate > 0.95 and &1.total_races > 5)) # Quality filter
+          |> Enum.sort_by(&(&1.score), :desc)
+          |> List.first()
+
+        case best_provider do
+          nil ->
+            # Fall back to priority if no provider meets quality threshold
+            Logger.debug("No providers meet quality threshold for #{state.chain_name}, falling back to priority")
+            providers
+            |> Enum.sort_by(& &1.config.priority)
+            |> List.first()
+            |> Map.get(:id)
+
+          provider ->
+            Logger.debug("Selected fastest provider for #{state.chain_name}: #{provider.provider_id} (score: #{provider.score})")
+            provider.provider_id
+        end
     end
   end
 
@@ -462,18 +474,12 @@ defmodule Livechain.RPC.ProviderPool do
     %{state | active_providers: viable_providers}
   end
 
-  defp update_provider_success(state, provider_id, latency_ms) do
+  defp update_provider_success(state, provider_id, _latency_ms) do
     case Map.get(state.providers, provider_id) do
       nil ->
         state
 
       provider ->
-        # Update latency with exponential moving average
-        new_latency = provider.avg_latency * 0.8 + latency_ms * 0.2
-
-        # Update error rate with exponential moving average (success = 0 error)
-        new_error_rate = provider.error_rate * 0.9 + 0.0 * 0.1
-
         cooldown_was_active = not is_nil(provider.cooldown_until)
 
         new_provider = %{
@@ -481,8 +487,6 @@ defmodule Livechain.RPC.ProviderPool do
           | status: :healthy,
             consecutive_successes: provider.consecutive_successes + 1,
             consecutive_failures: 0,
-            avg_latency: new_latency,
-            error_rate: new_error_rate,
             last_health_check: System.monotonic_time(:millisecond),
             # Reset cooldown state on success
             cooldown_until: nil,
@@ -549,15 +553,11 @@ defmodule Livechain.RPC.ProviderPool do
                 cooldown_ms: trunc(actual_cooldown)
               })
 
-              # Update error rate for rate limit (treat as error)
-              new_error_rate = provider.error_rate * 0.9 + 1.0 * 0.1
-
               updated = %{
                 provider
                 | cooldown_until: cooldown_until,
                   cooldown_count: new_cooldown_count,
                   status: :rate_limited,
-                  error_rate: new_error_rate,
                   last_error: error,
                   last_health_check: System.monotonic_time(:millisecond)
               }
@@ -576,15 +576,11 @@ defmodule Livechain.RPC.ProviderPool do
                   provider.status
                 end
 
-              # Update error rate for regular failure
-              new_error_rate = provider.error_rate * 0.9 + 1.0 * 0.1
-
               updated = %{
                 provider
                 | status: new_status,
                   consecutive_failures: new_consecutive_failures,
                   consecutive_successes: 0,
-                  error_rate: new_error_rate,
                   last_error: error,
                   last_health_check: System.monotonic_time(:millisecond)
               }
@@ -616,13 +612,11 @@ defmodule Livechain.RPC.ProviderPool do
             provider_id: provider_id,
             status: :unhealthy
           })
+        end
 
-          new_state = update_active_providers(new_state)
-
-          %{
-            new_state
-            | stats: %{new_state.stats | last_failover: System.monotonic_time(:millisecond)}
-          }
+        # Update active providers list if status changed
+        if updated_provider.status != provider.status do
+          update_active_providers(new_state)
         else
           new_state
         end
@@ -678,33 +672,24 @@ defmodule Livechain.RPC.ProviderPool do
 
       case send_health_check_request(provider.config) do
         {:ok, _response} ->
-          duration_ms = System.monotonic_time(:millisecond) - start_time
-
           # Update provider with successful health check
-          new_latency = provider.avg_latency * 0.8 + duration_ms * 0.2
-          new_error_rate = provider.error_rate * 0.9 + 0.0 * 0.1
-
-          Logger.debug("Health check succeeded for #{provider_id} in #{duration_ms}ms")
+          Logger.debug("Health check succeeded for #{provider_id}")
 
           %{
             provider
-            | avg_latency: new_latency,
-              error_rate: new_error_rate,
-              consecutive_successes: provider.consecutive_successes + 1,
+            | consecutive_successes: provider.consecutive_successes + 1,
               consecutive_failures: 0,
               last_health_check: current_time
           }
 
         {:error, reason} ->
           _duration_ms = System.monotonic_time(:millisecond) - start_time
-          new_error_rate = provider.error_rate * 0.9 + 1.0 * 0.1
 
           Logger.debug("Health check failed for #{provider_id}: #{inspect(reason)}")
 
           %{
             provider
-            | error_rate: new_error_rate,
-              consecutive_failures: provider.consecutive_failures + 1,
+            | consecutive_failures: provider.consecutive_failures + 1,
               consecutive_successes: 0,
               last_error: reason,
               last_health_check: current_time

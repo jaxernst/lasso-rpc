@@ -16,26 +16,6 @@ defmodule Livechain.RPC.SelectionTest do
     # Mock the HTTP client for any background operations
     stub(Livechain.RPC.HttpClientMock, :request, &MockHttpClient.request/4)
 
-    # Start core dependencies if not already started
-    case Registry.start_link(
-           keys: :unique,
-           name: Livechain.Registry,
-           partitions: System.schedulers_online()
-         ) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    case Livechain.RPC.ProcessRegistry.start_link(name: Livechain.RPC.ProcessRegistry) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    case Livechain.Benchmarking.BenchmarkStore.start_link([]) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
     # Clean any existing metrics to ensure clean test state
     TestHelper.ensure_clean_state()
 

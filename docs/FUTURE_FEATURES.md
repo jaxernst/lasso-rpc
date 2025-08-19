@@ -18,9 +18,19 @@ A living backlog of high-impact improvements to make Livechain reliable, fast, a
 
 ### Protocol routing
 
+- **Current state**:
+  - ✅ HTTP upstream for reads with robust failover, circuit breakers, and 429 handling
+  - ✅ WebSocket upstream for subscriptions (eth_subscribe, eth_unsubscribe)
+  - ❌ WebSocket RPC calls (eth_getBalance, eth_blockNumber, etc.) lack failover logic
 - **Default**: read-only calls over HTTP upstream; subscriptions over WS upstream.
-- **Optional WS upstream for reads**: `WSRequestClient` with request-id correlation and timeout; used selectively per method.
+- **WebSocket read support** (P1 priority):
+  - `WSRequestClient` with request-id correlation and timeout management
+  - **Critical gap**: WebSocket RPC calls need same failover logic as HTTP (`try_failover_with_reporting/7`)
+  - **Current issue**: WS RPC calls fail immediately on 429 instead of transparent failover
+  - **Solution**: Extract failover logic to shared module or replicate in `RPCChannel`
 - **Per-method protocol policy**: override table in config for fine control.
+- **Provider capability flags**: `supports_ws_reads: true/false` per provider
+- **Automatic fallback**: WS fails → HTTP fallback for critical methods
 
 ### Latency and performance
 
@@ -33,6 +43,17 @@ A living backlog of high-impact improvements to make Livechain reliable, fast, a
 
 ### Resilience and fault tolerance
 
+- **Current HTTP strengths** (✅ implemented):
+  - **429 rate limit handling**: Automatic detection, exponential backoff (1s → 5min max), provider exclusion
+  - **Seamless failover**: `execute_rpc_with_failover/6` + `try_failover_with_reporting/7`
+  - **Circuit breaker integration**: Per-provider failure tracking and automatic recovery
+  - **Provider cooldown**: Rate-limited providers automatically excluded until cooldown expires
+  - **Zero user impact**: Original request succeeds transparently via next best provider
+- **WebSocket resilience gaps** (❌ needs implementation):
+  - **Missing failover logic**: WS RPC calls fail immediately instead of transparent retry
+  - **No request correlation**: Need `WSRequestManager` for request/response pairing
+  - **Inconsistent error handling**: WS errors not mapped to same taxonomy as HTTP
+  - **Circuit breaker gaps**: WS failures not properly integrated with breaker state
 - **Circuit breaker tuning**: per-provider thresholds; breaker state in telemetry; partial brownout handling.
 - **Adaptive retry/backoff**: selective retries on retryable errors; jittered backoff; method-aware retry limits.
 - **Rate-limit adaptation**: detect provider 429s; dynamically reduce traffic; use alternative providers.
@@ -77,6 +98,7 @@ A living backlog of high-impact improvements to make Livechain reliable, fast, a
 - **Chaos tests**: breaker opening/closing, provider disappear/return.
 - **Contract tests**: provider-specific JSON-RPC diffs; normalization tests.
 - **Benchmarks**: per-method latency, throughput under load, and aggregator overhead.
+- **Failover testing**: 429 injection, provider cooldown validation, WS vs HTTP parity
 
 ### Productization
 
@@ -87,6 +109,55 @@ A living backlog of high-impact improvements to make Livechain reliable, fast, a
 ### Roadmap (suggested phases)
 
 - **P0 (Core)**: strategy registry, per-method overrides, telemetry events, MethodPolicy timeouts
-- **P1 (Performance)**: hedged requests, cache/coalescing, provider scoreboards + dashboards
+- **P1 (Performance)**: WebSocket read support with failover parity, hedged requests, cache/coalescing, provider scoreboards + dashboards
 - **P2 (Resilience/Scale)**: adaptive rate limiting, staged rollout, geo-aware selection
 - **P3 (Product)**: cost-aware routing, multi-tenant quotas, billing/usage reporting
+
+### Implementation Notes
+
+#### WebSocket Read Support Architecture
+
+When implementing WebSocket reads, ensure parity with HTTP failover:
+
+```elixir
+# Current HTTP path (rpc_controller.ex:402-431)
+case ChainSupervisor.forward_rpc_request(chain, provider_id, method, params) do
+  {:ok, result} -> {:ok, result}
+  {:error, reason} ->
+    # ✅ Has robust failover
+    try_failover_with_reporting(chain, method, params, strategy, [provider_id], 1, region_filter)
+end
+
+# Current WebSocket path (rpc_channel.ex:211-213)
+defp forward_via_http(chain, provider_id, method, params) do
+  # ❌ Missing failover logic
+  ChainSupervisor.forward_rpc_request(chain, provider_id, method, params)
+end
+```
+
+**Required changes**:
+
+1. Extract `try_failover_with_reporting/7` to shared module
+2. Add `ChainSupervisor.forward_ws_rpc_request/4`
+3. Implement `WSRequestManager` for request correlation
+4. Map WS errors to same taxonomy (rate_limit, server_error, etc.)
+5. Integrate with circuit breakers and `BenchmarkStore.record_rpc_call/5`
+
+#### Provider Protocol Support Matrix
+
+Track provider capabilities to enable intelligent protocol selection:
+
+```elixir
+# config/chains.yml
+providers:
+  infura:
+    supports_ws_reads: true
+    ws_method_whitelist: ["eth_blockNumber", "eth_chainId", "eth_gasPrice"]
+  alchemy:
+    supports_ws_reads: false  # HTTP only for reads
+  quicknode:
+    supports_ws_reads: true
+    ws_method_whitelist: "*"  # All methods
+```
+
+This ensures WebSocket reads are only attempted when providers support them, with automatic HTTP fallback for unsupported methods or providers.

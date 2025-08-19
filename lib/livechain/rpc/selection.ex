@@ -24,7 +24,7 @@ defmodule Livechain.RPC.Selection do
   Picks the best provider for a given chain and method.
 
   Options:
-  - `:strategy` - Selection strategy (:leaderboard, :priority, :round_robin)
+  - `:strategy` - Selection strategy (:fastest, :cheapest, :priority, :round_robin)
   - `:protocol` - Required protocol (:http, :ws, :both)
   - `:exclude` - List of provider IDs to exclude
 
@@ -33,7 +33,7 @@ defmodule Livechain.RPC.Selection do
   @spec pick_provider(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def pick_provider(chain_name, method, opts \\ []) do
-    strategy = Keyword.get(opts, :strategy, :leaderboard)
+    strategy = Keyword.get(opts, :strategy, :cheapest)
     protocol = Keyword.get(opts, :protocol, :both)
     exclude = Keyword.get(opts, :exclude, [])
 

@@ -106,7 +106,7 @@ ChainRegistry provides thin lifecycle management separated from business logic:
 
 Selection module consolidates all provider picking logic:
 
-- **Strategy-aware**: Supports leaderboard, priority, round_robin strategies
+- **Strategy-aware**: Supports latency optimized (:fastest), price optimized (:cheapest), and round_robin strategies
 - **Protocol filtering**: Handles HTTP vs WebSocket protocol requirements
 - **Pool-first fallback**: Tries ProviderPool first, falls back to config-based selection
 - **Exclusion support**: Can exclude failed providers during failover
@@ -116,7 +116,7 @@ Selection module consolidates all provider picking logic:
 {:ok, provider_id} = Selection.pick_provider(
   "ethereum",
   "eth_getBalance",
-  strategy: :leaderboard,
+  strategy: :latency,
   protocol: :http
 )
 ```

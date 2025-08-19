@@ -2,6 +2,8 @@
 
 High-performance, scalable, and fault tolerant RPC orchestration service for EVM chains.
 
+'A Blockchain RPC smart router for fast, bullet proof consumer applications'
+
 ## Core Features + Selling points
 
 - Multi-provider orchestration with smart routing based on pluggable provider routing strategies (fastest, cheapest, round_robin)

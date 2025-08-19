@@ -17,26 +17,6 @@ defmodule Livechain.RPC.WSConnectionTest do
     # Mock the HTTP client
     stub(Livechain.RPC.HttpClientMock, :request, &MockHttpClient.request/4)
 
-    # Start core dependencies
-    case Registry.start_link(
-           keys: :unique,
-           name: Livechain.Registry,
-           partitions: System.schedulers_online()
-         ) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    case Livechain.RPC.ProcessRegistry.start_link(name: Livechain.RPC.ProcessRegistry) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    case Livechain.Benchmarking.BenchmarkStore.start_link([]) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
     # Create test endpoint configurations
     real_endpoint = %WSEndpoint{
       id: "test_real_provider",

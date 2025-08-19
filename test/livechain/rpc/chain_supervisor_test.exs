@@ -18,26 +18,6 @@ defmodule Livechain.RPC.ChainSupervisorTest do
     # Mock the HTTP client for provider operations
     stub(Livechain.RPC.HttpClientMock, :request, &MockHttpClient.request/4)
 
-    # Start core dependencies if not already started
-    case Registry.start_link(
-           keys: :unique,
-           name: Livechain.Registry,
-           partitions: System.schedulers_online()
-         ) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    case Livechain.RPC.ProcessRegistry.start_link(name: Livechain.RPC.ProcessRegistry) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    case Livechain.Benchmarking.BenchmarkStore.start_link([]) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
     # Create test chain configuration
     chain_config = %ChainConfig{
       chain_id: 1,
@@ -65,10 +45,7 @@ defmodule Livechain.RPC.ChainSupervisorTest do
           url: "https://test1.example.com",
           ws_url: "wss://test1.example.com/ws",
           type: "public",
-          api_key_required: false,
-          rate_limit: 1000,
-          latency_target: 100,
-          reliability: 0.95
+          api_key_required: false
         },
         %Provider{
           id: "test_provider_2",
@@ -76,10 +53,7 @@ defmodule Livechain.RPC.ChainSupervisorTest do
           url: "https://test2.example.com",
           ws_url: "wss://test2.example.com/ws",
           type: "public",
-          api_key_required: false,
-          rate_limit: 1000,
-          latency_target: 150,
-          reliability: 0.90
+          api_key_required: false
         },
         %Provider{
           id: "test_provider_3",
@@ -87,10 +61,7 @@ defmodule Livechain.RPC.ChainSupervisorTest do
           url: "https://test3.example.com",
           ws_url: "wss://test3.example.com/ws",
           type: "public",
-          api_key_required: false,
-          rate_limit: 1000,
-          latency_target: 200,
-          reliability: 0.85
+          api_key_required: false
         }
       ]
     }
