@@ -140,10 +140,7 @@ defmodule TestHelper do
       type: type,
       url: "https://#{id}.example.com",
       ws_url: "wss://#{id}.example.com/ws",
-      api_key_required: false,
-      rate_limit: 1000,
-      latency_target: 100 + priority * 10,
-      reliability: 0.99 - priority * 0.01
+      api_key_required: false
     }
   end
 

@@ -13,7 +13,7 @@ config :livechain, LivechainWeb.Endpoint,
   secret_key_base: "YourSecretKeyBaseHere" <> String.duplicate("a", 32)
 
 # Default provider selection strategy
-config :livechain, :provider_selection_strategy, :leaderboard
+config :livechain, :provider_selection_strategy, :cheapest
 
 # Default HTTP client adapter
 config :livechain, :http_client, Livechain.RPC.HttpClient.Finch

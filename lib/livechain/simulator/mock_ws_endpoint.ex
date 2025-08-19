@@ -51,9 +51,6 @@ defmodule Livechain.Simulator.MockWSEndpoint do
 
           # Provider characteristics
           provider_type: String.t(),
-          reliability: float(),
-          latency_target: non_neg_integer(),
-          rate_limit: non_neg_integer(),
 
           # Mock-specific fields
           mock_provider: pid() | nil,
@@ -83,9 +80,6 @@ defmodule Livechain.Simulator.MockWSEndpoint do
 
     # Provider characteristics
     provider_type: "public",
-    reliability: 0.95,
-    latency_target: 150,
-    rate_limit: 1000,
 
     # Mock-specific fields
     mock_provider: nil,

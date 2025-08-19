@@ -111,10 +111,7 @@ defmodule Livechain.Config.ChainConfigTest do
             type: "public",
             url: "https://test.example.com",
             ws_url: "wss://test.example.com",
-            api_key_required: false,
-            rate_limit: 1000,
-            latency_target: 100,
-            reliability: 0.99
+            api_key_required: false
           }
         ],
         connection: %ChainConfig.Connection{

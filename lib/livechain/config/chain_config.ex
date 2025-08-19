@@ -48,11 +48,8 @@ defmodule Livechain.Config.ChainConfig do
             # "paid" | "public" | "dedicated"
             type: String.t(),
             url: String.t(),
-            ws_url: String.t(),
+            ws_url: String.t() | nil,
             api_key_required: boolean(),
-            rate_limit: non_neg_integer(),
-            latency_target: non_neg_integer(),
-            reliability: float(),
             region: String.t() | nil
           }
 
@@ -64,9 +61,6 @@ defmodule Livechain.Config.ChainConfig do
       :url,
       :ws_url,
       :api_key_required,
-      :rate_limit,
-      :latency_target,
-      :reliability,
       :region
     ]
   end
@@ -94,13 +88,16 @@ defmodule Livechain.Config.ChainConfig do
             # min providers that must confirm
             min_confirmations: non_neg_integer(),
             # max concurrent providers to use
-            max_providers: non_neg_integer()
+            max_providers: non_neg_integer(),
+            # max cached messages (per chain)
+            max_cache_size: non_neg_integer()
           }
 
     defstruct [
       :deduplication_window,
       :min_confirmations,
-      :max_providers
+      :max_providers,
+      :max_cache_size
     ]
   end
 
@@ -138,8 +135,7 @@ defmodule Livechain.Config.ChainConfig do
     defmodule ProviderManagement do
       defstruct [
         :auto_failover,
-        :load_balancing,
-        :provider_rotation
+        :load_balancing
       ]
     end
 
@@ -221,6 +217,17 @@ defmodule Livechain.Config.ChainConfig do
   end
 
   @doc """
+  Gets providers that support WebSocket connections.
+  """
+  def get_ws_providers(chain_config) do
+    chain_config.providers
+    |> Enum.filter(fn provider -> 
+      provider_available?(provider) and not is_nil(provider.ws_url)
+    end)
+    |> Enum.sort_by(& &1.priority)
+  end
+
+  @doc """
   Gets a specific provider by ID.
   """
   def get_provider_by_id(chain_config, provider_id) do
@@ -291,9 +298,6 @@ defmodule Livechain.Config.ChainConfig do
         url: substitute_env_vars(provider_data["url"]),
         ws_url: substitute_env_vars(provider_data["ws_url"]),
         api_key_required: provider_data["api_key_required"],
-        rate_limit: provider_data["rate_limit"],
-        latency_target: provider_data["latency_target"],
-        reliability: provider_data["reliability"],
         region: provider_data["region"]
       }
     end)
@@ -311,7 +315,8 @@ defmodule Livechain.Config.ChainConfig do
     %Aggregation{
       deduplication_window: aggregation_data["deduplication_window"],
       min_confirmations: aggregation_data["min_confirmations"],
-      max_providers: aggregation_data["max_providers"]
+      max_providers: aggregation_data["max_providers"],
+      max_cache_size: aggregation_data["max_cache_size"]
     }
   end
 
@@ -350,8 +355,7 @@ defmodule Livechain.Config.ChainConfig do
   defp parse_provider_management(pm_data) do
     %Global.ProviderManagement{
       auto_failover: pm_data["auto_failover"],
-      load_balancing: pm_data["load_balancing"],
-      provider_rotation: pm_data["provider_rotation"]
+      load_balancing: pm_data["load_balancing"]
     }
   end
 
@@ -400,8 +404,8 @@ defmodule Livechain.Config.ChainConfig do
     end
   end
 
-  defp valid_provider?(%Provider{id: id, name: name, url: url, ws_url: ws_url})
-       when not is_nil(id) and not is_nil(name) and not is_nil(url) and not is_nil(ws_url) do
+  defp valid_provider?(%Provider{id: id, name: name, url: url})
+       when not is_nil(id) and not is_nil(name) and not is_nil(url) do
     true
   end
 

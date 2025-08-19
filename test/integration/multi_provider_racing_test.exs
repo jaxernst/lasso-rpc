@@ -40,26 +40,6 @@ defmodule Integration.MultiProviderRacingTest do
       {:ok, %{"jsonrpc" => "2.0", "id" => 1, "result" => result}}
     end)
 
-    # Start core dependencies if not already started
-    case Registry.start_link(
-           keys: :unique,
-           name: Livechain.Registry,
-           partitions: System.schedulers_online()
-         ) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    case Livechain.RPC.ProcessRegistry.start_link(name: Livechain.RPC.ProcessRegistry) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    case Livechain.Benchmarking.BenchmarkStore.start_link([]) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
     :ok
   end
 

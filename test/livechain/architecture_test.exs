@@ -18,35 +18,6 @@ defmodule Livechain.ArchitectureTest do
     import Mox
     stub(Livechain.RPC.HttpClientMock, :request, &MockHttpClient.request/4)
 
-    # Start core dependencies
-    Application.ensure_all_started(:phoenix)
-    Application.ensure_all_started(:telemetry)
-    Application.ensure_all_started(:phoenix_pubsub)
-    
-    # Start Registry if not already started
-    case Registry.start_link(keys: :unique, name: Livechain.Registry, partitions: System.schedulers_online()) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-    
-    # Start ProcessRegistry if not already started
-    case Livechain.RPC.ProcessRegistry.start_link(name: Livechain.RPC.ProcessRegistry) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-    
-    # Start ConfigStore if not already started
-    case Livechain.Config.ConfigStore.start_link([]) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    # Start ChainRegistry if not already started
-    case Livechain.RPC.ChainRegistry.start_link([]) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
     # Load test configuration
     {:ok, config} = ChainConfig.load_config("config/chains.yml")
 
@@ -220,7 +191,7 @@ defmodule Livechain.ArchitectureTest do
       assert is_map(config)
       # The config has 'chains' key and 'global' key
       assert Map.has_key?(config, :chains) or Map.has_key?(config, "chains")
-      
+
       # Test getting chain config
       {:ok, ethereum_config} = ChainConfig.get_chain_config(config, "ethereum")
       assert ethereum_config.chain_id == 1
@@ -231,13 +202,14 @@ defmodule Livechain.ArchitectureTest do
       # Test that we can interact with registry (may already be started)
       # Try to start it, but handle if already started
       case Livechain.RPC.ChainRegistry.start_link([]) do
-        {:ok, pid} -> 
+        {:ok, pid} ->
           assert is_pid(pid)
           GenServer.stop(pid)
-        {:error, {:already_started, pid}} -> 
+
+        {:error, {:already_started, pid}} ->
           assert is_pid(pid)
       end
-      
+
       # Get status without starting chains (to avoid hanging)
       status = Livechain.RPC.ChainRegistry.get_status()
       assert is_map(status)

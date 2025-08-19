@@ -35,7 +35,6 @@ defmodule Livechain.RPC.MessageAggregator do
               messages_forwarded: 0,
               messages_deduplicated: 0,
               providers_reporting: MapSet.new(),
-              avg_latency: 0,
               last_message_time: nil
   end
 

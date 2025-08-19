@@ -139,14 +139,16 @@ defmodule Livechain.RPC.ChainSupervisor do
 
   # Asynchronously start provider connections after supervisor is ready
   defp start_provider_connections_async(chain_name, chain_config) do
+    # TODO: This is an anti pattern
     # Give supervisor time to fully initialize
     Process.sleep(100)
-    # Start provider connections deterministically
-    available_providers = ChainConfig.get_available_providers(chain_config)
+
+    # Start WebSocket connections only for providers that support them
+    ws_providers = ChainConfig.get_ws_providers(chain_config)
     max_providers = chain_config.aggregation.max_providers
 
-    # Start up to max_providers connections, prioritizing by priority
-    providers_to_start = Enum.take(available_providers, max_providers)
+    # Start up to max_providers WS connections, prioritizing by priority
+    providers_to_start = Enum.take(ws_providers, max_providers)
 
     Enum.each(providers_to_start, fn provider ->
       # Start circuit breaker for this provider
@@ -156,7 +158,7 @@ defmodule Livechain.RPC.ChainSupervisor do
       start_provider_connection(chain_name, provider, chain_config)
     end)
 
-    Logger.info("Started #{length(providers_to_start)} provider connections for #{chain_name}")
+    Logger.info("Started #{length(providers_to_start)} WebSocket connections for #{chain_name} (#{length(ws_providers)} WS providers available)")
   end
 
   # Private functions

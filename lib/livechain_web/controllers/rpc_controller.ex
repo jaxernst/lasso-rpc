@@ -3,7 +3,7 @@ defmodule LivechainWeb.RPCController do
   Ethereum JSON-RPC controller providing endpoints for blockchain interactions.
 
   This controller acts as a smart proxy that:
-  - Forwards read-only RPC requests to the best-performing provider
+  - Forwards read-only RPC requests a provider based on a selected strategy
   - Routes requests based on real-time performance benchmarks
   - Provides automatic failover to healthy providers
   - Rejects subscription requests (use WebSocket for real-time events)
@@ -26,9 +26,8 @@ defmodule LivechainWeb.RPCController do
   use LivechainWeb, :controller
   require Logger
 
-  alias Livechain.RPC.{Selection, ChainSupervisor, ChainRegistry}
+  alias Livechain.RPC.{ChainRegistry, Failover}
   alias Livechain.Config.ConfigStore
-  alias Livechain.Benchmarking.BenchmarkStore
 
   @ws_only_methods [
     "eth_subscribe",
@@ -39,7 +38,6 @@ defmodule LivechainWeb.RPCController do
   Handle JSON-RPC requests for any supported chain.
   """
   def rpc(conn, params) do
-    # Debug: Log what parameters we actually receive
     Logger.info("RPC request received", params: inspect(params), path: conn.request_path)
 
     case Map.get(params, "chain_id") do
@@ -90,7 +88,7 @@ defmodule LivechainWeb.RPCController do
   defp maybe_publish_strategy_event(_chain, nil), do: :ok
 
   defp maybe_publish_strategy_event(chain, strategy) do
-    default = Application.get_env(:livechain, :provider_selection_strategy, :leaderboard)
+    default = Application.get_env(:livechain, :provider_selection_strategy, :cheapest)
 
     if strategy != default do
       Phoenix.PubSub.broadcast(
@@ -269,7 +267,7 @@ defmodule LivechainWeb.RPCController do
   end
 
   # Chain info
-  defp process_json_rpc_request(%{"method" => "eth_chainId", "params" => []}, chain, conn) do
+  defp process_json_rpc_request(%{"method" => "eth_chainId", "params" => []}, chain, _conn) do
     Logger.info("Getting chain ID", chain: chain)
 
     case get_chain_id(chain) do
@@ -355,18 +353,27 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
-
   defp unsupported_over_http?(method) do
     method in @ws_only_methods
   end
 
-  @doc """
-  Forward RPC request to the best-performing provider for the given chain.
-  Uses performance benchmarks to select the optimal provider.
-  Supports pluggable provider selection strategies via Application config:
-    config :livechain, :provider_selection_strategy, :leaderboard | :priority | :round_robin
-  """
-  defp forward_rpc_request(chain, method, params, opts \\ []) do
+  defp forward_rpc_request(chain, method, params, opts) do
+    with {:ok, strategy} <- extract_strategy(opts),
+         {:ok, region_filter} <- extract_region_filter(opts) do
+      failover_opts = [
+        strategy: strategy,
+        protocol: :http,
+        region_filter: region_filter
+      ]
+      
+      Failover.execute_with_failover(chain, method, params, failover_opts)
+    else
+      {:error, reason} ->
+        {:error, %{code: -32000, message: "Failed to extract request options: #{reason}"}}
+    end
+  end
+
+  defp extract_strategy(opts) do
     strategy =
       case Keyword.get(opts, :strategy) do
         nil ->
@@ -379,6 +386,10 @@ defmodule LivechainWeb.RPCController do
           s
       end
 
+    {:ok, strategy}
+  end
+
+  defp extract_region_filter(opts) do
     region_filter =
       case Keyword.get(opts, :conn) do
         %Plug.Conn{} = conn ->
@@ -388,347 +399,30 @@ defmodule LivechainWeb.RPCController do
           nil
       end
 
-    exclude_providers = []
-    selection_opts = [strategy: strategy, protocol: :http, exclude: exclude_providers]
-    
-    case Selection.pick_provider(chain, method, selection_opts) do
-      {:ok, provider_id} ->
-        start_time = System.monotonic_time(:millisecond)
-
-        :telemetry.execute([:livechain, :rpc, :request, :start], %{count: 1}, %{
-          chain: chain,
-          method: method,
-          strategy: strategy,
-          provider_id: provider_id
-        })
-
-        case ChainSupervisor.forward_rpc_request(chain, provider_id, method, params) do
-          {:ok, result} ->
-            duration_ms = System.monotonic_time(:millisecond) - start_time
-            record_rpc_success(chain, provider_id, method, duration_ms)
-
-            publish_routing_decision(
-              chain,
-              method,
-              strategy,
-              provider_id,
-              duration_ms,
-              :success,
-              0
-            )
-
-            :telemetry.execute(
-              [:livechain, :rpc, :request, :stop],
-              %{duration_ms: duration_ms},
-              %{
-                chain: chain,
-                method: method,
-                strategy: strategy,
-                provider_id: provider_id,
-                result: :success,
-                failovers: 0
-              }
-            )
-
-            {:ok, result}
-
-          {:error, reason} ->
-            duration_ms = System.monotonic_time(:millisecond) - start_time
-            record_rpc_failure(chain, provider_id, method, reason, duration_ms)
-            publish_routing_decision(chain, method, strategy, provider_id, duration_ms, :error, 0)
-
-            :telemetry.execute(
-              [:livechain, :rpc, :request, :stop],
-              %{duration_ms: duration_ms},
-              %{
-                chain: chain,
-                method: method,
-                strategy: strategy,
-                provider_id: provider_id,
-                result: :error,
-                failovers: 0
-              }
-            )
-
-            case try_failover_with_reporting(
-                   chain,
-                   method,
-                   params,
-                   strategy,
-                   [provider_id],
-                   1,
-                   region_filter
-                 ) do
-              {:ok, result} -> {:ok, result}
-              {:error, error} -> {:error, error}
-            end
-        end
-
-      {:error, reason} ->
-        {:error, %{code: -32000, message: "No available providers: #{reason}"}}
-    end
+    {:ok, region_filter}
   end
 
-  defp publish_routing_decision(
-         chain,
-         method,
-         strategy,
-         provider_id,
-         duration_ms,
-         result,
-         failovers
-       ) do
-    Phoenix.PubSub.broadcast(
-      Livechain.PubSub,
-      "routing:decisions",
-      %{
-        ts: System.system_time(:millisecond),
-        chain: chain,
-        method: method,
-        strategy: to_string(strategy),
-        provider_id: provider_id,
-        duration_ms: duration_ms,
-        result: result,
-        failover_count: failovers
-      }
-    )
-  end
 
-  defp try_failover_with_reporting(
-         chain,
-         method,
-         params,
-         strategy,
-         excluded_providers,
-         attempt,
-         region_filter
-       ) do
-    max_attempts = Livechain.Config.MethodPolicy.max_failovers(method)
-
-    case Selection.get_available_providers(chain, protocol: :http, exclude: excluded_providers) do
-      {:ok, []} ->
-        {:error, %{code: -32000, message: "All providers failed for method: #{method}"}}
-
-      {:ok, [next_provider | _]} ->
-        if attempt > max_attempts do
-          {:error, %{code: -32000, message: "Failover limit reached for method: #{method}"}}
-        else
-          Logger.warning("Failing over to provider",
-            chain: chain,
-            method: method,
-            provider: next_provider
-          )
-
-          start_time = System.monotonic_time(:millisecond)
-
-          case ChainSupervisor.forward_rpc_request(chain, next_provider, method, params) do
-                {:ok, result} ->
-                  duration_ms = System.monotonic_time(:millisecond) - start_time
-                  record_rpc_success(chain, next_provider, method, duration_ms)
-
-                  publish_routing_decision(
-                    chain,
-                    method,
-                    strategy,
-                    next_provider,
-                    duration_ms,
-                    :success,
-                    attempt
-                  )
-
-                  :telemetry.execute(
-                    [:livechain, :rpc, :request, :stop],
-                    %{duration_ms: duration_ms},
-                    %{
-                      chain: chain,
-                      method: method,
-                      strategy: strategy,
-                      provider_id: next_provider,
-                      result: :success,
-                      failovers: attempt
-                    }
-                  )
-
-                  {:ok, result}
-
-                {:error, reason} ->
-                  duration_ms = System.monotonic_time(:millisecond) - start_time
-                  record_rpc_failure(chain, next_provider, method, reason, duration_ms)
-
-                  publish_routing_decision(
-                    chain,
-                    method,
-                    strategy,
-                    next_provider,
-                    duration_ms,
-                    :error,
-                    attempt
-                  )
-
-                  :telemetry.execute(
-                    [:livechain, :rpc, :request, :stop],
-                    %{duration_ms: duration_ms},
-                    %{
-                      chain: chain,
-                      method: method,
-                      strategy: strategy,
-                      provider_id: next_provider,
-                      result: :error,
-                      failovers: attempt
-                    }
-                  )
-
-                  try_failover_with_reporting(
-                    chain,
-                    method,
-                    params,
-                    strategy,
-                    [next_provider | excluded_providers],
-                    attempt + 1,
-                    region_filter
-                  )
-              end
-        end
-
-      {:error, reason} ->
-        {:error, %{code: -32000, message: "Failed to get available providers: #{reason}"}}
-    end
-  end
 
   defp default_provider_strategy do
-    Application.get_env(:livechain, :provider_selection_strategy, :leaderboard)
+    Application.get_env(:livechain, :provider_selection_strategy, :cheapest)
   end
 
   def parse_strategy(nil), do: nil
 
   def parse_strategy(str) when is_binary(str) do
     case String.downcase(str) do
-      "leaderboard" -> :leaderboard
       "priority" -> :priority
       "round_robin" -> :round_robin
-      "latency" -> :latency
-      "latency_based" -> :latency
-      # "fastest" is an alias for latency-based selection
-      "fastest" -> :latency
+      "fastest" -> :fastest
       "cheapest" -> :cheapest
       _ -> nil
     end
   end
 
-
-  # Failover and benchmarking helpers remain the same
-
-  @doc """
-  Try failover to alternative providers if the primary provider fails.
-  """
-  defp try_failover(chain, method, params, excluded_providers) do
-    max_attempts = Livechain.Config.MethodPolicy.max_failovers(method)
-
-    case Selection.get_available_providers(chain, protocol: :http, exclude: excluded_providers) do
-      {:ok, []} ->
-        {:error, %{code: -32000, message: "All providers failed for method: #{method}"}}
-
-      {:ok, [next_provider | _]} ->
-        if length(excluded_providers) > max_attempts do
-          {:error, %{code: -32000, message: "Failover limit reached for method: #{method}"}}
-        else
-          Logger.warning("Failing over to provider",
-            chain: chain,
-            method: method,
-            provider: next_provider
-          )
-
-          start_time = System.monotonic_time(:millisecond)
-
-          case ChainSupervisor.forward_rpc_request(chain, next_provider, method, params) do
-            {:ok, result} ->
-              duration_ms = System.monotonic_time(:millisecond) - start_time
-              record_rpc_success(chain, next_provider, method, duration_ms)
-
-              publish_routing_decision(
-                chain,
-                method,
-                :round_robin,
-                next_provider,
-                duration_ms,
-                :success,
-                length(excluded_providers)
-              )
-
-              :telemetry.execute(
-                [:livechain, :rpc, :request, :stop],
-                %{duration_ms: duration_ms},
-                %{
-                  chain: chain,
-                  method: method,
-                  provider_id: next_provider,
-                  result: :success,
-                  failovers: length(excluded_providers)
-                }
-              )
-
-              {:ok, result}
-
-            {:error, reason} ->
-              duration_ms = System.monotonic_time(:millisecond) - start_time
-              record_rpc_failure(chain, next_provider, method, reason, duration_ms)
-
-              publish_routing_decision(
-                chain,
-                method,
-                :round_robin,
-                next_provider,
-                duration_ms,
-                :error,
-                length(excluded_providers)
-              )
-
-              :telemetry.execute(
-                [:livechain, :rpc, :request, :stop],
-                %{duration_ms: duration_ms},
-                %{
-                  chain: chain,
-                  method: method,
-                  provider_id: next_provider,
-                  result: :error,
-                  failovers: length(excluded_providers)
-                }
-              )
-
-              try_failover(chain, method, params, [next_provider | excluded_providers])
-          end
-        end
-
-      {:error, reason} ->
-        {:error, %{code: -32000, message: "Failed to get available providers: #{reason}"}}
-    end
-  end
-
-  @doc """
-  Record successful RPC call for performance benchmarking.
-  """
-  defp record_rpc_success(chain, provider_id, method, duration_ms) do
-    # Record in BenchmarkStore for historical analysis
-    BenchmarkStore.record_rpc_call(chain, provider_id, method, duration_ms, :success)
-
-    # Update ProviderPool with real-time metrics for provider selection
-    Livechain.RPC.ProviderPool.report_success(chain, provider_id, duration_ms)
-  end
-
-  @doc """
-  Record failed RPC call for performance benchmarking.
-  """
-  defp record_rpc_failure(chain, provider_id, method, reason, duration_ms) do
-    # Record in BenchmarkStore for historical analysis
-    BenchmarkStore.record_rpc_call(chain, provider_id, method, duration_ms, :error)
-
-    # Update ProviderPool with failure information for provider selection
-    Livechain.RPC.ProviderPool.report_failure(chain, provider_id, reason)
-  end
-
   defp resolve_chain_name(chain_identifier) do
     all_chains = ConfigStore.get_all_chains()
-    
+
     cond do
       is_binary(chain_identifier) and Map.has_key?(all_chains, chain_identifier) ->
         {:ok, chain_identifier}
@@ -785,6 +479,4 @@ defmodule LivechainWeb.RPCController do
         {:error, "Chain not configured: #{chain_name}"}
     end
   end
-
-
 end

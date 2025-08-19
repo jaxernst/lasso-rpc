@@ -1,8 +1,8 @@
 ### Vision: “Lasso RPC” Interactive System Explorer
 
-A modern, tab-based LiveView that feels like an exploratory dashboard: fast, animated, color-rich, and informative. Retain the current gridded background and card aesthetic; elevate with clear information hierarchy, interactive simulations, and real-time motion.
+A modern Phoenix LiveView app that feels like an exploratory dashboard: fast, animated, color-rich, and informative. Retain the current gridded background and card aesthetic; elevate with clear information hierarchy, interactive simulations, and real-time motion.
 
-### App Structure (Tabs)
+### App Structure (wip - can be updated as we go)
 
 - Overview
 - Network Explorer
@@ -11,7 +11,7 @@ A modern, tab-based LiveView that feels like an exploratory dashboard: fast, ani
 - Simulator
 - System
 
-### Tab Specs
+### Tab Specs (proposal)
 
 - Overview
 
@@ -176,26 +176,8 @@ Wire Telemetry to ETS aggregators for:
 
 - Keep the gridded background; add subtle animated gradients per card header on state change (success: emerald glow; error: rose; degraded: amber).
 - Use badges for chain, method, strategy; align with current color palette.
-- Sparklines: small SVGs (no heavy chart libs) to keep it snappy.
-- Batching: buffer incoming PubSub and flush at 250ms for smoothness.
-- List bounds: cap to 100 items; add filter chips (chain/method/provider) at the top of Streams.
-
-### Technical Tasks (Incremental)
-
-- Rename header branding to “Lasso RPC” in `lib/livechain_web/live/dashboard.ex`.
-- Add PubSub topics and emitters in:
-  - HTTP proxy path (`LivechainWeb.RPCController`/`Livechain.RPC.Endpoint`) for RPC decisions.
-  - WS subscription path (`Livechain.RPC.WSEndpoint`/`WSConnection`) for block/log events and client connections.
-  - Circuit breaker (`Livechain.RPC.CircuitBreaker`) to publish state changes.
-- Add Telemetry spans in HTTP/WS forwarding and aggregate to ETS.
-- Expand `NetworkTopology` props to accept metrics and circuit state; add click → drawer detail.
-- Implement Frontend Simulator (JS):
-  - `assets/js/lasso_simulator.js` – functions: `startHttpLoad(opts)`, `stopHttpLoad()`, `startWsLoad(opts)`, `stopWsLoad()`, `activeStats()`;
-  - Viem (or fetch/ws) to POST `/rpc/:chain` and open WS `ws://.../rpc/:chain` with `eth_subscribe`.
-  - LiveView Hook `SimulatorControl` to bridge UI controls and JS.
-- Optionally retain `SimulatorServer` for failure injection only.
-- Extend `Dashboard` LiveView:
-  - Wire Simulator tab buttons/sliders to Hook events; reflect client-side counters.
+- Sparklines: small SVGs to keep it snappy.
+- Batching: buffer incoming PubSub and flush at 25
 
 ### Mapping “What” → “How” → Source
 
