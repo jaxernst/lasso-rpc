@@ -304,7 +304,14 @@ defmodule Livechain.RPC.ProviderPool do
     # Find the provider that went down
     case Enum.find(state.providers, fn {_id, provider} -> provider.pid == pid end) do
       {provider_id, provider} ->
-        Logger.warning("Provider #{provider_id} process died: #{inspect(reason)}")
+        case reason do
+          {exception, stacktrace} when is_list(stacktrace) ->
+            formatted = Exception.format(:error, exception, stacktrace)
+            Logger.error("Provider #{provider_id} process crashed\n" <> formatted)
+
+          other ->
+            Logger.warning("Provider #{provider_id} process died: #{inspect(other)}")
+        end
 
         new_provider = %{
           provider

@@ -104,24 +104,9 @@ chains:
     block_time: 2100
 
     providers:
-      - id: "polygon_ankr"
-        name: "Ankr Polygon"
-        priority: 1
-        type: "public"
-        url: "https://rpc.ankr.com/polygon"
-        api_key_required: false
-
-      - id: "polygon_publicnode"
-        name: "PublicNode Polygon"
-        priority: 2
-        type: "public"
-        url: "https://polygon-rpc.publicnode.com"
-        ws_url: "wss://polygon-rpc.publicnode.com"
-        api_key_required: false
-
       - id: "polygon_blastapi"
         name: "BlastAPI Polygon"
-        priority: 3
+        priority: 1
         type: "public"
         url: "https://polygon-mainnet.public.blastapi.io"
         ws_url: "wss://polygon-mainnet.public.blastapi.io"

@@ -101,7 +101,7 @@ defmodule Livechain.RPC.ChainRegistry do
                     %{
                       id: provider.id,
                       name: provider.name,
-                      status: Map.get(provider, :status, :unknown),
+                      status: normalize_provider_status(Map.get(provider, :status, :unknown)),
                       chain: chain_name,
                       reconnect_attempts: Map.get(provider, :consecutive_failures, 0),
                       subscriptions: Map.get(provider, :subscriptions, 0),
@@ -133,6 +133,16 @@ defmodule Livechain.RPC.ChainRegistry do
       {:connection_status_update, connections}
     )
   end
+
+  # Private helper functions
+
+  # Normalize ProviderPool statuses to topology-expected statuses
+  defp normalize_provider_status(:healthy), do: :connected
+  defp normalize_provider_status(:unhealthy), do: :disconnected
+  defp normalize_provider_status(:connecting), do: :connecting
+  defp normalize_provider_status(:disconnected), do: :disconnected
+  defp normalize_provider_status(:rate_limited), do: :connecting
+  defp normalize_provider_status(_), do: :disconnected
 
   ## GenServer Implementation
 

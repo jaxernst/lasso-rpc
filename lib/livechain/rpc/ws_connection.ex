@@ -20,6 +20,7 @@ defmodule Livechain.RPC.WSConnection do
 
   alias Livechain.RPC.WSEndpoint
   alias Livechain.RPC.CircuitBreaker
+  alias Livechain.RPC.ProviderPool
   alias Livechain.Benchmarking.BenchmarkStore
 
   # Client API
@@ -114,16 +115,9 @@ defmodule Livechain.RPC.WSConnection do
   def handle_continue(:connect, state) do
     case connect_to_websocket(state.endpoint) do
       {:ok, connection} ->
-        Logger.info("Connected to WebSocket: #{state.endpoint.name}")
         Process.monitor(connection)
-
-        # Report successful connection to circuit breaker
-        CircuitBreaker.record_success(state.endpoint.id)
-
-        state = %{state | connection: connection, connected: true, reconnect_attempts: 0}
-        broadcast_status_change(state, :connected)
-        state = schedule_heartbeat(state)
-        state = send_pending_messages(state)
+        state = %{state | connection: connection}
+        # Connection success will be handled by {:ws_connected} message
         {:noreply, state}
 
       {:error, reason} ->
@@ -144,10 +138,8 @@ defmodule Livechain.RPC.WSConnection do
         )
 
         Process.monitor(pid)
-        state = %{state | connection: pid, connected: true, reconnect_attempts: 0}
-        broadcast_status_change(state, :connected)
-        state = schedule_heartbeat(state)
-        state = send_pending_messages(state)
+        state = %{state | connection: pid}
+        # Will get a ws_connected message shortly
         {:noreply, state}
     end
   end
@@ -203,6 +195,58 @@ defmodule Livechain.RPC.WSConnection do
   end
 
   @impl true
+  def handle_info({:ws_connected}, state) do
+    Logger.info("Connected to WebSocket: #{state.endpoint.name}")
+
+    # Report successful connection to circuit breaker
+    CircuitBreaker.record_success(state.endpoint.id)
+
+    # Report successful connection to provider pool for status tracking
+    ProviderPool.report_success(state.chain_name, state.endpoint.id, 0)
+
+    state = %{state | connected: true, reconnect_attempts: 0}
+    broadcast_status_change(state, :connected)
+    state = schedule_heartbeat(state)
+    state = send_pending_messages(state)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:ws_message, decoded}, state) do
+    case handle_websocket_message(decoded, state) do
+      {:ok, new_state} -> {:noreply, new_state}
+      new_state -> {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info({:ws_error, error}, state) do
+    Logger.error("WebSocket error: #{inspect(error)}")
+    CircuitBreaker.record_failure(state.endpoint.id)
+    ProviderPool.report_failure(state.chain_name, state.endpoint.id, error)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:ws_closed, code, reason}, state) do
+    Logger.info("WebSocket closed: #{code} - #{reason}")
+    state = %{state | connected: false, connection: nil}
+    broadcast_status_change(state, :disconnected)
+    state = schedule_reconnect(state)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:ws_disconnected, reason}, state) do
+    Logger.warning("WebSocket disconnected: #{inspect(reason)}")
+    ProviderPool.report_failure(state.chain_name, state.endpoint.id, {:disconnect, reason})
+    state = %{state | connected: false, connection: nil}
+    broadcast_status_change(state, :disconnected)
+    state = schedule_reconnect(state)
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info({:heartbeat}, state) do
     if state.connected do
       # Send ping to keep connection alive
@@ -227,64 +271,32 @@ defmodule Livechain.RPC.WSConnection do
     # Report disconnect as failure to circuit breaker
     CircuitBreaker.record_failure(state.endpoint.id)
 
+    case reason do
+      {exception, stacktrace} when is_list(stacktrace) ->
+        formatted = Exception.format(:error, exception, stacktrace)
+        Logger.error("WebSocket #{state.endpoint.id} crash detail\n" <> formatted)
+
+      _ ->
+        :ok
+    end
+
     state = %{state | connected: false, connection: nil}
     broadcast_status_change(state, :disconnected)
     state = schedule_reconnect(state)
     {:noreply, state}
   end
 
-  # WebSocket event handlers (WebSockex callbacks)
-
-  def handle_connect(_conn, state) do
-    Logger.info("WebSocket connected: #{state.endpoint.name}")
-    {:ok, state}
-  end
-
-  def handle_frame({:text, message}, state) do
-    case Jason.decode(message) do
-      {:ok, decoded} ->
-        handle_websocket_message(decoded, state)
-
-      {:error, reason} ->
-        Logger.error("Failed to decode WebSocket message: #{reason}")
-        {:ok, state}
-    end
-  end
-
-  def handle_frame({:binary, data}, state) do
-    Logger.debug("Received binary frame: #{byte_size(data)} bytes")
-    {:ok, state}
-  end
-
-  def handle_frame({:ping, payload}, state) do
-    Logger.debug("Received ping, sending pong")
-    {:reply, {:pong, payload}, state}
-  end
-
-  def handle_frame({:pong, _payload}, state) do
-    Logger.debug("Received pong")
-    {:ok, state}
-  end
-
-  def handle_frame({:close, code, reason}, state) do
-    Logger.info("WebSocket closed: #{code} - #{reason}")
-    {:ok, state}
-  end
-
-  def handle_disconnect(%{reason: reason}, state) do
-    Logger.warning("WebSocket disconnected: #{inspect(reason)}")
-    state = %{state | connected: false, connection: nil}
-    state = schedule_reconnect(state)
-    {:reconnect, state}
-  end
+  # WebSocket event handlers - these are now handled by WSHandler
+  # and communicated back via messages
 
   # Private functions
 
   defp connect_to_websocket(endpoint) do
+    # Start a separate WebSocket handler process
     WebSockex.start_link(
       endpoint.ws_url,
-      __MODULE__,
-      %{endpoint: endpoint}
+      Livechain.RPC.WSHandler,
+      %{endpoint: endpoint, parent: self()}
     )
   end
 

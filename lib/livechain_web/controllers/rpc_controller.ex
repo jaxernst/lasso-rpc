@@ -26,7 +26,7 @@ defmodule LivechainWeb.RPCController do
   use LivechainWeb, :controller
   require Logger
 
-  alias Livechain.RPC.{ChainRegistry, Failover}
+  alias Livechain.RPC.{ChainRegistry, Failover, Error}
   alias Livechain.Config.ConfigStore
 
   @ws_only_methods [
@@ -127,40 +127,20 @@ defmodule LivechainWeb.RPCController do
         json(conn, response)
 
       {:error, error} ->
-        # Handle both map-style errors and tuple-style errors from HTTP client
-        {code, message} =
+        # Normalize error to JSON-RPC format
+        normalized_error =
           case error do
-            %{code: code, message: message} when not is_nil(code) and not is_nil(message) ->
-              {code, message}
-
-            {:client_error, msg} ->
-              {-32600, "Client error: #{msg}"}
-
-            {:server_error, msg} ->
-              {-32603, "Server error: #{msg}"}
-
-            {:rate_limit, msg} ->
-              {-32029, "Rate limited: #{msg}"}
-
-            {:network_error, msg} ->
-              {-32603, "Network error: #{msg}"}
-
-            {:decode_error, msg} ->
-              {-32700, "Parse error: #{msg}"}
-
-            _ ->
-              {-32603, "Internal error"}
+            %{code: _, message: _} -> error
+            error_tuple -> Error.to_json_rpc(error_tuple)
           end
 
-        error_data = %{code: code, message: message}
-
-        # Only include data field if it exists
+        # Build error response with required fields and optional data
         error_data =
-          if Map.has_key?(error, :data) do
-            Map.put(error_data, :data, error.data)
-          else
-            error_data
-          end
+          %{
+            code: normalized_error[:code] || -32603,
+            message: normalized_error[:message] || "Internal error"
+          }
+          |> Map.merge(Map.take(normalized_error, [:data]))
 
         response = %{
           jsonrpc: "2.0",
