@@ -9,6 +9,7 @@ defmodule Livechain.RPC.CircuitBreaker do
 
   use GenServer
   require Logger
+  alias Livechain.RPC.ErrorClassifier
 
   defstruct [
     :provider_id,
@@ -185,10 +186,47 @@ defmodule Livechain.RPC.CircuitBreaker do
   defp execute_call(fun, state) do
     try do
       result = fun.()
-      handle_success(result, state)
+      classify_and_handle_result(result, state)
     catch
       kind, error ->
         handle_failure({kind, error}, state)
+    end
+  end
+
+  defp classify_and_handle_result(result, state) do
+    case result do
+      {:ok, value} ->
+        handle_success(value, state)
+
+      {:error, reason} ->
+        case ErrorClassifier.classify_error(reason) do
+          :infrastructure_failure ->
+            handle_failure(reason, state)
+
+          :user_error ->
+            # User/client errors don't affect circuit breaker state
+            handle_non_breaker_error(result, state)
+        end
+
+      other ->
+        # Any other return value is treated as success for backwards compatibility
+        handle_success(other, state)
+    end
+  end
+
+  defp handle_non_breaker_error(error_result, state) do
+    # User errors don't change circuit breaker state
+    case state.state do
+      :closed ->
+        {:reply, error_result, state}
+
+      :half_open ->
+        # In half_open, user errors are "neutral" - don't count as success or failure
+        {:reply, error_result, state}
+
+      :open ->
+        # This shouldn't happen since we check circuit state before calling execute_call
+        {:reply, {:error, :circuit_open}, state}
     end
   end
 

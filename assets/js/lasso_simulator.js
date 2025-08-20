@@ -1,5 +1,6 @@
 let httpStop = null;
 let wsSockets = [];
+let availableChains = [];
 let stats = {
   http: { success: 0, error: 0, avgLatencyMs: 0, inflight: 0 },
   ws: { open: 0 },
@@ -14,8 +15,25 @@ function updateAvg(avg, count, value) {
   return avg + (value - avg) / n;
 }
 
+export function setAvailableChains(chains) {
+  availableChains = chains;
+  console.log("Simulator: Set available chains to:", availableChains);
+}
+
+export function getAvailableChains() {
+  return availableChains;
+}
+
+function getDefaultChains() {
+  // Use chain IDs from available chains, fallback to ethereum if none available
+  if (availableChains && availableChains.length > 0) {
+    return availableChains.map(chain => chain.id);
+  }
+  return ["1"]; // Ethereum mainnet as fallback
+}
+
 export function startHttpLoad({
-  chains = ["ethereum"],
+  chains = getDefaultChains(),
   methods = ["eth_blockNumber"],
   rps = 5,
   concurrency = 4,
@@ -105,7 +123,7 @@ export function stopHttpLoad() {
 }
 
 export function startWsLoad({
-  chains = ["ethereum"],
+  chains = getDefaultChains(),
   connections = 2,
   topics = ["newHeads"],
   durationMs = 30000,

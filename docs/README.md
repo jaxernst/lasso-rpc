@@ -12,7 +12,7 @@ High-performance, scalable, and fault tolerant RPC orchestration service for EVM
 - WS + HTTP JSON-RPC proxy to support all standard readonly rpc methods supported by providers
 - Passive provider benchmarking on a per-chain, per JSON rpc method basis
 - Support for provider 'racing' to for maximally low latency modes ('fastest response possible' mode)
-- Live dashboard with deep system insights, live chain info + status, provider performance metrics, and system load simulation hub
+- Live dashboard with deep system insights, live chain info + status, live RPC actvity streams, provider performance metrics, and an interactive client load test/simulation
 
 ## Usage
 

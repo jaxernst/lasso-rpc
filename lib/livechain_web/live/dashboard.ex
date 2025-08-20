@@ -1,7 +1,8 @@
 defmodule LivechainWeb.Dashboard do
   use LivechainWeb, :live_view
+  require Logger
 
-  alias Livechain.RPC.WSSupervisor
+  alias Livechain.RPC.ChainRegistry
   alias LivechainWeb.NetworkTopology
 
   @impl true
@@ -56,10 +57,12 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:sampler_running, false)
       |> assign(:sampler_ref, nil)
       |> assign(:vm_metrics, %{})
+      |> assign(:available_chains, get_available_chains())
       |> assign(:sim_stats, %{
         http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0},
         ws: %{open: 0}
       })
+      |> fetch_connections()
 
     {:ok, initial_state}
   end
@@ -260,13 +263,7 @@ defmodule LivechainWeb.Dashboard do
             <.tab_switcher
               id="main-tabs"
               tabs={[
-                %{id: "overview", label: "Overview", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
-                %{
-                  id: "network",
-                  label: "Network Explorer",
-                  icon: "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3"
-                },
-                %{id: "streams", label: "Streams", icon: "M15 4m0 13V4m-6 3l6-3"},
+                %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
                 %{id: "benchmarks", label: "Benchmarks", icon: "M3 3h18M9 7l6-3M9 17l6-3"},
                 %{id: "simulator", label: "Simulator", icon: "M4 6h16M4 10h16M4 14h16"},
                 %{id: "system", label: "System", icon: "M15 4m0 13V4m-6 3l6-3"}
@@ -281,19 +278,8 @@ defmodule LivechainWeb.Dashboard do
       <div class="grid-pattern flex-1 overflow-hidden">
         <%= case @active_tab do %>
           <% "overview" -> %>
-            <.overview_tab_content
+            <.dashboard_tab_content
               connections={@connections}
-              routing_events={@routing_events}
-              provider_events={@provider_events}
-            />
-          <% "network" -> %>
-            <.network_tab_content
-              connections={@connections}
-              selected_chain={@selected_chain}
-              selected_provider={@selected_provider}
-            />
-          <% "streams" -> %>
-            <.streams_tab_content
               routing_events={@routing_events}
               provider_events={@provider_events}
             />
@@ -304,6 +290,7 @@ defmodule LivechainWeb.Dashboard do
               demo_running={@demo_running}
               sampler_running={@sampler_running}
               sim_stats={@sim_stats}
+              available_chains={@available_chains}
             />
           <% "system" -> %>
             <.metrics_tab_content
@@ -319,13 +306,13 @@ defmodule LivechainWeb.Dashboard do
     """
   end
 
-  def overview_tab_content(assigns) do
+  def dashboard_tab_content(assigns) do
     ~H"""
     <div class="flex h-full w-full flex-col gap-4 p-4">
       <!-- Topology and quick stats -->
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3 lg:col-span-2">
-          <div class="mb-2 text-sm font-semibold text-gray-300">Network topology</div>
+          <div class="mb-2 text-sm font-semibold text-gray-300">Chains</div>
           <NetworkTopology.nodes_display
             id="network-topology"
             connections={@connections}
@@ -336,25 +323,12 @@ defmodule LivechainWeb.Dashboard do
             on_test_connection="test_connection"
           />
         </div>
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-          <div class="mb-2 text-sm font-semibold text-gray-300">Quick stats</div>
-          <div class="space-y-1 text-sm text-gray-400">
-            <div>Connections: <span class="text-emerald-300">{length(@connections)}</span></div>
-            <div>
-              Routing events (last 100): <span class="text-sky-300">{length(@routing_events)}</span>
-            </div>
-            <div>
-              Provider events (last 100):
-              <span class="text-yellow-300">{length(@provider_events)}</span>
-            </div>
-          </div>
-        </div>
       </div>
       
     <!-- Feeds -->
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-          <div class="mb-2 text-sm font-semibold text-gray-300">Routing decisions</div>
+          <div class="mb-2 text-sm font-semibold text-gray-300">RPC Call Stream</div>
           <div class="h-64 overflow-auto">
             <%= for e <- @routing_events do %>
               <div class="mb-1 text-xs text-gray-400">
@@ -367,70 +341,6 @@ defmodule LivechainWeb.Dashboard do
         <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
           <div class="mb-2 text-sm font-semibold text-gray-300">Provider pool events</div>
           <div class="h-64 overflow-auto">
-            <%= for e <- @provider_events do %>
-              <div class="mb-1 text-xs text-gray-400">
-                <span class="text-gray-500">[{e.ts}]</span>
-                chain=<span class="text-purple-300"><%= e.chain %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> event=<span class="text-orange-300"><%= e.event %></span>
-              </div>
-            <% end %>
-          </div>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  def network_tab_content(assigns) do
-    ~H"""
-    <div class="flex h-full w-full flex-col gap-4 p-4">
-      <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3 lg:col-span-2">
-          <div class="mb-2 text-sm font-semibold text-gray-300">Network topology</div>
-          <NetworkTopology.nodes_display
-            id="network-topology"
-            connections={@connections}
-            selected_chain={@selected_chain}
-            selected_provider={@selected_provider}
-            on_chain_select="select_chain"
-            on_provider_select="select_provider"
-            on_test_connection="test_connection"
-          />
-        </div>
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-          <div class="mb-2 text-sm font-semibold text-gray-300">Details</div>
-          <div class="text-xs text-gray-400">
-            <div>
-              Selected chain: <span class="text-purple-300">{@selected_chain || "(none)"}</span>
-            </div>
-            <div>
-              Selected provider:
-              <span class="text-emerald-300">{@selected_provider || "(none)"}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  def streams_tab_content(assigns) do
-    ~H"""
-    <div class="flex h-full w-full flex-col gap-4 p-4">
-      <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-          <div class="mb-2 text-sm font-semibold text-gray-300">RPC call stream</div>
-          <div class="h-[32rem] overflow-auto">
-            <%= for e <- @routing_events do %>
-              <div class="mb-1 text-xs text-gray-400">
-                <span class="text-gray-500">[{e.ts}]</span>
-                chain=<span class="text-purple-300"><%= e.chain %></span> method=<span class="text-sky-300"><%= e.method %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> dur=<span class="text-yellow-300"><%= e.duration_ms %>ms</span> result=<span><%= e.result %></span> failovers=<span><%= e.failovers %></span>
-              </div>
-            <% end %>
-          </div>
-        </div>
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-          <div class="mb-2 text-sm font-semibold text-gray-300">System event stream</div>
-          <div class="h-[32rem] overflow-auto">
             <%= for e <- @provider_events do %>
               <div class="mb-1 text-xs text-gray-400">
                 <span class="text-gray-500">[{e.ts}]</span>
@@ -464,32 +374,19 @@ defmodule LivechainWeb.Dashboard do
       phx-hook="SimulatorControl"
       class="flex h-full w-full flex-col gap-4 p-4"
     >
-      <div class="flex items-center justify-between">
-        <div class="flex gap-2">
-          <button
-            phx-click="start_demo"
-            disabled={@demo_running}
-            class="rounded bg-emerald-600 px-3 py-1 text-white disabled:opacity-50"
-          >
-            Start Demo
-          </button>
-          <button
-            phx-click="stop_demo"
-            disabled={!@demo_running}
-            class="rounded bg-rose-600 px-3 py-1 text-white disabled:opacity-50"
-          >
-            Stop Demo
-          </button>
-          <button phx-click="refresh_connections" class="rounded bg-slate-700 px-3 py-1 text-white">
-            Refresh Connections
-          </button>
+      <!-- Available Chains Info -->
+      <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
+        <div class="mb-2 text-sm font-semibold text-gray-300">Available Chains</div>
+        <div class="flex flex-wrap gap-2">
+          <%= for chain <- @available_chains do %>
+            <span class="inline-flex items-center rounded-full bg-purple-100 px-3 py-0.5 text-xs font-medium text-purple-800">
+              {chain.display_name} (ID: {chain.id})
+            </span>
+          <% end %>
         </div>
-        <div class="text-sm text-gray-400">
-          Demo status:
-          <span class={[(@demo_running && "text-emerald-400") || "text-red-400"]}>
-            {if @demo_running, do: "running", else: "stopped"}
-          </span>
-        </div>
+        <%= if length(@available_chains) == 0 do %>
+          <div class="text-sm text-gray-400">No chains configured</div>
+        <% end %>
       </div>
 
       <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -502,7 +399,10 @@ defmodule LivechainWeb.Dashboard do
             <button phx-click="sim_http_stop" class="rounded bg-gray-700 px-3 py-1 text-white">
               Stop HTTP
             </button>
-            <span class="text-gray-400">RPS: 5, Methods: eth_blockNumber/eth_getBalance</span>
+            <span class="text-gray-400">
+              RPS: 5, Methods: eth_blockNumber/eth_getBalance <br />
+              Chains: {Enum.map(@available_chains, & &1.display_name) |> Enum.join(", ")}
+            </span>
           </div>
           <div class="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-400">
             <div>
@@ -534,7 +434,10 @@ defmodule LivechainWeb.Dashboard do
             <button phx-click="sim_ws_stop" class="rounded bg-gray-700 px-3 py-1 text-white">
               Stop WS
             </button>
-            <span class="text-gray-400">Conns: 2, Topic: newHeads</span>
+            <span class="text-gray-400">
+              Conns: 2, Topic: newHeads <br />
+              Chains: {Enum.map(@available_chains, & &1.display_name) |> Enum.join(", ")}
+            </span>
           </div>
           <div class="mt-2 text-xs text-gray-400">
             Open:
@@ -566,7 +469,7 @@ defmodule LivechainWeb.Dashboard do
           <div class="bg-gray-800/60 rounded p-3">
             CPU:
             <span class="text-emerald-300">
-              {(@vm_metrics[:cpu_percent] || 0) |> :erlang.float_to_binary([{:decimals, 1}])}%
+              {(@vm_metrics[:cpu_percent] || 0.0) |> :erlang.float_to_binary([{:decimals, 1}])}%
             </span>
           </div>
           <div class="bg-gray-800/60 rounded p-3">
@@ -640,34 +543,14 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def handle_event("test_connection", _params, socket) do
-    Livechain.RPC.WSSupervisor.broadcast_connection_status_update()
+    # Broadcast connection status update to all LiveViews
+    Livechain.RPC.ChainRegistry.broadcast_connection_status_update()
     {:noreply, socket}
   end
 
   @impl true
   def handle_event("refresh_connections", _params, socket) do
     {:noreply, fetch_connections(socket)}
-  end
-
-  # Demo controls
-  @impl true
-  def handle_event("start_demo", _params, socket) do
-    if socket.assigns.demo_running do
-      {:noreply, socket}
-    else
-      start_demo_connections()
-      {:noreply, socket |> assign(:demo_running, true) |> fetch_connections()}
-    end
-  end
-
-  @impl true
-  def handle_event("stop_demo", _params, socket) do
-    if socket.assigns.demo_running do
-      stop_demo_connections()
-      {:noreply, socket |> assign(:demo_running, false) |> fetch_connections()}
-    else
-      {:noreply, socket}
-    end
   end
 
   # Sampler controls
@@ -724,8 +607,7 @@ defmodule LivechainWeb.Dashboard do
   def handle_event("sim_http_start", _params, socket) do
     # Push event to JS hook with defaults; future: make dynamic via form controls
     opts = %{
-      # Use chain IDs instead of names: Base=8453, Arbitrum=42161
-      chains: ["8453", "42161"],
+      chains: Enum.map(socket.assigns.available_chains, & &1.id),
       methods: ["eth_blockNumber", "eth_getBalance"],
       rps: 5,
       concurrency: 4,
@@ -745,8 +627,7 @@ defmodule LivechainWeb.Dashboard do
   @impl true
   def handle_event("sim_ws_start", _params, socket) do
     opts = %{
-      # Use chain IDs instead of names: Base=8453, Arbitrum=42161
-      chains: ["8453", "42161"],
+      chains: Enum.map(socket.assigns.available_chains, & &1.id),
       connections: 2,
       topics: ["newHeads"],
       durationMs: 30_000
@@ -774,7 +655,7 @@ defmodule LivechainWeb.Dashboard do
   defp to_float(_), do: 0.0
 
   defp fetch_connections(socket) do
-    connections = Livechain.RPC.WSSupervisor.list_connections()
+    connections = Livechain.RPC.ChainRegistry.list_all_connections()
 
     socket
     |> assign(:connections, connections)
@@ -782,17 +663,17 @@ defmodule LivechainWeb.Dashboard do
   end
 
   defp start_demo_connections do
-    eth = Livechain.Simulator.MockWSEndpoint.ethereum_mainnet(subscription_topics: ["newHeads"])
-    poly = Livechain.Simulator.MockWSEndpoint.polygon(subscription_topics: ["newHeads"])
-
-    _ = Livechain.RPC.WSSupervisor.start_connection(eth)
-    _ = Livechain.RPC.WSSupervisor.start_connection(poly)
+    # Note: Demo connections are now handled by the chain supervisors
+    # This function is kept for compatibility but doesn't start connections
+    Logger.info("Demo connections are now managed by chain supervisors")
+    :ok
   end
 
   defp stop_demo_connections do
-    for id <- ["mock_ethereum_mainnet", "mock_polygon"] do
-      _ = Livechain.RPC.WSSupervisor.stop_connection(id)
-    end
+    # Note: Demo connections are now managed by chain supervisors
+    # This function is kept for compatibility but doesn't stop connections
+    Logger.info("Demo connections are now managed by chain supervisors")
+    :ok
   end
 
   defp publish_sample_routing_decision do
@@ -881,4 +762,25 @@ defmodule LivechainWeb.Dashboard do
 
   defp to_mb(bytes) when is_integer(bytes), do: Float.round(bytes / 1_048_576, 1)
   defp to_mb(_), do: 0.0
+
+  defp get_available_chains do
+    case Livechain.Config.ChainConfig.load_config() do
+      {:ok, config} ->
+        config.chains
+        |> Enum.map(fn {chain_name, chain_config} ->
+          %{
+            id: to_string(chain_config.chain_id),
+            name: chain_name,
+            display_name: chain_config.name,
+            block_time: chain_config.block_time
+          }
+        end)
+
+      {:error, _} ->
+        # Fallback to hardcoded values if config loading fails
+        [
+          %{id: "1", name: "ethereum", display_name: "Ethereum Mainnet", block_time: 12000}
+        ]
+    end
+  end
 end

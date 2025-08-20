@@ -22,7 +22,9 @@ defmodule Livechain.RPC.ProviderPool do
     :providers,
     :active_providers,
     :health_checks,
-    :stats
+    :stats,
+    # Circuit breaker state per provider_id: :closed | :open | :half_open
+    circuit_states: %{}
   ]
 
   defmodule ProviderState do
@@ -149,13 +151,18 @@ defmodule Livechain.RPC.ProviderPool do
   def init({chain_name, chain_config}) do
     Logger.info("Starting ProviderPool for #{chain_name}")
 
+    if Process.whereis(Livechain.PubSub) do
+      Phoenix.PubSub.subscribe(Livechain.PubSub, "circuit:events")
+    end
+
     state = %__MODULE__{
       chain_name: chain_name,
       chain_config: chain_config,
       providers: %{},
       active_providers: [],
       health_checks: %{},
-      stats: %PoolStats{}
+      stats: %PoolStats{},
+      circuit_states: %{}
     }
 
     # Schedule periodic health checks
@@ -285,6 +292,14 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @impl true
+  def handle_info(%{provider_id: provider_id, from: from, to: to} = _evt, state)
+      when is_binary(provider_id) and from in [:closed, :open, :half_open] and
+             to in [:closed, :open, :half_open] do
+    new_states = Map.put(state.circuit_states, provider_id, to)
+    {:noreply, %{state | circuit_states: new_states}}
+  end
+
+  @impl true
   def handle_info({:DOWN, _ref, :process, pid, reason}, state) do
     # Find the provider that went down
     case Enum.find(state.providers, fn {_id, provider} -> provider.pid == pid end) do
@@ -321,6 +336,12 @@ defmodule Livechain.RPC.ProviderPool do
       case Map.get(filters, :region) do
         nil -> true
         region when is_binary(region) -> provider.config.region == region
+        _ -> true
+      end
+    end)
+    |> Enum.filter(fn provider ->
+      case Map.get(state.circuit_states, provider.id) do
+        :open -> false
         _ -> true
       end
     end)
@@ -421,7 +442,10 @@ defmodule Livechain.RPC.ProviderPool do
     case BenchmarkStore.get_provider_leaderboard(state.chain_name) do
       [] ->
         # Fall back to priority-based selection when no benchmark data available
-        Logger.debug("No benchmark data available for #{state.chain_name}, falling back to priority")
+        Logger.debug(
+          "No benchmark data available for #{state.chain_name}, falling back to priority"
+        )
+
         providers
         |> Enum.sort_by(& &1.config.priority)
         |> List.first()
@@ -430,25 +454,32 @@ defmodule Livechain.RPC.ProviderPool do
       leaderboard ->
         # Filter providers by those in our available list and sort by performance score
         provider_ids = MapSet.new(Enum.map(providers, & &1.id))
-        
-        best_provider = 
+
+        best_provider =
           leaderboard
-          |> Enum.filter(&(MapSet.member?(provider_ids, &1.provider_id)))
-          |> Enum.filter(&(&1.win_rate > 0.95 and &1.total_races > 5)) # Quality filter
-          |> Enum.sort_by(&(&1.score), :desc)
+          |> Enum.filter(&MapSet.member?(provider_ids, &1.provider_id))
+          # Quality filter
+          |> Enum.filter(&(&1.win_rate > 0.95 and &1.total_races > 5))
+          |> Enum.sort_by(& &1.score, :desc)
           |> List.first()
 
         case best_provider do
           nil ->
             # Fall back to priority if no provider meets quality threshold
-            Logger.debug("No providers meet quality threshold for #{state.chain_name}, falling back to priority")
+            Logger.debug(
+              "No providers meet quality threshold for #{state.chain_name}, falling back to priority"
+            )
+
             providers
             |> Enum.sort_by(& &1.config.priority)
             |> List.first()
             |> Map.get(:id)
 
           provider ->
-            Logger.debug("Selected fastest provider for #{state.chain_name}: #{provider.provider_id} (score: #{provider.score})")
+            Logger.debug(
+              "Selected fastest provider for #{state.chain_name}: #{provider.provider_id} (score: #{provider.score})"
+            )
+
             provider.provider_id
         end
     end
