@@ -729,6 +729,39 @@ defmodule Livechain.RPC.SubscriptionManager do
     {:noreply, state}
   end
 
+  @impl true
+  def handle_info(%{event: :healthy, provider_id: _provider_id, chain: _chain} = _event, state) do
+    # Handle provider becoming healthy - just log for now
+    # No special action needed as healthy providers will be used automatically
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(%{event: :unhealthy, provider_id: provider_id, chain: chain} = _event, state) do
+    # Handle provider becoming unhealthy via provider pool events
+    send(self(), {:provider_unhealthy, chain, provider_id})
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(
+        %{event: :cooldown_start, provider_id: provider_id, chain: chain} = _event,
+        state
+      ) do
+    # Handle provider entering cooldown - treat similar to unhealthy
+    send(self(), {:provider_unhealthy, chain, provider_id})
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(
+        %{event: _event, provider_id: _provider_id, chain: _chain} = _provider_event,
+        state
+      ) do
+    # Catch-all for other provider pool events - just ignore them
+    {:noreply, state}
+  end
+
   defp ensure_chain_subscription(chain, filter) do
     # Ensure the chain manager has loaded configuration
     _ = Livechain.RPC.ChainManager.ensure_loaded()

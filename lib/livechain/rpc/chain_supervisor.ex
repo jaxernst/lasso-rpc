@@ -204,7 +204,7 @@ defmodule Livechain.RPC.ChainSupervisor do
         ProviderPool.register_provider(chain_name, provider.id, pid, provider)
 
       {:error, reason} ->
-        Logger.error("Failed to start WSConnection for #{provider.name}: #{reason}")
+        Logger.error("Failed to start WSConnection for #{provider.name}: #{inspect(reason)}")
     end
   end
 
@@ -224,7 +224,7 @@ defmodule Livechain.RPC.ChainSupervisor do
         Logger.debug("Circuit breaker for #{provider.id} already running")
 
       {:error, reason} ->
-        Logger.error("Failed to start circuit breaker for #{provider.id}: #{reason}")
+        Logger.error("Failed to start circuit breaker for #{provider.id}: #{inspect(reason)}")
     end
   end
 

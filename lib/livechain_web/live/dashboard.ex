@@ -282,6 +282,8 @@ defmodule LivechainWeb.Dashboard do
               connections={@connections}
               routing_events={@routing_events}
               provider_events={@provider_events}
+              selected_chain={@selected_chain}
+              selected_provider={@selected_provider}
             />
           <% "benchmarks" -> %>
             <.benchmarks_tab_content />
@@ -308,16 +310,15 @@ defmodule LivechainWeb.Dashboard do
 
   def dashboard_tab_content(assigns) do
     ~H"""
-    <div class="flex h-full w-full flex-col gap-4 p-4">
-      <!-- Topology and quick stats -->
-      <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3 lg:col-span-2">
-          <div class="mb-2 text-sm font-semibold text-gray-300">Chains</div>
+    <div class="relative flex h-full w-full">
+      <!-- Main Network Topology Area -->
+      <div class="flex-1 flex items-center justify-center p-8">
+        <div class="w-full max-w-4xl">
           <NetworkTopology.nodes_display
             id="network-topology"
             connections={@connections}
-            selected_chain={nil}
-            selected_provider={nil}
+            selected_chain={assigns[:selected_chain]}
+            selected_provider={assigns[:selected_provider]}
             on_chain_select="select_chain"
             on_provider_select="select_provider"
             on_test_connection="test_connection"
@@ -325,29 +326,281 @@ defmodule LivechainWeb.Dashboard do
         </div>
       </div>
       
-    <!-- Feeds -->
-      <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-          <div class="mb-2 text-sm font-semibold text-gray-300">RPC Call Stream</div>
-          <div class="h-64 overflow-auto">
-            <%= for e <- @routing_events do %>
-              <div class="mb-1 text-xs text-gray-400">
-                <span class="text-gray-500">[{e.ts}]</span>
-                chain=<span class="text-purple-300"><%= e.chain %></span> method=<span class="text-sky-300"><%= e.method %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> dur=<span class="text-yellow-300"><%= e.duration_ms %>ms</span> result=<span><%= e.result %></span> failovers=<span><%= e.failovers %></span>
+      <!-- Side Panel for Chain Details (when chain selected but no provider) -->
+      <%= if assigns[:selected_chain] && !assigns[:selected_provider] do %>
+        <div class="w-96 border-l border-gray-700/50 bg-gray-900/50 flex flex-col">
+          <.chain_details_panel 
+            chain={@selected_chain}
+            connections={@connections}
+            routing_events={@routing_events}
+            provider_events={@provider_events}
+          />
+        </div>
+      <% end %>
+      
+      <!-- Side Panel for Provider Details (when provider selected) -->
+      <%= if assigns[:selected_provider] do %>
+        <div class="w-96 border-l border-gray-700/50 bg-gray-900/50 flex flex-col">
+          <.provider_details_panel 
+            provider={@selected_provider}
+            connections={@connections}
+            routing_events={@routing_events}
+            provider_events={@provider_events}
+            selected_chain={@selected_chain}
+          />
+        </div>
+      <% end %>
+      
+      <!-- Bottom Event Stream (when nothing selected) -->
+      <%= if !assigns[:selected_chain] && !assigns[:selected_provider] do %>
+        <div class="absolute bottom-0 left-0 right-0 h-48 border-t border-gray-700/50 bg-gray-900/80 backdrop-blur-sm">
+          <div class="grid grid-cols-1 gap-4 lg:grid-cols-2 h-full p-4">
+            <div class="flex flex-col">
+              <div class="mb-2 text-sm font-semibold text-gray-300">RPC Call Stream</div>
+              <div class="flex-1 overflow-auto">
+                <%= for e <- Enum.take(@routing_events, 10) do %>
+                  <div class="mb-1 text-xs text-gray-400">
+                    <span class="text-gray-500">[{e.ts}]</span>
+                    chain=<span class="text-purple-300"><%= e.chain %></span> method=<span class="text-sky-300"><%= e.method %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> dur=<span class="text-yellow-300"><%= e.duration_ms %>ms</span> result=<span><%= e.result %></span> failovers=<span><%= e.failovers %></span>
+                  </div>
+                <% end %>
               </div>
-            <% end %>
+            </div>
+            <div class="flex flex-col">
+              <div class="mb-2 text-sm font-semibold text-gray-300">Provider pool events</div>
+              <div class="flex-1 overflow-auto">
+                <%= for e <- Enum.take(@provider_events, 10) do %>
+                  <div class="mb-1 text-xs text-gray-400">
+                    <span class="text-gray-500">[{e.ts}]</span>
+                    chain=<span class="text-purple-300"><%= e.chain %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> event=<span class="text-orange-300"><%= e.event %></span>
+                  </div>
+                <% end %>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-          <div class="mb-2 text-sm font-semibold text-gray-300">Provider pool events</div>
-          <div class="h-64 overflow-auto">
-            <%= for e <- @provider_events do %>
-              <div class="mb-1 text-xs text-gray-400">
-                <span class="text-gray-500">[{e.ts}]</span>
-                chain=<span class="text-purple-300"><%= e.chain %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> event=<span class="text-orange-300"><%= e.event %></span>
+      <% end %>
+    </div>
+    """
+  end
+
+  def chain_details_panel(assigns) do
+    assigns =
+      assigns
+      |> assign(:chain_connections, Enum.filter(assigns.connections, &(&1.chain == assigns.chain)))
+      |> assign(:chain_events, Enum.filter(assigns.routing_events, &(&1.chain == assigns.chain)))
+      |> assign(:chain_provider_events, Enum.filter(assigns.provider_events, &(&1.chain == assigns.chain)))
+    
+    ~H"""
+    <div class="flex flex-col h-full">
+      <!-- Header -->
+      <div class="p-4 border-b border-gray-700/50">
+        <div class="flex items-center justify-between">
+          <h3 class="text-lg font-semibold text-white capitalize"><%= @chain %></h3>
+          <button phx-click="select_chain" phx-value-chain="" class="text-gray-400 hover:text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+      
+      <!-- Chain Stats -->
+      <div class="p-4 border-b border-gray-700/50">
+        <div class="grid grid-cols-2 gap-4">
+          <div class="bg-gray-800/50 rounded-lg p-3">
+            <div class="text-xs text-gray-400">Providers</div>
+            <div class="text-xl font-bold text-white"><%= length(@chain_connections) %></div>
+          </div>
+          <div class="bg-gray-800/50 rounded-lg p-3">
+            <div class="text-xs text-gray-400">Connected</div>
+            <div class="text-xl font-bold text-emerald-400">
+              <%= Enum.count(@chain_connections, &(&1.status == :connected)) %>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Providers List -->
+      <div class="p-4 border-b border-gray-700/50">
+        <h4 class="text-sm font-semibold text-gray-300 mb-3">Providers</h4>
+        <div class="space-y-2">
+          <%= for connection <- @chain_connections do %>
+            <div 
+              class="bg-gray-800/30 rounded-lg p-3 cursor-pointer hover:bg-gray-800/50 transition-colors"
+              phx-click="select_provider" 
+              phx-value-provider={connection.id}
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                  <div class={[
+                    "w-3 h-3 rounded-full",
+                    case connection.status do
+                      :connected -> "bg-emerald-400"
+                      :disconnected -> "bg-red-400"
+                      _ -> "bg-yellow-400"
+                    end
+                  ]}></div>
+                  <div>
+                    <div class="text-sm font-medium text-white"><%= connection.name %></div>
+                    <div class="text-xs text-gray-400"><%= connection.id %></div>
+                  </div>
+                </div>
+                <div class="text-xs text-gray-400">
+                  <%= connection.subscriptions %> subs
+                </div>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      </div>
+      
+      <!-- Recent Events -->
+      <div class="flex-1 p-4 overflow-hidden">
+        <h4 class="text-sm font-semibold text-gray-300 mb-3">Recent Events</h4>
+        <div class="h-full overflow-auto space-y-2">
+          <!-- RPC Events -->
+          <%= for e <- Enum.take(@chain_events, 5) do %>
+            <div class="bg-blue-900/20 rounded-lg p-2">
+              <div class="text-xs text-blue-300">RPC Call</div>
+              <div class="text-xs text-gray-400">
+                <span class="text-sky-300"><%= e.method %></span> via 
+                <span class="text-emerald-300"><%= e.provider_id %></span> 
+                (<span class="text-yellow-300"><%= e.duration_ms %>ms</span>)
+              </div>
+            </div>
+          <% end %>
+          
+          <!-- Provider Events -->
+          <%= for e <- Enum.take(@chain_provider_events, 5) do %>
+            <div class="bg-orange-900/20 rounded-lg p-2">
+              <div class="text-xs text-orange-300">Provider Event</div>
+              <div class="text-xs text-gray-400">
+                <span class="text-emerald-300"><%= e.provider_id %></span>: 
+                <span class="text-orange-300"><%= e.event %></span>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  def provider_details_panel(assigns) do
+    assigns =
+      assigns
+      |> assign(:provider_connection, Enum.find(assigns.connections, &(&1.id == assigns.provider)))
+      |> assign(:provider_events, Enum.filter(assigns.routing_events, &(&1.provider_id == assigns.provider)))
+      |> assign(:provider_pool_events, Enum.filter(assigns.provider_events, &(&1.provider_id == assigns.provider)))
+    
+    ~H"""
+    <div class="flex flex-col h-full">
+      <!-- Header -->
+      <div class="p-4 border-b border-gray-700/50">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-lg font-semibold text-white">
+              <%= if @provider_connection, do: @provider_connection.name, else: @provider %>
+            </h3>
+            <%= if @provider_connection do %>
+              <div class="text-sm text-gray-400 mt-1">
+                Chain: <span class="text-purple-300 capitalize"><%= @provider_connection.chain %></span>
               </div>
             <% end %>
           </div>
+          <div class="flex items-center space-x-2">
+            <%= if assigns[:selected_chain] do %>
+              <button 
+                phx-click="select_provider" 
+                phx-value-provider="" 
+                class="text-gray-400 hover:text-white text-sm px-2 py-1 rounded border border-gray-600 hover:border-gray-400 transition-colors"
+              >
+                Back to Chain
+              </button>
+            <% end %>
+            <button phx-click="select_provider" phx-value-provider="" class="text-gray-400 hover:text-white">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Provider Stats -->
+      <%= if @provider_connection do %>
+        <div class="p-4 border-b border-gray-700/50">
+          <div class="grid grid-cols-2 gap-4">
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-xs text-gray-400">Status</div>
+              <div class={[
+                "text-sm font-bold",
+                case @provider_connection.status do
+                  :connected -> "text-emerald-400"
+                  :disconnected -> "text-red-400"
+                  _ -> "text-yellow-400"
+                end
+              ]}>
+                <%= String.upcase(to_string(@provider_connection.status)) %>
+              </div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-xs text-gray-400">Subscriptions</div>
+              <div class="text-sm font-bold text-white"><%= @provider_connection.subscriptions %></div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-xs text-gray-400">Failures</div>
+              <div class="text-sm font-bold text-red-400"><%= @provider_connection.reconnect_attempts %></div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-xs text-gray-400">Last Seen</div>
+              <div class="text-xs text-gray-300">
+                <%= format_last_seen(@provider_connection.last_seen) %>
+              </div>
+            </div>
+          </div>
+        </div>
+      <% end %>
+      
+      <!-- Recent Activity -->
+      <div class="flex-1 p-4 overflow-hidden">
+        <h4 class="text-sm font-semibold text-gray-300 mb-3">Recent Activity</h4>
+        <div class="h-full overflow-auto space-y-2">
+          <!-- RPC Calls -->
+          <%= for e <- Enum.take(@provider_events, 10) do %>
+            <div class="bg-blue-900/20 rounded-lg p-2">
+              <div class="text-xs text-blue-300">RPC Call</div>
+              <div class="text-xs text-gray-400">
+                <span class="text-sky-300"><%= e.method %></span> on 
+                <span class="text-purple-300 capitalize"><%= e.chain %></span> 
+                (<span class="text-yellow-300"><%= e.duration_ms %>ms</span>)
+                <span class={[
+                  "ml-2",
+                  case e.result do
+                    :success -> "text-emerald-400"
+                    :error -> "text-red-400"
+                    _ -> "text-gray-400"
+                  end
+                ]}>
+                  <%= String.upcase(to_string(e.result)) %>
+                </span>
+              </div>
+            </div>
+          <% end %>
+          
+          <!-- Provider Pool Events -->
+          <%= for e <- Enum.take(@provider_pool_events, 10) do %>
+            <div class="bg-orange-900/20 rounded-lg p-2">
+              <div class="text-xs text-orange-300">Pool Event</div>
+              <div class="text-xs text-gray-400">
+                <span class="text-orange-300"><%= e.event %></span>
+                <%= if e.details do %>
+                  <span class="text-gray-500">- <%= inspect(e.details) %></span>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
         </div>
       </div>
     </div>
@@ -532,8 +785,18 @@ defmodule LivechainWeb.Dashboard do
   end
 
   @impl true
+  def handle_event("select_chain", %{"chain" => ""}, socket) do
+    {:noreply, assign(socket, :selected_chain, nil)}
+  end
+
+  @impl true
   def handle_event("select_chain", %{"chain" => chain}, socket) do
     {:noreply, assign(socket, :selected_chain, chain)}
+  end
+
+  @impl true
+  def handle_event("select_provider", %{"provider" => ""}, socket) do
+    {:noreply, assign(socket, :selected_provider, nil)}
   end
 
   @impl true
@@ -762,6 +1025,15 @@ defmodule LivechainWeb.Dashboard do
 
   defp to_mb(bytes) when is_integer(bytes), do: Float.round(bytes / 1_048_576, 1)
   defp to_mb(_), do: 0.0
+
+  defp format_last_seen(nil), do: "Never"
+  defp format_last_seen(timestamp) when is_integer(timestamp) and timestamp > 0 do
+    case DateTime.from_unix(timestamp, :millisecond) do
+      {:ok, datetime} -> datetime |> DateTime.to_time() |> to_string()
+      {:error, _} -> "Invalid"
+    end
+  end
+  defp format_last_seen(_), do: "Unknown"
 
   defp get_available_chains do
     case Livechain.Config.ChainConfig.load_config() do
