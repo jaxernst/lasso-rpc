@@ -127,10 +127,32 @@ defmodule LivechainWeb.RPCController do
         json(conn, response)
 
       {:error, error} ->
-        error_data = %{
-          code: error.code || -32603,
-          message: error.message || "Internal error"
-        }
+        # Handle both map-style errors and tuple-style errors from HTTP client
+        {code, message} =
+          case error do
+            %{code: code, message: message} when not is_nil(code) and not is_nil(message) ->
+              {code, message}
+
+            {:client_error, msg} ->
+              {-32600, "Client error: #{msg}"}
+
+            {:server_error, msg} ->
+              {-32603, "Server error: #{msg}"}
+
+            {:rate_limit, msg} ->
+              {-32029, "Rate limited: #{msg}"}
+
+            {:network_error, msg} ->
+              {-32603, "Network error: #{msg}"}
+
+            {:decode_error, msg} ->
+              {-32700, "Parse error: #{msg}"}
+
+            _ ->
+              {-32603, "Internal error"}
+          end
+
+        error_data = %{code: code, message: message}
 
         # Only include data field if it exists
         error_data =
@@ -365,7 +387,7 @@ defmodule LivechainWeb.RPCController do
         protocol: :http,
         region_filter: region_filter
       ]
-      
+
       Failover.execute_with_failover(chain, method, params, failover_opts)
     else
       {:error, reason} ->
@@ -401,8 +423,6 @@ defmodule LivechainWeb.RPCController do
 
     {:ok, region_filter}
   end
-
-
 
   defp default_provider_strategy do
     Application.get_env(:livechain, :provider_selection_strategy, :cheapest)

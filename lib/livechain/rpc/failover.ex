@@ -8,7 +8,7 @@ defmodule Livechain.RPC.Failover do
 
   require Logger
 
-  alias Livechain.RPC.{Selection, ChainSupervisor, ProviderPool}
+  alias Livechain.RPC.{Selection, ChainSupervisor, ProviderPool, ErrorClassifier}
   alias Livechain.Benchmarking.BenchmarkStore
   alias Livechain.Config.MethodPolicy
 
@@ -43,63 +43,6 @@ defmodule Livechain.RPC.Failover do
 
   # Private functions
 
-  # Determines whether a specific error should trigger provider failover.
-  #
-  # Based on actual error patterns in our codebase:
-  # - HTTP Client returns typed tuples: {:rate_limit, _}, {:server_error, _}, etc.
-  # - Circuit breaker states: :circuit_open, etc.  
-  # - WebSocket/network errors: :timeout, :econnrefused, etc.
-  #
-  # Simple rule: Infrastructure/provider errors trigger failover, user errors don't.
-  @spec should_failover?(any()) :: boolean()
-  defp should_failover?(reason) do
-    case reason do
-      # === HTTP Client Errors (from Livechain.RPC.HttpClient.Finch) ===
-      {:rate_limit, _} -> true
-      {:server_error, _} -> true  
-      {:network_error, _} -> true
-      {:client_error, _} -> false  # 4xx errors are user errors
-      {:decode_error, _} -> false  # JSON parse errors are user errors
-
-      # === Circuit Breaker States ===
-      :circuit_open -> true
-      :circuit_opening -> true
-      :circuit_reopening -> true
-      {:circuit_breaker, _} -> true
-
-      # === Common Network/Connection Errors ===
-      :timeout -> true
-      :econnrefused -> true
-      :nxdomain -> true
-      {:timeout, _} -> true
-      {:connection_error, _} -> true
-
-      # === JSON-RPC Error Responses ===
-      %{code: code} when is_integer(code) ->
-        should_failover_jsonrpc_error?(code)
-
-      # === Fallback: Unknown errors don't failover (conservative) ===
-      other ->
-        Logger.debug("Unknown error type in failover, not failing over: #{inspect(other)}")
-        false
-    end
-  end
-
-  # JSON-RPC 2.0 error codes - simplified based on actual usage
-  defp should_failover_jsonrpc_error?(code) do
-    case code do
-      # Standard JSON-RPC 2.0 errors are user errors - don't failover
-      code when code in [-32700, -32600, -32601, -32602, -32603] -> false
-      
-      # Provider rate limiting patterns - DO failover  
-      code when code in [-32005, -32429] -> true
-      
-      # Conservative default: don't failover on unknown JSON-RPC codes
-      # Providers should use HTTP status codes for infrastructure issues
-      _ -> false
-    end
-  end
-
 
   defp execute_rpc_with_failover(chain, method, params, strategy, provider_id, region_filter) do
     start_time = System.monotonic_time(:millisecond)
@@ -121,7 +64,7 @@ defmodule Livechain.RPC.Failover do
         duration_ms = System.monotonic_time(:millisecond) - start_time
         record_failure_metrics(chain, provider_id, method, strategy, reason, duration_ms)
 
-        case should_failover?(reason) do
+        case ErrorClassifier.should_failover?(reason) do
           true ->
             try_failover_with_reporting(
               chain,
@@ -221,7 +164,7 @@ defmodule Livechain.RPC.Failover do
           attempt
         )
 
-        case should_failover?(reason) do
+        case ErrorClassifier.should_failover?(reason) do
           true ->
             try_failover_with_reporting(
               chain,

@@ -1,7 +1,7 @@
 defmodule Livechain.RPC.ProviderPoolTest do
   use ExUnit.Case, async: true
 
-  alias Livechain.RPC.ProviderPool
+  alias Livechain.RPC.{ProviderPool, CircuitBreaker}
   alias Livechain.Config.ChainConfig
 
   defp base_chain_config(providers) do
@@ -153,5 +153,75 @@ defmodule Livechain.RPC.ProviderPoolTest do
              })
 
     assert best_us2 == "paid_us"
+  end
+
+  test "excludes providers with open circuit from candidates" do
+    chain = "test_chain"
+
+    chain_config = %Livechain.Config.ChainConfig{
+      chain_id: 1,
+      name: chain,
+      providers: [
+        %Livechain.Config.ChainConfig.Provider{
+          id: "p1",
+          name: "P1",
+          priority: 1,
+          type: "public",
+          url: "http://example.com",
+          ws_url: nil,
+          api_key_required: false,
+          region: "us-east-1"
+        },
+        %Livechain.Config.ChainConfig.Provider{
+          id: "p2",
+          name: "P2",
+          priority: 2,
+          type: "public",
+          url: "http://example.org",
+          ws_url: nil,
+          api_key_required: false,
+          region: "us-east-1"
+        }
+      ],
+      connection: %Livechain.Config.ChainConfig.Connection{
+        heartbeat_interval: 1000,
+        reconnect_interval: 1000,
+        max_reconnect_attempts: 3
+      },
+      aggregation: %Livechain.Config.ChainConfig.Aggregation{
+        deduplication_window: 1000,
+        min_confirmations: 1,
+        max_providers: 2,
+        max_cache_size: 1000
+      },
+      failover: %Livechain.Config.ChainConfig.Failover{}
+    }
+
+    {:ok, _pid} = ProviderPool.start_link({chain, chain_config})
+
+    # Simulate providers being registered and healthy
+    :ok = ProviderPool.register_provider(chain, "p1", self(), Enum.at(chain_config.providers, 0))
+    :ok = ProviderPool.register_provider(chain, "p2", self(), Enum.at(chain_config.providers, 1))
+
+    # Mark both active
+    # Direct state manipulation via casts isn't public; rely on internal defaults:
+    # active_providers are derived from ChainConfig; ensure update_active_providers includes both
+    # Give the process a moment
+    Process.sleep(50)
+
+    # Open breaker for p1
+    {:ok, _} =
+      CircuitBreaker.start_link(
+        {"p1", %{failure_threshold: 1, recovery_timeout: 10_000, success_threshold: 1}}
+      )
+
+    :ok = CircuitBreaker.open("p1")
+    Process.sleep(10)
+
+    # When selecting, p1 should be excluded, so p2 should be chosen
+    case ProviderPool.get_best_provider(chain) do
+      {:ok, provider_id} -> assert provider_id == "p2"
+      {:error, reason} -> flunk("selection failed: #{inspect(reason)}")
+    end
   end
 end

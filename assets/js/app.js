@@ -56,6 +56,19 @@ const SimulatorControl = {
     this.httpTimer = null;
     this.wsHandles = [];
 
+    // Parse available chains from data attribute
+    try {
+      const chainsData = this.el.getAttribute("data-available-chains");
+      this.availableChains = chainsData ? JSON.parse(chainsData) : [];
+      console.log("Available chains:", this.availableChains);
+      
+      // Make chains available to the simulator module
+      LassoSim.setAvailableChains(this.availableChains);
+    } catch (e) {
+      console.error("Failed to parse available chains:", e);
+      this.availableChains = [];
+    }
+
     this.handleEvent("sim_start_http", (opts) => {
       console.log("sim_start_http received with opts:", opts);
       LassoSim.startHttpLoad(opts);

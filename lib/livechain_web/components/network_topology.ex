@@ -44,59 +44,87 @@ defmodule LivechainWeb.NetworkTopology do
 
     ~H"""
     <div class={["relative h-full w-full overflow-hidden", @class]}>
-      <!-- Debug info
-      # <div class="bg-purple-900/90 font-mono border-purple-500/30 absolute top-4 left-4 z-50 rounded-lg border p-3 text-xs text-white shadow-lg backdrop-blur-sm">
-      #   Total connections: <%= length(@connections) %><br />
-      #   Chains found: <%= map_size(@chains) %><br /> Chain groups: <%= inspect(Map.keys(@chains)) %>
-      # </div>
-      -->
-
-        <!-- Interactive nodes with spiral grid layout -->
-      <%= for {{chain_name, chain_connections}, index} <- @chains |> Enum.with_index() do %>
-        <% {x, y} = calculate_spiral_position(index, "50%", "50%") %>
-        <% radius = 40 + min(length(chain_connections) * 3, 20) %>
-        <!-- Chain node -->
-        <div
-          class={"#{if @selected_chain == chain_name, do: "animate-pulse"} border-white/20 absolute -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-4 shadow-xl transition-all duration-300 hover:scale-105"}
-          style={"left: #{x}; top: #{y}; width: #{radius * 2}px; height: #{radius * 2}px; background-color: #{chain_color(chain_name)};"}
-          phx-click={@on_chain_select}
-          phx-value-chain={chain_name}
-        >
-          <div class="flex h-full flex-col items-center justify-center text-white">
-            <div class="text-sm font-bold"><%= String.upcase(chain_name) %></div>
-            <div class="text-xs"><%= length(chain_connections) %> connections</div>
+      
+    <!-- Circular chain layout with orbiting providers -->
+      <div class="flex h-full w-full items-center justify-center p-8">
+        <div class="flex flex-wrap items-center justify-center gap-16">
+          <%= for {chain_name, chain_connections} <- @chains do %>
+            <div class="relative" style="width: 200px; height: 200px;">
+              <!-- Connection lines from center to providers (drawn first, behind chain circle) -->
+              <%= for {connection, index} <- Enum.with_index(chain_connections) do %>
+                <% {x, y} = calculate_orbit_position(index, length(chain_connections), 75) %>
+                <% {line_start_x, line_start_y, line_length, line_angle} =
+                  calculate_line_properties(x, y, 100, 50, 10) %>
+                <div
+                  class="pointer-events-none absolute"
+                  style={
+                    "left: #{line_start_x}px; top: #{line_start_y}px; " <>
+                    "width: #{line_length}px; height: 2px; " <>
+                    "background: #{provider_line_color(connection.status)}; " <>
+                    "transform-origin: 0 50%; " <>
+                    "transform: rotate(#{line_angle}rad);"
+                  }
+                >
+                </div>
+              <% end %>
+              
+    <!-- Chain node (circular) - drawn on top of lines -->
+              <div
+                class={["absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-all duration-300 hover:scale-110", if(@selected_chain == chain_name,
+    do: "ring-purple-400/30 border-purple-400 ring-4",
+    else: "border-gray-500 hover:border-gray-400"), "from-gray-800 to-gray-900"]}
+                style="width: 100px; height: 100px;"
+                phx-click={@on_chain_select}
+                phx-value-chain={chain_name}
+              >
+                <div class="text-center text-white">
+                  <div class="text-base font-bold text-purple-300">{String.upcase(chain_name)}</div>
+                  <div class="text-sm text-gray-300">{length(chain_connections)}</div>
+                </div>
+              </div>
+              
+    <!-- Orbiting provider nodes -->
+              <%= for {connection, index} <- Enum.with_index(chain_connections) do %>
+                <% {x, y} = calculate_orbit_position(index, length(chain_connections), 75) %>
+                <div
+                  class={["absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
+    do: "ring-purple-400/30 border-purple-400 ring-2",
+    else: "border-gray-600"), provider_status_class(connection.status)]}
+                  style={"width: 20px; height: 20px; left: #{x}px; top: #{y}px;"}
+                  phx-click={@on_provider_select}
+                  phx-value-provider={connection.id}
+                  title={connection.name}
+                >
+                  <!-- Status indicator dot -->
+                  <div class={["h-2 w-2 rounded-full", provider_status_dot_class(connection.status)]}>
+                  </div>
+                  
+    <!-- Reconnect attempts indicator -->
+                  <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
+                    <div class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white">
+                      {connection.reconnect_attempts}
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
+            </div>
+          <% end %>
+        </div>
+      </div>
+      
+    <!-- Status Legend -->
+      <div class="bg-gray-900/90 absolute right-4 bottom-4 rounded-lg border border-gray-600 p-2 backdrop-blur-sm">
+        <div class="flex items-center space-x-3 text-xs text-gray-300">
+          <div class="flex items-center space-x-1">
+            <div class="h-2 w-2 rounded-full bg-emerald-400"></div>
+            <span>Connected</span>
+          </div>
+          <div class="flex items-center space-x-1">
+            <div class="h-2 w-2 rounded-full bg-red-400"></div>
+            <span>Disconnected</span>
           </div>
         </div>
-        <!-- Provider nodes positioned around the chain node -->
-        <%= for {connection, conn_index} <- Enum.with_index(chain_connections) do %>
-          <% {provider_x, provider_y} =
-            calculate_satellite_position(x, y, radius + 35, conn_index, length(chain_connections)) %>
-
-          <div
-            class={"#{if @selected_provider == connection.id, do: "animate-bounce"} border-white/30 absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 transform cursor-pointer rounded-full border-2 shadow-lg transition-all duration-300 hover:scale-110"}
-            style={"left: #{provider_x}; top: #{provider_y}; background-color: #{provider_status_color(connection.status)};"}
-            phx-click={@on_provider_select}
-            phx-value-provider={connection.id}
-            title={connection.name}
-          >
-            <!-- Reconnect attempts indicator -->
-            <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
-              <div class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500">
-                <span class="text-xs font-bold text-white" style="font-size: 8px;">
-                  <%= connection.reconnect_attempts %>
-                </span>
-              </div>
-            <% end %>
-          </div>
-          <!-- Provider label -->
-          <div
-            class="text-white/80 pointer-events-none absolute -translate-x-1/2 transform text-xs font-medium"
-            style={"left: #{provider_x}; top: calc(#{provider_y} + 20px); font-size: 10px;"}
-          >
-            <%= String.slice(connection.name, 0..8) %>
-          </div>
-        <% end %>
-      <% end %>
+      </div>
     </div>
     """
   end
@@ -128,7 +156,89 @@ defmodule LivechainWeb.NetworkTopology do
 
   defp group_connections_by_chain(connections) do
     connections
-    |> Enum.group_by(&extract_chain_from_connection_name(&1.name))
+    |> Enum.group_by(&extract_chain_from_connection(&1))
+  end
+
+  defp calculate_orbit_position(index, total_providers, base_radius) do
+    # Add randomness to the angle based on provider index for consistent positioning
+    # Use index as seed for deterministic but varied positioning
+    :rand.seed(:exsplus, {index * 13, index * 7, index * 19})
+
+    # Calculate base angle for this provider (evenly distributed around circle)
+    base_angle = 2 * :math.pi() * index / max(total_providers, 1)
+
+    # Add random angle offset (-30 to +30 degrees)
+    angle_offset = (:rand.uniform() - 0.5) * :math.pi() / 3
+    angle = base_angle + angle_offset
+
+    # Add randomness to radius (extend further out and vary distance)
+    # -10 to +10 px variance
+    radius_variance = :rand.uniform() * 20 - 10
+    # Extend base radius by 15px + variance
+    actual_radius = base_radius + 15 + radius_variance
+
+    # Calculate position relative to center (100px from center of 200px container)
+    center = 100
+    x = center + actual_radius * :math.cos(angle)
+    y = center + actual_radius * :math.sin(angle)
+
+    {x, y}
+  end
+
+  defp calculate_line_properties(provider_x, provider_y, center, chain_radius, provider_radius) do
+    # Calculate distance from center to provider (full distance from chain edge to provider edge)
+    dx = provider_x - center
+    dy = provider_y - center
+    full_distance = :math.sqrt(dx * dx + dy * dy)
+
+    # Add randomness to line length for more organic feel
+    # Use provider position as seed for deterministic randomness
+    :rand.seed(
+      :exsplus,
+      {round(provider_x * 17), round(provider_y * 23), round(full_distance * 11)}
+    )
+
+    # -4 to +4 px variance
+    length_variance = (:rand.uniform() - 0.5) * 8
+
+    # Line should go from chain circle edge to provider dot edge, with some variance
+    base_line_length = full_distance - chain_radius - provider_radius
+    # Ensure minimum length
+    line_length = max(5, base_line_length + length_variance)
+
+    # Calculate angle for rotation
+    line_angle = :math.atan2(dy, dx)
+
+    # Calculate start position for the line (at the edge of the chain circle)
+    # We need to find the point on the chain circle's edge that's closest to the provider
+    # This is done by normalizing the direction vector and scaling it by the chain radius
+    {line_start_x, line_start_y} =
+      if full_distance > 0 do
+        # Normalize the direction vector
+        normalized_dx = dx / full_distance
+        normalized_dy = dy / full_distance
+
+        # Start position is at the edge of the chain circle
+        {center + normalized_dx * chain_radius, center + normalized_dy * chain_radius}
+      else
+        # Fallback if provider is at center (shouldn't happen in practice)
+        {center, center}
+      end
+
+    {line_start_x, line_start_y, line_length, line_angle}
+  end
+
+  defp provider_line_color(:connected), do: "#10b981"
+  defp provider_line_color(:disconnected), do: "#ef4444"
+  defp provider_line_color(:connecting), do: "#f59e0b"
+  defp provider_line_color(_), do: "#6b7280"
+
+  defp extract_chain_from_connection(connection) do
+    # Use the actual chain field from the connection if available
+    case Map.get(connection, :chain) do
+      chain when is_binary(chain) -> chain
+      _ -> extract_chain_from_connection_name(connection.name)
+    end
   end
 
   defp extract_chain_from_connection_name(name) do
@@ -139,14 +249,16 @@ defmodule LivechainWeb.NetworkTopology do
       String.contains?(name_lower, "polygon") -> "polygon"
       String.contains?(name_lower, "arbitrum") -> "arbitrum"
       String.contains?(name_lower, "optimism") -> "optimism"
-      String.contains?(name_lower, "base") -> "base"
+      # Be more specific for base to avoid matching "blastapi"
+      name_lower =~ ~r/\bbase\b/ -> "base"
       String.contains?(name_lower, "bsc") -> "bsc"
       String.contains?(name_lower, "avalanche") -> "avalanche"
       String.contains?(name_lower, "zksync") -> "zksync"
       String.contains?(name_lower, "linea") -> "linea"
       String.contains?(name_lower, "scroll") -> "scroll"
       String.contains?(name_lower, "mantle") -> "mantle"
-      String.contains?(name_lower, "blast") -> "blast"
+      # Be more specific for blast chain to avoid matching "blastapi"
+      name_lower =~ ~r/\bblast\b/ and not String.contains?(name_lower, "blastapi") -> "blast"
       String.contains?(name_lower, "mode") -> "mode"
       String.contains?(name_lower, "fantom") -> "fantom"
       String.contains?(name_lower, "celo") -> "celo"
@@ -245,6 +357,34 @@ defmodule LivechainWeb.NetworkTopology do
         {"50%", "50%"}
     end
   end
+
+  defp chain_display_name("ethereum"), do: "Ethereum"
+  defp chain_display_name("polygon"), do: "Polygon"
+  defp chain_display_name("arbitrum"), do: "Arbitrum"
+  defp chain_display_name("optimism"), do: "Optimism"
+  defp chain_display_name("base"), do: "Base"
+  defp chain_display_name("bsc"), do: "BSC"
+  defp chain_display_name("avalanche"), do: "Avalanche"
+  defp chain_display_name("zksync"), do: "zkSync"
+  defp chain_display_name("linea"), do: "Linea"
+  defp chain_display_name("scroll"), do: "Scroll"
+  defp chain_display_name("mantle"), do: "Mantle"
+  defp chain_display_name("blast"), do: "Blast"
+  defp chain_display_name("mode"), do: "Mode"
+  defp chain_display_name("fantom"), do: "Fantom"
+  defp chain_display_name("celo"), do: "Celo"
+  defp chain_display_name("unknown"), do: "Unknown Chain"
+  defp chain_display_name(chain), do: String.capitalize(chain)
+
+  defp provider_status_class(:connected), do: "bg-emerald-900/30 border-emerald-600"
+  defp provider_status_class(:disconnected), do: "bg-red-900/30 border-red-600"
+  defp provider_status_class(:connecting), do: "bg-yellow-900/30 border-yellow-600"
+  defp provider_status_class(_), do: "bg-gray-900/30 border-gray-600"
+
+  defp provider_status_dot_class(:connected), do: "bg-emerald-400"
+  defp provider_status_dot_class(:disconnected), do: "bg-red-400"
+  defp provider_status_dot_class(:connecting), do: "bg-yellow-400"
+  defp provider_status_dot_class(_), do: "bg-gray-400"
 
   defp chain_color("ethereum"), do: "#627EEA"
   defp chain_color("polygon"), do: "#8247E5"

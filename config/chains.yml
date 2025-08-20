@@ -59,160 +59,160 @@ chains:
       backfill_timeout: 30000 # max time to spend backfilling (ms)
       enabled: true # enable/disable backfill feature
 
-  # base:
-  #   chain_id: 8453
-  #   name: "Base Mainnet"
-  #   block_time: 2000
+  base:
+    chain_id: 8453
+    name: "Base Mainnet"
+    block_time: 2000
 
-  #   providers:
-  #     - id: "base_publicnode"
-  #       name: "PublicNode"
-  #       priority: 1
-  #       type: "public"
-  #       url: "https://base-rpc.publicnode.com"
-  #       ws_url: "wss://base-rpc.publicnode.com"
-  #       api_key_required: false
+    providers:
+      - id: "base_publicnode"
+        name: "PublicNode"
+        priority: 1
+        type: "public"
+        url: "https://base-rpc.publicnode.com"
+        ws_url: "wss://base-rpc.publicnode.com"
+        api_key_required: false
 
-  #     - id: "base_ankr"
-  #       name: "Ankr Base"
-  #       priority: 2
-  #       type: "public"
-  #       url: "https://rpc.ankr.com/base"
-  #       api_key_required: false
+      - id: "base_ankr"
+        name: "Ankr Base"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ankr.com/base"
+        api_key_required: false
 
-  #     - id: "base_blastapi"
-  #       name: "BlastAPI Base"
-  #       priority: 3
-  #       type: "public"
-  #       url: "https://base-mainnet.public.blastapi.io"
-  #       ws_url: "wss://base-mainnet.public.blastapi.io"
-  #       api_key_required: false
+      - id: "base_blastapi"
+        name: "BlastAPI Base"
+        priority: 3
+        type: "public"
+        url: "https://base-mainnet.public.blastapi.io"
+        ws_url: "wss://base-mainnet.public.blastapi.io"
+        api_key_required: false
 
-  #   connection:
-  #     heartbeat_interval: 20000 # Base is faster, more frequent heartbeats
-  #     reconnect_interval: 3000
-  #     max_reconnect_attempts: 15
+    connection:
+      heartbeat_interval: 20000 # Base is faster, more frequent heartbeats
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
 
-  #   aggregation:
-  #     deduplication_window: 1000 # Faster chain, shorter window
-  #     min_confirmations: 1
-  #     max_providers: 4
+    aggregation:
+      deduplication_window: 1000 # Faster chain, shorter window
+      min_confirmations: 1
+      max_providers: 4
 
-  # polygon:
-  #   chain_id: 137
-  #   name: "Polygon"
-  #   block_time: 2100
+  polygon:
+    chain_id: 137
+    name: "Polygon"
+    block_time: 2100
 
-  #   providers:
-  #     - id: "polygon_ankr"
-  #       name: "Ankr Polygon"
-  #       priority: 1
-  #       type: "public"
-  #       url: "https://rpc.ankr.com/polygon"
-  #       api_key_required: false
+    providers:
+      - id: "polygon_ankr"
+        name: "Ankr Polygon"
+        priority: 1
+        type: "public"
+        url: "https://rpc.ankr.com/polygon"
+        api_key_required: false
 
-  #     - id: "polygon_publicnode"
-  #       name: "PublicNode Polygon"
-  #       priority: 2
-  #       type: "public"
-  #       url: "https://polygon-rpc.publicnode.com"
-  #       ws_url: "wss://polygon-rpc.publicnode.com"
-  #       api_key_required: false
+      - id: "polygon_publicnode"
+        name: "PublicNode Polygon"
+        priority: 2
+        type: "public"
+        url: "https://polygon-rpc.publicnode.com"
+        ws_url: "wss://polygon-rpc.publicnode.com"
+        api_key_required: false
 
-  #     - id: "polygon_blastapi"
-  #       name: "BlastAPI Polygon"
-  #       priority: 3
-  #       type: "public"
-  #       url: "https://polygon-mainnet.public.blastapi.io"
-  #       ws_url: "wss://polygon-mainnet.public.blastapi.io"
-  #       api_key_required: false
+      - id: "polygon_blastapi"
+        name: "BlastAPI Polygon"
+        priority: 3
+        type: "public"
+        url: "https://polygon-mainnet.public.blastapi.io"
+        ws_url: "wss://polygon-mainnet.public.blastapi.io"
+        api_key_required: false
 
-  #   connection:
-  #     heartbeat_interval: 25000
-  #     reconnect_interval: 4000
-  #     max_reconnect_attempts: 12
+    connection:
+      heartbeat_interval: 25000
+      reconnect_interval: 4000
+      max_reconnect_attempts: 12
 
-  #   aggregation:
-  #     deduplication_window: 1500
-  #     min_confirmations: 1
-  #     max_providers: 3
+    aggregation:
+      deduplication_window: 1500
+      min_confirmations: 1
+      max_providers: 3
 
-  # arbitrum:
-  #   chain_id: 42161
-  #   name: "Arbitrum One"
-  #   block_time: 1000 # Very fast blocks
+  arbitrum:
+    chain_id: 42161
+    name: "Arbitrum One"
+    block_time: 1000 # Very fast blocks
 
-  #   providers:
-  #     - id: "arbitrum_official"
-  #       name: "Arbitrum Official"
-  #       priority: 1
-  #       type: "public"
-  #       url: "https://arb1.arbitrum.io/rpc"
-  #       api_key_required: false
+    providers:
+      - id: "arbitrum_official"
+        name: "Arbitrum Official"
+        priority: 1
+        type: "public"
+        url: "https://arb1.arbitrum.io/rpc"
+        api_key_required: false
 
-  #     - id: "arbitrum_blastapi"
-  #       name: "BlastAPI Arbitrum"
-  #       priority: 2
-  #       type: "public"
-  #       url: "https://arbitrum-one.public.blastapi.io"
-  #       ws_url: "wss://arbitrum-one.public.blastapi.io"
-  #       api_key_required: false
+      - id: "arbitrum_blastapi"
+        name: "BlastAPI Arbitrum"
+        priority: 2
+        type: "public"
+        url: "https://arbitrum-one.public.blastapi.io"
+        ws_url: "wss://arbitrum-one.public.blastapi.io"
+        api_key_required: false
 
-  #     - id: "arbitrum_ankr"
-  #       name: "Ankr Arbitrum"
-  #       priority: 3
-  #       type: "public"
-  #       url: "https://rpc.ankr.com/arbitrum"
-  #       api_key_required: false
+      - id: "arbitrum_ankr"
+        name: "Ankr Arbitrum"
+        priority: 3
+        type: "public"
+        url: "https://rpc.ankr.com/arbitrum"
+        api_key_required: false
 
-  #   connection:
-  #     heartbeat_interval: 15000 # Very frequent for fast chain
-  #     reconnect_interval: 2000
-  #     max_reconnect_attempts: 20
+    connection:
+      heartbeat_interval: 15000 # Very frequent for fast chain
+      reconnect_interval: 2000
+      max_reconnect_attempts: 20
 
-  #   aggregation:
-  #     deduplication_window: 500 # Very short for fast blocks
-  #     min_confirmations: 1
-  #     max_providers: 3
+    aggregation:
+      deduplication_window: 500 # Very short for fast blocks
+      min_confirmations: 1
+      max_providers: 3
 
-  # optimism:
-  #   chain_id: 10
-  #   name: "Optimism Mainnet"
-  #   block_time: 2000
+  optimism:
+    chain_id: 10
+    name: "Optimism Mainnet"
+    block_time: 2000
 
-  #   providers:
-  #     - id: "optimism_ankr"
-  #       name: "Ankr Optimism"
-  #       priority: 1
-  #       type: "public"
-  #       url: "https://rpc.ankr.com/optimism"
-  #       api_key_required: false
+    providers:
+      - id: "optimism_ankr"
+        name: "Ankr Optimism"
+        priority: 1
+        type: "public"
+        url: "https://rpc.ankr.com/optimism"
+        api_key_required: false
 
-  #     - id: "optimism_publicnode"
-  #       name: "PublicNode Optimism"
-  #       priority: 2
-  #       type: "public"
-  #       url: "https://optimism-rpc.publicnode.com"
-  #       ws_url: "wss://optimism-rpc.publicnode.com"
-  #       api_key_required: false
+      - id: "optimism_publicnode"
+        name: "PublicNode Optimism"
+        priority: 2
+        type: "public"
+        url: "https://optimism-rpc.publicnode.com"
+        ws_url: "wss://optimism-rpc.publicnode.com"
+        api_key_required: false
 
-  #     - id: "optimism_blastapi"
-  #       name: "BlastAPI Optimism"
-  #       priority: 3
-  #       type: "public"
-  #       url: "https://optimism-mainnet.public.blastapi.io"
-  #       ws_url: "wss://optimism-mainnet.public.blastapi.io"
-  #       api_key_required: false
+      - id: "optimism_blastapi"
+        name: "BlastAPI Optimism"
+        priority: 3
+        type: "public"
+        url: "https://optimism-mainnet.public.blastapi.io"
+        ws_url: "wss://optimism-mainnet.public.blastapi.io"
+        api_key_required: false
 
-  #   connection:
-  #     heartbeat_interval: 20000
-  #     reconnect_interval: 3000
-  #     max_reconnect_attempts: 15
+    connection:
+      heartbeat_interval: 20000
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
 
-  #   aggregation:
-  #     deduplication_window: 1000
-  #     min_confirmations: 1
-  #     max_providers: 3
+    aggregation:
+      deduplication_window: 1000
+      min_confirmations: 1
+      max_providers: 3
 
 # Global settings
 global:

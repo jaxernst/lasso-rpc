@@ -143,6 +143,11 @@ defmodule Livechain.RPC.ChainSupervisor do
     # Give supervisor time to fully initialize
     Process.sleep(100)
 
+    # Start circuit breakers for ALL providers (HTTP and WS)
+    Enum.each(chain_config.providers, fn provider ->
+      start_circuit_breaker(provider)
+    end)
+
     # Start WebSocket connections only for providers that support them
     ws_providers = ChainConfig.get_ws_providers(chain_config)
     max_providers = chain_config.aggregation.max_providers
@@ -151,14 +156,17 @@ defmodule Livechain.RPC.ChainSupervisor do
     providers_to_start = Enum.take(ws_providers, max_providers)
 
     Enum.each(providers_to_start, fn provider ->
-      # Start circuit breaker for this provider
-      start_circuit_breaker(provider)
-
-      # Start provider connection
+      # Start provider connection (circuit breaker already started above)
       start_provider_connection(chain_name, provider, chain_config)
     end)
 
-    Logger.info("Started #{length(providers_to_start)} WebSocket connections for #{chain_name} (#{length(ws_providers)} WS providers available)")
+    Logger.info(
+      "Started #{length(providers_to_start)} WebSocket connections for #{chain_name} (#{length(ws_providers)} WS providers available)"
+    )
+
+    Logger.info(
+      "Started circuit breakers for #{length(chain_config.providers)} providers for #{chain_name}"
+    )
   end
 
   # Private functions
@@ -230,6 +238,7 @@ defmodule Livechain.RPC.ChainSupervisor do
 
   defp normalize_breaker_result({:ok, {:ok, result}}), do: {:ok, result}
   defp normalize_breaker_result({:ok, {:error, reason}}), do: {:error, reason}
+  defp normalize_breaker_result({:ok, result}), do: {:ok, result}
   defp normalize_breaker_result({:error, reason}), do: {:error, reason}
   defp normalize_breaker_result({:reply, {:ok, result}, _state}), do: {:ok, result}
   defp normalize_breaker_result({:reply, {:error, reason}, _state}), do: {:error, reason}
@@ -241,12 +250,11 @@ defmodule Livechain.RPC.ChainSupervisor do
     catch
       :exit, {:noproc, _} ->
         # Circuit breaker not running; execute function directly
-        {:ok,
-         try do
-           fun.()
-         catch
-           kind, error -> {:error, {kind, error}}
-         end}
+        try do
+          fun.()
+        catch
+          kind, error -> {:error, {kind, error}}
+        end
     end
   end
 end

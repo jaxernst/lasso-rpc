@@ -77,6 +77,63 @@ defmodule Livechain.RPC.ChainRegistry do
     GenServer.call(__MODULE__, :get_status)
   end
 
+  @doc """
+  Gets all active connections from all chain supervisors.
+  This replaces the old WSSupervisor.list_connections functionality.
+  """
+  def list_all_connections do
+    # Get all configured chains from ConfigStore
+    all_chains = ConfigStore.get_all_chains()
+
+    Enum.flat_map(all_chains, fn {chain_name, _chain_config} ->
+      case get_chain_pid(chain_name) do
+        {:ok, pid} when is_pid(pid) ->
+          # Get status from the chain supervisor
+          case ChainSupervisor.get_chain_status(chain_name) do
+            %{error: _} ->
+              []
+
+            status ->
+              # Convert chain status to connection format
+              case Map.get(status, :providers, []) do
+                providers when is_list(providers) ->
+                  Enum.map(providers, fn provider ->
+                    %{
+                      id: provider.id,
+                      name: provider.name,
+                      status: Map.get(provider, :status, :unknown),
+                      chain: chain_name,
+                      reconnect_attempts: Map.get(provider, :consecutive_failures, 0),
+                      subscriptions: Map.get(provider, :subscriptions, 0),
+                      last_seen: Map.get(provider, :last_health_check)
+                    }
+                  end)
+
+                _ ->
+                  []
+              end
+          end
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  @doc """
+  Broadcasts connection status updates to all interested LiveViews.
+  This replaces the old WSSupervisor.broadcast_connection_status_update functionality.
+  """
+  def broadcast_connection_status_update do
+    connections = list_all_connections()
+
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      "ws_connections",
+      {:connection_status_update, connections}
+    )
+  end
+
   ## GenServer Implementation
 
   @impl true
@@ -207,21 +264,21 @@ defmodule Livechain.RPC.ChainRegistry do
     case Livechain.Config.ChainConfig.validate_chain_config(chain_config) do
       :ok ->
         case DynamicSupervisor.start_child(
-                 Livechain.RPC.Supervisor,
-                 {ChainSupervisor, {chain_name, chain_config}}
-               ) do
-            {:ok, pid} ->
-              Logger.info("Started ChainSupervisor for #{chain_name}")
-              {:ok, pid}
+               Livechain.RPC.Supervisor,
+               {ChainSupervisor, {chain_name, chain_config}}
+             ) do
+          {:ok, pid} ->
+            Logger.info("Started ChainSupervisor for #{chain_name}")
+            {:ok, pid}
 
-            {:error, {:already_started, pid}} ->
-              Logger.info("ChainSupervisor for #{chain_name} already running")
-              {:ok, pid}
+          {:error, {:already_started, pid}} ->
+            Logger.info("ChainSupervisor for #{chain_name} already running")
+            {:ok, pid}
 
-            {:error, reason} ->
-              Logger.error("Failed to start ChainSupervisor for #{chain_name}: #{inspect(reason)}")
-              {:error, reason}
-          end
+          {:error, reason} ->
+            Logger.error("Failed to start ChainSupervisor for #{chain_name}: #{inspect(reason)}")
+            {:error, reason}
+        end
 
       {:error, reason} ->
         Logger.error("Invalid configuration for #{chain_name}: #{inspect(reason)}")
@@ -229,4 +286,3 @@ defmodule Livechain.RPC.ChainRegistry do
     end
   end
 end
-
