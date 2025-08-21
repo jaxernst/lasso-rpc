@@ -262,9 +262,10 @@ defmodule LivechainWeb.NetworkTopology do
   defp categorize_chains(chains) do
     ethereum_l1 = Map.get(chains, "ethereum", [])
     
-    # Major chains that should orbit around Ethereum (actual L2s + major sidechains/alt-L1s)
-    major_chain_names = ["arbitrum", "optimism", "base", "polygon", "avalanche", "bnb", "fantom"]
+    # Major chains that should orbit around Ethereum (L2s and major networks)
+    major_chain_names = ["arbitrum", "optimism", "base", "zksync", "linea"]
     
+    # Smaller/newer chains for outer orbit
     {major_chains, other_chains} = 
       chains
       |> Map.drop(["ethereum"])
@@ -487,38 +488,24 @@ defmodule LivechainWeb.NetworkTopology do
 
     cond do
       String.contains?(name_lower, "ethereum") -> "ethereum"
-      String.contains?(name_lower, "polygon") -> "polygon"
       String.contains?(name_lower, "arbitrum") -> "arbitrum"
       String.contains?(name_lower, "optimism") -> "optimism"
       # Be more specific for base to avoid matching "blastapi"
       name_lower =~ ~r/\bbase\b/ -> "base"
-      String.contains?(name_lower, "bsc") or String.contains?(name_lower, "bnb") -> "bnb"
-      String.contains?(name_lower, "avalanche") or String.contains?(name_lower, "avax") -> "avalanche"
-      String.contains?(name_lower, "fantom") or String.contains?(name_lower, "ftm") -> "fantom"
-      String.contains?(name_lower, "cronos") -> "cronos"
-      String.contains?(name_lower, "celo") -> "celo"
-      String.contains?(name_lower, "gnosis") -> "gnosis"
-      String.contains?(name_lower, "moonbeam") -> "moonbeam"
-      String.contains?(name_lower, "kava") -> "kava"
+      String.contains?(name_lower, "zksync") -> "zksync"
+      String.contains?(name_lower, "linea") -> "linea"
+      String.contains?(name_lower, "unichain") -> "unichain"
       true -> "unknown"
     end
   end
 
   defp chain_display_name("ethereum"), do: "Ethereum"
-  defp chain_display_name("polygon"), do: "Polygon"
   defp chain_display_name("arbitrum"), do: "Arbitrum"
   defp chain_display_name("optimism"), do: "Optimism"
   defp chain_display_name("base"), do: "Base"
-  defp chain_display_name("bsc"), do: "BSC"
-  defp chain_display_name("avalanche"), do: "Avalanche"
   defp chain_display_name("zksync"), do: "zkSync"
   defp chain_display_name("linea"), do: "Linea"
-  defp chain_display_name("scroll"), do: "Scroll"
-  defp chain_display_name("mantle"), do: "Mantle"
-  defp chain_display_name("blast"), do: "Blast"
-  defp chain_display_name("mode"), do: "Mode"
-  defp chain_display_name("fantom"), do: "Fantom"
-  defp chain_display_name("celo"), do: "Celo"
+  defp chain_display_name("unichain"), do: "Unichain"
   defp chain_display_name("unknown"), do: "Unknown Chain"
   defp chain_display_name(chain), do: String.capitalize(chain)
 
@@ -533,20 +520,12 @@ defmodule LivechainWeb.NetworkTopology do
   defp provider_status_dot_class(_), do: "bg-gray-400"
 
   defp chain_color("ethereum"), do: "#627EEA"
-  defp chain_color("polygon"), do: "#8247E5"
   defp chain_color("arbitrum"), do: "#28A0F0"
   defp chain_color("optimism"), do: "#FF0420"
   defp chain_color("base"), do: "#0052FF"
-  defp chain_color("bsc"), do: "#F3BA2F"
-  defp chain_color("avalanche"), do: "#E84142"
   defp chain_color("zksync"), do: "#4E529A"
-  defp chain_color("linea"), do: "#121212"
-  defp chain_color("scroll"), do: "#FFEEDA"
-  defp chain_color("mantle"), do: "#000000"
-  defp chain_color("blast"), do: "#FCFC03"
-  defp chain_color("mode"), do: "#DFFE00"
-  defp chain_color("fantom"), do: "#1969FF"
-  defp chain_color("celo"), do: "#35D07F"
+  defp chain_color("linea"), do: "#61DFFF"
+  defp chain_color("unichain"), do: "#FF007A"
   defp chain_color(_), do: "#6B7280"
 
   defp provider_status_color(:connected), do: "#10B981"
@@ -563,7 +542,7 @@ defmodule LivechainWeb.NetworkTopology do
 
   # Helper to identify major chains that orbit around Ethereum
   defp is_l2_chain?(chain_name) do
-    major_chains = ["arbitrum", "optimism", "base", "polygon", "avalanche", "bnb", "fantom"]
+    major_chains = ["arbitrum", "optimism", "base", "zksync", "linea"]
     chain_name in major_chains
   end
 end
