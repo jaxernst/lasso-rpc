@@ -49,6 +49,8 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
       |> assign(:selected_chain, nil)
       |> assign(:selected_provider, nil)
+      |> assign(:hover_chain, nil)
+      |> assign(:hover_provider, nil)
       |> assign(:routing_events, [])
       |> assign(:provider_events, [])
       |> assign(:client_events, [])
@@ -58,6 +60,8 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:sampler_ref, nil)
       |> assign(:vm_metrics, %{})
       |> assign(:available_chains, get_available_chains())
+      |> assign(:details_collapsed, true)
+      |> assign(:events_collapsed, true)
       |> assign(:sim_stats, %{
         http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0},
         ws: %{open: 0}
@@ -275,15 +279,21 @@ defmodule LivechainWeb.Dashboard do
       </div>
       
     <!-- Content Section -->
-      <div class="grid-pattern flex-1 overflow-hidden">
+      <div class="grid-pattern relative flex-1 overflow-hidden">
         <%= case @active_tab do %>
           <% "overview" -> %>
             <.dashboard_tab_content
               connections={@connections}
               routing_events={@routing_events}
               provider_events={@provider_events}
+              client_events={@client_events}
+              latest_blocks={@latest_blocks}
               selected_chain={@selected_chain}
               selected_provider={@selected_provider}
+              hover_chain={@hover_chain}
+              hover_provider={@hover_provider}
+              details_collapsed={@details_collapsed}
+              events_collapsed={@events_collapsed}
             />
           <% "benchmarks" -> %>
             <.benchmarks_tab_content />
@@ -312,74 +322,73 @@ defmodule LivechainWeb.Dashboard do
     ~H"""
     <div class="relative flex h-full w-full">
       <!-- Main Network Topology Area -->
-      <div class="flex-1 flex items-center justify-center p-8">
+      <div class="flex flex-1 items-center justify-center p-8">
         <div class="w-full max-w-4xl">
           <NetworkTopology.nodes_display
             id="network-topology"
             connections={@connections}
-            selected_chain={assigns[:selected_chain]}
-            selected_provider={assigns[:selected_provider]}
+            selected_chain={@selected_chain}
+            selected_provider={@selected_provider}
             on_chain_select="select_chain"
             on_provider_select="select_provider"
             on_test_connection="test_connection"
+            on_chain_hover="highlight_chain"
+            on_provider_hover="highlight_provider"
           />
         </div>
       </div>
       
-      <!-- Side Panel for Chain Details (when chain selected but no provider) -->
-      <%= if assigns[:selected_chain] && !assigns[:selected_provider] do %>
-        <div class="w-96 border-l border-gray-700/50 bg-gray-900/50 flex flex-col">
-          <.chain_details_panel 
-            chain={@selected_chain}
-            connections={@connections}
-            routing_events={@routing_events}
-            provider_events={@provider_events}
-          />
-        </div>
-      <% end %>
-      
-      <!-- Side Panel for Provider Details (when provider selected) -->
-      <%= if assigns[:selected_provider] do %>
-        <div class="w-96 border-l border-gray-700/50 bg-gray-900/50 flex flex-col">
-          <.provider_details_panel 
-            provider={@selected_provider}
-            connections={@connections}
-            routing_events={@routing_events}
-            provider_events={@provider_events}
-            selected_chain={@selected_chain}
-          />
-        </div>
-      <% end %>
-      
-      <!-- Bottom Event Stream (when nothing selected) -->
-      <%= if !assigns[:selected_chain] && !assigns[:selected_provider] do %>
-        <div class="absolute bottom-0 left-0 right-0 h-48 border-t border-gray-700/50 bg-gray-900/80 backdrop-blur-sm">
-          <div class="grid grid-cols-1 gap-4 lg:grid-cols-2 h-full p-4">
-            <div class="flex flex-col">
-              <div class="mb-2 text-sm font-semibold text-gray-300">RPC Call Stream</div>
-              <div class="flex-1 overflow-auto">
-                <%= for e <- Enum.take(@routing_events, 10) do %>
-                  <div class="mb-1 text-xs text-gray-400">
-                    <span class="text-gray-500">[{e.ts}]</span>
-                    chain=<span class="text-purple-300"><%= e.chain %></span> method=<span class="text-sky-300"><%= e.method %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> dur=<span class="text-yellow-300"><%= e.duration_ms %>ms</span> result=<span><%= e.result %></span> failovers=<span><%= e.failovers %></span>
-                  </div>
-                <% end %>
+    <!-- Network Status Legend (positioned relative to full dashboard) -->
+      <div class="bg-gray-900/95 absolute right-4 bottom-4 z-30 min-w-max rounded-lg border border-gray-600 p-4 shadow-xl backdrop-blur-sm">
+        <h4 class="mb-3 text-xs font-semibold text-white">Network Status</h4>
+        <div class="space-y-2.5">
+          <!-- Provider Status -->
+          <div class="flex items-center space-x-2 text-xs text-gray-300">
+            <div class="h-3 w-3 flex-shrink-0 rounded-full bg-emerald-400"></div>
+            <span>Connected</span>
+          </div>
+          <div class="flex items-center space-x-2 text-xs text-gray-300">
+            <div class="h-3 w-3 flex-shrink-0 rounded-full bg-yellow-400"></div>
+            <span>Connecting/Reconnecting</span>
+          </div>
+          <div class="flex items-center space-x-2 text-xs text-gray-300">
+            <div class="h-3 w-3 flex-shrink-0 rounded-full bg-red-400"></div>
+            <span>Disconnected</span>
+          </div>
+          <!-- Reconnect Attempts Badge -->
+          <div class="mt-3 flex items-center space-x-2 border-t border-gray-700 pt-2.5 text-xs text-gray-300">
+            <div class="relative flex flex-shrink-0 items-center">
+              <div class="h-3 w-3 rounded-full bg-gray-600"></div>
+              <div class="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-yellow-500">
+                <span class="text-[8px] font-bold text-white">3</span>
               </div>
             </div>
-            <div class="flex flex-col">
-              <div class="mb-2 text-sm font-semibold text-gray-300">Provider pool events</div>
-              <div class="flex-1 overflow-auto">
-                <%= for e <- Enum.take(@provider_events, 10) do %>
-                  <div class="mb-1 text-xs text-gray-400">
-                    <span class="text-gray-500">[{e.ts}]</span>
-                    chain=<span class="text-purple-300"><%= e.chain %></span> provider=<span class="text-emerald-300"><%= e.provider_id %></span> event=<span class="text-orange-300"><%= e.event %></span>
-                  </div>
-                <% end %>
-              </div>
-            </div>
+            <span>Reconnect attempts</span>
           </div>
         </div>
-      <% end %>
+      </div>
+      
+    <!-- Floating Details Window (top-right) -->
+      <.floating_details_window
+        selected_chain={@selected_chain}
+        selected_provider={@selected_provider}
+        hover_chain={@hover_chain}
+        hover_provider={@hover_provider}
+        details_collapsed={@details_collapsed}
+        connections={@connections}
+        routing_events={@routing_events}
+        provider_events={@provider_events}
+        latest_blocks={@latest_blocks}
+      />
+      
+    <!-- Floating Events Window (bottom-left) -->
+      <.floating_events_window
+        events_collapsed={@events_collapsed}
+        routing_events={@routing_events}
+        provider_events={@provider_events}
+        client_events={@client_events}
+        latest_blocks={@latest_blocks}
+      />
     </div>
     """
   end
@@ -387,67 +396,77 @@ defmodule LivechainWeb.Dashboard do
   def chain_details_panel(assigns) do
     assigns =
       assigns
-      |> assign(:chain_connections, Enum.filter(assigns.connections, &(&1.chain == assigns.chain)))
+      |> assign(
+        :chain_connections,
+        Enum.filter(assigns.connections, &(&1.chain == assigns.chain))
+      )
       |> assign(:chain_events, Enum.filter(assigns.routing_events, &(&1.chain == assigns.chain)))
-      |> assign(:chain_provider_events, Enum.filter(assigns.provider_events, &(&1.chain == assigns.chain)))
-    
+      |> assign(
+        :chain_provider_events,
+        Enum.filter(assigns.provider_events, &(&1.chain == assigns.chain))
+      )
+
     ~H"""
-    <div class="flex flex-col h-full">
+    <div class="flex h-full flex-col">
       <!-- Header -->
-      <div class="p-4 border-b border-gray-700/50">
+      <div class="border-gray-700/50 border-b p-4">
         <div class="flex items-center justify-between">
-          <h3 class="text-lg font-semibold text-white capitalize"><%= @chain %></h3>
+          <h3 class="text-lg font-semibold capitalize text-white">{@chain}</h3>
           <button phx-click="select_chain" phx-value-chain="" class="text-gray-400 hover:text-white">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M6 18L18 6M6 6l12 12"
+              >
+              </path>
             </svg>
           </button>
         </div>
       </div>
       
-      <!-- Chain Stats -->
-      <div class="p-4 border-b border-gray-700/50">
+    <!-- Chain Stats -->
+      <div class="border-gray-700/50 border-b p-4">
         <div class="grid grid-cols-2 gap-4">
           <div class="bg-gray-800/50 rounded-lg p-3">
             <div class="text-xs text-gray-400">Providers</div>
-            <div class="text-xl font-bold text-white"><%= length(@chain_connections) %></div>
+            <div class="text-xl font-bold text-white">{length(@chain_connections)}</div>
           </div>
           <div class="bg-gray-800/50 rounded-lg p-3">
             <div class="text-xs text-gray-400">Connected</div>
             <div class="text-xl font-bold text-emerald-400">
-              <%= Enum.count(@chain_connections, &(&1.status == :connected)) %>
+              {Enum.count(@chain_connections, &(&1.status == :connected))}
             </div>
           </div>
         </div>
       </div>
       
-      <!-- Providers List -->
-      <div class="p-4 border-b border-gray-700/50">
-        <h4 class="text-sm font-semibold text-gray-300 mb-3">Providers</h4>
+    <!-- Providers List -->
+      <div class="border-gray-700/50 border-b p-4">
+        <h4 class="mb-3 text-sm font-semibold text-gray-300">Providers</h4>
         <div class="space-y-2">
           <%= for connection <- @chain_connections do %>
-            <div 
-              class="bg-gray-800/30 rounded-lg p-3 cursor-pointer hover:bg-gray-800/50 transition-colors"
-              phx-click="select_provider" 
+            <div
+              class="bg-gray-800/30 cursor-pointer rounded-lg p-3 transition-colors hover:bg-gray-800/50"
+              phx-click="select_provider"
               phx-value-provider={connection.id}
             >
               <div class="flex items-center justify-between">
                 <div class="flex items-center space-x-3">
-                  <div class={[
-                    "w-3 h-3 rounded-full",
-                    case connection.status do
-                      :connected -> "bg-emerald-400"
-                      :disconnected -> "bg-red-400"
-                      _ -> "bg-yellow-400"
-                    end
-                  ]}></div>
+                  <div class={["h-3 w-3 rounded-full", if(connection.status == :connected,
+    do: "bg-emerald-400",
+    else: if(connection.status == :disconnected,
+    do: "bg-red-400",
+    else: "bg-yellow-400"))]}>
+                  </div>
                   <div>
-                    <div class="text-sm font-medium text-white"><%= connection.name %></div>
-                    <div class="text-xs text-gray-400"><%= connection.id %></div>
+                    <div class="text-sm font-medium text-white">{connection.name}</div>
+                    <div class="text-xs text-gray-400">{connection.id}</div>
                   </div>
                 </div>
                 <div class="text-xs text-gray-400">
-                  <%= connection.subscriptions %> subs
+                  {connection.subscriptions} subs
                 </div>
               </div>
             </div>
@@ -455,29 +474,29 @@ defmodule LivechainWeb.Dashboard do
         </div>
       </div>
       
-      <!-- Recent Events -->
-      <div class="flex-1 p-4 overflow-hidden">
-        <h4 class="text-sm font-semibold text-gray-300 mb-3">Recent Events</h4>
-        <div class="h-full overflow-auto space-y-2">
+    <!-- Recent Events -->
+      <div class="flex-1 overflow-hidden p-4">
+        <h4 class="mb-3 text-sm font-semibold text-gray-300">Recent Events</h4>
+        <div class="h-full space-y-2 overflow-auto">
           <!-- RPC Events -->
           <%= for e <- Enum.take(@chain_events, 5) do %>
             <div class="bg-blue-900/20 rounded-lg p-2">
               <div class="text-xs text-blue-300">RPC Call</div>
               <div class="text-xs text-gray-400">
-                <span class="text-sky-300"><%= e.method %></span> via 
-                <span class="text-emerald-300"><%= e.provider_id %></span> 
+                <span class="text-sky-300">{e.method}</span>
+                via <span class="text-emerald-300">{e.provider_id}</span>
                 (<span class="text-yellow-300"><%= e.duration_ms %>ms</span>)
               </div>
             </div>
           <% end %>
           
-          <!-- Provider Events -->
+    <!-- Provider Events -->
           <%= for e <- Enum.take(@chain_provider_events, 5) do %>
             <div class="bg-orange-900/20 rounded-lg p-2">
               <div class="text-xs text-orange-300">Provider Event</div>
               <div class="text-xs text-gray-400">
-                <span class="text-emerald-300"><%= e.provider_id %></span>: 
-                <span class="text-orange-300"><%= e.event %></span>
+                <span class="text-emerald-300"><%= e.provider_id %></span>:
+                <span class="text-orange-300">{e.event}</span>
               </div>
             </div>
           <% end %>
@@ -490,115 +509,462 @@ defmodule LivechainWeb.Dashboard do
   def provider_details_panel(assigns) do
     assigns =
       assigns
-      |> assign(:provider_connection, Enum.find(assigns.connections, &(&1.id == assigns.provider)))
-      |> assign(:provider_events, Enum.filter(assigns.routing_events, &(&1.provider_id == assigns.provider)))
-      |> assign(:provider_pool_events, Enum.filter(assigns.provider_events, &(&1.provider_id == assigns.provider)))
-    
+      |> assign(
+        :provider_connection,
+        Enum.find(assigns.connections, &(&1.id == assigns.provider))
+      )
+      |> assign(
+        :provider_events,
+        Enum.filter(assigns.routing_events, &(&1.provider_id == assigns.provider))
+      )
+      |> assign(
+        :provider_pool_events,
+        Enum.filter(assigns.provider_events, &(&1.provider_id == assigns.provider))
+      )
+
     ~H"""
-    <div class="flex flex-col h-full">
+    <div class="flex h-full flex-col">
       <!-- Header -->
-      <div class="p-4 border-b border-gray-700/50">
+      <div class="border-gray-700/50 border-b p-4">
         <div class="flex items-center justify-between">
           <div>
             <h3 class="text-lg font-semibold text-white">
-              <%= if @provider_connection, do: @provider_connection.name, else: @provider %>
+              {if @provider_connection, do: @provider_connection.name, else: @provider}
             </h3>
             <%= if @provider_connection do %>
-              <div class="text-sm text-gray-400 mt-1">
-                Chain: <span class="text-purple-300 capitalize"><%= @provider_connection.chain %></span>
+              <div class="mt-1 text-sm text-gray-400">
+                Chain: <span class="capitalize text-purple-300">{@provider_connection.chain}</span>
               </div>
             <% end %>
           </div>
           <div class="flex items-center space-x-2">
             <%= if assigns[:selected_chain] do %>
-              <button 
-                phx-click="select_provider" 
-                phx-value-provider="" 
-                class="text-gray-400 hover:text-white text-sm px-2 py-1 rounded border border-gray-600 hover:border-gray-400 transition-colors"
+              <button
+                phx-click="select_provider"
+                phx-value-provider=""
+                class="rounded border border-gray-600 px-2 py-1 text-sm text-gray-400 transition-colors hover:border-gray-400 hover:text-white"
               >
                 Back to Chain
               </button>
             <% end %>
-            <button phx-click="select_provider" phx-value-provider="" class="text-gray-400 hover:text-white">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            <button
+              phx-click="select_provider"
+              phx-value-provider=""
+              class="text-gray-400 hover:text-white"
+            >
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M6 18L18 6M6 6l12 12"
+                >
+                </path>
               </svg>
             </button>
           </div>
         </div>
       </div>
       
-      <!-- Provider Stats -->
+    <!-- Provider Stats -->
       <%= if @provider_connection do %>
-        <div class="p-4 border-b border-gray-700/50">
+        <div class="border-gray-700/50 border-b p-4">
           <div class="grid grid-cols-2 gap-4">
             <div class="bg-gray-800/50 rounded-lg p-3">
               <div class="text-xs text-gray-400">Status</div>
-              <div class={[
-                "text-sm font-bold",
-                case @provider_connection.status do
-                  :connected -> "text-emerald-400"
-                  :disconnected -> "text-red-400"
-                  _ -> "text-yellow-400"
-                end
-              ]}>
-                <%= String.upcase(to_string(@provider_connection.status)) %>
+              <div class={["text-sm font-bold", if(@provider_connection.status == :connected,
+    do: "text-emerald-400",
+    else: if(@provider_connection.status == :disconnected,
+    do: "text-red-400",
+    else: "text-yellow-400"))]}>
+                {String.upcase(to_string(@provider_connection.status))}
               </div>
             </div>
             <div class="bg-gray-800/50 rounded-lg p-3">
               <div class="text-xs text-gray-400">Subscriptions</div>
-              <div class="text-sm font-bold text-white"><%= @provider_connection.subscriptions %></div>
+              <div class="text-sm font-bold text-white">{@provider_connection.subscriptions}</div>
             </div>
             <div class="bg-gray-800/50 rounded-lg p-3">
               <div class="text-xs text-gray-400">Failures</div>
-              <div class="text-sm font-bold text-red-400"><%= @provider_connection.reconnect_attempts %></div>
+              <div class="text-sm font-bold text-red-400">
+                {@provider_connection.reconnect_attempts}
+              </div>
             </div>
             <div class="bg-gray-800/50 rounded-lg p-3">
               <div class="text-xs text-gray-400">Last Seen</div>
               <div class="text-xs text-gray-300">
-                <%= format_last_seen(@provider_connection.last_seen) %>
+                {format_last_seen(@provider_connection.last_seen)}
               </div>
             </div>
           </div>
         </div>
       <% end %>
       
-      <!-- Recent Activity -->
-      <div class="flex-1 p-4 overflow-hidden">
-        <h4 class="text-sm font-semibold text-gray-300 mb-3">Recent Activity</h4>
-        <div class="h-full overflow-auto space-y-2">
+    <!-- Recent Activity -->
+      <div class="flex-1 overflow-hidden p-4">
+        <h4 class="mb-3 text-sm font-semibold text-gray-300">Recent Activity</h4>
+        <div class="h-full space-y-2 overflow-auto">
           <!-- RPC Calls -->
           <%= for e <- Enum.take(@provider_events, 10) do %>
             <div class="bg-blue-900/20 rounded-lg p-2">
               <div class="text-xs text-blue-300">RPC Call</div>
               <div class="text-xs text-gray-400">
-                <span class="text-sky-300"><%= e.method %></span> on 
-                <span class="text-purple-300 capitalize"><%= e.chain %></span> 
+                <span class="text-sky-300">{e.method}</span>
+                on <span class="capitalize text-purple-300">{e.chain}</span>
                 (<span class="text-yellow-300"><%= e.duration_ms %>ms</span>)
-                <span class={[
-                  "ml-2",
-                  case e.result do
-                    :success -> "text-emerald-400"
-                    :error -> "text-red-400"
-                    _ -> "text-gray-400"
-                  end
-                ]}>
-                  <%= String.upcase(to_string(e.result)) %>
+                <span class={["ml-2", if(e.result == :success,
+    do: "text-emerald-400",
+    else: if(e.result == :error, do: "text-red-400", else: "text-gray-400"))]}>
+                  {String.upcase(to_string(e.result))}
                 </span>
               </div>
             </div>
           <% end %>
           
-          <!-- Provider Pool Events -->
+    <!-- Provider Pool Events -->
           <%= for e <- Enum.take(@provider_pool_events, 10) do %>
             <div class="bg-orange-900/20 rounded-lg p-2">
               <div class="text-xs text-orange-300">Pool Event</div>
               <div class="text-xs text-gray-400">
-                <span class="text-orange-300"><%= e.event %></span>
+                <span class="text-orange-300">{e.event}</span>
                 <%= if e.details do %>
-                  <span class="text-gray-500">- <%= inspect(e.details) %></span>
+                  <span class="text-gray-500">- {inspect(e.details)}</span>
                 <% end %>
               </div>
+            </div>
+          <% end %>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Floating details window wrapper (pinned top-right)
+  def floating_details_window(assigns) do
+    assigns =
+      assigns
+      |> assign_new(:details_collapsed, fn -> true end)
+      |> assign_new(:hover_chain, fn -> nil end)
+      |> assign_new(:hover_provider, fn -> nil end)
+      |> assign(:total_connections, length(assigns.connections))
+      |> assign(:connected_providers, Enum.count(assigns.connections, &(&1.status == :connected)))
+      |> assign(
+        :total_chains,
+        assigns.connections |> Enum.map(& &1.chain) |> Enum.uniq() |> length()
+      )
+
+    ~H"""
+    <div class="pointer-events-none absolute top-4 right-4 z-30">
+      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@details_collapsed, do: "w-80", else: "w-96")]}>
+        <!-- Header / Collapsed preview bar -->
+        <div class="border-gray-700/50 flex items-center justify-between border-b px-3 py-2">
+          <div class="flex min-w-0 items-center gap-2">
+            <div class={["h-2 w-2 rounded-full", if(@connected_providers == @total_connections,
+    do: "bg-emerald-400",
+    else: "bg-yellow-400")]}>
+            </div>
+            <div class="truncate text-xs text-gray-300">
+              <%= cond do %>
+                <% @selected_provider -> %>
+                  Provider: {@selected_provider}
+                <% @selected_chain -> %>
+                  Chain: {@selected_chain}
+                <% @hover_provider -> %>
+                  Preview: {@hover_provider}
+                <% @hover_chain -> %>
+                  Preview: {@hover_chain}
+                <% true -> %>
+                  System Overview
+              <% end %>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <%= if @details_collapsed do %>
+              <div class="text-[10px] flex items-center space-x-2 text-gray-400">
+                <span class="text-emerald-300">{@connected_providers}/{@total_connections}</span>
+                <span>•</span>
+                <span class="text-purple-300">{@total_chains} chains</span>
+              </div>
+            <% end %>
+            <button
+              phx-click="toggle_details_panel"
+              class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-colors hover:bg-gray-700/60"
+            >
+              {if @details_collapsed, do: "↖", else: "↗"}
+            </button>
+          </div>
+        </div>
+
+        <%= if @details_collapsed do %>
+          <div class="space-y-2 px-3 py-2">
+            <div class="grid grid-cols-2 gap-3">
+              <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
+                <div class="text-[10px] uppercase tracking-wide text-gray-400">Providers</div>
+                <div class="text-sm font-semibold text-white">
+                  <span class="text-emerald-300">{@connected_providers}</span>
+                  <span class="text-gray-500">/{@total_connections}</span>
+                </div>
+              </div>
+              <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
+                <div class="text-[10px] uppercase tracking-wide text-gray-400">Chains</div>
+                <div class="text-sm font-semibold text-purple-300">{@total_chains}</div>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+              <div class="bg-gray-800/40 rounded-md px-2 py-1">
+                <div class="text-[10px] text-gray-400">RPC</div>
+                <div class="text-xs font-medium text-sky-300">{length(@routing_events)}</div>
+              </div>
+              <div class="bg-gray-800/40 rounded-md px-2 py-1">
+                <div class="text-[10px] text-gray-400">Events</div>
+                <div class="text-xs font-medium text-orange-300">{length(@provider_events)}</div>
+              </div>
+              <div class="bg-gray-800/40 rounded-md px-2 py-1">
+                <div class="text-[10px] text-gray-400">Blocks</div>
+                <div class="text-xs font-medium text-green-300">{length(@latest_blocks)}</div>
+              </div>
+            </div>
+          </div>
+        <% else %>
+          <!-- Body (only when expanded) -->
+          <div class="h-96">
+            <%= if @selected_provider do %>
+              <.provider_details_panel
+                provider={@selected_provider}
+                connections={@connections}
+                routing_events={@routing_events}
+                provider_events={@provider_events}
+                selected_chain={@selected_chain}
+              />
+            <% else %>
+              <%= if @selected_chain do %>
+                <.chain_details_panel
+                  chain={@selected_chain}
+                  connections={@connections}
+                  routing_events={@routing_events}
+                  provider_events={@provider_events}
+                />
+              <% else %>
+                <.meta_stats_panel
+                  connections={@connections}
+                  routing_events={@routing_events}
+                  provider_events={@provider_events}
+                />
+              <% end %>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  # Floating events window (pinned bottom-left)
+  def floating_events_window(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :total_events,
+        length(assigns.routing_events) + length(assigns.provider_events) +
+          length(assigns.client_events) + length(assigns.latest_blocks)
+      )
+
+    ~H"""
+    <div class="pointer-events-none absolute bottom-4 left-4 z-30">
+      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto w-96 rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@events_collapsed, do: "h-auto", else: "max-h-[70vh]")]}>
+        <div class="border-gray-700/50 flex items-center justify-between border-b px-3 py-2">
+          <div class="flex items-center space-x-2">
+            <div class="text-xs font-medium text-gray-300">Events</div>
+            <%= unless @events_collapsed do %>
+              <div class="bg-purple-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-purple-300">
+                {length(@routing_events) + length(@provider_events) + length(@client_events) +
+                  length(@latest_blocks)}
+              </div>
+            <% end %>
+          </div>
+          <button
+            phx-click="toggle_events_panel"
+            class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-colors hover:bg-gray-700/60"
+          >
+            {if @events_collapsed, do: "↗", else: "↙"}
+          </button>
+        </div>
+
+        <%= if @events_collapsed do %>
+          <div class="px-3 py-2">
+            <div class="text-xs text-gray-400">
+              {length(@routing_events)} RPC calls • {length(@provider_events)} provider events • {length(
+                @latest_blocks
+              )} blocks
+            </div>
+          </div>
+        <% else %>
+          <div class="flex flex-col overflow-hidden">
+            <div class="max-h-[60vh] flex-1 space-y-3 overflow-y-auto p-2">
+              <!-- RPC Call Stream Section -->
+              <div>
+                <div class="mb-2 flex items-center justify-between">
+                  <div class="flex items-center space-x-2 text-xs font-semibold text-gray-300">
+                    <span>RPC Calls</span>
+                    <div class="bg-sky-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-sky-300">
+                      {length(@routing_events)}
+                    </div>
+                  </div>
+                </div>
+                <div class="max-h-32 space-y-1 overflow-y-auto">
+                  <%= for e <- Enum.take(@routing_events, 20) do %>
+                    <div class="bg-gray-800/30 text-[11px] border-gray-700/20 animate-pulse rounded-md border px-2 py-1 text-gray-400">
+                      <div class="flex items-center justify-between">
+                        <div class="text-[10px] text-gray-500">{e.ts}</div>
+                        <div class="flex items-center space-x-1">
+                          <span class="text-sky-300">{e.method}</span>
+                          <span class="text-gray-500">on</span>
+                          <span class="capitalize text-purple-300">{e.chain}</span>
+                        </div>
+                      </div>
+                      <div class="mt-0.5 flex items-center justify-between">
+                        <span class="text-[10px] text-emerald-300">{e.provider_id}</span>
+                        <span class="text-[10px] text-yellow-300">{e.duration_ms}ms</span>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+              
+    <!-- Provider Events Section -->
+              <%= if length(@provider_events) > 0 do %>
+                <div>
+                  <div class="mb-2 flex items-center justify-between">
+                    <div class="flex items-center space-x-2 text-xs font-semibold text-gray-300">
+                      <span>Provider Events</span>
+                      <div class="bg-orange-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-orange-300">
+                        {length(@provider_events)}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="max-h-24 space-y-1 overflow-y-auto">
+                    <%= for e <- Enum.take(@provider_events, 10) do %>
+                      <div class="bg-gray-800/30 text-[11px] border-gray-700/20 rounded-md border px-2 py-1 text-gray-400">
+                        <div class="flex items-center justify-between">
+                          <span class="text-[10px] text-gray-500">{e.ts}</span>
+                          <span class="text-orange-300">{e.event}</span>
+                        </div>
+                        <div class="mt-0.5 flex items-center space-x-2">
+                          <span class="text-[10px] text-purple-300">{e.chain}</span>
+                          <span class="text-[10px] text-emerald-300">{e.provider_id}</span>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+              
+    <!-- Client Events Section -->
+              <%= if length(@client_events) > 0 do %>
+                <div>
+                  <div class="mb-2 flex items-center justify-between">
+                    <div class="flex items-center space-x-2 text-xs font-semibold text-gray-300">
+                      <span>Client Events</span>
+                      <div class="bg-blue-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-blue-300">
+                        {length(@client_events)}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="max-h-24 space-y-1 overflow-y-auto">
+                    <%= for e <- Enum.take(@client_events, 10) do %>
+                      <div class="bg-gray-800/30 text-[11px] border-gray-700/20 rounded-md border px-2 py-1 text-gray-400">
+                        <div class="flex items-center justify-between">
+                          <span class="text-[10px] text-gray-500">{e.ts}</span>
+                          <span class="text-orange-300">{e.event}</span>
+                        </div>
+                        <div class="mt-0.5 flex items-center space-x-2">
+                          <span class="text-[10px] text-gray-300">{e.ip}</span>
+                          <span class="text-[10px] text-sky-300">{e.transport}</span>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+              
+    <!-- Latest Blocks Section -->
+              <%= if length(@latest_blocks) > 0 do %>
+                <div>
+                  <div class="mb-2 flex items-center justify-between">
+                    <div class="flex items-center space-x-2 text-xs font-semibold text-gray-300">
+                      <span>Latest Blocks</span>
+                      <div class="bg-green-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-green-300">
+                        {length(@latest_blocks)}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="max-h-24 space-y-1 overflow-y-auto">
+                    <%= for e <- Enum.take(@latest_blocks, 10) do %>
+                      <div class="bg-gray-800/30 text-[11px] border-gray-700/20 rounded-md border px-2 py-1 text-gray-400">
+                        <div class="flex items-center justify-between">
+                          <span class="text-[10px] text-gray-500">{e.ts}</span>
+                          <span class="text-purple-300">{e.chain}</span>
+                        </div>
+                        <div class="mt-0.5 flex items-center justify-between">
+                          <span class="text-[10px] text-gray-300">#{e.block_number}</span>
+                          <div class="flex items-center space-x-1">
+                            <span class="text-[10px] text-emerald-300">{e.provider_first}</span>
+                            <span class="text-[10px] text-yellow-300">Δ{e.margin_ms}ms</span>
+                          </div>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  # Default meta stats panel for details window when nothing is selected
+  defp meta_stats_panel(assigns) do
+    assigns =
+      assigns
+      |> assign_new(:connections, fn -> [] end)
+      |> assign_new(:routing_events, fn -> [] end)
+      |> assign_new(:provider_events, fn -> [] end)
+
+    total = length(assigns.connections)
+    connected = Enum.count(assigns.connections, &(&1.status == :connected))
+    chains = assigns.connections |> Enum.map(& &1.chain) |> Enum.uniq() |> length()
+
+    assigns =
+      assign(assigns, :__meta_totals, %{total: total, connected: connected, chains: chains})
+
+    ~H"""
+    <div class="space-y-4 p-4">
+      <div class="grid grid-cols-3 gap-3">
+        <div class="bg-gray-800/50 rounded-lg p-3">
+          <div class="text-[11px] text-gray-400">Chains</div>
+          <div class="text-lg font-bold text-white">{@__meta_totals.chains}</div>
+        </div>
+        <div class="bg-gray-800/50 rounded-lg p-3">
+          <div class="text-[11px] text-gray-400">Providers</div>
+          <div class="text-lg font-bold text-white">{@__meta_totals.total}</div>
+        </div>
+        <div class="bg-gray-800/50 rounded-lg p-3">
+          <div class="text-[11px] text-gray-400">Connected</div>
+          <div class="text-lg font-bold text-emerald-400">{@__meta_totals.connected}</div>
+        </div>
+      </div>
+      <div class="text-xs text-gray-400">
+        <div class="mb-1 font-semibold text-gray-300">Recent activity</div>
+        <div class="max-h-40 space-y-1 overflow-auto">
+          <%= for e <- Enum.take(@routing_events, 5) do %>
+            <div>
+              <span class="text-gray-500">[{e.ts}]</span>
+              <span class="text-purple-300">{e.chain}</span>
+              <span class="text-sky-300">{e.method}</span>
+              via <span class="text-emerald-300">{e.provider_id}</span>
             </div>
           <% end %>
         </div>
@@ -786,22 +1152,49 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def handle_event("select_chain", %{"chain" => ""}, socket) do
-    {:noreply, assign(socket, :selected_chain, nil)}
+    {:noreply, socket |> assign(:selected_chain, nil) |> assign(:details_collapsed, true)}
   end
 
   @impl true
   def handle_event("select_chain", %{"chain" => chain}, socket) do
-    {:noreply, assign(socket, :selected_chain, chain)}
+    {:noreply,
+     socket
+     |> assign(:selected_chain, chain)
+     |> assign(:selected_provider, nil)
+     |> assign(:details_collapsed, false)}
   end
 
   @impl true
   def handle_event("select_provider", %{"provider" => ""}, socket) do
-    {:noreply, assign(socket, :selected_provider, nil)}
+    {:noreply, socket |> assign(:selected_provider, nil) |> assign(:details_collapsed, true)}
   end
 
   @impl true
   def handle_event("select_provider", %{"provider" => provider}, socket) do
-    {:noreply, assign(socket, :selected_provider, provider)}
+    {:noreply,
+     socket |> assign(:selected_provider, provider) |> assign(:details_collapsed, false)}
+  end
+
+  # Hover previews
+  @impl true
+  def handle_event("highlight_chain", %{"highlight" => chain}, socket) do
+    {:noreply, assign(socket, :hover_chain, chain)}
+  end
+
+  @impl true
+  def handle_event("highlight_provider", %{"highlight" => provider}, socket) do
+    {:noreply, assign(socket, :hover_provider, provider)}
+  end
+
+  # Collapsible windows toggles
+  @impl true
+  def handle_event("toggle_details_panel", _params, socket) do
+    {:noreply, update(socket, :details_collapsed, &(!&1))}
+  end
+
+  @impl true
+  def handle_event("toggle_events_panel", _params, socket) do
+    {:noreply, update(socket, :events_collapsed, &(!&1))}
   end
 
   @impl true
@@ -1027,12 +1420,14 @@ defmodule LivechainWeb.Dashboard do
   defp to_mb(_), do: 0.0
 
   defp format_last_seen(nil), do: "Never"
+
   defp format_last_seen(timestamp) when is_integer(timestamp) and timestamp > 0 do
     case DateTime.from_unix(timestamp, :millisecond) do
       {:ok, datetime} -> datetime |> DateTime.to_time() |> to_string()
       {:error, _} -> "Invalid"
     end
   end
+
   defp format_last_seen(_), do: "Unknown"
 
   defp get_available_chains do
