@@ -204,66 +204,49 @@ defmodule LivechainWeb.NetworkTopology do
     center_x = 2000
     center_y = 1500
 
-    # Spiral parameters - adjusted for better spacing
-    base_radius = 200
+    # Triangular grid parameters
     total_chains = length(Map.keys(chains))
+    spacing = 350  # Distance between adjacent chain centers
+    
+    # Generate triangular positions for chains
+    chain_positions = generate_hex_positions(total_chains, center_x, center_y, spacing)
 
-    total_nodes =
-      Enum.reduce(chains, total_chains, fn {_, providers}, acc -> acc + length(providers) end)
-
-    spiral_spacing = max(150, 1200 / max(1, total_nodes))
-    angle_increment = :math.pi() / 3
-
-    # Step 1: initial chain positions on spiral with estimated radii
-    initial_chains =
+    # Position chains on hexagonal grid
+    positioned_chains =
       chains
       |> Map.to_list()
       |> Enum.with_index()
-      |> Enum.map(fn {{chain_name, chain_connections}, idx} ->
-        {chain_x, chain_y} =
-          spiral_position(idx, center_x, center_y, base_radius, spiral_spacing, angle_increment)
-
+      |> Enum.reduce(%{}, fn {{chain_name, chain_connections}, idx}, acc ->
+        {chain_x, chain_y} = Enum.at(chain_positions, idx, {center_x, center_y})
+        
         provider_count = length(chain_connections)
         chain_radius = calculate_chain_radius(provider_count)
-
-        %{
-          name: chain_name,
-          x: chain_x,
-          y: chain_y,
-          radius: chain_radius,
-          connections: chain_connections
-        }
-      end)
-
-    # Step 2: resolve chain overlaps with a few relaxation iterations
-    resolved_chains = resolve_chain_collisions(initial_chains, 5)
-
-    # Step 3: compute provider positions after chain positions are stable
-    positioned_chains =
-      Enum.reduce(resolved_chains, %{}, fn chain, acc ->
-        provider_count = length(chain.connections)
-        orbit_radius = chain.radius + 50
+        orbit_radius = chain_radius + 50
         provider_radius = 10
 
-        {providers, _} =
-          Enum.reduce(Enum.with_index(chain.connections), {[], 0}, fn {connection, provider_index},
-                                                                      {provider_acc, _} ->
-            # Add randomization and variation to provider positioning
+        # Position providers around their chain
+        providers =
+          chain_connections
+          |> Enum.with_index()
+          |> Enum.map(fn {connection, provider_index} ->
             base_angle = case provider_count do
-              1 -> 0  # Single provider at top
+              1 -> 
+                # Single provider - use consistent position
+                seed = :erlang.phash2(connection.id, 1000)
+                (seed / 1000) * 2 * :math.pi()
               2 -> 
-                # For 2 providers, use diagonal positioning instead of horizontal
+                # For 2 providers, use vertical positioning
                 case provider_index do
-                  0 -> :math.pi() / 4      # 45 degrees (top-right)
-                  1 -> 5 * :math.pi() / 4  # 225 degrees (bottom-left)
+                  0 -> :math.pi() / 2      # 90 degrees (top)
+                  1 -> 3 * :math.pi() / 2  # 270 degrees (bottom)
                 end
               _ -> 
                 # For 3+ providers, use regular circular distribution
-                2 * :math.pi() * provider_index / provider_count
+                base = 2 * :math.pi() * provider_index / provider_count
+                base + :math.pi() / 2  # Start from top
             end
             
-            # Add controlled randomness to avoid perfect alignment
-            # Use connection.id as seed for consistent positioning across refreshes
+            # Add slight randomness for visual variety
             seed = :erlang.phash2(connection.id, 1000)
             angle_variance = (seed / 1000 - 0.5) * :math.pi() / 6  # ±30 degrees variance
             radius_variance = (seed / 1000 - 0.5) * 15  # ±7.5px radius variance
@@ -271,24 +254,22 @@ defmodule LivechainWeb.NetworkTopology do
             final_angle = base_angle + angle_variance
             final_radius = orbit_radius + radius_variance
             
-            provider_x = chain.x + final_radius * :math.cos(final_angle)
-            provider_y = chain.y + final_radius * :math.sin(final_angle)
+            provider_x = chain_x + final_radius * :math.cos(final_angle)
+            provider_y = chain_y + final_radius * :math.sin(final_angle)
 
-            provider_data = %{
+            {connection, %{
               position: {provider_x, provider_y},
               radius: provider_radius
-            }
-
-            {[{connection, provider_data} | provider_acc], 0}
+            }}
           end)
 
         chain_data = %{
-          position: {chain.x, chain.y},
-          radius: chain.radius,
-          providers: Enum.reverse(providers)
+          position: {chain_x, chain_y},
+          radius: chain_radius,
+          providers: providers
         }
 
-        Map.put(acc, chain.name, chain_data)
+        Map.put(acc, chain_name, chain_data)
       end)
 
     %{chains: positioned_chains}
@@ -298,102 +279,64 @@ defmodule LivechainWeb.NetworkTopology do
     max(30, min(80, 25 + provider_count * 3))
   end
 
-  defp resolve_chain_collisions(chains, 0), do: chains
-
-  defp resolve_chain_collisions(chains, iterations) when iterations > 0 do
-    canvas_width = 4000
-    canvas_height = 3000
-    separation_margin = 20
-
-    len = length(chains)
-
-    updated =
-      Enum.reduce(0..(len - 2), chains, fn i, acc ->
-        Enum.reduce((i + 1)..(len - 1), acc, fn j, acc_inner ->
-          node_i = Enum.at(acc_inner, i)
-          node_j = Enum.at(acc_inner, j)
-
-          {dx, dy} = {node_j.x - node_i.x, node_j.y - node_i.y}
-          distance = :math.sqrt(dx * dx + dy * dy)
-
-          r_i = effective_chain_radius(node_i)
-          r_j = effective_chain_radius(node_j)
-          min_distance = r_i + r_j + separation_margin
-
-          if distance <= 0.0 do
-            # Nudge slightly in a deterministic direction to break symmetry
-            nudge = 1.0
-
-            acc_inner
-            |> List.update_at(i, fn n ->
-              %{
-                n
-                | x: clamp_x(n.x - nudge, r_i, canvas_width),
-                  y: clamp_y(n.y - nudge, r_i, canvas_height)
-              }
-            end)
-            |> List.update_at(j, fn n ->
-              %{
-                n
-                | x: clamp_x(n.x + nudge, r_j, canvas_width),
-                  y: clamp_y(n.y + nudge, r_j, canvas_height)
-              }
-            end)
-          else
-            if distance < min_distance do
-              overlap = min_distance - distance
-              # Move each node half the overlap along the separating axis
-              move_ratio = overlap / (2 * distance)
-              move_x = dx * move_ratio
-              move_y = dy * move_ratio
-
-              acc_inner
-              |> List.update_at(i, fn n ->
-                %{
-                  n
-                  | x: clamp_x(n.x - move_x, r_i, canvas_width),
-                    y: clamp_y(n.y - move_y, r_i, canvas_height)
-                }
-              end)
-              |> List.update_at(j, fn n ->
-                %{
-                  n
-                  | x: clamp_x(n.x + move_x, r_j, canvas_width),
-                    y: clamp_y(n.y + move_y, r_j, canvas_height)
-                }
-              end)
-            else
-              acc_inner
-            end
-          end
-        end)
-      end)
-
-    resolve_chain_collisions(updated, iterations - 1)
-  end
-
-  defp effective_chain_radius(%{radius: r}) do
-    # Include provider orbit and provider dot radius (~10)
-    r + 60
-  end
-
-  defp clamp_x(x, r, width) do
-    min(width - r - 10, max(r + 10, x))
-  end
-
-  defp clamp_y(y, r, height) do
-    min(height - r - 10, max(r + 10, y))
-  end
-
-  defp spiral_position(index, center_x, center_y, base_radius, spacing, angle_increment) do
-    # Archimedean spiral: r = a + b * θ
-    angle = index * angle_increment
-    radius = base_radius + spacing * angle / (2 * :math.pi())
-
-    x = center_x + radius * :math.cos(angle)
-    y = center_y + radius * :math.sin(angle)
-
-    {x, y}
+  # Generate triangular grid positions for chains with better spacing
+  defp generate_hex_positions(count, center_x, center_y, spacing) do
+    cond do
+      count == 1 ->
+        [{center_x, center_y}]
+      
+      count == 2 ->
+        # Two nodes: place horizontally
+        offset = spacing / 2
+        [{center_x - offset, center_y}, {center_x + offset, center_y}]
+      
+      count == 3 ->
+        # Three nodes: equilateral triangle
+        height = spacing * :math.sqrt(3) / 2
+        [
+          {center_x, center_y - height * 2/3},           # top
+          {center_x - spacing/2, center_y + height/3},   # bottom left
+          {center_x + spacing/2, center_y + height/3}    # bottom right
+        ]
+      
+      count <= 6 ->
+        # 4-6 nodes: center + triangular arrangement
+        positions = [{center_x, center_y}]  # center
+        
+        # Triangular ring around center
+        triangle_positions = for i <- 0..(count - 2) do
+          angle = i * 2 * :math.pi() / (count - 1) - :math.pi() / 2  # Start from top
+          x = center_x + spacing * :math.cos(angle)
+          y = center_y + spacing * :math.sin(angle)
+          {x, y}
+        end
+        
+        positions ++ triangle_positions
+      
+      true ->
+        # 7+ nodes: multiple triangular rings
+        positions = [{center_x, center_y}]  # center
+        
+        # First ring: 6 positions in circle
+        first_ring = for i <- 0..5 do
+          angle = i * :math.pi() / 3 - :math.pi() / 2  # Start from top, 60-degree increments
+          x = center_x + spacing * :math.cos(angle)
+          y = center_y + spacing * :math.sin(angle)
+          {x, y}
+        end
+        
+        # Second ring: positions at wider spacing
+        second_ring = for i <- 0..11 do
+          angle = i * :math.pi() / 6 - :math.pi() / 2  # Start from top, 30-degree increments
+          radius = spacing * 1.8  # Wider spacing for second ring
+          x = center_x + radius * :math.cos(angle)
+          y = center_y + radius * :math.sin(angle)
+          {x, y}
+        end
+        
+        all_positions = positions ++ first_ring ++ second_ring
+        Enum.take(all_positions, count)
+    end
   end
 
   defp calculate_connection_line(
