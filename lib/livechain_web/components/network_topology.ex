@@ -37,6 +37,13 @@ defmodule LivechainWeb.NetworkTopology do
     doc: "event name for test connection"
   )
 
+  attr(:on_chain_hover, :string, default: nil, doc: "event name for chain hover (mouseenter)")
+
+  attr(:on_provider_hover, :string,
+    default: nil,
+    doc: "event name for provider hover (mouseenter)"
+  )
+
   attr(:class, :string, default: "", doc: "additional CSS classes")
 
   def nodes_display(assigns) do
@@ -46,23 +53,24 @@ defmodule LivechainWeb.NetworkTopology do
     <div class={["relative h-full w-full overflow-hidden", @class]}>
       
     <!-- Circular chain layout with orbiting providers -->
-      <div class="flex h-full w-full items-center justify-center p-8">
-        <div class="flex flex-wrap items-center justify-center gap-16">
+      <div class="flex h-full w-full items-center justify-center p-6">
+        <div class="flex flex-wrap items-center justify-center gap-12" style="max-width: 1200px;">
           <%= for {chain_name, chain_connections} <- @chains do %>
             <div class="relative" style="width: 200px; height: 200px;">
               <!-- Connection lines from center to providers (drawn first, behind chain circle) -->
               <%= for {connection, index} <- Enum.with_index(chain_connections) do %>
-                <% {x, y} = calculate_orbit_position(index, length(chain_connections), 75) %>
+                <% {x, y} = calculate_orbit_position(index, length(chain_connections), 85) %>
                 <% {line_start_x, line_start_y, line_length, line_angle} =
                   calculate_line_properties(x, y, 100, 50, 10) %>
                 <div
-                  class="pointer-events-none absolute"
+                  class="pointer-events-none absolute z-0"
                   style={
                     "left: #{line_start_x}px; top: #{line_start_y}px; " <>
                     "width: #{line_length}px; height: 2px; " <>
                     "background: #{provider_line_color(connection.status)}; " <>
                     "transform-origin: 0 50%; " <>
-                    "transform: rotate(#{line_angle}rad);"
+                    "transform: rotate(#{line_angle}rad); " <>
+                    "box-shadow: 0 0 2px #{provider_line_color(connection.status)};"
                   }
                 >
                 </div>
@@ -70,12 +78,17 @@ defmodule LivechainWeb.NetworkTopology do
               
     <!-- Chain node (circular) - drawn on top of lines -->
               <div
-                class={["absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-all duration-300 hover:scale-110", if(@selected_chain == chain_name,
+                class={["absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl shadow-inner transition-all duration-300 hover:scale-110", if(@selected_chain == chain_name,
     do: "ring-purple-400/30 border-purple-400 ring-4",
     else: "border-gray-500 hover:border-gray-400"), "from-gray-800 to-gray-900"]}
-                style="width: 100px; height: 100px;"
+                style={"width: 100px; height: 100px; background: linear-gradient(135deg, #1f2937 0%, #111827 100%); " <>
+                  if(@selected_chain == chain_name,
+                    do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
+                    else: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.2), inset 0 0 15px rgba(0, 0, 0, 0.3);")}
                 phx-click={@on_chain_select}
                 phx-value-chain={chain_name}
+                phx-mouseenter={@on_chain_hover}
+                phx-value-highlight={chain_name}
               >
                 <div class="text-center text-white">
                   <div class="text-base font-bold text-purple-300">{String.upcase(chain_name)}</div>
@@ -85,14 +98,19 @@ defmodule LivechainWeb.NetworkTopology do
               
     <!-- Orbiting provider nodes -->
               <%= for {connection, index} <- Enum.with_index(chain_connections) do %>
-                <% {x, y} = calculate_orbit_position(index, length(chain_connections), 75) %>
+                <% {x, y} = calculate_orbit_position(index, length(chain_connections), 85) %>
                 <div
-                  class={["absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
+                  class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
     do: "ring-purple-400/30 border-purple-400 ring-2",
     else: "border-gray-600"), provider_status_class(connection.status)]}
-                  style={"width: 20px; height: 20px; left: #{x}px; top: #{y}px;"}
+                  style={"width: 20px; height: 20px; left: #{x}px; top: #{y}px; " <>
+                    if(@selected_provider == connection.id,
+                      do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
+                      else: "box-shadow: 0 0 4px rgba(255, 255, 255, 0.15);")}
                   phx-click={@on_provider_select}
                   phx-value-provider={connection.id}
+                  phx-mouseenter={@on_provider_hover}
+                  phx-value-highlight={connection.id}
                   title={connection.name}
                 >
                   <!-- Status indicator dot -->
@@ -109,20 +127,6 @@ defmodule LivechainWeb.NetworkTopology do
               <% end %>
             </div>
           <% end %>
-        </div>
-      </div>
-      
-    <!-- Status Legend -->
-      <div class="bg-gray-900/90 absolute right-4 bottom-4 rounded-lg border border-gray-600 p-2 backdrop-blur-sm">
-        <div class="flex items-center space-x-3 text-xs text-gray-300">
-          <div class="flex items-center space-x-1">
-            <div class="h-2 w-2 rounded-full bg-emerald-400"></div>
-            <span>Connected</span>
-          </div>
-          <div class="flex items-center space-x-1">
-            <div class="h-2 w-2 rounded-full bg-red-400"></div>
-            <span>Disconnected</span>
-          </div>
         </div>
       </div>
     </div>
