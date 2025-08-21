@@ -56,17 +56,51 @@ defmodule LivechainWeb.NetworkTopology do
     ~H"""
     <div class={["relative h-full w-full overflow-hidden", @class]}>
       
-    <!-- Spiral network layout -->
+    <!-- Hierarchical orbital network layout -->
       <div class="relative" data-network-canvas style="width: 4000px; height: 3000px;">
-        <!-- Connection lines -->
+        <!-- L1 -> L2 Connection lines -->
+        <%= if Map.has_key?(@spiral_layout.chains, "ethereum") do %>
+          <% ethereum_pos = @spiral_layout.chains["ethereum"].position %>
+          <% ethereum_radius = @spiral_layout.chains["ethereum"].radius %>
+          <%= for {l2_name, l2_data} <- @spiral_layout.chains do %>
+            <%= if is_l2_chain?(l2_name) do %>
+              <% {line_start_x, line_start_y, line_end_x, line_end_y} =
+                calculate_connection_line_with_variance(
+                  ethereum_pos,
+                  l2_data.position,
+                  ethereum_radius,
+                  l2_data.radius,
+                  l2_name
+                ) %>
+              <svg
+                class="pointer-events-none absolute z-0"
+                style="left: 0; top: 0; width: 100%; height: 100%;"
+              >
+                <line
+                  x1={line_start_x}
+                  y1={line_start_y}
+                  x2={line_end_x}
+                  y2={line_end_y}
+                  stroke="#8B5CF6"
+                  stroke-width="1"
+                  opacity="0.3"
+                  stroke-dasharray="2,2"
+                />
+              </svg>
+            <% end %>
+          <% end %>
+        <% end %>
+
+        <!-- Provider connection lines -->
         <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
           <%= for {connection, provider_data} <- chain_data.providers do %>
             <% {line_start_x, line_start_y, line_end_x, line_end_y} =
-              calculate_connection_line(
+              calculate_connection_line_with_variance(
                 chain_data.position,
                 provider_data.position,
                 chain_data.radius,
-                provider_data.radius
+                provider_data.radius,
+                connection.id
               ) %>
             <svg
               class="pointer-events-none absolute z-0"
@@ -204,140 +238,166 @@ defmodule LivechainWeb.NetworkTopology do
     center_x = 2000
     center_y = 1500
 
-    # Triangular grid parameters
-    total_chains = length(Map.keys(chains))
-    spacing = 350  # Distance between adjacent chain centers
-    
-    # Generate triangular positions for chains
-    chain_positions = generate_hex_positions(total_chains, center_x, center_y, spacing)
+    # Hierarchical orbital layout configuration
+    config = %{
+      l1_radius: 60,           # Ethereum L1 node size
+      l2_orbit_min: 200,       # Minimum distance for L2 chains
+      l2_orbit_max: 350,       # Maximum distance for L2 chains
+      provider_orbit: 45,      # Provider orbit distance from their chain
+      provider_radius: 10,     # Provider node size
+      angle_spread: 2 * :math.pi(), # Full circle for L2 distribution
+      other_chain_orbit: 500   # Distance for non-Ethereum chains
+    }
 
-    # Position chains on hexagonal grid
-    positioned_chains =
+    # Separate Ethereum L1 from major chains and others
+    {ethereum_l1, major_chains, other_chains} = categorize_chains(chains)
+
+    # Build hierarchical structure
+    positioned_chains = build_orbital_structure(ethereum_l1, major_chains, other_chains, center_x, center_y, config)
+
+    %{chains: positioned_chains}
+  end
+
+  # Categorize chains into L1 Ethereum, L2s/major chains, and others
+  defp categorize_chains(chains) do
+    ethereum_l1 = Map.get(chains, "ethereum", [])
+    
+    # Major chains that should orbit around Ethereum (actual L2s + major sidechains/alt-L1s)
+    major_chain_names = ["arbitrum", "optimism", "base", "polygon", "avalanche", "bnb", "fantom"]
+    
+    {major_chains, other_chains} = 
       chains
+      |> Map.drop(["ethereum"])
+      |> Map.split(major_chain_names)
+    
+    {ethereum_l1, major_chains, other_chains}
+  end
+
+  # Build the orbital structure with Ethereum at center
+  defp build_orbital_structure(ethereum_l1, major_chains, other_chains, center_x, center_y, config) do
+    positioned = %{}
+    
+    # 1. Position Ethereum L1 at center if it exists
+    positioned = 
+      if length(ethereum_l1) > 0 do
+        # Use the standard chain radius calculation for Ethereum too, not fixed l1_radius
+        ethereum_radius = calculate_chain_radius(length(ethereum_l1))
+        ethereum_data = build_chain_node("ethereum", ethereum_l1, center_x, center_y, ethereum_radius, config.provider_orbit, config.provider_radius)
+        Map.put(positioned, "ethereum", ethereum_data)
+      else
+        positioned
+      end
+
+    # 2. Position major chains in orbital pattern around Ethereum
+    positioned = 
+      major_chains
       |> Map.to_list()
       |> Enum.with_index()
-      |> Enum.reduce(%{}, fn {{chain_name, chain_connections}, idx}, acc ->
-        {chain_x, chain_y} = Enum.at(chain_positions, idx, {center_x, center_y})
+      |> Enum.reduce(positioned, fn {{chain_name, chain_connections}, idx}, acc ->
+        total_majors = map_size(major_chains)
         
-        provider_count = length(chain_connections)
-        chain_radius = calculate_chain_radius(provider_count)
-        orbit_radius = chain_radius + 50
-        provider_radius = 10
-
-        # Position providers around their chain
-        providers =
-          chain_connections
-          |> Enum.with_index()
-          |> Enum.map(fn {connection, provider_index} ->
-            base_angle = case provider_count do
-              1 -> 
-                # Single provider - use consistent position
-                seed = :erlang.phash2(connection.id, 1000)
-                (seed / 1000) * 2 * :math.pi()
-              2 -> 
-                # For 2 providers, use vertical positioning
-                case provider_index do
-                  0 -> :math.pi() / 2      # 90 degrees (top)
-                  1 -> 3 * :math.pi() / 2  # 270 degrees (bottom)
-                end
-              _ -> 
-                # For 3+ providers, use regular circular distribution
-                base = 2 * :math.pi() * provider_index / provider_count
-                base + :math.pi() / 2  # Start from top
-            end
-            
-            # Add slight randomness for visual variety
-            seed = :erlang.phash2(connection.id, 1000)
-            angle_variance = (seed / 1000 - 0.5) * :math.pi() / 6  # ±30 degrees variance
-            radius_variance = (seed / 1000 - 0.5) * 15  # ±7.5px radius variance
-            
-            final_angle = base_angle + angle_variance
-            final_radius = orbit_radius + radius_variance
-            
-            provider_x = chain_x + final_radius * :math.cos(final_angle)
-            provider_y = chain_y + final_radius * :math.sin(final_angle)
-
-            {connection, %{
-              position: {provider_x, provider_y},
-              radius: provider_radius
-            }}
-          end)
-
-        chain_data = %{
-          position: {chain_x, chain_y},
-          radius: chain_radius,
-          providers: providers
-        }
-
+        # Calculate orbital position with slight randomness
+        base_angle = idx * config.angle_spread / max(1, total_majors)
+        seed = :erlang.phash2(chain_name, 1000)
+        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 4  # ±45 degrees
+        distance_variance = (seed / 1000 - 0.5) * 50  # ±25px
+        
+        final_angle = base_angle + angle_variance
+        orbit_distance = config.l2_orbit_min + 
+                        (config.l2_orbit_max - config.l2_orbit_min) * (seed / 1000) +
+                        distance_variance
+        
+        chain_x = center_x + orbit_distance * :math.cos(final_angle)
+        chain_y = center_y + orbit_distance * :math.sin(final_angle)
+        
+        chain_radius = calculate_chain_radius(length(chain_connections))
+        chain_data = build_chain_node(chain_name, chain_connections, chain_x, chain_y, chain_radius, config.provider_orbit, config.provider_radius)
+        
         Map.put(acc, chain_name, chain_data)
       end)
 
-    %{chains: positioned_chains}
+    # 3. Position other chains in outer orbital ring
+    positioned = 
+      other_chains
+      |> Map.to_list()
+      |> Enum.with_index()
+      |> Enum.reduce(positioned, fn {{chain_name, chain_connections}, idx}, acc ->
+        total_others = map_size(other_chains)
+        
+        # Outer orbital positioning
+        base_angle = idx * config.angle_spread / max(1, total_others)
+        seed = :erlang.phash2(chain_name, 1000)
+        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 3
+        
+        final_angle = base_angle + angle_variance
+        orbit_distance = config.other_chain_orbit + (seed / 1000 - 0.5) * 100
+        
+        chain_x = center_x + orbit_distance * :math.cos(final_angle)
+        chain_y = center_y + orbit_distance * :math.sin(final_angle)
+        
+        chain_radius = calculate_chain_radius(length(chain_connections))
+        chain_data = build_chain_node(chain_name, chain_connections, chain_x, chain_y, chain_radius, config.provider_orbit, config.provider_radius)
+        
+        Map.put(acc, chain_name, chain_data)
+      end)
+
+    positioned
+  end
+
+  # Build a chain node with its orbiting providers
+  defp build_chain_node(chain_name, chain_connections, x, y, chain_radius, provider_orbit, provider_radius) do
+    provider_count = length(chain_connections)
+    
+    providers = 
+      chain_connections
+      |> Enum.with_index()
+      |> Enum.map(fn {connection, provider_index} ->
+        # Calculate provider orbital position
+        base_angle = case provider_count do
+          1 -> 
+            # Single provider - use deterministic but varied position
+            seed = :erlang.phash2(connection.id, 1000)
+            (seed / 1000) * 2 * :math.pi()
+          2 -> 
+            # Two providers - opposite sides
+            case provider_index do
+              0 -> 0                    # Right
+              1 -> :math.pi()           # Left
+            end
+          _ -> 
+            # Multiple providers - even distribution
+            base = 2 * :math.pi() * provider_index / provider_count
+            base - :math.pi() / 2  # Start from top
+        end
+        
+        # Add controlled randomness for organic look
+        seed = :erlang.phash2(connection.id, 1000)
+        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 8  # ±22.5 degrees
+        radius_variance = (seed / 1000 - 0.5) * 10  # ±5px
+        
+        final_angle = base_angle + angle_variance
+        final_radius = provider_orbit + radius_variance
+        
+        provider_x = x + final_radius * :math.cos(final_angle)
+        provider_y = y + final_radius * :math.sin(final_angle)
+
+        {connection, %{
+          position: {provider_x, provider_y},
+          radius: provider_radius
+        }}
+      end)
+
+    %{
+      position: {x, y},
+      radius: chain_radius,
+      providers: providers
+    }
   end
 
   defp calculate_chain_radius(provider_count) do
     max(30, min(80, 25 + provider_count * 3))
   end
 
-  # Generate triangular grid positions for chains with better spacing
-  defp generate_hex_positions(count, center_x, center_y, spacing) do
-    cond do
-      count == 1 ->
-        [{center_x, center_y}]
-      
-      count == 2 ->
-        # Two nodes: place horizontally
-        offset = spacing / 2
-        [{center_x - offset, center_y}, {center_x + offset, center_y}]
-      
-      count == 3 ->
-        # Three nodes: equilateral triangle
-        height = spacing * :math.sqrt(3) / 2
-        [
-          {center_x, center_y - height * 2/3},           # top
-          {center_x - spacing/2, center_y + height/3},   # bottom left
-          {center_x + spacing/2, center_y + height/3}    # bottom right
-        ]
-      
-      count <= 6 ->
-        # 4-6 nodes: center + triangular arrangement
-        positions = [{center_x, center_y}]  # center
-        
-        # Triangular ring around center
-        triangle_positions = for i <- 0..(count - 2) do
-          angle = i * 2 * :math.pi() / (count - 1) - :math.pi() / 2  # Start from top
-          x = center_x + spacing * :math.cos(angle)
-          y = center_y + spacing * :math.sin(angle)
-          {x, y}
-        end
-        
-        positions ++ triangle_positions
-      
-      true ->
-        # 7+ nodes: multiple triangular rings
-        positions = [{center_x, center_y}]  # center
-        
-        # First ring: 6 positions in circle
-        first_ring = for i <- 0..5 do
-          angle = i * :math.pi() / 3 - :math.pi() / 2  # Start from top, 60-degree increments
-          x = center_x + spacing * :math.cos(angle)
-          y = center_y + spacing * :math.sin(angle)
-          {x, y}
-        end
-        
-        # Second ring: positions at wider spacing
-        second_ring = for i <- 0..11 do
-          angle = i * :math.pi() / 6 - :math.pi() / 2  # Start from top, 30-degree increments
-          radius = spacing * 1.8  # Wider spacing for second ring
-          x = center_x + radius * :math.cos(angle)
-          y = center_y + radius * :math.sin(angle)
-          {x, y}
-        end
-        
-        all_positions = positions ++ first_ring ++ second_ring
-        Enum.take(all_positions, count)
-    end
-  end
 
   defp calculate_connection_line(
          {chain_x, chain_y},
@@ -370,6 +430,45 @@ defmodule LivechainWeb.NetworkTopology do
     end
   end
 
+  # Calculate connection line with pseudo-random length variance
+  defp calculate_connection_line_with_variance(
+         {chain_x, chain_y},
+         {provider_x, provider_y},
+         chain_radius,
+         provider_radius,
+         seed_key
+       ) do
+    # Calculate direction vector
+    dx = provider_x - chain_x
+    dy = provider_y - chain_y
+    distance = :math.sqrt(dx * dx + dy * dy)
+
+    if distance > 0 do
+      # Normalize direction
+      norm_dx = dx / distance
+      norm_dy = dy / distance
+
+      # Add pseudo-random length variance
+      seed = :erlang.phash2(seed_key, 1000)
+      length_variance = (seed / 1000 - 0.5) * 30  # ±15px variance
+      
+      # Calculate start point (edge of chain circle with variance)
+      start_radius = chain_radius + length_variance * 0.3
+      start_x = chain_x + norm_dx * start_radius
+      start_y = chain_y + norm_dy * start_radius
+
+      # Calculate end point (edge of provider circle with variance)
+      end_radius = provider_radius + length_variance * 0.7
+      end_x = provider_x - norm_dx * end_radius
+      end_y = provider_y - norm_dy * end_radius
+
+      {start_x, start_y, end_x, end_y}
+    else
+      # Fallback for zero distance
+      {chain_x, chain_y, provider_x, provider_y}
+    end
+  end
+
   defp provider_line_color(:connected), do: "#10b981"
   defp provider_line_color(:disconnected), do: "#ef4444"
   defp provider_line_color(:connecting), do: "#f59e0b"
@@ -393,17 +492,14 @@ defmodule LivechainWeb.NetworkTopology do
       String.contains?(name_lower, "optimism") -> "optimism"
       # Be more specific for base to avoid matching "blastapi"
       name_lower =~ ~r/\bbase\b/ -> "base"
-      String.contains?(name_lower, "bsc") -> "bsc"
-      String.contains?(name_lower, "avalanche") -> "avalanche"
-      String.contains?(name_lower, "zksync") -> "zksync"
-      String.contains?(name_lower, "linea") -> "linea"
-      String.contains?(name_lower, "scroll") -> "scroll"
-      String.contains?(name_lower, "mantle") -> "mantle"
-      # Be more specific for blast chain to avoid matching "blastapi"
-      name_lower =~ ~r/\bblast\b/ and not String.contains?(name_lower, "blastapi") -> "blast"
-      String.contains?(name_lower, "mode") -> "mode"
-      String.contains?(name_lower, "fantom") -> "fantom"
+      String.contains?(name_lower, "bsc") or String.contains?(name_lower, "bnb") -> "bnb"
+      String.contains?(name_lower, "avalanche") or String.contains?(name_lower, "avax") -> "avalanche"
+      String.contains?(name_lower, "fantom") or String.contains?(name_lower, "ftm") -> "fantom"
+      String.contains?(name_lower, "cronos") -> "cronos"
       String.contains?(name_lower, "celo") -> "celo"
+      String.contains?(name_lower, "gnosis") -> "gnosis"
+      String.contains?(name_lower, "moonbeam") -> "moonbeam"
+      String.contains?(name_lower, "kava") -> "kava"
       true -> "unknown"
     end
   end
@@ -463,5 +559,11 @@ defmodule LivechainWeb.NetworkTopology do
       fastest_provider_id when fastest_provider_id == connection.id -> true
       _ -> false
     end
+  end
+
+  # Helper to identify major chains that orbit around Ethereum
+  defp is_l2_chain?(chain_name) do
+    major_chains = ["arbitrum", "optimism", "base", "polygon", "avalanche", "bnb", "fantom"]
+    chain_name in major_chains
   end
 end
