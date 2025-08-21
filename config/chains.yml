@@ -14,22 +14,23 @@ chains:
         priority: 1
         type: "public"
         url: "https://rpc.ankr.com/eth"
-        api_key_required: false
-
-      - id: "ethereum_llamarpc"
-        name: "LlamaRPC"
-        priority: 2
-        type: "public"
-        url: "https://eth.llamarpc.com"
-        ws_url: "wss://eth.llamarpc.com"
+        ws_url: "wss://rpc.ankr.com/eth/ws"
         api_key_required: false
 
       - id: "ethereum_publicnode"
         name: "PublicNode"
-        priority: 3
+        priority: 2
         type: "public"
         url: "https://ethereum-rpc.publicnode.com"
         ws_url: "wss://ethereum-rpc.publicnode.com"
+        api_key_required: false
+
+      - id: "ethereum_llamarpc"
+        name: "LlamaRPC"
+        priority: 3
+        type: "public"
+        url: "https://eth.llamarpc.com"
+        ws_url: "wss://eth.llamarpc.com"
         api_key_required: false
 
       - id: "ethereum_blastapi"
@@ -54,14 +55,6 @@ chains:
         url: "https://1rpc.io/eth"
         api_key_required: false
 
-      - id: "ethereum_drpc"
-        name: "dRPC"
-        priority: 7
-        type: "public"
-        url: "https://eth.drpc.org"
-        ws_url: "wss://eth.drpc.org"
-        api_key_required: false
-
     # Connection settings
     connection:
       heartbeat_interval: 30000
@@ -75,7 +68,7 @@ chains:
       max_providers: 3 # maximum concurrent providers to use
       max_cache_size: 10000 # maximum number of cached messages
 
-    # Subscription failover settings (optional - will use defaults if not specified)
+    # Subscription failover settings
     failover:
       max_backfill_blocks: 100 # max blocks to backfill on provider failover
       backfill_timeout: 30000 # max time to spend backfilling (ms)
@@ -88,7 +81,7 @@ chains:
 
     providers:
       - id: "base_publicnode"
-        name: "PublicNode"
+        name: "PublicNode Base"
         priority: 1
         type: "public"
         url: "https://base-rpc.publicnode.com"
@@ -102,19 +95,19 @@ chains:
         url: "https://rpc.ankr.com/base"
         api_key_required: false
 
+      - id: "base_omniatech"
+        name: "OmniaTech Base"
+        priority: 3
+        type: "public"
+        url: "https://endpoints.omniatech.io/v1/base/mainnet/public"
+        api_key_required: false
+
       - id: "base_blastapi"
         name: "BlastAPI Base"
-        priority: 3
+        priority: 4
         type: "public"
         url: "https://base-mainnet.public.blastapi.io"
         ws_url: "wss://base-mainnet.public.blastapi.io"
-        api_key_required: false
-
-      - id: "base_quicknode"
-        name: "QuickNode Base"
-        priority: 4
-        type: "public"
-        url: "https://base-mainnet.rpc.quicknode.pro"
         api_key_required: false
 
       - id: "base_1rpc"
@@ -134,44 +127,6 @@ chains:
       min_confirmations: 1
       max_providers: 4
 
-  polygon:
-    chain_id: 137
-    name: "Polygon"
-    block_time: 2100
-
-    providers:
-      - id: "polygon_blastapi"
-        name: "BlastAPI Polygon"
-        priority: 1
-        type: "public"
-        url: "https://polygon-mainnet.public.blastapi.io"
-        ws_url: "wss://polygon-mainnet.public.blastapi.io"
-        api_key_required: false
-
-      - id: "polygon_ankr"
-        name: "Ankr Polygon"
-        priority: 2
-        type: "public"
-        url: "https://rpc.ankr.com/polygon"
-        api_key_required: false
-
-      - id: "polygon_quicknode"
-        name: "QuickNode Polygon"
-        priority: 3
-        type: "public"
-        url: "https://polygon-mainnet.rpc.quicknode.pro"
-        api_key_required: false
-
-    connection:
-      heartbeat_interval: 25000
-      reconnect_interval: 4000
-      max_reconnect_attempts: 12
-
-    aggregation:
-      deduplication_window: 1500
-      min_confirmations: 1
-      max_providers: 3
-
   arbitrum:
     chain_id: 42161
     name: "Arbitrum One"
@@ -185,19 +140,27 @@ chains:
         url: "https://arb1.arbitrum.io/rpc"
         api_key_required: false
 
+      - id: "arbitrum_ankr"
+        name: "Ankr Arbitrum"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ankr.com/arbitrum"
+        api_key_required: false
+
       - id: "arbitrum_blastapi"
         name: "BlastAPI Arbitrum"
-        priority: 2
+        priority: 3
         type: "public"
         url: "https://arbitrum-one.public.blastapi.io"
         ws_url: "wss://arbitrum-one.public.blastapi.io"
         api_key_required: false
 
-      - id: "arbitrum_ankr"
-        name: "Ankr Arbitrum"
-        priority: 3
+      - id: "arbitrum_publicnode"
+        name: "PublicNode Arbitrum"
+        priority: 4
         type: "public"
-        url: "https://rpc.ankr.com/arbitrum"
+        url: "https://arbitrum-one-rpc.publicnode.com"
+        ws_url: "wss://arbitrum-one-rpc.publicnode.com"
         api_key_required: false
 
     connection:
@@ -231,9 +194,16 @@ chains:
         ws_url: "wss://optimism-rpc.publicnode.com"
         api_key_required: false
 
+      - id: "optimism_omniatech"
+        name: "OmniaTech Optimism"
+        priority: 3
+        type: "public"
+        url: "https://endpoints.omniatech.io/v1/op/mainnet/public"
+        api_key_required: false
+
       - id: "optimism_blastapi"
         name: "BlastAPI Optimism"
-        priority: 3
+        priority: 4
         type: "public"
         url: "https://optimism-mainnet.public.blastapi.io"
         ws_url: "wss://optimism-mainnet.public.blastapi.io"
@@ -249,100 +219,40 @@ chains:
       min_confirmations: 1
       max_providers: 3
 
-  avalanche:
-    chain_id: 43114
-    name: "Avalanche C-Chain"
-    block_time: 2000
-
-    providers:
-      - id: "avalanche_official"
-        name: "Avalanche Official"
-        priority: 1
-        type: "public"
-        url: "https://api.avax.network/ext/bc/C/rpc"
-        api_key_required: false
-
-      - id: "avalanche_ankr"
-        name: "Ankr Avalanche"
-        priority: 2
-        type: "public"
-        url: "https://rpc.ankr.com/avalanche"
-        api_key_required: false
-
-      - id: "avalanche_blastapi"
-        name: "BlastAPI Avalanche"
-        priority: 3
-        type: "public"
-        url: "https://ava-mainnet.public.blastapi.io/ext/bc/C/rpc"
-        ws_url: "wss://ava-mainnet.public.blastapi.io/ext/bc/C/ws"
-        api_key_required: false
-
-    connection:
-      heartbeat_interval: 20000
-      reconnect_interval: 3000
-      max_reconnect_attempts: 15
-
-    aggregation:
-      deduplication_window: 1000
-      min_confirmations: 1
-      max_providers: 3
-
-  bnb:
-    chain_id: 56
-    name: "BNB Smart Chain"
-    block_time: 3000
-
-    providers:
-      - id: "bnb_official"
-        name: "BNB Official"
-        priority: 1
-        type: "public"
-        url: "https://bsc-dataseed.binance.org"
-        api_key_required: false
-
-      - id: "bnb_ankr"
-        name: "Ankr BNB"
-        priority: 2
-        type: "public"
-        url: "https://rpc.ankr.com/bsc"
-        api_key_required: false
-
-      - id: "bnb_blastapi"
-        name: "BlastAPI BNB"
-        priority: 3
-        type: "public"
-        url: "https://bsc-mainnet.public.blastapi.io"
-        ws_url: "wss://bsc-mainnet.public.blastapi.io"
-        api_key_required: false
-
-    connection:
-      heartbeat_interval: 25000
-      reconnect_interval: 4000
-      max_reconnect_attempts: 12
-
-    aggregation:
-      deduplication_window: 1500
-      min_confirmations: 1
-      max_providers: 3
-
-  fantom:
-    chain_id: 250
-    name: "Fantom Opera"
+  zksync:
+    chain_id: 324
+    name: "zkSync Era"
     block_time: 1000
 
     providers:
-      - id: "fantom_official"
-        name: "Fantom Official"
+      - id: "zksync_official"
+        name: "zkSync Official"
         priority: 1
         type: "public"
-        url: "https://rpc.ftm.tools"
+        url: "https://mainnet.era.zksync.io"
+        ws_url: "wss://mainnet.era.zksync.io/ws"
         api_key_required: false
 
-      - id: "fantom_ankr"
-        name: "Ankr Fantom"
+      - id: "zksync_ankr"
+        name: "Ankr zkSync"
         priority: 2
         type: "public"
-        url: "https://rpc.ankr.com/fantom"
+        url: "https://rpc.ankr.com/zksync_era"
+        api_key_required: false
+
+      - id: "zksync_omniatech"
+        name: "OmniaTech zkSync"
+        priority: 3
+        type: "public"
+        url: "https://endpoints.omniatech.io/v1/zksync-era/mainnet/public"
+        api_key_required: false
+
+      - id: "zksync_publicnode"
+        name: "PublicNode zkSync"
+        priority: 4
+        type: "public"
+        url: "https://zksync-era-rpc.publicnode.com"
+        ws_url: "wss://zksync-era-rpc.publicnode.com"
         api_key_required: false
 
     connection:
@@ -353,144 +263,76 @@ chains:
     aggregation:
       deduplication_window: 500
       min_confirmations: 1
-      max_providers: 2
+      max_providers: 3
 
-  cronos:
-    chain_id: 25
-    name: "Cronos"
-    block_time: 6000
-
-    providers:
-      - id: "cronos_official"
-        name: "Cronos Official"
-        priority: 1
-        type: "public"
-        url: "https://evm.cronos.org"
-        api_key_required: false
-
-    connection:
-      heartbeat_interval: 30000
-      reconnect_interval: 5000
-      max_reconnect_attempts: 10
-
-    aggregation:
-      deduplication_window: 2000
-      min_confirmations: 1
-      max_providers: 2
-
-  celo:
-    chain_id: 42220
-    name: "Celo"
-    block_time: 5000
+  linea:
+    chain_id: 59144
+    name: "Linea Mainnet"
+    block_time: 2000
 
     providers:
-      - id: "celo_official"
-        name: "Celo Official"
+      - id: "linea_official"
+        name: "Linea Official"
         priority: 1
         type: "public"
-        url: "https://forno.celo.org"
+        url: "https://rpc.linea.build"
+        ws_url: "wss://rpc.linea.build"
         api_key_required: false
 
-      - id: "celo_ankr"
-        name: "Ankr Celo"
+      - id: "linea_ankr"
+        name: "Ankr Linea"
         priority: 2
         type: "public"
-        url: "https://rpc.ankr.com/celo"
+        url: "https://rpc.ankr.com/linea"
         api_key_required: false
 
+      - id: "linea_infura"
+        name: "Infura Linea"
+        priority: 3
+        type: "public"
+        url: "https://linea-mainnet.infura.io/v3/YOUR_KEY"
+        api_key_required: true
+
     connection:
-      heartbeat_interval: 30000
-      reconnect_interval: 5000
-      max_reconnect_attempts: 10
+      heartbeat_interval: 20000
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
 
     aggregation:
-      deduplication_window: 2000
+      deduplication_window: 1000
       min_confirmations: 1
       max_providers: 2
 
-  gnosis:
-    chain_id: 100
-    name: "Gnosis Chain"
-    block_time: 5000
+  unichain:
+    chain_id: 1301
+    name: "Unichain Sepolia"
+    block_time: 2000
 
     providers:
-      - id: "gnosis_official"
-        name: "Gnosis Official"
+      - id: "unichain_official"
+        name: "Unichain Official"
         priority: 1
         type: "public"
-        url: "https://rpc.gnosischain.com"
+        url: "https://sepolia.unichain.org"
         api_key_required: false
 
-      - id: "gnosis_ankr"
-        name: "Ankr Gnosis"
+      - id: "unichain_quicknode"
+        name: "QuickNode Unichain"
         priority: 2
-        type: "public"
-        url: "https://rpc.ankr.com/gnosis"
-        api_key_required: false
+        type: "third_party"
+        url: "https://unichain-sepolia.rpc.quicknode.pro"
+        ws_url: "wss://unichain-sepolia.rpc.quicknode.pro"
+        api_key_required: true
 
     connection:
-      heartbeat_interval: 30000
-      reconnect_interval: 5000
-      max_reconnect_attempts: 10
+      heartbeat_interval: 20000
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
 
     aggregation:
-      deduplication_window: 2000
+      deduplication_window: 1000
       min_confirmations: 1
       max_providers: 2
-
-  moonbeam:
-    chain_id: 1284
-    name: "Moonbeam"
-    block_time: 12000
-
-    providers:
-      - id: "moonbeam_official"
-        name: "Moonbeam Official"
-        priority: 1
-        type: "public"
-        url: "https://rpc.api.moonbeam.network"
-        api_key_required: false
-
-      - id: "moonbeam_blastapi"
-        name: "BlastAPI Moonbeam"
-        priority: 2
-        type: "public"
-        url: "https://moonbeam.public.blastapi.io"
-        ws_url: "wss://moonbeam.public.blastapi.io"
-        api_key_required: false
-
-    connection:
-      heartbeat_interval: 30000
-      reconnect_interval: 5000
-      max_reconnect_attempts: 10
-
-    aggregation:
-      deduplication_window: 2000
-      min_confirmations: 1
-      max_providers: 2
-
-  kava:
-    chain_id: 2222
-    name: "Kava EVM"
-    block_time: 6000
-
-    providers:
-      - id: "kava_official"
-        name: "Kava Official"
-        priority: 1
-        type: "public"
-        url: "https://evm.kava.io"
-        api_key_required: false
-
-    connection:
-      heartbeat_interval: 30000
-      reconnect_interval: 5000
-      max_reconnect_attempts: 10
-
-    aggregation:
-      deduplication_window: 2000
-      min_confirmations: 1
-      max_providers: 1
 
 # Global settings
 global:
