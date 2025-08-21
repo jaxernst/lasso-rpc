@@ -25,6 +25,7 @@ defmodule LivechainWeb.NetworkTopology do
   attr(:connections, :list, required: true, doc: "list of connection maps")
   attr(:selected_chain, :string, default: nil, doc: "currently selected chain")
   attr(:selected_provider, :string, default: nil, doc: "currently selected provider")
+  attr(:latency_leaders, :map, default: %{}, doc: "map of chain names to fastest provider ids")
   attr(:on_chain_select, :string, default: "select_chain", doc: "event name for chain selection")
 
   attr(:on_provider_select, :string,
@@ -47,87 +48,122 @@ defmodule LivechainWeb.NetworkTopology do
   attr(:class, :string, default: "", doc: "additional CSS classes")
 
   def nodes_display(assigns) do
-    assigns = assign(assigns, :chains, group_connections_by_chain(assigns.connections))
+    assigns =
+      assigns
+      |> assign(:chains, group_connections_by_chain(assigns.connections))
+      |> assign(:spiral_layout, calculate_spiral_layout(assigns.connections))
 
     ~H"""
     <div class={["relative h-full w-full overflow-hidden", @class]}>
       
-    <!-- Circular chain layout with orbiting providers -->
-      <div class="flex h-full w-full items-center justify-center p-6">
-        <div class="flex flex-wrap items-center justify-center gap-12" style="max-width: 1200px;">
-          <%= for {chain_name, chain_connections} <- @chains do %>
-            <div class="relative" style="width: 200px; height: 200px;">
-              <!-- Connection lines from center to providers (drawn first, behind chain circle) -->
-              <%= for {connection, index} <- Enum.with_index(chain_connections) do %>
-                <% {x, y} = calculate_orbit_position(index, length(chain_connections), 85) %>
-                <% {line_start_x, line_start_y, line_length, line_angle} =
-                  calculate_line_properties(x, y, 100, 50, 10) %>
+    <!-- Spiral network layout -->
+      <div class="relative" data-network-canvas style="width: 4000px; height: 3000px;">
+        <!-- Connection lines -->
+        <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
+          <%= for {connection, provider_data} <- chain_data.providers do %>
+            <% {line_start_x, line_start_y, line_end_x, line_end_y} =
+              calculate_connection_line(
+                chain_data.position,
+                provider_data.position,
+                chain_data.radius,
+                provider_data.radius
+              ) %>
+            <svg
+              class="pointer-events-none absolute z-0"
+              style="left: 0; top: 0; width: 100%; height: 100%;"
+            >
+              <line
+                x1={line_start_x}
+                y1={line_start_y}
+                x2={line_end_x}
+                y2={line_end_y}
+                stroke={provider_line_color(connection.status)}
+                stroke-width="2"
+                opacity="0.6"
+              />
+            </svg>
+          <% end %>
+        <% end %>
+        
+    <!-- Chain nodes -->
+        <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
+          <% {x, y} = chain_data.position %>
+          <% radius = chain_data.radius %>
+          <div
+            class={["absolute z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl shadow-inner transition-all duration-300 hover:scale-110", if(@selected_chain == chain_name,
+    do: "ring-purple-400/30 border-purple-400 ring-4",
+    else: "border-gray-500 hover:border-gray-400"), "from-gray-800 to-gray-900"]}
+            style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name)} 0%, #111827 100%); " <>
+              if(@selected_chain == chain_name,
+                do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
+                else: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.2), inset 0 0 15px rgba(0, 0, 0, 0.3);")}
+            phx-click={@on_chain_select}
+            phx-value-chain={chain_name}
+            phx-mouseenter={@on_chain_hover}
+            phx-value-highlight={chain_name}
+            data-chain={chain_name}
+            data-chain-center={"#{x},#{y}"}
+          >
+            <div class="text-center text-white">
+              <div class={"#{if radius < 40, do: "text-xs", else: "text-sm"} font-bold text-white"}>
+                {String.upcase(chain_name)}
+              </div>
+              <div class={"#{if radius < 40, do: "text-xs", else: "text-sm"} text-gray-300"}>
+                {length(chain_data.providers)}
+              </div>
+            </div>
+          </div>
+        <% end %>
+        
+    <!-- Provider nodes -->
+        <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
+          <%= for {connection, provider_data} <- chain_data.providers do %>
+            <% {x, y} = provider_data.position %>
+            <% radius = provider_data.radius %>
+            <div
+              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
+    do: "ring-purple-400/30 border-purple-400 ring-2",
+    else: "border-gray-600"), provider_status_class(connection.status)]}
+              style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
+                if(@selected_provider == connection.id,
+                  do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
+                  else: "box-shadow: 0 0 4px rgba(255, 255, 255, 0.15);")}
+              phx-click={@on_provider_select}
+              phx-value-provider={connection.id}
+              phx-mouseenter={@on_provider_hover}
+              phx-value-highlight={connection.id}
+              title={connection.name}
+              data-provider={connection.id}
+              data-provider-center={"#{x},#{y}"}
+            >
+              <!-- Status indicator dot -->
+              <div
+                class={["rounded-full", provider_status_dot_class(connection.status)]}
+                style={"width: #{max(4, radius - 4)}px; height: #{max(4, radius - 4)}px;"}
+              >
+              </div>
+              
+    <!-- Racing flag indicator for fastest provider -->
+              <%= if is_fastest_provider?(connection, chain_name, @latency_leaders) do %>
                 <div
-                  class="pointer-events-none absolute z-0"
-                  style={
-                    "left: #{line_start_x}px; top: #{line_start_y}px; " <>
-                    "width: #{line_length}px; height: 2px; " <>
-                    "background: #{provider_line_color(connection.status)}; " <>
-                    "transform-origin: 0 50%; " <>
-                    "transform: rotate(#{line_angle}rad); " <>
-                    "box-shadow: 0 0 2px #{provider_line_color(connection.status)};"
-                  }
+                  class="absolute -top-2 -right-2 flex h-4 w-4 animate-pulse items-center justify-center rounded-full bg-purple-600 text-xs font-bold text-white shadow-lg"
+                  title="Fastest average latency"
                 >
+                  <svg class="h-3 w-3 text-yellow-300" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M3 3v18l7-3 7 3V3H3z" />
+                  </svg>
                 </div>
               <% end %>
               
-    <!-- Chain node (circular) - drawn on top of lines -->
-              <div
-                class={["absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl shadow-inner transition-all duration-300 hover:scale-110", if(@selected_chain == chain_name,
-    do: "ring-purple-400/30 border-purple-400 ring-4",
-    else: "border-gray-500 hover:border-gray-400"), "from-gray-800 to-gray-900"]}
-                style={"width: 100px; height: 100px; background: linear-gradient(135deg, #1f2937 0%, #111827 100%); " <>
-                  if(@selected_chain == chain_name,
-                    do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
-                    else: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.2), inset 0 0 15px rgba(0, 0, 0, 0.3);")}
-                phx-click={@on_chain_select}
-                phx-value-chain={chain_name}
-                phx-mouseenter={@on_chain_hover}
-                phx-value-highlight={chain_name}
-              >
-                <div class="text-center text-white">
-                  <div class="text-base font-bold text-purple-300">{String.upcase(chain_name)}</div>
-                  <div class="text-sm text-gray-300">{length(chain_connections)}</div>
-                </div>
-              </div>
-              
-    <!-- Orbiting provider nodes -->
-              <%= for {connection, index} <- Enum.with_index(chain_connections) do %>
-                <% {x, y} = calculate_orbit_position(index, length(chain_connections), 85) %>
-                <div
-                  class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
-    do: "ring-purple-400/30 border-purple-400 ring-2",
-    else: "border-gray-600"), provider_status_class(connection.status)]}
-                  style={"width: 20px; height: 20px; left: #{x}px; top: #{y}px; " <>
-                    if(@selected_provider == connection.id,
-                      do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
-                      else: "box-shadow: 0 0 4px rgba(255, 255, 255, 0.15);")}
-                  phx-click={@on_provider_select}
-                  phx-value-provider={connection.id}
-                  phx-mouseenter={@on_provider_hover}
-                  phx-value-highlight={connection.id}
-                  title={connection.name}
-                >
-                  <!-- Status indicator dot -->
-                  <div class={["h-2 w-2 rounded-full", provider_status_dot_class(connection.status)]}>
-                  </div>
-                  
     <!-- Reconnect attempts indicator -->
-                  <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
-                    <div class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white">
-                      {connection.reconnect_attempts}
-                    </div>
-                  <% end %>
+              <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
+                <div class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white">
+                  {connection.reconnect_attempts}
                 </div>
               <% end %>
             </div>
           <% end %>
-        </div>
+        <% end %>
       </div>
     </div>
     """
@@ -163,73 +199,232 @@ defmodule LivechainWeb.NetworkTopology do
     |> Enum.group_by(&extract_chain_from_connection(&1))
   end
 
-  defp calculate_orbit_position(index, total_providers, base_radius) do
-    # Add randomness to the angle based on provider index for consistent positioning
-    # Use index as seed for deterministic but varied positioning
-    :rand.seed(:exsplus, {index * 13, index * 7, index * 19})
+  defp calculate_spiral_layout(connections) do
+    chains = group_connections_by_chain(connections)
+    center_x = 2000
+    center_y = 1500
 
-    # Calculate base angle for this provider (evenly distributed around circle)
-    base_angle = 2 * :math.pi() * index / max(total_providers, 1)
+    # Spiral parameters - adjusted for better spacing
+    base_radius = 200
+    total_chains = length(Map.keys(chains))
 
-    # Add random angle offset (-30 to +30 degrees)
-    angle_offset = (:rand.uniform() - 0.5) * :math.pi() / 3
-    angle = base_angle + angle_offset
+    total_nodes =
+      Enum.reduce(chains, total_chains, fn {_, providers}, acc -> acc + length(providers) end)
 
-    # Add randomness to radius (extend further out and vary distance)
-    # -10 to +10 px variance
-    radius_variance = :rand.uniform() * 20 - 10
-    # Extend base radius by 15px + variance
-    actual_radius = base_radius + 15 + radius_variance
+    spiral_spacing = max(150, 1200 / max(1, total_nodes))
+    angle_increment = :math.pi() / 3
 
-    # Calculate position relative to center (100px from center of 200px container)
-    center = 100
-    x = center + actual_radius * :math.cos(angle)
-    y = center + actual_radius * :math.sin(angle)
+    # Step 1: initial chain positions on spiral with estimated radii
+    initial_chains =
+      chains
+      |> Map.to_list()
+      |> Enum.with_index()
+      |> Enum.map(fn {{chain_name, chain_connections}, idx} ->
+        {chain_x, chain_y} =
+          spiral_position(idx, center_x, center_y, base_radius, spiral_spacing, angle_increment)
+
+        provider_count = length(chain_connections)
+        chain_radius = calculate_chain_radius(provider_count)
+
+        %{
+          name: chain_name,
+          x: chain_x,
+          y: chain_y,
+          radius: chain_radius,
+          connections: chain_connections
+        }
+      end)
+
+    # Step 2: resolve chain overlaps with a few relaxation iterations
+    resolved_chains = resolve_chain_collisions(initial_chains, 5)
+
+    # Step 3: compute provider positions after chain positions are stable
+    positioned_chains =
+      Enum.reduce(resolved_chains, %{}, fn chain, acc ->
+        provider_count = length(chain.connections)
+        orbit_radius = chain.radius + 50
+        provider_radius = 10
+
+        {providers, _} =
+          Enum.reduce(Enum.with_index(chain.connections), {[], 0}, fn {connection, provider_index},
+                                                                      {provider_acc, _} ->
+            # Add randomization and variation to provider positioning
+            base_angle = case provider_count do
+              1 -> 0  # Single provider at top
+              2 -> 
+                # For 2 providers, use diagonal positioning instead of horizontal
+                case provider_index do
+                  0 -> :math.pi() / 4      # 45 degrees (top-right)
+                  1 -> 5 * :math.pi() / 4  # 225 degrees (bottom-left)
+                end
+              _ -> 
+                # For 3+ providers, use regular circular distribution
+                2 * :math.pi() * provider_index / provider_count
+            end
+            
+            # Add controlled randomness to avoid perfect alignment
+            # Use connection.id as seed for consistent positioning across refreshes
+            seed = :erlang.phash2(connection.id, 1000)
+            angle_variance = (seed / 1000 - 0.5) * :math.pi() / 6  # ±30 degrees variance
+            radius_variance = (seed / 1000 - 0.5) * 15  # ±7.5px radius variance
+            
+            final_angle = base_angle + angle_variance
+            final_radius = orbit_radius + radius_variance
+            
+            provider_x = chain.x + final_radius * :math.cos(final_angle)
+            provider_y = chain.y + final_radius * :math.sin(final_angle)
+
+            provider_data = %{
+              position: {provider_x, provider_y},
+              radius: provider_radius
+            }
+
+            {[{connection, provider_data} | provider_acc], 0}
+          end)
+
+        chain_data = %{
+          position: {chain.x, chain.y},
+          radius: chain.radius,
+          providers: Enum.reverse(providers)
+        }
+
+        Map.put(acc, chain.name, chain_data)
+      end)
+
+    %{chains: positioned_chains}
+  end
+
+  defp calculate_chain_radius(provider_count) do
+    max(30, min(80, 25 + provider_count * 3))
+  end
+
+  defp resolve_chain_collisions(chains, 0), do: chains
+
+  defp resolve_chain_collisions(chains, iterations) when iterations > 0 do
+    canvas_width = 4000
+    canvas_height = 3000
+    separation_margin = 20
+
+    len = length(chains)
+
+    updated =
+      Enum.reduce(0..(len - 2), chains, fn i, acc ->
+        Enum.reduce((i + 1)..(len - 1), acc, fn j, acc_inner ->
+          node_i = Enum.at(acc_inner, i)
+          node_j = Enum.at(acc_inner, j)
+
+          {dx, dy} = {node_j.x - node_i.x, node_j.y - node_i.y}
+          distance = :math.sqrt(dx * dx + dy * dy)
+
+          r_i = effective_chain_radius(node_i)
+          r_j = effective_chain_radius(node_j)
+          min_distance = r_i + r_j + separation_margin
+
+          if distance <= 0.0 do
+            # Nudge slightly in a deterministic direction to break symmetry
+            nudge = 1.0
+
+            acc_inner
+            |> List.update_at(i, fn n ->
+              %{
+                n
+                | x: clamp_x(n.x - nudge, r_i, canvas_width),
+                  y: clamp_y(n.y - nudge, r_i, canvas_height)
+              }
+            end)
+            |> List.update_at(j, fn n ->
+              %{
+                n
+                | x: clamp_x(n.x + nudge, r_j, canvas_width),
+                  y: clamp_y(n.y + nudge, r_j, canvas_height)
+              }
+            end)
+          else
+            if distance < min_distance do
+              overlap = min_distance - distance
+              # Move each node half the overlap along the separating axis
+              move_ratio = overlap / (2 * distance)
+              move_x = dx * move_ratio
+              move_y = dy * move_ratio
+
+              acc_inner
+              |> List.update_at(i, fn n ->
+                %{
+                  n
+                  | x: clamp_x(n.x - move_x, r_i, canvas_width),
+                    y: clamp_y(n.y - move_y, r_i, canvas_height)
+                }
+              end)
+              |> List.update_at(j, fn n ->
+                %{
+                  n
+                  | x: clamp_x(n.x + move_x, r_j, canvas_width),
+                    y: clamp_y(n.y + move_y, r_j, canvas_height)
+                }
+              end)
+            else
+              acc_inner
+            end
+          end
+        end)
+      end)
+
+    resolve_chain_collisions(updated, iterations - 1)
+  end
+
+  defp effective_chain_radius(%{radius: r}) do
+    # Include provider orbit and provider dot radius (~10)
+    r + 60
+  end
+
+  defp clamp_x(x, r, width) do
+    min(width - r - 10, max(r + 10, x))
+  end
+
+  defp clamp_y(y, r, height) do
+    min(height - r - 10, max(r + 10, y))
+  end
+
+  defp spiral_position(index, center_x, center_y, base_radius, spacing, angle_increment) do
+    # Archimedean spiral: r = a + b * θ
+    angle = index * angle_increment
+    radius = base_radius + spacing * angle / (2 * :math.pi())
+
+    x = center_x + radius * :math.cos(angle)
+    y = center_y + radius * :math.sin(angle)
 
     {x, y}
   end
 
-  defp calculate_line_properties(provider_x, provider_y, center, chain_radius, provider_radius) do
-    # Calculate distance from center to provider (full distance from chain edge to provider edge)
-    dx = provider_x - center
-    dy = provider_y - center
-    full_distance = :math.sqrt(dx * dx + dy * dy)
+  defp calculate_connection_line(
+         {chain_x, chain_y},
+         {provider_x, provider_y},
+         chain_radius,
+         provider_radius
+       ) do
+    # Calculate direction vector
+    dx = provider_x - chain_x
+    dy = provider_y - chain_y
+    distance = :math.sqrt(dx * dx + dy * dy)
 
-    # Add randomness to line length for more organic feel
-    # Use provider position as seed for deterministic randomness
-    :rand.seed(
-      :exsplus,
-      {round(provider_x * 17), round(provider_y * 23), round(full_distance * 11)}
-    )
+    if distance > 0 do
+      # Normalize direction
+      norm_dx = dx / distance
+      norm_dy = dy / distance
 
-    # -4 to +4 px variance
-    length_variance = (:rand.uniform() - 0.5) * 8
+      # Calculate start point (edge of chain circle)
+      start_x = chain_x + norm_dx * chain_radius
+      start_y = chain_y + norm_dy * chain_radius
 
-    # Line should go from chain circle edge to provider dot edge, with some variance
-    base_line_length = full_distance - chain_radius - provider_radius
-    # Ensure minimum length
-    line_length = max(5, base_line_length + length_variance)
+      # Calculate end point (edge of provider circle)
+      end_x = provider_x - norm_dx * provider_radius
+      end_y = provider_y - norm_dy * provider_radius
 
-    # Calculate angle for rotation
-    line_angle = :math.atan2(dy, dx)
-
-    # Calculate start position for the line (at the edge of the chain circle)
-    # We need to find the point on the chain circle's edge that's closest to the provider
-    # This is done by normalizing the direction vector and scaling it by the chain radius
-    {line_start_x, line_start_y} =
-      if full_distance > 0 do
-        # Normalize the direction vector
-        normalized_dx = dx / full_distance
-        normalized_dy = dy / full_distance
-
-        # Start position is at the edge of the chain circle
-        {center + normalized_dx * chain_radius, center + normalized_dy * chain_radius}
-      else
-        # Fallback if provider is at center (shouldn't happen in practice)
-        {center, center}
-      end
-
-    {line_start_x, line_start_y, line_length, line_angle}
+      {start_x, start_y, end_x, end_y}
+    else
+      # Fallback for zero distance
+      {chain_x, chain_y, provider_x, provider_y}
+    end
   end
 
   defp provider_line_color(:connected), do: "#10b981"
@@ -267,98 +462,6 @@ defmodule LivechainWeb.NetworkTopology do
       String.contains?(name_lower, "fantom") -> "fantom"
       String.contains?(name_lower, "celo") -> "celo"
       true -> "unknown"
-    end
-  end
-
-  defp calculate_spiral_position(index, _center_x, _center_y) do
-    case index do
-      0 ->
-        # First chain goes in the center - use CSS transforms for centering
-        {"50%", "50%"}
-
-      _ ->
-        # Spiral outward using a modified Archimedes spiral
-        # Calculate which "ring" we're in and position within that ring
-        ring = calculate_ring(index)
-        position_in_ring = index - ring_start_index(ring)
-        positions_in_ring = positions_per_ring(ring)
-
-        # Calculate angle for this position in the ring
-        angle = 2 * :math.pi() * position_in_ring / positions_in_ring
-
-        # Distance from center increases with each ring (in viewport units)
-        # Use viewport width units for responsiveness
-        radius_vw = ring * 15 + 10
-        # Use viewport height units for responsiveness
-        radius_vh = ring * 12 + 8
-
-        # Calculate offset from center using CSS calc()
-        x_offset = radius_vw * :math.cos(angle)
-        y_offset = radius_vh * :math.sin(angle)
-
-        x = "calc(50% + #{round(x_offset)}vw)"
-        y = "calc(50% + #{round(y_offset)}vh)"
-
-        {x, y}
-    end
-  end
-
-  defp calculate_ring(index) when index <= 0, do: 0
-
-  defp calculate_ring(index) do
-    # Each ring can hold more nodes: ring 1 = 6, ring 2 = 12, ring 3 = 18, etc.
-    total = 0
-    ring = 1
-
-    calculate_ring_recursive(index, total, ring)
-  end
-
-  defp calculate_ring_recursive(index, total, ring) do
-    ring_capacity = ring * 6
-
-    if index <= total + ring_capacity do
-      ring
-    else
-      calculate_ring_recursive(index, total + ring_capacity, ring + 1)
-    end
-  end
-
-  defp ring_start_index(ring) when ring <= 1, do: 1
-
-  defp ring_start_index(ring) do
-    # Sum of positions in all previous rings
-    Enum.sum(1..(ring - 1) |> Enum.map(&(&1 * 6))) + 1
-  end
-
-  defp positions_per_ring(ring) when ring <= 0, do: 1
-  defp positions_per_ring(ring), do: ring * 6
-
-  defp calculate_satellite_position(center_x, center_y, distance, index, total_satellites) do
-    # Position WebSocket connections in a circle around their blockchain node
-    angle = 2 * :math.pi() * index / max(total_satellites, 1)
-
-    # Handle both pixel and percentage/calc positioning
-    case {center_x, center_y} do
-      {x, y} when is_binary(x) and is_binary(y) ->
-        # For CSS calc() positioning, use CSS transforms with pixel offsets
-        x_offset = distance * :math.cos(angle)
-        y_offset = distance * :math.sin(angle)
-
-        satellite_x = "calc(#{x} + #{round(x_offset)}px)"
-        satellite_y = "calc(#{y} + #{round(y_offset)}px)"
-
-        {satellite_x, satellite_y}
-
-      {x, y} when is_number(x) and is_number(y) ->
-        # Fallback for numeric positioning
-        satellite_x = x + distance * :math.cos(angle)
-        satellite_y = y + distance * :math.sin(angle)
-
-        {round(satellite_x), round(satellite_y)}
-
-      _ ->
-        # Default fallback
-        {"50%", "50%"}
     end
   end
 
@@ -411,4 +514,11 @@ defmodule LivechainWeb.NetworkTopology do
   defp provider_status_color(:disconnected), do: "#EF4444"
   defp provider_status_color(:connecting), do: "#F59E0B"
   defp provider_status_color(_), do: "#6B7280"
+
+  defp is_fastest_provider?(connection, chain_name, latency_leaders) do
+    case Map.get(latency_leaders, chain_name) do
+      fastest_provider_id when fastest_provider_id == connection.id -> true
+      _ -> false
+    end
+  end
 end

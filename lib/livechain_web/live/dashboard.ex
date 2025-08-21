@@ -41,6 +41,7 @@ defmodule LivechainWeb.Dashboard do
       _ = :erlang.statistics(:io)
 
       Process.send_after(self(), :vm_metrics_tick, 1_000)
+      Process.send_after(self(), :latency_leaders_refresh, 30_000)
     end
 
     initial_state =
@@ -66,6 +67,7 @@ defmodule LivechainWeb.Dashboard do
         http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0},
         ws: %{open: 0}
       })
+      |> assign(:latency_leaders, %{})
       |> fetch_connections()
 
     {:ok, initial_state}
@@ -200,6 +202,15 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, assign(socket, :vm_metrics, metrics)}
   end
 
+  # Latency leaders refresh
+  @impl true
+  def handle_info(:latency_leaders_refresh, socket) do
+    connections = Map.get(socket.assigns, :connections, [])
+    latency_leaders = get_latency_leaders_by_chain(connections)
+    Process.send_after(self(), :latency_leaders_refresh, 30_000)
+    {:noreply, assign(socket, :latency_leaders, latency_leaders)}
+  end
+
   # Sampler tick
   @impl true
   def handle_info(:sample_tick, %{assigns: %{sampler_running: true}} = socket) do
@@ -322,13 +333,18 @@ defmodule LivechainWeb.Dashboard do
     ~H"""
     <div class="relative flex h-full w-full">
       <!-- Main Network Topology Area -->
-      <div class="flex flex-1 items-center justify-center p-8">
-        <div class="w-full max-w-4xl">
+      <div
+        class="flex-1 overflow-hidden"
+        phx-hook="DraggableNetworkViewport"
+        id="draggable-viewport"
+      >
+        <div class="h-full w-full" data-draggable-content>
           <NetworkTopology.nodes_display
             id="network-topology"
             connections={@connections}
             selected_chain={@selected_chain}
             selected_provider={@selected_provider}
+            latency_leaders={Map.get(assigns, :latency_leaders, %{})}
             on_chain_select="select_chain"
             on_provider_select="select_provider"
             on_test_connection="test_connection"
@@ -354,6 +370,16 @@ defmodule LivechainWeb.Dashboard do
           <div class="flex items-center space-x-2 text-xs text-gray-300">
             <div class="h-3 w-3 flex-shrink-0 rounded-full bg-red-400"></div>
             <span>Disconnected</span>
+          </div>
+          <!-- Racing Flag Indicator -->
+          <div class="flex items-center space-x-2 text-xs text-gray-300">
+            <div class="relative flex flex-shrink-0 items-center">
+              <div class="h-3 w-3 rounded-full bg-purple-600"></div>
+              <svg class="absolute h-2 w-2 text-yellow-300" fill="currentColor" viewBox="0 0 24 24" style="top: 0.5px; left: 0.5px;">
+                <path d="M3 3v18l7-3 7 3V3H3z"/>
+              </svg>
+            </div>
+            <span>Fastest average latency</span>
           </div>
           <!-- Reconnect Attempts Badge -->
           <div class="mt-3 flex items-center space-x-2 border-t border-gray-700 pt-2.5 text-xs text-gray-300">
@@ -1157,11 +1183,17 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def handle_event("select_chain", %{"chain" => chain}, socket) do
-    {:noreply,
-     socket
-     |> assign(:selected_chain, chain)
-     |> assign(:selected_provider, nil)
-     |> assign(:details_collapsed, false)}
+    socket =
+      socket
+      |> assign(:selected_chain, chain)
+      |> assign(:selected_provider, nil)
+      |> assign(:details_collapsed, false)
+
+    # Re-enable auto-centering to animate pan to the selected chain
+    socket =
+      if chain != "", do: push_event(socket, "center_on_chain", %{chain: chain}), else: socket
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -1171,8 +1203,18 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def handle_event("select_provider", %{"provider" => provider}, socket) do
-    {:noreply,
-     socket |> assign(:selected_provider, provider) |> assign(:details_collapsed, false)}
+    socket =
+      socket
+      |> assign(:selected_provider, provider)
+      |> assign(:details_collapsed, false)
+
+    # Re-enable auto-centering to animate pan to the selected provider
+    socket =
+      if provider != "",
+        do: push_event(socket, "center_on_provider", %{provider: provider}),
+        else: socket
+
+    {:noreply, socket}
   end
 
   # Hover previews
@@ -1310,16 +1352,62 @@ defmodule LivechainWeb.Dashboard do
   defp to_float(value) when is_float(value), do: value
   defp to_float(_), do: 0.0
 
+  defp get_latency_leaders_by_chain(connections) do
+    alias Livechain.Benchmarking.BenchmarkStore
+    
+    # Group connections by chain
+    chains_with_providers = 
+      connections
+      |> Enum.group_by(fn conn -> Map.get(conn, :chain) end)
+      |> Enum.reject(fn {chain, _providers} -> is_nil(chain) end)
+
+    # For each chain, find the provider with lowest average latency
+    Enum.reduce(chains_with_providers, %{}, fn {chain_name, chain_connections}, acc ->
+      # Get latency data for each provider
+      provider_latencies = 
+        Enum.map(chain_connections, fn conn ->
+          provider_id = conn.id
+          
+          # Get RPC performance for common methods
+          common_methods = ["eth_blockNumber", "eth_getBalance", "eth_chainId", "eth_getLogs"]
+          
+          total_latency = 
+            Enum.reduce(common_methods, {0.0, 0}, fn method, {sum_latency, count} ->
+              case BenchmarkStore.get_rpc_performance(chain_name, provider_id, method) do
+                %{avg_latency: avg_lat, total_calls: total} when total >= 10 and avg_lat > 0 ->
+                  {sum_latency + avg_lat, count + 1}
+                _ ->
+                  {sum_latency, count}
+              end
+            end)
+          
+          case total_latency do
+            {sum, count} when count > 0 -> {provider_id, sum / count}
+            _ -> nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+      
+      # Find provider with lowest average latency
+      case Enum.min_by(provider_latencies, fn {_provider_id, avg_latency} -> avg_latency end, fn -> nil end) do
+        {fastest_provider_id, _latency} -> Map.put(acc, chain_name, fastest_provider_id)
+        nil -> acc
+      end
+    end)
+  end
+
   defp fetch_connections(socket) do
     connections = Livechain.RPC.ChainRegistry.list_all_connections()
+    latency_leaders = get_latency_leaders_by_chain(connections)
 
     socket
     |> assign(:connections, connections)
+    |> assign(:latency_leaders, latency_leaders)
     |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
   end
 
   defp start_demo_connections do
-    # Note: Demo connections are now handled by the chain supervisors
+    # Note: Demo connections are now managed by the chain supervisors
     # This function is kept for compatibility but doesn't start connections
     Logger.info("Demo connections are now managed by chain supervisors")
     :ok
