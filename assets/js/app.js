@@ -61,7 +61,7 @@ const SimulatorControl = {
       const chainsData = this.el.getAttribute("data-available-chains");
       this.availableChains = chainsData ? JSON.parse(chainsData) : [];
       console.log("Available chains:", this.availableChains);
-      
+
       // Make chains available to the simulator module
       LassoSim.setAvailableChains(this.availableChains);
     } catch (e) {
@@ -101,6 +101,287 @@ const SimulatorControl = {
   },
 };
 
+// Draggable Network Viewport Hook
+const DraggableNetworkViewport = {
+  mounted() {
+    this.isDragging = false;
+    this.startX = 0;
+    this.startY = 0;
+    this.translateX = 0;
+    this.translateY = 0;
+    this.scale = 1;
+    this.animationId = null;
+
+    // Find the network container (the draggable content)
+    this.networkContainer = this.el.querySelector("[data-draggable-content]");
+    if (!this.networkContainer) {
+      console.warn(
+        "DraggableNetworkViewport: No element with data-draggable-content found"
+      );
+      return;
+    }
+
+    // Find the actual canvas element (4000x3000) to transform; fallback to wrapper
+    this.canvasEl =
+      this.networkContainer.querySelector("[data-network-canvas]") ||
+      this.networkContainer;
+
+    // Compute initial transform to center the canvas in the viewport
+    const viewportRect = this.el.getBoundingClientRect();
+    const canvasWidth =
+      this.canvasEl.scrollWidth || this.canvasEl.offsetWidth || 4000;
+    const canvasHeight =
+      this.canvasEl.scrollHeight || this.canvasEl.offsetHeight || 3000;
+
+    this.translateX = viewportRect.width / 2 - canvasWidth / 2;
+    this.translateY = viewportRect.height / 2 - canvasHeight / 2;
+    this.updateTransform();
+
+    // Mouse events
+    this.el.addEventListener("mousedown", this.handleMouseDown.bind(this));
+    this.el.addEventListener("mousemove", this.handleMouseMove.bind(this));
+    this.el.addEventListener("mouseup", this.handleMouseUp.bind(this));
+    this.el.addEventListener("mouseleave", this.handleMouseUp.bind(this));
+
+    // Touch events for mobile
+    this.el.addEventListener("touchstart", this.handleTouchStart.bind(this), {
+      passive: false,
+    });
+    this.el.addEventListener("touchmove", this.handleTouchMove.bind(this), {
+      passive: false,
+    });
+    this.el.addEventListener("touchend", this.handleTouchEnd.bind(this));
+
+    // Zoom disabled - wheel events ignored (but we add programmatic zoom)
+
+    // Prevent context menu on right click
+    this.el.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    // Set cursor styles
+    this.el.style.cursor = "grab";
+    this.el.style.userSelect = "none";
+
+    this.handleEvent("center_on_chain", ({ chain }) => {
+      this.centerOnChain(chain, { zoom: 1.25 });
+    });
+
+    this.handleEvent("center_on_provider", ({ provider }) => {
+      this.centerOnProvider(provider, { zoom: 1.4 });
+    });
+
+    this.handleEvent("zoom_out", () => {
+      this.animateZoomTo(1);
+    });
+  },
+
+  updated() {
+    // Re-select canvas after LiveView patches and reapply current transform
+    this.networkContainer =
+      this.el.querySelector("[data-draggable-content]") ||
+      this.networkContainer;
+    this.canvasEl =
+      (this.networkContainer &&
+        this.networkContainer.querySelector("[data-network-canvas]")) ||
+      this.canvasEl;
+    this.updateTransform();
+  },
+
+  handleMouseDown(e) {
+    // Only handle left mouse button
+    if (e.button !== 0) return;
+
+    this.isDragging = true;
+    this.startX = e.clientX - this.translateX;
+    this.startY = e.clientY - this.translateY;
+    this.el.style.cursor = "grabbing";
+    e.preventDefault();
+  },
+
+  handleMouseMove(e) {
+    if (!this.isDragging) return;
+
+    this.translateX = e.clientX - this.startX;
+    this.translateY = e.clientY - this.startY;
+    this.updateTransform();
+    e.preventDefault();
+  },
+
+  handleMouseUp() {
+    this.isDragging = false;
+    this.el.style.cursor = "grab";
+  },
+
+  handleTouchStart(e) {
+    if (e.touches.length === 1) {
+      this.isDragging = true;
+      const touch = e.touches[0];
+      this.startX = touch.clientX - this.translateX;
+      this.startY = touch.clientY - this.translateY;
+      e.preventDefault();
+    }
+  },
+
+  handleTouchMove(e) {
+    if (!this.isDragging || e.touches.length !== 1) return;
+
+    const touch = e.touches[0];
+    this.translateX = touch.clientX - this.startX;
+    this.translateY = touch.clientY - this.startY;
+    this.updateTransform();
+    e.preventDefault();
+  },
+
+  handleTouchEnd() {
+    this.isDragging = false;
+  },
+
+  updateTransform() {
+    const target = this.canvasEl || this.networkContainer;
+    if (target) {
+      target.style.transform = `translate(${this.translateX}px, ${this.translateY}px) scale(${this.scale})`;
+      target.style.transformOrigin = "0 0";
+    }
+  },
+
+  // Center the viewport on the first chain on initial load
+  centerOnFirstChain() {
+    setTimeout(() => {
+      const firstChain = this.networkContainer?.querySelector(
+        "[data-chain-center]"
+      );
+      if (firstChain) {
+        const center = firstChain.getAttribute("data-chain-center");
+        if (center) {
+          const [x, y] = center.split(",").map(Number);
+          this.animateTo(x, y);
+        }
+      }
+    }, 100);
+  },
+
+  // Center viewport on a specific chain
+  centerOnChain(chainName, opts = {}) {
+    const chainElement = this.networkContainer?.querySelector(
+      `[data-chain="${chainName}"]`
+    );
+    if (chainElement) {
+      const center = chainElement.getAttribute("data-chain-center");
+      if (center) {
+        const [x, y] = center.split(",").map(Number);
+        const zoom = opts.zoom || 1.25;
+        this.animateTo(x, y, 800, zoom);
+      }
+    }
+  },
+
+  // Center viewport on a specific provider
+  centerOnProvider(providerId, opts = {}) {
+    const providerElement = this.networkContainer?.querySelector(
+      `[data-provider="${providerId}"]`
+    );
+    if (providerElement) {
+      const center = providerElement.getAttribute("data-provider-center");
+      if (center) {
+        const [x, y] = center.split(",").map(Number);
+        const zoom = opts.zoom || 1.4;
+        this.animateTo(x, y, 800, zoom);
+      }
+    }
+  },
+
+  // Smooth zoom animation to target scale while keeping the current center
+  animateZoomTo(targetScale = 1, duration = 300) {
+    if (this.animationId) cancelAnimationFrame(this.animationId);
+
+    const startScale = this.scale;
+    const startX = this.translateX;
+    const startY = this.translateY;
+
+    const viewportRect = this.el.getBoundingClientRect();
+    const viewportCenterX = viewportRect.width / 2;
+    const viewportCenterY = viewportRect.height / 2;
+
+    const currentCanvasCenterX = (viewportCenterX - startX) / startScale;
+    const currentCanvasCenterY = (viewportCenterY - startY) / startScale;
+
+    const startTime = performance.now();
+
+    const animate = (t) => {
+      const progress = Math.min((t - startTime) / duration, 1);
+      const ease = 1 - Math.pow(1 - progress, 3);
+      this.scale = startScale + (targetScale - startScale) * ease;
+
+      // Keep the same canvas point under the viewport center
+      this.translateX = viewportCenterX - currentCanvasCenterX * this.scale;
+      this.translateY = viewportCenterY - currentCanvasCenterY * this.scale;
+
+      this.updateTransform();
+      if (progress < 1) {
+        this.animationId = requestAnimationFrame(animate);
+      } else {
+        this.animationId = null;
+      }
+    };
+
+    this.animationId = requestAnimationFrame(animate);
+  },
+
+  // Smooth animation to center on specific coordinates, with optional zoom
+  animateTo(targetX, targetY, duration = 800, targetScale = null) {
+    if (this.animationId) {
+      cancelAnimationFrame(this.animationId);
+    }
+
+    const viewportRect = this.el.getBoundingClientRect();
+    const viewportCenterX = viewportRect.width / 2;
+    const viewportCenterY = viewportRect.height / 2;
+
+    const startTranslateX = this.translateX;
+    const startTranslateY = this.translateY;
+    const startScale = this.scale;
+
+    // If targetScale provided, animate scale too, keeping target point centered
+    const finalScale = targetScale == null ? this.scale : targetScale;
+
+    // Compute the translation needed at the final scale
+    const targetTranslateX_final = viewportCenterX - targetX * finalScale;
+    const targetTranslateY_final = viewportCenterY - targetY * finalScale;
+
+    const startTime = performance.now();
+
+    const animate = (currentTime) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+
+      // Interpolate scale and translation
+      this.scale = startScale + (finalScale - startScale) * easeProgress;
+      this.translateX =
+        startTranslateX +
+        (targetTranslateX_final - startTranslateX) * easeProgress;
+      this.translateY =
+        startTranslateY +
+        (targetTranslateY_final - startTranslateY) * easeProgress;
+
+      this.updateTransform();
+
+      if (progress < 1) {
+        this.animationId = requestAnimationFrame(animate);
+      } else {
+        this.animationId = null;
+      }
+    };
+
+    this.animationId = requestAnimationFrame(animate);
+  },
+
+  destroyed() {
+    if (this.animationId) {
+      cancelAnimationFrame(this.animationId);
+    }
+  },
+};
+
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");
@@ -110,6 +391,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
   hooks: {
     CollapsibleSection,
     SimulatorControl,
+    DraggableNetworkViewport,
   },
 });
 
