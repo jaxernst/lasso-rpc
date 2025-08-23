@@ -141,7 +141,8 @@ defmodule Livechain.RPC.ChainRegistry do
   defp normalize_provider_status(:unhealthy), do: :disconnected
   defp normalize_provider_status(:connecting), do: :connecting
   defp normalize_provider_status(:disconnected), do: :disconnected
-  defp normalize_provider_status(:rate_limited), do: :connecting
+  # Expose rate limiting distinctly in the UI
+  defp normalize_provider_status(:rate_limited), do: :rate_limited
   defp normalize_provider_status(_), do: :disconnected
 
   ## GenServer Implementation
