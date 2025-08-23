@@ -56,6 +56,7 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:provider_events, [])
       |> assign(:client_events, [])
       |> assign(:latest_blocks, [])
+      |> assign(:events, [])
       |> assign(:demo_running, false)
       |> assign(:sampler_running, false)
       |> assign(:sampler_ref, nil)
@@ -75,10 +76,79 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def handle_info({:connection_status_update, connections}, socket) do
+    prev = Map.get(socket.assigns, :connections, [])
+    prev_by_id = Map.new(prev, fn c -> {c.id, c} end)
+
+    # Build diff events for status changes and reconnect attempt increments
+    {socket, batch} =
+      Enum.reduce(connections, {socket, []}, fn c, {sock, acc} ->
+        case Map.get(prev_by_id, c.id) do
+          nil ->
+            {sock, acc}
+
+          prev_c ->
+            new_acc =
+              []
+              |> then(fn lst ->
+                if Map.get(c, :status) != Map.get(prev_c, :status) do
+                  [
+                    as_event(:provider,
+                      chain: Map.get(c, :chain),
+                      provider_id: c.id,
+                      severity:
+                        case c.status do
+                          :connected -> :info
+                          :connecting -> :warn
+                          _ -> :warn
+                        end,
+                      message: "status #{to_string(prev_c.status)} -> #{to_string(c.status)}",
+                      meta: %{name: c.name}
+                    )
+                    | lst
+                  ]
+                else
+                  lst
+                end
+              end)
+              |> then(fn lst ->
+                prev_attempts = Map.get(prev_c, :reconnect_attempts, 0)
+                attempts = Map.get(c, :reconnect_attempts, 0)
+
+                if attempts > prev_attempts do
+                  [
+                    as_event(:provider,
+                      chain: Map.get(c, :chain),
+                      provider_id: c.id,
+                      severity: :warn,
+                      message: "reconnect attempt #{attempts}",
+                      meta: %{delta: attempts - prev_attempts}
+                    )
+                    | lst
+                  ]
+                else
+                  lst
+                end
+              end)
+
+            {sock, acc ++ new_acc}
+        end
+      end)
+
     socket =
       socket
       |> assign(:connections, connections)
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
+      |> (fn s ->
+            if length(batch) > 0 do
+              s
+              |> update(:events, fn list ->
+                Enum.reverse(batch) ++ Enum.take(list, 199 - length(batch))
+              end)
+              |> push_event("events_batch", %{items: batch})
+            else
+              s
+            end
+          end).()
 
     {:noreply, socket}
   end
@@ -121,6 +191,7 @@ defmodule LivechainWeb.Dashboard do
       when is_map(evt) do
     entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      ts_ms: System.system_time(:millisecond),
       chain: chain,
       method: method,
       provider_id: pid,
@@ -130,6 +201,22 @@ defmodule LivechainWeb.Dashboard do
     }
 
     socket = update(socket, :routing_events, fn list -> [entry | Enum.take(list, 99)] end)
+
+    # Unified events + client-side push
+    ev =
+      as_event(:rpc,
+        chain: chain,
+        provider_id: pid,
+        severity: if(entry.result == :error, do: :warn, else: :info),
+        message: "#{method} #{entry.result} (#{dur}ms)",
+        meta: Map.drop(entry, [:ts, :ts_ms])
+      )
+
+    socket =
+      socket
+      |> update(:events, fn list -> [ev | Enum.take(list, 199)] end)
+      |> push_event("events_batch", %{items: [ev]})
+
     {:noreply, socket}
   end
 
@@ -139,6 +226,7 @@ defmodule LivechainWeb.Dashboard do
       when is_map(ev) do
     entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      ts_ms: System.system_time(:millisecond),
       chain: chain,
       provider_id: pid,
       event: event,
@@ -146,6 +234,21 @@ defmodule LivechainWeb.Dashboard do
     }
 
     socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, 99)] end)
+
+    uev =
+      as_event(:provider,
+        chain: chain,
+        provider_id: pid,
+        severity: :info,
+        message: to_string(event),
+        meta: Map.drop(entry, [:ts, :ts_ms])
+      )
+
+    socket =
+      socket
+      |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
+      |> push_event("events_batch", %{items: [uev]})
+
     {:noreply, socket}
   end
 
@@ -155,6 +258,7 @@ defmodule LivechainWeb.Dashboard do
       when is_map(msg) do
     entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      ts_ms: System.system_time(:millisecond),
       chain: chain,
       transport: transport,
       event: ev,
@@ -162,6 +266,20 @@ defmodule LivechainWeb.Dashboard do
     }
 
     socket = update(socket, :client_events, fn list -> [entry | Enum.take(list, 99)] end)
+
+    uev =
+      as_event(:client,
+        chain: chain,
+        severity: :debug,
+        message: "client #{ev} via #{transport}",
+        meta: Map.drop(entry, [:ts, :ts_ms])
+      )
+
+    socket =
+      socket
+      |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
+      |> push_event("events_batch", %{items: [uev]})
+
     {:noreply, socket}
   end
 
@@ -170,12 +288,27 @@ defmodule LivechainWeb.Dashboard do
   def handle_info(%{ts: _t, provider_id: pid, from: from, to: to, reason: reason} = _evt, socket) do
     entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      ts_ms: System.system_time(:millisecond),
       chain: "n/a",
       provider_id: pid,
       event: "circuit: #{from} -> #{to} (#{reason})"
     }
 
     socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, 99)] end)
+
+    uev =
+      as_event(:circuit,
+        provider_id: pid,
+        severity: :warn,
+        message: entry.event,
+        meta: Map.drop(entry, [:ts, :ts_ms])
+      )
+
+    socket =
+      socket
+      |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
+      |> push_event("events_batch", %{items: [uev]})
+
     {:noreply, socket}
   end
 
@@ -184,6 +317,7 @@ defmodule LivechainWeb.Dashboard do
   def handle_info(%{chain: chain, block_number: bn} = blk, socket) when is_map(blk) do
     entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      ts_ms: System.system_time(:millisecond),
       chain: chain,
       block_number: bn,
       provider_first: Map.get(blk, :provider_first) || Map.get(blk, "provider_first"),
@@ -191,6 +325,21 @@ defmodule LivechainWeb.Dashboard do
     }
 
     socket = update(socket, :latest_blocks, fn list -> [entry | Enum.take(list, 19)] end)
+
+    uev =
+      as_event(:block,
+        chain: chain,
+        severity: :info,
+        message:
+          "block #{bn} (first: #{entry.provider_first || "n/a"}, +#{entry.margin_ms || 0}ms)",
+        meta: Map.drop(entry, [:ts, :ts_ms])
+      )
+
+    socket =
+      socket
+      |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
+      |> push_event("events_batch", %{items: [uev]})
+
     {:noreply, socket}
   end
 
@@ -231,6 +380,16 @@ defmodule LivechainWeb.Dashboard do
   def render(assigns) do
     ~H"""
     <div class="flex h-full w-full flex-col">
+      <!-- Hidden events buffer hook -->
+      <div id="events-bus" class="hidden" phx-hook="EventsFeed" data-buffer-size="500"></div>
+      <!-- Persistent hidden simulator control hook anchor -->
+      <div
+        id="simulator-control-anchor"
+        class="hidden"
+        phx-hook="SimulatorControl"
+        data-available-chains={Jason.encode!(@available_chains)}
+      >
+      </div>
       <!-- Header -->
       <div class="border-gray-700/50 relative flex-shrink-0 border-b">
         <div class="relative flex items-center justify-between p-6">
@@ -260,12 +419,10 @@ defmodule LivechainWeb.Dashboard do
                     <div class="absolute inset-0 animate-ping rounded-lg bg-gradient-to-br from-purple-400 to-purple-600 opacity-20">
                     </div>
                   </div>
-                  <div class="flex items-center space-x-2">
-                    <h1 class="text-2xl font-bold text-white">Lasso RPC</h1>
-                    <div class="flex -translate-y-1.5 items-center space-x-1">
-                      <div class="h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-emerald-400">
-                      </div>
-                      <span class="text-xs font-medium text-emerald-600">LIVE</span>
+                  <div>
+                    <div class="text-lg font-bold text-white">Lasso RPC</div>
+                    <div class="text-xs text-gray-400">
+                      <span class="text-emerald-400">LIVE</span> • Orchestration Dashboard
                     </div>
                   </div>
                 </div>
@@ -273,19 +430,17 @@ defmodule LivechainWeb.Dashboard do
             </div>
           </div>
           
-    <!-- Tab Switcher -->
-          <div class="flex items-center space-x-4">
-            <.tab_switcher
-              id="main-tabs"
-              tabs={[
-                %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
-                %{id: "benchmarks", label: "Benchmarks", icon: "M3 3h18M9 7l6-3M9 17l6-3"},
-                %{id: "simulator", label: "Simulator", icon: "M4 6h16M4 10h16M4 14h16"},
-                %{id: "system", label: "System", icon: "M15 4m0 13V4m-6 3l6-3"}
-              ]}
-              active_tab={@active_tab}
-            />
-          </div>
+    <!-- Navigation Tabs -->
+          <.tab_switcher
+            id="main-tabs"
+            tabs={[
+              %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
+              %{id: "benchmarks", label: "Benchmarks", icon: "M3 3h18M9 7l6-3M9 17l6-3"},
+              %{id: "simulator", label: "Simulator", icon: "M4 6h16M4 10h16M4 14h16"},
+              %{id: "system", label: "System", icon: "M15 4m0 13V4m-6 3l6-3"}
+            ]}
+            active_tab={@active_tab}
+          />
         </div>
       </div>
       
@@ -299,12 +454,15 @@ defmodule LivechainWeb.Dashboard do
               provider_events={@provider_events}
               client_events={@client_events}
               latest_blocks={@latest_blocks}
+              events={@events}
               selected_chain={@selected_chain}
               selected_provider={@selected_provider}
               hover_chain={@hover_chain}
               hover_provider={@hover_provider}
               details_collapsed={@details_collapsed}
               events_collapsed={@events_collapsed}
+              sim_stats={@sim_stats}
+              available_chains={@available_chains}
             />
           <% "benchmarks" -> %>
             <.benchmarks_tab_content />
@@ -354,6 +512,12 @@ defmodule LivechainWeb.Dashboard do
         </div>
       </div>
       
+    <!-- Simulator Controls (top-left) -->
+      <.floating_simulator_controls
+        sim_stats={@sim_stats}
+        available_chains={@available_chains}
+      />
+      
     <!-- Network Status Legend (positioned relative to full dashboard) -->
       <div class="bg-gray-900/95 absolute right-4 bottom-4 z-30 min-w-max rounded-lg border border-gray-600 p-4 shadow-xl backdrop-blur-sm">
         <h4 class="mb-3 text-xs font-semibold text-white">Network Status</h4>
@@ -375,8 +539,13 @@ defmodule LivechainWeb.Dashboard do
           <div class="flex items-center space-x-2 text-xs text-gray-300">
             <div class="relative flex flex-shrink-0 items-center">
               <div class="h-3 w-3 rounded-full bg-purple-600"></div>
-              <svg class="absolute h-2 w-2 text-yellow-300" fill="currentColor" viewBox="0 0 24 24" style="top: 0.5px; left: 0.5px;">
-                <path d="M3 3v18l7-3 7 3V3H3z"/>
+              <svg
+                class="absolute h-2.5 w-2.5 text-yellow-300"
+                fill="currentColor"
+                viewBox="0 0 24 24"
+                style="top: 0.25px; left: 0.25px;"
+              >
+                <path d="M3 3v18l7-3 7 3V3H3z" />
               </svg>
             </div>
             <span>Fastest average latency</span>
@@ -385,8 +554,8 @@ defmodule LivechainWeb.Dashboard do
           <div class="mt-3 flex items-center space-x-2 border-t border-gray-700 pt-2.5 text-xs text-gray-300">
             <div class="relative flex flex-shrink-0 items-center">
               <div class="h-3 w-3 rounded-full bg-gray-600"></div>
-              <div class="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-yellow-500">
-                <span class="text-[8px] font-bold text-white">3</span>
+              <div class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-yellow-500">
+                <span class="text-[10px] font-bold leading-none text-white">3</span>
               </div>
             </div>
             <span>Reconnect attempts</span>
@@ -405,6 +574,7 @@ defmodule LivechainWeb.Dashboard do
         routing_events={@routing_events}
         provider_events={@provider_events}
         latest_blocks={@latest_blocks}
+        events={@events}
       />
       
     <!-- Floating Events Window (bottom-left) -->
@@ -430,6 +600,10 @@ defmodule LivechainWeb.Dashboard do
       |> assign(
         :chain_provider_events,
         Enum.filter(assigns.provider_events, &(&1.chain == assigns.chain))
+      )
+      |> assign(
+        :chain_unified_events,
+        Enum.filter(Map.get(assigns, :events, []), fn e -> e[:chain] == assigns.chain end)
       )
 
     ~H"""
@@ -500,32 +674,32 @@ defmodule LivechainWeb.Dashboard do
         </div>
       </div>
       
-    <!-- Recent Events -->
+    <!-- Recent Events (Unified) -->
       <div class="flex-1 overflow-hidden p-4">
         <h4 class="mb-3 text-sm font-semibold text-gray-300">Recent Events</h4>
-        <div class="h-full space-y-2 overflow-auto">
-          <!-- RPC Events -->
-          <%= for e <- Enum.take(@chain_events, 5) do %>
-            <div class="bg-blue-900/20 rounded-lg p-2">
-              <div class="text-xs text-blue-300">RPC Call</div>
-              <div class="text-xs text-gray-400">
-                <span class="text-sky-300">{e.method}</span>
-                via <span class="text-emerald-300">{e.provider_id}</span>
-                (<span class="text-yellow-300"><%= e.duration_ms %>ms</span>)
+        <div class="h-full overflow-auto">
+          <div class="mb-1 text-xs text-gray-500">Unified Activity</div>
+          <div
+            id="chain-unified-activity"
+            class="flex max-h-64 flex-col-reverse gap-1 overflow-y-auto"
+            phx-hook="TerminalFeed"
+          >
+            <%= for e <- Enum.take(@chain_unified_events, 50) do %>
+              <div class="bg-gray-800/30 rounded-lg p-2">
+                <div class={"text-xs " <> severity_text_class(e.severity || :info)}>Activity</div>
+                <div class="text-[11px] text-gray-400">
+                  <span class="text-gray-500">[{e.ts}]</span>
+                  <%= if e.chain do %>
+                    <span class="ml-1 text-purple-300">{e.chain}</span>
+                  <% end %>
+                  <%= if e.provider_id do %>
+                    <span class="ml-1 text-emerald-300">{e.provider_id}</span>
+                  <% end %>
+                  <span class="ml-1">{e.message}</span>
+                </div>
               </div>
-            </div>
-          <% end %>
-          
-    <!-- Provider Events -->
-          <%= for e <- Enum.take(@chain_provider_events, 5) do %>
-            <div class="bg-orange-900/20 rounded-lg p-2">
-              <div class="text-xs text-orange-300">Provider Event</div>
-              <div class="text-xs text-gray-400">
-                <span class="text-emerald-300"><%= e.provider_id %></span>:
-                <span class="text-orange-300">{e.event}</span>
-              </div>
-            </div>
-          <% end %>
+            <% end %>
+          </div>
         </div>
       </div>
     </div>
@@ -547,6 +721,11 @@ defmodule LivechainWeb.Dashboard do
         :provider_pool_events,
         Enum.filter(assigns.provider_events, &(&1.provider_id == assigns.provider))
       )
+      |> assign(
+        :provider_unified_events,
+        Enum.filter(Map.get(assigns, :events, []), fn e -> e[:provider_id] == assigns.provider end)
+      )
+      |> assign_provider_performance_metrics(assigns.provider)
 
     ~H"""
     <div class="flex h-full flex-col">
@@ -557,11 +736,6 @@ defmodule LivechainWeb.Dashboard do
             <h3 class="text-lg font-semibold text-white">
               {if @provider_connection, do: @provider_connection.name, else: @provider}
             </h3>
-            <%= if @provider_connection do %>
-              <div class="mt-1 text-sm text-gray-400">
-                Chain: <span class="capitalize text-purple-300">{@provider_connection.chain}</span>
-              </div>
-            <% end %>
           </div>
           <div class="flex items-center space-x-2">
             <%= if assigns[:selected_chain] do %>
@@ -573,21 +747,6 @@ defmodule LivechainWeb.Dashboard do
                 Back to Chain
               </button>
             <% end %>
-            <button
-              phx-click="select_provider"
-              phx-value-provider=""
-              class="text-gray-400 hover:text-white"
-            >
-              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M6 18L18 6M6 6l12 12"
-                >
-                </path>
-              </svg>
-            </button>
           </div>
         </div>
       </div>
@@ -598,12 +757,8 @@ defmodule LivechainWeb.Dashboard do
           <div class="grid grid-cols-2 gap-4">
             <div class="bg-gray-800/50 rounded-lg p-3">
               <div class="text-xs text-gray-400">Status</div>
-              <div class={["text-sm font-bold", if(@provider_connection.status == :connected,
-    do: "text-emerald-400",
-    else: if(@provider_connection.status == :disconnected,
-    do: "text-red-400",
-    else: "text-yellow-400"))]}>
-                {String.upcase(to_string(@provider_connection.status))}
+              <div class={["text-sm font-bold", provider_status_class_text(@provider_connection)]}>
+                {provider_status_label(@provider_connection)}
               </div>
             </div>
             <div class="bg-gray-800/50 rounded-lg p-3">
@@ -626,39 +781,27 @@ defmodule LivechainWeb.Dashboard do
         </div>
       <% end %>
       
-    <!-- Recent Activity -->
+    <!-- Recent Activity (Unified) -->
       <div class="flex-1 overflow-hidden p-4">
         <h4 class="mb-3 text-sm font-semibold text-gray-300">Recent Activity</h4>
-        <div class="h-full space-y-2 overflow-auto">
-          <!-- RPC Calls -->
-          <%= for e <- Enum.take(@provider_events, 10) do %>
-            <div class="bg-blue-900/20 rounded-lg p-2">
-              <div class="text-xs text-blue-300">RPC Call</div>
-              <div class="text-xs text-gray-400">
-                <span class="text-sky-300">{e.method}</span>
-                on <span class="capitalize text-purple-300">{e.chain}</span>
-                (<span class="text-yellow-300"><%= e.duration_ms %>ms</span>)
-                <span class={["ml-2", if(e.result == :success,
-    do: "text-emerald-400",
-    else: if(e.result == :error, do: "text-red-400", else: "text-gray-400"))]}>
-                  {String.upcase(to_string(e.result))}
-                </span>
+        <div class="h-full overflow-auto">
+          <div class="mb-1 text-xs text-gray-500">Unified Activity</div>
+          <div
+            id="provider-unified-activity"
+            class="flex max-h-80 flex-col-reverse gap-1 overflow-y-auto"
+            phx-hook="TerminalFeed"
+          >
+            <%= for e <- Enum.take(@provider_unified_events, 60) do %>
+              <div class="bg-gray-800/30 rounded-lg p-2">
+                <div class={"text-xs " <> severity_text_class(e.severity || :info)}>Activity</div>
+                <div class="text-[11px] text-gray-400">
+                  <span class="text-gray-500">[{e.ts}]</span>
+                  <span class="ml-1 text-emerald-300">{@provider}</span>
+                  <span class="ml-1">{e.message}</span>
+                </div>
               </div>
-            </div>
-          <% end %>
-          
-    <!-- Provider Pool Events -->
-          <%= for e <- Enum.take(@provider_pool_events, 10) do %>
-            <div class="bg-orange-900/20 rounded-lg p-2">
-              <div class="text-xs text-orange-300">Pool Event</div>
-              <div class="text-xs text-gray-400">
-                <span class="text-orange-300">{e.event}</span>
-                <%= if e.details do %>
-                  <span class="text-gray-500">- {inspect(e.details)}</span>
-                <% end %>
-              </div>
-            </div>
-          <% end %>
+            <% end %>
+          </div>
         </div>
       </div>
     </div>
@@ -672,6 +815,7 @@ defmodule LivechainWeb.Dashboard do
       |> assign_new(:details_collapsed, fn -> true end)
       |> assign_new(:hover_chain, fn -> nil end)
       |> assign_new(:hover_provider, fn -> nil end)
+      |> assign_new(:events, fn -> [] end)
       |> assign(:total_connections, length(assigns.connections))
       |> assign(:connected_providers, Enum.count(assigns.connections, &(&1.status == :connected)))
       |> assign(
@@ -681,7 +825,7 @@ defmodule LivechainWeb.Dashboard do
 
     ~H"""
     <div class="pointer-events-none absolute top-4 right-4 z-30">
-      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@details_collapsed, do: "w-80", else: "w-96")]}>
+      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@details_collapsed, do: "w-96", else: "w-[36rem] max-h-[80vh]")]}>
         <!-- Header / Collapsed preview bar -->
         <div class="border-gray-700/50 flex items-center justify-between border-b px-3 py-2">
           <div class="flex min-w-0 items-center gap-2">
@@ -738,28 +882,35 @@ defmodule LivechainWeb.Dashboard do
             </div>
             <div class="grid grid-cols-3 gap-2">
               <div class="bg-gray-800/40 rounded-md px-2 py-1">
-                <div class="text-[10px] text-gray-400">RPC</div>
-                <div class="text-xs font-medium text-sky-300">{length(@routing_events)}</div>
+                <div class="text-[10px] text-gray-400">RPC/s</div>
+                <div class="text-xs font-medium text-sky-300">
+                  {rpc_calls_per_second(@routing_events)}
+                </div>
               </div>
               <div class="bg-gray-800/40 rounded-md px-2 py-1">
-                <div class="text-[10px] text-gray-400">Events</div>
-                <div class="text-xs font-medium text-orange-300">{length(@provider_events)}</div>
+                <div class="text-[10px] text-gray-400">Errors</div>
+                <div class="text-xs font-medium text-red-300">
+                  {error_rate_percent(@routing_events)}%
+                </div>
               </div>
               <div class="bg-gray-800/40 rounded-md px-2 py-1">
-                <div class="text-[10px] text-gray-400">Blocks</div>
-                <div class="text-xs font-medium text-green-300">{length(@latest_blocks)}</div>
+                <div class="text-[10px] text-gray-400">Failovers</div>
+                <div class="text-xs font-medium text-yellow-300">
+                  {failovers_last_minute(@routing_events)}
+                </div>
               </div>
             </div>
           </div>
         <% else %>
           <!-- Body (only when expanded) -->
-          <div class="h-96">
+          <div class="max-h-[70vh] overflow-auto">
             <%= if @selected_provider do %>
               <.provider_details_panel
                 provider={@selected_provider}
                 connections={@connections}
                 routing_events={@routing_events}
                 provider_events={@provider_events}
+                events={@events}
                 selected_chain={@selected_chain}
               />
             <% else %>
@@ -769,6 +920,7 @@ defmodule LivechainWeb.Dashboard do
                   connections={@connections}
                   routing_events={@routing_events}
                   provider_events={@provider_events}
+                  events={@events}
                 />
               <% else %>
                 <.meta_stats_panel
@@ -837,7 +989,7 @@ defmodule LivechainWeb.Dashboard do
                     </div>
                   </div>
                 </div>
-                <div class="max-h-32 space-y-1 overflow-y-auto">
+                <div class="flex max-h-32 flex-col-reverse gap-1 overflow-y-auto">
                   <%= for e <- Enum.take(@routing_events, 20) do %>
                     <div class="bg-gray-800/30 text-[11px] border-gray-700/20 animate-pulse rounded-md border px-2 py-1 text-gray-400">
                       <div class="flex items-center justify-between">
@@ -868,7 +1020,7 @@ defmodule LivechainWeb.Dashboard do
                       </div>
                     </div>
                   </div>
-                  <div class="max-h-24 space-y-1 overflow-y-auto">
+                  <div class="flex max-h-24 flex-col-reverse gap-1 overflow-y-auto">
                     <%= for e <- Enum.take(@provider_events, 10) do %>
                       <div class="bg-gray-800/30 text-[11px] border-gray-700/20 rounded-md border px-2 py-1 text-gray-400">
                         <div class="flex items-center justify-between">
@@ -896,7 +1048,7 @@ defmodule LivechainWeb.Dashboard do
                       </div>
                     </div>
                   </div>
-                  <div class="max-h-24 space-y-1 overflow-y-auto">
+                  <div class="flex max-h-24 flex-col-reverse gap-1 overflow-y-auto">
                     <%= for e <- Enum.take(@client_events, 10) do %>
                       <div class="bg-gray-800/30 text-[11px] border-gray-700/20 rounded-md border px-2 py-1 text-gray-400">
                         <div class="flex items-center justify-between">
@@ -924,7 +1076,7 @@ defmodule LivechainWeb.Dashboard do
                       </div>
                     </div>
                   </div>
-                  <div class="max-h-24 space-y-1 overflow-y-auto">
+                  <div class="flex max-h-24 flex-col-reverse gap-1 overflow-y-auto">
                     <%= for e <- Enum.take(@latest_blocks, 10) do %>
                       <div class="bg-gray-800/30 text-[11px] border-gray-700/20 rounded-md border px-2 py-1 text-gray-400">
                         <div class="flex items-center justify-between">
@@ -1016,7 +1168,6 @@ defmodule LivechainWeb.Dashboard do
     ~H"""
     <div
       id="simulator-control"
-      phx-hook="SimulatorControl"
       class="flex h-full w-full flex-col gap-4 p-4"
     >
       <!-- Available Chains Info -->
@@ -1193,6 +1344,26 @@ defmodule LivechainWeb.Dashboard do
     socket =
       if chain != "", do: push_event(socket, "center_on_chain", %{chain: chain}), else: socket
 
+    # Ensure at least one scoped activity item appears
+    has_chain_event = Enum.any?(socket.assigns.events, fn e -> e[:chain] == chain end)
+
+    socket =
+      if not has_chain_event do
+        uev =
+          as_event(:system,
+            chain: chain,
+            severity: :debug,
+            message: "Opened chain view",
+            meta: %{}
+          )
+
+        socket
+        |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
+        |> push_event("events_batch", %{items: [uev]})
+      else
+        socket
+      end
+
     {:noreply, socket}
   end
 
@@ -1210,9 +1381,28 @@ defmodule LivechainWeb.Dashboard do
 
     # Re-enable auto-centering to animate pan to the selected provider
     socket =
-      if provider != "",
-        do: push_event(socket, "center_on_provider", %{provider: provider}),
-        else: socket
+      socket
+      |> push_event("center_on_provider", %{provider: provider})
+
+    # Ensure at least one scoped activity item appears
+    has_provider_event = Enum.any?(socket.assigns.events, fn e -> e[:provider_id] == provider end)
+
+    socket =
+      if not has_provider_event do
+        uev =
+          as_event(:system,
+            provider_id: provider,
+            severity: :debug,
+            message: "Opened provider view",
+            meta: %{}
+          )
+
+        socket
+        |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
+        |> push_event("events_batch", %{items: [uev]})
+      else
+        socket
+      end
 
     {:noreply, socket}
   end
@@ -1354,9 +1544,9 @@ defmodule LivechainWeb.Dashboard do
 
   defp get_latency_leaders_by_chain(connections) do
     alias Livechain.Benchmarking.BenchmarkStore
-    
+
     # Group connections by chain
-    chains_with_providers = 
+    chains_with_providers =
       connections
       |> Enum.group_by(fn conn -> Map.get(conn, :chain) end)
       |> Enum.reject(fn {chain, _providers} -> is_nil(chain) end)
@@ -1364,32 +1554,37 @@ defmodule LivechainWeb.Dashboard do
     # For each chain, find the provider with lowest average latency
     Enum.reduce(chains_with_providers, %{}, fn {chain_name, chain_connections}, acc ->
       # Get latency data for each provider
-      provider_latencies = 
+      provider_latencies =
         Enum.map(chain_connections, fn conn ->
           provider_id = conn.id
-          
+
           # Get RPC performance for common methods
           common_methods = ["eth_blockNumber", "eth_getBalance", "eth_chainId", "eth_getLogs"]
-          
-          total_latency = 
+
+          total_latency =
             Enum.reduce(common_methods, {0.0, 0}, fn method, {sum_latency, count} ->
               case BenchmarkStore.get_rpc_performance(chain_name, provider_id, method) do
                 %{avg_latency: avg_lat, total_calls: total} when total >= 10 and avg_lat > 0 ->
                   {sum_latency + avg_lat, count + 1}
+
                 _ ->
                   {sum_latency, count}
               end
             end)
-          
+
           case total_latency do
             {sum, count} when count > 0 -> {provider_id, sum / count}
             _ -> nil
           end
         end)
         |> Enum.reject(&is_nil/1)
-      
+
       # Find provider with lowest average latency
-      case Enum.min_by(provider_latencies, fn {_provider_id, avg_latency} -> avg_latency end, fn -> nil end) do
+      case Enum.min_by(
+             provider_latencies,
+             fn {_provider_id, avg_latency} -> avg_latency end,
+             fn -> nil end
+           ) do
         {fastest_provider_id, _latency} -> Map.put(acc, chain_name, fastest_provider_id)
         nil -> acc
       end
@@ -1518,6 +1713,66 @@ defmodule LivechainWeb.Dashboard do
 
   defp format_last_seen(_), do: "Unknown"
 
+  # New helpers for richer UI metrics and labeling
+  defp rpc_calls_per_second(routing_events) when is_list(routing_events) do
+    now = System.system_time(:millisecond)
+    one_minute_ago = now - 60_000
+    count = Enum.count(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
+    Float.round(count / 60, 1)
+  end
+
+  defp error_rate_percent(routing_events) when is_list(routing_events) do
+    now = System.system_time(:millisecond)
+    one_minute_ago = now - 60_000
+    recent = Enum.filter(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
+    total = max(length(recent), 1)
+    errors = Enum.count(recent, fn e -> e[:result] == :error end)
+    Float.round(errors * 100.0 / total)
+  end
+
+  defp failovers_last_minute(routing_events) when is_list(routing_events) do
+    now = System.system_time(:millisecond)
+    one_minute_ago = now - 60_000
+
+    Enum.reduce(routing_events, 0, fn e, acc ->
+      if (e[:ts_ms] || 0) >= one_minute_ago and (e[:failovers] || 0) > 0, do: acc + 1, else: acc
+    end)
+  end
+
+  defp provider_status_label(%{status: :connected}), do: "CONNECTED"
+  defp provider_status_label(%{status: :disconnected}), do: "DISCONNECTED"
+  defp provider_status_label(%{status: :rate_limited}), do: "RATE LIMITED"
+
+  defp provider_status_label(%{status: :connecting} = pc) do
+    attempts = Map.get(pc, :reconnect_attempts, 0)
+    last_seen = Map.get(pc, :last_seen)
+
+    cond do
+      attempts >= 5 and (is_nil(last_seen) or last_seen == 0) -> "UNREACHABLE"
+      attempts >= 5 -> "UNSTABLE"
+      true -> "CONNECTING"
+    end
+  end
+
+  defp provider_status_label(_), do: "UNKNOWN"
+
+  defp provider_status_class_text(%{status: :connected}), do: "text-emerald-400"
+  defp provider_status_class_text(%{status: :disconnected}), do: "text-red-400"
+  defp provider_status_class_text(%{status: :rate_limited}), do: "text-purple-300"
+
+  defp provider_status_class_text(%{status: :connecting} = pc) do
+    attempts = Map.get(pc, :reconnect_attempts, 0)
+    last_seen = Map.get(pc, :last_seen)
+
+    cond do
+      attempts >= 5 and (is_nil(last_seen) or last_seen == 0) -> "text-red-400"
+      attempts >= 5 -> "text-yellow-400"
+      true -> "text-yellow-400"
+    end
+  end
+
+  defp provider_status_class_text(_), do: "text-gray-400"
+
   defp get_available_chains do
     case Livechain.Config.ChainConfig.load_config() do
       {:ok, config} ->
@@ -1537,5 +1792,100 @@ defmodule LivechainWeb.Dashboard do
           %{id: "1", name: "ethereum", display_name: "Ethereum Mainnet", block_time: 12000}
         ]
     end
+  end
+
+  # Unified event builder
+  defp as_event(kind, opts) when is_list(opts) do
+    now_ms = System.system_time(:millisecond)
+
+    %{
+      id: System.unique_integer([:positive]),
+      kind: kind,
+      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      ts_ms: now_ms,
+      chain: Keyword.get(opts, :chain),
+      provider_id: Keyword.get(opts, :provider_id),
+      severity: Keyword.get(opts, :severity, :info),
+      message: Keyword.get(opts, :message),
+      meta: Keyword.get(opts, :meta, %{})
+    }
+  end
+
+  defp severity_text_class(:debug), do: "text-gray-400"
+  defp severity_text_class(:info), do: "text-sky-300"
+  defp severity_text_class(:warn), do: "text-yellow-300"
+  defp severity_text_class(:error), do: "text-red-400"
+  defp severity_text_class(_), do: "text-gray-400"
+
+  # New: floating simulator controls window
+  defp floating_simulator_controls(assigns) do
+    assigns =
+      assigns
+      |> assign_new(:sim_stats, fn ->
+        %{http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0}, ws: %{open: 0}}
+      end)
+
+    ~H"""
+    <div class="pointer-events-none absolute top-4 left-4 z-30">
+      <div class="border-gray-700/60 bg-gray-900/95 pointer-events-auto w-96 rounded-xl border shadow-2xl backdrop-blur-lg">
+        <div class="border-gray-700/50 flex items-center justify-between border-b px-3 py-2">
+          <div class="flex items-center space-x-2">
+            <div class="text-xs font-medium text-gray-300">Simulator</div>
+          </div>
+          <div class="text-[10px] text-gray-500">Controls</div>
+        </div>
+        <div class="p-3">
+          <div class="mb-3">
+            <div class="mb-1 text-xs font-semibold text-gray-300">HTTP Load</div>
+            <div class="flex flex-wrap items-center gap-2 text-xs">
+              <button phx-click="sim_http_start" class="rounded bg-indigo-600 px-2 py-1 text-white">
+                Start
+              </button>
+              <button phx-click="sim_http_stop" class="rounded bg-gray-700 px-2 py-1 text-white">
+                Stop
+              </button>
+              <div class="text-[11px] ml-auto grid grid-cols-3 gap-3 text-gray-400">
+                <div>
+                  OK:
+                  <span class="text-emerald-400">
+                    {@sim_stats.http["success"] || @sim_stats.http[:success]}
+                  </span>
+                </div>
+                <div>
+                  Err:
+                  <span class="text-rose-400">
+                    {@sim_stats.http["error"] || @sim_stats.http[:error]}
+                  </span>
+                </div>
+                <div>
+                  Avg:
+                  <span class="text-yellow-300">
+                    {(@sim_stats.http["avgLatencyMs"] || @sim_stats.http[:avgLatencyMs] || 0.0)
+                    |> to_float()
+                    |> Float.round(1)}ms
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="mb-1 text-xs font-semibold text-gray-300">WebSocket Load</div>
+            <div class="flex flex-wrap items-center gap-2 text-xs">
+              <button phx-click="sim_ws_start" class="rounded bg-purple-600 px-2 py-1 text-white">
+                Start
+              </button>
+              <button phx-click="sim_ws_stop" class="rounded bg-gray-700 px-2 py-1 text-white">
+                Stop
+              </button>
+              <div class="text-[11px] ml-auto text-gray-400">
+                Open:
+                <span class="text-emerald-400">{@sim_stats.ws["open"] || @sim_stats.ws[:open]}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
   end
 end

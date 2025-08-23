@@ -90,8 +90,8 @@ defmodule LivechainWeb.NetworkTopology do
             <% end %>
           <% end %>
         <% end %>
-
-        <!-- Provider connection lines -->
+        
+    <!-- Provider connection lines -->
         <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
           <%= for {connection, provider_data} <- chain_data.providers do %>
             <% {line_start_x, line_start_y, line_end_x, line_end_y} =
@@ -138,8 +138,8 @@ defmodule LivechainWeb.NetworkTopology do
             data-chain={chain_name}
             data-chain-center={"#{x},#{y}"}
           >
-            <div class="text-center text-white">
-              <div class={"#{if radius < 40, do: "text-xs", else: "text-sm"} font-bold text-white"}>
+            <div class="px-2 py-1 text-center text-white">
+              <div class={"#{if radius < 40, do: "text-xs", else: "text-sm"} mb-1 font-bold text-white"}>
                 {String.upcase(chain_name)}
               </div>
               <div class={"#{if radius < 40, do: "text-xs", else: "text-sm"} text-gray-300"}>
@@ -180,10 +180,10 @@ defmodule LivechainWeb.NetworkTopology do
     <!-- Racing flag indicator for fastest provider -->
               <%= if is_fastest_provider?(connection, chain_name, @latency_leaders) do %>
                 <div
-                  class="absolute -top-2 -right-2 flex h-4 w-4 animate-pulse items-center justify-center rounded-full bg-purple-600 text-xs font-bold text-white shadow-lg"
+                  class="absolute -top-2.5 -right-2.5 flex h-5 w-5 animate-pulse items-center justify-center rounded-full bg-purple-600 text-xs font-bold text-white shadow-lg"
                   title="Fastest average latency"
                 >
-                  <svg class="h-3 w-3 text-yellow-300" fill="currentColor" viewBox="0 0 24 24">
+                  <svg class="h-3.5 w-3.5 text-yellow-300" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M3 3v18l7-3 7 3V3H3z" />
                   </svg>
                 </div>
@@ -191,8 +191,10 @@ defmodule LivechainWeb.NetworkTopology do
               
     <!-- Reconnect attempts indicator -->
               <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
-                <div class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white">
-                  {connection.reconnect_attempts}
+                <div class="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white shadow-md">
+                  <span class="text-[10px] font-bold leading-none">
+                    {connection.reconnect_attempts}
+                  </span>
                 </div>
               <% end %>
             </div>
@@ -221,6 +223,10 @@ defmodule LivechainWeb.NetworkTopology do
           <div class="h-3 w-3 rounded-full bg-red-500"></div>
           <span>Disconnected</span>
         </div>
+        <div class="flex items-center space-x-2">
+          <div class="h-3 w-3 rounded-full bg-purple-400"></div>
+          <span>Rate limited</span>
+        </div>
       </div>
     </div>
     """
@@ -240,20 +246,28 @@ defmodule LivechainWeb.NetworkTopology do
 
     # Hierarchical orbital layout configuration
     config = %{
-      l1_radius: 60,           # Ethereum L1 node size
-      l2_orbit_min: 200,       # Minimum distance for L2 chains
-      l2_orbit_max: 350,       # Maximum distance for L2 chains
-      provider_orbit: 45,      # Provider orbit distance from their chain
-      provider_radius: 10,     # Provider node size
-      angle_spread: 2 * :math.pi(), # Full circle for L2 distribution
-      other_chain_orbit: 500   # Distance for non-Ethereum chains
+      # Ethereum L1 node size
+      l1_radius: 60,
+      # Minimum distance for L2 chains
+      l2_orbit_min: 200,
+      # Maximum distance for L2 chains
+      l2_orbit_max: 350,
+      # Provider orbit distance from their chain (increased from 45)
+      provider_orbit: 65,
+      # Provider node size
+      provider_radius: 10,
+      # Full circle for L2 distribution
+      angle_spread: 2 * :math.pi(),
+      # Distance for non-Ethereum chains
+      other_chain_orbit: 500
     }
 
     # Separate Ethereum L1 from major chains and others
     {ethereum_l1, major_chains, other_chains} = categorize_chains(chains)
 
     # Build hierarchical structure
-    positioned_chains = build_orbital_structure(ethereum_l1, major_chains, other_chains, center_x, center_y, config)
+    positioned_chains =
+      build_orbital_structure(ethereum_l1, major_chains, other_chains, center_x, center_y, config)
 
     %{chains: positioned_chains}
   end
@@ -261,84 +275,126 @@ defmodule LivechainWeb.NetworkTopology do
   # Categorize chains into L1 Ethereum, L2s/major chains, and others
   defp categorize_chains(chains) do
     ethereum_l1 = Map.get(chains, "ethereum", [])
-    
+
     # Major chains that should orbit around Ethereum (L2s and major networks)
     major_chain_names = ["arbitrum", "optimism", "base", "zksync", "linea"]
-    
+
     # Smaller/newer chains for outer orbit
-    {major_chains, other_chains} = 
+    {major_chains, other_chains} =
       chains
       |> Map.drop(["ethereum"])
       |> Map.split(major_chain_names)
-    
+
     {ethereum_l1, major_chains, other_chains}
   end
 
   # Build the orbital structure with Ethereum at center
-  defp build_orbital_structure(ethereum_l1, major_chains, other_chains, center_x, center_y, config) do
+  defp build_orbital_structure(
+         ethereum_l1,
+         major_chains,
+         other_chains,
+         center_x,
+         center_y,
+         config
+       ) do
     positioned = %{}
-    
+
     # 1. Position Ethereum L1 at center if it exists
-    positioned = 
+    positioned =
       if length(ethereum_l1) > 0 do
         # Use the standard chain radius calculation for Ethereum too, not fixed l1_radius
-        ethereum_radius = calculate_chain_radius(length(ethereum_l1))
-        ethereum_data = build_chain_node("ethereum", ethereum_l1, center_x, center_y, ethereum_radius, config.provider_orbit, config.provider_radius)
+        ethereum_radius = calculate_chain_radius(length(ethereum_l1), "ethereum")
+
+        ethereum_data =
+          build_chain_node(
+            "ethereum",
+            ethereum_l1,
+            center_x,
+            center_y,
+            ethereum_radius,
+            config.provider_orbit,
+            config.provider_radius
+          )
+
         Map.put(positioned, "ethereum", ethereum_data)
       else
         positioned
       end
 
     # 2. Position major chains in orbital pattern around Ethereum
-    positioned = 
+    positioned =
       major_chains
       |> Map.to_list()
       |> Enum.with_index()
       |> Enum.reduce(positioned, fn {{chain_name, chain_connections}, idx}, acc ->
         total_majors = map_size(major_chains)
-        
+
         # Calculate orbital position with slight randomness
         base_angle = idx * config.angle_spread / max(1, total_majors)
         seed = :erlang.phash2(chain_name, 1000)
-        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 4  # ±45 degrees
-        distance_variance = (seed / 1000 - 0.5) * 50  # ±25px
-        
+        # ±45 degrees
+        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 4
+        # ±25px
+        distance_variance = (seed / 1000 - 0.5) * 50
+
         final_angle = base_angle + angle_variance
-        orbit_distance = config.l2_orbit_min + 
-                        (config.l2_orbit_max - config.l2_orbit_min) * (seed / 1000) +
-                        distance_variance
-        
+
+        orbit_distance =
+          config.l2_orbit_min +
+            (config.l2_orbit_max - config.l2_orbit_min) * (seed / 1000) +
+            distance_variance
+
         chain_x = center_x + orbit_distance * :math.cos(final_angle)
         chain_y = center_y + orbit_distance * :math.sin(final_angle)
-        
-        chain_radius = calculate_chain_radius(length(chain_connections))
-        chain_data = build_chain_node(chain_name, chain_connections, chain_x, chain_y, chain_radius, config.provider_orbit, config.provider_radius)
-        
+
+        chain_radius = calculate_chain_radius(length(chain_connections), chain_name)
+
+        chain_data =
+          build_chain_node(
+            chain_name,
+            chain_connections,
+            chain_x,
+            chain_y,
+            chain_radius,
+            config.provider_orbit,
+            config.provider_radius
+          )
+
         Map.put(acc, chain_name, chain_data)
       end)
 
     # 3. Position other chains in outer orbital ring
-    positioned = 
+    positioned =
       other_chains
       |> Map.to_list()
       |> Enum.with_index()
       |> Enum.reduce(positioned, fn {{chain_name, chain_connections}, idx}, acc ->
         total_others = map_size(other_chains)
-        
+
         # Outer orbital positioning
         base_angle = idx * config.angle_spread / max(1, total_others)
         seed = :erlang.phash2(chain_name, 1000)
         angle_variance = (seed / 1000 - 0.5) * :math.pi() / 3
-        
+
         final_angle = base_angle + angle_variance
         orbit_distance = config.other_chain_orbit + (seed / 1000 - 0.5) * 100
-        
+
         chain_x = center_x + orbit_distance * :math.cos(final_angle)
         chain_y = center_y + orbit_distance * :math.sin(final_angle)
-        
-        chain_radius = calculate_chain_radius(length(chain_connections))
-        chain_data = build_chain_node(chain_name, chain_connections, chain_x, chain_y, chain_radius, config.provider_orbit, config.provider_radius)
-        
+
+        chain_radius = calculate_chain_radius(length(chain_connections), chain_name)
+
+        chain_data =
+          build_chain_node(
+            chain_name,
+            chain_connections,
+            chain_x,
+            chain_y,
+            chain_radius,
+            config.provider_orbit,
+            config.provider_radius
+          )
+
         Map.put(acc, chain_name, chain_data)
       end)
 
@@ -346,46 +402,71 @@ defmodule LivechainWeb.NetworkTopology do
   end
 
   # Build a chain node with its orbiting providers
-  defp build_chain_node(chain_name, chain_connections, x, y, chain_radius, provider_orbit, provider_radius) do
+  defp build_chain_node(
+         chain_name,
+         chain_connections,
+         x,
+         y,
+         chain_radius,
+         provider_orbit,
+         provider_radius
+       ) do
     provider_count = length(chain_connections)
-    
-    providers = 
+
+    # Use larger orbit distance for Ethereum to accommodate its bigger size
+    adjusted_provider_orbit =
+      case chain_name do
+        # Add 25px for Ethereum's larger size
+        "ethereum" -> provider_orbit + 25
+        _ -> provider_orbit
+      end
+
+    providers =
       chain_connections
       |> Enum.with_index()
       |> Enum.map(fn {connection, provider_index} ->
         # Calculate provider orbital position
-        base_angle = case provider_count do
-          1 -> 
-            # Single provider - use deterministic but varied position
-            seed = :erlang.phash2(connection.id, 1000)
-            (seed / 1000) * 2 * :math.pi()
-          2 -> 
-            # Two providers - opposite sides
-            case provider_index do
-              0 -> 0                    # Right
-              1 -> :math.pi()           # Left
-            end
-          _ -> 
-            # Multiple providers - even distribution
-            base = 2 * :math.pi() * provider_index / provider_count
-            base - :math.pi() / 2  # Start from top
-        end
-        
+        base_angle =
+          case provider_count do
+            1 ->
+              # Single provider - use deterministic but varied position
+              seed = :erlang.phash2(connection.id, 1000)
+              seed / 1000 * 2 * :math.pi()
+
+            2 ->
+              # Two providers - opposite sides
+              case provider_index do
+                # Right
+                0 -> 0
+                # Left
+                1 -> :math.pi()
+              end
+
+            _ ->
+              # Multiple providers - even distribution
+              base = 2 * :math.pi() * provider_index / provider_count
+              # Start from top
+              base - :math.pi() / 2
+          end
+
         # Add controlled randomness for organic look
         seed = :erlang.phash2(connection.id, 1000)
-        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 8  # ±22.5 degrees
-        radius_variance = (seed / 1000 - 0.5) * 10  # ±5px
-        
+        # ±22.5 degrees
+        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 8
+        # ±7.5px (increased from ±5px)
+        radius_variance = (seed / 1000 - 0.5) * 15
+
         final_angle = base_angle + angle_variance
-        final_radius = provider_orbit + radius_variance
-        
+        final_radius = adjusted_provider_orbit + radius_variance
+
         provider_x = x + final_radius * :math.cos(final_angle)
         provider_y = y + final_radius * :math.sin(final_angle)
 
-        {connection, %{
-          position: {provider_x, provider_y},
-          radius: provider_radius
-        }}
+        {connection,
+         %{
+           position: {provider_x, provider_y},
+           radius: provider_radius
+         }}
       end)
 
     %{
@@ -395,10 +476,16 @@ defmodule LivechainWeb.NetworkTopology do
     }
   end
 
-  defp calculate_chain_radius(provider_count) do
-    max(30, min(80, 25 + provider_count * 3))
-  end
+  defp calculate_chain_radius(provider_count, chain_name) do
+    base_radius = max(35, min(85, 30 + provider_count * 4))
 
+    # Make Ethereum the biggest node
+    case chain_name do
+      # Add 20px to make it significantly larger
+      "ethereum" -> base_radius + 20
+      _ -> base_radius
+    end
+  end
 
   defp calculate_connection_line(
          {chain_x, chain_y},
@@ -451,8 +538,9 @@ defmodule LivechainWeb.NetworkTopology do
 
       # Add pseudo-random length variance
       seed = :erlang.phash2(seed_key, 1000)
-      length_variance = (seed / 1000 - 0.5) * 30  # ±15px variance
-      
+      # ±15px variance
+      length_variance = (seed / 1000 - 0.5) * 30
+
       # Calculate start point (edge of chain circle with variance)
       start_radius = chain_radius + length_variance * 0.3
       start_x = chain_x + norm_dx * start_radius
@@ -473,6 +561,8 @@ defmodule LivechainWeb.NetworkTopology do
   defp provider_line_color(:connected), do: "#10b981"
   defp provider_line_color(:disconnected), do: "#ef4444"
   defp provider_line_color(:connecting), do: "#f59e0b"
+  # purple hint
+  defp provider_line_color(:rate_limited), do: "#8B5CF6"
   defp provider_line_color(_), do: "#6b7280"
 
   defp extract_chain_from_connection(connection) do
@@ -512,11 +602,13 @@ defmodule LivechainWeb.NetworkTopology do
   defp provider_status_class(:connected), do: "bg-emerald-900/30 border-emerald-600"
   defp provider_status_class(:disconnected), do: "bg-red-900/30 border-red-600"
   defp provider_status_class(:connecting), do: "bg-yellow-900/30 border-yellow-600"
+  defp provider_status_class(:rate_limited), do: "bg-purple-900/30 border-purple-600"
   defp provider_status_class(_), do: "bg-gray-900/30 border-gray-600"
 
   defp provider_status_dot_class(:connected), do: "bg-emerald-400"
   defp provider_status_dot_class(:disconnected), do: "bg-red-400"
   defp provider_status_dot_class(:connecting), do: "bg-yellow-400"
+  defp provider_status_dot_class(:rate_limited), do: "bg-purple-400"
   defp provider_status_dot_class(_), do: "bg-gray-400"
 
   defp chain_color("ethereum"), do: "#627EEA"
@@ -531,6 +623,7 @@ defmodule LivechainWeb.NetworkTopology do
   defp provider_status_color(:connected), do: "#10B981"
   defp provider_status_color(:disconnected), do: "#EF4444"
   defp provider_status_color(:connecting), do: "#F59E0B"
+  defp provider_status_color(:rate_limited), do: "#8B5CF6"
   defp provider_status_color(_), do: "#6B7280"
 
   defp is_fastest_provider?(connection, chain_name, latency_leaders) do

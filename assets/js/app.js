@@ -50,6 +50,50 @@ const CollapsibleSection = {
   },
 };
 
+// Lightweight client-side event buffer
+const EventsFeed = {
+  mounted() {
+    const sizeAttr = this.el.getAttribute("data-buffer-size");
+    this.maxSize = (sizeAttr && parseInt(sizeAttr, 10)) || 500;
+    this.buffer = [];
+
+    // Allow other components to access the buffer via window
+    window.__LivechainEventsFeed = {
+      latest: (n = 50, predicate = null) => {
+        const items = predicate ? this.buffer.filter(predicate) : this.buffer;
+        return items.slice(-n);
+      },
+    };
+
+    this.handleEvent("events_batch", ({ items }) => {
+      if (Array.isArray(items)) {
+        // Append and trim to ring buffer size
+        this.buffer.push(...items);
+        if (this.buffer.length > this.maxSize) {
+          this.buffer.splice(0, this.buffer.length - this.maxSize);
+        }
+      }
+    });
+  },
+};
+
+// Auto-scroll hook for terminal-style feeds (with flex-col-reverse)
+const TerminalFeed = {
+  mounted() {
+    // For reversed columns, bottom is scrollTop = 0
+    this.scrollToBottom();
+  },
+  updated() {
+    this.scrollToBottom();
+  },
+  scrollToBottom() {
+    try {
+      // Snap to bottom for reversed feeds
+      this.el.scrollTop = 0;
+    } catch (_) {}
+  },
+};
+
 const SimulatorControl = {
   mounted() {
     console.log("SimulatorControl hook mounted");
@@ -392,6 +436,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     CollapsibleSection,
     SimulatorControl,
     DraggableNetworkViewport,
+    EventsFeed,
+    TerminalFeed,
   },
 });
 
