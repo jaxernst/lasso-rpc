@@ -25,11 +25,11 @@ export function getAvailableChains() {
 }
 
 function getDefaultChains() {
-  // Use chain IDs from available chains, fallback to ethereum if none available
+  // Use chain names from available chains, fallback to ethereum if none available
   if (availableChains && availableChains.length > 0) {
-    return availableChains.map(chain => chain.id);
+    return availableChains.map(chain => chain.name);
   }
-  return ["1"]; // Ethereum mainnet as fallback
+  return ["ethereum"]; // Ethereum mainnet as fallback
 }
 
 export function startHttpLoad({
@@ -137,7 +137,7 @@ export function startWsLoad({
     const url = `${location.origin.replace(
       /^http/,
       "ws"
-    )}/rpc/${encodeURIComponent(chain)}`;
+    )}/ws/rpc/${encodeURIComponent(chain)}`;
     const ws = new WebSocket(url);
 
     ws.onopen = () => {

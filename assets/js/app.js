@@ -426,6 +426,173 @@ const DraggableNetworkViewport = {
   },
 };
 
+// Endpoint Selector Hook for Chain Details
+const EndpointSelector = {
+  mounted() {
+    this.selectedStrategy = 'fastest'; // default strategy
+    this.selectedProvider = null; // no provider selected by default
+    this.mode = 'strategy'; // 'strategy' or 'provider'
+    
+    // Set up click handlers
+    this.el.addEventListener('click', (e) => {
+      // Find the actual button element (might be a child element clicked)
+      const button = e.target.closest('button');
+      if (!button) return;
+      
+      if (button.dataset.strategy && !button.disabled) {
+        this.selectStrategy(button.dataset.strategy);
+      } else if (button.dataset.provider && !button.disabled) {
+        this.selectProvider(button.dataset.provider);
+      }
+    });
+    
+    // Set up copy to clipboard handlers
+    this.el.addEventListener('click', (e) => {
+      if (e.target.dataset.copyText) {
+        navigator.clipboard.writeText(e.target.dataset.copyText);
+      }
+    });
+    
+    this.updateUI();
+  },
+  
+  selectStrategy(strategy) {
+    this.selectedStrategy = strategy;
+    this.selectedProvider = null; // clear provider selection
+    this.mode = 'strategy';
+    this.updateUI();
+  },
+  
+  selectProvider(provider) {
+    this.selectedProvider = provider;
+    this.selectedStrategy = null; // clear strategy selection
+    this.mode = 'provider';
+    this.updateUI();
+  },
+  
+  updateUI() {
+    // Update strategy pills with specific colors
+    this.el.querySelectorAll('[data-strategy]').forEach(btn => {
+      const strategy = btn.dataset.strategy;
+      const isActive = strategy === this.selectedStrategy && this.mode === 'strategy';
+      
+      // Remove all possible color classes
+      btn.className = btn.className.replace(/border-(sky|emerald|purple|orange)-[0-9]+|bg-(sky|emerald|purple|orange)-[0-9]+\/20|text-(sky|emerald|purple|orange)-[0-9]+|border-gray-[0-9]+|text-gray-[0-9]+|hover:border-(sky|emerald|purple|orange)-[0-9]+|hover:text-(sky|emerald|purple|orange)-[0-9]+/g, '');
+      
+      if (isActive) {
+        // Set active color based on strategy
+        switch(strategy) {
+          case 'fastest':
+            btn.className += ' border-sky-500 bg-sky-500/20 text-sky-300';
+            break;
+          case 'leaderboard':
+            btn.className += ' border-emerald-500 bg-emerald-500/20 text-emerald-300';
+            break;
+          case 'priority':
+            btn.className += ' border-purple-500 bg-purple-500/20 text-purple-300';
+            break;
+          case 'round-robin':
+            btn.className += ' border-orange-500 bg-orange-500/20 text-orange-300';
+            break;
+        }
+      } else {
+        // Inactive state with hover colors
+        switch(strategy) {
+          case 'fastest':
+            btn.className += ' border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300';
+            break;
+          case 'leaderboard':
+            btn.className += ' border-gray-600 text-gray-300 hover:border-emerald-400 hover:text-emerald-300';
+            break;
+          case 'priority':
+            btn.className += ' border-gray-600 text-gray-300 hover:border-purple-400 hover:text-purple-300';
+            break;
+          case 'round-robin':
+            btn.className += ' border-gray-600 text-gray-300 hover:border-orange-400 hover:text-orange-300';
+            break;
+        }
+      }
+    });
+    
+    // Update provider buttons
+    this.el.querySelectorAll('[data-provider]').forEach(btn => {
+      const isActive = btn.dataset.provider === this.selectedProvider && this.mode === 'provider';
+      btn.className = btn.className.replace(/border-indigo-[0-9]+|bg-indigo-[0-9]+\/20|text-indigo-[0-9]+|border-gray-[0-9]+|text-gray-[0-9]+|hover:border-indigo-[0-9]+|hover:text-indigo-[0-9]+/g, '');
+      
+      if (isActive) {
+        btn.className += ' border-indigo-500 bg-indigo-500/20 text-indigo-300';
+      } else {
+        btn.className += ' border-gray-600 text-gray-300 hover:border-indigo-400 hover:text-indigo-300';
+      }
+    });
+    
+    // Update URLs and description
+    this.updateEndpointUrls();
+    this.updateModeDescription();
+  },
+  
+  updateEndpointUrls() {
+    const httpUrl = this.el.querySelector('#endpoint-url');
+    const wsUrl = this.el.querySelector('#ws-endpoint-url');
+    const httpCopyBtns = this.el.querySelectorAll('[data-copy-text]');
+    
+    if (httpUrl && wsUrl) {
+      const baseUrl = window.location.origin;
+      const wsHost = window.location.host;
+      
+      // Get chain from the URL or default
+      const pathParts = window.location.pathname.split('/');
+      const chain = pathParts[pathParts.length - 1] || 'ethereum';
+      
+      let newHttpUrl, newWsUrl;
+      
+      if (this.mode === 'strategy' && this.selectedStrategy) {
+        newHttpUrl = `${baseUrl}/rpc/${this.selectedStrategy}/${chain}`;
+        newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
+      } else if (this.mode === 'provider' && this.selectedProvider) {
+        // For provider overrides, use the provider ID directly
+        newHttpUrl = `${baseUrl}/rpc/provider/${this.selectedProvider}/${chain}`;
+        newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
+      } else {
+        // Default fallback
+        newHttpUrl = `${baseUrl}/rpc/fastest/${chain}`;
+        newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
+      }
+      
+      httpUrl.textContent = newHttpUrl;
+      wsUrl.textContent = newWsUrl;
+      
+      // Update copy button data attributes
+      httpCopyBtns.forEach(btn => {
+        if (btn.dataset.copyText && btn.dataset.copyText.includes('http')) {
+          btn.dataset.copyText = newHttpUrl;
+        } else if (btn.dataset.copyText && btn.dataset.copyText.includes('ws')) {
+          btn.dataset.copyText = newWsUrl;
+        }
+      });
+    }
+  },
+  
+  updateModeDescription() {
+    const descriptionEl = this.el.querySelector('#mode-description');
+    if (!descriptionEl) return;
+    
+    if (this.mode === 'strategy' && this.selectedStrategy) {
+      const descriptions = {
+        'fastest': 'Using fastest provider based on latency benchmarks',
+        'leaderboard': 'Using provider with highest success rate and performance score',
+        'priority': 'Using providers in configured priority order with failover',
+        'round-robin': 'Distributing requests evenly across all available providers'
+      };
+      descriptionEl.textContent = descriptions[this.selectedStrategy] || 'Strategy-based routing';
+    } else if (this.mode === 'provider' && this.selectedProvider) {
+      descriptionEl.textContent = `Direct connection to ${this.selectedProvider} provider (bypasses routing)`;
+    } else {
+      descriptionEl.textContent = 'Using fastest provider based on latency benchmarks';
+    }
+  }
+};
+
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");
@@ -438,6 +605,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     DraggableNetworkViewport,
     EventsFeed,
     TerminalFeed,
+    TabSwitcher: EndpointSelector,
   },
 });
 
