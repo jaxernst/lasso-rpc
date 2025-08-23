@@ -72,28 +72,46 @@ defmodule LivechainWeb.RPCSocket do
   end
 
   defp extract_chain_from_connect_info(connect_info) do
+    Logger.info("DEBUG: connect_info = #{inspect(connect_info)}")
+    
     # First, try to extract chain from route parameters (new parameterized route)
-    case connect_info do
+    result = case connect_info do
       %{params: %{"chain_id" => chain_id}} when is_binary(chain_id) ->
+        Logger.info("DEBUG: Found chain_id in params: #{chain_id}")
         chain_id
 
       %{uri: %{path: path}} when is_binary(path) ->
+        Logger.info("DEBUG: Falling back to path extraction: #{path}")
         # Fallback: extract from path for legacy routes
         case String.split(path, "/") do
           # Handle /ws/rpc/:chain_id pattern
-          ["", "ws", "rpc", chain | _] -> chain
+          ["", "ws", "rpc", chain | _] -> 
+            Logger.info("DEBUG: Extracted from ws path: #{chain}")
+            chain
           # Handle legacy /rpc/:chain pattern
-          ["", "rpc", chain | _] -> chain
-          _ -> "unknown"
+          ["", "rpc", chain | _] -> 
+            Logger.info("DEBUG: Extracted from rpc path: #{chain}")
+            chain
+          _ -> 
+            Logger.info("DEBUG: Path didn't match patterns: #{inspect(String.split(path, "/"))}")
+            "unknown"
         end
 
       _ ->
+        Logger.info("DEBUG: Trying alternative params structure")
         # Last fallback: try params with different key
         case connect_info do
-          %{params: %{"chain" => chain}} -> chain
-          _ -> "unknown"
+          %{params: %{"chain" => chain}} -> 
+            Logger.info("DEBUG: Found 'chain' in params: #{chain}")
+            chain
+          _ -> 
+            Logger.info("DEBUG: No chain found in any location")
+            "unknown"
         end
     end
+    
+    Logger.info("DEBUG: Final extracted chain: #{result}")
+    result
   end
 
   @impl true

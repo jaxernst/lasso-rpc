@@ -479,4 +479,68 @@ defmodule LivechainWeb.RPCController do
         {:error, "Chain not configured: #{chain_name}"}
     end
   end
+
+  # Strategy-specific handlers
+
+  def rpc_fastest(conn, %{"chain_id" => chain_id} = params) do
+    handle_strategy_rpc(conn, Map.put(params, "strategy", "fastest"), chain_id)
+  end
+
+  def rpc_cheapest(conn, %{"chain_id" => chain_id} = params) do
+    handle_strategy_rpc(conn, Map.put(params, "strategy", "cheapest"), chain_id)
+  end
+
+  def rpc_priority(conn, %{"chain_id" => chain_id} = params) do
+    handle_strategy_rpc(conn, Map.put(params, "strategy", "priority"), chain_id)
+  end
+
+  def rpc_leaderboard(conn, %{"chain_id" => chain_id} = params) do
+    handle_strategy_rpc(conn, Map.put(params, "strategy", "leaderboard"), chain_id)
+  end
+
+  def rpc_round_robin(conn, %{"chain_id" => chain_id} = params) do
+    handle_strategy_rpc(conn, Map.put(params, "strategy", "round_robin"), chain_id)
+  end
+
+  def rpc_provider_override(conn, %{"provider_id" => provider_id, "chain_id" => chain_id} = params) do
+    handle_provider_override_rpc(conn, params, chain_id, provider_id)
+  end
+
+  def rpc_no_failover(conn, %{"chain_id" => chain_id} = params) do
+    handle_strategy_rpc(conn, Map.put(params, "no_failover", true), chain_id)
+  end
+
+  def rpc_aggressive(conn, %{"chain_id" => chain_id} = params) do
+    handle_strategy_rpc(conn, Map.put(params, "aggressive_failover", true), chain_id)
+  end
+
+  def rpc_debug(conn, %{"chain_id" => chain_id} = params) do
+    Logger.info("Debug RPC request", params: inspect(params), chain_id: chain_id)
+    handle_strategy_rpc(conn, Map.put(params, "debug", true), chain_id)
+  end
+
+  def rpc_benchmark(conn, %{"chain_id" => chain_id} = params) do
+    handle_strategy_rpc(conn, Map.put(params, "force_benchmark", true), chain_id)
+  end
+
+  defp handle_strategy_rpc(conn, params, chain_id) do
+    # Delegate to main rpc function with strategy in params
+    rpc(conn, params)
+  end
+
+  defp handle_provider_override_rpc(conn, params, chain_id, provider_id) do
+    Logger.info("Provider override RPC request", 
+      provider_id: provider_id, 
+      chain_id: chain_id, 
+      method: params["method"]
+    )
+    
+    # Add provider override to params and delegate to main rpc function
+    params_with_override = Map.merge(params, %{
+      "chain_id" => chain_id,
+      "provider_override" => provider_id
+    })
+    
+    rpc(conn, params_with_override)
+  end
 end
