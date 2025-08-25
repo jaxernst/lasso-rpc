@@ -1,6 +1,7 @@
 let httpStop = null;
 let wsSockets = [];
 let availableChains = [];
+let activityCallback = null;
 let stats = {
   http: { success: 0, error: 0, avgLatencyMs: 0, inflight: 0 },
   ws: { open: 0 },
@@ -22,6 +23,21 @@ export function setAvailableChains(chains) {
 
 export function getAvailableChains() {
   return availableChains;
+}
+
+export function setActivityCallback(callback) {
+  activityCallback = callback;
+  console.log("Simulator: Activity callback set");
+}
+
+function logActivity(type, data) {
+  if (activityCallback) {
+    activityCallback({
+      type,
+      timestamp: Date.now(),
+      ...data
+    });
+  }
 }
 
 function getDefaultChains() {
@@ -68,17 +84,23 @@ export function startHttpLoad({
 
     const jsonBody = JSON.stringify(body);
     console.log("Making HTTP request to:", url, "with body:", body);
-    console.log("JSON body:", jsonBody);
-    console.log("JSON body length:", jsonBody.length);
     stats.http.inflight++;
     const start = now();
+    
+    // Log the start of the request
+    logActivity("http", {
+      method,
+      chain,
+      status: "started",
+      url: url
+    });
+    
     try {
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: jsonBody,
       });
-      console.log("HTTP response:", resp.status, resp.statusText);
       const _json = await resp.json().catch(() => null);
       const dur = now() - start;
       stats.http.avgLatencyMs = updateAvg(
@@ -86,12 +108,27 @@ export function startHttpLoad({
         stats.http.success + stats.http.error,
         dur
       );
+      
       if (resp.ok) {
         stats.http.success++;
+        logActivity("http", {
+          method,
+          chain,
+          status: "success",
+          latency: Math.round(dur),
+          statusCode: resp.status
+        });
       } else {
         stats.http.error++;
+        logActivity("http", {
+          method,
+          chain,
+          status: "error",
+          latency: Math.round(dur),
+          statusCode: resp.status
+        });
       }
-    } catch (_e) {
+    } catch (error) {
       const dur = now() - start;
       stats.http.avgLatencyMs = updateAvg(
         stats.http.avgLatencyMs,
@@ -99,6 +136,13 @@ export function startHttpLoad({
         dur
       );
       stats.http.error++;
+      logActivity("http", {
+        method,
+        chain,
+        status: "error",
+        latency: Math.round(dur),
+        error: error.message
+      });
     } finally {
       stats.http.inflight--;
     }
@@ -142,28 +186,64 @@ export function startWsLoad({
 
     ws.onopen = () => {
       stats.ws.open++;
+      logActivity("websocket", {
+        chain,
+        status: "connected",
+        url: url
+      });
+      
       for (const topic of topics) {
-        ws.send(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: Math.floor(Math.random() * 1e9),
-            method: "eth_subscribe",
-            params: [topic],
-          })
-        );
+        const subscribeMsg = {
+          jsonrpc: "2.0",
+          id: Math.floor(Math.random() * 1e9),
+          method: "eth_subscribe",
+          params: [topic],
+        };
+        ws.send(JSON.stringify(subscribeMsg));
+        
+        logActivity("websocket", {
+          method: "eth_subscribe",
+          chain,
+          status: "subscribed",
+          topic: topic
+        });
       }
     };
 
     ws.onclose = () => {
       stats.ws.open = Math.max(0, stats.ws.open - 1);
+      logActivity("websocket", {
+        chain,
+        status: "disconnected"
+      });
     };
 
-    ws.onerror = () => {
-      // passive
+    ws.onerror = (error) => {
+      logActivity("websocket", {
+        chain,
+        status: "error",
+        error: error.message || "Connection error"
+      });
     };
 
-    ws.onmessage = () => {
-      // passive; the server will process and emit events already
+    ws.onmessage = (event) => {
+      // Parse and log incoming messages
+      try {
+        const data = JSON.parse(event.data);
+        logActivity("websocket", {
+          chain,
+          status: "message",
+          method: data.method || "notification",
+          id: data.id
+        });
+      } catch (e) {
+        // Silent - just log raw message activity
+        logActivity("websocket", {
+          chain,
+          status: "message",
+          method: "raw_data"
+        });
+      }
     };
 
     wsSockets.push(ws);

@@ -698,7 +698,7 @@ defmodule Livechain.RPC.ProviderPool do
     update_active_providers(new_state)
   end
 
-  defp perform_provider_health_check(provider_id, provider, _state) do
+  defp perform_provider_health_check(provider_id, provider, state) do
     # Skip health check if provider is in cooldown
     current_time = System.monotonic_time(:millisecond)
 
@@ -724,6 +724,12 @@ defmodule Livechain.RPC.ProviderPool do
           _duration_ms = System.monotonic_time(:millisecond) - start_time
 
           Logger.debug("Health check failed for #{provider_id}: #{inspect(reason)}")
+
+          # Publish health check failure event
+          publish_provider_event(state.chain_name, provider_id, :health_check_failed, %{
+            reason: inspect(reason),
+            consecutive_failures: provider.consecutive_failures + 1
+          })
 
           %{
             provider
