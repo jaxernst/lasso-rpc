@@ -4,7 +4,7 @@ import "phoenix_html";
 import { Socket } from "phoenix";
 import { LiveSocket } from "phoenix_live_view";
 
-// Simulator module
+// Enhanced Simulator module
 import * as LassoSim from "./lasso_simulator";
 
 // Collapsible Section Hook
@@ -99,6 +99,8 @@ const SimulatorControl = {
     console.log("SimulatorControl hook mounted");
     this.httpTimer = null;
     this.wsHandles = [];
+    this.recentCalls = [];
+    this.maxRecentCalls = 50;
 
     // Parse available chains from data attribute
     try {
@@ -108,11 +110,17 @@ const SimulatorControl = {
 
       // Make chains available to the simulator module
       LassoSim.setAvailableChains(this.availableChains);
+      
+      // Set callback for activity tracking
+      LassoSim.setActivityCallback((activity) => {
+        this.trackActivity(activity);
+      });
     } catch (e) {
       console.error("Failed to parse available chains:", e);
       this.availableChains = [];
     }
 
+    // Enhanced event handlers
     this.handleEvent("sim_start_http", (opts) => {
       console.log("sim_start_http received with opts:", opts);
       LassoSim.startHttpLoad(opts);
@@ -131,15 +139,68 @@ const SimulatorControl = {
       LassoSim.stopWsLoad();
     });
 
+    // New enhanced handlers
+    this.handleEvent("sim_start_http_advanced", (opts) => {
+      console.log("sim_start_http_advanced received with opts:", opts);
+      LassoSim.startHttpLoad(opts);
+    });
+
+    this.handleEvent("sim_start_ws_advanced", (opts) => {
+      console.log("sim_start_ws_advanced received with opts:", opts);
+      LassoSim.startWsLoad(opts);
+    });
+
+    this.handleEvent("sim_stop_all", () => {
+      LassoSim.stopHttpLoad();
+      LassoSim.stopWsLoad();
+    });
+
+    this.handleEvent("clear_sim_logs", () => {
+      this.recentCalls = [];
+      this.pushEvent("update_recent_calls", { calls: [] });
+    });
+
+    // Stats and activity update interval
     this.statsInterval = setInterval(() => {
-      if (this.el.isConnected && this.pushEvent) {
+      if (this.el.isConnected && this.pushEvent && window.liveSocket && window.liveSocket.isConnected()) {
         const stats = LassoSim.activeStats();
         this.pushEvent("sim_stats", stats);
+        
+        // Also push recent activity
+        this.pushEvent("update_recent_calls", { calls: this.recentCalls.slice(-8) });
       }
     }, 1000);
   },
+
+  trackActivity(activity) {
+    // Add timestamp if not present
+    if (!activity.timestamp) {
+      activity.timestamp = Date.now();
+    }
+    
+    // Add to recent calls buffer
+    this.recentCalls.push(activity);
+    
+    // Keep buffer size manageable
+    if (this.recentCalls.length > this.maxRecentCalls) {
+      this.recentCalls.shift();
+    }
+
+    // Immediate update for real-time feel (throttled by the interval above)
+    if (this.el.isConnected && this.pushEvent) {
+      // Optional: push immediately for very recent activity
+      if (window.liveSocket && window.liveSocket.isConnected()) {
+        clearTimeout(this.immediateUpdate);
+        this.immediateUpdate = setTimeout(() => {
+          this.pushEvent("update_recent_calls", { calls: this.recentCalls.slice(-8) });
+        }, 100);
+      }
+    }
+  },
+
   destroyed() {
     clearInterval(this.statsInterval);
+    clearTimeout(this.immediateUpdate);
     LassoSim.stopHttpLoad();
     LassoSim.stopWsLoad();
   },
@@ -593,6 +654,14 @@ const EndpointSelector = {
   }
 };
 
+// Provider Request Animator Hook (placeholder)
+const ProviderRequestAnimator = {
+  mounted() {
+    // This hook can be used to animate provider requests in the future
+    // For now it's just a placeholder to prevent the console error
+  }
+};
+
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");
@@ -605,6 +674,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     DraggableNetworkViewport,
     EventsFeed,
     TerminalFeed,
+    ProviderRequestAnimator,
     TabSwitcher: EndpointSelector,
   },
 });

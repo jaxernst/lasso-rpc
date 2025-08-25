@@ -2,6 +2,10 @@
 
 A living backlog of high-impact improvements to make Livechain reliable, fast, and compelling. Items are grouped by domain and designed to be incremental.
 
+### Dashboard + UI:
+
+- Add provider configuration UI: Add chains and proivders directly through the interface, with API keys and secrets too
+
 ### Provider selection strategies
 
 - **Strategy registry + behaviour**: pluggable strategies with a clear behaviour (`pick/3`) and typed options.

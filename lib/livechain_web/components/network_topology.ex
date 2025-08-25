@@ -1,26 +1,6 @@
 defmodule LivechainWeb.NetworkTopology do
-  @moduledoc """
-  Network topology visualization component for displaying blockchain rpc connections
-  in an interactive grid layout.
-  """
-
   use Phoenix.Component
 
-  @doc """
-  Renders a network topology visualization component.
-
-  ## Examples
-
-      <.network_topology
-        id="network-topology"
-        connections={@connections}
-        selected_chain={@selected_chain}
-        selected_provider={@selected_provider}
-        on_chain_select="select_chain"
-        on_provider_select="select_provider"
-        on_test_connection="test_connection"
-      />
-  """
   attr(:id, :string, required: true, doc: "unique identifier for the topology component")
   attr(:connections, :list, required: true, doc: "list of connection maps")
   attr(:selected_chain, :string, default: nil, doc: "currently selected chain")
@@ -57,7 +37,12 @@ defmodule LivechainWeb.NetworkTopology do
     <div class={["relative h-full w-full overflow-hidden", @class]}>
       
     <!-- Hierarchical orbital network layout -->
-      <div class="relative" data-network-canvas style="width: 4000px; height: 3000px;">
+      <div 
+        class="relative cursor-default" 
+        data-network-canvas 
+        style="width: 4000px; height: 3000px;"
+        phx-click="deselect_all"
+      >
         <!-- L1 -> L2 Connection lines -->
         <%= if Map.has_key?(@spiral_layout.chains, "ethereum") do %>
           <% ethereum_pos = @spiral_layout.chains["ethereum"].position %>
@@ -155,9 +140,11 @@ defmodule LivechainWeb.NetworkTopology do
             <% {x, y} = provider_data.position %>
             <% radius = provider_data.radius %>
             <div
-              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
-    do: "ring-purple-400/30 border-purple-400 ring-2",
-    else: "border-gray-600"), provider_status_class(connection.status)]}
+              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", 
+                      if(@selected_provider == connection.id,
+                        do: "ring-purple-400/30 border-purple-400 ring-2 !border-purple-400",
+                        else: "border-gray-600"), 
+                      unless(@selected_provider == connection.id, do: provider_status_class(connection.status))]}
               style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
                 if(@selected_provider == connection.id,
                   do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
@@ -169,6 +156,7 @@ defmodule LivechainWeb.NetworkTopology do
               title={connection.name}
               data-provider={connection.id}
               data-provider-center={"#{x},#{y}"}
+              id={"provider-#{connection.id}"}
             >
               <!-- Status indicator dot -->
               <div
@@ -536,20 +524,13 @@ defmodule LivechainWeb.NetworkTopology do
       norm_dx = dx / distance
       norm_dy = dy / distance
 
-      # Add pseudo-random length variance
-      seed = :erlang.phash2(seed_key, 1000)
-      # ±15px variance
-      length_variance = (seed / 1000 - 0.5) * 30
+      # Calculate start point (edge of chain circle)
+      start_x = chain_x + norm_dx * chain_radius
+      start_y = chain_y + norm_dy * chain_radius
 
-      # Calculate start point (edge of chain circle with variance)
-      start_radius = chain_radius + length_variance * 0.3
-      start_x = chain_x + norm_dx * start_radius
-      start_y = chain_y + norm_dy * start_radius
-
-      # Calculate end point (edge of provider circle with variance)
-      end_radius = provider_radius + length_variance * 0.7
-      end_x = provider_x - norm_dx * end_radius
-      end_y = provider_y - norm_dy * end_radius
+      # Calculate end point (edge of provider circle) - extend all the way to provider edge
+      end_x = provider_x - norm_dx * provider_radius
+      end_y = provider_y - norm_dy * provider_radius
 
       {start_x, start_y, end_x, end_y}
     else
