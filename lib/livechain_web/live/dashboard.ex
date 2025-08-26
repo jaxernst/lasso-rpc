@@ -2,7 +2,6 @@ defmodule LivechainWeb.Dashboard do
   use LivechainWeb, :live_view
   require Logger
 
-  alias Livechain.RPC.ChainRegistry
   alias LivechainWeb.NetworkTopology
 
   @impl true
@@ -57,9 +56,6 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:client_events, [])
       |> assign(:latest_blocks, [])
       |> assign(:events, [])
-      |> assign(:demo_running, false)
-      |> assign(:sampler_running, false)
-      |> assign(:sampler_ref, nil)
       |> assign(:vm_metrics, %{})
       |> assign(:available_chains, get_available_chains())
       |> assign(:details_collapsed, true)
@@ -366,16 +362,6 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, assign(socket, :latency_leaders, latency_leaders)}
   end
 
-  # Sampler tick
-  @impl true
-  def handle_info(:sample_tick, %{assigns: %{sampler_running: true}} = socket) do
-    publish_sample_routing_decision()
-    Process.send_after(self(), :sample_tick, 1_000)
-    {:noreply, socket}
-  end
-
-  def handle_info(:sample_tick, socket), do: {:noreply, socket}
-
   @impl true
   def handle_info(:flush_connections, socket) do
     Process.delete(:pending_connection_update)
@@ -396,6 +382,7 @@ defmodule LivechainWeb.Dashboard do
         data-available-chains={Jason.encode!(@available_chains)}
       >
       </div>
+
       <!-- Header -->
       <div class="border-gray-700/50 relative flex-shrink-0 border-b">
         <div class="relative flex items-center justify-between p-6">
@@ -442,7 +429,6 @@ defmodule LivechainWeb.Dashboard do
             tabs={[
               %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
               %{id: "benchmarks", label: "Benchmarks", icon: "M3 3h18M9 7l6-3M9 17l6-3"},
-              %{id: "simulator", label: "Simulator", icon: "M4 6h16M4 10h16M4 14h16"},
               %{id: "system", label: "System", icon: "M15 4m0 13V4m-6 3l6-3"}
             ]}
             active_tab={@active_tab}
@@ -477,13 +463,6 @@ defmodule LivechainWeb.Dashboard do
             />
           <% "benchmarks" -> %>
             <.benchmarks_tab_content />
-          <% "simulator" -> %>
-            <.simulator_tab_content
-              demo_running={@demo_running}
-              sampler_running={@sampler_running}
-              sim_stats={@sim_stats}
-              available_chains={@available_chains}
-            />
           <% "system" -> %>
             <.metrics_tab_content
               connections={@connections}
@@ -521,9 +500,6 @@ defmodule LivechainWeb.Dashboard do
             latency_leaders={@latency_leaders}
             on_chain_select="select_chain"
             on_provider_select="select_provider"
-            on_test_connection="test_connection"
-            on_chain_hover="highlight_chain"
-            on_provider_hover="highlight_provider"
           />
         </div>
       </div>
@@ -598,14 +574,6 @@ defmodule LivechainWeb.Dashboard do
         events={@events}
       />
 
-    <!-- Floating Events Window (bottom-left) -->
-      <.floating_events_window
-        events_collapsed={@events_collapsed}
-        routing_events={@routing_events}
-        provider_events={@provider_events}
-        client_events={@client_events}
-        latest_blocks={@latest_blocks}
-      />
     </div>
     """
   end
@@ -1180,173 +1148,6 @@ defmodule LivechainWeb.Dashboard do
     """
   end
 
-  # Floating events window (pinned bottom-left)
-  def floating_events_window(assigns) do
-    assigns =
-      assign(
-        assigns,
-        :total_events,
-        length(assigns.routing_events) + length(assigns.provider_events) +
-          length(assigns.client_events) + length(assigns.latest_blocks)
-      )
-
-    ~H"""
-    <div class="pointer-events-none absolute bottom-4 left-4 z-30">
-      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto w-96 rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@events_collapsed, do: "h-auto", else: "max-h-[70vh]")]}>
-        <div class="border-gray-700/50 flex items-center justify-between border-b px-3 py-2">
-          <div class="flex items-center space-x-2">
-            <div class="text-xs font-medium text-gray-300">Events</div>
-            <%= unless @events_collapsed do %>
-              <div class="bg-purple-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-purple-300">
-                {length(@routing_events) + length(@provider_events) + length(@client_events) +
-                  length(@latest_blocks)}
-              </div>
-            <% end %>
-          </div>
-          <button
-            phx-click="toggle_events_panel"
-            class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-colors hover:bg-gray-700/60"
-          >
-            {if @events_collapsed, do: "↗", else: "↙"}
-          </button>
-        </div>
-
-        <%= if @events_collapsed do %>
-          <div class="px-3 py-2">
-            <div class="text-xs text-gray-400">
-              {length(@routing_events)} RPC calls • {length(@provider_events)} provider events • {length(
-                @latest_blocks
-              )} blocks
-            </div>
-          </div>
-        <% else %>
-          <div class="flex flex-col overflow-hidden">
-            <div class="max-h-[60vh] flex-1 space-y-3 overflow-y-auto p-2">
-              <!-- RPC Call Stream Section -->
-              <div>
-                <div class="mb-2 flex items-center justify-between">
-                  <div class="flex items-center space-x-2 text-xs font-semibold text-gray-300">
-                    <span>RPC Calls</span>
-                    <div class="bg-sky-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-sky-300">
-                      {length(@routing_events)}
-                    </div>
-                  </div>
-                </div>
-                <div class="flex max-h-32 flex-col-reverse gap-1 overflow-y-auto">
-                  <%= for e <- Enum.take(@routing_events, 20) do %>
-                    <div class="bg-gray-800/30 text-[11px] border-gray-700/20 animate-pulse rounded-md border px-2 py-1 text-gray-400">
-                      <div class="flex items-center justify-between">
-                        <div class="text-[10px] text-gray-500">{e.ts}</div>
-                        <div class="flex items-center space-x-1">
-                          <span class="text-sky-300">{e.method}</span>
-                          <span class="text-gray-500">on</span>
-                          <span class="capitalize text-purple-300">{e.chain}</span>
-                        </div>
-                      </div>
-                      <div class="mt-0.5 flex items-center justify-between">
-                        <span class="text-[10px] text-emerald-300">{e.provider_id}</span>
-                        <span class="text-[10px] text-yellow-300">{e.duration_ms}ms</span>
-                      </div>
-                    </div>
-                  <% end %>
-                </div>
-              </div>
-
-    <!-- Provider Events Section -->
-              <%= if length(@provider_events) > 0 do %>
-                <div>
-                  <div class="mb-2 flex items-center justify-between">
-                    <div class="flex items-center space-x-2 text-xs font-semibold text-gray-300">
-                      <span>Provider Events</span>
-                      <div class="bg-orange-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-orange-300">
-                        {length(@provider_events)}
-                      </div>
-                    </div>
-                  </div>
-                  <div class="flex max-h-24 flex-col-reverse gap-1 overflow-y-auto">
-                    <%= for e <- Enum.take(@provider_events, 10) do %>
-                      <div class="bg-gray-800/30 text-[11px] border-gray-700/20 rounded-md border px-2 py-1 text-gray-400">
-                        <div class="flex items-center justify-between">
-                          <span class="text-[10px] text-gray-500">{e.ts}</span>
-                          <span class="text-orange-300">{e.event}</span>
-                        </div>
-                        <div class="mt-0.5 flex items-center space-x-2">
-                          <span class="text-[10px] text-purple-300">{e.chain}</span>
-                          <span class="text-[10px] text-emerald-300">{e.provider_id}</span>
-                        </div>
-                      </div>
-                    <% end %>
-                  </div>
-                </div>
-              <% end %>
-
-    <!-- Client Events Section -->
-              <%= if length(@client_events) > 0 do %>
-                <div>
-                  <div class="mb-2 flex items-center justify-between">
-                    <div class="flex items-center space-x-2 text-xs font-semibold text-gray-300">
-                      <span>Client Events</span>
-                      <div class="bg-blue-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-blue-300">
-                        {length(@client_events)}
-                      </div>
-                    </div>
-                  </div>
-                  <div class="flex max-h-24 flex-col-reverse gap-1 overflow-y-auto">
-                    <%= for e <- Enum.take(@client_events, 10) do %>
-                      <div class="bg-gray-800/30 text-[11px] border-gray-700/20 rounded-md border px-2 py-1 text-gray-400">
-                        <div class="flex items-center justify-between">
-                          <span class="text-[10px] text-gray-500">{e.ts}</span>
-                          <span class="text-orange-300">{e.event}</span>
-                        </div>
-                        <div class="mt-0.5 flex items-center space-x-2">
-                          <span class="text-[10px] text-gray-300">{e.ip}</span>
-                          <span class="text-[10px] text-sky-300">{e.transport}</span>
-                        </div>
-                      </div>
-                    <% end %>
-                  </div>
-                </div>
-              <% end %>
-
-    <!-- Latest Blocks Section -->
-              <%= if length(@latest_blocks) > 0 do %>
-                <div>
-                  <div class="mb-2 flex items-center justify-between">
-                    <div class="flex items-center space-x-2 text-xs font-semibold text-gray-300">
-                      <span>Latest Blocks</span>
-                      <div class="bg-green-500/20 text-[10px] rounded px-1.5 py-0.5 font-medium text-green-300">
-                        {length(@latest_blocks)}
-                      </div>
-                    </div>
-                  </div>
-                  <div class="flex max-h-24 flex-col-reverse gap-1 overflow-y-auto">
-                    <%= for e <- Enum.take(@latest_blocks, 10) do %>
-                      <div class="bg-gray-800/30 text-[11px] border-gray-700/20 rounded-md border px-2 py-1 text-gray-400">
-                        <div class="flex items-center justify-between">
-                          <span class="text-[10px] text-gray-500">{e.ts}</span>
-                          <span class="text-purple-300">{e.chain}</span>
-                        </div>
-                        <div class="mt-0.5 flex items-center justify-between">
-                          <span class="text-[10px] text-gray-300">#{e.block_number}</span>
-                          <div class="flex items-center space-x-1">
-                            <span class="text-[10px] text-emerald-300">{e.provider_first}</span>
-                            <span class="text-[10px] text-yellow-300">Δ{e.margin_ms}ms</span>
-                          </div>
-                        </div>
-                      </div>
-                    <% end %>
-                  </div>
-                </div>
-              <% end %>
-            </div>
-          </div>
-        <% end %>
-      </div>
-    </div>
-    """
-  end
-
-  # Default meta stats panel for details window when nothing is selected
   defp meta_stats_panel(assigns) do
     assigns =
       assigns
@@ -1401,87 +1202,6 @@ defmodule LivechainWeb.Dashboard do
         <div class="text-sm font-semibold text-gray-300">Benchmarks</div>
         <div class="mt-2 text-xs text-gray-400">
           Coming soon: provider leaderboard, method x provider latency heatmap, and strategy comparisons.
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  def simulator_tab_content(assigns) do
-    ~H"""
-    <div
-      id="simulator-control"
-      class="flex h-full w-full flex-col gap-4 p-4"
-    >
-      <!-- Available Chains Info -->
-      <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-        <div class="mb-2 text-sm font-semibold text-gray-300">Available Chains</div>
-        <div class="flex flex-wrap gap-2">
-          <%= for chain <- @available_chains do %>
-            <span class="inline-flex items-center rounded-full bg-purple-100 px-3 py-0.5 text-xs font-medium text-purple-800">
-              {chain.display_name} (ID: {chain.id})
-            </span>
-          <% end %>
-        </div>
-        <%= if length(@available_chains) == 0 do %>
-          <div class="text-sm text-gray-400">No chains configured</div>
-        <% end %>
-      </div>
-
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-          <div class="mb-2 text-sm font-semibold text-gray-300">HTTP Load</div>
-          <div class="flex flex-wrap items-center gap-2 text-sm">
-            <button phx-click="sim_http_start" class="rounded bg-indigo-600 px-3 py-1 text-white">
-              Start HTTP
-            </button>
-            <button phx-click="sim_http_stop" class="rounded bg-gray-700 px-3 py-1 text-white">
-              Stop HTTP
-            </button>
-            <span class="text-gray-400">
-              RPS: 5, Methods: eth_blockNumber/eth_getBalance <br />
-              Chains: {Enum.map(@available_chains, & &1.display_name) |> Enum.join(", ")}
-            </span>
-          </div>
-          <div class="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-400">
-            <div>
-              Success:
-              <span class="text-emerald-400">
-                {@sim_stats.http["success"] || @sim_stats.http[:success]}
-              </span>
-            </div>
-            <div>
-              Errors:
-              <span class="text-rose-400">{@sim_stats.http["error"] || @sim_stats.http[:error]}</span>
-            </div>
-            <div>
-              Avg:
-              <span class="text-yellow-300">
-                {(@sim_stats.http["avgLatencyMs"] || @sim_stats.http[:avgLatencyMs] || 0.0)
-                |> to_float()
-                |> Float.round(1)} ms
-              </span>
-            </div>
-          </div>
-        </div>
-        <div class="border-gray-700/50 bg-gray-900/50 rounded-lg border p-3">
-          <div class="mb-2 text-sm font-semibold text-gray-300">WebSocket Load</div>
-          <div class="flex flex-wrap items-center gap-2 text-sm">
-            <button phx-click="sim_ws_start" class="rounded bg-purple-600 px-3 py-1 text-white">
-              Start WS
-            </button>
-            <button phx-click="sim_ws_stop" class="rounded bg-gray-700 px-3 py-1 text-white">
-              Stop WS
-            </button>
-            <span class="text-gray-400">
-              Conns: 2, Topic: newHeads <br />
-              Chains: {Enum.map(@available_chains, & &1.display_name) |> Enum.join(", ")}
-            </span>
-          </div>
-          <div class="mt-2 text-xs text-gray-400">
-            Open:
-            <span class="text-emerald-400">{@sim_stats.ws["open"] || @sim_stats.ws[:open]}</span>
-          </div>
         </div>
       </div>
     </div>
@@ -1613,16 +1333,6 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Hover previews
-  @impl true
-  def handle_event("highlight_chain", %{"highlight" => chain}, socket) do
-    {:noreply, assign(socket, :hover_chain, chain)}
-  end
-
-  @impl true
-  def handle_event("highlight_provider", %{"highlight" => provider}, socket) do
-    {:noreply, assign(socket, :hover_provider, provider)}
-  end
 
   # Collapsible windows toggles
   @impl true
@@ -1647,65 +1357,8 @@ defmodule LivechainWeb.Dashboard do
   end
 
   @impl true
-  def handle_event("test_connection", _params, socket) do
-    # Broadcast connection status update to all LiveViews
-    Livechain.RPC.ChainRegistry.broadcast_connection_status_update()
-    {:noreply, socket}
-  end
-
-  @impl true
   def handle_event("refresh_connections", _params, socket) do
     {:noreply, fetch_connections(socket)}
-  end
-
-  # Sampler controls
-  @impl true
-  def handle_event("start_sampler", _params, %{assigns: %{sampler_running: false}} = socket) do
-    Process.send_after(self(), :sample_tick, 100)
-    {:noreply, assign(socket, :sampler_running, true)}
-  end
-
-  def handle_event("start_sampler", _params, socket), do: {:noreply, socket}
-
-  @impl true
-  def handle_event("stop_sampler", _params, %{assigns: %{sampler_running: true}} = socket) do
-    {:noreply, assign(socket, :sampler_running, false)}
-  end
-
-  def handle_event("stop_sampler", _params, socket), do: {:noreply, socket}
-
-  @impl true
-  def handle_event("emit_cooldown", _params, socket) do
-    Phoenix.PubSub.broadcast(
-      Livechain.PubSub,
-      "provider_pool:events",
-      %{
-        ts: System.system_time(:millisecond),
-        chain: "demo",
-        provider_id: "demo_provider",
-        event: :cooldown_start,
-        details: %{until: System.system_time(:millisecond) + 5_000}
-      }
-    )
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("emit_healthy", _params, socket) do
-    Phoenix.PubSub.broadcast(
-      Livechain.PubSub,
-      "provider_pool:events",
-      %{
-        ts: System.system_time(:millisecond),
-        chain: "demo",
-        provider_id: "demo_provider",
-        event: :healthy,
-        details: %{}
-      }
-    )
-
-    {:noreply, socket}
   end
 
   @impl true
