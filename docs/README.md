@@ -1,8 +1,6 @@
 # Lasso RPC
 
-High-performance, scalable, and fault tolerant RPC orchestration service for EVM chains.
-
-'A Blockchain Node RPC smart router and orchestration service to support fast, bullet proof consumer applications'
+A high-peformance Blockchain Node RPC smart router and orchestration service to support fast, bullet proof consumer applications.
 
 ## Core Features + Selling points
 

@@ -3,6 +3,8 @@ defmodule LivechainWeb.Dashboard do
   require Logger
 
   alias LivechainWeb.NetworkTopology
+  alias LivechainWeb.Dashboard.{Helpers, MetricsHelpers, StatusHelpers, EndpointHelpers}
+  alias LivechainWeb.Dashboard.Components
 
   @impl true
   def mount(_params, _session, socket) do
@@ -57,7 +59,7 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:latest_blocks, [])
       |> assign(:events, [])
       |> assign(:vm_metrics, %{})
-      |> assign(:available_chains, get_available_chains())
+      |> assign(:available_chains, Helpers.get_available_chains())
       |> assign(:details_collapsed, true)
       |> assign(:events_collapsed, true)
       |> assign(:sim_stats, %{
@@ -93,7 +95,7 @@ defmodule LivechainWeb.Dashboard do
               |> then(fn lst ->
                 if Map.get(c, :status) != Map.get(prev_c, :status) do
                   [
-                    as_event(:provider,
+                    Helpers.as_event(:provider,
                       chain: Map.get(c, :chain),
                       provider_id: c.id,
                       severity:
@@ -117,7 +119,7 @@ defmodule LivechainWeb.Dashboard do
 
                 if attempts > prev_attempts do
                   [
-                    as_event(:provider,
+                    Helpers.as_event(:provider,
                       chain: Map.get(c, :chain),
                       provider_id: c.id,
                       severity: :warn,
@@ -205,7 +207,7 @@ defmodule LivechainWeb.Dashboard do
 
     # Unified events + client-side push
     ev =
-      as_event(:rpc,
+      Helpers.as_event(:rpc,
         chain: chain,
         provider_id: pid,
         severity: if(entry.result == :error, do: :warn, else: :info),
@@ -238,7 +240,7 @@ defmodule LivechainWeb.Dashboard do
     socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, 99)] end)
 
     uev =
-      as_event(:provider,
+      Helpers.as_event(:provider,
         chain: chain,
         provider_id: pid,
         severity: :info,
@@ -270,7 +272,7 @@ defmodule LivechainWeb.Dashboard do
     socket = update(socket, :client_events, fn list -> [entry | Enum.take(list, 99)] end)
 
     uev =
-      as_event(:client,
+      Helpers.as_event(:client,
         chain: chain,
         severity: :debug,
         message: "client #{ev} via #{transport}",
@@ -299,7 +301,7 @@ defmodule LivechainWeb.Dashboard do
     socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, 99)] end)
 
     uev =
-      as_event(:circuit,
+      Helpers.as_event(:circuit,
         provider_id: pid,
         severity: :warn,
         message: entry.event,
@@ -329,7 +331,7 @@ defmodule LivechainWeb.Dashboard do
     socket = update(socket, :latest_blocks, fn list -> [entry | Enum.take(list, 19)] end)
 
     uev =
-      as_event(:block,
+      Helpers.as_event(:block,
         chain: chain,
         severity: :info,
         message:
@@ -348,7 +350,7 @@ defmodule LivechainWeb.Dashboard do
   # VM metrics ticker
   @impl true
   def handle_info(:vm_metrics_tick, socket) do
-    metrics = collect_vm_metrics()
+    metrics = MetricsHelpers.collect_vm_metrics()
     Process.send_after(self(), :vm_metrics_tick, 2_000)
     {:noreply, assign(socket, :vm_metrics, metrics)}
   end
@@ -357,7 +359,7 @@ defmodule LivechainWeb.Dashboard do
   @impl true
   def handle_info(:latency_leaders_refresh, socket) do
     connections = Map.get(socket.assigns, :connections, [])
-    latency_leaders = get_latency_leaders_by_chain(connections)
+    latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
     Process.send_after(self(), :latency_leaders_refresh, 30_000)
     {:noreply, assign(socket, :latency_leaders, latency_leaders)}
   end
@@ -505,7 +507,9 @@ defmodule LivechainWeb.Dashboard do
       </div>
 
     <!-- Simulator Controls (top-left) -->
-      <.floating_simulator_controls
+      <.live_component
+        module={Components.SimulatorControls}
+        id="simulator-controls"
         sim_stats={@sim_stats}
         available_chains={@available_chains}
         sim_collapsed={@sim_collapsed}
@@ -579,28 +583,22 @@ defmodule LivechainWeb.Dashboard do
   end
 
   def chain_details_panel(assigns) do
+    chain_connections = Enum.filter(assigns.connections, &(&1.chain == assigns.chain))
+    
     assigns =
-      assigns
-      |> assign(
-        :chain_connections,
-        Enum.filter(assigns.connections, &(&1.chain == assigns.chain))
-      )
-      |> assign(:chain_events, Enum.filter(assigns.routing_events, &(&1.chain == assigns.chain)))
-      |> assign(
-        :chain_provider_events,
-        Enum.filter(assigns.provider_events, &(&1.chain == assigns.chain))
-      )
-      |> assign(
-        :chain_unified_events,
-        Enum.filter(Map.get(assigns, :events, []), fn e -> e[:chain] == assigns.chain end)
-      )
-      |> assign_chain_endpoints(assigns.chain)
-      |> assign_chain_performance_metrics(assigns.chain)
-      |> assign(:sample_curl, get_sample_curl_command())
-      |> assign(:selected_strategy_tab, "fastest")
-      |> assign(:selected_provider_tab, List.first(Enum.filter(assigns.connections, &(&1.chain == assigns.chain))))
-      |> assign(:active_endpoint_tab, "strategy")
-      |> assign(:last_decision, get_last_decision(assigns.routing_events, assigns.chain))
+      Map.merge(assigns, %{
+        chain_connections: chain_connections,
+        chain_events: Enum.filter(assigns.routing_events, &(&1.chain == assigns.chain)),
+        chain_provider_events: Enum.filter(assigns.provider_events, &(&1.chain == assigns.chain)),
+        chain_unified_events: Enum.filter(Map.get(assigns, :events, []), fn e -> e[:chain] == assigns.chain end),
+        chain_endpoints: EndpointHelpers.get_chain_endpoints(assigns, assigns.chain),
+        chain_performance: MetricsHelpers.get_chain_performance_metrics(assigns, assigns.chain),
+        sample_curl: Helpers.get_sample_curl_command(),
+        selected_strategy_tab: "fastest",
+        selected_provider_tab: List.first(chain_connections),
+        active_endpoint_tab: "strategy",
+        last_decision: Helpers.get_last_decision(assigns.routing_events, assigns.chain)
+      })
 
     ~H"""
     <div class="flex h-full flex-col">
@@ -619,7 +617,7 @@ defmodule LivechainWeb.Dashboard do
             <div>
               <h3 class="text-lg font-semibold capitalize text-white">{@chain}</h3>
               <div class="text-xs text-gray-400 flex items-center gap-2">
-                <span>{get_chain_id(@chain)}</span>
+                <span>{Helpers.get_chain_id(@chain)}</span>
                 <span>•</span>
                 <span><span class="text-emerald-400">{@chain_performance.connected_providers}</span>/<span class="text-gray-500">{@chain_performance.total_providers}</span> providers</span>
               </div>
@@ -692,9 +690,9 @@ defmodule LivechainWeb.Dashboard do
                 <div class="flex items-center gap-2 text-[11px] text-gray-300">
                   <div class="w-28 truncate text-emerald-300">{pid}</div>
                   <div class="flex-1 bg-gray-900/60 rounded h-2">
-                    <div class="bg-emerald-500 h-2 rounded" style={"width: #{to_float(pct) |> Float.round(1)}%"}></div>
+                    <div class="bg-emerald-500 h-2 rounded" style={"width: #{Helpers.to_float(pct) |> Float.round(1)}%"}></div>
                   </div>
-                  <div class="w-12 text-right text-gray-400">{to_float(pct) |> Float.round(1)}%</div>
+                  <div class="w-12 text-right text-gray-400">{Helpers.to_float(pct) |> Float.round(1)}%</div>
                 </div>
               <% end %>
               <%= if Enum.empty?(@chain_performance.decision_share) do %>
@@ -744,14 +742,14 @@ defmodule LivechainWeb.Dashboard do
             <div class="flex items-center justify-between mb-1">
               <div class="text-xs font-medium text-gray-300">HTTP</div>
               <button
-                data-copy-text={get_strategy_http_url(@chain_endpoints, "fastest")}
+                data-copy-text={EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
                 class="bg-gray-700 hover:bg-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
               >
                 Copy
               </button>
             </div>
             <div class="text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="endpoint-url">
-              {get_strategy_http_url(@chain_endpoints, "fastest")}
+              {EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
             </div>
           </div>
 
@@ -760,14 +758,14 @@ defmodule LivechainWeb.Dashboard do
             <div class="flex items-center justify-between mb-1">
               <div class="text-xs font-medium text-gray-300">WebSocket</div>
               <button
-                data-copy-text={get_strategy_ws_url(@chain_endpoints, "fastest")}
+                data-copy-text={EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
                 class="bg-gray-700 hover:bg-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
               >
                 Copy
               </button>
             </div>
             <div class="text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="ws-endpoint-url">
-              {get_strategy_ws_url(@chain_endpoints, "fastest")}
+              {EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
             </div>
           </div>
 
@@ -801,7 +799,7 @@ defmodule LivechainWeb.Dashboard do
                       <span class="text-sky-400">{event[:method]}</span>
                     <% end %>
                   </div>
-                  <span class="text-gray-500">{format_timestamp(event[:ts_ms])}</span>
+                  <span class="text-gray-500">{Helpers.format_timestamp(event[:ts_ms])}</span>
                 </div>
                 <%= if event[:message] do %>
                   <div class="text-xs text-gray-400 mt-1 font-mono">{event[:message]}</div>
@@ -823,25 +821,14 @@ defmodule LivechainWeb.Dashboard do
 
   def provider_details_panel(assigns) do
     assigns =
-      assigns
-      |> assign(
-        :provider_connection,
-        Enum.find(assigns.connections, &(&1.id == assigns.provider))
-      )
-      |> assign(
-        :provider_events,
-        Enum.filter(assigns.routing_events, &(&1.provider_id == assigns.provider))
-      )
-      |> assign(
-        :provider_pool_events,
-        Enum.filter(assigns.provider_events, &(&1.provider_id == assigns.provider))
-      )
-      |> assign(
-        :provider_unified_events,
-        Enum.filter(Map.get(assigns, :events, []), fn e -> e[:provider_id] == assigns.provider end)
-      )
-      |> assign_provider_performance_metrics(assigns.provider)
-      |> assign(:last_decision, get_last_decision(assigns.routing_events, nil, assigns.provider))
+      Map.merge(assigns, %{
+        provider_connection: Enum.find(assigns.connections, &(&1.id == assigns.provider)),
+        provider_events: Enum.filter(assigns.routing_events, &(&1.provider_id == assigns.provider)),
+        provider_pool_events: Enum.filter(assigns.provider_events, &(&1.provider_id == assigns.provider)),
+        provider_unified_events: Enum.filter(Map.get(assigns, :events, []), fn e -> e[:provider_id] == assigns.provider end),
+        performance_metrics: MetricsHelpers.get_provider_performance_metrics(assigns.provider, assigns.connections, assigns.routing_events),
+        last_decision: Helpers.get_last_decision(assigns.routing_events, nil, assigns.provider)
+      })
 
     ~H"""
     <div class="flex h-full flex-col">
@@ -865,7 +852,7 @@ defmodule LivechainWeb.Dashboard do
                 {if @provider_connection, do: @provider_connection.name, else: @provider}
               </h3>
               <div class="text-xs text-gray-400">
-                {if @provider_connection, do: String.capitalize(@provider_connection.chain || "unknown"), else: "Provider"} • {provider_status_label(@provider_connection)}
+                {if @provider_connection, do: String.capitalize(@provider_connection.chain || "unknown"), else: "Provider"} • {StatusHelpers.provider_status_label(@provider_connection)}
               </div>
             </div>
           </div>
@@ -915,14 +902,14 @@ defmodule LivechainWeb.Dashboard do
           <div class="flex flex-wrap items-center justify-between gap-3 text-sm pt-2 border-t border-gray-700/30">
             <div class="flex items-center space-x-3">
               <span class="text-gray-400">Status:</span>
-              <span class={provider_status_class_text(@provider_connection)}>
-                {provider_status_label(@provider_connection)}
+              <span class={StatusHelpers.provider_status_class_text(@provider_connection)}>
+                {StatusHelpers.provider_status_label(@provider_connection)}
               </span>
             </div>
 
             <div class="flex items-center space-x-3">
               <span class="text-gray-400">Pick share (5m):</span>
-              <span class="text-white">{(@performance_metrics.pick_share_5m || 0.0) |> to_float() |> Float.round(1)}%</span>
+              <span class="text-white">{(@performance_metrics.pick_share_5m || 0.0) |> Helpers.to_float() |> Float.round(1)}%</span>
             </div>
 
             <div class="flex items-center space-x-3">
@@ -975,8 +962,8 @@ defmodule LivechainWeb.Dashboard do
                 <div class="flex items-center justify-between text-[11px] text-gray-300">
                   <div class="text-sky-300 truncate">{stat.method}</div>
                   <div class="flex items-center gap-3">
-                    <span class="text-gray-400">p50 {to_float(stat.avg_duration_ms) |> Float.round(1)}ms</span>
-                    <span class={["", if(stat.success_rate >= 0.95, do: "text-emerald-400", else: if(stat.success_rate >= 0.8, do: "text-yellow-400", else: "text-red-400"))]}> {(to_float(stat.success_rate) * 100) |> Float.round(1)}%</span>
+                    <span class="text-gray-400">p50 {Helpers.to_float(stat.avg_duration_ms) |> Float.round(1)}ms</span>
+                    <span class={["", if(stat.success_rate >= 0.95, do: "text-emerald-400", else: if(stat.success_rate >= 0.8, do: "text-yellow-400", else: "text-red-400"))]}> {(Helpers.to_float(stat.success_rate) * 100) |> Float.round(1)}%</span>
                     <span class="text-gray-500">{stat.total_calls} calls</span>
                   </div>
                 </div>
@@ -1095,19 +1082,19 @@ defmodule LivechainWeb.Dashboard do
               <div class="bg-gray-800/40 rounded-md px-2 py-1">
                 <div class="text-[10px] text-gray-400">RPC/s</div>
                 <div class="text-xs font-medium text-sky-300">
-                  {rpc_calls_per_second(@routing_events)}
+                  {MetricsHelpers.rpc_calls_per_second(@routing_events)}
                 </div>
               </div>
               <div class="bg-gray-800/40 rounded-md px-2 py-1">
                 <div class="text-[10px] text-gray-400">Errors</div>
                 <div class="text-xs font-medium text-red-300">
-                  {error_rate_percent(@routing_events)}%
+                  {MetricsHelpers.error_rate_percent(@routing_events)}%
                 </div>
               </div>
               <div class="bg-gray-800/40 rounded-md px-2 py-1">
                 <div class="text-[10px] text-gray-400">Failovers</div>
                 <div class="text-xs font-medium text-yellow-300">
-                  {failovers_last_minute(@routing_events)}
+                  {MetricsHelpers.failovers_last_minute(@routing_events)}
                 </div>
               </div>
             </div>
@@ -1406,6 +1393,17 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, assign(socket, :sim_stats, %{http: http, ws: ws})}
   end
 
+  # Handle simulator component events
+  @impl true
+  def handle_info({:simulator_event, "toggle_collapsed", _params}, socket) do
+    {:noreply, update(socket, :sim_collapsed, &(!&1))}
+  end
+
+  @impl true
+  def handle_info({:simulator_event, event, params}, socket) do
+    handle_event(event, params, socket)
+  end
+
   # New enhanced simulator controls
   @impl true
   def handle_event("toggle_sim_panel", _params, socket) do
@@ -1553,320 +1551,9 @@ defmodule LivechainWeb.Dashboard do
 
   # Helper functions
 
-  defp assign_chain_endpoints(assigns, chain_name) do
-    base_url = LivechainWeb.Endpoint.url()
-    chain_id = get_chain_id(chain_name)
-
-    # Get available providers for this chain
-    providers = Enum.filter(assigns.connections, &(&1.chain == chain_name))
-
-    endpoints = %{
-      # Strategy endpoints
-      http_strategies: [
-        %{name: "Fastest (Latency-Optimized)", url: "#{base_url}/rpc/fastest/#{chain_id}", description: "Routes to fastest provider based on real-time latency"},
-        %{name: "Leaderboard (Performance-Based)", url: "#{base_url}/rpc/leaderboard/#{chain_id}", description: "Routes using racing-based performance scores"},
-        %{name: "Priority (Configured Order)", url: "#{base_url}/rpc/priority/#{chain_id}", description: "Routes by configured provider priority"},
-        %{name: "Round Robin", url: "#{base_url}/rpc/round-robin/#{chain_id}", description: "Distributes load evenly across providers"},
-        %{name: "Debug Mode", url: "#{base_url}/rpc/debug/#{chain_id}", description: "Enhanced logging and debugging info"}
-      ],
-
-      # WebSocket endpoints
-      ws_strategies: [
-        %{name: "Default Strategy", url: "#{String.replace(base_url, ~r/^http/, "ws")}/ws/rpc/#{chain_id}", description: "WebSocket with intelligent provider selection"},
-        %{name: "Direct Connection", url: "#{String.replace(base_url, ~r/^http/, "ws")}/ws/rpc/#{chain_id}?strategy=direct", description: "Direct WebSocket without failover"}
-      ],
-
-      # Provider-specific endpoints
-      provider_overrides: Enum.map(providers, fn provider ->
-        %{
-          name: provider.name,
-          provider_id: provider.id,
-          url: "#{base_url}/rpc/provider/#{provider.id}/#{chain_id}",
-          status: provider.status,
-          description: "Direct route to #{provider.name}"
-        }
-      end),
-
-      # Development endpoints
-      dev_endpoints: [
-        %{name: "No Failover", url: "#{base_url}/rpc/no-failover/#{chain_id}", description: "Disable failover for testing"},
-        %{name: "Aggressive Failover", url: "#{base_url}/rpc/aggressive/#{chain_id}", description: "Faster failover for development"},
-        %{name: "Benchmark Mode", url: "#{base_url}/rpc/benchmark/#{chain_id}", description: "Force active benchmarking"}
-      ]
-    }
-
-    assign(assigns, :chain_endpoints, endpoints)
-  end
-
-  defp assign_chain_performance_metrics(assigns, chain_name) do
-    alias Livechain.Benchmarking.BenchmarkStore
-
-    # Get chain-wide statistics
-    chain_stats = BenchmarkStore.get_chain_wide_stats(chain_name)
-    realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
-
-    # Calculate aggregate performance metrics over 5 minutes
-    now_ms = System.system_time(:millisecond)
-    window_ms = 300_000
-
-    recent_events = Enum.filter(assigns.routing_events, fn e ->
-      e[:chain] == chain_name and (e[:ts_ms] || 0) >= now_ms - window_ms
-    end)
-
-    latencies =
-      recent_events
-      |> Enum.map(&(&1[:duration_ms] || 0))
-      |> Enum.filter(&(&1 > 0))
-
-    {p50, p95} = percentile_pair(latencies)
-
-    success_rate = if length(recent_events) > 0 do
-      successes = Enum.count(recent_events, fn e -> e[:result] == :success end)
-      Float.round(successes * 100.0 / length(recent_events), 1)
-    else
-      nil
-    end
-
-    failovers_5m = Enum.count(recent_events, fn e -> (e[:failovers] || 0) > 0 end)
-
-    decision_share =
-      recent_events
-      |> Enum.group_by(& &1.provider_id)
-      |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(recent_events), 1)} end)
-      |> Enum.sort_by(fn {_pid, pct} -> -pct end)
-
-    connected_providers = Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :connected))
-    total_providers = Enum.count(assigns.connections, &(&1.chain == chain_name))
-
-    assign(assigns, :chain_performance, %{
-      total_calls: Map.get(chain_stats, :total_calls, 0),
-      success_rate: success_rate,
-      p50_latency: p50,
-      p95_latency: p95,
-      failovers_5m: failovers_5m,
-      connected_providers: connected_providers,
-      total_providers: total_providers,
-      recent_activity: length(recent_events),
-      providers_list: Map.get(realtime_stats, :providers, []),
-      rpc_methods: Map.get(realtime_stats, :rpc_methods, []),
-      last_updated: Map.get(realtime_stats, :last_updated, 0),
-      decision_share: decision_share
-    })
-  end
-
-  defp get_sample_curl_command do
-    ~s({"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1})
-  end
-
-  defp get_strategy_description(strategy) do
-    case strategy do
-      "fastest" -> "Routes to the provider with lowest average latency based on real-time benchmarks"
-      "leaderboard" -> "Uses racing-based performance scores to select the best provider"
-      "priority" -> "Routes by configured provider priority order"
-      "round-robin" -> "Distributes load evenly across all available providers"
-      _ -> "Smart routing based on performance metrics"
-    end
-  end
-
-  defp get_strategy_http_url(endpoints, strategy) do
-    base_url = LivechainWeb.Endpoint.url()
-    chain_id = get_current_chain_id(endpoints)
-    "#{base_url}/rpc/#{String.replace(strategy, "_", "-")}/#{chain_id}"
-  end
-
-  defp get_strategy_ws_url(endpoints, _strategy) do
-    base_url = LivechainWeb.Endpoint.url()
-    chain_id = get_current_chain_id(endpoints)
-    ws_url = String.replace(base_url, ~r/^http/, "ws")
-    "#{ws_url}/ws/rpc/#{chain_id}"
-  end
-
-  defp get_provider_http_url(endpoints, provider) do
-    base_url = LivechainWeb.Endpoint.url()
-    chain_id = get_current_chain_id(endpoints)
-    "#{base_url}/rpc/#{chain_id}/#{provider.id}"
-  end
-
-  defp get_provider_ws_url(endpoints, provider) do
-    base_url = LivechainWeb.Endpoint.url()
-    chain_id = get_current_chain_id(endpoints)
-    ws_url = String.replace(base_url, ~r/^http/, "ws")
-    "#{ws_url}/ws/rpc/#{chain_id}?provider=#{provider.id}"
-  end
-
-  defp get_provider_name(provider) do
-    provider.name || provider.id
-  end
-
-  defp provider_supports_websocket(_provider) do
-    # For now, assume all providers support WebSocket
-    # In the future, this could check provider capabilities
-    true
-  end
-
-  defp get_current_chain_id(endpoints) do
-    # Extract chain_id from the first endpoint URL
-    case List.first(endpoints.http_strategies) do
-      %{url: url} ->
-        url
-        |> String.split("/")
-        |> List.last()
-      _ -> "1"
-    end
-  end
-
-  defp get_chain_id(chain_name) do
-    case Livechain.Config.ChainConfig.load_config() do
-      {:ok, config} ->
-        case Map.get(config.chains, String.to_atom(chain_name)) do
-          %{chain_id: chain_id} -> to_string(chain_id)
-          _ -> chain_name
-        end
-      _ -> chain_name
-    end
-  end
-
-  defp assign_provider_performance_metrics(assigns, provider_id) do
-    alias Livechain.Benchmarking.BenchmarkStore
-
-    # Get the chain for this provider
-    chain = case Enum.find(assigns.connections, &(&1.id == provider_id)) do
-      %{chain: chain_name} -> chain_name
-      _ -> nil
-    end
-
-    if chain do
-      provider_score = BenchmarkStore.get_provider_score(chain, provider_id)
-      real_time_stats = BenchmarkStore.get_real_time_stats(chain, provider_id)
-      anomalies = BenchmarkStore.detect_performance_anomalies(chain, provider_id)
-
-      now_ms = System.system_time(:millisecond)
-      five_min_ms = 300_000
-      hour_ms = 3_600_000
-
-      events_5m = Enum.filter(assigns.routing_events, fn e ->
-        e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-      end)
-
-      latencies_5m =
-        events_5m
-        |> Enum.map(&(&1[:duration_ms] || 0))
-        |> Enum.filter(&(&1 > 0))
-
-      {p50, p95} = percentile_pair(latencies_5m)
-
-      success_rate = if length(events_5m) > 0 do
-        successes = Enum.count(events_5m, fn e -> e[:result] == :success end)
-        Float.round(successes * 100.0 / length(events_5m), 1)
-      else
-        nil
-      end
-
-      calls_last_minute = Map.get(real_time_stats, :calls_last_minute, 0)
-
-      calls_last_hour =
-        assigns.routing_events
-        |> Enum.count(fn e -> e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - hour_ms end)
-
-      # Provider pick share among chain decisions in 5m
-      chain_events_5m = Enum.filter(assigns.routing_events, fn e ->
-        e[:chain] == chain and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-      end)
-
-      pick_share_5m = if length(chain_events_5m) > 0 do
-        100.0 * Enum.count(chain_events_5m, fn e -> e[:provider_id] == provider_id end) / length(chain_events_5m)
-      else
-        0.0
-      end
-
-      assign(assigns, :performance_metrics, %{
-        provider_score: Float.round(provider_score || 0.0, 2),
-        p50_latency: p50,
-        p95_latency: p95,
-        success_rate: success_rate,
-        calls_last_minute: calls_last_minute,
-        calls_last_5m: length(events_5m),
-        calls_last_hour: calls_last_hour,
-        racing_stats: Map.get(real_time_stats, :racing_stats, []),
-        rpc_stats: Map.get(real_time_stats, :rpc_stats, []),
-        anomalies: anomalies || [],
-        recent_activity_count: length(events_5m),
-        pick_share_5m: pick_share_5m
-      })
-    else
-      assign(assigns, :performance_metrics, %{
-        provider_score: 0.0,
-        p50_latency: nil,
-        p95_latency: nil,
-        success_rate: nil,
-        calls_last_minute: 0,
-        calls_last_5m: 0,
-        calls_last_hour: 0,
-        racing_stats: [],
-        rpc_stats: [],
-        anomalies: [],
-        recent_activity_count: 0,
-        pick_share_5m: 0.0
-      })
-    end
-  end
-
-  defp to_float(value) when is_integer(value), do: value * 1.0
-  defp to_float(value) when is_float(value), do: value
-  defp to_float(_), do: 0.0
-
-  defp get_latency_leaders_by_chain(connections) do
-    alias Livechain.Benchmarking.BenchmarkStore
-
-    # Group connections by chain
-    chains_with_providers =
-      connections
-      |> Enum.group_by(fn conn -> Map.get(conn, :chain) end)
-      |> Enum.reject(fn {chain, _providers} -> is_nil(chain) end)
-
-    # For each chain, find the provider with lowest average latency
-    Enum.reduce(chains_with_providers, %{}, fn {chain_name, chain_connections}, acc ->
-      # Get latency data for each provider
-      provider_latencies =
-        Enum.map(chain_connections, fn conn ->
-          provider_id = conn.id
-
-          # Get RPC performance for common methods
-          common_methods = ["eth_blockNumber", "eth_getBalance", "eth_chainId", "eth_getLogs"]
-
-          total_latency =
-            Enum.reduce(common_methods, {0.0, 0}, fn method, {sum_latency, count} ->
-              case BenchmarkStore.get_rpc_performance(chain_name, provider_id, method) do
-                %{avg_latency: avg_lat, total_calls: total} when total >= 10 and avg_lat > 0 ->
-                  {sum_latency + avg_lat, count + 1}
-
-                _ ->
-                  {sum_latency, count}
-              end
-            end)
-
-          case total_latency do
-            {sum, count} when count > 0 -> {provider_id, sum / count}
-            _ -> nil
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      # Find provider with lowest average latency
-      case Enum.min_by(
-             provider_latencies,
-             fn {_provider_id, avg_latency} -> avg_latency end,
-             fn -> nil end
-           ) do
-        {fastest_provider_id, _latency} -> Map.put(acc, chain_name, fastest_provider_id)
-        nil -> acc
-      end
-    end)
-  end
-
   defp fetch_connections(socket) do
     connections = Livechain.RPC.ChainRegistry.list_all_connections()
-    latency_leaders = get_latency_leaders_by_chain(connections)
+    latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
 
     socket
     |> assign(:connections, connections)
@@ -1874,570 +1561,14 @@ defmodule LivechainWeb.Dashboard do
     |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
   end
 
-  defp start_demo_connections do
-    # Note: Demo connections are now managed by the chain supervisors
-    # This function is kept for compatibility but doesn't start connections
-    Logger.info("Demo connections are now managed by chain supervisors")
-    :ok
+  defp fetch_connections(socket) do
+    connections = Livechain.RPC.ChainRegistry.list_all_connections()
+    latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
+
+    socket
+    |> assign(:connections, connections)
+    |> assign(:latency_leaders, latency_leaders)
+    |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
   end
 
-  defp stop_demo_connections do
-    # Note: Demo connections are now managed by chain supervisors
-    # This function is kept for compatibility but doesn't stop connections
-    Logger.info("Demo connections are now managed by chain supervisors")
-    :ok
-  end
-
-  defp publish_sample_routing_decision do
-    sample = %{
-      ts: System.system_time(:millisecond),
-      chain: Enum.random(["ethereum", "polygon", "demo"]),
-      method: Enum.random(["eth_blockNumber", "eth_getBalance", "eth_chainId"]),
-      strategy: "priority",
-      provider_id: Enum.random(["mock_ethereum_mainnet", "mock_polygon", "demo_provider"]),
-      duration_ms: Enum.random(20..300),
-      result: Enum.random([:success, :error]),
-      failover_count: Enum.random(0..1)
-    }
-
-    Phoenix.PubSub.broadcast(Livechain.PubSub, "routing:decisions", sample)
-  end
-
-  defp collect_vm_metrics do
-    mem = :erlang.memory()
-
-    # CPU percent (runtime/wallclock deltas)
-    {_rt_total, rt_delta} = :erlang.statistics(:runtime)
-    {_wc_total, wc_delta} = :erlang.statistics(:wall_clock)
-
-    cpu_percent =
-      if wc_delta > 0 do
-        min(100.0, 100.0 * rt_delta / wc_delta)
-      else
-        0.0
-      end
-
-    # Reductions delta per tick (approx/s)
-    {_red_total, red_delta} = :erlang.statistics(:reductions)
-
-    # IO bytes
-    io = :erlang.statistics(:io)
-
-    {in_bytes, out_bytes} =
-      case io do
-        {{in_total, _}, {out_total, _}} -> {in_total, out_total}
-        {{in_total, _in2}} -> {in_total, 0}
-        _ -> {0, 0}
-      end
-
-    # Scheduler utilization avg (if enabled)
-    sched =
-      try do
-        :erlang.statistics(:scheduler_wall_time)
-      catch
-        :error, _ -> :not_available
-      end
-
-    sched_util_avg =
-      case sched do
-        list when is_list(list) and length(list) > 0 ->
-          vals =
-            Enum.map(list, fn
-              {_id, active, total} when total > 0 -> 100.0 * active / total
-              {_id, _active, _total} -> 0.0
-            end)
-
-          Enum.sum(vals) / max(1, length(vals))
-
-        _ ->
-          nil
-      end
-
-    %{
-      mem_total_mb: to_mb(mem[:total]),
-      mem_processes_mb: to_mb(mem[:processes_used] || mem[:processes] || 0),
-      mem_binary_mb: to_mb(mem[:binary] || 0),
-      mem_code_mb: to_mb(mem[:code] || 0),
-      mem_ets_mb: to_mb(mem[:ets] || 0),
-      process_count: :erlang.system_info(:process_count),
-      port_count: :erlang.system_info(:port_count),
-      atom_count: :erlang.system_info(:atom_count),
-      ets_count: :erlang.system_info(:ets_count),
-      run_queue: :erlang.statistics(:run_queue),
-      cpu_percent: cpu_percent,
-      reductions_s: red_delta,
-      io_in_bytes: in_bytes,
-      io_out_bytes: out_bytes,
-      sched_util_avg: sched_util_avg
-    }
-  end
-
-  defp to_mb(bytes) when is_integer(bytes), do: Float.round(bytes / 1_048_576, 1)
-  defp to_mb(_), do: 0.0
-
-  defp format_last_seen(nil), do: "Never"
-
-  defp format_last_seen(timestamp) when is_integer(timestamp) and timestamp > 0 do
-    case DateTime.from_unix(timestamp, :millisecond) do
-      {:ok, datetime} -> datetime |> DateTime.to_time() |> to_string()
-      {:error, _} -> "Invalid"
-    end
-  end
-
-  defp format_last_seen(_), do: "Unknown"
-
-  # New helpers for richer UI metrics and labeling
-  defp rpc_calls_per_second(routing_events) when is_list(routing_events) do
-    now = System.system_time(:millisecond)
-    one_minute_ago = now - 60_000
-    count = Enum.count(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
-    Float.round(count / 60, 1)
-  end
-
-  defp error_rate_percent(routing_events) when is_list(routing_events) do
-    now = System.system_time(:millisecond)
-    one_minute_ago = now - 60_000
-    recent = Enum.filter(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
-    total = max(length(recent), 1)
-    errors = Enum.count(recent, fn e -> e[:result] == :error end)
-    Float.round(errors * 100.0 / total)
-  end
-
-  defp failovers_last_minute(routing_events) when is_list(routing_events) do
-    now = System.system_time(:millisecond)
-    one_minute_ago = now - 60_000
-
-    Enum.reduce(routing_events, 0, fn e, acc ->
-      if (e[:ts_ms] || 0) >= one_minute_ago and (e[:failovers] || 0) > 0, do: acc + 1, else: acc
-    end)
-  end
-
-  defp provider_status_label(%{status: :connected}), do: "CONNECTED"
-  defp provider_status_label(%{status: :disconnected}), do: "DISCONNECTED"
-  defp provider_status_label(%{status: :rate_limited}), do: "RATE LIMITED"
-
-  defp provider_status_label(%{status: :connecting} = pc) do
-    attempts = Map.get(pc, :reconnect_attempts, 0)
-    last_seen = Map.get(pc, :last_seen)
-
-    cond do
-      attempts >= 5 and (is_nil(last_seen) or last_seen == 0) -> "UNREACHABLE"
-      attempts >= 5 -> "UNSTABLE"
-      true -> "CONNECTING"
-    end
-  end
-
-  defp provider_status_label(_), do: "UNKNOWN"
-
-  defp provider_status_class_text(%{status: :connected}), do: "text-emerald-400"
-  defp provider_status_class_text(%{status: :disconnected}), do: "text-red-400"
-  defp provider_status_class_text(%{status: :rate_limited}), do: "text-purple-300"
-
-  defp provider_status_class_text(%{status: :connecting} = pc) do
-    attempts = Map.get(pc, :reconnect_attempts, 0)
-    last_seen = Map.get(pc, :last_seen)
-
-    cond do
-      attempts >= 5 and (is_nil(last_seen) or last_seen == 0) -> "text-red-400"
-      attempts >= 5 -> "text-yellow-400"
-      true -> "text-yellow-400"
-    end
-  end
-
-  defp provider_status_class_text(_), do: "text-gray-400"
-
-  defp get_available_chains do
-    case Livechain.Config.ChainConfig.load_config() do
-      {:ok, config} ->
-        config.chains
-        |> Enum.map(fn {chain_name, chain_config} ->
-          %{
-            id: to_string(chain_config.chain_id),
-            name: chain_name,
-            display_name: chain_config.name,
-            block_time: chain_config.block_time
-          }
-        end)
-
-      {:error, _} ->
-        # Fallback to hardcoded values if config loading fails
-        [
-          %{id: "1", name: "ethereum", display_name: "Ethereum Mainnet", block_time: 12000}
-        ]
-    end
-  end
-
-  # Unified event builder
-  defp as_event(kind, opts) when is_list(opts) do
-    now_ms = System.system_time(:millisecond)
-
-    %{
-      id: System.unique_integer([:positive]),
-      kind: kind,
-      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
-      ts_ms: now_ms,
-      chain: Keyword.get(opts, :chain),
-      provider_id: Keyword.get(opts, :provider_id),
-      severity: Keyword.get(opts, :severity, :info),
-      message: Keyword.get(opts, :message),
-      meta: Keyword.get(opts, :meta, %{})
-    }
-  end
-
-  defp severity_text_class(:debug), do: "text-gray-400"
-  defp severity_text_class(:info), do: "text-sky-300"
-  defp severity_text_class(:warn), do: "text-yellow-300"
-  defp severity_text_class(:error), do: "text-red-400"
-  defp severity_text_class(_), do: "text-gray-400"
-
-  # Enhanced floating simulator controls window with collapsible design
-  defp floating_simulator_controls(assigns) do
-    assigns =
-      assigns
-      |> assign_new(:sim_stats, fn ->
-        %{http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0}, ws: %{open: 0}}
-      end)
-
-    ~H"""
-    <div class="pointer-events-none absolute top-4 left-4 z-30">
-      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300",
-                   if(@sim_collapsed, do: "w-80", else: "w-[28rem] max-h-[85vh]")]}>
-        <!-- Header -->
-        <div class="border-gray-700/50 flex items-center justify-between border-b px-3 py-2">
-          <div class="flex min-w-0 items-center gap-2">
-            <div class={["h-2 w-2 rounded-full", if((@sim_stats.http["success"] || @sim_stats.http[:success] || 0) > 0 or (@sim_stats.http["inflight"] || @sim_stats.http[:inflight] || 0) > 0 or (@sim_stats.ws["open"] || @sim_stats.ws[:open] || 0) > 0, do: "bg-emerald-400 animate-pulse", else: "bg-gray-500")]}></div>
-            <div class="truncate text-xs text-gray-300">
-              <%= if (@sim_stats.http["success"] || @sim_stats.http[:success] || 0) > 0 or (@sim_stats.http["inflight"] || @sim_stats.http[:inflight] || 0) > 0 or (@sim_stats.ws["open"] || @sim_stats.ws[:open] || 0) > 0 do %>
-                Load Test Active
-              <% else %>
-                Load Simulator
-              <% end %>
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <%= if @sim_collapsed do %>
-              <div class="text-[10px] flex items-center space-x-3 text-gray-400">
-                <span class="text-emerald-300">{@sim_stats.http["success"] || @sim_stats.http[:success] || 0} ✓</span>
-                <span class="text-rose-400">{@sim_stats.http["error"] || @sim_stats.http[:error] || 0} ✗</span>
-                <span class="text-yellow-300">{(@sim_stats.http["avgLatencyMs"] || @sim_stats.http[:avgLatencyMs] || 0.0) |> to_float() |> Float.round(1)}ms</span>
-              </div>
-            <% end %>
-            <button
-              phx-click="toggle_sim_panel"
-              class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-colors hover:bg-gray-700/60"
-            >
-              {if @sim_collapsed, do: "↖", else: "↗"}
-            </button>
-          </div>
-        </div>
-
-        <!-- Collapsed content - basic controls only -->
-        <%= if @sim_collapsed do %>
-          <div class="p-3 space-y-3">
-            <!-- Quick action buttons -->
-            <div class="flex items-center justify-between">
-              <div class="flex space-x-2">
-                <button phx-click="sim_http_start"
-                        class="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-xs font-medium transition-all duration-200 transform hover:scale-105 shadow-lg hover:shadow-indigo-500/25">
-                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  <span>HTTP</span>
-                </button>
-                <button phx-click="sim_ws_start"
-                        class="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white text-xs font-medium transition-all duration-200 transform hover:scale-105 shadow-lg hover:shadow-purple-500/25">
-                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
-                  </svg>
-                  <span>WS</span>
-                </button>
-              </div>
-              <div class="flex space-x-1">
-                <button phx-click="sim_http_stop" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs transition-colors">Stop HTTP</button>
-                <button phx-click="sim_ws_stop" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs transition-colors">Stop WS</button>
-              </div>
-            </div>
-
-            <!-- Compact stats display -->
-            <div class="grid grid-cols-2 gap-3 text-xs">
-              <div class="bg-gray-800/50 rounded-lg p-2 border border-gray-700/30">
-                <div class="text-gray-400 text-[10px] font-medium mb-1">HTTP STATS</div>
-                <div class="flex justify-between items-center">
-                  <div class="flex space-x-3">
-                    <span class="text-emerald-400">{@sim_stats.http["success"] || @sim_stats.http[:success] || 0}</span>
-                    <span class="text-rose-400">{@sim_stats.http["error"] || @sim_stats.http[:error] || 0}</span>
-                  </div>
-                  <div class="text-yellow-300 text-[10px]">
-                    {(@sim_stats.http["avgLatencyMs"] || @sim_stats.http[:avgLatencyMs] || 0.0) |> to_float() |> Float.round(1)}ms
-                  </div>
-                </div>
-              </div>
-              <div class="bg-gray-800/50 rounded-lg p-2 border border-gray-700/30">
-                <div class="text-gray-400 text-[10px] font-medium mb-1">WEBSOCKET</div>
-                <div class="flex justify-between items-center">
-                  <span class="text-emerald-400">{@sim_stats.ws["open"] || @sim_stats.ws[:open] || 0}</span>
-                  <div class="text-[10px] text-gray-400">open</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        <% else %>
-          <!-- Expanded content - full featured controls -->
-          <div class="max-h-[75vh] overflow-y-auto">
-            <div class="p-4 space-y-4">
-            <!-- Chain Selection -->
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <label class="text-xs font-semibold text-gray-300">Target Chains</label>
-                <button phx-click="select_all_chains" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">Select All</button>
-              </div>
-              <div class="grid grid-cols-2 gap-2 max-h-24 overflow-y-auto">
-                <%= for chain <- @available_chains do %>
-                  <label class="flex items-center space-x-2 cursor-pointer group">
-                    <input type="checkbox"
-                           name="selected_chains[]"
-                           value={chain.name}
-                           checked={chain.name in (@selected_chains || [])}
-                           phx-click="toggle_chain_selection"
-                           phx-value-chain={chain.name}
-                           class="rounded border-gray-600 bg-gray-700 text-indigo-600 focus:ring-indigo-500 focus:ring-2 w-3 h-3" />
-                    <span class="text-xs text-gray-300 group-hover:text-gray-200 transition-colors truncate">{chain.display_name}</span>
-                  </label>
-                <% end %>
-              </div>
-            </div>
-
-            <!-- Strategy Selection -->
-            <div class="space-y-2">
-              <label class="text-xs font-semibold text-gray-300">Routing Strategy</label>
-              <div class="grid grid-cols-2 gap-2">
-                <%= for {strategy, label, color} <- [["fastest", "Fastest", "sky"], ["leaderboard", "Best Score", "emerald"], ["priority", "Priority", "purple"], ["round-robin", "Round Robin", "orange"], ["cheapest", "Cheapest", "green"]] do %>
-                  <button phx-click="select_strategy"
-                          phx-value-strategy={strategy}
-                          class={"px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 border #{if @selected_strategy == strategy, do: "border-#{color}-500 bg-#{color}-500/20 text-#{color}-300", else: "border-gray-600 bg-gray-700/50 text-gray-300 hover:border-#{color}-400 hover:text-#{color}-300"}"}
-                  >
-                    {label}
-                  </button>
-                <% end %>
-              </div>
-            </div>
-
-            <!-- Request Rate Control -->
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <label class="text-xs font-semibold text-gray-300">Request Rate</label>
-                <span class="text-xs text-indigo-400 font-mono">{@request_rate} RPS</span>
-              </div>
-              <div class="flex items-center space-x-3">
-                <button phx-click="decrease_rate" class="p-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
-                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
-                  </svg>
-                </button>
-                <div class="flex-1 relative">
-                  <input type="range"
-                         min="1"
-                         max="50"
-                         value={@request_rate}
-                         phx-change="update_rate"
-                         name="rate"
-                         class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer slider" />
-                  <div class="absolute -bottom-1 left-0 right-0 flex justify-between text-[10px] text-gray-500">
-                    <span>1</span>
-                    <span>25</span>
-                    <span>50</span>
-                  </div>
-                </div>
-                <button phx-click="increase_rate" class="p-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
-                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <!-- Action Controls -->
-            <div class="space-y-3">
-              <div class="flex space-x-2">
-                <button phx-click="sim_http_start_advanced"
-                        class="flex-1 flex items-center justify-center space-x-2 py-2 px-4 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-sm font-medium transition-all duration-200 transform hover:scale-105 shadow-lg hover:shadow-indigo-500/25">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  <span>Start HTTP Load</span>
-                </button>
-                <button phx-click="sim_ws_start_advanced"
-                        class="flex-1 flex items-center justify-center space-x-2 py-2 px-4 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white text-sm font-medium transition-all duration-200 transform hover:scale-105 shadow-lg hover:shadow-purple-500/25">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
-                  </svg>
-                  <span>Start WS Load</span>
-                </button>
-              </div>
-              <div class="flex space-x-2">
-                <button phx-click="sim_stop_all"
-                        class="flex-1 py-2 px-4 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium transition-colors">
-                  Stop All
-                </button>
-                <button phx-click="clear_sim_logs"
-                        class="px-4 py-2 rounded-lg border border-gray-600 text-gray-300 hover:border-gray-500 hover:text-gray-200 text-sm transition-colors">
-                  Clear Logs
-                </button>
-              </div>
-            </div>
-
-            <!-- Live Activity Feed -->
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <label class="text-xs font-semibold text-gray-300">Live Activity</label>
-                <div class="flex items-center space-x-1">
-                  <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                  <span class="text-[10px] text-gray-400">Real-time</span>
-                </div>
-              </div>
-              <div class="bg-gray-900/50 border border-gray-700/50 rounded-lg p-3 h-32 overflow-y-auto">
-                <div class="space-y-1 text-xs font-mono">
-                  <%= if length(@recent_calls || []) > 0 do %>
-                    <%= for call <- Enum.take(@recent_calls || [], 8) do %>
-                      <div class="flex items-center justify-between text-[10px] py-0.5">
-                        <div class="flex items-center space-x-2">
-                          <span class={"w-1.5 h-1.5 rounded-full #{if call[:type] == :http, do: "bg-indigo-400", else: "bg-purple-400"}"}></span>
-                          <span class="text-gray-400">{call[:method] || "subscribe"}</span>
-                          <span class="text-gray-500">→</span>
-                          <span class="text-gray-300">{call[:chain]}</span>
-                        </div>
-                        <div class="flex items-center space-x-2">
-                          <span class={"#{if call[:status] == :success, do: "text-emerald-400", else: "text-rose-400"}"}>
-                            {if call[:status] == :success, do: "✓", else: "✗"}
-                          </span>
-                          <%= if call[:latency] do %>
-                            <span class="text-yellow-300">{call[:latency]}ms</span>
-                          <% end %>
-                        </div>
-                      </div>
-                    <% end %>
-                  <% else %>
-                    <div class="text-center text-gray-500 mt-8">
-                      <svg class="w-6 h-6 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                      </svg>
-                      <div class="text-xs">No activity yet</div>
-                      <div class="text-[10px] text-gray-600">Start a simulation to see live calls</div>
-                    </div>
-                  <% end %>
-                </div>
-              </div>
-            </div>
-
-            <!-- Enhanced Stats Display -->
-            <div class="grid grid-cols-2 gap-3">
-              <div class="bg-gradient-to-br from-indigo-900/30 to-purple-900/30 border border-indigo-500/30 rounded-lg p-3">
-                <div class="flex items-center justify-between mb-2">
-                  <div class="text-xs font-semibold text-indigo-300">HTTP Load</div>
-                  <div class="text-[10px] text-gray-400">RPC Calls</div>
-                </div>
-                <div class="space-y-1">
-                  <div class="flex justify-between text-xs">
-                    <span class="text-gray-400">Success:</span>
-                    <span class="text-emerald-400 font-mono">{@sim_stats.http["success"] || @sim_stats.http[:success] || 0}</span>
-                  </div>
-                  <div class="flex justify-between text-xs">
-                    <span class="text-gray-400">Errors:</span>
-                    <span class="text-rose-400 font-mono">{@sim_stats.http["error"] || @sim_stats.http[:error] || 0}</span>
-                  </div>
-                  <div class="flex justify-between text-xs">
-                    <span class="text-gray-400">Avg Latency:</span>
-                    <span class="text-yellow-300 font-mono">
-                      {(@sim_stats.http["avgLatencyMs"] || @sim_stats.http[:avgLatencyMs] || 0.0) |> to_float() |> Float.round(1)}ms
-                    </span>
-                  </div>
-                  <div class="flex justify-between text-xs">
-                    <span class="text-gray-400">In Flight:</span>
-                    <span class="text-blue-400 font-mono">{@sim_stats.http["inflight"] || @sim_stats.http[:inflight] || 0}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="bg-gradient-to-br from-purple-900/30 to-pink-900/30 border border-purple-500/30 rounded-lg p-3">
-                <div class="flex items-center justify-between mb-2">
-                  <div class="text-xs font-semibold text-purple-300">WebSocket</div>
-                  <div class="text-[10px] text-gray-400">Subscriptions</div>
-                </div>
-                <div class="space-y-1">
-                  <div class="flex justify-between text-xs">
-                    <span class="text-gray-400">Open:</span>
-                    <span class="text-emerald-400 font-mono">{@sim_stats.ws["open"] || @sim_stats.ws[:open] || 0}</span>
-                  </div>
-                  <div class="flex justify-between text-xs">
-                    <span class="text-gray-400">Topics:</span>
-                    <span class="text-purple-400 font-mono">newHeads</span>
-                  </div>
-                  <div class="flex justify-between text-xs">
-                    <span class="text-gray-400">Messages:</span>
-                    <span class="text-blue-400 font-mono">Live</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          </div>
-        <% end %>
-      </div>
-    </div>
-    """
-  end
-
-  # Helper function for formatting timestamps
-  defp format_timestamp(nil), do: "now"
-  defp format_timestamp(timestamp) when is_integer(timestamp) do
-    now = System.system_time(:millisecond)
-    diff = now - timestamp
-
-    cond do
-      diff < 1000 -> "now"
-      diff < 60_000 -> "#{div(diff, 1000)}s ago"
-      diff < 3_600_000 -> "#{div(diff, 60_000)}m ago"
-      true -> "#{div(diff, 3_600_000)}h ago"
-    end
-  end
-  defp format_timestamp(_), do: "unknown"
-
-  defp percentile_pair(values) when is_list(values) do
-    sorted = Enum.sort(values)
-    n = length(sorted)
-
-    if n == 0 do
-      {nil, nil}
-    else
-      p50 = percentile(sorted, 0.5)
-      p95 = percentile(sorted, 0.95)
-      {Float.round(p50, 1), Float.round(p95, 1)}
-    end
-  end
-
-  defp percentile([], _p), do: 0.0
-  defp percentile(sorted_values, p) do
-    n = length(sorted_values)
-    r = p * (n - 1)
-    lower = :math.floor(r) |> trunc()
-    upper = :math.ceil(r) |> trunc()
-
-    if lower == upper do
-      Enum.at(sorted_values, lower) * 1.0
-    else
-      lower_val = Enum.at(sorted_values, lower) * 1.0
-      upper_val = Enum.at(sorted_values, upper) * 1.0
-      frac = r - lower
-      lower_val + frac * (upper_val - lower_val)
-    end
-  end
-
-  defp get_last_decision(routing_events, chain_name, provider_id \\ nil) do
-    Enum.find(routing_events, fn e ->
-      cond do
-        provider_id -> e[:provider_id] == provider_id
-        chain_name -> e[:chain] == chain_name
-        true -> false
-      end
-    end)
-  end
-end
+ end
