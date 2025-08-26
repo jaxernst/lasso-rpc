@@ -1,13 +1,30 @@
 # Lasso RPC
 
-A high-peformance Blockchain Node RPC smart router and orchestration service to support fast, bullet proof consumer applications.
+A smart blockchain RPC router for building bulletproof onchain applications.
 
-## Core Features + Selling points
+On the surface Lasso RPC is just like a standard node provider (i.e. Alchemy, Infura, QuickNode), providing ethereum json rpc endpoints for both websocket and http connections, but was you look deeper, it becomes clear that Lasso is a different beast. As a matter of fact, Lasso is ALL the RPC providers across ALL the EVM chains ALL at once. It provides ALL the best properties of your high performing RPC service, but with the flexability to pick and choose what properties you want in an RPC services:
+
+Want to use free provider without the resitrictions of aggressive rate limits? Simply configure Lasso RPC with a bunch of free providers and take advantage of Lasso's round robin routing strategy to load balance between them:
+
+`https://lasso-rpc/base/round-robin`
+
+Want the fast possible response to your RPC call? Have your RPC requests routed to the fastest proivder using real-world provider benchmarking data:
+
+`https://lasso-rpc/optimism/fastest`
+
+### Don't accept RPC failures
+
+Lasso implements deep orchestration with built in fault tolerance, enabling deep failover behavior resulting in hightly reliable RPC behavior. Providers go down, see intermittant failures, and or network errors that can distrupt critical services, but Lasso routes around failures and provides stronger reliablity guarantees
+
+### Don't guess on the best RPC provider
+
+Lasso uses passive benchmarking to make informed decisions about request routing. As real network conditions change, Lasso's smart routing will too. Degraded provider performance will be identified, and under severe circumstances will trigger a circuit breaker fault to auto redirect to the next best provider.
+
+## Core Features
 
 - Multi-provider orchestration with smart routing based on pluggable provider routing strategies (fastest, cheapest, round_robin)
-- Scalable + reliable real-time RPC support with websockets feeds
-- Strong failover properties for provider connection issues across http and ws
 - WS + HTTP JSON-RPC proxy to support all standard readonly rpc methods supported by providers
+- Strong failover properties for provider connection issues across http and ws
 - Passive provider benchmarking on a per-chain, per JSON rpc method basis
 - Support for provider 'racing' to for maximally low latency modes ('fastest response possible' mode)
 - Live dashboard with deep system insights, live chain info + status, live RPC actvity streams, provider performance metrics, and an interactive client load test/simulation
