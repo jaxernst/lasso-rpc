@@ -1,198 +1,210 @@
-### Vision: “Lasso RPC” Interactive System Explorer
+# LiveChain/Lasso RPC Tech Demo Guide
 
-A modern Phoenix LiveView app that feels like an exploratory dashboard: fast, animated, color-rich, and informative. Retain the current gridded background and card aesthetic; elevate with clear information hierarchy, interactive simulations, and real-time motion.
+## What is LiveChain (Lasso RPC)?
 
-### App Structure (wip - can be updated as we go)
+LiveChain is a high-performance, scalable RPC orchestration service for EVM chains that provides intelligent multi-provider routing with real-time benchmarking and failover. The "Lasso RPC" brand represents the consumer-facing dashboard for developers to visualize and interact with the system.
 
-- Overview
-- Network Explorer
-- Streams
-- Benchmarks
-- Simulator
-- System
+## Current UI Features & Capabilities
 
-### Tab Specs (proposal)
+### 1. Main Dashboard Tab ("Overview")
+**Visual**: Interactive network topology with orbital layout showing chains and providers
+- **Network Topology Display**: Hierarchical orbital layout with chains as central nodes and providers orbiting around them
+- **Real-time Connection Status**: Color-coded provider nodes (green=connected, yellow=connecting, red=disconnected)
+- **Latency Leaders**: Purple nodes with racing flags indicate fastest average latency providers
+- **Interactive Selection**: Click chains/providers to see detailed information
+- **Reconnection Tracking**: Badge indicators showing reconnection attempts
+- **Draggable Viewport**: Pan around the network topology for better navigation
 
-- Overview
+**Live Data Streams**:
+- Real-time RPC routing decisions
+- Provider connection status updates  
+- Client connection events
+- Latest block arrivals per chain
+- Provider pool health events
+- Circuit breaker state changes
 
-  - Hero header: “Lasso RPC” with animated live indicator and chain/provider counts.
-  - Cards:
-    - Providers summary by chain: total, healthy, degraded, down; mini sparkline for health over time.
-    - Live client connections: count + sparkline by minute.
-    - Latest blocks per chain: compact list (height-limited, auto-scrolling) with block number, age, proposer/tx count if available.
-    - Strategy overview: current default strategy and quick switcher (read-only display in MVP, action in Simulator).
-  - Implementation notes:
-    - Sources: `Livechain.RPC.WSSupervisor.list_connections/0`, `ProviderPool` events, new blocks PubSub (see below).
-    - PubSub topics: `"ws_connections"`, `"provider_pool:events"`, `"blocks:new:<chain>"`.
-    - Keep lists bounded (100 entries) with prepend; throttle updates to ~250ms batch.
+### 2. Floating Simulator Controls
+**Location**: Top-left overlay on dashboard
+**Features**:
+- **HTTP Load Generation**: Simulate RPC calls with configurable rate and concurrency
+- **WebSocket Load Generation**: Create multiple WS connections and subscriptions
+- **Chain Selection**: Target specific chains (Ethereum, Arbitrum, Base, etc.)
+- **Strategy Selection**: Test different routing strategies (fastest, leaderboard, etc.)
+- **Real-time Statistics**: Success rates, error counts, average latency, inflight requests
+- **Collapsible Interface**: Expand/collapse for focused viewing
 
-- Network Explorer
+### 3. Benchmarks Tab
+**Current State**: Placeholder with "Coming Soon" message
+**Planned Features** (for presentation discussion):
+- Provider leaderboard with win rates and performance scores
+- Method × Provider latency heatmap
+- Strategy performance comparisons
+- Historical performance trends
 
-  - Interactive topology (keep the current style) with improvements:
-    - Columns per chain; providers as nodes; edges representing WS/HTTP flows.
-    - Node badges: latency (p50/p95), error rate, circuit state; glow/pulse when events occur.
-    - Click provider → drawer with detail: recent RPC calls, health timeline, failures, circuit state transitions.
-  - Implementation notes:
-    - Use existing `LivechainWeb.NetworkTopology` component; add assigns for health/metrics, click handlers (`"select_provider"`).
-    - Data: provider health from `ProviderPool`, circuit state from `CircuitBreaker`, RPC latency from Telemetry aggregation.
+### 4. System Tab
+**Features**:
+- **Connection Metrics**: Active provider connections count
+- **Event Buffer Status**: Routing and provider events in memory
+- **BEAM VM Metrics**: CPU usage, run queue length, reductions/second
+- **Process Statistics**: Process count, memory usage breakdown
+- **Real-time Updates**: Live system performance monitoring
 
-- Streams
+### 5. Simulator Tab (Deprecated)
+**Status**: Removed - functionality moved to floating simulator controls on main dashboard
 
-  - Live feeds in a split view:
-    - RPC call stream (high-signal): chain, method, duration, provider, strategy, result. Color by result; sticky filters for chain/method.
-    - System event stream: provider pool events, circuit trips/recoveries, failovers, strategy change events.
-  - Implementation notes:
-    - Topics: `"routing:decisions"`, `"provider_pool:events"`, `"circuit:events"`, `"strategy:events"`.
-    - Publish real events from HTTP proxy and WS forwarder paths; include `failover_count`, `selected_strategy`, `fallback_reason`.
+## Tech Demo Presentation Flow
 
-- Benchmarks
+### Phase 1: System Overview (2-3 minutes)
+**Script**: "Let me show you LiveChain, our intelligent RPC orchestration system..."
 
-  - Comparative metrics:
-    - Leaderboard: providers ranked by score (win rate, avg margin, confidence).
-    - Method performance matrix: latency by provider x method (heatmap); toggle time range (5m/1h/24h).
-    - Strategy comparison: show latency distribution and cost vs latency for multiple strategies (e.g., fastest vs cheapest vs round_robin).
-  - Implementation notes:
-    - Source: `Livechain.Benchmarking.BenchmarkStore` (leaderboard, real-time stats), ETS-backed matrices (add a tiny aggregator process for rolling windows).
-    - Add `:telemetry` to emit `[:livechain, :rpc, :forward, :stop]` with metadata `provider`, `method`, `chain`, `strategy`.
+1. **Open Dashboard**: Start with the main network topology view
+   - Point out the orbital layout representing different blockchain networks
+   - Highlight the real-time nature with live indicators
+   - Show provider nodes orbiting each chain
 
-- Simulator
+2. **Explain Visual Language**: 
+   - Green nodes = healthy connected providers
+   - Yellow nodes = connecting/reconnecting 
+   - Red nodes = disconnected providers
+   - Purple nodes with flags = fastest average latency (racing winners)
 
-  - Controls:
-    - Load generator (JS client-driven): choose chains/methods, target RPS, concurrency, bursts.
-    - WS connection generator: open N WebSocket connections to `/rpc/:chain`, subscribe to topics, auto-close after T.
-    - Failure injection (server-side optional): open circuit, add latency, drop packets, force rate limits; scoped to provider/chain with duration.
-    - Strategy sandbox: switch default strategy and/or override per chain; compare real-time results side-by-side.
-    - Scenario presets: “Provider outage”, “Latency spike”, “Rate limit storm”, “Flappy WS”, “HTTP burst”.
-  - Visuals:
-    - Mini KPIs: success rate, failovers/min, avg latency, selected strategy.
-    - Timeline strips: event markers for injections and recoveries.
-  - Implementation notes (JS-based approach):
-    - Use a frontend module (`assets/js/lasso_simulator.js`) powered by Viem or bare fetch/websocket:
-      - HTTP JSON-RPC: POST to `/rpc/:chain` (methods like `eth_blockNumber`, `eth_getBalance`).
-      - WebSocket JSON-RPC: connect to `ws://.../rpc/:chain`, send `eth_subscribe` for `newHeads`/`logs`.
-    - Orchestrate via LiveView Hooks (e.g., `SimulatorControl`) to start/stop load and report client-side counters back to LiveView assigns.
-    - All HTTP calls flow through `LivechainWeb.RPCController` and will emit `routing:decisions`; WS traffic flows through real/mock WS stacks and will surface via `blocks:new:<chain>` and streams.
+3. **Show Scale**: 
+   - Point out the multiple chains supported (Ethereum, Arbitrum, Base, Optimism, etc.)
+   - Multiple providers per chain for redundancy
+   - Real-time connection status across all providers
 
-- System
-  - BEAM metrics:
-    - CPU, run queue, reductions/sec
-    - Memory breakdown
-    - Process/Port/ETS counts
-    - Scheduler utilization avg
-  - Implementation notes:
-    - Keep your current implementation; just add historical sparklines (store last 60 samples in socket assigns).
+### Phase 2: Real-time Intelligence (3-4 minutes)
+**Script**: "The key innovation is passive provider racing and intelligent routing..."
 
-### Data & Events: Shapes and Topics
+1. **Click on Provider Nodes**: 
+   - Select different providers to show connection details
+   - Explain how reconnection attempts are tracked
+   - Show provider-specific metrics
 
-- RPC decisions (publish from HTTP/WS forwarders)
+2. **System Tab Demo**:
+   - Navigate to System tab
+   - Show live VM metrics updating
+   - Explain the BEAM/Elixir foundation
+   - Point out real-time event processing capabilities
 
-```json
-{
-  "ts": 1731630452123,
-  "chain": "ethereum",
-  "method": "eth_getBalance",
-  "strategy": "leaderboard",
-  "provider_id": "alchemy_ethereum",
-  "duration_ms": 73,
-  "result": "success",
-  "failover_count": 0
-}
-```
+3. **Explain Racing Algorithm**:
+   - "We race identical events from multiple providers"
+   - "First to deliver wins, subsequent arrivals update performance scores"
+   - "This gives us production-grounded performance data"
 
-Topic: `routing:decisions`
+### Phase 3: Load Testing & Simulation (4-5 minutes)
+**Script**: "Now let's see how it performs under load and stress conditions..."
 
-- Provider pool events (already in place)
+1. **Expand Simulator Controls**:
+   - Show the floating simulator panel
+   - Explain the HTTP and WebSocket load generation options
+   - Select target chains for testing
 
-```json
-{
-  "ts": 1731630452123,
-  "chain": "polygon",
-  "provider_id": "infura_polygon",
-  "event": "cooldown_start",
-  "details": { "until": 1731630458123 }
-}
-```
+2. **Start HTTP Load Test**:
+   - Configure moderate RPS (5-10 requests/second)
+   - Select multiple chains
+   - Choose "fastest" strategy
+   - Click Start and watch real-time stats
 
-Topic: `provider_pool:events`
+3. **Observe Real-time Behavior**:
+   - Watch success rates and latency metrics
+   - Show how routing decisions are made
+   - Point out failover behavior if any providers struggle
 
-- Circuit events
+4. **WebSocket Simulation**:
+   - Start WebSocket connections
+   - Show subscription management
+   - Explain real-time event distribution
 
-```json
-{
-  "ts": 1731630452123,
-  "chain": "ethereum",
-  "provider_id": "alchemy_ethereum",
-  "from": "closed",
-  "to": "open",
-  "reason": "failure_threshold_exceeded"
-}
-```
+### Phase 4: System Intelligence & Failover (2-3 minutes)
+**Script**: "The system automatically handles provider failures and optimizes routing..."
 
-Topic: `circuit:events`
+1. **Strategy Discussion**:
+   - Explain different routing strategies available
+   - Show how "fastest" uses real performance data
+   - Discuss leaderboard-based routing
 
-- New blocks
+2. **Failover Demonstration**:
+   - If possible, show how circuit breakers work
+   - Explain automatic provider rotation
+   - Show recovery behavior
 
-```json
-{
-  "ts": 1731630452123,
-  "chain": "ethereum",
-  "block_number": 20714562,
-  "hash": "0x...",
-  "tx_count": 142,
-  "provider_first": "alchemy_ethereum",
-  "margin_ms": 12
-}
-```
+### Phase 5: Production Readiness (1-2 minutes)
+**Script**: "This isn't just a demo - it's production-ready infrastructure..."
 
-Topic: `blocks:new:<chain>`
+1. **Highlight Architecture Benefits**:
+   - Elixir/OTP fault tolerance
+   - Horizontal scalability 
+   - Memory-bounded performance tracking
+   - Regional deployment capabilities
 
-- Client connections
+2. **Developer Experience**:
+   - Simple HTTP and WebSocket endpoints
+   - Standard JSON-RPC compatibility
+   - Transparent provider orchestration
+   - Real-time performance insights
 
-```json
-{
-  "ts": 1731630452123,
-  "event": "client_connected",
-  "transport": "ws",
-  "remote_ip": "1.2.3.4"
-}
-```
+## Key Talking Points During Demo
 
-Topic: `clients:events`
+### Technical Innovation
+- **Passive Benchmarking**: No synthetic load, real production metrics
+- **Event Racing**: Microsecond timing precision for provider comparison
+- **Circuit Breakers**: Automatic fault detection and recovery
+- **Memory Management**: Bounded caches with predictable resource usage
 
-### Telemetry: Recommended Spans
+### Business Value
+- **Cost Optimization**: Automatically route to best-performing providers
+- **Reliability**: Multi-provider redundancy with instant failover
+- **Performance**: Sub-5ms routing decisions with optimal provider selection
+- **Observability**: Complete visibility into RPC performance and routing decisions
 
-- `[:livechain, :rpc, :forward, :start|:stop]` with metadata: `chain`, `method`, `strategy`, `provider_id`, `result`, `error?`.
-- `[:livechain, :ws, :message, :received]` with metadata: `chain`, `provider_id`, `event_type` (newHeads/logs), `message_key`.
-- `[:livechain, :circuit, :state_change]` with metadata: `chain`, `provider_id`, `from`, `to`, `reason`.
+### Developer Benefits
+- **Drop-in Replacement**: Standard JSON-RPC endpoints
+- **Zero Configuration**: Intelligent routing works out of the box
+- **Real-time Insights**: Live dashboard for monitoring and debugging
+- **Production Scale**: Handles 1000+ concurrent connections
 
-Wire Telemetry to ETS aggregators for:
+## Demo Environment Setup
 
-- Latency per method/provider/strategy (rolling 5m/1h).
-- Success/error counts.
-- Failover counts.
-  Expose to LiveView via simple getters or PubSub snapshots (`benchmarks:stats:<chain>`).
+### Prerequisites
+- LiveChain running on localhost:4000
+- Multiple RPC providers configured per chain
+- WebSocket and HTTP endpoints accessible
+- Simulator JavaScript modules loaded
 
-### UI/UX Notes
+### Optimal Demo Flow
+1. Start with clean dashboard (no active simulations)
+2. Have interesting provider configurations (some fast, some slow)
+3. Pre-configure multiple chains for variety
+4. Ensure stable network conditions for consistent demonstration
+5. Have backup talking points if live demo encounters issues
 
-- Keep the gridded background; add subtle animated gradients per card header on state change (success: emerald glow; error: rose; degraded: amber).
-- Use badges for chain, method, strategy; align with current color palette.
-- Sparklines: small SVGs to keep it snappy.
-- Batching: buffer incoming PubSub and flush at 25
+### Recovery Strategies
+- If simulator doesn't work: focus on architecture and static metrics
+- If providers are down: explain failover concepts and circuit breaker benefits  
+- If UI is unresponsive: pivot to code walkthrough and architecture diagrams
+- If network issues: discuss production deployment and regional strategies
 
-### Mapping “What” → “How” → Source
+## Future Enhancements (Discussion Points)
 
-- Overview info for all providers → Provider status cards → `ProviderPool`, `CircuitBreaker`
-- Live provider activity by chain → Streams + Topology pulses → `provider_pool:events`
-- Live WS connections to providers → Topology node states → `WSSupervisor.list_connections/0` + `"ws_connections"`
-- Live client connections → Overview KPI + Streams → `clients:events`
-- RPC method call stream → Streams panel → `routing:decisions` + Telemetry
-- Relevant system PubSub → Streams panel → `provider_pool:events`, `circuit:events`, `strategy:events`
-- Live latest blocks → Overview “Latest blocks” + Streams → `blocks:new:<chain>`
-- Latencies by method + strategy comparison → Benchmarks heatmap + comparison → Telemetry + BenchmarkStore
-- BEAM stats → System tab → existing `collect_vm_metrics/0`
+### Benchmarks Tab Implementation
+- Real provider leaderboards with win/loss ratios
+- Latency heatmaps by method and provider
+- Cost vs performance analysis
+- Historical trend analysis
 
-### Stretch “Wow” Ideas
+### Advanced Simulator Features
+- Failure injection (circuit breaking, latency spikes)
+- A/B testing different strategies side-by-side
+- Scenario presets for common failure modes
+- Load pattern templates (burst, sustained, ramp-up)
 
-- Strategy A/B sandbox: split traffic (e.g., 20% `fastest`, 80% `leaderboard`) and show deltas live.
-- Cost overlays: add “estimated $/1k calls” per provider, render latency vs cost scatter.
-- Anomaly hints: badge cards with “spike detected” when Z-score deviates >2σ for 5m.
+### Production Features
+- Multi-region deployment with geo-routing
+- Cost tracking and optimization
+- Advanced alerting and monitoring
+- API rate limiting and quota management
+
+## Conclusion Statement
+
+"LiveChain demonstrates how Elixir/OTP's supervision model and real-time capabilities create a uniquely powerful RPC orchestration platform. By racing providers against each other and using production traffic for benchmarking, we achieve both optimal performance and maximum reliability - something that traditional synthetic benchmarking approaches simply can't match."

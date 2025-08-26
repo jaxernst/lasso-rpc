@@ -4,7 +4,7 @@
 
 ### **System Overview**
 
-Livechain is an Elixir/OTP application that provides intelligent RPC provider orchestration through **passive benchmarking** and **automatic failover**. The system races multiple RPC providers against each other to measure real-world performance and routes traffic based on actual speed and reliability data.
+Livechain is an Elixir/OTP application that provides intelligent RPC provider orchestration and client router, acting as a 'smart proxy' between blockchain RPC services and/or self hosted node infrastructure.
 
 ### **Core Capabilities**
 

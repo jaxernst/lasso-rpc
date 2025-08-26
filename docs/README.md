@@ -1,8 +1,8 @@
-# Livechain
+# Lasso RPC
 
 High-performance, scalable, and fault tolerant RPC orchestration service for EVM chains.
 
-'A Blockchain RPC smart router for fast, bullet proof consumer applications'
+'A Blockchain Node RPC smart router and orchestration service to support fast, bullet proof consumer applications'
 
 ## Core Features + Selling points
 
