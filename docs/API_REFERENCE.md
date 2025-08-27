@@ -144,64 +144,16 @@ ws.send(
 
 The orchestrator uses a pluggable provider selection strategy when forwarding JSON-RPC calls over both HTTP and WebSocket.
 
-- **Default**: `:leaderboard` (highest score from `BenchmarkStore`)
-- **Alternatives**: `:priority`, `:round_robin`
+- **Default**: `:cheapest`
+- **Alternatives**: `:fastest`, `:priority`, `:round_robin`
 
 Configuration:
 
 ```elixir
 # config/config.exs
-config :livechain, :provider_selection_strategy, :leaderboard
-# :priority or :round_robin can be used instead
+config :livechain, :provider_selection_strategy, :cheapest
+# :fastest, :priority or :round_robin can be used instead
 ```
-
-Future strategies (planned): `:cheapest`, `:latency_based`, hybrid strategies.
-
----
-
-## Benchmarking API (Internal)
-
-### **Provider Leaderboard**
-
-```
-GET /api/benchmarks/:chain
-```
-
-Returns provider performance rankings for specified chain.
-
-**Example**: `GET /api/benchmarks/ethereum`
-
-**Response:**
-
-```json
-{
-  "leaderboard": [
-    {
-      "provider_id": "alchemy_ethereum",
-      "win_rate": 0.65,
-      "total_races": 1250,
-      "avg_margin_ms": 12.5,
-      "score": 1.85
-    },
-    {
-      "provider_id": "infura_ethereum",
-      "win_rate": 0.35,
-      "total_races": 1250,
-      "avg_margin_ms": 28.3,
-      "score": 1.42
-    }
-  ],
-  "last_updated": "2024-01-01T00:00:00Z"
-}
-```
-
-### **Real-Time Stats**
-
-```
-GET /api/benchmarks/:chain/stats
-```
-
-Returns current performance statistics.
 
 ---
 

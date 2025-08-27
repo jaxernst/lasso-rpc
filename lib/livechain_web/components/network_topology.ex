@@ -460,36 +460,6 @@ defmodule LivechainWeb.NetworkTopology do
     end
   end
 
-  defp calculate_connection_line(
-         {chain_x, chain_y},
-         {provider_x, provider_y},
-         chain_radius,
-         provider_radius
-       ) do
-    # Calculate direction vector
-    dx = provider_x - chain_x
-    dy = provider_y - chain_y
-    distance = :math.sqrt(dx * dx + dy * dy)
-
-    if distance > 0 do
-      # Normalize direction
-      norm_dx = dx / distance
-      norm_dy = dy / distance
-
-      # Calculate start point (edge of chain circle)
-      start_x = chain_x + norm_dx * chain_radius
-      start_y = chain_y + norm_dy * chain_radius
-
-      # Calculate end point (edge of provider circle)
-      end_x = provider_x - norm_dx * provider_radius
-      end_y = provider_y - norm_dy * provider_radius
-
-      {start_x, start_y, end_x, end_y}
-    else
-      # Fallback for zero distance
-      {chain_x, chain_y, provider_x, provider_y}
-    end
-  end
 
   # Calculate connection line with pseudo-random length variance
   defp calculate_connection_line_with_variance(
@@ -497,7 +467,7 @@ defmodule LivechainWeb.NetworkTopology do
          {provider_x, provider_y},
          chain_radius,
          provider_radius,
-         seed_key
+         _seed_key
        ) do
     # Calculate direction vector
     dx = provider_x - chain_x
@@ -555,15 +525,6 @@ defmodule LivechainWeb.NetworkTopology do
     end
   end
 
-  defp chain_display_name("ethereum"), do: "Ethereum"
-  defp chain_display_name("arbitrum"), do: "Arbitrum"
-  defp chain_display_name("optimism"), do: "Optimism"
-  defp chain_display_name("base"), do: "Base"
-  defp chain_display_name("zksync"), do: "zkSync"
-  defp chain_display_name("linea"), do: "Linea"
-  defp chain_display_name("unichain"), do: "Unichain"
-  defp chain_display_name("unknown"), do: "Unknown Chain"
-  defp chain_display_name(chain), do: String.capitalize(chain)
 
   defp provider_status_class(:connected), do: "bg-emerald-900/30 border-emerald-600"
   defp provider_status_class(:disconnected), do: "bg-red-900/30 border-red-600"
@@ -586,11 +547,6 @@ defmodule LivechainWeb.NetworkTopology do
   defp chain_color("unichain"), do: "#FF007A"
   defp chain_color(_), do: "#6B7280"
 
-  defp provider_status_color(:connected), do: "#10B981"
-  defp provider_status_color(:disconnected), do: "#EF4444"
-  defp provider_status_color(:connecting), do: "#F59E0B"
-  defp provider_status_color(:rate_limited), do: "#8B5CF6"
-  defp provider_status_color(_), do: "#6B7280"
 
   defp is_fastest_provider?(connection, chain_name, latency_leaders) do
     case Map.get(latency_leaders, chain_name) do

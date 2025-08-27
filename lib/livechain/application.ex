@@ -74,14 +74,4 @@ defmodule Livechain.Application do
     end
   end
 
-  # Helper function to conditionally include simulator in supervision tree
-  defp maybe_add_simulator do
-    case Mix.env() do
-      env when env in [:dev, :test] ->
-        [{Livechain.Simulator, mode: "normal"}]
-
-      _ ->
-        []
-    end
-  end
 end

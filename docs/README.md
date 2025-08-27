@@ -51,18 +51,17 @@ This architecture scales from a single self-hosted instance to a global network 
 
 ## Core Features
 
-- **Multi-provider orchestration** with pluggable routing strategies (fastest, cheapest, round-robin)
+- **Multi-provider orchestration** with pluggable routing strategies (cheapest, fastest, priority, round-robin)
 - **Full JSON-RPC compatibility** via HTTP and WebSocket proxies for all standard read-only methods
 - **Bulletproof failover** with per-provider circuit breakers and health monitoring
 - **Passive benchmarking** using real traffic to measure provider performance per-chain and per-method
-- **Event racing** for maximum speed—multiple providers compete to deliver blockchain events first
-- **Live dashboard** with real-time insights, provider performance metrics, and interactive load testing
+- **Live dashboard** with real-time insights and provider performance metrics
 
 ## Usage
 
 ### HTTP vs WebSocket
 
-- WebSocket (WS): Subscriptions only (e.g., `eth_subscribe`, `eth_unsubscribe`). Also supports generic forwarding of read-only methods using the same selection/failover logic as HTTP.
+- WebSocket (WS): Subscriptions (e.g., `eth_subscribe`, `eth_unsubscribe`) and read-only methods.
 - HTTP (POST /rpc/:chain): Read-only methods proxied to upstream providers.
   - WS-only methods over HTTP return a JSON-RPC error with a hint to use WS.
 
@@ -70,15 +69,15 @@ This architecture scales from a single self-hosted instance to a global network 
 
 The orchestrator uses a pluggable strategy to pick providers when forwarding HTTP calls.
 
-- Default: `:leaderboard` (highest score from BenchmarkStore)
-- Alternatives: `:priority`, `:round_robin`
+- Default: `:cheapest`
+- Alternatives: `:fastest`, `:priority`, `:round_robin`
 
 Configure via:
 
 ```elixir
 # config/config.exs
-config :livechain, :provider_selection_strategy, :leaderboard
-# :priority or :round_robin also supported
+config :livechain, :provider_selection_strategy, :cheapest
+# :fastest, :priority, or :round_robin also supported
 ```
 
 ### Examples
@@ -92,7 +91,7 @@ curl -X POST http://localhost:4000/rpc/ethereum \
 
 ```javascript
 // Subscribe to new block headers over WS
-const ws = new WebSocket("ws://localhost:4000/rpc/ethereum");
+const ws = new WebSocket("ws://localhost:4000/ws/rpc/ethereum");
 ws.onopen = () =>
   ws.send(
     JSON.stringify({

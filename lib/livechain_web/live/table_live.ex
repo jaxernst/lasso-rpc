@@ -1,9 +1,8 @@
 defmodule LivechainWeb.TableLive do
   use LivechainWeb, :live_view
 
-  alias Livechain.RPC.WSSupervisor
-
   # Use custom observatory layout without width constraints
+  @impl true
   def mount(_params, _session, socket) do
     socket = assign(socket, :layout, {LivechainWeb.Layouts, "observatory"})
     mount_logic(socket)

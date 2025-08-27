@@ -15,30 +15,42 @@ mix phx.server
 
 ## Configure Providers
 
-Edit `config/chains.yml` to set your providers (Infura, Alchemy, etc.). Ensure API keys are present in the URLs or environment variables.
+Edit `config/chains.yml` to set your providers. You can define multiple providers per chain with different priorities.
 
-## HTTP vs WebSocket
+Example for Ethereum:
 
-- Use WebSocket for `eth_subscribe`/`eth_unsubscribe`.
-- Both WebSocket and HTTP support read-only JSON-RPC methods via the orchestration layer.
+```yaml
+chains:
+  ethereum:
+    chain_id: 1
+    name: "Ethereum Mainnet"
+    block_time: 12000
+    providers:
+      - id: "ethereum_ankr"
+        name: "Ankr Public"
+        priority: 1
+        type: "public"
+        url: "https://rpc.ankr.com/eth"
+        ws_url: "wss://rpc.ankr.com/eth/ws"
+        api_key_required: false
+    connection:
+      heartbeat_interval: 30000
+      reconnect_interval: 5000
+      max_reconnect_attempts: 10
+    aggregation:
+      deduplication_window: 2000
+      min_confirmations: 1
+      max_providers: 3
+      max_cache_size: 10000
+```
 
 ## Provider Selection Strategy
 
-Default strategy is `:leaderboard`. Switch strategies via config or at runtime.
+Default strategy is `:cheapest`. You can change it in your `config/config.exs`:
 
 ```elixir
-# config/config.exs
-config :livechain, :provider_selection_strategy, :leaderboard
-# Alternatives: :priority | :round_robin
-```
-
-At runtime (for demos):
-
-```elixir
-# In IEx (attached to the running node)
-Application.put_env(:livechain, :provider_selection_strategy, :priority)
-Application.put_env(:livechain, :provider_selection_strategy, :round_robin)
-Application.put_env(:livechain, :provider_selection_strategy, :leaderboard)
+config :livechain, :provider_selection_strategy, :cheapest
+# Alternatives: :fastest, :priority, :round_robin
 ```
 
 ## TODO / Next Steps

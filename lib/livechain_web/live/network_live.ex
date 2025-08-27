@@ -203,7 +203,7 @@ defmodule LivechainWeb.NetworkLive do
   @impl true
   def handle_event("test_connection", _params, socket) do
     # Manually trigger a status broadcast to test PubSub
-    Livechain.RPC.WSSupervisor.broadcast_connection_status_update()
+    WSSupervisor.broadcast_connection_status_update()
 
     # Also add some test events to the live stream
     test_events = [
@@ -258,7 +258,7 @@ defmodule LivechainWeb.NetworkLive do
 
   # Include all the same helper functions from OrchestrationLive
   defp fetch_connections(socket) do
-    connections = Livechain.RPC.WSSupervisor.list_connections()
+    connections = WSSupervisor.list_connections()
 
     socket
     |> assign(:connections, connections)

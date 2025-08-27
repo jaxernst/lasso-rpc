@@ -1,8 +1,14 @@
 defmodule Livechain.RPC.ProviderPoolTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Livechain.RPC.{ProviderPool, CircuitBreaker}
   alias Livechain.Config.ChainConfig
+
+  setup_all do
+    # Ensure test environment is ready with all services
+    TestHelper.ensure_test_environment_ready()
+    :ok
+  end
 
   defp base_chain_config(providers) do
     %{
