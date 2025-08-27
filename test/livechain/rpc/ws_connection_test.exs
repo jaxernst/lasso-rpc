@@ -13,6 +13,12 @@ defmodule Livechain.RPC.WSConnectionTest do
   alias Livechain.RPC.{WSConnection, WSEndpoint, CircuitBreaker}
   alias Livechain.Simulator.MockWSEndpoint
 
+  setup_all do
+    # Ensure test environment is ready with all services
+    TestHelper.ensure_test_environment_ready()
+    :ok
+  end
+
   setup do
     # Mock the HTTP client
     stub(Livechain.RPC.HttpClientMock, :request, &MockHttpClient.request/4)

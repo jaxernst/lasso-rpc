@@ -21,7 +21,6 @@ defmodule Livechain.RPC.WSConnection do
   alias Livechain.RPC.WSEndpoint
   alias Livechain.RPC.CircuitBreaker
   alias Livechain.RPC.ProviderPool
-  alias Livechain.Benchmarking.BenchmarkStore
 
   # Client API
 

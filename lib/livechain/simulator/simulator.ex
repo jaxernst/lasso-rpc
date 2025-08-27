@@ -208,18 +208,6 @@ defmodule Livechain.Simulator.Simulator do
   end
 
   @impl true
-  def handle_call(:get_stats, _from, state) do
-    stats =
-      Map.merge(state.stats, %{
-        active_connections: map_size(state.active_connections),
-        active_timers: map_size(state.connection_timers),
-        mode: state.mode
-      })
-
-    {:reply, stats, state}
-  end
-
-  @impl true
   def handle_cast(:start_all_mock_connections, state) do
     Logger.info("Starting all configured mock WebSocket connections...")
 
@@ -234,11 +222,6 @@ defmodule Livechain.Simulator.Simulator do
   end
 
   @impl true
-  def handle_call(:get_mode, _from, state) do
-    {:reply, state.mode, state}
-  end
-
-  @impl true
   def handle_cast(:stop_all_mock_connections, state) do
     Logger.info("Stopping all mock WebSocket connections...")
 
@@ -248,6 +231,23 @@ defmodule Livechain.Simulator.Simulator do
     end)
 
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_call(:get_stats, _from, state) do
+    stats =
+      Map.merge(state.stats, %{
+        active_connections: map_size(state.active_connections),
+        active_timers: map_size(state.connection_timers),
+        mode: state.mode
+      })
+
+    {:reply, stats, state}
+  end
+
+  @impl true
+  def handle_call(:get_mode, _from, state) do
+    {:reply, state.mode, state}
   end
 
   @impl true

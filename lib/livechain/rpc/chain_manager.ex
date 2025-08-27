@@ -96,13 +96,6 @@ defmodule Livechain.RPC.ChainManager do
   end
 
   @doc """
-  Subscribes to events on all providers for a chain.
-  """
-  def subscribe_to_events(chain_name, topic) do
-    ChainSupervisor.subscribe_to_events(chain_name, topic)
-  end
-
-  @doc """
   Gets global statistics across all chains.
   """
   def get_global_stats do
@@ -220,7 +213,7 @@ defmodule Livechain.RPC.ChainManager do
         results =
           Enum.map(config.chains, fn {chain_name, chain_config} ->
             case start_chain_supervisor(new_state, chain_name, chain_config) do
-              {:ok, pid} = result ->
+              {:ok, _pid} = result ->
                 Logger.info("✓ Chain supervisor started successfully: #{chain_name}")
                 {chain_name, result}
 

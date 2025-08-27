@@ -44,29 +44,24 @@ Separation of concerns:
 
 ## OTP Supervision Architecture
 
-```
-Livechain.Application
-├── Livechain.Config.ConfigStore                  # Centralized configuration caching (ETS)
-├── Livechain.RPC.ChainRegistry                   # Thin lifecycle management only
-├── Livechain.RPC.ChainSupervisor (per chain)     # Per-chain process supervision
-│   ├── Livechain.RPC.WSConnection (per provider) # Individual provider connections
-│   ├── Livechain.RPC.MessageAggregator          # Event deduplication & racing
-│   ├── Livechain.RPC.ProviderPool               # Provider health management
-│   └── Livechain.RPC.CircuitBreaker (per provider) # Fault tolerance
-├── Livechain.RPC.Selection                      # Unified provider selection logic
-├── Livechain.Benchmarking.BenchmarkStore        # Performance data storage
-├── Livechain.Benchmarking.Persistence           # Historical data snapshots
-└── Phoenix.Endpoint                             # Web interface & API
-```
+Livechain leverages OTP for fault-tolerance and concurrency. The supervision tree is structured as follows:
+
+- **Livechain.Application**: The top-level application supervisor.
+- **DynamicSupervisor**: A dynamic supervisor named `Livechain.RPC.Supervisor` is used to start and stop `ChainSupervisor` processes on demand.
+- **Livechain.RPC.ChainSupervisor**: A supervisor for each blockchain network, managing all processes related to that chain.
+- **Livechain.RPC.WSConnection**: A GenServer for each provider's WebSocket connection, supervised by the `ChainSupervisor`.
+- **Livechain.RPC.MessageAggregator**: A GenServer that deduplicates messages from different providers for a single chain.
+- **Livechain.RPC.ProviderPool**: Manages the health and status of providers for a chain.
+- **Livechain.RPC.CircuitBreaker**: A GenServer for each provider to track failures and open/close the circuit.
 
 ### **Supervision Strategy**
 
-- **Configuration caching**: ConfigStore eliminates hot-path YAML loading with fast ETS lookups
-- **Lifecycle separation**: ChainRegistry handles only start/stop operations, never request processing
-- **Chain isolation**: Each blockchain network runs in separate supervision tree
-- **Provider isolation**: Individual provider failures don't affect others
-- **Unified selection**: Single Selection module handles all provider picking logic
-- **Restart strategy**: Temporary failures trigger process restart, permanent failures trigger failover
+- **Configuration caching**: `ConfigStore` eliminates hot-path YAML loading with fast ETS lookups.
+- **Lifecycle separation**: `ChainRegistry` handles only start/stop operations, never request processing.
+- **Chain isolation**: Each blockchain network runs in a separate supervision tree under a dynamic supervisor, allowing for chains to be started and stopped dynamically.
+- **Provider isolation**: Individual provider failures don't affect others, thanks to the `CircuitBreaker` and `ProviderPool`.
+- **Unified selection**: The `Selection` module handles all provider picking logic.
+- **Restart strategy**: Temporary failures trigger process restarts, while persistent failures trigger failover via the `CircuitBreaker`.
 
 ---
 
@@ -123,40 +118,9 @@ Selection module consolidates all provider picking logic:
 
 ---
 
-## Core Algorithms
+### **Circuit Breaker State Machine**
 
-### **1. Message Racing Algorithm**
-
-**File**: `lib/livechain/rpc/message_aggregator.ex:166-195`
-
-```elixir
-defp process_blockchain_message(state, provider_id, message, received_at) do
-  message_key = generate_message_key(message)
-
-  case Map.get(state.message_cache, message_key) do
-    nil ->
-      # First provider to deliver this event wins the race
-      forward_message(state.chain_name, provider_id, message, received_at)
-      BenchmarkStore.record_event_race_win(state.chain_name, provider_id, event_type, received_at)
-
-    {_cached_msg, cached_time, cached_provider} ->
-      # Subsequent providers lose - calculate timing margin
-      margin_ms = received_at - cached_time
-      BenchmarkStore.record_event_race_loss(state.chain_name, provider_id, event_type, received_at, margin_ms)
-  end
-end
-```
-
-**Key Properties**:
-
-- **Deterministic message keys**: Block hashes, transaction hashes, or content SHA256
-- **Microsecond timing precision**: System.monotonic_time(:millisecond)
-- **Memory bounded**: LRU cache with configurable size limits
-- **Race integrity**: Cache cleanup preserves timing accuracy
-
-### **2. Circuit Breaker State Machine**
-
-**File**: `lib/livechain/rpc/circuit_breaker.ex:83-99`
+**File**: `lib/livechain/rpc/circuit_breaker.ex`
 
 ```elixir
 def handle_call({:call, fun}, _from, state) do
@@ -183,24 +147,7 @@ end
 - `:half_open` → `:closed`: After success_threshold consecutive successes
 - `:half_open` → `:open`: On any failure
 
-### **3. Provider Scoring Algorithm**
 
-**File**: `lib/livechain/benchmarking/benchmark_store.ex:656-663`
-
-```elixir
-defp calculate_provider_score(win_rate, avg_margin_ms, total_races) do
-  confidence_factor = :math.log10(max(total_races, 1))
-  margin_penalty = if avg_margin_ms > 0, do: 1 / (1 + avg_margin_ms / 100), else: 1.0
-  win_rate * margin_penalty * confidence_factor
-end
-```
-
-**Scoring Factors**:
-
-- **Win rate**: Percentage of events delivered first (0.0 - 1.0)
-- **Margin penalty**: Lower average loss margins = higher score
-- **Confidence factor**: Logarithmic scaling based on sample size
-- **Score range**: 0.0 to ~2.0 (theoretical max with perfect performance)
 
 ---
 

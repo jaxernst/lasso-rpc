@@ -54,20 +54,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     )
   end
 
-  @doc """
-  Records an RPC call performance metric.
-
-  ## Examples
-
-      iex> BenchmarkStore.record_rpc_call("ethereum", "infura_provider", "eth_getLogs", 150, :success)
-      :ok
-  """
-  def record_rpc_call(chain_name, provider_id, method, duration_ms, result) do
-    GenServer.cast(
-      __MODULE__,
-      {:record_rpc_call, chain_name, provider_id, method, duration_ms, result}
-    )
-  end
 
   @doc """
   Gets the provider leaderboard for a chain showing racing performance.
@@ -229,7 +215,20 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
   end
 
   @doc """
-  Records an RPC call with a specific timestamp.
+  Records an RPC call performance metric.
+  
+  ## Parameters
+    - `chain_name`: The blockchain name
+    - `provider_id`: Unique provider identifier  
+    - `method`: The RPC method called
+    - `duration_ms`: Response time in milliseconds
+    - `result`: `:success` or `:error`
+    - `timestamp`: Optional timestamp (defaults to current time)
+
+  ## Examples
+
+      iex> BenchmarkStore.record_rpc_call("ethereum", "infura_provider", "eth_getLogs", 150, :success)
+      :ok
   """
   def record_rpc_call(chain_name, provider_id, method, duration_ms, result, timestamp \\ nil) do
     actual_timestamp = timestamp || System.system_time(:millisecond)
@@ -366,6 +365,18 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
       score_table = score_table_name(chain_name)
       cleanup_score_table_by_timestamp(score_table, cutoff_time)
     end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast(:cleanup_old_metrics, state) do
+    Logger.info("Cleaning up old metrics across all chains")
+
+    # Clean up old entries for all chains
+    Enum.each(state.chains, fn chain_name ->
+      GenServer.cast(__MODULE__, {:cleanup_old_entries, chain_name})
+    end)
 
     {:noreply, state}
   end
@@ -951,17 +962,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     {:reply, result, state}
   end
 
-  @impl true
-  def handle_cast(:cleanup_old_metrics, state) do
-    Logger.info("Cleaning up old metrics across all chains")
-
-    # Clean up old entries for all chains
-    Enum.each(state.chains, fn chain_name ->
-      GenServer.cast(__MODULE__, {:cleanup_old_entries, chain_name})
-    end)
-
-    {:noreply, state}
-  end
 
   @impl true
   def handle_info(:cleanup_all_chains, state) do

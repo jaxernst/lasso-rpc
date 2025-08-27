@@ -1,7 +1,13 @@
 defmodule Livechain.RPC.CircuitBreakerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Livechain.RPC.CircuitBreaker
+
+  setup_all do
+    # Ensure test environment is ready with all services
+    TestHelper.ensure_test_environment_ready()
+    :ok
+  end
 
   test "opens after failure_threshold failures and rejects until recovery timeout" do
     id = "cb_provider"

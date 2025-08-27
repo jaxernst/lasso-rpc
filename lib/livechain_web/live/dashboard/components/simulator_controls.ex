@@ -3,7 +3,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
   alias LivechainWeb.Dashboard.Helpers
 
   @impl true
-  def update(%{sim_stats: sim_stats} = assigns, socket) do
+  def update(%{sim_stats: _sim_stats} = assigns, socket) do
     socket =
       socket
       |> assign(assigns)

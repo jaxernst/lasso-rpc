@@ -23,14 +23,17 @@ defmodule Livechain.RPC.HttpClient.Finch do
            Finch.request(req, Livechain.Finch, receive_timeout: timeout_ms) do
       handle_response(status, resp_body)
     else
-      {:error, reason} ->
-        {:error, {:network_error, "Request failed: #{inspect(reason)}"}}
-
       {:error, :timeout} ->
         {:error, {:network_error, "Timeout"}}
 
-      {:error, encode_err} ->
+      {:error, %Mint.TransportError{reason: :timeout}} ->
+        {:error, {:network_error, "Connection timeout"}}
+
+      {:error, encode_err} when is_atom(encode_err) ->
         {:error, {:decode_error, "Failed to encode request: #{inspect(encode_err)}"}}
+
+      {:error, reason} ->
+        {:error, {:network_error, "Request failed: #{inspect(reason)}"}}
     end
   end
 

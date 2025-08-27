@@ -7,22 +7,7 @@ defmodule LivechainWeb.RPCControllerTest do
 
   use ExUnit.Case, async: true
 
-  describe "RPC controller module" do
-    test "can process JSON-RPC requests" do
-      # Test that the module can handle basic JSON-RPC requests
-      request = %{
-        "jsonrpc" => "2.0",
-        "method" => "eth_blockNumber",
-        "params" => [],
-        "id" => 1
-      }
-
-      # This is a basic test that the module exists and can be called
-      # In a real test environment, we'd test the actual HTTP endpoints
-      assert is_map(request)
-      assert request["method"] == "eth_blockNumber"
-    end
-  end
+  # Deleted meaningless test that only validates test data
 
   describe "health endpoints" do
     test "health controller exists" do

@@ -88,10 +88,6 @@ defmodule Livechain.RPC.WSSupervisor do
     end
   end
 
-  def start_connection(%MockWSEndpoint{} = endpoint) do
-    {:error, "MockWSConnection has been removed - use real WSConnection instead"}
-  end
-
   @doc """
   Stops a WebSocket connection.
 

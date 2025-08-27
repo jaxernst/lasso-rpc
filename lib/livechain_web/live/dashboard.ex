@@ -370,6 +370,17 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, socket}
   end
 
+  # Handle simulator component events
+  @impl true
+  def handle_info({:simulator_event, "toggle_collapsed", _params}, socket) do
+    {:noreply, update(socket, :sim_collapsed, &(!&1))}
+  end
+
+  @impl true
+  def handle_info({:simulator_event, event, params}, socket) do
+    handle_event(event, params, socket)
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -1393,17 +1404,6 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, assign(socket, :sim_stats, %{http: http, ws: ws})}
   end
 
-  # Handle simulator component events
-  @impl true
-  def handle_info({:simulator_event, "toggle_collapsed", _params}, socket) do
-    {:noreply, update(socket, :sim_collapsed, &(!&1))}
-  end
-
-  @impl true
-  def handle_info({:simulator_event, event, params}, socket) do
-    handle_event(event, params, socket)
-  end
-
   # New enhanced simulator controls
   @impl true
   def handle_event("toggle_sim_panel", _params, socket) do
@@ -1550,16 +1550,6 @@ defmodule LivechainWeb.Dashboard do
 
 
   # Helper functions
-
-  defp fetch_connections(socket) do
-    connections = Livechain.RPC.ChainRegistry.list_all_connections()
-    latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
-
-    socket
-    |> assign(:connections, connections)
-    |> assign(:latency_leaders, latency_leaders)
-    |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
-  end
 
   defp fetch_connections(socket) do
     connections = Livechain.RPC.ChainRegistry.list_all_connections()

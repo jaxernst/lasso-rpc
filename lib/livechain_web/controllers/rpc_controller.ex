@@ -523,7 +523,7 @@ defmodule LivechainWeb.RPCController do
     handle_strategy_rpc(conn, Map.put(params, "force_benchmark", true), chain_id)
   end
 
-  defp handle_strategy_rpc(conn, params, chain_id) do
+  defp handle_strategy_rpc(conn, params, _chain_id) do
     # Delegate to main rpc function with strategy in params
     rpc(conn, params)
   end

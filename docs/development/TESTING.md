@@ -27,8 +27,7 @@ test/
 │   ├── config/
 │   │   └── chain_config_test.exs        # Configuration tests
 │   └── rpc/
-│       ├── endpoint_test.exs            # RPC endpoint tests
-│       └── live_stream_test.exs         # WebSocket streaming tests
+│       └── endpoint_test.exs            # RPC endpoint tests
 └── livechain_web/
     ├── conn_case.exs                    # HTTP test helpers
     └── controllers/
@@ -36,38 +35,6 @@ test/
         ├── status_controller_test.exs   # Status endpoint tests
         └── rpc_controller_test.exs      # RPC endpoint tests
 ```
-
-### 2. Validation Scripts (`/scripts/validation/`)
-
-**Purpose**: Manual system validation and real-world testing
-**Run with**: `mix run scripts/validation/<script>.exs`
-
-#### Scripts:
-
-- **`test_real_integration.exs`**: Comprehensive real RPC endpoint testing
-  - Tests direct RPC calls to public endpoints
-  - Validates JSON-RPC controller integration
-  - Tests WebSocket connections to real networks
-
-### 3. Demo Scripts (`/scripts/`)
-
-**Purpose**: Feature demonstrations and presentations
-**Run with**: `mix run scripts/<script>.exs`
-
-#### Scripts:
-
-- **`demo_hackathon.exs`**: Complete feature demonstration
-
-  - Health endpoint validation
-  - JSON-RPC endpoint testing
-  - Multi-chain support validation
-  - WebSocket subscription testing
-  - System validation
-  - Multi-client WebSocket instructions
-
-- **`start_demo.exs`**: Quick start demonstration
-  - Runs live demo for 2 minutes
-  - Shows real-time blockchain data streaming
 
 ## Running Tests
 
@@ -90,23 +57,6 @@ mix test --only integration
 mix test --only live
 ```
 
-### Validation Scripts
-
-```bash
-# Test real RPC integration
-mix run scripts/validation/test_real_integration.exs
-```
-
-### Demo Scripts
-
-```bash
-# Run complete hackathon demo
-mix run scripts/demo_hackathon.exs
-
-# Run quick start demo
-mix run scripts/start_demo.exs
-```
-
 ## Test Coverage
 
 ### ✅ Well-Covered Areas
@@ -120,26 +70,15 @@ mix run scripts/start_demo.exs
 2. **RPC Infrastructure**
 
    - Endpoint creation and validation
-   - WebSocket connections
-   - Real blockchain network integration
 
 3. **Architecture Components**
 
-   - Process registry functionality
    - Circuit breaker patterns
    - Message aggregation
-   - Performance testing
-   - Fault tolerance
 
-4. **Telemetry**
-
-   - Event emission for all major operations
-   - Handler attachment/detachment
-
-5. **HTTP Controllers**
+4. **HTTP Controllers**
    - JSON-RPC endpoint testing
    - Health and status endpoints
-   - Error handling
 
 ### ⚠️ Areas Needing More Coverage
 
@@ -152,18 +91,14 @@ mix run scripts/start_demo.exs
 
    - Network failure handling
    - Rate limiting scenarios
-   - Malicious input testing
 
 3. **Load Testing**
 
    - High-throughput testing
    - Memory usage under load
-   - Connection pool testing
 
 4. **Security Testing**
-   - Authentication/authorization
-   - Input validation
-   - Rate limiting
+   - Input validation and sanitization
 
 ## Testing Best Practices
 

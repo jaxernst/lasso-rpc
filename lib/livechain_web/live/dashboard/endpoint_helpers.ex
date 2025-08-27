@@ -48,7 +48,7 @@ defmodule LivechainWeb.Dashboard.EndpointHelpers do
       ]
     }
 
-    Phoenix.LiveView.assign(assigns, :chain_endpoints, endpoints)
+    Map.put(assigns, :chain_endpoints, endpoints)
   end
 
   @doc "Get HTTP URL for strategy"

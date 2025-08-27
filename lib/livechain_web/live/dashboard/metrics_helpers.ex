@@ -45,7 +45,7 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
     connected_providers = Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :connected))
     total_providers = Enum.count(assigns.connections, &(&1.chain == chain_name))
 
-    Phoenix.LiveView.assign(assigns, :chain_performance, %{
+    Map.put(assigns, :chain_performance, %{
       total_calls: Map.get(chain_stats, :total_calls, 0),
       success_rate: success_rate,
       p50_latency: p50,
@@ -113,7 +113,7 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
         0.0
       end
 
-      Phoenix.LiveView.assign(assigns, :performance_metrics, %{
+      Map.put(assigns, :performance_metrics, %{
         provider_score: Float.round(provider_score || 0.0, 2),
         p50_latency: p50,
         p95_latency: p95,
@@ -128,7 +128,7 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
         pick_share_5m: pick_share_5m
       })
     else
-      Phoenix.LiveView.assign(assigns, :performance_metrics, %{
+      Map.put(assigns, :performance_metrics, %{
         provider_score: 0.0,
         p50_latency: nil,
         p95_latency: nil,

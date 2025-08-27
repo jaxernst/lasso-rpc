@@ -134,24 +134,8 @@ defmodule Livechain.ArchitectureTest do
     end
   end
 
-  describe "Telemetry Integration" do
-    test "emits events correctly" do
-      # Test RPC call telemetry
-      Telemetry.emit_rpc_call("test_provider", "eth_blockNumber", 150, :ok)
-
-      # Test provider health change telemetry
-      Telemetry.emit_provider_health_change("test_provider", :healthy, :unhealthy)
-
-      # Test circuit breaker telemetry
-      Telemetry.emit_circuit_breaker_change("test_provider", :closed, :open)
-
-      # Test failover telemetry
-      Telemetry.emit_failover("ethereum", "provider1", "provider2", :timeout)
-
-      # All events should be emitted without errors
-      assert true
-    end
-  end
+  # Deleted meaningless telemetry test that only validates functions don't crash
+  # without testing that events are actually emitted or handled
 
   describe "Configuration Validation" do
     test "validates chain configuration correctly" do
@@ -254,18 +238,5 @@ defmodule Livechain.ArchitectureTest do
     end
   end
 
-  describe "Fault Tolerance Tests" do
-    test "handles provider connection failures gracefully" do
-      # This test would simulate actual provider failures
-      # For now, we test the error handling infrastructure
-
-      # Test that error telemetry works
-      Telemetry.emit_error(:rpc, "connection_timeout", %{provider_id: "test"})
-
-      # Test that circuit breakers can be created
-      {:ok, _pid} = CircuitBreaker.start_link({"test_provider", %{}})
-
-      assert true
-    end
-  end
+  # Deleted fake fault tolerance test that doesn't simulate actual failures
 end
