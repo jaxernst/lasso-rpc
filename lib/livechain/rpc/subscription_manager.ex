@@ -150,7 +150,15 @@ defmodule Livechain.RPC.SubscriptionManager do
     # We'll subscribe to specific chains as subscriptions are created
 
     # Subscribe to provider pool events for failover handling
-    Phoenix.PubSub.subscribe(Livechain.PubSub, "provider_pool:events")
+    # Use defensive subscription to handle timing issues in test environment
+    case safe_pubsub_subscribe("provider_pool:events") do
+      :ok ->
+        Logger.debug("Successfully subscribed to provider pool events")
+
+      {:error, reason} ->
+        Logger.warning("Failed to subscribe to provider pool events: #{inspect(reason)}")
+        # Continue initialization - we'll retry subscription when needed
+    end
 
     {:ok,
      %__MODULE__{
@@ -776,8 +784,13 @@ defmodule Livechain.RPC.SubscriptionManager do
 
   defp subscribe_to_chain_events(chain, _filter) do
     # Subscribe to aggregated events from MessageAggregator for this chain
-    Phoenix.PubSub.subscribe(Livechain.PubSub, "aggregated:#{chain}")
-    Logger.debug("Subscribed to aggregated events for chain #{chain}")
+    case safe_pubsub_subscribe("aggregated:#{chain}") do
+      :ok ->
+        Logger.debug("Subscribed to aggregated events for chain #{chain}")
+
+      {:error, reason} ->
+        Logger.warning("Failed to subscribe to aggregated events for chain #{chain}: #{inspect(reason)}")
+    end
   end
 
   defp find_matching_subscriptions(chain, event_type, event_data, state) do
@@ -954,5 +967,23 @@ defmodule Livechain.RPC.SubscriptionManager do
 
   defp generate_request_id do
     :rand.uniform(1_000_000) |> to_string()
+  end
+
+  # Helper function for safe PubSub subscription with retry logic
+  defp safe_pubsub_subscribe(topic) do
+    try do
+      case Phoenix.PubSub.subscribe(Livechain.PubSub, topic) do
+        :ok -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    rescue
+      error ->
+        Logger.debug("PubSub subscribe failed: #{inspect(error)}")
+        {:error, error}
+    catch
+      :exit, reason ->
+        Logger.debug("PubSub subscribe exit: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 end

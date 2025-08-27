@@ -1,18 +1,41 @@
 # Livechain Hackathon Project - Working Document
 
 ## Project Overview **[UPDATED 2025-08-27 POST-CODE REVIEW]**
+
 **Status**: HIGH-QUALITY hackathon prototype → Client-deliverable internal tool  
 **Timeline**: Demo-ready in 20-24 hours, Internal tool in 32-40 hours total  
 **Goal**: Immediately usable on demo day with clear SaaS evolution path  
-**Major Finding**: Codebase quality much higher than expected (B- grade, excellent OTP architecture)  
+**Major Finding**: Codebase quality much higher than expected (B- grade, excellent OTP architecture)
 
 ---
+
+## TRIAGE
+
+- **ISSUE: Subscription Failover Backfill is Incomplete (Impacts `newHeads`)**
+  - **Summary**: The subscription failover backfill mechanism, configured by `max_backfill_blocks`, is only implemented for `eth_subscribe("logs")`. It is NOT implemented for the critical `eth_subscribe("newHeads")` subscription type. This means if a provider fails during a `newHeads` subscription, the client will miss blocks and experience data loss, which undermines a core reliability feature.
+  - **Evidence**:
+    - The implementation in `lib/livechain/rpc/subscription_manager.ex` (functions `backfill_events_for_subscriptions`, `deliver_backfilled_logs`) is entirely focused on fetching and replaying log events via `eth_getLogs`.
+    - The integration test in `test/integration/failover_test.exs` only validates the backfill behavior for `logs` subscriptions. There are no tests for `newHeads` backfill.
+  - **Required Fix (6-10h)**:
+    - **1. Extend `subscription_manager.ex`**:
+      - Create a new function, perhaps `backfill_new_heads`, that is triggered during failover for `newHeads` subscriptions.
+      - This function should determine the range of missing block numbers.
+      - It must then loop from `last_seen_block + 1` to `current_block`, calling `eth_getBlockByNumber` for each missing block and sending the result to the client.
+      - This process must respect the `max_backfill_blocks` and `backfill_timeout` configuration.
+    - **2. Update `failover_test.exs`**:
+      - Add a new test case that establishes a `newHeads` subscription.
+      - Simulates a provider failure and a gap of several blocks.
+      - Asserts that the client correctly receives the missed blocks via the backfill mechanism after the failover event.
+
+
+Issue + tasks discovered that have not yet been scoped/planned out. Report triage tasks here:
 
 ## COMPREHENSIVE TODO LIST
 
 ### =� **PHASE 1: DEMO DAY CRITICAL (Priority 1)**
 
 #### **P1.1: Core Stability Issues (MUST FIX FIRST) [REVISED BASED ON CODE REVIEW]**
+
 - [ ] **Fix 5 failing tests** - Provider selection algorithm broken **(4-6h fix)**
   - [x] ~~Fix provider pool tests~~ (CONFIRMED: Specific to selection algorithm)
   - [ ] Fix provider selection logic tests **(PRIMARY ISSUE)**
@@ -30,6 +53,7 @@
   - [ ] Test circuit breaker activation and recovery
 
 #### **P1.2: Professional Polish (QUICK WINS) [REDUCED EFFORT REQUIRED]**
+
 - [ ] **Fix remaining compilation warnings** - Only 6 left **(2h total)**
   - [x] ~~Phoenix LiveView deprecated calls~~ (MINIMAL IMPACT CONFIRMED)
   - [ ] Resolve remaining unused variable warnings
@@ -47,6 +71,7 @@
   - [ ] Update UI/dashboard text
 
 #### **P1.3: Demo Infrastructure [STREAMLINED]**
+
 - [ ] **Essential Docker setup** **(3h)**
   - [ ] Create basic Dockerfile
   - [ ] Add docker-compose for demo deployment
@@ -61,6 +86,7 @@
 ### =' **PHASE 2: INTERNAL TOOL READINESS (Priority 2)**
 
 #### **P2.1: Production Infrastructure**
+
 - [ ] **Complete Dockerization**
   - [ ] Multi-stage builds for optimization
   - [ ] Security best practices (non-root user, minimal base)
@@ -76,6 +102,7 @@
   - [ ] Runtime configuration reloading
 
 #### **P2.2: Monitoring & Observability**
+
 - [ ] **Metrics export**
   - [ ] Prometheus metrics endpoint
   - [ ] Custom business metrics (cost, SLA, performance)
@@ -92,6 +119,7 @@
   - [ ] Cost threshold alerts
 
 #### **P2.3: Core Feature Completions**
+
 - [ ] **Provider management system**
   - [ ] Runtime provider configuration API
   - [ ] Cost-aware routing framework
@@ -109,6 +137,7 @@
 ### <� **PHASE 3: ENTERPRISE DEMONSTRATION (Priority 3)**
 
 #### **P3.1: Multi-tenancy Framework**
+
 - [ ] **Basic authentication system**
   - [ ] API key generation and management
   - [ ] Request authentication middleware
@@ -123,6 +152,7 @@
   - [ ] Usage reporting APIs
 
 #### **P3.2: Business Intelligence Features**
+
 - [ ] **Cost optimization**
   - [ ] Real-time cost tracking per provider/method
   - [ ] Cost-optimized routing decisions
@@ -137,6 +167,7 @@
   - [ ] Provider capacity monitoring
 
 #### **P3.3: Developer Experience**
+
 - [ ] **API documentation**
   - [ ] OpenAPI/Swagger specification
   - [ ] Interactive API explorer
@@ -155,30 +186,34 @@
 ## RISK ASSESSMENT & MITIGATION STRATEGIES
 
 ### **HIGH RISK (Demo Blockers) [UPDATED POST-REVIEW]**
-| Risk | Impact | Likelihood | Mitigation Strategy |
-|------|--------|------------|---------------------|
-| Provider selection algorithm broken | Demo fails completely | **HIGH** | Fix immediately - 4-6h focused debugging |
-| WebSocket failover missing | Live demo stutters/fails | **MEDIUM** | Well-scoped 8-12h implementation |
-| Circuit breaker gaps | Reliability story unconvincing | **MEDIUM** | 6-8h integration work, can parallel with WebSocket |
+
+| Risk                                | Impact                         | Likelihood | Mitigation Strategy                                |
+| ----------------------------------- | ------------------------------ | ---------- | -------------------------------------------------- |
+| Provider selection algorithm broken | Demo fails completely          | **HIGH**   | Fix immediately - 4-6h focused debugging           |
+| WebSocket failover missing          | Live demo stutters/fails       | **MEDIUM** | Well-scoped 8-12h implementation                   |
+| Circuit breaker gaps                | Reliability story unconvincing | **MEDIUM** | 6-8h integration work, can parallel with WebSocket |
 
 ### **MEDIUM RISK [UPDATED POST-REVIEW]**
-| Risk | Impact | Likelihood | Mitigation Strategy |
-|------|--------|------------|---------------------|
-| Configuration inconsistencies | Deployment issues | **LOW** | Well-defined 4-6h fix |
-| Phoenix warnings | Unprofessional appearance | **LOW** | Quick 2-3h resolution |
-| Performance under load unknown | Demo stutters | **MEDIUM** | Basic load testing with realistic scenarios |
+
+| Risk                           | Impact                    | Likelihood | Mitigation Strategy                         |
+| ------------------------------ | ------------------------- | ---------- | ------------------------------------------- |
+| Configuration inconsistencies  | Deployment issues         | **LOW**    | Well-defined 4-6h fix                       |
+| Phoenix warnings               | Unprofessional appearance | **LOW**    | Quick 2-3h resolution                       |
+| Performance under load unknown | Demo stutters             | **MEDIUM** | Basic load testing with realistic scenarios |
 
 ### **LOW RISK**
-| Risk | Impact | Mitigation Strategy |
-|------|--------|-------------------|
-| Missing enterprise features | Limited appeal | Position as foundation for growth |
-| Limited provider coverage | Reduced value | Focus on major providers (Infura, Alchemy) |
+
+| Risk                        | Impact         | Mitigation Strategy                        |
+| --------------------------- | -------------- | ------------------------------------------ |
+| Missing enterprise features | Limited appeal | Position as foundation for growth          |
+| Limited provider coverage   | Reduced value  | Focus on major providers (Infura, Alchemy) |
 
 ---
 
 ## SUCCESS METRICS
 
 ### **Demo Day Success Criteria**
+
 -  Application starts without errors or warnings
 -  All health endpoints return 200 OK
 -  Dashboard shows live connections and metrics
@@ -188,6 +223,7 @@
 -  Performance benefits are demonstrable
 
 ### **Internal Tool Success Criteria**
+
 -  Docker deployment works out-of-box
 -  Can route production Web3 traffic reliably
 -  Monitoring provides actionable business insights
@@ -196,6 +232,7 @@
 -  Scales to handle realistic enterprise load
 
 ### **Enterprise Potential Demonstration**
+
 -  Multi-tenant architecture clearly defined
 -  Cost savings quantified with real data
 -  SaaS evolution path is compelling
@@ -207,6 +244,7 @@
 ## RESOURCE REQUIREMENTS
 
 ### **Time Allocation [REVISED BASED ON CODE REVIEW]**
+
 - **Phase 1 (Demo Critical)**: 20-24 hours focused work
   - Core fixes: 12-18 hours
   - Professional polish: 6-8 hours
@@ -215,11 +253,13 @@
 - **Phase 3 (Enterprise Demo)**: 3-5 days for MVP features (unchanged)
 
 ### **Required Specialized Skills**
-*[To be filled after stakeholder consultation]*
+
+_[To be filled after stakeholder consultation]_
 
 ---
 
 ## NEXT STEPS
+
 1. **Immediate**: Stakeholder approval of priorities and timeline
 2. **Resource Planning**: Identify and onboard specialized agents
 3. **Execution**: Begin Phase 1 critical path items
@@ -233,24 +273,27 @@
 ## EXECUTION STATUS
 
 ### **PHASE 1: DEMO DAY CRITICAL - REVISED PRIORITY [UPDATED 2025-08-27]**
+
 **Started**: 2025-08-27  
 **Target Completion**: 2025-08-28 (24-hour sprint)  
 **Status**: High-priority pivot based on code review findings
 
 **IMMEDIATE ACTION REQUIRED (Next 24 Hours):**
+
 1. **Provider selection test fixes** (4-6h) - Core functionality blocker
 2. **WebSocket failover implementation** (8-12h) - Critical for demo reliability
 3. **Circuit breaker integration** (6-8h) - Can overlap with WebSocket work
 4. **Professional polish** (6-8h) - Warnings, config fixes, branding
 
 #### **Revised Active Assignments**
+
 - **URGENT**: Need specialized agent for provider selection algorithm debugging
 - **CONCURRENT**: WebSocket failover implementation agent
 - **SUPPORTING**: Configuration and warnings cleanup agent
 
 ---
 
-*Document created: 2025-08-27*  
-*Last updated: 2025-08-27 (Post Code Review)*  
-*Status: Phase 1 Execution - Priority Pivot Required*  
-*Next Update: 2025-08-28 (Post 24-hour Sprint)*
+_Document created: 2025-08-27_  
+_Last updated: 2025-08-27 (Post Code Review)_  
+_Status: Phase 1 Execution - Priority Pivot Required_  
+_Next Update: 2025-08-28 (Post 24-hour Sprint)_

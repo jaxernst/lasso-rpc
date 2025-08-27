@@ -25,9 +25,6 @@ defmodule LivechainWeb.Router do
     pipe_through(:browser)
 
     live("/", Dashboard)
-    live("/orchestration", OrchestrationLive)
-    live("/network", NetworkLive)
-    live("/table", TableLive)
   end
 
   scope "/api", LivechainWeb do
@@ -48,26 +45,18 @@ defmodule LivechainWeb.Router do
     pipe_through(:api_with_logging)
 
     # Strategy-specific endpoints for different routing approaches
-    post("/fastest/:chain_id", RPCController, :rpc_fastest)       # Use fastest provider based on latency
-    post("/cheapest/:chain_id", RPCController, :rpc_cheapest)     # Use cheapest provider (if cost data available)
-    post("/priority/:chain_id", RPCController, :rpc_priority)     # Use priority-ordered providers
-    post("/leaderboard/:chain_id", RPCController, :rpc_leaderboard) # Use leaderboard-based selection (default)
-    post("/round-robin/:chain_id", RPCController, :rpc_round_robin) # Round-robin provider selection
-    
+    # Use fastest provider based on latency
+    post("/fastest/:chain_id", RPCController, :rpc_fastest)
+    # Use cheapest provider (default to free providers)
+    post("/cheapest/:chain_id", RPCController, :rpc_cheapest)
+    # Use priority-ordered providers
+    post("/priority/:chain_id", RPCController, :rpc_priority)
+    # Round-robin provider selection
+    post("/round-robin/:chain_id", RPCController, :rpc_round_robin)
+
     # Provider override endpoints - directly target specific providers
     post("/provider/:provider_id/:chain_id", RPCController, :rpc_provider_override)
-    post("/:chain_id/:provider_id", RPCController, :rpc_provider_override)  # Alternative format
-    
-    # Fallback tolerance endpoints
-    post("/no-failover/:chain_id", RPCController, :rpc_no_failover) # Disable failover for testing
-    post("/aggressive/:chain_id", RPCController, :rpc_aggressive)    # More aggressive failover settings
-    
-    # Development/debugging endpoints
-    post("/debug/:chain_id", RPCController, :rpc_debug)          # Enhanced logging and debugging
-    post("/benchmark/:chain_id", RPCController, :rpc_benchmark)  # Force benchmarking mode
-    
-    # Legacy endpoints for backward compatibility
-    post("/:strategy/:chain_id", RPCController, :rpc)
-    post("/:chain_id", RPCController, :rpc)
+    # Alternative format
+    post("/:chain_id/:provider_id", RPCController, :rpc_provider_override)
   end
 end

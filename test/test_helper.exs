@@ -105,27 +105,45 @@ defmodule TestHelper do
   end
 
   def ensure_test_environment_ready() do
-    # Wait for critical services to be available with proper timeout
+    # First ensure the main application is started
+    case Application.ensure_all_started(:livechain) do
+      {:ok, _} -> :ok
+      {:error, reason} -> raise "Failed to start livechain application: #{inspect(reason)}"
+    end
+
+    # Then wait for critical services to be available with proper timeout
     wait_for_service(Livechain.PubSub, "PubSub")
     wait_for_service(Livechain.Registry, "Registry")
     wait_for_service(Livechain.RPC.ProcessRegistry, "ProcessRegistry")
+    
+    # Give a moment for any post-startup initialization
+    Process.sleep(100)
     :ok
   end
 
   defp wait_for_service(service_name, description) do
     case GenServer.whereis(service_name) do
       nil ->
-        # Wait up to 2 seconds for the service to start
-        case Enum.find_value(1..20, fn _ ->
-               Process.sleep(100)
-               GenServer.whereis(service_name)
-             end) do
-          nil ->
-            raise "#{description} service not available after timeout"
+        # Wait up to 10 seconds for the service to start with exponential backoff
+        # This handles heavy test load scenarios better
+        wait_with_backoff(service_name, description, 1, 10_000, 50)
 
-          _pid ->
-            :ok
-        end
+      _pid ->
+        :ok
+    end
+  end
+
+  defp wait_with_backoff(service_name, description, attempt, max_wait_ms, base_sleep_ms) do
+    if attempt * base_sleep_ms > max_wait_ms do
+      raise "#{description} service not available after #{max_wait_ms}ms timeout"
+    end
+
+    case GenServer.whereis(service_name) do
+      nil ->
+        # Exponential backoff: 50ms, 100ms, 200ms, 400ms, etc.
+        sleep_time = min(base_sleep_ms * attempt, 1000)
+        Process.sleep(sleep_time)
+        wait_with_backoff(service_name, description, attempt + 1, max_wait_ms, base_sleep_ms)
 
       _pid ->
         :ok

@@ -46,7 +46,43 @@ defmodule Livechain.RPC.WSConnectionTest do
         failure_rate: 0.1
       )
 
+    # Setup cleanup for proper process teardown
+    on_exit(fn ->
+      # Stop any WebSocket connections that may have been started
+      cleanup_ws_connections([real_endpoint.id, mock_endpoint.id])
+      # Clean up circuit breakers that may have been started
+      cleanup_circuit_breakers([real_endpoint.id, mock_endpoint.id])
+    end)
+
     %{real_endpoint: real_endpoint, mock_endpoint: mock_endpoint}
+  end
+
+  # Helper function to clean up WebSocket connections
+  defp cleanup_ws_connections(connection_ids) do
+    Enum.each(connection_ids, fn connection_id ->
+      try do
+        case GenServer.whereis({:via, Registry, {Livechain.Registry, {:ws_conn, connection_id}}}) do
+          nil -> :ok
+          pid -> GenServer.stop(pid, :normal, 1000)
+        end
+      rescue
+        _ -> :ok
+      end
+    end)
+  end
+
+  # Helper function to clean up circuit breakers
+  defp cleanup_circuit_breakers(provider_ids) do
+    Enum.each(provider_ids, fn provider_id ->
+      try do
+        case GenServer.whereis({:via, Registry, {Livechain.Registry, {:circuit_breaker, provider_id}}}) do
+          nil -> :ok
+          pid -> GenServer.stop(pid, :normal, 1000)
+        end
+      rescue
+        _ -> :ok
+      end
+    end)
   end
 
   describe "Connection Lifecycle" do
