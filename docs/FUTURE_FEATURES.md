@@ -81,6 +81,7 @@ A living backlog of high-impact improvements to make Livechain reliable, fast, a
 
 - **Geo-aware selection**: client region detection and region-tagged providers; prefer lowest RTT.
 - **Failover across regions**: bounded-latency cross-region fallback.
+- **Triage Note (Incomplete Feature)**: The core application code (`RPCController`, `Failover`, `ProviderPool`) contains logic to filter providers by a `region` specified in an `x-livechain-region` header. However, the provider configuration schema does not currently include a `region` field. This makes the feature implemented but not usable, and it doesn't make sense to explicitly define what regions providers are in (this can be revealed via latency and passive benchmarking)
 - See also: [REGIONAL_LATENCY_ROUTING_DESIGN_CONSIDERATIONS.md](REGIONAL_LATENCY_ROUTING_DESIGN_CONSIDERATIONS.md)
 
 ### Security and multi-tenant controls

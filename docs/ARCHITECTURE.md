@@ -202,19 +202,19 @@ eth_getBalance(address)          # Account balance queries
 
 ### **Provider Selection Strategies**
 
-Provider selection is pluggable and defaults to leaderboard-based selection:
+Provider selection is pluggable. The main strategies include:
 
-- **:leaderboard (default)**: Picks highest-scoring provider from `BenchmarkStore`
-- **:priority**: First available provider by configured priority
-- **:round_robin**: Rotates across available providers
-- Future strategies can include **:cheapest**, **:latency_based**, or **hybrid** approaches
+- **:fastest (default)**: Picks the highest-scoring provider from the `BenchmarkStore`. The score is based on historical performance from passive event racing, effectively making this a leaderboard-based strategy.
+- **:priority**: First available provider based on its statically configured `priority`.
+- **:round_robin**: Rotates across available, healthy providers.
+- **:cheapest**: Prefers providers marked as `type: "public"` before using others.
 
 Configuration:
 
 ```elixir
 # config/config.exs
-config :livechain, :provider_selection_strategy, :leaderboard
-# Alternatives: :priority | :round_robin
+config :livechain, :provider_selection_strategy, :fastest
+# Alternatives: :priority | :round_robin | :cheapest
 ```
 
 ---

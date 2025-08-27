@@ -38,6 +38,9 @@ defmodule Livechain.Application do
         # Start the chain registry for lifecycle management only
         Livechain.RPC.ChainRegistry,
 
+        # Start the chain manager for blockchain orchestration
+        Livechain.RPC.ChainManager,
+
         # Start the subscription manager for JSON-RPC subscriptions
         Livechain.RPC.SubscriptionManager,
 
