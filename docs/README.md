@@ -1,33 +1,62 @@
-# Lasso RPC
+# Livechain
 
-A smart blockchain RPC router for building bulletproof onchain applications.
+**Self-hostable and infinitely scalable RPC orchestrator for bulletproof onchain onchain application development.**
 
-On the surface Lasso RPC is just like a standard node provider (i.e. Alchemy, Infura, QuickNode), providing ethereum json rpc endpoints for both websocket and http connections, but was you look deeper, it becomes clear that Lasso is a different beast. As a matter of fact, Lasso is ALL the RPC providers across ALL the EVM chains ALL at once. It provides ALL the best properties of your high performing RPC service, but with the flexability to pick and choose what properties you want in an RPC services:
+Blockchain applications are hard to build, and at the core of this development space are Node RPC providers. Node RPC providers drive the onchain application ecosystem, and the pletora of existing providers make for a tough, opaque decision. Lasso RPC makes the decision easy.
 
-Want to use free provider without the resitrictions of aggressive rate limits? Simply configure Lasso RPC with a bunch of free providers and take advantage of Lasso's round robin routing strategy to load balance between them:
+On the surface, Lasso RPC looks like any RPC provider (Alchemy, Infura, QuickNode)—giving you JSON-RPC endpoints for WebSocket and HTTP. But dig deeper and you'll see Livechain is a different beast: it's **ALL** your providers across **ALL** your chains, intelligently orchestrated so you can focus on building great apps while Lasso gives you the best RPC performance on the market.
 
-`https://lasso-rpc/base/round-robin`
+Want to bypass rate limits? Declare your Lasso endpoint to target multiple free providers and load balance between them:
 
-Want the fast possible response to your RPC call? Have your RPC requests routed to the fastest proivder using real-world provider benchmarking data:
+```
+POST /rpc/base/free/load-balance     # A RPC endpoint that target free providers only and load balances requests between them
+```
 
-`https://lasso-rpc/optimism/fastest`
+Want the fastest possible responses? Let Livechain route to your best-performing provider using real-world benchmarks:
 
-### Don't accept RPC failures
+```
+POST /rpc/ethereum/fastest # Automatic routing to fastest provider
+```
 
-Lasso implements deep orchestration with built in fault tolerance, enabling deep failover behavior resulting in hightly reliable RPC behavior. Providers go down, see intermittant failures, and or network errors that can distrupt critical services, but Lasso routes around failures and provides stronger reliablity guarantees
+Want much better reliability? Lasso will quietly retry your failed request in the event of a transient error or node provider issue, and you'll never know it happened.
 
-### Don't guess on the best RPC provider
+Want to build out you own blockchain node infrastructure and compete with the big boy providers? Start with Lasso RPC.
 
-Lasso uses passive benchmarking to make informed decisions about request routing. As real network conditions change, Lasso's smart routing will too. Degraded provider performance will be identified, and under severe circumstances will trigger a circuit breaker fault to auto redirect to the next best provider.
+## Why Lasso RPC Exists
+
+**Stop accepting RPC failures.** Providers go down, hit rate limits, and suffer network issues that break your app. Livechain routes around these failures with circuit breakers and intelligent failover—your dApp stays online when others don't.
+
+**Stop guessing which provider is best.** Livechain passively benchmarks providers using your actual traffic. When network conditions change, routing adapts automatically. No synthetic benchmarks, no guesswork—just real performance data driving intelligent decisions.
+
+## Built on Elixir/OTP: Fault-Tolerance by Design
+
+Livechain runs on the Erlang BEAM VM, the same battle-tested platform that powers WhatsApp, Discord, and telecom infrastructure serving billions of users. This gives us superpowers:
+
+- **Massive concurrency**: Handle thousands of concurrent connections with minimal overhead
+- **Fault isolation**: Provider failures don't cascade—each connection runs in its own lightweight process
+- **Self-healing**: Crashed processes automatically restart without affecting others
+- **Hot code updates**: Deploy fixes without downtime
+- **Distributed by default**: Built to coordinate across multiple nodes and regions
+
+## Global Distribution Potential
+
+BEAM's distributed capabilities unlock powerful possibilities for smart routing:
+
+- **Regional nodes**: Deploy Livechain instances globally, each maintaining region-local performance benchmarks
+- **Latency-aware routing**: Clients connect to the nearest Livechain node, which routes to the fastest upstream provider for that region
+- **Cross-region coordination**: Nodes can share performance data to optimize routing decisions globally
+- **Edge deployment**: Run Livechain close to your users for minimal added latency
+
+This architecture scales from a single self-hosted instance to a global network of coordinated nodes.
 
 ## Core Features
 
-- Multi-provider orchestration with smart routing based on pluggable provider routing strategies (fastest, cheapest, round_robin)
-- WS + HTTP JSON-RPC proxy to support all standard readonly rpc methods supported by providers
-- Strong failover properties for provider connection issues across http and ws
-- Passive provider benchmarking on a per-chain, per JSON rpc method basis
-- Support for provider 'racing' to for maximally low latency modes ('fastest response possible' mode)
-- Live dashboard with deep system insights, live chain info + status, live RPC actvity streams, provider performance metrics, and an interactive client load test/simulation
+- **Multi-provider orchestration** with pluggable routing strategies (fastest, cheapest, round-robin)
+- **Full JSON-RPC compatibility** via HTTP and WebSocket proxies for all standard read-only methods
+- **Bulletproof failover** with per-provider circuit breakers and health monitoring
+- **Passive benchmarking** using real traffic to measure provider performance per-chain and per-method
+- **Event racing** for maximum speed—multiple providers compete to deliver blockchain events first
+- **Live dashboard** with real-time insights, provider performance metrics, and interactive load testing
 
 ## Usage
 
