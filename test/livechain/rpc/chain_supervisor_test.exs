@@ -97,7 +97,7 @@ defmodule Livechain.RPC.ChainSupervisorTest do
       assert MessageAggregator in child_modules
       assert ProviderPool in child_modules
       # DynamicSupervisor for connections
-      assert :dynamic in child_modules
+      assert DynamicSupervisor in child_modules
 
       # Cleanup
       Supervisor.stop(supervisor_pid)
@@ -118,6 +118,9 @@ defmodule Livechain.RPC.ChainSupervisorTest do
         capture_log(fn ->
           # This should fail validation
           result = ChainSupervisor.start_link({"invalid_chain", invalid_config})
+          Process.sleep(100)
+
+          IO.puts("result: #{inspect(result)}")
 
           case result do
             {:ok, pid} ->
@@ -130,6 +133,7 @@ defmodule Livechain.RPC.ChainSupervisorTest do
           end
         end)
 
+      IO.puts(log)
       # Should have logged the startup attempt
       assert log =~ "Starting ChainSupervisor"
     end
@@ -244,7 +248,7 @@ defmodule Livechain.RPC.ChainSupervisorTest do
       # but should not crash
       assert result in [
                :ok,
-               {:error, :no_active_providers},
+               {:error, :no_providers_available},
                {:error, :message_aggregator_not_found}
              ]
 
@@ -268,7 +272,7 @@ defmodule Livechain.RPC.ChainSupervisorTest do
       # Should gracefully handle the lack of providers
       assert result in [
                :ok,
-               {:error, :no_active_providers},
+               {:error, :no_providers_available},
                {:error, :message_aggregator_not_found}
              ]
 

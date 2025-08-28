@@ -226,6 +226,7 @@ defmodule Integration.FailoverTest do
           end
         end)
 
+      IO.puts("failover test log: #{log}")
       # Should see failover activity in logs
       assert log =~ "provider" || log =~ "failover" || log =~ "failure"
 
