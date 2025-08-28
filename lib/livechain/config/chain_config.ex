@@ -41,6 +41,7 @@ defmodule Livechain.Config.ChainConfig do
   end
 
   defmodule Provider do
+    @derive Jason.Encoder
     @type t :: %__MODULE__{
             id: String.t(),
             name: String.t(),

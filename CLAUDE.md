@@ -1,1 +1,2 @@
-Don't ever give estimates in ANY timeframes, i.e. 2 weeks/hrs/days
+- Don't ever give estimates in ANY timeframes, i.e. 2 weeks/hrs/days
+- No 'for now' implementations - if you're unable to complete the full implementation, say so and document a handoff
