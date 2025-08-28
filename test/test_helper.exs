@@ -111,14 +111,47 @@ defmodule TestHelper do
       {:error, reason} -> raise "Failed to start livechain application: #{inspect(reason)}"
     end
 
-    # Then wait for critical services to be available with proper timeout
-    wait_for_service(Livechain.PubSub, "PubSub")
-    wait_for_service(Livechain.Registry, "Registry")
+    # Wait for critical services with specific checks
+    # Phoenix.PubSub is started with name: Livechain.PubSub
+    wait_for_service_with_check(
+      fn -> 
+        # Simple test: try to get child spec
+        :supervisor.which_children(Livechain.PubSub)
+      end,
+      "PubSub (Livechain.PubSub)"
+    )
+    
+    # Registry is started with name: Livechain.Registry
+    wait_for_service_with_check(
+      fn -> Registry.select(Livechain.Registry, []) end,
+      "Registry (Livechain.Registry)"
+    )
+    
     wait_for_service(Livechain.RPC.ProcessRegistry, "ProcessRegistry")
     
     # Give a moment for any post-startup initialization
     Process.sleep(100)
     :ok
+  end
+
+  defp wait_for_service_with_check(check_func, description) do
+    wait_for_service_with_check_backoff(check_func, description, 1, 10_000, 50)
+  end
+
+  defp wait_for_service_with_check_backoff(check_func, description, attempt, max_wait_ms, base_sleep_ms) do
+    if attempt * base_sleep_ms > max_wait_ms do
+      raise "#{description} service not available after #{max_wait_ms}ms timeout"
+    end
+
+    try do
+      check_func.()
+      :ok
+    rescue
+      _ ->
+        sleep_time = min(base_sleep_ms * attempt, 1000)
+        Process.sleep(sleep_time)
+        wait_for_service_with_check_backoff(check_func, description, attempt + 1, max_wait_ms, base_sleep_ms)
+    end
   end
 
   defp wait_for_service(service_name, description) do
@@ -132,6 +165,7 @@ defmodule TestHelper do
         :ok
     end
   end
+
 
   defp wait_with_backoff(service_name, description, attempt, max_wait_ms, base_sleep_ms) do
     if attempt * base_sleep_ms > max_wait_ms do

@@ -1,0 +1,30 @@
+{
+  "data": {
+    "timestamp": 1756357200,
+    "providers": [
+      "arbitrum_publicnode"
+    ],
+    "chain_name": "arbitrum",
+    "hour_timestamp": 1756357200,
+    "snapshot_data": [
+      {
+        "timestamp": 1756357200,
+        "wins": 57,
+        "chain_name": "arbitrum",
+        "hour_timestamp": 1756357200,
+        "provider_id": "arbitrum_publicnode",
+        "event_type": "unknown",
+        "last_updated": -576457184123,
+        "total_races": 57,
+        "avg_margin_ms": 0.0,
+        "rpc_avg_duration_ms": null,
+        "rpc_calls": null,
+        "rpc_method": null,
+        "rpc_success_rate": null
+      }
+    ]
+  },
+  "timestamp": 1756358378,
+  "chain_name": "arbitrum",
+  "datetime": "2025-08-28T05:19:38.471546Z"
+}
