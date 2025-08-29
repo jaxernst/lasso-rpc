@@ -1,28 +1,28 @@
 # Livechain
 
-**Self-hostable and infinitely scalable RPC orchestrator for bulletproof onchain onchain application development.**
+**A Blockchain RPC orchestrator and smart router for bulletproof onchain application development.**
 
-Blockchain applications are hard to build, and at the core of this development space are Node RPC providers. Node RPC providers drive the onchain application ecosystem, and the pletora of existing providers make for a tough, opaque decision. Lasso RPC makes the decision easy.
+Building reliable blockchain applications is challenging, largely due to the complexity of choosing and managing RPC providers. With dozens of providers offering different performance characteristics, pricing models, and reliability guarantees, developers face an opaque decision that directly impacts their application's user experience.
 
-On the surface, Lasso RPC looks like any RPC provider (Alchemy, Infura, QuickNode)—giving you JSON-RPC endpoints for WebSocket and HTTP. But dig deeper and you'll see Livechain is a different beast: it's **ALL** your providers across **ALL** your chains, intelligently orchestrated so you can focus on building great apps while Lasso gives you the best RPC performance on the market.
+Lasso solves this by acting as an intelligent proxy that sits between your application and multiple RPC providers. While it provides the same JSON-RPC endpoints for WebSocket and HTTP that you'd expect from any provider, Livechain orchestrates **all** your providers across **all** your chains. It automatically routes requests to the best-performing provider, handles failures gracefully, and gives you the reliability and performance your applications deserve.
 
-Want to bypass rate limits? Declare your Lasso endpoint to target multiple free providers and load balance between them:
-
-```
-POST /rpc/base/free/load-balance     # A RPC endpoint that target free providers only and load balances requests between them
-```
-
-Want the fastest possible responses? Let Livechain route to your best-performing provider using real-world benchmarks:
+Want to bypass rate limits? Configure Livechain to target multiple free providers and load balance between them:
 
 ```
-POST /rpc/ethereum/fastest # Automatic routing to fastest provider
+POST /rpc/base # Automatically load balances across available providers
 ```
 
-Want much better reliability? Lasso will quietly retry your failed request in the event of a transient error or node provider issue, and you'll never know it happened.
+Want the fastest possible responses? Livechain routes to your best-performing provider using real-world benchmarks:
 
-Want to build out you own blockchain node infrastructure and compete with the big boy providers? Start with Lasso RPC.
+```
+POST /rpc/ethereum # Automatic routing based on passive performance measurement
+```
 
-## Why Lasso RPC Exists
+Want much better reliability? Livechain will quietly retry your failed request with circuit breakers and intelligent failover—your application stays resilient when providers don't.
+
+Want to build your own blockchain node infrastructure? Start with Livechain as your orchestration layer.
+
+## Why Livechain Exists
 
 **Stop accepting RPC failures.** Providers go down, hit rate limits, and suffer network issues that break your app. Livechain routes around these failures with circuit breakers and intelligent failover—your dApp stays online when others don't.
 
@@ -69,15 +69,15 @@ This architecture scales from a single self-hosted instance to a global network 
 
 The orchestrator uses a pluggable strategy to pick providers when forwarding HTTP calls.
 
-- Default: `:cheapest`
-- Alternatives: `:fastest`, `:priority`, `:round_robin`
+- Default: `:fastest` (leaderboard-based on passive benchmarking)
+- Alternatives: `:priority`, `:round_robin`, `:cheapest`
 
 Configure via:
 
 ```elixir
 # config/config.exs
-config :livechain, :provider_selection_strategy, :cheapest
-# :fastest, :priority, or :round_robin also supported
+config :livechain, :provider_selection_strategy, :fastest
+# :priority, :round_robin, or :cheapest also supported
 ```
 
 ### Examples
