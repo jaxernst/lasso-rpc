@@ -5,6 +5,7 @@ defmodule LivechainWeb.Dashboard do
   alias LivechainWeb.NetworkTopology
   alias LivechainWeb.Dashboard.{Helpers, MetricsHelpers, StatusHelpers, EndpointHelpers}
   alias LivechainWeb.Dashboard.Components
+  alias LivechainWeb.Components.{DashboardHeader, NetworkStatusLegend}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -560,58 +561,7 @@ defmodule LivechainWeb.Dashboard do
       >
       </div>
 
-      <!-- Header -->
-      <div class="border-gray-700/50 relative flex-shrink-0 border-b">
-        <div class="relative flex items-center justify-between p-6">
-          <!-- Title Section -->
-          <div class="flex items-center space-x-4">
-            <div class="relative">
-              <div class="absolute inset-0 rounded-2xl bg-gradient-to-r from-purple-600 to-purple-400 opacity-10 blur-xl">
-              </div>
-              <div class="relative rounded-2xl ">
-                <div class="flex items-center space-x-3">
-                  <div class="relative">
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-purple-400 to-purple-600 shadow-lg">
-                      <svg
-                        class="h-5 w-5 text-white"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M13 10V3L4 14h7v7l9-11h-7z"
-                        />
-                      </svg>
-                    </div>
-                    <div class="absolute inset-0 animate-ping rounded-lg bg-gradient-to-br from-purple-400 to-purple-600 opacity-20">
-                    </div>
-                  </div>
-                  <div>
-                    <div class="text-lg font-bold text-white">Lasso RPC</div>
-                    <div class="text-xs text-gray-400">
-                      <span class="text-emerald-400">LIVE</span> • Orchestration Dashboard
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-    <!-- Navigation Tabs -->
-          <.tab_switcher
-            id="main-tabs"
-            tabs={[
-              %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
-              %{id: "benchmarks", label: "Benchmarks", icon: "M3 3h18M9 7l6-3M9 17l6-3"},
-              %{id: "system", label: "System", icon: "M15 4m0 13V4m-6 3l6-3"}
-            ]}
-            active_tab={@active_tab}
-          />
-        </div>
-      </div>
+      <DashboardHeader.header active_tab={@active_tab} />
 
     <!-- Content Section -->
       <div class="grid-pattern relative flex-1 overflow-hidden">
@@ -707,52 +657,8 @@ defmodule LivechainWeb.Dashboard do
         recent_calls={@recent_calls}
       />
 
-    <!-- Network Status Legend (positioned relative to full dashboard) -->
-      <div class="bg-gray-900/95 absolute right-4 bottom-4 z-30 min-w-max rounded-lg border border-gray-600 p-4 shadow-xl backdrop-blur-sm">
-        <h4 class="mb-3 text-xs font-semibold text-white">Network Status</h4>
-        <div class="space-y-2.5">
-          <!-- Provider Status -->
-          <div class="flex items-center space-x-2 text-xs text-gray-300">
-            <div class="h-3 w-3 flex-shrink-0 rounded-full bg-emerald-400"></div>
-            <span>Connected</span>
-          </div>
-          <div class="flex items-center space-x-2 text-xs text-gray-300">
-            <div class="h-3 w-3 flex-shrink-0 rounded-full bg-yellow-400"></div>
-            <span>Connecting/Reconnecting</span>
-          </div>
-          <div class="flex items-center space-x-2 text-xs text-gray-300">
-            <div class="h-3 w-3 flex-shrink-0 rounded-full bg-red-400"></div>
-            <span>Disconnected</span>
-          </div>
-          <!-- Racing Flag Indicator -->
-          <div class="flex items-center space-x-2 text-xs text-gray-300">
-            <div class="relative flex flex-shrink-0 items-center">
-              <div class="h-3 w-3 rounded-full bg-purple-600"></div>
-              <svg
-                class="absolute h-2.5 w-2.5 text-yellow-300"
-                fill="currentColor"
-                viewBox="0 0 24 24"
-                style="top: 0.25px; left: 0.25px;"
-              >
-                <path d="M3 3v18l7-3 7 3V3H3z" />
-              </svg>
-            </div>
-            <span>Fastest average latency</span>
-          </div>
-          <!-- Reconnect Attempts Badge -->
-          <div class="mt-3 flex items-center space-x-2 border-t border-gray-700 pt-2.5 text-xs text-gray-300">
-            <div class="relative flex flex-shrink-0 items-center">
-              <div class="h-3 w-3 rounded-full bg-gray-600"></div>
-              <div class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-yellow-500">
-                <span class="text-[10px] font-bold leading-none text-white">3</span>
-              </div>
-            </div>
-            <span>Reconnect attempts</span>
-          </div>
-        </div>
-      </div>
+      <NetworkStatusLegend.legend />
 
-    <!-- Floating Details Window (top-right) -->
       <.floating_details_window
         selected_chain={@selected_chain}
         selected_provider={@selected_provider}

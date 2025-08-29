@@ -51,7 +51,7 @@ defmodule LivechainWeb.Router do
 
     # Chain validation endpoint
     post("/chains/validate", ChainController, :validate)
-    
+
     # Backup management
     get("/chains/backups", ChainController, :list_backups)
     post("/chains/backup", ChainController, :create_backup)
@@ -60,6 +60,9 @@ defmodule LivechainWeb.Router do
   # HTTP JSON-RPC endpoints with enhanced logging
   scope "/rpc", LivechainWeb do
     pipe_through(:api_with_logging)
+
+    # Base endpoint
+    post("/:chain_id", RPCController, :rpc_base)
 
     # Strategy-specific endpoints for different routing approaches
     # Use fastest provider based on latency
@@ -73,7 +76,6 @@ defmodule LivechainWeb.Router do
 
     # Provider override endpoints - directly target specific providers
     post("/provider/:provider_id/:chain_id", RPCController, :rpc_provider_override)
-    # Alternative format
     post("/:chain_id/:provider_id", RPCController, :rpc_provider_override)
   end
 end
