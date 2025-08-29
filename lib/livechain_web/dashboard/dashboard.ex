@@ -6,7 +6,7 @@ defmodule LivechainWeb.Dashboard do
   alias LivechainWeb.Dashboard.{Helpers, MetricsHelpers, StatusHelpers, EndpointHelpers}
   alias LivechainWeb.Dashboard.Components
   alias LivechainWeb.Components.{DashboardHeader, NetworkStatusLegend}
-  alias LivechainWeb.Components.DashboardComponents
+  alias LivechainWeb.Components.{DashboardComponents, ChainConfigurationWindow}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -77,13 +77,6 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:recent_calls, [])
       |> assign(:latency_leaders, %{})
       |> assign(:chain_config_open, false)
-      |> assign(:chain_config_collapsed, true)
-      |> assign(:config_selected_chain, nil)
-      |> assign(:config_form_data, %{})
-      |> assign(:config_validation_errors, [])
-      |> assign(:config_expanded_providers, MapSet.new())
-      |> assign(:quick_add_open, false)
-      |> assign(:quick_add_data, %{})
       |> fetch_connections()
 
     {:ok, initial_state}
@@ -393,158 +386,65 @@ defmodule LivechainWeb.Dashboard do
     handle_event(event, params, socket)
   end
 
-  # Chain configuration change notifications
+  # Handle messages from ChainConfigurationWindow component
   @impl true
-  def handle_info({:chain_created, chain_name, _chain_config}, socket) do
-    if socket.assigns.chain_config_open do
-      # Reload chains list to show the new chain
-      case Livechain.Config.ChainConfigManager.list_chains() do
-        {:ok, chains} ->
-          chain_list = Enum.map(chains, fn {name, config} ->
-            %{name: name, chain_id: config.chain_id, providers: config.providers}
-          end)
+  def handle_info({:chain_config_closed}, socket) do
+    {:noreply, assign(socket, :chain_config_open, false)}
+  end
 
-          socket =
-            socket
-            |> assign(:available_chains, chain_list)
-            |> push_event("show_notification", %{
-              message: "Chain '#{chain_name}' was created",
-              type: "info"
-            })
-
-          {:noreply, socket}
-
-        {:error, _} ->
-          {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
-    end
+  @impl true  
+  def handle_info({:chain_config_saved, message}, socket) do
+    socket = 
+      socket
+      |> fetch_connections()  # Refresh connections to reflect new chains
+      |> push_event("show_notification", %{message: message, type: "info"})
+    {:noreply, socket}
   end
 
   @impl true
-  def handle_info({:chain_updated, chain_name, _chain_config}, socket) do
-    if socket.assigns.chain_config_open do
-      # Reload chains list and update form if this chain is selected
-      case Livechain.Config.ChainConfigManager.list_chains() do
-        {:ok, chains} ->
-          chain_list = Enum.map(chains, fn {name, config} ->
-            %{name: name, chain_id: config.chain_id, providers: config.providers}
-          end)
-
-          socket =
-            socket
-            |> assign(:available_chains, chain_list)
-            |> push_event("show_notification", %{
-              message: "Chain '#{chain_name}' was updated",
-              type: "info"
-            })
-
-          # If this is the currently selected chain, reload its form data
-          socket = if socket.assigns.config_selected_chain == chain_name do
-            case Livechain.Config.ChainConfigManager.get_chain(chain_name) do
-              {:ok, config} ->
-                form_data = %{
-                  name: config.name,
-                  chain_id: config.chain_id,
-                  block_time: config.block_time,
-                  providers: Enum.map(config.providers, fn provider ->
-                    %{
-                      id: provider.id,
-                      name: provider.name,
-                      url: provider.url,
-                      ws_url: provider.ws_url,
-                      priority: provider.priority,
-                      type: provider.type,
-                      api_key_required: provider.api_key_required,
-                      region: provider.region
-                    }
-                  end)
-                }
-                assign(socket, :config_form_data, form_data)
-
-              {:error, _} ->
-                socket
-            end
-          else
-            socket
-          end
-
-          {:noreply, socket}
-
-        {:error, _} ->
-          {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
-    end
+  def handle_info({:chain_config_deleted, message}, socket) do
+    socket = 
+      socket
+      |> fetch_connections()
+      |> push_event("show_notification", %{message: message, type: "warning"})
+    {:noreply, socket}
   end
 
   @impl true
-  def handle_info({:chain_deleted, chain_name, _chain_config}, socket) do
-    if socket.assigns.chain_config_open do
-      # Reload chains list
-      case Livechain.Config.ChainConfigManager.list_chains() do
-        {:ok, chains} ->
-          chain_list = Enum.map(chains, fn {name, config} ->
-            %{name: name, chain_id: config.chain_id, providers: config.providers}
-          end)
+  def handle_info({:chain_config_test_results, results}, socket) do
+    socket = push_event(socket, "show_test_results", %{results: results})
+    {:noreply, socket}
+  end
 
-          socket =
-            socket
-            |> assign(:available_chains, chain_list)
-            |> push_event("show_notification", %{
-              message: "Chain '#{chain_name}' was deleted",
-              type: "warning"
-            })
+  @impl true
+  def handle_info({:chain_config_notification, type, message}, socket) do
+    socket = push_event(socket, "show_notification", %{message: message, type: Atom.to_string(type)})
+    {:noreply, socket}
+  end
 
-          # If this was the currently selected chain, clear the selection
-          socket = if socket.assigns.config_selected_chain == chain_name do
-            socket
-            |> assign(:config_selected_chain, nil)
-            |> assign(:config_form_data, %{})
-          else
-            socket
-          end
+  # Chain configuration change notifications (still needed for updating available chains)
+  @impl true
+  def handle_info({:chain_created, _chain_name, _chain_config}, socket) do
+    socket = fetch_connections(socket)
+    {:noreply, socket}
+  end
 
-          {:noreply, socket}
+  @impl true
+  def handle_info({:chain_updated, _chain_name, _chain_config}, socket) do
+    socket = fetch_connections(socket)
+    {:noreply, socket}
+  end
 
-        {:error, _} ->
-          {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
-    end
+  @impl true
+  def handle_info({:chain_deleted, _chain_name, _chain_config}, socket) do
+    socket = fetch_connections(socket)
+    {:noreply, socket}
   end
 
   @impl true
   def handle_info({:config_restored, _backup_path, _}, socket) do
-    if socket.assigns.chain_config_open do
-      # Reload everything after config restore
-      case Livechain.Config.ChainConfigManager.list_chains() do
-        {:ok, chains} ->
-          chain_list = Enum.map(chains, fn {name, config} ->
-            %{name: name, chain_id: config.chain_id, providers: config.providers}
-          end)
-
-          socket =
-            socket
-            |> assign(:available_chains, chain_list)
-            |> assign(:config_selected_chain, nil)
-            |> assign(:config_form_data, %{})
-            |> push_event("show_notification", %{
-              message: "Configuration restored from backup",
-              type: "info"
-            })
-
-          {:noreply, socket}
-
-        {:error, _} ->
-          {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
-    end
+    socket = fetch_connections(socket)
+    {:noreply, socket}
   end
 
   @impl true
@@ -589,10 +489,6 @@ defmodule LivechainWeb.Dashboard do
               request_rate={@request_rate}
               recent_calls={@recent_calls}
               chain_config_open={@chain_config_open}
-              chain_config_collapsed={@chain_config_collapsed}
-              config_selected_chain={@config_selected_chain}
-              config_form_data={@config_form_data}
-              config_validation_errors={@config_validation_errors}
             />
           <% "benchmarks" -> %>
             <DashboardComponents.benchmarks_tab_content />
@@ -615,13 +511,6 @@ defmodule LivechainWeb.Dashboard do
       assigns
       |> assign_new(:latency_leaders, fn -> %{} end)
       |> assign_new(:chain_config_open, fn -> false end)
-      |> assign_new(:chain_config_collapsed, fn -> true end)
-      |> assign_new(:config_selected_chain, fn -> nil end)
-      |> assign_new(:config_form_data, fn -> %{} end)
-      |> assign_new(:config_validation_errors, fn -> [] end)
-      |> assign_new(:config_expanded_providers, fn -> MapSet.new() end)
-      |> assign_new(:quick_add_open, fn -> false end)
-      |> assign_new(:quick_add_data, fn -> %{} end)
 
     ~H"""
     <div class="relative flex h-full w-full">
@@ -674,17 +563,11 @@ defmodule LivechainWeb.Dashboard do
         chain_config_open={@chain_config_open}
       />
 
-      <!-- Floating Chain Configuration Window (top-left) -->
-      <DashboardComponents.floating_chain_config_window
-        chain_config_open={@chain_config_open}
-        chain_config_collapsed={@chain_config_collapsed}
-        config_selected_chain={@config_selected_chain}
-        config_form_data={@config_form_data}
-        config_validation_errors={@config_validation_errors}
-        available_chains={@available_chains}
-        config_expanded_providers={@config_expanded_providers}
-        quick_add_open={@quick_add_open}
-        quick_add_data={@quick_add_data}
+      <!-- Chain Configuration Window -->
+      <.live_component
+        module={ChainConfigurationWindow}
+        id="chain-configuration-window"
+        is_open={@chain_config_open}
       />
 
     </div>
@@ -1546,253 +1429,11 @@ defmodule LivechainWeb.Dashboard do
   # Chain Configuration Event Handlers
   @impl true
   def handle_event("toggle_chain_config", _params, socket) do
-    Logger.info("Toggling chain config window")
     new_open = not socket.assigns.chain_config_open
-    socket =
-      socket
-      |> assign(:chain_config_open, new_open)
-      |> assign(:chain_config_collapsed, not new_open)  # Auto-expand when opening
-
-    # Load available chains when opening
-    socket = if new_open do
-      case Livechain.Config.ChainConfigManager.list_chains() do
-        {:ok, chains} ->
-          chain_list = Enum.map(chains, fn {name, config} ->
-            %{
-              name: name,
-              chain_id: config.chain_id,
-              providers: config.providers
-            }
-          end)
-          assign(socket, :available_chains, chain_list)
-
-        {:error, _reason} ->
-          assign(socket, :available_chains, [])
-      end
-    else
-      socket
-    end
-
+    socket = assign(socket, :chain_config_open, new_open)
     {:noreply, socket}
   end
 
-  @impl true
-  def handle_event("toggle_chain_config_collapsed", _params, socket) do
-    {:noreply, update(socket, :chain_config_collapsed, &(!&1))}
-  end
-
-  @impl true
-  def handle_event("close_chain_config", _params, socket) do
-    socket =
-      socket
-      |> assign(:chain_config_open, false)
-      |> assign(:config_selected_chain, nil)
-      |> assign(:config_form_data, %{})
-      |> assign(:config_validation_errors, [])
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("select_config_chain", %{"chain" => chain_name}, socket) do
-    # Load the selected chain's configuration
-    case Livechain.Config.ChainConfigManager.get_chain(chain_name) do
-      {:ok, config} ->
-        form_data = %{
-          name: config.name,
-          chain_id: config.chain_id,
-          block_time: config.block_time,
-          providers: Enum.map(config.providers, fn provider ->
-            %{
-              id: provider.id,
-              name: provider.name,
-              url: provider.url,
-              ws_url: provider.ws_url,
-              priority: provider.priority,
-              type: provider.type,
-              api_key_required: provider.api_key_required,
-              region: provider.region
-            }
-          end)
-        }
-
-        socket =
-          socket
-          |> assign(:config_selected_chain, chain_name)
-          |> assign(:config_form_data, form_data)
-          |> assign(:config_validation_errors, [])
-          |> assign(:config_expanded_providers, MapSet.new())
-
-        {:noreply, socket}
-
-      {:error, _reason} ->
-        {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("add_new_chain", _params, socket) do
-    # Set up for adding a new chain
-    socket =
-      socket
-      |> assign(:config_selected_chain, "new_chain")
-      |> assign(:config_form_data, %{
-        name: "",
-        chain_id: nil,
-        block_time: 12000,
-        providers: []
-      })
-      |> assign(:config_validation_errors, [])
-      |> assign(:config_expanded_providers, MapSet.new())
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("save_chain_config", _params, socket) do
-    chain_name = socket.assigns.config_selected_chain
-    form_data = socket.assigns.config_form_data
-
-    # Convert form data to the format expected by ChainConfigManager
-    chain_attrs = %{
-      "name" => Map.get(form_data, :name, ""),
-      "chain_id" => Map.get(form_data, :chain_id),
-      "block_time" => Map.get(form_data, :block_time, 12000),
-      "providers" => Enum.map(Map.get(form_data, :providers, []), fn provider ->
-        %{
-          "id" => provider.id || "",
-          "name" => provider.name || "",
-          "url" => provider.url || "",
-          "ws_url" => provider.ws_url,
-          "priority" => provider.priority || 1,
-          "type" => provider.type || "public",
-          "api_key_required" => provider.api_key_required || false,
-          "region" => provider.region
-        }
-      end)
-    }
-
-    result = if chain_name == "new_chain" do
-      # Create new chain
-      actual_chain_name = String.downcase(Map.get(form_data, :name, "")) |> String.replace(~r/[^a-z0-9]/, "_")
-      Livechain.Config.ChainConfigManager.create_chain(actual_chain_name, chain_attrs)
-    else
-      # Update existing chain
-      Livechain.Config.ChainConfigManager.update_chain(chain_name, chain_attrs)
-    end
-
-    case result do
-      {:ok, _config} ->
-        # Reload chains list and show success
-        case Livechain.Config.ChainConfigManager.list_chains() do
-          {:ok, chains} ->
-            chain_list = Enum.map(chains, fn {name, config} ->
-              %{name: name, chain_id: config.chain_id, providers: config.providers}
-            end)
-
-            socket =
-              socket
-              |> assign(:available_chains, chain_list)
-              |> assign(:config_validation_errors, [])
-              |> push_event("show_success", %{message: "Chain configuration saved successfully"})
-
-            {:noreply, socket}
-
-          {:error, _} ->
-            {:noreply, socket}
-        end
-
-      {:error, reason} ->
-        error_message = case reason do
-          :chain_already_exists -> "Chain already exists"
-          {:invalid_chain_config, _} -> "Invalid chain configuration"
-          _ -> "Failed to save chain configuration"
-        end
-
-        socket = assign(socket, :config_validation_errors, [error_message])
-        {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("test_chain_config", _params, socket) do
-    chain_name = socket.assigns.config_selected_chain
-
-    # Test connectivity using the API endpoint
-    case Livechain.Config.ChainConfigManager.get_chain(chain_name) do
-      {:ok, config} ->
-        # Test each provider
-        test_results = Enum.map(config.providers, fn provider ->
-          case Livechain.Config.ConfigValidator.test_provider_connectivity(provider) do
-            :ok -> "✓ #{provider.name}: Connected"
-            {:error, reason} -> "✗ #{provider.name}: #{inspect(reason)}"
-          end
-        end)
-
-        socket = push_event(socket, "show_test_results", %{results: test_results})
-        {:noreply, socket}
-
-      {:error, _reason} ->
-        {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("delete_chain_config", _params, socket) do
-    chain_name = socket.assigns.config_selected_chain
-
-    case Livechain.Config.ChainConfigManager.delete_chain(chain_name) do
-      :ok ->
-        # Reload chains list
-        case Livechain.Config.ChainConfigManager.list_chains() do
-          {:ok, chains} ->
-            chain_list = Enum.map(chains, fn {name, config} ->
-              %{name: name, chain_id: config.chain_id, providers: config.providers}
-            end)
-
-            socket =
-              socket
-              |> assign(:available_chains, chain_list)
-              |> assign(:config_selected_chain, nil)
-              |> assign(:config_form_data, %{})
-              |> push_event("show_success", %{message: "Chain deleted successfully"})
-
-            {:noreply, socket}
-
-          {:error, _} ->
-            {:noreply, socket}
-        end
-
-      {:error, reason} ->
-        error_message = "Failed to delete chain: #{inspect(reason)}"
-        socket = assign(socket, :config_validation_errors, [error_message])
-        {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("add_provider", _params, socket) do
-    current_providers = Map.get(socket.assigns.config_form_data, :providers, [])
-    new_provider = %{
-      id: "provider_#{length(current_providers) + 1}",
-      name: "",
-      url: "",
-      ws_url: nil,
-      priority: length(current_providers) + 1,
-      type: "public",
-      api_key_required: false,
-      region: nil
-    }
-
-    updated_providers = current_providers ++ [new_provider]
-    updated_form_data = Map.put(socket.assigns.config_form_data, :providers, updated_providers)
-
-    # auto-expand the newly added row
-    expanded = Map.get(socket.assigns, :config_expanded_providers, MapSet.new())
-    expanded = MapSet.put(expanded, length(updated_providers) - 1)
-
-    {:noreply, socket |> assign(:config_form_data, updated_form_data) |> assign(:config_expanded_providers, expanded)}
-  end
 
   @impl true
   def handle_event("sim_start_load_test", _params, socket) do
@@ -1829,109 +1470,6 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, socket}
   end
 
-  @impl true
-  def handle_event("remove_provider", %{"index" => index}, socket) do
-    idx =
-      case Integer.parse(index || "") do
-        {val, _} -> val
-        _ -> -1
-      end
-
-    current_providers = Map.get(socket.assigns.config_form_data, :providers, [])
-
-    updated_providers =
-      if idx >= 0 and idx < length(current_providers) do
-        List.delete_at(current_providers, idx)
-      else
-        current_providers
-      end
-
-    updated_form_data = Map.put(socket.assigns.config_form_data, :providers, updated_providers)
-
-    # Reindex expanded set to keep following rows consistent after deletion
-    old_expanded = Map.get(socket.assigns, :config_expanded_providers, MapSet.new())
-    new_expanded =
-      old_expanded
-      |> Enum.reduce(MapSet.new(), fn i, acc ->
-        cond do
-          i == idx -> acc
-          i > idx -> MapSet.put(acc, i - 1)
-          true -> MapSet.put(acc, i)
-        end
-      end)
-
-    {:noreply, socket |> assign(:config_form_data, updated_form_data) |> assign(:config_expanded_providers, new_expanded)}
-  end
-
-  @impl true
-  def handle_event("config_form_change", %{"chain" => chain_params}, socket) do
-    current = Map.get(socket.assigns, :config_form_data, %{})
-
-    chain_id =
-      case Integer.parse(Map.get(chain_params, "chain_id", "")) do
-        {v, _} -> v
-        _ -> nil
-      end
-
-    block_time =
-      case Integer.parse(Map.get(chain_params, "block_time", "")) do
-        {v, _} -> v
-        _ -> 12000
-      end
-
-    providers_params = Map.get(chain_params, "providers", %{})
-
-    providers_list =
-      providers_params
-      |> Enum.sort_by(fn {k, _} ->
-        case Integer.parse(k) do
-          {v, _} -> v
-          _ -> 0
-        end
-      end)
-      |> Enum.with_index()
-      |> Enum.map(fn {{_k, attrs}, i} ->
-        existing = Enum.at(Map.get(current, :providers, []), i) || %{}
-        %{
-          id: Map.get(existing, :id) || Map.get(existing, "id") || "provider_#{i + 1}",
-          name: Map.get(attrs, "name", existing[:name] || ""),
-          url: Map.get(attrs, "url", existing[:url] || ""),
-          ws_url: Map.get(attrs, "ws_url", existing[:ws_url]),
-          priority: Map.get(existing, :priority) || i + 1,
-          type: Map.get(existing, :type) || "public",
-          api_key_required: Map.get(existing, :api_key_required) || false,
-          region: Map.get(existing, :region)
-        }
-      end)
-
-    form_data = %{
-      name: Map.get(chain_params, "name", current[:name] || ""),
-      chain_id: chain_id,
-      block_time: block_time,
-      providers: providers_list
-    }
-
-    {:noreply, assign(socket, :config_form_data, form_data)}
-  end
-
-  @impl true
-  def handle_event("toggle_provider_row", %{"index" => index}, socket) do
-    idx = case Integer.parse(index || "") do
-      {v, _} -> v
-      _ -> -1
-    end
-
-    expanded = Map.get(socket.assigns, :config_expanded_providers, MapSet.new())
-
-    new_expanded =
-      if idx >= 0 do
-        if MapSet.member?(expanded, idx), do: MapSet.delete(expanded, idx), else: MapSet.put(expanded, idx)
-      else
-        expanded
-      end
-
-    {:noreply, assign(socket, :config_expanded_providers, new_expanded)}
-  end
 
   # Helper functions
 
@@ -1946,109 +1484,5 @@ defmodule LivechainWeb.Dashboard do
   end
 
 
-  @impl true
-  def handle_event("toggle_quick_add", _params, socket) do
-    {:noreply, socket |> update(:quick_add_open, &(!&1))}
-  end
-
-  @impl true
-  def handle_event("quick_add_change", %{"qa" => qa}, socket) do
-    chain_id = case Integer.parse(Map.get(qa, "chain_id", "")) do
-      {v, _} -> v
-      _ -> nil
-    end
-
-    data = %{
-      name: Map.get(qa, "name", ""),
-      chain_id: chain_id,
-      url: Map.get(qa, "url", ""),
-      ws_url: Map.get(qa, "ws_url", "")
-    }
-
-    {:noreply, assign(socket, :quick_add_data, data)}
-  end
-
-  @impl true
-  def handle_event("quick_add_submit", %{"qa" => qa}, socket) do
-    name = Map.get(qa, "name", "")
-    chain_id = case Integer.parse(Map.get(qa, "chain_id", "")) do
-      {v, _} -> v
-      _ -> nil
-    end
-    url = Map.get(qa, "url", "")
-    ws_url = Map.get(qa, "ws_url")
-
-    # If a chain is selected, attach; otherwise, create or fetch by name
-    target_chain = socket.assigns.config_selected_chain || String.downcase(name) |> String.replace(~r/[^a-z0-9]/, "_")
-
-    chain_exists = case Livechain.Config.ChainConfigManager.get_chain(target_chain) do
-      {:ok, _} -> true
-      _ -> false
-    end
-
-    provider = %{
-      "id" => "provider_#{System.unique_integer([:positive])}",
-      "name" => name <> " RPC",
-      "url" => url,
-      "ws_url" => ws_url,
-      "priority" => 1,
-      "type" => "public",
-      "api_key_required" => false
-    }
-
-    result = if chain_exists do
-      # Append provider to existing chain
-      case Livechain.Config.ChainConfigManager.get_chain(target_chain) do
-        {:ok, cfg} ->
-          providers = (cfg.providers || []) ++ [provider |> Map.new(fn {k, v} -> {String.to_atom(k), v} end)]
-          attrs = %{
-            "name" => cfg.name || name,
-            "chain_id" => cfg.chain_id || chain_id,
-            "block_time" => cfg.block_time || 12000,
-            "providers" => Enum.map(providers, fn p -> %{
-              "id" => p[:id] || provider["id"],
-              "name" => p[:name] || provider["name"],
-              "url" => p[:url] || provider["url"],
-              "ws_url" => p[:ws_url] || provider["ws_url"],
-              "priority" => p[:priority] || 1,
-              "type" => p[:type] || "public",
-              "api_key_required" => p[:api_key_required] || false,
-              "region" => p[:region]
-            } end)
-          }
-          Livechain.Config.ChainConfigManager.update_chain(target_chain, attrs)
-
-        err -> err
-      end
-    else
-      # Create new chain with a single provider
-      attrs = %{
-        "name" => name,
-        "chain_id" => chain_id,
-        "block_time" => 12000,
-        "providers" => [provider]
-      }
-      Livechain.Config.ChainConfigManager.create_chain(target_chain, attrs)
-    end
-
-    case result do
-      {:ok, _cfg} ->
-        # refresh chains and switch to the target
-        {:ok, chains} = Livechain.Config.ChainConfigManager.list_chains()
-        chain_list = Enum.map(chains, fn {nm, cfg} -> %{name: nm, chain_id: cfg.chain_id, providers: cfg.providers} end)
-
-        socket = socket
-        |> assign(:available_chains, chain_list)
-        |> assign(:config_selected_chain, target_chain)
-        |> assign(:quick_add_open, false)
-        |> assign(:quick_add_data, %{})
-        |> push_event("show_success", %{message: "Provider added"})
-
-        {:noreply, socket}
-
-      {:error, reason} ->
-        {:noreply, assign(socket, :config_validation_errors, ["Failed to add provider: #{inspect(reason)}"])}
-    end
-  end
 
  end
