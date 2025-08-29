@@ -67,7 +67,8 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:details_collapsed, true)
       |> assign(:events_collapsed, true)
       |> assign(:latency_leaders, %{})
-      |> assign(:chain_config_open, false)
+      |> assign(:chain_config_open, true)
+      |> assign(:chain_config_collapsed, true)
       |> fetch_connections()
 
     {:ok, initial_state}
@@ -368,11 +369,6 @@ defmodule LivechainWeb.Dashboard do
 
 
   # Handle messages from ChainConfigurationWindow component
-  @impl true
-  def handle_info({:chain_config_closed}, socket) do
-    {:noreply, assign(socket, :chain_config_open, false)}
-  end
-
   @impl true  
   def handle_info({:chain_config_saved, message}, socket) do
     socket = 
@@ -486,6 +482,7 @@ defmodule LivechainWeb.Dashboard do
       assigns
       |> assign_new(:latency_leaders, fn -> %{} end)
       |> assign_new(:chain_config_open, fn -> false end)
+      |> assign_new(:chain_config_collapsed, fn -> true end)
 
     ~H"""
     <div class="relative flex h-full w-full">
@@ -530,6 +527,7 @@ defmodule LivechainWeb.Dashboard do
         latest_blocks={@latest_blocks}
         events={@events}
         chain_config_open={@chain_config_open}
+        chain_config_collapsed={@chain_config_collapsed}
       />
 
       <!-- Chain Configuration Window -->
@@ -537,6 +535,10 @@ defmodule LivechainWeb.Dashboard do
         module={ChainConfigurationWindow}
         id="chain-configuration-window"
         is_open={@chain_config_open}
+        is_collapsed={@chain_config_collapsed}
+        selected_chain={@selected_chain}
+        selected_provider={@selected_provider}
+        connections={@connections}
       />
 
     </div>
@@ -1020,20 +1022,22 @@ defmodule LivechainWeb.Dashboard do
             <% end %>
 
             <!-- Chain Configuration Button -->
-            <button
-              phx-click="toggle_chain_config"
-              class={[
-                "bg-gray-800/60 rounded px-2 py-1 text-xs transition-colors hover:bg-gray-700/60",
-                if(@chain_config_open, do: "text-purple-300 bg-purple-900/30", else: "text-gray-200")
-              ]}
-              title="Configure Chains"
-            >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                      d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-              </svg>
-            </button>
+            <%= if @selected_chain || @selected_provider do %>
+              <button
+                phx-click="toggle_chain_config"
+                class={[
+                  "bg-gray-800/60 rounded px-2 py-1 text-xs transition-colors hover:bg-gray-700/60",
+                  if(not @chain_config_collapsed, do: "text-purple-300 bg-purple-900/30", else: "text-gray-200")
+                ]}
+                title="Configure Providers"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+              </button>
+            <% end %>
 
             <button
               phx-click="toggle_details_panel"
@@ -1260,8 +1264,18 @@ defmodule LivechainWeb.Dashboard do
   # Chain Configuration Event Handlers
   @impl true
   def handle_event("toggle_chain_config", _params, socket) do
-    new_open = not socket.assigns.chain_config_open
-    socket = assign(socket, :chain_config_open, new_open)
+    # Toggle the collapsed state and notify the component
+    new_collapsed = not socket.assigns.chain_config_collapsed
+    socket = assign(socket, :chain_config_collapsed, new_collapsed)
+    
+    # Send message to update the component
+    send_update(ChainConfigurationWindow, 
+      id: "chain-configuration-window", 
+      is_collapsed: new_collapsed,
+      selected_chain: socket.assigns.selected_chain,
+      selected_provider: socket.assigns.selected_provider
+    )
+    
     {:noreply, socket}
   end
 
