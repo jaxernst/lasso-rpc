@@ -66,15 +66,6 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:available_chains, Helpers.get_available_chains())
       |> assign(:details_collapsed, true)
       |> assign(:events_collapsed, true)
-      |> assign(:sim_stats, %{
-        http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0},
-        ws: %{open: 0}
-      })
-      |> assign(:sim_collapsed, true)
-      |> assign(:selected_chains, [])
-      |> assign(:selected_strategy, "fastest")
-      |> assign(:request_rate, 5)
-      |> assign(:recent_calls, [])
       |> assign(:latency_leaders, %{})
       |> assign(:chain_config_open, false)
       |> fetch_connections()
@@ -375,16 +366,6 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Handle simulator component events
-  @impl true
-  def handle_info({:simulator_event, "toggle_collapsed", _params}, socket) do
-    {:noreply, update(socket, :sim_collapsed, &(!&1))}
-  end
-
-  @impl true
-  def handle_info({:simulator_event, event, params}, socket) do
-    handle_event(event, params, socket)
-  end
 
   # Handle messages from ChainConfigurationWindow component
   @impl true
@@ -481,13 +462,7 @@ defmodule LivechainWeb.Dashboard do
               hover_provider={@hover_provider}
               details_collapsed={@details_collapsed}
               events_collapsed={@events_collapsed}
-              sim_stats={@sim_stats}
               available_chains={@available_chains}
-              sim_collapsed={@sim_collapsed}
-              selected_chains={@selected_chains}
-              selected_strategy={@selected_strategy}
-              request_rate={@request_rate}
-              recent_calls={@recent_calls}
               chain_config_open={@chain_config_open}
             />
           <% "benchmarks" -> %>
@@ -538,13 +513,7 @@ defmodule LivechainWeb.Dashboard do
       <.live_component
         module={Components.SimulatorControls}
         id="simulator-controls"
-        sim_stats={@sim_stats}
         available_chains={@available_chains}
-        sim_collapsed={@sim_collapsed}
-        selected_chains={@selected_chains}
-        selected_strategy={@selected_strategy}
-        request_rate={@request_rate}
-        recent_calls={@recent_calls}
       />
 
       <NetworkStatusLegend.legend />
@@ -1272,158 +1241,20 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, fetch_connections(socket)}
   end
 
+
+  # Simulator Event Forwarding (from JavaScript hooks to SimulatorControls component)
   @impl true
-  def handle_event("sim_http_start", _params, socket) do
-    # Push event to JS hook with defaults; future: make dynamic via form controls
-    opts = %{
-      chains: Enum.map(socket.assigns.available_chains, & &1.name),
-      methods: ["eth_blockNumber", "eth_getBalance"],
-      rps: 5,
-      concurrency: 4,
-      durationMs: 30_000
-    }
-
-    socket = push_event(socket, "sim_start_http", opts)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_http_stop", _params, socket) do
-    socket = push_event(socket, "sim_stop_http", %{})
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_ws_start", _params, socket) do
-    opts = %{
-      chains: Enum.map(socket.assigns.available_chains, & &1.name),
-      connections: 2,
-      topics: ["newHeads"],
-      durationMs: 30_000
-    }
-
-    socket = push_event(socket, "sim_start_ws", opts)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_ws_stop", _params, socket) do
-    socket = push_event(socket, "sim_stop_ws", %{})
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_stats", %{"http" => http, "ws" => ws}, socket) do
-    {:noreply, assign(socket, :sim_stats, %{http: http, ws: ws})}
-  end
-
-  # New enhanced simulator controls
-  @impl true
-  def handle_event("toggle_sim_panel", _params, socket) do
-    {:noreply, update(socket, :sim_collapsed, &(!&1))}
-  end
-
-  @impl true
-  def handle_event("toggle_chain_selection", %{"chain" => chain}, socket) do
-    selected = socket.assigns.selected_chains
-    new_selected = if chain in selected do
-      Enum.reject(selected, &(&1 == chain))
-    else
-      [chain | selected]
-    end
-    {:noreply, assign(socket, :selected_chains, new_selected)}
-  end
-
-  @impl true
-  def handle_event("select_all_chains", _params, socket) do
-    all_chains = Enum.map(socket.assigns.available_chains, & &1.name)
-    {:noreply, assign(socket, :selected_chains, all_chains)}
-  end
-
-  @impl true
-  def handle_event("select_strategy", %{"strategy" => strategy}, socket) do
-    {:noreply, assign(socket, :selected_strategy, strategy)}
-  end
-
-  @impl true
-  def handle_event("update_rate", %{"rate" => rate}, socket) do
-    rate_int = String.to_integer(rate)
-    {:noreply, assign(socket, :request_rate, rate_int)}
-  end
-
-  @impl true
-  def handle_event("increase_rate", _params, socket) do
-    current_rate = socket.assigns.request_rate
-    new_rate = min(current_rate + 1, 50)
-    {:noreply, assign(socket, :request_rate, new_rate)}
-  end
-
-  @impl true
-  def handle_event("decrease_rate", _params, socket) do
-    current_rate = socket.assigns.request_rate
-    new_rate = max(current_rate - 1, 1)
-    {:noreply, assign(socket, :request_rate, new_rate)}
-  end
-
-  @impl true
-  def handle_event("sim_http_start_advanced", _params, socket) do
-    selected_chains = socket.assigns.selected_chains
-    chains = if length(selected_chains) > 0 do
-      selected_chains
-    else
-      Enum.map(socket.assigns.available_chains, & &1.name)
-    end
-
-    opts = %{
-      chains: chains,
-      methods: ["eth_blockNumber", "eth_getBalance", "eth_getTransactionCount"],
-      rps: socket.assigns.request_rate,
-      concurrency: 4,
-      strategy: socket.assigns.selected_strategy,
-      durationMs: 60_000
-    }
-
-    socket = push_event(socket, "sim_start_http_advanced", opts)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_ws_start_advanced", _params, socket) do
-    selected_chains = socket.assigns.selected_chains
-    chains = if length(selected_chains) > 0 do
-      selected_chains
-    else
-      Enum.map(socket.assigns.available_chains, & &1.name)
-    end
-
-    opts = %{
-      chains: chains,
-      connections: 3,
-      topics: ["newHeads", "logs"],
-      durationMs: 60_000
-    }
-
-    socket = push_event(socket, "sim_start_ws_advanced", opts)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_stop_all", _params, socket) do
-    socket = socket
-    |> push_event("sim_stop_http", %{})
-    |> push_event("sim_stop_ws", %{})
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("clear_sim_logs", _params, socket) do
-    socket = assign(socket, :recent_calls, [])
+  def handle_event("sim_stats", %{"http" => _http, "ws" => _ws} = stats, socket) do
+    # Forward to SimulatorControls component
+    send_update(Components.SimulatorControls, id: "simulator-controls", sim_stats: stats)
     {:noreply, socket}
   end
 
   @impl true
   def handle_event("update_recent_calls", %{"calls" => calls}, socket) do
-    {:noreply, assign(socket, :recent_calls, calls)}
+    # Forward to SimulatorControls component  
+    send_update(Components.SimulatorControls, id: "simulator-controls", recent_calls: calls)
+    {:noreply, socket}
   end
 
   # Chain Configuration Event Handlers
@@ -1435,40 +1266,6 @@ defmodule LivechainWeb.Dashboard do
   end
 
 
-  @impl true
-  def handle_event("sim_start_load_test", _params, socket) do
-    # Start both HTTP and WebSocket load tests with sensible defaults
-    selected_chains = socket.assigns.selected_chains
-    chains = if length(selected_chains) > 0 do
-      selected_chains
-    else
-      Enum.map(socket.assigns.available_chains, & &1.name)
-    end
-
-    # Start HTTP load test
-    http_opts = %{
-      chains: chains,
-      methods: ["eth_blockNumber", "eth_getBalance"],
-      rps: socket.assigns.request_rate,
-      concurrency: 4,
-      strategy: socket.assigns.selected_strategy,
-      durationMs: 60_000
-    }
-
-    # Start WebSocket connections
-    ws_opts = %{
-      chains: chains,
-      connections: 2,
-      topics: ["newHeads"],
-      durationMs: 60_000
-    }
-
-    socket = socket
-    |> push_event("sim_start_http_advanced", http_opts)
-    |> push_event("sim_start_ws_advanced", ws_opts)
-
-    {:noreply, socket}
-  end
 
 
   # Helper functions
