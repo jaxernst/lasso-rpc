@@ -5,7 +5,7 @@ defmodule LivechainWeb.Dashboard do
   alias LivechainWeb.NetworkTopology
   alias LivechainWeb.Dashboard.{Helpers, MetricsHelpers, StatusHelpers, EndpointHelpers}
   alias LivechainWeb.Dashboard.Components
-  alias LivechainWeb.Components.{DashboardHeader, NetworkStatusLegend}
+  alias LivechainWeb.Components.{DashboardHeader, NetworkStatusLegend, DashboardComponents}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -674,7 +674,7 @@ defmodule LivechainWeb.Dashboard do
       />
 
       <!-- Floating Chain Configuration Window (top-left) -->
-      <.floating_chain_config_window
+      <DashboardComponents.floating_chain_config_window
         chain_config_open={@chain_config_open}
         chain_config_collapsed={@chain_config_collapsed}
         config_selected_chain={@config_selected_chain}
