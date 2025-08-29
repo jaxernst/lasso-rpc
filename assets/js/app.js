@@ -169,7 +169,7 @@ const SimulatorControl = {
         // Also push recent activity
         this.pushEvent("update_recent_calls", { calls: this.recentCalls.slice(-8) });
       }
-    }, 1000);
+    }, 200);
   },
 
   trackActivity(activity) {
