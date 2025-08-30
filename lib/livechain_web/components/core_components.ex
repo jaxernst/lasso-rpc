@@ -362,8 +362,6 @@ defmodule LivechainWeb.CoreComponents do
   end
 
   @doc """
-  Renders a modern tab switcher component with dark theme and purple accents.
-
   ## Examples
 
       <.tab_switcher
@@ -388,7 +386,7 @@ defmodule LivechainWeb.CoreComponents do
         <button
           phx-click="switch_tab"
           phx-value-tab={tab.id}
-          class={["relative flex items-center space-x-2 overflow-hidden rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200", if(@active_tab == tab.id,
+          class={["relative flex items-center gap-2 overflow-hidden rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200", if(@active_tab == tab.id,
     do: "shadow-purple-500/25 bg-gradient-to-r from-purple-600 to-purple-500 text-white shadow-lg",
     else: "text-gray-300 hover:bg-gray-800/50 hover:text-white")]}
         >
