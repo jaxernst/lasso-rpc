@@ -96,7 +96,6 @@ const TerminalFeed = {
 
 const SimulatorControl = {
   mounted() {
-    console.log("SimulatorControl hook mounted");
     this.httpTimer = null;
     this.wsHandles = [];
     this.recentCalls = [];
@@ -110,7 +109,7 @@ const SimulatorControl = {
 
       // Make chains available to the simulator module
       LassoSim.setAvailableChains(this.availableChains);
-      
+
       // Set callback for activity tracking
       LassoSim.setActivityCallback((activity) => {
         this.trackActivity(activity);
@@ -120,9 +119,25 @@ const SimulatorControl = {
       this.availableChains = [];
     }
 
-    // Enhanced event handlers
+    // Modern run-based event handlers
+    this.handleEvent("start_simulator_run", (config) => {
+      console.log("Starting simulator run with config:", config);
+      this.startSimulatorRun(config);
+    });
+
+    this.handleEvent("stop_all_runs", () => {
+      console.log("Stopping all simulator runs");
+      LassoSim.stopAllRuns();
+    });
+
+    this.handleEvent("stop_run", ({ run_id }) => {
+      console.log("Stopping simulator run:", run_id);
+      LassoSim.stopRun(run_id);
+    });
+
+    // Legacy handlers for backward compatibility
     this.handleEvent("sim_start_http", (opts) => {
-      console.log("sim_start_http received with opts:", opts);
+      console.log("sim_start_http (legacy) received with opts:", opts);
       LassoSim.startHttpLoad(opts);
     });
 
@@ -131,7 +146,7 @@ const SimulatorControl = {
     });
 
     this.handleEvent("sim_start_ws", (opts) => {
-      console.log("sim_start_ws received with opts:", opts);
+      console.log("sim_start_ws (legacy) received with opts:", opts);
       LassoSim.startWsLoad(opts);
     });
 
@@ -139,37 +154,55 @@ const SimulatorControl = {
       LassoSim.stopWsLoad();
     });
 
-    // New enhanced handlers
     this.handleEvent("sim_start_http_advanced", (opts) => {
-      console.log("sim_start_http_advanced received with opts:", opts);
+      console.log("sim_start_http_advanced (legacy) received with opts:", opts);
       LassoSim.startHttpLoad(opts);
     });
 
     this.handleEvent("sim_start_ws_advanced", (opts) => {
-      console.log("sim_start_ws_advanced received with opts:", opts);
+      console.log("sim_start_ws_advanced (legacy) received with opts:", opts);
       LassoSim.startWsLoad(opts);
-    });
-
-    this.handleEvent("sim_stop_all", () => {
-      LassoSim.stopHttpLoad();
-      LassoSim.stopWsLoad();
     });
 
     this.handleEvent("clear_sim_logs", () => {
       this.recentCalls = [];
-      this.pushEvent("update_recent_calls", { calls: [] });
+      // No need to push event, component handles clearing internally
     });
 
-    // Stats and activity update interval
+    // Stats and activity update interval - only send updates when simulator is running
+    // Completion events are now handled immediately via trackActivity
     this.statsInterval = setInterval(() => {
-      if (this.el.isConnected && this.pushEvent && window.liveSocket && window.liveSocket.isConnected()) {
+      if (
+        this.el.isConnected &&
+        window.liveSocket &&
+        window.liveSocket.isConnected() &&
+        LassoSim.isRunning()  // Only update when simulator is actually running
+      ) {
         const stats = LassoSim.activeStats();
-        this.pushEvent("sim_stats", stats);
+        const activeRuns = LassoSim.getActiveRuns();
         
-        // Also push recent activity
-        this.pushEvent("update_recent_calls", { calls: this.recentCalls.slice(-8) });
+        // Send updates directly to the SimulatorControls component
+        this.pushEvent("sim_stats", stats);
+        this.pushEvent("active_runs_update", { runs: activeRuns });
+        this.pushEvent("update_recent_calls", {
+          calls: this.recentCalls.slice(-8),
+        });
       }
-    }, 200);
+    }, 500); // Reduce frequency from 200ms to 500ms
+  },
+
+  startSimulatorRun(config) {
+    try {
+      // Use the new run-based API
+      const run = LassoSim.startRun(config);
+      console.log("Started simulator run:", run.id, config);
+      
+      // Immediately update active runs
+      const activeRuns = LassoSim.getActiveRuns();
+      this.pushEvent("active_runs_update", { runs: activeRuns });
+    } catch (error) {
+      console.error("Failed to start simulator run:", error);
+    }
   },
 
   trackActivity(activity) {
@@ -177,22 +210,41 @@ const SimulatorControl = {
     if (!activity.timestamp) {
       activity.timestamp = Date.now();
     }
-    
+
     // Add to recent calls buffer
     this.recentCalls.push(activity);
-    
+
     // Keep buffer size manageable
     if (this.recentCalls.length > this.maxRecentCalls) {
       this.recentCalls.shift();
     }
 
-    // Immediate update for real-time feel (throttled by the interval above)
-    if (this.el.isConnected && this.pushEvent) {
-      // Optional: push immediately for very recent activity
-      if (window.liveSocket && window.liveSocket.isConnected()) {
+    // Handle run completion notifications immediately
+    if (activity.type === 'run' && activity.status === 'stopped') {
+      // Send immediate notification when run completes
+      if (this.el.isConnected && this.pushEvent && window.liveSocket && window.liveSocket.isConnected()) {
+        console.log("Run completed, sending immediate update:", activity);
+        
+        // Update active runs and stats immediately
+        const activeRuns = LassoSim.getActiveRuns();
+        const stats = LassoSim.activeStats();
+        
+        this.pushEvent("active_runs_update", { runs: activeRuns });
+        this.pushEvent("sim_stats", stats);
+        
+        // Update recent calls to show completion
+        this.pushEvent("update_recent_calls", {
+          calls: this.recentCalls.slice(-8),
+        });
+      }
+    } else {
+      // Normal immediate update for real-time feel (throttled by the interval above)
+      if (this.el.isConnected && this.pushEvent && window.liveSocket && window.liveSocket.isConnected() && LassoSim.isRunning()) {
         clearTimeout(this.immediateUpdate);
         this.immediateUpdate = setTimeout(() => {
-          this.pushEvent("update_recent_calls", { calls: this.recentCalls.slice(-8) });
+          this.pushEvent("update_recent_calls", {
+            calls: this.recentCalls.slice(-8),
+          });
         }, 100);
       }
     }
@@ -490,127 +542,144 @@ const DraggableNetworkViewport = {
 // Endpoint Selector Hook for Chain Details
 const EndpointSelector = {
   mounted() {
-    this.selectedStrategy = 'fastest'; // default strategy
+    this.selectedStrategy = "fastest"; // default strategy
     this.selectedProvider = null; // no provider selected by default
-    this.mode = 'strategy'; // 'strategy' or 'provider'
-    
+    this.mode = "strategy"; // 'strategy' or 'provider'
+
     // Set up click handlers
-    this.el.addEventListener('click', (e) => {
+    this.el.addEventListener("click", (e) => {
       // Find the actual button element (might be a child element clicked)
-      const button = e.target.closest('button');
+      const button = e.target.closest("button");
       if (!button) return;
-      
+
       if (button.dataset.strategy && !button.disabled) {
         this.selectStrategy(button.dataset.strategy);
       } else if (button.dataset.provider && !button.disabled) {
         this.selectProvider(button.dataset.provider);
       }
     });
-    
+
     // Set up copy to clipboard handlers
-    this.el.addEventListener('click', (e) => {
+    this.el.addEventListener("click", (e) => {
       if (e.target.dataset.copyText) {
         navigator.clipboard.writeText(e.target.dataset.copyText);
       }
     });
-    
+
     this.updateUI();
   },
-  
+
   selectStrategy(strategy) {
     this.selectedStrategy = strategy;
     this.selectedProvider = null; // clear provider selection
-    this.mode = 'strategy';
+    this.mode = "strategy";
     this.updateUI();
   },
-  
+
   selectProvider(provider) {
     this.selectedProvider = provider;
     this.selectedStrategy = null; // clear strategy selection
-    this.mode = 'provider';
+    this.mode = "provider";
     this.updateUI();
   },
-  
+
   updateUI() {
     // Update strategy pills with specific colors
-    this.el.querySelectorAll('[data-strategy]').forEach(btn => {
+    this.el.querySelectorAll("[data-strategy]").forEach((btn) => {
       const strategy = btn.dataset.strategy;
-      const isActive = strategy === this.selectedStrategy && this.mode === 'strategy';
-      
+      const isActive =
+        strategy === this.selectedStrategy && this.mode === "strategy";
+
       // Remove all possible color classes
-      btn.className = btn.className.replace(/border-(sky|emerald|purple|orange)-[0-9]+|bg-(sky|emerald|purple|orange)-[0-9]+\/20|text-(sky|emerald|purple|orange)-[0-9]+|border-gray-[0-9]+|text-gray-[0-9]+|hover:border-(sky|emerald|purple|orange)-[0-9]+|hover:text-(sky|emerald|purple|orange)-[0-9]+/g, '');
-      
+      btn.className = btn.className.replace(
+        /border-(sky|emerald|purple|orange)-[0-9]+|bg-(sky|emerald|purple|orange)-[0-9]+\/20|text-(sky|emerald|purple|orange)-[0-9]+|border-gray-[0-9]+|text-gray-[0-9]+|hover:border-(sky|emerald|purple|orange)-[0-9]+|hover:text-(sky|emerald|purple|orange)-[0-9]+/g,
+        ""
+      );
+
       if (isActive) {
         // Set active color based on strategy
-        switch(strategy) {
-          case 'fastest':
-            btn.className += ' border-sky-500 bg-sky-500/20 text-sky-300';
+        switch (strategy) {
+          case "fastest":
+            btn.className += " border-sky-500 bg-sky-500/20 text-sky-300";
             break;
-          case 'leaderboard':
-            btn.className += ' border-emerald-500 bg-emerald-500/20 text-emerald-300';
+          case "leaderboard":
+            btn.className +=
+              " border-emerald-500 bg-emerald-500/20 text-emerald-300";
             break;
-          case 'priority':
-            btn.className += ' border-purple-500 bg-purple-500/20 text-purple-300';
+          case "priority":
+            btn.className +=
+              " border-purple-500 bg-purple-500/20 text-purple-300";
             break;
-          case 'round-robin':
-            btn.className += ' border-orange-500 bg-orange-500/20 text-orange-300';
+          case "round-robin":
+            btn.className +=
+              " border-orange-500 bg-orange-500/20 text-orange-300";
             break;
         }
       } else {
         // Inactive state with hover colors
-        switch(strategy) {
-          case 'fastest':
-            btn.className += ' border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300';
+        switch (strategy) {
+          case "fastest":
+            btn.className +=
+              " border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300";
             break;
-          case 'leaderboard':
-            btn.className += ' border-gray-600 text-gray-300 hover:border-emerald-400 hover:text-emerald-300';
+          case "leaderboard":
+            btn.className +=
+              " border-gray-600 text-gray-300 hover:border-emerald-400 hover:text-emerald-300";
             break;
-          case 'priority':
-            btn.className += ' border-gray-600 text-gray-300 hover:border-purple-400 hover:text-purple-300';
+          case "priority":
+            btn.className +=
+              " border-gray-600 text-gray-300 hover:border-purple-400 hover:text-purple-300";
             break;
-          case 'round-robin':
-            btn.className += ' border-gray-600 text-gray-300 hover:border-orange-400 hover:text-orange-300';
+          case "round-robin":
+            btn.className +=
+              " border-gray-600 text-gray-300 hover:border-orange-400 hover:text-orange-300";
             break;
         }
       }
     });
-    
+
     // Update provider buttons
-    this.el.querySelectorAll('[data-provider]').forEach(btn => {
-      const isActive = btn.dataset.provider === this.selectedProvider && this.mode === 'provider';
-      btn.className = btn.className.replace(/border-indigo-[0-9]+|bg-indigo-[0-9]+\/20|text-indigo-[0-9]+|border-gray-[0-9]+|text-gray-[0-9]+|hover:border-indigo-[0-9]+|hover:text-indigo-[0-9]+/g, '');
-      
+    this.el.querySelectorAll("[data-provider]").forEach((btn) => {
+      const isActive =
+        btn.dataset.provider === this.selectedProvider &&
+        this.mode === "provider";
+      btn.className = btn.className.replace(
+        /border-indigo-[0-9]+|bg-indigo-[0-9]+\/20|text-indigo-[0-9]+|border-gray-[0-9]+|text-gray-[0-9]+|hover:border-indigo-[0-9]+|hover:text-indigo-[0-9]+/g,
+        ""
+      );
+
       if (isActive) {
-        btn.className += ' border-indigo-500 bg-indigo-500/20 text-indigo-300';
+        btn.className += " border-indigo-500 bg-indigo-500/20 text-indigo-300";
       } else {
-        btn.className += ' border-gray-600 text-gray-300 hover:border-indigo-400 hover:text-indigo-300';
+        btn.className +=
+          " border-gray-600 text-gray-300 hover:border-indigo-400 hover:text-indigo-300";
       }
     });
-    
+
     // Update URLs and description
     this.updateEndpointUrls();
     this.updateModeDescription();
   },
-  
+
   updateEndpointUrls() {
-    const httpUrl = this.el.querySelector('#endpoint-url');
-    const wsUrl = this.el.querySelector('#ws-endpoint-url');
-    const httpCopyBtns = this.el.querySelectorAll('[data-copy-text]');
-    
+    const httpUrl = this.el.querySelector("#endpoint-url");
+    const wsUrl = this.el.querySelector("#ws-endpoint-url");
+    const httpCopyBtns = this.el.querySelectorAll("[data-copy-text]");
+
     if (httpUrl && wsUrl) {
       const baseUrl = window.location.origin;
       const wsHost = window.location.host;
-      
+
       // Get chain from the URL or default
-      const pathParts = window.location.pathname.split('/');
-      const chain = pathParts[pathParts.length - 1] || 'ethereum';
-      
+      const pathParts = window.location.pathname.split("/");
+      const chain = pathParts[pathParts.length - 1] || "ethereum";
+
       let newHttpUrl, newWsUrl;
-      
-      if (this.mode === 'strategy' && this.selectedStrategy) {
+
+      if (this.mode === "strategy" && this.selectedStrategy) {
         newHttpUrl = `${baseUrl}/rpc/${this.selectedStrategy}/${chain}`;
         newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
-      } else if (this.mode === 'provider' && this.selectedProvider) {
+      } else if (this.mode === "provider" && this.selectedProvider) {
         // For provider overrides, use the provider ID directly
         newHttpUrl = `${baseUrl}/rpc/provider/${this.selectedProvider}/${chain}`;
         newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
@@ -619,39 +688,46 @@ const EndpointSelector = {
         newHttpUrl = `${baseUrl}/rpc/fastest/${chain}`;
         newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
       }
-      
+
       httpUrl.textContent = newHttpUrl;
       wsUrl.textContent = newWsUrl;
-      
+
       // Update copy button data attributes
-      httpCopyBtns.forEach(btn => {
-        if (btn.dataset.copyText && btn.dataset.copyText.includes('http')) {
+      httpCopyBtns.forEach((btn) => {
+        if (btn.dataset.copyText && btn.dataset.copyText.includes("http")) {
           btn.dataset.copyText = newHttpUrl;
-        } else if (btn.dataset.copyText && btn.dataset.copyText.includes('ws')) {
+        } else if (
+          btn.dataset.copyText &&
+          btn.dataset.copyText.includes("ws")
+        ) {
           btn.dataset.copyText = newWsUrl;
         }
       });
     }
   },
-  
+
   updateModeDescription() {
-    const descriptionEl = this.el.querySelector('#mode-description');
+    const descriptionEl = this.el.querySelector("#mode-description");
     if (!descriptionEl) return;
-    
-    if (this.mode === 'strategy' && this.selectedStrategy) {
+
+    if (this.mode === "strategy" && this.selectedStrategy) {
       const descriptions = {
-        'fastest': 'Using fastest provider based on latency benchmarks',
-        'leaderboard': 'Using provider with highest success rate and performance score',
-        'priority': 'Using providers in configured priority order with failover',
-        'round-robin': 'Distributing requests evenly across all available providers'
+        fastest: "Using fastest provider based on latency benchmarks",
+        leaderboard:
+          "Using provider with highest success rate and performance score",
+        priority: "Using providers in configured priority order with failover",
+        "round-robin":
+          "Distributing requests evenly across all available providers",
       };
-      descriptionEl.textContent = descriptions[this.selectedStrategy] || 'Strategy-based routing';
-    } else if (this.mode === 'provider' && this.selectedProvider) {
+      descriptionEl.textContent =
+        descriptions[this.selectedStrategy] || "Strategy-based routing";
+    } else if (this.mode === "provider" && this.selectedProvider) {
       descriptionEl.textContent = `Direct connection to ${this.selectedProvider} provider (bypasses routing)`;
     } else {
-      descriptionEl.textContent = 'Using fastest provider based on latency benchmarks';
+      descriptionEl.textContent =
+        "Using fastest provider based on latency benchmarks";
     }
-  }
+  },
 };
 
 // Provider Request Animator Hook (placeholder)
@@ -659,7 +735,7 @@ const ProviderRequestAnimator = {
   mounted() {
     // This hook can be used to animate provider requests in the future
     // For now it's just a placeholder to prevent the console error
-  }
+  },
 };
 
 let csrfToken = document
