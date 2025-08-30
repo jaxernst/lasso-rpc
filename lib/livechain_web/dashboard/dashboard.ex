@@ -785,9 +785,12 @@ defmodule LivechainWeb.Dashboard do
   end
 
   def provider_details_panel(assigns) do
+    # Find the provider connection - this should update when switching providers
+    provider_connection = Enum.find(assigns.connections, &(&1.id == assigns.provider))
+    
     assigns =
       Map.merge(assigns, %{
-        provider_connection: Enum.find(assigns.connections, &(&1.id == assigns.provider)),
+        provider_connection: provider_connection,
         provider_events: Enum.filter(assigns.routing_events, &(&1.provider_id == assigns.provider)),
         provider_pool_events: Enum.filter(assigns.provider_events, &(&1.provider_id == assigns.provider)),
         provider_unified_events: Enum.filter(Map.get(assigns, :events, []), fn e -> e[:provider_id] == assigns.provider end),
@@ -796,20 +799,14 @@ defmodule LivechainWeb.Dashboard do
       })
 
     ~H"""
-    <div class="flex h-full flex-col">
+    <div class="flex h-full flex-col" data-provider-id={@provider}>
       <!-- Header -->
       <div class="border-gray-700/50 border-b p-4">
         <div class="flex items-center justify-between">
           <div class="flex items-center space-x-3">
             <div class={[
               "h-3 w-3 rounded-full",
-              if(@provider_connection && @provider_connection.status == :connected,
-                do: "bg-emerald-400",
-                else: if(@provider_connection && @provider_connection.status == :disconnected,
-                  do: "bg-red-400",
-                  else: "bg-yellow-400"
-                )
-              )
+              StatusHelpers.provider_status_indicator_class(@provider_connection || %{})
             ]}>
             </div>
             <div>
@@ -817,7 +814,7 @@ defmodule LivechainWeb.Dashboard do
                 {if @provider_connection, do: @provider_connection.name, else: @provider}
               </h3>
               <div class="text-xs text-gray-400">
-                {if @provider_connection, do: String.capitalize(@provider_connection.chain || "unknown"), else: "Provider"} • {StatusHelpers.provider_status_label(@provider_connection)}
+                {if @provider_connection, do: String.capitalize(@provider_connection.chain || "unknown"), else: "Provider"} • {StatusHelpers.provider_status_label(@provider_connection || %{})}
               </div>
             </div>
           </div>
@@ -864,36 +861,132 @@ defmodule LivechainWeb.Dashboard do
           </div>
         </div>
         <%= if @provider_connection do %>
-          <div class="flex flex-wrap items-center justify-between gap-3 text-sm pt-2 border-t border-gray-700/30">
-            <div class="flex items-center space-x-3">
-              <span class="text-gray-400">Status:</span>
-              <span class={StatusHelpers.provider_status_class_text(@provider_connection)}>
-                {StatusHelpers.provider_status_label(@provider_connection)}
-              </span>
-            </div>
-
-            <div class="flex items-center space-x-3">
-              <span class="text-gray-400">Pick share (5m):</span>
-              <span class="text-white">{(@performance_metrics.pick_share_5m || 0.0) |> Helpers.to_float() |> Float.round(1)}%</span>
-            </div>
-
-            <div class="flex items-center space-x-3">
-              <span class="text-gray-400">Subs:</span>
-              <span class="text-white">{@provider_connection.subscriptions}</span>
-            </div>
-
-            <%= if @provider_connection.reconnect_attempts > 0 do %>
-              <div class="flex items-center space-x-3">
-                <span class="text-gray-400">Issues:</span>
-                <span class={["font-medium", if(@provider_connection.reconnect_attempts >= 10, do: "text-red-400", else: if(@provider_connection.reconnect_attempts >= 5, do: "text-yellow-400", else: "text-gray-300"))]}>
-                  <%= if @provider_connection.reconnect_attempts >= 5 do %>
-                    High
-                  <% else %>
-                    {@provider_connection.reconnect_attempts}
-                  <% end %>
+          <div class="space-y-3 pt-3 border-t border-gray-700/30">
+            <!-- Enhanced Status Information -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div class="flex flex-col">
+                <span class="text-gray-400 text-xs">Status</span>
+                <span class={StatusHelpers.provider_status_class_text(@provider_connection)}>
+                  {StatusHelpers.provider_status_label(@provider_connection)}
                 </span>
               </div>
+              
+              <div class="flex flex-col">
+                <span class="text-gray-400 text-xs">Health</span>
+                <span class={StatusHelpers.provider_status_class_text(%{health_status: Map.get(@provider_connection, :health_status, :unknown)})}>
+                  {Map.get(@provider_connection, :health_status, :unknown) |> to_string() |> String.upcase()}
+                </span>
+              </div>
+
+              <div class="flex flex-col">
+                <span class="text-gray-400 text-xs">Circuit</span>
+                <span class={case Map.get(@provider_connection, :circuit_state, :closed) do
+                  :open -> "text-red-400"
+                  :half_open -> "text-yellow-400"
+                  :closed -> "text-emerald-400"
+                end}>
+                  {Map.get(@provider_connection, :circuit_state, :closed) |> to_string() |> String.upcase()}
+                </span>
+              </div>
+
+              <div class="flex flex-col">
+                <span class="text-gray-400 text-xs">WebSocket</span>
+                <span class={if Map.get(@provider_connection, :ws_connected, false), do: "text-emerald-400", else: "text-red-400"}>
+                  {if Map.get(@provider_connection, :ws_connected, false), do: "CONNECTED", else: "DISCONNECTED"}
+                </span>
+              </div>
+            </div>
+
+            <!-- Failure Information -->
+            <%= if Map.get(@provider_connection, :consecutive_failures, 0) > 0 or Map.get(@provider_connection, :last_error) do %>
+              <div class="bg-red-900/20 border border-red-600/30 rounded-lg p-3">
+                <div class="flex items-center gap-2 mb-2">
+                  <div class="w-2 h-2 rounded-full bg-red-400"></div>
+                  <span class="text-red-300 text-sm font-medium">Issues Detected</span>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <span class="text-gray-400">Consecutive failures:</span>
+                    <span class="text-red-300 ml-2">{Map.get(@provider_connection, :consecutive_failures, 0)}</span>
+                  </div>
+                  <div>
+                    <span class="text-gray-400">Reconnect attempts:</span>
+                    <span class="text-yellow-300 ml-2">{@provider_connection.reconnect_attempts}</span>
+                  </div>
+                </div>
+                
+                <%= if @provider_connection && Map.get(@provider_connection, :last_error) do %>
+                  <% last_error = Map.get(@provider_connection, :last_error) %>
+                  <div class="mt-2 pt-2 border-t border-red-600/20">
+                    <span class="text-gray-400 text-xs">Last error:</span>
+                    <div class="text-red-300 text-xs mt-1 font-mono bg-gray-900/50 rounded px-2 py-1 break-words">
+                      {inspect(last_error, pretty: true, limit: :infinity)}
+                    </div>
+                    <!-- Debug: Show provider ID to confirm panel is updating -->
+                    <div class="text-gray-500 text-[10px] mt-1">
+                      Provider: {@provider} | Updated: {DateTime.utc_now() |> DateTime.to_time() |> to_string()}
+                    </div>
+                  </div>
+                <% end %>
+              </div>
             <% end %>
+
+            <!-- Rate Limiting Information -->
+            <%= if Map.get(@provider_connection, :is_in_cooldown, false) do %>
+              <div class="bg-purple-900/20 border border-purple-600/30 rounded-lg p-3">
+                <div class="flex items-center gap-2 mb-2">
+                  <div class="w-2 h-2 rounded-full bg-purple-400"></div>
+                  <span class="text-purple-300 text-sm font-medium">Rate Limited</span>
+                </div>
+                
+                <div class="text-xs">
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <span class="text-gray-400">Cooldown count:</span>
+                      <span class="text-purple-300 ml-2">{Map.get(@provider_connection, :cooldown_count, 0)}</span>
+                    </div>
+                    <%= if Map.get(@provider_connection, :cooldown_until) do %>
+                      <% time_remaining = max(0, Map.get(@provider_connection, :cooldown_until, 0) - System.monotonic_time(:millisecond)) %>
+                      <div>
+                        <span class="text-gray-400">Time remaining:</span>
+                        <span class="text-purple-300 ml-2">{div(time_remaining, 1000)}s</span>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+            <% end %>
+
+            <!-- Performance Information -->
+            <div class="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <span class="text-gray-400">Consecutive successes:</span>
+                <span class="text-emerald-300 ml-2">{Map.get(@provider_connection, :consecutive_successes, 0)}</span>
+              </div>
+              <div>
+                <span class="text-gray-400">Pick share (5m):</span>
+                <span class="text-white ml-2">{(@performance_metrics.pick_share_5m || 0.0) |> Helpers.to_float() |> Float.round(1)}%</span>
+              </div>
+              <div>
+                <span class="text-gray-400">Subscriptions:</span>
+                <span class="text-white ml-2">{@provider_connection.subscriptions}</span>
+              </div>
+              <%= if Map.get(@provider_connection, :pending_messages, 0) > 0 do %>
+                <div>
+                  <span class="text-gray-400">Pending messages:</span>
+                  <span class="text-yellow-300 ml-2">{Map.get(@provider_connection, :pending_messages, 0)}</span>
+                </div>
+              <% end %>
+            </div>
+
+            <!-- Status Explanation -->
+            <div class="bg-gray-800/30 rounded-lg p-2">
+              <div class="text-xs text-gray-300">
+                <span class="text-gray-400">Status explanation:</span>
+                <div class="mt-1">{StatusHelpers.status_explanation(@provider_connection)}</div>
+              </div>
+            </div>
           </div>
         <% end %>
       </div>
@@ -1050,45 +1143,80 @@ defmodule LivechainWeb.Dashboard do
 
         <%= if @details_collapsed do %>
           <div class="space-y-2 px-3 py-2">
-            <div class="grid grid-cols-2 gap-3">
-              <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
-                <div class="text-[10px] uppercase tracking-wide text-gray-400">Providers</div>
-                <div class="text-sm font-semibold text-white">
-                  <span class="text-emerald-300">{@connected_providers}</span>
-                  <span class="text-gray-500">/{@total_connections}</span>
+            <%= if @selected_provider || @selected_chain do %>
+              <!-- Chain/Provider specific collapsed view -->
+              <div class="grid grid-cols-2 gap-3">
+                <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
+                  <div class="text-[10px] uppercase tracking-wide text-gray-400">Providers</div>
+                  <div class="text-sm font-semibold text-white">
+                    <span class="text-emerald-300">{@connected_providers}</span>
+                    <span class="text-gray-500">/{@total_connections}</span>
+                  </div>
+                </div>
+                <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
+                  <div class="text-[10px] uppercase tracking-wide text-gray-400">Chains</div>
+                  <div class="text-sm font-semibold text-purple-300">{@total_chains}</div>
                 </div>
               </div>
-              <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
-                <div class="text-[10px] uppercase tracking-wide text-gray-400">Chains</div>
-                <div class="text-sm font-semibold text-purple-300">{@total_chains}</div>
-              </div>
-            </div>
-            <div class="grid grid-cols-3 gap-2">
-              <div class="bg-gray-800/40 rounded-md px-2 py-1">
-                <div class="text-[10px] text-gray-400">RPC/s</div>
-                <div class="text-xs font-medium text-sky-300">
-                  {MetricsHelpers.rpc_calls_per_second(@routing_events)}
+              <div class="grid grid-cols-3 gap-2">
+                <div class="bg-gray-800/40 rounded-md px-2 py-1">
+                  <div class="text-[10px] text-gray-400">RPC/s</div>
+                  <div class="text-xs font-medium text-sky-300">
+                    {MetricsHelpers.rpc_calls_per_second(@routing_events)}
+                  </div>
+                </div>
+                <div class="bg-gray-800/40 rounded-md px-2 py-1">
+                  <div class="text-[10px] text-gray-400">Errors</div>
+                  <div class="text-xs font-medium text-red-300">
+                    {MetricsHelpers.error_rate_percent(@routing_events)}%
+                  </div>
+                </div>
+                <div class="bg-gray-800/40 rounded-md px-2 py-1">
+                  <div class="text-[10px] text-gray-400">Failovers</div>
+                  <div class="text-xs font-medium text-yellow-300">
+                    {MetricsHelpers.failovers_last_minute(@routing_events)}
+                  </div>
                 </div>
               </div>
-              <div class="bg-gray-800/40 rounded-md px-2 py-1">
-                <div class="text-[10px] text-gray-400">Errors</div>
-                <div class="text-xs font-medium text-red-300">
-                  {MetricsHelpers.error_rate_percent(@routing_events)}%
+            <% else %>
+              <!-- System overview collapsed view with status breakdown -->
+              <% status_breakdown = StatusHelpers.status_breakdown(@connections) %>
+              <% critical_count = Enum.count(@connections, &StatusHelpers.is_critical_status?/1) %>
+              <% needs_attention_count = Enum.count(@connections, &StatusHelpers.needs_attention?/1) %>
+              
+              <div class="grid grid-cols-2 gap-3">
+                <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
+                  <div class="text-[10px] uppercase tracking-wide text-gray-400">Providers</div>
+                  <div class="text-sm font-semibold text-white">{@total_connections}</div>
+                </div>
+                <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
+                  <div class="text-[10px] uppercase tracking-wide text-gray-400">Issues</div>
+                  <div class={["text-sm font-semibold", if(critical_count > 0, do: "text-red-400", else: (if needs_attention_count > 0, do: "text-yellow-400", else: "text-emerald-400"))]}>
+                    {if critical_count > 0, do: critical_count, else: (if needs_attention_count > 0, do: needs_attention_count, else: 0)}
+                  </div>
                 </div>
               </div>
-              <div class="bg-gray-800/40 rounded-md px-2 py-1">
-                <div class="text-[10px] text-gray-400">Failovers</div>
-                <div class="text-xs font-medium text-yellow-300">
-                  {MetricsHelpers.failovers_last_minute(@routing_events)}
-                </div>
+              
+              <!-- Status breakdown compact -->
+              <div class="grid grid-cols-2 gap-1 text-xs">
+                <%= for {status, count} <- status_breakdown |> Enum.take(4) do %>
+                  <div class="flex items-center justify-between bg-gray-800/20 rounded px-2 py-1">
+                    <div class="flex items-center gap-1">
+                      <div class={["w-1.5 h-1.5 rounded-full", StatusHelpers.provider_status_indicator_class(%{status: status, health_status: status, circuit_state: :closed})]}></div>
+                      <span class="text-gray-300 text-[10px]">{String.slice(StatusHelpers.provider_status_label(%{status: status, health_status: status, circuit_state: :closed}), 0, 8)}</span>
+                    </div>
+                    <span class="text-gray-400 font-mono text-[10px]">{count}</span>
+                  </div>
+                <% end %>
               </div>
-            </div>
+            <% end %>
           </div>
         <% else %>
           <!-- Body (only when expanded) -->
           <div class="max-h-[70vh] overflow-auto">
             <%= if @selected_provider do %>
               <.provider_details_panel
+                id={"provider-details-#{@selected_provider}"}
                 provider={@selected_provider}
                 connections={@connections}
                 routing_events={@routing_events}
@@ -1127,15 +1255,27 @@ defmodule LivechainWeb.Dashboard do
       |> assign_new(:routing_events, fn -> [] end)
       |> assign_new(:provider_events, fn -> [] end)
 
+    # Use enhanced status breakdown
+    status_breakdown = StatusHelpers.status_breakdown(assigns.connections)
     total = length(assigns.connections)
-    connected = Enum.count(assigns.connections, &(&1.status == :connected))
     chains = assigns.connections |> Enum.map(& &1.chain) |> Enum.uniq() |> length()
+    
+    # Count critical issues
+    critical_count = Enum.count(assigns.connections, &StatusHelpers.is_critical_status?/1)
+    needs_attention_count = Enum.count(assigns.connections, &StatusHelpers.needs_attention?/1)
 
     assigns =
-      assign(assigns, :__meta_totals, %{total: total, connected: connected, chains: chains})
+      assign(assigns, :__meta_totals, %{
+        total: total, 
+        chains: chains,
+        status_breakdown: status_breakdown,
+        critical_count: critical_count,
+        needs_attention_count: needs_attention_count
+      })
 
     ~H"""
     <div class="space-y-4 p-4">
+      <!-- Overall Stats -->
       <div class="grid grid-cols-3 gap-3">
         <div class="bg-gray-800/50 rounded-lg p-3">
           <div class="text-[11px] text-gray-400">Chains</div>
@@ -1146,13 +1286,33 @@ defmodule LivechainWeb.Dashboard do
           <div class="text-lg font-bold text-white">{@__meta_totals.total}</div>
         </div>
         <div class="bg-gray-800/50 rounded-lg p-3">
-          <div class="text-[11px] text-gray-400">Connected</div>
-          <div class="text-lg font-bold text-emerald-400">{@__meta_totals.connected}</div>
+          <div class="text-[11px] text-gray-400">Issues</div>
+          <div class={["text-lg font-bold", if(@__meta_totals.critical_count > 0, do: "text-red-400", else: (if @__meta_totals.needs_attention_count > 0, do: "text-yellow-400", else: "text-emerald-400"))]}>
+            {if @__meta_totals.critical_count > 0, do: @__meta_totals.critical_count, else: (if @__meta_totals.needs_attention_count > 0, do: @__meta_totals.needs_attention_count, else: 0)}
+          </div>
         </div>
       </div>
+
+      <!-- Status Breakdown -->
+      <div class="bg-gray-800/30 rounded-lg p-3">
+        <div class="text-[11px] text-gray-400 mb-2 font-semibold">Provider Status</div>
+        <div class="space-y-1">
+          <%= for {status, count} <- @__meta_totals.status_breakdown |> Enum.sort_by(fn {status, _} -> StatusHelpers.status_priority(%{status: status, health_status: status, circuit_state: :closed}) end) do %>
+            <div class="flex items-center justify-between text-xs">
+              <div class="flex items-center gap-2">
+                <div class={["w-2 h-2 rounded-full", StatusHelpers.provider_status_indicator_class(%{status: status, health_status: status, circuit_state: :closed})]}></div>
+                <span class="text-gray-300">{StatusHelpers.provider_status_label(%{status: status, health_status: status, circuit_state: :closed})}</span>
+              </div>
+              <span class="text-gray-400 font-mono">{count}</span>
+            </div>
+          <% end %>
+        </div>
+      </div>
+
+      <!-- Recent Activity -->
       <div class="text-xs text-gray-400">
         <div class="mb-1 font-semibold text-gray-300">Recent activity</div>
-        <div class="max-h-40 space-y-1 overflow-auto">
+        <div class="max-h-32 space-y-1 overflow-auto">
           <%= for e <- Enum.take(@routing_events, 5) do %>
             <div>
               <span class="text-gray-500">[{e.ts}]</span>

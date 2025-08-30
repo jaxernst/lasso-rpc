@@ -122,6 +122,14 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @doc """
+  Gets comprehensive provider details including circuit breaker states.
+  """
+  @spec get_comprehensive_status(chain_name) :: {:ok, map()} | {:error, term()}
+  def get_comprehensive_status(chain_name) do
+    GenServer.call(via_name(chain_name), :get_comprehensive_status)
+  end
+
+  @doc """
   Triggers manual failover from a specific provider.
   """
   @spec trigger_failover(chain_name, provider_id) :: :ok
@@ -249,6 +257,43 @@ defmodule Livechain.RPC.ProviderPool do
             last_health_check: provider.last_health_check
           }
         end),
+      stats: state.stats
+    }
+
+    {:reply, {:ok, status}, state}
+  end
+
+  @impl true
+  def handle_call(:get_comprehensive_status, _from, state) do
+    current_time = System.monotonic_time(:millisecond)
+    
+    providers =
+      Enum.map(state.providers, fn {id, provider} ->
+        circuit_state = Map.get(state.circuit_states, id, :closed)
+        is_in_cooldown = provider.cooldown_until && provider.cooldown_until > current_time
+        
+        %{
+          id: id,
+          name: provider.config.name,
+          status: provider.status,
+          health_status: provider.status,  # Preserve original status
+          circuit_state: circuit_state,
+          consecutive_failures: provider.consecutive_failures,
+          consecutive_successes: provider.consecutive_successes,
+          last_health_check: provider.last_health_check,
+          last_error: provider.last_error,
+          is_in_cooldown: is_in_cooldown,
+          cooldown_until: provider.cooldown_until,
+          cooldown_count: provider.cooldown_count
+        }
+      end)
+
+    status = %{
+      chain_name: state.chain_name,
+      total_providers: map_size(state.providers),
+      active_providers: length(state.active_providers),
+      providers: providers,
+      circuit_states: state.circuit_states,
       stats: state.stats
     }
 
