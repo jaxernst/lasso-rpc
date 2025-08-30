@@ -10,11 +10,9 @@ defmodule LivechainWeb.Dashboard.EndpointHelpers do
     base_url = LivechainWeb.Endpoint.url()
     chain_id = Helpers.get_chain_id(chain_name)
 
-    # Get available providers for this chain
-    providers = Enum.filter(assigns.connections, &(&1.chain == chain_name))
-
     endpoints = %{
-      # Strategy endpoints
+      chain: chain_name,
+      chain_id: chain_id,
       http_strategies: [
         %{
           name: "Fastest (Latency-Optimized)",
@@ -50,14 +48,14 @@ defmodule LivechainWeb.Dashboard.EndpointHelpers do
   @doc "Get HTTP URL for strategy"
   def get_strategy_http_url(endpoints, strategy) do
     base_url = LivechainWeb.Endpoint.url()
-    chain_id = get_current_chain_id(endpoints)
+    chain_id = extract_chain_id(endpoints)
     "#{base_url}/rpc/#{String.replace(strategy, "_", "-")}/#{chain_id}"
   end
 
   @doc "Get WebSocket URL for strategy"
   def get_strategy_ws_url(endpoints, _strategy) do
     base_url = LivechainWeb.Endpoint.url()
-    chain_id = get_current_chain_id(endpoints)
+    chain_id = extract_chain_id(endpoints)
     ws_url = String.replace(base_url, ~r/^http/, "ws")
     "#{ws_url}/ws/rpc/#{chain_id}"
   end
@@ -65,14 +63,14 @@ defmodule LivechainWeb.Dashboard.EndpointHelpers do
   @doc "Get HTTP URL for specific provider"
   def get_provider_http_url(endpoints, provider) do
     base_url = LivechainWeb.Endpoint.url()
-    chain_id = get_current_chain_id(endpoints)
+    chain_id = extract_chain_id(endpoints)
     "#{base_url}/rpc/#{chain_id}/#{provider.id}"
   end
 
   @doc "Get WebSocket URL for specific provider"
   def get_provider_ws_url(endpoints, provider) do
     base_url = LivechainWeb.Endpoint.url()
-    chain_id = get_current_chain_id(endpoints)
+    chain_id = extract_chain_id(endpoints)
     ws_url = String.replace(base_url, ~r/^http/, "ws")
     "#{ws_url}/ws/rpc/#{chain_id}?provider=#{provider.id}"
   end
@@ -94,11 +92,9 @@ defmodule LivechainWeb.Dashboard.EndpointHelpers do
     base_url = LivechainWeb.Endpoint.url()
     chain_id = Helpers.get_chain_id(chain_name)
 
-    # Get available providers for this chain
-    providers = Enum.filter(assigns.connections, &(&1.chain == chain_name))
-
     %{
-      # Strategy endpoints
+      chain: chain_name,
+      chain_id: chain_id,
       http_strategies: [
         %{
           name: "Fastest (Latency-Optimized)",
@@ -129,16 +125,12 @@ defmodule LivechainWeb.Dashboard.EndpointHelpers do
     }
   end
 
-  # Extract chain_id from the first endpoint URL
-  defp get_current_chain_id(endpoints) do
-    case List.first(endpoints.http_strategies) do
-      %{url: url} ->
-        url
-        |> String.split("/")
-        |> List.last()
+  # Prefer explicit chain_id when present; fallback to parsing first strategy URL
+  defp extract_chain_id(%{chain_id: id}) when is_binary(id) and byte_size(id) > 0, do: id
 
-      _ ->
-        "1"
-    end
+  defp extract_chain_id(%{http_strategies: [%{url: url} | _]}) when is_binary(url) do
+    url |> String.split("/") |> List.last()
   end
+
+  defp extract_chain_id(_), do: "1"
 end

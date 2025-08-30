@@ -93,8 +93,8 @@ defmodule Livechain.RPC.ChainSupervisorTest do
           end
         end)
 
-      # Should have MessageAggregator, ProviderPool, and DynamicSupervisor
-      assert MessageAggregator in child_modules
+      # Should have ProviderPool and DynamicSupervisor
+      # Note: MessageAggregator has been removed in favor of simpler RPC-based benchmarking
       assert ProviderPool in child_modules
       # DynamicSupervisor for connections
       assert DynamicSupervisor in child_modules

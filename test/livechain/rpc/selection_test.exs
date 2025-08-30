@@ -157,11 +157,12 @@ defmodule Livechain.RPC.SelectionTest do
     test "adapts to performance changes over time" do
       # Add benchmark data to make ethereum_ankr appear fastest
       Enum.each(1..10, fn _i ->
-        Livechain.Benchmarking.BenchmarkStore.record_event_race_win(
+        Livechain.Benchmarking.BenchmarkStore.record_rpc_call(
           "ethereum",
           "ethereum_ankr",
-          :newHeads,
-          System.monotonic_time(:millisecond)
+          "eth_blockNumber",
+          50,
+          :success
         )
       end)
 

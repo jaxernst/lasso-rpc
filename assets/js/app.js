@@ -176,11 +176,11 @@ const SimulatorControl = {
         this.el.isConnected &&
         window.liveSocket &&
         window.liveSocket.isConnected() &&
-        LassoSim.isRunning()  // Only update when simulator is actually running
+        LassoSim.isRunning() // Only update when simulator is actually running
       ) {
         const stats = LassoSim.activeStats();
         const activeRuns = LassoSim.getActiveRuns();
-        
+
         // Send updates directly to the SimulatorControls component
         this.pushEvent("sim_stats", stats);
         this.pushEvent("active_runs_update", { runs: activeRuns });
@@ -196,7 +196,7 @@ const SimulatorControl = {
       // Use the new run-based API
       const run = LassoSim.startRun(config);
       console.log("Started simulator run:", run.id, config);
-      
+
       // Immediately update active runs
       const activeRuns = LassoSim.getActiveRuns();
       this.pushEvent("active_runs_update", { runs: activeRuns });
@@ -220,18 +220,23 @@ const SimulatorControl = {
     }
 
     // Handle run completion notifications immediately
-    if (activity.type === 'run' && activity.status === 'stopped') {
+    if (activity.type === "run" && activity.status === "stopped") {
       // Send immediate notification when run completes
-      if (this.el.isConnected && this.pushEvent && window.liveSocket && window.liveSocket.isConnected()) {
+      if (
+        this.el.isConnected &&
+        this.pushEvent &&
+        window.liveSocket &&
+        window.liveSocket.isConnected()
+      ) {
         console.log("Run completed, sending immediate update:", activity);
-        
+
         // Update active runs and stats immediately
         const activeRuns = LassoSim.getActiveRuns();
         const stats = LassoSim.activeStats();
-        
+
         this.pushEvent("active_runs_update", { runs: activeRuns });
         this.pushEvent("sim_stats", stats);
-        
+
         // Update recent calls to show completion
         this.pushEvent("update_recent_calls", {
           calls: this.recentCalls.slice(-8),
@@ -239,7 +244,13 @@ const SimulatorControl = {
       }
     } else {
       // Normal immediate update for real-time feel (throttled by the interval above)
-      if (this.el.isConnected && this.pushEvent && window.liveSocket && window.liveSocket.isConnected() && LassoSim.isRunning()) {
+      if (
+        this.el.isConnected &&
+        this.pushEvent &&
+        window.liveSocket &&
+        window.liveSocket.isConnected() &&
+        LassoSim.isRunning()
+      ) {
         clearTimeout(this.immediateUpdate);
         this.immediateUpdate = setTimeout(() => {
           this.pushEvent("update_recent_calls", {
@@ -546,6 +557,9 @@ const EndpointSelector = {
     this.selectedProvider = null; // no provider selected by default
     this.mode = "strategy"; // 'strategy' or 'provider'
 
+    // Read chain info from server-provided data attributes
+    this.readChainFromDataset();
+
     // Set up click handlers
     this.el.addEventListener("click", (e) => {
       // Find the actual button element (might be a child element clicked)
@@ -567,6 +581,17 @@ const EndpointSelector = {
     });
 
     this.updateUI();
+  },
+
+  updated() {
+    // When LiveView updates the DOM, refresh chain context from data attributes
+    this.readChainFromDataset();
+    this.updateUI();
+  },
+
+  readChainFromDataset() {
+    this.chain = this.el.getAttribute("data-chain") || this.chain || "ethereum";
+    this.chainId = this.el.getAttribute("data-chain-id") || this.chainId || "1";
   },
 
   selectStrategy(strategy) {
@@ -669,10 +694,7 @@ const EndpointSelector = {
     if (httpUrl && wsUrl) {
       const baseUrl = window.location.origin;
       const wsHost = window.location.host;
-
-      // Get chain from the URL or default
-      const pathParts = window.location.pathname.split("/");
-      const chain = pathParts[pathParts.length - 1] || "ethereum";
+      const chain = this.chainId || this.chain || "1";
 
       let newHttpUrl, newWsUrl;
 

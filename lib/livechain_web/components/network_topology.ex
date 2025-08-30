@@ -178,33 +178,6 @@ defmodule LivechainWeb.NetworkTopology do
     """
   end
 
-  def legend(assigns) do
-    ~H"""
-    <!-- Legend -->
-    <div class="bg-purple-900/90 absolute right-6 bottom-6 rounded-lg border border-purple-700 p-4 shadow-xl backdrop-blur-sm">
-      <h3 class="mb-2 text-sm font-semibold text-white">Network Status</h3>
-      <div class="space-y-1 text-xs text-white">
-        <div class="flex items-center space-x-2">
-          <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
-          <span>Connected</span>
-        </div>
-        <div class="flex items-center space-x-2">
-          <div class="h-3 w-3 rounded-full bg-yellow-500"></div>
-          <span>Reconnecting</span>
-        </div>
-        <div class="flex items-center space-x-2">
-          <div class="h-3 w-3 rounded-full bg-red-500"></div>
-          <span>Disconnected</span>
-        </div>
-        <div class="flex items-center space-x-2">
-          <div class="h-3 w-3 rounded-full bg-purple-400"></div>
-          <span>Rate limited</span>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
   # Helper functions for network topology
 
   defp group_connections_by_chain(connections) do
@@ -245,26 +218,108 @@ defmodule LivechainWeb.NetworkTopology do
     %{chains: positioned_chains}
   end
 
-  # Categorize chains into L1 Ethereum, L2s/major chains, and others
+  # Categorize chains into L1 Ethereum, L2s/rollups, and others
   defp categorize_chains(chains) do
     ethereum_l1 = Map.get(chains, "ethereum", [])
 
-    # Major chains that should orbit around Ethereum (L2s and major networks)
-    major_chain_names = ["arbitrum", "optimism", "base", "zksync", "linea"]
+    # Ethereum L2s and rollups that should orbit around Ethereum
+    l2_chain_names = [
+      # Optimistic Rollups
+      # Arbitrum One - optimistic rollup
+      "arbitrum",
+      # Optimism - optimistic rollup
+      "optimism",
+      # Base - optimistic rollup
+      "base",
+      # Arbitrum Nova - optimistic rollup
+      "arbitrum_nova",
+      # Optimism Bedrock - optimistic rollup
+      "optimism_bedrock",
+      # Boba Network - optimistic rollup
+      "boba",
+      # Metis - optimistic rollup
+      "metis",
+      # Loopring - optimistic rollup
+      "loopring",
+      # Zora - optimistic rollup
+      "zora",
+      # Blast - optimistic rollup
+      "blast",
+      # Mode - optimistic rollup
+      "mode",
+      # Fraxtal - optimistic rollup
+      "fraxtal",
+      # opBNB - optimistic rollup
+      "opbnb",
+      # Polygon zkEVM - zk rollup
+      "polygon_zkevm",
 
-    # Smaller/newer chains for outer orbit
-    {major_chains, other_chains} =
+      # Zero-Knowledge Rollups
+      # zkSync Era - zk rollup
+      "zksync",
+      # Linea - zk rollup
+      "linea",
+      # Scroll - zk rollup
+      "scroll",
+      # StarkNet - zk rollup
+      "starknet",
+      # Polygon - zk rollup (Polygon zkEVM)
+      "polygon",
+      # Mantle - zk rollup
+      "mantle",
+      # Taiko - zk rollup
+      "taiko",
+      # Kroma - zk rollup
+      "kroma",
+      # OP Celestia - zk rollup
+      "op_celestia",
+      # Eclipse - zk rollup
+      "eclipse",
+      # Lumio - zk rollup
+      "lumio",
+      # Astria - zk rollup
+      "astria",
+      # Caldera - zk rollup
+      "caldera",
+      # Degen - zk rollup
+      "degen",
+      # Lyra - zk rollup
+      "lyra",
+      # Aevo - zk rollup
+      "aevo",
+      # Hyperliquid - zk rollup
+      "hyperliquid",
+      # Vertex - zk rollup
+      "vertex",
+      # Drift - zk rollup
+      "drift",
+      # Jupiter - zk rollup
+      "jupiter",
+      # Pyth - zk rollup
+      "pyth",
+      # Chainlink - zk rollup
+      "chainlink",
+      # Unichain - zk rollup
+      "unichain",
+      # Manta - zk rollup
+      "manta",
+      # Immutable - zk rollup
+      "immutable"
+    ]
+
+    # Other chains for outer orbit
+    {l2_chains, other_chains} =
       chains
       |> Map.drop(["ethereum"])
-      |> Map.split(major_chain_names)
+      |> Map.split(l2_chain_names)
 
-    {ethereum_l1, major_chains, other_chains}
+    {ethereum_l1, l2_chains, other_chains}
   end
 
   # Build the orbital structure with Ethereum at center
   defp build_orbital_structure(
          ethereum_l1,
-         major_chains,
+         l2_chains,
          other_chains,
          center_x,
          center_y,
@@ -294,16 +349,16 @@ defmodule LivechainWeb.NetworkTopology do
         positioned
       end
 
-    # 2. Position major chains in orbital pattern around Ethereum
+    # 2. Position L2 chains in orbital pattern around Ethereum
     positioned =
-      major_chains
+      l2_chains
       |> Map.to_list()
       |> Enum.with_index()
       |> Enum.reduce(positioned, fn {{chain_name, chain_connections}, idx}, acc ->
-        total_majors = map_size(major_chains)
+        total_l2s = map_size(l2_chains)
 
         # Calculate orbital position with slight randomness
-        base_angle = idx * config.angle_spread / max(1, total_majors)
+        base_angle = idx * config.angle_spread / max(1, total_l2s)
         seed = :erlang.phash2(chain_name, 1000)
         # ±45 degrees
         angle_variance = (seed / 1000 - 0.5) * :math.pi() / 4
@@ -460,7 +515,6 @@ defmodule LivechainWeb.NetworkTopology do
     end
   end
 
-
   # Calculate connection line with pseudo-random length variance
   defp calculate_connection_line_with_variance(
          {chain_x, chain_y},
@@ -500,26 +554,40 @@ defmodule LivechainWeb.NetworkTopology do
   # Enhanced provider line colors based on comprehensive status
   defp provider_line_color(connection_status) when is_atom(connection_status) do
     case connection_status do
-      :connected -> "#10b981"      # Green - healthy
-      :disconnected -> "#ef4444"   # Red - failed
-      :connecting -> "#f59e0b"     # Yellow/Orange - connecting 
-      :rate_limited -> "#8B5CF6"   # Purple - rate limited
-      _ -> "#6b7280"               # Gray - unknown
+      # Green - healthy
+      :connected -> "#10b981"
+      # Red - failed
+      :disconnected -> "#ef4444"
+      # Yellow/Orange - connecting
+      :connecting -> "#f59e0b"
+      # Purple - rate limited
+      :rate_limited -> "#8B5CF6"
+      # Gray - unknown
+      _ -> "#6b7280"
     end
   end
 
   # Enhanced provider line colors using comprehensive connection data
   defp provider_line_color(connection) when is_map(connection) do
     case StatusHelpers.determine_provider_status(connection) do
-      :circuit_open -> "#dc2626"   # Dark red - circuit open
-      :failed -> "#ef4444"         # Red - failed  
-      :unhealthy -> "#f97316"      # Orange - unhealthy
-      :unstable -> "#eab308"       # Yellow - unstable
-      :rate_limited -> "#8b5cf6"   # Purple - rate limited
-      :connecting -> "#f59e0b"     # Amber - connecting
-      :recovering -> "#3b82f6"     # Blue - recovering
-      :connected -> "#10b981"      # Green - healthy
-      :unknown -> "#6b7280"        # Gray - unknown
+      # Dark red - circuit open
+      :circuit_open -> "#dc2626"
+      # Red - failed
+      :failed -> "#ef4444"
+      # Orange - unhealthy
+      :unhealthy -> "#f97316"
+      # Yellow - unstable
+      :unstable -> "#eab308"
+      # Purple - rate limited
+      :rate_limited -> "#8b5cf6"
+      # Amber - connecting
+      :connecting -> "#f59e0b"
+      # Blue - recovering
+      :recovering -> "#3b82f6"
+      # Green - healthy
+      :connected -> "#10b981"
+      # Gray - unknown
+      :unknown -> "#6b7280"
     end
   end
 
@@ -544,11 +612,43 @@ defmodule LivechainWeb.NetworkTopology do
       name_lower =~ ~r/\bbase\b/ -> "base"
       String.contains?(name_lower, "zksync") -> "zksync"
       String.contains?(name_lower, "linea") -> "linea"
+      String.contains?(name_lower, "polygon") -> "polygon"
+      String.contains?(name_lower, "mantle") -> "mantle"
+      String.contains?(name_lower, "scroll") -> "scroll"
+      String.contains?(name_lower, "starknet") -> "starknet"
+      String.contains?(name_lower, "immutable") -> "immutable"
+      String.contains?(name_lower, "metis") -> "metis"
+      String.contains?(name_lower, "boba") -> "boba"
+      String.contains?(name_lower, "loopring") -> "loopring"
+      String.contains?(name_lower, "dydx") -> "dydx"
+      String.contains?(name_lower, "zora") -> "zora"
+      String.contains?(name_lower, "blast") -> "blast"
+      String.contains?(name_lower, "mode") -> "mode"
+      String.contains?(name_lower, "fraxtal") -> "fraxtal"
+      String.contains?(name_lower, "manta") -> "manta"
+      String.contains?(name_lower, "opbnb") -> "opbnb"
+      String.contains?(name_lower, "taiko") -> "taiko"
+      String.contains?(name_lower, "kroma") -> "kroma"
+      String.contains?(name_lower, "op_celestia") -> "op_celestia"
+      String.contains?(name_lower, "eclipse") -> "eclipse"
+      String.contains?(name_lower, "lumio") -> "lumio"
+      String.contains?(name_lower, "astria") -> "astria"
+      String.contains?(name_lower, "caldera") -> "caldera"
+      String.contains?(name_lower, "degen") -> "degen"
+      String.contains?(name_lower, "lyra") -> "lyra"
+      String.contains?(name_lower, "aevo") -> "aevo"
+      String.contains?(name_lower, "hyperliquid") -> "hyperliquid"
+      String.contains?(name_lower, "vertex") -> "vertex"
+      String.contains?(name_lower, "drift") -> "drift"
+      String.contains?(name_lower, "jupiter") -> "jupiter"
+      String.contains?(name_lower, "pyth") -> "pyth"
+      String.contains?(name_lower, "chainlink") -> "chainlink"
+      String.contains?(name_lower, "arbitrum_nova") -> "arbitrum_nova"
+      String.contains?(name_lower, "optimism_bedrock") -> "optimism_bedrock"
       String.contains?(name_lower, "unichain") -> "unichain"
       true -> "unknown"
     end
   end
-
 
   # Enhanced provider status classes using comprehensive status
   defp provider_status_class(connection_status) when is_atom(connection_status) do
@@ -563,15 +663,24 @@ defmodule LivechainWeb.NetworkTopology do
 
   defp provider_status_class(connection) when is_map(connection) do
     case StatusHelpers.determine_provider_status(connection) do
-      :circuit_open -> "bg-red-900/40 border-red-500"      # Dark red - circuit open
-      :failed -> "bg-red-900/30 border-red-600"            # Red - failed
-      :unhealthy -> "bg-orange-900/30 border-orange-600"   # Orange - unhealthy  
-      :unstable -> "bg-yellow-900/30 border-yellow-600"    # Yellow - unstable
-      :rate_limited -> "bg-purple-900/30 border-purple-600" # Purple - rate limited
-      :connecting -> "bg-amber-900/30 border-amber-600"    # Amber - connecting
-      :recovering -> "bg-blue-900/30 border-blue-600"      # Blue - recovering
-      :connected -> "bg-emerald-900/30 border-emerald-600" # Green - healthy
-      :unknown -> "bg-gray-900/30 border-gray-600"         # Gray - unknown
+      # Dark red - circuit open
+      :circuit_open -> "bg-red-900/40 border-red-500"
+      # Red - failed
+      :failed -> "bg-red-900/30 border-red-600"
+      # Orange - unhealthy
+      :unhealthy -> "bg-orange-900/30 border-orange-600"
+      # Yellow - unstable
+      :unstable -> "bg-yellow-900/30 border-yellow-600"
+      # Purple - rate limited
+      :rate_limited -> "bg-purple-900/30 border-purple-600"
+      # Amber - connecting
+      :connecting -> "bg-amber-900/30 border-amber-600"
+      # Blue - recovering
+      :recovering -> "bg-blue-900/30 border-blue-600"
+      # Green - healthy
+      :connected -> "bg-emerald-900/30 border-emerald-600"
+      # Gray - unknown
+      :unknown -> "bg-gray-900/30 border-gray-600"
     end
   end
 
@@ -587,15 +696,24 @@ defmodule LivechainWeb.NetworkTopology do
 
   defp provider_status_dot_class(connection) when is_map(connection) do
     case StatusHelpers.determine_provider_status(connection) do
-      :circuit_open -> "bg-red-500"      # Dark red - circuit open
-      :failed -> "bg-red-400"            # Red - failed
-      :unhealthy -> "bg-orange-400"      # Orange - unhealthy
-      :unstable -> "bg-yellow-400"       # Yellow - unstable
-      :rate_limited -> "bg-purple-400"   # Purple - rate limited
-      :connecting -> "bg-amber-400"      # Amber - connecting
-      :recovering -> "bg-blue-400"       # Blue - recovering
-      :connected -> "bg-emerald-400"     # Green - healthy
-      :unknown -> "bg-gray-400"          # Gray - unknown
+      # Dark red - circuit open
+      :circuit_open -> "bg-red-500"
+      # Red - failed
+      :failed -> "bg-red-400"
+      # Orange - unhealthy
+      :unhealthy -> "bg-orange-400"
+      # Yellow - unstable
+      :unstable -> "bg-yellow-400"
+      # Purple - rate limited
+      :rate_limited -> "bg-purple-400"
+      # Amber - connecting
+      :connecting -> "bg-amber-400"
+      # Blue - recovering
+      :recovering -> "bg-blue-400"
+      # Green - healthy
+      :connected -> "bg-emerald-400"
+      # Gray - unknown
+      :unknown -> "bg-gray-400"
     end
   end
 
@@ -605,17 +723,132 @@ defmodule LivechainWeb.NetworkTopology do
   defp chain_color("base"), do: "#0052FF"
   defp chain_color("zksync"), do: "#4E529A"
   defp chain_color("linea"), do: "#61DFFF"
+  defp chain_color("polygon"), do: "#8247E5"
+  defp chain_color("mantle"), do: "#000000"
+  defp chain_color("scroll"), do: "#FEF201"
+  defp chain_color("starknet"), do: "#00FFC2"
+  defp chain_color("immutable"), do: "#F7931E"
+  defp chain_color("metis"), do: "#00DACC"
+  defp chain_color("boba"), do: "#FF6B6B"
+  defp chain_color("loopring"), do: "#1C42FF"
+  defp chain_color("dydx"), do: "#000000"
+  defp chain_color("zora"), do: "#000000"
+  defp chain_color("blast"), do: "#F7931E"
+  defp chain_color("mode"), do: "#000000"
+  defp chain_color("fraxtal"), do: "#000000"
+  defp chain_color("manta"), do: "#000000"
+  defp chain_color("opbnb"), do: "#F7931E"
+  defp chain_color("taiko"), do: "#000000"
+  defp chain_color("kroma"), do: "#000000"
+  defp chain_color("op_celestia"), do: "#000000"
+  defp chain_color("eclipse"), do: "#000000"
+  defp chain_color("lumio"), do: "#000000"
+  defp chain_color("astria"), do: "#000000"
+  defp chain_color("caldera"), do: "#000000"
+  defp chain_color("degen"), do: "#000000"
+  defp chain_color("lyra"), do: "#000000"
+  defp chain_color("aevo"), do: "#000000"
+  defp chain_color("hyperliquid"), do: "#000000"
+  defp chain_color("vertex"), do: "#000000"
+  defp chain_color("drift"), do: "#000000"
+  defp chain_color("jupiter"), do: "#000000"
+  defp chain_color("pyth"), do: "#000000"
+  defp chain_color("chainlink"), do: "#000000"
+  defp chain_color("arbitrum_nova"), do: "#28A0F0"
+  defp chain_color("optimism_bedrock"), do: "#FF0420"
   defp chain_color("unichain"), do: "#FF007A"
   defp chain_color(_), do: "#6B7280"
-
 
   defp is_fastest_provider?(_connection, _chain_name, _latency_leaders) do
     false
   end
 
-  # Helper to identify major chains that orbit around Ethereum
+  # Helper to identify Ethereum L2s and rollups that orbit around Ethereum
   defp is_l2_chain?(chain_name) do
-    major_chains = ["arbitrum", "optimism", "base", "zksync", "linea"]
-    chain_name in major_chains
+    l2_chains = [
+      # Optimistic Rollups
+      # Arbitrum One - optimistic rollup
+      "arbitrum",
+      # Optimism - optimistic rollup
+      "optimism",
+      # Base - optimistic rollup
+      "base",
+      # Arbitrum Nova - optimistic rollup
+      "arbitrum_nova",
+      # Optimism Bedrock - optimistic rollup
+      "optimism_bedrock",
+      # Boba Network - optimistic rollup
+      "boba",
+      # Metis - optimistic rollup
+      "metis",
+      # Loopring - optimistic rollup
+      "loopring",
+      # Zora - optimistic rollup
+      "zora",
+      # Blast - optimistic rollup
+      "blast",
+      # Mode - optimistic rollup
+      "mode",
+      # Fraxtal - optimistic rollup
+      "fraxtal",
+      # opBNB - optimistic rollup
+      "opbnb",
+      # Polygon zkEVM - zk rollup
+      "polygon_zkevm",
+
+      # Zero-Knowledge Rollups
+      # zkSync Era - zk rollup
+      "zksync",
+      # Linea - zk rollup
+      "linea",
+      # Scroll - zk rollup
+      "scroll",
+      # StarkNet - zk rollup
+      "starknet",
+      # Polygon - zk rollup (Polygon zkEVM)
+      "polygon",
+      # Mantle - zk rollup
+      "mantle",
+      # Taiko - zk rollup
+      "taiko",
+      # Kroma - zk rollup
+      "kroma",
+      # OP Celestia - zk rollup
+      "op_celestia",
+      # Eclipse - zk rollup
+      "eclipse",
+      # Lumio - zk rollup
+      "lumio",
+      # Astria - zk rollup
+      "astria",
+      # Caldera - zk rollup
+      "caldera",
+      # Degen - zk rollup
+      "degen",
+      # Lyra - zk rollup
+      "lyra",
+      # Aevo - zk rollup
+      "aevo",
+      # Hyperliquid - zk rollup
+      "hyperliquid",
+      # Vertex - zk rollup
+      "vertex",
+      # Drift - zk rollup
+      "drift",
+      # Jupiter - zk rollup
+      "jupiter",
+      # Pyth - zk rollup
+      "pyth",
+      # Chainlink - zk rollup
+      "chainlink",
+      # Unichain - zk rollup
+      "unichain",
+      # Manta - zk rollup
+      "manta",
+      # Immutable - zk rollup
+      "immutable"
+    ]
+
+    chain_name in l2_chains
   end
 end

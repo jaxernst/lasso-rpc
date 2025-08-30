@@ -14,6 +14,7 @@ defmodule LivechainWeb.Dashboard.Helpers do
 
   @doc "Format timestamp relative to current time"
   def format_timestamp(nil), do: "now"
+
   def format_timestamp(timestamp) when is_integer(timestamp) do
     now = System.system_time(:millisecond)
     diff = now - timestamp
@@ -25,16 +26,19 @@ defmodule LivechainWeb.Dashboard.Helpers do
       true -> "#{div(diff, 3_600_000)}h ago"
     end
   end
+
   def format_timestamp(_), do: "unknown"
 
   @doc "Format last seen timestamp"
   def format_last_seen(nil), do: "Never"
+
   def format_last_seen(timestamp) when is_integer(timestamp) and timestamp > 0 do
     case DateTime.from_unix(timestamp, :millisecond) do
       {:ok, datetime} -> datetime |> DateTime.to_time() |> to_string()
       {:error, _} -> "Invalid"
     end
   end
+
   def format_last_seen(_), do: "Unknown"
 
   @doc "Calculate percentiles for a list of values"
@@ -53,6 +57,7 @@ defmodule LivechainWeb.Dashboard.Helpers do
 
   @doc "Calculate a specific percentile from sorted values"
   def percentile([], _p), do: 0.0
+
   def percentile(sorted_values, p) do
     n = length(sorted_values)
     r = p * (n - 1)
@@ -88,7 +93,9 @@ defmodule LivechainWeb.Dashboard.Helpers do
           %{chain_id: chain_id} -> to_string(chain_id)
           _ -> chain_name
         end
-      _ -> chain_name
+
+      _ ->
+        chain_name
     end
   end
 
@@ -131,19 +138,23 @@ defmodule LivechainWeb.Dashboard.Helpers do
     }
   end
 
-  @doc "Get sample curl command for testing"
-  def get_sample_curl_command do
-    ~s({"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1})
-  end
-
   @doc "Get strategy description"
   def get_strategy_description(strategy) do
     case strategy do
-      "fastest" -> "Routes to the provider with lowest average latency based on real-time benchmarks"
-      "leaderboard" -> "Uses racing-based performance scores to select the best provider"
-      "priority" -> "Routes by configured provider priority order"
-      "round-robin" -> "Distributes load evenly across all available providers"
-      _ -> "Smart routing based on performance metrics"
+      "fastest" ->
+        "Routes to the provider with lowest average latency based on real-time benchmarks"
+
+      "leaderboard" ->
+        "Uses racing-based performance scores to select the best provider"
+
+      "priority" ->
+        "Routes by configured provider priority order"
+
+      "round-robin" ->
+        "Distributes load evenly across all available providers"
+
+      _ ->
+        "Smart routing based on performance metrics"
     end
   end
 end

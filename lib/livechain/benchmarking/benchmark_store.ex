@@ -1,13 +1,13 @@
 defmodule Livechain.Benchmarking.BenchmarkStore do
   @moduledoc """
-  Manages performance benchmarking data for RPC providers using ETS tables.
+  Manages RPC performance benchmarking data for providers using ETS tables.
 
-  This module provides passive benchmarking by tracking:
-  1. Event racing metrics - which provider delivers events fastest
-  2. RPC call performance - latency and success rates for JSON-RPC calls
+  This module provides performance benchmarking by tracking:
+  - RPC call latency and success rates for different methods
+  - Provider performance history for intelligent routing decisions
 
   Data is stored in per-chain ETS tables with automatic cleanup to manage memory usage.
-  Keeps detailed metrics for 24 hours with hourly snapshots for historical analysis.
+  Keeps detailed metrics for 24 hours with periodic cleanup.
   """
 
   use GenServer
@@ -28,37 +28,22 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
   end
 
   @doc """
-  Records a racing victory for an event.
+  Records an RPC call result for performance tracking.
 
   ## Examples
 
-      iex> BenchmarkStore.record_event_race_win("ethereum", "infura_provider", "newHeads", 1640995200000)
+      iex> BenchmarkStore.record_rpc_call("ethereum", "infura_provider", "eth_getBalance", 120, :success)
       :ok
   """
-  def record_event_race_win(chain_name, provider_id, event_type, timestamp) do
-    GenServer.cast(__MODULE__, {:record_race_win, chain_name, provider_id, event_type, timestamp})
-  end
-
-  @doc """
-  Records a racing loss for an event with the margin by which it lost.
-
-  ## Examples
-
-      iex> BenchmarkStore.record_event_race_loss("ethereum", "alchemy_provider", "newHeads", 1640995200050, 50)
-      :ok
-  """
-  def record_event_race_loss(chain_name, provider_id, event_type, timestamp, margin_ms) do
-    GenServer.cast(
-      __MODULE__,
-      {:record_race_loss, chain_name, provider_id, event_type, timestamp, margin_ms}
-    )
+  def record_rpc_call(chain_name, provider_id, method, duration_ms, result) do
+    GenServer.cast(__MODULE__, {:record_rpc_call, chain_name, provider_id, method, duration_ms, result})
   end
 
 
   @doc """
-  Gets the provider leaderboard for a chain showing racing performance.
+  Gets the provider leaderboard for a chain showing RPC performance.
 
-  Returns a list of providers sorted by performance with metrics.
+  Returns a list of providers sorted by average latency and success rate.
   """
   def get_provider_leaderboard(chain_name) do
     GenServer.call(__MODULE__, {:get_provider_leaderboard, chain_name})

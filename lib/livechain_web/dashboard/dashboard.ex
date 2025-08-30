@@ -6,7 +6,7 @@ defmodule LivechainWeb.Dashboard do
   alias LivechainWeb.Dashboard.{Helpers, MetricsHelpers, StatusHelpers, EndpointHelpers}
   alias LivechainWeb.Dashboard.Components
   alias LivechainWeb.Components.{DashboardHeader, NetworkStatusLegend}
-  alias LivechainWeb.Components.{DashboardComponents, ChainConfigurationWindow}
+  alias LivechainWeb.Components.{DashboardComponents}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -20,17 +20,6 @@ defmodule LivechainWeb.Dashboard do
       Phoenix.PubSub.subscribe(Livechain.PubSub, "circuit:events")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "chain_config_changes")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "chain_config_updates")
-
-      # Subscribe to compact block events per configured chain
-      case Livechain.Config.ChainConfig.load_config() do
-        {:ok, cfg} ->
-          Enum.each(Map.keys(cfg.chains), fn chain ->
-            Phoenix.PubSub.subscribe(Livechain.PubSub, "blocks:new:#{chain}")
-          end)
-
-        _ ->
-          :ok
-      end
 
       # Enable scheduler wall time if supported (for utilization metrics)
       try do
@@ -55,8 +44,6 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
       |> assign(:selected_chain, nil)
       |> assign(:selected_provider, nil)
-      |> assign(:hover_chain, nil)
-      |> assign(:hover_provider, nil)
       |> assign(:routing_events, [])
       |> assign(:provider_events, [])
       |> assign(:client_events, [])
@@ -69,6 +56,10 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:latency_leaders, %{})
       |> assign(:chain_config_open, true)
       |> assign(:chain_config_collapsed, true)
+      |> assign(:selected_chain_metrics, %{})
+      |> assign(:selected_chain_events, [])
+      |> assign(:selected_chain_unified_events, [])
+      |> assign(:selected_chain_endpoints, %{})
       |> fetch_connections()
 
     {:ok, initial_state}
@@ -222,6 +213,13 @@ defmodule LivechainWeb.Dashboard do
       |> push_event("events_batch", %{items: [ev]})
       |> push_event("provider_request", %{provider_id: pid})
 
+    # Update chain-specific metrics if this event is for the currently selected chain
+    socket = if socket.assigns[:selected_chain] == chain do
+      update_selected_chain_metrics(socket)
+    else
+      socket
+    end
+
     # Trigger connection refresh to update provider metrics in floating details window
     # This ensures real-time reactivity for both simulator and regular traffic
     socket = case Process.get(:pending_connection_update) do
@@ -264,6 +262,13 @@ defmodule LivechainWeb.Dashboard do
       socket
       |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
       |> push_event("events_batch", %{items: [uev]})
+
+    # Update chain-specific metrics if this event is for the currently selected chain
+    socket = if socket.assigns[:selected_chain] == chain do
+      update_selected_chain_metrics(socket)
+    else
+      socket
+    end
 
     {:noreply, socket}
   end
@@ -356,6 +361,13 @@ defmodule LivechainWeb.Dashboard do
       |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
       |> push_event("events_batch", %{items: [uev]})
 
+    # Update chain-specific metrics if this event is for the currently selected chain
+    socket = if socket.assigns[:selected_chain] == chain do
+      update_selected_chain_metrics(socket)
+    else
+      socket
+    end
+
     {:noreply, socket}
   end
 
@@ -382,16 +394,6 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, socket}
   end
 
-
-  # Handle messages from ChainConfigurationWindow component
-  @impl true
-  def handle_info({:chain_config_saved, message}, socket) do
-    socket =
-      socket
-      |> fetch_connections()  # Refresh connections to reflect new chains
-      |> push_event("show_notification", %{message: message, type: "info"})
-    {:noreply, socket}
-  end
 
   @impl true
   def handle_info({:chain_config_deleted, message}, socket) do
@@ -469,12 +471,16 @@ defmodule LivechainWeb.Dashboard do
               events={@events}
               selected_chain={@selected_chain}
               selected_provider={@selected_provider}
-              hover_chain={@hover_chain}
-              hover_provider={@hover_provider}
               details_collapsed={@details_collapsed}
               events_collapsed={@events_collapsed}
               available_chains={@available_chains}
               chain_config_open={@chain_config_open}
+              chain_config_collapsed={@chain_config_collapsed}
+              selected_chain_metrics={@selected_chain_metrics}
+              selected_chain_events={@selected_chain_events}
+              selected_chain_unified_events={@selected_chain_unified_events}
+              selected_chain_endpoints={@selected_chain_endpoints}
+              latency_leaders={@latency_leaders}
             />
           <% "benchmarks" -> %>
             <DashboardComponents.benchmarks_tab_content />
@@ -492,13 +498,27 @@ defmodule LivechainWeb.Dashboard do
     """
   end
 
-  def dashboard_tab_content(assigns) do
-    assigns =
-      assigns
-      |> assign_new(:latency_leaders, fn -> %{} end)
-      |> assign_new(:chain_config_open, fn -> false end)
-      |> assign_new(:chain_config_collapsed, fn -> true end)
+  # Dashboard tab content attrs
+  attr :connections, :list
+  attr :routing_events, :list
+  attr :provider_events, :list
+  attr :client_events, :list
+  attr :latest_blocks, :list
+  attr :events, :list
+  attr :selected_chain, :string
+  attr :selected_provider, :string
+  attr :details_collapsed, :boolean
+  attr :events_collapsed, :boolean
+  attr :available_chains, :list
+  attr :chain_config_open, :boolean
+  attr :chain_config_collapsed, :boolean, default: true
+  attr :latency_leaders, :map, default: %{}
+  attr :selected_chain_metrics, :map, default: %{}
+  attr :selected_chain_events, :list, default: []
+  attr :selected_chain_unified_events, :list, default: []
+  attr :selected_chain_endpoints, :map, default: %{}
 
+  def dashboard_tab_content(assigns) do
     ~H"""
     <div class="relative flex h-full w-full">
       <!-- Main Network Topology Area -->
@@ -533,8 +553,6 @@ defmodule LivechainWeb.Dashboard do
       <.floating_details_window
         selected_chain={@selected_chain}
         selected_provider={@selected_provider}
-        hover_chain={@hover_chain}
-        hover_provider={@hover_provider}
         details_collapsed={@details_collapsed}
         connections={@connections}
         routing_events={@routing_events}
@@ -543,17 +561,10 @@ defmodule LivechainWeb.Dashboard do
         events={@events}
         chain_config_open={@chain_config_open}
         chain_config_collapsed={@chain_config_collapsed}
-      />
-
-      <!-- Chain Configuration Window -->
-      <.live_component
-        module={ChainConfigurationWindow}
-        id="chain-configuration-window"
-        is_open={@chain_config_open}
-        is_collapsed={@chain_config_collapsed}
-        selected_chain={@selected_chain}
-        selected_provider={@selected_provider}
-        connections={@connections}
+        selected_chain_metrics={@selected_chain_metrics}
+        selected_chain_events={@selected_chain_events}
+        selected_chain_unified_events={@selected_chain_unified_events}
+        selected_chain_endpoints={@selected_chain_endpoints}
       />
 
     </div>
@@ -562,26 +573,31 @@ defmodule LivechainWeb.Dashboard do
 
 
 
+  attr :chain, :string, required: true
+  attr :connections, :list, required: true
+  attr :routing_events, :list, required: true
+  attr :provider_events, :list, required: true
+  attr :events, :list, required: true
+  attr :selected_chain_metrics, :map, required: true
+  attr :selected_chain_events, :list, required: true
+  attr :selected_chain_unified_events, :list, required: true
+  attr :selected_chain_endpoints, :map, required: true
+
   def chain_details_panel(assigns) do
     chain_connections = Enum.filter(assigns.connections, &(&1.chain == assigns.chain))
 
-    assigns =
-      Map.merge(assigns, %{
-        chain_connections: chain_connections,
-        chain_events: Enum.filter(assigns.routing_events, &(&1.chain == assigns.chain)),
-        chain_provider_events: Enum.filter(assigns.provider_events, &(&1.chain == assigns.chain)),
-        chain_unified_events: Enum.filter(Map.get(assigns, :events, []), fn e -> e[:chain] == assigns.chain end),
-        chain_endpoints: EndpointHelpers.get_chain_endpoints(assigns, assigns.chain),
-        chain_performance: MetricsHelpers.get_chain_performance_metrics(assigns, assigns.chain),
-        sample_curl: Helpers.get_sample_curl_command(),
-        selected_strategy_tab: "fastest",
-        selected_provider_tab: List.first(chain_connections),
-        active_endpoint_tab: "strategy",
-        last_decision: Helpers.get_last_decision(assigns.routing_events, assigns.chain)
-      })
+    assigns = assigns
+    |> assign(:chain_connections, chain_connections)
+    |> assign(:chain_events, assigns.selected_chain_events)
+    |> assign(:chain_provider_events, Enum.filter(assigns.provider_events, &(&1.chain == assigns.chain)))
+    |> assign(:chain_unified_events, assigns.selected_chain_unified_events)
+    |> assign(:chain_endpoints, assigns.selected_chain_endpoints)
+    |> assign(:chain_performance, assigns.selected_chain_metrics)
+    |> assign(:last_decision, Helpers.get_last_decision(assigns.selected_chain_events, assigns.chain))
+
 
     ~H"""
-    <div class="flex h-full flex-col">
+    <div class="flex h-full flex-col" id={"chain-details-" <> @chain}>
       <!-- Header -->
       <div class="border-gray-700/50 border-b p-4">
         <div class="flex items-center justify-between">
@@ -684,7 +700,7 @@ defmodule LivechainWeb.Dashboard do
       </div>
 
       <!-- Endpoint Configuration -->
-      <div id="endpoint-config" class="border-gray-700/50 border-b p-4" phx-hook="TabSwitcher">
+      <div id={"endpoint-config-#{@chain}"} class="border-gray-700/50 border-b p-4" phx-hook="TabSwitcher" data-chain={@chain} data-chain-id={Helpers.get_chain_id(@chain)}>
         <h4 class="mb-3 text-sm font-semibold text-gray-300">RPC Endpoints</h4>
 
         <div class="mb-4">
@@ -1075,15 +1091,24 @@ defmodule LivechainWeb.Dashboard do
   end
 
   # Floating details window wrapper (pinned top-right)
+  attr :selected_chain, :string
+  attr :selected_provider, :string
+  attr :details_collapsed, :boolean
+  attr :connections, :list
+  attr :routing_events, :list
+  attr :provider_events, :list
+  attr :latest_blocks, :list
+  attr :events, :list
+  attr :chain_config_open, :boolean
+  attr :chain_config_collapsed, :boolean
+  attr :selected_chain_metrics, :map
+  attr :selected_chain_events, :list
+  attr :selected_chain_unified_events, :list
+  attr :selected_chain_endpoints, :map
+
   def floating_details_window(assigns) do
     assigns =
       assigns
-      |> assign_new(:details_collapsed, fn -> true end)
-      |> assign_new(:hover_chain, fn -> nil end)
-      |> assign_new(:hover_provider, fn -> nil end)
-      |> assign_new(:events, fn -> [] end)
-      |> assign_new(:chain_config_open, fn -> false end)
-      |> assign_new(:vm_metrics, fn -> %{} end)
       |> assign(:total_connections, length(assigns.connections))
       |> assign(:connected_providers, Enum.count(assigns.connections, &(&1.status == :connected)))
       |> assign(
@@ -1101,8 +1126,11 @@ defmodule LivechainWeb.Dashboard do
     do: "bg-emerald-400",
     else: "bg-yellow-400")]}>
             </div>
+
             <div class="truncate text-xs text-gray-300">
               <%= cond do %>
+                <% @details_collapsed -> %>
+                  System Overview
                 <% @selected_provider -> %>
                   {
                     case Enum.find(assigns.connections, &(&1.id == @selected_provider)) do
@@ -1112,30 +1140,20 @@ defmodule LivechainWeb.Dashboard do
                   }
                 <% @selected_chain -> %>
                   {@selected_chain |> String.capitalize()}
-                <% @hover_provider -> %>
-                  Preview: {@hover_provider}
-                <% @hover_chain -> %>
-                  Preview: {@hover_chain}
                 <% true -> %>
                   System Overview
               <% end %>
             </div>
           </div>
+
           <div class="flex items-center gap-2">
-            <%= if @details_collapsed do %>
-              <div class="text-[10px] flex items-center space-x-3 text-gray-400">
-                <span class="text-sky-400">{MetricsHelpers.rpc_calls_per_second(assigns.routing_events)} RPS</span>
-                <span>•</span>
-                <span class={["font-medium", if(MetricsHelpers.error_rate_percent(assigns.routing_events) > 5, do: "text-red-400", else: if(MetricsHelpers.error_rate_percent(assigns.routing_events) > 1, do: "text-yellow-400", else: "text-emerald-400"))]}>                {MetricsHelpers.error_rate_percent(assigns.routing_events)}% err</span>
-              </div>
-            <% end %>
 
            <%= if @selected_chain || @selected_provider do %>
             <button
               phx-click="toggle_details_panel"
               class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-colors hover:bg-gray-700/60"
             >
-              {if @details_collapsed, do: "↖", else: "↗"}
+              {if @details_collapsed, do: "↙", else: "↗"}
             </button>
             <% end %>
           </div>
@@ -1143,62 +1161,34 @@ defmodule LivechainWeb.Dashboard do
 
         <%= if @details_collapsed do %>
           <div class="space-y-2 px-3 py-2">
-            <%= if @selected_provider || @selected_chain do %>
               <!-- Chain/Provider specific collapsed view -->
-              <div class="grid grid-cols-2 gap-3">
-                <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
-                  <div class="text-[10px] uppercase tracking-wide text-gray-400">Providers</div>
+              <div class="grid grid-cols-4 gap-3 bg-gray-800/40 rounded-md pl-3">
+                <div class="py-1.5">
+                  <div class="text-[10px] tracking-wide text-gray-400">Providers</div>
                   <div class="text-sm font-semibold text-white">
-                    <span class="text-emerald-300">{@connected_providers}</span>
-                    <span class="text-gray-500">/{@total_connections}</span>
+                    <span class="text-emerald-300">{@total_connections}</span>
                   </div>
                 </div>
-                <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
+                <div class=" py-1.5">
                   <div class="text-[10px] uppercase tracking-wide text-gray-400">Chains</div>
                   <div class="text-sm font-semibold text-purple-300">{@total_chains}</div>
                 </div>
-              </div>
-              <div class="grid grid-cols-3 gap-2">
-                <div class="bg-gray-800/40 rounded-md px-2 py-1">
+                <div class=" py-1.5">
                   <div class="text-[10px] text-gray-400">RPC/s</div>
                   <div class="text-xs font-medium text-sky-300">
                     {MetricsHelpers.rpc_calls_per_second(@routing_events)}
                   </div>
                 </div>
-                <div class="bg-gray-800/40 rounded-md px-2 py-1">
-                  <div class="text-[10px] text-gray-400">Errors</div>
-                  <div class="text-xs font-medium text-red-300">
-                    {MetricsHelpers.error_rate_percent(@routing_events)}%
-                  </div>
-                </div>
-                <div class="bg-gray-800/40 rounded-md px-2 py-1">
+                <div class=" py-1.5">
                   <div class="text-[10px] text-gray-400">Failovers</div>
                   <div class="text-xs font-medium text-yellow-300">
                     {MetricsHelpers.failovers_last_minute(@routing_events)}
                   </div>
                 </div>
               </div>
-            <% else %>
-              <!-- System overview collapsed view -->
-              <% rpc_rate = MetricsHelpers.rpc_calls_per_second(@routing_events) %>
-              <% error_rate = MetricsHelpers.error_rate_percent(@routing_events) %>
 
-              <!-- RPC Performance compact -->
-              <div class="grid grid-cols-2 gap-3 mb-3">
-                <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
-                  <div class="text-[10px] text-gray-400">RPC/s</div>
-                  <div class="text-sm font-medium text-sky-300">{rpc_rate}</div>
-                </div>
-                <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
-                  <div class="text-[10px] text-gray-400">Error Rate</div>
-                  <div class={["text-sm font-medium", if(error_rate > 5, do: "text-red-400", else: if(error_rate > 1, do: "text-yellow-400", else: "text-emerald-400"))]}>
-                    {error_rate}%
-                  </div>
-                </div>
-              </div>
-
-              <!-- Recent Activity in collapsed state -->
-              <div class=" rounded-md px-2 pb-2">
+               <!-- Recent Activity in collapsed state -->
+              <div class="px-2 pb-2">
                 <div class="text-[10px] text-gray-400 mb-1.5">Recent Activity</div>
                 <div class="max-h-20 space-y-1 overflow-y-auto">
                   <%= for e <- Enum.take(@routing_events, 4) do %>
@@ -1216,7 +1206,6 @@ defmodule LivechainWeb.Dashboard do
                   <% end %>
                 </div>
               </div>
-            <% end %>
           </div>
         <% else %>
           <!-- Body (only when expanded) -->
@@ -1239,6 +1228,10 @@ defmodule LivechainWeb.Dashboard do
                   routing_events={@routing_events}
                   provider_events={@provider_events}
                   events={@events}
+                  selected_chain_metrics={@selected_chain_metrics}
+                  selected_chain_events={@selected_chain_events}
+                  selected_chain_unified_events={@selected_chain_unified_events}
+                  selected_chain_endpoints={@selected_chain_endpoints}
                 />
               <% end %>
             <% end %>
@@ -1249,65 +1242,6 @@ defmodule LivechainWeb.Dashboard do
     """
   end
 
-  defp meta_stats_panel(assigns) do
-    assigns =
-      assigns
-      |> assign_new(:connections, fn -> [] end)
-      |> assign_new(:routing_events, fn -> [] end)
-      |> assign_new(:provider_events, fn -> [] end)
-      |> assign_new(:vm_metrics, fn -> %{} end)
-
-    # RPC performance metrics
-    rpc_rate = MetricsHelpers.rpc_calls_per_second(assigns.routing_events)
-    error_rate = MetricsHelpers.error_rate_percent(assigns.routing_events)
-
-    assigns =
-      assign(assigns, :__meta_stats, %{
-        rpc_rate: rpc_rate,
-        error_rate: error_rate
-      })
-
-    ~H"""
-    <div class="space-y-4 p-4">
-      <!-- RPC Performance Metrics -->
-      <div class="bg-gray-800/30 rounded-lg p-3">
-        <div class="text-[11px] text-gray-400 mb-3 font-semibold">RPC Performance (1m)</div>
-        <div class="grid grid-cols-2 gap-3">
-          <div class="bg-gray-800/40 rounded-md p-2 text-center">
-            <div class="text-[10px] text-gray-400">Calls/sec</div>
-            <div class="text-lg font-bold text-sky-400">{@__meta_stats.rpc_rate}</div>
-          </div>
-          <div class="bg-gray-800/40 rounded-md p-2 text-center">
-            <div class="text-[10px] text-gray-400">Error rate</div>
-            <div class={["text-lg font-bold", if(@__meta_stats.error_rate > 5, do: "text-red-400", else: if(@__meta_stats.error_rate > 1, do: "text-yellow-400", else: "text-emerald-400"))]}>
-              {@__meta_stats.error_rate}%
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Recent Activity -->
-      <div class="bg-gray-800/30 rounded-lg p-3">
-        <div class="text-[11px] text-gray-400 mb-2 font-semibold">Recent Activity</div>
-        <div class="max-h-32 space-y-1 overflow-auto">
-          <%= for e <- Enum.take(@routing_events, 6) do %>
-            <div class="text-[10px] text-gray-300">
-              <span class="text-purple-300">{e.chain}</span>
-              <span class="text-sky-300">{e.method}</span>
-              → <span class="text-emerald-300">{String.slice(e.provider_id, 0, 10)}…</span>
-              <span class={["ml-1", if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")]}>
-                ({e[:duration_ms] || 0}ms)
-              </span>
-            </div>
-          <% end %>
-          <%= if length(@routing_events) == 0 do %>
-            <div class="text-[10px] text-gray-500">No recent activity</div>
-          <% end %>
-        </div>
-      </div>
-    </div>
-    """
-  end
 
 
 
@@ -1318,7 +1252,13 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def handle_event("select_chain", %{"chain" => ""}, socket) do
-    {:noreply, socket |> assign(:selected_chain, nil) |> assign(:details_collapsed, true)}
+    socket =
+      socket
+      |> assign(:selected_chain, nil)
+      |> assign(:details_collapsed, true)
+      |> update_selected_chain_metrics()
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -1328,6 +1268,7 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:selected_chain, chain)
       |> assign(:selected_provider, nil)
       |> assign(:details_collapsed, false)
+      |> update_selected_chain_metrics()
 
     # Re-enable auto-centering to animate pan to the selected chain
     socket =
@@ -1412,28 +1353,36 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Chain Configuration Event Handlers
-  @impl true
-  def handle_event("toggle_chain_config", _params, socket) do
-    # Toggle the collapsed state and notify the component
-    new_collapsed = not socket.assigns.chain_config_collapsed
-    socket = assign(socket, :chain_config_collapsed, new_collapsed)
-
-    # Send message to update the component
-    send_update(ChainConfigurationWindow,
-      id: "chain-configuration-window",
-      is_collapsed: new_collapsed,
-      selected_chain: socket.assigns.selected_chain,
-      selected_provider: socket.assigns.selected_provider
-    )
-
-    {:noreply, socket}
-  end
-
-
-
-
   # Helper functions
+
+  defp update_selected_chain_metrics(socket) do
+    case socket.assigns[:selected_chain] do
+      nil ->
+        # Clear all chain-specific data when no chain is selected
+        socket
+        |> assign(:selected_chain_metrics, %{})
+        |> assign(:selected_chain_events, [])
+        |> assign(:selected_chain_unified_events, [])
+        |> assign(:selected_chain_endpoints, %{})
+      chain ->
+        # Calculate chain-specific metrics
+        chain_metrics = MetricsHelpers.get_chain_performance_metrics(socket.assigns, chain)
+
+        # Get chain-specific endpoints
+        chain_endpoints = EndpointHelpers.get_chain_endpoints(socket.assigns, chain)
+
+        # Filter events for selected chain
+        chain_events = Enum.filter(socket.assigns.routing_events, &(&1.chain == chain))
+        chain_unified_events = Enum.filter(socket.assigns.events, fn e -> e[:chain] == chain end)
+
+        # Update all chain-specific assigns at once to ensure consistency
+        socket
+        |> assign(:selected_chain_metrics, chain_metrics)
+        |> assign(:selected_chain_events, chain_events)
+        |> assign(:selected_chain_unified_events, chain_unified_events)
+        |> assign(:selected_chain_endpoints, chain_endpoints)
+    end
+  end
 
   defp fetch_connections(socket) do
     connections = Livechain.RPC.ChainRegistry.list_all_connections()

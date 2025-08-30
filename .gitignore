@@ -24,3 +24,12 @@ livechain-*.tar
 
 # Node modules
 /assets/node_modules/
+
+# Generated assets (compiled from source)
+/priv/static/assets/
+
+# Benchmark snapshots (generated data)
+/priv/benchmark_snapshots/
+
+# Configuration backups (auto-generated)
+/priv/config_backups/
