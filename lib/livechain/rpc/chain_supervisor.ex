@@ -3,23 +3,23 @@ defmodule Livechain.RPC.ChainSupervisor do
   Supervises multiple RPC provider connections for a single blockchain.
 
   This supervisor manages multiple WSConnection processes for redundancy,
-  failover, and speed optimization. It coordinates with MessageAggregator
-  to deduplicate messages and always forwards the fastest response.
+  failover, and performance optimization. It coordinates with ProviderPool
+  for intelligent provider selection based on real performance metrics.
 
   Architecture:
   ChainSupervisor
   ├── WSConnection (Provider 1 - Priority 1)
   ├── WSConnection (Provider 2 - Priority 2)
   ├── WSConnection (Provider 3 - Priority 3)
-  ├── MessageAggregator (Deduplication & Speed)
-  └── ProviderPool (Health & Failover)
+  ├── ProviderPool (Health & Performance Tracking)
+  └── CircuitBreaker (Failure Protection)
   """
 
   use Supervisor
   require Logger
 
   alias Livechain.Config.{ChainConfig, ConfigStore}
-  alias Livechain.RPC.{WSConnection, WSEndpoint, MessageAggregator, ProviderPool, CircuitBreaker}
+  alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker}
 
   @doc """
   Starts a ChainSupervisor for a specific blockchain.
@@ -121,10 +121,7 @@ defmodule Livechain.RPC.ChainSupervisor do
     )
 
     children = [
-      # Start MessageAggregator first
-      {MessageAggregator, {chain_name, chain_config}},
-
-      # Start ProviderPool for health monitoring
+      # Start ProviderPool for health monitoring and performance tracking
       {ProviderPool, {chain_name, chain_config}},
 
       # Start dynamic supervisor to manage WS connections

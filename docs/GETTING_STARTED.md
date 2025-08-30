@@ -46,11 +46,11 @@ chains:
 
 ## Provider Selection Strategy
 
-Default strategy is `:cheapest`. You can change it in your `config/config.exs`:
+Default strategy is `:cheapest` (prefers free providers). You can change it in your `config/config.exs`:
 
 ```elixir
 config :livechain, :provider_selection_strategy, :cheapest
-# Alternatives: :fastest, :priority, :round_robin
+# Alternatives: :fastest (performance-based), :priority (static), :round_robin (load balanced)
 ```
 
 ## TODO / Next Steps

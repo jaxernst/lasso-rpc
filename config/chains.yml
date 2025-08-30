@@ -9,25 +9,9 @@ chains:
 
     # Provider pool - multiple providers for redundancy
     providers:
-      - id: "ethereum_infura"
-        name: "Infura Ethereum"
-        priority: 1
-        type: "third_party"
-        url: "https://mainnet.infura.io/v3/YOUR_PROJECT_ID"
-        ws_url: "wss://mainnet.infura.io/ws/v3/YOUR_PROJECT_ID"
-        api_key_required: true
-
-      - id: "ethereum_alchemy"
-        name: "Alchemy Ethereum"
-        priority: 2
-        type: "third_party"
-        url: "https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
-        ws_url: "wss://eth-mainnet.g.alchemy.com/ws/v2/YOUR_API_KEY"
-        api_key_required: true
-
       - id: "ethereum_ankr"
         name: "Ankr Public"
-        priority: 3
+        priority: 1
         type: "public"
         url: "https://rpc.ankr.com/eth"
         ws_url: "wss://rpc.ankr.com/eth/ws"
@@ -35,12 +19,41 @@ chains:
 
       - id: "ethereum_llamarpc"
         name: "LlamaRPC"
-        priority: 4
+        priority: 2
         type: "public"
         url: "https://eth.llamarpc.com"
         ws_url: "wss://eth.llamarpc.com"
         api_key_required: false
 
+      - id: "ethereum_cloudflare"
+        name: "Cloudflare Ethereum"
+        priority: 3
+        type: "public"
+        url: "https://cloudflare-eth.com"
+        api_key_required: false
+
+      - id: "ethereum_publicnode"
+        name: "PublicNode Ethereum"
+        priority: 4
+        type: "public"
+        url: "https://ethereum-rpc.publicnode.com"
+        ws_url: "wss://ethereum-rpc.publicnode.com"
+        api_key_required: false
+
+      - id: "ethereum_1rpc"
+        name: "1RPC Ethereum"
+        priority: 5
+        type: "public"
+        url: "https://1rpc.io/eth"
+        api_key_required: false
+
+      - id: "ethereum_blastapi"
+        name: "BlastAPI Ethereum"
+        priority: 6
+        type: "public"
+        url: "https://ethereum.publicnode.com"
+        ws_url: "wss://ethereum.publicnode.com"
+        api_key_required: false
 
     # Connection settings
     connection:
@@ -68,28 +81,42 @@ chains:
 
     # Provider pool - multiple providers for redundancy
     providers:
-      - id: "polygon_infura"
-        name: "Infura Polygon"
-        priority: 1
-        type: "third_party"
-        url: "https://polygon-mainnet.infura.io/v3/YOUR_PROJECT_ID"
-        ws_url: "wss://polygon-mainnet.infura.io/ws/v3/YOUR_PROJECT_ID"
-        api_key_required: true
-
-      - id: "polygon_alchemy"
-        name: "Alchemy Polygon"
-        priority: 2
-        type: "third_party"
-        url: "https://polygon-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
-        ws_url: "wss://polygon-mainnet.g.alchemy.com/ws/v2/YOUR_API_KEY"
-        api_key_required: true
-
       - id: "polygon_ankr"
         name: "Ankr Polygon"
-        priority: 3
+        priority: 1
         type: "public"
         url: "https://rpc.ankr.com/polygon"
         ws_url: "wss://rpc.ankr.com/polygon/ws"
+        api_key_required: false
+
+      - id: "polygon_publicnode"
+        name: "PublicNode Polygon"
+        priority: 2
+        type: "public"
+        url: "https://polygon-rpc.publicnode.com"
+        ws_url: "wss://polygon-rpc.publicnode.com"
+        api_key_required: false
+
+      - id: "polygon_1rpc"
+        name: "1RPC Polygon"
+        priority: 3
+        type: "public"
+        url: "https://1rpc.io/matic"
+        api_key_required: false
+
+      - id: "polygon_blastapi"
+        name: "BlastAPI Polygon"
+        priority: 4
+        type: "public"
+        url: "https://polygon.publicnode.com"
+        ws_url: "wss://polygon.publicnode.com"
+        api_key_required: false
+
+      - id: "polygon_omniatech"
+        name: "OmniaTech Polygon"
+        priority: 5
+        type: "public"
+        url: "https://endpoints.omniatech.io/v1/matic/mainnet/public"
         api_key_required: false
 
     # Connection settings
@@ -154,6 +181,13 @@ chains:
         url: "https://1rpc.io/base"
         api_key_required: false
 
+      - id: "base_official"
+        name: "Base Official"
+        priority: 6
+        type: "public"
+        url: "https://mainnet.base.org"
+        api_key_required: false
+
     connection:
       heartbeat_interval: 20000 # Base is faster, more frequent heartbeats
       reconnect_interval: 3000
@@ -198,6 +232,20 @@ chains:
         type: "public"
         url: "https://arbitrum-one-rpc.publicnode.com"
         ws_url: "wss://arbitrum-one-rpc.publicnode.com"
+        api_key_required: false
+
+      - id: "arbitrum_1rpc"
+        name: "1RPC Arbitrum"
+        priority: 5
+        type: "public"
+        url: "https://1rpc.io/arb"
+        api_key_required: false
+
+      - id: "arbitrum_omniatech"
+        name: "OmniaTech Arbitrum"
+        priority: 6
+        type: "public"
+        url: "https://endpoints.omniatech.io/v1/arbitrum/mainnet/public"
         api_key_required: false
 
     connection:
@@ -246,6 +294,20 @@ chains:
         ws_url: "wss://optimism-mainnet.public.blastapi.io"
         api_key_required: false
 
+      - id: "optimism_1rpc"
+        name: "1RPC Optimism"
+        priority: 5
+        type: "public"
+        url: "https://1rpc.io/op"
+        api_key_required: false
+
+      - id: "optimism_official"
+        name: "Optimism Official"
+        priority: 6
+        type: "public"
+        url: "https://mainnet.optimism.io"
+        api_key_required: false
+
     connection:
       heartbeat_interval: 20000
       reconnect_interval: 3000
@@ -292,6 +354,13 @@ chains:
         ws_url: "wss://zksync-era-rpc.publicnode.com"
         api_key_required: false
 
+      - id: "zksync_1rpc"
+        name: "1RPC zkSync"
+        priority: 5
+        type: "public"
+        url: "https://1rpc.io/zksync2-era"
+        api_key_required: false
+
     connection:
       heartbeat_interval: 15000
       reconnect_interval: 2000
@@ -301,6 +370,37 @@ chains:
       deduplication_window: 500
       min_confirmations: 1
       max_providers: 3
+
+  unichain:
+    chain_id: 1301
+    name: "Unichain Sepolia"
+    block_time: 2000
+
+    providers:
+      - id: "unichain_official"
+        name: "Unichain Official"
+        priority: 1
+        type: "public"
+        url: "https://sepolia.unichain.org"
+        api_key_required: false
+
+      - id: "unichain_publicnode"
+        name: "PublicNode Unichain"
+        priority: 2
+        type: "public"
+        url: "https://unichain-sepolia-rpc.publicnode.com"
+        ws_url: "wss://unichain-sepolia-rpc.publicnode.com"
+        api_key_required: false
+
+    connection:
+      heartbeat_interval: 20000
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
+
+    aggregation:
+      deduplication_window: 1000
+      min_confirmations: 1
+      max_providers: 2
 
   linea:
     chain_id: 59144
@@ -323,43 +423,28 @@ chains:
         url: "https://rpc.ankr.com/linea"
         api_key_required: false
 
-      - id: "linea_infura"
-        name: "Infura Linea"
+      - id: "linea_publicnode"
+        name: "PublicNode Linea"
         priority: 3
         type: "public"
-        url: "https://linea-mainnet.infura.io/v3/YOUR_KEY"
-        api_key_required: true
-
-    connection:
-      heartbeat_interval: 20000
-      reconnect_interval: 3000
-      max_reconnect_attempts: 15
-
-    aggregation:
-      deduplication_window: 1000
-      min_confirmations: 1
-      max_providers: 2
-
-  unichain:
-    chain_id: 1301
-    name: "Unichain Sepolia"
-    block_time: 2000
-
-    providers:
-      - id: "unichain_official"
-        name: "Unichain Official"
-        priority: 1
-        type: "public"
-        url: "https://sepolia.unichain.org"
+        url: "https://linea-rpc.publicnode.com"
+        ws_url: "wss://linea-rpc.publicnode.com"
         api_key_required: false
 
-      - id: "unichain_quicknode"
-        name: "QuickNode Unichain"
-        priority: 2
-        type: "third_party"
-        url: "https://unichain-sepolia.rpc.quicknode.pro"
-        ws_url: "wss://unichain-sepolia.rpc.quicknode.pro"
-        api_key_required: true
+      - id: "linea_1rpc"
+        name: "1RPC Linea"
+        priority: 4
+        type: "public"
+        url: "https://1rpc.io/linea"
+        api_key_required: false
+
+      - id: "linea_blastapi"
+        name: "BlastAPI Linea"
+        priority: 5
+        type: "public"
+        url: "https://linea-mainnet.public.blastapi.io"
+        ws_url: "wss://linea-mainnet.public.blastapi.io"
+        api_key_required: false
 
     connection:
       heartbeat_interval: 20000
@@ -369,7 +454,7 @@ chains:
     aggregation:
       deduplication_window: 1000
       min_confirmations: 1
-      max_providers: 2
+      max_providers: 3
 
 # Global settings
 global:

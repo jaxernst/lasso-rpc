@@ -220,11 +220,12 @@ defmodule TestHelper do
 
     Enum.each(provider_ids, fn provider_id ->
       # Add some benchmark data so the provider appears in selection
-      Livechain.Benchmarking.BenchmarkStore.record_event_race_win(
+      Livechain.Benchmarking.BenchmarkStore.record_rpc_call(
         chain_name,
         provider_id,
-        :newHeads,
-        System.monotonic_time(:millisecond)
+        "eth_blockNumber",
+        100,
+        :success
       )
     end)
 

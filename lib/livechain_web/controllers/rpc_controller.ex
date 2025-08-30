@@ -473,11 +473,7 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
-  # Strategy-specific handlers, dispatched from the router.
-  # They delegate to a helper that sets the strategy atom in the connection assigns
-  # before calling the main rpc/2 function. This approach uses function heads to
-  # keep the controller DRY and avoids logic in the router.
-  def rpc_base(conn, params), do: rpc_with_strategy(conn, params, :round_robin)
+  def rpc_base(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
   def rpc_fastest(conn, params), do: rpc_with_strategy(conn, params, :fastest)
   def rpc_cheapest(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
   def rpc_priority(conn, params), do: rpc_with_strategy(conn, params, :priority)

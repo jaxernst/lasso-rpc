@@ -144,8 +144,8 @@ ws.send(
 
 The orchestrator uses a pluggable provider selection strategy when forwarding JSON-RPC calls over both HTTP and WebSocket.
 
-- **Default**: `:cheapest`
-- **Alternatives**: `:fastest`, `:priority`, `:round_robin`
+- **Default**: `:cheapest` (prefers free providers)
+- **Alternatives**: `:fastest` (uses performance data), `:priority` (static config), `:round_robin` (load balanced)
 
 Configuration:
 
