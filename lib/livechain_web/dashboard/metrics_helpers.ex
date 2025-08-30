@@ -147,12 +147,12 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
 
   @doc "Get provider performance metrics (non-socket version)"
   def get_provider_performance_metrics(provider_id, connections \\ [], routing_events \\ []) do
+    require Logger
     # Get the chain for this provider
     chain = case Enum.find(connections, &(&1.id == provider_id)) do
       %{chain: chain_name} -> chain_name
       _ -> nil
     end
-
     if chain do
       provider_score = BenchmarkStore.get_provider_score(chain, provider_id)
       real_time_stats = BenchmarkStore.get_real_time_stats(chain, provider_id)
@@ -285,52 +285,8 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
     }
   end
 
-  @doc "Get latency leaders by chain"
-  def get_latency_leaders_by_chain(connections) do
-    # Group connections by chain
-    chains_with_providers =
-      connections
-      |> Enum.group_by(fn conn -> Map.get(conn, :chain) end)
-      |> Enum.reject(fn {chain, _providers} -> is_nil(chain) end)
-
-    # For each chain, find the provider with lowest average latency
-    Enum.reduce(chains_with_providers, %{}, fn {chain_name, chain_connections}, acc ->
-      # Get latency data for each provider
-      provider_latencies =
-        Enum.map(chain_connections, fn conn ->
-          provider_id = conn.id
-
-          # Get RPC performance for common methods
-          common_methods = ["eth_blockNumber", "eth_getBalance", "eth_chainId", "eth_getLogs"]
-
-          total_latency =
-            Enum.reduce(common_methods, {0.0, 0}, fn method, {sum_latency, count} ->
-              case BenchmarkStore.get_rpc_performance(chain_name, provider_id, method) do
-                %{avg_latency: avg_lat, total_calls: total} when total >= 10 and avg_lat > 0 ->
-                  {sum_latency + avg_lat, count + 1}
-
-                _ ->
-                  {sum_latency, count}
-              end
-            end)
-
-          case total_latency do
-            {sum, count} when count > 0 -> {provider_id, sum / count}
-            _ -> nil
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      # Find provider with lowest average latency
-      case Enum.min_by(
-             provider_latencies,
-             fn {_provider_id, avg_latency} -> avg_latency end,
-             fn -> nil end
-           ) do
-        {fastest_provider_id, _latency} -> Map.put(acc, chain_name, fastest_provider_id)
-        nil -> acc
-      end
-    end)
+  def get_latency_leaders_by_chain(_connections) do
+    %{}
   end
 
   @doc "Collect VM metrics"

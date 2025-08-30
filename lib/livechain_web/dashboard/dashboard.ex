@@ -195,12 +195,16 @@ defmodule LivechainWeb.Dashboard do
       chain: chain,
       method: method,
       provider_id: pid,
-      duration_ms: dur,
+      duration_ms: (if is_number(dur), do: round(dur), else: 0),
       result: Map.get(evt, :result, :unknown),
       failovers: Map.get(evt, :failover_count, 0)
     }
 
-    socket = update(socket, :routing_events, fn list -> [entry | Enum.take(list, 99)] end)
+    socket = update(socket, :routing_events, fn list ->
+      require Logger
+      Logger.info("Adding routing event to list: #{method} -> #{pid} (#{dur}ms, type: #{inspect(dur)}), current list size: #{length(list)}")
+      [entry | Enum.take(list, 99)]
+    end)
 
     # Unified events + client-side push
     ev =
@@ -217,6 +221,17 @@ defmodule LivechainWeb.Dashboard do
       |> update(:events, fn list -> [ev | Enum.take(list, 199)] end)
       |> push_event("events_batch", %{items: [ev]})
       |> push_event("provider_request", %{provider_id: pid})
+
+    # Trigger connection refresh to update provider metrics in floating details window
+    # This ensures real-time reactivity for both simulator and regular traffic
+    socket = case Process.get(:pending_connection_update) do
+      nil ->
+        Process.put(:pending_connection_update, true)
+        Process.send_after(self(), :flush_connections, 100)
+        fetch_connections(socket)
+      _ ->
+        socket
+    end
 
     {:noreply, socket}
   end
@@ -369,9 +384,9 @@ defmodule LivechainWeb.Dashboard do
 
 
   # Handle messages from ChainConfigurationWindow component
-  @impl true  
+  @impl true
   def handle_info({:chain_config_saved, message}, socket) do
-    socket = 
+    socket =
       socket
       |> fetch_connections()  # Refresh connections to reflect new chains
       |> push_event("show_notification", %{message: message, type: "info"})
@@ -380,7 +395,7 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def handle_info({:chain_config_deleted, message}, socket) do
-    socket = 
+    socket =
       socket
       |> fetch_connections()
       |> push_event("show_notification", %{message: message, type: "warning"})
@@ -787,7 +802,7 @@ defmodule LivechainWeb.Dashboard do
   def provider_details_panel(assigns) do
     # Find the provider connection - this should update when switching providers
     provider_connection = Enum.find(assigns.connections, &(&1.id == assigns.provider))
-    
+
     assigns =
       Map.merge(assigns, %{
         provider_connection: provider_connection,
@@ -870,7 +885,7 @@ defmodule LivechainWeb.Dashboard do
                   {StatusHelpers.provider_status_label(@provider_connection)}
                 </span>
               </div>
-              
+
               <div class="flex flex-col">
                 <span class="text-gray-400 text-xs">Health</span>
                 <span class={StatusHelpers.provider_status_class_text(%{health_status: Map.get(@provider_connection, :health_status, :unknown)})}>
@@ -904,7 +919,7 @@ defmodule LivechainWeb.Dashboard do
                   <div class="w-2 h-2 rounded-full bg-red-400"></div>
                   <span class="text-red-300 text-sm font-medium">Issues Detected</span>
                 </div>
-                
+
                 <div class="grid grid-cols-2 gap-3 text-xs">
                   <div>
                     <span class="text-gray-400">Consecutive failures:</span>
@@ -915,7 +930,7 @@ defmodule LivechainWeb.Dashboard do
                     <span class="text-yellow-300 ml-2">{@provider_connection.reconnect_attempts}</span>
                   </div>
                 </div>
-                
+
                 <%= if @provider_connection && Map.get(@provider_connection, :last_error) do %>
                   <% last_error = Map.get(@provider_connection, :last_error) %>
                   <div class="mt-2 pt-2 border-t border-red-600/20">
@@ -939,7 +954,7 @@ defmodule LivechainWeb.Dashboard do
                   <div class="w-2 h-2 rounded-full bg-purple-400"></div>
                   <span class="text-purple-300 text-sm font-medium">Rate Limited</span>
                 </div>
-                
+
                 <div class="text-xs">
                   <div class="grid grid-cols-2 gap-3">
                     <div>
@@ -1068,6 +1083,7 @@ defmodule LivechainWeb.Dashboard do
       |> assign_new(:hover_provider, fn -> nil end)
       |> assign_new(:events, fn -> [] end)
       |> assign_new(:chain_config_open, fn -> false end)
+      |> assign_new(:vm_metrics, fn -> %{} end)
       |> assign(:total_connections, length(assigns.connections))
       |> assign(:connected_providers, Enum.count(assigns.connections, &(&1.status == :connected)))
       |> assign(
@@ -1107,37 +1123,21 @@ defmodule LivechainWeb.Dashboard do
           </div>
           <div class="flex items-center gap-2">
             <%= if @details_collapsed do %>
-              <div class="text-[10px] flex items-center space-x-2 text-gray-400">
-                <span class="text-emerald-300">{@connected_providers}/{@total_connections}</span>
+              <div class="text-[10px] flex items-center space-x-3 text-gray-400">
+                <span class="text-sky-400">{MetricsHelpers.rpc_calls_per_second(assigns.routing_events)} RPS</span>
                 <span>•</span>
-                <span class="text-purple-300">{@total_chains} chains</span>
+                <span class={["font-medium", if(MetricsHelpers.error_rate_percent(assigns.routing_events) > 5, do: "text-red-400", else: if(MetricsHelpers.error_rate_percent(assigns.routing_events) > 1, do: "text-yellow-400", else: "text-emerald-400"))]}>                {MetricsHelpers.error_rate_percent(assigns.routing_events)}% err</span>
               </div>
             <% end %>
 
-            <!-- Chain Configuration Button -->
-            <%= if @selected_chain || @selected_provider do %>
-              <button
-                phx-click="toggle_chain_config"
-                class={[
-                  "bg-gray-800/60 rounded px-2 py-1 text-xs transition-colors hover:bg-gray-700/60",
-                  if(not @chain_config_collapsed, do: "text-purple-300 bg-purple-900/30", else: "text-gray-200")
-                ]}
-                title="Configure Providers"
-              >
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                        d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                </svg>
-              </button>
-            <% end %>
-
+           <%= if @selected_chain || @selected_provider do %>
             <button
               phx-click="toggle_details_panel"
               class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-colors hover:bg-gray-700/60"
             >
               {if @details_collapsed, do: "↖", else: "↗"}
             </button>
+            <% end %>
           </div>
         </div>
 
@@ -1179,35 +1179,42 @@ defmodule LivechainWeb.Dashboard do
                 </div>
               </div>
             <% else %>
-              <!-- System overview collapsed view with status breakdown -->
-              <% status_breakdown = StatusHelpers.status_breakdown(@connections) %>
-              <% critical_count = Enum.count(@connections, &StatusHelpers.is_critical_status?/1) %>
-              <% needs_attention_count = Enum.count(@connections, &StatusHelpers.needs_attention?/1) %>
-              
-              <div class="grid grid-cols-2 gap-3">
+              <!-- System overview collapsed view -->
+              <% rpc_rate = MetricsHelpers.rpc_calls_per_second(@routing_events) %>
+              <% error_rate = MetricsHelpers.error_rate_percent(@routing_events) %>
+
+              <!-- RPC Performance compact -->
+              <div class="grid grid-cols-2 gap-3 mb-3">
                 <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
-                  <div class="text-[10px] uppercase tracking-wide text-gray-400">Providers</div>
-                  <div class="text-sm font-semibold text-white">{@total_connections}</div>
+                  <div class="text-[10px] text-gray-400">RPC/s</div>
+                  <div class="text-sm font-medium text-sky-300">{rpc_rate}</div>
                 </div>
                 <div class="bg-gray-800/40 rounded-md px-2 py-1.5">
-                  <div class="text-[10px] uppercase tracking-wide text-gray-400">Issues</div>
-                  <div class={["text-sm font-semibold", if(critical_count > 0, do: "text-red-400", else: (if needs_attention_count > 0, do: "text-yellow-400", else: "text-emerald-400"))]}>
-                    {if critical_count > 0, do: critical_count, else: (if needs_attention_count > 0, do: needs_attention_count, else: 0)}
+                  <div class="text-[10px] text-gray-400">Error Rate</div>
+                  <div class={["text-sm font-medium", if(error_rate > 5, do: "text-red-400", else: if(error_rate > 1, do: "text-yellow-400", else: "text-emerald-400"))]}>
+                    {error_rate}%
                   </div>
                 </div>
               </div>
-              
-              <!-- Status breakdown compact -->
-              <div class="grid grid-cols-2 gap-1 text-xs">
-                <%= for {status, count} <- status_breakdown |> Enum.take(4) do %>
-                  <div class="flex items-center justify-between bg-gray-800/20 rounded px-2 py-1">
-                    <div class="flex items-center gap-1">
-                      <div class={["w-1.5 h-1.5 rounded-full", StatusHelpers.provider_status_indicator_class(%{status: status, health_status: status, circuit_state: :closed})]}></div>
-                      <span class="text-gray-300 text-[10px]">{String.slice(StatusHelpers.provider_status_label(%{status: status, health_status: status, circuit_state: :closed}), 0, 8)}</span>
+
+              <!-- Recent Activity in collapsed state -->
+              <div class=" rounded-md px-2 pb-2">
+                <div class="text-[10px] text-gray-400 mb-1.5">Recent Activity</div>
+                <div class="max-h-20 space-y-1 overflow-y-auto">
+                  <%= for e <- Enum.take(@routing_events, 4) do %>
+                    <div class="text-[9px] text-gray-300">
+                      <span class="text-purple-300">{e.chain}</span>
+                      <span class="text-sky-300"> {e.method}</span>
+                      → <span class="text-emerald-300">{String.slice(e.provider_id, 0, 8)}…</span>
+                      <span class={["ml-1", if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")]}>
+                        ({e[:duration_ms] || 0}ms)
+                      </span>
                     </div>
-                    <span class="text-gray-400 font-mono text-[10px]">{count}</span>
-                  </div>
-                <% end %>
+                  <% end %>
+                  <%= if length(@routing_events) == 0 do %>
+                    <div class="text-[9px] text-gray-500">No recent activity</div>
+                  <% end %>
+                </div>
               </div>
             <% end %>
           </div>
@@ -1233,12 +1240,6 @@ defmodule LivechainWeb.Dashboard do
                   provider_events={@provider_events}
                   events={@events}
                 />
-              <% else %>
-                <.meta_stats_panel
-                  connections={@connections}
-                  routing_events={@routing_events}
-                  provider_events={@provider_events}
-                />
               <% end %>
             <% end %>
           </div>
@@ -1254,72 +1255,53 @@ defmodule LivechainWeb.Dashboard do
       |> assign_new(:connections, fn -> [] end)
       |> assign_new(:routing_events, fn -> [] end)
       |> assign_new(:provider_events, fn -> [] end)
+      |> assign_new(:vm_metrics, fn -> %{} end)
 
-    # Use enhanced status breakdown
-    status_breakdown = StatusHelpers.status_breakdown(assigns.connections)
-    total = length(assigns.connections)
-    chains = assigns.connections |> Enum.map(& &1.chain) |> Enum.uniq() |> length()
-    
-    # Count critical issues
-    critical_count = Enum.count(assigns.connections, &StatusHelpers.is_critical_status?/1)
-    needs_attention_count = Enum.count(assigns.connections, &StatusHelpers.needs_attention?/1)
+    # RPC performance metrics
+    rpc_rate = MetricsHelpers.rpc_calls_per_second(assigns.routing_events)
+    error_rate = MetricsHelpers.error_rate_percent(assigns.routing_events)
 
     assigns =
-      assign(assigns, :__meta_totals, %{
-        total: total, 
-        chains: chains,
-        status_breakdown: status_breakdown,
-        critical_count: critical_count,
-        needs_attention_count: needs_attention_count
+      assign(assigns, :__meta_stats, %{
+        rpc_rate: rpc_rate,
+        error_rate: error_rate
       })
 
     ~H"""
     <div class="space-y-4 p-4">
-      <!-- Overall Stats -->
-      <div class="grid grid-cols-3 gap-3">
-        <div class="bg-gray-800/50 rounded-lg p-3">
-          <div class="text-[11px] text-gray-400">Chains</div>
-          <div class="text-lg font-bold text-white">{@__meta_totals.chains}</div>
-        </div>
-        <div class="bg-gray-800/50 rounded-lg p-3">
-          <div class="text-[11px] text-gray-400">Providers</div>
-          <div class="text-lg font-bold text-white">{@__meta_totals.total}</div>
-        </div>
-        <div class="bg-gray-800/50 rounded-lg p-3">
-          <div class="text-[11px] text-gray-400">Issues</div>
-          <div class={["text-lg font-bold", if(@__meta_totals.critical_count > 0, do: "text-red-400", else: (if @__meta_totals.needs_attention_count > 0, do: "text-yellow-400", else: "text-emerald-400"))]}>
-            {if @__meta_totals.critical_count > 0, do: @__meta_totals.critical_count, else: (if @__meta_totals.needs_attention_count > 0, do: @__meta_totals.needs_attention_count, else: 0)}
+      <!-- RPC Performance Metrics -->
+      <div class="bg-gray-800/30 rounded-lg p-3">
+        <div class="text-[11px] text-gray-400 mb-3 font-semibold">RPC Performance (1m)</div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-gray-800/40 rounded-md p-2 text-center">
+            <div class="text-[10px] text-gray-400">Calls/sec</div>
+            <div class="text-lg font-bold text-sky-400">{@__meta_stats.rpc_rate}</div>
+          </div>
+          <div class="bg-gray-800/40 rounded-md p-2 text-center">
+            <div class="text-[10px] text-gray-400">Error rate</div>
+            <div class={["text-lg font-bold", if(@__meta_stats.error_rate > 5, do: "text-red-400", else: if(@__meta_stats.error_rate > 1, do: "text-yellow-400", else: "text-emerald-400"))]}>
+              {@__meta_stats.error_rate}%
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Status Breakdown -->
-      <div class="bg-gray-800/30 rounded-lg p-3">
-        <div class="text-[11px] text-gray-400 mb-2 font-semibold">Provider Status</div>
-        <div class="space-y-1">
-          <%= for {status, count} <- @__meta_totals.status_breakdown |> Enum.sort_by(fn {status, _} -> StatusHelpers.status_priority(%{status: status, health_status: status, circuit_state: :closed}) end) do %>
-            <div class="flex items-center justify-between text-xs">
-              <div class="flex items-center gap-2">
-                <div class={["w-2 h-2 rounded-full", StatusHelpers.provider_status_indicator_class(%{status: status, health_status: status, circuit_state: :closed})]}></div>
-                <span class="text-gray-300">{StatusHelpers.provider_status_label(%{status: status, health_status: status, circuit_state: :closed})}</span>
-              </div>
-              <span class="text-gray-400 font-mono">{count}</span>
-            </div>
-          <% end %>
-        </div>
-      </div>
-
       <!-- Recent Activity -->
-      <div class="text-xs text-gray-400">
-        <div class="mb-1 font-semibold text-gray-300">Recent activity</div>
+      <div class="bg-gray-800/30 rounded-lg p-3">
+        <div class="text-[11px] text-gray-400 mb-2 font-semibold">Recent Activity</div>
         <div class="max-h-32 space-y-1 overflow-auto">
-          <%= for e <- Enum.take(@routing_events, 5) do %>
-            <div>
-              <span class="text-gray-500">[{e.ts}]</span>
+          <%= for e <- Enum.take(@routing_events, 6) do %>
+            <div class="text-[10px] text-gray-300">
               <span class="text-purple-300">{e.chain}</span>
               <span class="text-sky-300">{e.method}</span>
-              via <span class="text-emerald-300">{e.provider_id}</span>
+              → <span class="text-emerald-300">{String.slice(e.provider_id, 0, 10)}…</span>
+              <span class={["ml-1", if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")]}>
+                ({e[:duration_ms] || 0}ms)
+              </span>
             </div>
+          <% end %>
+          <%= if length(@routing_events) == 0 do %>
+            <div class="text-[10px] text-gray-500">No recent activity</div>
           <% end %>
         </div>
       </div>
@@ -1418,7 +1400,7 @@ defmodule LivechainWeb.Dashboard do
 
   @impl true
   def handle_event("update_recent_calls", %{"calls" => calls}, socket) do
-    # Forward to SimulatorControls component  
+    # Forward to SimulatorControls component
     send_update(Components.SimulatorControls, id: "simulator-controls", recent_calls: calls)
     {:noreply, socket}
   end
@@ -1436,15 +1418,15 @@ defmodule LivechainWeb.Dashboard do
     # Toggle the collapsed state and notify the component
     new_collapsed = not socket.assigns.chain_config_collapsed
     socket = assign(socket, :chain_config_collapsed, new_collapsed)
-    
+
     # Send message to update the component
-    send_update(ChainConfigurationWindow, 
-      id: "chain-configuration-window", 
+    send_update(ChainConfigurationWindow,
+      id: "chain-configuration-window",
       is_collapsed: new_collapsed,
       selected_chain: socket.assigns.selected_chain,
       selected_provider: socket.assigns.selected_provider
     )
-    
+
     {:noreply, socket}
   end
 

@@ -2,7 +2,7 @@ defmodule LivechainWeb.Components.DashboardHeader do
   use Phoenix.Component
   import LivechainWeb.CoreComponents
 
-  attr :active_tab, :string, required: true, doc: "currently active tab"
+  attr(:active_tab, :string, required: true, doc: "currently active tab")
 
   def header(assigns) do
     ~H"""
@@ -45,13 +45,12 @@ defmodule LivechainWeb.Components.DashboardHeader do
             </div>
           </div>
         </div>
-
-        <!-- Navigation Tabs -->
+        
+    <!-- Navigation Tabs -->
         <.tab_switcher
           id="main-tabs"
           tabs={[
             %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
-            %{id: "benchmarks", label: "Benchmarks", icon: "M3 3h18M9 7l6-3M9 17l6-3"},
             %{id: "system", label: "System", icon: "M15 4m0 13V4m-6 3l6-3"}
           ]}
           active_tab={@active_tab}
