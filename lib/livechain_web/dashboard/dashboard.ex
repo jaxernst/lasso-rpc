@@ -1246,7 +1246,9 @@ defmodule LivechainWeb.Dashboard do
   end
 
 
-  # Simulator Event Forwarding (from JavaScript hooks to SimulatorControls component)
+
+
+  # Simulator Event Forwarding (only forwards when simulator is active)
   @impl true
   def handle_event("sim_stats", %{"http" => _http, "ws" => _ws} = stats, socket) do
     # Forward to SimulatorControls component
@@ -1258,6 +1260,13 @@ defmodule LivechainWeb.Dashboard do
   def handle_event("update_recent_calls", %{"calls" => calls}, socket) do
     # Forward to SimulatorControls component  
     send_update(Components.SimulatorControls, id: "simulator-controls", recent_calls: calls)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("active_runs_update", %{"runs" => runs}, socket) do
+    # Forward to SimulatorControls component
+    send_update(Components.SimulatorControls, id: "simulator-controls", active_runs: runs)
     {:noreply, socket}
   end
 
