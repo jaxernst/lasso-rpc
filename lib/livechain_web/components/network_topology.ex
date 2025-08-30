@@ -84,7 +84,7 @@ defmodule LivechainWeb.NetworkTopology do
                 y1={line_start_y}
                 x2={line_end_x}
                 y2={line_end_y}
-                stroke={provider_line_color(connection.status)}
+                stroke={provider_line_color(connection)}
                 stroke-width="2"
                 opacity="0.6"
               />
@@ -130,7 +130,7 @@ defmodule LivechainWeb.NetworkTopology do
               class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
     do: "ring-purple-400/30 !border-purple-400 border-purple-400 ring-2",
     else: "border-gray-600"), unless(@selected_provider == connection.id,
-    do: provider_status_class(connection.status))]}
+    do: provider_status_class(connection))]}
               style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
                 if(@selected_provider == connection.id,
                   do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
@@ -145,7 +145,7 @@ defmodule LivechainWeb.NetworkTopology do
             >
               <!-- Status indicator dot -->
               <div
-                class={["rounded-full", provider_status_dot_class(connection.status)]}
+                class={["rounded-full", provider_status_dot_class(connection)]}
                 style={"width: #{max(4, radius - 4)}px; height: #{max(4, radius - 4)}px;"}
               >
               </div>
@@ -494,12 +494,36 @@ defmodule LivechainWeb.NetworkTopology do
     end
   end
 
-  defp provider_line_color(:connected), do: "#10b981"
-  defp provider_line_color(:disconnected), do: "#ef4444"
-  defp provider_line_color(:connecting), do: "#f59e0b"
-  # purple hint
-  defp provider_line_color(:rate_limited), do: "#8B5CF6"
-  defp provider_line_color(_), do: "#6b7280"
+  # Import StatusHelpers for comprehensive status determination
+  alias LivechainWeb.Dashboard.StatusHelpers
+
+  # Enhanced provider line colors based on comprehensive status
+  defp provider_line_color(connection_status) when is_atom(connection_status) do
+    case connection_status do
+      :connected -> "#10b981"      # Green - healthy
+      :disconnected -> "#ef4444"   # Red - failed
+      :connecting -> "#f59e0b"     # Yellow/Orange - connecting 
+      :rate_limited -> "#8B5CF6"   # Purple - rate limited
+      _ -> "#6b7280"               # Gray - unknown
+    end
+  end
+
+  # Enhanced provider line colors using comprehensive connection data
+  defp provider_line_color(connection) when is_map(connection) do
+    case StatusHelpers.determine_provider_status(connection) do
+      :circuit_open -> "#dc2626"   # Dark red - circuit open
+      :failed -> "#ef4444"         # Red - failed  
+      :unhealthy -> "#f97316"      # Orange - unhealthy
+      :unstable -> "#eab308"       # Yellow - unstable
+      :rate_limited -> "#8b5cf6"   # Purple - rate limited
+      :connecting -> "#f59e0b"     # Amber - connecting
+      :recovering -> "#3b82f6"     # Blue - recovering
+      :connected -> "#10b981"      # Green - healthy
+      :unknown -> "#6b7280"        # Gray - unknown
+    end
+  end
+
+  defp provider_line_color(status), do: provider_line_color(status)
 
   defp extract_chain_from_connection(connection) do
     # Use the actual chain field from the connection if available
@@ -526,17 +550,54 @@ defmodule LivechainWeb.NetworkTopology do
   end
 
 
-  defp provider_status_class(:connected), do: "bg-emerald-900/30 border-emerald-600"
-  defp provider_status_class(:disconnected), do: "bg-red-900/30 border-red-600"
-  defp provider_status_class(:connecting), do: "bg-yellow-900/30 border-yellow-600"
-  defp provider_status_class(:rate_limited), do: "bg-purple-900/30 border-purple-600"
-  defp provider_status_class(_), do: "bg-gray-900/30 border-gray-600"
+  # Enhanced provider status classes using comprehensive status
+  defp provider_status_class(connection_status) when is_atom(connection_status) do
+    case connection_status do
+      :connected -> "bg-emerald-900/30 border-emerald-600"
+      :disconnected -> "bg-red-900/30 border-red-600"
+      :connecting -> "bg-yellow-900/30 border-yellow-600"
+      :rate_limited -> "bg-purple-900/30 border-purple-600"
+      _ -> "bg-gray-900/30 border-gray-600"
+    end
+  end
 
-  defp provider_status_dot_class(:connected), do: "bg-emerald-400"
-  defp provider_status_dot_class(:disconnected), do: "bg-red-400"
-  defp provider_status_dot_class(:connecting), do: "bg-yellow-400"
-  defp provider_status_dot_class(:rate_limited), do: "bg-purple-400"
-  defp provider_status_dot_class(_), do: "bg-gray-400"
+  defp provider_status_class(connection) when is_map(connection) do
+    case StatusHelpers.determine_provider_status(connection) do
+      :circuit_open -> "bg-red-900/40 border-red-500"      # Dark red - circuit open
+      :failed -> "bg-red-900/30 border-red-600"            # Red - failed
+      :unhealthy -> "bg-orange-900/30 border-orange-600"   # Orange - unhealthy  
+      :unstable -> "bg-yellow-900/30 border-yellow-600"    # Yellow - unstable
+      :rate_limited -> "bg-purple-900/30 border-purple-600" # Purple - rate limited
+      :connecting -> "bg-amber-900/30 border-amber-600"    # Amber - connecting
+      :recovering -> "bg-blue-900/30 border-blue-600"      # Blue - recovering
+      :connected -> "bg-emerald-900/30 border-emerald-600" # Green - healthy
+      :unknown -> "bg-gray-900/30 border-gray-600"         # Gray - unknown
+    end
+  end
+
+  defp provider_status_dot_class(connection_status) when is_atom(connection_status) do
+    case connection_status do
+      :connected -> "bg-emerald-400"
+      :disconnected -> "bg-red-400"
+      :connecting -> "bg-yellow-400"
+      :rate_limited -> "bg-purple-400"
+      _ -> "bg-gray-400"
+    end
+  end
+
+  defp provider_status_dot_class(connection) when is_map(connection) do
+    case StatusHelpers.determine_provider_status(connection) do
+      :circuit_open -> "bg-red-500"      # Dark red - circuit open
+      :failed -> "bg-red-400"            # Red - failed
+      :unhealthy -> "bg-orange-400"      # Orange - unhealthy
+      :unstable -> "bg-yellow-400"       # Yellow - unstable
+      :rate_limited -> "bg-purple-400"   # Purple - rate limited
+      :connecting -> "bg-amber-400"      # Amber - connecting
+      :recovering -> "bg-blue-400"       # Blue - recovering
+      :connected -> "bg-emerald-400"     # Green - healthy
+      :unknown -> "bg-gray-400"          # Gray - unknown
+    end
+  end
 
   defp chain_color("ethereum"), do: "#627EEA"
   defp chain_color("arbitrum"), do: "#28A0F0"

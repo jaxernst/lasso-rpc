@@ -20,6 +20,7 @@ defmodule Livechain.RPC.ChainRegistry do
 
   alias Livechain.Config.ConfigStore
   alias Livechain.RPC.ChainSupervisor
+  alias Livechain.RPC.ProviderPool
 
   defstruct [
     :chain_supervisors,
@@ -88,29 +89,83 @@ defmodule Livechain.RPC.ChainRegistry do
     Enum.flat_map(all_chains, fn {chain_name, _chain_config} ->
       case get_chain_pid(chain_name) do
         {:ok, pid} when is_pid(pid) ->
-          # Get status from the chain supervisor
-          case ChainSupervisor.get_chain_status(chain_name) do
-            %{error: _} ->
-              []
+          # Get comprehensive status from provider pool
+          case ProviderPool.get_comprehensive_status(chain_name) do
+            {:ok, pool_status} ->
+              # Get WebSocket connection info from chain supervisor  
+              ws_status = ChainSupervisor.get_chain_status(chain_name)
+              ws_connections = Map.get(ws_status, :ws_connections, [])
+              
+              # Merge provider pool data with WS connection data
+              Enum.map(pool_status.providers, fn provider ->
+                # Find matching WS connection data
+                ws_connection = Enum.find(ws_connections, &(&1.id == provider.id))
+                
+                # Safely extract WebSocket connection data with nil checks
+                reconnect_attempts = if ws_connection, do: Map.get(ws_connection, :reconnect_attempts, 0), else: 0
+                subscriptions = if ws_connection, do: Map.get(ws_connection, :subscriptions, 0), else: 0
+                ws_connected = if ws_connection, do: Map.get(ws_connection, :connected, false), else: false
+                pending_messages = if ws_connection, do: Map.get(ws_connection, :pending_messages, 0), else: 0
+                
+                %{
+                  id: provider.id,
+                  name: provider.name,
+                  # Keep the normalized status for UI compatibility, but add raw data
+                  status: normalize_provider_status(provider.status),
+                  health_status: provider.health_status,
+                  circuit_state: provider.circuit_state,
+                  chain: chain_name,
+                  reconnect_attempts: reconnect_attempts,
+                  subscriptions: subscriptions,
+                  last_seen: provider.last_health_check,
+                  # Enhanced status data
+                  consecutive_failures: provider.consecutive_failures,
+                  consecutive_successes: provider.consecutive_successes,
+                  last_error: provider.last_error,
+                  is_in_cooldown: provider.is_in_cooldown,
+                  cooldown_until: provider.cooldown_until,
+                  cooldown_count: provider.cooldown_count,
+                  # Connection state from WebSocket
+                  ws_connected: ws_connected,
+                  pending_messages: pending_messages
+                }
+              end)
 
-            status ->
-              # Convert chain status to connection format
-              case Map.get(status, :providers, []) do
-                providers when is_list(providers) ->
-                  Enum.map(providers, fn provider ->
-                    %{
-                      id: provider.id,
-                      name: provider.name,
-                      status: normalize_provider_status(Map.get(provider, :status, :unknown)),
-                      chain: chain_name,
-                      reconnect_attempts: Map.get(provider, :consecutive_failures, 0),
-                      subscriptions: Map.get(provider, :subscriptions, 0),
-                      last_seen: Map.get(provider, :last_health_check)
-                    }
-                  end)
-
-                _ ->
+            {:error, _} ->
+              # Fallback to old method if comprehensive status fails
+              case ChainSupervisor.get_chain_status(chain_name) do
+                %{error: _} ->
                   []
+
+                status ->
+                  case Map.get(status, :providers, []) do
+                    providers when is_list(providers) ->
+                      Enum.map(providers, fn provider ->
+                        %{
+                          id: provider.id,
+                          name: provider.name,
+                          status: normalize_provider_status(Map.get(provider, :status, :unknown)),
+                          chain: chain_name,
+                          reconnect_attempts: Map.get(provider, :consecutive_failures, 0),
+                          subscriptions: Map.get(provider, :subscriptions, 0),
+                          last_seen: Map.get(provider, :last_health_check),
+                          # Default values for enhanced fields
+                          health_status: :unknown,
+                          circuit_state: :closed,
+                          consecutive_failures: 0,
+                          consecutive_successes: 0,
+                          last_error: nil,
+                          is_in_cooldown: false,
+                          cooldown_until: nil,
+                          cooldown_count: 0,
+                          ws_connected: false,
+                          pending_messages: 0
+                        }
+                      end)
+
+                    _ ->
+                      []
+                  end
               end
           end
 
