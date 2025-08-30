@@ -609,11 +609,8 @@ defmodule LivechainWeb.NetworkTopology do
   defp chain_color(_), do: "#6B7280"
 
 
-  defp is_fastest_provider?(connection, chain_name, latency_leaders) do
-    case Map.get(latency_leaders, chain_name) do
-      fastest_provider_id when fastest_provider_id == connection.id -> true
-      _ -> false
-    end
+  defp is_fastest_provider?(_connection, _chain_name, _latency_leaders) do
+    false
   end
 
   # Helper to identify major chains that orbit around Ethereum
