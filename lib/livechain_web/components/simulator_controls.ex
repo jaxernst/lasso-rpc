@@ -749,7 +749,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
   defp get_preview_text(params) do
     strategy = Map.get(params, :strategy, "round-robin")
     chains = Map.get(params, :chains, [])
-    load_types = Map.get(params, :load_types, %{http: true, ws: true})
+    _load_types = Map.get(params, :load_types, %{http: true, ws: true})
 
     strategy_label =
       case strategy do

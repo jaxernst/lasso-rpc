@@ -703,6 +703,8 @@ defmodule LivechainWeb.Dashboard do
             <%= if provider.status == :connected do %>
               <button
                 data-provider={provider.id}
+                data-provider-type={provider.type}
+                data-provider-supports-ws={provider.type in [:websocket, :both]}
                 class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-indigo-400 hover:text-indigo-300 flex items-center space-x-1"
               >
                 <div class="h-1.5 w-1.5 rounded-full bg-emerald-400"></div>
@@ -733,21 +735,32 @@ defmodule LivechainWeb.Dashboard do
             </div>
           </div>
 
-          <!-- WebSocket Endpoint -->
-          <div class="mb-3">
-            <div class="flex items-center justify-between mb-1">
-              <div class="text-xs font-medium text-gray-300">WebSocket</div>
-              <button
-                data-copy-text={EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
-                class="bg-gray-700 hover:bg-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
-              >
-                Copy
-              </button>
+          <!-- WebSocket Endpoint (only show if chain has providers that support WebSocket) -->
+          <%= if Enum.any?(@chain_connections, fn provider -> 
+                provider.type in [:websocket, :both] or (!is_nil(Map.get(provider, :ws_url)) and String.length(Map.get(provider, :ws_url, "")) > 0)
+              end) do %>
+            <div class="mb-3">
+              <div class="flex items-center justify-between mb-1">
+                <div class="text-xs font-medium text-gray-300">WebSocket</div>
+                <button
+                  data-copy-text={EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
+                  class="bg-gray-700 hover:bg-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
+                >
+                  Copy
+                </button>
+              </div>
+              <div class="text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="ws-endpoint-url">
+                {EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
+              </div>
             </div>
-            <div class="text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="ws-endpoint-url">
-              {EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
+          <% else %>
+            <div class="mb-3">
+              <div class="text-xs font-medium text-gray-400">WebSocket</div>
+              <div class="text-xs text-gray-500 bg-gray-900/50 rounded px-2 py-1">
+                No WebSocket providers available for this chain
+              </div>
             </div>
-          </div>
+          <% end %>
 
           <div class="text-xs text-gray-400" id="mode-description">
             Using fastest provider based on latency benchmarks
@@ -1392,6 +1405,7 @@ defmodule LivechainWeb.Dashboard do
   end
 
   defp fetch_connections(socket) do
+    # Use list_all_connections to get proper status data flow from ProviderPool
     connections = Livechain.RPC.ChainRegistry.list_all_connections()
     latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
 

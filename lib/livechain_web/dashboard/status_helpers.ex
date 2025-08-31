@@ -20,38 +20,50 @@ defmodule LivechainWeb.Dashboard.StatusHelpers do
     reconnect_attempts = Map.get(provider, :reconnect_attempts, 0)
     is_in_cooldown = Map.get(provider, :is_in_cooldown, false)
 
+    # Debug log status determination for troubleshooting
+    require Logger
+    provider_id = Map.get(provider, :id, "unknown")
+    Logger.debug("StatusHelpers: Status determination for #{provider_id}: circuit_state=#{circuit_state}, health_status=#{health_status}, connection_status=#{connection_status}, consecutive_failures=#{consecutive_failures}, is_in_cooldown=#{is_in_cooldown}")
+
     cond do
-      # Circuit breaker is open - provider is effectively failed
+      # Circuit breaker is open - provider is effectively failed (highest priority)
       circuit_state == :open ->
         :circuit_open
 
-      # Rate limited/cooldown state
-      connection_status == :rate_limited or is_in_cooldown ->
-        :rate_limited
+      # Use health_status from ProviderPool as primary indicator
+      health_status == :healthy ->
+        :connected
 
-      # Provider has failed too many times
-      consecutive_failures >= 10 ->
-        :failed
-
-      # Health checks are specifically failing
       health_status == :unhealthy ->
         :unhealthy
 
-      # Connection issues with frequent reconnects
-      reconnect_attempts >= 5 and health_status != :healthy ->
-        :unstable
+      health_status == :rate_limited or is_in_cooldown ->
+        :rate_limited
 
-      # Normal connecting state (initial connection)
-      connection_status == :connecting and reconnect_attempts < 3 ->
+      health_status == :connecting ->
         :connecting
-
-      # Healthy and connected
-      connection_status in [:connected, :healthy] and health_status in [:healthy, :connected] ->
-        :connected
 
       # Circuit breaker in recovery mode
       circuit_state == :half_open ->
         :recovering
+
+      # Provider has failed too many times (fallback for old data)
+      consecutive_failures >= 10 ->
+        :failed
+
+      # Connection issues with frequent reconnects (fallback for old data)
+      reconnect_attempts >= 5 ->
+        :unstable
+
+      # Fallback to connection_status for compatibility
+      connection_status == :connected ->
+        :connected
+
+      connection_status == :connecting ->
+        :connecting
+
+      connection_status == :rate_limited ->
+        :rate_limited
 
       # Default fallback
       true ->

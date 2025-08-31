@@ -37,7 +37,7 @@ defmodule LivechainWeb.Components.DashboardHeader do
                 </div>
                 <div>
                   <div class="flex gap-1 text-lg font-bold text-white">
-                    Lasso RPC
+                    Livechain
                     <div class="text-[9px] ml-.5 -translate-y-1.5 align-super text-emerald-400">
                       ● LIVE
                     </div>

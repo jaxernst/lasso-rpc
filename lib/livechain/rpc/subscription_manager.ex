@@ -326,6 +326,18 @@ defmodule Livechain.RPC.SubscriptionManager do
     {:reply, state.subscriptions, state}
   end
 
+  @impl true
+  def handle_call({:get_chain_subscriptions, chain}, _from, state) do
+    subscription_ids = Map.get(state.chain_subscriptions, chain, [])
+
+    subscriptions =
+      subscription_ids
+      |> Enum.map(&Map.get(state.subscriptions, &1))
+      |> Enum.reject(&is_nil/1)
+
+    {:reply, subscriptions, state}
+  end
+
   @doc """
   Handle provider failover - migrate all subscriptions from failed provider to healthy ones.
   This is the core function for bulletproof subscription continuity.
@@ -401,18 +413,6 @@ defmodule Livechain.RPC.SubscriptionManager do
   end
 
   @impl true
-  def handle_call({:get_chain_subscriptions, chain}, _from, state) do
-    subscription_ids = Map.get(state.chain_subscriptions, chain, [])
-
-    subscriptions =
-      subscription_ids
-      |> Enum.map(&Map.get(state.subscriptions, &1))
-      |> Enum.reject(&is_nil/1)
-
-    {:reply, subscriptions, state}
-  end
-
-  @impl true
   def handle_cast({:update_subscription_block, subscription_id, block_number, block_hash}, state) do
     case Map.get(state.subscriptions, subscription_id) do
       %SubscriptionState{} = subscription ->
@@ -447,20 +447,22 @@ defmodule Livechain.RPC.SubscriptionManager do
 
       # Update last delivered block if this event has block info
       case extract_block_info(event_data) do
-        {block_number, block_hash} when is_integer(block_number) ->
-          update_subscription_block(subscription.id, block_number, block_hash)
+        {block_number, block_hash} ->
+          GenServer.cast(__MODULE__, {
+            :update_subscription_block,
+            subscription.id,
+            block_number,
+            block_hash
+          })
 
-        _ ->
-          # No block info available
+        nil ->
           :ok
       end
     end)
 
-    # Cache event for potential reconnection scenarios
-    cache_event(chain, event_type, event_data, state)
-
     {:noreply, state}
   end
+
 
   # Private functions for backfill implementation
 
@@ -873,21 +875,6 @@ defmodule Livechain.RPC.SubscriptionManager do
     )
   end
 
-  defp cache_event(chain, event_type, event_data, _state) do
-    # Cache recent events for reconnection scenarios
-    cache_entry = %{
-      chain: chain,
-      type: event_type,
-      data: event_data,
-      timestamp: DateTime.utc_now()
-    }
-
-    # Keep only last 100 events per chain
-    current_cache = :ets.lookup(:event_cache, chain) || []
-    updated_cache = [cache_entry | current_cache] |> Enum.take(100)
-
-    :ets.insert(:event_cache, {chain, updated_cache})
-  end
 
   defp extract_chain_from_message(message) when is_map(message) do
     # Extract chain from the Livechain metadata
