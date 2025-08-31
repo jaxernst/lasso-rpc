@@ -245,11 +245,120 @@ defmodule Livechain.RPC.ChainRegistry do
   end
 
   @doc """
+  Lists ALL providers with comprehensive status, including HTTP-only providers.
+  This shows every provider from config regardless of connection type.
+  """
+  def list_all_providers_comprehensive do
+    # Get all configured chains from ConfigStore
+    all_chains = ConfigStore.get_all_chains()
+
+    Enum.flat_map(all_chains, fn {chain_name, chain_config} ->
+      # Get health check data from ProviderPool if available
+      pool_providers_map = case get_chain_pid(chain_name) do
+        {:ok, pid} when is_pid(pid) ->
+          case ProviderPool.get_comprehensive_status(chain_name) do
+            {:ok, pool_status} ->
+              # Convert to map for easy lookup
+              pool_status.providers
+              |> Enum.map(&{&1.id, &1})
+              |> Enum.into(%{})
+            {:error, _} ->
+              %{}
+          end
+        _ ->
+          %{}
+      end
+      
+      # Get WebSocket connection info if chain is running
+      ws_connections_map = case get_chain_pid(chain_name) do
+        {:ok, pid} when is_pid(pid) ->
+          ws_status = ChainSupervisor.get_chain_status(chain_name)
+          ws_connections = Map.get(ws_status, :ws_connections, [])
+          ws_connections
+          |> Enum.map(&{&1.id, &1})
+          |> Enum.into(%{})
+        _ ->
+          %{}
+      end
+      
+      # Show ALL providers from config, enriched with runtime data
+      Enum.map(chain_config.providers, fn config_provider ->
+        provider_type = determine_provider_type(config_provider)
+        
+        # Get health check data from ProviderPool if available
+        pool_provider = Map.get(pool_providers_map, config_provider.id)
+        
+        # Get WebSocket connection data if available  
+        ws_connection = Map.get(ws_connections_map, config_provider.id)
+        
+        # Safely extract WebSocket connection data
+        reconnect_attempts = if ws_connection, do: Map.get(ws_connection, :reconnect_attempts, 0), else: 0
+        subscriptions = if ws_connection, do: Map.get(ws_connection, :subscriptions, 0), else: 0
+        ws_connected = if ws_connection, do: Map.get(ws_connection, :connected, false), else: false
+        pending_messages = if ws_connection, do: Map.get(ws_connection, :pending_messages, 0), else: 0
+        
+        if pool_provider do
+          # Provider has health check data from ProviderPool
+          %{
+            id: pool_provider.id,
+            name: pool_provider.name || config_provider.name || config_provider.id,
+            type: provider_type,  # Add missing type field
+            status: normalize_provider_status(pool_provider.status),
+            health_status: pool_provider.status,
+            circuit_state: pool_provider.circuit_state,
+            chain: chain_name,
+            reconnect_attempts: reconnect_attempts,
+            subscriptions: subscriptions,
+            last_seen: pool_provider.last_health_check,
+            consecutive_failures: pool_provider.consecutive_failures,
+            consecutive_successes: pool_provider.consecutive_successes,
+            last_error: pool_provider.last_error,
+            is_in_cooldown: pool_provider.is_in_cooldown,
+            cooldown_until: pool_provider.cooldown_until,
+            cooldown_count: pool_provider.cooldown_count,
+            ws_connected: ws_connected,
+            pending_messages: pending_messages
+          }
+        else
+          # Provider not in ProviderPool - use config and WS data
+          status = case provider_type do
+            :http -> :connecting  # HTTP-only providers show as connecting by default
+            :websocket -> if ws_connected, do: :connected, else: :disconnected
+            :both -> if ws_connected, do: :connected, else: :connecting
+            _ -> :unknown
+          end
+          
+          %{
+            id: config_provider.id,
+            name: config_provider.name || config_provider.id,
+            type: provider_type,  # Add missing type field
+            status: normalize_provider_status(status),
+            health_status: :unknown,  # No health check data available
+            circuit_state: :closed,
+            chain: chain_name,
+            reconnect_attempts: reconnect_attempts,
+            subscriptions: subscriptions,
+            last_seen: nil,
+            consecutive_failures: 0,
+            consecutive_successes: 0,
+            last_error: nil,
+            is_in_cooldown: false,
+            cooldown_until: nil,
+            cooldown_count: 0,
+            ws_connected: ws_connected,
+            pending_messages: pending_messages
+          }
+        end
+      end)
+    end)
+  end
+
+  @doc """
   Broadcasts connection status updates to all interested LiveViews.
   This replaces the old WSSupervisor.broadcast_connection_status_update functionality.
   """
   def broadcast_connection_status_update do
-    connections = list_all_connections()
+    connections = list_all_providers_comprehensive()
 
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,

@@ -147,6 +147,12 @@ defmodule Livechain.RPC.ChainSupervisor do
       start_circuit_breaker(provider)
     end)
 
+    # Register ALL providers with ProviderPool (for health checks)
+    Enum.each(chain_config.providers, fn provider ->
+      # Register with ProviderPool - pass self() as pid since HTTP-only providers don't have dedicated processes
+      ProviderPool.register_provider(chain_name, provider.id, self(), provider)
+    end)
+
     # Start WebSocket connections for all providers that support them
     ws_providers = ChainConfig.get_ws_providers(chain_config)
 
@@ -161,6 +167,10 @@ defmodule Livechain.RPC.ChainSupervisor do
 
     Logger.info(
       "Started circuit breakers for #{length(chain_config.providers)} providers for #{chain_name}"
+    )
+
+    Logger.info(
+      "Registered #{length(chain_config.providers)} providers (HTTP + WebSocket) with ProviderPool for #{chain_name}"
     )
   end
 
@@ -187,7 +197,7 @@ defmodule Livechain.RPC.ChainSupervisor do
          ) do
       {:ok, pid} ->
         Logger.info("Started WSConnection for #{provider.name} (#{provider.id})")
-        # Register with ProviderPool
+        # Update ProviderPool registration with the actual WSConnection pid
         ProviderPool.register_provider(chain_name, provider.id, pid, provider)
 
       {:error, {:already_started, pid}} ->
@@ -195,7 +205,7 @@ defmodule Livechain.RPC.ChainSupervisor do
           "WSConnection for #{provider.name} (#{provider.id}) already exists, using existing connection"
         )
 
-        # Register with ProviderPool using existing pid
+        # Update ProviderPool registration with existing WSConnection pid
         ProviderPool.register_provider(chain_name, provider.id, pid, provider)
 
       {:error, reason} ->
@@ -256,17 +266,38 @@ defmodule Livechain.RPC.ChainSupervisor do
   # Collects WebSocket connection status from WSConnection processes
   defp collect_ws_connection_status(providers) when is_list(providers) do
     Enum.map(providers, fn provider ->
-      case WSConnection.status(provider.id) do
-        status when is_map(status) ->
+      try do
+        case WSConnection.status(provider.id) do
+          status when is_map(status) ->
+            %{
+              id: provider.id,
+              connected: Map.get(status, :connected, false),
+              reconnect_attempts: Map.get(status, :reconnect_attempts, 0),
+              subscriptions: Map.get(status, :subscriptions, 0),
+              pending_messages: Map.get(status, :pending_messages, 0)
+            }
+          _ ->
+            # WSConnection process not found or error occurred
+            %{
+              id: provider.id,
+              connected: false,
+              reconnect_attempts: 0,
+              subscriptions: 0,
+              pending_messages: 0
+            }
+        end
+      catch
+        :exit, {:noproc, _} ->
+          # WSConnection process doesn't exist (likely HTTP-only provider)
           %{
             id: provider.id,
-            connected: Map.get(status, :connected, false),
-            reconnect_attempts: Map.get(status, :reconnect_attempts, 0),
-            subscriptions: Map.get(status, :subscriptions, 0),
-            pending_messages: Map.get(status, :pending_messages, 0)
+            connected: false,
+            reconnect_attempts: 0,
+            subscriptions: 0,
+            pending_messages: 0
           }
         _ ->
-          # WSConnection process not found or error occurred
+          # Any other error
           %{
             id: provider.id,
             connected: false,
