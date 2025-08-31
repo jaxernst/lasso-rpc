@@ -1,6 +1,8 @@
 defmodule LivechainWeb.NetworkTopology do
   use Phoenix.Component
 
+  alias LivechainWeb.Dashboard.Helpers
+
   attr(:id, :string, required: true, doc: "unique identifier for the topology component")
   attr(:connections, :list, required: true, doc: "list of connection maps")
   attr(:selected_chain, :string, default: nil, doc: "currently selected chain")
@@ -111,11 +113,11 @@ defmodule LivechainWeb.NetworkTopology do
             data-chain-center={"#{x},#{y}"}
           >
             <div class="px-2 py-1 text-center text-white">
-              <div class={"#{if radius < 40, do: "text-xs", else: "text-sm"} mb-1 font-bold text-white"}>
+              <div class={"#{if radius < 50, do: "text-xs", else: "text-sm"} mb-1 font-bold text-white"}>
                 {String.upcase(chain_name)}
               </div>
-              <div class={"#{if radius < 40, do: "text-xs", else: "text-sm"} text-gray-300"}>
-                {length(chain_data.providers)}
+              <div class={"#{if radius < 50, do: "text-xs", else: "text-sm"} text-gray-300"}>
+                {Helpers.get_chain_id(chain_name)}
               </div>
             </div>
           </div>
@@ -198,8 +200,8 @@ defmodule LivechainWeb.NetworkTopology do
       l2_orbit_min: 200,
       # Maximum distance for L2 chains
       l2_orbit_max: 350,
-      # Provider orbit distance from their chain (increased from 45)
-      provider_orbit: 65,
+      # Provider orbit distance from their chain (increased to accommodate larger chain circles)
+      provider_orbit: 75,
       # Provider node size
       provider_radius: 10,
       # Full circle for L2 distribution
@@ -444,8 +446,8 @@ defmodule LivechainWeb.NetworkTopology do
     # Use larger orbit distance for Ethereum to accommodate its bigger size
     adjusted_provider_orbit =
       case chain_name do
-        # Add 25px for Ethereum's larger size
-        "ethereum" -> provider_orbit + 25
+        # Add 30px for Ethereum's larger size
+        "ethereum" -> provider_orbit + 30
         _ -> provider_orbit
       end
 
@@ -505,12 +507,13 @@ defmodule LivechainWeb.NetworkTopology do
   end
 
   defp calculate_chain_radius(provider_count, chain_name) do
-    base_radius = max(35, min(85, 30 + provider_count * 4))
+    # Increase base radius to accommodate longer chain names
+    base_radius = max(45, min(95, 40 + provider_count * 3))
 
     # Make Ethereum the biggest node
     case chain_name do
-      # Add 20px to make it significantly larger
-      "ethereum" -> base_radius + 20
+      # Add 25px to make it significantly larger
+      "ethereum" -> base_radius + 25
       _ -> base_radius
     end
   end
@@ -766,87 +769,31 @@ defmodule LivechainWeb.NetworkTopology do
   # Helper to identify Ethereum L2s and rollups that orbit around Ethereum
   defp is_l2_chain?(chain_name) do
     l2_chains = [
-      # Optimistic Rollups
-      # Arbitrum One - optimistic rollup
       "arbitrum",
-      # Optimism - optimistic rollup
       "optimism",
-      # Base - optimistic rollup
       "base",
-      # Arbitrum Nova - optimistic rollup
       "arbitrum_nova",
-      # Optimism Bedrock - optimistic rollup
       "optimism_bedrock",
-      # Boba Network - optimistic rollup
       "boba",
-      # Metis - optimistic rollup
       "metis",
-      # Loopring - optimistic rollup
+      "metis",
       "loopring",
-      # Zora - optimistic rollup
       "zora",
-      # Blast - optimistic rollup
+      "zora",
       "blast",
-      # Mode - optimistic rollup
       "mode",
-      # Fraxtal - optimistic rollup
+      "mode",
       "fraxtal",
-      # opBNB - optimistic rollup
-      "opbnb",
-      # Polygon zkEVM - zk rollup
       "polygon_zkevm",
-
-      # Zero-Knowledge Rollups
-      # zkSync Era - zk rollup
       "zksync",
-      # Linea - zk rollup
       "linea",
-      # Scroll - zk rollup
       "scroll",
-      # StarkNet - zk rollup
       "starknet",
-      # Polygon - zk rollup (Polygon zkEVM)
-      "polygon",
-      # Mantle - zk rollup
       "mantle",
-      # Taiko - zk rollup
       "taiko",
-      # Kroma - zk rollup
       "kroma",
-      # OP Celestia - zk rollup
-      "op_celestia",
-      # Eclipse - zk rollup
-      "eclipse",
-      # Lumio - zk rollup
-      "lumio",
-      # Astria - zk rollup
-      "astria",
-      # Caldera - zk rollup
-      "caldera",
-      # Degen - zk rollup
-      "degen",
-      # Lyra - zk rollup
-      "lyra",
-      # Aevo - zk rollup
-      "aevo",
-      # Hyperliquid - zk rollup
-      "hyperliquid",
-      # Vertex - zk rollup
-      "vertex",
-      # Drift - zk rollup
-      "drift",
-      # Jupiter - zk rollup
-      "jupiter",
-      # Pyth - zk rollup
-      "pyth",
-      # Chainlink - zk rollup
-      "chainlink",
-      # Unichain - zk rollup
       "unichain",
-      # Manta - zk rollup
-      "manta",
-      # Immutable - zk rollup
-      "immutable"
+      "manta"
     ]
 
     chain_name in l2_chains

@@ -11,32 +11,26 @@ defmodule Livechain.Config.ChainConfig do
   @type t :: %__MODULE__{
           chain_id: non_neg_integer(),
           name: String.t(),
-          block_time: non_neg_integer(),
           providers: [Provider.t()],
           connection: Connection.t(),
-          aggregation: Aggregation.t(),
           failover: Failover.t()
         }
 
   defstruct [
     :chain_id,
     :name,
-    :block_time,
     :providers,
     :connection,
-    :aggregation,
     :failover
   ]
 
   defmodule Config do
     @type t :: %__MODULE__{
-            chains: %{String.t() => ChainConfig.t()},
-            global: Global.t()
+            chains: %{String.t() => ChainConfig.t()}
           }
 
     defstruct [
-      :chains,
-      :global
+      :chains
     ]
   end
 
@@ -82,25 +76,6 @@ defmodule Livechain.Config.ChainConfig do
     ]
   end
 
-  defmodule Aggregation do
-    @type t :: %__MODULE__{
-            # milliseconds
-            deduplication_window: non_neg_integer(),
-            # min providers that must confirm
-            min_confirmations: non_neg_integer(),
-            # max concurrent providers to use
-            max_providers: non_neg_integer(),
-            # max cached messages (per chain)
-            max_cache_size: non_neg_integer()
-          }
-
-    defstruct [
-      :deduplication_window,
-      :min_confirmations,
-      :max_providers,
-      :max_cache_size
-    ]
-  end
 
   defmodule Failover do
     @type t :: %__MODULE__{
@@ -117,38 +92,6 @@ defmodule Livechain.Config.ChainConfig do
               enabled: true
   end
 
-  defmodule Global do
-    defstruct [
-      :health_check,
-      :provider_management,
-      :deduplication
-    ]
-
-    defmodule HealthCheck do
-      defstruct [
-        :interval,
-        :timeout,
-        :failure_threshold,
-        :recovery_threshold
-      ]
-    end
-
-    defmodule ProviderManagement do
-      defstruct [
-        :auto_failover,
-        :load_balancing
-      ]
-    end
-
-    defmodule Deduplication do
-      defstruct [
-        :enabled,
-        :algorithm,
-        :cache_size,
-        :cache_ttl
-      ]
-    end
-  end
 
   @doc """
   Loads and parses the chain configuration from a YAML file.
@@ -253,11 +196,9 @@ defmodule Livechain.Config.ChainConfig do
   defp provider_available?(_), do: false
 
   defp parse_config(yaml_data) do
-    with {:ok, chains} <- parse_chains(yaml_data["chains"]),
-         {:ok, global} <- parse_global(yaml_data["global"]) do
+    with {:ok, chains} <- parse_chains(yaml_data["chains"]) do
       config = %Config{
-        chains: chains,
-        global: global
+        chains: chains
       }
 
       {:ok, config}
@@ -281,10 +222,8 @@ defmodule Livechain.Config.ChainConfig do
     %__MODULE__{
       chain_id: chain_data["chain_id"],
       name: chain_data["name"],
-      block_time: chain_data["block_time"],
       providers: parse_providers(chain_data["providers"]),
       connection: parse_connection(chain_data["connection"]),
-      aggregation: parse_aggregation(chain_data["aggregation"]),
       failover: parse_failover(chain_data["failover"])
     }
   end
@@ -312,14 +251,6 @@ defmodule Livechain.Config.ChainConfig do
     }
   end
 
-  defp parse_aggregation(aggregation_data) do
-    %Aggregation{
-      deduplication_window: aggregation_data["deduplication_window"],
-      min_confirmations: aggregation_data["min_confirmations"],
-      max_providers: aggregation_data["max_providers"],
-      max_cache_size: aggregation_data["max_cache_size"]
-    }
-  end
 
   defp parse_failover(nil) do
     # Use default values if no failover config provided
@@ -334,40 +265,6 @@ defmodule Livechain.Config.ChainConfig do
     }
   end
 
-  defp parse_global(global_data) do
-    global = %Global{
-      health_check: parse_health_check(global_data["health_check"]),
-      provider_management: parse_provider_management(global_data["provider_management"]),
-      deduplication: parse_deduplication(global_data["deduplication"])
-    }
-
-    {:ok, global}
-  end
-
-  defp parse_health_check(health_check_data) do
-    %Global.HealthCheck{
-      interval: health_check_data["interval"],
-      timeout: health_check_data["timeout"],
-      failure_threshold: health_check_data["failure_threshold"],
-      recovery_threshold: health_check_data["recovery_threshold"]
-    }
-  end
-
-  defp parse_provider_management(pm_data) do
-    %Global.ProviderManagement{
-      auto_failover: pm_data["auto_failover"],
-      load_balancing: pm_data["load_balancing"]
-    }
-  end
-
-  defp parse_deduplication(dedup_data) do
-    %Global.Deduplication{
-      enabled: dedup_data["enabled"],
-      algorithm: dedup_data["algorithm"],
-      cache_size: dedup_data["cache_size"],
-      cache_ttl: dedup_data["cache_ttl"]
-    }
-  end
 
   @doc """
   Substitutes environment variables in configuration strings.
@@ -389,8 +286,7 @@ defmodule Livechain.Config.ChainConfig do
   """
   def validate_chain_config(%__MODULE__{} = chain_config) do
     with :ok <- validate_providers(chain_config.providers),
-         :ok <- validate_connection(chain_config.connection),
-         :ok <- validate_aggregation(chain_config.aggregation) do
+         :ok <- validate_connection(chain_config.connection) do
       :ok
     end
   end
@@ -419,10 +315,4 @@ defmodule Livechain.Config.ChainConfig do
 
   defp validate_connection(_), do: {:error, :invalid_connection}
 
-  defp validate_aggregation(%Aggregation{deduplication_window: dw, min_confirmations: mc})
-       when is_integer(dw) and dw > 0 and is_integer(mc) and mc > 0 do
-    :ok
-  end
-
-  defp validate_aggregation(_), do: {:error, :invalid_aggregation}
 end

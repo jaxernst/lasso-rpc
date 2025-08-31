@@ -21,7 +21,6 @@ defmodule LivechainWeb.Admin.ChainController do
               id: name,
               name: config.name,
               chain_id: config.chain_id,
-              block_time: config.block_time,
               provider_count: length(config.providers),
               providers: Enum.map(config.providers, fn provider ->
                 %{
@@ -39,12 +38,6 @@ defmodule LivechainWeb.Admin.ChainController do
                 heartbeat_interval: config.connection.heartbeat_interval,
                 reconnect_interval: config.connection.reconnect_interval,
                 max_reconnect_attempts: config.connection.max_reconnect_attempts
-              },
-              aggregation: %{
-                deduplication_window: config.aggregation.deduplication_window,
-                min_confirmations: config.aggregation.min_confirmations,
-                max_providers: config.aggregation.max_providers,
-                max_cache_size: config.aggregation.max_cache_size
               },
               failover: %{
                 max_backfill_blocks: config.failover.max_backfill_blocks,
@@ -75,7 +68,6 @@ defmodule LivechainWeb.Admin.ChainController do
           id: chain_id,
           name: config.name,
           chain_id: config.chain_id,
-          block_time: config.block_time,
           providers: Enum.map(config.providers, fn provider ->
             %{
               id: provider.id,
@@ -92,12 +84,6 @@ defmodule LivechainWeb.Admin.ChainController do
             heartbeat_interval: config.connection.heartbeat_interval,
             reconnect_interval: config.connection.reconnect_interval,
             max_reconnect_attempts: config.connection.max_reconnect_attempts
-          },
-          aggregation: %{
-            deduplication_window: config.aggregation.deduplication_window,
-            min_confirmations: config.aggregation.min_confirmations,
-            max_providers: config.aggregation.max_providers,
-            max_cache_size: config.aggregation.max_cache_size
           },
           failover: %{
             max_backfill_blocks: config.failover.max_backfill_blocks,
@@ -358,7 +344,6 @@ defmodule LivechainWeb.Admin.ChainController do
       id: chain_id,
       name: config.name,
       chain_id: config.chain_id,
-      block_time: config.block_time,
       provider_count: length(config.providers)
     }
   end

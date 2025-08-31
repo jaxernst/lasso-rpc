@@ -47,7 +47,7 @@ This architecture scales from a single self-hosted instance to a global network 
 
 - **Multi-provider orchestration** with pluggable routing strategies (fastest, cheapest, priority, round-robin)
 - **Full JSON-RPC compatibility** via HTTP and WebSocket proxies for all standard read-only methods
-- **Bulletproof failover** with per-provider circuit breakers and health monitoring
+- **RPC Method failover** with per-provider circuit breakers and health monitoring
 - **Passive benchmarking** using real traffic to measure provider performance per-chain and per-method
 - **Performance tracking** - measures real RPC call latencies to optimize provider selection
 - **Live dashboard** with real-time insights, provider leaderboards, and performance metrics
@@ -76,7 +76,7 @@ curl -X POST http://localhost:4000/rpc/cheapest/ethereum \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 
-# ⚡ FASTEST - Routes to best-performing provider based on real latency data  
+# ⚡ FASTEST - Routes to best-performing provider based on real latency data
 curl -X POST http://localhost:4000/rpc/fastest/ethereum \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
@@ -95,6 +95,7 @@ curl -X POST http://localhost:4000/rpc/round-robin/ethereum \
 ## Quick Start
 
 ### Prerequisites
+
 - **Elixir/OTP 26+** - [Install Elixir](https://elixir-lang.org/install.html)
 - **Node.js 18+** - [Install Node.js](https://nodejs.org/) (for Phoenix LiveView assets)
 
@@ -139,6 +140,7 @@ curl -X POST http://localhost:4000/rpc/fastest/ethereum \
 ### 🎬 Automated Demo
 
 Run the interactive demo script:
+
 ```bash
 # Demonstrates all 4 routing strategies with live examples
 ./scripts/demo_routing_strategies.exs
@@ -196,6 +198,7 @@ WebSocket: ws://localhost:4000/rpc/base
 ```
 
 ### Supported Methods
+
 - **Block queries**: `eth_blockNumber`, `eth_getBlockByNumber`, `eth_getBlockByHash`
 - **Account queries**: `eth_getBalance`, `eth_getTransactionCount`, `eth_getCode`
 - **Transaction queries**: `eth_getTransactionByHash`, `eth_getTransactionReceipt`
@@ -215,7 +218,7 @@ GET /api/status
 GET /api/metrics/:chain
 ```
 
-## Key Innovation: Real Performance Tracking  
+## Key Innovation: Real Performance Tracking
 
 Unlike traditional load balancers, Livechain uses **real RPC call measurements** for intelligent routing:
 
@@ -231,7 +234,7 @@ This gives you production-grounded performance data without synthetic benchmarks
 Access the real-time dashboard at `http://localhost:4000`:
 
 - **Provider leaderboards** with win rates and average latency
-- **Performance matrix** showing RPC call latencies by provider and method  
+- **Performance matrix** showing RPC call latencies by provider and method
 - **Circuit breaker status** and provider health monitoring
 - **Chain selection** to switch between networks
 - **System simulator** for load testing
@@ -282,6 +285,6 @@ mix run scripts/load_test.exs
 ## Links
 
 - [Full Documentation](docs/)
-- [API Reference](docs/API_REFERENCE.md)  
+- [API Reference](docs/API_REFERENCE.md)
 - [Architecture Deep Dive](docs/ARCHITECTURE.md)
 - [Getting Started Guide](docs/GETTING_STARTED.md)

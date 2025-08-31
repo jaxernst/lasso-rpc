@@ -14,15 +14,6 @@ Livechain is an Elixir/OTP application that provides intelligent RPC provider or
 - Passive provider benchmarking on a per-chain and per-method basis with event racing for lowest-latency delivery
 - Live dashboard with real-time insights, provider performance metrics, chain status, and a system load simulator
 
-### **Key Innovation: Passive Provider Racing**
-
-Instead of synthetic benchmarks, Livechain deduplicates identical events from multiple providers and measures which provider delivers them fastest in real time. This produces production-grounded performance data without introducing artificial load.
-
-- Deterministic message keys (block/tx hashes or content digests) enable identical-event detection
-- Microsecond-level timing to compute precise win/loss margins
-- First-wins forwarding: clients receive the earliest provider's message; subsequent arrivals update scores
-- Memory-bounded cache preserves race integrity with predictable resource usage
-
 ---
 
 ## Regionality and Latency-Aware Routing
@@ -147,8 +138,6 @@ end
 - `:half_open` → `:closed`: After success_threshold consecutive successes
 - `:half_open` → `:open`: On any failure
 
-
-
 ---
 
 ## Data Flow Architecture
@@ -223,7 +212,8 @@ config :livechain, :provider_selection_strategy, :fastest
 
 ### **Phoenix LiveView Components**
 
-- **Racing leaderboard**: Live provider rankings with win rates
+- **Latency Metrics**: Live provider rankings
+- **Routing Decision Events**: See how requests are routed in real time
 - **Performance matrix**: RPC call latencies by provider and method
 - **Chain selection**: Switch between Ethereum, Polygon, Arbitrum
 - **Real-time updates**: WebSocket push updates on new race results

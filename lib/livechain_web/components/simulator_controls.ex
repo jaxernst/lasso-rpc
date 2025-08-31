@@ -18,14 +18,21 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
       |> assign_new(:sim_collapsed, fn -> true end)
       |> assign_new(:simulator_running, fn -> false end)
       |> assign_new(:selected_chains, fn -> [] end)
-      |> assign_new(:selected_strategy, fn -> "fastest" end)
+      |> assign_new(:selected_strategy, fn -> "round-robin" end)
       |> assign_new(:request_rate, fn -> 5 end)
       |> assign_new(:run_duration, fn -> 30 end)
-      |> assign_new(:run_type, fn -> "load_test" end)
+      |> assign_new(:load_types, fn -> %{http: true, ws: true} end)
       |> assign_new(:recent_calls, fn -> [] end)
       |> assign_new(:available_chains, fn -> [] end)
       |> assign_new(:active_runs, fn -> [] end)
       |> assign_new(:quick_run_config, fn -> get_default_run_config() end)
+      |> assign_new(:preview_text, fn ->
+        get_preview_text(%{
+          strategy: "round-robin",
+          chains: [],
+          load_types: %{http: true, ws: true}
+        })
+      end)
 
     # Handle specific updates from Dashboard forwarding
     socket =
@@ -107,38 +114,46 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
         [chain | selected]
       end
 
-    {:noreply, assign(socket, :selected_chains, new_selected)}
+    socket =
+      socket
+      |> assign(:selected_chains, new_selected)
+      |> update_preview_text()
+
+    {:noreply, socket}
   end
 
   @impl true
   def handle_event("select_all_chains", _params, socket) do
     all_chains = Enum.map(socket.assigns.available_chains, & &1.name)
-    {:noreply, assign(socket, :selected_chains, all_chains)}
+
+    socket =
+      socket
+      |> assign(:selected_chains, all_chains)
+      |> update_preview_text()
+
+    {:noreply, socket}
   end
 
   @impl true
   def handle_event("select_strategy", %{"strategy" => strategy}, socket) do
-    {:noreply, assign(socket, :selected_strategy, strategy)}
+    socket =
+      socket
+      |> assign(:selected_strategy, strategy)
+      |> update_preview_text()
+
+    {:noreply, socket}
   end
 
   @impl true
-  def handle_event("update_rate", %{"rate" => rate}, socket) do
+  def handle_event("set_rate", %{"rate" => rate}, socket) do
     rate_int = String.to_integer(rate)
-    {:noreply, assign(socket, :request_rate, rate_int)}
-  end
 
-  @impl true
-  def handle_event("increase_rate", _params, socket) do
-    current_rate = socket.assigns.request_rate
-    new_rate = min(current_rate + 1, 50)
-    {:noreply, assign(socket, :request_rate, new_rate)}
-  end
+    socket =
+      socket
+      |> assign(:request_rate, rate_int)
+      |> update_preview_text()
 
-  @impl true
-  def handle_event("decrease_rate", _params, socket) do
-    current_rate = socket.assigns.request_rate
-    new_rate = max(current_rate - 1, 1)
-    {:noreply, assign(socket, :request_rate, new_rate)}
+    {:noreply, socket}
   end
 
   @impl true
@@ -275,12 +290,12 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
   def handle_event("active_runs_update", %{"runs" => runs}, socket) do
     # Update simulator_running based on whether there are any active runs
     is_running = length(runs) > 0
-    
-    socket = 
+
+    socket =
       socket
       |> assign(:active_runs, runs)
       |> assign(:simulator_running, is_running)
-    
+
     {:noreply, socket}
   end
 
@@ -309,17 +324,31 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
   end
 
   @impl true
-  def handle_event("update_run_type", %{"type" => type}, socket) do
-    new_config =
+  def handle_event("toggle_load_type", %{"type" => type}, socket) do
+    current_load_types = socket.assigns.load_types
+
+    new_load_types =
       case type do
-        "load_test" -> get_load_test_config(socket)
-        "http_only" -> get_http_only_config(socket)
-        "ws_only" -> get_ws_only_config(socket)
-        "stress_test" -> get_stress_test_config(socket)
-        _ -> get_default_run_config()
+        "http" -> %{current_load_types | http: !current_load_types.http}
+        "ws" -> %{current_load_types | ws: !current_load_types.ws}
+        _ -> current_load_types
       end
 
-    {:noreply, assign(socket, run_type: type, quick_run_config: new_config)}
+    # Ensure at least one type is selected
+    new_load_types =
+      if !new_load_types.http && !new_load_types.ws do
+        # Default to HTTP if both are disabled
+        %{http: true, ws: false}
+      else
+        new_load_types
+      end
+
+    socket =
+      socket
+      |> assign(:load_types, new_load_types)
+      |> update_preview_text()
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -342,7 +371,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
     else: "bg-gray-500")]}>
             </div>
             <div class="truncate text-xs font-medium text-white">
-              Network Simulator
+              RPC Load Simulator
             </div>
           </div>
           <div class="flex items-center gap-2">
@@ -351,7 +380,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
               phx-target={@myself}
               class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-all duration-200 hover:bg-gray-700/60"
             >
-              {if @sim_collapsed, do: "↖", else: "↗"}
+              {if @sim_collapsed, do: "↘", else: "↖"}
             </button>
           </div>
         </div>
@@ -361,7 +390,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
           <.collapsed_content
             sim_stats={@sim_stats}
             simulator_running={@simulator_running}
-            quick_run_config={@quick_run_config}
+            preview_text={@preview_text}
             myself={@myself}
           />
         <% else %>
@@ -373,11 +402,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
               selected_chains={@selected_chains}
               selected_strategy={@selected_strategy}
               request_rate={@request_rate}
-              run_duration={@run_duration}
-              run_type={@run_type}
-              quick_run_config={@quick_run_config}
-              active_runs={@active_runs}
-              recent_calls={@recent_calls}
+              load_types={@load_types}
               simulator_running={@simulator_running}
               myself={@myself}
             />
@@ -395,7 +420,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
       <%= if not @simulator_running do %>
         <div class="flex items-center justify-between">
           <div class="text-[10px] text-gray-400">
-            {format_run_config(@quick_run_config)}
+            {@preview_text}
           </div>
           <button
             phx-click="quick_start"
@@ -434,7 +459,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
               <span class="text-purple-400">{get_stat(@sim_stats, :ws, "open", 0)} WS</span>
             </span>
           </div>
-          
+
           <div class="flex justify-end pt-1">
             <button
               phx-click="sim_stop_all"
@@ -453,204 +478,124 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
   defp expanded_content(assigns) do
     ~H"""
     <div class="space-y-4 p-4">
-      <!-- Run Configuration Section -->
-      <div class="space-y-3">
-        <div class="flex items-center justify-between">
-          <h3 class="text-xs font-semibold text-white">Simulation Configuration</h3>
-          <%= if @simulator_running do %>
-            <div class="flex items-center gap-1">
-              <div class="h-2 w-2 animate-pulse rounded-full bg-emerald-400"></div>
-              <span class="text-[10px] text-emerald-300">Running</span>
-            </div>
-          <% end %>
-        </div>
-        
-    <!-- Quick Run Type Selector -->
-        <div class="space-y-2">
-          <label class="text-[10px] font-medium text-gray-400">Run Type</label>
-          <div class="grid grid-cols-2 gap-1">
-            <%= for {type, label, desc} <- [
-              {"load_test", "Load Test", "HTTP + WS mixed"},
-              {"http_only", "HTTP Only", "REST API load"},
-              {"ws_only", "WebSocket", "Real-time subs"},
-              {"stress_test", "Stress Test", "High throughput"}
-            ] do %>
-              <button
-                phx-click="update_run_type"
-                phx-value-type={type}
-                phx-target={@myself}
-                class={["text-[10px] rounded-lg p-2 text-left transition-all duration-200", if(@run_type == type,
-    do: "bg-emerald-500/20 border border-emerald-500 text-emerald-300",
-    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-emerald-400/50")]}
-              >
-                <div class="font-medium">{label}</div>
-                <div class="mt-0.5 text-gray-400">{desc}</div>
-              </button>
-            <% end %>
+      <!-- Header Section -->
+      <div class="flex items-center justify-between">
+        <h3 class="text-xs font-semibold text-white">Load Simulator</h3>
+        <%= if @simulator_running do %>
+          <div class="flex items-center gap-1">
+            <div class="h-2 w-2 animate-pulse rounded-full bg-emerald-400"></div>
+            <span class="text-[10px] text-emerald-300">Running</span>
           </div>
-        </div>
-        
-    <!-- Duration Control -->
-        <div class="space-y-2">
-          <div class="flex items-center justify-between">
-            <label class="text-[10px] font-medium text-gray-400">Duration</label>
-            <div class="bg-blue-500/20 border-blue-500/30 rounded border px-2 py-0.5">
-              <span class="text-[10px] font-mono text-blue-300">{@run_duration}s</span>
-            </div>
-          </div>
-          <input
-            type="range"
-            min="5"
-            max="300"
-            step="5"
-            value={@run_duration}
-            phx-change="update_duration"
-            phx-target={@myself}
-            name="duration"
-            class="h-1 w-full cursor-pointer appearance-none rounded bg-gray-700 accent-blue-500"
-          />
-          <div class="text-[9px] flex justify-between text-gray-500">
-            <span>5s</span>
-            <span>5min</span>
-          </div>
-        </div>
+        <% end %>
       </div>
       
-    <!-- Advanced Configuration -->
-      <div class="border-gray-700/40 space-y-3 border-t pt-4">
-        <h4 class="text-[10px] font-medium text-gray-400">Advanced Settings</h4>
-        
     <!-- Chain Selection -->
-        <div class="space-y-2">
-          <div class="flex items-center justify-between">
-            <label class="text-[10px] text-gray-400">Target Chains</label>
-            <button
-              phx-click="select_all_chains"
-              phx-target={@myself}
-              class="text-[9px] border-sky-500/30 rounded border px-1.5 py-0.5 text-sky-400 transition-colors hover:border-sky-400/50 hover:text-sky-300"
-            >
-              All
-            </button>
-          </div>
-          <div class="flex flex-wrap gap-1">
-            <%= if length(@available_chains) > 0 do %>
-              <%= for chain <- @available_chains do %>
-                <button
-                  phx-click="toggle_chain_selection"
-                  phx-value-chain={chain.name}
-                  phx-target={@myself}
-                  class={["text-[9px] rounded px-2 py-1 font-medium transition-all duration-200", if(chain.name in (@selected_chains || []),
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <label class="text-[10px] font-medium text-gray-400">Target Chains</label>
+          <button
+            phx-click="select_all_chains"
+            phx-target={@myself}
+            class="text-[9px] border-sky-500/30 rounded border px-1.5 py-0.5 text-sky-400 transition-colors hover:border-sky-400/50 hover:text-sky-300"
+          >
+            All
+          </button>
+        </div>
+        <div class="flex flex-wrap gap-1">
+          <%= if length(@available_chains) > 0 do %>
+            <%= for chain <- @available_chains do %>
+              <button
+                phx-click="toggle_chain_selection"
+                phx-value-chain={chain.name}
+                phx-target={@myself}
+                class={["text-[9px] rounded px-2 py-1 font-medium transition-all duration-200", if(chain.name in (@selected_chains || []),
     do: "bg-sky-500/20 border border-sky-500 text-sky-300",
     else: "border border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300")]}
-                >
-                  {chain.display_name}
-                </button>
-              <% end %>
-            <% else %>
-              <div class="text-[10px] py-1 text-gray-500">No chains available</div>
+              >
+                {chain.display_name}
+              </button>
             <% end %>
-          </div>
+          <% else %>
+            <div class="text-[10px] py-1 text-gray-500">No chains available</div>
+          <% end %>
         </div>
-        
-    <!-- Strategy and Rate -->
-        <div class="grid grid-cols-2 gap-3">
-          <div class="space-y-1">
-            <label class="text-[10px] text-gray-400">Strategy</label>
-            <select
-              phx-change="select_strategy"
+      </div>
+      
+    <!-- Routing Strategy -->
+      <div class="space-y-2">
+        <label class="text-[10px] font-medium text-gray-400">Routing Strategy</label>
+        <div class="grid grid-cols-2 gap-1">
+          <%= for {strategy, label, icon} <- [
+            {"round-robin", "Round Robin", "🔄"},
+            {"fastest", "Fastest", "⚡"},
+            {"cheapest", "Cheapest", "💰"},
+            {"priority", "Priority", "⭐"}
+          ] do %>
+            <button
+              phx-click="select_strategy"
+              phx-value-strategy={strategy}
               phx-target={@myself}
-              name="strategy"
-              class="text-[10px] w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-gray-300 focus:border-purple-500 focus:outline-none"
+              class={["text-[10px] rounded-lg p-2 text-left transition-all duration-200", if(@selected_strategy == strategy,
+    do: "bg-purple-500/20 border border-purple-500 text-purple-300",
+    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50")]}
             >
-              <%= for {strategy, label} <- [{"fastest", "⚡ Fastest"}, {"leaderboard", "🏆 Leaderboard"}, {"priority", "⭐ Priority"}, {"round-robin", "🔄 Round Robin"}] do %>
-                <option value={strategy} selected={@selected_strategy == strategy}>{label}</option>
-              <% end %>
-            </select>
-          </div>
-
-          <div class="space-y-1">
-            <label class="text-[10px] text-gray-400">Rate (RPS)</label>
-            <div class="flex items-center gap-1">
-              <button
-                phx-click="decrease_rate"
-                phx-target={@myself}
-                class="rounded bg-gray-700 p-1 text-xs text-gray-300 hover:bg-gray-600"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={@request_rate}
-                phx-change="update_rate"
-                phx-target={@myself}
-                name="rate"
-                class="text-[10px] flex-1 rounded border border-gray-600 bg-gray-800 px-1 py-1 text-center text-gray-300 focus:border-orange-500 focus:outline-none"
-              />
-              <button
-                phx-click="increase_rate"
-                phx-target={@myself}
-                class="rounded bg-gray-700 p-1 text-xs text-gray-300 hover:bg-gray-600"
-              >
-                +
-              </button>
-            </div>
-          </div>
+              <div class="font-medium">{icon} {label}</div>
+            </button>
+          <% end %>
         </div>
       </div>
       
-    <!-- Control Actions -->
-      <div class="border-gray-700/40 space-y-2 border-t pt-4">
-        <%= if not @simulator_running do %>
+    <!-- Load Type Toggles
+      <div class="space-y-2">
+        <label class="text-[10px] font-medium text-gray-400">Load Types</label>
+        <div class="flex gap-2">
           <button
-            phx-click="start_simulator_run"
+            phx-click="toggle_load_type"
+            phx-value-type="http"
             phx-target={@myself}
-            class="bg-emerald-600/20 border-emerald-500/40 flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium text-emerald-300 transition-all duration-200 hover:bg-emerald-600/30"
+            class={["text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200", if(@load_types.http,
+    do: "bg-sky-500/20 border border-sky-500 text-sky-300",
+    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-sky-400/50")]}
           >
-            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            <span>Start Simulation</span>
-          </button>
-        <% else %>
-          <button
-            phx-click="sim_stop_all"
-            phx-target={@myself}
-            class="bg-red-600/20 border-red-500/40 flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium text-red-300 transition-all duration-200 hover:bg-red-600/30"
-          >
-            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-            </svg>
-            <span>Stop All Runs</span>
-          </button>
-        <% end %>
-
-        <div class="grid grid-cols-2 gap-2">
-          <button
-            phx-click="clear_sim_logs"
-            phx-target={@myself}
-            class="border-gray-600/40 bg-gray-800/60 rounded-lg border px-3 py-2 text-xs text-gray-300 transition-all duration-200 hover:border-gray-500/60 hover:bg-gray-700/60 hover:text-white"
-          >
-            Clear Logs
+            HTTP Load
           </button>
           <button
-            phx-click="toggle_collapsed"
+            phx-click="toggle_load_type"
+            phx-value-type="ws"
             phx-target={@myself}
-            class="border-gray-600/40 bg-gray-800/60 rounded-lg border px-3 py-2 text-xs text-gray-300 transition-all duration-200 hover:border-gray-500/60 hover:bg-gray-700/60 hover:text-white"
+            class={["text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200", if(@load_types.ws,
+    do: "bg-purple-500/20 border border-purple-500 text-purple-300",
+    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50")]}
           >
-            Minimize
+            WebSocket Load
           </button>
         </div>
       </div>
+     -->
+
+      <!-- Request Rate -->
+      <div class="space-y-2">
+        <label class="text-[10px] font-medium text-gray-400">Request Rate</label>
+        <div class="flex gap-2">
+          <%= for rate <- [5, 15, 30] do %>
+            <button
+              phx-click="set_rate"
+              phx-value-rate={rate}
+              phx-target={@myself}
+              class={["text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200", if(@request_rate == rate,
+    do: "bg-orange-500/20 border border-orange-500 text-orange-300",
+    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-orange-400/50")]}
+            >
+              {rate} RPS
+            </button>
+          <% end %>
+        </div>
+      </div>
       
-    <!-- Enhanced Live Stats -->
+    <!-- Live Statistics -->
       <div class="bg-gray-800/40 space-y-2 rounded-lg p-3">
         <div class="flex items-center justify-between">
           <div class="text-xs font-medium text-gray-300">Live Statistics</div>
-          <%= if @simulator_running do %>
-            <div class="text-[9px] text-gray-400">Updating...</div>
-          <% end %>
         </div>
 
         <div class="grid grid-cols-3 gap-2">
@@ -691,6 +636,33 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
           </div>
         </div>
       </div>
+      
+    <!-- Control Actions -->
+      <div class="space-y-2">
+        <%= if not @simulator_running do %>
+          <button
+            phx-click="start_simulator_run"
+            phx-target={@myself}
+            class="bg-emerald-600/20 border-emerald-500/40 flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium text-emerald-300 transition-all duration-200 hover:bg-emerald-600/30"
+          >
+            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            <span>Start Load Test</span>
+          </button>
+        <% else %>
+          <button
+            phx-click="sim_stop_all"
+            phx-target={@myself}
+            class="bg-red-600/20 border-red-500/40 flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium text-red-300 transition-all duration-200 hover:bg-red-600/30"
+          >
+            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+            </svg>
+            <span>Stop Load Test</span>
+          </button>
+        <% end %>
+      </div>
     </div>
     """
   end
@@ -724,7 +696,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
   # Run configuration helpers
   defp get_default_run_config do
     %{
-      type: "load_test",
+      type: "custom",
       duration: 30000,
       http: %{
         enabled: true,
@@ -740,84 +712,27 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
     }
   end
 
-  defp get_load_test_config(socket) do
+  defp build_run_config(socket) do
+    load_types = socket.assigns.load_types
+
     %{
-      type: "load_test",
-      duration: socket.assigns.run_duration * 1000,
+      type: "custom",
+      # 30 seconds default
+      duration: 30000,
       chains: get_selected_chains(socket),
       strategy: socket.assigns.selected_strategy,
       http: %{
-        enabled: true,
-        methods: ["eth_blockNumber", "eth_getBalance", "eth_getTransactionCount"],
+        enabled: load_types.http,
+        methods: ["eth_blockNumber", "eth_getBalance"],
         rps: socket.assigns.request_rate,
-        concurrency: 4
+        concurrency: max(8, socket.assigns.request_rate)
       },
       ws: %{
-        enabled: true,
+        enabled: load_types.ws,
         connections: 2,
         topics: ["newHeads"]
       }
     }
-  end
-
-  defp get_http_only_config(socket) do
-    %{
-      type: "http_only",
-      duration: socket.assigns.run_duration * 1000,
-      chains: get_selected_chains(socket),
-      strategy: socket.assigns.selected_strategy,
-      http: %{
-        enabled: true,
-        methods: ["eth_blockNumber", "eth_getBalance", "eth_getTransactionCount"],
-        rps: socket.assigns.request_rate,
-        concurrency: 6
-      },
-      ws: %{enabled: false}
-    }
-  end
-
-  defp get_ws_only_config(socket) do
-    %{
-      type: "ws_only",
-      duration: socket.assigns.run_duration * 1000,
-      chains: get_selected_chains(socket),
-      http: %{enabled: false},
-      ws: %{
-        enabled: true,
-        connections: 4,
-        topics: ["newHeads", "logs"]
-      }
-    }
-  end
-
-  defp get_stress_test_config(socket) do
-    %{
-      type: "stress_test",
-      duration: socket.assigns.run_duration * 1000,
-      chains: get_selected_chains(socket),
-      strategy: socket.assigns.selected_strategy,
-      http: %{
-        enabled: true,
-        methods: ["eth_blockNumber", "eth_getBalance", "eth_getTransactionCount"],
-        rps: socket.assigns.request_rate * 2,
-        concurrency: 8
-      },
-      ws: %{
-        enabled: true,
-        connections: 6,
-        topics: ["newHeads", "logs", "pendingTransactions"]
-      }
-    }
-  end
-
-  defp build_run_config(socket) do
-    case socket.assigns.run_type do
-      "load_test" -> get_load_test_config(socket)
-      "http_only" -> get_http_only_config(socket)
-      "ws_only" -> get_ws_only_config(socket)
-      "stress_test" -> get_stress_test_config(socket)
-      _ -> get_load_test_config(socket)
-    end
   end
 
   defp get_selected_chains(socket) do
@@ -830,19 +745,39 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
     end
   end
 
-  defp format_run_config(config) do
-    duration_s = div(Map.get(config, :duration, 30000), 1000)
-    http_enabled = get_in(config, [:http, :enabled]) || false
-    ws_enabled = get_in(config, [:ws, :enabled]) || false
+  # Preview text generation and update helpers
+  defp get_preview_text(params) do
+    strategy = Map.get(params, :strategy, "round-robin")
+    chains = Map.get(params, :chains, [])
+    load_types = Map.get(params, :load_types, %{http: true, ws: true})
 
-    type_label =
-      case {http_enabled, ws_enabled} do
-        {true, true} -> "Load Test"
-        {true, false} -> "HTTP Only"
-        {false, true} -> "WebSocket"
-        _ -> "Custom"
+    strategy_label =
+      case strategy do
+        "round-robin" -> "Round Robin"
+        "fastest" -> "Fastest"
+        "cheapest" -> "Cheapest"
+        "priority" -> "Priority"
+        _ -> "Round Robin"
       end
 
-    "#{type_label} • #{duration_s}s"
+    chains_text =
+      case length(chains) do
+        0 -> "All Chains"
+        1 -> "1 Chain"
+        n -> "#{n} Chains"
+      end
+
+    "#{strategy_label} • #{chains_text}"
+  end
+
+  defp update_preview_text(socket) do
+    preview_text =
+      get_preview_text(%{
+        strategy: socket.assigns.selected_strategy,
+        chains: socket.assigns.selected_chains,
+        load_types: socket.assigns.load_types
+      })
+
+    assign(socket, :preview_text, preview_text)
   end
 end

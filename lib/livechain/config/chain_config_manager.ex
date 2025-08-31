@@ -198,12 +198,9 @@ defmodule Livechain.Config.ChainConfigManager do
       chain_config = %ChainConfig{
         chain_id: Map.get(attrs, "chain_id") || Map.get(attrs, :chain_id),
         name: Map.get(attrs, "name") || Map.get(attrs, :name),
-        block_time: Map.get(attrs, "block_time") || Map.get(attrs, :block_time) || 12000,
         providers:
           parse_providers(Map.get(attrs, "providers") || Map.get(attrs, :providers) || []),
         connection: parse_connection(Map.get(attrs, "connection") || Map.get(attrs, :connection)),
-        aggregation:
-          parse_aggregation(Map.get(attrs, "aggregation") || Map.get(attrs, :aggregation)),
         failover: parse_failover(Map.get(attrs, "failover") || Map.get(attrs, :failover))
       }
 
@@ -245,18 +242,6 @@ defmodule Livechain.Config.ChainConfigManager do
     }
   end
 
-  defp parse_aggregation(nil), do: default_aggregation()
-
-  defp parse_aggregation(agg) do
-    %ChainConfig.Aggregation{
-      deduplication_window:
-        Map.get(agg, "deduplication_window") || Map.get(agg, :deduplication_window) || 2000,
-      min_confirmations:
-        Map.get(agg, "min_confirmations") || Map.get(agg, :min_confirmations) || 1,
-      max_providers: Map.get(agg, "max_providers") || Map.get(agg, :max_providers) || 3,
-      max_cache_size: Map.get(agg, "max_cache_size") || Map.get(agg, :max_cache_size) || 10000
-    }
-  end
 
   defp parse_failover(nil), do: default_failover()
 
@@ -278,14 +263,6 @@ defmodule Livechain.Config.ChainConfigManager do
     }
   end
 
-  defp default_aggregation do
-    %ChainConfig.Aggregation{
-      deduplication_window: 2000,
-      min_confirmations: 1,
-      max_providers: 3,
-      max_cache_size: 10000
-    }
-  end
 
   defp default_failover do
     %ChainConfig.Failover{
@@ -342,10 +319,8 @@ defmodule Livechain.Config.ChainConfigManager do
        %{
          "chain_id" => chain.chain_id,
          "name" => chain.name,
-         "block_time" => chain.block_time,
          "providers" => convert_providers_to_yaml(chain.providers),
          "connection" => convert_connection_to_yaml(chain.connection),
-         "aggregation" => convert_aggregation_to_yaml(chain.aggregation),
          "failover" => convert_failover_to_yaml(chain.failover)
        }}
     end)
@@ -377,14 +352,6 @@ defmodule Livechain.Config.ChainConfigManager do
     }
   end
 
-  defp convert_aggregation_to_yaml(aggregation) do
-    %{
-      "deduplication_window" => aggregation.deduplication_window,
-      "min_confirmations" => aggregation.min_confirmations,
-      "max_providers" => aggregation.max_providers,
-      "max_cache_size" => aggregation.max_cache_size
-    }
-  end
 
   defp convert_failover_to_yaml(failover) do
     %{

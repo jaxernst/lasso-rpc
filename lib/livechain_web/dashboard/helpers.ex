@@ -108,15 +108,14 @@ defmodule LivechainWeb.Dashboard.Helpers do
           %{
             id: to_string(chain_config.chain_id),
             name: chain_name,
-            display_name: chain_config.name,
-            block_time: chain_config.block_time
+            display_name: chain_config.name
           }
         end)
 
       {:error, _} ->
         # Fallback to hardcoded values if config loading fails
         [
-          %{id: "1", name: "ethereum", display_name: "Ethereum Mainnet", block_time: 12000}
+          %{id: "1", name: "ethereum", display_name: "Ethereum Mainnet"}
         ]
     end
   end
