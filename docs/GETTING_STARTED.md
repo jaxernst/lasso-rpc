@@ -24,7 +24,6 @@ chains:
   ethereum:
     chain_id: 1
     name: "Ethereum Mainnet"
-    block_time: 12000
     providers:
       - id: "ethereum_ankr"
         name: "Ankr Public"

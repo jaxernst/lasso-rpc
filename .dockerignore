@@ -1,0 +1,49 @@
+# Elixir build artifacts
+_build/
+deps/
+*.ez
+
+# Generated on crash by the VM
+erl_crash.dump
+
+# Static assets that will be built in container
+priv/static/
+
+# Local environment files
+.env*
+.envrc
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node modules (will be installed in container)
+node_modules/
+assets/node_modules/
+
+# Git files
+.git/
+.gitignore
+
+# Docker files
+Dockerfile
+.dockerignore
+docker-compose*.yml
+docker/
+
+# Documentation
+*.md
+docs/
+
+# Test coverage
+cover/
+
+# Mix test results
+.mix_test_results

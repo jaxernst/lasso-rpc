@@ -127,6 +127,7 @@ chains:
         priority: 2
         type: "public"
         url: "https://rpc.ankr.com/base"
+        ws_url: "wss://rpc.ankr.com/base/ws"
         api_key_required: false
 
       - id: "base_omniatech"
@@ -144,18 +145,12 @@ chains:
         ws_url: "wss://base-mainnet.public.blastapi.io"
         api_key_required: false
 
-      - id: "base_1rpc"
-        name: "1RPC Base"
-        priority: 5
+      - id: "base_0xrpc"
+        name: "0xRPC Base"
+        priority: 7
         type: "public"
-        url: "https://1rpc.io/base"
-        api_key_required: false
-
-      - id: "base_official"
-        name: "Base Official"
-        priority: 6
-        type: "public"
-        url: "https://mainnet.base.org"
+        url: "https://0xrpc.io/base"
+        ws_url: "wss://0xrpc.io/base"
         api_key_required: false
 
     connection:
@@ -230,7 +225,6 @@ chains:
   optimism:
     chain_id: 10
     name: "Optimism Mainnet"
-    block_time: 2000
 
     providers:
       - id: "optimism_ankr"

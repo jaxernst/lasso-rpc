@@ -102,7 +102,6 @@ defmodule Livechain.Config.ChainConfigTest do
       valid_config = %ChainConfig{
         chain_id: 1,
         name: "Test Chain",
-        block_time: 1000,
         providers: [
           %ChainConfig.Provider{
             id: "test_provider",
@@ -118,11 +117,6 @@ defmodule Livechain.Config.ChainConfigTest do
           heartbeat_interval: 15000,
           reconnect_interval: 2000,
           max_reconnect_attempts: 10
-        },
-        aggregation: %ChainConfig.Aggregation{
-          deduplication_window: 500,
-          min_confirmations: 1,
-          max_providers: 3
         }
       }
 

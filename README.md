@@ -1,47 +1,36 @@
-# Livechain
+# Lasso RPC
 
-**An intelligent blockchain RPC orchestrator and smart router for bulletproof onchain application development.**
+**A smart blockchain RPC aggregator for building bulletproof onchain applications.**
 
 Building reliable blockchain applications is challenging, largely due to the complexity of choosing and managing RPC providers. With dozens of providers offering different performance, pricing models, and reliability guarantees, developers face an opaque decision that directly impacts their application's user experience.
 
-Livechain solves this by acting as an intelligent proxy that sits between your application and multiple RPC providers. While it provides the same JSON-RPC endpoints for WebSocket and HTTP that you'd expect from any provider, Livechain orchestrates **all** your providers across **all** your chains. It automatically routes requests to the best-performing provider, handles failures gracefully, and gives you the reliability and performance to build consumer-grade onchain applications.
+Lasso solves this by acting as an intelligent proxy that sits between your application and multiple RPC providers. While it provides the same JSON-RPC endpoints for WebSocket and HTTP that you'd expect from any provider, Lasso orchestrates **all** your providers across **all** your chains. It automatically routes requests to the best-performing provider, handles failures gracefully, and gives you the reliability and performance to build consumer-grade onchain applications.
 
-Want to bypass rate limits? Configure Livechain to target multiple free providers and load balance between them:
+Want to bypass rate limits? Configure Lasso to target multiple free providers and load balance between them:
 
 ```
 POST /rpc/base # Automatically load balances across available providers
 ```
 
-Want the fastest possible responses? Livechain routes to your best-performing provider using real-world benchmarks:
+Want the fastest possible responses? Lasso routes to your best-performing provider using real-world benchmarks:
 
 ```
 POST /rpc/ethereum # Automatic routing based on passive performance measurement
 ```
 
-Want much better reliability? Livechain will quietly retry your failed request with circuit breakers and intelligent failover—your application stays resilient when providers don't.
+Want much better reliability? Lasso will quietly retry your failed request with circuit breakers and intelligent failover—your application stays resilient when providers don't.
 
-Want to build your own blockchain node infrastructure? Start with Livechain as your orchestration layer.
+Want to build your own blockchain node infrastructure? Start with Lasso as your orchestration layer.
 
 ## Built on Elixir/OTP: Fault-Tolerance by Design
 
-Livechain runs on the Erlang BEAM VM, a battle-tested platform that powers highly scalable platforms like WhatsApp, Discord, Supabase, and telecom infrastructure serving billions of users. This gives us superpowers:
+Lasso runs on the Erlang BEAM VM, a battle-tested platform that powers highly scalable platforms like WhatsApp, Discord, Supabase, and telecom infrastructure serving billions of users. This gives us superpowers:
 
 - **Massive concurrency**: Handle thousands of concurrent connections with minimal overhead
 - **Fault isolation**: Provider failures don't cascade—each connection runs in its own lightweight process
 - **Self-healing**: Crashed processes automatically restart without affecting others
 - **Hot code updates**: Deploy fixes without downtime
 - **Distributed by default**: Simple and high level primitives to coordinate across multiple nodes and regions
-
-## Global Distribution Potential
-
-BEAM's distributed capabilities unlock powerful possibilities for smart routing:
-
-- **Regional nodes**: Deploy Livechain instances globally, each maintaining region-local performance benchmarks
-- **Latency-aware routing**: Clients connect to the nearest Livechain node, which routes to the fastest upstream provider for that region
-- **Cross-region coordination**: Nodes can share performance data to optimize routing decisions globally
-- **Edge deployment**: Run Livechain close to your users for minimal added latency
-
-This architecture scales from a single self-hosted instance to a global network of coordinated nodes.
 
 ## Core Features
 
@@ -51,7 +40,18 @@ This architecture scales from a single self-hosted instance to a global network 
 - **Passive benchmarking** using real traffic to measure provider performance per-chain and per-method
 - **Performance tracking** - measures real RPC call latencies to optimize provider selection
 - **Live dashboard** with real-time insights, provider leaderboards, and performance metrics
-- **Global distribution ready** with BEAM's built-in clustering and fault-tolerance
+- **Globally distributable** with BEAM's built-in clustering and fault-tolerance
+
+## Global Distribution Potential
+
+BEAM's distributed capabilities unlock powerful possibilities for smart routing:
+
+- **Regional nodes**: Deploy Lasso instances globally, each maintaining region-local performance benchmarks
+- **Latency-aware routing**: Clients connect to the nearest Lasso node, which routes to the fastest upstream provider for that region
+- **Cross-region coordination**: Nodes can share performance data to optimize routing decisions globally
+- **Edge deployment**: Run Lasso close to your users for minimal added latency
+
+This architecture scales from a single self-hosted instance to a global network of coordinated nodes.
 
 ## Usage
 
@@ -63,7 +63,7 @@ This architecture scales from a single self-hosted instance to a global network 
 
 ### Provider Selection Strategy
 
-The orchestrator uses a pluggable strategy to pick providers when forwarding HTTP calls.
+The orchestrator uses a pluggable route-based strategy to pick providers when forwarding HTTP calls.
 
 - Default: `:cheapest` (prefers free providers)
 - Alternatives: `:fastest` (performance-based), `:priority` (static config), `:round_robin` (load balanced)
@@ -96,10 +96,40 @@ curl -X POST http://localhost:4000/rpc/round-robin/ethereum \
 
 ### Prerequisites
 
-- **Elixir/OTP 26+** - [Install Elixir](https://elixir-lang.org/install.html)
-- **Node.js 18+** - [Install Node.js](https://nodejs.org/) (for Phoenix LiveView assets)
+Choose one of the following setup methods:
 
-### 🚀 Running Locally (For Judges & Reviewers)
+#### Option 1: Docker (Recommended for Development)
+
+- **Docker & Docker Compose** - [Install Docker](https://docs.docker.com/get-docker/)
+
+#### Option 2: Direct Installation (Recommended for Judges)
+
+- **Elixir/OTP 26+** - [Install Elixir](https://elixir-lang.org/install.html)
+
+### 🚀 Running with Docker (HTTPS Development Setup)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-org/livechain
+cd livechain
+
+# 2. Generate SSL certificates for HTTPS proxy
+./docker/generate-ssl-certs.sh
+
+# 3. Start with Docker Compose
+docker-compose up --build
+
+# 4. Open your browser
+open https://localhost  # HTTPS with SSL termination
+```
+
+**🎯 Docker setup provides:**
+
+- **HTTPS proxy** at https://localhost (with self-signed cert)
+- **HTTP redirect** at http://localhost → https://localhost
+- **Production-like environment** for testing against HTTPS RPC endpoints
+
+### 🚀 Running Locally (Direct Installation)
 
 ```bash
 # 1. Clone the repository
@@ -109,19 +139,32 @@ cd livechain
 # 2. Install Elixir dependencies
 mix deps.get
 
-# 3. Install Node.js assets (for the dashboard)
-cd assets && npm install && cd ..
-
-# 4. Start the Phoenix server
+# 3. Start the Phoenix server
 mix phx.server
 
-# 5. Open your browser
+# 4. Open your browser
 open http://localhost:4000
 ```
 
 **🎯 The app will be running at:** http://localhost:4000
 
-**⚡ Test the routing strategies immediately:**
+**⚡ Test the routing strategies:**
+
+**For Docker setup (HTTPS):**
+
+```bash
+# Test cheapest strategy (uses free providers first)
+curl -k -X POST https://localhost/rpc/cheapest/ethereum \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+
+# Test fastest strategy (performance-based routing)
+curl -k -X POST https://localhost/rpc/fastest/ethereum \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+**For direct installation (HTTP):**
 
 ```bash
 # Test cheapest strategy (uses free providers first)
@@ -135,7 +178,10 @@ curl -X POST http://localhost:4000/rpc/fastest/ethereum \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 ```
 
-**📊 View the live dashboard:** http://localhost:4000 for real-time provider metrics
+**📊 View the live dashboard:**
+
+- Docker: https://localhost
+- Direct: http://localhost:4000
 
 ### 🎬 Automated Demo
 
@@ -218,9 +264,9 @@ GET /api/status
 GET /api/metrics/:chain
 ```
 
-## Key Innovation: Real Performance Tracking
+## Key Feature: Real Performance Tracking
 
-Unlike traditional load balancers, Livechain uses **real RPC call measurements** for intelligent routing:
+Unlike traditional load balancers, Lasso uses **real RPC call measurements** for intelligent routing:
 
 1. **Track actual RPC latencies** from your production traffic
 2. **Build provider leaderboards** based on real performance data

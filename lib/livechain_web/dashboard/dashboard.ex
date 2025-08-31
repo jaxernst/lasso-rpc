@@ -871,7 +871,7 @@ defmodule LivechainWeb.Dashboard do
           </div>
         </div>
         <%= if @provider_connection do %>
-          <div class="space-y-3 pt-3 border-t border-gray-700/30">
+          <div class="space-y-3 pt-3  p-3">
             <!-- Enhanced Status Information -->
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
               <div class="flex flex-col">
@@ -1281,6 +1281,7 @@ defmodule LivechainWeb.Dashboard do
       |> assign(:selected_chain, nil)
       |> assign(:selected_provider, nil)
       |> assign(:details_collapsed, true)
+      |> push_event("zoom_out", %{})
 
     {:noreply, socket}
   end

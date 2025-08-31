@@ -12,7 +12,7 @@ defmodule Integration.FailoverTest do
 
   alias Livechain.RPC.{ChainSupervisor, ProviderPool, CircuitBreaker, MessageAggregator}
   alias Livechain.Config.ChainConfig
-  alias Livechain.Config.ChainConfig.{Provider, Aggregation, Connection, Failover}
+  alias Livechain.Config.ChainConfig.{Provider, Connection, Failover}
   alias Livechain.RPC.WSEndpoint
   alias Livechain.Simulator.MockWSEndpoint
 
@@ -55,12 +55,6 @@ defmodule Integration.FailoverTest do
     chain_config = %ChainConfig{
       chain_id: 1,
       name: "ethereum",
-      block_time: 12000,
-      aggregation: %Aggregation{
-        deduplication_window: 1000,
-        min_confirmations: 1,
-        max_providers: 4
-      },
       connection: %Connection{
         heartbeat_interval: 30000,
         reconnect_interval: 5000,
