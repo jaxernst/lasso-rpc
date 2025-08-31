@@ -29,13 +29,15 @@ defmodule Livechain.RPC.ChainSupervisor do
   end
 
   @doc """
-  Gets the status of all providers for a chain.
+  Gets the status of all providers for a chain, including WebSocket connection information.
   """
   def get_chain_status(chain_name) do
     try do
       case ProviderPool.get_status(chain_name) do
         {:ok, status} ->
-          status
+          # Collect WebSocket connection status from WSConnection processes
+          ws_connections = collect_ws_connection_status(status.providers)
+          Map.put(status, :ws_connections, ws_connections)
 
         {:error, reason} ->
           Logger.error("Failed to get chain status for #{chain_name}: #{reason}")
@@ -145,20 +147,16 @@ defmodule Livechain.RPC.ChainSupervisor do
       start_circuit_breaker(provider)
     end)
 
-    # Start WebSocket connections only for providers that support them
+    # Start WebSocket connections for all providers that support them
     ws_providers = ChainConfig.get_ws_providers(chain_config)
-    max_providers = chain_config.aggregation.max_providers
 
-    # Start up to max_providers WS connections, prioritizing by priority
-    providers_to_start = Enum.take(ws_providers, max_providers)
-
-    Enum.each(providers_to_start, fn provider ->
+    Enum.each(ws_providers, fn provider ->
       # Start provider connection (circuit breaker already started above)
       start_provider_connection(chain_name, provider, chain_config)
     end)
 
     Logger.info(
-      "Started #{length(providers_to_start)} WebSocket connections for #{chain_name} (#{length(ws_providers)} WS providers available)"
+      "Started #{length(ws_providers)} WebSocket connections for #{chain_name}"
     )
 
     Logger.info(
@@ -254,4 +252,31 @@ defmodule Livechain.RPC.ChainSupervisor do
         end
     end
   end
+
+  # Collects WebSocket connection status from WSConnection processes
+  defp collect_ws_connection_status(providers) when is_list(providers) do
+    Enum.map(providers, fn provider ->
+      case WSConnection.status(provider.id) do
+        status when is_map(status) ->
+          %{
+            id: provider.id,
+            connected: Map.get(status, :connected, false),
+            reconnect_attempts: Map.get(status, :reconnect_attempts, 0),
+            subscriptions: Map.get(status, :subscriptions, 0),
+            pending_messages: Map.get(status, :pending_messages, 0)
+          }
+        _ ->
+          # WSConnection process not found or error occurred
+          %{
+            id: provider.id,
+            connected: false,
+            reconnect_attempts: 0,
+            subscriptions: 0,
+            pending_messages: 0
+          }
+      end
+    end)
+  end
+
+  defp collect_ws_connection_status(_), do: []
 end

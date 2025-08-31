@@ -23,7 +23,6 @@ defmodule Livechain.Config.ConfigValidator do
          :ok <- validate_providers(chain_config.providers, skip_connectivity),
          :ok <- validate_provider_priorities(chain_config.providers),
          :ok <- validate_connection_settings(chain_config.connection),
-         :ok <- validate_aggregation_settings(chain_config.aggregation),
          :ok <- validate_failover_settings(chain_config.failover) do
       :ok
     else
@@ -134,40 +133,6 @@ defmodule Livechain.Config.ConfigValidator do
     end
   end
   
-  @doc """
-  Validates aggregation settings are reasonable.
-  """
-  @spec validate_aggregation_settings(ChainConfig.Aggregation.t()) :: :ok | {:error, term()}
-  def validate_aggregation_settings(aggregation) do
-    cond do
-      aggregation.deduplication_window < 0 ->
-        {:error, :invalid_deduplication_window}
-      
-      aggregation.deduplication_window > 60_000 ->
-        {:error, :deduplication_window_too_large}
-      
-      aggregation.min_confirmations < 1 ->
-        {:error, :invalid_min_confirmations}
-      
-      aggregation.min_confirmations > aggregation.max_providers ->
-        {:error, :min_confirmations_exceeds_max_providers}
-      
-      aggregation.max_providers < 1 ->
-        {:error, :invalid_max_providers}
-      
-      aggregation.max_providers > 20 ->
-        {:error, :too_many_max_providers}
-      
-      aggregation.max_cache_size < 100 ->
-        {:error, :cache_size_too_small}
-      
-      aggregation.max_cache_size > 1_000_000 ->
-        {:error, :cache_size_too_large}
-      
-      true ->
-        :ok
-    end
-  end
   
   @doc """
   Validates failover settings are reasonable.
@@ -217,12 +182,6 @@ defmodule Livechain.Config.ConfigValidator do
   def format_error(:reconnect_too_infrequent), do: "Reconnect interval must be <= 60000ms"
   def format_error(:invalid_reconnect_attempts), do: "Max reconnect attempts must be >= 1"
   def format_error(:too_many_reconnect_attempts), do: "Max reconnect attempts must be <= 100"
-  def format_error(:invalid_deduplication_window), do: "Deduplication window must be >= 0"
-  def format_error(:deduplication_window_too_large), do: "Deduplication window must be <= 60000ms"
-  def format_error(:invalid_min_confirmations), do: "Min confirmations must be >= 1"
-  def format_error(:min_confirmations_exceeds_max_providers), do: "Min confirmations cannot exceed max providers"
-  def format_error(:invalid_max_providers), do: "Max providers must be >= 1"
-  def format_error(:too_many_max_providers), do: "Max providers should be <= 20"
   def format_error(:cache_size_too_small), do: "Cache size must be >= 100"
   def format_error(:cache_size_too_large), do: "Cache size must be <= 1000000"
   def format_error(:invalid_backfill_blocks), do: "Max backfill blocks must be >= 0"
@@ -237,7 +196,7 @@ defmodule Livechain.Config.ConfigValidator do
   # Private functions
   
   defp validate_basic_structure(chain_config) do
-    required_fields = [:chain_id, :name, :providers, :connection, :aggregation, :failover]
+    required_fields = [:chain_id, :name, :providers, :connection, :failover]
     
     missing_fields = Enum.filter(required_fields, fn field ->
       Map.get(chain_config, field) == nil

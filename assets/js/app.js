@@ -627,7 +627,7 @@ const EndpointSelector = {
           case "fastest":
             btn.className += " border-sky-500 bg-sky-500/20 text-sky-300";
             break;
-          case "leaderboard":
+          case "cheapest":
             btn.className +=
               " border-emerald-500 bg-emerald-500/20 text-emerald-300";
             break;
@@ -647,7 +647,7 @@ const EndpointSelector = {
             btn.className +=
               " border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300";
             break;
-          case "leaderboard":
+          case "cheapest":
             btn.className +=
               " border-gray-600 text-gray-300 hover:border-emerald-400 hover:text-emerald-300";
             break;
@@ -735,8 +735,8 @@ const EndpointSelector = {
     if (this.mode === "strategy" && this.selectedStrategy) {
       const descriptions = {
         fastest: "Using fastest provider based on latency benchmarks",
-        leaderboard:
-          "Using provider with highest success rate and performance score",
+        cheapest:
+          "Using provider with lowest cost per request or free tier availability",
         priority: "Using providers in configured priority order with failover",
         "round-robin":
           "Distributing requests evenly across all available providers",

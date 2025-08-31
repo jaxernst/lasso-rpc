@@ -116,7 +116,7 @@ defmodule Livechain.RPC.SubscriptionManager do
   This is the core function for bulletproof subscription continuity.
   """
   def handle_provider_failover(chain, failed_provider_id, healthy_provider_ids) do
-    GenServer.call(
+    GenServer.cast(
       __MODULE__,
       {:handle_provider_failover, chain, failed_provider_id, healthy_provider_ids}
     )
@@ -334,9 +334,8 @@ defmodule Livechain.RPC.SubscriptionManager do
 
   """
   @impl true
-  def handle_call(
+  def handle_cast(
         {:handle_provider_failover, chain, failed_provider_id, healthy_provider_ids},
-        _from,
         state
       ) do
     # Get all subscriptions for this chain
@@ -398,7 +397,7 @@ defmodule Livechain.RPC.SubscriptionManager do
           %{updated_state | subscriptions: failed_subscriptions}
       end
 
-    {:reply, :ok, final_state}
+    {:noreply, final_state}
   end
 
   @impl true
@@ -717,7 +716,8 @@ defmodule Livechain.RPC.SubscriptionManager do
     # Get healthy providers for failover
     case ChainManager.get_available_providers(chain) do
       {:ok, healthy_providers} ->
-        GenServer.call(self(), {:handle_provider_failover, chain, provider_id, healthy_providers})
+        # Use cast instead of call to avoid deadlock
+        GenServer.cast(self(), {:handle_provider_failover, chain, provider_id, healthy_providers})
 
       {:error, reason} ->
         Logger.error("Failed to get healthy providers for failover",

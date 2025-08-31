@@ -127,8 +127,10 @@ class SimulatorRun {
           : [],
       };
 
-      const qs = strategy ? `?strategy=${encodeURIComponent(strategy)}` : "";
-      const url = `/rpc/${encodeURIComponent(chain)}${qs}`;
+      // Use strategy-specific endpoints as defined in the router
+      const url = strategy 
+        ? `/rpc/${encodeURIComponent(strategy)}/${encodeURIComponent(chain)}`
+        : `/rpc/${encodeURIComponent(chain)}`;
 
       this.stats.http.inflight++;
       const start = now();

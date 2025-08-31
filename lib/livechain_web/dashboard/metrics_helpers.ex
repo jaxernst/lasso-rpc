@@ -363,8 +363,25 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
   def rpc_calls_per_second(routing_events) when is_list(routing_events) do
     now = System.system_time(:millisecond)
     one_minute_ago = now - 60_000
-    count = Enum.count(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
-    Float.round(count / 60, 1)
+    
+    recent_events = Enum.filter(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
+    count = length(recent_events)
+    
+    # If we have no events, return 0
+    if count == 0 do
+      0.0
+    else
+      # Calculate the actual time span of our data
+      oldest_event_time = recent_events
+        |> Enum.map(&(&1[:ts_ms] || now))
+        |> Enum.min()
+      
+      # Calculate the actual duration in seconds (minimum of 1 second to avoid division by zero)
+      actual_duration_seconds = max(1, (now - oldest_event_time) / 1000)
+      
+      # Calculate rate based on actual duration
+      Float.round(count / actual_duration_seconds, 1)
+    end
   end
 
   @doc "Calculate error rate percentage from routing events"

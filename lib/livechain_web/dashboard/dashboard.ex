@@ -173,7 +173,7 @@ defmodule LivechainWeb.Dashboard do
           ts: _ts,
           chain: chain,
           method: method,
-          strategy: _strategy,
+          strategy: strategy,
           provider_id: pid,
           duration_ms: dur
         } = evt,
@@ -185,6 +185,7 @@ defmodule LivechainWeb.Dashboard do
       ts_ms: System.system_time(:millisecond),
       chain: chain,
       method: method,
+      strategy: strategy,
       provider_id: pid,
       duration_ms: (if is_number(dur), do: round(dur), else: 0),
       result: Map.get(evt, :result, :unknown),
@@ -661,24 +662,7 @@ defmodule LivechainWeb.Dashboard do
       <div class="border-gray-700/50 border-t p-4">
         <h4 class="mb-2 text-sm font-semibold text-gray-300">Routing decisions</h4>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-1">
-            <div class="text-[11px] text-gray-400 mb-1">Last decision</div>
-            <%= if @last_decision do %>
-              <div class="text-xs text-gray-300 space-y-1">
-                <div class="flex items-center justify-between gap-2">
-                  <div class="truncate"><span class="text-sky-300">{@last_decision.method}</span> <span class="text-gray-500">→</span> <span class="text-emerald-300 truncate">{@last_decision.provider_id}</span></div>
-                  <div class="shrink-0 text-yellow-300 font-mono">{@last_decision.duration_ms}ms</div>
-                </div>
-                <div class="text-[11px] text-gray-400 flex items-center gap-2">
-                  <span>strategy: {Map.get(@last_decision, :strategy, "—")}</span>
-                  <span>•</span>
-                  <span>failovers: {Map.get(@last_decision, :failovers, 0)}</span>
-                </div>
-              </div>
-            <% else %>
-              <div class="text-xs text-gray-500">No recent decisions</div>
-            <% end %>
-          </div>
+          <.last_decision_card last_decision={@last_decision} connections={@connections} />
           <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-2">
             <div class="text-[11px] text-gray-400 mb-1">Decision breakdown (5m)</div>
             <div class="space-y-1">
@@ -707,7 +691,7 @@ defmodule LivechainWeb.Dashboard do
           <div class="text-xs text-gray-400 mb-2">Strategy</div>
           <div class="flex flex-wrap gap-2">
             <button data-strategy="fastest" class="px-3 py-1 rounded-full text-xs transition-all border border-sky-500 bg-sky-500/20 text-sky-300">⚡ Fastest</button>
-            <button data-strategy="leaderboard" class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-emerald-400 hover:text-emerald-300">🏆 Leaderboard</button>
+            <button data-strategy="cheapest" class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-emerald-400 hover:text-emerald-300">💰 Cheapest</button>
             <button data-strategy="priority" class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-purple-400 hover:text-purple-300">🎯 Priority</button>
             <button data-strategy="round-robin" class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-orange-400 hover:text-orange-300">🔄 Round Robin</button>
           </div>
@@ -816,18 +800,13 @@ defmodule LivechainWeb.Dashboard do
   end
 
   def provider_details_panel(assigns) do
-    # Find the provider connection - this should update when switching providers
-    provider_connection = Enum.find(assigns.connections, &(&1.id == assigns.provider))
+    assigns = assigns
+      |> assign(:provider_connection, Enum.find(assigns.connections, &(&1.id == assigns.provider)))
+      |> assign(:provider_events, Enum.filter(assigns.routing_events, &(&1.provider_id == assigns.provider)))
+      |> assign(:provider_unified_events, Enum.filter(Map.get(assigns, :events, []), fn e -> e[:provider_id] == assigns.provider end))
+      |> assign(:performance_metrics, MetricsHelpers.get_provider_performance_metrics(assigns.provider, assigns.connections, assigns.routing_events))
+      |> assign(:last_decision, Helpers.get_last_decision(assigns.routing_events, nil, assigns.provider))
 
-    assigns =
-      Map.merge(assigns, %{
-        provider_connection: provider_connection,
-        provider_events: Enum.filter(assigns.routing_events, &(&1.provider_id == assigns.provider)),
-        provider_pool_events: Enum.filter(assigns.provider_events, &(&1.provider_id == assigns.provider)),
-        provider_unified_events: Enum.filter(Map.get(assigns, :events, []), fn e -> e[:provider_id] == assigns.provider end),
-        performance_metrics: MetricsHelpers.get_provider_performance_metrics(assigns.provider, assigns.connections, assigns.routing_events),
-        last_decision: Helpers.get_last_decision(assigns.routing_events, nil, assigns.provider)
-      })
 
     ~H"""
     <div class="flex h-full flex-col" data-provider-id={@provider}>
@@ -1026,24 +1005,7 @@ defmodule LivechainWeb.Dashboard do
       <div class="border-gray-700/50 border-t p-4">
         <h4 class="mb-2 text-sm font-semibold text-gray-300">Routing decisions</h4>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div class="bg-gray-800/40 rounded-lg p-3">
-            <div class="text-[11px] text-gray-400 mb-1">Last decision</div>
-            <%= if @last_decision do %>
-              <div class="text-xs text-gray-300 space-y-1">
-                <div class="flex items-center justify-between gap-2">
-                  <div class="truncate"><span class="text-sky-300">{@last_decision.method}</span> <span class="text-gray-500">→</span> <span class="text-emerald-300 truncate">{@last_decision.provider_id}</span></div>
-                  <div class="shrink-0 text-yellow-300 font-mono">{@last_decision.duration_ms}ms</div>
-                </div>
-                <div class="text-[11px] text-gray-400 flex items-center gap-2">
-                  <span>strategy: {Map.get(@last_decision, :strategy, "—")}</span>
-                  <span>•</span>
-                  <span>failovers: {Map.get(@last_decision, :failovers, 0)}</span>
-                </div>
-              </div>
-            <% else %>
-              <div class="text-xs text-gray-500">No recent decisions</div>
-            <% end %>
-          </div>
+          <.last_decision_card last_decision={@last_decision} connections={@connections} />
           <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-2">
             <div class="text-[11px] text-gray-400 mb-1">Top methods (5m)</div>
             <div class="space-y-1 max-h-32 overflow-y-auto">
@@ -1351,6 +1313,50 @@ defmodule LivechainWeb.Dashboard do
     # Forward to SimulatorControls component
     send_update(Components.SimulatorControls, id: "simulator-controls", active_runs: runs)
     {:noreply, socket}
+  end
+
+  # Shared components
+
+  attr :last_decision, :map, default: nil
+  attr :connections, :list, default: []
+
+  def last_decision_card(assigns) do
+    # Get provider name from connections if available
+    provider_name = case assigns[:connections] do
+      connections when is_list(connections) ->
+        case assigns[:last_decision] && Enum.find(connections, &(&1.id == assigns.last_decision.provider_id)) do
+          %{name: name} -> name
+          _ -> assigns[:last_decision] && assigns.last_decision.provider_id
+        end
+      _ -> assigns[:last_decision] && assigns.last_decision.provider_id
+    end
+
+    assigns = assign(assigns, :provider_name, provider_name)
+
+    ~H"""
+    <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-1">
+      <div class="text-[11px] text-gray-400 mb-1">Last decision</div>
+      <%= if @last_decision do %>
+        <div class="text-xs text-gray-300 space-y-1">
+          <div class="flex items-center justify-between gap-2">
+            <div class="truncate">
+              <span class="text-sky-300">{@last_decision.method}</span>
+              <span class="text-gray-500">→</span>
+              <span class="text-emerald-300 truncate" title={@last_decision.provider_id}>
+                {@provider_name || @last_decision.provider_id}
+              </span>
+            </div>
+            <div class="shrink-0 text-yellow-300 font-mono">{@last_decision.duration_ms}ms</div>
+          </div>
+          <div class="text-[11px] text-gray-400 flex items-center gap-2">
+            <span>strategy: <span class="text-purple-300">{Map.get(@last_decision, :strategy, "—")}</span></span>
+          </div>
+        </div>
+      <% else %>
+        <div class="text-xs text-gray-500">No recent decisions</div>
+      <% end %>
+    </div>
+    """
   end
 
   # Helper functions

@@ -539,9 +539,8 @@ defmodule Livechain.RPC.ProviderPool do
 
   defp update_active_providers(state) do
     available_providers = ChainConfig.get_available_providers(state.chain_config)
-    max_providers = state.chain_config.aggregation.max_providers
 
-    # Get providers that are registered and not completely failed
+    # Get all providers that are registered and not completely failed
     viable_providers =
       available_providers
       |> Enum.filter(fn provider ->
@@ -551,7 +550,6 @@ defmodule Livechain.RPC.ProviderPool do
           _ -> true
         end
       end)
-      |> Enum.take(max_providers)
       |> Enum.map(& &1.id)
 
     %{state | active_providers: viable_providers}
