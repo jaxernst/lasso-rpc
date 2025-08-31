@@ -959,6 +959,10 @@ video {
   max-height: 80vh;
 }
 
+.max-h-\[75vh\] {
+  max-height: 75vh;
+}
+
 .min-h-96 {
   min-height: 24rem;
 }
@@ -1219,10 +1223,6 @@ video {
 
 .gap-4 {
   gap: 1rem;
-}
-
-.gap-5 {
-  gap: 1.25rem;
 }
 
 .space-x-1 > :not([hidden]) ~ :not([hidden]) {

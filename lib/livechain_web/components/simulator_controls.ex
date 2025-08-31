@@ -362,7 +362,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
   def render(assigns) do
     ~H"""
     <div class="pointer-events-none absolute top-4 left-4 z-30">
-      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@sim_collapsed, do: "w-64", else: "max-h-[70vh] w-80")]}>
+      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@sim_collapsed, do: "w-64", else: "max-h-[80vh] w-80")]}>
         <!-- Header -->
         <div class="border-gray-700/50 flex items-center justify-between border-b px-3 py-2">
           <div class="flex min-w-0 items-center gap-2">
@@ -395,7 +395,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
           />
         <% else %>
           <!-- Expanded content - full control panel -->
-          <div class="max-h-[60vh] overflow-y-auto">
+          <div class="overflow-y-auto">
             <.expanded_content
               sim_stats={@sim_stats}
               available_chains={@available_chains}

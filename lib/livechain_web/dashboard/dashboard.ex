@@ -914,14 +914,35 @@ defmodule LivechainWeb.Dashboard do
 
               <div class="flex flex-col">
                 <span class="text-gray-400 text-xs">WebSocket</span>
-                <span class={if Map.get(@provider_connection, :ws_connected, false), do: "text-emerald-400", else: "text-red-400"}>
-                  {if Map.get(@provider_connection, :ws_connected, false), do: "CONNECTED", else: "DISCONNECTED"}
+                <% has_ws_support = Map.get(@provider_connection, :type) in [:websocket, :both] %>
+                <span class={
+                  cond do
+                    not has_ws_support -> "text-gray-400"
+                    Map.get(@provider_connection, :ws_connected, false) -> "text-emerald-400"
+                    true -> "text-red-400"
+                  end
+                }>
+                  {
+                    cond do
+                      not has_ws_support -> "NOT SUPPORTED"
+                      Map.get(@provider_connection, :ws_connected, false) -> "CONNECTED"
+                      true -> "DISCONNECTED"
+                    end
+                  }
                 </span>
               </div>
             </div>
 
             <!-- Failure Information -->
-            <%= if Map.get(@provider_connection, :consecutive_failures, 0) > 0 or Map.get(@provider_connection, :last_error) do %>
+            <% 
+              # Only show issues if there are actual current problems
+              has_current_issues = (Map.get(@provider_connection, :consecutive_failures, 0) > 0) or
+                                   (Map.get(@provider_connection, :reconnect_attempts, 0) > 0) or
+                                   (Map.get(@provider_connection, :is_in_cooldown, false) == true) or
+                                   (Map.get(@provider_connection, :circuit_state) == :open) or
+                                   (Map.get(@provider_connection, :health_status) in [:unhealthy, :rate_limited])
+            %>
+            <%= if has_current_issues do %>
               <div class="bg-red-900/20 border border-red-600/30 rounded-lg p-3">
                 <div class="flex items-center gap-2 mb-2">
                   <div class="w-2 h-2 rounded-full bg-red-400"></div>
@@ -1405,8 +1426,8 @@ defmodule LivechainWeb.Dashboard do
   end
 
   defp fetch_connections(socket) do
-    # Use list_all_connections to get proper status data flow from ProviderPool
-    connections = Livechain.RPC.ChainRegistry.list_all_connections()
+    # Use list_all_providers_comprehensive to show ALL providers regardless of connection type
+    connections = Livechain.RPC.ChainRegistry.list_all_providers_comprehensive()
     latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
 
     socket
