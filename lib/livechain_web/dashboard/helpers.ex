@@ -89,7 +89,7 @@ defmodule LivechainWeb.Dashboard.Helpers do
   def get_chain_id(chain_name) do
     case Livechain.Config.ChainConfig.load_config() do
       {:ok, config} ->
-        case Map.get(config.chains, String.to_atom(chain_name)) do
+        case Map.get(config.chains, chain_name) do
           %{chain_id: chain_id} -> to_string(chain_id)
           _ -> chain_name
         end
