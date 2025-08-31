@@ -42,7 +42,12 @@ defmodule Livechain.RPC.ProviderPool do
       # Cooldown fields for rate limit handling
       :cooldown_until,
       :cooldown_count,
-      :base_cooldown_ms
+      :base_cooldown_ms,
+      # EMA-based metrics for performance tracking
+      error_rate: 0.0,
+      success_rate: 1.0,
+      avg_latency_ms: 0.0,
+      total_requests: 0
     ]
   end
 
@@ -254,7 +259,11 @@ defmodule Livechain.RPC.ProviderPool do
             name: provider.config.name,
             status: provider.status,
             consecutive_failures: provider.consecutive_failures,
-            last_health_check: provider.last_health_check
+            last_health_check: provider.last_health_check,
+            error_rate: provider.error_rate,
+            success_rate: provider.success_rate,
+            avg_latency_ms: provider.avg_latency_ms,
+            total_requests: provider.total_requests
           }
         end),
       stats: state.stats
@@ -397,6 +406,13 @@ defmodule Livechain.RPC.ProviderPool do
         _ -> true
       end
     end)
+    |> Enum.filter(fn provider ->
+      case Map.get(filters, :exclude) do
+        nil -> true
+        exclude_list when is_list(exclude_list) -> provider.id not in exclude_list
+        _ -> true
+      end
+    end)
   end
 
   defp select_best_provider(state) do
@@ -463,6 +479,29 @@ defmodule Livechain.RPC.ProviderPool do
 
           :fastest ->
             choose_fastest_provider_with_benchmarks(state, providers)
+
+          :leaderboard ->
+            # Alias for fastest - uses benchmark data for selection
+            choose_fastest_provider_with_benchmarks(state, providers)
+
+          :latency ->
+            # Choose provider with lowest average latency, meeting success rate threshold
+            providers
+            |> Enum.filter(&(&1.success_rate >= 0.95))
+            |> case do
+              [] ->
+                # Fallback to priority if no provider meets success threshold
+                providers
+                |> Enum.sort_by(& &1.config.priority)
+                |> List.first()
+                |> Map.get(:id)
+              
+              filtered_providers ->
+                filtered_providers
+                |> Enum.sort_by(& &1.avg_latency_ms)
+                |> List.first()
+                |> Map.get(:id)
+            end
 
           :cheapest ->
             # Prefer public providers; if none, fallback to paid
@@ -555,13 +594,38 @@ defmodule Livechain.RPC.ProviderPool do
     %{state | active_providers: viable_providers}
   end
 
-  defp update_provider_success(state, provider_id, _latency_ms) do
+  defp update_provider_success(state, provider_id, latency_ms) do
     case Map.get(state.providers, provider_id) do
       nil ->
         state
 
       provider ->
         cooldown_was_active = not is_nil(provider.cooldown_until)
+        
+        # EMA calculations with alpha = 0.1 (smoothing factor)
+        alpha = 0.1
+        new_total_requests = provider.total_requests + 1
+        
+        # Update success rate (EMA)
+        new_success_rate = if provider.total_requests == 0 do
+          1.0
+        else
+          provider.success_rate * (1 - alpha) + alpha
+        end
+        
+        # Update error rate (EMA)
+        new_error_rate = if provider.total_requests == 0 do
+          0.0
+        else
+          provider.error_rate * (1 - alpha)
+        end
+        
+        # Update average latency (EMA)
+        new_avg_latency = if provider.total_requests == 0 do
+          latency_ms
+        else
+          provider.avg_latency_ms * (1 - alpha) + latency_ms * alpha
+        end
 
         new_provider = %{
           provider
@@ -571,7 +635,12 @@ defmodule Livechain.RPC.ProviderPool do
             last_health_check: System.monotonic_time(:millisecond),
             # Reset cooldown state on success
             cooldown_until: nil,
-            cooldown_count: if(cooldown_was_active, do: 0, else: provider.cooldown_count)
+            cooldown_count: if(cooldown_was_active, do: 0, else: provider.cooldown_count),
+            # Update EMA metrics
+            error_rate: new_error_rate,
+            success_rate: new_success_rate,
+            avg_latency_ms: new_avg_latency,
+            total_requests: new_total_requests
         }
 
         if cooldown_was_active do
@@ -620,6 +689,22 @@ defmodule Livechain.RPC.ProviderPool do
               actual_cooldown = min(cooldown_ms, max_cooldown)
               cooldown_until = System.monotonic_time(:millisecond) + trunc(actual_cooldown)
 
+              # EMA calculations for failure
+              alpha = 0.1
+              new_total_requests = provider.total_requests + 1
+              
+              new_success_rate = if provider.total_requests == 0 do
+                0.0
+              else
+                provider.success_rate * (1 - alpha)
+              end
+              
+              new_error_rate = if provider.total_requests == 0 do
+                1.0
+              else
+                provider.error_rate * (1 - alpha) + alpha
+              end
+
               Logger.warning(
                 "Provider #{provider_id} rate limited, cooling down for #{trunc(actual_cooldown)}ms"
               )
@@ -640,7 +725,11 @@ defmodule Livechain.RPC.ProviderPool do
                   cooldown_count: new_cooldown_count,
                   status: :rate_limited,
                   last_error: error,
-                  last_health_check: System.monotonic_time(:millisecond)
+                  last_health_check: System.monotonic_time(:millisecond),
+                  # Update EMA metrics
+                  error_rate: new_error_rate,
+                  success_rate: new_success_rate,
+                  total_requests: new_total_requests
               }
 
               {true, updated}
@@ -657,13 +746,33 @@ defmodule Livechain.RPC.ProviderPool do
                   provider.status
                 end
 
+              # EMA calculations for failure
+              alpha = 0.1
+              new_total_requests = provider.total_requests + 1
+              
+              new_success_rate = if provider.total_requests == 0 do
+                0.0
+              else
+                provider.success_rate * (1 - alpha)
+              end
+              
+              new_error_rate = if provider.total_requests == 0 do
+                1.0
+              else
+                provider.error_rate * (1 - alpha) + alpha
+              end
+
               updated = %{
                 provider
                 | status: new_status,
                   consecutive_failures: new_consecutive_failures,
                   consecutive_successes: 0,
                   last_error: error,
-                  last_health_check: System.monotonic_time(:millisecond)
+                  last_health_check: System.monotonic_time(:millisecond),
+                  # Update EMA metrics
+                  error_rate: new_error_rate,
+                  success_rate: new_success_rate,
+                  total_requests: new_total_requests
               }
 
               {false, updated}

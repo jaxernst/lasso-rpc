@@ -194,12 +194,6 @@ defmodule Livechain.RPC.ProviderPoolTest do
         reconnect_interval: 1000,
         max_reconnect_attempts: 3
       },
-      aggregation: %Livechain.Config.ChainConfig.Aggregation{
-        deduplication_window: 1000,
-        min_confirmations: 1,
-        max_providers: 2,
-        max_cache_size: 1000
-      },
       failover: %Livechain.Config.ChainConfig.Failover{}
     }
 

@@ -20,8 +20,6 @@ defmodule Livechain.RPC.SelectionTest do
     TestHelper.ensure_clean_state()
 
     # We'll use the actual providers from the config file
-    # ethereum providers: ethereum_infura (priority 1), ethereum_alchemy (priority 2),
-    # ethereum_ankr (priority 3), ethereum_llamarpc (priority 4)
 
     :ok
   end
@@ -29,7 +27,7 @@ defmodule Livechain.RPC.SelectionTest do
   describe "Priority Strategy" do
     test "selects provider by priority order" do
       # Priority strategy should select highest priority (lowest number)
-      # ethereum_infura has priority 1, so it should be selected
+      # ethereum_ankr has priority 1, so it should be selected
       {:ok, selected} =
         Selection.pick_provider(
           "ethereum",
@@ -37,7 +35,7 @@ defmodule Livechain.RPC.SelectionTest do
           strategy: :priority
         )
 
-      assert selected == "ethereum_infura"
+      assert selected == "ethereum_ankr"
     end
 
     test "skips failed providers in priority order" do
@@ -47,11 +45,11 @@ defmodule Livechain.RPC.SelectionTest do
           "ethereum",
           "eth_getBalance",
           strategy: :priority,
-          exclude: ["ethereum_infura"]
+          exclude: ["ethereum_ankr"]
         )
 
-      # Should select next highest priority: ethereum_alchemy
-      assert selected == "ethereum_alchemy"
+      # Should select next highest priority: ethereum_llamarpc
+      assert selected == "ethereum_llamarpc"
     end
 
     test "handles all providers excluded" do
@@ -61,7 +59,14 @@ defmodule Livechain.RPC.SelectionTest do
           "ethereum",
           "eth_getBalance",
           strategy: :priority,
-          exclude: ["ethereum_infura", "ethereum_alchemy", "ethereum_ankr", "ethereum_llamarpc"]
+          exclude: [
+            "ethereum_ankr",
+            "ethereum_llamarpc",
+            "ethereum_cloudflare",
+            "ethereum_publicnode",
+            "ethereum_1rpc",
+            "ethereum_blastapi"
+          ]
         )
 
       assert {:error, :no_available_providers} = result
@@ -85,7 +90,7 @@ defmodule Livechain.RPC.SelectionTest do
 
       # Should include different providers (round robin behavior)
       # Note: actual round robin implementation may vary, we just check for variety
-      assert "ethereum_infura" in selections or "ethereum_alchemy" in selections or
+      assert "ethereum_ankr" in selections or "ethereum_llamarpc" in selections or
                "ethereum_ankr" in selections
     end
 
@@ -98,27 +103,33 @@ defmodule Livechain.RPC.SelectionTest do
               "ethereum",
               "eth_getBalance",
               strategy: :round_robin,
-              exclude: ["ethereum_infura"]
+              exclude: ["ethereum_ankr"]
             )
 
           provider
         end
 
       # Should not include excluded provider
-      refute "ethereum_infura" in selections
-      # Should include other providers
-      assert Enum.any?(selections, fn p ->
-               p in ["ethereum_alchemy", "ethereum_ankr", "ethereum_llamarpc"]
-             end)
+      refute "ethereum_ankr" in selections
+      # Should include other providers (excluding the excluded one)
+      other_providers = [
+        "ethereum_llamarpc",
+        "ethereum_cloudflare",
+        "ethereum_publicnode",
+        "ethereum_1rpc",
+        "ethereum_blastapi"
+      ]
+
+      assert Enum.any?(selections, fn p -> p in other_providers end)
     end
   end
 
-  describe "Leaderboard Strategy" do
+  describe "Fastest Strategy" do
     test "selects highest scoring provider" do
       # Add some benchmark data to create a leaderboard
       Livechain.Benchmarking.BenchmarkStore.record_event_race_win(
         "ethereum",
-        "ethereum_alchemy",
+        "ethereum_llamarpc",
         :newHeads,
         System.monotonic_time(:millisecond)
       )
@@ -127,13 +138,13 @@ defmodule Livechain.RPC.SelectionTest do
         Selection.pick_provider(
           "ethereum",
           "eth_getBalance",
-          strategy: :leaderboard
+          strategy: :fastest
         )
 
       # Should select a provider based on benchmark data or fall back to config
       assert selected in [
-               "ethereum_infura",
-               "ethereum_alchemy",
+               "ethereum_ankr",
+               "ethereum_llamarpc",
                "ethereum_ankr",
                "ethereum_llamarpc"
              ]
@@ -147,11 +158,11 @@ defmodule Livechain.RPC.SelectionTest do
         Selection.pick_provider(
           "ethereum",
           "eth_getBalance",
-          strategy: :leaderboard
+          strategy: :fastest
         )
 
       # Should fall back to priority selection (highest priority provider)
-      assert selected == "ethereum_infura"
+      assert selected == "ethereum_ankr"
     end
 
     test "adapts to performance changes over time" do
@@ -173,22 +184,22 @@ defmodule Livechain.RPC.SelectionTest do
         Selection.pick_provider(
           "ethereum",
           "eth_getBalance",
-          strategy: :leaderboard
+          strategy: :fastest
         )
 
       # Should select based on performance or fall back to priority
       assert initial_selected in [
-               "ethereum_infura",
-               "ethereum_alchemy",
+               "ethereum_ankr",
+               "ethereum_llamarpc",
                "ethereum_ankr",
                "ethereum_llamarpc"
              ]
 
-      # Add more wins for ethereum_alchemy
+      # Add more wins for ethereum_llamarpc
       Enum.each(1..15, fn _i ->
         Livechain.Benchmarking.BenchmarkStore.record_event_race_win(
           "ethereum",
-          "ethereum_alchemy",
+          "ethereum_llamarpc",
           :newHeads,
           System.monotonic_time(:millisecond)
         )
@@ -200,13 +211,13 @@ defmodule Livechain.RPC.SelectionTest do
         Selection.pick_provider(
           "ethereum",
           "eth_getBalance",
-          strategy: :leaderboard
+          strategy: :fastest
         )
 
       # Should still select a valid provider
       assert later_selected in [
-               "ethereum_infura",
-               "ethereum_alchemy",
+               "ethereum_ankr",
+               "ethereum_llamarpc",
                "ethereum_ankr",
                "ethereum_llamarpc"
              ]
@@ -224,7 +235,7 @@ defmodule Livechain.RPC.SelectionTest do
           protocol: :http
         )
 
-      assert selected == "ethereum_infura"
+      assert selected == "ethereum_ankr"
     end
 
     test "filters providers by WebSocket support" do
@@ -237,7 +248,7 @@ defmodule Livechain.RPC.SelectionTest do
           protocol: :ws
         )
 
-      assert selected == "ethereum_infura"
+      assert selected == "ethereum_ankr"
     end
 
     test "handles no providers supporting required protocol" do
@@ -264,7 +275,7 @@ defmodule Livechain.RPC.SelectionTest do
       # Add method-specific benchmark data
       Livechain.Benchmarking.BenchmarkStore.record_rpc_call(
         "ethereum",
-        "ethereum_alchemy",
+        "ethereum_llamarpc",
         "eth_getBalance",
         100,
         :success,
@@ -275,12 +286,12 @@ defmodule Livechain.RPC.SelectionTest do
         Selection.pick_provider(
           "ethereum",
           "eth_getBalance",
-          strategy: :leaderboard
+          strategy: :fastest
         )
 
       assert balance_provider in [
-               "ethereum_infura",
-               "ethereum_alchemy",
+               "ethereum_ankr",
+               "ethereum_llamarpc",
                "ethereum_ankr",
                "ethereum_llamarpc"
              ]
@@ -295,7 +306,7 @@ defmodule Livechain.RPC.SelectionTest do
         )
 
       # Should fall back to default provider selection
-      assert selected == "ethereum_infura"
+      assert selected == "ethereum_ankr"
     end
   end
 
@@ -318,8 +329,8 @@ defmodule Livechain.RPC.SelectionTest do
 
       # Should get providers for each chain
       assert eth_provider in [
-               "ethereum_infura",
-               "ethereum_alchemy",
+               "ethereum_ankr",
+               "ethereum_llamarpc",
                "ethereum_ankr",
                "ethereum_llamarpc"
              ]
@@ -354,11 +365,11 @@ defmodule Livechain.RPC.SelectionTest do
           "ethereum",
           "eth_getBalance",
           strategy: :priority,
-          exclude: ["ethereum_infura"]
+          exclude: ["ethereum_ankr"]
         )
 
       # Should select next best provider
-      assert selected == "ethereum_alchemy"
+      assert selected == "ethereum_llamarpc"
     end
 
     test "handles cascading failures gracefully" do
@@ -368,20 +379,22 @@ defmodule Livechain.RPC.SelectionTest do
           "ethereum",
           "eth_getBalance",
           strategy: :priority,
-          exclude: ["ethereum_infura"]
+          exclude: ["ethereum_ankr"]
         )
 
-      assert selected1 == "ethereum_alchemy"
+      assert selected1 == "ethereum_llamarpc"
 
       {:ok, selected2} =
         Selection.pick_provider(
           "ethereum",
           "eth_getBalance",
           strategy: :priority,
-          exclude: ["ethereum_infura", "ethereum_alchemy"]
+          exclude: ["ethereum_ankr", "ethereum_llamarpc"]
         )
 
-      assert selected2 == "ethereum_ankr"
+      # Should select next highest priority with both HTTP and WS support
+      # ethereum_cloudflare (priority 3) doesn't have ws_url, so ethereum_publicnode (priority 4) is selected
+      assert selected2 == "ethereum_publicnode"
     end
   end
 
@@ -399,13 +412,13 @@ defmodule Livechain.RPC.SelectionTest do
         Selection.pick_provider(
           "ethereum",
           "eth_getBalance",
-          strategy: :leaderboard
+          strategy: :fastest
         )
 
       # Should return valid provider
       assert selected in [
-               "ethereum_infura",
-               "ethereum_alchemy",
+               "ethereum_ankr",
+               "ethereum_llamarpc",
                "ethereum_ankr",
                "ethereum_llamarpc"
              ]
@@ -420,7 +433,7 @@ defmodule Livechain.RPC.SelectionTest do
           Selection.pick_provider(
             "new_chain",
             "new_method",
-            strategy: :leaderboard
+            strategy: :fastest
           )
         catch
           :exit, _ -> {:error, :no_available_providers}

@@ -116,23 +116,20 @@ defmodule Livechain.RPC.Selection do
 
   # Pool-based selection (preferred when pool is available)
   defp pool_selection(chain_name, method, strategy, protocol, exclude) do
-    case ProviderPool.get_best_provider(chain_name, strategy, method) do
+    filters = %{exclude: exclude}
+    case ProviderPool.get_best_provider(chain_name, strategy, method, filters) do
       {:ok, provider_id} ->
-        # Verify the selected provider meets our criteria
-        if provider_id in exclude do
-          {:error, :selected_provider_excluded}
-        else
-          case ConfigStore.get_provider(chain_name, provider_id) do
-            {:ok, provider_config} ->
-              if supports_protocol?(provider_config, protocol) do
-                {:ok, provider_id}
-              else
-                {:error, :selected_provider_wrong_protocol}
-              end
+        # Verify the selected provider meets protocol requirements
+        case ConfigStore.get_provider(chain_name, provider_id) do
+          {:ok, provider_config} ->
+            if supports_protocol?(provider_config, protocol) do
+              {:ok, provider_id}
+            else
+              {:error, :selected_provider_wrong_protocol}
+            end
 
-            {:error, reason} ->
-              {:error, {:provider_config_error, reason}}
-          end
+          {:error, reason} ->
+            {:error, {:provider_config_error, reason}}
         end
 
       {:error, reason} ->

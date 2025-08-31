@@ -1,0 +1,29 @@
+services:
+  lasso:
+    build: .
+    environment:
+      - MIX_ENV=prod
+      - PHX_SERVER=true
+      - PHX_HOST=0.0.0.0
+      - PORT=4000
+    volumes:
+      - ./config:/app/config:ro
+    networks:
+      - lasso-network
+
+  nginx-proxy:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - lasso
+    networks:
+      - lasso-network
+
+networks:
+  lasso-network:
+    driver: bridge

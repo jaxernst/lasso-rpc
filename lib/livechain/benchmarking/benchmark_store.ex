@@ -39,6 +39,17 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     GenServer.cast(__MODULE__, {:record_rpc_call, chain_name, provider_id, method, duration_ms, result})
   end
 
+  @doc """
+  Records a racing event win for performance tracking.
+
+  ## Examples
+
+      iex> BenchmarkStore.record_event_race_win("ethereum", "infura_provider", :newHeads, timestamp)
+      :ok
+  """
+  def record_event_race_win(chain_name, provider_id, event_type, timestamp) do
+    GenServer.cast(__MODULE__, {:record_race_win, chain_name, provider_id, event_type, timestamp})
+  end
 
   @doc """
   Gets the provider leaderboard for a chain showing RPC performance.
