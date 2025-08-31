@@ -88,7 +88,7 @@ defmodule LivechainWeb.Dashboard.EndpointHelpers do
   end
 
   @doc "Get chain endpoints (non-socket version)"
-  def get_chain_endpoints(assigns, chain_name) do
+  def get_chain_endpoints(_assigns, chain_name) do
     base_url = LivechainWeb.Endpoint.url()
     chain_id = Helpers.get_chain_id(chain_name)
 

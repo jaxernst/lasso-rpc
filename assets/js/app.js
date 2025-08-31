@@ -605,6 +605,13 @@ const EndpointSelector = {
     this.selectedProvider = provider;
     this.selectedStrategy = null; // clear strategy selection
     this.mode = "provider";
+    
+    // Get provider capabilities from the button data attributes
+    const providerButton = this.el.querySelector(`[data-provider="${provider}"]`);
+    this.selectedProviderSupportsWs = providerButton 
+      ? providerButton.dataset.providerSupportsWs === 'true' 
+      : false;
+      
     this.updateUI();
   },
 
@@ -704,7 +711,12 @@ const EndpointSelector = {
       } else if (this.mode === "provider" && this.selectedProvider) {
         // For provider overrides, use the provider ID directly
         newHttpUrl = `${baseUrl}/rpc/provider/${this.selectedProvider}/${chain}`;
-        newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
+        // Only show WebSocket URL if provider supports it
+        if (this.selectedProviderSupportsWs) {
+          newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
+        } else {
+          newWsUrl = "WebSocket not supported by this provider";
+        }
       } else {
         // Default fallback
         newHttpUrl = `${baseUrl}/rpc/fastest/${chain}`;
@@ -722,7 +734,15 @@ const EndpointSelector = {
           btn.dataset.copyText &&
           btn.dataset.copyText.includes("ws")
         ) {
-          btn.dataset.copyText = newWsUrl;
+          // Only allow copying if it's a valid WebSocket URL
+          if (this.selectedProviderSupportsWs || this.mode === "strategy") {
+            btn.dataset.copyText = newWsUrl;
+            btn.disabled = false;
+            btn.classList.remove("opacity-50", "cursor-not-allowed");
+          } else {
+            btn.disabled = true;
+            btn.classList.add("opacity-50", "cursor-not-allowed");
+          }
         }
       });
     }

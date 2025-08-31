@@ -283,7 +283,7 @@ defmodule Livechain.RPC.ProviderPool do
         
         %{
           id: id,
-          name: provider.config.name,
+          name: Map.get(provider.config, :name, id),  # Safely get name with fallback
           status: provider.status,
           health_status: provider.status,  # Preserve original status
           circuit_state: circuit_state,
@@ -662,6 +662,9 @@ defmodule Livechain.RPC.ProviderPool do
             provider_id: provider_id,
             status: :healthy
           })
+
+          # Trigger connection status update broadcast for UI
+          Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
         end
 
         new_providers = Map.put(state.providers, provider_id, new_provider)
@@ -802,6 +805,9 @@ defmodule Livechain.RPC.ProviderPool do
             provider_id: provider_id,
             status: :unhealthy
           })
+
+          # Trigger connection status update broadcast for UI
+          Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
         end
 
         # Update active providers list if status changed
@@ -838,6 +844,9 @@ defmodule Livechain.RPC.ProviderPool do
               status: :healthy
             })
 
+            # Trigger connection status update broadcast for UI
+            Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
+
             %{updated_provider | status: :healthy}
           else
             updated_provider
@@ -864,18 +873,32 @@ defmodule Livechain.RPC.ProviderPool do
         {:ok, _response} ->
           # Update provider with successful health check
           Logger.debug("Health check succeeded for #{provider_id}")
-
-          %{
+          
+          updated_provider = %{
             provider
-            | consecutive_successes: provider.consecutive_successes + 1,
+            | status: :healthy,
+              consecutive_successes: provider.consecutive_successes + 1,
               consecutive_failures: 0,
               last_health_check: current_time
           }
+          
+          # Trigger connection status update if status changed
+          if provider.status != :healthy do
+            Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
+          end
+          
+          updated_provider
 
         {:error, reason} ->
           _duration_ms = System.monotonic_time(:millisecond) - start_time
 
           Logger.debug("Health check failed for #{provider_id}: #{inspect(reason)}")
+
+          # Determine the appropriate status based on error type
+          new_status = case reason do
+            {:rate_limit, _} -> :rate_limited
+            _ -> :unhealthy
+          end
 
           # Publish health check failure event
           publish_provider_event(state.chain_name, provider_id, :health_check_failed, %{
@@ -883,13 +906,21 @@ defmodule Livechain.RPC.ProviderPool do
             consecutive_failures: provider.consecutive_failures + 1
           })
 
-          %{
+          updated_provider = %{
             provider
-            | consecutive_failures: provider.consecutive_failures + 1,
+            | status: new_status,
+              consecutive_failures: provider.consecutive_failures + 1,
               consecutive_successes: 0,
               last_error: reason,
               last_health_check: current_time
           }
+          
+          # Trigger connection status update if status changed
+          if provider.status != new_status do
+            Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
+          end
+          
+          updated_provider
       end
     end
   end

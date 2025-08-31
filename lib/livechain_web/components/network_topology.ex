@@ -164,6 +164,18 @@ defmodule LivechainWeb.NetworkTopology do
                 </div>
               <% end %>
               
+    <!-- WebSocket support indicator -->
+              <%= if has_websocket_support?(connection) do %>
+                <div
+                  class="absolute -bottom-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white shadow-md"
+                  title="WebSocket Support"
+                >
+                  <svg class="h-2.5 w-2.5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                  </svg>
+                </div>
+              <% end %>
+              
     <!-- Reconnect attempts indicator -->
               <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
                 <div class="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white shadow-md">
@@ -717,6 +729,20 @@ defmodule LivechainWeb.NetworkTopology do
       :connected -> "bg-emerald-400"
       # Gray - unknown
       :unknown -> "bg-gray-400"
+    end
+  end
+
+  # Helper to check if a provider supports WebSocket connections
+  defp has_websocket_support?(connection) do
+    # Check if the connection has WebSocket support based on type or ws_url
+    case Map.get(connection, :type) do
+      :websocket -> true
+      :both -> true
+      :http -> false
+      _ -> 
+        # Fallback: check if ws_url is present and not nil
+        ws_url = Map.get(connection, :ws_url)
+        is_binary(ws_url) and String.length(ws_url) > 0
     end
   end
 

@@ -28,7 +28,6 @@ defmodule Livechain.RPC.WSSupervisor do
   require Logger
 
   alias Livechain.RPC.{WSEndpoint, WSConnection}
-  alias Livechain.Simulator.MockWSEndpoint
 
   # Client API
 
@@ -70,7 +69,7 @@ defmodule Livechain.RPC.WSSupervisor do
               status: :starting
             })
 
-            broadcast_connection_status_update()
+            Livechain.RPC.ChainRegistry.broadcast_connection_status_update()
             {:ok, pid}
 
           {:error, {:already_started, pid}} ->
@@ -107,7 +106,7 @@ defmodule Livechain.RPC.WSSupervisor do
           status: :stopped
         })
 
-        Task.start(fn -> broadcast_connection_status_update() end)
+        Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
         result
 
       {:error, :not_found} ->

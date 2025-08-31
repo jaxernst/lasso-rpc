@@ -300,16 +300,18 @@ defmodule Livechain.Config.ChainConfigManager do
       "global" => convert_global_to_yaml(config.global)
     }
 
-    case YamlElixir.write_to_string(yaml_data) do
-      {:ok, yaml_content} ->
-        case File.write(@config_file, yaml_content) do
-          :ok -> :ok
-          {:error, reason} -> {:error, {:file_write_failed, reason}}
-        end
-
-      {:error, reason} ->
-        {:error, {:yaml_generation_failed, reason}}
-    end
+    # TODO: YamlElixir.write_to_string/1 doesn't exist - need alternative YAML writer
+    # case YamlElixir.write_to_string(yaml_data) do
+    #   {:ok, yaml_content} ->
+    #     case File.write(@config_file, yaml_content) do
+    #       :ok -> :ok
+    #       {:error, reason} -> {:error, {:file_write_failed, reason}}
+    #     end
+    #
+    #   {:error, reason} ->
+    #     {:error, {:yaml_generation_failed, reason}}
+    # end
+    {:error, :not_implemented}
   end
 
   defp convert_chains_to_yaml(chains) do
