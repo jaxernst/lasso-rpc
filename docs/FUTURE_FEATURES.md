@@ -168,3 +168,23 @@ providers:
 ```
 
 This ensures WebSocket reads are only attempted when providers support them, with automatic HTTP fallback for unsupported methods or providers.
+
+## TRIAGE
+
+- **ISSUE: Subscription Failover Backfill is Incomplete (Impacts `newHeads`)**
+  - **Summary**: The subscription failover backfill mechanism, configured by `max_backfill_blocks`, is only implemented for `eth_subscribe("logs")`. It is NOT implemented for the critical `eth_subscribe("newHeads")` subscription type. This means if a provider fails during a `newHeads` subscription, the client will miss blocks and experience data loss, which undermines a core reliability feature.
+  - **Evidence**:
+    - The implementation in `lib/livechain/rpc/subscription_manager.ex` (functions `backfill_events_for_subscriptions`, `deliver_backfilled_logs`) is entirely focused on fetching and replaying log events via `eth_getLogs`.
+    - The integration test in `test/integration/failover_test.exs` only validates the backfill behavior for `logs` subscriptions. There are no tests for `newHeads` backfill.
+  - **Required Fix (6-10h)**:
+    - **1. Extend `subscription_manager.ex`**:
+      - Create a new function, perhaps `backfill_new_heads`, that is triggered during failover for `newHeads` subscriptions.
+      - This function should determine the range of missing block numbers.
+      - It must then loop from `last_seen_block + 1` to `current_block`, calling `eth_getBlockByNumber` for each missing block and sending the result to the client.
+      - This process must respect the `max_backfill_blocks` and `backfill_timeout` configuration.
+    - **2. Update `failover_test.exs`**:
+      - Add a new test case that establishes a `newHeads` subscription.
+      - Simulates a provider failure and a gap of several blocks.
+      - Asserts that the client correctly receives the missed blocks via the backfill mechanism after the failover event.
+
+Issue + tasks discovered that have not yet been scoped/planned out. Report triage tasks here:
