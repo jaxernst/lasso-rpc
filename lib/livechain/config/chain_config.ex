@@ -76,7 +76,6 @@ defmodule Livechain.Config.ChainConfig do
     ]
   end
 
-
   defmodule Failover do
     @type t :: %__MODULE__{
             # max blocks to backfill on failover
@@ -91,7 +90,6 @@ defmodule Livechain.Config.ChainConfig do
               backfill_timeout: 30_000,
               enabled: true
   end
-
 
   @doc """
   Loads and parses the chain configuration from a YAML file.
@@ -165,7 +163,7 @@ defmodule Livechain.Config.ChainConfig do
   """
   def get_ws_providers(chain_config) do
     chain_config.providers
-    |> Enum.filter(fn provider -> 
+    |> Enum.filter(fn provider ->
       provider_available?(provider) and not is_nil(provider.ws_url)
     end)
     |> Enum.sort_by(& &1.priority)
@@ -251,7 +249,6 @@ defmodule Livechain.Config.ChainConfig do
     }
   end
 
-
   defp parse_failover(nil) do
     # Use default values if no failover config provided
     %__MODULE__.Failover{}
@@ -264,7 +261,6 @@ defmodule Livechain.Config.ChainConfig do
       enabled: Map.get(failover_data, "enabled", true)
     }
   end
-
 
   @doc """
   Substitutes environment variables in configuration strings.
@@ -314,5 +310,4 @@ defmodule Livechain.Config.ChainConfig do
   end
 
   defp validate_connection(_), do: {:error, :invalid_connection}
-
 end

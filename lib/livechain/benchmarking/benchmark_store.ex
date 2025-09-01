@@ -27,17 +27,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @doc """
-  Records an RPC call result for performance tracking.
-
-  ## Examples
-
-      iex> BenchmarkStore.record_rpc_call("ethereum", "infura_provider", "eth_getBalance", 120, :success)
-      :ok
-  """
-  def record_rpc_call(chain_name, provider_id, method, duration_ms, result) do
-    GenServer.cast(__MODULE__, {:record_rpc_call, chain_name, provider_id, method, duration_ms, result})
-  end
 
   @doc """
   Records a racing event win for performance tracking.
@@ -212,7 +201,7 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
 
   @doc """
   Records an RPC call performance metric.
-  
+
   ## Parameters
     - `chain_name`: The blockchain name
     - `provider_id`: Unique provider identifier  
@@ -957,7 +946,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
 
     {:reply, result, state}
   end
-
 
   @impl true
   def handle_info(:cleanup_all_chains, state) do

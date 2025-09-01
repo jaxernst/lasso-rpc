@@ -242,7 +242,6 @@ defmodule Livechain.Config.ChainConfigManager do
     }
   end
 
-
   defp parse_failover(nil), do: default_failover()
 
   defp parse_failover(failover) do
@@ -262,7 +261,6 @@ defmodule Livechain.Config.ChainConfigManager do
       max_reconnect_attempts: 10
     }
   end
-
 
   defp default_failover do
     %ChainConfig.Failover{
@@ -295,7 +293,7 @@ defmodule Livechain.Config.ChainConfigManager do
   end
 
   defp save_config_to_file(config) do
-    yaml_data = %{
+    _yaml_data = %{
       "chains" => convert_chains_to_yaml(config.chains),
       "global" => convert_global_to_yaml(config.global)
     }
@@ -353,7 +351,6 @@ defmodule Livechain.Config.ChainConfigManager do
       "max_reconnect_attempts" => connection.max_reconnect_attempts
     }
   end
-
 
   defp convert_failover_to_yaml(failover) do
     %{

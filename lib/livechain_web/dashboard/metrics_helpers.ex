@@ -16,9 +16,10 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
     now_ms = System.system_time(:millisecond)
     window_ms = 300_000
 
-    recent_events = Enum.filter(assigns.routing_events, fn e ->
-      e[:chain] == chain_name and (e[:ts_ms] || 0) >= now_ms - window_ms
-    end)
+    recent_events =
+      Enum.filter(assigns.routing_events, fn e ->
+        e[:chain] == chain_name and (e[:ts_ms] || 0) >= now_ms - window_ms
+      end)
 
     latencies =
       recent_events
@@ -27,12 +28,13 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
 
     {p50, p95} = Helpers.percentile_pair(latencies)
 
-    success_rate = if length(recent_events) > 0 do
-      successes = Enum.count(recent_events, fn e -> e[:result] == :success end)
-      Float.round(successes * 100.0 / length(recent_events), 1)
-    else
-      nil
-    end
+    success_rate =
+      if length(recent_events) > 0 do
+        successes = Enum.count(recent_events, fn e -> e[:result] == :success end)
+        Float.round(successes * 100.0 / length(recent_events), 1)
+      else
+        nil
+      end
 
     failovers_5m = Enum.count(recent_events, fn e -> (e[:failovers] || 0) > 0 end)
 
@@ -42,7 +44,9 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
       |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(recent_events), 1)} end)
       |> Enum.sort_by(fn {_pid, pct} -> -pct end)
 
-    connected_providers = Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :connected))
+    connected_providers =
+      Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :connected))
+
     total_providers = Enum.count(assigns.connections, &(&1.chain == chain_name))
 
     Map.put(assigns, :chain_performance, %{
@@ -64,10 +68,11 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
   @doc "Assign provider performance metrics to assigns"
   def assign_provider_performance_metrics(assigns, provider_id) do
     # Get the chain for this provider
-    chain = case Enum.find(assigns.connections, &(&1.id == provider_id)) do
-      %{chain: chain_name} -> chain_name
-      _ -> nil
-    end
+    chain =
+      case Enum.find(assigns.connections, &(&1.id == provider_id)) do
+        %{chain: chain_name} -> chain_name
+        _ -> nil
+      end
 
     if chain do
       provider_score = BenchmarkStore.get_provider_score(chain, provider_id)
@@ -78,9 +83,10 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
       five_min_ms = 300_000
       hour_ms = 3_600_000
 
-      events_5m = Enum.filter(assigns.routing_events, fn e ->
-        e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-      end)
+      events_5m =
+        Enum.filter(assigns.routing_events, fn e ->
+          e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - five_min_ms
+        end)
 
       latencies_5m =
         events_5m
@@ -89,29 +95,35 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
 
       {p50, p95} = Helpers.percentile_pair(latencies_5m)
 
-      success_rate = if length(events_5m) > 0 do
-        successes = Enum.count(events_5m, fn e -> e[:result] == :success end)
-        Float.round(successes * 100.0 / length(events_5m), 1)
-      else
-        nil
-      end
+      success_rate =
+        if length(events_5m) > 0 do
+          successes = Enum.count(events_5m, fn e -> e[:result] == :success end)
+          Float.round(successes * 100.0 / length(events_5m), 1)
+        else
+          nil
+        end
 
       calls_last_minute = Map.get(real_time_stats, :calls_last_minute, 0)
 
       calls_last_hour =
         assigns.routing_events
-        |> Enum.count(fn e -> e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - hour_ms end)
+        |> Enum.count(fn e ->
+          e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - hour_ms
+        end)
 
       # Provider pick share among chain decisions in 5m
-      chain_events_5m = Enum.filter(assigns.routing_events, fn e ->
-        e[:chain] == chain and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-      end)
+      chain_events_5m =
+        Enum.filter(assigns.routing_events, fn e ->
+          e[:chain] == chain and (e[:ts_ms] || 0) >= now_ms - five_min_ms
+        end)
 
-      pick_share_5m = if length(chain_events_5m) > 0 do
-        100.0 * Enum.count(chain_events_5m, fn e -> e[:provider_id] == provider_id end) / length(chain_events_5m)
-      else
-        0.0
-      end
+      pick_share_5m =
+        if length(chain_events_5m) > 0 do
+          100.0 * Enum.count(chain_events_5m, fn e -> e[:provider_id] == provider_id end) /
+            length(chain_events_5m)
+        else
+          0.0
+        end
 
       Map.put(assigns, :performance_metrics, %{
         provider_score: Float.round(provider_score || 0.0, 2),
@@ -149,10 +161,12 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
   def get_provider_performance_metrics(provider_id, connections \\ [], routing_events \\ []) do
     require Logger
     # Get the chain for this provider
-    chain = case Enum.find(connections, &(&1.id == provider_id)) do
-      %{chain: chain_name} -> chain_name
-      _ -> nil
-    end
+    chain =
+      case Enum.find(connections, &(&1.id == provider_id)) do
+        %{chain: chain_name} -> chain_name
+        _ -> nil
+      end
+
     if chain do
       provider_score = BenchmarkStore.get_provider_score(chain, provider_id)
       real_time_stats = BenchmarkStore.get_real_time_stats(chain, provider_id)
@@ -162,9 +176,10 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
       five_min_ms = 300_000
       hour_ms = 3_600_000
 
-      events_5m = Enum.filter(routing_events, fn e ->
-        e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-      end)
+      events_5m =
+        Enum.filter(routing_events, fn e ->
+          e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - five_min_ms
+        end)
 
       latencies_5m =
         events_5m
@@ -173,29 +188,35 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
 
       {p50, p95} = Helpers.percentile_pair(latencies_5m)
 
-      success_rate = if length(events_5m) > 0 do
-        successes = Enum.count(events_5m, fn e -> e[:result] == :success end)
-        Float.round(successes * 100.0 / length(events_5m), 1)
-      else
-        nil
-      end
+      success_rate =
+        if length(events_5m) > 0 do
+          successes = Enum.count(events_5m, fn e -> e[:result] == :success end)
+          Float.round(successes * 100.0 / length(events_5m), 1)
+        else
+          nil
+        end
 
       calls_last_minute = Map.get(real_time_stats, :calls_last_minute, 0)
 
       calls_last_hour =
         routing_events
-        |> Enum.count(fn e -> e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - hour_ms end)
+        |> Enum.count(fn e ->
+          e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - hour_ms
+        end)
 
       # Provider pick share among chain decisions in 5m
-      chain_events_5m = Enum.filter(routing_events, fn e ->
-        e[:chain] == chain and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-      end)
+      chain_events_5m =
+        Enum.filter(routing_events, fn e ->
+          e[:chain] == chain and (e[:ts_ms] || 0) >= now_ms - five_min_ms
+        end)
 
-      pick_share_5m = if length(chain_events_5m) > 0 do
-        100.0 * Enum.count(chain_events_5m, fn e -> e[:provider_id] == provider_id end) / length(chain_events_5m)
-      else
-        0.0
-      end
+      pick_share_5m =
+        if length(chain_events_5m) > 0 do
+          100.0 * Enum.count(chain_events_5m, fn e -> e[:provider_id] == provider_id end) /
+            length(chain_events_5m)
+        else
+          0.0
+        end
 
       %{
         provider_score: Float.round(provider_score || 0.0, 2),
@@ -233,32 +254,35 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
   def get_chain_performance_metrics(assigns, chain_name) do
     # Chain-specific routing events
     chain_events = Enum.filter(assigns.routing_events, &(&1.chain == chain_name))
-    
+
     # Calculate metrics based on chain_events
     now_ms = System.system_time(:millisecond)
     five_min_ms = 300_000
     _hour_ms = 3_600_000
-    
-    recent_events = Enum.filter(chain_events, fn e -> (e[:ts_ms] || 0) >= now_ms - five_min_ms end)
-    
+
+    recent_events =
+      Enum.filter(chain_events, fn e -> (e[:ts_ms] || 0) >= now_ms - five_min_ms end)
+
     # Calculate success rate
-    success_rate = if length(recent_events) > 0 do
-      successful = Enum.count(recent_events, fn e -> e[:result] == :success end)
-      Float.round(successful * 100.0 / length(recent_events), 1)
-    else
-      nil
-    end
-    
+    success_rate =
+      if length(recent_events) > 0 do
+        successful = Enum.count(recent_events, fn e -> e[:result] == :success end)
+        Float.round(successful * 100.0 / length(recent_events), 1)
+      else
+        nil
+      end
+
     # Calculate latency percentiles
-    latencies = recent_events
+    latencies =
+      recent_events
       |> Enum.map(&(&1[:duration_ms] || 0))
       |> Enum.filter(&(&1 > 0))
-    
+
     {p50, p95} = Helpers.percentile_pair(latencies)
-    
+
     # Calculate failovers in the last 5 minutes
     failovers_5m = Enum.count(recent_events, &((&1[:failover_count] || 0) > 0))
-    
+
     # Provider decision share
     decision_share =
       recent_events
@@ -266,7 +290,9 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
       |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(recent_events), 1)} end)
       |> Enum.sort_by(fn {_pid, pct} -> -pct end)
 
-    connected_providers = Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :connected))
+    connected_providers =
+      Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :connected))
+
     total_providers = Enum.count(assigns.connections, &(&1.chain == chain_name))
 
     %{
@@ -363,22 +389,23 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
   def rpc_calls_per_second(routing_events) when is_list(routing_events) do
     now = System.system_time(:millisecond)
     one_minute_ago = now - 60_000
-    
+
     recent_events = Enum.filter(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
     count = length(recent_events)
-    
+
     # If we have no events, return 0
     if count == 0 do
       0.0
     else
       # Calculate the actual time span of our data
-      oldest_event_time = recent_events
+      oldest_event_time =
+        recent_events
         |> Enum.map(&(&1[:ts_ms] || now))
         |> Enum.min()
-      
+
       # Calculate the actual duration in seconds (minimum of 1 second to avoid division by zero)
       actual_duration_seconds = max(1, (now - oldest_event_time) / 1000)
-      
+
       # Calculate rate based on actual duration
       Float.round(count / actual_duration_seconds, 1)
     end

@@ -181,7 +181,7 @@ defmodule LivechainWeb.RPCChannel do
   # Uses the same failover logic as HTTP for seamless error recovery
   defp forward_read_call(chain, method, params) do
     strategy = default_provider_strategy()
-    
+
     failover_opts = [
       strategy: strategy,
       protocol: :http
@@ -198,7 +198,6 @@ defmodule LivechainWeb.RPCChannel do
         {:error, "RPC forwarding failed: #{inspect(reason)}"}
     end
   end
-
 
   defp default_provider_strategy do
     Application.get_env(:livechain, :provider_selection_strategy, :cheapest)

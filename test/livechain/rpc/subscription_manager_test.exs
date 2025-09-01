@@ -46,6 +46,7 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
       nil ->
         # If not running, start it manually for tests
         {:ok, _pid} = start_supervised(SubscriptionManager)
+
       _ ->
         :ok
     end
@@ -94,13 +95,13 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
 
     test "tracks subscriptions in state" do
       {:ok, sub_id} = SubscriptionManager.subscribe_to_new_heads("ethereum")
-      
+
       # Get current subscriptions
       subscriptions = SubscriptionManager.get_subscriptions()
-      
+
       assert is_map(subscriptions)
       assert Map.has_key?(subscriptions, sub_id)
-      
+
       subscription = Map.get(subscriptions, sub_id)
       assert subscription.type == :newHeads
       assert subscription.chain == "ethereum"
@@ -111,7 +112,7 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
   describe "Event Handling" do
     test "handles blockchain events correctly" do
       {:ok, sub_id} = SubscriptionManager.subscribe_to_new_heads("ethereum")
-      
+
       # Simulate incoming blockchain event
       block_event = %{
         "number" => "0x12345",
@@ -122,7 +123,7 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
 
       # This tests the handle_event interface
       SubscriptionManager.handle_event("ethereum", :newHeads, block_event)
-      
+
       # The event should be processed without error
       # (The actual delivery would happen via PubSub in real usage)
     end
@@ -146,14 +147,14 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
 
     test "updates subscription block tracking" do
       {:ok, sub_id} = SubscriptionManager.subscribe_to_new_heads("ethereum")
-      
+
       # Test the update_subscription_block function
       SubscriptionManager.update_subscription_block(sub_id, 0x101, "0xblock101")
-      
+
       # Verify subscription state was updated
       subscriptions = SubscriptionManager.get_subscriptions()
       subscription = Map.get(subscriptions, sub_id)
-      
+
       assert subscription.last_delivered_block == 0x101
       assert subscription.last_delivered_block_hash == "0xblock101"
     end
@@ -184,7 +185,7 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
       # List subscriptions for ethereum
       ethereum_subs = SubscriptionManager.get_chain_subscriptions("ethereum")
       assert length(ethereum_subs) == 2
-      
+
       ethereum_sub_ids = Enum.map(ethereum_subs, & &1.id)
       assert sub_id1 in ethereum_sub_ids
       assert sub_id2 in ethereum_sub_ids
@@ -200,11 +201,11 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
       # Create multiple subscriptions and verify they have incremental IDs
       {:ok, sub_id1} = SubscriptionManager.subscribe_to_new_heads("ethereum")
       {:ok, sub_id2} = SubscriptionManager.subscribe_to_new_heads("ethereum")
-      
+
       # Extract counter values from subscription IDs
       [_, _, counter1] = String.split(sub_id1, "_")
       [_, _, counter2] = String.split(sub_id2, "_")
-      
+
       assert String.to_integer(counter1) < String.to_integer(counter2)
     end
   end
@@ -212,16 +213,17 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
   describe "Provider Failover" do
     test "handles provider failover for chain subscriptions" do
       {:ok, sub_id} = SubscriptionManager.subscribe_to_new_heads("ethereum")
-      
+
       # Simulate provider failover
-      result = SubscriptionManager.handle_provider_failover(
-        "ethereum", 
-        "failed_provider", 
-        ["healthy_provider1", "healthy_provider2"]
-      )
-      
+      result =
+        SubscriptionManager.handle_provider_failover(
+          "ethereum",
+          "failed_provider",
+          ["healthy_provider1", "healthy_provider2"]
+        )
+
       assert result == :ok
-      
+
       # Subscription should still exist and be active
       subscriptions = SubscriptionManager.get_subscriptions()
       subscription = Map.get(subscriptions, sub_id)
@@ -237,10 +239,10 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
       # Get chain subscriptions - used by failover logic
       ethereum_subs = SubscriptionManager.get_chain_subscriptions("ethereum")
       polygon_subs = SubscriptionManager.get_chain_subscriptions("polygon")
-      
+
       assert length(ethereum_subs) == 2
       assert length(polygon_subs) == 1
-      
+
       ethereum_ids = Enum.map(ethereum_subs, & &1.id)
       assert sub_id1 in ethereum_ids
       assert sub_id2 in ethereum_ids
@@ -254,23 +256,23 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
       {:ok, newheads_sub} = SubscriptionManager.subscribe_to_new_heads("ethereum")
       {:ok, logs_sub} = SubscriptionManager.subscribe_to_logs("ethereum", %{"address" => "0x123"})
       {:ok, polygon_sub} = SubscriptionManager.subscribe_to_new_heads("polygon")
-      
+
       # Verify all subscriptions exist
       subscriptions = SubscriptionManager.get_subscriptions()
       assert Map.has_key?(subscriptions, newheads_sub)
       assert Map.has_key?(subscriptions, logs_sub)
       assert Map.has_key?(subscriptions, polygon_sub)
-      
+
       # Verify subscription types
       assert subscriptions[newheads_sub].type == :newHeads
       assert subscriptions[logs_sub].type == :logs
       assert subscriptions[polygon_sub].type == :newHeads
-      
+
       # Verify chains
       assert subscriptions[newheads_sub].chain == "ethereum"
       assert subscriptions[logs_sub].chain == "ethereum"
       assert subscriptions[polygon_sub].chain == "polygon"
-      
+
       # Clean up
       SubscriptionManager.unsubscribe(newheads_sub)
       SubscriptionManager.unsubscribe(logs_sub)
@@ -308,5 +310,4 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
       assert {:error, "Subscription not found"} = result
     end
   end
-
 end

@@ -463,7 +463,6 @@ defmodule Livechain.RPC.SubscriptionManager do
     {:noreply, state}
   end
 
-
   # Private functions for backfill implementation
 
   defp perform_subscription_backfill(state, chain, subscription_ids, healthy_provider_ids) do
@@ -791,7 +790,9 @@ defmodule Livechain.RPC.SubscriptionManager do
         Logger.debug("Subscribed to aggregated events for chain #{chain}")
 
       {:error, reason} ->
-        Logger.warning("Failed to subscribe to aggregated events for chain #{chain}: #{inspect(reason)}")
+        Logger.warning(
+          "Failed to subscribe to aggregated events for chain #{chain}: #{inspect(reason)}"
+        )
     end
   end
 
@@ -874,7 +875,6 @@ defmodule Livechain.RPC.SubscriptionManager do
       event_type: "subscription"
     )
   end
-
 
   defp extract_chain_from_message(message) when is_map(message) do
     # Extract chain from the Livechain metadata

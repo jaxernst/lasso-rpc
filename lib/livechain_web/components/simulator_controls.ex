@@ -480,7 +480,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
     <div class="space-y-4 p-4">
       <!-- Header Section -->
       <div class="flex items-center justify-between">
-        <h3 class="text-xs font-semibold text-white">Load Simulator</h3>
+        <h3 class="text-xs font-semibold text-white">Configure Test Run</h3>
         <%= if @simulator_running do %>
           <div class="flex items-center gap-1">
             <div class="h-2 w-2 animate-pulse rounded-full bg-emerald-400"></div>

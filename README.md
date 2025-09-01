@@ -59,7 +59,6 @@ This architecture scales from a single self-hosted instance to a global network 
 
 - WebSocket (WS): Subscriptions (e.g., `eth_subscribe`, `eth_unsubscribe`) and read-only methods.
 - HTTP (POST /rpc/:chain): Read-only methods proxied to upstream providers.
-  - WS-only methods over HTTP return a JSON-RPC error with a hint to use WS.
 
 ### Provider Selection Strategy
 
@@ -94,94 +93,67 @@ curl -X POST http://localhost:4000/rpc/round-robin/ethereum \
 
 ## Quick Start
 
-### Prerequisites
+Choose your preferred setup method:
 
-Choose one of the following setup methods:
+### 🚀 Option 1: Docker (Production Optimized Build)
 
-#### Option 1: Docker (Recommended for Development)
-
-- **Docker & Docker Compose** - [Install Docker](https://docs.docker.com/get-docker/)
-
-#### Option 2: Direct Installation (Recommended for Judges)
-
-- **Elixir/OTP 26+** - [Install Elixir](https://elixir-lang.org/install.html)
-
-### 🚀 Running with Docker (HTTPS Development Setup)
+**Fastest way to get started - no Elixir installation required:**
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/livechain
+# Clone and run with one command
+git clone <repository-url>
 cd livechain
-
-# 2. Generate SSL certificates for HTTPS proxy
-./docker/generate-ssl-certs.sh
-
-# 3. Start with Docker Compose
-docker-compose up --build
-
-# 4. Open your browser
-open https://localhost  # HTTPS with SSL termination
+./run-docker.sh
 ```
 
-**🎯 Docker setup provides:**
-
-- **HTTPS proxy** at https://localhost (with self-signed cert)
-- **HTTP redirect** at http://localhost → https://localhost
-- **Production-like environment** for testing against HTTPS RPC endpoints
-
-### 🚀 Running Locally (Direct Installation)
+**Or manually:**
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/livechain
-cd livechain
+docker build -t lasso-rpc .
+docker run --rm -p 4000:4000 lasso-rpc
+```
 
-# 2. Install Elixir dependencies
+**🎯 Access at:** http://localhost:4000
+
+### 🚀 Option 2: Local Development
+
+**Prerequisites:** [Elixir/OTP 26+](https://elixir-lang.org/install.html)
+
+```bash
+# Development mode (hot reloading, faster builds)
 mix deps.get
-
-# 3. Start the Phoenix server
 mix phx.server
-
-# 4. Open your browser
-open http://localhost:4000
 ```
 
-**🎯 The app will be running at:** http://localhost:4000
+**🎯 Access at:** http://localhost:4000
 
-**⚡ Test the routing strategies:**
+## ⚡ Test the RPC Endpoints
 
-**For Docker setup (HTTPS):**
-
-```bash
-# Test cheapest strategy (uses free providers first)
-curl -k -X POST https://localhost/rpc/cheapest/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# Test fastest strategy (performance-based routing)
-curl -k -X POST https://localhost/rpc/fastest/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-```
-
-**For direct installation (HTTP):**
+Once running, test all 4 routing strategies:
 
 ```bash
-# Test cheapest strategy (uses free providers first)
+# 💰 CHEAPEST - Prefers free providers
 curl -X POST http://localhost:4000/rpc/cheapest/ethereum \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 
-# Test fastest strategy (performance-based routing)
+# ⚡ FASTEST - Performance-based routing
 curl -X POST http://localhost:4000/rpc/fastest/ethereum \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+
+# 🎯 PRIORITY - Static configuration priorities
+curl -X POST http://localhost:4000/rpc/priority/ethereum \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+
+# 🔄 ROUND_ROBIN - Load balances across providers
+curl -X POST http://localhost:4000/rpc/round-robin/ethereum \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 ```
 
-**📊 View the live dashboard:**
-
-- Docker: https://localhost
-- Direct: http://localhost:4000
+**📊 Live Dashboard:** http://localhost:4000
 
 ### 🎬 Automated Demo
 
@@ -214,16 +186,22 @@ chains:
         type: "premium"
 ```
 
-### Basic Usage
+### Using with Web3 Libraries
+
+**Viem/Wagmi:**
+
+```typescript
+import { createPublicClient, http } from "viem";
+
+const client = createPublicClient({
+  transport: http("http://localhost:4000/rpc/fastest/ethereum"),
+});
+```
+
+**WebSocket subscriptions:**
 
 ```bash
-# Get latest block
-curl -X POST http://localhost:4000/rpc/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# WebSocket subscriptions
-wscat -c ws://localhost:4000/rpc/ethereum
+wscat -c ws://localhost:4000/ws/rpc/ethereum
 {"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
 ```
 
@@ -233,14 +211,16 @@ wscat -c ws://localhost:4000/rpc/ethereum
 
 ```bash
 # Ethereum Mainnet
-POST /rpc/ethereum
-WebSocket: ws://localhost:4000/rpc/ethereum
+POST http://localhost:4000/rpc/fastest/ethereum
+WebSocket: ws://localhost:4000/ws/rpc/ethereum
 
 # Base
-POST /rpc/base
-WebSocket: ws://localhost:4000/rpc/base
+POST http://localhost:4000/rpc/fastest/base
+WebSocket: ws://localhost:4000/ws/rpc/base
 
-# Polygon, Arbitrum, etc. (configurable)
+# Other chains: polygon, arbitrum, optimism, avalanche, etc.
+POST http://localhost:4000/rpc/fastest/{chain}
+WebSocket: ws://localhost:4000/ws/rpc/{chain}
 ```
 
 ### Supported Methods
@@ -277,7 +257,7 @@ This gives you production-grounded performance data without synthetic benchmarks
 
 ## Live Dashboard
 
-Access the real-time dashboard at `http://localhost:4000`:
+Access the real-time dashboard at http://localhost:4000:
 
 - **Provider leaderboards** with win rates and average latency
 - **Performance matrix** showing RPC call latencies by provider and method
@@ -333,4 +313,3 @@ mix run scripts/load_test.exs
 - [Full Documentation](docs/)
 - [API Reference](docs/API_REFERENCE.md)
 - [Architecture Deep Dive](docs/ARCHITECTURE.md)
-- [Getting Started Guide](docs/GETTING_STARTED.md)

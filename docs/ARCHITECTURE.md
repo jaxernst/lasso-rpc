@@ -8,7 +8,7 @@ Livechain is an Elixir/OTP application that provides intelligent RPC provider or
 
 ### **Core Capabilities**
 
-- Multi-provider orchestration with pluggable provider selection strategies (default `:leaderboard`; also `:priority`, `:round_robin`)
+- Multi-provider orchestration with pluggable provider selection strategies (default `:fastest`; also `:cheapest`, `:priority`, `:round_robin`)
 - WS + HTTP JSON-RPC proxy for all standard read-only methods; WS also supports real-time subscriptions (`eth_subscribe`, `eth_unsubscribe`)
 - Strong failover across HTTP and WS via per-provider circuit breakers and provider pools
 - Passive provider benchmarking on a per-chain and per-method basis with event racing for lowest-latency delivery
@@ -203,7 +203,7 @@ Configuration:
 ```elixir
 # config/config.exs
 config :livechain, :provider_selection_strategy, :fastest
-# Alternatives: :priority | :round_robin | :cheapest
+# Alternatives: :cheapest | :priority | :round_robin
 ```
 
 ---

@@ -11,33 +11,33 @@ defmodule LivechainWeb.Components.NetworkStatusLegend do
           <span>Healthy</span>
         </div>
         
-        <!-- Connecting/Recovery States -->
+    <!-- Connecting/Recovery States -->
         <div class="flex items-center space-x-1.5 text-xs text-gray-300">
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-amber-400"></div>
           <span>Connecting</span>
         </div>
-        
+
         <div class="flex items-center space-x-1.5 text-xs text-gray-300">
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-blue-400"></div>
           <span>Recovering</span>
         </div>
         
-        <!-- Problem States -->
+    <!-- Problem States -->
         <div class="flex items-center space-x-1.5 text-xs text-gray-300">
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-orange-400"></div>
           <span>Unhealthy</span>
         </div>
-        
+
         <div class="flex items-center space-x-1.5 text-xs text-gray-300">
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-purple-400"></div>
           <span>Rate Limited</span>
         </div>
-        
+
         <div class="flex items-center space-x-1.5 text-xs text-gray-300">
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-red-500"></div>
           <span>Circuit Open</span>
         </div>
-        
+
         <div class="flex items-center space-x-1.5 text-xs text-gray-300">
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-gray-400"></div>
           <span>Unknown</span>

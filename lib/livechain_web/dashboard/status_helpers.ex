@@ -23,7 +23,10 @@ defmodule LivechainWeb.Dashboard.StatusHelpers do
     # Debug log status determination for troubleshooting
     require Logger
     provider_id = Map.get(provider, :id, "unknown")
-    Logger.debug("StatusHelpers: Status determination for #{provider_id}: circuit_state=#{circuit_state}, health_status=#{health_status}, connection_status=#{connection_status}, consecutive_failures=#{consecutive_failures}, is_in_cooldown=#{is_in_cooldown}")
+
+    Logger.debug(
+      "StatusHelpers: Status determination for #{provider_id}: circuit_state=#{circuit_state}, health_status=#{health_status}, connection_status=#{connection_status}, consecutive_failures=#{consecutive_failures}, is_in_cooldown=#{is_in_cooldown}"
+    )
 
     cond do
       # Circuit breaker is open - provider is effectively failed (highest priority)
@@ -89,15 +92,24 @@ defmodule LivechainWeb.Dashboard.StatusHelpers do
   @doc "Get provider status CSS text class with enhanced colors"
   def provider_status_class_text(provider) do
     case determine_provider_status(provider) do
-      :circuit_open -> "text-red-500"      # 🔴 Critical failure
-      :failed -> "text-red-400"            # 🔴 Failed
-      :unhealthy -> "text-orange-400"      # 🟠 Unhealthy
-      :unstable -> "text-yellow-400"       # 🟡 Unstable
-      :rate_limited -> "text-purple-300"   # 🟣 Rate limited
-      :connecting -> "text-gray-300"       # ⚪ Connecting
-      :recovering -> "text-blue-400"       # 🔵 Recovering
-      :connected -> "text-emerald-400"     # 🟢 Healthy
-      :unknown -> "text-gray-400"          # ⚫ Unknown
+      # 🔴 Critical failure
+      :circuit_open -> "text-red-500"
+      # 🔴 Failed
+      :failed -> "text-red-400"
+      # 🟠 Unhealthy
+      :unhealthy -> "text-orange-400"
+      # 🟡 Unstable
+      :unstable -> "text-yellow-400"
+      # 🟣 Rate limited
+      :rate_limited -> "text-purple-300"
+      # ⚪ Connecting
+      :connecting -> "text-gray-300"
+      # 🔵 Recovering
+      :recovering -> "text-blue-400"
+      # 🟢 Healthy
+      :connected -> "text-emerald-400"
+      # ⚫ Unknown
+      :unknown -> "text-gray-400"
     end
   end
 
@@ -105,7 +117,7 @@ defmodule LivechainWeb.Dashboard.StatusHelpers do
   def provider_status_indicator_class(provider) do
     case determine_provider_status(provider) do
       :circuit_open -> "bg-red-500"
-      :failed -> "bg-red-400" 
+      :failed -> "bg-red-400"
       :unhealthy -> "bg-orange-400"
       :unstable -> "bg-yellow-400"
       :rate_limited -> "bg-purple-400"
@@ -165,7 +177,6 @@ defmodule LivechainWeb.Dashboard.StatusHelpers do
     end)
     |> Enum.into(%{})
   end
-
 
   @doc "Get severity text CSS class"
   def severity_text_class(:debug), do: "text-gray-400"

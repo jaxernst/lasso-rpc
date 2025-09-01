@@ -12,6 +12,10 @@ RUN apk add --no-cache \
 # Set working directory
 WORKDIR /app
 
+# Set environment to production from the start
+ENV MIX_ENV=prod
+ENV PHX_SERVER=true
+
 # Install hex and rebar
 RUN mix local.hex --force && \
     mix local.rebar --force
@@ -19,31 +23,29 @@ RUN mix local.hex --force && \
 # Copy dependency files
 COPY mix.exs mix.lock ./
 
-# Install Elixir dependencies
+# Install Elixir dependencies for production
 RUN mix deps.get --only prod
 RUN mix deps.compile
 
-# Copy Phoenix assets
+# Copy assets and application code
 COPY assets/ ./assets/
-
-# Install Node.js dependencies and build assets
-RUN cd assets && npm ci --production=false && npm run build
-
-# Copy application code
 COPY . .
 
-# Compile the application
+# Install any remaining dependencies
+RUN mix deps.get --only prod
+
+# Compile the application for production
 RUN mix compile
 
-# Create release build
+# Build static assets (CSS/JS)
+RUN mix tailwind.install
+RUN mix esbuild.install
+RUN mix tailwind livechain --minify
+RUN mix esbuild livechain --minify
 RUN mix phx.digest
 
 # Expose port
 EXPOSE 4000
-
-# Set environment to production
-ENV MIX_ENV=prod
-ENV PHX_SERVER=true
 
 # Start the application
 CMD ["mix", "phx.server"]

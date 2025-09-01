@@ -2,7 +2,7 @@ defmodule LivechainWeb.Components.DashboardComponents do
   @moduledoc """
   Helper components for the dashboard UI, extracted for better organization.
   """
-  
+
   use Phoenix.Component
 
   # Floating Chain Configuration Window (top-left)
@@ -18,18 +18,10 @@ defmodule LivechainWeb.Components.DashboardComponents do
       |> assign_new(:config_expanded_providers, fn -> MapSet.new() end)
 
     ~H"""
-    <div class={[
-      "pointer-events-none absolute top-4 left-4 z-40 transition-all duration-300",
-      if(@chain_config_open,
-        do: if(@chain_config_collapsed, do: "w-80 h-12", else: "w-[28rem] h-[32rem]"),
-        else: "w-80 h-12 opacity-0 pointer-events-none scale-90"
-      )
-    ]}>
-      <div class={[
-        "border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg",
-        "transition-all duration-300",
-        unless(@chain_config_open, do: "scale-90 opacity-0")
-      ]}>
+    <div class={["pointer-events-none absolute top-4 left-4 z-40 transition-all duration-300", if(@chain_config_open,
+    do: if(@chain_config_collapsed, do: "h-12 w-80", else: "w-[28rem] h-[32rem]"),
+    else: "pointer-events-none h-12 w-80 scale-90 opacity-0")]}>
+      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg", "transition-all duration-300", unless(@chain_config_open, do: "scale-90 opacity-0")]}>
         <!-- Header / Collapsed State -->
         <div class="border-gray-700/50 flex items-center justify-between border-b px-4 py-2">
           <div class="flex min-w-0 items-center gap-2">
@@ -59,30 +51,26 @@ defmodule LivechainWeb.Components.DashboardComponents do
 
         <%= unless @chain_config_collapsed do %>
           <!-- Expanded Three-Panel Layout -->
-          <div class="flex flex-col h-[28rem]">
+          <div class="h-[28rem] flex flex-col">
             <!-- Chain List Panel -->
-            <div class="border-gray-700/50 border-b p-3 h-40">
-              <div class="flex items-center justify-between mb-2">
+            <div class="border-gray-700/50 h-40 border-b p-3">
+              <div class="mb-2 flex items-center justify-between">
                 <h4 class="text-sm font-semibold text-gray-300">Configured Chains</h4>
                 <button
                   phx-click="toggle_quick_add"
-                  class="bg-purple-600 hover:bg-purple-500 rounded px-2 py-1 text-xs text-white transition-colors"
+                  class="rounded bg-purple-600 px-2 py-1 text-xs text-white transition-colors hover:bg-purple-500"
                 >
                   + Add Provider
                 </button>
               </div>
-              <div class="space-y-1 max-h-24 overflow-y-auto">
+              <div class="max-h-24 space-y-1 overflow-y-auto">
                 <%= for chain <- @available_chains do %>
                   <button
                     phx-click="select_config_chain"
                     phx-value-chain={chain.name}
-                    class={[
-                      "w-full text-left px-2 py-1.5 rounded text-xs transition-colors flex items-center justify-between",
-                      if(@config_selected_chain == chain.name,
-                        do: "bg-purple-600/20 border border-purple-600/40 text-purple-200",
-                        else: "bg-gray-800/40 hover:bg-gray-700/60 text-gray-300"
-                      )
-                    ]}
+                    class={["flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs transition-colors", if(@config_selected_chain == chain.name,
+    do: "bg-purple-600/20 border-purple-600/40 border text-purple-200",
+    else: "bg-gray-800/40 text-gray-300 hover:bg-gray-700/60")]}
                   >
                     <div>
                       <div class="font-medium">{String.capitalize(chain.name)}</div>
@@ -92,15 +80,15 @@ defmodule LivechainWeb.Components.DashboardComponents do
                   </button>
                 <% end %>
                 <%= if Enum.empty?(@available_chains) do %>
-                  <div class="text-xs text-gray-500 text-center py-4">
+                  <div class="py-4 text-center text-xs text-gray-500">
                     No chains configured
                   </div>
                 <% end %>
               </div>
             </div>
-
-            <!-- Configuration Form Panel -->
-            <div class="flex-1 p-3 overflow-y-auto">
+            
+    <!-- Configuration Form Panel -->
+            <div class="flex-1 overflow-y-auto p-3">
               <%= if @quick_add_open do %>
                 <.quick_add_provider_form quick_add_data={@quick_add_data} />
               <% else %>
@@ -112,30 +100,40 @@ defmodule LivechainWeb.Components.DashboardComponents do
                     expanded={@config_expanded_providers}
                   />
                 <% else %>
-                  <div class="text-center text-gray-500 text-sm py-8">
-                    <svg class="h-12 w-12 mx-auto text-gray-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+                  <div class="py-8 text-center text-sm text-gray-500">
+                    <svg
+                      class="mx-auto mb-3 h-12 w-12 text-gray-600"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="1.5"
+                        d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"
+                      />
                     </svg>
                     <p>Select a chain to configure</p>
-                    <p class="text-xs text-gray-600 mt-1">or add a provider</p>
+                    <p class="mt-1 text-xs text-gray-600">or add a provider</p>
                   </div>
                 <% end %>
               <% end %>
             </div>
-
-            <!-- Action Buttons Panel -->
-            <div class="border-gray-700/50 border-t p-3 flex justify-between items-center">
+            
+    <!-- Action Buttons Panel -->
+            <div class="border-gray-700/50 flex items-center justify-between border-t p-3">
               <div class="flex items-center space-x-2">
                 <%= if @config_selected_chain do %>
                   <button
                     phx-click="test_chain_config"
-                    class="bg-blue-600 hover:bg-blue-500 rounded px-3 py-1.5 text-xs text-white transition-colors"
+                    class="rounded bg-blue-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-500"
                   >
                     Test Connection
                   </button>
                   <button
                     phx-click="delete_chain_config"
-                    class="bg-red-600 hover:bg-red-500 rounded px-3 py-1.5 text-xs text-white transition-colors"
+                    class="rounded bg-red-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-red-500"
                   >
                     Delete Chain
                   </button>
@@ -145,7 +143,7 @@ defmodule LivechainWeb.Components.DashboardComponents do
                 <button
                   type="submit"
                   form="chain-config-form"
-                  class="bg-emerald-600 hover:bg-emerald-500 rounded px-3 py-1.5 text-xs text-white transition-colors font-medium"
+                  class="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-500"
                 >
                   Save Changes
                 </button>
@@ -167,73 +165,100 @@ defmodule LivechainWeb.Components.DashboardComponents do
       |> assign_new(:expanded, fn -> MapSet.new() end)
 
     ~H"""
-    <form id="chain-config-form" phx-change="config_form_change" phx-submit="save_chain_config" class="space-y-4">
+    <form
+      id="chain-config-form"
+      phx-change="config_form_change"
+      phx-submit="save_chain_config"
+      class="space-y-4"
+    >
       <div class="text-sm font-medium text-gray-300">
         Configure: <span class="text-purple-300">{String.capitalize(@selected_chain)}</span>
       </div>
-
-      <!-- Basic Chain Information -->
+      
+    <!-- Basic Chain Information -->
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2">
-          <label class="block text-[11px] font-medium text-gray-400 mb-1">Chain Name</label>
+          <label class="text-[11px] mb-1 block font-medium text-gray-400">Chain Name</label>
           <input
             type="text"
             name="chain[name]"
             value={Map.get(@form_data, :name, String.capitalize(@selected_chain))}
             phx-debounce="300"
-            class="w-full bg-gray-800/80 border border-gray-600/70 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
             placeholder="e.g., Ethereum Mainnet"
           />
         </div>
         <div>
-          <label class="block text-[11px] font-medium text-gray-400 mb-1">Chain ID</label>
+          <label class="text-[11px] mb-1 block font-medium text-gray-400">Chain ID</label>
           <input
             type="number"
             name="chain[chain_id]"
             value={Map.get(@form_data, :chain_id, "")}
             phx-debounce="300"
-            class="w-full bg-gray-800/80 border border-gray-600/70 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
             placeholder="1"
           />
         </div>
         <div>
-          <label class="block text-[11px] font-medium text-gray-400 mb-1">Block Time (ms)</label>
+          <label class="text-[11px] mb-1 block font-medium text-gray-400">Block Time (ms)</label>
           <input
             type="number"
             name="chain[block_time]"
             value={Map.get(@form_data, :block_time, 12000)}
             phx-debounce="300"
-            class="w-full bg-gray-800/80 border border-gray-600/70 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
             placeholder="12000"
           />
         </div>
       </div>
-
-      <!-- Providers Section -->
+      
+    <!-- Providers Section -->
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <label class="block text-[11px] font-medium text-gray-400">Providers</label>
+          <label class="text-[11px] block font-medium text-gray-400">Providers</label>
           <button
             type="button"
             phx-click="add_provider"
-            class="bg-purple-600 hover:bg-purple-500 rounded px-2 py-1 text-xs text-white transition-colors"
+            class="rounded bg-purple-600 px-2 py-1 text-xs text-white transition-colors hover:bg-purple-500"
           >
             + Add Provider
           </button>
         </div>
 
-        <div class="space-y-2 max-h-40 overflow-y-auto pr-1">
+        <div class="max-h-40 space-y-2 overflow-y-auto pr-1">
           <%= for {provider, idx} <- Enum.with_index(Map.get(@form_data, :providers, [])) do %>
-            <div class="bg-gray-800/60 border border-gray-700/70 rounded">
+            <div class="bg-gray-800/60 border-gray-700/70 rounded border">
               <div class="flex items-center justify-between px-2 py-2">
-                <button type="button" phx-click="toggle_provider_row" phx-value-index={idx} class="flex items-center gap-2 text-left flex-1">
-                  <svg class={["h-3 w-3 transition-transform", if(MapSet.member?(@expanded, idx), do: "rotate-90 text-purple-300", else: "text-gray-400")]} viewBox="0 0 20 20" fill="currentColor"><path d="M6 6l6 4-6 4V6z"/></svg>
-                  <span class="text-sm text-white truncate">{provider.name || "Provider #{idx + 1}"}</span>
+                <button
+                  type="button"
+                  phx-click="toggle_provider_row"
+                  phx-value-index={idx}
+                  class="flex flex-1 items-center gap-2 text-left"
+                >
+                  <svg
+                    class={["h-3 w-3 transition-transform", if(MapSet.member?(@expanded, idx),
+    do: "rotate-90 text-purple-300",
+    else: "text-gray-400")]}
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                  >
+                    <path d="M6 6l6 4-6 4V6z" />
+                  </svg>
+                  <span class="truncate text-sm text-white">
+                    {provider.name || "Provider #{idx + 1}"}
+                  </span>
                 </button>
-                <button type="button" phx-click="remove_provider" phx-value-index={idx} class="text-rose-400 hover:text-rose-300 text-xs px-2">Remove</button>
+                <button
+                  type="button"
+                  phx-click="remove_provider"
+                  phx-value-index={idx}
+                  class="px-2 text-xs text-rose-400 hover:text-rose-300"
+                >
+                  Remove
+                </button>
               </div>
               <%= if MapSet.member?(@expanded, idx) do %>
-                <div class="border-t border-gray-700/60 p-2 space-y-2">
+                <div class="border-gray-700/60 space-y-2 border-t p-2">
                   <div class="grid grid-cols-1 gap-2">
                     <input
                       type="url"
@@ -241,7 +266,7 @@ defmodule LivechainWeb.Components.DashboardComponents do
                       placeholder="https://rpc.example.com"
                       value={provider.url || ""}
                       phx-debounce="300"
-                      class="w-full bg-gray-900/60 border border-gray-600/70 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                      class="bg-gray-900/60 border-gray-600/70 w-full rounded border px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
                     />
                     <input
                       type="url"
@@ -249,7 +274,7 @@ defmodule LivechainWeb.Components.DashboardComponents do
                       placeholder="wss://ws.example.com (optional)"
                       value={provider.ws_url || ""}
                       phx-debounce="300"
-                      class="w-full bg-gray-900/60 border border-gray-600/70 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      class="bg-gray-900/60 border-gray-600/70 w-full rounded border px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                     />
                   </div>
                 </div>
@@ -258,17 +283,17 @@ defmodule LivechainWeb.Components.DashboardComponents do
           <% end %>
 
           <%= if Enum.empty?(Map.get(@form_data, :providers, [])) do %>
-            <div class="text-xs text-gray-500 text-center py-2">
+            <div class="py-2 text-center text-xs text-gray-500">
               No providers configured
             </div>
           <% end %>
         </div>
       </div>
-
-      <!-- Validation Errors -->
+      
+    <!-- Validation Errors -->
       <%= if not Enum.empty?(@validation_errors) do %>
-        <div class="bg-red-900/20 border border-red-600/40 rounded p-2">
-          <div class="text-xs font-medium text-red-400 mb-1">Validation Errors:</div>
+        <div class="bg-red-900/20 border-red-600/40 rounded border p-2">
+          <div class="mb-1 text-xs font-medium text-red-400">Validation Errors:</div>
           <%= for error <- @validation_errors do %>
             <div class="text-xs text-red-300">• {error}</div>
           <% end %>
@@ -284,29 +309,74 @@ defmodule LivechainWeb.Components.DashboardComponents do
       |> assign_new(:quick_add_data, fn -> %{} end)
 
     ~H"""
-    <form id="quick-add-form" phx-change="quick_add_change" phx-submit="quick_add_submit" class="space-y-3">
+    <form
+      id="quick-add-form"
+      phx-change="quick_add_change"
+      phx-submit="quick_add_submit"
+      class="space-y-3"
+    >
       <div class="text-sm font-semibold text-gray-300">Add Provider</div>
       <div class="grid grid-cols-2 gap-2">
         <div>
-          <label class="block text-[11px] text-gray-400 mb-1">Chain Name</label>
-          <input type="text" name="qa[name]" value={Map.get(@quick_add_data, :name, "")} placeholder="e.g., Arbitrum" phx-debounce="300" class="w-full bg-gray-800/80 border border-gray-600/70 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500" />
+          <label class="text-[11px] mb-1 block text-gray-400">Chain Name</label>
+          <input
+            type="text"
+            name="qa[name]"
+            value={Map.get(@quick_add_data, :name, "")}
+            placeholder="e.g., Arbitrum"
+            phx-debounce="300"
+            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+          />
         </div>
         <div>
-          <label class="block text-[11px] text-gray-400 mb-1">Chain ID</label>
-          <input type="number" name="qa[chain_id]" value={Map.get(@quick_add_data, :chain_id, "")} placeholder="42161" phx-debounce="300" class="w-full bg-gray-800/80 border border-gray-600/70 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500" />
+          <label class="text-[11px] mb-1 block text-gray-400">Chain ID</label>
+          <input
+            type="number"
+            name="qa[chain_id]"
+            value={Map.get(@quick_add_data, :chain_id, "")}
+            placeholder="42161"
+            phx-debounce="300"
+            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+          />
         </div>
         <div class="col-span-2">
-          <label class="block text-[11px] text-gray-400 mb-1">HTTP URL</label>
-          <input type="url" name="qa[url]" value={Map.get(@quick_add_data, :url, "")} placeholder="https://rpc.example.com" phx-debounce="300" class="w-full bg-gray-900/60 border border-gray-600/70 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-sky-500 focus:ring-1 focus:ring-sky-500" />
+          <label class="text-[11px] mb-1 block text-gray-400">HTTP URL</label>
+          <input
+            type="url"
+            name="qa[url]"
+            value={Map.get(@quick_add_data, :url, "")}
+            placeholder="https://rpc.example.com"
+            phx-debounce="300"
+            class="bg-gray-900/60 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+          />
         </div>
         <div class="col-span-2">
-          <label class="block text-[11px] text-gray-400 mb-1">WS URL (optional)</label>
-          <input type="url" name="qa[ws_url]" value={Map.get(@quick_add_data, :ws_url, "")} placeholder="wss://ws.example.com" phx-debounce="300" class="w-full bg-gray-900/60 border border-gray-600/70 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" />
+          <label class="text-[11px] mb-1 block text-gray-400">WS URL (optional)</label>
+          <input
+            type="url"
+            name="qa[ws_url]"
+            value={Map.get(@quick_add_data, :ws_url, "")}
+            placeholder="wss://ws.example.com"
+            phx-debounce="300"
+            class="bg-gray-900/60 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+          />
         </div>
       </div>
       <div class="flex items-center justify-end gap-2 pt-2">
-        <button type="button" phx-click="toggle_quick_add" class="bg-gray-700/80 hover:bg-gray-600 rounded px-3 py-1.5 text-xs text-gray-200">Cancel</button>
-        <button type="submit" form="quick-add-form" class="bg-emerald-600 hover:bg-emerald-500 rounded px-3 py-1.5 text-xs text-white font-medium">Add Provider</button>
+        <button
+          type="button"
+          phx-click="toggle_quick_add"
+          class="bg-gray-700/80 rounded px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-600"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          form="quick-add-form"
+          class="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500"
+        >
+          Add Provider
+        </button>
       </div>
     </form>
     """
