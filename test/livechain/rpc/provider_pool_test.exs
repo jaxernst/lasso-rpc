@@ -26,7 +26,7 @@ defmodule Livechain.RPC.ProviderPoolTest do
     }
   end
 
-  defp provider_struct(attrs \\ []) do
+  defp provider_struct(attrs) do
     struct(
       ChainConfig.Provider,
       Map.merge(

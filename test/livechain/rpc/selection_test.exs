@@ -10,7 +10,6 @@ defmodule Livechain.RPC.SelectionTest do
   import Mox
 
   alias Livechain.RPC.Selection
-  alias Livechain.Config.ChainConfig
 
   setup do
     # Mock the HTTP client for any background operations

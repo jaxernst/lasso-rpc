@@ -10,18 +10,16 @@ defmodule Integration.FailoverTest do
   import Mox
   import ExUnit.CaptureLog
 
-  alias Livechain.RPC.{ChainSupervisor, ProviderPool, CircuitBreaker, MessageAggregator}
+  alias Livechain.RPC.{ChainSupervisor, CircuitBreaker}
   alias Livechain.Config.ChainConfig
   alias Livechain.Config.ChainConfig.{Provider, Connection, Failover}
-  alias Livechain.RPC.WSEndpoint
-  alias Livechain.Simulator.MockWSEndpoint
 
   setup do
     # Start the application to ensure all dependencies are available
     Application.ensure_all_started(:livechain)
 
     # Mock HTTP client with controlled failure scenarios
-    stub(Livechain.RPC.HttpClientMock, :request, fn config, method, params, timeout ->
+    stub(Livechain.RPC.HttpClientMock, :request, fn config, _method, _params, _timeout ->
       # Simulate different provider reliability
       case config.url do
         "https://reliable-provider.example.com" ->
@@ -198,7 +196,7 @@ defmodule Integration.FailoverTest do
       Process.sleep(300)
 
       # Initially, reliable provider should be active
-      initial_providers = ChainSupervisor.get_active_providers(chain_name)
+      _initial_providers = ChainSupervisor.get_active_providers(chain_name)
 
       # Simulate primary provider failure
       log =
@@ -240,7 +238,7 @@ defmodule Integration.FailoverTest do
 
       # Make requests while simulating provider failures
       results =
-        for i <- 1..10 do
+        for _i <- 1..10 do
           result =
             try do
               ChainSupervisor.send_message(chain_name, %{
@@ -280,11 +278,11 @@ defmodule Integration.FailoverTest do
       {:ok, supervisor_pid} = ChainSupervisor.start_link({chain_name, chain_config})
       Process.sleep(300)
 
-      initial_status = ChainSupervisor.get_chain_status(chain_name)
+      _initial_status = ChainSupervisor.get_chain_status(chain_name)
 
       # Make multiple requests to test load distribution
       tasks =
-        for i <- 1..20 do
+        for _i <- 1..20 do
           Task.async(fn ->
             try do
               ChainSupervisor.send_message(chain_name, %{
@@ -342,7 +340,7 @@ defmodule Integration.FailoverTest do
         end
 
       Task.await_many(baseline_tasks, 2000)
-      baseline_time = System.monotonic_time(:millisecond) - baseline_start
+      _baseline_time = System.monotonic_time(:millisecond) - baseline_start
 
       # Now test performance during failures
       failover_start = System.monotonic_time(:millisecond)
