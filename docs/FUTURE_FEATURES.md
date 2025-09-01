@@ -27,11 +27,12 @@ A living backlog of high-impact improvements to make Livechain reliable, fast, a
   - ✅ WebSocket upstream for subscriptions (eth_subscribe, eth_unsubscribe)
   - ❌ WebSocket RPC calls (eth_getBalance, eth_blockNumber, etc.) lack failover logic
 - **Default**: read-only calls over HTTP upstream; subscriptions over WS upstream.
-- **WebSocket read support** (P1 priority):
+- **WebSocket read support** (OUT OF SCOPE FOR HACKATHON SUBMISSION):
   - `WSRequestClient` with request-id correlation and timeout management
   - **Critical gap**: WebSocket RPC calls need same failover logic as HTTP (`try_failover_with_reporting/7`)
   - **Current issue**: WS RPC calls fail immediately on 429 instead of transparent failover
   - **Solution**: Extract failover logic to shared module or replicate in `RPCChannel`
+  - **Note**: WebSocket/HTTP parity implementation deferred to post-hackathon development
 - **Per-method protocol policy**: override table in config for fine control.
 - **Provider capability flags**: `supports_ws_reads: true/false` per provider
 - **Automatic fallback**: WS fails → HTTP fallback for critical methods
@@ -53,11 +54,12 @@ A living backlog of high-impact improvements to make Livechain reliable, fast, a
   - **Circuit breaker integration**: Per-provider failure tracking and automatic recovery
   - **Provider cooldown**: Rate-limited providers automatically excluded until cooldown expires
   - **Zero user impact**: Original request succeeds transparently via next best provider
-- **WebSocket resilience gaps** (❌ needs implementation):
+- **WebSocket resilience gaps** (❌ OUT OF SCOPE FOR HACKATHON):
   - **Missing failover logic**: WS RPC calls fail immediately instead of transparent retry
   - **No request correlation**: Need `WSRequestManager` for request/response pairing
   - **Inconsistent error handling**: WS errors not mapped to same taxonomy as HTTP
   - **Circuit breaker gaps**: WS failures not properly integrated with breaker state
+  - **Note**: WebSocket parity features deferred to post-hackathon roadmap
 - **Circuit breaker tuning**: per-provider thresholds; breaker state in telemetry; partial brownout handling.
 - **Adaptive retry/backoff**: selective retries on retryable errors; jittered backoff; method-aware retry limits.
 - **Rate-limit adaptation**: detect provider 429s; dynamically reduce traffic; use alternative providers.
@@ -114,8 +116,8 @@ A living backlog of high-impact improvements to make Livechain reliable, fast, a
 ### Roadmap (suggested phases)
 
 - **P0 (Core)**: strategy registry, per-method overrides, telemetry events, MethodPolicy timeouts
-- **P1 (Performance)**: WebSocket read support with failover parity, hedged requests, cache/coalescing, provider scoreboards + dashboards
-- **P2 (Resilience/Scale)**: adaptive rate limiting, staged rollout, geo-aware selection
+- **P1 (Performance)**: hedged requests, cache/coalescing, provider scoreboards + dashboards (WebSocket read support moved to P2)
+- **P2 (Resilience/Scale)**: WebSocket read support with failover parity, adaptive rate limiting, staged rollout, geo-aware selection
 - **P3 (Product)**: cost-aware routing, multi-tenant quotas, billing/usage reporting
 
 ### Implementation Notes
@@ -166,4 +168,3 @@ providers:
 ```
 
 This ensures WebSocket reads are only attempted when providers support them, with automatic HTTP fallback for unsupported methods or providers.
-@das

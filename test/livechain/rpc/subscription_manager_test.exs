@@ -111,7 +111,7 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
 
   describe "Event Handling" do
     test "handles blockchain events correctly" do
-      {:ok, sub_id} = SubscriptionManager.subscribe_to_new_heads("ethereum")
+      {:ok, _sub_id} = SubscriptionManager.subscribe_to_new_heads("ethereum")
 
       # Simulate incoming blockchain event
       block_event = %{
@@ -130,7 +130,7 @@ defmodule Livechain.RPC.SubscriptionManagerTest do
 
     test "handles logs events correctly" do
       filter = %{"address" => "0x1234567890123456789012345678901234567890"}
-      {:ok, sub_id} = SubscriptionManager.subscribe_to_logs("ethereum", filter)
+      {:ok, _sub_id} = SubscriptionManager.subscribe_to_logs("ethereum", filter)
 
       # Simulate a log event
       log_event = %{

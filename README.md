@@ -60,37 +60,6 @@ This architecture scales from a single self-hosted instance to a global network 
 - WebSocket (WS): Subscriptions (e.g., `eth_subscribe`, `eth_unsubscribe`) and read-only methods.
 - HTTP (POST /rpc/:chain): Read-only methods proxied to upstream providers.
 
-### Provider Selection Strategy
-
-The orchestrator uses a pluggable route-based strategy to pick providers when forwarding HTTP calls.
-
-- Default: `:cheapest` (prefers free providers)
-- Alternatives: `:fastest` (performance-based), `:priority` (static config), `:round_robin` (load balanced)
-
-Try all 4 strategies with these endpoints:
-
-```bash
-# 💰 CHEAPEST - Prefers free providers to save costs
-curl -X POST http://localhost:4000/rpc/cheapest/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# ⚡ FASTEST - Routes to best-performing provider based on real latency data
-curl -X POST http://localhost:4000/rpc/fastest/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# 📊 PRIORITY - Uses static configuration priorities
-curl -X POST http://localhost:4000/rpc/priority/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# 🔄 ROUND_ROBIN - Load balances across all available providers
-curl -X POST http://localhost:4000/rpc/round-robin/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-```
-
 ## Quick Start
 
 Choose your preferred setup method:
@@ -164,7 +133,9 @@ Run the interactive demo script:
 ./scripts/demo_routing_strategies.exs
 ```
 
-### Configure Providers
+## Configuration
+
+### Provider Setup
 
 Edit `config/chains.yml` to add your RPC providers:
 
@@ -186,6 +157,25 @@ chains:
         type: "premium"
 ```
 
+### Provider Selection Strategy
+
+```elixir
+# config/config.exs
+config :livechain, :provider_selection_strategy, :fastest
+# Options: :fastest, :cheapest, :priority, :round_robin
+```
+
+### Circuit Breaker Settings
+
+```elixir
+config :livechain, :circuit_breaker,
+  failure_threshold: 5,      # failures before opening
+  recovery_timeout: 60_000,  # ms before retry
+  success_threshold: 2       # successes before closing
+```
+
+## Integration
+
 ### Using with Web3 Libraries
 
 **Viem/Wagmi:**
@@ -205,31 +195,17 @@ wscat -c ws://localhost:4000/ws/rpc/ethereum
 {"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
 ```
 
+## Live Dashboard
+
+Access the real-time dashboard at http://localhost:4000:
+
+- **Provider leaderboards** with win rates and average latency
+- **Performance matrix** showing RPC call latencies by provider and method
+- **Circuit breaker status** and provider health monitoring
+- **Chain selection** to switch between networks
+- **System simulator** for load testing
+
 ## API Reference
-
-### Supported Chains & Endpoints
-
-```bash
-# Ethereum Mainnet
-POST http://localhost:4000/rpc/fastest/ethereum
-WebSocket: ws://localhost:4000/ws/rpc/ethereum
-
-# Base
-POST http://localhost:4000/rpc/fastest/base
-WebSocket: ws://localhost:4000/ws/rpc/base
-
-# Other chains: polygon, arbitrum, optimism, avalanche, etc.
-POST http://localhost:4000/rpc/fastest/{chain}
-WebSocket: ws://localhost:4000/ws/rpc/{chain}
-```
-
-### Supported Methods
-
-- **Block queries**: `eth_blockNumber`, `eth_getBlockByNumber`, `eth_getBlockByHash`
-- **Account queries**: `eth_getBalance`, `eth_getTransactionCount`, `eth_getCode`
-- **Transaction queries**: `eth_getTransactionByHash`, `eth_getTransactionReceipt`
-- **Log queries**: `eth_getLogs` with full filter support
-- **Subscriptions** (WebSocket only): `eth_subscribe`, `eth_unsubscribe` for `newHeads`, `logs`
 
 ### System Health & Metrics
 
@@ -242,56 +218,6 @@ GET /api/status
 
 # Provider performance metrics
 GET /api/metrics/:chain
-```
-
-## Key Feature: Real Performance Tracking
-
-Unlike traditional load balancers, Lasso uses **real RPC call measurements** for intelligent routing:
-
-1. **Track actual RPC latencies** from your production traffic
-2. **Build provider leaderboards** based on real performance data
-3. **Route requests intelligently** using the `:fastest` strategy
-4. **Automatic failover** when providers fail or slow down
-
-This gives you production-grounded performance data without synthetic benchmarks or artificial load.
-
-## Live Dashboard
-
-Access the real-time dashboard at http://localhost:4000:
-
-- **Provider leaderboards** with win rates and average latency
-- **Performance matrix** showing RPC call latencies by provider and method
-- **Circuit breaker status** and provider health monitoring
-- **Chain selection** to switch between networks
-- **System simulator** for load testing
-
-## Architecture
-
-Built on **Elixir/OTP** for fault-tolerance and massive concurrency:
-
-- **Process isolation**: Each provider connection runs in its own lightweight process
-- **Circuit breakers**: Automatic failover when providers fail
-- **Self-healing**: Crashed processes restart automatically without affecting others
-- **Hot updates**: Deploy fixes without downtime
-- **Distributed ready**: Simple clustering across multiple nodes/regions
-
-## Configuration
-
-### Provider Selection Strategy
-
-```elixir
-# config/config.exs
-config :livechain, :provider_selection_strategy, :fastest
-# Options: :fastest, :cheapest, :priority, :round_robin
-```
-
-### Circuit Breaker Settings
-
-```elixir
-config :livechain, :circuit_breaker,
-  failure_threshold: 5,      # failures before opening
-  recovery_timeout: 60_000,  # ms before retry
-  success_threshold: 2       # successes before closing
 ```
 
 ## Development & Testing
@@ -311,5 +237,4 @@ mix run scripts/load_test.exs
 ## Links
 
 - [Full Documentation](docs/)
-- [API Reference](docs/API_REFERENCE.md)
 - [Architecture Deep Dive](docs/ARCHITECTURE.md)
