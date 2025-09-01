@@ -70,3 +70,8 @@ config :logger, :console,
 
 # Environment specific configs
 import_config "#{config_env()}.exs"
+
+# Runtime configuration (loaded at runtime, not compile time)
+if File.exists?("config/runtime.exs") do
+  import_config "runtime.exs"
+end

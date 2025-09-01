@@ -195,7 +195,10 @@ defmodule LivechainWeb.BlockchainChannel do
                 :ok
 
               {:error, reason} ->
-                Logger.error("Failed to start chain connection for #{chain_id}: #{inspect(reason)}")
+                Logger.error(
+                  "Failed to start chain connection for #{chain_id}: #{inspect(reason)}"
+                )
+
                 :error
             end
 
@@ -231,6 +234,7 @@ defmodule LivechainWeb.BlockchainChannel do
                   max_reconnect_attempts: chain_config.connection.max_reconnect_attempts,
                   subscription_topics: chain_config.connection.subscription_topics
                 }
+
                 {:ok, endpoint}
 
               [] ->

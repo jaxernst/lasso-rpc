@@ -21,9 +21,7 @@ config :livechain,
   environment: :test
 
 # Configure Phoenix PubSub for testing  
-config :livechain, Livechain.PubSub,
-  adapter: Phoenix.PubSub.PG
+config :livechain, Livechain.PubSub, adapter: Phoenix.PubSub.PG
 
 # Configure process registry for testing
-config :livechain, Livechain.RPC.ProcessRegistry,
-  partitions: 1
+config :livechain, Livechain.RPC.ProcessRegistry, partitions: 1

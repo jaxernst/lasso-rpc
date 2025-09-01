@@ -43,7 +43,6 @@ defmodule Livechain.RPC.Failover do
 
   # Private functions
 
-
   defp execute_rpc_with_failover(chain, method, params, strategy, provider_id, region_filter) do
     start_time = System.monotonic_time(:millisecond)
 

@@ -59,21 +59,24 @@ defmodule LivechainWeb.RPCController do
         case resolve_chain_name(chain_id) do
           {:ok, chain_name} ->
             # Check if strategy was already assigned by strategy-specific endpoint
-            strategy_atom = case conn.assigns[:provider_strategy] do
-              nil ->
-                # No strategy assigned yet, check URL params (for backward compatibility)
-                strategy_str = params["strategy"]
-                case strategy_str do
-                  "priority" -> :priority
-                  "round_robin" -> :round_robin
-                  "fastest" -> :fastest
-                  "cheapest" -> :cheapest
-                  _ -> default_provider_strategy()
-                end
-              existing_strategy ->
-                # Strategy already assigned by endpoint-specific handler
-                existing_strategy
-            end
+            strategy_atom =
+              case conn.assigns[:provider_strategy] do
+                nil ->
+                  # No strategy assigned yet, check URL params (for backward compatibility)
+                  strategy_str = params["strategy"]
+
+                  case strategy_str do
+                    "priority" -> :priority
+                    "round_robin" -> :round_robin
+                    "fastest" -> :fastest
+                    "cheapest" -> :cheapest
+                    _ -> default_provider_strategy()
+                  end
+
+                existing_strategy ->
+                  # Strategy already assigned by endpoint-specific handler
+                  existing_strategy
+              end
 
             conn = assign(conn, :provider_strategy, strategy_atom)
 

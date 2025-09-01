@@ -75,7 +75,9 @@ defmodule Livechain.RPC.WSConnectionTest do
   defp cleanup_circuit_breakers(provider_ids) do
     Enum.each(provider_ids, fn provider_id ->
       try do
-        case GenServer.whereis({:via, Registry, {Livechain.Registry, {:circuit_breaker, provider_id}}}) do
+        case GenServer.whereis(
+               {:via, Registry, {Livechain.Registry, {:circuit_breaker, provider_id}}}
+             ) do
           nil -> :ok
           pid -> GenServer.stop(pid, :normal, 1000)
         end

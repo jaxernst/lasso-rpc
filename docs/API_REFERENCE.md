@@ -144,15 +144,15 @@ ws.send(
 
 The orchestrator uses a pluggable provider selection strategy when forwarding JSON-RPC calls over both HTTP and WebSocket.
 
-- **Default**: `:cheapest` (prefers free providers)
-- **Alternatives**: `:fastest` (uses performance data), `:priority` (static config), `:round_robin` (load balanced)
+- **Default**: `:fastest` (performance-based routing)
+- **Alternatives**: `:cheapest` (prefers free providers), `:priority` (static config), `:round_robin` (load balanced)
 
 Configuration:
 
 ```elixir
 # config/config.exs
-config :livechain, :provider_selection_strategy, :cheapest
-# :fastest, :priority or :round_robin can be used instead
+config :livechain, :provider_selection_strategy, :fastest
+# :cheapest, :priority or :round_robin can be used instead
 ```
 
 ---

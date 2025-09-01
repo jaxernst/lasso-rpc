@@ -76,5 +76,4 @@ defmodule Livechain.Application do
       {:ok, supervisor}
     end
   end
-
 end

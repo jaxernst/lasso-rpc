@@ -67,7 +67,7 @@ defmodule LivechainWeb.Router do
     # Strategy-specific endpoints for different routing approaches
     # Use fastest provider based on latency
     post("/fastest/:chain_id", RPCController, :rpc_fastest)
-    # Use cheapest provider (default to free providers)
+    # Use cheapest provider (round-robin between free providers)
     post("/cheapest/:chain_id", RPCController, :rpc_cheapest)
     # Use priority-ordered providers
     post("/priority/:chain_id", RPCController, :rpc_priority)

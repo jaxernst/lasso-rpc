@@ -161,9 +161,7 @@ defmodule Livechain.RPC.ChainSupervisor do
       start_provider_connection(chain_name, provider, chain_config)
     end)
 
-    Logger.info(
-      "Started #{length(ws_providers)} WebSocket connections for #{chain_name}"
-    )
+    Logger.info("Started #{length(ws_providers)} WebSocket connections for #{chain_name}")
 
     Logger.info(
       "Started circuit breakers for #{length(chain_config.providers)} providers for #{chain_name}"
@@ -276,6 +274,7 @@ defmodule Livechain.RPC.ChainSupervisor do
               subscriptions: Map.get(status, :subscriptions, 0),
               pending_messages: Map.get(status, :pending_messages, 0)
             }
+
           _ ->
             # WSConnection process not found or error occurred
             %{
@@ -296,6 +295,7 @@ defmodule Livechain.RPC.ChainSupervisor do
             subscriptions: 0,
             pending_messages: 0
           }
+
         _ ->
           # Any other error
           %{

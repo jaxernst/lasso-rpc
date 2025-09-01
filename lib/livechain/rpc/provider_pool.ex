@@ -275,17 +275,19 @@ defmodule Livechain.RPC.ProviderPool do
   @impl true
   def handle_call(:get_comprehensive_status, _from, state) do
     current_time = System.monotonic_time(:millisecond)
-    
+
     providers =
       Enum.map(state.providers, fn {id, provider} ->
         circuit_state = Map.get(state.circuit_states, id, :closed)
         is_in_cooldown = provider.cooldown_until && provider.cooldown_until > current_time
-        
+
         %{
           id: id,
-          name: Map.get(provider.config, :name, id),  # Safely get name with fallback
+          # Safely get name with fallback
+          name: Map.get(provider.config, :name, id),
           status: provider.status,
-          health_status: provider.status,  # Preserve original status
+          # Preserve original status
+          health_status: provider.status,
           circuit_state: circuit_state,
           consecutive_failures: provider.consecutive_failures,
           consecutive_successes: provider.consecutive_successes,
@@ -495,7 +497,7 @@ defmodule Livechain.RPC.ProviderPool do
                 |> Enum.sort_by(& &1.config.priority)
                 |> List.first()
                 |> Map.get(:id)
-              
+
               filtered_providers ->
                 filtered_providers
                 |> Enum.sort_by(& &1.avg_latency_ms)
@@ -601,31 +603,34 @@ defmodule Livechain.RPC.ProviderPool do
 
       provider ->
         cooldown_was_active = not is_nil(provider.cooldown_until)
-        
+
         # EMA calculations with alpha = 0.1 (smoothing factor)
         alpha = 0.1
         new_total_requests = provider.total_requests + 1
-        
+
         # Update success rate (EMA)
-        new_success_rate = if provider.total_requests == 0 do
-          1.0
-        else
-          provider.success_rate * (1 - alpha) + alpha
-        end
-        
+        new_success_rate =
+          if provider.total_requests == 0 do
+            1.0
+          else
+            provider.success_rate * (1 - alpha) + alpha
+          end
+
         # Update error rate (EMA)
-        new_error_rate = if provider.total_requests == 0 do
-          0.0
-        else
-          provider.error_rate * (1 - alpha)
-        end
-        
+        new_error_rate =
+          if provider.total_requests == 0 do
+            0.0
+          else
+            provider.error_rate * (1 - alpha)
+          end
+
         # Update average latency (EMA)
-        new_avg_latency = if provider.total_requests == 0 do
-          latency_ms
-        else
-          provider.avg_latency_ms * (1 - alpha) + latency_ms * alpha
-        end
+        new_avg_latency =
+          if provider.total_requests == 0 do
+            latency_ms
+          else
+            provider.avg_latency_ms * (1 - alpha) + latency_ms * alpha
+          end
 
         new_provider = %{
           provider
@@ -695,18 +700,20 @@ defmodule Livechain.RPC.ProviderPool do
               # EMA calculations for failure
               alpha = 0.1
               new_total_requests = provider.total_requests + 1
-              
-              new_success_rate = if provider.total_requests == 0 do
-                0.0
-              else
-                provider.success_rate * (1 - alpha)
-              end
-              
-              new_error_rate = if provider.total_requests == 0 do
-                1.0
-              else
-                provider.error_rate * (1 - alpha) + alpha
-              end
+
+              new_success_rate =
+                if provider.total_requests == 0 do
+                  0.0
+                else
+                  provider.success_rate * (1 - alpha)
+                end
+
+              new_error_rate =
+                if provider.total_requests == 0 do
+                  1.0
+                else
+                  provider.error_rate * (1 - alpha) + alpha
+                end
 
               Logger.warning(
                 "Provider #{provider_id} rate limited, cooling down for #{trunc(actual_cooldown)}ms"
@@ -752,18 +759,20 @@ defmodule Livechain.RPC.ProviderPool do
               # EMA calculations for failure
               alpha = 0.1
               new_total_requests = provider.total_requests + 1
-              
-              new_success_rate = if provider.total_requests == 0 do
-                0.0
-              else
-                provider.success_rate * (1 - alpha)
-              end
-              
-              new_error_rate = if provider.total_requests == 0 do
-                1.0
-              else
-                provider.error_rate * (1 - alpha) + alpha
-              end
+
+              new_success_rate =
+                if provider.total_requests == 0 do
+                  0.0
+                else
+                  provider.success_rate * (1 - alpha)
+                end
+
+              new_error_rate =
+                if provider.total_requests == 0 do
+                  1.0
+                else
+                  provider.error_rate * (1 - alpha) + alpha
+                end
 
               updated = %{
                 provider
@@ -873,7 +882,7 @@ defmodule Livechain.RPC.ProviderPool do
         {:ok, _response} ->
           # Update provider with successful health check
           Logger.debug("Health check succeeded for #{provider_id}")
-          
+
           updated_provider = %{
             provider
             | status: :healthy,
@@ -881,12 +890,12 @@ defmodule Livechain.RPC.ProviderPool do
               consecutive_failures: 0,
               last_health_check: current_time
           }
-          
+
           # Trigger connection status update if status changed
           if provider.status != :healthy do
             Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
           end
-          
+
           updated_provider
 
         {:error, reason} ->
@@ -895,10 +904,11 @@ defmodule Livechain.RPC.ProviderPool do
           Logger.debug("Health check failed for #{provider_id}: #{inspect(reason)}")
 
           # Determine the appropriate status based on error type
-          new_status = case reason do
-            {:rate_limit, _} -> :rate_limited
-            _ -> :unhealthy
-          end
+          new_status =
+            case reason do
+              {:rate_limit, _} -> :rate_limited
+              _ -> :unhealthy
+            end
 
           # Publish health check failure event
           publish_provider_event(state.chain_name, provider_id, :health_check_failed, %{
@@ -914,12 +924,12 @@ defmodule Livechain.RPC.ProviderPool do
               last_error: reason,
               last_health_check: current_time
           }
-          
+
           # Trigger connection status update if status changed
           if provider.status != new_status do
             Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
           end
-          
+
           updated_provider
       end
     end
