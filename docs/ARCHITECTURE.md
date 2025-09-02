@@ -234,7 +234,6 @@ end
 
 ### **Throughput**
 
-- **Event processing**: 1000+ events/second per chain
 - **Racing latency**: <5ms from event receipt to race result
 - **Provider Configuration + capability lookups**: <1ms via ETS cache (no file I/O)
 - **Provider selection**: <2ms via Selection module
@@ -252,7 +251,6 @@ end
 
 - **Concurrent providers**: Can support an unbounded number of RPC providers
 - **Multiple chains**: Independent supervision trees scale horizontally
-- **Client connections**: 1000+ concurrent WebSocket clients
 - **Historical data**: Bounded memory with persistent snapshots
 
 ---

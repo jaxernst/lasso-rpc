@@ -77,6 +77,23 @@ defmodule Livechain.RPC.ChainSupervisor do
   end
 
   @doc """
+  Forwards a WebSocket message to a specific provider on this chain.
+  This is used by the failover system to send messages via WebSocket connections.
+  """
+  @spec forward_ws_message(String.t(), String.t(), map()) ::
+          {:ok, any()} | {:error, term()}
+  def forward_ws_message(_chain_name, provider_id, message) do
+    try do
+      WSConnection.send_message(provider_id, message)
+      {:ok, :sent}
+    rescue
+      error -> {:error, error}
+    catch
+      kind, error -> {:error, {kind, error}}
+    end
+  end
+
+  @doc """
   Forwards an RPC request to a specific provider on this chain.
   This is the core function for HTTP RPC forwarding with provider selection.
   """
@@ -127,24 +144,25 @@ defmodule Livechain.RPC.ChainSupervisor do
       {ProviderPool, {chain_name, chain_config}},
 
       # Start dynamic supervisor to manage WS connections
-      {DynamicSupervisor, strategy: :one_for_one, name: connection_supervisor_name(chain_name)}
+      {DynamicSupervisor, strategy: :one_for_one, name: connection_supervisor_name(chain_name)},
+      
+      # Start dynamic supervisor to manage circuit breakers
+      {DynamicSupervisor, strategy: :one_for_one, name: circuit_breaker_supervisor_name(chain_name)},
+
+      # Start connection manager after dependencies
+      {Task, fn -> start_provider_connections_async(chain_name, chain_config) end}
     ]
 
-    # Start provider connections synchronously after supervisor is initialized
-    spawn_link(fn -> start_provider_connections_async(chain_name, chain_config) end)
-
-    Supervisor.init(children, strategy: :one_for_one)
+    Supervisor.init(children, strategy: :rest_for_one)
   end
 
-  # Asynchronously start provider connections after supervisor is ready
+
+  # Start provider connections after dependencies are ready
   defp start_provider_connections_async(chain_name, chain_config) do
-    # TODO: This is an anti pattern
-    # Give supervisor time to fully initialize
-    Process.sleep(100)
 
     # Start circuit breakers for ALL providers (HTTP and WS)
     Enum.each(chain_config.providers, fn provider ->
-      start_circuit_breaker(provider)
+      start_circuit_breaker(chain_name, provider)
     end)
 
     # Register ALL providers with ProviderPool (for health checks)
@@ -211,7 +229,7 @@ defmodule Livechain.RPC.ChainSupervisor do
     end
   end
 
-  defp start_circuit_breaker(provider) do
+  defp start_circuit_breaker(chain_name, provider) do
     # Circuit breaker configuration
     circuit_config = %{
       failure_threshold: 5,
@@ -219,9 +237,13 @@ defmodule Livechain.RPC.ChainSupervisor do
       success_threshold: 2
     }
 
-    case CircuitBreaker.start_link({provider.id, circuit_config}) do
+    # Start circuit breaker under the dynamic supervisor for proper supervision
+    case DynamicSupervisor.start_child(
+           circuit_breaker_supervisor_name(chain_name),
+           {CircuitBreaker, {provider.id, circuit_config}}
+         ) do
       {:ok, _pid} ->
-        Logger.info("Started circuit breaker for provider #{provider.id}")
+        Logger.info("Started supervised circuit breaker for provider #{provider.id}")
 
       {:error, {:already_started, _pid}} ->
         Logger.debug("Circuit breaker for #{provider.id} already running")
@@ -238,14 +260,45 @@ defmodule Livechain.RPC.ChainSupervisor do
   defp connection_supervisor_name(chain_name) do
     :"#{chain_name}_connection_supervisor"
   end
+  
+  defp circuit_breaker_supervisor_name(chain_name) do
+    :"#{chain_name}_circuit_breaker_supervisor"
+  end
 
-  defp normalize_breaker_result({:ok, {:ok, result}}), do: {:ok, result}
+  defp normalize_breaker_result({:ok, {:ok, result}}) do
+    normalize_rpc_response(result)
+  end
+  
   defp normalize_breaker_result({:ok, {:error, reason}}), do: {:error, reason}
-  defp normalize_breaker_result({:ok, result}), do: {:ok, result}
+  
+  defp normalize_breaker_result({:ok, result}) do
+    normalize_rpc_response(result)
+  end
+  
   defp normalize_breaker_result({:error, reason}), do: {:error, reason}
-  defp normalize_breaker_result({:reply, {:ok, result}, _state}), do: {:ok, result}
+  
+  defp normalize_breaker_result({:reply, {:ok, result}, _state}) do
+    normalize_rpc_response(result)
+  end
+  
   defp normalize_breaker_result({:reply, {:error, reason}, _state}), do: {:error, reason}
   defp normalize_breaker_result({:reply, other, _state}), do: {:error, other}
+  
+  # Check if a successful response contains a JSON-RPC error
+  defp normalize_rpc_response(%{"error" => error} = _response) when is_map(error) do
+    # Provider returned a JSON-RPC error - treat as error
+    {:error, error}
+  end
+  
+  defp normalize_rpc_response(%{"result" => result}) do
+    # Standard JSON-RPC success response - extract result
+    {:ok, result}
+  end
+  
+  defp normalize_rpc_response(response) do
+    # Non-standard response format - pass through
+    {:ok, response}
+  end
 
   defp safe_breaker_call(provider_id, fun, timeout) do
     try do

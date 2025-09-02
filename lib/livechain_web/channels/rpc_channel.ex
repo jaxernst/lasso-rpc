@@ -12,7 +12,7 @@ defmodule LivechainWeb.RPCChannel do
   use LivechainWeb, :channel
   require Logger
 
-  alias Livechain.RPC.{SubscriptionManager, Failover}
+  alias Livechain.RPC.{SubscriptionManager, Failover, Error}
   alias Livechain.Config.ConfigStore
 
   @impl true
@@ -45,14 +45,8 @@ defmodule LivechainWeb.RPCChannel do
           }
 
         {:error, reason} ->
-          %{
-            "jsonrpc" => "2.0",
-            "id" => id,
-            "error" => %{
-              "code" => -32000,
-              "message" => to_string(reason)
-            }
-          }
+          # Use centralized error normalization for consistency
+          Error.normalize(reason, id)
 
         {:subscription, subscription_id} ->
           %{
@@ -187,16 +181,8 @@ defmodule LivechainWeb.RPCChannel do
       protocol: :http
     ]
 
-    case Failover.execute_with_failover(chain, method, params, failover_opts) do
-      {:ok, result} ->
-        {:ok, result}
-
-      {:error, %{message: message}} ->
-        {:error, "RPC forwarding failed: #{message}"}
-
-      {:error, reason} ->
-        {:error, "RPC forwarding failed: #{inspect(reason)}"}
-    end
+    # Pass through the error directly for consistent normalization upstream
+    Failover.execute_with_failover(chain, method, params, failover_opts)
   end
 
   defp default_provider_strategy do

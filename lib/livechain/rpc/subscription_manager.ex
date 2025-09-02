@@ -342,30 +342,65 @@ defmodule Livechain.RPC.SubscriptionManager do
   Handle provider failover - migrate all subscriptions from failed provider to healthy ones.
   This is the core function for bulletproof subscription continuity.
 
-  TODO: This may not work properly as designed
+  This function ensures that active subscriptions survive provider failures by:
+  1. Identifying all subscriptions using the failed provider
+  2. Marking them as migrating to prevent race conditions
+  3. Performing backfill of missed events if enabled
+  4. Updating subscriptions to use healthy providers
+  5. Sending new upstream subscription requests
 
+  The failover process is designed to be atomic and recoverable.
   """
   @impl true
   def handle_cast(
         {:handle_provider_failover, chain, failed_provider_id, healthy_provider_ids},
         state
       ) do
-    # Get all subscriptions for this chain
-    chain_subscription_ids = Map.get(state.chain_subscriptions, chain, [])
+    # Validate input parameters
+    cond do
+      not is_list(healthy_provider_ids) or healthy_provider_ids == [] ->
+        Logger.error("Provider failover failed: no healthy providers available",
+          chain: chain,
+          failed_provider: failed_provider_id
+        )
 
-    Logger.warning("Handling provider failover for chain #{chain}",
-      failed_provider: failed_provider_id,
-      healthy_providers: healthy_provider_ids,
-      affected_subscriptions: length(chain_subscription_ids)
-    )
+        {:noreply, state}
 
+      true ->
+        # Get all subscriptions for this chain
+        chain_subscription_ids = Map.get(state.chain_subscriptions, chain, [])
+
+        Logger.warning("Handling provider failover for chain #{chain}",
+          failed_provider: failed_provider_id,
+          healthy_providers: healthy_provider_ids,
+          affected_subscriptions: length(chain_subscription_ids)
+        )
+
+        do_provider_failover(
+          chain,
+          failed_provider_id,
+          healthy_provider_ids,
+          chain_subscription_ids,
+          state
+        )
+    end
+  end
+
+  # Extracted failover logic for better readability
+  defp do_provider_failover(
+         chain,
+         failed_provider_id,
+         healthy_provider_ids,
+         chain_subscription_ids,
+         state
+       ) do
     # Mark all chain subscriptions as migrating and remove failed provider
     updated_state = %{
       state
       | subscriptions:
           Enum.reduce(chain_subscription_ids, state.subscriptions, fn sub_id, acc ->
             case Map.get(acc, sub_id) do
-              %SubscriptionState{} = sub ->
+              %SubscriptionState{status: :active} = sub ->
                 updated_sub = %{
                   sub
                   | status: :migrating,
@@ -374,7 +409,17 @@ defmodule Livechain.RPC.SubscriptionManager do
 
                 Map.put(acc, sub_id, updated_sub)
 
-              nil ->
+              %SubscriptionState{status: status} = sub
+              when status in [:migrating, :backfilling] ->
+                # Already in transition, just remove failed provider
+                updated_sub = %{
+                  sub
+                  | provider_ids: List.delete(sub.provider_ids, failed_provider_id)
+                }
+
+                Map.put(acc, sub_id, updated_sub)
+
+              _ ->
                 acc
             end
           end)
@@ -412,6 +457,7 @@ defmodule Livechain.RPC.SubscriptionManager do
     {:noreply, final_state}
   end
 
+  # Handle subscription block updates for continuity tracking
   @impl true
   def handle_cast({:update_subscription_block, subscription_id, block_number, block_hash}, state) do
     case Map.get(state.subscriptions, subscription_id) do
@@ -925,8 +971,12 @@ defmodule Livechain.RPC.SubscriptionManager do
         }
 
         # Send subscription request to the provider via WSConnection
-        case Registry.lookup(Livechain.Registry, {:ws_conn, provider_id}) do
-          [{pid, _}] ->
+        case Livechain.RPC.ProcessRegistry.lookup(
+               Livechain.RPC.ProcessRegistry,
+               :ws_connection,
+               provider_id
+             ) do
+          {:ok, pid} ->
             GenServer.cast(pid, {:send_message, subscription_message})
 
             Logger.debug("Sent upstream subscription request to #{provider_id}",
@@ -934,10 +984,11 @@ defmodule Livechain.RPC.SubscriptionManager do
               type: subscription_type
             )
 
-          [] ->
+          {:error, reason} ->
             Logger.warning("Provider connection not found for upstream subscription",
               chain: chain,
-              provider_id: provider_id
+              provider_id: provider_id,
+              reason: reason
             )
         end
 

@@ -19,6 +19,7 @@ defmodule Livechain.RPC.Selection do
 
   alias Livechain.Config.ConfigStore
   alias Livechain.RPC.ProviderPool
+  alias Livechain.RPC.CircuitBreaker
 
   @doc """
   Picks the best provider for a given chain and method.
@@ -58,7 +59,7 @@ defmodule Livechain.RPC.Selection do
           "Pool selection failed (#{inspect(reason)}), falling back to config-based selection"
         )
 
-        config_selection(chain_name, method, protocol, exclude)
+        config_selection(chain_name, method, protocol, exclude, strategy)
     end
   end
 
@@ -118,47 +119,52 @@ defmodule Livechain.RPC.Selection do
   defp pool_selection(chain_name, method, strategy, protocol, exclude) do
     filters = %{exclude: exclude}
 
-    case ProviderPool.get_best_provider(chain_name, strategy, method, filters) do
-      {:ok, provider_id} ->
-        # Verify the selected provider meets protocol requirements
-        case ConfigStore.get_provider(chain_name, provider_id) do
-          {:ok, provider_config} ->
-            if supports_protocol?(provider_config, protocol) do
-              {:ok, provider_id}
-            else
-              {:error, :selected_provider_wrong_protocol}
-            end
+    with {:ok, provider_id} <-
+           ProviderPool.get_best_provider(chain_name, strategy, method, filters),
+         :ok <- verify_circuit_breaker_state(provider_id),
+         {:ok, provider_config} <- ConfigStore.get_provider(chain_name, provider_id),
+         true <- supports_protocol?(provider_config, protocol) do
+      {:ok, provider_id}
+    else
+      {:error, reason} when reason in [:no_providers_available] ->
+        {:error, {:pool_selection_failed, reason}}
 
-          {:error, reason} ->
-            {:error, {:provider_config_error, reason}}
-        end
+      {:error, :circuit_open} ->
+        {:error, :selected_provider_circuit_open}
 
       {:error, reason} ->
-        {:error, {:pool_selection_failed, reason}}
+        {:error, {:provider_config_error, reason}}
+
+      false ->
+        {:error, :selected_provider_wrong_protocol}
     end
   end
 
   # Config-based selection (fallback when pool is unavailable)
-  defp config_selection(chain_name, method, protocol, exclude) do
+  defp config_selection(chain_name, method, protocol, exclude, strategy) do
     case config_based_providers(chain_name, protocol, exclude) do
       {:ok, []} ->
         {:error, :no_available_providers}
 
-      {:ok, [first_provider | _]} ->
+      {:ok, available_providers} ->
+        # For config-based selection, we use priority-based selection as fallback
+        # since provider pool not being available is not a nominal state
+        selected_provider = List.first(available_providers)
+
         Logger.debug(
-          "Selected provider via config fallback: #{first_provider} for #{chain_name}.#{method}"
+          "Selected provider via config fallback: #{selected_provider} for #{chain_name}.#{method} (strategy: #{strategy})"
         )
 
         :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
           chain: chain_name,
           method: method,
-          strategy: :config_fallback,
+          strategy: strategy,
           protocol: protocol,
-          provider_id: first_provider,
+          provider_id: selected_provider,
           selection_type: :config_based
         })
 
-        {:ok, first_provider}
+        {:ok, selected_provider}
 
       {:error, reason} ->
         :telemetry.execute([:livechain, :selection, :failure], %{count: 1}, %{
@@ -209,4 +215,25 @@ defmodule Livechain.RPC.Selection do
     do: is_binary(Map.get(provider, :http_url)) or is_binary(Map.get(provider, :url))
 
   defp supports_protocol?(provider, :ws), do: is_binary(Map.get(provider, :ws_url))
+
+  defp verify_circuit_breaker_state(provider_id) do
+    case CircuitBreaker.get_state(provider_id) do
+      %{state: :open} ->
+        Logger.debug("Circuit breaker verification failed: #{provider_id} is open")
+        {:error, :circuit_open}
+
+      %{state: state} when state in [:closed, :half_open] ->
+        :ok
+
+      {:error, :not_found} ->
+        # Circuit breaker doesn't exist yet, assume closed
+        Logger.debug("Circuit breaker not found for #{provider_id}, assuming closed")
+        :ok
+    end
+  rescue
+    # Handle case where CircuitBreaker GenServer is not running
+    _ ->
+      Logger.debug("Circuit breaker verification failed for #{provider_id}, assuming closed")
+      :ok
+  end
 end
