@@ -4,7 +4,7 @@ defmodule LivechainWeb.BlockchainChannel do
 
   This channel provides real-time streaming of blockchain data including:
   - New blocks
-  - Transactions  
+  - Transactions
   - Events and logs
   - Contract interactions
 
@@ -30,7 +30,7 @@ defmodule LivechainWeb.BlockchainChannel do
   ## Topics
 
   - `blockchain:ethereum` - Ethereum mainnet
-  - `blockchain:polygon` - Polygon network  
+  - `blockchain:polygon` - Polygon network
   - `blockchain:arbitrum` - Arbitrum network
   - `blockchain:bsc` - Binance Smart Chain
   """

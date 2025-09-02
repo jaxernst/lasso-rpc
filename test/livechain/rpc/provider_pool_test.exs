@@ -1,5 +1,6 @@
 defmodule Livechain.RPC.ProviderPoolTest do
   use ExUnit.Case, async: false
+  import Mox
 
   alias Livechain.RPC.{ProviderPool, CircuitBreaker}
   alias Livechain.Config.ChainConfig
@@ -7,6 +8,20 @@ defmodule Livechain.RPC.ProviderPoolTest do
   setup_all do
     # Ensure test environment is ready with all services
     TestHelper.ensure_test_environment_ready()
+    :ok
+  end
+
+  setup :verify_on_exit!
+
+  setup do
+    # Set up default mock expectations for health checks
+    # Allow any number of health check calls to succeed
+    stub(Livechain.RPC.HttpClientMock, :request, fn _endpoint, method, _params, _timeout ->
+      case method do
+        "eth_chainId" -> {:ok, "0x1"}
+        _ -> {:error, :method_not_mocked}
+      end
+    end)
     :ok
   end
 

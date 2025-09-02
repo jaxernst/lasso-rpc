@@ -46,6 +46,11 @@ defmodule Livechain.RPC.WSConnectionTest do
         failure_rate: 0.1
       )
 
+    # Start circuit breakers for endpoints
+    circuit_breaker_config = %{failure_threshold: 3, recovery_timeout: 5000, success_threshold: 2}
+    {:ok, _} = CircuitBreaker.start_link({real_endpoint.id, circuit_breaker_config})
+    {:ok, _} = CircuitBreaker.start_link({mock_endpoint.id, circuit_breaker_config})
+
     # Setup cleanup for proper process teardown
     on_exit(fn ->
       # Stop any WebSocket connections that may have been started
@@ -62,8 +67,15 @@ defmodule Livechain.RPC.WSConnectionTest do
     Enum.each(connection_ids, fn connection_id ->
       try do
         case GenServer.whereis({:via, Registry, {Livechain.Registry, {:ws_conn, connection_id}}}) do
-          nil -> :ok
-          pid -> GenServer.stop(pid, :normal, 1000)
+          nil ->
+            :ok
+
+          pid ->
+            try do
+              GenServer.stop(pid, :normal)
+            catch
+              :exit, _ -> :ok
+            end
         end
       rescue
         _ -> :ok
@@ -78,8 +90,15 @@ defmodule Livechain.RPC.WSConnectionTest do
         case GenServer.whereis(
                {:via, Registry, {Livechain.Registry, {:circuit_breaker, provider_id}}}
              ) do
-          nil -> :ok
-          pid -> GenServer.stop(pid, :normal, 1000)
+          nil ->
+            :ok
+
+          pid ->
+            try do
+              GenServer.stop(pid, :normal)
+            catch
+              :exit, _ -> :ok
+            end
         end
       rescue
         _ -> :ok
@@ -338,9 +357,7 @@ defmodule Livechain.RPC.WSConnectionTest do
         heartbeat_interval: mock_endpoint.heartbeat_interval
       }
 
-      # Start circuit breaker for this endpoint
-      circuit_breaker_config = %{failure_threshold: 3, recovery_timeout: 5000}
-      CircuitBreaker.start_link({endpoint.id, circuit_breaker_config})
+      # Circuit breaker already started in setup
 
       {:ok, pid} = WSConnection.start_link(endpoint)
       Process.sleep(100)

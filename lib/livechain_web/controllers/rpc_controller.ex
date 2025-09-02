@@ -141,27 +141,8 @@ defmodule LivechainWeb.RPCController do
         json(conn, response)
 
       {:error, error} ->
-        # Normalize error to JSON-RPC format
-        normalized_error =
-          case error do
-            %{code: _, message: _} -> error
-            error_tuple -> Error.to_json_rpc(error_tuple)
-          end
-
-        # Build error response with required fields and optional data
-        error_data =
-          %{
-            code: normalized_error[:code] || -32603,
-            message: normalized_error[:message] || "Internal error"
-          }
-          |> Map.merge(Map.take(normalized_error, [:data]))
-
-        response = %{
-          jsonrpc: "2.0",
-          error: error_data,
-          id: params["id"]
-        }
-
+        # Use centralized error normalization
+        response = Error.normalize(error, params["id"])
         json(conn, response)
     end
   end

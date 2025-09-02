@@ -49,10 +49,17 @@ defmodule Livechain.RPC.HttpClient.Finch do
 
   defp handle_response(status, body) when status in 200..299 do
     case Jason.decode(body) do
-      {:ok, %{"error" => %{"code" => code, "message" => message}}}
-      when code in [-32005, -32000] ->
-        {:error, {:rate_limit, message || "Rate limit exceeded"}}
-
+      # JSON-RPC error response in successful HTTP response
+      {:ok, %{"error" => error} = response} when is_map(error) ->
+        # Return the full response so it can be properly normalized upstream
+        # This preserves the error structure for consistent handling
+        {:ok, response}
+      
+      # Successful JSON-RPC response
+      {:ok, %{"result" => _} = response} ->
+        {:ok, response}
+      
+      # Valid JSON but not JSON-RPC format (pass through)
       {:ok, decoded} ->
         {:ok, decoded}
 

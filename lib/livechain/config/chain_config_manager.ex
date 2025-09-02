@@ -293,23 +293,22 @@ defmodule Livechain.Config.ChainConfigManager do
   end
 
   defp save_config_to_file(config) do
-    _yaml_data = %{
+    yaml_data = %{
       "chains" => convert_chains_to_yaml(config.chains),
       "global" => convert_global_to_yaml(config.global)
     }
 
-    # TODO: YamlElixir.write_to_string/1 doesn't exist - need alternative YAML writer
-    # case YamlElixir.write_to_string(yaml_data) do
-    #   {:ok, yaml_content} ->
-    #     case File.write(@config_file, yaml_content) do
-    #       :ok -> :ok
-    #       {:error, reason} -> {:error, {:file_write_failed, reason}}
-    #     end
-    #
-    #   {:error, reason} ->
-    #     {:error, {:yaml_generation_failed, reason}}
-    # end
-    {:error, :not_implemented}
+    # Convert to YAML format using Jason and manual formatting
+    case encode_as_yaml(yaml_data) do
+      {:ok, yaml_content} ->
+        case File.write(@config_file, yaml_content) do
+          :ok -> :ok
+          {:error, reason} -> {:error, {:file_write_failed, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:yaml_generation_failed, reason}}
+    end
   end
 
   defp convert_chains_to_yaml(chains) do
@@ -390,5 +389,36 @@ defmodule Livechain.Config.ChainConfigManager do
 
   defp broadcast_config_change(event, chain_name, chain_config) do
     PubSub.broadcast(@pubsub, "chain_config_changes", {event, chain_name, chain_config})
+  end
+
+  # Simple YAML encoder using Jason and manual formatting
+  defp encode_as_yaml(data) do
+    try do
+      case Jason.encode(data, pretty: true) do
+        {:ok, json_string} ->
+          # Convert JSON to YAML format by replacing JSON syntax with YAML
+          yaml_content =
+            json_string
+            # Remove quotes from keys
+            |> String.replace(~r/"([^"]+)":/, "\\1:")
+            # Keep quotes around string values
+            |> String.replace(~r/"([^"]+)"/, "'\\1'")
+            # YAML booleans
+            |> String.replace("true", "true")
+            |> String.replace("false", "false")
+            # YAML null
+            |> String.replace("null", "~")
+            # Preserve newlines
+            |> String.replace("\n", "\n")
+
+          {:ok, yaml_content}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    catch
+      _, reason ->
+        {:error, reason}
+    end
   end
 end

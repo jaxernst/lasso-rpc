@@ -83,8 +83,15 @@ defmodule TestHelper do
     try do
       # Stop test-specific processes
       case GenServer.whereis(Livechain.RPC.SubscriptionManagerTest.MockChainManager) do
-        nil -> :ok
-        pid -> GenServer.stop(pid, :normal, 1000)
+        nil ->
+          :ok
+
+        pid ->
+          try do
+            GenServer.stop(pid, :normal)
+          catch
+            :exit, _ -> :ok
+          end
       end
     rescue
       _ -> :ok

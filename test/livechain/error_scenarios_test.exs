@@ -17,11 +17,25 @@ defmodule Livechain.ErrorScenariosTest do
   @moduletag :fault_tolerance
 
   setup do
-    # Start the application for testing
-    Application.ensure_all_started(:livechain)
-
+    # Cleanup any existing circuit breakers before test
     on_exit(fn ->
-      Application.stop(:livechain)
+      # Stop any circuit breakers that might have been started
+      ["test_provider_failures", "test_provider_recovery"]
+      |> Enum.each(fn provider_id ->
+        via_name = {:via, Registry, {Livechain.Registry, {:circuit_breaker, provider_id}}}
+
+        case GenServer.whereis(via_name) do
+          nil ->
+            :ok
+
+          pid when is_pid(pid) ->
+            try do
+              GenServer.stop(pid, :normal)
+            catch
+              :exit, _ -> :ok
+            end
+        end
+      end)
     end)
 
     :ok
@@ -62,8 +76,12 @@ defmodule Livechain.ErrorScenariosTest do
         CircuitBreaker.call(provider_id, fn -> raise "test error" end)
       end
 
-      # Wait for recovery timeout
-      Process.sleep(200)
+      # Verify circuit is open
+      state = CircuitBreaker.get_state(provider_id)
+      assert state.state == :open
+
+      # Wait for recovery timeout with proper polling instead of fixed sleep
+      wait_for_recovery_timeout(provider_id, 100)
 
       # Attempt recovery with successes
       for _ <- 1..2 do
@@ -74,6 +92,50 @@ defmodule Livechain.ErrorScenariosTest do
       # Circuit should be closed
       state = CircuitBreaker.get_state(provider_id)
       assert state.state == :closed
+    end
+  end
+
+  # Helper function to wait for circuit breaker recovery timeout
+  defp wait_for_recovery_timeout(provider_id, timeout_ms, max_attempts \\ 50) do
+    wait_for_recovery_timeout_impl(provider_id, timeout_ms, max_attempts, 0)
+  end
+
+  defp wait_for_recovery_timeout_impl(provider_id, timeout_ms, max_attempts, attempt) do
+    if attempt >= max_attempts do
+      flunk(
+        "Circuit breaker #{provider_id} did not reach recovery timeout after #{max_attempts} attempts"
+      )
+    end
+
+    state = CircuitBreaker.get_state(provider_id)
+
+    case state.state do
+      :open ->
+        # Check if enough time has passed since last failure
+        case state.last_failure_time do
+          nil ->
+            # No failure time recorded, assume ready for recovery
+            :ok
+
+          last_failure ->
+            current_time = System.monotonic_time(:millisecond)
+
+            if current_time - last_failure >= timeout_ms do
+              :ok
+            else
+              # Wait a bit and try again
+              Process.sleep(10)
+              wait_for_recovery_timeout_impl(provider_id, timeout_ms, max_attempts, attempt + 1)
+            end
+        end
+
+      :half_open ->
+        # Already in half-open state, ready to proceed
+        :ok
+
+      :closed ->
+        # Already closed, ready to proceed
+        :ok
     end
   end
 

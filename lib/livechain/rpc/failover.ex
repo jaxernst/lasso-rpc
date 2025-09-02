@@ -34,7 +34,7 @@ defmodule Livechain.RPC.Failover do
 
     with {:ok, provider_id} <-
            Selection.pick_provider(chain, method, strategy: strategy, protocol: protocol) do
-      execute_rpc_with_failover(chain, method, params, strategy, provider_id, region_filter)
+      execute_rpc_with_failover(chain, method, params, strategy, provider_id, region_filter, protocol)
     else
       {:error, reason} ->
         {:error, %{code: -32000, message: "No available providers: #{reason}"}}
@@ -43,7 +43,29 @@ defmodule Livechain.RPC.Failover do
 
   # Private functions
 
-  defp execute_rpc_with_failover(chain, method, params, strategy, provider_id, region_filter) do
+  defp forward_request_by_protocol(chain, provider_id, method, params, :http) do
+    ChainSupervisor.forward_rpc_request(chain, provider_id, method, params)
+  end
+
+  defp forward_request_by_protocol(chain, provider_id, method, params, :ws) do
+    ChainSupervisor.forward_ws_message(chain, provider_id, %{
+      "jsonrpc" => "2.0",
+      "method" => method,
+      "params" => params,
+      "id" => generate_request_id()
+    })
+  end
+
+  defp forward_request_by_protocol(chain, provider_id, method, params, :both) do
+    # Default to HTTP for :both protocol
+    ChainSupervisor.forward_rpc_request(chain, provider_id, method, params)
+  end
+
+  defp generate_request_id do
+    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+  end
+
+  defp execute_rpc_with_failover(chain, method, params, strategy, provider_id, region_filter, protocol) do
     start_time = System.monotonic_time(:millisecond)
 
     :telemetry.execute([:livechain, :rpc, :request, :start], %{count: 1}, %{
@@ -53,7 +75,7 @@ defmodule Livechain.RPC.Failover do
       provider_id: provider_id
     })
 
-    case ChainSupervisor.forward_rpc_request(chain, provider_id, method, params) do
+    case forward_request_by_protocol(chain, provider_id, method, params, protocol) do
       {:ok, result} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
         record_success_metrics(chain, provider_id, method, strategy, duration_ms)
@@ -72,7 +94,8 @@ defmodule Livechain.RPC.Failover do
               strategy,
               [provider_id],
               1,
-              region_filter
+              region_filter,
+              protocol
             )
 
           false ->
@@ -89,13 +112,14 @@ defmodule Livechain.RPC.Failover do
          strategy,
          excluded_providers,
          attempt,
-         _region_filter
+         _region_filter,
+         protocol
        ) do
     max_attempts = MethodPolicy.max_failovers(method)
 
     with {:attempt_limit, false} <- {:attempt_limit, attempt > max_attempts},
          {:ok, providers} <-
-           Selection.get_available_providers(chain, protocol: :http, exclude: excluded_providers),
+           Selection.get_available_providers(chain, protocol: protocol, exclude: excluded_providers),
          {:providers_available, [next_provider | _]} <- {:providers_available, providers} do
       Logger.warning("Failing over to provider",
         chain: chain,
@@ -110,7 +134,8 @@ defmodule Livechain.RPC.Failover do
         strategy,
         next_provider,
         excluded_providers,
-        attempt
+        attempt,
+        protocol
       )
     else
       {:attempt_limit, true} ->
@@ -131,11 +156,12 @@ defmodule Livechain.RPC.Failover do
          strategy,
          provider_id,
          excluded_providers,
-         attempt
+         attempt,
+         protocol
        ) do
     start_time = System.monotonic_time(:millisecond)
 
-    case ChainSupervisor.forward_rpc_request(chain, provider_id, method, params) do
+    case forward_request_by_protocol(chain, provider_id, method, params, protocol) do
       {:ok, result} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
 
@@ -172,7 +198,8 @@ defmodule Livechain.RPC.Failover do
               strategy,
               [provider_id | excluded_providers],
               attempt + 1,
-              nil
+              nil,
+              protocol
             )
 
           false ->

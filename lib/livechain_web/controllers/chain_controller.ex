@@ -1,22 +1,18 @@
 defmodule LivechainWeb.ChainController do
   use LivechainWeb, :controller
 
-  # TODO: This controller should use ChainConfig (the hardcoded chains map is bad form)
   alias Livechain.RPC.WSSupervisor
-
-  @supported_chains %{
-    "1" => %{name: "Ethereum Mainnet", function: :ethereum_mainnet},
-    "137" => %{name: "Polygon", function: :polygon},
-    "42161" => %{name: "Arbitrum", function: :arbitrum},
-    "56" => %{name: "BSC", function: :bsc}
-  }
+  alias Livechain.Config.ConfigStore
 
   def index(conn, _params) do
+    all_chains = ConfigStore.get_all_chains()
+
     chains =
-      Enum.map(@supported_chains, fn {chain_id, info} ->
+      Enum.map(all_chains, fn {chain_name, chain_config} ->
         %{
-          chain_id: chain_id,
-          name: info.name,
+          chain_id: to_string(chain_config.chain_id),
+          name: chain_config.name,
+          chain_name: chain_name,
           supported: true
         }
       end)
@@ -25,26 +21,35 @@ defmodule LivechainWeb.ChainController do
   end
 
   def status(conn, %{"chain_id" => chain_id}) do
-    case Map.get(@supported_chains, chain_id) do
+    all_chains = ConfigStore.get_all_chains()
+
+    # Find chain by chain_id (numeric string)
+    chain_info =
+      Enum.find(all_chains, fn {_chain_name, chain_config} ->
+        to_string(chain_config.chain_id) == chain_id
+      end)
+
+    case chain_info do
       nil ->
         conn
         |> put_status(:not_found)
         |> json(%{error: "Unsupported chain ID", chain_id: chain_id})
 
-      chain_info ->
+      {chain_name, chain_config} ->
         # Get connection status for this chain
         connections = WSSupervisor.list_connections()
 
         chain_connection =
           Enum.find(connections, fn conn ->
-            String.contains?(String.downcase(conn.name), String.downcase(chain_info.name))
+            String.contains?(String.downcase(conn.name), String.downcase(chain_config.name))
           end)
 
         status =
           if chain_connection do
             %{
               chain_id: chain_id,
-              name: chain_info.name,
+              chain_name: chain_name,
+              name: chain_config.name,
               connected: chain_connection.status == :connected,
               reconnect_attempts: chain_connection.reconnect_attempts || 0,
               subscriptions: chain_connection.subscriptions || 0
@@ -52,7 +57,8 @@ defmodule LivechainWeb.ChainController do
           else
             %{
               chain_id: chain_id,
-              name: chain_info.name,
+              chain_name: chain_name,
+              name: chain_config.name,
               connected: false,
               reconnect_attempts: 0,
               subscriptions: 0
