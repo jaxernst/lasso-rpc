@@ -16,23 +16,6 @@ Livechain is an Elixir/OTP application that provides intelligent RPC provider or
 
 ---
 
-## Regionality and Latency-Aware Routing (Architecural Vision)
-
-Livechain is designed to operate as a regional-first platform: clients connect to the nearest Livechain node, which then selects the lowest-latency upstream provider using region-local metrics.
-
-- **Client proximity**: Use geo routing at the edge (DNS or managed LB) to land clients on the closest region.
-- **Region-local benchmarking**: Maintain per-region leaderboards and latency/error metrics; prefer the top provider for that region and method.
-- **Persistent connections**: Keep warm HTTP pools and provider WebSockets to minimize handshakes and reduce hop latency.
-- **Failover without regressions**: Circuit breakers, cooldowns, and provider pools ensure graceful rotation to the next best provider.
-- **Minimal overhead**: Hot-path selection and routing are in-memory (ETS/Registry); typical added latency is single-digit milliseconds, often offset by better upstream choice.
-
-Separation of concerns:
-
-- **BEAM/Elixir**: Selection logic, benchmarking, circuit breaking, WS/HTTP proxying, telemetry (region-tagged), and per-region supervision (using `Registry`).
-- **Infrastructure**: Global ingress/geo routing (DNS/LB), TLS termination and WS stickiness, environment config (`LIVECHAIN_REGION`), scaling, and observability stack.
-
----
-
 ## OTP Supervision Architecture
 
 Livechain leverages OTP for fault-tolerance and concurrency. The supervision tree is structured as follows:
@@ -232,14 +215,6 @@ end
 
 ## Performance Characteristics
 
-### **Throughput**
-
-- **Racing latency**: <5ms from event receipt to race result
-- **Provider Configuration + capability lookups**: <1ms via ETS cache (no file I/O)
-- **Provider selection**: <2ms via Selection module
-- **Dashboard updates**: <100ms from race result to UI update
-- **Memory usage**: ~10MB per chain for 24 hours of data
-
 ### **Fault Tolerance**
 
 - **Provider failures**: Detected within 5 seconds, failover in <1 second
@@ -254,6 +229,21 @@ end
 - **Historical data**: Bounded memory with persistent snapshots
 
 ---
+
+###  Regionality and Latency-Aware Routing (Architecural Vision)
+
+Livechain is designed to operate as a regional-first platform: clients connect to the nearest Livechain node, which then selects the lowest-latency upstream provider using region-local metrics.
+
+- **Client proximity**: Use geo routing at the edge (DNS or managed LB) to land clients on the closest region.
+- **Region-local benchmarking**: Maintain per-region leaderboards and latency/error metrics; prefer the top provider for that region and method.
+- **Persistent connections**: Keep warm HTTP pools and provider WebSockets to minimize handshakes and reduce hop latency.
+- **Failover without regressions**: Circuit breakers, cooldowns, and provider pools ensure graceful rotation to the next best provider.
+- **Minimal overhead**: Hot-path selection and routing are in-memory (ETS/Registry); typical added latency is single-digit milliseconds, often offset by better upstream choice.
+
+Separation of concerns:
+
+- **BEAM/Elixir**: Selection logic, benchmarking, circuit breaking, WS/HTTP proxying, telemetry (region-tagged), and per-region supervision (using `Registry`).
+- **Infrastructure**: Global ingress/geo routing (DNS/LB), TLS termination and WS stickiness, environment config (`LIVECHAIN_REGION`), scaling, and observability stack.
 
 ## Configuration and Deployment
 
