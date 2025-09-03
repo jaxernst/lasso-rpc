@@ -244,12 +244,8 @@ GET /api/metrics/:chain
 # Run tests
 mix test
 
-# Start with simulation mode
+# Start the dev server
 mix phx.server
-# Visit http://localhost:4000/simulator
-
-# Load testing
-mix run scripts/load_test.exs
 ```
 
 ## Links
