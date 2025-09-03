@@ -63,7 +63,7 @@ This architecture scales from a single self-hosted instance to a global network 
 
 ## Quick Start
 
-**🎯 For Hackathon Judges:** See [HACKATHON_SETUP.md](HACKATHON_SETUP.md) for the fastest setup guide!
+**🎯 For Hackathon Judges:** See [HACKATHON_SETUP.md](HACKATHON_SETUP.md) for the fastest setup guide
 
 Choose your preferred setup method:
 
