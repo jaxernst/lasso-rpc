@@ -165,9 +165,19 @@ chains:
 
 ### Provider Selection Strategy
 
+Routing strategies are determined by the endpoint you use:
+
+- `/rpc/fastest/:chain` - Routes to the fastest provider based on performance metrics
+- `/rpc/cheapest/:chain` - Prefers free/public providers  
+- `/rpc/priority/:chain` - Uses static priority order from configuration
+- `/rpc/round-robin/:chain` - Load balances across all available providers
+- `/rpc/:chain` - Uses the default strategy (configured below)
+
+**Default strategy for base `/rpc/:chain` endpoint:**
+
 ```elixir
 # config/config.exs
-config :livechain, :provider_selection_strategy, :fastest
+config :livechain, :provider_selection_strategy, :cheapest
 # Options: :fastest, :cheapest, :priority, :round_robin
 ```
 
