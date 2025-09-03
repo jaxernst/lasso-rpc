@@ -21,7 +21,6 @@ defmodule LivechainWeb.RPCSocket do
   ## Channels
   channel("rpc:*", LivechainWeb.RPCChannel)
 
-  @impl true
   def connect(_params, socket, connect_info) do
     # Extract chain from the socket path
     chain = extract_chain_from_connect_info(connect_info)
@@ -41,8 +40,7 @@ defmodule LivechainWeb.RPCSocket do
     end
   end
 
-  @impl true
-  def terminate(_reason, socket) do
+  def terminate(_reason, {_internal_state, socket}) do
     chain = Map.get(socket.assigns, :chain, "unknown")
     publish_client_event(:client_disconnected, chain, %{})
     :ok
@@ -121,7 +119,6 @@ defmodule LivechainWeb.RPCSocket do
     result
   end
 
-  @impl true
   def id(socket), do: "rpc_socket:#{socket.assigns.chain}"
 
   # Validate chain against configured chains

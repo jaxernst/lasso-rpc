@@ -230,7 +230,6 @@ defmodule Livechain.RPC.WSConnection do
     {:noreply, state}
   end
 
-  @impl true
   def handle_info({:ws_message, decoded}, state) do
     case handle_websocket_message(decoded, state) do
       {:ok, new_state} -> {:noreply, new_state}
@@ -238,7 +237,6 @@ defmodule Livechain.RPC.WSConnection do
     end
   end
 
-  @impl true
   def handle_info({:ws_error, error}, state) do
     Logger.error("WebSocket error: #{inspect(error)}")
     # Use proper error classification instead of direct failure recording
@@ -247,7 +245,6 @@ defmodule Livechain.RPC.WSConnection do
     {:noreply, state}
   end
 
-  @impl true
   def handle_info({:ws_closed, code, reason}, state) do
     Logger.info("WebSocket closed: #{code} - #{inspect(reason)}")
     state = %{state | connected: false, connection: nil}
@@ -256,7 +253,6 @@ defmodule Livechain.RPC.WSConnection do
     {:noreply, state}
   end
 
-  @impl true
   def handle_info({:ws_disconnected, reason}, state) do
     Logger.warning("WebSocket disconnected: #{inspect(reason)}")
     ProviderPool.report_failure(state.chain_name, state.endpoint.id, {:disconnect, reason})
@@ -266,7 +262,6 @@ defmodule Livechain.RPC.WSConnection do
     {:noreply, state}
   end
 
-  @impl true
   def handle_info({:heartbeat}, state) do
     if state.connected do
       # Send ping to keep connection alive through circuit breaker
@@ -292,12 +287,32 @@ defmodule Livechain.RPC.WSConnection do
     end
   end
 
-  @impl true
   def handle_info({:reconnect}, state) do
     Logger.info("Attempting to reconnect to #{state.endpoint.name}")
     # Clear the reconnect timer ref since it's already fired
     state = %{state | reconnect_ref: nil}
     {:noreply, state, {:continue, :connect}}
+  end
+
+  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
+    Logger.warning("WebSocket connection lost: #{inspect(reason)}")
+
+    # Report disconnect as failure to circuit breaker with proper error classification
+    report_websocket_error(state.endpoint.id, {:connection_lost, reason})
+
+    case reason do
+      {exception, stacktrace} when is_list(stacktrace) ->
+        formatted = Exception.format(:error, exception, stacktrace)
+        Logger.error("WebSocket #{state.endpoint.id} crash detail\n" <> formatted)
+
+      _ ->
+        :ok
+    end
+
+    state = %{state | connected: false, connection: nil}
+    broadcast_status_change(state, :disconnected)
+    state = schedule_reconnect(state)
+    {:noreply, state}
   end
 
   @impl true
@@ -320,28 +335,6 @@ defmodule Livechain.RPC.WSConnection do
     broadcast_status_change(state, :terminated)
 
     :ok
-  end
-
-  @impl true
-  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
-    Logger.warning("WebSocket connection lost: #{inspect(reason)}")
-
-    # Report disconnect as failure to circuit breaker with proper error classification
-    report_websocket_error(state.endpoint.id, {:connection_lost, reason})
-
-    case reason do
-      {exception, stacktrace} when is_list(stacktrace) ->
-        formatted = Exception.format(:error, exception, stacktrace)
-        Logger.error("WebSocket #{state.endpoint.id} crash detail\n" <> formatted)
-
-      _ ->
-        :ok
-    end
-
-    state = %{state | connected: false, connection: nil}
-    broadcast_status_change(state, :disconnected)
-    state = schedule_reconnect(state)
-    {:noreply, state}
   end
 
   # WebSocket event handlers - these are now handled by WSHandler
