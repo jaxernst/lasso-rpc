@@ -245,21 +245,6 @@ Separation of concerns:
 - **BEAM/Elixir**: Selection logic, benchmarking, circuit breaking, WS/HTTP proxying, telemetry (region-tagged), and per-region supervision (using `Registry`).
 - **Infrastructure**: Global ingress/geo routing (DNS/LB), TLS termination and WS stickiness, environment config (`LIVECHAIN_REGION`), scaling, and observability stack.
 
-## Configuration and Deployment
-
-### **Environment Configuration**
-
-```elixir
-# config/prod.exs
-config :livechain,
-  providers: [
-    ethereum: [
-      %{id: "infura", url: "wss://mainnet.infura.io/ws/v3/#{api_key}", type: :infura},
-      %{id: "alchemy", url: "wss://eth-mainnet.alchemyapi.io/v2/#{api_key}", type: :alchemy}
-    ]
-  ]
-```
-
 ---
 
 This architecture leverages Elixir/OTP's fault tolerance and concurrency strengths to create a production-ready RPC orchestration system with unique competitive advantages through passive performance benchmarking and intelligent provider selection.
