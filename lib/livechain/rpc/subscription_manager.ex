@@ -386,6 +386,56 @@ defmodule Livechain.RPC.SubscriptionManager do
     end
   end
 
+  # Handle subscription block updates for continuity tracking
+  def handle_cast({:update_subscription_block, subscription_id, block_number, block_hash}, state) do
+    case Map.get(state.subscriptions, subscription_id) do
+      %SubscriptionState{} = subscription ->
+        updated_subscription = %{
+          subscription
+          | last_delivered_block: block_number,
+            last_delivered_block_hash: block_hash
+        }
+
+        updated_subscriptions =
+          Map.put(state.subscriptions, subscription_id, updated_subscription)
+
+        {:noreply, %{state | subscriptions: updated_subscriptions}}
+
+      nil ->
+        Logger.warning("Attempted to update non-existent subscription",
+          subscription_id: subscription_id
+        )
+
+        {:noreply, state}
+    end
+  end
+
+  def handle_cast({:handle_event, chain, event_type, event_data}, state) do
+    # Find subscriptions that match this event
+    matching_subscriptions = find_matching_subscriptions(chain, event_type, event_data, state)
+
+    # Route event to matching subscribers and track delivered blocks
+    Enum.each(matching_subscriptions, fn subscription ->
+      route_event_to_subscriber(subscription, event_data)
+
+      # Update last delivered block if this event has block info
+      case extract_block_info(event_data) do
+        {block_number, block_hash} ->
+          GenServer.cast(__MODULE__, {
+            :update_subscription_block,
+            subscription.id,
+            block_number,
+            block_hash
+          })
+
+        nil ->
+          :ok
+      end
+    end)
+
+    {:noreply, state}
+  end
+
   # Extracted failover logic for better readability
   defp do_provider_failover(
          chain,
@@ -455,58 +505,6 @@ defmodule Livechain.RPC.SubscriptionManager do
       end
 
     {:noreply, final_state}
-  end
-
-  # Handle subscription block updates for continuity tracking
-  @impl true
-  def handle_cast({:update_subscription_block, subscription_id, block_number, block_hash}, state) do
-    case Map.get(state.subscriptions, subscription_id) do
-      %SubscriptionState{} = subscription ->
-        updated_subscription = %{
-          subscription
-          | last_delivered_block: block_number,
-            last_delivered_block_hash: block_hash
-        }
-
-        updated_subscriptions =
-          Map.put(state.subscriptions, subscription_id, updated_subscription)
-
-        {:noreply, %{state | subscriptions: updated_subscriptions}}
-
-      nil ->
-        Logger.warning("Attempted to update non-existent subscription",
-          subscription_id: subscription_id
-        )
-
-        {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_cast({:handle_event, chain, event_type, event_data}, state) do
-    # Find subscriptions that match this event
-    matching_subscriptions = find_matching_subscriptions(chain, event_type, event_data, state)
-
-    # Route event to matching subscribers and track delivered blocks
-    Enum.each(matching_subscriptions, fn subscription ->
-      route_event_to_subscriber(subscription, event_data)
-
-      # Update last delivered block if this event has block info
-      case extract_block_info(event_data) do
-        {block_number, block_hash} ->
-          GenServer.cast(__MODULE__, {
-            :update_subscription_block,
-            subscription.id,
-            block_number,
-            block_hash
-          })
-
-        nil ->
-          :ok
-      end
-    end)
-
-    {:noreply, state}
   end
 
   # Private functions for backfill implementation
