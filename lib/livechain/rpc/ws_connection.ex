@@ -174,7 +174,7 @@ defmodule Livechain.RPC.WSConnection do
         end
 
       {:error, reason} ->
-        Logger.error("Failed to send message: #{reason}")
+        Logger.error("Failed to send message: #{inspect(reason)}")
         state = %{state | pending_messages: [message | state.pending_messages]}
         {:noreply, state}
     end
@@ -249,7 +249,7 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def handle_info({:ws_closed, code, reason}, state) do
-    Logger.info("WebSocket closed: #{code} - #{reason}")
+    Logger.info("WebSocket closed: #{code} - #{inspect(reason)}")
     state = %{state | connected: false, connection: nil}
     broadcast_status_change(state, :disconnected)
     state = schedule_reconnect(state)
@@ -283,7 +283,7 @@ defmodule Livechain.RPC.WSConnection do
           {:noreply, state}
 
         {:error, reason} ->
-          Logger.debug("Heartbeat failed for #{state.endpoint.id}: #{reason}")
+          Logger.debug("Heartbeat failed for #{state.endpoint.id}: #{inspect(reason)}")
           state = schedule_heartbeat(state)
           {:noreply, state}
       end
