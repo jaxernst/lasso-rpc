@@ -1,6 +1,8 @@
 # Lasso RPC
 
 **A smart blockchain RPC aggregator for building bulletproof onchain applications.**
+<img width="1466" height="1034" alt="Screenshot 2025-09-02 at 5 13 21 PM" src="https://github.com/user-attachments/assets/0fdd37bb-e4c2-4ae0-b3c8-3cb3f4ba04d6" />
+
 
 Building reliable blockchain applications is challenging, largely due to the complexity of choosing and managing RPC providers. With dozens of providers offering different performance, pricing models, and reliability guarantees, developers face an opaque decision that directly impacts their application's user experience.
 
