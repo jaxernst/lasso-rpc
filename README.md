@@ -16,7 +16,7 @@ POST /rpc/base # Automatically load balances across available providers
 Want the fastest possible responses? Lasso routes to your best-performing provider using real-world benchmarks:
 
 ```
-POST /rpc/ethereum # Automatic routing based on passive performance measurement
+POST /rpc/fastest/ethereum # Automatic routing based on passive performance measurement
 ```
 
 Want much better reliability? Lasso will quietly retry your failed request with circuit breakers and intelligent failover—your application stays resilient when providers don't.
