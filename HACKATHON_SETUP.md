@@ -108,4 +108,4 @@ docker system prune -f
 - **Circuit breakers** prevent cascade failures
 - **Passive benchmarking** measures real RPC performance
 - **WebSocket support** for subscriptions
-- **Distributed-ready** for global deployment
+- **Distributed-ready** Low-complexity path to global deployment with local node latency optimization

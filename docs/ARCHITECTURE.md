@@ -16,7 +16,7 @@ Livechain is an Elixir/OTP application that provides intelligent RPC provider or
 
 ---
 
-## Regionality and Latency-Aware Routing
+## Regionality and Latency-Aware Routing (Architecural Vision)
 
 Livechain is designed to operate as a regional-first platform: clients connect to the nearest Livechain node, which then selects the lowest-latency upstream provider using region-local metrics.
 
