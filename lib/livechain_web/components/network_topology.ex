@@ -153,7 +153,7 @@ defmodule LivechainWeb.NetworkTopology do
               </div>
               
     <!-- Racing flag indicator for fastest provider -->
-              <%= if is_fastest_provider?(connection, chain_name, @latency_leaders) do %>
+              <%= if fastest_provider?(connection, chain_name, @latency_leaders) do %>
                 <div
                   class="absolute -top-2.5 -right-2.5 flex h-5 w-5 animate-pulse items-center justify-center rounded-full bg-purple-600 text-xs font-bold text-white shadow-lg"
                   title="Fastest average latency"
@@ -792,7 +792,7 @@ defmodule LivechainWeb.NetworkTopology do
   defp chain_color("unichain"), do: "#FF007A"
   defp chain_color(_), do: "#6B7280"
 
-  defp is_fastest_provider?(_connection, _chain_name, _latency_leaders) do
+  defp fastest_provider?(_connection, _chain_name, _latency_leaders) do
     false
   end
 

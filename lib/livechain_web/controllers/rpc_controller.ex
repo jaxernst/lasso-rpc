@@ -29,16 +29,33 @@ defmodule LivechainWeb.RPCController do
   alias Livechain.RPC.{ChainRegistry, Failover, Error}
   alias Livechain.Config.ConfigStore
 
+  @jsonrpc_version "2.0"
+
   @ws_only_methods [
     "eth_subscribe",
     "eth_unsubscribe"
   ]
 
+  # Additional HTTP disallowed methods (stateful or account management)
+  @http_disallowed_methods [
+    "eth_sendRawTransaction",
+    "eth_sendTransaction",
+    "personal_sign",
+    "eth_sign",
+    "eth_signTransaction",
+    "eth_accounts",
+    "txpool_content",
+    "txpool_inspect",
+    "txpool_status"
+  ]
+
+  @max_batch_requests Application.compile_env(:livechain, :max_batch_requests, 50)
+
   @doc """
   Handle JSON-RPC requests for any supported chain.
   """
   def rpc(conn, params) do
-    Logger.info("RPC request received", params: inspect(params), path: conn.request_path)
+    Logger.debug("RPC request received", path: conn.request_path)
 
     case Map.get(params, "chain_id") do
       nil ->
@@ -123,29 +140,81 @@ defmodule LivechainWeb.RPCController do
 
   defp handle_chain_rpc(conn, chain_name) do
     # Phoenix has already parsed the JSON body into conn.params
-    params = conn.params
-    handle_json_rpc(conn, params, chain_name)
+    body = Map.get(conn.params, "_json", conn.params)
+
+    case body do
+      requests when is_list(requests) ->
+        handle_json_rpc_batch(conn, requests, chain_name)
+
+      request when is_map(request) ->
+        handle_json_rpc(conn, request, chain_name)
+
+      _ ->
+        json(conn, Error.normalize(%{code: -32600, message: "Invalid Request"}, nil))
+    end
   end
 
   defp handle_json_rpc(conn, params, chain) do
-    Logger.info("JSON-RPC request", method: params["method"], chain: chain, id: params["id"])
+    Logger.debug("JSON-RPC request", method: params["method"], chain: chain)
 
-    case process_json_rpc_request(params, chain, conn) do
-      {:ok, result} ->
-        response = %{
-          jsonrpc: "2.0",
-          result: result,
-          id: params["id"]
-        }
+    with {:ok, request} <- validate_json_rpc_request(params),
+         {:ok, result} <- process_json_rpc_request(request, chain, conn) do
+      response = %{
+        jsonrpc: @jsonrpc_version,
+        result: result,
+        id: request["id"]
+      }
 
-        json(conn, response)
-
+      json(conn, response)
+    else
       {:error, error} ->
-        # Use centralized error normalization
-        response = Error.normalize(error, params["id"])
+        response = Error.normalize(error, Map.get(params, "id"))
         json(conn, response)
     end
   end
+
+  defp handle_json_rpc_batch(conn, requests, chain) do
+    if length(requests) > @max_batch_requests do
+      err = %{code: -32600, message: "Invalid Request: batch too large"}
+      json(conn, Error.normalize(err, nil))
+    else
+      results =
+        Enum.map(requests, fn req ->
+          case validate_json_rpc_request(req) do
+            {:ok, request} ->
+              case process_json_rpc_request(request, chain, conn) do
+                {:ok, result} -> %{jsonrpc: @jsonrpc_version, result: result, id: request["id"]}
+                {:error, error} -> Error.normalize(error, request["id"])
+              end
+
+            {:error, error} ->
+              Error.normalize(error, Map.get(req, "id"))
+          end
+        end)
+
+      json(conn, results)
+    end
+  end
+
+  defp validate_json_rpc_request(%{"method" => method} = request) when is_binary(method) do
+    cond do
+      Map.has_key?(request, "jsonrpc") and request["jsonrpc"] != @jsonrpc_version ->
+        {:error, %{code: -32600, message: "Invalid Request: jsonrpc must be \"2.0\""}}
+
+      true ->
+        normalized =
+          Map.update(request, "params", [], fn
+            nil -> []
+            list when is_list(list) -> list
+            map when is_map(map) -> [map]
+            other -> [other]
+          end)
+
+        {:ok, normalized}
+    end
+  end
+
+  defp validate_json_rpc_request(_), do: {:error, %{code: -32600, message: "Invalid Request"}}
 
   # Block and transaction queries
   defp process_json_rpc_request(
@@ -153,7 +222,7 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Getting logs", chain: chain, filter: filter)
+    Logger.debug("Getting logs", chain: chain)
     forward_rpc_request(chain, "eth_getLogs", [filter], conn: conn)
   end
 
@@ -162,7 +231,7 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Getting block by number", chain: chain, block: block_number)
+    Logger.debug("Getting block by number", chain: chain)
 
     forward_rpc_request(chain, "eth_getBlockByNumber", [block_number, include_transactions],
       conn: conn
@@ -174,7 +243,7 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Getting block by hash", chain: chain, block_hash: block_hash)
+    Logger.debug("Getting block by hash", chain: chain)
 
     forward_rpc_request(chain, "eth_getBlockByHash", [block_hash, include_transactions],
       conn: conn
@@ -182,7 +251,7 @@ defmodule LivechainWeb.RPCController do
   end
 
   defp process_json_rpc_request(%{"method" => "eth_blockNumber", "params" => []}, chain, conn) do
-    Logger.info("Getting block number", chain: chain)
+    Logger.debug("Getting block number", chain: chain)
     forward_rpc_request(chain, "eth_blockNumber", [], conn: conn)
   end
 
@@ -192,7 +261,7 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Getting balance", chain: chain, address: address)
+    Logger.debug("Getting balance", chain: chain)
     forward_rpc_request(chain, "eth_getBalance", [address, block], conn: conn)
   end
 
@@ -201,7 +270,7 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Getting transaction count", chain: chain, address: address)
+    Logger.debug("Getting transaction count", chain: chain)
     forward_rpc_request(chain, "eth_getTransactionCount", [address, block], conn: conn)
   end
 
@@ -210,7 +279,7 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Getting contract code", chain: chain, address: address)
+    Logger.debug("Getting contract code", chain: chain)
     forward_rpc_request(chain, "eth_getCode", [address, block], conn: conn)
   end
 
@@ -220,7 +289,7 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Making contract call", chain: chain, call_object: call_object)
+    Logger.debug("Making contract call", chain: chain)
     forward_rpc_request(chain, "eth_call", [call_object, block], conn: conn)
   end
 
@@ -229,13 +298,13 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Estimating gas", chain: chain, call_object: call_object)
+    Logger.debug("Estimating gas", chain: chain)
     forward_rpc_request(chain, "eth_estimateGas", [call_object, block], conn: conn)
   end
 
   # Gas and fee queries
   defp process_json_rpc_request(%{"method" => "eth_gasPrice", "params" => []}, chain, conn) do
-    Logger.info("Getting gas price", chain: chain)
+    Logger.debug("Getting gas price", chain: chain)
     forward_rpc_request(chain, "eth_gasPrice", [], conn: conn)
   end
 
@@ -244,7 +313,7 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Getting max priority fee", chain: chain)
+    Logger.debug("Getting max priority fee", chain: chain)
     forward_rpc_request(chain, "eth_maxPriorityFeePerGas", [], conn: conn)
   end
 
@@ -256,7 +325,7 @@ defmodule LivechainWeb.RPCController do
          chain,
          conn
        ) do
-    Logger.info("Getting fee history", chain: chain, block_count: block_count)
+    Logger.debug("Getting fee history", chain: chain)
 
     forward_rpc_request(chain, "eth_feeHistory", [block_count, newest_block, reward_percentiles],
       conn: conn
@@ -265,14 +334,14 @@ defmodule LivechainWeb.RPCController do
 
   # Chain info
   defp process_json_rpc_request(%{"method" => "eth_chainId", "params" => []}, chain, _conn) do
-    Logger.info("Getting chain ID", chain: chain)
+    Logger.debug("Getting chain ID", chain: chain)
 
     case get_chain_id(chain) do
       {:ok, chain_id} ->
         {:ok, chain_id}
 
       {:error, reason} ->
-        {:error, %{code: -32603, message: "Failed to get chain ID: #{reason}"}}
+        {:error, %{code: -32_603, message: "Failed to get chain ID: #{reason}"}}
     end
   end
 
@@ -283,7 +352,7 @@ defmodule LivechainWeb.RPCController do
         {:ok, status}
 
       error ->
-        {:error, %{code: -32603, message: "Failed to get chain status: #{inspect(error)}"}}
+        {:error, %{code: -32_603, message: "Failed to get chain status: #{inspect(error)}"}}
     end
   end
 
@@ -299,74 +368,104 @@ defmodule LivechainWeb.RPCController do
          %{started_count: started_count, message: "Started #{started_count} chain supervisors"}}
 
       {:error, reason} ->
-        {:error, %{code: -32603, message: "Failed to start chains: #{inspect(reason)}"}}
+        {:error, %{code: -32_603, message: "Failed to start chains: #{inspect(reason)}"}}
     end
   end
 
-  # Generic method handler: forward allowed methods, reject unsupported-over-HTTP methods
+  # Reject WS-only methods over HTTP
+  defp process_json_rpc_request(%{"method" => method}, _chain, _conn)
+       when method in @ws_only_methods do
+    {:error,
+     %{
+       code: -32_601,
+       message: "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
+       data: %{websocket_url: "/socket/websocket"}
+     }}
+  end
+
+  # Reject stateful/account methods over HTTP
+  defp process_json_rpc_request(%{"method" => method}, _chain, _conn)
+       when method in @http_disallowed_methods do
+    {:error, %{code: -32_601, message: "Method not supported by proxy"}}
+  end
+
+  # Generic method handler: forward allowed methods
   defp process_json_rpc_request(%{"method" => method, "params" => params}, chain, conn) do
-    if unsupported_over_http?(method) do
-      {:error,
-       %{
-         code: -32601,
-         message: "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
-         data: %{
-           websocket_url: "/socket/websocket",
-           supported_http_methods: [
-             "eth_getLogs",
-             "eth_getBlockByNumber",
-             "eth_blockNumber",
-             "eth_chainId",
-             "eth_getBalance",
-             "eth_getTransactionCount",
-             "eth_getCode",
-             "eth_call",
-             "eth_estimateGas",
-             "eth_gasPrice",
-             "eth_maxPriorityFeePerGas",
-             "eth_feeHistory"
-           ]
-         }
-       }}
-    else
-      Logger.info("Forwarding RPC method", method: method, chain: chain, params: params)
-      forward_rpc_request(chain, method, params, conn: conn)
-    end
+    Logger.debug("Forwarding RPC method", method: method, chain: chain)
+    forward_rpc_request(chain, method, params || [], conn: conn)
   end
 
   defp process_json_rpc_request(%{"method" => method}, chain, conn) do
-    if unsupported_over_http?(method) do
-      {:error,
-       %{
-         code: -32601,
-         message: "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
-         data: %{
-           websocket_url: "/socket/websocket"
-         }
-       }}
+    process_json_rpc_request(%{"method" => method, "params" => []}, chain, conn)
+  end
+
+  # Provider override in conn params
+  defp forward_rpc_request(
+         chain,
+         method,
+         params,
+         opts = [conn: %Plug.Conn{params: %{"provider_override" => provider_id}}]
+       )
+       when is_binary(provider_id) do
+    with {:ok, strategy} <- extract_strategy(opts),
+         {:ok, region_filter} <- extract_region_filter(opts) do
+      allow_failover? = Application.get_env(:livechain, :allow_failover_on_override, true)
+
+      case Livechain.RPC.ChainSupervisor.forward_rpc_request(chain, provider_id, method, params) do
+        {:ok, result} ->
+          {:ok, result}
+
+        {:error, _} when allow_failover? ->
+          failover_opts = [strategy: strategy, protocol: :http, region_filter: region_filter]
+          Failover.execute_with_failover(chain, method, params, failover_opts)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     else
-      Logger.info("Forwarding RPC method", method: method, chain: chain, params: [])
-      forward_rpc_request(chain, method, [], conn: conn)
+      {:error, reason} ->
+        {:error, %{code: -32_000, message: "Failed to extract request options: #{reason}"}}
     end
   end
 
-  defp unsupported_over_http?(method) do
-    method in @ws_only_methods
-  end
+  # Provider override in opts
+  defp forward_rpc_request(chain, method, params, opts) when is_list(opts) do
+    case Keyword.get(opts, :provider_override) do
+      provider_id when is_binary(provider_id) ->
+        with {:ok, strategy} <- extract_strategy(opts),
+             {:ok, region_filter} <- extract_region_filter(opts) do
+          allow_failover? = Application.get_env(:livechain, :allow_failover_on_override, true)
 
-  defp forward_rpc_request(chain, method, params, opts) do
-    with {:ok, strategy} <- extract_strategy(opts),
-         {:ok, region_filter} <- extract_region_filter(opts) do
-      failover_opts = [
-        strategy: strategy,
-        protocol: :http,
-        region_filter: region_filter
-      ]
+          case Livechain.RPC.ChainSupervisor.forward_rpc_request(
+                 chain,
+                 provider_id,
+                 method,
+                 params
+               ) do
+            {:ok, result} ->
+              {:ok, result}
 
-      Failover.execute_with_failover(chain, method, params, failover_opts)
-    else
-      {:error, reason} ->
-        {:error, %{code: -32000, message: "Failed to extract request options: #{reason}"}}
+            {:error, _} when allow_failover? ->
+              failover_opts = [strategy: strategy, protocol: :http, region_filter: region_filter]
+              Failover.execute_with_failover(chain, method, params, failover_opts)
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+        else
+          {:error, reason} ->
+            {:error, %{code: -32_000, message: "Failed to extract request options: #{reason}"}}
+        end
+
+      _ ->
+        with {:ok, strategy} <- extract_strategy(opts),
+             {:ok, region_filter} <- extract_region_filter(opts) do
+          failover_opts = [strategy: strategy, protocol: :http, region_filter: region_filter]
+          Failover.execute_with_failover(chain, method, params, failover_opts)
+        else
+          {:error, reason} ->
+            {:error, %{code: -32_000, message: "Failed to extract request options: #{reason}"}}
+        end
     end
   end
 
@@ -398,6 +497,8 @@ defmodule LivechainWeb.RPCController do
 
     {:ok, region_filter}
   end
+
+  # defp extract_provider_override/1 removed: provider overrides handled in forward_rpc_request heads
 
   defp default_provider_strategy do
     Application.get_env(:livechain, :provider_selection_strategy, :cheapest)

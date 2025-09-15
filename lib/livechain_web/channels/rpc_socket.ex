@@ -124,16 +124,11 @@ defmodule LivechainWeb.RPCSocket do
   @impl true
   def id(socket), do: "rpc_socket:#{socket.assigns.chain}"
 
-  # Validate chain against configured chains
+  # Validate chain against configured chains using ConfigStore (no file I/O on hot path)
   defp valid_chain?(chain) do
-    case Livechain.Config.ChainConfig.load_config() do
-      {:ok, config} ->
-        Map.has_key?(config.chains, chain)
-
-      # TODO: Should not use fallbacks here (config is the source of truth).
-      {:error, _reason} ->
-        # Fallback to basic validation if config loading fails
-        chain in ["ethereum", "arbitrum", "polygon", "bsc"]
+    case Livechain.Config.ConfigStore.get_chain(chain) do
+      {:ok, _} -> true
+      _ -> false
     end
   end
 end

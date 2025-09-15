@@ -737,7 +737,7 @@ defmodule LivechainWeb.Dashboard do
           </div>
 
           <!-- WebSocket Endpoint (only show if chain has providers that support WebSocket) -->
-          <%= if Enum.any?(@chain_connections, fn provider -> 
+          <%= if Enum.any?(@chain_connections, fn provider ->
                 provider.type in [:websocket, :both] or (!is_nil(Map.get(provider, :ws_url)) and String.length(Map.get(provider, :ws_url, "")) > 0)
               end) do %>
             <div class="mb-3">
@@ -935,7 +935,7 @@ defmodule LivechainWeb.Dashboard do
             </div>
 
             <!-- Failure Information -->
-            <% 
+            <%
               # Only show issues if there are actual current problems
               has_current_issues = (Map.get(@provider_connection, :consecutive_failures, 0) > 0) or
                                    (Map.get(@provider_connection, :reconnect_attempts, 0) > 0) or

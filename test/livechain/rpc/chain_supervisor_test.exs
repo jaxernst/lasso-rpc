@@ -17,7 +17,7 @@ defmodule Livechain.RPC.ChainSupervisorTest do
   setup do
     # Mock the HTTP client for provider operations
     stub(Livechain.RPC.HttpClientMock, :request, &MockHttpClient.request/4)
-    
+
     # Ensure clean state and test environment is ready
     TestHelper.ensure_clean_state()
     TestHelper.ensure_test_environment_ready()
@@ -94,7 +94,7 @@ defmodule Livechain.RPC.ChainSupervisorTest do
       # Should have ProviderPool and DynamicSupervisor for connections
       # Extract actual child modules that are started
       actual_modules = Enum.filter(child_modules, &(&1 != :dynamic))
-      
+
       # Should have at least ProviderPool
       assert ProviderPool in actual_modules or length(children) >= 2
 
@@ -326,10 +326,13 @@ defmodule Livechain.RPC.ChainSupervisorTest do
 
       # Verify child processes are started
       children = Supervisor.which_children(supervisor_pid)
-      assert length(children) >= 2  # Should have ProviderPool and DynamicSupervisor
+      # Should have ProviderPool and DynamicSupervisor
+      assert length(children) >= 2
 
       # Verify process is registered
-      case GenServer.whereis({:via, Registry, {Livechain.Registry, {:chain_supervisor, chain_name}}}) do
+      case GenServer.whereis(
+             {:via, Registry, {Livechain.Registry, {:chain_supervisor, chain_name}}}
+           ) do
         nil -> flunk("Chain supervisor not registered")
         pid when is_pid(pid) -> assert Process.alive?(pid)
       end
@@ -346,28 +349,32 @@ defmodule Livechain.RPC.ChainSupervisorTest do
 
       # Verify ProviderPool is accessible through the supervisor
       children = Supervisor.which_children(supervisor_pid)
-      
+
       # Check if ProviderPool is among the children by looking at child specs
-      provider_pool_found = Enum.any?(children, fn child ->
-        case child do
-          {child_id, _pid, _type, _modules} ->
-            case child_id do
-              {Livechain.RPC.ProviderPool, _} -> true
-              _ -> false
-            end
-          _ -> false
-        end
-      end)
-      
+      provider_pool_found =
+        Enum.any?(children, fn child ->
+          case child do
+            {child_id, _pid, _type, _modules} ->
+              case child_id do
+                {Livechain.RPC.ProviderPool, _} -> true
+                _ -> false
+              end
+
+            _ ->
+              false
+          end
+        end)
+
       # Alternative: verify we can interact with ProviderPool through ChainSupervisor
-      if not provider_pool_found do
+      if provider_pool_found do
+        assert provider_pool_found, "ProviderPool should be started as a child"
+      else
         # If we can't find it directly, verify functionality works
         active_providers = ChainSupervisor.get_active_providers(chain_name)
-        assert is_list(active_providers)  # Should return a list even if empty
-      else
-        assert provider_pool_found, "ProviderPool should be started as a child"
+        # Should return a list even if empty
+        assert is_list(active_providers)
       end
-      
+
       # Try to get chain status (which uses ProviderPool internally)
       status = ChainSupervisor.get_chain_status(chain_name)
       assert is_map(status)
@@ -390,10 +397,10 @@ defmodule Livechain.RPC.ChainSupervisorTest do
       # Supervisor should start expected children
       # ProviderPool, DynamicSupervisor
       assert length(initial_children) >= 2
-      
+
       # Verify supervisor is still alive and functional
       assert Process.alive?(supervisor_pid)
-      
+
       # Should be able to get status without errors
       status = ChainSupervisor.get_chain_status(chain_name)
       assert is_map(status)
