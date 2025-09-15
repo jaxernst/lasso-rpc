@@ -19,7 +19,7 @@ defmodule Livechain.RPC.ChainSupervisor do
   require Logger
 
   alias Livechain.Config.{ChainConfig, ConfigStore}
-  alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker}
+  alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker, Normalizer}
 
   @doc """
   Starts a ChainSupervisor for a specific blockchain.
@@ -123,7 +123,7 @@ defmodule Livechain.RPC.ChainSupervisor do
             end,
             timeout_ms + 1_000
           )
-          |> normalize_breaker_result()
+          |> normalize_breaker_result(provider_id, method)
         end
 
       {:error, :not_found} ->
@@ -145,9 +145,10 @@ defmodule Livechain.RPC.ChainSupervisor do
 
       # Start dynamic supervisor to manage WS connections
       {DynamicSupervisor, strategy: :one_for_one, name: connection_supervisor_name(chain_name)},
-      
+
       # Start dynamic supervisor to manage circuit breakers
-      {DynamicSupervisor, strategy: :one_for_one, name: circuit_breaker_supervisor_name(chain_name)},
+      {DynamicSupervisor,
+       strategy: :one_for_one, name: circuit_breaker_supervisor_name(chain_name)},
 
       # Start connection manager after dependencies
       {Task, fn -> start_provider_connections_async(chain_name, chain_config) end}
@@ -156,10 +157,8 @@ defmodule Livechain.RPC.ChainSupervisor do
     Supervisor.init(children, strategy: :rest_for_one)
   end
 
-
   # Start provider connections after dependencies are ready
   defp start_provider_connections_async(chain_name, chain_config) do
-
     # Start circuit breakers for ALL providers (HTTP and WS)
     Enum.each(chain_config.providers, fn provider ->
       start_circuit_breaker(chain_name, provider)
@@ -260,45 +259,33 @@ defmodule Livechain.RPC.ChainSupervisor do
   defp connection_supervisor_name(chain_name) do
     :"#{chain_name}_connection_supervisor"
   end
-  
+
   defp circuit_breaker_supervisor_name(chain_name) do
     :"#{chain_name}_circuit_breaker_supervisor"
   end
 
-  defp normalize_breaker_result({:ok, {:ok, result}}) do
-    normalize_rpc_response(result)
+  defp normalize_breaker_result({:ok, {:ok, response_map}}, provider_id, method) do
+    Normalizer.run(provider_id, method, response_map)
   end
-  
-  defp normalize_breaker_result({:ok, {:error, reason}}), do: {:error, reason}
-  
-  defp normalize_breaker_result({:ok, result}) do
-    normalize_rpc_response(result)
+
+  defp normalize_breaker_result({:ok, {:error, reason}}, _provider_id, _method),
+    do: {:error, reason}
+
+  defp normalize_breaker_result({:ok, response_map}, provider_id, method) do
+    Normalizer.run(provider_id, method, response_map)
   end
-  
-  defp normalize_breaker_result({:error, reason}), do: {:error, reason}
-  
-  defp normalize_breaker_result({:reply, {:ok, result}, _state}) do
-    normalize_rpc_response(result)
+
+  defp normalize_breaker_result({:error, reason}, _provider_id, _method), do: {:error, reason}
+
+  defp normalize_breaker_result({:reply, {:ok, response_map}, _state}, provider_id, method) do
+    Normalizer.run(provider_id, method, response_map)
   end
-  
-  defp normalize_breaker_result({:reply, {:error, reason}, _state}), do: {:error, reason}
-  defp normalize_breaker_result({:reply, other, _state}), do: {:error, other}
-  
-  # Check if a successful response contains a JSON-RPC error
-  defp normalize_rpc_response(%{"error" => error} = _response) when is_map(error) do
-    # Provider returned a JSON-RPC error - treat as error
-    {:error, error}
-  end
-  
-  defp normalize_rpc_response(%{"result" => result}) do
-    # Standard JSON-RPC success response - extract result
-    {:ok, result}
-  end
-  
-  defp normalize_rpc_response(response) do
-    # Non-standard response format - pass through
-    {:ok, response}
-  end
+
+  defp normalize_breaker_result({:reply, {:error, reason}, _state}, _provider_id, _method),
+    do: {:error, reason}
+
+  defp normalize_breaker_result({:reply, other, _state}, _provider_id, _method),
+    do: {:error, other}
 
   defp safe_breaker_call(provider_id, fun, timeout) do
     try do

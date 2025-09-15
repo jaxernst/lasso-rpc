@@ -336,12 +336,7 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
     # IO bytes
     io = :erlang.statistics(:io)
 
-    {in_bytes, out_bytes} =
-      case io do
-        {{in_total, _}, {out_total, _}} -> {in_total, out_total}
-        {{in_total, _in2}} -> {in_total, 0}
-        _ -> {0, 0}
-      end
+    {{_, in_bytes}, {_, out_bytes}} = io
 
     # Scheduler utilization avg (if enabled)
     sched =
@@ -379,8 +374,8 @@ defmodule LivechainWeb.Dashboard.MetricsHelpers do
       run_queue: :erlang.statistics(:run_queue),
       cpu_percent: cpu_percent,
       reductions_s: red_delta,
-      io_in_bytes: in_bytes,
-      io_out_bytes: out_bytes,
+      io_in_mb: Helpers.to_mb(in_bytes),
+      io_out_mb: Helpers.to_mb(out_bytes),
       sched_util_avg: sched_util_avg
     }
   end

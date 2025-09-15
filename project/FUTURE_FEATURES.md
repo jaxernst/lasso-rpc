@@ -14,6 +14,7 @@ A living backlog of high-impact improvements to make Livechain reliable, fast, a
   - `:leaderboard` (default) based on ProviderPool health/latency
   - `:priority` config-based fallback
   - `:round_robin` for traffic spreading
+  - `:best_sync` prefer providers with most up-to-date head/safe/finalized; thresholdable lag
   - `:race_top_n` (hedged requests) with early-cancel on first success
   - `:cost_aware` (optimize $ given SLO)
   - `:quota_aware` (avoid hitting provider limits)
@@ -168,6 +169,76 @@ providers:
 ```
 
 This ensures WebSocket reads are only attempted when providers support them, with automatic HTTP fallback for unsupported methods or providers.
+
+#### "Best Sync" Routing Strategy
+
+Goal: Prefer providers that are most up-to-date with chain head to minimize stale reads and inconsistencies. Applies to time-sensitive reads (e.g., `eth_blockNumber`, latest state queries) and can be relaxed for historical queries.
+
+- Signals to track per provider (passive + active):
+
+  - Latest observed `block_number` from normal traffic and/or periodic `eth_blockNumber` probe
+  - `eth_syncing` status and current block vs highest block
+  - Optional: Ethereum `safe` and `finalized` heads via `eth_getBlockByNumber("safe"|"finalized")`
+  - Last-updated timestamp to avoid using stale measurements
+
+- Global head estimation per chain:
+
+  - Maintain a lightweight `HeadTracker` that periodically samples a subset of providers with jitter (e.g., every 1–2s under load, 3–5s idle)
+  - Compute `global_best_head` as a k-of-n majority or trimmed max to avoid outliers
+  - Track `global_safe_head` and `global_finalized_head` when supported
+
+- Selection/scoring (simplified precedence):
+
+  1. Filter to providers with `head_lag <= max_lag_blocks` relative to chosen reference (latest|safe|finalized)
+  2. Within the filtered set, sort by health score → latency → recent success rate
+  3. If fewer than `min_viable` remain, widen `max_lag_blocks` gradually or fall back to `:leaderboard`
+
+  Pseudocode:
+
+  ```elixir
+  def pick_best_sync(candidates, opts) do
+    reference = opts[:reference] || :latest # :latest | :safe | :finalized
+    max_lag  = opts[:max_lag_blocks] || 1
+    min_ok   = opts[:min_viable] || 2
+
+    fresh = Enum.filter(candidates, fn p -> lag(p, reference) <= max_lag end)
+    ranked = fresh |> sort_by([:health_desc, :latency_asc, :success_rate_desc])
+
+    cond do
+      length(ranked) >= min_ok -> ranked
+      true -> fallback(:leaderboard, candidates)
+    end
+  end
+  ```
+
+- Config (chains.yml):
+
+  ```yaml
+  selection:
+    default_strategy: :best_sync
+    method_overrides:
+      eth_getBlockByNumber:
+        { strategy: :best_sync, reference: latest, max_lag_blocks: 0 }
+      eth_getBalance:
+        { strategy: :best_sync, reference: safe, max_lag_blocks: 1 }
+    strategies:
+      best_sync:
+        reference: latest # latest | safe | finalized
+        max_lag_blocks: 1 # initial filter threshold
+        min_viable: 2 # minimum candidates to keep
+        fallback_strategy: :leaderboard
+  ```
+
+- Telemetry:
+
+  - Emit `[:livechain, :selection, :best_sync]` with `provider_id`, `head`, `lag_blocks`, `reference`, `max_lag`, `reason`
+  - Track `global_best_head`, `global_safe_head`, `global_finalized_head` gauges
+
+- Failure modes and safeguards:
+  - Cold start: use fallback until enough head samples collected
+  - Outliers/malicious: require k-of-n concordance on heads; trim extreme values
+  - Oscillation: apply small hysteresis (e.g., require sustained freshness for N samples before promoting)
+  - Sparse traffic: rely on periodic probes with jittered schedule
 
 ## TRIAGE
 

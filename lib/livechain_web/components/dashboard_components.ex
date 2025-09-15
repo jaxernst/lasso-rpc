@@ -461,10 +461,10 @@ defmodule LivechainWeb.Components.DashboardComponents do
             Mem ETS: <span class="text-emerald-300">{@vm_metrics[:mem_ets_mb] || 0} MB</span>
           </div>
           <div class="bg-gray-800/60 rounded p-3">
-            IO in: <span class="text-emerald-300">{@vm_metrics[:io_in_bytes] || 0}</span>
+            IO in: <span class="text-emerald-300">{@vm_metrics[:io_in_mb] || 0} MB</span>
           </div>
           <div class="bg-gray-800/60 rounded p-3">
-            IO out: <span class="text-emerald-300">{@vm_metrics[:io_out_bytes] || 0}</span>
+            IO out: <span class="text-emerald-300">{@vm_metrics[:io_out_mb] || 0} MB</span>
           </div>
           <div class="bg-gray-800/60 rounded p-3">
             Sched util avg:

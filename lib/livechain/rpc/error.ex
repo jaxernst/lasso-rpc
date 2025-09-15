@@ -1,12 +1,12 @@
 defmodule Livechain.RPC.Error do
   @moduledoc """
   Provides comprehensive JSON-RPC 2.0 error normalization for the RPC aggregator.
-  
+
   Ensures consistent error responses across:
   - HTTP and WebSocket protocols
   - Different provider error formats
   - Various error conditions (rate limits, network errors, etc.)
-  
+
   All errors follow the JSON-RPC 2.0 specification:
   ```json
   {
@@ -49,14 +49,14 @@ defmodule Livechain.RPC.Error do
   @method_not_found -32601
   @invalid_params -32602
   @internal_error -32603
-  
+
   # Server error codes (reserved range: -32000 to -32099)
   @generic_server_error -32000
   @rate_limit_error -32005
 
   @doc """
   Normalizes any error into a JSON-RPC 2.0 compliant error structure.
-  
+
   This is the main entry point for error normalization. It handles:
   - Typed errors from internal systems
   - Provider error responses
@@ -74,59 +74,82 @@ defmodule Livechain.RPC.Error do
 
   @doc """
   Normalizes an error to just the error object (without the JSON-RPC wrapper).
-  
+
   Returns a map with `code`, `message`, and optionally `data` fields.
   """
   @spec normalize_error(any()) :: json_rpc_error()
+  def normalize_error(%Livechain.JSONRPC.Error{} = jerr) do
+    base = %{"code" => jerr.code, "message" => jerr.message}
+
+    base =
+      case jerr.data do
+        nil -> base
+        data -> Map.put(base, "data", data)
+      end
+
+    base
+  end
+
   def normalize_error(error) do
     case error do
       # Already normalized JSON-RPC error
       %{"code" => code, "message" => message} = err when is_integer(code) and is_binary(message) ->
         sanitize_error_object(err)
-      
+
       %{code: code, message: message} = err when is_integer(code) and is_binary(message) ->
         sanitize_error_object(err)
-      
+
       # Provider error responses (nested error object)
       %{"error" => inner_error} when is_map(inner_error) ->
         normalize_error(inner_error)
-      
+
       %{error: inner_error} when is_map(inner_error) ->
         normalize_error(inner_error)
-      
+
       # Typed internal errors
       {:rate_limit, msg} ->
         create_error(@rate_limit_error, msg || "Rate limit exceeded", %{category: :rate_limit})
-      
+
       {:server_error, msg} ->
-        create_error(@generic_server_error, msg || "Upstream server error", %{category: :server_error})
-      
+        create_error(@generic_server_error, msg || "Upstream server error", %{
+          category: :server_error
+        })
+
       {:client_error, msg} ->
         create_error(@invalid_params, msg || "Invalid request", %{category: :client_error})
-      
+
       {:network_error, msg} ->
         create_error(@generic_server_error, msg || "Network error", %{category: :network_error})
-      
+
       {:decode_error, msg} ->
         create_error(@parse_error, msg || "Parse error", %{category: :decode_error})
-      
+
       {:circuit_open, details} ->
-        create_error(@generic_server_error, "Circuit breaker open", %{category: :circuit_breaker, details: inspect(details)})
-      
+        create_error(@generic_server_error, "Circuit breaker open", %{
+          category: :circuit_breaker,
+          details: inspect(details)
+        })
+
       {:circuit_opening, details} ->
-        create_error(@generic_server_error, "Circuit breaker opening", %{category: :circuit_breaker, details: inspect(details)})
-      
+        create_error(@generic_server_error, "Circuit breaker opening", %{
+          category: :circuit_breaker,
+          details: inspect(details)
+        })
+
       {:circuit_reopening, details} ->
-        create_error(@generic_server_error, "Circuit breaker reopening", %{category: :circuit_breaker, details: inspect(details)})
-      
+        create_error(@generic_server_error, "Circuit breaker reopening", %{
+          category: :circuit_breaker,
+          details: inspect(details)
+        })
+
       # String errors
       msg when is_binary(msg) ->
         create_error(@internal_error, msg, nil)
-      
+
       # Atom errors
       atom when is_atom(atom) ->
         create_error(@internal_error, to_string(atom), nil)
-      
+
       # Any other error format
       other ->
         create_error(@internal_error, "Internal error", %{details: inspect(other)})
@@ -135,7 +158,7 @@ defmodule Livechain.RPC.Error do
 
   @doc """
   Maps provider-specific error codes to standard JSON-RPC error codes.
-  
+
   Different providers may return different error codes for similar conditions.
   This function normalizes them to standard JSON-RPC 2.0 codes.
   """
@@ -150,24 +173,51 @@ defmodule Livechain.RPC.Error do
   def map_provider_error_code(code) when is_integer(code) do
     cond do
       # Standard JSON-RPC errors - pass through
-      code in [@parse_error, @invalid_request, @method_not_found, @invalid_params, @internal_error] ->
+      code in [
+        @parse_error,
+        @invalid_request,
+        @method_not_found,
+        @invalid_params,
+        @internal_error
+      ] ->
         code
-      
+
       # Server error range - pass through
       code >= -32099 and code <= -32000 ->
         code
-      
+
       # Common provider-specific codes
-      code == 429 -> @rate_limit_error  # HTTP 429 status
-      code == -32005 -> @rate_limit_error  # Explicit rate limit
-      code == 4001 -> @invalid_request  # user rejection
-      code == 4100 -> @invalid_request  # Unauthorized
-      code == 4200 -> @method_not_found  # Unsupported method
-      code == 4900 -> @generic_server_error  # Provider disconnected
-      code == 4901 -> @generic_server_error  # Chain disconnected
-      
+      # HTTP 429 status
+      code == 429 ->
+        @rate_limit_error
+
+      # Explicit rate limit
+      code == -32005 ->
+        @rate_limit_error
+
+      # user rejection
+      code == 4001 ->
+        @invalid_request
+
+      # Unauthorized
+      code == 4100 ->
+        @invalid_request
+
+      # Unsupported method
+      code == 4200 ->
+        @method_not_found
+
+      # Provider disconnected
+      code == 4900 ->
+        @generic_server_error
+
+      # Chain disconnected
+      code == 4901 ->
+        @generic_server_error
+
       # Default mapping
-      true -> @internal_error
+      true ->
+        @internal_error
     end
   end
 
@@ -195,7 +245,7 @@ defmodule Livechain.RPC.Error do
       "code" => get_error_code(error),
       "message" => get_error_message(error)
     }
-    
+
     case get_error_data(error) do
       nil -> base
       data -> Map.put(base, "data", data)
