@@ -26,7 +26,8 @@ defmodule LivechainWeb.RPCController do
   use LivechainWeb, :controller
   require Logger
 
-  alias Livechain.RPC.{ChainRegistry, Failover, Error}
+  alias Livechain.RPC.{ChainRegistry, Failover}
+  alias Livechain.JSONRPC.Error, as: JError
   alias Livechain.Config.ConfigStore
 
   @jsonrpc_version "2.0"
@@ -54,23 +55,18 @@ defmodule LivechainWeb.RPCController do
   @doc """
   Handle JSON-RPC requests for any supported chain.
   """
-  def rpc(conn, params) do
+  def rpc(conn, params = %{"chain_id" => chain_id}) do
     Logger.debug("RPC request received", path: conn.request_path)
 
-    case Map.get(params, "chain_id") do
+    case chain_id do
       nil ->
         Logger.error("Missing chain_id parameter", params: inspect(params))
 
+        error = JError.new(-32602, "Missing chain_id parameter")
+
         conn
         |> put_status(:bad_request)
-        |> json(%{
-          jsonrpc: "2.0",
-          error: %{
-            code: -32602,
-            message: "Missing chain_id parameter"
-          },
-          id: nil
-        })
+        |> json(JError.to_response(error, nil))
 
       chain_id ->
         case resolve_chain_name(chain_id) do
@@ -102,18 +98,49 @@ defmodule LivechainWeb.RPCController do
             handle_chain_rpc(conn, chain_name)
 
           {:error, reason} ->
+            error = JError.new(-32602, "Unsupported chain: #{reason}")
+
             conn
             |> put_status(:bad_request)
-            |> json(%{
-              jsonrpc: "2.0",
-              error: %{
-                code: -32602,
-                message: "Unsupported chain: #{reason}"
-              },
-              id: nil
-            })
+            |> json(JError.to_response(error, nil))
         end
     end
+  end
+
+  def rpc_base(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
+  def rpc_fastest(conn, params), do: rpc_with_strategy(conn, params, :fastest)
+  def rpc_cheapest(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
+  def rpc_priority(conn, params), do: rpc_with_strategy(conn, params, :priority)
+  def rpc_round_robin(conn, params), do: rpc_with_strategy(conn, params, :round_robin)
+
+  defp rpc_with_strategy(conn, params, strategy_atom) do
+    conn
+    |> assign(:provider_strategy, strategy_atom)
+    |> rpc(params)
+  end
+
+  def rpc_provider_override(
+        conn,
+        %{"provider_id" => provider_id, "chain_id" => chain_id} = params
+      ) do
+    handle_provider_override_rpc(conn, params, chain_id, provider_id)
+  end
+
+  defp handle_provider_override_rpc(conn, params, chain_id, provider_id) do
+    Logger.info("Provider override RPC request",
+      provider_id: provider_id,
+      chain_id: chain_id,
+      method: params["method"]
+    )
+
+    # Add provider override to params and delegate to main rpc function
+    params_with_override =
+      Map.merge(params, %{
+        "chain_id" => chain_id,
+        "provider_override" => provider_id
+      })
+
+    rpc(conn, params_with_override)
   end
 
   defp maybe_publish_strategy_event(_chain, nil), do: :ok
@@ -150,7 +177,8 @@ defmodule LivechainWeb.RPCController do
         handle_json_rpc(conn, request, chain_name)
 
       _ ->
-        json(conn, Error.normalize(%{code: -32600, message: "Invalid Request"}, nil))
+        error = JError.new(-32600, "Invalid Request")
+        json(conn, JError.to_response(error, nil))
     end
   end
 
@@ -168,27 +196,34 @@ defmodule LivechainWeb.RPCController do
       json(conn, response)
     else
       {:error, error} ->
-        response = Error.normalize(error, Map.get(params, "id"))
-        json(conn, response)
+        json(
+          conn,
+          error
+          |> JError.from()
+          |> JError.to_response(Map.get(params, "id"))
+        )
     end
   end
 
   defp handle_json_rpc_batch(conn, requests, chain) do
     if length(requests) > @max_batch_requests do
-      err = %{code: -32600, message: "Invalid Request: batch too large"}
-      json(conn, Error.normalize(err, nil))
+      error = JError.new(-32600, "Invalid Request: batch too large")
+      json(conn, JError.to_response(error, nil))
     else
       results =
         Enum.map(requests, fn req ->
           case validate_json_rpc_request(req) do
             {:ok, request} ->
               case process_json_rpc_request(request, chain, conn) do
-                {:ok, result} -> %{jsonrpc: @jsonrpc_version, result: result, id: request["id"]}
-                {:error, error} -> Error.normalize(error, request["id"])
+                {:ok, result} ->
+                  %{jsonrpc: @jsonrpc_version, result: result, id: request["id"]}
+
+                {:error, error} ->
+                  JError.to_response(JError.from(error), request["id"])
               end
 
             {:error, error} ->
-              Error.normalize(error, Map.get(req, "id"))
+              JError.to_response(JError.from(error), Map.get(req, "id"))
           end
         end)
 
@@ -199,7 +234,7 @@ defmodule LivechainWeb.RPCController do
   defp validate_json_rpc_request(%{"method" => method} = request) when is_binary(method) do
     cond do
       Map.has_key?(request, "jsonrpc") and request["jsonrpc"] != @jsonrpc_version ->
-        {:error, %{code: -32600, message: "Invalid Request: jsonrpc must be \"2.0\""}}
+        {:error, JError.new(-32600, "Invalid Request: jsonrpc must be \"2.0\"")}
 
       true ->
         normalized =
@@ -214,7 +249,7 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
-  defp validate_json_rpc_request(_), do: {:error, %{code: -32600, message: "Invalid Request"}}
+  defp validate_json_rpc_request(_), do: {:error, JError.new(-32600, "Invalid Request")}
 
   # Block and transaction queries
   defp process_json_rpc_request(
@@ -341,7 +376,7 @@ defmodule LivechainWeb.RPCController do
         {:ok, chain_id}
 
       {:error, reason} ->
-        {:error, %{code: -32_603, message: "Failed to get chain ID: #{reason}"}}
+        {:error, JError.new(-32603, "Failed to get chain ID: #{reason}")}
     end
   end
 
@@ -352,7 +387,7 @@ defmodule LivechainWeb.RPCController do
         {:ok, status}
 
       error ->
-        {:error, %{code: -32_603, message: "Failed to get chain status: #{inspect(error)}"}}
+        {:error, JError.new(-32603, "Failed to get chain status: #{inspect(error)}")}
     end
   end
 
@@ -368,25 +403,21 @@ defmodule LivechainWeb.RPCController do
          %{started_count: started_count, message: "Started #{started_count} chain supervisors"}}
 
       {:error, reason} ->
-        {:error, %{code: -32_603, message: "Failed to start chains: #{inspect(reason)}"}}
+        {:error, JError.new(-32603, "Failed to start chains: #{inspect(reason)}")}
     end
   end
 
   # Reject WS-only methods over HTTP
   defp process_json_rpc_request(%{"method" => method}, _chain, _conn)
        when method in @ws_only_methods do
-    {:error,
-     %{
-       code: -32_601,
-       message: "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
-       data: %{websocket_url: "/socket/websocket"}
-     }}
+    {:error, JError.new(-32601, "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
+      data: %{websocket_url: "/socket/websocket"})}
   end
 
   # Reject stateful/account methods over HTTP
   defp process_json_rpc_request(%{"method" => method}, _chain, _conn)
        when method in @http_disallowed_methods do
-    {:error, %{code: -32_601, message: "Method not supported by proxy"}}
+    {:error, JError.new(-32601, "Method not supported by proxy")}
   end
 
   # Generic method handler: forward allowed methods
@@ -424,7 +455,7 @@ defmodule LivechainWeb.RPCController do
       end
     else
       {:error, reason} ->
-        {:error, %{code: -32_000, message: "Failed to extract request options: #{reason}"}}
+        {:error, JError.new(-32000, "Failed to extract request options: #{reason}")}
     end
   end
 
@@ -454,7 +485,7 @@ defmodule LivechainWeb.RPCController do
           end
         else
           {:error, reason} ->
-            {:error, %{code: -32_000, message: "Failed to extract request options: #{reason}"}}
+            {:error, JError.new(-32000, "Failed to extract request options: #{reason}")}
         end
 
       _ ->
@@ -464,7 +495,7 @@ defmodule LivechainWeb.RPCController do
           Failover.execute_with_failover(chain, method, params, failover_opts)
         else
           {:error, reason} ->
-            {:error, %{code: -32_000, message: "Failed to extract request options: #{reason}"}}
+            {:error, JError.new(-32000, "Failed to extract request options: #{reason}")}
         end
     end
   end
@@ -505,98 +536,25 @@ defmodule LivechainWeb.RPCController do
   end
 
   defp resolve_chain_name(chain_identifier) do
-    all_chains = ConfigStore.get_all_chains()
+    case ConfigStore.get_chain_by_name_or_id(chain_identifier) do
+      {:ok, {chain_name, _chain_config}} ->
+        {:ok, chain_name}
 
-    cond do
-      is_binary(chain_identifier) and Map.has_key?(all_chains, chain_identifier) ->
-        {:ok, chain_identifier}
+      {:error, :not_found} ->
+        {:error, "Chain ID #{inspect(chain_identifier)} not configured"}
 
-      is_integer(chain_identifier) ->
-        case find_chain_by_id(all_chains, chain_identifier) do
-          {:ok, chain_name} -> {:ok, chain_name}
-          :not_found -> {:error, "Chain ID #{chain_identifier} not configured"}
-        end
-
-      is_binary(chain_identifier) ->
-        case Integer.parse(chain_identifier) do
-          {chain_id, ""} ->
-            case find_chain_by_id(all_chains, chain_id) do
-              {:ok, chain_name} -> {:ok, chain_name}
-              :not_found -> {:error, "Chain ID #{chain_id} not configured"}
-            end
-
-          _ ->
-            {:error, "Invalid chain identifier: #{chain_identifier}"}
-        end
-
-      true ->
-        {:error, "Invalid chain identifier format"}
-    end
-  end
-
-  defp find_chain_by_id(chains, chain_id) do
-    case Enum.find(chains, fn {_name, chain_config} ->
-           chain_config.chain_id == chain_id
-         end) do
-      {chain_name, _config} -> {:ok, chain_name}
-      nil -> :not_found
+      {:error, :invalid_format} ->
+        {:error, "Invalid chain identifier: #{inspect(chain_identifier)}"}
     end
   end
 
   defp get_chain_id(chain_name) do
     case ConfigStore.get_chain(chain_name) do
-      {:ok, chain_config} ->
-        chain_id = chain_config.chain_id
-
-        cond do
-          is_integer(chain_id) ->
-            {:ok, "0x" <> Integer.to_string(chain_id, 16)}
-
-          is_binary(chain_id) ->
-            {:ok, chain_id}
-
-          true ->
-            {:error, "Invalid chain ID format for: #{chain_name}"}
-        end
+      {:ok, %{chain_id: chain_id}} when is_integer(chain_id) ->
+        {:ok, "0x" <> Integer.to_string(chain_id, 16)}
 
       {:error, :not_found} ->
         {:error, "Chain not configured: #{chain_name}"}
     end
-  end
-
-  def rpc_base(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
-  def rpc_fastest(conn, params), do: rpc_with_strategy(conn, params, :fastest)
-  def rpc_cheapest(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
-  def rpc_priority(conn, params), do: rpc_with_strategy(conn, params, :priority)
-  def rpc_round_robin(conn, params), do: rpc_with_strategy(conn, params, :round_robin)
-
-  defp rpc_with_strategy(conn, params, strategy_atom) do
-    conn
-    |> assign(:provider_strategy, strategy_atom)
-    |> rpc(params)
-  end
-
-  def rpc_provider_override(
-        conn,
-        %{"provider_id" => provider_id, "chain_id" => chain_id} = params
-      ) do
-    handle_provider_override_rpc(conn, params, chain_id, provider_id)
-  end
-
-  defp handle_provider_override_rpc(conn, params, chain_id, provider_id) do
-    Logger.info("Provider override RPC request",
-      provider_id: provider_id,
-      chain_id: chain_id,
-      method: params["method"]
-    )
-
-    # Add provider override to params and delegate to main rpc function
-    params_with_override =
-      Map.merge(params, %{
-        "chain_id" => chain_id,
-        "provider_override" => provider_id
-      })
-
-    rpc(conn, params_with_override)
   end
 end

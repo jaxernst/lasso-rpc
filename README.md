@@ -208,7 +208,7 @@ const client = createPublicClient({
 **WebSocket subscriptions:**
 
 ```bash
-wscat -c ws://localhost:4000/ws/rpc/ethereum
+wscat -c ws://localhost:4000/rpc/ethereum
 {"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
 ```
 

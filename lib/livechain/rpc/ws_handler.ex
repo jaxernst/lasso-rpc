@@ -12,7 +12,7 @@ defmodule Livechain.RPC.WSHandler do
   # WebSockex callbacks
 
   def handle_connect(_conn, state) do
-    Logger.info("WebSocket connected: #{state.endpoint.name}")
+    Logger.debug("WebSocket connected: #{state.endpoint.name}")
     send(state.parent, {:ws_connected})
     {:ok, state}
   end
@@ -30,11 +30,6 @@ defmodule Livechain.RPC.WSHandler do
     end
   end
 
-  def handle_frame({:binary, data}, state) do
-    Logger.debug("Received binary frame: #{byte_size(data)} bytes")
-    {:ok, state}
-  end
-
   def handle_frame({:ping, payload}, state) do
     Logger.debug("Received ping, sending pong")
     {:reply, {:pong, payload}, state}
@@ -46,13 +41,15 @@ defmodule Livechain.RPC.WSHandler do
   end
 
   def handle_frame({:close, code, reason}, state) do
-    Logger.info("WebSocket closed: #{code} - #{reason}")
     send(state.parent, {:ws_closed, code, reason})
     {:ok, state}
   end
 
+  @doc """
+  Common reason: {:remote, 1013, "Connection timeout exceeded"}
+  TODO: Should have bespoke handling for various disconnect reasons (1013 indicates a bad provider config)
+  """
   def handle_disconnect(%{reason: reason}, state) do
-    Logger.warning("WebSocket disconnected: #{inspect(reason)}")
     send(state.parent, {:ws_disconnected, reason})
     {:ok, state}
   end

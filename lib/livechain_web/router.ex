@@ -57,7 +57,7 @@ defmodule LivechainWeb.Router do
     post("/chains/backup", ChainController, :create_backup)
   end
 
-  # HTTP JSON-RPC endpoints with enhanced logging
+  # HTTP JSON-RPC endpoints
   scope "/rpc", LivechainWeb do
     pipe_through(:api_with_logging)
 

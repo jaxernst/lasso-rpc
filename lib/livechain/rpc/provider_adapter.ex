@@ -16,4 +16,3 @@ defmodule Livechain.RPC.ProviderAdapter do
 
   @optional_callbacks headers: 1
 end
-

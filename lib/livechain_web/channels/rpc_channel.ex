@@ -12,7 +12,8 @@ defmodule LivechainWeb.RPCChannel do
   use LivechainWeb, :channel
   require Logger
 
-  alias Livechain.RPC.{SubscriptionManager, Failover, Error}
+  alias Livechain.RPC.{SubscriptionManager, Failover}
+  alias Livechain.JSONRPC.Error, as: JError
   alias Livechain.Config.ConfigStore
 
   @impl true
@@ -45,8 +46,7 @@ defmodule LivechainWeb.RPCChannel do
           }
 
         {:error, reason} ->
-          # Use centralized error normalization for consistency
-          Error.normalize(reason, id)
+          JError.to_response(JError.from(reason), id)
 
         {:subscription, subscription_id} ->
           %{
@@ -63,14 +63,8 @@ defmodule LivechainWeb.RPCChannel do
   def handle_in("rpc_call", invalid_request, socket) do
     Logger.warning("Invalid JSON-RPC request: #{inspect(invalid_request)}")
 
-    response = %{
-      "jsonrpc" => "2.0",
-      "id" => nil,
-      "error" => %{
-        "code" => -32600,
-        "message" => "Invalid Request"
-      }
-    }
+    error = JError.new(-32600, "Invalid Request")
+    response = JError.to_response(error, nil)
 
     {:reply, {:ok, response}, socket}
   end

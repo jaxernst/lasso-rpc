@@ -744,6 +744,62 @@ defmodule Livechain.RPC.ProviderPool do
 
               {true, updated}
 
+            %Livechain.JSONRPC.Error{category: :rate_limit} ->
+              # Calculate exponential backoff
+              new_cooldown_count = provider.cooldown_count + 1
+              cooldown_ms = provider.base_cooldown_ms * :math.pow(2, new_cooldown_count)
+              # 5 minutes max
+              max_cooldown = 300_000
+              actual_cooldown = min(cooldown_ms, max_cooldown)
+              cooldown_until = System.monotonic_time(:millisecond) + trunc(actual_cooldown)
+
+              # EMA calculations for failure
+              alpha = 0.1
+              new_total_requests = provider.total_requests + 1
+
+              new_success_rate =
+                if provider.total_requests == 0 do
+                  0.0
+                else
+                  provider.success_rate * (1 - alpha)
+                end
+
+              new_error_rate =
+                if provider.total_requests == 0 do
+                  1.0
+                else
+                  provider.error_rate * (1 - alpha) + alpha
+                end
+
+              Logger.warning(
+                "Provider #{provider_id} rate limited, cooling down for #{trunc(actual_cooldown)}ms"
+              )
+
+              publish_provider_event(state.chain_name, provider_id, :cooldown_start, %{
+                until: cooldown_until
+              })
+
+              :telemetry.execute([:livechain, :provider, :cooldown, :start], %{count: 1}, %{
+                chain: state.chain_name,
+                provider_id: provider_id,
+                cooldown_ms: trunc(actual_cooldown)
+              })
+
+              updated = %{
+                provider
+                | cooldown_until: cooldown_until,
+                  cooldown_count: new_cooldown_count,
+                  status: :rate_limited,
+                  last_error: error,
+                  last_health_check: System.monotonic_time(:millisecond),
+                  # Update EMA metrics
+                  error_rate: new_error_rate,
+                  success_rate: new_success_rate,
+                  total_requests: new_total_requests
+              }
+
+              {true, updated}
+
             _ ->
               # Regular failure handling
               new_consecutive_failures = provider.consecutive_failures + 1
@@ -907,6 +963,7 @@ defmodule Livechain.RPC.ProviderPool do
           new_status =
             case reason do
               {:rate_limit, _} -> :rate_limited
+              %Livechain.JSONRPC.Error{category: :rate_limit} -> :rate_limited
               _ -> :unhealthy
             end
 

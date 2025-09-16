@@ -1,12 +1,12 @@
 defmodule Livechain.Config.ConfigStore do
   @moduledoc """
   Centralized configuration store that caches chain and provider configurations
-  in ETS tables for fast, hot-path access. Eliminates the need to load YAML 
+  in ETS tables for fast, hot-path access. Eliminates the need to load YAML
   files during request processing.
 
   This module provides:
   - One-time configuration loading at startup
-  - Fast ETS-based lookups for chains and providers  
+  - Fast ETS-based lookups for chains and providers
   - Runtime configuration reload capability
   - Typed struct storage (ChainConfig, ProviderConfig)
   """
@@ -18,6 +18,7 @@ defmodule Livechain.Config.ConfigStore do
 
   @config_table :livechain_config_store
   @chains_key :chains
+  @chain_ids_key :chain_ids
 
   ## Public API
 
@@ -90,6 +91,59 @@ defmodule Livechain.Config.ConfigStore do
     case :ets.lookup(@config_table, @chains_key) do
       [{@chains_key, chains}] -> chains
       [] -> %{}
+    end
+  end
+
+  @doc """
+  Gets a chain configuration by chain name or chain ID.
+
+  Accepts either a chain name (string) or a chain ID (integer or numeric string).
+  Returns the normalized chain name along with the chain configuration.
+  """
+  @spec get_chain_by_name_or_id(String.t() | integer()) ::
+          {:ok, {String.t(), ChainConfig.t()}} | {:error, :not_found | :invalid_format}
+  def get_chain_by_name_or_id(chain_id) when is_integer(chain_id) do
+    find_chain_by_id(chain_id)
+  end
+
+  def get_chain_by_name_or_id(chain_name) when is_binary(chain_name) do
+    case :ets.lookup(@config_table, @chains_key) do
+      [{@chains_key, chains}] ->
+        case Map.get(chains, chain_name) do
+          nil ->
+            # Not found by name, try parsing as numeric chain ID
+            case Integer.parse(chain_name) do
+              {chain_id, ""} -> find_chain_by_id(chain_id)
+              _ -> {:error, :invalid_format}
+            end
+
+          chain_config ->
+            {:ok, {chain_name, chain_config}}
+        end
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  # Private helper to find chain by numeric ID using O(1) index lookup
+  defp find_chain_by_id(chain_id) do
+    case :ets.lookup(@config_table, @chain_ids_key) do
+      [{@chain_ids_key, id_index}] ->
+        case Map.get(id_index, chain_id) do
+          nil ->
+            {:error, :not_found}
+
+          chain_name ->
+            # Get the actual config using the chain name
+            case get_chain(chain_name) do
+              {:ok, chain_config} -> {:ok, {chain_name, chain_config}}
+              error -> error
+            end
+        end
+
+      [] ->
+        {:error, :not_found}
     end
   end
 
@@ -203,8 +257,24 @@ defmodule Livechain.Config.ConfigStore do
   defp load_and_store_config(config_path) do
     case ChainConfig.load_config(config_path) do
       {:ok, config} ->
-        # Store chains configuration atomically
-        :ets.insert(@config_table, {@chains_key, config.chains})
+        # Build chain_id -> chain_name index for O(1) ID lookups
+        chain_id_index =
+          Enum.reduce(config.chains, %{}, fn {chain_name, chain_config}, acc ->
+            case Map.get(chain_config, :chain_id) do
+              chain_id when is_integer(chain_id) ->
+                Map.put(acc, chain_id, chain_name)
+
+              _ ->
+                acc
+            end
+          end)
+
+        # Store both chains and ID index atomically
+        :ets.insert(@config_table, [
+          {@chains_key, config.chains},
+          {@chain_ids_key, chain_id_index}
+        ])
+
         :ok
 
       {:error, reason} ->
