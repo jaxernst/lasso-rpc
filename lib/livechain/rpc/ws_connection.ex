@@ -75,19 +75,6 @@ defmodule Livechain.RPC.WSConnection do
     GenServer.call(via_name(connection_id), :status)
   end
 
-  @doc """
-  Performs a health check request to a provider endpoint.
-  Used by ProviderPool for active health monitoring.
-  """
-  def health_check_request(endpoint, method \\ "eth_chainId", params \\ []) do
-    Livechain.RPC.HttpClient.request(
-      %{url: endpoint.url, api_key: endpoint.api_key},
-      method,
-      params,
-      5_000
-    )
-  end
-
   # Server Callbacks
 
   @impl true
@@ -215,7 +202,7 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def handle_info({:ws_connected}, state) do
-    Logger.info("Connected to WebSocket: #{state.endpoint.name}")
+    Logger.debug("Connected to WebSocket: #{state.endpoint.name}")
 
     # Report successful connection to circuit breaker
     CircuitBreaker.record_success(state.endpoint.id)
@@ -232,6 +219,8 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def handle_info({:ws_message, decoded}, state) do
+    IO.inspect({decoded, state})
+
     case handle_websocket_message(decoded, state) do
       {:ok, new_state} -> {:noreply, new_state}
       new_state -> {:noreply, new_state}
@@ -301,28 +290,6 @@ defmodule Livechain.RPC.WSConnection do
   end
 
   @impl true
-  def terminate(reason, state) do
-    Logger.info(
-      "Terminating WebSocket connection #{state.endpoint.id}, reason: #{inspect(reason)}"
-    )
-
-    # Clean up heartbeat timer
-    if state.heartbeat_ref do
-      Process.cancel_timer(state.heartbeat_ref)
-    end
-
-    # Clean up reconnect timer
-    if state.reconnect_ref do
-      Process.cancel_timer(state.reconnect_ref)
-    end
-
-    # Notify of disconnection
-    broadcast_status_change(state, :terminated)
-
-    :ok
-  end
-
-  @impl true
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
     Logger.warning("WebSocket connection lost: #{inspect(reason)}")
 
@@ -342,6 +309,28 @@ defmodule Livechain.RPC.WSConnection do
     broadcast_status_change(state, :disconnected)
     state = schedule_reconnect(state)
     {:noreply, state}
+  end
+
+  @impl true
+  def terminate(reason, state) do
+    Logger.info(
+      "Terminating WebSocket connection #{state.endpoint.id}, reason: #{inspect(reason)}"
+    )
+
+    # Clean up heartbeat timer
+    if state.heartbeat_ref do
+      Process.cancel_timer(state.heartbeat_ref)
+    end
+
+    # Clean up reconnect timer
+    if state.reconnect_ref do
+      Process.cancel_timer(state.reconnect_ref)
+    end
+
+    # Notify of disconnection
+    broadcast_status_change(state, :terminated)
+
+    :ok
   end
 
   # WebSocket event handlers - these are now handled by WSHandler
@@ -625,15 +614,28 @@ defmodule Livechain.RPC.WSConnection do
 
   # Helper function to properly classify WebSocket errors before reporting to CircuitBreaker
   defp report_websocket_error(provider_id, error) do
-    case ErrorClassifier.classify_error(error) do
-      :infrastructure_failure ->
+    case error do
+      %Livechain.JSONRPC.Error{retriable?: true} ->
         # Infrastructure failures should trigger circuit breaker
         CircuitBreaker.call(provider_id, fn -> {:error, error} end)
 
-      :user_error ->
+      %Livechain.JSONRPC.Error{retriable?: false} ->
         # User errors should not affect circuit breaker state
         Logger.debug("WebSocket user error (not triggering circuit breaker): #{inspect(error)}")
         :ok
+
+      _ ->
+        # Fall back to ErrorClassifier for legacy error shapes
+        case ErrorClassifier.classify_error(error) do
+          :infrastructure_failure ->
+            # Infrastructure failures should trigger circuit breaker
+            CircuitBreaker.call(provider_id, fn -> {:error, error} end)
+
+          :user_error ->
+            # User errors should not affect circuit breaker state
+            Logger.debug("WebSocket user error (not triggering circuit breaker): #{inspect(error)}")
+            :ok
+        end
     end
   end
 end

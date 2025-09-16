@@ -10,6 +10,7 @@ defmodule Livechain.RPC.CircuitBreaker do
   use GenServer
   require Logger
   alias Livechain.RPC.ErrorClassifier
+  alias Livechain.JSONRPC.Error, as: JError
 
   defstruct [
     :provider_id,
@@ -198,7 +199,15 @@ defmodule Livechain.RPC.CircuitBreaker do
       {:ok, value} ->
         handle_success(value, state)
 
+      {:error, %JError{retriable?: true} = reason} ->
+        handle_failure(reason, state)
+
+      {:error, %JError{retriable?: false}} ->
+        # User/client errors don't affect circuit breaker state
+        handle_non_breaker_error(result, state)
+
       {:error, reason} ->
+        # Fall back to ErrorClassifier for legacy error shapes
         case ErrorClassifier.classify_error(reason) do
           :infrastructure_failure ->
             handle_failure(reason, state)

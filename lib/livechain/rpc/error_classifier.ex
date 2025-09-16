@@ -26,6 +26,12 @@ defmodule Livechain.RPC.ErrorClassifier do
   @spec classify_error(any()) :: :infrastructure_failure | :user_error
   def classify_error(reason) do
     case reason do
+      %Livechain.JSONRPC.Error{retriable?: true} ->
+        :infrastructure_failure
+
+      %Livechain.JSONRPC.Error{retriable?: false} ->
+        :user_error
+
       # === HTTP Client Errors (from Livechain.RPC.HttpClient.Finch) ===
       {:rate_limit, _} ->
         :infrastructure_failure

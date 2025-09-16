@@ -28,7 +28,6 @@ defmodule Livechain.RPC.Selection do
   - `:strategy` - Selection strategy (:fastest, :cheapest, :priority, :round_robin)
   - `:protocol` - Required protocol (:http, :ws, :both)
   - `:exclude` - List of provider IDs to exclude
-  - `:region`  - Optional region filter (string)
 
   Returns {:ok, provider_id} or {:error, reason}
   """
@@ -38,10 +37,9 @@ defmodule Livechain.RPC.Selection do
     strategy = Keyword.get(opts, :strategy, :cheapest)
     protocol = Keyword.get(opts, :protocol, :both)
     exclude = Keyword.get(opts, :exclude, [])
-    region = Keyword.get(opts, :region)
 
     # Try pool-based selection first
-    case pool_selection(chain_name, method, strategy, protocol, exclude, region) do
+    case pool_selection(chain_name, method, strategy, protocol, exclude) do
       {:ok, provider_id} = result ->
         Logger.debug("Selected provider via pool: #{provider_id} for #{chain_name}.#{method}")
 
@@ -61,17 +59,12 @@ defmodule Livechain.RPC.Selection do
           "Pool selection failed (#{inspect(reason)}), falling back to config-based selection"
         )
 
-        config_selection(chain_name, method, protocol, exclude, strategy, region)
+        config_selection(chain_name, method, protocol, exclude, strategy)
     end
   end
 
   @doc """
   Gets all available providers for a chain, respecting protocol requirements.
-
-  Options:
-  - `:protocol` - Required protocol (:http, :ws, :both)
-  - `:exclude` - List of provider IDs to exclude
-  - `:region`  - Optional region filter (string)
 
   Returns providers in priority order (pool-based if available, config-based otherwise).
   """
@@ -80,7 +73,6 @@ defmodule Livechain.RPC.Selection do
   def get_available_providers(chain_name, opts \\ []) do
     protocol = Keyword.get(opts, :protocol, :both)
     exclude = Keyword.get(opts, :exclude, [])
-    region = Keyword.get(opts, :region)
 
     # Try to get providers from pool first
     case ProviderPool.get_active_providers(chain_name) do
@@ -91,8 +83,7 @@ defmodule Livechain.RPC.Selection do
             chain_name,
             provider_ids,
             protocol,
-            exclude,
-            region
+            exclude
           )
 
         {:ok, filtered}
@@ -100,11 +91,11 @@ defmodule Livechain.RPC.Selection do
       {:error, reason} ->
         Logger.debug("Failed to get active providers from pool: #{inspect(reason)}")
         # Fall back to config-based provider list
-        config_based_providers(chain_name, protocol, exclude, region)
+        config_based_providers(chain_name, protocol, exclude)
 
       _ ->
         # Fall back to config-based provider list
-        config_based_providers(chain_name, protocol, exclude, region)
+        config_based_providers(chain_name, protocol, exclude)
     end
   end
 
@@ -125,8 +116,8 @@ defmodule Livechain.RPC.Selection do
   ## Private Functions
 
   # Pool-based selection (preferred when pool is available)
-  defp pool_selection(chain_name, method, strategy, protocol, exclude, region) do
-    filters = %{exclude: exclude, region: region}
+  defp pool_selection(chain_name, method, strategy, protocol, exclude) do
+    filters = %{exclude: exclude}
 
     with {:ok, provider_id} <-
            ProviderPool.get_best_provider(chain_name, strategy, method, filters),
@@ -150,8 +141,8 @@ defmodule Livechain.RPC.Selection do
   end
 
   # Config-based selection (fallback when pool is unavailable)
-  defp config_selection(chain_name, method, protocol, exclude, strategy, region) do
-    case config_based_providers(chain_name, protocol, exclude, region) do
+  defp config_selection(chain_name, method, protocol, exclude, strategy) do
+    case config_based_providers(chain_name, protocol, exclude) do
       {:ok, []} ->
         {:error, :no_available_providers}
 
@@ -189,15 +180,12 @@ defmodule Livechain.RPC.Selection do
   end
 
   # Get providers from config in priority order
-  defp config_based_providers(chain_name, protocol, exclude, region) do
+  defp config_based_providers(chain_name, protocol, exclude) do
     case ConfigStore.get_providers(chain_name) do
       {:ok, providers} ->
         available_providers =
           providers
           |> Enum.filter(fn provider -> supports_protocol?(provider, protocol) end)
-          |> Enum.filter(fn provider ->
-            is_nil(region) or Map.get(provider, :region) == region
-          end)
           |> Enum.reject(fn provider -> provider.id in exclude end)
           |> Enum.sort_by(& &1.priority)
           |> Enum.map(& &1.id)
@@ -209,23 +197,13 @@ defmodule Livechain.RPC.Selection do
     end
   end
 
-  defp filter_providers_by_protocol_and_exclusions(
-         chain_name,
-         provider_ids,
-         protocol,
-         exclude,
-         region
-       ) do
+  defp filter_providers_by_protocol_and_exclusions(chain_name, provider_ids, protocol, exclude) do
     provider_ids
     |> Enum.reject(&(&1 in exclude))
     |> Enum.filter(fn provider_id ->
       case ConfigStore.get_provider(chain_name, provider_id) do
-        {:ok, provider_config} ->
-          supports_protocol?(provider_config, protocol) and
-            (is_nil(region) or Map.get(provider_config, :region) == region)
-
-        _ ->
-          false
+        {:ok, provider_config} -> supports_protocol?(provider_config, protocol)
+        _ -> false
       end
     end)
   end

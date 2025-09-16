@@ -2,8 +2,7 @@ defmodule LivechainWeb.RPCSocket do
   @moduledoc """
   WebSocket handler for standard Ethereum JSON-RPC.
 
-  # TODO: 'Viem compatible' is the wrong way to describe this. 'Viem compatible' just means that it follows the ethereum JSON-RPC spec.
-  Provides Viem-compatible WebSocket endpoints at:
+  Provides Ethereum JSON-RPC WebSocket endpoints at:
   - /rpc/ethereum
   - /rpc/arbitrum
   - /rpc/polygon
@@ -13,6 +12,10 @@ defmodule LivechainWeb.RPCSocket do
   - eth_getLogs
   - eth_getBlockByNumber
   - eth_getTransactionReceipt
+
+
+  # TODO: Need to ensure we are connected to at least one provider for the target chain when connecting
+          if not providers are available to connect, we should disconnect the client
   """
 
   use Phoenix.Socket
@@ -21,32 +24,23 @@ defmodule LivechainWeb.RPCSocket do
   ## Channels
   channel("rpc:*", LivechainWeb.RPCChannel)
 
-  @impl true
-  def connect(_params, socket, connect_info) do
-    # Extract chain from the socket path
-    chain = extract_chain_from_connect_info(connect_info)
+  def connect(%{"chain_id" => chain_identifier}, socket, connect_info) do
+    case Livechain.Config.ConfigStore.get_chain_by_name_or_id(chain_identifier) do
+      {:ok, {chain_name, _chain_config}} ->
+        Logger.info("JSON-RPC client connected to chain: #{chain_name}")
+        socket = assign(socket, :chain, chain_name)
 
-    case valid_chain?(chain) do
-      true ->
-        Logger.info("JSON-RPC client connected to chain: #{chain}")
-        socket = assign(socket, :chain, chain)
-
-        publish_client_event(:client_connected, chain, connect_info)
+        publish_client_event(:client_connected, chain_name, connect_info)
 
         {:ok, socket}
 
-      false ->
-        Logger.warning("Invalid chain requested: #{chain}")
+      _ ->
+        Logger.warning("Invalid chain requested: #{inspect(chain_identifier)}")
         :error
     end
   end
 
-  @impl true
-  def terminate(_reason, socket) do
-    chain = Map.get(socket.assigns, :chain, "unknown")
-    publish_client_event(:client_disconnected, chain, %{})
-    :ok
-  end
+  def id(socket), do: "rpc_socket:#{socket.assigns.chain}"
 
   defp publish_client_event(event, chain, connect_info) do
     remote_ip =
@@ -69,66 +63,5 @@ defmodule LivechainWeb.RPCSocket do
         remote_ip: remote_ip
       }
     )
-  end
-
-  defp extract_chain_from_connect_info(connect_info) do
-    Logger.info("DEBUG: connect_info = #{inspect(connect_info)}")
-
-    # First, try to extract chain from route parameters (new parameterized route)
-    result =
-      case connect_info do
-        %{params: %{"chain_id" => chain_id}} when is_binary(chain_id) ->
-          Logger.info("DEBUG: Found chain_id in params: #{chain_id}")
-          chain_id
-
-        %{uri: %{path: path}} when is_binary(path) ->
-          Logger.info("DEBUG: Falling back to path extraction: #{path}")
-          # Fallback: extract from path for legacy routes
-          case String.split(path, "/") do
-            # Handle /ws/rpc/:chain_id pattern
-            ["", "ws", "rpc", chain | _] ->
-              Logger.info("DEBUG: Extracted from ws path: #{chain}")
-              chain
-
-            # Handle legacy /rpc/:chain pattern
-            ["", "rpc", chain | _] ->
-              Logger.info("DEBUG: Extracted from rpc path: #{chain}")
-              chain
-
-            _ ->
-              Logger.info(
-                "DEBUG: Path didn't match patterns: #{inspect(String.split(path, "/"))}"
-              )
-
-              "unknown"
-          end
-
-        _ ->
-          Logger.info("DEBUG: Trying alternative params structure")
-          # Last fallback: try params with different key
-          case connect_info do
-            %{params: %{"chain" => chain}} ->
-              Logger.info("DEBUG: Found 'chain' in params: #{chain}")
-              chain
-
-            _ ->
-              Logger.info("DEBUG: No chain found in any location")
-              "unknown"
-          end
-      end
-
-    Logger.info("DEBUG: Final extracted chain: #{result}")
-    result
-  end
-
-  @impl true
-  def id(socket), do: "rpc_socket:#{socket.assigns.chain}"
-
-  # Validate chain against configured chains using ConfigStore (no file I/O on hot path)
-  defp valid_chain?(chain) do
-    case Livechain.Config.ConfigStore.get_chain(chain) do
-      {:ok, _} -> true
-      _ -> false
-    end
   end
 end

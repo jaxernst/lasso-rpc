@@ -11,6 +11,7 @@ defmodule Livechain.RPC.Failover do
   alias Livechain.RPC.{Selection, ChainSupervisor, ProviderPool, ErrorClassifier}
   alias Livechain.Benchmarking.BenchmarkStore
   alias Livechain.Config.MethodPolicy
+  alias Livechain.JSONRPC.Error, as: JError
 
   @doc """
   Executes an RPC request with automatic failover on failure.
@@ -33,11 +34,7 @@ defmodule Livechain.RPC.Failover do
     region_filter = Keyword.get(opts, :region_filter)
 
     with {:ok, provider_id} <-
-           Selection.pick_provider(chain, method,
-             strategy: strategy,
-             protocol: protocol,
-             region: region_filter
-           ) do
+           Selection.pick_provider(chain, method, strategy: strategy, protocol: protocol) do
       execute_rpc_with_failover(
         chain,
         method,
@@ -49,7 +46,7 @@ defmodule Livechain.RPC.Failover do
       )
     else
       {:error, reason} ->
-        {:error, %{code: -32000, message: "No available providers: #{reason}"}}
+        {:error, JError.new(-32000, "No available providers: #{reason}")}
     end
   end
 
@@ -105,7 +102,13 @@ defmodule Livechain.RPC.Failover do
         duration_ms = System.monotonic_time(:millisecond) - start_time
         record_failure_metrics(chain, provider_id, method, strategy, reason, duration_ms)
 
-        case ErrorClassifier.should_failover?(reason) do
+        should_failover =
+          case reason do
+            %Livechain.JSONRPC.Error{retriable?: retriable?} -> retriable?
+            _ -> ErrorClassifier.should_failover?(reason)
+          end
+
+        case should_failover do
           true ->
             try_failover_with_reporting(
               chain,
@@ -132,7 +135,7 @@ defmodule Livechain.RPC.Failover do
          strategy,
          excluded_providers,
          attempt,
-         region_filter,
+         _region_filter,
          protocol
        ) do
     max_attempts = MethodPolicy.max_failovers(method)
@@ -141,8 +144,7 @@ defmodule Livechain.RPC.Failover do
          {:ok, providers} <-
            Selection.get_available_providers(chain,
              protocol: protocol,
-             exclude: excluded_providers,
-             region: region_filter
+             exclude: excluded_providers
            ),
          {:providers_available, [next_provider | _]} <- {:providers_available, providers} do
       Logger.warning("Failing over to provider",
@@ -163,13 +165,13 @@ defmodule Livechain.RPC.Failover do
       )
     else
       {:attempt_limit, true} ->
-        {:error, %{code: -32_000, message: "Failover limit reached for method: #{method}"}}
+        {:error, JError.new(-32000, "Failover limit reached for method: #{method}")}
 
       {:providers_available, []} ->
-        {:error, %{code: -32_000, message: "All providers failed for method: #{method}"}}
+        {:error, JError.new(-32000, "All providers failed for method: #{method}")}
 
       {:error, reason} ->
-        {:error, %{code: -32_000, message: "Failed to get available providers: #{reason}"}}
+        {:error, JError.new(-32000, "Failed to get available providers: #{reason}")}
     end
   end
 
@@ -213,7 +215,13 @@ defmodule Livechain.RPC.Failover do
           attempt
         )
 
-        case ErrorClassifier.should_failover?(reason) do
+        should_failover =
+          case reason do
+            %Livechain.JSONRPC.Error{retriable?: retriable?} -> retriable?
+            _ -> ErrorClassifier.should_failover?(reason)
+          end
+
+        case should_failover do
           true ->
             try_failover_with_reporting(
               chain,

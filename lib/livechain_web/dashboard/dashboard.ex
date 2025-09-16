@@ -788,7 +788,7 @@ defmodule LivechainWeb.Dashboard do
                         _ -> "bg-gray-400"
                       end
                     ]}></div>
-                    <span class="font-mono text-gray-300">{to_string(event[:kind]) || "event"}</span>
+                    <span class="font-mono text-gray-300">{to_string(event[:kind])}</span>
                     <%= if event[:method] do %>
                       <span class="text-sky-400">{event[:method]}</span>
                     <% end %>

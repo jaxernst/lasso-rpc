@@ -7,8 +7,7 @@ defmodule LivechainWeb.Endpoint do
   @session_options [
     store: :cookie,
     key: "_livechain_key",
-    # TODO: Put in env var
-    signing_salt: "FvHQmKTwY0gU9P0aH8gi9M5rO4+q2qIIhpKjLlMcOqfeN4YubVHibH/rbN3e7OMH",
+    signing_salt: Application.get_env(:livechain, LivechainWeb.Endpoint)[:secret_key_base],
     same_site: "Lax"
   ]
 
@@ -18,16 +17,10 @@ defmodule LivechainWeb.Endpoint do
     longpoll: [connect_info: [session: @session_options]]
   )
 
-  # WebSocket configuration
-  socket("/socket", LivechainWeb.UserSocket,
-    websocket: true,
-    longpoll: false
-  )
-
   # JSON-RPC WebSocket endpoints with route parameters
   # Using /ws/rpc/:chain_id path to avoid conflicts with HTTP /rpc/:chain_id
-  socket("/ws/rpc/:chain_id", LivechainWeb.RPCSocket,
-    websocket: true,
+  socket("/rpc/:chain_id", LivechainWeb.RPCSocket,
+    websocket: [path: ""],
     longpoll: false
   )
 
