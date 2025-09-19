@@ -20,6 +20,7 @@ defmodule Livechain.RPC.ChainSupervisor do
 
   alias Livechain.Config.{ChainConfig, ConfigStore}
   alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker, Normalizer}
+  alias Livechain.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
 
   @doc """
   Starts a ChainSupervisor for a specific blockchain.
@@ -60,20 +61,6 @@ defmodule Livechain.RPC.ChainSupervisor do
   """
   def trigger_failover(chain_name, provider_id) do
     ProviderPool.trigger_failover(chain_name, provider_id)
-  end
-
-  @doc """
-  Sends a message to the best available provider for a chain.
-  """
-  def send_message(chain_name, message) do
-    case ProviderPool.get_best_provider(chain_name) do
-      {:ok, provider_id} ->
-        WSConnection.send_message(provider_id, message)
-
-      {:error, :no_providers_available} ->
-        Logger.error("No providers available for chain #{chain_name}")
-        {:error, :no_providers_available}
-    end
   end
 
   @doc """
@@ -149,6 +136,13 @@ defmodule Livechain.RPC.ChainSupervisor do
       # Start dynamic supervisor to manage circuit breakers
       {DynamicSupervisor,
        strategy: :one_for_one, name: circuit_breaker_supervisor_name(chain_name)},
+
+      # Start per-chain subscription registry and pool
+      {ClientSubscriptionRegistry, chain_name},
+      {UpstreamSubscriptionPool, chain_name},
+
+      # StreamSupervisor for per-key coordinators
+      {Livechain.RPC.StreamSupervisor, chain_name},
 
       # Start connection manager after dependencies
       {Task, fn -> start_provider_connections_async(chain_name, chain_config) end}

@@ -30,27 +30,17 @@ defmodule Livechain.Application do
          keys: :unique, name: Livechain.Registry, partitions: System.schedulers_online()},
 
         # Start dynamic supervisor for chain supervisors
-        {DynamicSupervisor, strategy: :one_for_one, name: Livechain.RPC.Supervisor},
+        {DynamicSupervisor, name: Livechain.RPC.Supervisor, strategy: :one_for_one},
 
         # Start configuration store for centralized config caching
         Livechain.Config.ConfigStore,
 
-        # Start the chain registry for lifecycle management only
+        # Start the chain registry for lifecycle management
         Livechain.RPC.ChainRegistry,
-
-        # Start the chain manager for blockchain orchestration
-        Livechain.RPC.ChainManager,
-
-        # Start the subscription manager for JSON-RPC subscriptions
-        Livechain.RPC.SubscriptionManager,
 
         # Start Phoenix endpoint
         LivechainWeb.Endpoint
-
-        # Add simulator to children if in dev/test
       ]
-
-    # ++ maybe_add_simulator()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     opts = [strategy: :one_for_one, name: Livechain.Supervisor]

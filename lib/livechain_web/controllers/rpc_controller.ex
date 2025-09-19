@@ -410,8 +410,12 @@ defmodule LivechainWeb.RPCController do
   # Reject WS-only methods over HTTP
   defp process_json_rpc_request(%{"method" => method}, _chain, _conn)
        when method in @ws_only_methods do
-    {:error, JError.new(-32601, "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
-      data: %{websocket_url: "/socket/websocket"})}
+    {:error,
+     JError.new(
+       -32601,
+       "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
+       data: %{websocket_url: "/socket/websocket"}
+     )}
   end
 
   # Reject stateful/account methods over HTTP
@@ -438,8 +442,7 @@ defmodule LivechainWeb.RPCController do
          opts = [conn: %Plug.Conn{params: %{"provider_override" => provider_id}}]
        )
        when is_binary(provider_id) do
-    with {:ok, strategy} <- extract_strategy(opts),
-         {:ok, region_filter} <- extract_region_filter(opts) do
+    with {:ok, strategy} <- extract_strategy(opts) do
       allow_failover? = Application.get_env(:livechain, :allow_failover_on_override, true)
 
       case Livechain.RPC.ChainSupervisor.forward_rpc_request(chain, provider_id, method, params) do
@@ -447,7 +450,7 @@ defmodule LivechainWeb.RPCController do
           {:ok, result}
 
         {:error, _} when allow_failover? ->
-          failover_opts = [strategy: strategy, protocol: :http, region_filter: region_filter]
+          failover_opts = [strategy: strategy, protocol: :http]
           Failover.execute_with_failover(chain, method, params, failover_opts)
 
         {:error, reason} ->
@@ -463,8 +466,7 @@ defmodule LivechainWeb.RPCController do
   defp forward_rpc_request(chain, method, params, opts) when is_list(opts) do
     case Keyword.get(opts, :provider_override) do
       provider_id when is_binary(provider_id) ->
-        with {:ok, strategy} <- extract_strategy(opts),
-             {:ok, region_filter} <- extract_region_filter(opts) do
+        with {:ok, strategy} <- extract_strategy(opts) do
           allow_failover? = Application.get_env(:livechain, :allow_failover_on_override, true)
 
           case Livechain.RPC.ChainSupervisor.forward_rpc_request(
@@ -477,7 +479,7 @@ defmodule LivechainWeb.RPCController do
               {:ok, result}
 
             {:error, _} when allow_failover? ->
-              failover_opts = [strategy: strategy, protocol: :http, region_filter: region_filter]
+              failover_opts = [strategy: strategy, protocol: :http]
               Failover.execute_with_failover(chain, method, params, failover_opts)
 
             {:error, reason} ->
@@ -489,9 +491,8 @@ defmodule LivechainWeb.RPCController do
         end
 
       _ ->
-        with {:ok, strategy} <- extract_strategy(opts),
-             {:ok, region_filter} <- extract_region_filter(opts) do
-          failover_opts = [strategy: strategy, protocol: :http, region_filter: region_filter]
+        with {:ok, strategy} <- extract_strategy(opts) do
+          failover_opts = [strategy: strategy, protocol: :http]
           Failover.execute_with_failover(chain, method, params, failover_opts)
         else
           {:error, reason} ->
@@ -514,19 +515,6 @@ defmodule LivechainWeb.RPCController do
       end
 
     {:ok, strategy}
-  end
-
-  defp extract_region_filter(opts) do
-    region_filter =
-      case Keyword.get(opts, :conn) do
-        %Plug.Conn{} = conn ->
-          Plug.Conn.get_req_header(conn, "x-livechain-region") |> List.first()
-
-        _ ->
-          nil
-      end
-
-    {:ok, region_filter}
   end
 
   # defp extract_provider_override/1 removed: provider overrides handled in forward_rpc_request heads

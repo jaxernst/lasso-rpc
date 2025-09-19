@@ -8,6 +8,8 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
 
   Data is stored in per-chain ETS tables with automatic cleanup to manage memory usage.
   Keeps detailed metrics for 24 hours with periodic cleanup.
+
+  Provider selection is based on method-specific latency and success rate metrics
   """
 
   use GenServer
@@ -27,19 +29,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-
-  @doc """
-  Records a racing event win for performance tracking.
-
-  ## Examples
-
-      iex> BenchmarkStore.record_event_race_win("ethereum", "infura_provider", :newHeads, timestamp)
-      :ok
-  """
-  def record_event_race_win(chain_name, provider_id, event_type, timestamp) do
-    GenServer.cast(__MODULE__, {:record_race_win, chain_name, provider_id, event_type, timestamp})
-  end
-
   @doc """
   Gets the provider leaderboard for a chain showing RPC performance.
 
@@ -56,12 +45,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     GenServer.call(__MODULE__, {:get_provider_metrics, chain_name, provider_id})
   end
 
-  @doc """
-  Gets performance metrics for a specific event type across all providers.
-  """
-  def get_event_type_performance(chain_name, event_type) do
-    GenServer.call(__MODULE__, {:get_event_type_performance, chain_name, event_type})
-  end
 
   @doc """
   Gets performance metrics for a specific RPC method across all providers.
@@ -106,13 +89,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
   """
   def clear_chain_metrics(chain_name) do
     GenServer.call(__MODULE__, {:clear_chain_metrics, chain_name})
-  end
-
-  @doc """
-  Gets racing statistics for a specific provider and event type.
-  """
-  def get_racing_stats(chain_name, provider_id, event_type) do
-    GenServer.call(__MODULE__, {:get_racing_stats, chain_name, provider_id, event_type})
   end
 
   @doc """
@@ -204,7 +180,7 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
 
   ## Parameters
     - `chain_name`: The blockchain name
-    - `provider_id`: Unique provider identifier  
+    - `provider_id`: Unique provider identifier
     - `method`: The RPC method called
     - `duration_ms`: Response time in milliseconds
     - `result`: `:success` or `:error`
@@ -234,54 +210,12 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     schedule_cleanup()
 
     state = %{
-      racing_tables: %{},
       rpc_tables: %{},
       score_tables: %{},
       chains: MapSet.new()
     }
 
     {:ok, state}
-  end
-
-  @impl true
-  def handle_cast({:record_race_win, chain_name, provider_id, event_type, timestamp}, state) do
-    new_state = ensure_tables_exist(state, chain_name)
-
-    racing_table = racing_table_name(chain_name)
-    score_table = score_table_name(chain_name)
-
-    # Check and enforce memory limits before inserting
-    enforce_table_limits(racing_table)
-
-    # Record detailed racing entry
-    :ets.insert(racing_table, {timestamp, provider_id, event_type, :win, 0})
-
-    # Update aggregated scores
-    update_score_table(score_table, provider_id, event_type, :win, 0)
-
-    {:noreply, new_state}
-  end
-
-  @impl true
-  def handle_cast(
-        {:record_race_loss, chain_name, provider_id, event_type, timestamp, margin_ms},
-        state
-      ) do
-    new_state = ensure_tables_exist(state, chain_name)
-
-    racing_table = racing_table_name(chain_name)
-    score_table = score_table_name(chain_name)
-
-    # Check and enforce memory limits before inserting
-    enforce_table_limits(racing_table)
-
-    # Record detailed racing entry
-    :ets.insert(racing_table, {timestamp, provider_id, event_type, :loss, margin_ms})
-
-    # Update aggregated scores
-    update_score_table(score_table, provider_id, event_type, :loss, margin_ms)
-
-    {:noreply, new_state}
   end
 
   @impl true
@@ -333,11 +267,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     # 24 hours ago - use monotonic time for consistency
     cutoff_time = System.monotonic_time(:millisecond) - 24 * 60 * 60 * 1000
 
-    # Clean racing table
-    if Map.has_key?(state.racing_tables, chain_name) do
-      racing_table = racing_table_name(chain_name)
-      cleanup_table_by_timestamp(racing_table, cutoff_time, 0)
-    end
 
     # Clean RPC table
     if Map.has_key?(state.rpc_tables, chain_name) do
@@ -390,17 +319,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     {:reply, result, state}
   end
 
-  @impl true
-  def handle_call({:get_event_type_performance, chain_name, event_type}, _from, state) do
-    result =
-      if Map.has_key?(state.racing_tables, chain_name) do
-        get_event_performance_stats(chain_name, event_type)
-      else
-        %{}
-      end
-
-    {:reply, result, state}
-  end
 
   @impl true
   def handle_call({:get_rpc_method_performance, chain_name, method}, _from, state) do
@@ -446,10 +364,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
 
   @impl true
   def handle_call({:clear_chain_metrics, chain_name}, _from, state) do
-    if Map.has_key?(state.racing_tables, chain_name) do
-      racing_table = racing_table_name(chain_name)
-      :ets.delete(racing_table)
-    end
 
     if Map.has_key?(state.rpc_tables, chain_name) do
       rpc_table = rpc_table_name(chain_name)
@@ -463,39 +377,12 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
 
     new_state = %{
       state
-      | racing_tables: Map.delete(state.racing_tables, chain_name),
-        rpc_tables: Map.delete(state.rpc_tables, chain_name),
+      | rpc_tables: Map.delete(state.rpc_tables, chain_name),
         score_tables: Map.delete(state.score_tables, chain_name),
         chains: MapSet.delete(state.chains, chain_name)
     }
 
     {:reply, :ok, new_state}
-  end
-
-  @impl true
-  def handle_call({:get_racing_stats, chain_name, provider_id, event_type}, _from, state) do
-    result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        score_table = score_table_name(chain_name)
-        key = {provider_id, event_type, :racing}
-
-        case :ets.lookup(score_table, key) do
-          [{_key, wins, total, avg_margin, _samples, _last_updated}] ->
-            %{
-              wins: wins,
-              total_races: total,
-              win_rate: if(total > 0, do: wins / total, else: 0.0),
-              avg_loss_margin: avg_margin
-            }
-
-          [] ->
-            %{wins: 0, total_races: 0, win_rate: 0.0, avg_loss_margin: 0}
-        end
-      else
-        %{wins: 0, total_races: 0, win_rate: 0.0, avg_loss_margin: 0}
-      end
-
-    {:reply, result, state}
   end
 
   @impl true
@@ -588,36 +475,26 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
       if Map.has_key?(state.score_tables, chain_name) do
         score_table = score_table_name(chain_name)
 
-        # Get all racing entries for this provider
-        racing_entries =
+        # Get all RPC entries for this provider
+        rpc_entries =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{pid, _event_type, type}, _wins, _total, _avg, _samples, _updated} ->
-            pid == provider_id and type == :racing
+          |> Enum.filter(fn {{pid, _method, type}, _successes, _total, _avg, _samples, _updated} ->
+            pid == provider_id and type == :rpc
           end)
 
-        # Calculate composite score
-        if length(racing_entries) > 0 do
-          total_wins =
-            Enum.reduce(racing_entries, 0, fn {_key, wins, _total, _avg, _samples, _updated},
-                                              acc ->
-              acc + wins
+        # Calculate composite score based on RPC performance
+        if length(rpc_entries) > 0 do
+          {total_successes, total_calls, weighted_avg_latency} =
+            Enum.reduce(rpc_entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total, avg_duration, _samples, _updated},
+                                                     {acc_successes, acc_total, acc_latency} ->
+              {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total}
             end)
 
-          total_races =
-            Enum.reduce(racing_entries, 0, fn {_key, _wins, total, _avg, _samples, _updated},
-                                              acc ->
-              acc + total
-            end)
+          success_rate = if total_calls > 0, do: total_successes / total_calls, else: 0.0
+          avg_latency = if total_calls > 0, do: weighted_avg_latency / total_calls, else: 0.0
 
-          avg_margin =
-            Enum.reduce(racing_entries, 0, fn {_key, _wins, _total, avg, _samples, _updated},
-                                              acc ->
-              acc + avg
-            end) / length(racing_entries)
-
-          win_rate = if total_races > 0, do: total_wins / total_races, else: 0.0
-          calculate_provider_score(win_rate, avg_margin, total_races)
+          calculate_rpc_provider_score(success_rate, avg_latency, total_calls)
         else
           0.0
         end
@@ -900,10 +777,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     total_size =
       state.chains
       |> Enum.map(fn chain_name ->
-        racing_size =
-          if Map.has_key?(state.racing_tables, chain_name),
-            do: :ets.info(racing_table_name(chain_name), :size) || 0,
-            else: 0
 
         rpc_size =
           if Map.has_key?(state.rpc_tables, chain_name),
@@ -915,7 +788,7 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
             do: :ets.info(score_table_name(chain_name), :size) || 0,
             else: 0
 
-        racing_size + rpc_size + score_size
+        rpc_size + score_size
       end)
       |> Enum.sum()
 
@@ -1108,78 +981,22 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     else
       Logger.info("Creating benchmark tables for chain: #{chain_name}")
 
-      racing_table = racing_table_name(chain_name)
       rpc_table = rpc_table_name(chain_name)
       score_table = score_table_name(chain_name)
 
-      # Create ETS tables
-      :ets.new(racing_table, [:public, :named_table, :bag, :compressed])
+      # Create ETS tables (no racing table needed)
       :ets.new(rpc_table, [:public, :named_table, :bag, :compressed])
       :ets.new(score_table, [:public, :named_table, :set, :compressed])
 
       %{
         state
-        | racing_tables: Map.put(state.racing_tables, chain_name, racing_table),
-          rpc_tables: Map.put(state.rpc_tables, chain_name, rpc_table),
+        | rpc_tables: Map.put(state.rpc_tables, chain_name, rpc_table),
           score_tables: Map.put(state.score_tables, chain_name, score_table),
           chains: MapSet.put(state.chains, chain_name)
       }
     end
   end
 
-  defp update_score_table(score_table, provider_id, event_type, result, margin_ms) do
-    key = {provider_id, event_type, :racing}
-
-    try do
-      case :ets.lookup(score_table, key) do
-        [] ->
-          # First entry for this provider/event_type combination
-          wins = if result == :win, do: 1, else: 0
-          total = 1
-          avg_margin = margin_ms
-
-          :ets.insert(
-            score_table,
-            {key, wins, total, avg_margin, [], System.monotonic_time(:millisecond)}
-          )
-
-        [{_key, wins, total, avg_margin, _samples, _last_updated}] ->
-          # Update existing entry
-          new_wins = if result == :win, do: wins + 1, else: wins
-          new_total = total + 1
-          new_avg_margin = (avg_margin * total + margin_ms) / new_total
-
-          :ets.insert(
-            score_table,
-            {key, new_wins, new_total, new_avg_margin, [], System.monotonic_time(:millisecond)}
-          )
-
-        multiple_entries ->
-          Logger.warning(
-            "Multiple score entries found for #{inspect(key)}: #{length(multiple_entries)}"
-          )
-
-          # Use the first entry and continue
-          [{_key, wins, total, avg_margin, _samples, _last_updated}] =
-            Enum.take(multiple_entries, 1)
-
-          new_wins = if result == :win, do: wins + 1, else: wins
-          new_total = total + 1
-          new_avg_margin = (avg_margin * total + margin_ms) / new_total
-
-          :ets.insert(
-            score_table,
-            {key, new_wins, new_total, new_avg_margin, [], System.monotonic_time(:millisecond)}
-          )
-      end
-    rescue
-      e ->
-        Logger.error("Error updating score table for #{inspect(key)}: #{inspect(e)}")
-    catch
-      :exit, reason ->
-        Logger.error("Score table access error for #{inspect(key)}: #{inspect(reason)}")
-    end
-  end
 
   defp update_rpc_scores(score_table, provider_id, method, duration_ms, result) do
     key = {provider_id, method, :rpc}
@@ -1325,38 +1142,43 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
   defp calculate_leaderboard(chain_name) do
     score_table = score_table_name(chain_name)
 
-    # Get all racing scores grouped by provider
-    racing_scores =
+    # Get all RPC scores grouped by provider
+    rpc_scores =
       score_table
       |> :ets.tab2list()
-      |> Enum.filter(fn {{_provider_id, _event_type, type}, _wins, _total, _avg, _samples,
+      |> Enum.filter(fn {{_provider_id, _method, type}, _successes, _total, _avg_duration, _samples,
                          _updated} ->
-        type == :racing
+        type == :rpc
       end)
-      |> Enum.group_by(fn {{provider_id, _event_type, _type}, _wins, _total, _avg, _samples,
+      |> Enum.group_by(fn {{provider_id, _method, _type}, _successes, _total, _avg_duration, _samples,
                            _updated} ->
         provider_id
       end)
 
-    # Calculate overall scores for each provider
-    Enum.map(racing_scores, fn {provider_id, entries} ->
-      {total_wins, total_races, weighted_avg_margin} =
-        Enum.reduce(entries, {0, 0, 0.0}, fn {{_pid, _et, _type}, wins, total, avg_margin,
+    # Calculate overall scores for each provider based on RPC latency metrics
+    Enum.map(rpc_scores, fn {provider_id, entries} ->
+      {total_successes, total_calls, weighted_avg_latency} =
+        Enum.reduce(entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total, avg_duration,
                                               _samples, _updated},
-                                             {acc_wins, acc_total, acc_margin} ->
-          {acc_wins + wins, acc_total + total, acc_margin + avg_margin * total}
+                                             {acc_successes, acc_total, acc_latency} ->
+          {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total}
         end)
 
-      win_rate = if total_races > 0, do: total_wins / total_races, else: 0.0
-      avg_margin = if total_races > 0, do: weighted_avg_margin / total_races, else: 0.0
+      success_rate = if total_calls > 0, do: total_successes / total_calls, else: 0.0
+      avg_latency = if total_calls > 0, do: weighted_avg_latency / total_calls, else: 0.0
 
       %{
         provider_id: provider_id,
-        total_wins: total_wins,
-        total_races: total_races,
-        win_rate: win_rate,
-        avg_margin_ms: avg_margin,
-        score: calculate_provider_score(win_rate, avg_margin, total_races)
+        total_calls: total_calls,
+        total_successes: total_successes,
+        success_rate: success_rate,
+        avg_latency_ms: avg_latency,
+        # For backward compatibility, include legacy fields mapped to RPC equivalents
+        total_wins: total_successes,
+        total_races: total_calls,
+        win_rate: success_rate,
+        avg_margin_ms: avg_latency,
+        score: calculate_rpc_provider_score(success_rate, avg_latency, total_calls)
       }
     end)
     |> Enum.sort_by(& &1.score, :desc)
@@ -1413,36 +1235,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     }
   end
 
-  defp get_event_performance_stats(chain_name, event_type) do
-    score_table = score_table_name(chain_name)
-
-    # Get all racing entries for this event type
-    event_entries =
-      score_table
-      |> :ets.tab2list()
-      |> Enum.filter(fn {{_pid, et, type}, _wins, _total, _avg, _samples, _updated} ->
-        type == :racing and et == event_type
-      end)
-
-    provider_stats =
-      Enum.map(event_entries, fn {{provider_id, _et, _type}, wins, total, avg_margin, _samples,
-                                  last_updated} ->
-        %{
-          provider_id: provider_id,
-          wins: wins,
-          total_races: total,
-          win_rate: if(total > 0, do: wins / total, else: 0.0),
-          avg_margin_ms: avg_margin,
-          last_updated: last_updated
-        }
-      end)
-      |> Enum.sort_by(& &1.win_rate, :desc)
-
-    %{
-      event_type: event_type,
-      providers: provider_stats
-    }
-  end
 
   defp get_rpc_performance_stats(chain_name, method) do
     score_table = score_table_name(chain_name)
@@ -1516,16 +1308,20 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     }
   end
 
-  defp calculate_provider_score(win_rate, avg_margin_ms, total_races) do
-    # Simple scoring algorithm - can be enhanced later
-    # Higher win rate is better, lower margin is better, more races gives confidence
-    confidence_factor = :math.log10(max(total_races, 1))
-    margin_penalty = if avg_margin_ms > 0, do: 1 / (1 + avg_margin_ms / 100), else: 1.0
 
-    win_rate * margin_penalty * confidence_factor
+  defp calculate_rpc_provider_score(success_rate, avg_latency_ms, total_calls) do
+    # RPC-based scoring algorithm - optimized for performance
+    # Higher success rate is better, lower latency is better, more calls gives confidence
+    confidence_factor = :math.log10(max(total_calls, 1))
+
+    # Penalize latency: providers with lower latency get higher scores
+    # Use 1000ms as baseline - anything faster gets bonus, slower gets penalty
+    latency_factor = if avg_latency_ms > 0, do: 1000 / (1000 + avg_latency_ms), else: 1.0
+
+    # Heavily weight success rate and latency
+    success_rate * latency_factor * confidence_factor
   end
 
-  defp racing_table_name(chain_name), do: :"racing_metrics_#{chain_name}"
   defp rpc_table_name(chain_name), do: :"rpc_metrics_#{chain_name}"
   defp score_table_name(chain_name), do: :"provider_scores_#{chain_name}"
 

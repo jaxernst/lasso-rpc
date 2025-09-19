@@ -8,6 +8,9 @@ defmodule Livechain.RPC.ProviderPool do
   - Provider priority and reliability scores
   - Rate limiting and error rates
   - Automatic failover on provider failures
+
+  # TODO: This module should not store 'chain config' in state (should use config store). Functions using this chain config need to be refactored
+  # TODO: 'Trigger failover' is not actually used anywhere? (chain_supervisor also has a 'trigger_failover' function, but that's not used anywhere either)
   """
 
   use GenServer
@@ -80,14 +83,6 @@ defmodule Livechain.RPC.ProviderPool do
   @spec register_provider(chain_name, provider_id, pid(), map()) :: :ok
   def register_provider(chain_name, provider_id, pid, provider_config) do
     GenServer.call(via_name(chain_name), {:register_provider, provider_id, pid, provider_config})
-  end
-
-  @doc """
-  Gets the best available provider based on current global load balancing strategy.
-  """
-  @spec get_best_provider(chain_name) :: {:ok, provider_id} | {:error, term()}
-  def get_best_provider(chain_name) do
-    GenServer.call(via_name(chain_name), :get_best_provider)
   end
 
   @doc """
@@ -212,17 +207,6 @@ defmodule Livechain.RPC.ProviderPool do
 
     Logger.info("Registered provider #{provider_id} for #{state.chain_name}")
     {:reply, :ok, new_state}
-  end
-
-  @impl true
-  def handle_call(:get_best_provider, _from, state) do
-    case select_best_provider(state) do
-      nil ->
-        {:reply, {:error, :no_providers_available}, state}
-
-      provider_id ->
-        {:reply, {:ok, provider_id}, state}
-    end
   end
 
   @impl true
@@ -396,13 +380,6 @@ defmodule Livechain.RPC.ProviderPool do
     |> Enum.filter(&(&1.status in [:healthy, :connecting]))
     |> Enum.filter(&(is_nil(&1.cooldown_until) or &1.cooldown_until <= current_time))
     |> Enum.filter(fn provider ->
-      case Map.get(filters, :region) do
-        nil -> true
-        region when is_binary(region) -> provider.config.region == region
-        _ -> true
-      end
-    end)
-    |> Enum.filter(fn provider ->
       case Map.get(state.circuit_states, provider.id) do
         :open -> false
         _ -> true
@@ -417,48 +394,7 @@ defmodule Livechain.RPC.ProviderPool do
     end)
   end
 
-  defp select_best_provider(state) do
-    providers = candidates_ready(state)
-
-    case providers do
-      [] ->
-        fallback_providers =
-          state.active_providers
-          |> Enum.map(&Map.get(state.providers, &1))
-          |> Enum.filter(&(&1.status in [:connecting, :unhealthy]))
-
-        case fallback_providers do
-          [] -> nil
-          [provider | _] -> provider.id
-        end
-
-      providers ->
-        case load_balancing_mode(state) do
-          "priority" ->
-            providers
-            |> Enum.sort_by(& &1.config.priority)
-            |> List.first()
-            |> Map.get(:id)
-
-          "fastest" ->
-            choose_fastest_provider_with_benchmarks(state, providers)
-
-          "round_robin" ->
-            providers
-            |> Enum.sort_by(& &1.id)
-            |> Enum.at(rem(state.stats.total_requests, length(providers)))
-            |> Map.get(:id)
-
-          _ ->
-            providers
-            |> Enum.sort_by(& &1.config.priority)
-            |> List.first()
-            |> Map.get(:id)
-        end
-    end
-  end
-
-  defp select_best_provider_by_strategy(state, strategy, _method, filters) do
+  defp select_best_provider_by_strategy(state, strategy, method, filters) do
     providers = candidates_ready(state, filters)
 
     case providers do
@@ -480,30 +416,7 @@ defmodule Livechain.RPC.ProviderPool do
             |> Map.get(:id)
 
           :fastest ->
-            choose_fastest_provider_with_benchmarks(state, providers)
-
-          :leaderboard ->
-            # Alias for fastest - uses benchmark data for selection
-            choose_fastest_provider_with_benchmarks(state, providers)
-
-          :latency ->
-            # Choose provider with lowest average latency, meeting success rate threshold
-            providers
-            |> Enum.filter(&(&1.success_rate >= 0.95))
-            |> case do
-              [] ->
-                # Fallback to priority if no provider meets success threshold
-                providers
-                |> Enum.sort_by(& &1.config.priority)
-                |> List.first()
-                |> Map.get(:id)
-
-              filtered_providers ->
-                filtered_providers
-                |> Enum.sort_by(& &1.avg_latency_ms)
-                |> List.first()
-                |> Map.get(:id)
-            end
+            choose_fastest_provider_with_benchmarks(state, providers, method)
 
           :cheapest ->
             # Prefer public providers; if none, fallback to paid
@@ -530,13 +443,13 @@ defmodule Livechain.RPC.ProviderPool do
     |> Map.get(:id)
   end
 
-  defp choose_fastest_provider_with_benchmarks(state, providers) do
-    # Get provider leaderboard data from BenchmarkStore
-    case BenchmarkStore.get_provider_leaderboard(state.chain_name) do
-      [] ->
-        # Fall back to priority-based selection when no benchmark data available
+  defp choose_fastest_provider_with_benchmarks(state, providers, method \\ nil) do
+    # Use method-specific RPC performance data when available
+    case method do
+      nil ->
+        # No specific method provided, fall back to priority
         Logger.debug(
-          "No benchmark data available for #{state.chain_name}, falling back to priority"
+          "No method specified for #{state.chain_name}, falling back to priority"
         )
 
         providers
@@ -544,36 +457,51 @@ defmodule Livechain.RPC.ProviderPool do
         |> List.first()
         |> Map.get(:id)
 
-      leaderboard ->
-        # Filter providers by those in our available list and sort by performance score
-        provider_ids = MapSet.new(Enum.map(providers, & &1.id))
+      method_name ->
+        # Get method-specific performance data from BenchmarkStore
+        case BenchmarkStore.get_rpc_method_performance(state.chain_name, method_name) do
+          %{providers: [_ | _] = method_stats} ->
+            # Filter to only providers in our available list and choose fastest
+            provider_ids = MapSet.new(Enum.map(providers, & &1.id))
 
-        best_provider =
-          leaderboard
-          |> Enum.filter(&MapSet.member?(provider_ids, &1.provider_id))
-          # Quality filter
-          |> Enum.filter(&(&1.win_rate > 0.95 and &1.total_races > 5))
-          |> Enum.sort_by(& &1.score, :desc)
-          |> List.first()
+            best_provider =
+              method_stats
+              |> Enum.filter(&MapSet.member?(provider_ids, &1.provider_id))
+              # Quality filter: require reasonable success rate and some call history
+              |> Enum.filter(&(&1.success_rate > 0.95 and &1.total_calls >= 1))
+              # Already sorted by avg_duration_ms ascending (fastest first)
+              |> List.first()
 
-        case best_provider do
-          nil ->
-            # Fall back to priority if no provider meets quality threshold
+            case best_provider do
+              nil ->
+                # Fall back to priority if no provider meets quality threshold
+                Logger.debug(
+                  "No providers meet quality threshold for #{state.chain_name}.#{method_name}, falling back to priority"
+                )
+
+                providers
+                |> Enum.sort_by(& &1.config.priority)
+                |> List.first()
+                |> Map.get(:id)
+
+              provider ->
+                Logger.debug(
+                  "Selected fastest provider for #{state.chain_name}.#{method_name}: #{provider.provider_id} (#{provider.avg_duration_ms}ms avg)"
+                )
+
+                provider.provider_id
+            end
+
+          _ ->
+            # Fall back to priority-based selection when no benchmark data available
             Logger.debug(
-              "No providers meet quality threshold for #{state.chain_name}, falling back to priority"
+              "No method-specific benchmark data available for #{state.chain_name}.#{method_name}, falling back to priority"
             )
 
             providers
             |> Enum.sort_by(& &1.config.priority)
             |> List.first()
             |> Map.get(:id)
-
-          provider ->
-            Logger.debug(
-              "Selected fastest provider for #{state.chain_name}: #{provider.provider_id} (score: #{provider.score})"
-            )
-
-            provider.provider_id
         end
     end
   end
@@ -1029,6 +957,7 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   # Config helpers with safe defaults
+
   defp global_config(state) do
     Map.get(state.chain_config, :global, %{
       health_check: %{

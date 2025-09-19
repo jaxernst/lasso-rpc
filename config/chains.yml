@@ -222,64 +222,64 @@ chains:
       backfill_timeout: 30000
       enabled: true
 
-  optimism:
-    chain_id: 10
-    name: "Optimism Mainnet"
+  # optimism:
+  #   chain_id: 10
+  #   name: "Optimism Mainnet"
 
-    providers:
-      - id: "optimism_ankr"
-        name: "Ankr Optimism"
-        priority: 1
-        type: "public"
-        url: "https://rpc.ankr.com/optimism"
-        api_key_required: false
+  #   providers:
+  #     - id: "optimism_ankr"
+  #       name: "Ankr Optimism"
+  #       priority: 1
+  #       type: "public"
+  #       url: "https://rpc.ankr.com/optimism"
+  #       api_key_required: false
 
-      - id: "optimism_publicnode"
-        name: "PublicNode Optimism"
-        priority: 2
-        type: "public"
-        url: "https://optimism-rpc.publicnode.com"
-        ws_url: "wss://optimism-rpc.publicnode.com"
-        api_key_required: false
+  #     - id: "optimism_publicnode"
+  #       name: "PublicNode Optimism"
+  #       priority: 2
+  #       type: "public"
+  #       url: "https://optimism-rpc.publicnode.com"
+  #       ws_url: "wss://optimism-rpc.publicnode.com"
+  #       api_key_required: false
 
-      - id: "optimism_omniatech"
-        name: "OmniaTech Optimism"
-        priority: 3
-        type: "public"
-        url: "https://endpoints.omniatech.io/v1/op/mainnet/public"
-        api_key_required: false
+  #     - id: "optimism_omniatech"
+  #       name: "OmniaTech Optimism"
+  #       priority: 3
+  #       type: "public"
+  #       url: "https://endpoints.omniatech.io/v1/op/mainnet/public"
+  #       api_key_required: false
 
-      - id: "optimism_blastapi"
-        name: "BlastAPI Optimism"
-        priority: 4
-        type: "public"
-        url: "https://optimism-mainnet.public.blastapi.io"
-        ws_url: "wss://optimism-mainnet.public.blastapi.io"
-        api_key_required: false
+  #     - id: "optimism_blastapi"
+  #       name: "BlastAPI Optimism"
+  #       priority: 4
+  #       type: "public"
+  #       url: "https://optimism-mainnet.public.blastapi.io"
+  #       ws_url: "wss://optimism-mainnet.public.blastapi.io"
+  #       api_key_required: false
 
-      - id: "optimism_1rpc"
-        name: "1RPC Optimism"
-        priority: 5
-        type: "public"
-        url: "https://1rpc.io/op"
-        api_key_required: false
+  #     - id: "optimism_1rpc"
+  #       name: "1RPC Optimism"
+  #       priority: 5
+  #       type: "public"
+  #       url: "https://1rpc.io/op"
+  #       api_key_required: false
 
-      - id: "optimism_official"
-        name: "Optimism Official"
-        priority: 6
-        type: "public"
-        url: "https://mainnet.optimism.io"
-        api_key_required: false
+  #     - id: "optimism_official"
+  #       name: "Optimism Official"
+  #       priority: 6
+  #       type: "public"
+  #       url: "https://mainnet.optimism.io"
+  #       api_key_required: false
 
-    connection:
-      heartbeat_interval: 20000
-      reconnect_interval: 3000
-      max_reconnect_attempts: 15
+  #   connection:
+  #     heartbeat_interval: 20000
+  #     reconnect_interval: 3000
+  #     max_reconnect_attempts: 15
 
-    failover:
-      max_backfill_blocks: 100
-      backfill_timeout: 30000
-      enabled: true
+  #   failover:
+  #     max_backfill_blocks: 100
+  #     backfill_timeout: 30000
+  #     enabled: true
 
   zksync:
     chain_id: 324
@@ -400,149 +400,149 @@ chains:
       backfill_timeout: 30000
       enabled: true
 
-  berachain:
-    chain_id: 80094
-    name: "Berachain Mainnet"
+  # berachain:
+  #   chain_id: 80094
+  #   name: "Berachain Mainnet"
 
-    providers:
-      - id: "berachain_publicnode"
-        name: "PublicNode Berachain"
-        priority: 1
-        type: "public"
-        url: "https://berachain-rpc.publicnode.com"
-        ws_url: "wss://berachain-rpc.publicnode.com"
-        api_key_required: false
+  #   providers:
+  #     - id: "berachain_publicnode"
+  #       name: "PublicNode Berachain"
+  #       priority: 1
+  #       type: "public"
+  #       url: "https://berachain-rpc.publicnode.com"
+  #       ws_url: "wss://berachain-rpc.publicnode.com"
+  #       api_key_required: false
 
-      - id: "berachain_drpc"
-        name: "DRPC Berachain"
-        priority: 2
-        type: "public"
-        url: "https://berachain.drpc.org"
-        ws_url: "wss://berachain.drpc.org"
-        api_key_required: false
+  #     - id: "berachain_drpc"
+  #       name: "DRPC Berachain"
+  #       priority: 2
+  #       type: "public"
+  #       url: "https://berachain.drpc.org"
+  #       ws_url: "wss://berachain.drpc.org"
+  #       api_key_required: false
 
-      - id: "berachain_apis"
-        name: "Berachain APIs"
-        priority: 3
-        type: "public"
-        url: "https://rpc.berachain-apis.com"
-        ws_url: "wss://rpc.berachain-apis.com"
-        api_key_required: false
+  #     - id: "berachain_apis"
+  #       name: "Berachain APIs"
+  #       priority: 3
+  #       type: "public"
+  #       url: "https://rpc.berachain-apis.com"
+  #       ws_url: "wss://rpc.berachain-apis.com"
+  #       api_key_required: false
 
-      - id: "berachain_official"
-        name: "Berachain Official"
-        priority: 4
-        type: "public"
-        url: "https://rpc.berachain.com"
-        api_key_required: false
+  #     - id: "berachain_official"
+  #       name: "Berachain Official"
+  #       priority: 4
+  #       type: "public"
+  #       url: "https://rpc.berachain.com"
+  #       api_key_required: false
 
-      - id: "berachain_therpc"
-        name: "TheRPC Berachain"
-        priority: 5
-        type: "public"
-        url: "https://berachain.therpc.io"
-        api_key_required: false
+  #     - id: "berachain_therpc"
+  #       name: "TheRPC Berachain"
+  #       priority: 5
+  #       type: "public"
+  #       url: "https://berachain.therpc.io"
+  #       api_key_required: false
 
-      - id: "berachain_tatum"
-        name: "Tatum Berachain"
-        priority: 6
-        type: "public"
-        url: "https://berachain-mainnet.gateway.tatum.io"
-        api_key_required: false
+  #     - id: "berachain_tatum"
+  #       name: "Tatum Berachain"
+  #       priority: 6
+  #       type: "public"
+  #       url: "https://berachain-mainnet.gateway.tatum.io"
+  #       api_key_required: false
 
-      - id: "berachain_grove"
-        name: "Grove Berachain"
-        priority: 7
-        type: "public"
-        url: "https://berachain.rpc.grove.city/v1/01fdb492"
-        api_key_required: false
+  #     - id: "berachain_grove"
+  #       name: "Grove Berachain"
+  #       priority: 7
+  #       type: "public"
+  #       url: "https://berachain.rpc.grove.city/v1/01fdb492"
+  #       api_key_required: false
 
-    connection:
-      heartbeat_interval: 20000
-      reconnect_interval: 3000
-      max_reconnect_attempts: 15
+  #   connection:
+  #     heartbeat_interval: 20000
+  #     reconnect_interval: 3000
+  #     max_reconnect_attempts: 15
 
-    failover:
-      max_backfill_blocks: 100
-      backfill_timeout: 30000
-      enabled: true
+  #   failover:
+  #     max_backfill_blocks: 100
+  #     backfill_timeout: 30000
+  #     enabled: true
 
-  avalanche:
-    chain_id: 43114
-    name: "Avalanche C-Chain"
+  # avalanche:
+  #   chain_id: 43114
+  #   name: "Avalanche C-Chain"
 
-    providers:
-      - id: "avalanche_therpc"
-        name: "TheRPC Avalanche"
-        priority: 1
-        type: "public"
-        url: "https://avalanche.therpc.io"
-        api_key_required: false
+  #   providers:
+  #     - id: "avalanche_therpc"
+  #       name: "TheRPC Avalanche"
+  #       priority: 1
+  #       type: "public"
+  #       url: "https://avalanche.therpc.io"
+  #       api_key_required: false
 
-      - id: "avalanche_omniatech"
-        name: "OmniaTech Avalanche"
-        priority: 2
-        type: "public"
-        url: "https://endpoints.omniatech.io/v1/avax/mainnet/public"
-        api_key_required: false
+  #     - id: "avalanche_omniatech"
+  #       name: "OmniaTech Avalanche"
+  #       priority: 2
+  #       type: "public"
+  #       url: "https://endpoints.omniatech.io/v1/avax/mainnet/public"
+  #       api_key_required: false
 
-      - id: "avalanche_publicnode"
-        name: "PublicNode Avalanche"
-        priority: 3
-        type: "public"
-        url: "https://avalanche-c-chain-rpc.publicnode.com"
-        ws_url: "wss://avalanche-c-chain-rpc.publicnode.com"
-        api_key_required: false
+  #     - id: "avalanche_publicnode"
+  #       name: "PublicNode Avalanche"
+  #       priority: 3
+  #       type: "public"
+  #       url: "https://avalanche-c-chain-rpc.publicnode.com"
+  #       ws_url: "wss://avalanche-c-chain-rpc.publicnode.com"
+  #       api_key_required: false
 
-      - id: "avalanche_poolz"
-        name: "Poolz Avalanche"
-        priority: 4
-        type: "public"
-        url: "https://rpc.poolz.finance/avalanche"
-        api_key_required: false
+  #     - id: "avalanche_poolz"
+  #       name: "Poolz Avalanche"
+  #       priority: 4
+  #       type: "public"
+  #       url: "https://rpc.poolz.finance/avalanche"
+  #       api_key_required: false
 
-      - id: "avalanche_grove"
-        name: "Grove Avalanche"
-        priority: 5
-        type: "public"
-        url: "https://avax.rpc.grove.city/v1/01fdb492"
-        api_key_required: false
+  #     - id: "avalanche_grove"
+  #       name: "Grove Avalanche"
+  #       priority: 5
+  #       type: "public"
+  #       url: "https://avax.rpc.grove.city/v1/01fdb492"
+  #       api_key_required: false
 
-      - id: "avalanche_drpc"
-        name: "DRPC Avalanche"
-        priority: 6
-        type: "public"
-        url: "https://avalanche.drpc.org"
-        api_key_required: false
+  #     - id: "avalanche_drpc"
+  #       name: "DRPC Avalanche"
+  #       priority: 6
+  #       type: "public"
+  #       url: "https://avalanche.drpc.org"
+  #       api_key_required: false
 
-      - id: "avalanche_onfinality"
-        name: "OnFinality Avalanche"
-        priority: 7
-        type: "public"
-        url: "https://avalanche.api.onfinality.io/public/ext/bc/C/rpc"
-        api_key_required: false
+  #     - id: "avalanche_onfinality"
+  #       name: "OnFinality Avalanche"
+  #       priority: 7
+  #       type: "public"
+  #       url: "https://avalanche.api.onfinality.io/public/ext/bc/C/rpc"
+  #       api_key_required: false
 
-      - id: "avalanche_nodies"
-        name: "Nodies Avalanche"
-        priority: 8
-        type: "public"
-        url: "https://avalanche-public.nodies.app/ext/bc/C/rpc"
-        api_key_required: false
+  #     - id: "avalanche_nodies"
+  #       name: "Nodies Avalanche"
+  #       priority: 8
+  #       type: "public"
+  #       url: "https://avalanche-public.nodies.app/ext/bc/C/rpc"
+  #       api_key_required: false
 
-      - id: "avalanche_0xrpc"
-        name: "0xRPC Avalanche"
-        priority: 9
-        type: "public"
-        url: "https://0xrpc.io/avax"
-        ws_url: "wss://0xrpc.io/avax"
-        api_key_required: false
+  #     - id: "avalanche_0xrpc"
+  #       name: "0xRPC Avalanche"
+  #       priority: 9
+  #       type: "public"
+  #       url: "https://0xrpc.io/avax"
+  #       ws_url: "wss://0xrpc.io/avax"
+  #       api_key_required: false
 
-    connection:
-      heartbeat_interval: 20000
-      reconnect_interval: 3000
-      max_reconnect_attempts: 15
+  #   connection:
+  #     heartbeat_interval: 20000
+  #     reconnect_interval: 3000
+  #     max_reconnect_attempts: 15
 
-    failover:
-      max_backfill_blocks: 100
-      backfill_timeout: 30000
-      enabled: true
+  #   failover:
+  #     max_backfill_blocks: 100
+  #     backfill_timeout: 30000
+  #     enabled: true

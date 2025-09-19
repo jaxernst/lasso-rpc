@@ -12,7 +12,7 @@ defmodule LivechainWeb.RPCChannel do
   use LivechainWeb, :channel
   require Logger
 
-  alias Livechain.RPC.{SubscriptionManager, Failover}
+  alias Livechain.RPC.{SubscriptionRouter, Failover}
   alias Livechain.JSONRPC.Error, as: JError
   alias Livechain.Config.ConfigStore
 
@@ -69,11 +69,21 @@ defmodule LivechainWeb.RPCChannel do
     {:reply, {:ok, response}, socket}
   end
 
-  # Handle subscription notifications from SubscriptionManager
+  # Handle subscription notifications from ClientSubscriptionRegistry
   @impl true
-  def handle_info({:subscription_event, notification}, socket) do
-    # Forward the subscription notification directly to the client
-    push(socket, "rpc_notification", notification)
+  def handle_info({:subscription_event, payload}, socket) do
+    # If payload is already a proper JSON-RPC notification, forward directly
+    # Otherwise, wrap it (defensive)
+    message =
+      case payload do
+        %{"jsonrpc" => "2.0", "method" => "eth_subscription", "params" => %{"subscription" => _}} ->
+          payload
+
+        other ->
+          %{"jsonrpc" => "2.0", "method" => "eth_subscription", "params" => other}
+      end
+
+    push(socket, "rpc_notification", message)
     {:noreply, socket}
   end
 
@@ -82,11 +92,8 @@ defmodule LivechainWeb.RPCChannel do
   defp handle_rpc_method("eth_subscribe", [subscription_type | params], socket) do
     case subscription_type do
       "newHeads" ->
-        case SubscriptionManager.subscribe_to_new_heads(socket.assigns.chain) do
+        case SubscriptionRouter.subscribe(socket.assigns.chain, {:newHeads}) do
           {:ok, subscription_id} ->
-            # Subscribe to the per-subscription topic
-            Phoenix.PubSub.subscribe(Livechain.PubSub, "subscription:#{subscription_id}")
-
             _socket = update_subscriptions(socket, subscription_id, "newHeads")
             {:subscription, subscription_id}
 
@@ -97,7 +104,7 @@ defmodule LivechainWeb.RPCChannel do
       "logs" ->
         filter = List.first(params, %{})
 
-        case SubscriptionManager.subscribe_to_logs(socket.assigns.chain, filter) do
+        case SubscriptionRouter.subscribe(socket.assigns.chain, {:logs, filter}) do
           {:ok, subscription_id} ->
             # Subscribe to the per-subscription topic
             Phoenix.PubSub.subscribe(Livechain.PubSub, "subscription:#{subscription_id}")
@@ -120,8 +127,8 @@ defmodule LivechainWeb.RPCChannel do
         {:ok, false}
 
       {_subscription_type, updated_subscriptions} ->
-        # Unsubscribe from SubscriptionManager
-        SubscriptionManager.unsubscribe(subscription_id)
+        # Unsubscribe from new pool/router
+        SubscriptionRouter.unsubscribe(socket.assigns.chain, subscription_id)
 
         # Unsubscribe from per-subscription topic
         Phoenix.PubSub.unsubscribe(Livechain.PubSub, "subscription:#{subscription_id}")
