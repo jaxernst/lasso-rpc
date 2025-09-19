@@ -11,7 +11,7 @@ Livechain is an Elixir/OTP application that provides intelligent RPC provider or
 - Multi-provider orchestration with pluggable provider selection strategies (default `:fastest`; also `:cheapest`, `:priority`, `:round_robin`)
 - WS + HTTP JSON-RPC proxy for all standard read-only methods; WS also supports real-time subscriptions (`eth_subscribe`, `eth_unsubscribe`)
 - Strong failover across HTTP and WS via per-provider circuit breakers and provider pools
-- Passive provider benchmarking on a per-chain and per-method basis with event racing for lowest-latency delivery
+- Passive provider benchmarking on a per-chain and per-method basis using real RPC call latencies for intelligent routing
 - Live dashboard with real-time insights, provider performance metrics, chain status, and a system load simulator
 
 ---
@@ -102,7 +102,7 @@ Selection module consolidates all provider picking logic:
 {:ok, provider_id} = Selection.pick_provider(
   "ethereum",
   "eth_getBalance",
-  strategy: :latency,
+  strategy: :fastest,
   protocol: :http
 )
 ```
@@ -145,19 +145,18 @@ end
 ### **Event Processing Pipeline**
 
 ```
-[RPC Provider] → [WSConnection] → [MessageAggregator] → [Racing Logic] → [BenchmarkStore]
-     ↓              ↓                    ↓                   ↓              ↓
-  WebSocket      Connection         Message Cache      Timing Analysis   ETS Tables
- Subscription     Health           Deduplication     Race Win/Loss      Metrics Storage
+[RPC Provider] → [RPC Call] → [Latency Measurement] → [BenchmarkStore]
+     ↓              ↓              ↓                     ↓
+  HTTP/WS        Request         Response Time         ETS Tables
+ Connection      Processing      Tracking             Metrics Storage
 ```
 
 ### **Performance Data Storage**
 
 ```
 ETS Tables (Per Chain):
-├── racing_metrics_#{chain}     # {timestamp, provider_id, event_type, result, margin_ms}
 ├── rpc_metrics_#{chain}        # {timestamp, provider_id, method, duration_ms, result}
-└── provider_scores_#{chain}    # {provider_id, event_type, :racing} => {wins, total, avg_margin}
+└── provider_scores_#{chain}    # {provider_id, method, :rpc} => {successes, total, avg_duration}
 ```
 
 ### **Memory Management**
@@ -174,9 +173,9 @@ ETS Tables (Per Chain):
 ### **Standard Method Support**
 
 ```elixir
-# WebSocket subscriptions for racing:
-eth_subscribe("newHeads")        # Block event racing
-eth_subscribe("logs")            # Transaction log racing
+# WebSocket subscriptions:
+eth_subscribe("newHeads")        # Block events
+eth_subscribe("logs")            # Transaction logs
 
 # HTTP endpoints for benchmarking/proxying (read-only):
 eth_getLogs(filter)              # Historical log queries
@@ -193,7 +192,7 @@ eth_getBalance(address)          # Account balance queries
 
 Provider selection is pluggable. The main strategies include:
 
-- **:fastest (default)**: Picks the highest-scoring provider from the `BenchmarkStore`. The score is based on historical performance from passive event racing, effectively making this a leaderboard-based strategy.
+- **:fastest (default)**: Picks the highest-scoring provider from the `BenchmarkStore`. The score is based on method-specific RPC latency measurements and success rates, effectively making this a performance-based strategy.
 - **:priority**: First available provider based on its statically configured `priority`.
 - **:round_robin**: Rotates across available, healthy providers.
 - **:cheapest**: Prefers providers marked as `type: "public"` before using others.
@@ -212,11 +211,11 @@ config :livechain, :provider_selection_strategy, :fastest
 
 ### **Phoenix LiveView Components**
 
-- **Latency Metrics**: Live provider rankings
+- **Latency Metrics**: Live provider rankings based on RPC performance
 - **Routing Decision Events**: See how requests are routed in real time
 - **Performance matrix**: RPC call latencies by provider and method
 - **Chain selection**: Switch between Ethereum, Polygon, Arbitrum
-- **Real-time updates**: WebSocket push updates on new race results
+- **Real-time updates**: WebSocket push updates on new RPC metrics
 
 ### **Data Integration**
 
@@ -225,6 +224,7 @@ def load_benchmark_data(socket) do
   chain_name = socket.assigns.benchmark_chain
   provider_leaderboard = BenchmarkStore.get_provider_leaderboard(chain_name)
   realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
+  # Leaderboard now based on RPC latency and success rate metrics
 end
 ```
 
@@ -234,10 +234,10 @@ end
 
 ### **Throughput**
 
-- **Racing latency**: <5ms from event receipt to race result
+- **RPC latency measurement**: <5ms overhead for latency tracking
 - **Provider Configuration + capability lookups**: <1ms via ETS cache (no file I/O)
 - **Provider selection**: <2ms via Selection module
-- **Dashboard updates**: <100ms from race result to UI update
+- **Dashboard updates**: <100ms from RPC metrics to UI update
 - **Memory usage**: ~10MB per chain for 24 hours of data
 
 ### **Fault Tolerance**
@@ -245,7 +245,7 @@ end
 - **Provider failures**: Detected within 5 seconds, failover in <1 second
 - **Process crashes**: Automatic restart within 500ms
 - **Network partitions**: Circuit breakers prevent cascade failures
-- **Data persistence**: No race data loss during normal operation
+- **Data persistence**: No RPC metrics loss during normal operation
 
 ### **Scalability**
 

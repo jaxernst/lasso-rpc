@@ -633,7 +633,10 @@ defmodule Livechain.RPC.WSConnection do
 
           :user_error ->
             # User errors should not affect circuit breaker state
-            Logger.debug("WebSocket user error (not triggering circuit breaker): #{inspect(error)}")
+            Logger.debug(
+              "WebSocket user error (not triggering circuit breaker): #{inspect(error)}"
+            )
+
             :ok
         end
     end

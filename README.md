@@ -13,10 +13,10 @@ Want to bypass rate limits? Configure Lasso to target multiple free providers an
 POST /rpc/base # Automatically load balances across available providers
 ```
 
-Want the fastest possible responses? Lasso routes to your best-performing provider using real-world benchmarks:
+Want the fastest possible responses? Lasso routes to your best-performing provider using real-world RPC latency benchmarks:
 
 ```
-POST /rpc/ethereum # Automatic routing based on passive performance measurement
+POST /rpc/ethereum # Automatic routing based on per-method latency measurements
 ```
 
 Want much better reliability? Lasso will quietly retry your failed request with circuit breakers and intelligent failover—your application stays resilient when providers don't.
@@ -38,8 +38,8 @@ Lasso runs on the Erlang BEAM VM, a battle-tested platform that powers highly sc
 - **Multi-provider orchestration** with pluggable routing strategies (fastest, cheapest, priority, round-robin)
 - **Full JSON-RPC compatibility** via HTTP and WebSocket proxies for all standard read-only methods
 - **RPC Method failover** with per-provider circuit breakers and health monitoring
-- **Passive benchmarking** using real traffic to measure provider performance per-chain and per-method
-- **Performance tracking** - measures real RPC call latencies to optimize provider selection
+- **Method-specific benchmarking** using real RPC call latencies to measure provider performance per-chain and per-method
+- **Intelligent routing** - automatically selects providers based on actual latency measurements for each RPC method
 - **Live dashboard** with real-time insights, provider leaderboards, and performance metrics
 - **Globally distributable** with BEAM's built-in clustering and fault-tolerance
 
@@ -168,7 +168,7 @@ chains:
 
 Routing strategies are determined by the endpoint you use:
 
-- `/rpc/fastest/:chain` - Routes to the fastest provider based on performance metrics
+- `/rpc/fastest/:chain` - Routes to the fastest provider based on method-specific RPC latency measurements
 - `/rpc/cheapest/:chain` - Prefers free/public providers
 - `/rpc/priority/:chain` - Uses static priority order from configuration
 - `/rpc/round-robin/:chain` - Load balances across all available providers
@@ -216,7 +216,7 @@ wscat -c ws://localhost:4000/rpc/ethereum
 
 Access the real-time dashboard at http://localhost:4000:
 
-- **Provider leaderboards** with win rates and average latency
+- **Provider leaderboards** with success rates and RPC method latencies
 - **Performance matrix** showing RPC call latencies by provider and method
 - **Circuit breaker status** and provider health monitoring
 - **Chain selection** to switch between networks

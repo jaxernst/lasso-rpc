@@ -30,6 +30,8 @@ defmodule Livechain.RPC.Selection do
   - `:exclude` - List of provider IDs to exclude
 
   Returns {:ok, provider_id} or {:error, reason}
+
+  # TODO: Should ha
   """
   @spec pick_provider(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -38,7 +40,6 @@ defmodule Livechain.RPC.Selection do
     protocol = Keyword.get(opts, :protocol, :both)
     exclude = Keyword.get(opts, :exclude, [])
 
-    # Try pool-based selection first
     case pool_selection(chain_name, method, strategy, protocol, exclude) do
       {:ok, provider_id} = result ->
         Logger.debug("Selected provider via pool: #{provider_id} for #{chain_name}.#{method}")
@@ -121,22 +122,13 @@ defmodule Livechain.RPC.Selection do
 
     with {:ok, provider_id} <-
            ProviderPool.get_best_provider(chain_name, strategy, method, filters),
-         :ok <- verify_circuit_breaker_state(provider_id),
+         true <- CircuitBreaker.get_state(provider_id).state != :open,
          {:ok, provider_config} <- ConfigStore.get_provider(chain_name, provider_id),
          true <- supports_protocol?(provider_config, protocol) do
       {:ok, provider_id}
     else
-      {:error, reason} when reason in [:no_providers_available] ->
-        {:error, {:pool_selection_failed, reason}}
-
-      {:error, :circuit_open} ->
-        {:error, :selected_provider_circuit_open}
-
-      {:error, reason} ->
-        {:error, {:provider_config_error, reason}}
-
-      false ->
-        {:error, :selected_provider_wrong_protocol}
+      {:error, reason} -> {:error, reason}
+      false -> {:error, :selected_provider_wrong_protocol}
     end
   end
 
@@ -215,25 +207,4 @@ defmodule Livechain.RPC.Selection do
     do: is_binary(Map.get(provider, :http_url)) or is_binary(Map.get(provider, :url))
 
   defp supports_protocol?(provider, :ws), do: is_binary(Map.get(provider, :ws_url))
-
-  defp verify_circuit_breaker_state(provider_id) do
-    case CircuitBreaker.get_state(provider_id) do
-      %{state: :open} ->
-        Logger.debug("Circuit breaker verification failed: #{provider_id} is open")
-        {:error, :circuit_open}
-
-      %{state: state} when state in [:closed, :half_open] ->
-        :ok
-
-      {:error, :not_found} ->
-        # Circuit breaker doesn't exist yet, assume closed
-        Logger.debug("Circuit breaker not found for #{provider_id}, assuming closed")
-        :ok
-    end
-  rescue
-    # Handle case where CircuitBreaker GenServer is not running
-    _ ->
-      Logger.debug("Circuit breaker verification failed for #{provider_id}, assuming closed")
-      :ok
-  end
 end

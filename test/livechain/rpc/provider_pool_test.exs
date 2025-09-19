@@ -22,6 +22,7 @@ defmodule Livechain.RPC.ProviderPoolTest do
         _ -> {:error, :method_not_mocked}
       end
     end)
+
     :ok
   end
 
@@ -86,7 +87,7 @@ defmodule Livechain.RPC.ProviderPoolTest do
     assert p1_status3.error_rate > p1_status2.error_rate
   end
 
-  test ":latency strategy prefers lowest latency meeting success-rate threshold" do
+  test ":fastest strategy prefers lowest latency meeting success-rate threshold" do
     p1 = provider_struct(%{id: "p1", name: "P1", priority: 2, region: "us"})
     p2 = provider_struct(%{id: "p2", name: "P2", priority: 1, region: "us"})
     chain_config = base_chain_config([p1, p2])
@@ -100,7 +101,7 @@ defmodule Livechain.RPC.ProviderPoolTest do
     ProviderPool.report_success("testnet_lat", p2.id, 40)
 
     assert {:ok, best} =
-             ProviderPool.get_best_provider("testnet_lat", :latency, "eth_blockNumber")
+             ProviderPool.get_best_provider("testnet_lat", :fastest, "eth_blockNumber")
 
     assert best == "p2"
 
@@ -109,7 +110,7 @@ defmodule Livechain.RPC.ProviderPoolTest do
     end
 
     assert {:ok, best2} =
-             ProviderPool.get_best_provider("testnet_lat", :latency, "eth_blockNumber")
+             ProviderPool.get_best_provider("testnet_lat", :fastest, "eth_blockNumber")
 
     assert best2 == "p1"
   end

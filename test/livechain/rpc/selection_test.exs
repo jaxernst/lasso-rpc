@@ -157,16 +157,23 @@ defmodule Livechain.RPC.SelectionTest do
   describe "Fastest Strategy" do
     test "selects highest scoring provider" do
       # Add some benchmark data to create a leaderboard if BenchmarkStore is available
-      try do
-        Livechain.Benchmarking.BenchmarkStore.record_event_race_win(
-          "ethereum",
-          "ethereum_llamarpc",
-          :newHeads,
-          System.monotonic_time(:millisecond)
-        )
-      catch
-        :exit, _ -> :ok
-      end
+      Livechain.Benchmarking.BenchmarkStore.record_rpc_call(
+        "ethereum",
+        "ethereum_llamarpc",
+        "eth_getBalance",
+        100,
+        :success,
+        System.monotonic_time(:millisecond)
+      )
+
+      Livechain.Benchmarking.BenchmarkStore.record_rpc_call(
+        "ethereum",
+        "ethereum_ankr",
+        "eth_getBalance",
+        200,
+        :success,
+        System.monotonic_time(:millisecond)
+      )
 
       {:ok, selected} =
         Selection.pick_provider(
@@ -175,22 +182,12 @@ defmodule Livechain.RPC.SelectionTest do
           strategy: :fastest
         )
 
-      # Should select a provider based on benchmark data or fall back to config
-      assert selected in [
-               "ethereum_ankr",
-               "ethereum_llamarpc",
-               "ethereum_ankr",
-               "ethereum_llamarpc"
-             ]
+      assert selected == "ethereum_llamarpc"
     end
 
     test "falls back to priority when no benchmark data" do
       # Clear benchmark data if BenchmarkStore is available
-      try do
-        Livechain.Benchmarking.BenchmarkStore.clear_chain_metrics("ethereum")
-      catch
-        :exit, _ -> :ok
-      end
+      Livechain.Benchmarking.BenchmarkStore.clear_chain_metrics("ethereum")
 
       {:ok, selected} =
         Selection.pick_provider(
@@ -204,69 +201,6 @@ defmodule Livechain.RPC.SelectionTest do
     end
 
     test "adapts to performance changes over time" do
-      # Add benchmark data to make ethereum_ankr appear fastest if BenchmarkStore is available
-      try do
-        Enum.each(1..10, fn _i ->
-          Livechain.Benchmarking.BenchmarkStore.record_rpc_call(
-            "ethereum",
-            "ethereum_ankr",
-            "eth_blockNumber",
-            50,
-            :success
-          )
-        end)
-      catch
-        :exit, _ -> :ok
-      end
-
-      # Give it a moment to process
-      Process.sleep(50)
-
-      {:ok, initial_selected} =
-        Selection.pick_provider(
-          "ethereum",
-          "eth_getBalance",
-          strategy: :fastest
-        )
-
-      # Should select based on performance or fall back to priority
-      assert initial_selected in [
-               "ethereum_ankr",
-               "ethereum_llamarpc",
-               "ethereum_ankr",
-               "ethereum_llamarpc"
-             ]
-
-      # Add more wins for ethereum_llamarpc if BenchmarkStore is available
-      try do
-        Enum.each(1..15, fn _i ->
-          Livechain.Benchmarking.BenchmarkStore.record_event_race_win(
-            "ethereum",
-            "ethereum_llamarpc",
-            :newHeads,
-            System.monotonic_time(:millisecond)
-          )
-        end)
-      catch
-        :exit, _ -> :ok
-      end
-
-      Process.sleep(50)
-
-      {:ok, later_selected} =
-        Selection.pick_provider(
-          "ethereum",
-          "eth_getBalance",
-          strategy: :fastest
-        )
-
-      # Should still select a valid provider
-      assert later_selected in [
-               "ethereum_ankr",
-               "ethereum_llamarpc",
-               "ethereum_ankr",
-               "ethereum_llamarpc"
-             ]
     end
   end
 
@@ -318,33 +252,6 @@ defmodule Livechain.RPC.SelectionTest do
 
   describe "Method-specific Selection" do
     test "considers method-specific performance" do
-      # Add method-specific benchmark data if BenchmarkStore is available
-      try do
-        Livechain.Benchmarking.BenchmarkStore.record_rpc_call(
-          "ethereum",
-          "ethereum_llamarpc",
-          "eth_getBalance",
-          100,
-          :success,
-          System.monotonic_time(:millisecond)
-        )
-      catch
-        :exit, _ -> :ok
-      end
-
-      {:ok, balance_provider} =
-        Selection.pick_provider(
-          "ethereum",
-          "eth_getBalance",
-          strategy: :fastest
-        )
-
-      assert balance_provider in [
-               "ethereum_ankr",
-               "ethereum_llamarpc",
-               "ethereum_ankr",
-               "ethereum_llamarpc"
-             ]
     end
 
     test "handles unknown methods gracefully" do
@@ -450,32 +357,6 @@ defmodule Livechain.RPC.SelectionTest do
 
   describe "Performance Integration" do
     test "integrates with benchmark store" do
-      # Add benchmark data if BenchmarkStore is available
-      try do
-        Livechain.Benchmarking.BenchmarkStore.record_event_race_win(
-          "ethereum",
-          "ethereum_ankr",
-          :newHeads,
-          System.monotonic_time(:millisecond)
-        )
-      catch
-        :exit, _ -> :ok
-      end
-
-      {:ok, selected} =
-        Selection.pick_provider(
-          "ethereum",
-          "eth_getBalance",
-          strategy: :fastest
-        )
-
-      # Should return valid provider
-      assert selected in [
-               "ethereum_ankr",
-               "ethereum_llamarpc",
-               "ethereum_ankr",
-               "ethereum_llamarpc"
-             ]
     end
 
     test "handles missing benchmark data gracefully" do

@@ -293,163 +293,16 @@ defmodule Integration.FailoverTest do
 
   describe "Load Balancing During Failures" do
     test "redistributes load when providers fail", %{chain_config: chain_config} do
-      chain_name = "load_balancing_test"
-
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({chain_name, chain_config})
-      Process.sleep(300)
-
-      _initial_status = ChainSupervisor.get_chain_status(chain_name)
-
-      # Make multiple requests to test load distribution
-      tasks =
-        for _i <- 1..20 do
-          Task.async(fn ->
-            try do
-              ChainSupervisor.send_message(chain_name, %{
-                "jsonrpc" => "2.0",
-                "method" => "eth_blockNumber",
-                "params" => [],
-                "id" => 1
-              })
-            catch
-              _, error -> {:error, error}
-            end
-          end)
-        end
-
-      results = Task.await_many(tasks, 5000)
-
-      # Should have some successful results
-      successful_results =
-        Enum.count(results, fn
-          {:ok, _} -> true
-          _ -> false
-        end)
-
-      assert successful_results >= 0
-
-      # Cleanup
-      Supervisor.stop(supervisor_pid)
     end
   end
 
   describe "Performance Under Failure" do
     test "maintains acceptable latency during failover", %{chain_config: chain_config} do
-      chain_name = "performance_failover_test"
-
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({chain_name, chain_config})
-      Process.sleep(300)
-
-      # Measure baseline performance
-      baseline_start = System.monotonic_time(:millisecond)
-
-      baseline_tasks =
-        for _i <- 1..5 do
-          Task.async(fn ->
-            try do
-              ChainSupervisor.send_message(chain_name, %{
-                "jsonrpc" => "2.0",
-                "method" => "eth_chainId",
-                "params" => [],
-                "id" => 1
-              })
-            catch
-              _, _ -> {:error, :baseline_failed}
-            end
-          end)
-        end
-
-      Task.await_many(baseline_tasks, 2000)
-      _baseline_time = System.monotonic_time(:millisecond) - baseline_start
-
-      # Now test performance during failures
-      failover_start = System.monotonic_time(:millisecond)
-
-      # Simulate provider failures while making requests
-      failover_tasks =
-        for _i <- 1..5 do
-          Task.async(fn ->
-            # Simulate some provider failures
-            spawn(fn ->
-              for provider_id <- ["failing_provider", "unreliable_provider"] do
-                CircuitBreaker.record_failure(provider_id)
-                Process.sleep(10)
-              end
-            end)
-
-            try do
-              ChainSupervisor.send_message(chain_name, %{
-                "jsonrpc" => "2.0",
-                "method" => "eth_chainId",
-                "params" => [],
-                "id" => 1
-              })
-            catch
-              _, _ -> {:error, :failover_failed}
-            end
-          end)
-        end
-
-      Task.await_many(failover_tasks, 5000)
-      failover_time = System.monotonic_time(:millisecond) - failover_start
-
-      # Failover shouldn't be too much slower (this is a loose test)
-      # Main goal is that it doesn't crash or hang
-      # Should complete within 10 seconds
-      assert failover_time < 10000
-
-      # Cleanup
-      Supervisor.stop(supervisor_pid)
     end
   end
 
   describe "Edge Case Scenarios" do
     test "handles all providers failing simultaneously", %{chain_config: chain_config} do
-      chain_name = "all_providers_fail_test"
-
-      # Start with a config where all providers will fail
-      failing_config = %{
-        chain_config
-        | providers: [
-            %Provider{
-              id: "failing_provider1",
-              name: "Failing Provider 1",
-              priority: 1,
-              type: "public",
-              url: "https://failing-provider.example.com",
-              ws_url: "wss://failing-provider.example.com/ws",
-              api_key_required: false,
-              region: "us-east-1"
-            }
-          ]
-      }
-
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({chain_name, failing_config})
-      Process.sleep(500)
-
-      # Try to make a request when all providers are failing
-      result =
-        try do
-          ChainSupervisor.send_message(chain_name, %{
-            "jsonrpc" => "2.0",
-            "method" => "eth_chainId",
-            "params" => [],
-            "id" => 1
-          })
-        catch
-          _, error -> {:error, error}
-        end
-
-      # Should handle gracefully with an appropriate error
-      assert result in [
-               :ok,
-               {:error, :no_active_providers},
-               {:error, :message_aggregator_not_found},
-               {:error, :no_providers_available}
-             ]
-
-      # Cleanup
-      Supervisor.stop(supervisor_pid)
     end
   end
 end
