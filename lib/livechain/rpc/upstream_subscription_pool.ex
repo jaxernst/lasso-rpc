@@ -14,6 +14,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
   alias Livechain.RPC.ChainSupervisor
   alias Livechain.RPC.FilterNormalizer
   alias Livechain.Config.ConfigStore
+  alias Livechain.Events.Provider
 
   @type chain :: String.t()
   @type provider_id :: String.t()
@@ -42,7 +43,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
   def init(chain) do
     Logger.info("Starting ProviderSubscriptionPool for #{chain}")
     Phoenix.PubSub.subscribe(Livechain.PubSub, "raw_messages:#{chain}")
-    Phoenix.PubSub.subscribe(Livechain.PubSub, "provider_pool:events")
+    Phoenix.PubSub.subscribe(Livechain.PubSub, "provider_pool:events:#{chain}")
 
     # Load backfill config
     failover_cfg =
@@ -190,9 +191,14 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
     {:noreply, state}
   end
 
-  # Provider pool events (failover triggers)
-  def handle_info(%{chain: chain, provider_id: provider_id, event: event} = _evt, state)
-      when chain == state.chain and event in [:unhealthy, :cooldown_start, :health_check_failed] do
+  def handle_info(evt, state)
+      when is_struct(evt, Provider.Unhealthy) or
+             is_struct(evt, Provider.CooldownStart) or
+             is_struct(evt, Provider.HealthCheckFailed) or
+             is_struct(evt, Provider.WSClosed) or
+             is_struct(evt, Provider.WSDisconnected) do
+    provider_id = Map.get(evt, :provider_id)
+
     keys_to_failover =
       state.keys
       |> Enum.filter(fn {_key, entry} -> entry.primary_provider_id == provider_id end)
@@ -209,6 +215,8 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
 
     {:noreply, state}
   end
+
+  def handle_info(_, state), do: {:noreply, state}
 
   # Legacy no-op; failover is delegated to StreamCoordinator
   # Legacy no-op removed; failover handled via StreamCoordinator

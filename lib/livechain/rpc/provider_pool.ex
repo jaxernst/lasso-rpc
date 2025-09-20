@@ -18,6 +18,7 @@ defmodule Livechain.RPC.ProviderPool do
 
   alias Livechain.Config.ChainConfig
   alias Livechain.Benchmarking.BenchmarkStore
+  alias Livechain.Events.Provider
 
   defstruct [
     :chain_name,
@@ -448,9 +449,7 @@ defmodule Livechain.RPC.ProviderPool do
     case method do
       nil ->
         # No specific method provided, fall back to priority
-        Logger.debug(
-          "No method specified for #{state.chain_name}, falling back to priority"
-        )
+        Logger.debug("No method specified for #{state.chain_name}, falling back to priority")
 
         providers
         |> Enum.sort_by(& &1.config.priority)
@@ -939,17 +938,46 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   defp publish_provider_event(chain_name, provider_id, event, details) do
-    Phoenix.PubSub.broadcast(
-      Livechain.PubSub,
-      "provider_pool:events",
-      %{
-        ts: System.system_time(:millisecond),
-        chain: chain_name,
-        provider_id: provider_id,
-        event: event,
-        details: details
-      }
-    )
+    ts = System.system_time(:millisecond)
+
+    typed =
+      case event do
+        :healthy ->
+          %Provider.Healthy{ts: ts, chain: chain_name, provider_id: provider_id}
+
+        :unhealthy ->
+          %Provider.Unhealthy{
+            ts: ts,
+            chain: chain_name,
+            provider_id: provider_id,
+            reason: Map.get(details, :reason) || Map.get(details, "reason")
+          }
+
+        :cooldown_start ->
+          %Provider.CooldownStart{
+            ts: ts,
+            chain: chain_name,
+            provider_id: provider_id,
+            until:
+              Map.get(details, :until) || Map.get(details, "until") ||
+                System.monotonic_time(:millisecond)
+          }
+
+        :cooldown_end ->
+          %Provider.CooldownEnd{ts: ts, chain: chain_name, provider_id: provider_id}
+
+        :health_check_failed ->
+          %Provider.HealthCheckFailed{
+            ts: ts,
+            chain: chain_name,
+            provider_id: provider_id,
+            reason: Map.get(details, :reason) || Map.get(details, "reason"),
+            consecutive_failures:
+              Map.get(details, :consecutive_failures) || Map.get(details, "consecutive_failures")
+          }
+      end
+
+    Phoenix.PubSub.broadcast(Livechain.PubSub, Provider.topic(chain_name), typed)
   end
 
   def via_name(chain_name) do
