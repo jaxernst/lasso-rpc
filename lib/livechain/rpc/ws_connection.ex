@@ -23,6 +23,7 @@ defmodule Livechain.RPC.WSConnection do
   alias Livechain.RPC.ProviderPool
   alias Livechain.RPC.Failover
   alias Livechain.RPC.ErrorClassifier
+  alias Livechain.Events.Provider
 
   # Client API
 
@@ -212,6 +213,17 @@ defmodule Livechain.RPC.WSConnection do
 
     state = %{state | connected: true, reconnect_attempts: 0}
     broadcast_status_change(state, :connected)
+    # Emit WSConnected typed event
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      Provider.topic(state.chain_name),
+      %Provider.WSConnected{
+        ts: System.system_time(:millisecond),
+        chain: state.chain_name,
+        provider_id: state.endpoint.id
+      }
+    )
+
     state = schedule_heartbeat(state)
     state = send_pending_messages(state)
     {:noreply, state}
@@ -241,6 +253,19 @@ defmodule Livechain.RPC.WSConnection do
     Logger.info("WebSocket closed: #{code} - #{inspect(reason)}")
     state = %{state | connected: false, connection: nil}
     broadcast_status_change(state, :disconnected)
+    # Emit typed provider WS closed event for per-chain consumers
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      Provider.topic(state.chain_name),
+      %Provider.WSClosed{
+        ts: System.system_time(:millisecond),
+        chain: state.chain_name,
+        provider_id: state.endpoint.id,
+        code: code,
+        reason: reason
+      }
+    )
+
     state = schedule_reconnect(state)
     {:noreply, state}
   end
@@ -251,6 +276,18 @@ defmodule Livechain.RPC.WSConnection do
     ProviderPool.report_failure(state.chain_name, state.endpoint.id, {:disconnect, reason})
     state = %{state | connected: false, connection: nil}
     broadcast_status_change(state, :disconnected)
+    # Emit typed provider WS disconnected event for per-chain consumers
+    Phoenix.PubSub.broadcast(
+      Livechain.PubSub,
+      Provider.topic(state.chain_name),
+      %Provider.WSDisconnected{
+        ts: System.system_time(:millisecond),
+        chain: state.chain_name,
+        provider_id: state.endpoint.id,
+        reason: reason
+      }
+    )
+
     state = schedule_reconnect(state)
     {:noreply, state}
   end
@@ -352,11 +389,6 @@ defmodule Livechain.RPC.WSConnection do
            exclude: [state.endpoint.id]
          ) do
       {:ok, _result} ->
-        # Check if this was a subscription-related failover that needs backfill
-        if is_subscription_method(method) do
-          notify_subscription_failover(state.chain_name, state.endpoint.id)
-        end
-
         :telemetry.execute(
           [:livechain, :ws, :failover, :success],
           %{count: 1},
@@ -389,40 +421,6 @@ defmodule Livechain.RPC.WSConnection do
   defp is_subscription_method("eth_subscribe"), do: true
   defp is_subscription_method("eth_unsubscribe"), do: true
   defp is_subscription_method(_), do: false
-
-  defp notify_subscription_failover(chain_name, failed_provider_id) do
-    with {:ok, healthy_providers} when healthy_providers != [] <-
-           Livechain.RPC.Selection.get_available_providers(chain_name,
-             protocol: :ws,
-             exclude: [failed_provider_id]
-           ),
-         pid when is_pid(pid) <- GenServer.whereis(Livechain.RPC.SubscriptionManager) do
-      GenServer.cast(
-        Livechain.RPC.SubscriptionManager,
-        {:handle_provider_failover, chain_name, failed_provider_id, healthy_providers}
-      )
-
-      Logger.info("Notified SubscriptionManager of WebSocket failover",
-        chain: chain_name,
-        failed_provider: failed_provider_id,
-        healthy_providers: healthy_providers
-      )
-    else
-      {:ok, []} ->
-        Logger.warning("No healthy WebSocket providers available for failover notification",
-          chain: chain_name,
-          failed_provider: failed_provider_id
-        )
-
-      nil ->
-        Logger.debug("SubscriptionManager not running, skipping failover notification")
-
-      {:error, reason} ->
-        Logger.warning(
-          "Failed to get healthy providers for failover notification: #{inspect(reason)}"
-        )
-    end
-  end
 
   defp connect_to_websocket(endpoint) do
     # Start a separate WebSocket handler process

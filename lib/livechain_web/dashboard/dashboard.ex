@@ -8,6 +8,7 @@ defmodule LivechainWeb.Dashboard do
   alias LivechainWeb.Components.DashboardHeader
   alias LivechainWeb.Components.NetworkStatusLegend
   alias LivechainWeb.Components.DashboardComponents
+  alias Livechain.Events.Provider
 
   @impl true
   def mount(_params, _session, socket) do
@@ -16,7 +17,6 @@ defmodule LivechainWeb.Dashboard do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Livechain.PubSub, "ws_connections")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "routing:decisions")
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "provider_pool:events")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "clients:events")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "circuit:events")
       Phoenix.PubSub.subscribe(Livechain.PubSub, "chain_config_changes")
@@ -236,17 +236,31 @@ defmodule LivechainWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Provider pool event feed (real or synthetic)
   @impl true
-  def handle_info(%{ts: _t, chain: chain, provider_id: pid, event: event} = ev, socket)
-      when is_map(ev) do
+  def handle_info(evt, socket)
+      when is_struct(evt, Provider.Healthy) or
+             is_struct(evt, Provider.Unhealthy) or
+             is_struct(evt, Provider.CooldownStart) or
+             is_struct(evt, Provider.CooldownEnd) or
+             is_struct(evt, Provider.HealthCheckFailed) do
+    {chain, pid, event, details, ts} =
+      case evt do
+        %Provider.Healthy{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :healthy, nil, ts}
+        %Provider.Unhealthy{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :unhealthy, nil, ts}
+        %Provider.CooldownStart{chain: chain, provider_id: pid, until: until, ts: ts} ->
+          {chain, pid, :cooldown_start, %{until: until}, ts}
+        %Provider.CooldownEnd{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :cooldown_end, nil, ts}
+        %Provider.HealthCheckFailed{chain: chain, provider_id: pid, reason: reason, ts: ts} ->
+          {chain, pid, :health_check_failed, %{reason: reason}, ts}
+      end
+
     entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
-      ts_ms: System.system_time(:millisecond),
+      ts_ms: ts,
       chain: chain,
       provider_id: pid,
       event: event,
-      details: Map.get(ev, :details)
+      details: details
     }
 
     socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, 99)] end)
@@ -264,13 +278,6 @@ defmodule LivechainWeb.Dashboard do
       socket
       |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
       |> push_event("events_batch", %{items: [uev]})
-
-    # Update chain-specific metrics if this event is for the currently selected chain
-    socket = if socket.assigns[:selected_chain] == chain do
-      update_selected_chain_metrics(socket)
-    else
-      socket
-    end
 
     {:noreply, socket}
   end

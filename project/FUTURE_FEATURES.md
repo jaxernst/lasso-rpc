@@ -240,22 +240,18 @@ Goal: Prefer providers that are most up-to-date with chain head to minimize stal
   - Oscillation: apply small hysteresis (e.g., require sustained freshness for N samples before promoting)
   - Sparse traffic: rely on periodic probes with jittered schedule
 
-## TRIAGE
+### Block Height Awareness and Reorg Awareness
 
-- **ISSUE: Subscription Failover Backfill is Incomplete (Impacts `newHeads`)**
-  - **Summary**: The subscription failover backfill mechanism, configured by `max_backfill_blocks`, is only implemented for `eth_subscribe("logs")`. It is NOT implemented for the critical `eth_subscribe("newHeads")` subscription type. This means if a provider fails during a `newHeads` subscription, the client will miss blocks and experience data loss, which undermines a core reliability feature.
-  - **Evidence**:
-    - The implementation in `lib/livechain/rpc/subscription_manager.ex` (functions `backfill_events_for_subscriptions`, `deliver_backfilled_logs`) is entirely focused on fetching and replaying log events via `eth_getLogs`.
-    - The integration test in `test/integration/failover_test.exs` only validates the backfill behavior for `logs` subscriptions. There are no tests for `newHeads` backfill.
-  - **Required Fix (6-10h)**:
-    - **1. Extend `subscription_manager.ex`**:
-      - Create a new function, perhaps `backfill_new_heads`, that is triggered during failover for `newHeads` subscriptions.
-      - This function should determine the range of missing block numbers.
-      - It must then loop from `last_seen_block + 1` to `current_block`, calling `eth_getBlockByNumber` for each missing block and sending the result to the client.
-      - This process must respect the `max_backfill_blocks` and `backfill_timeout` configuration.
-    - **2. Update `failover_test.exs`**:
-      - Add a new test case that establishes a `newHeads` subscription.
-      - Simulates a provider failure and a gap of several blocks.
-      - Asserts that the client correctly receives the missed blocks via the backfill mechanism after the failover event.
+Pretty much just need to figure out how to deal with the challenges around block height syncing, reorg impacts, and related complexities. That has mostly been handwaved thus far, but here's the challenge outlined:
 
-Issue + tasks discovered that have not yet been scoped/planned out. Report triage tasks here:
+Consistency challenges emerge from temporal differences between providers. Different blockchain sync states, block height variations, and chain reorganization handling create scenarios where identical queries return different results. arXiv +2 Mitigation strategies include block height awareness (routing queries to providers within acceptable lag thresholds) and quorum-based validation for critical queries.
+
+### Per-method Provider Priority configuration
+
+Some providers excel in specific methods, and some providers can handle signficaintly greater throughput for specific methods. It would be nice to specify 'favored' method or 'prioritized' methods on a per-provider basis. For example: If Alchemy is way cheaper or faster for a particular archival query, a user could config historical 'get logs' queries to prefer that provider. Still need to be smart about this design and this of the best api to declare such preferences.
+
+This may also include flags for providers that should be preferred to eth_subscribe streams (some providers may perform better with long running ws feeds, but we don't have explicit benchmarking for those yet)
+
+### Improved routing/selection strategies for eth_subscribe feeds
+
+Benchmarking is implemented for HTTP methods but there's not a good performance/reliability equivalent to make routing decisions for multiplexed upstream proivder websocket feeds. CUrrent these are picked based on manually configured 'priority', but there is likely a smarter way to go about this to ensure best websocket stream performance. (Multiplexing is an important considerations here, and it may be important to balance out/fan out websocket connections to multiple providers if any single provider get too much eth_subscribe load - i.e. there could be many clients subscirbe to many different logs feed filters that might need some degree of load balancing). THis is fairly complex and will require some careful consideration and design.

@@ -198,7 +198,33 @@ defmodule Livechain.RPC.Selection do
         _ -> false
       end
     end)
+    |> maybe_filter_ws_stability(chain_name, protocol)
   end
+
+  # WS stability filter: exclude providers that recently disconnected/closed
+  # unless they've been stable for a short window. This relies on ProviderPool
+  # (or future state) exposing circuit/connection metadata. For now, use a
+  # conservative heuristic via ChainRegistry comprehensive status if available.
+  defp maybe_filter_ws_stability(provider_ids, chain_name, :ws) do
+    conns = Livechain.RPC.ChainRegistry.list_all_providers_comprehensive()
+
+    by_id =
+      conns
+      |> Enum.filter(&(&1.chain == chain_name))
+      |> Map.new(&{&1.id, &1})
+
+    provider_ids
+    |> Enum.filter(fn pid ->
+      case Map.get(by_id, pid) do
+        %{ws_connected: true} -> true
+        # If connection info missing, be conservative and exclude
+        _ -> false
+      end
+    end)
+  end
+
+  defp maybe_filter_ws_stability(provider_ids, _chain_name, _protocol),
+    do: provider_ids
 
   defp supports_protocol?(provider, :both),
     do: supports_protocol?(provider, :http) and supports_protocol?(provider, :ws)
