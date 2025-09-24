@@ -22,7 +22,10 @@ defmodule Livechain.JSONRPC.Error do
     :provider_id,
     :http_status,
     :retriable?,
-    :original_code
+    :original_code,
+    # Transport context
+    :source,
+    :transport
   ]
 
   @type t :: %__MODULE__{
@@ -33,7 +36,9 @@ defmodule Livechain.JSONRPC.Error do
           provider_id: String.t() | nil,
           http_status: integer() | nil,
           retriable?: boolean() | nil,
-          original_code: integer() | nil
+          original_code: integer() | nil,
+          source: :jsonrpc | :transport | :infrastructure | nil,
+          transport: :http | :ws | nil
         }
 
   # JSON-RPC 2.0 standard error codes
@@ -65,11 +70,13 @@ defmodule Livechain.JSONRPC.Error do
       code: normalized_code,
       message: message,
       data: Keyword.get(opts, :data),
-      category: categorize_error(normalized_code),
+      category: Keyword.get(opts, :category) || categorize_error(normalized_code),
       provider_id: Keyword.get(opts, :provider_id),
       http_status: Keyword.get(opts, :http_status),
-      retriable?: assess_retriability(normalized_code),
-      original_code: code
+      retriable?: Keyword.get(opts, :retriable?) || assess_retriability(normalized_code),
+      original_code: code,
+      source: Keyword.get(opts, :source),
+      transport: Keyword.get(opts, :transport)
     }
   end
 
@@ -101,13 +108,8 @@ defmodule Livechain.JSONRPC.Error do
   @doc """
   Coerces any error shape into a %#{__MODULE__}{}.
 
-  Accepts:
-  - Existing %#{__MODULE__}{}
-  - Provider-style maps with code/message (binary or atom keys)
-  - Nested {"error": %{...}} envelopes
-  - Internal tuple errors like {:rate_limit, msg}
-  - Circuit breaker atoms/tuples
-  - Any other value → internal error with details in data
+  Uses centralized error normalization for consistency across the system.
+  For complex error normalization, prefer using Livechain.RPC.ErrorNormalizer directly.
 
   Optional opts:
   - :provider_id (string)
@@ -117,82 +119,12 @@ defmodule Livechain.JSONRPC.Error do
 
   def from(%__MODULE__{} = error, _opts), do: error
 
-  # Nested provider envelope
-  def from(%{"error" => inner} = _wrapped, opts) when is_map(inner), do: from(inner, opts)
-  def from(%{error: inner} = _wrapped, opts) when is_map(inner), do: from(inner, opts)
-
-  # Provider error maps
-  def from(%{"code" => code, "message" => message} = err, opts)
-      when is_integer(code) and is_binary(message) do
-    new(code, message,
-      data: Map.get(err, "data"),
-      provider_id: Keyword.get(opts, :provider_id),
-      http_status: Map.get(err, "http_status")
-    )
+  # Delegate complex normalization to ErrorNormalizer
+  def from(error, opts) do
+    # Import the centralizer normalizer for complex cases
+    Livechain.RPC.ErrorNormalizer.normalize(error, opts)
   end
 
-  def from(%{code: code, message: message} = err, opts)
-      when is_integer(code) and is_binary(message) do
-    new(code, message,
-      data: Map.get(err, :data),
-      provider_id: Keyword.get(opts, :provider_id),
-      http_status: Map.get(err, :http_status)
-    )
-  end
-
-  # Internal tuple errors
-  def from({:rate_limit, msg}, _opts), do: new(429, msg || "Rate limit exceeded")
-
-  def from({:client_error, payload}, _opts) do
-    {message, http_status} = extract_message_and_status(payload)
-    new(-32602, message || "Invalid request", http_status: http_status)
-  end
-
-  def from({:server_error, payload}, _opts) do
-    {message, http_status} = extract_message_and_status(payload)
-    new(-32000, message || "Upstream server error", http_status: http_status)
-  end
-
-  def from({:network_error, payload}, _opts) do
-    {message, http_status} = extract_message_and_status(payload)
-    new(-32000, message || "Network error", http_status: http_status)
-  end
-
-  def from({:encode_error, msg}, _opts), do: new(-32600, msg || "Failed to encode request")
-
-  def from({:response_decode_error, msg}, _opts),
-    do: new(-32000, msg || "Failed to decode response")
-
-  # Circuit breaker
-  def from(:circuit_open, _opts), do: new(-32000, "Circuit breaker open")
-  def from(:circuit_opening, _opts), do: new(-32000, "Circuit breaker opening")
-  def from(:circuit_reopening, _opts), do: new(-32000, "Circuit breaker reopening")
-  def from({:circuit_open, _details}, _opts), do: new(-32000, "Circuit breaker open")
-  def from({:circuit_opening, _details}, _opts), do: new(-32000, "Circuit breaker opening")
-  def from({:circuit_reopening, _details}, _opts), do: new(-32000, "Circuit breaker reopening")
-
-  # Atom errors fall back to internal error
-  def from(atom, _opts) when is_atom(atom), do: new(-32603, to_string(atom))
-
-  # Fallback
-  def from(other, _opts), do: new(-32603, "Internal error", data: %{details: inspect(other)})
-
-  defp extract_message_and_status(%{status: status, body: body}) when is_integer(status) do
-    {format_http_message(status, body), status}
-  end
-
-  defp extract_message_and_status(other) when is_binary(other), do: {other, nil}
-  defp extract_message_and_status(other), do: {inspect(other), nil}
-
-  defp format_http_message(status, body) do
-    "HTTP #{status}: #{truncate_body(body)}"
-  end
-
-  defp truncate_body(body) when is_binary(body) do
-    if String.length(body) > 300, do: String.slice(body, 0, 300) <> "...", else: body
-  end
-
-  defp truncate_body(other), do: inspect(other)
 
   # Private helper functions
 

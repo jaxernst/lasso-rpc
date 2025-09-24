@@ -116,26 +116,6 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @doc """
-  Strategy-aware best provider selection.
-  Applies cooldown and breaker exclusions consistently.
-  """
-  @spec get_best_provider(chain_name, strategy, String.t() | nil) ::
-          {:ok, provider_id} | {:error, term()}
-  def get_best_provider(chain_name, strategy, method \\ nil) do
-    GenServer.call(via_name(chain_name), {:get_best_provider, strategy, method})
-  end
-
-  @doc """
-  Strategy-aware best provider selection with filters (e.g., region).
-  Supported filters: %{region: "us-east-1"}
-  """
-  @spec get_best_provider(chain_name, strategy, String.t() | nil, map()) ::
-          {:ok, provider_id} | {:error, term()}
-  def get_best_provider(chain_name, strategy, method, filters) when is_map(filters) do
-    GenServer.call(via_name(chain_name), {:get_best_provider, strategy, method, filters})
-  end
-
-  @doc """
   Gets all currently active providers.
   """
   @spec get_active_providers(chain_name) :: [provider_id]
@@ -296,32 +276,6 @@ defmodule Livechain.RPC.ProviderPool do
 
       nil ->
         {:reply, {:error, :not_registered}, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_best_provider, strategy, method}, _from, state) do
-    case Selection.pick_provider(state.chain_name, method || "",
-           strategy: strategy,
-           protocol: :both
-         ) do
-      {:ok, provider_id} -> {:reply, {:ok, provider_id}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:get_best_provider, strategy, method, filters}, _from, state) do
-    protocol = Map.get(filters, :protocol, :both)
-    exclude = Map.get(filters, :exclude, [])
-
-    case Selection.pick_provider(state.chain_name, method || "",
-           strategy: strategy,
-           protocol: protocol,
-           exclude: exclude
-         ) do
-      {:ok, provider_id} -> {:reply, {:ok, provider_id}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -1052,12 +1006,4 @@ defmodule Livechain.RPC.ProviderPool do
   def via_name(chain_name) do
     {:via, Registry, {Livechain.Registry, {:provider_pool, chain_name}}}
   end
-
-  # Config helpers with safe defaults
-
-  # defp global_config/1: deprecated, use HealthPolicy config and ConfigStore instead
-
-  # defp health_check_config/1: deprecated, HealthPolicy holds thresholds
-
-  # load_balancing_mode removed; strategies are supplied explicitly by callers
 end

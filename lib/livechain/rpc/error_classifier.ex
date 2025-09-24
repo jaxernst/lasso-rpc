@@ -1,27 +1,113 @@
 defmodule Livechain.RPC.ErrorClassifier do
   @moduledoc """
-  Centralizes error classification logic for RPC operations.
+  Unified error classification and normalization for RPC operations.
 
-  Distinguishes between:
-  - Infrastructure/provider failures (should trigger circuit breaker & failover)
-  - User/client errors (should not affect provider health)
-
-  Used by both CircuitBreaker and Failover modules to ensure consistent behavior.
+  Provides consistent error categorization and JError normalization across
+  all transport layers and components. Single source of truth for error
+  classification used by CircuitBreaker, HealthPolicy, and Failover.
   """
 
+  alias Livechain.JSONRPC.Error, as: JError
+
+  @type context :: %{
+          optional(:transport) => :http | :ws,
+          optional(:provider_id) => String.t(),
+          optional(:method) => String.t()
+        }
+
   @doc """
-  Classifies an error reason as either infrastructure failure or user error.
+  Normalizes any error into a properly categorized JError.
 
-  ## Examples
+  This is the single entry point for all error normalization across
+  transport layers, ensuring consistent categorization and retriability.
+  """
+  @spec normalize_error(any(), context()) :: JError.t()
+  def normalize_error(error, context \\ %{})
 
-      iex> ErrorClassifier.classify_error({:server_error, "500 Internal Server Error"})
-      :infrastructure_failure
+  def normalize_error(%JError{} = error, _context), do: error
 
-      iex> ErrorClassifier.classify_error({:client_error, "400 Bad Request"})
-      :user_error
+  def normalize_error(error, context) do
+    classification = classify_error(error)
+    provider_id = Map.get(context, :provider_id, "unknown")
+    transport = Map.get(context, :transport)
 
-      iex> ErrorClassifier.classify_error(:circuit_open)
-      :infrastructure_failure
+    case error do
+      {:rate_limit, payload} ->
+        JError.new(-32001, "Rate limited by provider",
+          data: payload,
+          provider_id: provider_id,
+          source: :transport,
+          transport: transport,
+          category: :rate_limit,
+          retriable?: true
+        )
+
+      {:server_error, payload} ->
+        JError.new(-32002, "Server error",
+          data: payload,
+          provider_id: provider_id,
+          source: :transport,
+          transport: transport,
+          category: :server_error,
+          retriable?: true
+        )
+
+      {:client_error, payload} ->
+        JError.new(-32003, "Client error",
+          data: payload,
+          provider_id: provider_id,
+          source: :transport,
+          transport: transport,
+          category: :client_error,
+          retriable?: false
+        )
+
+      {:network_error, reason} ->
+        JError.new(-32004, "Network error: #{reason}",
+          provider_id: provider_id,
+          source: :transport,
+          transport: transport,
+          category: :network_error,
+          retriable?: true
+        )
+
+      :circuit_open ->
+        JError.new(-32010, "Circuit breaker open",
+          provider_id: provider_id,
+          source: :infrastructure,
+          transport: transport,
+          category: :circuit_open,
+          retriable?: true
+        )
+
+      :timeout ->
+        JError.new(-32011, "Request timeout",
+          provider_id: provider_id,
+          source: :infrastructure,
+          transport: transport,
+          category: :timeout,
+          retriable?: true
+        )
+
+      other ->
+        retriable? = classification == :infrastructure_failure
+        category = if retriable?, do: :infrastructure_error, else: :user_error
+
+        JError.new(-32000, "Unclassified error: #{inspect(other)}",
+          data: other,
+          provider_id: provider_id,
+          source: :infrastructure,
+          transport: transport,
+          category: category,
+          retriable?: retriable?
+        )
+    end
+  end
+
+  @doc """
+  Legacy classification function for backwards compatibility.
+
+  Use normalize_error/2 for new code.
   """
   @spec classify_error(any()) :: :infrastructure_failure | :user_error
   def classify_error(reason) do

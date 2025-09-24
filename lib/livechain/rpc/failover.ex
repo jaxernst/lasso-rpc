@@ -8,9 +8,9 @@ defmodule Livechain.RPC.Failover do
 
   require Logger
 
-  alias Livechain.RPC.{Selection, ChainSupervisor, ProviderPool}
+  alias Livechain.RPC.{Selection, Transport, ProviderPool}
   alias Livechain.Benchmarking.BenchmarkStore
-  alias Livechain.Config.MethodPolicy
+  alias Livechain.Config.{MethodPolicy, ConfigStore}
   alias Livechain.JSONRPC.Error, as: JError
 
   @doc """
@@ -31,7 +31,7 @@ defmodule Livechain.RPC.Failover do
   def execute_with_failover(chain, method, params, opts \\ []) do
     strategy = Keyword.get(opts, :strategy, :cheapest)
     protocol = Keyword.get(opts, :protocol, :http)
-    region_filter = Keyword.get(opts, :region_filter)
+    _region_filter = Keyword.get(opts, :region_filter)
 
     with {:ok, provider_id} <-
            Selection.pick_provider(chain, method, strategy: strategy, protocol: protocol) do
@@ -41,8 +41,7 @@ defmodule Livechain.RPC.Failover do
         params,
         strategy,
         provider_id,
-        region_filter,
-        protocol
+        opts
       )
     else
       {:error, reason} ->
@@ -52,26 +51,19 @@ defmodule Livechain.RPC.Failover do
 
   # Private functions
 
-  defp forward_request_by_protocol(chain, provider_id, method, params, :http) do
-    ChainSupervisor.forward_rpc_request(chain, provider_id, method, params)
-  end
+  defp forward_request_via_transport(chain, provider_id, method, params, opts) do
+    case ConfigStore.get_provider(chain, provider_id) do
+      {:ok, provider_config} ->
+        transport_opts = [
+          timeout: Keyword.get(opts, :timeout, 30_000),
+          protocol: Keyword.get(opts, :protocol)
+        ]
 
-  defp forward_request_by_protocol(chain, provider_id, method, params, :ws) do
-    ChainSupervisor.forward_ws_message(chain, provider_id, %{
-      "jsonrpc" => "2.0",
-      "method" => method,
-      "params" => params,
-      "id" => generate_request_id()
-    })
-  end
+        Transport.forward_request(provider_id, provider_config, method, params, transport_opts)
 
-  defp forward_request_by_protocol(chain, provider_id, method, params, :both) do
-    # Default to HTTP for :both protocol
-    ChainSupervisor.forward_rpc_request(chain, provider_id, method, params)
-  end
-
-  defp generate_request_id do
-    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+      {:error, reason} ->
+        {:error, JError.new(-32000, "Provider not found: #{reason}", provider_id: provider_id)}
+    end
   end
 
   defp execute_rpc_with_failover(
@@ -80,8 +72,7 @@ defmodule Livechain.RPC.Failover do
          params,
          strategy,
          provider_id,
-         region_filter,
-         protocol
+         opts
        ) do
     start_time = System.monotonic_time(:millisecond)
 
@@ -92,7 +83,7 @@ defmodule Livechain.RPC.Failover do
       provider_id: provider_id
     })
 
-    case forward_request_by_protocol(chain, provider_id, method, params, protocol) do
+    case forward_request_via_transport(chain, provider_id, method, params, opts) do
       {:ok, result} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
         record_success_metrics(chain, provider_id, method, strategy, duration_ms)
@@ -118,8 +109,8 @@ defmodule Livechain.RPC.Failover do
               strategy,
               [provider_id],
               1,
-              region_filter,
-              protocol
+              nil,
+              Keyword.get(opts, :protocol, :http)
             )
 
           false ->
@@ -184,8 +175,9 @@ defmodule Livechain.RPC.Failover do
          protocol
        ) do
     start_time = System.monotonic_time(:millisecond)
+    opts = [protocol: protocol, timeout: 30_000]
 
-    case forward_request_by_protocol(chain, provider_id, method, params, protocol) do
+    case forward_request_via_transport(chain, provider_id, method, params, opts) do
       {:ok, result} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
 
