@@ -142,10 +142,26 @@ defmodule Livechain.JSONRPC.Error do
 
   # Internal tuple errors
   def from({:rate_limit, msg}, _opts), do: new(429, msg || "Rate limit exceeded")
-  def from({:client_error, msg}, _opts), do: new(-32602, msg || "Invalid request")
-  def from({:server_error, msg}, _opts), do: new(-32000, msg || "Upstream server error")
-  def from({:network_error, msg}, _opts), do: new(-32000, msg || "Network error")
-  def from({:decode_error, msg}, _opts), do: new(-32700, msg || "Parse error")
+
+  def from({:client_error, payload}, _opts) do
+    {message, http_status} = extract_message_and_status(payload)
+    new(-32602, message || "Invalid request", http_status: http_status)
+  end
+
+  def from({:server_error, payload}, _opts) do
+    {message, http_status} = extract_message_and_status(payload)
+    new(-32000, message || "Upstream server error", http_status: http_status)
+  end
+
+  def from({:network_error, payload}, _opts) do
+    {message, http_status} = extract_message_and_status(payload)
+    new(-32000, message || "Network error", http_status: http_status)
+  end
+
+  def from({:encode_error, msg}, _opts), do: new(-32600, msg || "Failed to encode request")
+
+  def from({:response_decode_error, msg}, _opts),
+    do: new(-32000, msg || "Failed to decode response")
 
   # Circuit breaker
   def from(:circuit_open, _opts), do: new(-32000, "Circuit breaker open")
@@ -160,6 +176,23 @@ defmodule Livechain.JSONRPC.Error do
 
   # Fallback
   def from(other, _opts), do: new(-32603, "Internal error", data: %{details: inspect(other)})
+
+  defp extract_message_and_status(%{status: status, body: body}) when is_integer(status) do
+    {format_http_message(status, body), status}
+  end
+
+  defp extract_message_and_status(other) when is_binary(other), do: {other, nil}
+  defp extract_message_and_status(other), do: {inspect(other), nil}
+
+  defp format_http_message(status, body) do
+    "HTTP #{status}: #{truncate_body(body)}"
+  end
+
+  defp truncate_body(body) when is_binary(body) do
+    if String.length(body) > 300, do: String.slice(body, 0, 300) <> "...", else: body
+  end
+
+  defp truncate_body(other), do: inspect(other)
 
   # Private helper functions
 

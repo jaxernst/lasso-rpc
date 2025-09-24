@@ -1,8 +1,9 @@
 defmodule LivechainWeb.MetricsController do
   use LivechainWeb, :controller
 
+  require Logger
+
   alias LivechainWeb.Dashboard.MetricsHelpers
-  alias Livechain.RPC.ChainRegistry
   alias Livechain.Config.ConfigStore
   alias Livechain.Benchmarking.BenchmarkStore
 
@@ -26,7 +27,7 @@ defmodule LivechainWeb.MetricsController do
         |> json(%{
           error: "Chain not found",
           chain: chain_name,
-          available_chains: ConfigStore.get_all_chain_names()
+          available_chains: ConfigStore.list_chains()
         })
     end
   end
@@ -38,14 +39,14 @@ defmodule LivechainWeb.MetricsController do
     |> json(%{
       error: "Chain parameter required",
       usage: "/api/metrics/{chain_name}",
-      available_chains: ConfigStore.get_all_chain_names()
+      available_chains: ConfigStore.list_chains()
     })
   end
 
   defp collect_chain_metrics(chain_name) do
     # Get basic chain information
-    chain_config = ConfigStore.get_chain(chain_name)
-    provider_configs = ConfigStore.get_providers(chain_name)
+    {:ok, chain_config} = ConfigStore.get_chain(chain_name)
+    {:ok, provider_configs} = ConfigStore.get_providers(chain_name)
 
     # Get performance data from BenchmarkStore
     chain_stats = BenchmarkStore.get_chain_wide_stats(chain_name)
@@ -98,7 +99,7 @@ defmodule LivechainWeb.MetricsController do
     # Build comprehensive response
     %{
       chain: chain_name,
-      chain_id: chain_config[:chain_id],
+      chain_id: chain_config.chain_id,
       timestamp: System.system_time(:millisecond),
       system_metrics: %{
         memory_mb: vm_metrics.mem_total_mb,

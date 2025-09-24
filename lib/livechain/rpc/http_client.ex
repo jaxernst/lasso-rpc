@@ -16,12 +16,14 @@ defmodule Livechain.RPC.HttpClient do
   @type method :: String.t()
   @type params :: list()
   @type timeout_ms :: non_neg_integer()
+  @type error_payload :: String.t() | map()
   @type error_reason ::
-          {:rate_limit, String.t()}
-          | {:server_error, String.t()}
-          | {:client_error, String.t()}
-          | {:network_error, String.t()}
-          | {:decode_error, String.t()}
+          {:rate_limit, error_payload}
+          | {:server_error, error_payload}
+          | {:client_error, error_payload}
+          | {:network_error, error_payload}
+          | {:encode_error, String.t()}
+          | {:response_decode_error, String.t()}
 
   @callback request(provider_config, method, params, timeout_ms) ::
               {:ok, json_map} | {:error, error_reason}

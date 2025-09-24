@@ -1,7 +1,7 @@
 defmodule LivechainWeb.ChainController do
   use LivechainWeb, :controller
 
-  alias Livechain.RPC.WSSupervisor
+  alias Livechain.RPC.ChainRegistry
   alias Livechain.Config.ConfigStore
 
   def index(conn, _params) do
@@ -36,34 +36,28 @@ defmodule LivechainWeb.ChainController do
         |> json(%{error: "Unsupported chain ID", chain_id: chain_id})
 
       {chain_name, chain_config} ->
-        # Get connection status for this chain
-        connections = WSSupervisor.list_connections()
+        providers = ChainRegistry.list_all_providers_comprehensive()
 
-        chain_connection =
-          Enum.find(connections, fn conn ->
-            String.contains?(String.downcase(conn.name), String.downcase(chain_config.name))
-          end)
+        chain_providers =
+          providers
+          |> Enum.filter(&(&1.chain == chain_name))
 
-        status =
-          if chain_connection do
-            %{
-              chain_id: chain_id,
-              chain_name: chain_name,
-              name: chain_config.name,
-              connected: chain_connection.status == :connected,
-              reconnect_attempts: chain_connection.reconnect_attempts || 0,
-              subscriptions: chain_connection.subscriptions || 0
-            }
-          else
-            %{
-              chain_id: chain_id,
-              chain_name: chain_name,
-              name: chain_config.name,
-              connected: false,
-              reconnect_attempts: 0,
-              subscriptions: 0
-            }
-          end
+        connected = Enum.any?(chain_providers, &(&1.ws_connected == true))
+
+        status = %{
+          chain_id: chain_id,
+          chain_name: chain_name,
+          name: chain_config.name,
+          connected: connected,
+          reconnect_attempts:
+            chain_providers
+            |> Enum.map(&(&1.reconnect_attempts || 0))
+            |> Enum.max(fn -> 0 end),
+          subscriptions:
+            chain_providers
+            |> Enum.map(&(&1.subscriptions || 0))
+            |> Enum.sum()
+        }
 
         json(conn, status)
     end

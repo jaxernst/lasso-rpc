@@ -7,7 +7,7 @@ defmodule LivechainWeb.Endpoint do
   @session_options [
     store: :cookie,
     key: "_livechain_key",
-    signing_salt: Application.get_env(:livechain, LivechainWeb.Endpoint)[:secret_key_base],
+    signing_salt: Application.compile_env(:livechain, LivechainWeb.Endpoint)[:secret_key_base],
     same_site: "Lax"
   ]
 

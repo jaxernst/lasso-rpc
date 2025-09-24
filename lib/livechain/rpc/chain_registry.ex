@@ -21,6 +21,7 @@ defmodule Livechain.RPC.ChainRegistry do
   alias Livechain.Config.ConfigStore
   alias Livechain.RPC.ChainSupervisor
   alias Livechain.RPC.ProviderPool
+  alias Livechain.RPC.StatusAggregator
 
   defstruct [
     :chain_supervisors,
@@ -83,52 +84,7 @@ defmodule Livechain.RPC.ChainRegistry do
   Shows both WebSocket and HTTP-only providers with proper status indicators.
   """
   def list_all_providers do
-    # Get all configured chains from ConfigStore
-    all_chains = ConfigStore.get_all_chains()
-
-    Enum.flat_map(all_chains, fn {chain_name, chain_config} ->
-      Enum.map(chain_config.providers, fn provider ->
-        # Determine provider type based on available URLs
-        provider_type = determine_provider_type(provider)
-
-        # Get status information
-        provider_status = determine_provider_status(chain_name, provider)
-
-        # Get WebSocket connection info if applicable
-        ws_info =
-          if provider_type in [:websocket, :both] do
-            case get_chain_pid(chain_name) do
-              {:ok, _pid} ->
-                ws_status = ChainSupervisor.get_chain_status(chain_name)
-                ws_connections = Map.get(ws_status, :ws_connections, [])
-                Enum.find(ws_connections, &(&1.id == provider.id))
-
-              _ ->
-                nil
-            end
-          else
-            nil
-          end
-
-        %{
-          id: provider.id,
-          name: provider.name,
-          chain: chain_name,
-          type: provider_type,
-          status: provider_status,
-          # WebSocket specific fields (nil for HTTP-only)
-          ws_connected: if(ws_info, do: Map.get(ws_info, :connected, false), else: nil),
-          reconnect_attempts: if(ws_info, do: Map.get(ws_info, :reconnect_attempts, 0), else: 0),
-          subscriptions: if(ws_info, do: Map.get(ws_info, :subscriptions, 0), else: 0),
-          pending_messages: if(ws_info, do: Map.get(ws_info, :pending_messages, 0), else: 0),
-          # Provider configuration info
-          priority: Map.get(provider, :priority, 999),
-          url: provider.url,
-          ws_url: Map.get(provider, :ws_url),
-          last_seen: System.system_time(:millisecond)
-        }
-      end)
-    end)
+    StatusAggregator.list_all_providers_comprehensive()
   end
 
   @doc """
@@ -151,7 +107,7 @@ defmodule Livechain.RPC.ChainRegistry do
                 "ChainRegistry: Successfully got comprehensive status for #{chain_name}, #{length(pool_status.providers)} providers"
               )
 
-              # Get WebSocket connection info from chain supervisor  
+              # Get WebSocket connection info from chain supervisor
               ws_status = ChainSupervisor.get_chain_status(chain_name)
               ws_connections = Map.get(ws_status, :ws_connections, [])
 
@@ -187,7 +143,7 @@ defmodule Livechain.RPC.ChainRegistry do
                   id: provider.id,
                   name: provider_name,
                   # Use the actual health status from ProviderPool for UI display
-                  status: normalize_provider_status(provider.status),
+                  status: provider.status,
                   # Use the actual status from ProviderPool
                   health_status: provider.status,
                   circuit_state: provider.circuit_state,
@@ -231,7 +187,7 @@ defmodule Livechain.RPC.ChainRegistry do
                         %{
                           id: provider.id,
                           name: provider.name,
-                          status: normalize_provider_status(Map.get(provider, :status, :unknown)),
+                          status: Map.get(provider, :status, :unknown),
                           chain: chain_name,
                           reconnect_attempts: Map.get(provider, :consecutive_failures, 0),
                           subscriptions: Map.get(provider, :subscriptions, 0),
@@ -272,125 +228,7 @@ defmodule Livechain.RPC.ChainRegistry do
   This shows every provider from config regardless of connection type.
   """
   def list_all_providers_comprehensive do
-    # Get all configured chains from ConfigStore
-    all_chains = ConfigStore.get_all_chains()
-
-    Enum.flat_map(all_chains, fn {chain_name, chain_config} ->
-      # Get health check data from ProviderPool if available
-      pool_providers_map =
-        case get_chain_pid(chain_name) do
-          {:ok, pid} when is_pid(pid) ->
-            case ProviderPool.get_comprehensive_status(chain_name) do
-              {:ok, pool_status} ->
-                # Convert to map for easy lookup
-                pool_status.providers
-                |> Enum.map(&{&1.id, &1})
-                |> Enum.into(%{})
-
-              {:error, _} ->
-                %{}
-            end
-
-          _ ->
-            %{}
-        end
-
-      # Get WebSocket connection info if chain is running
-      ws_connections_map =
-        case get_chain_pid(chain_name) do
-          {:ok, pid} when is_pid(pid) ->
-            ws_status = ChainSupervisor.get_chain_status(chain_name)
-            ws_connections = Map.get(ws_status, :ws_connections, [])
-
-            ws_connections
-            |> Enum.map(&{&1.id, &1})
-            |> Enum.into(%{})
-
-          _ ->
-            %{}
-        end
-
-      # Show ALL providers from config, enriched with runtime data
-      Enum.map(chain_config.providers, fn config_provider ->
-        provider_type = determine_provider_type(config_provider)
-
-        # Get health check data from ProviderPool if available
-        pool_provider = Map.get(pool_providers_map, config_provider.id)
-
-        # Get WebSocket connection data if available  
-        ws_connection = Map.get(ws_connections_map, config_provider.id)
-
-        # Safely extract WebSocket connection data
-        reconnect_attempts =
-          if ws_connection, do: Map.get(ws_connection, :reconnect_attempts, 0), else: 0
-
-        subscriptions = if ws_connection, do: Map.get(ws_connection, :subscriptions, 0), else: 0
-
-        ws_connected =
-          if ws_connection, do: Map.get(ws_connection, :connected, false), else: false
-
-        pending_messages =
-          if ws_connection, do: Map.get(ws_connection, :pending_messages, 0), else: 0
-
-        if pool_provider do
-          # Provider has health check data from ProviderPool
-          %{
-            id: pool_provider.id,
-            name: pool_provider.name || config_provider.name || config_provider.id,
-            # Add missing type field
-            type: provider_type,
-            status: normalize_provider_status(pool_provider.status),
-            health_status: pool_provider.status,
-            circuit_state: pool_provider.circuit_state,
-            chain: chain_name,
-            reconnect_attempts: reconnect_attempts,
-            subscriptions: subscriptions,
-            last_seen: pool_provider.last_health_check,
-            consecutive_failures: pool_provider.consecutive_failures,
-            consecutive_successes: pool_provider.consecutive_successes,
-            last_error: pool_provider.last_error,
-            is_in_cooldown: pool_provider.is_in_cooldown,
-            cooldown_until: pool_provider.cooldown_until,
-            cooldown_count: pool_provider.cooldown_count,
-            ws_connected: ws_connected,
-            pending_messages: pending_messages
-          }
-        else
-          # Provider not in ProviderPool - use config and WS data
-          status =
-            case provider_type do
-              # HTTP-only providers show as connecting by default
-              :http -> :connecting
-              :websocket -> if ws_connected, do: :connected, else: :disconnected
-              :both -> if ws_connected, do: :connected, else: :connecting
-              _ -> :unknown
-            end
-
-          %{
-            id: config_provider.id,
-            name: config_provider.name || config_provider.id,
-            # Add missing type field
-            type: provider_type,
-            status: normalize_provider_status(status),
-            # No health check data available
-            health_status: :unknown,
-            circuit_state: :closed,
-            chain: chain_name,
-            reconnect_attempts: reconnect_attempts,
-            subscriptions: subscriptions,
-            last_seen: nil,
-            consecutive_failures: 0,
-            consecutive_successes: 0,
-            last_error: nil,
-            is_in_cooldown: false,
-            cooldown_until: nil,
-            cooldown_count: 0,
-            ws_connected: ws_connected,
-            pending_messages: pending_messages
-          }
-        end
-      end)
-    end)
+    StatusAggregator.list_all_providers_comprehensive()
   end
 
   @doc """
@@ -407,139 +245,12 @@ defmodule Livechain.RPC.ChainRegistry do
     )
   end
 
-  # Private helper functions
-
-  # Helper function to determine provider type based on available URLs
-  defp determine_provider_type(provider) do
-    has_http = is_binary(provider.url) and String.length(provider.url) > 0
-
-    has_ws =
-      is_binary(Map.get(provider, :ws_url)) and String.length(Map.get(provider, :ws_url, "")) > 0
-
-    case {has_http, has_ws} do
-      {true, true} -> :both
-      {true, false} -> :http
-      # Unlikely but possible
-      {false, true} -> :websocket
-      # Invalid configuration
-      {false, false} -> :unknown
-    end
-  end
-
-  # Helper function to determine provider status 
-  defp determine_provider_status(chain_name, provider) do
-    provider_type = determine_provider_type(provider)
-
-    case provider_type do
-      :both ->
-        # For providers with both HTTP and WebSocket, check WebSocket first, then health status
-        ws_status = get_ws_status(chain_name, provider.id)
-        health_status = get_provider_health_status(chain_name, provider.id)
-
-        cond do
-          # If WebSocket is connected, provider is connected
-          ws_status == true -> :connected
-          # If WebSocket is disconnected but HTTP health check passes, show connecting
-          ws_status == false and health_status == :connected -> :connecting
-          # If both are unavailable, disconnected
-          true -> :disconnected
-        end
-
-      :websocket ->
-        # WebSocket-only provider - depends entirely on WebSocket status
-        case get_ws_status(chain_name, provider.id) do
-          true -> :connected
-          # WebSocket is trying to connect
-          false -> :connecting
-          # WebSocket connection not started
-          nil -> :disconnected
-        end
-
-      :http ->
-        # HTTP-only provider - use health check status from ProviderPool
-        get_provider_health_status(chain_name, provider.id)
-
-      :unknown ->
-        :disconnected
-    end
-  end
-
-  defp get_ws_status(chain_name, provider_id) do
-    case get_chain_pid(chain_name) do
-      {:ok, _pid} ->
-        ws_status = ChainSupervisor.get_chain_status(chain_name)
-        ws_connections = Map.get(ws_status, :ws_connections, [])
-
-        case Enum.find(ws_connections, &(&1.id == provider_id)) do
-          nil -> nil
-          connection -> Map.get(connection, :connected, false)
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp get_provider_health_status(chain_name, provider_id) do
-    # Get the actual health check status from ProviderPool
-    try do
-      case ProviderPool.get_comprehensive_status(chain_name) do
-        {:ok, pool_status} ->
-          # Find the specific provider in the pool status
-          case Enum.find(pool_status.providers, &(&1.id == provider_id)) do
-            %{status: :healthy} -> :connected
-            %{status: :unhealthy} -> :disconnected
-            %{status: :connecting} -> :connecting
-            %{status: :rate_limited} -> :connecting
-            # Default for unknown status
-            _ -> :connecting
-          end
-
-        {:error, _} ->
-          # Fallback to circuit breaker status if ProviderPool is not available
-          get_circuit_breaker_status(provider_id)
-      end
-    catch
-      :exit, {:noproc, _} ->
-        # ProviderPool not started yet, fallback to circuit breaker
-        get_circuit_breaker_status(provider_id)
-
-      _ ->
-        :connecting
-    end
-  end
-
-  defp get_circuit_breaker_status(provider_id) do
-    try do
-      case Livechain.RPC.CircuitBreaker.get_state(provider_id) do
-        %{state: :closed} -> :connected
-        %{state: :half_open} -> :connecting
-        %{state: :open} -> :disconnected
-        # Default - assume providers are available
-        _ -> :connected
-      end
-    catch
-      # Circuit breaker not started yet
-      :exit, {:noproc, _} -> :connected
-      _ -> :connected
-    end
-  end
-
-  # Normalize ProviderPool statuses to topology-expected statuses
-  defp normalize_provider_status(:healthy), do: :connected
-  defp normalize_provider_status(:unhealthy), do: :disconnected
-  defp normalize_provider_status(:connecting), do: :connecting
-  defp normalize_provider_status(:disconnected), do: :disconnected
-  # Expose rate limiting distinctly in the UI
-  defp normalize_provider_status(:rate_limited), do: :rate_limited
-  defp normalize_provider_status(_), do: :disconnected
+  # Private helper functions removed; StatusAggregator is the authority for UI status.
 
   ## GenServer Implementation
 
   @impl true
   def init(_opts) do
-    Logger.info("Starting ChainRegistry")
-
     state = %__MODULE__{
       chain_supervisors: %{},
       started_at: System.monotonic_time(:millisecond)
@@ -552,8 +263,6 @@ defmodule Livechain.RPC.ChainRegistry do
   def handle_call(:start_all_chains, _from, state) do
     # Get all configured chains from ConfigStore
     all_chains = ConfigStore.get_all_chains()
-
-    Logger.info("Starting supervisors for #{map_size(all_chains)} configured chains")
 
     # Start chain supervisors for each configured chain
     results =
@@ -575,24 +284,8 @@ defmodule Livechain.RPC.ChainRegistry do
       |> Enum.filter(fn {_, result} -> match?({:ok, _}, result) end)
       |> Enum.into(%{}, fn {chain_name, {:ok, pid}} -> {chain_name, pid} end)
 
-    successful_starts = map_size(successful_supervisors)
-    failed_starts = Enum.count(results, fn {_, result} -> match?({:error, _}, result) end)
-
-    if failed_starts > 0 do
-      failed_chains =
-        results
-        |> Enum.filter(fn {_, result} -> match?({:error, _}, result) end)
-        |> Enum.map(fn {chain_name, _} -> chain_name end)
-
-      Logger.error("Failed chains: #{Enum.join(failed_chains, ", ")}")
-    end
-
-    Logger.info(
-      "Chain supervisor startup complete: #{successful_starts}/#{map_size(all_chains)} successful, #{failed_starts} failed"
-    )
-
     new_state = %{state | chain_supervisors: successful_supervisors}
-    {:reply, {:ok, successful_starts}, new_state}
+    {:reply, {:ok, map_size(successful_supervisors)}, new_state}
   end
 
   @impl true
@@ -661,28 +354,11 @@ defmodule Livechain.RPC.ChainRegistry do
   ## Private Functions
 
   defp start_chain_supervisor(chain_name, chain_config) do
-    case Livechain.Config.ChainConfig.validate_chain_config(chain_config) do
-      :ok ->
-        case DynamicSupervisor.start_child(
-               Livechain.RPC.Supervisor,
-               {ChainSupervisor, {chain_name, chain_config}}
-             ) do
-          {:ok, pid} ->
-            Logger.info("Started ChainSupervisor for #{chain_name}")
-            {:ok, pid}
+    :ok = Livechain.Config.ChainConfig.validate_chain_config(chain_config)
 
-          {:error, {:already_started, pid}} ->
-            Logger.info("ChainSupervisor for #{chain_name} already running")
-            {:ok, pid}
-
-          {:error, reason} ->
-            Logger.error("Failed to start ChainSupervisor for #{chain_name}: #{inspect(reason)}")
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        Logger.error("Invalid configuration for #{chain_name}: #{inspect(reason)}")
-        {:error, reason}
-    end
+    DynamicSupervisor.start_child(
+      Livechain.RPC.Supervisor,
+      {ChainSupervisor, {chain_name, chain_config}}
+    )
   end
 end

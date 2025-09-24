@@ -15,7 +15,7 @@ config :livechain, LivechainWeb.Endpoint,
 # Enhanced logging for development debugging
 config :logger, :console,
   format: "[$level] $message\n",
-  level: :info,
+  level: :debug,
   metadata: :all
 
 # Enable detailed Phoenix logging
@@ -29,7 +29,5 @@ config :phoenix, :stacktrace_depth, 20
 # Initialize plugs at runtime for faster development compilation
 config :phoenix, :plug_init_mode, :runtime
 
-# Enable simulator in development for demos and testing
 config :livechain,
-  enable_simulator: true,
   environment: :dev

@@ -164,8 +164,6 @@ defmodule Livechain.Telemetry do
       &Livechain.Telemetry.Handlers.handle_event/4,
       %{}
     )
-
-    Logger.info("Attached default telemetry handlers")
   end
 
   @doc """

@@ -45,7 +45,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     GenServer.call(__MODULE__, {:get_provider_metrics, chain_name, provider_id})
   end
 
-
   @doc """
   Gets performance metrics for a specific RPC method across all providers.
   """
@@ -204,8 +203,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
 
   @impl true
   def init(_opts) do
-    Logger.info("Starting BenchmarkStore")
-
     # Schedule periodic cleanup
     schedule_cleanup()
 
@@ -267,7 +264,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     # 24 hours ago - use monotonic time for consistency
     cutoff_time = System.monotonic_time(:millisecond) - 24 * 60 * 60 * 1000
 
-
     # Clean RPC table
     if Map.has_key?(state.rpc_tables, chain_name) do
       rpc_table = rpc_table_name(chain_name)
@@ -319,7 +315,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     {:reply, result, state}
   end
 
-
   @impl true
   def handle_call({:get_rpc_method_performance, chain_name, method}, _from, state) do
     result =
@@ -364,7 +359,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
 
   @impl true
   def handle_call({:clear_chain_metrics, chain_name}, _from, state) do
-
     if Map.has_key?(state.rpc_tables, chain_name) do
       rpc_table = rpc_table_name(chain_name)
       :ets.delete(rpc_table)
@@ -486,7 +480,8 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
         # Calculate composite score based on RPC performance
         if length(rpc_entries) > 0 do
           {total_successes, total_calls, weighted_avg_latency} =
-            Enum.reduce(rpc_entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total, avg_duration, _samples, _updated},
+            Enum.reduce(rpc_entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total,
+                                                      avg_duration, _samples, _updated},
                                                      {acc_successes, acc_total, acc_latency} ->
               {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total}
             end)
@@ -777,7 +772,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     total_size =
       state.chains
       |> Enum.map(fn chain_name ->
-
         rpc_size =
           if Map.has_key?(state.rpc_tables, chain_name),
             do: :ets.info(rpc_table_name(chain_name), :size) || 0,
@@ -997,7 +991,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     end
   end
 
-
   defp update_rpc_scores(score_table, provider_id, method, duration_ms, result) do
     key = {provider_id, method, :rpc}
 
@@ -1146,20 +1139,20 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     rpc_scores =
       score_table
       |> :ets.tab2list()
-      |> Enum.filter(fn {{_provider_id, _method, type}, _successes, _total, _avg_duration, _samples,
-                         _updated} ->
+      |> Enum.filter(fn {{_provider_id, _method, type}, _successes, _total, _avg_duration,
+                         _samples, _updated} ->
         type == :rpc
       end)
-      |> Enum.group_by(fn {{provider_id, _method, _type}, _successes, _total, _avg_duration, _samples,
-                           _updated} ->
+      |> Enum.group_by(fn {{provider_id, _method, _type}, _successes, _total, _avg_duration,
+                           _samples, _updated} ->
         provider_id
       end)
 
     # Calculate overall scores for each provider based on RPC latency metrics
     Enum.map(rpc_scores, fn {provider_id, entries} ->
       {total_successes, total_calls, weighted_avg_latency} =
-        Enum.reduce(entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total, avg_duration,
-                                              _samples, _updated},
+        Enum.reduce(entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total,
+                                              avg_duration, _samples, _updated},
                                              {acc_successes, acc_total, acc_latency} ->
           {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total}
         end)
@@ -1235,7 +1228,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
     }
   end
 
-
   defp get_rpc_performance_stats(chain_name, method) do
     score_table = score_table_name(chain_name)
 
@@ -1307,7 +1299,6 @@ defmodule Livechain.Benchmarking.BenchmarkStore do
       last_updated: System.monotonic_time(:millisecond)
     }
   end
-
 
   defp calculate_rpc_provider_score(success_rate, avg_latency_ms, total_calls) do
     # RPC-based scoring algorithm - optimized for performance

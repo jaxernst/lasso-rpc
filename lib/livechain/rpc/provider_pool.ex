@@ -16,9 +16,10 @@ defmodule Livechain.RPC.ProviderPool do
   use GenServer
   require Logger
 
-  alias Livechain.Config.ChainConfig
-  alias Livechain.Benchmarking.BenchmarkStore
   alias Livechain.Events.Provider
+  alias Livechain.RPC.HealthPolicy
+  alias Livechain.Config.ConfigStore
+  alias Livechain.RPC.Selection
 
   defstruct [
     :chain_name,
@@ -37,22 +38,33 @@ defmodule Livechain.RPC.ProviderPool do
       :id,
       :config,
       :pid,
-      # :healthy, :unhealthy, :connecting, :disconnected, :rate_limited
+      # Health status of the provider:
+      # :healthy | :unhealthy | :connecting | :disconnected | :rate_limited | :misconfigured | :degraded
       :status,
+      # Policy-derived availability for routing: :up | :limited | :down | :misconfigured
+      :availability,
       :last_health_check,
       :consecutive_failures,
       :consecutive_successes,
       :last_error,
       # Cooldown fields for rate limit handling
       :cooldown_until,
-      :cooldown_count,
-      :base_cooldown_ms,
-      # EMA-based metrics for performance tracking
-      error_rate: 0.0,
-      success_rate: 1.0,
-      avg_latency_ms: 0.0,
-      total_requests: 0
+      # Centralized health policy state (availability + signals)
+      :policy
     ]
+
+    # Implement Access behavior for get_in/put_in/update_in
+    def fetch(%__MODULE__{} = struct, key) do
+      Map.fetch(struct, key)
+    end
+
+    def get_and_update(%__MODULE__{} = struct, key, fun) do
+      Map.get_and_update(struct, key, fun)
+    end
+
+    def pop(%__MODULE__{} = struct, key) do
+      Map.pop(struct, key)
+    end
   end
 
   defmodule PoolStats do
@@ -69,6 +81,14 @@ defmodule Livechain.RPC.ProviderPool do
   @type chain_name :: String.t()
   @type provider_id :: String.t()
   @type strategy :: :priority | :round_robin | :fastest | :cheapest
+  @type health_status ::
+          :healthy
+          | :unhealthy
+          | :connecting
+          | :disconnected
+          | :rate_limited
+          | :misconfigured
+          | :degraded
 
   @doc """
   Starts the ProviderPool for a chain.
@@ -79,11 +99,20 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @doc """
-  Registers a new provider with the pool.
+  Registers a provider's configuration with the pool (no pid).
   """
-  @spec register_provider(chain_name, provider_id, pid(), map()) :: :ok
-  def register_provider(chain_name, provider_id, pid, provider_config) do
-    GenServer.call(via_name(chain_name), {:register_provider, provider_id, pid, provider_config})
+  @spec register_provider(chain_name, provider_id, map()) :: :ok
+  def register_provider(chain_name, provider_id, provider_config) do
+    GenServer.call(via_name(chain_name), {:register_provider, provider_id, provider_config})
+  end
+
+  @doc """
+  Attaches a WebSocket connection pid to an already-registered provider.
+  The pid will be monitored; HTTP-only providers should never call this.
+  """
+  @spec attach_ws_connection(chain_name, provider_id, pid()) :: :ok | {:error, term()}
+  def attach_ws_connection(chain_name, provider_id, pid) do
+    GenServer.call(via_name(chain_name), {:attach_ws_connection, provider_id, pid})
   end
 
   @doc """
@@ -131,6 +160,16 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @doc """
+  Lists provider candidates enriched with policy-derived availability for selection.
+
+  Supported filters: %{protocol: :http | :ws | :both, exclude: [provider_id]}
+  """
+  @spec list_candidates(chain_name, map()) :: [map()]
+  def list_candidates(chain_name, filters \\ %{}) when is_map(filters) do
+    GenServer.call(via_name(chain_name), {:list_candidates, filters})
+  end
+
+  @doc """
   Triggers manual failover from a specific provider.
   """
   @spec trigger_failover(chain_name, provider_id) :: :ok
@@ -139,11 +178,11 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @doc """
-  Reports a successful operation for latency tracking.
+  Reports a successful operation (no latency needed; performance is tracked elsewhere).
   """
-  @spec report_success(chain_name, provider_id, non_neg_integer()) :: :ok
-  def report_success(chain_name, provider_id, latency_ms) do
-    GenServer.cast(via_name(chain_name), {:report_success, provider_id, latency_ms})
+  @spec report_success(chain_name, provider_id) :: :ok
+  def report_success(chain_name, provider_id) do
+    GenServer.cast(via_name(chain_name), {:report_success, provider_id})
   end
 
   @doc """
@@ -154,12 +193,34 @@ defmodule Livechain.RPC.ProviderPool do
     GenServer.cast(via_name(chain_name), {:report_failure, provider_id, error})
   end
 
+  @doc """
+  Reports that a provider's WebSocket connection has successfully connected.
+  """
+  @spec report_ws_connected(chain_name, provider_id) :: :ok
+  def report_ws_connected(chain_name, provider_id) do
+    GenServer.cast(via_name(chain_name), {:report_ws_connected, provider_id})
+  end
+
+  @doc """
+  Reports that a provider's WebSocket connection was closed with a code and reason.
+  """
+  @spec report_ws_closed(chain_name, provider_id, integer(), term()) :: :ok
+  def report_ws_closed(chain_name, provider_id, code, reason) do
+    GenServer.cast(via_name(chain_name), {:report_ws_closed, provider_id, code, reason})
+  end
+
+  @doc """
+  Reports that a provider's WebSocket connection was disconnected with a reason.
+  """
+  @spec report_ws_disconnected(chain_name, provider_id, term()) :: :ok
+  def report_ws_disconnected(chain_name, provider_id, reason) do
+    GenServer.cast(via_name(chain_name), {:report_ws_disconnected, provider_id, reason})
+  end
+
   # GenServer callbacks
 
   @impl true
   def init({chain_name, chain_config}) do
-    Logger.info("Starting ProviderPool for #{chain_name}")
-
     if Process.whereis(Livechain.PubSub) do
       Phoenix.PubSub.subscribe(Livechain.PubSub, "circuit:events")
     end
@@ -174,55 +235,93 @@ defmodule Livechain.RPC.ProviderPool do
       circuit_states: %{}
     }
 
-    # Schedule periodic health checks
-    schedule_health_check(state)
+    # Health checks moved to ProviderHealthMonitor; no internal scheduler
 
     {:ok, state}
   end
 
   @impl true
-  def handle_call({:register_provider, provider_id, pid, provider_config}, _from, state) do
-    provider_state = %ProviderState{
-      id: provider_id,
-      config: provider_config,
-      pid: pid,
-      status: :connecting,
-      last_health_check: System.monotonic_time(:millisecond),
-      consecutive_failures: 0,
-      consecutive_successes: 0,
-      last_error: nil,
-      cooldown_until: nil,
-      cooldown_count: 0,
-      # Start with 1 second base cooldown
-      base_cooldown_ms: 1000
-    }
+  def handle_call({:register_provider, provider_id, provider_config}, _from, state) do
+    existing = Map.get(state.providers, provider_id)
 
-    new_providers = Map.put(state.providers, provider_id, provider_state)
-    new_state = %{state | providers: new_providers}
+    provider_state =
+      case existing do
+        nil ->
+          %ProviderState{
+            id: provider_id,
+            config: provider_config,
+            pid: nil,
+            status: :connecting,
+            last_health_check: System.system_time(:millisecond),
+            consecutive_failures: 0,
+            consecutive_successes: 0,
+            last_error: nil,
+            cooldown_until: nil,
+            policy: Livechain.RPC.HealthPolicy.new()
+          }
 
-    # Monitor the process
-    Process.monitor(pid)
+        %ProviderState{} = prev ->
+          # Preserve pid and all metrics; refresh config only
+          %{prev | config: provider_config}
+      end
 
-    # Update active providers list
-    new_state = update_active_providers(new_state)
+    new_state =
+      state
+      |> Map.update!(:providers, &Map.put(&1, provider_id, provider_state))
+      |> update_active_providers()
 
-    Logger.info("Registered provider #{provider_id} for #{state.chain_name}")
+    Logger.info(
+      "Registered provider #{provider_id} for #{state.chain_name} (pid: #{inspect(provider_state.pid)})"
+    )
+
     {:reply, :ok, new_state}
   end
 
   @impl true
+  def handle_call({:attach_ws_connection, provider_id, pid}, _from, state) when is_pid(pid) do
+    case Map.get(state.providers, provider_id) do
+      %ProviderState{} = prev ->
+        updated = %{prev | pid: pid, status: prev.status || :connecting}
+
+        new_state =
+          state
+          |> Map.update!(:providers, &Map.put(&1, provider_id, updated))
+          |> update_active_providers()
+
+        Logger.info(
+          "Attached WS pid to provider #{provider_id} for #{state.chain_name}: #{inspect(pid)}"
+        )
+
+        {:reply, :ok, new_state}
+
+      nil ->
+        {:reply, {:error, :not_registered}, state}
+    end
+  end
+
+  @impl true
   def handle_call({:get_best_provider, strategy, method}, _from, state) do
-    case select_best_provider_by_strategy(state, strategy, method, %{}) do
-      nil -> {:reply, {:error, :no_providers_available}, state}
-      provider_id -> {:reply, {:ok, provider_id}, state}
+    case Selection.pick_provider(state.chain_name, method || "",
+           strategy: strategy,
+           protocol: :both
+         ) do
+      {:ok, provider_id} -> {:reply, {:ok, provider_id}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
   @impl true
   def handle_call({:get_best_provider, strategy, method, filters}, _from, state) do
-    case select_best_provider_by_strategy(state, strategy, method, filters) do
-      nil -> {:reply, {:error, :no_providers_available}, state}
-      provider_id -> {:reply, {:ok, provider_id}, state}
+    protocol = Map.get(filters, :protocol, :both)
+    exclude = Map.get(filters, :exclude, [])
+
+    case Selection.pick_provider(state.chain_name, method || "",
+           strategy: strategy,
+           protocol: protocol,
+           exclude: exclude
+         ) do
+      {:ok, provider_id} -> {:reply, {:ok, provider_id}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -244,11 +343,7 @@ defmodule Livechain.RPC.ProviderPool do
             name: provider.config.name,
             status: provider.status,
             consecutive_failures: provider.consecutive_failures,
-            last_health_check: provider.last_health_check,
-            error_rate: provider.error_rate,
-            success_rate: provider.success_rate,
-            avg_latency_ms: provider.avg_latency_ms,
-            total_requests: provider.total_requests
+            last_health_check: provider.last_health_check
           }
         end),
       stats: state.stats
@@ -264,7 +359,22 @@ defmodule Livechain.RPC.ProviderPool do
     providers =
       Enum.map(state.providers, fn {id, provider} ->
         circuit_state = Map.get(state.circuit_states, id, :closed)
-        is_in_cooldown = provider.cooldown_until && provider.cooldown_until > current_time
+
+        {cooldown_until, is_in_cooldown} =
+          case Map.get(provider, :policy) do
+            %Livechain.RPC.HealthPolicy{} = pol ->
+              {pol.cooldown_until, Livechain.RPC.HealthPolicy.cooldown?(pol, current_time)}
+
+            _ ->
+              cuc = provider.cooldown_until
+              {cuc, cuc && cuc > current_time}
+          end
+
+        availability =
+          case Map.get(provider, :policy) do
+            %Livechain.RPC.HealthPolicy{} = pol -> Livechain.RPC.HealthPolicy.availability(pol)
+            _ -> Map.get(provider, :availability, :up)
+          end
 
         %{
           id: id,
@@ -273,14 +383,15 @@ defmodule Livechain.RPC.ProviderPool do
           status: provider.status,
           # Preserve original status
           health_status: provider.status,
+          availability: availability,
           circuit_state: circuit_state,
           consecutive_failures: provider.consecutive_failures,
           consecutive_successes: provider.consecutive_successes,
           last_health_check: provider.last_health_check,
           last_error: provider.last_error,
           is_in_cooldown: is_in_cooldown,
-          cooldown_until: provider.cooldown_until,
-          cooldown_count: provider.cooldown_count
+          cooldown_until: cooldown_until,
+          policy: Map.get(provider, :policy)
         }
       end)
 
@@ -294,6 +405,29 @@ defmodule Livechain.RPC.ProviderPool do
     }
 
     {:reply, {:ok, status}, state}
+  end
+
+  @impl true
+  def handle_call({:list_candidates, filters}, _from, state) do
+    candidates =
+      state
+      |> candidates_ready(filters)
+      |> Enum.map(fn p ->
+        availability =
+          case Map.get(p, :policy) do
+            %Livechain.RPC.HealthPolicy{} = pol -> Livechain.RPC.HealthPolicy.availability(pol)
+            _ -> :up
+          end
+
+        %{
+          id: p.id,
+          config: p.config,
+          availability: availability,
+          policy: Map.get(p, :policy)
+        }
+      end)
+
+    {:reply, candidates, state}
   end
 
   @impl true
@@ -314,8 +448,8 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @impl true
-  def handle_cast({:report_success, provider_id, latency_ms}, state) do
-    new_state = update_provider_success(state, provider_id, latency_ms)
+  def handle_cast({:report_success, provider_id}, state) do
+    new_state = update_provider_success(state, provider_id)
     {:noreply, new_state}
   end
 
@@ -326,11 +460,73 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @impl true
-  def handle_info(:health_check, state) do
-    new_state = perform_health_checks(state)
-    schedule_health_check(state)
-    {:noreply, new_state}
+  def handle_cast({:report_ws_connected, provider_id}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :healthy,
+            consecutive_successes: provider.consecutive_successes + 1,
+            consecutive_failures: 0,
+            last_health_check: System.system_time(:millisecond)
+        }
+
+        publish_provider_event(state.chain_name, provider_id, :ws_connected, %{})
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
   end
+
+  @impl true
+  def handle_cast({:report_ws_closed, provider_id, code, reason}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :disconnected,
+            consecutive_failures: provider.consecutive_failures + 1,
+            last_error: {:ws_closed, code, reason},
+            last_health_check: System.system_time(:millisecond)
+        }
+
+        publish_provider_event(state.chain_name, provider_id, :ws_closed, %{
+          code: code,
+          reason: reason
+        })
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:report_ws_disconnected, provider_id, reason}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :disconnected,
+            consecutive_failures: provider.consecutive_failures + 1,
+            last_error: {:ws_disconnected, reason},
+            last_health_check: System.system_time(:millisecond)
+        }
+
+        publish_provider_event(state.chain_name, provider_id, :ws_disconnected, %{reason: reason})
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  # :health_check handling removed
 
   @impl true
   def handle_info(%{provider_id: provider_id, from: from, to: to} = _evt, state)
@@ -338,6 +534,139 @@ defmodule Livechain.RPC.ProviderPool do
              to in [:closed, :open, :half_open] do
     new_states = Map.put(state.circuit_states, provider_id, to)
     {:noreply, %{state | circuit_states: new_states}}
+  end
+
+  @impl true
+  def handle_info(%Provider.Healthy{provider_id: provider_id, ts: ts}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :healthy,
+            consecutive_successes: provider.consecutive_successes + 1,
+            consecutive_failures: 0,
+            last_health_check: ts
+        }
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info(%Provider.Unhealthy{provider_id: provider_id, ts: ts, reason: reason}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :unhealthy,
+            consecutive_failures: provider.consecutive_failures + 1,
+            last_error: reason,
+            last_health_check: ts
+        }
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info(%Provider.CooldownStart{provider_id: provider_id, until: _until_ts}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :rate_limited
+        }
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info(%Provider.CooldownEnd{provider_id: provider_id}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = provider
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info(%Provider.WSConnected{provider_id: provider_id, ts: ts}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :healthy,
+            consecutive_successes: provider.consecutive_successes + 1,
+            consecutive_failures: 0,
+            last_health_check: ts
+        }
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info(%Provider.WSClosed{provider_id: provider_id, ts: ts, reason: reason}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :disconnected,
+            consecutive_failures: provider.consecutive_failures + 1,
+            last_error: {:ws_closed, reason},
+            last_health_check: ts
+        }
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info(
+        %Provider.WSDisconnected{provider_id: provider_id, ts: ts, reason: reason},
+        state
+      ) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :disconnected,
+            consecutive_failures: provider.consecutive_failures + 1,
+            last_error: {:ws_disconnected, reason},
+            last_health_check: ts
+        }
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
   end
 
   @impl true
@@ -373,13 +702,39 @@ defmodule Livechain.RPC.ProviderPool do
 
   # Private functions
 
-  defp candidates_ready(state, filters \\ %{}) do
+  # NOTE: candidates_ready and supports_protocol? are used by list_candidates/2
+  # Keep them private helpers for candidate construction.
+  defp candidates_ready(state, filters) do
     current_time = System.monotonic_time(:millisecond)
 
     state.active_providers
     |> Enum.map(&Map.get(state.providers, &1))
-    |> Enum.filter(&(&1.status in [:healthy, :connecting]))
-    |> Enum.filter(&(is_nil(&1.cooldown_until) or &1.cooldown_until <= current_time))
+    |> Enum.filter(fn p ->
+      av =
+        Map.get(p, :availability) ||
+          case Map.get(p, :policy) do
+            %Livechain.RPC.HealthPolicy{} = pol -> Livechain.RPC.HealthPolicy.availability(pol)
+            _ -> :up
+          end
+
+      av in [:up, :limited]
+    end)
+    |> Enum.filter(fn p ->
+      case Map.get(p, :policy) do
+        %Livechain.RPC.HealthPolicy{} = pol ->
+          not Livechain.RPC.HealthPolicy.cooldown?(pol, current_time)
+
+        _ ->
+          is_nil(p.cooldown_until) or p.cooldown_until <= current_time
+      end
+    end)
+    |> Enum.filter(&supports_protocol?(&1.config, Map.get(filters, :protocol)))
+    |> Enum.filter(fn provider ->
+      case Map.get(filters, :protocol) do
+        :ws -> provider.status in [:healthy, :connecting] and is_pid(provider.pid)
+        _ -> true
+      end
+    end)
     |> Enum.filter(fn provider ->
       case Map.get(state.circuit_states, provider.id) do
         :open -> false
@@ -395,127 +750,36 @@ defmodule Livechain.RPC.ProviderPool do
     end)
   end
 
-  defp select_best_provider_by_strategy(state, strategy, method, filters) do
-    providers = candidates_ready(state, filters)
+  defp supports_protocol?(_provider_config, nil), do: true
+  defp supports_protocol?(provider_config, :http), do: is_binary(Map.get(provider_config, :url))
+  defp supports_protocol?(provider_config, :ws), do: is_binary(Map.get(provider_config, :ws_url))
 
-    case providers do
-      [] ->
-        nil
+  defp supports_protocol?(provider_config, :both),
+    do: is_binary(Map.get(provider_config, :url)) and is_binary(Map.get(provider_config, :ws_url))
 
-      providers ->
-        case strategy do
-          :priority ->
-            providers
-            |> Enum.sort_by(& &1.config.priority)
-            |> List.first()
-            |> Map.get(:id)
-
-          :round_robin ->
-            providers
-            |> Enum.sort_by(& &1.id)
-            |> Enum.at(rem(state.stats.total_requests, length(providers)))
-            |> Map.get(:id)
-
-          :fastest ->
-            choose_fastest_provider_with_benchmarks(state, providers, method)
-
-          :cheapest ->
-            # Prefer public providers; if none, fallback to paid
-            {public, non_public} = Enum.split_with(providers, &(&1.config.type == "public"))
-
-            choose_round_robin_or_first(public, state) ||
-              choose_round_robin_or_first(non_public, state)
-
-          _ ->
-            providers
-            |> Enum.sort_by(& &1.config.priority)
-            |> List.first()
-            |> Map.get(:id)
-        end
-    end
+  defp put_provider_and_refresh(state, provider_id, updated) do
+    new_providers = Map.put(state.providers, provider_id, updated)
+    new_state = %{state | providers: new_providers}
+    update_active_providers(new_state)
   end
 
-  defp choose_round_robin_or_first([], _state), do: nil
-
-  defp choose_round_robin_or_first(providers, state) do
-    providers
-    |> Enum.sort_by(& &1.id)
-    |> Enum.at(rem(state.stats.total_requests, length(providers)))
-    |> Map.get(:id)
-  end
-
-  defp choose_fastest_provider_with_benchmarks(state, providers, method \\ nil) do
-    # Use method-specific RPC performance data when available
-    case method do
-      nil ->
-        # No specific method provided, fall back to priority
-        Logger.debug("No method specified for #{state.chain_name}, falling back to priority")
-
-        providers
-        |> Enum.sort_by(& &1.config.priority)
-        |> List.first()
-        |> Map.get(:id)
-
-      method_name ->
-        # Get method-specific performance data from BenchmarkStore
-        case BenchmarkStore.get_rpc_method_performance(state.chain_name, method_name) do
-          %{providers: [_ | _] = method_stats} ->
-            # Filter to only providers in our available list and choose fastest
-            provider_ids = MapSet.new(Enum.map(providers, & &1.id))
-
-            best_provider =
-              method_stats
-              |> Enum.filter(&MapSet.member?(provider_ids, &1.provider_id))
-              # Quality filter: require reasonable success rate and some call history
-              |> Enum.filter(&(&1.success_rate > 0.95 and &1.total_calls >= 1))
-              # Already sorted by avg_duration_ms ascending (fastest first)
-              |> List.first()
-
-            case best_provider do
-              nil ->
-                # Fall back to priority if no provider meets quality threshold
-                Logger.debug(
-                  "No providers meet quality threshold for #{state.chain_name}.#{method_name}, falling back to priority"
-                )
-
-                providers
-                |> Enum.sort_by(& &1.config.priority)
-                |> List.first()
-                |> Map.get(:id)
-
-              provider ->
-                Logger.debug(
-                  "Selected fastest provider for #{state.chain_name}.#{method_name}: #{provider.provider_id} (#{provider.avg_duration_ms}ms avg)"
-                )
-
-                provider.provider_id
-            end
-
-          _ ->
-            # Fall back to priority-based selection when no benchmark data available
-            Logger.debug(
-              "No method-specific benchmark data available for #{state.chain_name}.#{method_name}, falling back to priority"
-            )
-
-            providers
-            |> Enum.sort_by(& &1.config.priority)
-            |> List.first()
-            |> Map.get(:id)
-        end
-    end
-  end
+  # Selection is centralized in Livechain.RPC.Selection; local strategy functions removed
 
   defp update_active_providers(state) do
-    available_providers = ChainConfig.get_available_providers(state.chain_config)
+    available_providers =
+      case ConfigStore.get_chain(state.chain_name) do
+        {:ok, cfg} -> cfg.providers
+        _ -> []
+      end
 
-    # Get all providers that are registered and not completely failed
+    # Active providers are ones we may route to under normal conditions
     viable_providers =
       available_providers
       |> Enum.filter(fn provider ->
         case Map.get(state.providers, provider.id) do
           nil -> false
-          %{status: :disconnected, consecutive_failures: failures} when failures > 10 -> false
-          _ -> true
+          %{status: status} when status in [:healthy, :connecting] -> true
+          _ -> false
         end
       end)
       |> Enum.map(& &1.id)
@@ -523,86 +787,69 @@ defmodule Livechain.RPC.ProviderPool do
     %{state | active_providers: viable_providers}
   end
 
-  defp update_provider_success(state, provider_id, latency_ms) do
+  defp update_provider_success(state, provider_id) do
     case Map.get(state.providers, provider_id) do
       nil ->
         state
 
       provider ->
-        cooldown_was_active = not is_nil(provider.cooldown_until)
+        policy = provider.policy || Livechain.RPC.HealthPolicy.new()
+        new_policy = Livechain.RPC.HealthPolicy.apply_event(policy, {:success, 0, nil})
 
-        # EMA calculations with alpha = 0.1 (smoothing factor)
-        alpha = 0.1
-        new_total_requests = provider.total_requests + 1
-
-        # Update success rate (EMA)
-        new_success_rate =
-          if provider.total_requests == 0 do
-            1.0
-          else
-            provider.success_rate * (1 - alpha) + alpha
-          end
-
-        # Update error rate (EMA)
-        new_error_rate =
-          if provider.total_requests == 0 do
-            0.0
-          else
-            provider.error_rate * (1 - alpha)
-          end
-
-        # Update average latency (EMA)
-        new_avg_latency =
-          if provider.total_requests == 0 do
-            latency_ms
-          else
-            provider.avg_latency_ms * (1 - alpha) + latency_ms * alpha
-          end
-
-        new_provider = %{
+        updated_provider =
           provider
-          | status: :healthy,
+          |> Map.merge(%{
+            status: :healthy,
             consecutive_successes: provider.consecutive_successes + 1,
             consecutive_failures: 0,
-            last_health_check: System.monotonic_time(:millisecond),
-            # Reset cooldown state on success
-            cooldown_until: nil,
-            cooldown_count: if(cooldown_was_active, do: 0, else: provider.cooldown_count),
-            # Update EMA metrics
-            error_rate: new_error_rate,
-            success_rate: new_success_rate,
-            avg_latency_ms: new_avg_latency,
-            total_requests: new_total_requests
-        }
-
-        if cooldown_was_active do
-          publish_provider_event(state.chain_name, provider_id, :cooldown_end, %{})
-
-          :telemetry.execute([:livechain, :provider, :cooldown, :end], %{count: 1}, %{
-            chain: state.chain_name,
-            provider_id: provider_id
-          })
-        end
-
-        became_healthy = provider.status != :healthy
-
-        if became_healthy do
-          publish_provider_event(state.chain_name, provider_id, :healthy, %{})
-
-          :telemetry.execute([:livechain, :provider, :status], %{count: 1}, %{
-            chain: state.chain_name,
-            provider_id: provider_id,
-            status: :healthy
+            last_health_check: System.system_time(:millisecond),
+            policy: new_policy
           })
 
-          # Trigger connection status update broadcast for UI
-          Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
-        end
+        state = maybe_emit_cooldown_end(state, provider_id, provider)
+        state = maybe_emit_became_healthy(state, provider_id, provider)
 
-        new_providers = Map.put(state.providers, provider_id, new_provider)
+        new_providers = Map.put(state.providers, provider_id, updated_provider)
         new_stats = %{state.stats | total_requests: state.stats.total_requests + 1}
-
         %{state | providers: new_providers, stats: new_stats}
+    end
+  end
+
+  defp maybe_emit_cooldown_end(state, provider_id, provider) do
+    prev_cooldown =
+      case provider.policy do
+        %Livechain.RPC.HealthPolicy{cooldown_until: cu} -> cu
+        _ -> provider.cooldown_until
+      end
+
+    if prev_cooldown do
+      publish_provider_event(state.chain_name, provider_id, :cooldown_end, %{})
+
+      :telemetry.execute([:livechain, :provider, :cooldown, :end], %{count: 1}, %{
+        chain: state.chain_name,
+        provider_id: provider_id
+      })
+
+      state
+    else
+      state
+    end
+  end
+
+  defp maybe_emit_became_healthy(state, provider_id, provider) do
+    if provider.status != :healthy do
+      publish_provider_event(state.chain_name, provider_id, :healthy, %{})
+
+      :telemetry.execute([:livechain, :provider, :status], %{count: 1}, %{
+        chain: state.chain_name,
+        provider_id: provider_id,
+        status: :healthy
+      })
+
+      Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
+      state
+    else
+      state
     end
   end
 
@@ -612,329 +859,131 @@ defmodule Livechain.RPC.ProviderPool do
         state
 
       provider ->
-        # Check if this is a rate limit error
-        {is_rate_limit, updated_provider} =
-          case error do
-            {:rate_limit, _message} ->
-              # Calculate exponential backoff
-              new_cooldown_count = provider.cooldown_count + 1
-              cooldown_ms = provider.base_cooldown_ms * :math.pow(2, new_cooldown_count)
-              # 5 minutes max
-              max_cooldown = 300_000
-              actual_cooldown = min(cooldown_ms, max_cooldown)
-              cooldown_until = System.monotonic_time(:millisecond) + trunc(actual_cooldown)
+        {jerr, context} = normalize_error_for_pool(error, provider_id)
+        now_ms = System.monotonic_time(:millisecond)
+        policy = provider.policy || Livechain.RPC.HealthPolicy.new()
 
-              # EMA calculations for failure
-              alpha = 0.1
-              new_total_requests = provider.total_requests + 1
+        new_policy =
+          Livechain.RPC.HealthPolicy.apply_event(policy, {:failure, jerr, context, nil, now_ms})
 
-              new_success_rate =
-                if provider.total_requests == 0 do
-                  0.0
-                else
-                  provider.success_rate * (1 - alpha)
-                end
+        cond do
+          jerr.category == :rate_limit ->
+            cooldown_until = new_policy.cooldown_until
 
-              new_error_rate =
-                if provider.total_requests == 0 do
-                  1.0
-                else
-                  provider.error_rate * (1 - alpha) + alpha
-                end
-
-              Logger.warning(
-                "Provider #{provider_id} rate limited, cooling down for #{trunc(actual_cooldown)}ms"
-              )
-
-              publish_provider_event(state.chain_name, provider_id, :cooldown_start, %{
-                until: cooldown_until
-              })
-
-              :telemetry.execute([:livechain, :provider, :cooldown, :start], %{count: 1}, %{
-                chain: state.chain_name,
-                provider_id: provider_id,
-                cooldown_ms: trunc(actual_cooldown)
-              })
-
-              updated = %{
-                provider
-                | cooldown_until: cooldown_until,
-                  cooldown_count: new_cooldown_count,
-                  status: :rate_limited,
-                  last_error: error,
-                  last_health_check: System.monotonic_time(:millisecond),
-                  # Update EMA metrics
-                  error_rate: new_error_rate,
-                  success_rate: new_success_rate,
-                  total_requests: new_total_requests
-              }
-
-              {true, updated}
-
-            %Livechain.JSONRPC.Error{category: :rate_limit} ->
-              # Calculate exponential backoff
-              new_cooldown_count = provider.cooldown_count + 1
-              cooldown_ms = provider.base_cooldown_ms * :math.pow(2, new_cooldown_count)
-              # 5 minutes max
-              max_cooldown = 300_000
-              actual_cooldown = min(cooldown_ms, max_cooldown)
-              cooldown_until = System.monotonic_time(:millisecond) + trunc(actual_cooldown)
-
-              # EMA calculations for failure
-              alpha = 0.1
-              new_total_requests = provider.total_requests + 1
-
-              new_success_rate =
-                if provider.total_requests == 0 do
-                  0.0
-                else
-                  provider.success_rate * (1 - alpha)
-                end
-
-              new_error_rate =
-                if provider.total_requests == 0 do
-                  1.0
-                else
-                  provider.error_rate * (1 - alpha) + alpha
-                end
-
-              Logger.warning(
-                "Provider #{provider_id} rate limited, cooling down for #{trunc(actual_cooldown)}ms"
-              )
-
-              publish_provider_event(state.chain_name, provider_id, :cooldown_start, %{
-                until: cooldown_until
-              })
-
-              :telemetry.execute([:livechain, :provider, :cooldown, :start], %{count: 1}, %{
-                chain: state.chain_name,
-                provider_id: provider_id,
-                cooldown_ms: trunc(actual_cooldown)
-              })
-
-              updated = %{
-                provider
-                | cooldown_until: cooldown_until,
-                  cooldown_count: new_cooldown_count,
-                  status: :rate_limited,
-                  last_error: error,
-                  last_health_check: System.monotonic_time(:millisecond),
-                  # Update EMA metrics
-                  error_rate: new_error_rate,
-                  success_rate: new_success_rate,
-                  total_requests: new_total_requests
-              }
-
-              {true, updated}
-
-            _ ->
-              # Regular failure handling
-              new_consecutive_failures = provider.consecutive_failures + 1
-              failure_threshold = health_check_config(state).failure_threshold
-
-              new_status =
-                if new_consecutive_failures >= failure_threshold do
-                  :unhealthy
-                else
-                  provider.status
-                end
-
-              # EMA calculations for failure
-              alpha = 0.1
-              new_total_requests = provider.total_requests + 1
-
-              new_success_rate =
-                if provider.total_requests == 0 do
-                  0.0
-                else
-                  provider.success_rate * (1 - alpha)
-                end
-
-              new_error_rate =
-                if provider.total_requests == 0 do
-                  1.0
-                else
-                  provider.error_rate * (1 - alpha) + alpha
-                end
-
-              updated = %{
-                provider
-                | status: new_status,
-                  consecutive_failures: new_consecutive_failures,
-                  consecutive_successes: 0,
-                  last_error: error,
-                  last_health_check: System.monotonic_time(:millisecond),
-                  # Update EMA metrics
-                  error_rate: new_error_rate,
-                  success_rate: new_success_rate,
-                  total_requests: new_total_requests
-              }
-
-              {false, updated}
-          end
-
-        new_providers = Map.put(state.providers, provider_id, updated_provider)
-
-        new_stats = %{
-          state.stats
-          | total_requests: state.stats.total_requests + 1,
-            failed_requests: state.stats.failed_requests + 1
-        }
-
-        new_state = %{state | providers: new_providers, stats: new_stats}
-
-        # Log status change for non-rate-limit errors
-        if not is_rate_limit and updated_provider.status == :unhealthy and
-             provider.status != :unhealthy do
-          Logger.warning(
-            "Provider #{provider_id} marked as unhealthy after #{updated_provider.consecutive_failures} failures"
-          )
-
-          publish_provider_event(state.chain_name, provider_id, :unhealthy, %{})
-
-          :telemetry.execute([:livechain, :provider, :status], %{count: 1}, %{
-            chain: state.chain_name,
-            provider_id: provider_id,
-            status: :unhealthy
-          })
-
-          # Trigger connection status update broadcast for UI
-          Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
-        end
-
-        # Update active providers list if status changed
-        if updated_provider.status != provider.status do
-          update_active_providers(new_state)
-        else
-          new_state
-        end
-    end
-  end
-
-  defp perform_health_checks(state) do
-    recovery_threshold = health_check_config(state).recovery_threshold
-
-    # Perform active health checks for all providers
-    new_providers =
-      Enum.reduce(state.providers, state.providers, fn {provider_id, provider}, acc ->
-        # Perform active health check
-        updated_provider = perform_provider_health_check(provider_id, provider, state)
-
-        # Check if unhealthy providers should be marked as recovering
-        final_provider =
-          if updated_provider.status == :unhealthy and
-               updated_provider.consecutive_successes >= recovery_threshold do
-            Logger.info(
-              "Provider #{provider_id} recovered after #{updated_provider.consecutive_successes} successes"
+            Logger.warning(
+              "Provider #{provider_id} rate limited, cooling down until #{inspect(cooldown_until)}"
             )
 
-            publish_provider_event(state.chain_name, provider_id, :healthy, %{})
+            updated_provider =
+              provider
+              |> Map.merge(%{
+                status: :rate_limited,
+                last_error: jerr,
+                last_health_check: System.system_time(:millisecond),
+                policy: new_policy
+              })
 
-            :telemetry.execute([:livechain, :provider, :status], %{count: 1}, %{
-              chain: state.chain_name,
-              provider_id: provider_id,
-              status: :healthy
+            publish_provider_event(state.chain_name, provider_id, :cooldown_start, %{
+              until: cooldown_until
             })
 
-            # Trigger connection status update broadcast for UI
-            Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
+            :telemetry.execute([:livechain, :provider, :cooldown, :start], %{count: 1}, %{
+              chain: state.chain_name,
+              provider_id: provider_id,
+              cooldown_ms: if(cooldown_until, do: max(cooldown_until - now_ms, 0), else: 0)
+            })
 
-            %{updated_provider | status: :healthy}
-          else
-            updated_provider
-          end
+            state
+            |> put_provider_and_refresh(provider_id, updated_provider)
+            |> increment_failure_stats()
 
-        Map.put(acc, provider_id, final_provider)
-      end)
+          jerr.category == :client_error and context == :live_traffic ->
+            updated_provider =
+              provider
+              |> Map.merge(%{
+                last_error: jerr,
+                last_health_check: System.system_time(:millisecond)
+              })
 
-    new_state = %{state | providers: new_providers}
-    update_active_providers(new_state)
-  end
+            state
+            |> put_provider_and_refresh(provider_id, updated_provider)
+            |> increment_failure_stats()
 
-  defp perform_provider_health_check(provider_id, provider, state) do
-    # Skip health check if provider is in cooldown
-    current_time = System.monotonic_time(:millisecond)
+          true ->
+            new_consecutive_failures = provider.consecutive_failures + 1
+            failure_threshold = new_policy.config.failure_threshold
 
-    if provider.cooldown_until && provider.cooldown_until > current_time do
-      provider
-    else
-      # Perform health check using eth_chainId (lightweight method)
-      start_time = System.monotonic_time(:millisecond)
+            new_status =
+              HealthPolicy.decide_failure_status(
+                jerr,
+                context,
+                new_consecutive_failures,
+                failure_threshold
+              )
 
-      case send_health_check_request(provider.config) do
-        {:ok, _response} ->
-          # Update provider with successful health check
-          Logger.debug("Health check succeeded for #{provider_id}")
+            updated_provider =
+              provider
+              |> Map.merge(%{
+                status: new_status,
+                consecutive_failures: new_consecutive_failures,
+                consecutive_successes: 0,
+                last_error: jerr,
+                last_health_check: System.system_time(:millisecond),
+                policy: new_policy
+              })
 
-          updated_provider = %{
-            provider
-            | status: :healthy,
-              consecutive_successes: provider.consecutive_successes + 1,
-              consecutive_failures: 0,
-              last_health_check: current_time
-          }
+            new_state =
+              state
+              |> put_provider_and_refresh(provider_id, updated_provider)
+              |> increment_failure_stats()
 
-          # Trigger connection status update if status changed
-          if provider.status != :healthy do
-            Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
-          end
+            if updated_provider.status == :unhealthy and provider.status != :unhealthy do
+              Logger.warning(
+                "Provider #{provider_id} marked as unhealthy after #{updated_provider.consecutive_failures} failures"
+              )
 
-          updated_provider
+              publish_provider_event(state.chain_name, provider_id, :unhealthy, %{})
 
-        {:error, reason} ->
-          _duration_ms = System.monotonic_time(:millisecond) - start_time
+              :telemetry.execute([:livechain, :provider, :status], %{count: 1}, %{
+                chain: state.chain_name,
+                provider_id: provider_id,
+                status: :unhealthy
+              })
 
-          Logger.debug("Health check failed for #{provider_id}: #{inspect(reason)}")
-
-          # Determine the appropriate status based on error type
-          new_status =
-            case reason do
-              {:rate_limit, _} -> :rate_limited
-              %Livechain.JSONRPC.Error{category: :rate_limit} -> :rate_limited
-              _ -> :unhealthy
+              Task.start(fn ->
+                Livechain.RPC.ChainRegistry.broadcast_connection_status_update()
+              end)
             end
 
-          # Publish health check failure event
-          publish_provider_event(state.chain_name, provider_id, :health_check_failed, %{
-            reason: inspect(reason),
-            consecutive_failures: provider.consecutive_failures + 1
-          })
-
-          updated_provider = %{
-            provider
-            | status: new_status,
-              consecutive_failures: provider.consecutive_failures + 1,
-              consecutive_successes: 0,
-              last_error: reason,
-              last_health_check: current_time
-          }
-
-          # Trigger connection status update if status changed
-          if provider.status != new_status do
-            Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
-          end
-
-          updated_provider
-      end
+            new_state
+        end
     end
   end
 
-  defp send_health_check_request(provider_config) do
-    # Use eth_chainId as a lightweight health check method
-    endpoint = %{
-      url: provider_config.url,
-      # For public endpoints, no API key needed
-      api_key: nil
+  defp normalize_error_for_pool({:health_check, %Livechain.JSONRPC.Error{} = jerr}, _provider_id),
+    do: {jerr, :health_check}
+
+  defp normalize_error_for_pool({:health_check, other}, provider_id),
+    do: {Livechain.JSONRPC.Error.from(other, provider_id: provider_id), :health_check}
+
+  defp normalize_error_for_pool(%Livechain.JSONRPC.Error{} = jerr, _provider_id),
+    do: {jerr, :live_traffic}
+
+  defp normalize_error_for_pool(other, provider_id),
+    do: {Livechain.JSONRPC.Error.from(other, provider_id: provider_id), :live_traffic}
+
+  # defp start_rate_limit_cooldown/2: superseded by HealthPolicy cooldown handling
+
+  # Failure status decision logic centralized in HealthPolicy
+
+  defp increment_failure_stats(state) do
+    new_stats = %{
+      state.stats
+      | total_requests: state.stats.total_requests + 1,
+        failed_requests: state.stats.failed_requests + 1
     }
 
-    # Delegate to configured HttpClient adapter
-    Livechain.RPC.HttpClient.request(endpoint, "eth_chainId", [], 5_000)
-  end
-
-  defp schedule_health_check(state) do
-    # Health check at configured interval (default 30s)
-    interval = health_check_config(state).interval
-    Process.send_after(self(), :health_check, interval)
+    %{state | stats: new_stats}
   end
 
   defp publish_provider_event(chain_name, provider_id, event, details) do
@@ -975,6 +1024,26 @@ defmodule Livechain.RPC.ProviderPool do
             consecutive_failures:
               Map.get(details, :consecutive_failures) || Map.get(details, "consecutive_failures")
           }
+
+        :ws_connected ->
+          %Provider.WSConnected{ts: ts, chain: chain_name, provider_id: provider_id}
+
+        :ws_closed ->
+          %Provider.WSClosed{
+            ts: ts,
+            chain: chain_name,
+            provider_id: provider_id,
+            code: Map.get(details, :code) || Map.get(details, "code"),
+            reason: Map.get(details, :reason) || Map.get(details, "reason")
+          }
+
+        :ws_disconnected ->
+          %Provider.WSDisconnected{
+            ts: ts,
+            chain: chain_name,
+            provider_id: provider_id,
+            reason: Map.get(details, :reason) || Map.get(details, "reason")
+          }
       end
 
     Phoenix.PubSub.broadcast(Livechain.PubSub, Provider.topic(chain_name), typed)
@@ -986,36 +1055,9 @@ defmodule Livechain.RPC.ProviderPool do
 
   # Config helpers with safe defaults
 
-  defp global_config(state) do
-    Map.get(state.chain_config, :global, %{
-      health_check: %{
-        interval: 30_000,
-        timeout: 5_000,
-        failure_threshold: 3,
-        recovery_threshold: 2
-      },
-      provider_management: %{
-        auto_failover: true,
-        load_balancing: "priority",
-        provider_rotation: nil
-      }
-    })
-  end
+  # defp global_config/1: deprecated, use HealthPolicy config and ConfigStore instead
 
-  defp health_check_config(state) do
-    gc = global_config(state)
+  # defp health_check_config/1: deprecated, HealthPolicy holds thresholds
 
-    Map.get(gc, :health_check, %{
-      interval: 30_000,
-      timeout: 5_000,
-      failure_threshold: 3,
-      recovery_threshold: 2
-    })
-  end
-
-  defp load_balancing_mode(state) do
-    gc = global_config(state)
-    pm = Map.get(gc, :provider_management, %{load_balancing: "priority"})
-    Map.get(pm, :load_balancing, "priority")
-  end
+  # load_balancing_mode removed; strategies are supplied explicitly by callers
 end

@@ -15,12 +15,10 @@ config :logger, level: :warning
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 
-# Enable simulator in test environment
 config :livechain,
-  enable_simulator: true,
   environment: :test
 
-# Configure Phoenix PubSub for testing  
+# Configure Phoenix PubSub for testing
 config :livechain, Livechain.PubSub, adapter: Phoenix.PubSub.PG
 
 # Configure process registry for testing

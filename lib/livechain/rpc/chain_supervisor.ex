@@ -20,6 +20,7 @@ defmodule Livechain.RPC.ChainSupervisor do
 
   alias Livechain.Config.{ChainConfig, ConfigStore}
   alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker, Normalizer}
+  alias Livechain.RPC.ProviderHealthMonitor
   alias Livechain.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
 
   @doc """
@@ -122,10 +123,6 @@ defmodule Livechain.RPC.ChainSupervisor do
 
   @impl true
   def init({chain_name, chain_config}) do
-    Logger.info(
-      "Starting ChainSupervisor for #{chain_name} with #{length(chain_config.providers)} providers"
-    )
-
     children = [
       # Start ProviderPool for health monitoring and performance tracking
       {ProviderPool, {chain_name, chain_config}},
@@ -136,6 +133,9 @@ defmodule Livechain.RPC.ChainSupervisor do
       # Start dynamic supervisor to manage circuit breakers
       {DynamicSupervisor,
        strategy: :one_for_one, name: circuit_breaker_supervisor_name(chain_name)},
+
+      # Start per-chain health monitor (HTTP checks + typed events)
+      {ProviderHealthMonitor, chain_name},
 
       # Start per-chain subscription registry and pool
       {ClientSubscriptionRegistry, chain_name},
@@ -155,13 +155,11 @@ defmodule Livechain.RPC.ChainSupervisor do
   defp start_provider_connections_async(chain_name, chain_config) do
     # Start circuit breakers for ALL providers (HTTP and WS)
     Enum.each(chain_config.providers, fn provider ->
-      start_circuit_breaker(chain_name, provider)
+      {:ok, _} = start_circuit_breaker(chain_name, provider)
     end)
 
-    # Register ALL providers with ProviderPool (for health checks)
     Enum.each(chain_config.providers, fn provider ->
-      # Register with ProviderPool - pass self() as pid since HTTP-only providers don't have dedicated processes
-      ProviderPool.register_provider(chain_name, provider.id, self(), provider)
+      ProviderPool.register_provider(chain_name, provider.id, provider)
     end)
 
     # Start WebSocket connections for all providers that support them
@@ -190,13 +188,12 @@ defmodule Livechain.RPC.ChainSupervisor do
     endpoint = %WSEndpoint{
       id: provider.id,
       name: provider.name,
-      url: provider.url,
       ws_url: provider.ws_url,
       chain_id: chain_config.chain_id,
+      chain_name: chain_name,
       heartbeat_interval: chain_config.connection.heartbeat_interval,
       reconnect_interval: chain_config.connection.reconnect_interval,
-      max_reconnect_attempts: chain_config.connection.max_reconnect_attempts,
-      subscription_topics: Map.get(chain_config.connection, :subscription_topics, ["newHeads"])
+      max_reconnect_attempts: chain_config.connection.max_reconnect_attempts
     }
 
     # Start the connection under the dynamic supervisor
@@ -206,16 +203,16 @@ defmodule Livechain.RPC.ChainSupervisor do
          ) do
       {:ok, pid} ->
         Logger.info("Started WSConnection for #{provider.name} (#{provider.id})")
-        # Update ProviderPool registration with the actual WSConnection pid
-        ProviderPool.register_provider(chain_name, provider.id, pid, provider)
+        # Attach the actual WSConnection pid
+        ProviderPool.attach_ws_connection(chain_name, provider.id, pid)
 
       {:error, {:already_started, pid}} ->
         Logger.info(
           "WSConnection for #{provider.name} (#{provider.id}) already exists, using existing connection"
         )
 
-        # Update ProviderPool registration with existing WSConnection pid
-        ProviderPool.register_provider(chain_name, provider.id, pid, provider)
+        # Attach the existing WSConnection pid
+        ProviderPool.attach_ws_connection(chain_name, provider.id, pid)
 
       {:error, reason} ->
         Logger.error("Failed to start WSConnection for #{provider.name}: #{inspect(reason)}")
@@ -230,20 +227,10 @@ defmodule Livechain.RPC.ChainSupervisor do
       success_threshold: 2
     }
 
-    # Start circuit breaker under the dynamic supervisor for proper supervision
-    case DynamicSupervisor.start_child(
-           circuit_breaker_supervisor_name(chain_name),
-           {CircuitBreaker, {provider.id, circuit_config}}
-         ) do
-      {:ok, _pid} ->
-        Logger.info("Started supervised circuit breaker for provider #{provider.id}")
-
-      {:error, {:already_started, _pid}} ->
-        Logger.debug("Circuit breaker for #{provider.id} already running")
-
-      {:error, reason} ->
-        Logger.error("Failed to start circuit breaker for #{provider.id}: #{inspect(reason)}")
-    end
+    DynamicSupervisor.start_child(
+      circuit_breaker_supervisor_name(chain_name),
+      {CircuitBreaker, {provider.id, circuit_config}}
+    )
   end
 
   defp via_name(chain_name) do
@@ -262,24 +249,17 @@ defmodule Livechain.RPC.ChainSupervisor do
     Normalizer.run(provider_id, method, response_map)
   end
 
-  defp normalize_breaker_result({:ok, {:error, reason}}, _provider_id, _method),
-    do: {:error, reason}
+  defp normalize_breaker_result({:ok, {:error, reason}}, provider_id, _method) do
+    {:error, Livechain.JSONRPC.Error.from(reason, provider_id: provider_id)}
+  end
 
   defp normalize_breaker_result({:ok, response_map}, provider_id, method) do
     Normalizer.run(provider_id, method, response_map)
   end
 
-  defp normalize_breaker_result({:error, reason}, _provider_id, _method), do: {:error, reason}
-
-  defp normalize_breaker_result({:reply, {:ok, response_map}, _state}, provider_id, method) do
-    Normalizer.run(provider_id, method, response_map)
+  defp normalize_breaker_result({:error, reason}, provider_id, _method) do
+    {:error, Livechain.JSONRPC.Error.from(reason, provider_id: provider_id)}
   end
-
-  defp normalize_breaker_result({:reply, {:error, reason}, _state}, _provider_id, _method),
-    do: {:error, reason}
-
-  defp normalize_breaker_result({:reply, other, _state}, _provider_id, _method),
-    do: {:error, other}
 
   defp safe_breaker_call(provider_id, fun, timeout) do
     try do
