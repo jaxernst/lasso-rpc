@@ -8,7 +8,7 @@ defmodule Livechain.RPC.Failover do
 
   require Logger
 
-  alias Livechain.RPC.{Selection, ChainSupervisor, ProviderPool, ErrorClassifier}
+  alias Livechain.RPC.{Selection, ChainSupervisor, ProviderPool}
   alias Livechain.Benchmarking.BenchmarkStore
   alias Livechain.Config.MethodPolicy
   alias Livechain.JSONRPC.Error, as: JError
@@ -100,12 +100,13 @@ defmodule Livechain.RPC.Failover do
 
       {:error, reason} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
-        record_failure_metrics(chain, provider_id, method, strategy, reason, duration_ms)
+        jerr = JError.from(reason, provider_id: provider_id)
+        record_failure_metrics(chain, provider_id, method, strategy, jerr, duration_ms)
 
         should_failover =
-          case reason do
+          case jerr do
             %Livechain.JSONRPC.Error{retriable?: retriable?} -> retriable?
-            _ -> ErrorClassifier.should_failover?(reason)
+            _ -> false
           end
 
         case should_failover do
@@ -141,12 +142,12 @@ defmodule Livechain.RPC.Failover do
     max_attempts = MethodPolicy.max_failovers(method)
 
     with {:attempt_limit, false} <- {:attempt_limit, attempt > max_attempts},
-         {:ok, providers} <-
-           Selection.get_available_providers(chain,
+         {:ok, next_provider} <-
+           Selection.pick_provider(chain, method,
+             strategy: strategy,
              protocol: protocol,
              exclude: excluded_providers
-           ),
-         {:providers_available, [next_provider | _]} <- {:providers_available, providers} do
+           ) do
       Logger.warning("Failing over to provider",
         chain: chain,
         method: method,
@@ -167,11 +168,8 @@ defmodule Livechain.RPC.Failover do
       {:attempt_limit, true} ->
         {:error, JError.new(-32000, "Failover limit reached for method: #{method}")}
 
-      {:providers_available, []} ->
-        {:error, JError.new(-32000, "All providers failed for method: #{method}")}
-
       {:error, reason} ->
-        {:error, JError.new(-32000, "Failed to get available providers: #{reason}")}
+        {:error, JError.new(-32000, "Failed to select next provider: #{reason}")}
     end
   end
 
@@ -204,21 +202,22 @@ defmodule Livechain.RPC.Failover do
 
       {:error, reason} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
+        jerr = JError.from(reason, provider_id: provider_id)
 
         record_failover_failure_metrics(
           chain,
           provider_id,
           method,
           strategy,
-          reason,
+          jerr,
           duration_ms,
           attempt
         )
 
         should_failover =
-          case reason do
+          case jerr do
             %Livechain.JSONRPC.Error{retriable?: retriable?} -> retriable?
-            _ -> ErrorClassifier.should_failover?(reason)
+            _ -> false
           end
 
         case should_failover do
@@ -236,7 +235,7 @@ defmodule Livechain.RPC.Failover do
 
           false ->
             # User error - stop failover chain and return error
-            {:error, reason}
+            {:error, jerr}
         end
     end
   end
@@ -378,7 +377,7 @@ defmodule Livechain.RPC.Failover do
     BenchmarkStore.record_rpc_call(chain, provider_id, method, duration_ms, :success)
 
     # Update ProviderPool with real-time metrics for provider selection
-    ProviderPool.report_success(chain, provider_id, duration_ms)
+    ProviderPool.report_success(chain, provider_id)
   end
 
   defp record_rpc_failure(chain, provider_id, method, reason, duration_ms) do

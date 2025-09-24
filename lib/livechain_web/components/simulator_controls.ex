@@ -228,47 +228,9 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
   end
 
   @impl true
-  def handle_event("sim_start_load_test", _params, socket) do
-    selected_chains = socket.assigns.selected_chains
-
-    chains =
-      if length(selected_chains) > 0 do
-        selected_chains
-      else
-        Enum.map(socket.assigns.available_chains, & &1.name)
-      end
-
-    http_opts = %{
-      chains: chains,
-      methods: ["eth_blockNumber", "eth_getBalance"],
-      rps: socket.assigns.request_rate,
-      concurrency: 4,
-      strategy: socket.assigns.selected_strategy,
-      durationMs: 60_000
-    }
-
-    ws_opts = %{
-      chains: chains,
-      connections: 2,
-      topics: ["newHeads"],
-      durationMs: 60_000
-    }
-
-    socket =
-      socket
-      |> assign(:simulator_running, true)
-      |> push_event("sim_start_http_advanced", http_opts)
-      |> push_event("sim_start_ws_advanced", ws_opts)
-
-    {:noreply, socket}
-  end
-
-  # Handle stats updates from JavaScript
-  @impl true
   def handle_event("sim_stats", %{"http" => http, "ws" => ws}, socket) do
     new_stats = %{http: http, ws: ws}
 
-    # Auto-detect if simulator has stopped (no inflight requests and no connections)
     simulator_actually_running =
       get_stat(new_stats, :http, "inflight", 0) > 0 or
         get_stat(new_stats, :ws, "open", 0) > 0
@@ -288,7 +250,6 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
 
   @impl true
   def handle_event("active_runs_update", %{"runs" => runs}, socket) do
-    # Update simulator_running based on whether there are any active runs
     is_running = length(runs) > 0
 
     socket =
@@ -334,10 +295,8 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
         _ -> current_load_types
       end
 
-    # Ensure at least one type is selected
     new_load_types =
       if !new_load_types.http && !new_load_types.ws do
-        # Default to HTTP if both are disabled
         %{http: true, ws: false}
       else
         new_load_types
@@ -555,8 +514,7 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
             phx-target={@myself}
             class={["text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200", if(@load_types.http,
     do: "bg-sky-500/20 border border-sky-500 text-sky-300",
-    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-sky-400/50")]}
-          >
+    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-sky-400/50")]}>
             HTTP Load
           </button>
           <button
@@ -669,13 +627,11 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
 
   # Helper functions
   defp is_simulator_active(sim_stats, simulator_running) do
-    # Check if simulator is actively running based on inflight requests or open connections
     get_stat(sim_stats, :http, "inflight", 0) > 0 or
       get_stat(sim_stats, :ws, "open", 0) > 0 or simulator_running
   end
 
   defp get_stat(sim_stats, type, key, default) do
-    # JavaScript sends string keys for both outer and inner maps
     type_string = to_string(type)
     key_string = to_string(key)
 
@@ -684,7 +640,6 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
         Map.get(stats, key_string, default)
 
       %{^type => stats} when is_map(stats) ->
-        # Fallback for atom keys
         atom_key = if is_atom(key), do: key, else: String.to_atom(key)
         Map.get(stats, atom_key, default)
 
@@ -717,7 +672,6 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
 
     %{
       type: "custom",
-      # 30 seconds default
       duration: 30000,
       chains: get_selected_chains(socket),
       strategy: socket.assigns.selected_strategy,
@@ -745,7 +699,6 @@ defmodule LivechainWeb.Dashboard.Components.SimulatorControls do
     end
   end
 
-  # Preview text generation and update helpers
   defp get_preview_text(params) do
     strategy = Map.get(params, :strategy, "round-robin")
     chains = Map.get(params, :chains, [])

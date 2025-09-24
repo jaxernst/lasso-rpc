@@ -22,8 +22,8 @@ defmodule Livechain.RPC.WSConnection do
   alias Livechain.RPC.CircuitBreaker
   alias Livechain.RPC.ProviderPool
   alias Livechain.RPC.Failover
-  alias Livechain.RPC.ErrorClassifier
-  alias Livechain.Events.Provider
+  alias Livechain.RPC.WSNormalizer
+  alias Livechain.JSONRPC.Error, as: JError
 
   # Client API
 
@@ -80,14 +80,9 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def init(%WSEndpoint{} = endpoint) do
-    Logger.info("Starting WebSocket connection for #{endpoint.name} (#{endpoint.id})")
-
-    # Cache chain name at startup to avoid config loading on hot path
-    chain_name = resolve_chain_name(endpoint.chain_id)
-
     state = %{
       endpoint: endpoint,
-      chain_name: chain_name,
+      chain_name: endpoint.chain_name,
       connection: nil,
       connected: false,
       reconnect_attempts: 0,
@@ -103,33 +98,50 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def handle_continue(:connect, state) do
-    case connect_to_websocket(state.endpoint) do
+    case CircuitBreaker.call(state.endpoint.id, fn ->
+           connect_to_websocket(state.endpoint)
+         end) do
       {:ok, connection} ->
         Process.monitor(connection)
         state = %{state | connection: connection}
-        # Connection success will be handled by {:ws_connected} message
+        # success path continues via {:ws_connected}
         {:noreply, state}
 
-      {:error, reason} ->
+      {:error, %JError{} = jerr} ->
         Logger.error(
-          "Failed to connect to #{state.endpoint.name} (WebSocket): #{inspect(reason)}"
+          "Failed to connect to #{state.endpoint.name} (WebSocket): #{jerr.message} (code=#{inspect(jerr.code)})"
         )
 
-        # Report connection failure to circuit breaker with proper error classification
-        report_websocket_error(state.endpoint.id, reason)
-
         broadcast_status_change(state, :disconnected)
+
+        state =
+          if jerr.retriable? do
+            schedule_reconnect(state)
+          else
+            state
+          end
+
+        {:noreply, state}
+
+      {:error, :circuit_open} ->
+        Logger.debug("Circuit breaker open for #{state.endpoint.id}, skipping connect attempt")
+        # Try again later (uses existing backoff)
         state = schedule_reconnect(state)
         {:noreply, state}
 
-      {:already_started, pid} ->
-        Logger.info(
-          "WebSocket connection already exists for #{state.endpoint.name}, using existing connection"
-        )
+      {:error, other} ->
+        Logger.debug("Circuit breaker call error: #{inspect(other)}")
 
-        Process.monitor(pid)
-        state = %{state | connection: pid}
-        # Will get a ws_connected message shortly
+        jerr = JError.from(other, provider_id: state.endpoint.id)
+        broadcast_status_change(state, :disconnected)
+
+        state =
+          if jerr.retriable? do
+            schedule_reconnect(state)
+          else
+            state
+          end
+
         {:noreply, state}
     end
   end
@@ -137,7 +149,13 @@ defmodule Livechain.RPC.WSConnection do
   @impl true
   def handle_cast({:send_message, message}, %{connected: true, connection: connection} = state) do
     case CircuitBreaker.call(state.endpoint.id, fn ->
-           WebSockex.send_frame(connection, {:text, Jason.encode!(message)})
+           case WebSockex.send_frame(connection, {:text, Jason.encode!(message)}) do
+             :ok ->
+               :ok
+
+             {:error, reason} ->
+               {:error, WSNormalizer.normalize_send_error(reason, state.endpoint.id)}
+           end
          end) do
       {:ok, :ok} ->
         {:noreply, state}
@@ -208,21 +226,11 @@ defmodule Livechain.RPC.WSConnection do
     # Report successful connection to circuit breaker
     CircuitBreaker.record_success(state.endpoint.id)
 
-    # Report successful connection to provider pool for status tracking
-    ProviderPool.report_success(state.chain_name, state.endpoint.id, 0)
+    # Report successful connection to provider pool for status tracking (single writer)
+    ProviderPool.report_ws_connected(state.chain_name, state.endpoint.id)
 
     state = %{state | connected: true, reconnect_attempts: 0}
     broadcast_status_change(state, :connected)
-    # Emit WSConnected typed event
-    Phoenix.PubSub.broadcast(
-      Livechain.PubSub,
-      Provider.topic(state.chain_name),
-      %Provider.WSConnected{
-        ts: System.system_time(:millisecond),
-        chain: state.chain_name,
-        provider_id: state.endpoint.id
-      }
-    )
 
     state = schedule_heartbeat(state)
     state = send_pending_messages(state)
@@ -231,8 +239,6 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def handle_info({:ws_message, decoded}, state) do
-    IO.inspect({decoded, state})
-
     case handle_websocket_message(decoded, state) do
       {:ok, new_state} -> {:noreply, new_state}
       new_state -> {:noreply, new_state}
@@ -242,8 +248,6 @@ defmodule Livechain.RPC.WSConnection do
   @impl true
   def handle_info({:ws_error, error}, state) do
     Logger.error("WebSocket error: #{inspect(error)}")
-    # Use proper error classification instead of direct failure recording
-    report_websocket_error(state.endpoint.id, error)
     ProviderPool.report_failure(state.chain_name, state.endpoint.id, error)
     {:noreply, state}
   end
@@ -251,44 +255,28 @@ defmodule Livechain.RPC.WSConnection do
   @impl true
   def handle_info({:ws_closed, code, reason}, state) do
     Logger.info("WebSocket closed: #{code} - #{inspect(reason)}")
+
+    jerr = WSNormalizer.normalize_close(code, reason, state.endpoint.id)
+
     state = %{state | connected: false, connection: nil}
     broadcast_status_change(state, :disconnected)
-    # Emit typed provider WS closed event for per-chain consumers
-    Phoenix.PubSub.broadcast(
-      Livechain.PubSub,
-      Provider.topic(state.chain_name),
-      %Provider.WSClosed{
-        ts: System.system_time(:millisecond),
-        chain: state.chain_name,
-        provider_id: state.endpoint.id,
-        code: code,
-        reason: reason
-      }
-    )
+    ProviderPool.report_ws_closed(state.chain_name, state.endpoint.id, code, reason)
 
-    state = schedule_reconnect(state)
+    state = if jerr.retriable?, do: schedule_reconnect(state), else: state
     {:noreply, state}
   end
 
   @impl true
   def handle_info({:ws_disconnected, reason}, state) do
     Logger.warning("WebSocket disconnected: #{inspect(reason)}")
-    ProviderPool.report_failure(state.chain_name, state.endpoint.id, {:disconnect, reason})
+
+    jerr = WSNormalizer.normalize_disconnect(reason, state.endpoint.id)
+
+    ProviderPool.report_ws_disconnected(state.chain_name, state.endpoint.id, reason)
     state = %{state | connected: false, connection: nil}
     broadcast_status_change(state, :disconnected)
-    # Emit typed provider WS disconnected event for per-chain consumers
-    Phoenix.PubSub.broadcast(
-      Livechain.PubSub,
-      Provider.topic(state.chain_name),
-      %Provider.WSDisconnected{
-        ts: System.system_time(:millisecond),
-        chain: state.chain_name,
-        provider_id: state.endpoint.id,
-        reason: reason
-      }
-    )
 
-    state = schedule_reconnect(state)
+    state = if jerr.retriable?, do: schedule_reconnect(state), else: state
     {:noreply, state}
   end
 
@@ -297,7 +285,13 @@ defmodule Livechain.RPC.WSConnection do
     if state.connected do
       # Send ping to keep connection alive through circuit breaker
       case CircuitBreaker.call(state.endpoint.id, fn ->
-             WebSockex.send_frame(state.connection, :ping)
+             case WebSockex.send_frame(state.connection, :ping) do
+               :ok ->
+                 :ok
+
+               {:error, reason} ->
+                 {:error, WSNormalizer.normalize_send_error(reason, state.endpoint.id)}
+             end
            end) do
         {:ok, :ok} ->
           state = schedule_heartbeat(state)
@@ -329,9 +323,6 @@ defmodule Livechain.RPC.WSConnection do
   @impl true
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
     Logger.warning("WebSocket connection lost: #{inspect(reason)}")
-
-    # Report disconnect as failure to circuit breaker with proper error classification
-    report_websocket_error(state.endpoint.id, {:connection_lost, reason})
 
     case reason do
       {exception, stacktrace} when is_list(stacktrace) ->
@@ -424,11 +415,14 @@ defmodule Livechain.RPC.WSConnection do
 
   defp connect_to_websocket(endpoint) do
     # Start a separate WebSocket handler process
-    WebSockex.start_link(
-      endpoint.ws_url,
-      Livechain.RPC.WSHandler,
-      %{endpoint: endpoint, parent: self()}
-    )
+    case WebSockex.start_link(
+           endpoint.ws_url,
+           Livechain.RPC.WSHandler,
+           %{endpoint: endpoint, parent: self()}
+         ) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, reason} -> {:error, WSNormalizer.normalize_connect_error(reason, endpoint.id)}
+    end
   end
 
   defp schedule_heartbeat(state) do
@@ -573,22 +567,6 @@ defmodule Livechain.RPC.WSConnection do
     {:ok, state}
   end
 
-  # Resolve chain name via config at startup
-  defp resolve_chain_name(chain_id) do
-    case Livechain.Config.ChainConfig.load_config("config/chains.yml") do
-      {:ok, config} ->
-        case Enum.find(config.chains, fn {_name, chain_config} ->
-               chain_config.chain_id == chain_id
-             end) do
-          {name, _} -> name
-          nil -> "unknown"
-        end
-
-      {:error, _} ->
-        "unknown"
-    end
-  end
-
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
   defp via_name(connection_id) do
@@ -608,35 +586,5 @@ defmodule Livechain.RPC.WSConnection do
          subscriptions: MapSet.size(state.subscriptions)
        }}
     )
-  end
-
-  # Helper function to properly classify WebSocket errors before reporting to CircuitBreaker
-  defp report_websocket_error(provider_id, error) do
-    case error do
-      %Livechain.JSONRPC.Error{retriable?: true} ->
-        # Infrastructure failures should trigger circuit breaker
-        CircuitBreaker.call(provider_id, fn -> {:error, error} end)
-
-      %Livechain.JSONRPC.Error{retriable?: false} ->
-        # User errors should not affect circuit breaker state
-        Logger.debug("WebSocket user error (not triggering circuit breaker): #{inspect(error)}")
-        :ok
-
-      _ ->
-        # Fall back to ErrorClassifier for legacy error shapes
-        case ErrorClassifier.classify_error(error) do
-          :infrastructure_failure ->
-            # Infrastructure failures should trigger circuit breaker
-            CircuitBreaker.call(provider_id, fn -> {:error, error} end)
-
-          :user_error ->
-            # User errors should not affect circuit breaker state
-            Logger.debug(
-              "WebSocket user error (not triggering circuit breaker): #{inspect(error)}"
-            )
-
-            :ok
-        end
-    end
   end
 end

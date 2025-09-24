@@ -46,8 +46,12 @@ defmodule Livechain.RPC.ErrorClassifier do
       {:client_error, _} ->
         :user_error
 
-      # JSON parse errors are user errors
-      {:decode_error, _} ->
+      # Response decode errors indicate provider/infra problems
+      {:response_decode_error, _} ->
+        :infrastructure_failure
+
+      # Request encode errors are user/client-side
+      {:encode_error, _} ->
         :user_error
 
       # === Circuit Breaker States ===
@@ -107,8 +111,11 @@ defmodule Livechain.RPC.ErrorClassifier do
   # JSON-RPC 2.0 error codes classification
   defp classify_jsonrpc_error(code) do
     case code do
-      # Standard JSON-RPC 2.0 errors are user errors
-      code when code in [-32700, -32600, -32601, -32602, -32603] -> :user_error
+      # Standard JSON-RPC 2.0 errors
+      # -32700 (parse), -32600, -32601, -32602 are client-side/user errors
+      code when code in [-32700, -32600, -32601, -32602] -> :user_error
+      # -32603 (internal error) is a server-side retriable/infrastructure failure
+      -32603 -> :infrastructure_failure
       # Provider rate limiting patterns - infrastructure failures
       code when code in [-32005, -32429] -> :infrastructure_failure
       # Conservative default: treat unknown JSON-RPC codes as user errors

@@ -191,7 +191,6 @@ defmodule Livechain.Config.ConfigStore do
           last_loaded: DateTime.utc_now()
         }
 
-        Logger.info("ConfigStore initialized with configuration from #{config_path}")
         {:ok, state}
 
       {:error, reason} ->

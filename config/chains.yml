@@ -30,28 +30,28 @@ chains:
         url: "https://cloudflare-eth.com"
         api_key_required: false
 
-      - id: "ethereum_publicnode"
-        name: "PublicNode Ethereum"
-        priority: 4
-        type: "public"
-        url: "https://ethereum-rpc.publicnode.com"
-        ws_url: "wss://ethereum-rpc.publicnode.com"
-        api_key_required: false
+      # - id: "ethereum_publicnode"
+      #   name: "PublicNode Ethereum"
+      #   priority: 4
+      #   type: "public"
+      #   url: "https://ethereum-rpc.publicnode.com"
+      #   ws_url: "wss://ethereum-rpc.publicnode.com"
+      #   api_key_required: false
 
-      - id: "ethereum_1rpc"
-        name: "1RPC Ethereum"
-        priority: 5
-        type: "public"
-        url: "https://1rpc.io/eth"
-        api_key_required: false
+      # - id: "ethereum_1rpc"
+      #   name: "1RPC Ethereum"
+      #   priority: 5
+      #   type: "public"
+      #   url: "https://1rpc.io/eth"
+      #   api_key_required: false
 
-      - id: "ethereum_blastapi"
-        name: "BlastAPI Ethereum"
-        priority: 6
-        type: "public"
-        url: "https://ethereum.publicnode.com"
-        ws_url: "wss://ethereum.publicnode.com"
-        api_key_required: false
+      # - id: "ethereum_blastapi"
+      #   name: "BlastAPI Ethereum"
+      #   priority: 6
+      #   type: "public"
+      #   url: "https://ethereum.publicnode.com"
+      #   ws_url: "wss://ethereum.publicnode.com"
+      #   api_key_required: false
 
     connection:
       heartbeat_interval: 30000
@@ -63,164 +63,164 @@ chains:
       backfill_timeout: 30000
       enabled: true
 
-  polygon:
-    chain_id: 137
-    name: "Polygon Mainnet"
+  # polygon:
+  #   chain_id: 137
+  #   name: "Polygon Mainnet"
 
-    providers:
-      - id: "polygon_ankr"
-        name: "Ankr Polygon"
-        priority: 1
-        type: "public"
-        url: "https://rpc.ankr.com/polygon"
-        ws_url: "wss://rpc.ankr.com/polygon/ws"
-        api_key_required: false
+  #   providers:
+  #     - id: "polygon_ankr"
+  #       name: "Ankr Polygon"
+  #       priority: 1
+  #       type: "public"
+  #       url: "https://rpc.ankr.com/polygon"
+  #       ws_url: "wss://rpc.ankr.com/polygon/ws"
+  #       api_key_required: false
 
-      - id: "polygon_publicnode"
-        name: "PublicNode Polygon"
-        priority: 2
-        type: "public"
-        url: "https://polygon-rpc.publicnode.com"
-        ws_url: "wss://polygon-rpc.publicnode.com"
-        api_key_required: false
+  #     - id: "polygon_publicnode"
+  #       name: "PublicNode Polygon"
+  #       priority: 2
+  #       type: "public"
+  #       url: "https://polygon-rpc.publicnode.com"
+  #       ws_url: "wss://polygon-rpc.publicnode.com"
+  #       api_key_required: false
 
-      - id: "polygon_1rpc"
-        name: "1RPC Polygon"
-        priority: 3
-        type: "public"
-        url: "https://1rpc.io/matic"
-        api_key_required: false
+  #     - id: "polygon_1rpc"
+  #       name: "1RPC Polygon"
+  #       priority: 3
+  #       type: "public"
+  #       url: "https://1rpc.io/matic"
+  #       api_key_required: false
 
-      - id: "polygon_blastapi"
-        name: "BlastAPI Polygon"
-        priority: 4
-        type: "public"
-        url: "https://polygon.publicnode.com"
-        ws_url: "wss://polygon.publicnode.com"
-        api_key_required: false
+  #     - id: "polygon_blastapi"
+  #       name: "BlastAPI Polygon"
+  #       priority: 4
+  #       type: "public"
+  #       url: "https://polygon.publicnode.com"
+  #       ws_url: "wss://polygon.publicnode.com"
+  #       api_key_required: false
 
-    connection:
-      heartbeat_interval: 20000
-      reconnect_interval: 3000
-      max_reconnect_attempts: 15
+  #   connection:
+  #     heartbeat_interval: 20000
+  #     reconnect_interval: 3000
+  #     max_reconnect_attempts: 15
 
-    failover:
-      max_backfill_blocks: 100
-      backfill_timeout: 30000
-      enabled: true
+  #   failover:
+  #     max_backfill_blocks: 100
+  #     backfill_timeout: 30000
+  #     enabled: true
 
-  base:
-    chain_id: 8453
-    name: "Base Mainnet"
+  # base:
+  #   chain_id: 8453
+  #   name: "Base Mainnet"
 
-    providers:
-      - id: "base_publicnode"
-        name: "PublicNode Base"
-        priority: 1
-        type: "public"
-        url: "https://base-rpc.publicnode.com"
-        ws_url: "wss://base-rpc.publicnode.com"
-        api_key_required: false
+  #   providers:
+  #     - id: "base_publicnode"
+  #       name: "PublicNode Base"
+  #       priority: 1
+  #       type: "public"
+  #       url: "https://base-rpc.publicnode.com"
+  #       ws_url: "wss://base-rpc.publicnode.com"
+  #       api_key_required: false
 
-      - id: "base_ankr"
-        name: "Ankr Base"
-        priority: 2
-        type: "public"
-        url: "https://rpc.ankr.com/base"
-        ws_url: "wss://rpc.ankr.com/base/ws"
-        api_key_required: false
+  #     - id: "base_ankr"
+  #       name: "Ankr Base"
+  #       priority: 2
+  #       type: "public"
+  #       url: "https://rpc.ankr.com/base"
+  #       ws_url: "wss://rpc.ankr.com/base/ws"
+  #       api_key_required: false
 
-      - id: "base_omniatech"
-        name: "OmniaTech Base"
-        priority: 3
-        type: "public"
-        url: "https://endpoints.omniatech.io/v1/base/mainnet/public"
-        api_key_required: false
+  #     - id: "base_omniatech"
+  #       name: "OmniaTech Base"
+  #       priority: 3
+  #       type: "public"
+  #       url: "https://endpoints.omniatech.io/v1/base/mainnet/public"
+  #       api_key_required: false
 
-      - id: "base_blastapi"
-        name: "BlastAPI Base"
-        priority: 4
-        type: "public"
-        url: "https://base-mainnet.public.blastapi.io"
-        ws_url: "wss://base-mainnet.public.blastapi.io"
-        api_key_required: false
+  #     - id: "base_blastapi"
+  #       name: "BlastAPI Base"
+  #       priority: 4
+  #       type: "public"
+  #       url: "https://base-mainnet.public.blastapi.io"
+  #       ws_url: "wss://base-mainnet.public.blastapi.io"
+  #       api_key_required: false
 
-      - id: "base_0xrpc"
-        name: "0xRPC Base"
-        priority: 7
-        type: "public"
-        url: "https://0xrpc.io/base"
-        ws_url: "wss://0xrpc.io/base"
-        api_key_required: false
+  #     - id: "base_0xrpc"
+  #       name: "0xRPC Base"
+  #       priority: 7
+  #       type: "public"
+  #       url: "https://0xrpc.io/base"
+  #       ws_url: "wss://0xrpc.io/base"
+  #       api_key_required: false
 
-    connection:
-      heartbeat_interval: 20000
-      reconnect_interval: 3000
-      max_reconnect_attempts: 15
+  #   connection:
+  #     heartbeat_interval: 20000
+  #     reconnect_interval: 3000
+  #     max_reconnect_attempts: 15
 
-    failover:
-      max_backfill_blocks: 100
-      backfill_timeout: 30000
-      enabled: true
+  #   failover:
+  #     max_backfill_blocks: 100
+  #     backfill_timeout: 30000
+  #     enabled: true
 
-  arbitrum:
-    chain_id: 42161
-    name: "Arbitrum One"
+  # arbitrum:
+  #   chain_id: 42161
+  #   name: "Arbitrum One"
 
-    providers:
-      - id: "arbitrum_official"
-        name: "Arbitrum Official"
-        priority: 1
-        type: "public"
-        url: "https://arb1.arbitrum.io/rpc"
-        api_key_required: false
+  #   providers:
+  #     - id: "arbitrum_official"
+  #       name: "Arbitrum Official"
+  #       priority: 1
+  #       type: "public"
+  #       url: "https://arb1.arbitrum.io/rpc"
+  #       api_key_required: false
 
-      - id: "arbitrum_ankr"
-        name: "Ankr Arbitrum"
-        priority: 2
-        type: "public"
-        url: "https://rpc.ankr.com/arbitrum"
-        api_key_required: false
+  #     - id: "arbitrum_ankr"
+  #       name: "Ankr Arbitrum"
+  #       priority: 2
+  #       type: "public"
+  #       url: "https://rpc.ankr.com/arbitrum"
+  #       api_key_required: false
 
-      - id: "arbitrum_blastapi"
-        name: "BlastAPI Arbitrum"
-        priority: 3
-        type: "public"
-        url: "https://arbitrum-one.public.blastapi.io"
-        ws_url: "wss://arbitrum-one.public.blastapi.io"
-        api_key_required: false
+  #     - id: "arbitrum_blastapi"
+  #       name: "BlastAPI Arbitrum"
+  #       priority: 3
+  #       type: "public"
+  #       url: "https://arbitrum-one.public.blastapi.io"
+  #       ws_url: "wss://arbitrum-one.public.blastapi.io"
+  #       api_key_required: false
 
-      - id: "arbitrum_publicnode"
-        name: "PublicNode Arbitrum"
-        priority: 4
-        type: "public"
-        url: "https://arbitrum-one-rpc.publicnode.com"
-        ws_url: "wss://arbitrum-one-rpc.publicnode.com"
-        api_key_required: false
+  #     - id: "arbitrum_publicnode"
+  #       name: "PublicNode Arbitrum"
+  #       priority: 4
+  #       type: "public"
+  #       url: "https://arbitrum-one-rpc.publicnode.com"
+  #       ws_url: "wss://arbitrum-one-rpc.publicnode.com"
+  #       api_key_required: false
 
-      - id: "arbitrum_1rpc"
-        name: "1RPC Arbitrum"
-        priority: 5
-        type: "public"
-        url: "https://1rpc.io/arb"
-        api_key_required: false
+  #     - id: "arbitrum_1rpc"
+  #       name: "1RPC Arbitrum"
+  #       priority: 5
+  #       type: "public"
+  #       url: "https://1rpc.io/arb"
+  #       api_key_required: false
 
-      - id: "arbitrum_omniatech"
-        name: "OmniaTech Arbitrum"
-        priority: 6
-        type: "public"
-        url: "https://endpoints.omniatech.io/v1/arbitrum/mainnet/public"
-        api_key_required: false
+  #     - id: "arbitrum_omniatech"
+  #       name: "OmniaTech Arbitrum"
+  #       priority: 6
+  #       type: "public"
+  #       url: "https://endpoints.omniatech.io/v1/arbitrum/mainnet/public"
+  #       api_key_required: false
 
-    connection:
-      heartbeat_interval: 15000
-      reconnect_interval: 2000
-      max_reconnect_attempts: 20
+  #   connection:
+  #     heartbeat_interval: 15000
+  #     reconnect_interval: 2000
+  #     max_reconnect_attempts: 20
 
-    failover:
-      max_backfill_blocks: 100
-      backfill_timeout: 30000
-      enabled: true
+  #   failover:
+  #     max_backfill_blocks: 100
+  #     backfill_timeout: 30000
+  #     enabled: true
 
   # optimism:
   #   chain_id: 10
@@ -286,27 +286,27 @@ chains:
     name: "zkSync Era"
 
     providers:
-      - id: "zksync_official"
-        name: "zkSync Official"
-        priority: 1
-        type: "public"
-        url: "https://mainnet.era.zksync.io"
-        ws_url: "wss://mainnet.era.zksync.io/ws"
-        api_key_required: false
+      # - id: "zksync_official"
+      #   name: "zkSync Official"
+      #   priority: 1
+      #   type: "public"
+      #   url: "https://mainnet.era.zksync.io"
+      #   ws_url: "wss://mainnet.era.zksync.io/ws"
+      #   api_key_required: false
 
-      - id: "zksync_ankr"
-        name: "Ankr zkSync"
-        priority: 2
-        type: "public"
-        url: "https://rpc.ankr.com/zksync_era"
-        api_key_required: false
+      # - id: "zksync_ankr"
+      #   name: "Ankr zkSync"
+      #   priority: 2
+      #   type: "public"
+      #   url: "https://rpc.ankr.com/zksync_era"
+      #   api_key_required: false
 
-      - id: "zksync_omniatech"
-        name: "OmniaTech zkSync"
-        priority: 3
-        type: "public"
-        url: "https://endpoints.omniatech.io/v1/zksync-era/mainnet/public"
-        api_key_required: false
+      # - id: "zksync_omniatech"
+      #   name: "OmniaTech zkSync"
+      #   priority: 3
+      #   type: "public"
+      #   url: "https://endpoints.omniatech.io/v1/zksync-era/mainnet/public"
+      #   api_key_required: false
 
       - id: "zksync_publicnode"
         name: "PublicNode zkSync"
@@ -316,12 +316,12 @@ chains:
         ws_url: "wss://zksync-era-rpc.publicnode.com"
         api_key_required: false
 
-      - id: "zksync_1rpc"
-        name: "1RPC zkSync"
-        priority: 5
-        type: "public"
-        url: "https://1rpc.io/zksync2-era"
-        api_key_required: false
+      # - id: "zksync_1rpc"
+      #   name: "1RPC zkSync"
+      #   priority: 5
+      #   type: "public"
+      #   url: "https://1rpc.io/zksync2-era"
+      #   api_key_required: false
 
     connection:
       heartbeat_interval: 15000
@@ -333,72 +333,72 @@ chains:
       backfill_timeout: 30000
       enabled: true
 
-  unichain:
-    chain_id: 130
-    name: "Unichain Mainnet"
+  # unichain:
+  #   chain_id: 130
+  #   name: "Unichain Mainnet"
 
-    providers:
-      - id: "unichain_0xrpc"
-        name: "0xRPC Unichain"
-        priority: 1
-        type: "public"
-        url: "https://0xrpc.io/uni"
-        ws_url: "wss://0xrpc.io/uni"
-        api_key_required: false
+  #   providers:
+  #     - id: "unichain_0xrpc"
+  #       name: "0xRPC Unichain"
+  #       priority: 1
+  #       type: "public"
+  #       url: "https://0xrpc.io/uni"
+  #       ws_url: "wss://0xrpc.io/uni"
+  #       api_key_required: false
 
-      - id: "unichain_publicnode"
-        name: "PublicNode Unichain"
-        priority: 2
-        type: "public"
-        url: "https://unichain-rpc.publicnode.com"
-        ws_url: "wss://unichain-rpc.publicnode.com"
-        api_key_required: false
+  #     - id: "unichain_publicnode"
+  #       name: "PublicNode Unichain"
+  #       priority: 2
+  #       type: "public"
+  #       url: "https://unichain-rpc.publicnode.com"
+  #       ws_url: "wss://unichain-rpc.publicnode.com"
+  #       api_key_required: false
 
-      - id: "unichain_drpc"
-        name: "DRPC Unichain"
-        priority: 3
-        type: "public"
-        url: "https://unichain.drpc.org"
-        ws_url: "wss://unichain.drpc.org"
-        api_key_required: false
+  #     - id: "unichain_drpc"
+  #       name: "DRPC Unichain"
+  #       priority: 3
+  #       type: "public"
+  #       url: "https://unichain.drpc.org"
+  #       ws_url: "wss://unichain.drpc.org"
+  #       api_key_required: false
 
-      - id: "unichain_drpc_https"
-        name: "DRPC Unichain HTTPS"
-        priority: 4
-        type: "public"
-        url: "https://unichain.drpc.org"
-        api_key_required: false
+  #     - id: "unichain_drpc_https"
+  #       name: "DRPC Unichain HTTPS"
+  #       priority: 4
+  #       type: "public"
+  #       url: "https://unichain.drpc.org"
+  #       api_key_required: false
 
-      - id: "unichain_poolz"
-        name: "Poolz Unichain"
-        priority: 5
-        type: "public"
-        url: "https://rpc.poolz.finance/unichain"
-        api_key_required: false
+  #     - id: "unichain_poolz"
+  #       name: "Poolz Unichain"
+  #       priority: 5
+  #       type: "public"
+  #       url: "https://rpc.poolz.finance/unichain"
+  #       api_key_required: false
 
-      - id: "unichain_onfinality"
-        name: "OnFinality Unichain"
-        priority: 6
-        type: "public"
-        url: "https://unichain.api.onfinality.io/public"
-        api_key_required: false
+  #     - id: "unichain_onfinality"
+  #       name: "OnFinality Unichain"
+  #       priority: 6
+  #       type: "public"
+  #       url: "https://unichain.api.onfinality.io/public"
+  #       api_key_required: false
 
-      - id: "unichain_therpc"
-        name: "TheRPC Unichain"
-        priority: 7
-        type: "public"
-        url: "https://unichain.therpc.io"
-        api_key_required: false
+  #     - id: "unichain_therpc"
+  #       name: "TheRPC Unichain"
+  #       priority: 7
+  #       type: "public"
+  #       url: "https://unichain.therpc.io"
+  #       api_key_required: false
 
-    connection:
-      heartbeat_interval: 20000
-      reconnect_interval: 3000
-      max_reconnect_attempts: 15
+  #   connection:
+  #     heartbeat_interval: 20000
+  #     reconnect_interval: 3000
+  #     max_reconnect_attempts: 15
 
-    failover:
-      max_backfill_blocks: 100
-      backfill_timeout: 30000
-      enabled: true
+  #   failover:
+  #     max_backfill_blocks: 100
+  #     backfill_timeout: 30000
+  #     enabled: true
 
   # berachain:
   #   chain_id: 80094

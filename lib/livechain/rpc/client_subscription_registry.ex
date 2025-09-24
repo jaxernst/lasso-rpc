@@ -42,8 +42,6 @@ defmodule Livechain.RPC.ClientSubscriptionRegistry do
 
   @impl true
   def init(chain) do
-    Logger.info("Starting ClientSubscriptionRegistry for #{chain}")
-
     state = %{
       chain: chain,
       by_id: %{},

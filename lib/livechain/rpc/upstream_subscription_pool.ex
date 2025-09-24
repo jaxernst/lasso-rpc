@@ -41,7 +41,6 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
 
   @impl true
   def init(chain) do
-    Logger.info("Starting ProviderSubscriptionPool for #{chain}")
     Phoenix.PubSub.subscribe(Livechain.PubSub, "raw_messages:#{chain}")
     Phoenix.PubSub.subscribe(Livechain.PubSub, "provider_pool:events:#{chain}")
 
@@ -66,6 +65,8 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       upstream_index: %{},
       # request_id => {provider_id, key}
       pending_subscribe: %{},
+      # provider capabilities discovered at runtime, e.g., %{provider_id => %{newHeads: true/false, logs: true/false}}
+      provider_caps: %{},
       # config
       max_backfill_blocks: Map.get(failover_cfg, :max_backfill_blocks, 32),
       backfill_timeout: Map.get(failover_cfg, :backfill_timeout, 30_000),
@@ -141,6 +142,10 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
           updated_entry = put_in(entry, [:upstream, provider_id], upstream_id)
           upstream_index = put_in(state.upstream_index, [provider_id, upstream_id], key)
 
+          # Mark capability for this provider/key as supported
+          cap = capability_from_key(key)
+          provider_caps = put_in(state.provider_caps, [provider_id, cap], true)
+
           # Notify coordinator that upstream is confirmed
           StreamCoordinator.upstream_confirmed(state.chain, key, provider_id, upstream_id)
 
@@ -149,8 +154,68 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
              state
              | keys: Map.put(state.keys, key, updated_entry),
                upstream_index: upstream_index,
-               pending_subscribe: new_pending
+               pending_subscribe: new_pending,
+               provider_caps: provider_caps
            }}
+        else
+          {:noreply, %{state | pending_subscribe: new_pending}}
+        end
+    end
+  end
+
+  # Handle subscription errors (e.g., provider does not support specific subscription type)
+  def handle_info(
+        {:raw_message, provider_id, %{"id" => request_id, "error" => error}, _received_at},
+        state
+      ) do
+    case Map.pop(state.pending_subscribe, request_id) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {{prov, key}, new_pending} ->
+        if prov == provider_id do
+          Logger.warning(
+            "Upstream subscribe failed on #{provider_id} for #{inspect(key)}: #{inspect(error)}"
+          )
+
+          cap = capability_from_key(key)
+          provider_caps = put_in(state.provider_caps, [provider_id, cap], false)
+
+          entry = Map.get(state.keys, key)
+          already_tried = Map.keys(entry.upstream)
+
+          exclude = Enum.uniq([provider_id | already_tried])
+
+          case Selection.pick_provider(state.chain, "eth_subscribe",
+                 strategy: :priority,
+                 protocol: :ws,
+                 exclude: exclude
+               ) do
+            {:ok, next_provider} ->
+              request_id2 = send_upstream_subscribe(next_provider, key)
+              telemetry_upstream(:subscribe, state.chain, next_provider, key)
+
+              updated_entry =
+                entry
+                |> Map.put(:primary_provider_id, next_provider)
+                |> update_in([:upstream], &Map.put(&1, next_provider, nil))
+
+              new_state = %{
+                state
+                | keys: Map.put(state.keys, key, updated_entry),
+                  pending_subscribe: Map.put(new_pending, request_id2, {next_provider, key}),
+                  provider_caps: provider_caps
+              }
+
+              {:noreply, new_state}
+
+            {:error, reason} ->
+              Logger.error(
+                "No alternative provider available for #{inspect(key)} after failure on #{provider_id}: #{inspect(reason)}"
+              )
+
+              {:noreply, %{state | pending_subscribe: new_pending, provider_caps: provider_caps}}
+          end
         else
           {:noreply, %{state | pending_subscribe: new_pending}}
         end
@@ -364,6 +429,9 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       key: inspect(key)
     })
   end
+
+  defp capability_from_key({:newHeads}), do: :newHeads
+  defp capability_from_key({:logs, _}), do: :logs
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 end

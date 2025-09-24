@@ -59,20 +59,16 @@ defmodule TestHelper do
       _ -> :ok
     end
 
-    # Clean subscription manager state if it's running
+    # Clean subscription pools if they're running
     try do
-      case GenServer.whereis(Livechain.RPC.SubscriptionManager) do
-        nil ->
+      # Clean up any active upstream subscription pools
+      Registry.select(Livechain.Registry, [{{:pool, :"$1"}, :_, :_}])
+      |> Enum.each(fn {_key, pool_pid} ->
+        if Process.alive?(pool_pid) do
+          # Pool cleanup is handled by supervisor termination
           :ok
-
-        _pid ->
-          # Get all current subscriptions and unsubscribe them
-          subscriptions = Livechain.RPC.SubscriptionManager.get_subscriptions()
-
-          Enum.each(subscriptions, fn {sub_id, _sub} ->
-            Livechain.RPC.SubscriptionManager.unsubscribe(sub_id)
-          end)
-      end
+        end
+      end)
     rescue
       _ -> :ok
     end
@@ -82,17 +78,8 @@ defmodule TestHelper do
     # Stop any running GenServers that might have been started during tests
     try do
       # Stop test-specific processes
-      case GenServer.whereis(Livechain.RPC.SubscriptionManagerTest.MockChainManager) do
-        nil ->
-          :ok
-
-        pid ->
-          try do
-            GenServer.stop(pid, :normal)
-          catch
-            :exit, _ -> :ok
-          end
-      end
+      # Clean up any test-specific mock processes that may have been started
+      :ok
     rescue
       _ -> :ok
     end

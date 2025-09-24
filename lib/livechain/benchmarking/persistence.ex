@@ -14,7 +14,7 @@ defmodule Livechain.Benchmarking.Persistence do
   CREATE TABLE provider_performance_snapshots (
     id SERIAL PRIMARY KEY,
     chain_name VARCHAR(50) NOT NULL,
-    provider_id VARCHAR(100) NOT NULL, 
+    provider_id VARCHAR(100) NOT NULL,
     hour_timestamp TIMESTAMP NOT NULL,
     event_type VARCHAR(50),
     wins INTEGER,
@@ -25,7 +25,7 @@ defmodule Livechain.Benchmarking.Persistence do
     rpc_avg_duration_ms FLOAT,
     rpc_success_rate FLOAT,
     created_at TIMESTAMP DEFAULT NOW(),
-    
+
     INDEX idx_chain_provider (chain_name, provider_id),
     INDEX idx_timestamp (hour_timestamp),
     INDEX idx_event_type (event_type),
@@ -82,7 +82,6 @@ defmodule Livechain.Benchmarking.Persistence do
     # Schedule periodic cleanup
     schedule_cleanup()
 
-    Logger.info("Started benchmark persistence service")
     {:ok, %{}}
   end
 

@@ -18,8 +18,7 @@ defmodule Livechain.RPC.Selection do
   require Logger
 
   alias Livechain.Config.ConfigStore
-  alias Livechain.RPC.ProviderPool
-  alias Livechain.RPC.CircuitBreaker
+  alias Livechain.RPC.{ProviderPool, Strategy}
 
   @doc """
   Picks the best provider for a given chain and method.
@@ -30,15 +29,13 @@ defmodule Livechain.RPC.Selection do
   - `:exclude` - List of provider IDs to exclude
 
   Returns {:ok, provider_id} or {:error, reason}
-
-  # TODO: Should ha
   """
   @spec pick_provider(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def pick_provider(chain_name, method, opts \\ []) do
-    strategy = Keyword.get(opts, :strategy, :cheapest)
-    protocol = Keyword.get(opts, :protocol, :both)
-    exclude = Keyword.get(opts, :exclude, [])
+    {strategy, protocol, exclude} =
+      {Keyword.get(opts, :strategy, :cheapest), Keyword.get(opts, :protocol, :both),
+       Keyword.get(opts, :exclude, [])}
 
     case pool_selection(chain_name, method, strategy, protocol, exclude) do
       {:ok, provider_id} = result ->
@@ -118,17 +115,32 @@ defmodule Livechain.RPC.Selection do
 
   # Pool-based selection (preferred when pool is available)
   defp pool_selection(chain_name, method, strategy, protocol, exclude) do
-    filters = %{exclude: exclude}
+    filters = %{exclude: exclude, protocol: protocol}
 
-    with {:ok, provider_id} <-
-           ProviderPool.get_best_provider(chain_name, strategy, method, filters),
-         true <- CircuitBreaker.get_state(provider_id).state != :open,
-         {:ok, provider_config} <- ConfigStore.get_provider(chain_name, provider_id),
-         true <- supports_protocol?(provider_config, protocol) do
-      {:ok, provider_id}
-    else
-      {:error, reason} -> {:error, reason}
-      false -> {:error, :selected_provider_wrong_protocol}
+    candidates = ProviderPool.list_candidates(chain_name, filters)
+
+    case candidates do
+      [] ->
+        {:error, :no_providers_available}
+
+      _ ->
+        ctx = %{now_ms: System.monotonic_time(:millisecond)}
+
+        provider_id =
+          case strategy do
+            :priority -> Strategy.Priority.choose(candidates, method, ctx)
+            :round_robin -> Strategy.RoundRobin.choose(candidates, method, ctx)
+            :cheapest -> Strategy.Cheapest.choose(candidates, method, ctx)
+            :fastest -> Strategy.Fastest.choose(candidates, method, ctx)
+            _ -> Strategy.Priority.choose(candidates, method, ctx)
+          end
+
+        with pid when is_binary(pid) <- provider_id,
+             {:ok, _provider_config} <- ConfigStore.get_provider(chain_name, pid) do
+          {:ok, pid}
+        else
+          _ -> {:error, :no_providers_available}
+        end
     end
   end
 

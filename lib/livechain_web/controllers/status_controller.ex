@@ -19,7 +19,11 @@ defmodule LivechainWeb.StatusController do
         status: "operational",
         timestamp: DateTime.utc_now(),
         uptime: System.monotonic_time(:second),
-        memory_usage: :erlang.memory(),
+        memory_usage: %{
+          total: :erlang.memory(:total),
+          processes: :erlang.memory(:processes),
+          system: :erlang.memory(:system)
+        },
         process_count: :erlang.system_info(:process_count)
       },
       connections: %{

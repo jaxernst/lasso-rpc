@@ -58,11 +58,6 @@ defmodule Livechain.Application do
           Logger.error("Failed to start chain supervisors: #{reason}")
       end
 
-      # Auto-start simulator in dev/test environments
-      if Mix.env() in [:dev, :test] do
-        # start_simulator_process()
-      end
-
       {:ok, supervisor}
     end
   end

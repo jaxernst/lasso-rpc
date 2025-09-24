@@ -29,9 +29,6 @@ defmodule Livechain.RPC.HttpClient.Finch do
       {:error, %Mint.TransportError{reason: :timeout}} ->
         {:error, {:network_error, "Connection timeout"}}
 
-      {:error, encode_err} when is_atom(encode_err) ->
-        {:error, {:decode_error, "Failed to encode request: #{inspect(encode_err)}"}}
-
       {:error, reason} ->
         {:error, {:network_error, "Request failed: #{inspect(reason)}"}}
     end
@@ -54,26 +51,29 @@ defmodule Livechain.RPC.HttpClient.Finch do
         # Return the full response so it can be properly normalized upstream
         # This preserves the error structure for consistent handling
         {:ok, response}
-      
+
       # Successful JSON-RPC response
       {:ok, %{"result" => _} = response} ->
         {:ok, response}
-      
-      # Valid JSON but not JSON-RPC format (pass through)
+
+      # Valid JSON but not JSON-RPC format: treat as invalid provider response (infra)
       {:ok, decoded} ->
-        {:ok, decoded}
+        {:error, {:response_decode_error, "Invalid JSON-RPC response shape: #{inspect(decoded)}"}}
 
       {:error, decode_error} ->
-        {:error, {:decode_error, "Failed to decode response: #{inspect(decode_error)}"}}
+        {:error, {:response_decode_error, "Failed to decode response: #{inspect(decode_error)}"}}
     end
   end
 
-  defp handle_response(429, body), do: {:error, {:rate_limit, "HTTP 429: #{body}"}}
+  defp handle_response(429, body), do: {:error, {:rate_limit, %{status: 429, body: body}}}
+
+  # Treat 408 Request Timeout as retriable infrastructure failure
+  defp handle_response(408, body), do: {:error, {:server_error, %{status: 408, body: body}}}
 
   defp handle_response(status, body) when status >= 500,
-    do: {:error, {:server_error, "HTTP #{status}: #{body}"}}
+    do: {:error, {:server_error, %{status: status, body: body}}}
 
-  defp handle_response(status, body), do: {:error, {:client_error, "HTTP #{status}: #{body}"}}
+  defp handle_response(status, body), do: {:error, {:client_error, %{status: status, body: body}}}
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 end

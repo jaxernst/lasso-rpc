@@ -90,8 +90,6 @@ defmodule Livechain.RPC.CircuitBreaker do
 
   @impl true
   def init({provider_id, config}) do
-    Logger.info("Starting circuit breaker for #{provider_id}")
-
     state = %__MODULE__{
       provider_id: provider_id,
       failure_threshold: Map.get(config, :failure_threshold, 5),
@@ -195,6 +193,8 @@ defmodule Livechain.RPC.CircuitBreaker do
   end
 
   defp classify_and_handle_result(result, state) do
+    Logger.debug("Classifying and handling result: #{inspect(result)}")
+
     case result do
       {:ok, value} ->
         handle_success(value, state)
