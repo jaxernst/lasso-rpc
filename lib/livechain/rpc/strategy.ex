@@ -12,6 +12,13 @@ defmodule Livechain.RPC.Strategy do
           optional(:availability) => :up | :limited | :down | :misconfigured
         }
 
-  @callback choose(candidates :: [candidate], method :: String.t() | nil, ctx :: map()) ::
+  @type context :: %{
+          optional(:chain) => String.t(),
+          optional(:metrics) => module(),
+          optional(:now_ms) => integer(),
+          optional(atom()) => any()
+        }
+
+  @callback choose(candidates :: [candidate], method :: String.t() | nil, ctx :: context()) ::
               String.t() | nil
 end

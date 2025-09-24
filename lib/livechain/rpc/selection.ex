@@ -18,10 +18,22 @@ defmodule Livechain.RPC.Selection do
   require Logger
 
   alias Livechain.Config.ConfigStore
-  alias Livechain.RPC.{ProviderPool, Strategy}
+  alias Livechain.RPC.{ProviderPool, Strategy, SelectionContext}
 
   @doc """
-  Picks the best provider for a given chain and method.
+  Picks the best provider using a SelectionContext.
+
+  Returns {:ok, provider_id} or {:error, reason}
+  """
+  @spec select_provider(SelectionContext.t()) :: {:ok, String.t()} | {:error, term()}
+  def select_provider(%SelectionContext{} = ctx) do
+    with {:ok, validated_ctx} <- SelectionContext.validate(ctx) do
+      do_select_provider(validated_ctx)
+    end
+  end
+
+  @doc """
+  Picks the best provider for a given chain and method (legacy interface).
 
   Options:
   - `:strategy` - Selection strategy (:fastest, :cheapest, :priority, :round_robin)
@@ -33,19 +45,22 @@ defmodule Livechain.RPC.Selection do
   @spec pick_provider(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def pick_provider(chain_name, method, opts \\ []) do
-    {strategy, protocol, exclude} =
-      {Keyword.get(opts, :strategy, :cheapest), Keyword.get(opts, :protocol, :both),
-       Keyword.get(opts, :exclude, [])}
+    ctx = SelectionContext.new(chain_name, method, opts)
+    select_provider(ctx)
+  end
 
-    case pool_selection(chain_name, method, strategy, protocol, exclude) do
+  # Private implementation
+
+  defp do_select_provider(%SelectionContext{} = ctx) do
+    case pool_selection(ctx) do
       {:ok, provider_id} = result ->
-        Logger.debug("Selected provider via pool: #{provider_id} for #{chain_name}.#{method}")
+        Logger.debug("Selected provider via pool: #{provider_id} for #{ctx.chain}.#{ctx.method}")
 
         :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
-          chain: chain_name,
-          method: method,
-          strategy: strategy,
-          protocol: protocol,
+          chain: ctx.chain,
+          method: ctx.method,
+          strategy: ctx.strategy,
+          protocol: ctx.protocol,
           provider_id: provider_id,
           selection_type: :pool_based
         })
@@ -57,7 +72,7 @@ defmodule Livechain.RPC.Selection do
           "Pool selection failed (#{inspect(reason)}), falling back to config-based selection"
         )
 
-        config_selection(chain_name, method, protocol, exclude, strategy)
+        config_selection(ctx)
     end
   end
 
@@ -114,29 +129,29 @@ defmodule Livechain.RPC.Selection do
   ## Private Functions
 
   # Pool-based selection (preferred when pool is available)
-  defp pool_selection(chain_name, method, strategy, protocol, exclude) do
-    filters = %{exclude: exclude, protocol: protocol}
+  defp pool_selection(%SelectionContext{} = ctx) do
+    filters = %{exclude: ctx.exclude, protocol: ctx.protocol}
 
-    candidates = ProviderPool.list_candidates(chain_name, filters)
+    candidates = ProviderPool.list_candidates(ctx.chain, filters)
 
     case candidates do
       [] ->
         {:error, :no_providers_available}
 
       _ ->
-        ctx = %{now_ms: System.monotonic_time(:millisecond)}
+        strategy_ctx = SelectionContext.to_strategy_context(ctx)
 
         provider_id =
-          case strategy do
-            :priority -> Strategy.Priority.choose(candidates, method, ctx)
-            :round_robin -> Strategy.RoundRobin.choose(candidates, method, ctx)
-            :cheapest -> Strategy.Cheapest.choose(candidates, method, ctx)
-            :fastest -> Strategy.Fastest.choose(candidates, method, ctx)
-            _ -> Strategy.Priority.choose(candidates, method, ctx)
+          case ctx.strategy do
+            :priority -> Strategy.Priority.choose(candidates, ctx.method, strategy_ctx)
+            :round_robin -> Strategy.RoundRobin.choose(candidates, ctx.method, strategy_ctx)
+            :cheapest -> Strategy.Cheapest.choose(candidates, ctx.method, strategy_ctx)
+            :fastest -> Strategy.Fastest.choose(candidates, ctx.method, strategy_ctx)
+            _ -> Strategy.Priority.choose(candidates, ctx.method, strategy_ctx)
           end
 
         with pid when is_binary(pid) <- provider_id,
-             {:ok, _provider_config} <- ConfigStore.get_provider(chain_name, pid) do
+             {:ok, _provider_config} <- ConfigStore.get_provider(ctx.chain, pid) do
           {:ok, pid}
         else
           _ -> {:error, :no_providers_available}
@@ -145,8 +160,8 @@ defmodule Livechain.RPC.Selection do
   end
 
   # Config-based selection (fallback when pool is unavailable)
-  defp config_selection(chain_name, method, protocol, exclude, strategy) do
-    case config_based_providers(chain_name, protocol, exclude) do
+  defp config_selection(%SelectionContext{} = ctx) do
+    case config_based_providers(ctx.chain, ctx.protocol, ctx.exclude) do
       {:ok, []} ->
         {:error, :no_available_providers}
 
@@ -156,14 +171,14 @@ defmodule Livechain.RPC.Selection do
         selected_provider = List.first(available_providers)
 
         Logger.debug(
-          "Selected provider via config fallback: #{selected_provider} for #{chain_name}.#{method} (strategy: #{strategy})"
+          "Selected provider via config fallback: #{selected_provider} for #{ctx.chain}.#{ctx.method} (strategy: #{ctx.strategy})"
         )
 
         :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
-          chain: chain_name,
-          method: method,
-          strategy: strategy,
-          protocol: protocol,
+          chain: ctx.chain,
+          method: ctx.method,
+          strategy: ctx.strategy,
+          protocol: ctx.protocol,
           provider_id: selected_provider,
           selection_type: :config_based
         })
@@ -172,9 +187,9 @@ defmodule Livechain.RPC.Selection do
 
       {:error, reason} ->
         :telemetry.execute([:livechain, :selection, :failure], %{count: 1}, %{
-          chain: chain_name,
-          method: method,
-          protocol: protocol,
+          chain: ctx.chain,
+          method: ctx.method,
+          protocol: ctx.protocol,
           reason: reason,
           selection_type: :config_based
         })
