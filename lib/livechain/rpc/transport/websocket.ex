@@ -10,6 +10,7 @@ defmodule Livechain.RPC.Transport.WebSocket do
 
   require Logger
   alias Livechain.RPC.ChainSupervisor
+  alias Livechain.RPC.ErrorNormalizer
   alias Livechain.JSONRPC.Error, as: JError
 
   @impl true
@@ -39,7 +40,8 @@ defmodule Livechain.RPC.Transport.WebSocket do
             {:ok, result}
 
           {:error, reason} ->
-            {:error, normalize_ws_error(reason, provider_id)}
+            {:error, ErrorNormalizer.normalize(reason,
+                       provider_id: provider_id, context: :transport, transport: :ws)}
         end
     end
   end
@@ -62,38 +64,4 @@ defmodule Livechain.RPC.Transport.WebSocket do
     is_binary(get_ws_url(provider_config))
   end
 
-  defp normalize_ws_error(:connection_closed, provider_id) do
-    JError.new(-32005, "WebSocket connection closed",
-               provider_id: provider_id,
-               source: :transport, transport: :ws,
-               category: :network_error, retriable?: true)
-  end
-
-  defp normalize_ws_error(:connection_failed, provider_id) do
-    JError.new(-32006, "WebSocket connection failed",
-               provider_id: provider_id,
-               source: :transport, transport: :ws,
-               category: :network_error, retriable?: true)
-  end
-
-  defp normalize_ws_error(:timeout, provider_id) do
-    JError.new(-32007, "WebSocket request timeout",
-               provider_id: provider_id,
-               source: :transport, transport: :ws,
-               category: :network_error, retriable?: true)
-  end
-
-  defp normalize_ws_error({:invalid_response, response}, provider_id) do
-    JError.new(-32700, "Invalid WebSocket response format",
-               data: response, provider_id: provider_id,
-               source: :transport, transport: :ws,
-               category: :server_error, retriable?: true)
-  end
-
-  defp normalize_ws_error(other, provider_id) do
-    JError.new(-32000, "Unknown WebSocket transport error: #{inspect(other)}",
-               provider_id: provider_id,
-               source: :transport, transport: :ws,
-               category: :network_error, retriable?: true)
-  end
 end

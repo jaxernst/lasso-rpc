@@ -193,7 +193,7 @@ defmodule Livechain.RPC.CircuitBreaker do
   end
 
   defp classify_and_handle_result(result, state) do
-    Logger.debug("Classifying and handling result: #{inspect(result)}")
+    # Logger.debug("Classifying and handling result: #{inspect(result)}")
 
     case result do
       {:ok, value} ->

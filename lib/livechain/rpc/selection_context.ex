@@ -59,20 +59,6 @@ defmodule Livechain.RPC.SelectionContext do
   end
 
   @doc """
-  Converts the context to a map suitable for strategy execution.
-  """
-  @spec to_strategy_context(t()) :: map()
-  def to_strategy_context(%__MODULE__{} = ctx) do
-    %{
-      chain: ctx.chain,
-      metrics: ctx.metrics,
-      now_ms: System.monotonic_time(:millisecond),
-      timeout: ctx.timeout,
-      region_filter: ctx.region_filter
-    }
-  end
-
-  @doc """
   Validates that the context has all required fields and valid values.
   """
   @spec validate(t()) :: {:ok, t()} | {:error, String.t()}

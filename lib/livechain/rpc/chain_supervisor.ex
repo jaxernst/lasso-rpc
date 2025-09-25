@@ -57,12 +57,6 @@ defmodule Livechain.RPC.ChainSupervisor do
     ProviderPool.get_active_providers(chain_name)
   end
 
-  @doc """
-  Manually triggers failover to next available provider.
-  """
-  def trigger_failover(chain_name, provider_id) do
-    ProviderPool.trigger_failover(chain_name, provider_id)
-  end
 
   @doc """
   Forwards a WebSocket message to a specific provider on this chain.

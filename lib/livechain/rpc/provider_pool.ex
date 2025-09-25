@@ -9,8 +9,6 @@ defmodule Livechain.RPC.ProviderPool do
   - Rate limiting and error rates
   - Automatic failover on provider failures
 
-  # TODO: This module should not store 'chain config' in state (should use config store). Functions using this chain config need to be refactored
-  # TODO: 'Trigger failover' is not actually used anywhere? (chain_supervisor also has a 'trigger_failover' function, but that's not used anywhere either)
   """
 
   use GenServer
@@ -19,7 +17,6 @@ defmodule Livechain.RPC.ProviderPool do
   alias Livechain.Events.Provider
   alias Livechain.RPC.HealthPolicy
   alias Livechain.Config.ConfigStore
-  alias Livechain.RPC.Selection
 
   defstruct [
     :chain_name,
@@ -132,14 +129,6 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @doc """
-  Gets comprehensive provider details including circuit breaker states.
-  """
-  @spec get_comprehensive_status(chain_name) :: {:ok, map()} | {:error, term()}
-  def get_comprehensive_status(chain_name) do
-    GenServer.call(via_name(chain_name), :get_comprehensive_status)
-  end
-
-  @doc """
   Lists provider candidates enriched with policy-derived availability for selection.
 
   Supported filters: %{protocol: :http | :ws | :both, exclude: [provider_id]}
@@ -147,14 +136,6 @@ defmodule Livechain.RPC.ProviderPool do
   @spec list_candidates(chain_name, map()) :: [map()]
   def list_candidates(chain_name, filters \\ %{}) when is_map(filters) do
     GenServer.call(via_name(chain_name), {:list_candidates, filters})
-  end
-
-  @doc """
-  Triggers manual failover from a specific provider.
-  """
-  @spec trigger_failover(chain_name, provider_id) :: :ok
-  def trigger_failover(chain_name, provider_id) do
-    GenServer.cast(via_name(chain_name), {:trigger_failover, provider_id})
   end
 
   @doc """
@@ -286,28 +267,6 @@ defmodule Livechain.RPC.ProviderPool do
 
   @impl true
   def handle_call(:get_status, _from, state) do
-    status = %{
-      chain_name: state.chain_name,
-      total_providers: map_size(state.providers),
-      active_providers: length(state.active_providers),
-      providers:
-        Enum.map(state.providers, fn {id, provider} ->
-          %{
-            id: id,
-            name: provider.config.name,
-            status: provider.status,
-            consecutive_failures: provider.consecutive_failures,
-            last_health_check: provider.last_health_check
-          }
-        end),
-      stats: state.stats
-    }
-
-    {:reply, {:ok, status}, state}
-  end
-
-  @impl true
-  def handle_call(:get_comprehensive_status, _from, state) do
     current_time = System.monotonic_time(:millisecond)
 
     providers =
@@ -332,11 +291,8 @@ defmodule Livechain.RPC.ProviderPool do
 
         %{
           id: id,
-          # Safely get name with fallback
           name: Map.get(provider.config, :name, id),
           status: provider.status,
-          # Preserve original status
-          health_status: provider.status,
           availability: availability,
           circuit_state: circuit_state,
           consecutive_failures: provider.consecutive_failures,
@@ -382,23 +338,6 @@ defmodule Livechain.RPC.ProviderPool do
       end)
 
     {:reply, candidates, state}
-  end
-
-  @impl true
-  def handle_cast({:trigger_failover, provider_id}, state) do
-    case Map.get(state.providers, provider_id) do
-      nil ->
-        Logger.warning("Cannot failover unknown provider #{provider_id}")
-        {:noreply, state}
-
-      provider ->
-        Logger.info("Manual failover triggered for provider #{provider_id}")
-        new_provider = %{provider | status: :unhealthy, consecutive_failures: 999}
-        new_providers = Map.put(state.providers, provider_id, new_provider)
-        new_state = %{state | providers: new_providers}
-        new_state = update_active_providers(new_state)
-        {:noreply, new_state}
-    end
   end
 
   @impl true

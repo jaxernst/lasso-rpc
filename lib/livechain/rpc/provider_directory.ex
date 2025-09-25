@@ -8,7 +8,7 @@ defmodule Livechain.RPC.ProviderDirectory do
     with {:ok, {_name, chain_cfg}} <- ConfigStore.get_chain_by_name_or_id(chain) do
       # Get pool status if available
       pool_map =
-        case ProviderPool.get_comprehensive_status(chain) do
+        case ProviderPool.get_status(chain) do
           {:ok, pool_status} -> Map.new(pool_status.providers, &{&1.id, &1})
           _ -> %{}
         end

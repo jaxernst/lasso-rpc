@@ -50,7 +50,8 @@ defmodule Livechain.RPC.Transport do
     case select_transport(provider_config, method, opts) do
       nil ->
         {:error, JError.new(-32000, "No suitable transport available", provider_id: provider_id)}
-      transport ->
+
+      transport when is_atom(transport) ->
         transport.forward_request(provider_config, method, params,
                                   Keyword.put(opts, :provider_id, provider_id))
     end
@@ -61,9 +62,10 @@ defmodule Livechain.RPC.Transport do
   """
   @spec supports_protocol?(provider_config, :http | :ws | :both) :: boolean()
   def supports_protocol?(provider_config, protocol) do
-    case select_transport(provider_config, nil, protocol: protocol) do
-      nil -> false
-      transport -> transport.supports_protocol?(provider_config, protocol)
+    case protocol do
+      :http -> has_http_url?(provider_config)
+      :ws -> has_ws_url?(provider_config)
+      :both -> has_http_url?(provider_config) and has_ws_url?(provider_config)
     end
   end
 

@@ -8,7 +8,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
   use GenServer
   require Logger
 
-  alias Livechain.RPC.{Selection, ClientSubscriptionRegistry}
+  alias Livechain.RPC.{Selection, SelectionContext, ClientSubscriptionRegistry}
   alias Livechain.RPC.StreamSupervisor
   alias Livechain.RPC.StreamCoordinator
   alias Livechain.RPC.ChainSupervisor
@@ -186,10 +186,12 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
 
           exclude = Enum.uniq([provider_id | already_tried])
 
-          case Selection.pick_provider(state.chain, "eth_subscribe",
-                 strategy: :priority,
-                 protocol: :ws,
-                 exclude: exclude
+          case Selection.select_provider(
+                 SelectionContext.new(state.chain, "eth_subscribe",
+                   strategy: :priority,
+                   protocol: :ws,
+                   exclude: exclude
+                 )
                ) do
             {:ok, next_provider} ->
               request_id2 = send_upstream_subscribe(next_provider, key)
@@ -297,9 +299,11 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
         _ = start_coordinator_for_key(state, key)
 
         with {:ok, provider_id} <-
-               Selection.pick_provider(state.chain, "eth_subscribe",
-                 strategy: :priority,
-                 protocol: :ws
+               Selection.select_provider(
+                 SelectionContext.new(state.chain, "eth_subscribe",
+                   strategy: :priority,
+                   protocol: :ws
+                 )
                ) do
           request_id = send_upstream_subscribe(provider_id, key)
           telemetry_upstream(:subscribe, state.chain, provider_id, key)
@@ -345,10 +349,12 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
   end
 
   defp pick_next_provider(state, failed_provider_id) do
-    case Selection.pick_provider(state.chain, "eth_subscribe",
-           strategy: :priority,
-           protocol: :ws,
-           exclude: [failed_provider_id]
+    case Selection.select_provider(
+           SelectionContext.new(state.chain, "eth_subscribe",
+             strategy: :priority,
+             protocol: :ws,
+             exclude: [failed_provider_id]
+           )
          ) do
       {:ok, provider} -> provider
       _ -> failed_provider_id

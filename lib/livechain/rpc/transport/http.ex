@@ -10,6 +10,7 @@ defmodule Livechain.RPC.Transport.HTTP do
 
   require Logger
   alias Livechain.RPC.HttpClient
+  alias Livechain.RPC.ErrorNormalizer
   alias Livechain.JSONRPC.Error, as: JError
 
   @impl true
@@ -29,11 +30,23 @@ defmodule Livechain.RPC.Transport.HTTP do
                      provider: provider_id, method: method, url: url)
 
         case HttpClient.request(http_config, method, params, timeout_ms) do
-          {:ok, response} ->
-            normalize_http_response(response, provider_id)
+          {:ok, %{"error" => _error} = response} ->
+            # JSON-RPC error response - normalize using centralized logic
+            jerr = ErrorNormalizer.normalize(response,
+                     provider_id: provider_id, context: :jsonrpc, transport: :http)
+            {:error, jerr}
+
+          {:ok, %{"result" => result}} ->
+            {:ok, result}
+
+          {:ok, invalid_response} ->
+            {:error, JError.new(-32700, "Invalid JSON-RPC response format",
+                               data: invalid_response, provider_id: provider_id,
+                               source: :transport, transport: :http, retriable?: false)}
 
           {:error, reason} ->
-            {:error, normalize_http_error(reason, provider_id)}
+            {:error, ErrorNormalizer.normalize(reason,
+                       provider_id: provider_id, context: :transport, transport: :http)}
         end
     end
   end
@@ -56,74 +69,4 @@ defmodule Livechain.RPC.Transport.HTTP do
     is_binary(get_http_url(provider_config))
   end
 
-  defp normalize_http_response(%{"error" => error} = _response, provider_id)
-       when is_map(error) do
-    # JSON-RPC error response
-    code = Map.get(error, "code", -32000)
-    message = Map.get(error, "message", "Unknown error")
-    data = Map.get(error, "data")
-
-    jerr = JError.new(code, message, data: data, provider_id: provider_id,
-                     source: :jsonrpc, transport: :http)
-    {:error, jerr}
-  end
-
-  defp normalize_http_response(%{"result" => result}, _provider_id) do
-    {:ok, result}
-  end
-
-  defp normalize_http_response(other, provider_id) do
-    {:error, JError.new(-32700, "Invalid JSON-RPC response format",
-                       data: other, provider_id: provider_id,
-                       source: :transport, transport: :http, retriable?: false)}
-  end
-
-  defp normalize_http_error({:rate_limit, payload}, provider_id) do
-    JError.new(-32001, "Rate limited by provider",
-               data: payload, provider_id: provider_id,
-               source: :transport, transport: :http,
-               category: :rate_limit, retriable?: true)
-  end
-
-  defp normalize_http_error({:server_error, payload}, provider_id) do
-    JError.new(-32002, "Server error",
-               data: payload, provider_id: provider_id,
-               source: :transport, transport: :http,
-               category: :server_error, retriable?: true)
-  end
-
-  defp normalize_http_error({:client_error, payload}, provider_id) do
-    JError.new(-32003, "Client error",
-               data: payload, provider_id: provider_id,
-               source: :transport, transport: :http,
-               category: :client_error, retriable?: false)
-  end
-
-  defp normalize_http_error({:network_error, reason}, provider_id) do
-    JError.new(-32004, "Network error: #{reason}",
-               provider_id: provider_id,
-               source: :transport, transport: :http,
-               category: :network_error, retriable?: true)
-  end
-
-  defp normalize_http_error({:encode_error, reason}, provider_id) do
-    JError.new(-32700, "JSON encoding error: #{reason}",
-               provider_id: provider_id,
-               source: :transport, transport: :http,
-               category: :client_error, retriable?: false)
-  end
-
-  defp normalize_http_error({:response_decode_error, reason}, provider_id) do
-    JError.new(-32700, "Response decode error: #{reason}",
-               provider_id: provider_id,
-               source: :transport, transport: :http,
-               category: :server_error, retriable?: true)
-  end
-
-  defp normalize_http_error(other, provider_id) do
-    JError.new(-32000, "Unknown HTTP transport error: #{inspect(other)}",
-               provider_id: provider_id,
-               source: :transport, transport: :http,
-               category: :network_error, retriable?: true)
-  end
 end

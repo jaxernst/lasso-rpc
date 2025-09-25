@@ -45,10 +45,6 @@ defmodule Livechain.RPC.WSHandler do
     {:ok, state}
   end
 
-  @doc """
-  Common reason: {:remote, 1013, "Connection timeout exceeded"}
-  TODO: Should have bespoke handling for various disconnect reasons (1013 indicates a bad provider config)
-  """
   def handle_disconnect(%{reason: reason}, state) do
     send(state.parent, {:ws_disconnected, reason})
     {:ok, state}

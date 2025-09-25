@@ -21,7 +21,25 @@ defmodule Livechain.RPC.Selection do
   alias Livechain.RPC.{ProviderPool, Strategy, SelectionContext}
 
   @doc """
-  Picks the best provider using a SelectionContext.
+  Picks the best provider using simple parameters.
+
+  Options:
+  - :strategy => :fastest | :cheapest | :priority | :round_robin (default from config)
+  - :protocol => :http | :ws | :both (default :both)
+  - :exclude => [provider_id]
+  - :timeout => ms (default 30_000)
+  - :region_filter => String.t() | nil
+
+  Returns {:ok, provider_id} or {:error, reason}
+  """
+  @spec select_provider(String.t(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def select_provider(chain, method, opts \\ []) when is_binary(chain) and is_binary(method) do
+    ctx = SelectionContext.new(chain, method, opts)
+    select_provider(ctx)
+  end
+
+  @doc """
+  Picks the best provider using a SelectionContext (backward compatibility).
 
   Returns {:ok, provider_id} or {:error, reason}
   """
@@ -32,54 +50,51 @@ defmodule Livechain.RPC.Selection do
     end
   end
 
-  @doc """
-  Picks the best provider for a given chain and method (legacy interface).
-
-  Options:
-  - `:strategy` - Selection strategy (:fastest, :cheapest, :priority, :round_robin)
-  - `:protocol` - Required protocol (:http, :ws, :both)
-  - `:exclude` - List of provider IDs to exclude
-
-  Returns {:ok, provider_id} or {:error, reason}
-  """
-  @spec pick_provider(String.t(), String.t(), keyword()) ::
-          {:ok, String.t()} | {:error, term()}
-  def pick_provider(chain_name, method, opts \\ []) do
-    ctx = SelectionContext.new(chain_name, method, opts)
-    select_provider(ctx)
-  end
-
   # Private implementation
 
   defp do_select_provider(%SelectionContext{} = ctx) do
-    case pool_selection(ctx) do
-      {:ok, provider_id} = result ->
-        Logger.debug("Selected provider via pool: #{provider_id} for #{ctx.chain}.#{ctx.method}")
+    filters = %{exclude: ctx.exclude, protocol: ctx.protocol}
+    candidates = ProviderPool.list_candidates(ctx.chain, filters)
 
-        :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
-          chain: ctx.chain,
-          method: ctx.method,
-          strategy: ctx.strategy,
-          protocol: ctx.protocol,
-          provider_id: provider_id,
-          selection_type: :pool_based
-        })
+    case candidates do
+      [] ->
+        {:error, :no_providers_available}
 
-        result
+      _ ->
+        strategy_mod = resolve_strategy_module(ctx.strategy)
+        prepared_ctx = strategy_mod.prepare_context(ctx)
+        selected_candidate = strategy_mod.choose(candidates, ctx.method, prepared_ctx)
 
-      {:error, reason} ->
-        Logger.debug(
-          "Pool selection failed (#{inspect(reason)}), falling back to config-based selection"
-        )
+        case selected_candidate do
+          pid when is_binary(pid) ->
+            Logger.debug("Selected provider: #{pid} for #{ctx.chain}.#{ctx.method}")
 
-        config_selection(ctx)
+            :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
+              chain: ctx.chain,
+              method: ctx.method,
+              strategy: ctx.strategy,
+              protocol: ctx.protocol,
+              provider_id: pid
+            })
+
+            {:ok, pid}
+
+          _ ->
+            {:error, :no_providers_available}
+        end
     end
   end
+
+  defp resolve_strategy_module(:priority), do: Strategy.Priority
+  defp resolve_strategy_module(:round_robin), do: Strategy.RoundRobin
+  defp resolve_strategy_module(:cheapest), do: Strategy.Cheapest
+  defp resolve_strategy_module(:fastest), do: Strategy.Fastest
+  defp resolve_strategy_module(_), do: Strategy.Priority
 
   @doc """
   Gets all available providers for a chain, respecting protocol requirements.
 
-  Returns providers in priority order (pool-based if available, config-based otherwise).
+  Returns providers from ProviderPool in the order determined by availability and health.
   """
   @spec get_available_providers(String.t(), keyword()) ::
           {:ok, [String.t()]} | {:error, term()}
@@ -87,29 +102,11 @@ defmodule Livechain.RPC.Selection do
     protocol = Keyword.get(opts, :protocol, :both)
     exclude = Keyword.get(opts, :exclude, [])
 
-    # Try to get providers from pool first
-    case ProviderPool.get_active_providers(chain_name) do
-      provider_ids when is_list(provider_ids) ->
-        # Filter by protocol and exclusions
-        filtered =
-          filter_providers_by_protocol_and_exclusions(
-            chain_name,
-            provider_ids,
-            protocol,
-            exclude
-          )
+    filters = %{protocol: protocol, exclude: exclude}
+    candidates = ProviderPool.list_candidates(chain_name, filters)
+    provider_ids = Enum.map(candidates, & &1.id)
 
-        {:ok, filtered}
-
-      {:error, reason} ->
-        Logger.debug("Failed to get active providers from pool: #{inspect(reason)}")
-        # Fall back to config-based provider list
-        config_based_providers(chain_name, protocol, exclude)
-
-      _ ->
-        # Fall back to config-based provider list
-        config_based_providers(chain_name, protocol, exclude)
-    end
+    {:ok, provider_ids}
   end
 
   @doc """
@@ -127,131 +124,6 @@ defmodule Livechain.RPC.Selection do
   end
 
   ## Private Functions
-
-  # Pool-based selection (preferred when pool is available)
-  defp pool_selection(%SelectionContext{} = ctx) do
-    filters = %{exclude: ctx.exclude, protocol: ctx.protocol}
-
-    candidates = ProviderPool.list_candidates(ctx.chain, filters)
-
-    case candidates do
-      [] ->
-        {:error, :no_providers_available}
-
-      _ ->
-        strategy_ctx = SelectionContext.to_strategy_context(ctx)
-
-        provider_id =
-          case ctx.strategy do
-            :priority -> Strategy.Priority.choose(candidates, ctx.method, strategy_ctx)
-            :round_robin -> Strategy.RoundRobin.choose(candidates, ctx.method, strategy_ctx)
-            :cheapest -> Strategy.Cheapest.choose(candidates, ctx.method, strategy_ctx)
-            :fastest -> Strategy.Fastest.choose(candidates, ctx.method, strategy_ctx)
-            _ -> Strategy.Priority.choose(candidates, ctx.method, strategy_ctx)
-          end
-
-        with pid when is_binary(pid) <- provider_id,
-             {:ok, _provider_config} <- ConfigStore.get_provider(ctx.chain, pid) do
-          {:ok, pid}
-        else
-          _ -> {:error, :no_providers_available}
-        end
-    end
-  end
-
-  # Config-based selection (fallback when pool is unavailable)
-  defp config_selection(%SelectionContext{} = ctx) do
-    case config_based_providers(ctx.chain, ctx.protocol, ctx.exclude) do
-      {:ok, []} ->
-        {:error, :no_available_providers}
-
-      {:ok, available_providers} ->
-        # For config-based selection, we use priority-based selection as fallback
-        # since provider pool not being available is not a nominal state
-        selected_provider = List.first(available_providers)
-
-        Logger.debug(
-          "Selected provider via config fallback: #{selected_provider} for #{ctx.chain}.#{ctx.method} (strategy: #{ctx.strategy})"
-        )
-
-        :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
-          chain: ctx.chain,
-          method: ctx.method,
-          strategy: ctx.strategy,
-          protocol: ctx.protocol,
-          provider_id: selected_provider,
-          selection_type: :config_based
-        })
-
-        {:ok, selected_provider}
-
-      {:error, reason} ->
-        :telemetry.execute([:livechain, :selection, :failure], %{count: 1}, %{
-          chain: ctx.chain,
-          method: ctx.method,
-          protocol: ctx.protocol,
-          reason: reason,
-          selection_type: :config_based
-        })
-
-        {:error, reason}
-    end
-  end
-
-  # Get providers from config in priority order
-  defp config_based_providers(chain_name, protocol, exclude) do
-    case ConfigStore.get_providers(chain_name) do
-      {:ok, providers} ->
-        available_providers =
-          providers
-          |> Enum.filter(fn provider -> supports_protocol?(provider, protocol) end)
-          |> Enum.reject(fn provider -> provider.id in exclude end)
-          |> Enum.sort_by(& &1.priority)
-          |> Enum.map(& &1.id)
-
-        {:ok, available_providers}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp filter_providers_by_protocol_and_exclusions(chain_name, provider_ids, protocol, exclude) do
-    provider_ids
-    |> Enum.reject(&(&1 in exclude))
-    |> Enum.filter(fn provider_id ->
-      case ConfigStore.get_provider(chain_name, provider_id) do
-        {:ok, provider_config} -> supports_protocol?(provider_config, protocol)
-        _ -> false
-      end
-    end)
-    |> maybe_filter_ws_stability(chain_name, protocol)
-  end
-
-  # WS stability filter: exclude providers that recently disconnected/closed
-  # unless they've been stable for a short window. This relies on ProviderPool
-  # (or future state) exposing circuit/connection metadata. For now, use a
-  # conservative heuristic via ChainRegistry comprehensive status if available.
-  defp maybe_filter_ws_stability(provider_ids, chain_name, :ws) do
-    conns = Livechain.RPC.ChainRegistry.list_all_providers_comprehensive()
-
-    by_id =
-      conns
-      |> Enum.filter(&(&1.chain == chain_name))
-      |> Map.new(&{&1.id, &1})
-
-    provider_ids
-    |> Enum.filter(fn pid ->
-      case Map.get(by_id, pid) do
-        %{ws_connected: true} -> true
-        # If connection info missing, be conservative and exclude
-        _ -> false
-      end
-    end)
-  end
-
-  defp maybe_filter_ws_stability(provider_ids, _chain_name, _protocol),
-    do: provider_ids
 
   defp supports_protocol?(provider, :both),
     do: supports_protocol?(provider, :http) and supports_protocol?(provider, :ws)
