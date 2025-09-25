@@ -56,8 +56,6 @@ defmodule LivechainWeb.RPCController do
   Handle JSON-RPC requests for any supported chain.
   """
   def rpc(conn, params = %{"chain_id" => chain_id}) do
-    Logger.debug("RPC request received", path: conn.request_path)
-
     case chain_id do
       nil ->
         Logger.error("Missing chain_id parameter", params: inspect(params))
@@ -183,8 +181,6 @@ defmodule LivechainWeb.RPCController do
   end
 
   defp handle_json_rpc(conn, params, chain) do
-    Logger.debug("JSON-RPC request", method: params["method"], chain: chain)
-
     with {:ok, request} <- validate_json_rpc_request(params),
          {:ok, result} <- process_json_rpc_request(request, chain, conn) do
       response = %{
@@ -434,70 +430,35 @@ defmodule LivechainWeb.RPCController do
     process_json_rpc_request(%{"method" => method, "params" => []}, chain, conn)
   end
 
-  # Provider override in conn params
-  defp forward_rpc_request(
-         chain,
-         method,
-         params,
-         opts = [conn: %Plug.Conn{params: %{"provider_override" => provider_id}}]
-       )
-       when is_binary(provider_id) do
+  # Unified forwarding: extracts strategy and optional provider override, delegates to Failover
+  defp forward_rpc_request(chain, method, params, opts) when is_list(opts) do
     with {:ok, strategy} <- extract_strategy(opts) do
-      allow_failover? = Application.get_env(:livechain, :allow_failover_on_override, true)
+      provider_override =
+        case Keyword.get(opts, :provider_override) do
+          pid when is_binary(pid) ->
+            pid
 
-      case Livechain.RPC.ChainSupervisor.forward_rpc_request(chain, provider_id, method, params) do
-        {:ok, result} ->
-          {:ok, result}
+          _ ->
+            case Keyword.get(opts, :conn) do
+              %Plug.Conn{params: %{"provider_override" => pid}} when is_binary(pid) -> pid
+              _ -> nil
+            end
+        end
 
-        {:error, _} when allow_failover? ->
-          failover_opts = [strategy: strategy, protocol: :http]
-          Failover.execute_with_failover(chain, method, params, failover_opts)
+      allow_override_failover =
+        Application.get_env(:livechain, :allow_failover_on_override, true)
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+      failover_opts = [
+        strategy: strategy,
+        protocol: :http,
+        provider_override: provider_override,
+        allow_failover_on_override: allow_override_failover
+      ]
+
+      Failover.execute_with_failover(chain, method, params, failover_opts)
     else
       {:error, reason} ->
         {:error, JError.new(-32000, "Failed to extract request options: #{reason}")}
-    end
-  end
-
-  # Provider override in opts
-  defp forward_rpc_request(chain, method, params, opts) when is_list(opts) do
-    case Keyword.get(opts, :provider_override) do
-      provider_id when is_binary(provider_id) ->
-        with {:ok, strategy} <- extract_strategy(opts) do
-          allow_failover? = Application.get_env(:livechain, :allow_failover_on_override, true)
-
-          case Livechain.RPC.ChainSupervisor.forward_rpc_request(
-                 chain,
-                 provider_id,
-                 method,
-                 params
-               ) do
-            {:ok, result} ->
-              {:ok, result}
-
-            {:error, _} when allow_failover? ->
-              failover_opts = [strategy: strategy, protocol: :http]
-              Failover.execute_with_failover(chain, method, params, failover_opts)
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-        else
-          {:error, reason} ->
-            {:error, JError.new(-32000, "Failed to extract request options: #{reason}")}
-        end
-
-      _ ->
-        with {:ok, strategy} <- extract_strategy(opts) do
-          failover_opts = [strategy: strategy, protocol: :http]
-          Failover.execute_with_failover(chain, method, params, failover_opts)
-        else
-          {:error, reason} ->
-            {:error, JError.new(-32000, "Failed to extract request options: #{reason}")}
-        end
     end
   end
 

@@ -119,12 +119,10 @@ defmodule Livechain.JSONRPC.Error do
 
   def from(%__MODULE__{} = error, _opts), do: error
 
-  # Delegate complex normalization to ErrorNormalizer
+  # Delegate to centralized ErrorNormalizer for consistency
   def from(error, opts) do
-    # Import the centralizer normalizer for complex cases
     Livechain.RPC.ErrorNormalizer.normalize(error, opts)
   end
-
 
   # Private helper functions
 

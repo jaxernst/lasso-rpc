@@ -32,37 +32,101 @@ defmodule Livechain.RPC.Failover do
     strategy = Keyword.get(opts, :strategy, :cheapest)
     protocol = Keyword.get(opts, :protocol, :http)
     _region_filter = Keyword.get(opts, :region_filter)
+    provider_override = Keyword.get(opts, :provider_override)
 
-    with {:ok, provider_id} <-
-           Selection.pick_provider(chain, method, strategy: strategy, protocol: protocol) do
-      execute_rpc_with_failover(
-        chain,
-        method,
-        params,
-        strategy,
-        provider_id,
-        opts
+    allow_override_failover =
+      Keyword.get(
+        opts,
+        :allow_failover_on_override,
+        Application.get_env(:livechain, :allow_failover_on_override, true)
       )
-    else
-      {:error, reason} ->
-        {:error, JError.new(-32000, "No available providers: #{reason}")}
+
+    case provider_override do
+      provider_id when is_binary(provider_id) ->
+        # Short-circuit: attempt the specified provider first
+        start_time = System.monotonic_time(:millisecond)
+
+        case forward_request_via_transport(chain, provider_id, method, params, opts) do
+          {:ok, result} ->
+            duration_ms = System.monotonic_time(:millisecond) - start_time
+            record_success_metrics(chain, provider_id, method, strategy, duration_ms)
+            {:ok, result}
+
+          {:error, reason} ->
+            duration_ms = System.monotonic_time(:millisecond) - start_time
+            jerr = JError.from(reason, provider_id: provider_id)
+            record_failure_metrics(chain, provider_id, method, strategy, jerr, duration_ms)
+
+            should_failover =
+              case jerr do
+                %Livechain.JSONRPC.Error{retriable?: retriable?} -> retriable?
+                _ -> false
+              end
+
+            cond do
+              allow_override_failover and should_failover ->
+                try_failover_with_reporting(
+                  chain,
+                  method,
+                  params,
+                  strategy,
+                  [provider_id],
+                  1,
+                  nil,
+                  protocol
+                )
+
+              true ->
+                {:error, jerr}
+            end
+        end
+
+      _ ->
+        with {:ok, provider_id} <-
+               Selection.select_provider(chain, method, strategy: strategy, protocol: protocol) do
+          execute_rpc_with_failover(
+            chain,
+            method,
+            params,
+            strategy,
+            provider_id,
+            opts
+          )
+        else
+          {:error, reason} ->
+            {:error, JError.new(-32000, "No available providers: #{reason}")}
+        end
     end
   end
 
   # Private functions
 
   defp forward_request_via_transport(chain, provider_id, method, params, opts) do
-    case ConfigStore.get_provider(chain, provider_id) do
-      {:ok, provider_config} ->
-        transport_opts = [
-          timeout: Keyword.get(opts, :timeout, 30_000),
-          protocol: Keyword.get(opts, :protocol)
-        ]
+    # Prefer ChainSupervisor path for HTTP to leverage circuit breakers and normalization
+    case Keyword.get(opts, :protocol) do
+      :http ->
+        Livechain.RPC.ChainSupervisor.forward_rpc_request(chain, provider_id, method, params)
 
-        Transport.forward_request(provider_id, provider_config, method, params, transport_opts)
+      _ ->
+        case ConfigStore.get_provider(chain, provider_id) do
+          {:ok, provider_config} ->
+            transport_opts = [
+              timeout: Keyword.get(opts, :timeout, 30_000),
+              protocol: Keyword.get(opts, :protocol)
+            ]
 
-      {:error, reason} ->
-        {:error, JError.new(-32000, "Provider not found: #{reason}", provider_id: provider_id)}
+            Transport.forward_request(
+              provider_id,
+              provider_config,
+              method,
+              params,
+              transport_opts
+            )
+
+          {:error, reason} ->
+            {:error,
+             JError.new(-32000, "Provider not found: #{reason}", provider_id: provider_id)}
+        end
     end
   end
 
@@ -134,7 +198,7 @@ defmodule Livechain.RPC.Failover do
 
     with {:attempt_limit, false} <- {:attempt_limit, attempt > max_attempts},
          {:ok, next_provider} <-
-           Selection.pick_provider(chain, method,
+           Selection.select_provider(chain, method,
              strategy: strategy,
              protocol: protocol,
              exclude: excluded_providers

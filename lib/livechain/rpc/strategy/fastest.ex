@@ -6,6 +6,27 @@ defmodule Livechain.RPC.Strategy.Fastest do
   alias Livechain.RPC.Metrics
 
   @impl true
+  def prepare_context(selection) do
+    base_ctx = Livechain.RPC.StrategyContext.new(selection)
+    # Allow gates to be configured via env, with base_ctx defaults
+    freshness_cutoff_ms =
+      Application.get_env(:livechain, :fastest_freshness_cutoff_ms, 10 * 60 * 1000)
+
+    min_calls = Application.get_env(:livechain, :fastest_min_calls, 3)
+    min_success_rate = Application.get_env(:livechain, :fastest_min_success_rate, 0.9)
+
+    chain = selection.chain || Map.get(base_ctx, :chain)
+
+    %{
+      base_ctx
+      | freshness_cutoff_ms: base_ctx.freshness_cutoff_ms || freshness_cutoff_ms,
+        min_calls: base_ctx.min_calls || min_calls,
+        min_success_rate: base_ctx.min_success_rate || min_success_rate,
+        chain: chain
+    }
+  end
+
+  @impl true
   def choose(candidates, method, ctx) do
     case method do
       nil -> by_priority(candidates)
@@ -24,11 +45,11 @@ defmodule Livechain.RPC.Strategy.Fastest do
   end
 
   defp pick_fastest(candidates, method_name, ctx) do
-    freshness_cutoff_ms = Map.get(ctx, :freshness_cutoff_ms, 10 * 60 * 1000)
-    min_calls = Map.get(ctx, :min_calls, 3)
-    min_success_rate = Map.get(ctx, :min_success_rate, 0.9)
+    freshness_cutoff_ms = ctx.freshness_cutoff_ms || 10 * 60 * 1000
+    min_calls = ctx.min_calls || 3
+    min_success_rate = ctx.min_success_rate || 0.9
 
-    chain = Map.get(ctx, :chain) || any_chain(candidates)
+    chain = ctx.chain || any_chain(candidates)
 
     case Metrics.get_method_performance(chain, method_name) do
       [_ | _] = provider_performances ->
@@ -53,7 +74,8 @@ defmodule Livechain.RPC.Strategy.Fastest do
     |> Enum.filter(&MapSet.member?(provider_ids, &1.provider_id))
     |> Enum.filter(&(&1.performance.total_calls >= gates.min_calls))
     |> Enum.filter(&(&1.performance.success_rate >= gates.min_success_rate))
-    |> Enum.filter(&(&1.performance.confidence_score > 0.1))  # Require minimum confidence
+    # Require minimum confidence
+    |> Enum.filter(&(&1.performance.confidence_score > 0.1))
     |> Enum.sort_by(fn %{provider_id: pid, performance: perf} ->
       availability = Map.get(candidates_by_id[pid], :availability, :up)
       availability_rank = if availability == :up, do: 0, else: 1

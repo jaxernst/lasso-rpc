@@ -101,7 +101,7 @@ defmodule Livechain.RPC.ChainRegistry do
           # Get comprehensive status from provider pool
           Logger.debug("ChainRegistry: Attempting to get comprehensive status for #{chain_name}")
 
-          case ProviderPool.get_comprehensive_status(chain_name) do
+          case ProviderPool.get_status(chain_name) do
             {:ok, pool_status} ->
               Logger.debug(
                 "ChainRegistry: Successfully got comprehensive status for #{chain_name}, #{length(pool_status.providers)} providers"

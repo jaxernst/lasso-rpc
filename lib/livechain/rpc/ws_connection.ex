@@ -98,8 +98,10 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def handle_continue(:connect, state) do
+    ws_connection_pid = self()
+
     case CircuitBreaker.call(state.endpoint.id, fn ->
-           connect_to_websocket(state.endpoint)
+           connect_to_websocket(state.endpoint, ws_connection_pid)
          end) do
       {:ok, connection} ->
         Process.monitor(connection)
@@ -413,12 +415,12 @@ defmodule Livechain.RPC.WSConnection do
   defp is_subscription_method("eth_unsubscribe"), do: true
   defp is_subscription_method(_), do: false
 
-  defp connect_to_websocket(endpoint) do
+  defp connect_to_websocket(endpoint, parent_pid) do
     # Start a separate WebSocket handler process
     case WebSockex.start_link(
            endpoint.ws_url,
            Livechain.RPC.WSHandler,
-           %{endpoint: endpoint, parent: self()}
+           %{endpoint: endpoint, parent: parent_pid}
          ) do
       {:ok, pid} -> {:ok, pid}
       {:error, reason} -> {:error, WSNormalizer.normalize_connect_error(reason, endpoint.id)}
