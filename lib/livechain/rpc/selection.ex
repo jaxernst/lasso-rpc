@@ -18,7 +18,7 @@ defmodule Livechain.RPC.Selection do
   require Logger
 
   alias Livechain.Config.ConfigStore
-  alias Livechain.RPC.{ProviderPool, Strategy, SelectionContext}
+  alias Livechain.RPC.{ProviderPool, Strategy, SelectionContext, ProviderRegistry, Channel}
 
   @doc """
   Picks the best provider using simple parameters.
@@ -123,6 +123,54 @@ defmodule Livechain.RPC.Selection do
     end
   end
 
+  @doc """
+  Selects the best channels for a method across all available transports.
+
+  This is the new channel-based selection API that considers transport capabilities,
+  health, and performance metrics to return ordered candidate channels.
+
+  Options:
+  - :strategy => :fastest | :cheapest | :priority | :round_robin
+  - :transport => :http | :ws | :both (default :both)
+  - :exclude => [provider_id]
+  - :limit => integer (maximum channels to return)
+
+  Returns a list of Channel structs ordered by strategy preference.
+  """
+  @spec select_channels(String.t(), String.t(), keyword()) :: [Channel.t()]
+  def select_channels(chain, method, opts \\ []) do
+    strategy = Keyword.get(opts, :strategy, :round_robin)
+    transport = Keyword.get(opts, :transport, :both)
+    exclude = Keyword.get(opts, :exclude, [])
+    limit = Keyword.get(opts, :limit, 10)
+
+    # Build filters for ProviderRegistry
+    filters = %{
+      method: method,
+      protocol: transport,
+      exclude: exclude
+    }
+
+    # Get candidate channels from registry
+    channels = ProviderRegistry.get_candidate_channels(chain, filters)
+
+    # Apply strategy-specific sorting and limiting
+    channels
+    |> apply_channel_strategy(strategy, method, chain)
+    |> Enum.take(limit)
+  end
+
+  @doc """
+  Selects the best channel for a specific provider and transport combination.
+
+  Returns {:ok, channel} or {:error, reason}.
+  """
+  @spec select_provider_channel(String.t(), String.t(), :http | :ws, keyword()) ::
+          {:ok, Channel.t()} | {:error, term()}
+  def select_provider_channel(chain, provider_id, transport, opts \\ []) do
+    ProviderRegistry.get_channel(chain, provider_id, transport, opts)
+  end
+
   ## Private Functions
 
   defp supports_protocol?(provider, :both),
@@ -132,4 +180,52 @@ defmodule Livechain.RPC.Selection do
     do: is_binary(Map.get(provider, :http_url)) or is_binary(Map.get(provider, :url))
 
   defp supports_protocol?(provider, :ws), do: is_binary(Map.get(provider, :ws_url))
+
+  # Channel-specific strategy application
+
+  defp apply_channel_strategy(channels, :priority, _method, _chain) do
+    # Sort by provider priority (would need to fetch provider configs)
+    # For now, preserve order and prefer HTTP over WebSocket
+    Enum.sort_by(channels, fn channel ->
+      transport_priority = case channel.transport do
+        :http -> 0
+        :ws -> 1
+      end
+      {0, transport_priority}  # {provider_priority, transport_priority}
+    end)
+  end
+
+  defp apply_channel_strategy(channels, :round_robin, _method, _chain) do
+    # Simple shuffle for round-robin (could be improved with state tracking)
+    Enum.shuffle(channels)
+  end
+
+  defp apply_channel_strategy(channels, :fastest, method, _chain) do
+    # Sort by performance metrics (would integrate with updated Metrics module)
+    # For now, prefer HTTP for most methods, WebSocket for subscriptions
+    Enum.sort_by(channels, fn channel ->
+      transport_score = case {channel.transport, method} do
+        {:ws, "eth_subscribe"} -> 0  # WebSocket is best for subscriptions
+        {:http, _} -> 1  # HTTP is good for unary calls
+        {:ws, _} -> 2  # WebSocket unary is slower for now
+      end
+      {transport_score, channel.provider_id}
+    end)
+  end
+
+  defp apply_channel_strategy(channels, :cheapest, _method, _chain) do
+    # Sort by cost (would need provider cost configuration)
+    # For now, treat all as equal cost and prefer HTTP
+    Enum.sort_by(channels, fn channel ->
+      case channel.transport do
+        :http -> 0
+        :ws -> 1
+      end
+    end)
+  end
+
+  defp apply_channel_strategy(channels, _strategy, _method, _chain) do
+    # Default: preserve original order
+    channels
+  end
 end

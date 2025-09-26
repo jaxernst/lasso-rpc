@@ -26,7 +26,7 @@ defmodule LivechainWeb.RPCController do
   use LivechainWeb, :controller
   require Logger
 
-  alias Livechain.RPC.{ChainRegistry, Failover}
+  alias Livechain.RPC.ChainRegistry
   alias Livechain.JSONRPC.Error, as: JError
   alias Livechain.Config.ConfigStore
 
@@ -430,7 +430,7 @@ defmodule LivechainWeb.RPCController do
     process_json_rpc_request(%{"method" => method, "params" => []}, chain, conn)
   end
 
-  # Unified forwarding: extracts strategy and optional provider override, delegates to Failover
+  # Unified forwarding: extracts strategy and optional provider override, delegates to RequestPipeline
   defp forward_rpc_request(chain, method, params, opts) when is_list(opts) do
     with {:ok, strategy} <- extract_strategy(opts) do
       provider_override =
@@ -445,17 +445,13 @@ defmodule LivechainWeb.RPCController do
             end
         end
 
-      allow_override_failover =
-        Application.get_env(:livechain, :allow_failover_on_override, true)
-
-      failover_opts = [
+      pipeline_opts = [
         strategy: strategy,
-        protocol: :http,
         provider_override: provider_override,
-        allow_failover_on_override: allow_override_failover
+        failover_on_override: false
       ]
 
-      Failover.execute_with_failover(chain, method, params, failover_opts)
+      Livechain.RPC.RequestPipeline.execute(chain, method, params, pipeline_opts)
     else
       {:error, reason} ->
         {:error, JError.new(-32000, "Failed to extract request options: #{reason}")}

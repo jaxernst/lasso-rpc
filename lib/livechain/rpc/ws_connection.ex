@@ -21,7 +21,6 @@ defmodule Livechain.RPC.WSConnection do
   alias Livechain.RPC.WSEndpoint
   alias Livechain.RPC.CircuitBreaker
   alias Livechain.RPC.ProviderPool
-  alias Livechain.RPC.Failover
   alias Livechain.RPC.WSNormalizer
   alias Livechain.JSONRPC.Error, as: JError
 
@@ -150,39 +149,14 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def handle_cast({:send_message, message}, %{connected: true, connection: connection} = state) do
-    case CircuitBreaker.call(state.endpoint.id, fn ->
-           case WebSockex.send_frame(connection, {:text, Jason.encode!(message)}) do
-             :ok ->
-               :ok
-
-             {:error, reason} ->
-               {:error, WSNormalizer.normalize_send_error(reason, state.endpoint.id)}
-           end
-         end) do
-      {:ok, :ok} ->
+    case WebSockex.send_frame(connection, {:text, Jason.encode!(message)}) do
+      :ok ->
         {:noreply, state}
 
-      {:error, :circuit_open} ->
-        Logger.debug(
-          "Circuit breaker open, attempting WebSocket failover for #{state.endpoint.id}"
-        )
-
-        case attempt_ws_failover(state, message) do
-          :ok ->
-            Logger.debug("WebSocket failover successful for #{state.endpoint.id}")
-            {:noreply, state}
-
-          {:error, reason} ->
-            Logger.debug(
-              "WebSocket failover failed for #{state.endpoint.id}: #{inspect(reason)}, queueing message"
-            )
-
-            state = %{state | pending_messages: [message | state.pending_messages]}
-            {:noreply, state}
-        end
-
       {:error, reason} ->
-        Logger.error("Failed to send message: #{inspect(reason)}")
+        normalized = WSNormalizer.normalize_send_error(reason, state.endpoint.id)
+        Logger.error("Failed to send WebSocket message: #{inspect(normalized)}")
+        ProviderPool.report_failure(state.chain_name, state.endpoint.id, normalized)
         state = %{state | pending_messages: [message | state.pending_messages]}
         {:noreply, state}
     end
@@ -285,27 +259,15 @@ defmodule Livechain.RPC.WSConnection do
   @impl true
   def handle_info({:heartbeat}, state) do
     if state.connected do
-      # Send ping to keep connection alive through circuit breaker
-      case CircuitBreaker.call(state.endpoint.id, fn ->
-             case WebSockex.send_frame(state.connection, :ping) do
-               :ok ->
-                 :ok
-
-               {:error, reason} ->
-                 {:error, WSNormalizer.normalize_send_error(reason, state.endpoint.id)}
-             end
-           end) do
-        {:ok, :ok} ->
-          state = schedule_heartbeat(state)
-          {:noreply, state}
-
-        {:error, :circuit_open} ->
-          Logger.debug("Circuit breaker open, skipping heartbeat for #{state.endpoint.id}")
+      case WebSockex.send_frame(state.connection, :ping) do
+        :ok ->
           state = schedule_heartbeat(state)
           {:noreply, state}
 
         {:error, reason} ->
-          Logger.debug("Heartbeat failed for #{state.endpoint.id}: #{inspect(reason)}")
+          normalized = WSNormalizer.normalize_send_error(reason, state.endpoint.id)
+          Logger.debug("Heartbeat failed for #{state.endpoint.id}: #{inspect(normalized)}")
+          ProviderPool.report_failure(state.chain_name, state.endpoint.id, normalized)
           state = schedule_heartbeat(state)
           {:noreply, state}
       end
@@ -367,53 +329,6 @@ defmodule Livechain.RPC.WSConnection do
   # and communicated back via messages
 
   # Private functions
-
-  defp attempt_ws_failover(state, message) do
-    # Extract method and params from the message for failover
-    method = Map.get(message, "method")
-    params = Map.get(message, "params", [])
-
-    case Failover.execute_with_failover(
-           state.chain_name,
-           method,
-           params,
-           strategy: :cheapest,
-           protocol: :ws,
-           exclude: [state.endpoint.id]
-         ) do
-      {:ok, _result} ->
-        :telemetry.execute(
-          [:livechain, :ws, :failover, :success],
-          %{count: 1},
-          %{
-            chain: state.chain_name,
-            original_provider: state.endpoint.id,
-            method: method,
-            subscription_related: is_subscription_method(method)
-          }
-        )
-
-        :ok
-
-      {:error, reason} ->
-        :telemetry.execute(
-          [:livechain, :ws, :failover, :failure],
-          %{count: 1},
-          %{
-            chain: state.chain_name,
-            original_provider: state.endpoint.id,
-            method: method,
-            reason: inspect(reason)
-          }
-        )
-
-        {:error, reason}
-    end
-  end
-
-  defp is_subscription_method("eth_subscribe"), do: true
-  defp is_subscription_method("eth_unsubscribe"), do: true
-  defp is_subscription_method(_), do: false
 
   defp connect_to_websocket(endpoint, parent_pid) do
     # Start a separate WebSocket handler process

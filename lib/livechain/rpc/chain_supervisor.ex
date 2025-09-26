@@ -18,8 +18,8 @@ defmodule Livechain.RPC.ChainSupervisor do
   use Supervisor
   require Logger
 
-  alias Livechain.Config.{ChainConfig, ConfigStore}
-  alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker, Normalizer}
+  alias Livechain.Config.ChainConfig
+  alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker}
   alias Livechain.RPC.ProviderHealthMonitor
   alias Livechain.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
 
@@ -55,62 +55,6 @@ defmodule Livechain.RPC.ChainSupervisor do
   """
   def get_active_providers(chain_name) do
     ProviderPool.get_active_providers(chain_name)
-  end
-
-
-  @doc """
-  Forwards a WebSocket message to a specific provider on this chain.
-  This is used by the failover system to send messages via WebSocket connections.
-  """
-  @spec forward_ws_message(String.t(), String.t(), map()) ::
-          {:ok, any()} | {:error, term()}
-  def forward_ws_message(_chain_name, provider_id, message) do
-    try do
-      WSConnection.send_message(provider_id, message)
-      {:ok, :sent}
-    rescue
-      error -> {:error, error}
-    catch
-      kind, error -> {:error, {kind, error}}
-    end
-  end
-
-  @doc """
-  Forwards an RPC request to a specific provider on this chain.
-  This is the core function for HTTP RPC forwarding with provider selection.
-  """
-  @spec forward_rpc_request(String.t(), String.t(), String.t(), list()) ::
-          {:ok, any()} | {:error, term()}
-  def forward_rpc_request(chain_name, provider_id, method, params) do
-    # Use ConfigStore instead of loading config on hot path
-    case ConfigStore.get_provider(chain_name, provider_id) do
-      {:ok, provider} ->
-        http_url =
-          cond do
-            is_binary(Map.get(provider, :http_url)) -> Map.get(provider, :http_url)
-            is_binary(Map.get(provider, :url)) -> Map.get(provider, :url)
-            true -> nil
-          end
-
-        if is_nil(http_url) do
-          {:error, {:client_error, "Provider has no HTTP URL configured: #{provider_id}"}}
-        else
-          http_provider = %{url: http_url, api_key: Map.get(provider, :api_key)}
-          timeout_ms = Livechain.Config.MethodPolicy.timeout_for(method)
-
-          safe_breaker_call(
-            provider_id,
-            fn ->
-              Livechain.RPC.HttpClient.request(http_provider, method, params, timeout_ms)
-            end,
-            timeout_ms + 1_000
-          )
-          |> normalize_breaker_result(provider_id, method)
-        end
-
-      {:error, :not_found} ->
-        {:error, {:client_error, "Provider not found: #{provider_id}"}}
-    end
   end
 
   # Supervisor callbacks
@@ -237,36 +181,6 @@ defmodule Livechain.RPC.ChainSupervisor do
 
   defp circuit_breaker_supervisor_name(chain_name) do
     :"#{chain_name}_circuit_breaker_supervisor"
-  end
-
-  defp normalize_breaker_result({:ok, {:ok, response_map}}, provider_id, method) do
-    Normalizer.run(provider_id, method, response_map)
-  end
-
-  defp normalize_breaker_result({:ok, {:error, reason}}, provider_id, _method) do
-    {:error, Livechain.JSONRPC.Error.from(reason, provider_id: provider_id)}
-  end
-
-  defp normalize_breaker_result({:ok, response_map}, provider_id, method) do
-    Normalizer.run(provider_id, method, response_map)
-  end
-
-  defp normalize_breaker_result({:error, reason}, provider_id, _method) do
-    {:error, Livechain.JSONRPC.Error.from(reason, provider_id: provider_id)}
-  end
-
-  defp safe_breaker_call(provider_id, fun, timeout) do
-    try do
-      CircuitBreaker.call(provider_id, fun, timeout)
-    catch
-      :exit, {:noproc, _} ->
-        # Circuit breaker not running; execute function directly
-        try do
-          fun.()
-        catch
-          kind, error -> {:error, {kind, error}}
-        end
-    end
   end
 
   # Collects WebSocket connection status from WSConnection processes
