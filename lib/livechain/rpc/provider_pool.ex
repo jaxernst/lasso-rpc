@@ -739,7 +739,6 @@ defmodule Livechain.RPC.ProviderPool do
         status: :healthy
       })
 
-      Task.start(fn -> Livechain.RPC.ChainRegistry.broadcast_connection_status_update() end)
       state
     else
       state
@@ -842,10 +841,6 @@ defmodule Livechain.RPC.ProviderPool do
                 provider_id: provider_id,
                 status: :unhealthy
               })
-
-              Task.start(fn ->
-                Livechain.RPC.ChainRegistry.broadcast_connection_status_update()
-              end)
             end
 
             new_state

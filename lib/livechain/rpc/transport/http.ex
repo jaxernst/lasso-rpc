@@ -25,14 +25,19 @@ defmodule Livechain.RPC.Transport.HTTP do
 
     case get_http_url(provider_config) do
       nil ->
-        {:error, JError.new(-32000, "No HTTP URL configured for provider",
-                           provider_id: provider_id, retriable?: false)}
+        {:error,
+         JError.new(-32000, "No HTTP URL configured for provider",
+           provider_id: provider_id,
+           retriable?: false
+         )}
+
       url ->
         channel = %{
           url: url,
           provider_id: provider_id,
           config: provider_config
         }
+
         {:ok, channel}
     end
   end
@@ -46,7 +51,8 @@ defmodule Livechain.RPC.Transport.HTTP do
     %{
       unary?: true,
       subscriptions?: false,
-      methods: :all  # HTTP supports all methods by default
+      # HTTP supports all methods by default
+      methods: :all
     }
   end
 
@@ -57,42 +63,58 @@ defmodule Livechain.RPC.Transport.HTTP do
     method = Map.get(rpc_request, "method")
     params = Map.get(rpc_request, "params", [])
 
-    Logger.debug("HTTP request via channel",
-                 provider: provider_id, method: method, url: url)
+    Logger.debug("HTTP request via channel", provider: provider_id, method: method, url: url)
 
     case HttpClient.request(provider_config, method, params, timeout) do
       {:ok, %{"error" => _error} = response} ->
-        jerr = ErrorNormalizer.normalize(response,
-                 provider_id: provider_id, context: :jsonrpc, transport: :http)
+        jerr =
+          ErrorNormalizer.normalize(response,
+            provider_id: provider_id,
+            context: :jsonrpc,
+            transport: :http
+          )
+
         {:error, jerr}
 
       {:ok, %{"result" => result}} ->
         {:ok, result}
 
       {:ok, invalid_response} ->
-        {:error, JError.new(-32700, "Invalid JSON-RPC response format",
-                           data: invalid_response, provider_id: provider_id,
-                           source: :transport, transport: :http, retriable?: false)}
+        {:error,
+         JError.new(-32700, "Invalid JSON-RPC response format",
+           data: invalid_response,
+           provider_id: provider_id,
+           source: :transport,
+           transport: :http,
+           retriable?: false
+         )}
 
       {:error, reason} ->
-        {:error, ErrorNormalizer.normalize(reason,
-                   provider_id: provider_id, context: :transport, transport: :http)}
+        {:error,
+         ErrorNormalizer.normalize(reason,
+           provider_id: provider_id,
+           context: :transport,
+           transport: :http
+         )}
     end
   end
 
   @impl true
   def subscribe(_channel, _rpc_request, _handler_pid) do
-    {:error, :unsupported_method}  # HTTP doesn't support subscriptions
+    # HTTP doesn't support subscriptions
+    {:error, :unsupported_method}
   end
 
   @impl true
   def unsubscribe(_channel, _subscription_ref) do
-    {:error, :unsupported_method}  # HTTP doesn't support subscriptions
+    # HTTP doesn't support subscriptions
+    {:error, :unsupported_method}
   end
 
   @impl true
   def close(_channel) do
-    :ok  # HTTP channels are stateless
+    # HTTP channels are stateless
+    :ok
   end
 
   # Legacy compatibility functions (no longer part of behaviour)
@@ -103,33 +125,49 @@ defmodule Livechain.RPC.Transport.HTTP do
 
     case get_http_url(provider_config) do
       nil ->
-        {:error, JError.new(-32000, "No HTTP URL configured for provider",
-                           provider_id: provider_id, retriable?: false)}
+        {:error,
+         JError.new(-32000, "No HTTP URL configured for provider",
+           provider_id: provider_id,
+           retriable?: false
+         )}
 
       url ->
         http_config = Map.put(provider_config, :url, url)
 
-        Logger.debug("Forwarding HTTP request",
-                     provider: provider_id, method: method, url: url)
+        Logger.debug("Forwarding HTTP request", provider: provider_id, method: method, url: url)
 
         case HttpClient.request(http_config, method, params, timeout_ms) do
           {:ok, %{"error" => _error} = response} ->
             # JSON-RPC error response - normalize using centralized logic
-            jerr = ErrorNormalizer.normalize(response,
-                     provider_id: provider_id, context: :jsonrpc, transport: :http)
+            jerr =
+              ErrorNormalizer.normalize(response,
+                provider_id: provider_id,
+                context: :jsonrpc,
+                transport: :http
+              )
+
             {:error, jerr}
 
           {:ok, %{"result" => result}} ->
             {:ok, result}
 
           {:ok, invalid_response} ->
-            {:error, JError.new(-32700, "Invalid JSON-RPC response format",
-                               data: invalid_response, provider_id: provider_id,
-                               source: :transport, transport: :http, retriable?: false)}
+            {:error,
+             JError.new(-32700, "Invalid JSON-RPC response format",
+               data: invalid_response,
+               provider_id: provider_id,
+               source: :transport,
+               transport: :http,
+               retriable?: false
+             )}
 
           {:error, reason} ->
-            {:error, ErrorNormalizer.normalize(reason,
-                       provider_id: provider_id, context: :transport, transport: :http)}
+            {:error,
+             ErrorNormalizer.normalize(reason,
+               provider_id: provider_id,
+               context: :transport,
+               transport: :http
+             )}
         end
     end
   end
@@ -149,5 +187,4 @@ defmodule Livechain.RPC.Transport.HTTP do
   defp has_http_url?(provider_config) do
     is_binary(get_http_url(provider_config))
   end
-
 end

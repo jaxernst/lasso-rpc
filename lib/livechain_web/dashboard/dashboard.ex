@@ -1435,7 +1435,7 @@ defmodule LivechainWeb.Dashboard do
 
   defp fetch_connections(socket) do
     # Use list_all_providers_comprehensive to show ALL providers regardless of connection type
-    connections = Livechain.RPC.ChainRegistry.list_all_providers_comprehensive()
+    connections = [] # Livechain.RPC.ChainRegistry.list_all_providers_comprehensive()
     latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
 
     socket

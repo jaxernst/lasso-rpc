@@ -14,7 +14,7 @@ defmodule Livechain.RPC.GapFiller do
   def ensure_blocks(chain, provider_id, from_n, to_n, _opts) when from_n <= to_n do
     blocks =
       Enum.reduce(from_n..to_n, [], fn n, acc ->
-        case RequestPipeline.execute(
+        case RequestPipeline.execute_via_channels(
                chain,
                "eth_getBlockByNumber",
                [
@@ -54,7 +54,7 @@ defmodule Livechain.RPC.GapFiller do
 
     full_filter = Map.merge(filter, base_filter)
 
-    case RequestPipeline.execute(chain, "eth_getLogs", [full_filter],
+    case RequestPipeline.execute_via_channels(chain, "eth_getLogs", [full_filter],
            strategy: :priority,
            provider_override: provider_id,
            failover_on_override: false

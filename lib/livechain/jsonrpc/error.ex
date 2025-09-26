@@ -13,6 +13,19 @@ defmodule Livechain.JSONRPC.Error do
   At the boundary, this serializes to standard JSON-RPC error maps.
   """
 
+  @derive {Jason.Encoder,
+           only: [
+             :code,
+             :message,
+             :data,
+             :category,
+             :provider_id,
+             :http_status,
+             :retriable?,
+             :original_code,
+             :source,
+             :transport
+           ]}
   @enforce_keys [:code, :message]
   defstruct [
     :code,

@@ -35,9 +35,6 @@ defmodule Livechain.Application do
         # Start configuration store for centralized config caching
         Livechain.Config.ConfigStore,
 
-        # Start the chain registry for lifecycle management
-        Livechain.RPC.ChainRegistry,
-
         # Start Phoenix endpoint
         LivechainWeb.Endpoint
       ]
@@ -50,15 +47,48 @@ defmodule Livechain.Application do
       Livechain.Telemetry.attach_default_handlers()
 
       # Start all configured chains
-      case Livechain.RPC.ChainRegistry.start_all_chains() do
-        {:ok, started_count} ->
-          Logger.info("Started #{started_count} chain supervisors")
-
-        {:error, reason} ->
-          Logger.error("Failed to start chain supervisors: #{reason}")
-      end
+      {:ok, started_count} = start_all_chains()
+      Logger.info("Started #{started_count} chain supervisors")
 
       {:ok, supervisor}
     end
+  end
+
+  # Private helper functions
+
+  defp start_all_chains do
+    # Get all configured chains from ConfigStore
+    all_chains = Livechain.Config.ConfigStore.get_all_chains()
+
+    # Start chain supervisors for each configured chain
+    results =
+      Enum.map(all_chains, fn {chain_name, chain_config} ->
+        case start_chain_supervisor(chain_name, chain_config) do
+          {:ok, _pid} = result ->
+            Logger.info("✓ Chain supervisor started successfully: #{chain_name}")
+            {chain_name, result}
+
+          {:error, reason} = result ->
+            Logger.error("✗ Chain supervisor failed to start: #{chain_name} - #{inspect(reason)}")
+            {chain_name, result}
+        end
+      end)
+
+    # Count successful starts
+    successful_count =
+      results
+      |> Enum.filter(fn {_, result} -> match?({:ok, _}, result) end)
+      |> length()
+
+    {:ok, successful_count}
+  end
+
+  defp start_chain_supervisor(chain_name, chain_config) do
+    :ok = Livechain.Config.ChainConfig.validate_chain_config(chain_config)
+
+    DynamicSupervisor.start_child(
+      Livechain.RPC.Supervisor,
+      {Livechain.RPC.ChainSupervisor, {chain_name, chain_config}}
+    )
   end
 end

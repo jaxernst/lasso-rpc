@@ -91,9 +91,7 @@ Notes:
 
 1. `RequestPipeline.handle/1` receives JSON-RPC request.
 2. `Selection.pick_candidates(chain, method, strategy)` returns ordered channels (both transports).
-3. Pipeline attempts:
-   - Option A (default): try first candidate, on soft failure or timeout, failover to next.
-   - Option B (opt-in): hedged requests to two candidates (WS+HTTP), take first winner, cancel loser.
+3. Pipeline attempts: try first candidate, on failure or timeout, failover to next.
 4. Record latency and health by `provider+transport+method`. Update circuits on failures.
 
 ### Unary from inbound WebSocket
@@ -169,16 +167,13 @@ providers:
 - `BenchmarkProber`:
   - Periodically issues lightweight probes for a curated method set (e.g., `eth_blockNumber`, `eth_chainId`, `net_version`, small `eth_call`).
   - Uses both HTTP and WS channels to keep comparisons fresh.
-- Dashboard: extend existing views with transport dimension; show method x provider x transport matrix.
 
 ---
 
 ## Failure and retry semantics (unary)
 
 - On `:unsupported_method`, immediately try next candidate (no penalty).
-- On timeout:
-  - If hedging enabled: race continues; cancel loser.
-  - If not: failover to next candidate until budget exhausted.
+- On timeout or failover to next candidate until budget exhausted.
 - On error codes (provider-specific parsing): convert to retryable vs terminal. Terminal errors (e.g., invalid params) return immediately.
 
 ---

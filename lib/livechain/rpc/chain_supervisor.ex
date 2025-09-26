@@ -19,7 +19,7 @@ defmodule Livechain.RPC.ChainSupervisor do
   require Logger
 
   alias Livechain.Config.ChainConfig
-  alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker}
+  alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker, ProviderRegistry}
   alias Livechain.RPC.ProviderHealthMonitor
   alias Livechain.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
 
@@ -64,6 +64,9 @@ defmodule Livechain.RPC.ChainSupervisor do
     children = [
       # Start ProviderPool for health monitoring and performance tracking
       {ProviderPool, {chain_name, chain_config}},
+
+      # Start ProviderRegistry for transport-agnostic channel management
+      {ProviderRegistry, {chain_name, chain_config}},
 
       # Start dynamic supervisor to manage WS connections
       {DynamicSupervisor, strategy: :one_for_one, name: connection_supervisor_name(chain_name)},

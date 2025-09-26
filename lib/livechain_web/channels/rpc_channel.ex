@@ -182,7 +182,7 @@ defmodule LivechainWeb.RPCChannel do
     ]
 
     # Pass through the error directly for consistent normalization upstream
-    RequestPipeline.execute(chain, method, params, pipeline_opts)
+    RequestPipeline.execute_via_channels(chain, method, params, pipeline_opts)
   end
 
   defp default_provider_strategy do

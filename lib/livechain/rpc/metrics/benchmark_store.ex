@@ -38,7 +38,8 @@ defmodule Livechain.RPC.Metrics.BenchmarkStore do
         providers
         |> Enum.filter(fn provider -> provider.total_calls > 0 end)
         |> Enum.map(fn provider ->
-          confidence_score = calculate_confidence_score(provider.total_calls, provider.success_rate)
+          confidence_score =
+            calculate_confidence_score(provider.total_calls, provider.success_rate)
 
           %{
             provider_id: provider.provider_id,
@@ -85,7 +86,8 @@ defmodule Livechain.RPC.Metrics.BenchmarkStore do
   defp calculate_confidence_score(total_calls, success_rate) when total_calls > 0 do
     # Calculate confidence based on sample size and success rate
     # More calls = higher confidence, higher success rate = higher confidence
-    sample_confidence = :math.log10(max(total_calls, 1)) / 3.0  # Log scale, max at 1000 calls
+    # Log scale, max at 1000 calls
+    sample_confidence = :math.log10(max(total_calls, 1)) / 3.0
     success_confidence = success_rate
 
     # Weighted average with slightly more weight on sample size
