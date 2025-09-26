@@ -191,8 +191,24 @@ defmodule Livechain.RPC.ProviderRegistry do
       {:ok, provider_config} ->
         transport_module = get_transport_module(transport)
         channel_opts = Keyword.put(opts, :provider_id, provider_id)
+        # Only attempt to open channels that are actually configured
+        case transport do
+          :http ->
+            if is_binary(Map.get(provider_config, :url)) or
+                 is_binary(Map.get(provider_config, :http_url)) do
+              transport_module.open(provider_config, channel_opts)
+            else
+              {:error, :no_http_config}
+            end
 
-        case transport_module.open(provider_config, channel_opts) do
+          :ws ->
+            if is_binary(Map.get(provider_config, :ws_url)) do
+              transport_module.open(provider_config, channel_opts)
+            else
+              {:error, :no_ws_config}
+            end
+        end
+        |> case do
           {:ok, raw_channel} ->
             # Wrap in Channel struct
             channel = Channel.new(provider_id, transport, raw_channel, transport_module)
@@ -262,23 +278,37 @@ defmodule Livechain.RPC.ProviderRegistry do
     exclude_list = Map.get(filters, :exclude, [])
     method_filter = Map.get(filters, :method)
 
+    # Determine gating by method (Phase 1a)
+    {require_unary, require_subscriptions} =
+      case method_filter do
+        "eth_subscribe" -> {false, true}
+        "eth_unsubscribe" -> {false, true}
+        _ -> {true, false}
+      end
+
     state.channels
     |> Enum.flat_map(fn {provider_id, provider_channels} ->
       if provider_id in exclude_list do
         []
       else
-        Enum.filter_map(
-          provider_channels,
-          fn {transport, channel} ->
-            transport_matches?(transport, protocol_filter) and
-              Channel.healthy?(channel) and
-              method_supported?(state, provider_id, transport, method_filter)
-          end,
-          fn {_transport, channel} -> channel end
-        )
+        provider_channels
+        |> Enum.filter(fn {transport, channel} ->
+          transport_matches?(transport, protocol_filter) and
+            Channel.healthy?(channel) and
+            method_supported?(state, provider_id, transport, method_filter) and
+            channel_capability_allows?(channel, require_unary, require_subscriptions)
+        end)
+        |> Enum.map(fn {_t, channel} -> channel end)
       end
     end)
   end
+
+  defp channel_capability_allows?(channel, true, false), do: Channel.supports_unary?(channel)
+
+  defp channel_capability_allows?(channel, false, true),
+    do: Channel.supports_subscriptions?(channel)
+
+  defp channel_capability_allows?(_channel, false, false), do: true
 
   defp transport_matches?(_transport, :both), do: true
   defp transport_matches?(transport, transport), do: true

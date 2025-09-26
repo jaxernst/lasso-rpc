@@ -144,17 +144,41 @@ defmodule Livechain.RPC.Selection do
     exclude = Keyword.get(opts, :exclude, [])
     limit = Keyword.get(opts, :limit, 10)
 
-    # Build filters for ProviderRegistry
-    filters = %{
-      method: method,
-      protocol: transport,
-      exclude: exclude
-    }
+    # Ask ProviderPool for provider candidates (single source of truth for provider availability)
+    pool_filters = %{protocol: transport, exclude: exclude}
+    provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
 
-    # Get candidate channels from registry
-    channels = ProviderRegistry.get_candidate_channels(chain, filters)
+    # Build channel candidates via ProviderRegistry (enforces channel-level health/capabilities)
+    # Map provider list into channels, lazily opening as needed
+    channels =
+      provider_candidates
+      |> Enum.flat_map(fn %{id: provider_id} ->
+        transports =
+          case method do
+            "eth_subscribe" ->
+              [:ws]
 
-    # Apply strategy-specific sorting and limiting
+            "eth_unsubscribe" ->
+              [:ws]
+
+            _ ->
+              case transport do
+                # Phase 1a: prefer HTTP only for unary until WS unary is complete
+                :both -> [:http]
+                :http -> [:http]
+                :ws -> [:ws]
+              end
+          end
+
+        transports
+        |> Enum.flat_map(fn t ->
+          case ProviderRegistry.get_channel(chain, provider_id, t, method: method) do
+            {:ok, channel} -> [channel]
+            _ -> []
+          end
+        end)
+      end)
+
     channels
     |> apply_channel_strategy(strategy, method, chain)
     |> Enum.take(limit)
@@ -187,11 +211,14 @@ defmodule Livechain.RPC.Selection do
     # Sort by provider priority (would need to fetch provider configs)
     # For now, preserve order and prefer HTTP over WebSocket
     Enum.sort_by(channels, fn channel ->
-      transport_priority = case channel.transport do
-        :http -> 0
-        :ws -> 1
-      end
-      {0, transport_priority}  # {provider_priority, transport_priority}
+      transport_priority =
+        case channel.transport do
+          :http -> 0
+          :ws -> 1
+        end
+
+      # {provider_priority, transport_priority}
+      {0, transport_priority}
     end)
   end
 
@@ -201,15 +228,14 @@ defmodule Livechain.RPC.Selection do
   end
 
   defp apply_channel_strategy(channels, :fastest, method, _chain) do
-    # Sort by performance metrics (would integrate with updated Metrics module)
-    # For now, prefer HTTP for most methods, WebSocket for subscriptions
+    # Phase 1a heuristic: WS for subscriptions, HTTP for unary
     Enum.sort_by(channels, fn channel ->
-      transport_score = case {channel.transport, method} do
-        {:ws, "eth_subscribe"} -> 0  # WebSocket is best for subscriptions
-        {:http, _} -> 1  # HTTP is good for unary calls
-        {:ws, _} -> 2  # WebSocket unary is slower for now
+      case {channel.transport, method} do
+        {:ws, "eth_subscribe"} -> 0
+        {:ws, "eth_unsubscribe"} -> 0
+        {:http, _} -> 1
+        {:ws, _} -> 2
       end
-      {transport_score, channel.provider_id}
     end)
   end
 

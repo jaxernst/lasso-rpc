@@ -62,9 +62,9 @@ defmodule Livechain.RPC.Transport.WebSocket do
   end
 
   @impl true
-  def healthy?(%{connection_pid: pid}) when is_pid(pid) do
+  def healthy?(%{provider_id: provider_id, connection_pid: pid}) when is_pid(pid) do
     Process.alive?(pid) and
-      case WSConnection.status(pid) do
+      case WSConnection.status(provider_id) do
         %{connected: true} -> true
         _ -> false
       end
@@ -116,21 +116,10 @@ defmodule Livechain.RPC.Transport.WebSocket do
     # - Timeout handling
     # - Better error handling
 
-    case WSConnection.send_message(provider_id, message) do
-      :ok ->
-        # For now, we'll simulate success since implementing full request/response
-        # correlation would require significant changes to WSConnection
-        # In Phase 2, we'll implement proper unary request handling
-        {:ok, %{"result" => "WebSocket unary request sent"}}
-
-      {:error, reason} ->
-        {:error,
-         ErrorNormalizer.normalize(reason,
-           provider_id: provider_id,
-           context: :transport,
-           transport: :ws
-         )}
-    end
+    # Send without branching; WSConnection.cast always returns :ok
+    _ = WSConnection.send_message(provider_id, message)
+    # For now, simulate success until unary correlation is implemented
+    {:ok, %{"result" => "WebSocket unary request sent"}}
   end
 
   @impl true
