@@ -12,7 +12,7 @@ defmodule LivechainWeb.RPCChannel do
   use LivechainWeb, :channel
   require Logger
 
-  alias Livechain.RPC.{SubscriptionRouter, Failover}
+  alias Livechain.RPC.{SubscriptionRouter, RequestPipeline}
   alias Livechain.JSONRPC.Error, as: JError
   alias Livechain.Config.ConfigStore
 
@@ -177,13 +177,12 @@ defmodule LivechainWeb.RPCChannel do
   defp forward_read_call(chain, method, params) do
     strategy = default_provider_strategy()
 
-    failover_opts = [
-      strategy: strategy,
-      protocol: :http
+    pipeline_opts = [
+      strategy: strategy
     ]
 
     # Pass through the error directly for consistent normalization upstream
-    Failover.execute_with_failover(chain, method, params, failover_opts)
+    RequestPipeline.execute(chain, method, params, pipeline_opts)
   end
 
   defp default_provider_strategy do

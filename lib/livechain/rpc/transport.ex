@@ -1,60 +1,129 @@
 defmodule Livechain.RPC.Transport do
   @moduledoc """
-  Unified transport abstraction for RPC requests.
+  Transport abstraction behaviour for RPC requests and subscriptions.
 
-  Provides a consistent interface for forwarding requests regardless of
-  the underlying protocol (HTTP, WebSocket, etc.), enabling clean separation
-  of transport concerns from failover and routing logic.
+  Provides a unified interface for different transport protocols (HTTP, WebSocket)
+  to enable transport-agnostic request routing and capability-aware selection.
   """
 
   alias Livechain.JSONRPC.Error, as: JError
 
+  @type channel :: term()
+  @type rpc_request :: map()
+  @type rpc_response :: map()
+  @type subscription_ref :: term()
   @type provider_config :: map()
   @type method :: String.t()
   @type params :: list()
-  @type request_id :: String.t()
   @type opts :: keyword()
 
   @doc """
-  Forwards a request using the appropriate transport for the provider configuration.
+  Opens a channel (connection/pool) for the given provider configuration.
 
   Options:
-  - `:timeout` - Request timeout in milliseconds
-  - `:request_id` - Unique request identifier (generated if not provided)
-  - `:protocol` - Force specific protocol (:http | :ws)
+  - `:timeout` - Connection timeout in milliseconds
+  - Any transport-specific options
 
-  Returns the decoded response or a normalized JError.
+  Returns {:ok, channel} or {:error, reason}
   """
-  @callback forward_request(provider_config, method, params, opts) ::
-              {:ok, any()} | {:error, JError.t()}
+  @callback open(provider_config, opts) :: {:ok, channel} | {:error, term()}
 
   @doc """
-  Determines if a provider supports the specified protocol.
+  Checks if a channel is healthy and ready to handle requests.
   """
-  @callback supports_protocol?(provider_config, :http | :ws | :both) :: boolean()
+  @callback healthy?(channel) :: boolean()
 
   @doc """
-  Gets the preferred transport for a provider configuration.
+  Gets the capabilities of a channel.
+
+  Returns capabilities map with:
+  - unary?: boolean - supports single request/response
+  - subscriptions?: boolean - supports streaming subscriptions
+  - methods: :all | MapSet.t(String.t()) - supported method names
   """
-  @callback get_transport_type(provider_config) :: :http | :ws
+  @callback capabilities(channel) :: %{
+    unary?: boolean(),
+    subscriptions?: boolean(),
+    methods: :all | MapSet.t(String.t())
+  }
 
   @doc """
-  Forwards a request using the best available transport for the provider.
+  Performs a single JSON-RPC request over the channel.
 
-  Automatically selects HTTP or WebSocket based on provider configuration
-  and request type. Falls back gracefully between protocols when possible.
+  Returns {:ok, response} for successful requests,
+  {:error, :unsupported_method} if the method isn't supported,
+  {:error, reason} for other failures.
+  """
+  @callback request(channel, rpc_request, timeout()) ::
+              {:ok, rpc_response} | {:error, :unsupported_method | :timeout | term()}
+
+  @doc """
+  Starts a streaming subscription (WebSocket only).
+
+  The response handler process will receive subscription messages.
+  Returns {:ok, subscription_ref} or {:error, reason}.
+  """
+  @callback subscribe(channel, rpc_request, pid()) ::
+              {:ok, subscription_ref} | {:error, :unsupported_method | term()}
+
+  @doc """
+  Cancels a streaming subscription.
+  """
+  @callback unsubscribe(channel, subscription_ref) :: :ok | {:error, term()}
+
+  @doc """
+  Closes a channel and cleans up resources.
+  """
+  @callback close(channel) :: :ok
+
+  # Legacy compatibility functions
+
+  @doc """
+  Forwards a request via the specified protocol.
+
+  This is the primary, explicit API. The transport module mapping is direct:
+  - :http → Livechain.RPC.Transport.HTTP
+  - :ws   → Livechain.RPC.Transport.WebSocket
+
+  URL presence and protocol support are validated inside each transport.
+  """
+  @spec forward_request(String.t(), provider_config, :http | :ws, method, params, opts) ::
+          {:ok, any()} | {:error, JError.t()}
+  def forward_request(provider_id, provider_config, protocol, method, params, opts) do
+    opts_with_pid = Keyword.put(opts, :provider_id, provider_id)
+
+    case protocol do
+      :http ->
+        Livechain.RPC.Transport.HTTP.forward_request(
+          provider_config,
+          method,
+          params,
+          opts_with_pid
+        )
+
+      :ws ->
+        Livechain.RPC.Transport.WebSocket.forward_request(
+          provider_config,
+          method,
+          params,
+          opts_with_pid
+        )
+
+      other ->
+        {:error,
+         JError.new(-32000, "Invalid protocol: #{inspect(other)}", provider_id: provider_id)}
+    end
+  end
+
+  @doc """
+  Backward-compatible API that reads :protocol from opts.
+  Defaults to :http if not provided.
   """
   @spec forward_request(String.t(), provider_config, method, params, opts) ::
           {:ok, any()} | {:error, JError.t()}
-  def forward_request(provider_id, provider_config, method, params, opts \\ []) do
-    case select_transport(provider_config, method, opts) do
-      nil ->
-        {:error, JError.new(-32000, "No suitable transport available", provider_id: provider_id)}
-
-      transport when is_atom(transport) ->
-        transport.forward_request(provider_config, method, params,
-                                  Keyword.put(opts, :provider_id, provider_id))
-    end
+  def forward_request(provider_id, provider_config, method, params, opts) do
+    protocol = Keyword.get(opts, :protocol, :http)
+    forward_request(provider_id, provider_config, protocol, method, params, opts)
   end
 
   @doc """
@@ -71,47 +140,9 @@ defmodule Livechain.RPC.Transport do
 
   # Private functions
 
-  defp select_transport(provider_config, method, opts) do
-    forced_protocol = Keyword.get(opts, :protocol)
+  # No resolver helpers needed; explicit protocol mapping above keeps this simple.
 
-    case forced_protocol do
-      :http ->
-        if has_http_url?(provider_config), do: Livechain.RPC.Transport.HTTP, else: nil
-
-      :ws ->
-        if has_ws_url?(provider_config), do: Livechain.RPC.Transport.WebSocket, else: nil
-
-      :both ->
-        # For :both, prefer WebSocket for subscriptions, HTTP otherwise
-        cond do
-          subscription_method?(method) and has_ws_url?(provider_config) ->
-            Livechain.RPC.Transport.WebSocket
-          has_http_url?(provider_config) ->
-            Livechain.RPC.Transport.HTTP
-          has_ws_url?(provider_config) ->
-            Livechain.RPC.Transport.WebSocket
-          true ->
-            nil
-        end
-
-      nil ->
-        # Auto-select based on method and availability
-        cond do
-          subscription_method?(method) and has_ws_url?(provider_config) ->
-            Livechain.RPC.Transport.WebSocket
-          has_http_url?(provider_config) ->
-            Livechain.RPC.Transport.HTTP
-          has_ws_url?(provider_config) ->
-            Livechain.RPC.Transport.WebSocket
-          true ->
-            nil
-        end
-    end
-  end
-
-  defp subscription_method?("eth_subscribe"), do: true
-  defp subscription_method?("eth_unsubscribe"), do: true
-  defp subscription_method?(_), do: false
+  # No subscription detection needed in explicit protocol mode
 
   defp has_http_url?(provider_config) do
     is_binary(Map.get(provider_config, :url)) or

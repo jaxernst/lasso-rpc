@@ -3,7 +3,7 @@ defmodule Livechain.RPC.GapFiller do
   HTTP backfill utilities. Pure API with no GenServer; run in Task from callers.
   """
 
-  alias Livechain.RPC.ChainSupervisor
+  alias Livechain.RPC.RequestPipeline
 
   @type backfill_opts :: [timeout_ms: non_neg_integer()]
 
@@ -14,10 +14,17 @@ defmodule Livechain.RPC.GapFiller do
   def ensure_blocks(chain, provider_id, from_n, to_n, _opts) when from_n <= to_n do
     blocks =
       Enum.reduce(from_n..to_n, [], fn n, acc ->
-        case ChainSupervisor.forward_rpc_request(chain, provider_id, "eth_getBlockByNumber", [
-               "0x" <> Integer.to_string(n, 16),
-               false
-             ]) do
+        case RequestPipeline.execute(
+               chain,
+               "eth_getBlockByNumber",
+               [
+                 "0x" <> Integer.to_string(n, 16),
+                 false
+               ],
+               strategy: :priority,
+               provider_override: provider_id,
+               failover_on_override: false
+             ) do
           {:ok, %{"number" => _} = block} -> acc ++ [block]
           _ -> acc
         end
@@ -47,7 +54,11 @@ defmodule Livechain.RPC.GapFiller do
 
     full_filter = Map.merge(filter, base_filter)
 
-    case ChainSupervisor.forward_rpc_request(chain, provider_id, "eth_getLogs", [full_filter]) do
+    case RequestPipeline.execute(chain, "eth_getLogs", [full_filter],
+           strategy: :priority,
+           provider_override: provider_id,
+           failover_on_override: false
+         ) do
       {:ok, logs} when is_list(logs) ->
         ordered =
           Enum.sort_by(logs, fn log ->

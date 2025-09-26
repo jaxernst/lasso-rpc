@@ -197,11 +197,10 @@ defmodule Livechain.RPC.StreamCoordinator do
   end
 
   defp fetch_head(chain, provider_id) do
-    case Livechain.RPC.ChainSupervisor.forward_rpc_request(
-           chain,
-           provider_id,
-           "eth_blockNumber",
-           []
+    case Livechain.RPC.RequestPipeline.execute(chain, "eth_blockNumber", [],
+           strategy: :priority,
+           provider_override: provider_id,
+           failover_on_override: false
          ) do
       {:ok, "0x" <> _ = hex} -> String.to_integer(String.trim_leading(hex, "0x"), 16)
       _ -> 0

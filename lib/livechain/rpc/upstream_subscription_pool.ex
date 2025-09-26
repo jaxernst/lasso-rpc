@@ -11,7 +11,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
   alias Livechain.RPC.{Selection, SelectionContext, ClientSubscriptionRegistry}
   alias Livechain.RPC.StreamSupervisor
   alias Livechain.RPC.StreamCoordinator
-  alias Livechain.RPC.ChainSupervisor
+  alias Livechain.RPC.WSConnection
   alias Livechain.RPC.FilterNormalizer
   alias Livechain.Config.ConfigStore
   alias Livechain.Events.Provider
@@ -388,7 +388,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       "params" => ["newHeads"]
     }
 
-    ChainSupervisor.forward_ws_message("_ignored_", provider_id, message)
+    WSConnection.send_message(provider_id, message)
     id
   end
 
@@ -403,7 +403,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       "params" => ["logs", normalized]
     }
 
-    ChainSupervisor.forward_ws_message("_ignored_", provider_id, message)
+    WSConnection.send_message(provider_id, message)
     id
   end
 

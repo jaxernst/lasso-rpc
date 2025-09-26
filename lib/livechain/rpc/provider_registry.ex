@@ -1,0 +1,291 @@
+defmodule Livechain.RPC.ProviderRegistry do
+  @moduledoc """
+  Registry for managing provider channels across different transports.
+
+  This module provides a unified interface for opening, managing, and selecting
+  channels (HTTP pools, WebSocket connections) for different providers and transports.
+  It acts as the bridge between the transport-agnostic RequestPipeline and the
+  concrete transport implementations.
+
+  Each provider can have multiple channels:
+  - HTTP channel (connection pool)
+  - WebSocket channel (persistent connection/pool)
+
+  The registry maintains channel lifecycle, health status, and provides
+  selection capabilities for the routing logic.
+  """
+
+  use GenServer
+  require Logger
+
+  alias Livechain.RPC.Channel
+  alias Livechain.Config.ConfigStore
+  alias Livechain.JSONRPC.Error, as: JError
+
+  defstruct [
+    :chain_name,
+    # Map of provider_id => %{http: channel, ws: channel}
+    :channels,
+    # Map of {provider_id, transport} => capabilities
+    :capabilities,
+    # Map of {provider_id, transport} => timestamp
+    :last_health_check
+  ]
+
+  @type chain_name :: String.t()
+  @type provider_id :: String.t()
+  @type transport :: :http | :ws
+  @type channel_map :: %{transport => Channel.t()}
+
+  @doc """
+  Starts the ProviderRegistry for a chain.
+  """
+  @spec start_link({chain_name, map()}) :: GenServer.on_start()
+  def start_link({chain_name, _chain_config}) do
+    GenServer.start_link(__MODULE__, chain_name, name: via_name(chain_name))
+  end
+
+  @doc """
+  Gets or opens a channel for a provider and transport.
+
+  Returns {:ok, channel} or {:error, reason}.
+  """
+  @spec get_channel(chain_name, provider_id, transport, keyword()) ::
+          {:ok, Channel.t()} | {:error, term()}
+  def get_channel(chain_name, provider_id, transport, opts \\ []) do
+    GenServer.call(via_name(chain_name), {:get_channel, provider_id, transport, opts})
+  end
+
+  @doc """
+  Lists all available channels for a provider.
+
+  Returns a list of {transport, channel} tuples.
+  """
+  @spec list_provider_channels(chain_name, provider_id) :: [{transport, Channel.t()}]
+  def list_provider_channels(chain_name, provider_id) do
+    GenServer.call(via_name(chain_name), {:list_provider_channels, provider_id})
+  end
+
+  @doc """
+  Gets all candidate channels that match the given filters.
+
+  Filters can include:
+  - protocol: :http | :ws | :both
+  - exclude: [provider_id]
+  - method: String.t() (for capability filtering)
+
+  Returns a list of Channel structs with transport and capability information.
+  """
+  @spec get_candidate_channels(chain_name, map()) :: [Channel.t()]
+  def get_candidate_channels(chain_name, filters \\ %{}) do
+    GenServer.call(via_name(chain_name), {:get_candidate_channels, filters})
+  end
+
+  @doc """
+  Forces refresh of capabilities for a provider/transport combination.
+  """
+  @spec refresh_capabilities(chain_name, provider_id, transport) :: :ok
+  def refresh_capabilities(chain_name, provider_id, transport) do
+    GenServer.cast(via_name(chain_name), {:refresh_capabilities, provider_id, transport})
+  end
+
+  @doc """
+  Closes and removes a channel from the registry.
+  """
+  @spec close_channel(chain_name, provider_id, transport) :: :ok
+  def close_channel(chain_name, provider_id, transport) do
+    GenServer.cast(via_name(chain_name), {:close_channel, provider_id, transport})
+  end
+
+  # GenServer implementation
+
+  @impl true
+  def init(chain_name) do
+    state = %__MODULE__{
+      chain_name: chain_name,
+      channels: %{},
+      capabilities: %{},
+      last_health_check: %{}
+    }
+
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_call({:get_channel, provider_id, transport, opts}, _from, state) do
+    case get_existing_channel(state, provider_id, transport) do
+      {:ok, channel} ->
+        # Verify channel is still healthy
+        if Channel.healthy?(channel) do
+          {:reply, {:ok, channel}, state}
+        else
+          # Channel is unhealthy, remove and create new one
+          new_state = remove_channel(state, provider_id, transport)
+          case create_channel(new_state, provider_id, transport, opts) do
+            {:ok, channel, updated_state} ->
+              {:reply, {:ok, channel}, updated_state}
+            {:error, reason} ->
+              {:reply, {:error, reason}, new_state}
+          end
+        end
+
+      {:error, :not_found} ->
+        case create_channel(state, provider_id, transport, opts) do
+          {:ok, channel, updated_state} ->
+            {:reply, {:ok, channel}, updated_state}
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+    end
+  end
+
+  @impl true
+  def handle_call({:list_provider_channels, provider_id}, _from, state) do
+    channels = Map.get(state.channels, provider_id, %{})
+    channel_list = Enum.to_list(channels)
+    {:reply, channel_list, state}
+  end
+
+  @impl true
+  def handle_call({:get_candidate_channels, filters}, _from, state) do
+    candidates = build_candidate_list(state, filters)
+    {:reply, candidates, state}
+  end
+
+  @impl true
+  def handle_cast({:refresh_capabilities, provider_id, transport}, state) do
+    case get_existing_channel(state, provider_id, transport) do
+      {:ok, channel} ->
+        capabilities = Channel.get_capabilities(channel)
+        key = {provider_id, transport}
+        new_capabilities = Map.put(state.capabilities, key, capabilities)
+        new_state = %{state | capabilities: new_capabilities}
+        {:noreply, new_state}
+
+      {:error, :not_found} ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:close_channel, provider_id, transport}, state) do
+    new_state = remove_channel(state, provider_id, transport)
+    {:noreply, new_state}
+  end
+
+  # Private functions
+
+  defp get_existing_channel(state, provider_id, transport) do
+    case get_in(state.channels, [provider_id, transport]) do
+      nil -> {:error, :not_found}
+      channel -> {:ok, channel}
+    end
+  end
+
+  defp create_channel(state, provider_id, transport, opts) do
+    case ConfigStore.get_provider(state.chain_name, provider_id) do
+      {:ok, provider_config} ->
+        transport_module = get_transport_module(transport)
+        channel_opts = Keyword.put(opts, :provider_id, provider_id)
+
+        case transport_module.open(provider_config, channel_opts) do
+          {:ok, raw_channel} ->
+            # Wrap in Channel struct
+            channel = Channel.new(provider_id, transport, raw_channel, transport_module)
+
+            # Store channel
+            updated_channels = put_in(state.channels, [provider_id, transport], channel)
+            new_state = %{state | channels: updated_channels}
+
+            # Cache capabilities
+            capabilities = Channel.get_capabilities(channel)
+            cap_key = {provider_id, transport}
+            new_capabilities = Map.put(state.capabilities, cap_key, capabilities)
+            final_state = %{new_state | capabilities: new_capabilities}
+
+            Logger.info("Created #{transport} channel for provider #{provider_id}")
+            {:ok, channel, final_state}
+
+          {:error, reason} ->
+            Logger.warning("Failed to create #{transport} channel for provider #{provider_id}: #{inspect(reason)}")
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, JError.new(-32000, "Provider not found: #{inspect(reason)}", provider_id: provider_id)}
+    end
+  end
+
+  defp remove_channel(state, provider_id, transport) do
+    case get_existing_channel(state, provider_id, transport) do
+      {:ok, channel} ->
+        Channel.close(channel)
+        Logger.debug("Closed #{transport} channel for provider #{provider_id}")
+
+      {:error, :not_found} ->
+        :ok
+    end
+
+    # Remove from state
+    updated_channels =
+      case Map.get(state.channels, provider_id) do
+        nil -> state.channels
+        provider_channels ->
+          new_provider_channels = Map.delete(provider_channels, transport)
+          if map_size(new_provider_channels) == 0 do
+            Map.delete(state.channels, provider_id)
+          else
+            Map.put(state.channels, provider_id, new_provider_channels)
+          end
+      end
+
+    # Remove capabilities
+    cap_key = {provider_id, transport}
+    updated_capabilities = Map.delete(state.capabilities, cap_key)
+
+    %{state | channels: updated_channels, capabilities: updated_capabilities}
+  end
+
+  defp build_candidate_list(state, filters) do
+    protocol_filter = Map.get(filters, :protocol, :both)
+    exclude_list = Map.get(filters, :exclude, [])
+    method_filter = Map.get(filters, :method)
+
+    state.channels
+    |> Enum.flat_map(fn {provider_id, provider_channels} ->
+      if provider_id in exclude_list do
+        []
+      else
+        Enum.filter_map(provider_channels,
+          fn {transport, channel} ->
+            transport_matches?(transport, protocol_filter) and
+            Channel.healthy?(channel) and
+            method_supported?(state, provider_id, transport, method_filter)
+          end,
+          fn {_transport, channel} -> channel end
+        )
+      end
+    end)
+  end
+
+  defp transport_matches?(_transport, :both), do: true
+  defp transport_matches?(transport, transport), do: true
+  defp transport_matches?(_transport, _protocol), do: false
+
+  defp method_supported?(_state, _provider_id, _transport, nil), do: true
+  defp method_supported?(state, provider_id, transport, method) do
+    key = {provider_id, transport}
+    case Map.get(state.capabilities, key) do
+      nil -> true  # Assume supported if capabilities unknown
+      %{methods: :all} -> true
+      %{methods: method_set} -> MapSet.member?(method_set, method)
+    end
+  end
+
+  defp get_transport_module(:http), do: Livechain.RPC.Transport.HTTP
+  defp get_transport_module(:ws), do: Livechain.RPC.Transport.WebSocket
+
+  defp via_name(chain_name) do
+    {:via, Registry, {Livechain.Registry, {:provider_registry, chain_name}}}
+  end
+end
