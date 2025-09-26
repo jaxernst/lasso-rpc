@@ -16,7 +16,12 @@ defmodule Livechain.RPC.Transport.WebSocket do
   alias Livechain.JSONRPC.Error, as: JError
 
   # Channel represents a WebSocket connection
-  @type channel :: %{ws_url: String.t(), provider_id: String.t(), connection_pid: pid(), config: map()}
+  @type channel :: %{
+          ws_url: String.t(),
+          provider_id: String.t(),
+          connection_pid: pid(),
+          config: map()
+        }
 
   # New Transport behaviour implementation
 
@@ -26,15 +31,23 @@ defmodule Livechain.RPC.Transport.WebSocket do
 
     case get_ws_url(provider_config) do
       nil ->
-        {:error, JError.new(-32000, "No WebSocket URL configured for provider",
-                           provider_id: provider_id, retriable?: false)}
+        {:error,
+         JError.new(-32000, "No WebSocket URL configured for provider",
+           provider_id: provider_id,
+           retriable?: false
+         )}
+
       ws_url ->
         # For now, we'll use the existing WSConnection via the provider_id
         # In a full implementation, we would start a dedicated connection pool here
         case GenServer.whereis({:via, Registry, {Livechain.Registry, {:ws_conn, provider_id}}}) do
           nil ->
-            {:error, JError.new(-32000, "WebSocket connection not available",
-                               provider_id: provider_id, retriable?: true)}
+            {:error,
+             JError.new(-32000, "WebSocket connection not available",
+               provider_id: provider_id,
+               retriable?: true
+             )}
+
           connection_pid ->
             channel = %{
               ws_url: ws_url,
@@ -42,6 +55,7 @@ defmodule Livechain.RPC.Transport.WebSocket do
               connection_pid: connection_pid,
               config: provider_config
             }
+
             {:ok, channel}
         end
     end
@@ -57,6 +71,7 @@ defmodule Livechain.RPC.Transport.WebSocket do
   rescue
     _ -> false
   end
+
   def healthy?(_), do: false
 
   @impl true
@@ -64,7 +79,8 @@ defmodule Livechain.RPC.Transport.WebSocket do
     %{
       unary?: true,
       subscriptions?: true,
-      methods: :all  # WebSocket supports all methods by default
+      # WebSocket supports all methods by default
+      methods: :all
     }
   end
 
@@ -85,7 +101,10 @@ defmodule Livechain.RPC.Transport.WebSocket do
     }
 
     Logger.debug("WebSocket unary request via channel",
-      provider: provider_id, method: method, id: request_id)
+      provider: provider_id,
+      method: method,
+      id: request_id
+    )
 
     # For unary requests over WebSocket, we need to:
     # 1. Send the message
@@ -105,8 +124,12 @@ defmodule Livechain.RPC.Transport.WebSocket do
         {:ok, %{"result" => "WebSocket unary request sent"}}
 
       {:error, reason} ->
-        {:error, ErrorNormalizer.normalize(reason,
-                   provider_id: provider_id, context: :transport, transport: :ws)}
+        {:error,
+         ErrorNormalizer.normalize(reason,
+           provider_id: provider_id,
+           context: :transport,
+           transport: :ws
+         )}
     end
   end
 
@@ -121,13 +144,16 @@ defmodule Livechain.RPC.Transport.WebSocket do
     case method do
       "eth_subscribe" ->
         [topic | _] = params
+
         case WSConnection.subscribe(provider_id, topic) do
           :ok ->
             # Return a subscription reference (simplified)
             {:ok, {provider_id, topic, handler_pid}}
+
           error ->
             {:error, error}
         end
+
       _ ->
         {:error, :unsupported_method}
     end
@@ -141,6 +167,7 @@ defmodule Livechain.RPC.Transport.WebSocket do
     Logger.debug("WebSocket unsubscribe", provider: provider_id, topic: topic)
     :ok
   end
+
   def unsubscribe(_channel, _subscription_ref) do
     {:error, :invalid_subscription_ref}
   end

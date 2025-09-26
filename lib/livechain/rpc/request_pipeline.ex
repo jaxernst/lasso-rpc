@@ -54,7 +54,11 @@ defmodule Livechain.RPC.RequestPipeline do
     case provider_override do
       provider_id when is_binary(provider_id) ->
         execute_with_provider_override(
-          chain, rpc_request, strategy, provider_id, transport_override,
+          chain,
+          rpc_request,
+          strategy,
+          provider_id,
+          transport_override,
           failover_on_override: failover_on_override,
           timeout: timeout
         )
@@ -469,7 +473,14 @@ defmodule Livechain.RPC.RequestPipeline do
 
   # New channel-based implementation functions
 
-  defp execute_with_provider_override(chain, rpc_request, strategy, provider_id, transport_override, opts) do
+  defp execute_with_provider_override(
+         chain,
+         rpc_request,
+         strategy,
+         provider_id,
+         transport_override,
+         opts
+       ) do
     failover_on_override = Keyword.get(opts, :failover_on_override, false)
     timeout = Keyword.get(opts, :timeout, 30_000)
     method = Map.get(rpc_request, "method")
@@ -532,6 +543,10 @@ defmodule Livechain.RPC.RequestPipeline do
         # Sort channels by strategy preference
         sorted_channels = sort_channels_by_strategy(channels, strategy, method, chain)
 
+        Logger.info(
+          "Found #{length(sorted_channels)} candidate channels: #{inspect(Enum.map(sorted_channels, &Channel.to_string/1))}"
+        )
+
         start_time = System.monotonic_time(:millisecond)
 
         case attempt_request_on_channels(sorted_channels, rpc_request, timeout) do
@@ -549,10 +564,11 @@ defmodule Livechain.RPC.RequestPipeline do
   end
 
   defp get_provider_channels(chain, provider_id, transport_override) do
-    transports = case transport_override do
-      nil -> [:http, :ws]
-      transport -> [transport]
-    end
+    transports =
+      case transport_override do
+        nil -> [:http, :ws]
+        transport -> [transport]
+      end
 
     transports
     |> Enum.map(fn transport ->
@@ -571,13 +587,16 @@ defmodule Livechain.RPC.RequestPipeline do
   defp attempt_request_on_channels([channel | rest_channels], rpc_request, timeout) do
     case Channel.request(channel, rpc_request, timeout) do
       {:ok, result} ->
+        Logger.debug("✓ Request Success via #{Channel.to_string(channel)}")
         {:ok, result, channel}
 
       {:error, :unsupported_method} ->
         # Fast fallthrough - try next channel immediately
         Logger.debug("Method not supported on channel, trying next",
           channel: Channel.to_string(channel),
-          method: Map.get(rpc_request, "method"))
+          method: Map.get(rpc_request, "method")
+        )
+
         attempt_request_on_channels(rest_channels, rpc_request, timeout)
 
       {:error, reason} ->
@@ -585,7 +604,9 @@ defmodule Livechain.RPC.RequestPipeline do
         # For now, propagate the error
         Logger.warning("Channel request failed",
           channel: Channel.to_string(channel),
-          error: inspect(reason))
+          error: inspect(reason)
+        )
+
         {:error, reason}
     end
   end
@@ -630,7 +651,8 @@ defmodule Livechain.RPC.RequestPipeline do
   end
 
   defp try_channel_failover(chain, rpc_request, strategy, excluded_providers, attempt, timeout) do
-    max_attempts = 3  # Could be configurable
+    # Could be configurable
+    max_attempts = 3
 
     if attempt > max_attempts do
       {:error, JError.new(-32000, "Failover limit reached")}
@@ -651,11 +673,20 @@ defmodule Livechain.RPC.RequestPipeline do
 
             {:error, _reason} ->
               # Get the provider ID from the failed channel and add to exclusions
-              new_excluded = case sorted_channels do
-                [failed_channel | _] -> [failed_channel.provider_id | excluded_providers]
-                [] -> excluded_providers
-              end
-              try_channel_failover(chain, rpc_request, strategy, new_excluded, attempt + 1, timeout)
+              new_excluded =
+                case sorted_channels do
+                  [failed_channel | _] -> [failed_channel.provider_id | excluded_providers]
+                  [] -> excluded_providers
+                end
+
+              try_channel_failover(
+                chain,
+                rpc_request,
+                strategy,
+                new_excluded,
+                attempt + 1,
+                timeout
+              )
           end
       end
     end
@@ -714,7 +745,16 @@ defmodule Livechain.RPC.RequestPipeline do
     )
   end
 
-  defp publish_channel_routing_decision(chain, method, strategy, provider_id, transport, duration_ms, result, failovers) do
+  defp publish_channel_routing_decision(
+         chain,
+         method,
+         strategy,
+         provider_id,
+         transport,
+         duration_ms,
+         result,
+         failovers
+       ) do
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "routing:decisions",

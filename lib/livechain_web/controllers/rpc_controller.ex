@@ -26,7 +26,6 @@ defmodule LivechainWeb.RPCController do
   use LivechainWeb, :controller
   require Logger
 
-  alias Livechain.RPC.ChainRegistry
   alias Livechain.JSONRPC.Error, as: JError
   alias Livechain.Config.ConfigStore
 
@@ -376,33 +375,6 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
-  # Debug method for chain status
-  defp process_json_rpc_request(%{"method" => "debug_chains", "params" => []}, _chain, _conn) do
-    case ChainRegistry.get_status() do
-      status when is_map(status) ->
-        {:ok, status}
-
-      error ->
-        {:error, JError.new(-32603, "Failed to get chain status: #{inspect(error)}")}
-    end
-  end
-
-  # Debug method to manually start chains
-  defp process_json_rpc_request(
-         %{"method" => "debug_start_chains", "params" => []},
-         _chain,
-         _conn
-       ) do
-    case ChainRegistry.start_all_chains() do
-      {:ok, started_count} ->
-        {:ok,
-         %{started_count: started_count, message: "Started #{started_count} chain supervisors"}}
-
-      {:error, reason} ->
-        {:error, JError.new(-32603, "Failed to start chains: #{inspect(reason)}")}
-    end
-  end
-
   # Reject WS-only methods over HTTP
   defp process_json_rpc_request(%{"method" => method}, _chain, _conn)
        when method in @ws_only_methods do
@@ -451,7 +423,7 @@ defmodule LivechainWeb.RPCController do
         failover_on_override: false
       ]
 
-      Livechain.RPC.RequestPipeline.execute(chain, method, params, pipeline_opts)
+      Livechain.RPC.RequestPipeline.execute_via_channels(chain, method, params, pipeline_opts)
     else
       {:error, reason} ->
         {:error, JError.new(-32000, "Failed to extract request options: #{reason}")}

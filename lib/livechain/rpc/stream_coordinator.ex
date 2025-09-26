@@ -197,7 +197,7 @@ defmodule Livechain.RPC.StreamCoordinator do
   end
 
   defp fetch_head(chain, provider_id) do
-    case Livechain.RPC.RequestPipeline.execute(chain, "eth_blockNumber", [],
+    case Livechain.RPC.RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [],
            strategy: :priority,
            provider_override: provider_id,
            failover_on_override: false

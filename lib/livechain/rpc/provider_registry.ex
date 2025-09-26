@@ -41,8 +41,8 @@ defmodule Livechain.RPC.ProviderRegistry do
   Starts the ProviderRegistry for a chain.
   """
   @spec start_link({chain_name, map()}) :: GenServer.on_start()
-  def start_link({chain_name, _chain_config}) do
-    GenServer.start_link(__MODULE__, chain_name, name: via_name(chain_name))
+  def start_link({chain_name, chain_config}) do
+    GenServer.start_link(__MODULE__, {chain_name, chain_config}, name: via_name(chain_name))
   end
 
   @doc """
@@ -99,8 +99,9 @@ defmodule Livechain.RPC.ProviderRegistry do
 
   # GenServer implementation
 
+  # Fallback for backward compatibility
   @impl true
-  def init(chain_name) do
+  def init({chain_name, _chain_config}) when is_binary(chain_name) do
     state = %__MODULE__{
       chain_name: chain_name,
       channels: %{},
@@ -121,9 +122,11 @@ defmodule Livechain.RPC.ProviderRegistry do
         else
           # Channel is unhealthy, remove and create new one
           new_state = remove_channel(state, provider_id, transport)
+
           case create_channel(new_state, provider_id, transport, opts) do
             {:ok, channel, updated_state} ->
               {:reply, {:ok, channel}, updated_state}
+
             {:error, reason} ->
               {:reply, {:error, reason}, new_state}
           end
@@ -133,6 +136,7 @@ defmodule Livechain.RPC.ProviderRegistry do
         case create_channel(state, provider_id, transport, opts) do
           {:ok, channel, updated_state} ->
             {:reply, {:ok, channel}, updated_state}
+
           {:error, reason} ->
             {:reply, {:error, reason}, state}
         end
@@ -207,12 +211,16 @@ defmodule Livechain.RPC.ProviderRegistry do
             {:ok, channel, final_state}
 
           {:error, reason} ->
-            Logger.warning("Failed to create #{transport} channel for provider #{provider_id}: #{inspect(reason)}")
+            Logger.warning(
+              "Failed to create #{transport} channel for provider #{provider_id}: #{inspect(reason)}"
+            )
+
             {:error, reason}
         end
 
       {:error, reason} ->
-        {:error, JError.new(-32000, "Provider not found: #{inspect(reason)}", provider_id: provider_id)}
+        {:error,
+         JError.new(-32000, "Provider not found: #{inspect(reason)}", provider_id: provider_id)}
     end
   end
 
@@ -229,9 +237,12 @@ defmodule Livechain.RPC.ProviderRegistry do
     # Remove from state
     updated_channels =
       case Map.get(state.channels, provider_id) do
-        nil -> state.channels
+        nil ->
+          state.channels
+
         provider_channels ->
           new_provider_channels = Map.delete(provider_channels, transport)
+
           if map_size(new_provider_channels) == 0 do
             Map.delete(state.channels, provider_id)
           else
@@ -256,11 +267,12 @@ defmodule Livechain.RPC.ProviderRegistry do
       if provider_id in exclude_list do
         []
       else
-        Enum.filter_map(provider_channels,
+        Enum.filter_map(
+          provider_channels,
           fn {transport, channel} ->
             transport_matches?(transport, protocol_filter) and
-            Channel.healthy?(channel) and
-            method_supported?(state, provider_id, transport, method_filter)
+              Channel.healthy?(channel) and
+              method_supported?(state, provider_id, transport, method_filter)
           end,
           fn {_transport, channel} -> channel end
         )
@@ -273,10 +285,13 @@ defmodule Livechain.RPC.ProviderRegistry do
   defp transport_matches?(_transport, _protocol), do: false
 
   defp method_supported?(_state, _provider_id, _transport, nil), do: true
+
   defp method_supported?(state, provider_id, transport, method) do
     key = {provider_id, transport}
+
     case Map.get(state.capabilities, key) do
-      nil -> true  # Assume supported if capabilities unknown
+      # Assume supported if capabilities unknown
+      nil -> true
       %{methods: :all} -> true
       %{methods: method_set} -> MapSet.member?(method_set, method)
     end
