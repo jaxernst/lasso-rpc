@@ -532,24 +532,26 @@ defmodule Livechain.RPC.RequestPipeline do
   defp execute_with_channel_selection(chain, rpc_request, strategy, transport_override, timeout) do
     method = Map.get(rpc_request, "method")
 
-    # Get candidate channels based on strategy and constraints
-    filters = build_selection_filters(transport_override, method)
+    # Get candidate channels from unified Selection
+    channels =
+      Selection.select_channels(chain, method,
+        strategy: strategy,
+        transport: transport_override || :both,
+        limit: 10
+      )
 
-    case ProviderRegistry.get_candidate_channels(chain, filters) do
+    case channels do
       [] ->
         {:error, JError.new(-32000, "No available channels for method: #{method}")}
 
-      channels ->
-        # Sort channels by strategy preference
-        sorted_channels = sort_channels_by_strategy(channels, strategy, method, chain)
-
+      _ ->
         Logger.info(
-          "Found #{length(sorted_channels)} candidate channels: #{inspect(Enum.map(sorted_channels, &Channel.to_string/1))}"
+          "Found #{length(channels)} candidate channels: #{inspect(Enum.map(channels, &Channel.to_string/1))}"
         )
 
         start_time = System.monotonic_time(:millisecond)
 
-        case attempt_request_on_channels(sorted_channels, rpc_request, timeout) do
+        case attempt_request_on_channels(channels, rpc_request, timeout) do
           {:ok, result, channel} ->
             duration_ms = System.monotonic_time(:millisecond) - start_time
             record_channel_success_metrics(chain, channel, method, strategy, duration_ms)
@@ -611,45 +613,6 @@ defmodule Livechain.RPC.RequestPipeline do
     end
   end
 
-  defp build_selection_filters(transport_override, method) do
-    filters = %{method: method}
-
-    case transport_override do
-      nil -> Map.put(filters, :protocol, :both)
-      transport -> Map.put(filters, :protocol, transport)
-    end
-  end
-
-  defp sort_channels_by_strategy(channels, :priority, _method, _chain) do
-    # Sort by provider priority
-    Enum.sort_by(channels, fn _channel ->
-      # This would need to access provider config for priority
-      # For now, preserve original order
-      0
-    end)
-  end
-
-  defp sort_channels_by_strategy(channels, :round_robin, _method, _chain) do
-    # Simple round-robin - could be improved with state tracking
-    Enum.shuffle(channels)
-  end
-
-  defp sort_channels_by_strategy(channels, :fastest, _method, _chain) do
-    # Sort by performance metrics - this would integrate with Metrics module
-    # For now, prefer HTTP over WebSocket for unary requests
-    Enum.sort_by(channels, fn channel ->
-      case channel.transport do
-        :http -> 0
-        :ws -> 1
-      end
-    end)
-  end
-
-  defp sort_channels_by_strategy(channels, _strategy, _method, _chain) do
-    # Default: preserve original order
-    channels
-  end
-
   defp try_channel_failover(chain, rpc_request, strategy, excluded_providers, attempt, timeout) do
     # Could be configurable
     max_attempts = 3
@@ -658,32 +621,31 @@ defmodule Livechain.RPC.RequestPipeline do
       {:error, JError.new(-32000, "Failover limit reached")}
     else
       method = Map.get(rpc_request, "method")
-      filters = %{method: method, exclude: excluded_providers, protocol: :both}
 
-      case ProviderRegistry.get_candidate_channels(chain, filters) do
+      channels =
+        Selection.select_channels(chain, method,
+          strategy: strategy,
+          transport: :both,
+          exclude: excluded_providers,
+          limit: 10
+        )
+
+      case channels do
         [] ->
           {:error, JError.new(-32000, "No more channels available for failover")}
 
-        channels ->
-          sorted_channels = sort_channels_by_strategy(channels, strategy, method, chain)
-
-          case attempt_request_on_channels(sorted_channels, rpc_request, timeout) do
+        _ ->
+          case attempt_request_on_channels(channels, rpc_request, timeout) do
             {:ok, result, _channel} ->
               {:ok, result}
 
             {:error, _reason} ->
-              # Get the provider ID from the failed channel and add to exclusions
-              new_excluded =
-                case sorted_channels do
-                  [failed_channel | _] -> [failed_channel.provider_id | excluded_providers]
-                  [] -> excluded_providers
-                end
-
+              # Conservative: keep exclusions unchanged and bump attempt
               try_channel_failover(
                 chain,
                 rpc_request,
                 strategy,
-                new_excluded,
+                excluded_providers,
                 attempt + 1,
                 timeout
               )
