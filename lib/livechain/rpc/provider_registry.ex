@@ -214,7 +214,11 @@ defmodule Livechain.RPC.ProviderRegistry do
             channel = Channel.new(provider_id, transport, raw_channel, transport_module)
 
             # Store channel
-            updated_channels = put_in(state.channels, [provider_id, transport], channel)
+            updated_channels =
+              Map.update(state.channels, provider_id, %{}, fn provider_channels ->
+                Map.put(provider_channels, transport, channel)
+              end)
+
             new_state = %{state | channels: updated_channels}
 
             # Cache capabilities

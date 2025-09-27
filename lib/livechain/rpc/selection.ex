@@ -163,8 +163,7 @@ defmodule Livechain.RPC.Selection do
 
             _ ->
               case transport do
-                # Phase 1a: prefer HTTP only for unary until WS unary is complete
-                :both -> [:http]
+                :both -> [:http, :ws]
                 :http -> [:http]
                 :ws -> [:ws]
               end
@@ -227,15 +226,25 @@ defmodule Livechain.RPC.Selection do
     Enum.shuffle(channels)
   end
 
-  defp apply_channel_strategy(channels, :fastest, method, _chain) do
-    # Phase 1a heuristic: WS for subscriptions, HTTP for unary
+  defp apply_channel_strategy(channels, :fastest, method, chain) do
     Enum.sort_by(channels, fn channel ->
-      case {channel.transport, method} do
-        {:ws, "eth_subscribe"} -> 0
-        {:ws, "eth_unsubscribe"} -> 0
-        {:http, _} -> 1
-        {:ws, _} -> 2
-      end
+      # Lower score is better
+      perf =
+        Livechain.RPC.Metrics.get_provider_transport_performance(
+          chain,
+          channel.provider_id,
+          method,
+          channel.transport
+        )
+
+      latency_score =
+        case perf do
+          %{latency_ms: ms} when is_number(ms) and ms > 0 -> ms
+          _ -> 10_000
+        end
+
+      # Prefer known performance; unknown gets penalized
+      latency_score
     end)
   end
 

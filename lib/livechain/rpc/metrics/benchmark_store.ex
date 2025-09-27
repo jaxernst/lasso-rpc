@@ -66,9 +66,20 @@ defmodule Livechain.RPC.Metrics.BenchmarkStore do
   def record_request(chain, provider_id, method, duration_ms, result, opts) do
     async = Keyword.get(opts, :async, true)
     timestamp = Keyword.get(opts, :timestamp)
+    transport = Keyword.get(opts, :transport, :http)
 
     recording_fn = fn ->
-      BenchmarkStore.record_rpc_call(chain, provider_id, method, duration_ms, result, timestamp)
+      # Persist transport-aware entry under augmented method key to avoid table format changes
+      method_key = "#{method}@#{transport}"
+
+      BenchmarkStore.record_rpc_call(
+        chain,
+        provider_id,
+        method_key,
+        duration_ms,
+        result,
+        timestamp
+      )
     end
 
     if async do
@@ -79,6 +90,40 @@ defmodule Livechain.RPC.Metrics.BenchmarkStore do
     end
 
     :ok
+  end
+
+  @impl true
+  def get_provider_transport_performance(chain, provider_id, method, transport) do
+    method_key = "#{method}@#{transport}"
+
+    case Livechain.Benchmarking.BenchmarkStore.get_rpc_performance(chain, provider_id, method_key) do
+      %{total_calls: 0} ->
+        nil
+
+      %{avg_latency: latency, success_rate: success_rate, total_calls: total_calls} ->
+        %{
+          latency_ms: latency,
+          success_rate: success_rate,
+          total_calls: total_calls,
+          confidence_score: calculate_confidence_score(total_calls, success_rate)
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  @impl true
+  def get_method_transport_performance(chain, method) do
+    # Gather for both transports
+    [:http, :ws]
+    |> Enum.flat_map(fn transport ->
+      data = get_method_performance(chain, "#{method}@#{transport}")
+
+      Enum.map(data, fn %{provider_id: pid, performance: perf} ->
+        %{provider_id: pid, transport: transport, performance: perf}
+      end)
+    end)
   end
 
   # Private functions

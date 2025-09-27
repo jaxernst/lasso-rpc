@@ -44,7 +44,7 @@ defmodule Livechain.RPC.ProviderHealthMonitor do
     _ts = System.system_time(:millisecond)
 
     result =
-      CircuitBreaker.call(provider.id, fn ->
+      CircuitBreaker.call({provider.id, :http}, fn ->
         HttpClient.request(
           %{url: http_url, api_key: Map.get(provider, :api_key)},
           "eth_chainId",

@@ -85,41 +85,18 @@ defmodule Livechain.RPC.Transport.WebSocket do
   end
 
   @impl true
-  def request(channel, rpc_request, _timeout \\ 30_000) do
-    %{provider_id: provider_id, connection_pid: _connection_pid} = channel
+  def request(channel, rpc_request, timeout \\ 30_000) do
+    %{provider_id: provider_id} = channel
 
     method = Map.get(rpc_request, "method")
     params = Map.get(rpc_request, "params", [])
-    request_id = Map.get(rpc_request, "id") || generate_request_id()
-
-    # Create full JSON-RPC request message
-    message = %{
-      "jsonrpc" => "2.0",
-      "method" => method,
-      "params" => params,
-      "id" => request_id
-    }
 
     Logger.debug("WebSocket unary request via channel",
       provider: provider_id,
-      method: method,
-      id: request_id
+      method: method
     )
 
-    # For unary requests over WebSocket, we need to:
-    # 1. Send the message
-    # 2. Wait for the response with matching ID
-    # 3. Return the result
-
-    # This is a simplified implementation - in production we'd want:
-    # - A proper request/response correlation system
-    # - Timeout handling
-    # - Better error handling
-
-    # Send without branching; WSConnection.cast always returns :ok
-    _ = WSConnection.send_message(provider_id, message)
-    # For now, simulate success until unary correlation is implemented
-    {:ok, %{"result" => "WebSocket unary request sent"}}
+    WSConnection.request(provider_id, method, params, timeout)
   end
 
   @impl true
