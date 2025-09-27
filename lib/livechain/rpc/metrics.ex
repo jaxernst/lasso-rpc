@@ -48,7 +48,8 @@ defmodule Livechain.RPC.Metrics do
   This should not block the calling process and should handle
   any storage failures gracefully.
   """
-  @callback record_request(chain, provider_id, method, non_neg_integer(), result, recording_opts) :: :ok
+  @callback record_request(chain, provider_id, method, non_neg_integer(), result, recording_opts) ::
+              :ok
 
   @doc """
   Gets performance data using the configured metrics backend.
@@ -61,17 +62,18 @@ defmodule Livechain.RPC.Metrics do
   @doc """
   Gets performance data for a specific provider, method, and transport.
   """
-  @spec get_provider_transport_performance(chain, provider_id, method, :http | :ws) :: performance_data() | nil
-  def get_provider_transport_performance(chain, provider_id, method, _transport) do
-    # For now, delegate to the general method - backend implementations
-    # can use the transport information from the opts when recording
-    get_provider_performance(chain, provider_id, method)
+  @spec get_provider_transport_performance(chain, provider_id, method, :http | :ws) ::
+          performance_data() | nil
+  def get_provider_transport_performance(chain, provider_id, method, transport) do
+    backend().get_provider_transport_performance(chain, provider_id, method, transport)
   end
 
   @doc """
   Gets method performance comparison using the configured metrics backend.
   """
-  @spec get_method_performance(chain, method) :: [%{provider_id: provider_id, performance: performance_data()}]
+  @spec get_method_performance(chain, method) :: [
+          %{provider_id: provider_id, performance: performance_data()}
+        ]
   def get_method_performance(chain, method) do
     backend().get_method_performance(chain, method)
   end
@@ -81,17 +83,11 @@ defmodule Livechain.RPC.Metrics do
 
   Returns performance data with transport dimension included.
   """
-  @spec get_method_transport_performance(chain, method) :: [%{provider_id: provider_id, transport: :http | :ws, performance: performance_data()}]
+  @spec get_method_transport_performance(chain, method) :: [
+          %{provider_id: provider_id, transport: :http | :ws, performance: performance_data()}
+        ]
   def get_method_transport_performance(chain, method) do
-    # For Phase 1, return the same data as the general method
-    # In Phase 2, this would return transport-specific metrics
-    get_method_performance(chain, method)
-    |> Enum.flat_map(fn %{provider_id: provider_id, performance: performance} ->
-      [
-        %{provider_id: provider_id, transport: :http, performance: performance},
-        %{provider_id: provider_id, transport: :ws, performance: performance}
-      ]
-    end)
+    backend().get_method_transport_performance(chain, method)
   end
 
   @doc """
@@ -101,7 +97,8 @@ defmodule Livechain.RPC.Metrics do
   - `:async` - If false, records synchronously (default: true)
   - `:timestamp` - Custom timestamp (default: current time)
   """
-  @spec record_request(chain, provider_id, method, non_neg_integer(), result, recording_opts) :: :ok
+  @spec record_request(chain, provider_id, method, non_neg_integer(), result, recording_opts) ::
+          :ok
   def record_request(chain, provider_id, method, duration_ms, result, opts \\ []) do
     backend().record_request(chain, provider_id, method, duration_ms, result, opts)
   end
@@ -117,7 +114,14 @@ defmodule Livechain.RPC.Metrics do
   @doc """
   Convenience function to record a successful request with transport information.
   """
-  @spec record_transport_success(chain, provider_id, method, non_neg_integer(), :http | :ws, recording_opts) :: :ok
+  @spec record_transport_success(
+          chain,
+          provider_id,
+          method,
+          non_neg_integer(),
+          :http | :ws,
+          recording_opts
+        ) :: :ok
   def record_transport_success(chain, provider_id, method, duration_ms, transport, opts \\ []) do
     transport_opts = Keyword.put(opts, :transport, transport)
     record_request(chain, provider_id, method, duration_ms, :success, transport_opts)
@@ -134,7 +138,14 @@ defmodule Livechain.RPC.Metrics do
   @doc """
   Convenience function to record a failed request with transport information.
   """
-  @spec record_transport_failure(chain, provider_id, method, non_neg_integer(), :http | :ws, recording_opts) :: :ok
+  @spec record_transport_failure(
+          chain,
+          provider_id,
+          method,
+          non_neg_integer(),
+          :http | :ws,
+          recording_opts
+        ) :: :ok
   def record_transport_failure(chain, provider_id, method, duration_ms, transport, opts \\ []) do
     transport_opts = Keyword.put(opts, :transport, transport)
     record_request(chain, provider_id, method, duration_ms, :error, transport_opts)

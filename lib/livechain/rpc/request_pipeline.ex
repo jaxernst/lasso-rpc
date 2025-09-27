@@ -310,7 +310,7 @@ defmodule Livechain.RPC.RequestPipeline do
     case ConfigStore.get_provider(chain, provider_id) do
       {:ok, provider_config} ->
         CircuitBreaker.call(
-          provider_id,
+          {provider_id, :http},
           fn ->
             Transport.forward_request(
               provider_id,
@@ -587,9 +587,17 @@ defmodule Livechain.RPC.RequestPipeline do
   end
 
   defp attempt_request_on_channels([channel | rest_channels], rpc_request, timeout) do
-    case Channel.request(channel, rpc_request, timeout) do
+    attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
+
+    cb_id =
+      case channel.transport do
+        :http -> {channel.provider_id, :http}
+        :ws -> {channel.provider_id, :ws}
+      end
+
+    case CircuitBreaker.call(cb_id, attempt_fun, timeout + 1_000) do
       {:ok, result} ->
-        Logger.debug("✓ Request Success via #{Channel.to_string(channel)}")
+        Logger.debug("✓ Request Success via #{Channel.to_string(channel)}", result: result)
         {:ok, result, channel}
 
       {:error, :unsupported_method} ->

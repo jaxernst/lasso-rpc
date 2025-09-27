@@ -14,6 +14,7 @@ defmodule Livechain.RPC.CircuitBreaker do
 
   defstruct [
     :provider_id,
+    :transport,
     :failure_threshold,
     :recovery_timeout,
     :success_threshold,
@@ -26,6 +27,8 @@ defmodule Livechain.RPC.CircuitBreaker do
   ]
 
   @type provider_id :: String.t()
+  @type transport :: :http | :ws | :unknown
+  @type breaker_id :: provider_id | {provider_id, transport}
   @type breaker_state :: :closed | :open | :half_open
   @type state_t :: %__MODULE__{
           provider_id: provider_id,
@@ -42,32 +45,33 @@ defmodule Livechain.RPC.CircuitBreaker do
   @doc """
   Starts a circuit breaker for a provider.
   """
-  @spec start_link({provider_id, map()}) :: GenServer.on_start()
-  def start_link({provider_id, config}) do
-    GenServer.start_link(__MODULE__, {provider_id, config}, name: via_name(provider_id))
+  @spec start_link({breaker_id, map()}) :: GenServer.on_start()
+  def start_link({id, config}) do
+    GenServer.start_link(__MODULE__, {id, config}, name: via_name(id))
   end
 
   @doc """
   Attempts to execute a function through the circuit breaker.
   """
-  @spec call(provider_id, (-> any()), non_neg_integer()) ::
+  @spec call(breaker_id, (-> any()), non_neg_integer()) ::
           {:ok, any()} | {:error, term()}
-  def call(provider_id, fun, timeout \\ 30_000) do
-    GenServer.call(via_name(provider_id), {:call, fun}, timeout)
+  def call(id, fun, timeout \\ 30_000) do
+    GenServer.call(via_name(id), {:call, fun}, timeout)
   end
 
   @doc """
   Gets the current state of the circuit breaker.
   """
-  @spec get_state(provider_id) :: %{
+  @spec get_state(breaker_id) :: %{
           provider_id: provider_id,
+          transport: transport,
           state: breaker_state,
           failure_count: non_neg_integer(),
           success_count: non_neg_integer(),
           last_failure_time: integer() | nil
         }
-  def get_state(provider_id) do
-    GenServer.call(via_name(provider_id), :get_state)
+  def get_state(id) do
+    GenServer.call(via_name(id), :get_state)
   end
 
   @doc """
@@ -89,9 +93,16 @@ defmodule Livechain.RPC.CircuitBreaker do
   # GenServer callbacks
 
   @impl true
-  def init({provider_id, config}) do
+  def init({id, config}) do
+    {provider_id, transport} =
+      case id do
+        {pid, t} -> {pid, t}
+        pid when is_binary(pid) -> {pid, :unknown}
+      end
+
     state = %__MODULE__{
       provider_id: provider_id,
+      transport: transport,
       failure_threshold: Map.get(config, :failure_threshold, 5),
       recovery_timeout: Map.get(config, :recovery_timeout, 60_000),
       success_threshold: Map.get(config, :success_threshold, 2),
@@ -136,6 +147,7 @@ defmodule Livechain.RPC.CircuitBreaker do
   def handle_call(:get_state, _from, state) do
     status = %{
       provider_id: state.provider_id,
+      transport: state.transport,
       state: state.state,
       failure_count: state.failure_count,
       success_count: state.success_count,
@@ -147,7 +159,7 @@ defmodule Livechain.RPC.CircuitBreaker do
 
   @impl true
   def handle_cast(:open, state) do
-    Logger.warning("Circuit breaker #{state.provider_id} manually opened")
+    Logger.warning("Circuit breaker #{state.provider_id} (#{state.transport}) manually opened")
 
     :telemetry.execute([:livechain, :circuit_breaker, :open], %{count: 1}, %{
       provider_id: state.provider_id
@@ -161,7 +173,7 @@ defmodule Livechain.RPC.CircuitBreaker do
 
   @impl true
   def handle_cast(:close, state) do
-    Logger.info("Circuit breaker #{state.provider_id} manually closed")
+    Logger.info("Circuit breaker #{state.provider_id} (#{state.transport}) manually closed")
 
     :telemetry.execute([:livechain, :circuit_breaker, :close], %{count: 1}, %{
       provider_id: state.provider_id
@@ -251,7 +263,9 @@ defmodule Livechain.RPC.CircuitBreaker do
         new_success_count = state.success_count + 1
 
         if new_success_count >= state.success_threshold do
-          Logger.info("Circuit breaker #{state.provider_id} recovered, closing")
+          Logger.info(
+            "Circuit breaker #{state.provider_id} (#{state.transport}) recovered, closing"
+          )
 
           :telemetry.execute([:livechain, :circuit_breaker, :close], %{count: 1}, %{
             provider_id: state.provider_id
@@ -280,14 +294,14 @@ defmodule Livechain.RPC.CircuitBreaker do
     current_time = System.monotonic_time(:millisecond)
 
     Logger.warning(
-      "Circuit breaker #{state.provider_id} failure #{new_failure_count}/#{state.failure_threshold}: #{inspect(error)}"
+      "Circuit breaker #{state.provider_id} (#{state.transport}) failure #{new_failure_count}/#{state.failure_threshold}: #{inspect(error)}"
     )
 
     case state.state do
       :closed ->
         if new_failure_count >= state.failure_threshold do
           Logger.error(
-            "Circuit breaker #{state.provider_id} opening after #{new_failure_count} failures"
+            "Circuit breaker #{state.provider_id} (#{state.transport}) opening after #{new_failure_count} failures"
           )
 
           :telemetry.execute([:livechain, :circuit_breaker, :open], %{count: 1}, %{
@@ -312,7 +326,7 @@ defmodule Livechain.RPC.CircuitBreaker do
       :half_open ->
         # Half-open state fails, go back to open
         Logger.error(
-          "Circuit breaker #{state.provider_id} re-opening after recovery attempt failed"
+          "Circuit breaker #{state.provider_id} (#{state.transport}) re-opening after recovery attempt failed"
         )
 
         :telemetry.execute([:livechain, :circuit_breaker, :open], %{count: 1}, %{
@@ -344,13 +358,14 @@ defmodule Livechain.RPC.CircuitBreaker do
     end
   end
 
-  defp publish_circuit_event(provider_id, from, to, reason) do
+  defp publish_circuit_event(provider_id, from, to, reason, transport \\ :unknown) do
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "circuit:events",
       %{
         ts: System.system_time(:millisecond),
         provider_id: provider_id,
+        transport: transport,
         from: from,
         to: to,
         reason: reason
@@ -361,24 +376,30 @@ defmodule Livechain.RPC.CircuitBreaker do
   @doc """
   Record a successful operation for the circuit breaker.
   """
-  def record_success(provider_id) do
-    case GenServer.whereis(via_name(provider_id)) do
+  def record_success(id) do
+    case GenServer.whereis(via_name(id)) do
       nil -> {:error, :not_found}
-      _pid -> GenServer.call(via_name(provider_id), {:call, fn -> {:ok, :success} end})
+      _pid -> GenServer.call(via_name(id), {:call, fn -> {:ok, :success} end})
     end
   end
 
   @doc """
   Record a failed operation for the circuit breaker.
   """
-  def record_failure(provider_id) do
-    case GenServer.whereis(via_name(provider_id)) do
+  def record_failure(id) do
+    case GenServer.whereis(via_name(id)) do
       nil -> {:error, :not_found}
-      _pid -> GenServer.call(via_name(provider_id), {:call, fn -> {:error, :failure} end})
+      _pid -> GenServer.call(via_name(id), {:call, fn -> {:error, :failure} end})
     end
   end
 
-  defp via_name(provider_id) do
-    {:via, Registry, {Livechain.Registry, {:circuit_breaker, provider_id}}}
+  defp via_name(id) do
+    key =
+      case id do
+        {provider_id, transport} -> "#{provider_id}:#{transport}"
+        provider_id when is_binary(provider_id) -> provider_id
+      end
+
+    {:via, Registry, {Livechain.Registry, {:circuit_breaker, key}}}
   end
 end

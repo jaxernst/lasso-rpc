@@ -247,6 +247,6 @@ mix test
 mix phx.server
 # Visit http://localhost:4000/simulator
 
-# Load testing
-mix run scripts/load_test.exs
+# Load testing (curl) - basic rpc methods
+for i in {1..20}; do for method in eth_blockNumber eth_gasPrice eth_getBlockByNumber eth_chainId; do curl -s -X POST http://localhost:4000/rpc/round-robin/ethereum -H 'Content-Type: application/json' -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$(if [ \"$method\" = "eth_getBlockByNumber" ]; then echo '[\"latest\", false]'; else echo '[]'; fi),\"id\":$i}" & done; wait; done
 ```

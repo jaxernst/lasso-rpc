@@ -94,9 +94,12 @@ defmodule Livechain.RPC.ChainSupervisor do
 
   # Start provider connections after dependencies are ready
   defp start_provider_connections_async(chain_name, chain_config) do
-    # Start circuit breakers for ALL providers (HTTP and WS)
+    # Start circuit breakers per transport for ALL providers (HTTP and WS)
     Enum.each(chain_config.providers, fn provider ->
-      {:ok, _} = start_circuit_breaker(chain_name, provider)
+      {:ok, _} = start_circuit_breaker(chain_name, provider, :http)
+
+      if is_binary(provider.ws_url),
+        do: {:ok, _} = start_circuit_breaker(chain_name, provider, :ws)
     end)
 
     Enum.each(chain_config.providers, fn provider ->
@@ -160,7 +163,7 @@ defmodule Livechain.RPC.ChainSupervisor do
     end
   end
 
-  defp start_circuit_breaker(chain_name, provider) do
+  defp start_circuit_breaker(chain_name, provider, transport) do
     # Circuit breaker configuration
     circuit_config = %{
       failure_threshold: 5,
@@ -170,7 +173,7 @@ defmodule Livechain.RPC.ChainSupervisor do
 
     DynamicSupervisor.start_child(
       circuit_breaker_supervisor_name(chain_name),
-      {CircuitBreaker, {provider.id, circuit_config}}
+      {CircuitBreaker, {{provider.id, transport}, circuit_config}}
     )
   end
 

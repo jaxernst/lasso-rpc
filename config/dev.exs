@@ -14,9 +14,21 @@ config :livechain, LivechainWeb.Endpoint,
 
 # Enhanced logging for development debugging
 config :logger, :console,
-  format: "[$level] $message\n",
+  format: "[$level] $message => $metadata\n",
   level: :debug,
-  metadata: :all
+  metadata: [
+    :provider,
+    :method,
+    :url,
+    :request_id,
+    :transport,
+    :context,
+    :timeout,
+    :retry_count,
+    :error,
+    :channel,
+    :result
+  ]
 
 # Enable detailed Phoenix logging
 config :phoenix, :logger, true

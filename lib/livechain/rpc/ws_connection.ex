@@ -87,6 +87,7 @@ defmodule Livechain.RPC.WSConnection do
       reconnect_attempts: 0,
       subscriptions: MapSet.new(),
       pending_messages: [],
+      pending_requests: %{},
       heartbeat_ref: nil,
       reconnect_ref: nil
     }
@@ -95,11 +96,24 @@ defmodule Livechain.RPC.WSConnection do
     {:ok, state, {:continue, :connect}}
   end
 
+  @doc """
+  Performs a unary JSON-RPC request over the WebSocket connection with response correlation.
+
+  Returns {:ok, result} | {:error, reason}.
+  """
+  def request(connection_id, method, params, timeout_ms \\ 30_000) do
+    GenServer.call(
+      via_name(connection_id),
+      {:request, method, params, timeout_ms},
+      timeout_ms + 2_000
+    )
+  end
+
   @impl true
   def handle_continue(:connect, state) do
     ws_connection_pid = self()
 
-    case CircuitBreaker.call(state.endpoint.id, fn ->
+    case CircuitBreaker.call({state.endpoint.id, :ws}, fn ->
            connect_to_websocket(state.endpoint, ws_connection_pid)
          end) do
       {:ok, connection} ->
@@ -162,6 +176,7 @@ defmodule Livechain.RPC.WSConnection do
     end
   end
 
+  @impl true
   def handle_cast({:send_message, message}, state) do
     # Queue message for when we reconnect
     state = %{state | pending_messages: [message | state.pending_messages]}
@@ -183,6 +198,41 @@ defmodule Livechain.RPC.WSConnection do
   end
 
   @impl true
+  def handle_call({:request, method, params, timeout_ms}, from, %{connected: true} = state) do
+    request_id = generate_id()
+
+    message = %{
+      "jsonrpc" => "2.0",
+      "id" => request_id,
+      "method" => method,
+      "params" => params || []
+    }
+
+    case WebSockex.send_frame(state.connection, {:text, Jason.encode!(message)}) do
+      :ok ->
+        timer = Process.send_after(self(), {:request_timeout, request_id}, timeout_ms)
+
+        pending =
+          Map.put(state.pending_requests, request_id, %{
+            from: from,
+            timer: timer,
+            sent_at: System.monotonic_time(:millisecond)
+          })
+
+        {:noreply, %{state | pending_requests: pending}}
+
+      {:error, reason} ->
+        {:reply, {:error, WSNormalizer.normalize_send_error(reason, state.endpoint.id)}, state}
+    end
+  end
+
+  def handle_call({:request, _method, _params, _timeout_ms}, _from, state) do
+    # Not connected: behave like transient failure
+    {:reply, {:error, WSNormalizer.normalize_disconnect(:not_connected, state.endpoint.id)},
+     state}
+  end
+
+  @impl true
   def handle_call(:status, _from, state) do
     status = %{
       connected: state.connected,
@@ -200,7 +250,7 @@ defmodule Livechain.RPC.WSConnection do
     Logger.debug("Connected to WebSocket: #{state.endpoint.name}")
 
     # Report successful connection to circuit breaker
-    CircuitBreaker.record_success(state.endpoint.id)
+    CircuitBreaker.record_success({state.endpoint.id, :ws})
 
     # Report successful connection to provider pool for status tracking (single writer)
     ProviderPool.report_ws_connected(state.chain_name, state.endpoint.id)
@@ -215,9 +265,41 @@ defmodule Livechain.RPC.WSConnection do
 
   @impl true
   def handle_info({:ws_message, decoded}, state) do
-    case handle_websocket_message(decoded, state) do
-      {:ok, new_state} -> {:noreply, new_state}
-      new_state -> {:noreply, new_state}
+    case decoded do
+      %{"jsonrpc" => "2.0", "id" => id} = resp ->
+        case Map.pop(state.pending_requests, id) do
+          {nil, _pending} ->
+            # Not a tracked request; treat as generic message
+            case handle_websocket_message(decoded, state) do
+              {:ok, new_state} -> {:noreply, new_state}
+              new_state -> {:noreply, new_state}
+            end
+
+          {%{from: from, timer: timer}, new_pending} ->
+            Process.cancel_timer(timer)
+
+            reply =
+              cond do
+                Map.has_key?(resp, "result") ->
+                  {:ok, Map.get(resp, "result")}
+
+                Map.has_key?(resp, "error") ->
+                  {:error, JError.from(Map.get(resp, "error"), provider_id: state.endpoint.id)}
+
+                true ->
+                  {:error,
+                   JError.new(-32700, "Invalid JSON-RPC response", provider_id: state.endpoint.id)}
+              end
+
+            GenServer.reply(from, reply)
+            {:noreply, %{state | pending_requests: new_pending}}
+        end
+
+      _other ->
+        case handle_websocket_message(decoded, state) do
+          {:ok, new_state} -> {:noreply, new_state}
+          new_state -> {:noreply, new_state}
+        end
     end
   end
 
@@ -273,6 +355,22 @@ defmodule Livechain.RPC.WSConnection do
       end
     else
       {:noreply, state}
+    end
+  end
+
+  def handle_info({:request_timeout, request_id}, state) do
+    case Map.pop(state.pending_requests, request_id) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {%{from: from}, new_pending} ->
+        GenServer.reply(
+          from,
+          {:error,
+           JError.new(-32000, "WebSocket request timeout", provider_id: state.endpoint.id)}
+        )
+
+        {:noreply, %{state | pending_requests: new_pending}}
     end
   end
 
@@ -424,8 +522,6 @@ defmodule Livechain.RPC.WSConnection do
       "raw_messages:#{state.chain_name}",
       {:raw_message, state.endpoint.id, message, received_at}
     )
-
-    # Backward compatibility removed - all events now route through MessageAggregator
 
     {:ok, state}
   end
