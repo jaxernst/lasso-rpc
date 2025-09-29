@@ -19,7 +19,7 @@ defmodule LivechainWeb.ChainController do
     json(conn, %{chains: chains})
   end
 
-  def status(conn, %{"chain_id" => chain_id}) do
+  def status(conn, %{"chain_id" => _chain_id}) do
     json(conn, %{status: "not implemented"})
   end
 end

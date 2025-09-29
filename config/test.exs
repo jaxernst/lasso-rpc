@@ -8,7 +8,7 @@ config :livechain, LivechainWeb.Endpoint,
   server: false
 
 # Print only warnings and errors during test
-config :logger, level: :warning
+config :logger, level: :debug
 
 # Email configuration removed - not needed for this application
 
@@ -16,7 +16,8 @@ config :logger, level: :warning
 config :phoenix, :plug_init_mode, :runtime
 
 config :livechain,
-  environment: :test
+  environment: :test,
+  chains_config_path: "config/test_chains.yml"
 
 # Configure Phoenix PubSub for testing
 config :livechain, Livechain.PubSub, adapter: Phoenix.PubSub.PG

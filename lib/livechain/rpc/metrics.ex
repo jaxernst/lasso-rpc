@@ -35,12 +35,35 @@ defmodule Livechain.RPC.Metrics do
               performance_data() | nil
 
   @doc """
+  Gets performance data for a specific provider and method and transport.
+
+  Returns aggregated performance metrics with confidence scoring
+  to help strategies make informed routing decisions.
+  """
+  @callback get_provider_transport_performance(chain, provider_id, method, :http | :ws) ::
+              performance_data() | nil
+
+  @doc """
   Gets performance comparison data for all providers supporting a method.
 
   Returns a list of performance data sorted by the backend's ranking algorithm.
   """
   @callback get_method_performance(chain, method) ::
               [%{provider_id: provider_id, performance: performance_data()}]
+
+  @doc """
+  Gets performance data for a specific method and transport.
+
+  Returns a list of performance data sorted by the backend's ranking algorithm.
+  """
+  @callback get_method_transport_performance(chain, provider_id, method, :http | :ws) ::
+              [
+                %{
+                  provider_id: provider_id,
+                  transport: :http | :ws,
+                  performance: performance_data()
+                }
+              ]
 
   @doc """
   Records a request performance metric asynchronously.

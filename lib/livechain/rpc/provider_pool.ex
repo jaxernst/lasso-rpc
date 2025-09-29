@@ -155,14 +155,6 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @doc """
-  Reports that a provider's WebSocket connection has successfully connected.
-  """
-  @spec report_ws_connected(chain_name, provider_id) :: :ok
-  def report_ws_connected(chain_name, provider_id) do
-    GenServer.cast(via_name(chain_name), {:report_ws_connected, provider_id})
-  end
-
-  @doc """
   Reports that a provider's WebSocket connection was closed with a code and reason.
   """
   @spec report_ws_closed(chain_name, provider_id, integer(), term()) :: :ok
@@ -170,21 +162,12 @@ defmodule Livechain.RPC.ProviderPool do
     GenServer.cast(via_name(chain_name), {:report_ws_closed, provider_id, code, reason})
   end
 
-  @doc """
-  Reports that a provider's WebSocket connection was disconnected with a reason.
-  """
-  @spec report_ws_disconnected(chain_name, provider_id, term()) :: :ok
-  def report_ws_disconnected(chain_name, provider_id, reason) do
-    GenServer.cast(via_name(chain_name), {:report_ws_disconnected, provider_id, reason})
-  end
-
   # GenServer callbacks
 
   @impl true
   def init({chain_name, chain_config}) do
-    if Process.whereis(Livechain.PubSub) do
-      Phoenix.PubSub.subscribe(Livechain.PubSub, "circuit:events")
-    end
+    Phoenix.PubSub.subscribe(Livechain.PubSub, "circuit:events")
+    Phoenix.PubSub.subscribe(Livechain.PubSub, "ws_connections")
 
     state = %__MODULE__{
       chain_name: chain_name,
@@ -195,8 +178,6 @@ defmodule Livechain.RPC.ProviderPool do
       stats: %PoolStats{},
       circuit_states: %{}
     }
-
-    # Health checks moved to ProviderHealthMonitor; no internal scheduler
 
     {:ok, state}
   end
@@ -353,7 +334,7 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @impl true
-  def handle_cast({:report_ws_connected, provider_id}, state) do
+  def handle_info({:ws_connection_status_changed, provider_id, :connected}, state) do
     case Map.get(state.providers, provider_id) do
       nil ->
         {:noreply, state}
@@ -374,7 +355,7 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @impl true
-  def handle_cast({:report_ws_closed, provider_id, code, reason}, state) do
+  def handle_info({:ws_connection_status_changed, provider_id, {:disconnected, jerr}}, state) do
     case Map.get(state.providers, provider_id) do
       nil ->
         {:noreply, state}
@@ -384,13 +365,13 @@ defmodule Livechain.RPC.ProviderPool do
           provider
           | status: :disconnected,
             consecutive_failures: provider.consecutive_failures + 1,
-            last_error: {:ws_closed, code, reason},
+            last_error: jerr,
             last_health_check: System.system_time(:millisecond)
         }
 
         publish_provider_event(state.chain_name, provider_id, :ws_closed, %{
-          code: code,
-          reason: reason
+          code: jerr.code,
+          reason: jerr.message
         })
 
         new_state = put_provider_and_refresh(state, provider_id, updated)
@@ -399,30 +380,13 @@ defmodule Livechain.RPC.ProviderPool do
   end
 
   @impl true
-  def handle_cast({:report_ws_disconnected, provider_id, reason}, state) do
-    case Map.get(state.providers, provider_id) do
-      nil ->
-        {:noreply, state}
-
-      provider ->
-        updated = %{
-          provider
-          | status: :disconnected,
-            consecutive_failures: provider.consecutive_failures + 1,
-            last_error: {:ws_disconnected, reason},
-            last_health_check: System.system_time(:millisecond)
-        }
-
-        publish_provider_event(state.chain_name, provider_id, :ws_disconnected, %{reason: reason})
-        new_state = put_provider_and_refresh(state, provider_id, updated)
-        {:noreply, new_state}
-    end
-  end
-
-  # :health_check handling removed
+  def handle_info({:ws_connection_status_changed, _, _}, state), do: {:noreply, state}
 
   @impl true
-  def handle_info(%{provider_id: provider_id, from: from, to: to} = _evt, state)
+  def handle_info(
+        {:circuit_breaker_event, %{provider_id: provider_id, from: from, to: to}},
+        state
+      )
       when is_binary(provider_id) and from in [:closed, :open, :half_open] and
              to in [:closed, :open, :half_open] do
     new_states = Map.put(state.circuit_states, provider_id, to)

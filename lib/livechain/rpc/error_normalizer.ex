@@ -139,6 +139,18 @@ defmodule Livechain.RPC.ErrorNormalizer do
   end
 
   # WebSocket specific errors
+  def normalize(:not_connected, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+
+    JError.new(-32000, "WebSocket not connected",
+      provider_id: provider_id,
+      source: :transport,
+      transport: :ws,
+      category: :network_error,
+      retriable?: true
+    )
+  end
+
   def normalize(:connection_closed, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
@@ -155,6 +167,229 @@ defmodule Livechain.RPC.ErrorNormalizer do
     provider_id = Keyword.get(opts, :provider_id)
 
     JError.new(-32006, "WebSocket connection failed",
+      provider_id: provider_id,
+      source: :transport,
+      transport: :ws,
+      category: :network_error,
+      retriable?: true
+    )
+  end
+
+  # WebSockex connection errors
+  def normalize(%WebSockex.RequestError{code: 429} = _err, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+
+    JError.new(429, "Rate limited",
+      provider_id: provider_id,
+      source: :transport,
+      transport: :ws,
+      category: :rate_limit,
+      retriable?: true
+    )
+  end
+
+  def normalize(%WebSockex.RequestError{code: 408, message: msg} = _err, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+
+    JError.new(-32000, msg || "Upstream timeout",
+      provider_id: provider_id,
+      source: :transport,
+      transport: :ws,
+      category: :network_error,
+      retriable?: true
+    )
+  end
+
+  def normalize(%WebSockex.RequestError{code: code, message: msg} = _err, opts)
+      when is_integer(code) and code >= 500 and code <= 599 do
+    provider_id = Keyword.get(opts, :provider_id)
+
+    JError.new(code, msg || "Upstream server error",
+      provider_id: provider_id,
+      source: :transport,
+      transport: :ws,
+      category: :server_error,
+      retriable?: true
+    )
+  end
+
+  def normalize(%WebSockex.RequestError{code: code, message: msg} = _err, opts)
+      when is_integer(code) and code >= 400 and code <= 499 do
+    provider_id = Keyword.get(opts, :provider_id)
+
+    JError.new(code, msg || "Client error",
+      provider_id: provider_id,
+      source: :transport,
+      transport: :ws,
+      category: :client_error,
+      retriable?: false
+    )
+  end
+
+  def normalize(%WebSockex.RequestError{} = err, opts) do
+    normalize({:network_error, {:request_error, err}}, Keyword.put(opts, :transport, :ws))
+  end
+
+  # WebSocket close codes (RFC 6455)
+  def normalize({:ws_close, code, reason}, opts) when is_integer(code) do
+    provider_id = Keyword.get(opts, :provider_id)
+
+    case code do
+      1000 ->
+        # Normal closure - allow reconnect (transient)
+        JError.new(-32000, "WebSocket normal closure",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :network_error,
+          retriable?: true
+        )
+
+      1001 ->
+        # Going away - treat as network/transient
+        JError.new(-32000, "WebSocket going away",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :network_error,
+          retriable?: true
+        )
+
+      1002 ->
+        # Protocol error - server-side
+        JError.new(-32000, "WebSocket protocol error",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :server_error,
+          retriable?: true
+        )
+
+      1003 ->
+        # Unsupported data - client-side, non-retriable
+        JError.new(-32600, "WebSocket unsupported data",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :client_error,
+          retriable?: false
+        )
+
+      1006 ->
+        # Abnormal closure - network/transient
+        JError.new(-32000, "WebSocket abnormal closure",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :network_error,
+          retriable?: true
+        )
+
+      1008 ->
+        # Policy violation - client-side
+        JError.new(-32600, "WebSocket policy violation",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :client_error,
+          retriable?: false
+        )
+
+      1009 ->
+        # Message too big - client-side
+        JError.new(-32602, "WebSocket message too big",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :client_error,
+          retriable?: false
+        )
+
+      1011 ->
+        # Internal server error - retriable
+        JError.new(-32000, "WebSocket server error",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :server_error,
+          retriable?: true
+        )
+
+      1012 ->
+        # Service restart - retriable
+        JError.new(-32000, "WebSocket service restart",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :server_error,
+          retriable?: true
+        )
+
+      1013 ->
+        # Try again later / overload - map to 429 (retriable)
+        JError.new(429, "WebSocket try again later",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :rate_limit,
+          retriable?: true
+        )
+
+      1014 ->
+        # Bad gateway - retriable
+        JError.new(-32000, "WebSocket bad gateway",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :network_error,
+          retriable?: true
+        )
+
+      1015 ->
+        # TLS handshake failure - network/transient
+        JError.new(-32000, "WebSocket TLS handshake failure",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :network_error,
+          retriable?: true
+        )
+
+      _ ->
+        # Unknown/abnormal - treat as network/transient by default
+        JError.new(-32000, "WebSocket close (code #{code}): #{inspect(reason)}",
+          provider_id: provider_id,
+          source: :transport,
+          transport: :ws,
+          category: :network_error,
+          retriable?: true
+        )
+    end
+  end
+
+  # WebSocket disconnect with remote close code
+  def normalize({:ws_disconnect, {:remote, code, msg}}, opts) when is_integer(code) do
+    # Handle close code 1013 specially (backpressure/rate limit)
+    if code == 1013 do
+      provider_id = Keyword.get(opts, :provider_id)
+
+      JError.new(429, msg || "WebSocket backpressure",
+        provider_id: provider_id,
+        source: :transport,
+        transport: :ws,
+        category: :rate_limit,
+        retriable?: true
+      )
+    else
+      normalize({:ws_close, code, msg}, opts)
+    end
+  end
+
+  # Generic WebSocket disconnect
+  def normalize({:ws_disconnect, reason}, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+
+    JError.new(-32000, "WebSocket disconnected: #{inspect(reason)}",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -186,13 +421,15 @@ defmodule Livechain.RPC.ErrorNormalizer do
 
   # Private functions
 
-  defp maybe_add_provider_id(%JError{provider_id: nil} = jerr, provider_id) when is_binary(provider_id) do
+  defp maybe_add_provider_id(%JError{provider_id: nil} = jerr, provider_id)
+       when is_binary(provider_id) do
     %{jerr | provider_id: provider_id}
   end
 
   defp maybe_add_provider_id(jerr, _), do: jerr
 
-  defp maybe_add_transport(%JError{transport: nil} = jerr, transport) when not is_nil(transport) do
+  defp maybe_add_transport(%JError{transport: nil} = jerr, transport)
+       when not is_nil(transport) do
     %{jerr | transport: transport}
   end
 
@@ -207,10 +444,16 @@ defmodule Livechain.RPC.ErrorNormalizer do
   defp categorize_jsonrpc_error(code) when code >= -32001 and code <= -32099, do: :server_error
   defp categorize_jsonrpc_error(_), do: :application_error
 
-  defp retriable_jsonrpc_error?(-32700), do: false  # Parse error
-  defp retriable_jsonrpc_error?(-32600), do: false  # Invalid request
-  defp retriable_jsonrpc_error?(-32601), do: false  # Method not found
-  defp retriable_jsonrpc_error?(-32602), do: false  # Invalid params
-  defp retriable_jsonrpc_error?(code) when code >= -32099 and code <= -32000, do: true  # Server errors
-  defp retriable_jsonrpc_error?(_), do: true  # Application errors - usually retriable
+  # Parse error
+  defp retriable_jsonrpc_error?(-32700), do: false
+  # Invalid request
+  defp retriable_jsonrpc_error?(-32600), do: false
+  # Method not found
+  defp retriable_jsonrpc_error?(-32601), do: false
+  # Invalid params
+  defp retriable_jsonrpc_error?(-32602), do: false
+  # Server errors
+  defp retriable_jsonrpc_error?(code) when code >= -32099 and code <= -32000, do: true
+  # Application errors - usually retriable
+  defp retriable_jsonrpc_error?(_), do: true
 end

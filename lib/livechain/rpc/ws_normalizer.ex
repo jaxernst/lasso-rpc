@@ -1,11 +1,21 @@
 defmodule Livechain.RPC.WSNormalizer do
   @moduledoc """
-  WebSocket-specific error normalization to %Livechain.JSONRPC.Error{}.
+  DEPRECATED: Use Livechain.RPC.ErrorNormalizer instead.
 
-  Goals:
-  - Provide a single, transport-agnostic error shape for policy decisions
-  - Encode retriability via JSON-RPC error categories
-  - Keep WS error semantics consistent with HTTP path
+  This module has been consolidated into ErrorNormalizer for unified error handling.
+  All WebSocket-specific error normalization is now handled by ErrorNormalizer.
+
+  ## Migration
+
+  Replace calls like:
+  - `WSNormalizer.normalize_connect_error(err, provider_id)` →
+    `ErrorNormalizer.normalize(err, provider_id: provider_id, transport: :ws)`
+  - `WSNormalizer.normalize_send_error(err, provider_id)` →
+    `ErrorNormalizer.normalize(err, provider_id: provider_id, transport: :ws)`
+  - `WSNormalizer.normalize_close(code, reason, provider_id)` →
+    `ErrorNormalizer.normalize({:ws_close, code, reason}, provider_id: provider_id, transport: :ws)`
+  - `WSNormalizer.normalize_disconnect(reason, provider_id)` →
+    `ErrorNormalizer.normalize({:ws_disconnect, reason}, provider_id: provider_id, transport: :ws)`
   """
 
   alias Livechain.JSONRPC.Error, as: JError

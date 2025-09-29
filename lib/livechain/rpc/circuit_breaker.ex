@@ -362,14 +362,15 @@ defmodule Livechain.RPC.CircuitBreaker do
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "circuit:events",
-      %{
-        ts: System.system_time(:millisecond),
-        provider_id: provider_id,
-        transport: transport,
-        from: from,
-        to: to,
-        reason: reason
-      }
+      {:circuit_breaker_event,
+       %{
+         ts: System.system_time(:millisecond),
+         provider_id: provider_id,
+         transport: transport,
+         from: from,
+         to: to,
+         reason: reason
+       }}
     )
   end
 

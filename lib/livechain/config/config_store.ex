@@ -25,8 +25,7 @@ defmodule Livechain.Config.ConfigStore do
   @doc """
   Starts the ConfigStore GenServer and loads initial configuration.
   """
-  def start_link(opts \\ []) do
-    config_path = Keyword.get(opts, :config_path, "config/chains.yml")
+  def start_link(config_path) do
     GenServer.start_link(__MODULE__, config_path, name: __MODULE__)
   end
 

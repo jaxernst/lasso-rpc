@@ -33,7 +33,8 @@ defmodule Livechain.Application do
         {DynamicSupervisor, name: Livechain.RPC.Supervisor, strategy: :one_for_one},
 
         # Start configuration store for centralized config caching
-        Livechain.Config.ConfigStore,
+        {Livechain.Config.ConfigStore,
+         Application.get_env(:livechain, :chains_config_path, "config/chains.yml")},
 
         # Start Phoenix endpoint
         LivechainWeb.Endpoint
