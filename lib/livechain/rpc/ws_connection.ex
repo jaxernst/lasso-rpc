@@ -21,7 +21,7 @@ defmodule Livechain.RPC.WSConnection do
   alias Livechain.RPC.WSEndpoint
   alias Livechain.RPC.CircuitBreaker
   alias Livechain.RPC.ProviderPool
-  alias Livechain.RPC.WSNormalizer
+  alias Livechain.RPC.ErrorNormalizer
   alias Livechain.JSONRPC.Error, as: JError
 
   # Client API
@@ -48,7 +48,7 @@ defmodule Livechain.RPC.WSConnection do
       :ok
   """
   def send_message(connection_id, message) do
-    GenServer.cast(via_name(connection_id), {:send_message, message})
+    GenServer.call(via_name(connection_id), {:send_message, message})
   end
 
   @doc """
@@ -60,7 +60,7 @@ defmodule Livechain.RPC.WSConnection do
       :ok
   """
   def subscribe(connection_id, topic) do
-    GenServer.cast(via_name(connection_id), {:subscribe, topic})
+    GenServer.call(via_name(connection_id), {:subscribe, topic})
   end
 
   @doc """
@@ -86,7 +86,6 @@ defmodule Livechain.RPC.WSConnection do
       connected: false,
       reconnect_attempts: 0,
       subscriptions: MapSet.new(),
-      pending_messages: [],
       pending_requests: %{},
       heartbeat_ref: nil,
       reconnect_ref: nil
@@ -127,7 +126,7 @@ defmodule Livechain.RPC.WSConnection do
           "Failed to connect to #{state.endpoint.name} (WebSocket): #{jerr.message} (code=#{inspect(jerr.code)})"
         )
 
-        broadcast_status_change(state, :disconnected)
+        broadcast_connection_status(state, :disconnected)
 
         state =
           if jerr.retriable? do
@@ -148,7 +147,7 @@ defmodule Livechain.RPC.WSConnection do
         Logger.debug("Circuit breaker call error: #{inspect(other)}")
 
         jerr = JError.from(other, provider_id: state.endpoint.id)
-        broadcast_status_change(state, :disconnected)
+        broadcast_connection_status(state, :disconnected)
 
         state =
           if jerr.retriable? do
@@ -162,29 +161,25 @@ defmodule Livechain.RPC.WSConnection do
   end
 
   @impl true
-  def handle_cast({:send_message, message}, %{connected: true, connection: connection} = state) do
-    case WebSockex.send_frame(connection, {:text, Jason.encode!(message)}) do
-      :ok ->
-        {:noreply, state}
-
-      {:error, reason} ->
-        normalized = WSNormalizer.normalize_send_error(reason, state.endpoint.id)
-        Logger.error("Failed to send WebSocket message: #{inspect(normalized)}")
-        ProviderPool.report_failure(state.chain_name, state.endpoint.id, normalized)
-        state = %{state | pending_messages: [message | state.pending_messages]}
-        {:noreply, state}
-    end
+  def handle_call(
+        {:send_message, message},
+        _from,
+        %{connected: true, connection: connection} = state
+      ) do
+    ws_client().send_frame(connection, {:text, Jason.encode!(message)})
+    {:reply, :ok, state}
   end
 
   @impl true
-  def handle_cast({:send_message, message}, state) do
-    # Queue message for when we reconnect
-    state = %{state | pending_messages: [message | state.pending_messages]}
-    {:noreply, state}
+  def handle_call({:send_message, _message}, _from, %{connected: false} = state) do
+    error =
+      ErrorNormalizer.normalize(:not_connected, provider_id: state.endpoint.id, transport: :ws)
+
+    {:reply, {:error, error}, state}
   end
 
   @impl true
-  def handle_cast({:subscribe, topic}, state) do
+  def handle_call({:subscribe, topic}, _from, %{connected: true, connection: connection} = state) do
     subscription_message = %{
       "jsonrpc" => "2.0",
       "id" => generate_id(),
@@ -192,9 +187,22 @@ defmodule Livechain.RPC.WSConnection do
       "params" => [topic]
     }
 
-    GenServer.cast(self(), {:send_message, subscription_message})
-    state = %{state | subscriptions: MapSet.put(state.subscriptions, topic)}
-    {:noreply, state}
+    case ws_client().send_frame(connection, {:text, Jason.encode!(subscription_message)}) do
+      :ok ->
+        state = %{state | subscriptions: MapSet.put(state.subscriptions, topic)}
+        {:reply, :ok, state}
+
+      {:error, reason} ->
+        jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
+        {:reply, {:error, jerr}, state}
+    end
+  end
+
+  def handle_call({:subscribe, _topic}, _from, %{connected: false} = state) do
+    jerr =
+      ErrorNormalizer.normalize(:not_connected, provider_id: state.endpoint.id, transport: :ws)
+
+    {:reply, {:error, jerr}, state}
   end
 
   @impl true
@@ -208,7 +216,7 @@ defmodule Livechain.RPC.WSConnection do
       "params" => params || []
     }
 
-    case WebSockex.send_frame(state.connection, {:text, Jason.encode!(message)}) do
+    case ws_client().send_frame(state.connection, {:text, Jason.encode!(message)}) do
       :ok ->
         timer = Process.send_after(self(), {:request_timeout, request_id}, timeout_ms)
 
@@ -222,14 +230,16 @@ defmodule Livechain.RPC.WSConnection do
         {:noreply, %{state | pending_requests: pending}}
 
       {:error, reason} ->
-        {:reply, {:error, WSNormalizer.normalize_send_error(reason, state.endpoint.id)}, state}
+        jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
+        {:reply, {:error, jerr}, state}
     end
   end
 
-  def handle_call({:request, _method, _params, _timeout_ms}, _from, state) do
-    # Not connected: behave like transient failure
-    {:reply, {:error, WSNormalizer.normalize_disconnect(:not_connected, state.endpoint.id)},
-     state}
+  def handle_call({:request, _method, _params, _timeout_ms}, _from, %{connected: false} = state) do
+    jerr =
+      ErrorNormalizer.normalize(:not_connected, provider_id: state.endpoint.id, transport: :ws)
+
+    {:reply, {:error, jerr}, state}
   end
 
   @impl true
@@ -239,7 +249,7 @@ defmodule Livechain.RPC.WSConnection do
       endpoint_id: state.endpoint.id,
       reconnect_attempts: state.reconnect_attempts,
       subscriptions: MapSet.size(state.subscriptions),
-      pending_messages: length(state.pending_messages)
+      pending_requests: map_size(state.pending_requests)
     }
 
     {:reply, status, state}
@@ -252,14 +262,10 @@ defmodule Livechain.RPC.WSConnection do
     # Report successful connection to circuit breaker
     CircuitBreaker.record_success({state.endpoint.id, :ws})
 
-    # Report successful connection to provider pool for status tracking (single writer)
-    ProviderPool.report_ws_connected(state.chain_name, state.endpoint.id)
-
     state = %{state | connected: true, reconnect_attempts: 0}
-    broadcast_status_change(state, :connected)
+    broadcast_connection_status(state, :connected)
 
     state = schedule_heartbeat(state)
-    state = send_pending_messages(state)
     {:noreply, state}
   end
 
@@ -314,11 +320,14 @@ defmodule Livechain.RPC.WSConnection do
   def handle_info({:ws_closed, code, reason}, state) do
     Logger.info("WebSocket closed: #{code} - #{inspect(reason)}")
 
-    jerr = WSNormalizer.normalize_close(code, reason, state.endpoint.id)
+    jerr =
+      ErrorNormalizer.normalize({:ws_close, code, reason},
+        provider_id: state.endpoint.id,
+        transport: :ws
+      )
 
     state = %{state | connected: false, connection: nil}
-    broadcast_status_change(state, :disconnected)
-    ProviderPool.report_ws_closed(state.chain_name, state.endpoint.id, code, reason)
+    broadcast_connection_status(state, {:disconnected, jerr})
 
     state = if jerr.retriable?, do: schedule_reconnect(state), else: state
     {:noreply, state}
@@ -328,11 +337,14 @@ defmodule Livechain.RPC.WSConnection do
   def handle_info({:ws_disconnected, reason}, state) do
     Logger.warning("WebSocket disconnected: #{inspect(reason)}")
 
-    jerr = WSNormalizer.normalize_disconnect(reason, state.endpoint.id)
+    jerr =
+      ErrorNormalizer.normalize({:ws_disconnect, reason},
+        provider_id: state.endpoint.id,
+        transport: :ws
+      )
 
-    ProviderPool.report_ws_disconnected(state.chain_name, state.endpoint.id, reason)
     state = %{state | connected: false, connection: nil}
-    broadcast_status_change(state, :disconnected)
+    broadcast_connection_status(state, {:disconnected, jerr})
 
     state = if jerr.retriable?, do: schedule_reconnect(state), else: state
     {:noreply, state}
@@ -341,15 +353,15 @@ defmodule Livechain.RPC.WSConnection do
   @impl true
   def handle_info({:heartbeat}, state) do
     if state.connected do
-      case WebSockex.send_frame(state.connection, :ping) do
+      case ws_client().send_frame(state.connection, :ping) do
         :ok ->
           state = schedule_heartbeat(state)
           {:noreply, state}
 
         {:error, reason} ->
-          normalized = WSNormalizer.normalize_send_error(reason, state.endpoint.id)
-          Logger.debug("Heartbeat failed for #{state.endpoint.id}: #{inspect(normalized)}")
-          ProviderPool.report_failure(state.chain_name, state.endpoint.id, normalized)
+          jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
+          Logger.debug("Heartbeat failed for #{state.endpoint.id}: #{inspect(jerr)}")
+          ProviderPool.report_failure(state.chain_name, state.endpoint.id, jerr)
           state = schedule_heartbeat(state)
           {:noreply, state}
       end
@@ -396,7 +408,7 @@ defmodule Livechain.RPC.WSConnection do
     end
 
     state = %{state | connected: false, connection: nil}
-    broadcast_status_change(state, :disconnected)
+    broadcast_connection_status(state, {:disconnected, nil})
     state = schedule_reconnect(state)
     {:noreply, state}
   end
@@ -418,7 +430,7 @@ defmodule Livechain.RPC.WSConnection do
     end
 
     # Notify of disconnection
-    broadcast_status_change(state, :terminated)
+    broadcast_connection_status(state, {:terminated, nil})
 
     :ok
   end
@@ -430,13 +442,16 @@ defmodule Livechain.RPC.WSConnection do
 
   defp connect_to_websocket(endpoint, parent_pid) do
     # Start a separate WebSocket handler process
-    case WebSockex.start_link(
+    case ws_client().start_link(
            endpoint.ws_url,
            Livechain.RPC.WSHandler,
            %{endpoint: endpoint, parent: parent_pid}
          ) do
-      {:ok, pid} -> {:ok, pid}
-      {:error, reason} -> {:error, WSNormalizer.normalize_connect_error(reason, endpoint.id)}
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:error, reason} ->
+        {:error, ErrorNormalizer.normalize(reason, provider_id: endpoint.id, transport: :ws)}
     end
   end
 
@@ -478,16 +493,6 @@ defmodule Livechain.RPC.WSConnection do
         Logger.error("Max reconnection attempts reached for #{state.endpoint.name}")
         state
     end
-  end
-
-  defp send_pending_messages(%{pending_messages: []} = state), do: state
-
-  defp send_pending_messages(%{pending_messages: messages} = state) do
-    Enum.each(messages, fn message ->
-      GenServer.cast(self(), {:send_message, message})
-    end)
-
-    %{state | pending_messages: []}
   end
 
   # TODO: Consider consilidating these duplicative function handlers (only difference is in the debug calls)
@@ -586,18 +591,15 @@ defmodule Livechain.RPC.WSConnection do
     {:via, Registry, {Livechain.Registry, {:ws_conn, connection_id}}}
   end
 
-  defp broadcast_status_change(state, status) do
+  defp broadcast_connection_status(state, status) do
     Phoenix.PubSub.broadcast(
       Livechain.PubSub,
       "ws_connections",
-      {:connection_status_changed, state.endpoint.id,
-       %{
-         id: state.endpoint.id,
-         name: state.endpoint.name,
-         status: status,
-         reconnect_attempts: state.reconnect_attempts,
-         subscriptions: MapSet.size(state.subscriptions)
-       }}
+      {:ws_connection_status_changed, state.endpoint.id, status}
     )
+  end
+
+  defp ws_client do
+    Application.get_env(:livechain, :ws_client_module, WebSockex)
   end
 end

@@ -12,7 +12,6 @@ defmodule Livechain.RPC.WSHandler do
   # WebSockex callbacks
 
   def handle_connect(_conn, state) do
-    Logger.debug("WebSocket connected: #{state.endpoint.name}")
     send(state.parent, {:ws_connected})
     {:ok, state}
   end

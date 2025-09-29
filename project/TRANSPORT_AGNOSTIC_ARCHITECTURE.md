@@ -207,7 +207,7 @@ providers:
 
 ## Implementation plan (phased)
 
-### Phase 1 — Foundations
+### Phase 1 — Foundations (completed)
 
 - Implement `Transport` behaviour; adapt `Transport.HTTP` and `Transport.WebSocket` to provide `request/3` and `capabilities/1`.
 - Introduce `ProviderRegistry` and `Channel` lifecycle (HTTP pool, WS connection).

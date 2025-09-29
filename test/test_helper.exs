@@ -8,16 +8,12 @@ Mox.defmock(Livechain.RPC.HttpClientMock, for: Livechain.RPC.HttpClient)
 # Use the mock adapter for HTTP client in tests
 Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClientMock)
 
-# Ensure config store is initialized with test configuration
-# This helps with provider selection in tests
-config_path = Path.join(__DIR__, "../config/chains.yml")
-
-if File.exists?(config_path) do
-  Livechain.Config.ConfigStore.reload()
-end
+# Use mock WS client in tests for deterministic WSConnection behavior
+Application.put_env(:livechain, :ws_client_module, TestSupport.MockWSClient)
 
 # Load support modules
 Code.require_file("test/support/mock_http_client.ex")
+Code.require_file("test/support/mock_ws_client.ex")
 
 # Ensure test isolation by resetting benchmark store between tests
 ExUnit.configure(
@@ -200,6 +196,27 @@ defmodule TestHelper do
       ws_url: "wss://#{id}.example.com/ws",
       api_key_required: false
     }
+  end
+
+  def eventually(func, timeout_ms \\ 1000) do
+    eventually_with_delay(func, timeout_ms, 10)
+  end
+
+  defp eventually_with_delay(func, timeout_ms, delay_ms) do
+    start_time = System.monotonic_time(:millisecond)
+
+    case func.() do
+      true ->
+        true
+
+      false ->
+        if System.monotonic_time(:millisecond) - start_time >= timeout_ms do
+          false
+        else
+          Process.sleep(delay_ms)
+          eventually_with_delay(func, timeout_ms, delay_ms)
+        end
+    end
   end
 
   def create_test_chain_config(

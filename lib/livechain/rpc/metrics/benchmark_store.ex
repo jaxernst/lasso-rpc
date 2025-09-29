@@ -114,15 +114,12 @@ defmodule Livechain.RPC.Metrics.BenchmarkStore do
   end
 
   @impl true
-  def get_method_transport_performance(chain, method) do
+  def get_method_transport_performance(chain, provider_id, method, transport) do
     # Gather for both transports
-    [:http, :ws]
-    |> Enum.flat_map(fn transport ->
-      data = get_method_performance(chain, "#{method}@#{transport}")
+    data = get_method_transport_performance(chain, provider_id, method, transport)
 
-      Enum.map(data, fn %{provider_id: pid, performance: perf} ->
-        %{provider_id: pid, transport: transport, performance: perf}
-      end)
+    Enum.map(data, fn %{provider_id: pid, performance: perf} ->
+      %{provider_id: pid, transport: transport, performance: perf}
     end)
   end
 
