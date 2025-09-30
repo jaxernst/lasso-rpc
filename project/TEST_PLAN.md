@@ -6,14 +6,10 @@ Single source of truth for testing: what’s covered today, gaps, and a pragmati
 
 ## Current State Snapshot
 
-- Automated test run (local):
-  - mix test fails during compilation in `test/livechain/rpc/ws_connection_test.exs` due to missing/invalid config (`KeyError: key :url not found`). Indicates outdated WS tests and/or setup assumptions.
 - Manual smoke (local):
   - GET `/api/health` → 200 OK (healthy)
   - GET `/api/metrics/ethereum` → 200 OK (no providers listed yet; system metrics present)
   - POST `/rpc/fastest/ethereum` with `eth_blockNumber` → 200 OK (returned block number)
-
-Implication: HTTP path is functioning; some legacy tests need to be skipped/updated to reflect current architecture.
 
 ## Testing Pillars (What matters most)
 
