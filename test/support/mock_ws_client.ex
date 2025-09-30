@@ -42,6 +42,10 @@ defmodule TestSupport.MockWSClient do
     GenServer.cast(pid, {:set_response_delay, delay_ms})
   end
 
+  def set_response_mode(pid, mode) when mode in [:result, :error] do
+    GenServer.cast(pid, {:set_response_mode, mode})
+  end
+
   def emit_subscription_notification(pid, subscription_id, result) do
     GenServer.cast(pid, {:emit_subscription, subscription_id, result})
   end
@@ -70,7 +74,8 @@ defmodule TestSupport.MockWSClient do
       should_fail_connection: should_fail,
       connected: false,
       response_delay: 0,
-      pending_responses: %{}
+      pending_responses: %{},
+      response_mode: :result
     }
 
     if should_fail do
@@ -124,22 +129,43 @@ defmodule TestSupport.MockWSClient do
   def handle_call(
         {:send_frame, {:text, payload}},
         _from,
-        %{handler: handler, state: st, connected: true, response_delay: delay} = s
+        %{
+          handler: handler,
+          state: st,
+          connected: true,
+          response_delay: delay,
+          response_mode: mode
+        } = s
       ) do
     # Parse request and create proper JSON-RPC response
     response_payload =
       case Jason.decode(payload) do
         {:ok, %{"id" => id, "method" => method, "params" => params}} ->
           # Create a proper JSON-RPC response with the same ID
-          response = %{
-            "jsonrpc" => "2.0",
-            "id" => id,
-            "result" => %{
-              "method" => method,
-              "params" => params,
-              "mock_response" => true
-            }
-          }
+          response =
+            case mode do
+              :result ->
+                %{
+                  "jsonrpc" => "2.0",
+                  "id" => id,
+                  "result" => %{
+                    "method" => method,
+                    "params" => params,
+                    "mock_response" => true
+                  }
+                }
+
+              :error ->
+                %{
+                  "jsonrpc" => "2.0",
+                  "id" => id,
+                  "error" => %{
+                    "code" => -32001,
+                    "message" => "mock error",
+                    "data" => %{"method" => method, "params" => params}
+                  }
+                }
+            end
 
           Jason.encode!(response)
 
@@ -225,6 +251,10 @@ defmodule TestSupport.MockWSClient do
 
   def handle_cast({:set_response_delay, delay_ms}, s) do
     {:noreply, %{s | response_delay: delay_ms}}
+  end
+
+  def handle_cast({:set_response_mode, mode}, s) do
+    {:noreply, %{s | response_mode: mode}}
   end
 
   def handle_cast(
