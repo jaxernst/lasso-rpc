@@ -269,6 +269,19 @@ defmodule Livechain.RPC.WSConnectionTest do
   end
 
   describe "Health Monitoring" do
+    test "broadcasts terminated status on stop", %{endpoint: endpoint} do
+      Phoenix.PubSub.subscribe(Livechain.PubSub, "ws_connections")
+      endpoint_id = endpoint.id
+
+      {:ok, pid} = WSConnection.start_link(endpoint)
+
+      assert_receive {:ws_connection_status_changed, ^endpoint_id, :connected}, 1000
+
+      GenServer.stop(pid, :normal)
+
+      assert_receive {:ws_connection_status_changed, ^endpoint_id, {:terminated, nil}}, 1000
+    end
+
     test "reports comprehensive connection status", %{endpoint: endpoint} do
       {:ok, pid} = WSConnection.start_link(endpoint)
 
@@ -626,6 +639,82 @@ defmodule Livechain.RPC.WSConnectionTest do
   end
 
   describe "Comprehensive Reconnection Logic" do
+    test "schedules reconnect when initial connect fails", %{endpoint: endpoint} do
+      # Temporarily swap WS client to always-failing one
+      prev = Application.get_env(:livechain, :ws_client_module)
+      Application.put_env(:livechain, :ws_client_module, TestSupport.FailingWSClient)
+
+      # Create circuit breaker for the test endpoint
+      fail_endpoint = %{endpoint | id: "fail_init_1"}
+
+      circuit_breaker_config = %{
+        failure_threshold: 3,
+        recovery_timeout: 200,
+        success_threshold: 1
+      }
+
+      {:ok, _} = CircuitBreaker.start_link({{fail_endpoint.id, :ws}, circuit_breaker_config})
+
+      try do
+        Phoenix.PubSub.subscribe(Livechain.PubSub, "ws_connections")
+
+        {:ok, _pid} = WSConnection.start_link(fail_endpoint)
+
+        # Should broadcast disconnected due to failed connect (atom, not tuple on initial failure)
+        assert_receive {:ws_connection_status_changed, "fail_init_1", :disconnected}, 1000
+
+        # Status should show not connected and at least one reconnect attempt scheduled soon
+        status = WSConnection.status("fail_init_1")
+        assert status.connected == false
+      after
+        Application.put_env(:livechain, :ws_client_module, prev)
+        # Clean up circuit breaker
+        cleanup_circuit_breakers(["fail_init_1"])
+        cleanup_ws_connections(["fail_init_1"])
+      end
+    end
+
+    test "stops scheduling after max reconnect attempts when connect keeps failing", %{
+      endpoint: endpoint
+    } do
+      prev = Application.get_env(:livechain, :ws_client_module)
+      Application.put_env(:livechain, :ws_client_module, TestSupport.FailingWSClient)
+
+      # Use low max attempts
+      failing = %{
+        endpoint
+        | id: "fail_exhaust",
+          reconnect_interval: 10,
+          max_reconnect_attempts: 2
+      }
+
+      # Create circuit breaker for the test endpoint
+      circuit_breaker_config = %{
+        failure_threshold: 3,
+        recovery_timeout: 200,
+        success_threshold: 1
+      }
+
+      {:ok, _} = CircuitBreaker.start_link({{failing.id, :ws}, circuit_breaker_config})
+
+      try do
+        {:ok, _pid} = WSConnection.start_link(failing)
+
+        # Wait for attempts to reach max using eventually
+        assert TestHelper.eventually(
+                 fn ->
+                   status = WSConnection.status("fail_exhaust")
+                   status.connected == false and status.reconnect_attempts >= 2
+                 end,
+                 2000
+               )
+      after
+        Application.put_env(:livechain, :ws_client_module, prev)
+        cleanup_circuit_breakers(["fail_exhaust"])
+        cleanup_ws_connections(["fail_exhaust"])
+      end
+    end
+
     test "successfully reconnects after disconnect", %{endpoint: endpoint} do
       reconnect_endpoint = %{endpoint | reconnect_interval: 100, max_reconnect_attempts: 5}
       {:ok, pid} = WSConnection.start_link(reconnect_endpoint)
@@ -642,8 +731,8 @@ defmodule Livechain.RPC.WSConnectionTest do
       # Should receive disconnection
       assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 500
 
-      # Should automatically reconnect (wait for reconnect interval + some buffer)
-      assert_receive {:ws_connection_status_changed, _, :connected}, 1000
+      # Should automatically reconnect (wait for reconnect interval + jitter + buffer)
+      assert_receive {:ws_connection_status_changed, _, :connected}, 2000
 
       # Verify reconnection was successful
       status = WSConnection.status(reconnect_endpoint.id)
@@ -678,8 +767,8 @@ defmodule Livechain.RPC.WSConnectionTest do
       assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 500
       t1 = System.monotonic_time(:millisecond)
 
-      # Should reconnect with delay (50ms base + reconnect_attempts * 50ms + jitter)
-      assert_receive {:ws_connection_status_changed, _, :connected}, 1000
+      # Should reconnect with delay (50ms base + reconnect_attempts * 50ms + jitter up to 1000ms)
+      assert_receive {:ws_connection_status_changed, _, :connected}, 2000
       t2 = System.monotonic_time(:millisecond)
 
       # First reconnect should take at least 50ms (base interval)
@@ -822,13 +911,14 @@ defmodule Livechain.RPC.WSConnectionTest do
       mock_client_pid = ws_state.connection
       Process.exit(mock_client_pid, :kill)
 
-      # Wait for disconnect
-      Process.sleep(200)
-
-      # Circuit breaker should still be closed (one failure isn't enough)
-      # but we should see the connection attempt in progress
-      status = WSConnection.status(endpoint.id)
-      assert status.connected == false
+      # Wait for disconnect using eventually
+      assert TestHelper.eventually(
+               fn ->
+                 status = WSConnection.status(endpoint.id)
+                 status.connected == false
+               end,
+               1000
+             )
 
       GenServer.stop(pid)
 
@@ -895,6 +985,42 @@ defmodule Livechain.RPC.WSConnectionTest do
   end
 
   describe "Concurrent Request Handling" do
+    test "maps JSON-RPC error object to JError for pending request", %{endpoint: endpoint} do
+      {:ok, pid} = WSConnection.start_link(endpoint)
+
+      assert TestHelper.eventually(fn -> WSConnection.status(endpoint.id).connected end)
+
+      ws_state = :sys.get_state(pid)
+      mock_client_pid = ws_state.connection
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :error)
+
+      result = WSConnection.request(endpoint.id, "eth_err", [1], 500)
+      assert {:error, %Livechain.JSONRPC.Error{} = jerr} = result
+      # Error normalizer wraps the error map, but original info should be in message
+      assert jerr.message =~ "-32001"
+      assert jerr.message =~ "mock error"
+
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :result)
+      GenServer.stop(pid)
+    end
+
+    test "unknown-id messages are routed to raw PubSub", %{endpoint: endpoint} do
+      {:ok, pid} = WSConnection.start_link(endpoint)
+      endpoint_id = endpoint.id
+      assert TestHelper.eventually(fn -> WSConnection.status(endpoint_id).connected end)
+
+      Phoenix.PubSub.subscribe(Livechain.PubSub, "raw_messages:#{endpoint.chain_name}")
+
+      # Emit a message with an id that isn't tracked as pending
+      ws_state = :sys.get_state(pid)
+      mock_client_pid = ws_state.connection
+      unknown = %{"jsonrpc" => "2.0", "id" => "deadbeef", "result" => %{"ok" => true}}
+      TestSupport.MockWSClient.emit_message(mock_client_pid, unknown)
+
+      assert_receive {:raw_message, ^endpoint_id, ^unknown, _}, 1000
+      GenServer.stop(pid)
+    end
+
     test "handles multiple simultaneous requests with correct correlation", %{endpoint: endpoint} do
       {:ok, pid} = WSConnection.start_link(endpoint)
 
@@ -1059,6 +1185,22 @@ defmodule Livechain.RPC.WSConnectionTest do
   end
 
   describe "Refined Request Timeout Testing" do
+    test "timeout error includes expected code and message", %{endpoint: endpoint} do
+      {:ok, pid} = WSConnection.start_link(endpoint)
+      assert TestHelper.eventually(fn -> WSConnection.status(endpoint.id).connected end)
+
+      ws_state = :sys.get_state(pid)
+      mock_client_pid = ws_state.connection
+      TestSupport.MockWSClient.set_response_delay(mock_client_pid, 1000)
+
+      result = WSConnection.request(endpoint.id, "eth_timeout", [], 100)
+      assert {:error, %Livechain.JSONRPC.Error{code: -32000, message: msg}} = result
+      assert msg =~ "timeout"
+
+      TestSupport.MockWSClient.set_response_delay(mock_client_pid, 0)
+      GenServer.stop(pid)
+    end
+
     test "request times out when no response received", %{endpoint: endpoint} do
       {:ok, pid} = WSConnection.start_link(endpoint)
 

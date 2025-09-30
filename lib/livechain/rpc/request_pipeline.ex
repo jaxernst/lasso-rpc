@@ -610,14 +610,31 @@ defmodule Livechain.RPC.RequestPipeline do
         attempt_request_on_channels(rest_channels, rpc_request, timeout)
 
       {:error, reason} ->
-        # For other errors, we could implement retry logic here
-        # For now, propagate the error
-        Logger.warning("Channel request failed",
-          channel: Channel.to_string(channel),
-          error: inspect(reason)
-        )
+        # Check if error is retriable and we have more channels to try
+        should_retry =
+          case reason do
+            %JError{retriable?: true} -> true
+            _ -> false
+          end
 
-        {:error, reason}
+        if should_retry and rest_channels != [] do
+          Logger.info("Retriable error on channel, failing over to next",
+            channel: Channel.to_string(channel),
+            error: inspect(reason),
+            remaining_channels: length(rest_channels)
+          )
+
+          attempt_request_on_channels(rest_channels, rpc_request, timeout)
+        else
+          Logger.warning("Channel request failed - no failover",
+            channel: Channel.to_string(channel),
+            error: inspect(reason),
+            retriable: should_retry,
+            remaining_channels: length(rest_channels)
+          )
+
+          {:error, reason}
+        end
     end
   end
 

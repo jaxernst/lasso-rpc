@@ -50,13 +50,17 @@ defmodule Livechain.RPC.ErrorNormalizer do
     message = Map.get(error, "message", "Unknown error")
     data = Map.get(error, "data")
 
+    # Detect authentication/authorization errors by message content
+    # These should be retriable (failover to other providers that may not require auth)
+    {category, retriable?} = categorize_and_assess_retriability(code, message)
+
     JError.new(code, message,
       data: data,
       provider_id: provider_id,
       source: context,
       transport: transport,
-      category: categorize_jsonrpc_error(code),
-      retriable?: retriable_jsonrpc_error?(code)
+      category: category,
+      retriable?: retriable?
     )
   end
 
@@ -456,4 +460,54 @@ defmodule Livechain.RPC.ErrorNormalizer do
   defp retriable_jsonrpc_error?(code) when code >= -32099 and code <= -32000, do: true
   # Application errors - usually retriable
   defp retriable_jsonrpc_error?(_), do: true
+
+  # Error categorization with message content inspection
+  # Simple string matching - no regex needed
+
+  # Authentication error keywords
+  @auth_keywords [
+    "unauthorized",
+    "authentication",
+    "authenticate",
+    "api key",
+    "forbidden",
+    "access denied",
+    "permission denied"
+  ]
+
+  # Rate limit keywords
+  @rate_limit_keywords [
+    "rate limit",
+    "too many requests",
+    "throttled",
+    "quota exceeded",
+    "capacity exceeded"
+  ]
+
+  defp categorize_and_assess_retriability(code, message) when is_binary(message) do
+    message_lower = String.downcase(message)
+
+    cond do
+      # Auth errors should trigger failover (other providers may not require auth)
+      contains_any?(message_lower, @auth_keywords) ->
+        {:auth_error, true}
+
+      # Rate limits should trigger failover
+      contains_any?(message_lower, @rate_limit_keywords) ->
+        {:rate_limit, true}
+
+      # Fall back to code-based categorization
+      true ->
+        {categorize_jsonrpc_error(code), retriable_jsonrpc_error?(code)}
+    end
+  end
+
+  # Catch-all for non-string messages
+  defp categorize_and_assess_retriability(code, _message) do
+    {categorize_jsonrpc_error(code), retriable_jsonrpc_error?(code)}
+  end
+
+  defp contains_any?(message, keywords) do
+    Enum.any?(keywords, fn keyword -> String.contains?(message, keyword) end)
+  end
 end

@@ -14,6 +14,7 @@ Application.put_env(:livechain, :ws_client_module, TestSupport.MockWSClient)
 # Load support modules
 Code.require_file("test/support/mock_http_client.ex")
 Code.require_file("test/support/mock_ws_client.ex")
+Code.require_file("test/support/failing_ws_client.ex")
 
 # Ensure test isolation by resetting benchmark store between tests
 ExUnit.configure(
