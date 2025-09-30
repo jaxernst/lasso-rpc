@@ -11,7 +11,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
   alias Livechain.RPC.{Selection, SelectionContext, ClientSubscriptionRegistry}
   alias Livechain.RPC.StreamSupervisor
   alias Livechain.RPC.StreamCoordinator
-  alias Livechain.RPC.WSConnection
+  alias Livechain.RPC.{TransportRegistry, Channel}
   alias Livechain.RPC.FilterNormalizer
   alias Livechain.Config.ConfigStore
   alias Livechain.Events.Provider
@@ -138,25 +138,48 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       {{prov, key}, new_pending} ->
         # Only proceed if this confirmation matches the provider we expect
         if prov == provider_id do
-          entry = Map.get(state.keys, key)
-          updated_entry = put_in(entry, [:upstream, provider_id], upstream_id)
-          upstream_index = put_in(state.upstream_index, [provider_id, upstream_id], key)
+          case Map.get(state.keys, key) do
+            nil ->
+              Logger.warning(
+                "Received subscription confirmation for unknown key: #{inspect(key)}"
+              )
 
-          # Mark capability for this provider/key as supported
-          cap = capability_from_key(key)
-          provider_caps = put_in(state.provider_caps, [provider_id, cap], true)
+              {:noreply, %{state | pending_subscribe: new_pending}}
 
-          # Notify coordinator that upstream is confirmed
-          StreamCoordinator.upstream_confirmed(state.chain, key, provider_id, upstream_id)
+            entry ->
+              updated_entry = put_in(entry, [:upstream, provider_id], upstream_id)
 
-          {:noreply,
-           %{
-             state
-             | keys: Map.put(state.keys, key, updated_entry),
-               upstream_index: upstream_index,
-               pending_subscribe: new_pending,
-               provider_caps: provider_caps
-           }}
+              # Build nested upstream_index map
+              upstream_index =
+                Map.update(
+                  state.upstream_index,
+                  provider_id,
+                  %{upstream_id => key},
+                  fn provider_map ->
+                    Map.put(provider_map, upstream_id, key)
+                  end
+                )
+
+              # Mark capability for this provider/key as supported
+              cap = capability_from_key(key)
+
+              provider_caps =
+                Map.update(state.provider_caps, provider_id, %{cap => true}, fn provider_map ->
+                  Map.put(provider_map, cap, true)
+                end)
+
+              # Notify coordinator that upstream is confirmed
+              StreamCoordinator.upstream_confirmed(state.chain, key, provider_id, upstream_id)
+
+              {:noreply,
+               %{
+                 state
+                 | keys: Map.put(state.keys, key, updated_entry),
+                   upstream_index: upstream_index,
+                   pending_subscribe: new_pending,
+                   provider_caps: provider_caps
+               }}
+          end
         else
           {:noreply, %{state | pending_subscribe: new_pending}}
         end
@@ -194,7 +217,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
                  )
                ) do
             {:ok, next_provider} ->
-              request_id2 = send_upstream_subscribe(next_provider, key)
+              request_id2 = send_upstream_subscribe(state.chain, next_provider, key)
               telemetry_upstream(:subscribe, state.chain, next_provider, key)
 
               updated_entry =
@@ -305,7 +328,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
                    protocol: :ws
                  )
                ) do
-          request_id = send_upstream_subscribe(provider_id, key)
+          request_id = send_upstream_subscribe(state.chain, provider_id, key)
           telemetry_upstream(:subscribe, state.chain, provider_id, key)
 
           entry = %{
@@ -378,7 +401,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
     end
   end
 
-  defp send_upstream_subscribe(provider_id, {:newHeads}) do
+  defp send_upstream_subscribe(chain, provider_id, {:newHeads}) do
     id = generate_id()
 
     message = %{
@@ -388,11 +411,17 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       "params" => ["newHeads"]
     }
 
-    WSConnection.send_message(provider_id, message)
+    Logger.debug("Sending upstream eth_subscribe to #{provider_id} with id #{id}")
+
+    # Use Channel abstraction instead of direct WSConnection call
+    # This supports dynamic providers that weren't started via ChainSupervisor init
+    result = send_via_channel(chain, provider_id, message)
+
+    Logger.debug("Channel send result: #{inspect(result)}")
     id
   end
 
-  defp send_upstream_subscribe(provider_id, {:logs, filter}) do
+  defp send_upstream_subscribe(chain, provider_id, {:logs, filter}) do
     id = generate_id()
     normalized = FilterNormalizer.normalize(filter)
 
@@ -403,8 +432,37 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       "params" => ["logs", normalized]
     }
 
-    WSConnection.send_message(provider_id, message)
+    Logger.debug("Sending upstream eth_subscribe (logs) to #{provider_id} with id #{id}")
+
+    # Use Channel abstraction instead of direct WSConnection call
+    result = send_via_channel(chain, provider_id, message)
+
+    Logger.debug("Channel send result: #{inspect(result)}")
     id
+  end
+
+  # Helper to send message via Channel (falls back to WSConnection for compatibility)
+  defp send_via_channel(chain, provider_id, message) do
+    case TransportRegistry.get_channel(chain, provider_id, :ws) do
+      {:ok, channel} ->
+        # Channel exists, use it
+        case Channel.request(channel, message, 5_000) do
+          {:ok, _result} -> :ok
+          {:error, _reason} = error -> error
+        end
+
+      {:error, _reason} ->
+        # Fall back to direct WSConnection for providers started by ChainSupervisor
+        # This maintains backward compatibility during transition
+        case GenServer.whereis({:via, Registry, {Livechain.Registry, {:ws_conn, provider_id}}}) do
+          nil ->
+            {:error, :no_ws_connection}
+
+          _pid ->
+            # WSConnection exists, send directly (fire and forget style)
+            Livechain.RPC.WSConnection.send_message(provider_id, message)
+        end
+    end
   end
 
   defp send_upstream_unsubscribe(_provider_id, _key, _upstream_id) do

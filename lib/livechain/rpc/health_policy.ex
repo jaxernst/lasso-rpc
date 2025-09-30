@@ -6,6 +6,7 @@ defmodule Livechain.RPC.HealthPolicy do
   Performance signals: rolling success rate, latency EMA, optional head-lag
   """
 
+  @derive {Jason.Encoder, only: [:availability, :cooldown_until, :consecutive_failures]}
   alias Livechain.JSONRPC.Error, as: JError
 
   @type context :: :health_check | :live_traffic

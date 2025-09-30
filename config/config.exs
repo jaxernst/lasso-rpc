@@ -64,9 +64,7 @@ config :tailwind,
   ]
 
 # Logger configuration
-config :logger, :console,
-  format: "$time $metadata[$level] $message\n",
-  metadata: :all
+config :logger, :console, format: "$time $metadata[$level] $message\n"
 
 # Environment specific configs
 import_config "#{config_env()}.exs"

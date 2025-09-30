@@ -18,7 +18,7 @@ defmodule Livechain.RPC.Selection do
   require Logger
 
   alias Livechain.Config.ConfigStore
-  alias Livechain.RPC.{ProviderPool, Strategy, SelectionContext, ProviderRegistry, Channel}
+  alias Livechain.RPC.{ProviderPool, Strategy, SelectionContext, TransportRegistry, Channel}
 
   @doc """
   Picks the best provider using simple parameters.
@@ -148,11 +148,17 @@ defmodule Livechain.RPC.Selection do
     pool_filters = %{protocol: transport, exclude: exclude}
     provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
 
-    # Build channel candidates via ProviderRegistry (enforces channel-level health/capabilities)
+    require Logger
+
+    Logger.debug(
+      "Selection.select_channels for #{chain}/#{method}: found #{length(provider_candidates)} provider candidates: #{inspect(Enum.map(provider_candidates, & &1.id))}"
+    )
+
+    # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
     # Map provider list into channels, lazily opening as needed
     channels =
       provider_candidates
-      |> Enum.flat_map(fn %{id: provider_id} ->
+      |> Enum.flat_map(fn %{id: provider_id, config: provider_config} ->
         transports =
           case method do
             "eth_subscribe" ->
@@ -171,7 +177,11 @@ defmodule Livechain.RPC.Selection do
 
         transports
         |> Enum.flat_map(fn t ->
-          case ProviderRegistry.get_channel(chain, provider_id, t, method: method) do
+          # Pass provider_config through opts for dynamic providers
+          case TransportRegistry.get_channel(chain, provider_id, t,
+                 method: method,
+                 provider_config: provider_config
+               ) do
             {:ok, channel} -> [channel]
             _ -> []
           end
@@ -191,7 +201,7 @@ defmodule Livechain.RPC.Selection do
   @spec select_provider_channel(String.t(), String.t(), :http | :ws, keyword()) ::
           {:ok, Channel.t()} | {:error, term()}
   def select_provider_channel(chain, provider_id, transport, opts \\ []) do
-    ProviderRegistry.get_channel(chain, provider_id, transport, opts)
+    TransportRegistry.get_channel(chain, provider_id, transport, opts)
   end
 
   ## Private Functions

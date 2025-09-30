@@ -2,12 +2,20 @@ defmodule Livechain.Battle.MockProvider do
   @moduledoc """
   Mock RPC provider for battle testing.
 
+  ⚠️  **NOT RECOMMENDED** - Use real providers with SetupHelper instead.
+
+  This module provides a minimal HTTP-only mock provider for advanced scenarios.
+  For most battle tests, use SetupHelper.setup_providers() with real external providers.
+
   Simulates an RPC provider with configurable:
   - Latency (fixed delay before responding)
   - Reliability (probability of success vs failure)
   - Response data (customizable JSON-RPC responses)
 
-  Uses Plug.Cowboy to run a real HTTP server on a random port.
+  Limitations:
+  - HTTP only (no WebSocket support)
+  - Does not integrate with ConfigStore
+  - Not representative of real provider behavior
   """
 
   use Plug.Router
@@ -184,57 +192,17 @@ defmodule Livechain.Battle.MockProvider do
     base_port + offset
   end
 
-  defp register_provider_in_config_store(provider_id, url, ws_url, opts) do
-    # Create a minimal provider config
-    provider_config = %Livechain.Config.ChainConfig.Provider{
-      id: Atom.to_string(provider_id),
-      name: opts[:name] || Atom.to_string(provider_id),
-      url: url,
-      ws_url: ws_url,
-      type: opts[:type] || "mock",
-      priority: opts[:priority] || 999,
-      api_key_required: false,
-      region: opts[:region] || "local"
-    }
+  defp register_provider_in_config_store(provider_id, url, _ws_url, opts) do
+    # NOTE: ConfigStore doesn't support dynamic updates.
+    # MockProvider is NOT RECOMMENDED for battle testing.
+    # Use SetupHelper.setup_providers() with real providers instead.
 
-    # Get chain from opts or use "testchain"
-    chain_name = opts[:chain] || "testchain"
-
-    # Try to get existing chain config, or create a new one
-    chain_config =
-      case Livechain.Config.ConfigStore.get_chain(chain_name) do
-        {:error, :not_found} ->
-          # Create minimal chain config
-          %Livechain.Config.ChainConfig{
-            chain_id: opts[:chain_id] || 999,
-            name: chain_name,
-            providers: [provider_config],
-            connection: %Livechain.Config.ChainConfig.Connection{
-              heartbeat_interval: 30_000,
-              reconnect_interval: 5_000,
-              max_reconnect_attempts: 10
-            },
-            failover: %Livechain.Config.ChainConfig.Failover{
-              enabled: true,
-              max_backfill_blocks: 10,
-              backfill_timeout: 5_000
-            }
-          }
-
-        {:ok, existing_config} ->
-          # Add provider to existing config
-          %{existing_config | providers: [provider_config | existing_config.providers]}
-      end
-
-    # Note: ConfigStore doesn't support dynamic updates in current implementation
-    # For battle testing, we'll need to pre-configure chains or use a test-specific store
-    # For Phase 1, we'll just log this
     Logger.debug(
-      "Mock provider #{provider_id} registered (chain: #{chain_name}, url: #{url})"
+      "Mock provider #{provider_id} started (url: #{url}) - NOT registered in ConfigStore"
     )
 
-    # Return the chain config for caller to use
-    {chain_name, chain_config}
+    # Return minimal info for logging
+    {opts[:chain] || "mockchain", nil}
   end
 
   # Plug.Cowboy callback

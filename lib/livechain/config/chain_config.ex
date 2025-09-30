@@ -285,7 +285,14 @@ defmodule Livechain.Config.ChainConfig do
     :ok = validate_connection(chain_config.connection)
   end
 
-  defp validate_providers([]), do: {:error, :no_providers}
+  defp validate_providers([]) do
+    # Allow empty providers in test environment for dynamic registration
+    if Mix.env() == :test do
+      :ok
+    else
+      {:error, :no_providers}
+    end
+  end
 
   defp validate_providers(providers) do
     if Enum.all?(providers, &valid_provider?/1) do

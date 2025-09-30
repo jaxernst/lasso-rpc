@@ -19,7 +19,7 @@ defmodule Livechain.RPC.ChainSupervisor do
   require Logger
 
   alias Livechain.Config.ChainConfig
-  alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker, ProviderRegistry}
+  alias Livechain.RPC.{WSConnection, WSEndpoint, ProviderPool, CircuitBreaker, TransportRegistry}
   alias Livechain.RPC.ProviderHealthMonitor
   alias Livechain.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
 
@@ -57,6 +57,92 @@ defmodule Livechain.RPC.ChainSupervisor do
     ProviderPool.get_active_providers(chain_name)
   end
 
+  @doc """
+  Dynamically adds a provider to a running chain supervisor.
+
+  This function:
+  - Starts circuit breakers for HTTP and WebSocket transports
+  - Registers the provider with ProviderPool
+  - Starts a WebSocket connection if ws_url is present
+
+  The provider becomes immediately available for request routing.
+
+  ## Options
+  - `:start_ws` - Whether to start WebSocket connection (:auto | :force | :skip). Default: :auto
+
+  ## Example
+      ensure_provider("ethereum", %{
+        id: "new_provider",
+        name: "New Provider",
+        url: "https://rpc.example.com",
+        ws_url: "wss://ws.example.com",
+        type: "premium",
+        priority: 100
+      })
+  """
+  @spec ensure_provider(String.t(), map(), keyword()) :: :ok | {:error, term()}
+  def ensure_provider(chain_name, provider_config, opts \\ []) do
+    with {:ok, chain_config} <- get_chain_config(chain_name),
+         :ok <- start_circuit_breakers_for_provider(chain_name, provider_config),
+         :ok <- ProviderPool.register_provider(chain_name, provider_config.id, provider_config),
+         :ok <- maybe_start_ws_connection(chain_name, provider_config, chain_config, opts) do
+      :ok
+    else
+      {:error, reason} = error ->
+        Logger.error(
+          "Failed to add provider #{provider_config.id} to #{chain_name}: #{inspect(reason)}"
+        )
+
+        error
+    end
+  end
+
+  @doc """
+  Removes a provider from a running chain supervisor.
+
+  This function:
+  - Closes all transport channels (HTTP and WebSocket)
+  - Stops WebSocket connection process if running
+  - Terminates circuit breakers
+  - Unregisters provider from ProviderPool
+
+  The provider is immediately removed from request routing.
+
+  ## Example
+      remove_provider("ethereum", "old_provider")
+  """
+  @spec remove_provider(String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_provider(chain_name, provider_id) do
+    # Close transport channels
+    TransportRegistry.close_channel(chain_name, provider_id, :http)
+    TransportRegistry.close_channel(chain_name, provider_id, :ws)
+
+    # Stop WebSocket connection if running (use brutal_kill if normal shutdown fails)
+    case GenServer.whereis({:via, Registry, {Livechain.Registry, {:ws_conn, provider_id}}}) do
+      nil ->
+        :ok
+
+      pid ->
+        try do
+          GenServer.stop(pid, :normal, 1_000)
+        catch
+          :exit, _ ->
+            # Force kill if graceful shutdown fails
+            Process.exit(pid, :kill)
+            :ok
+        end
+    end
+
+    # Stop circuit breakers
+    stop_circuit_breakers_for_provider(chain_name, provider_id)
+
+    # Unregister from pool
+    :ok = ProviderPool.unregister_provider(chain_name, provider_id)
+
+    Logger.info("Successfully removed provider #{provider_id} from #{chain_name}")
+    :ok
+  end
+
   # Supervisor callbacks
 
   @impl true
@@ -65,8 +151,8 @@ defmodule Livechain.RPC.ChainSupervisor do
       # Start ProviderPool for health monitoring and performance tracking
       {ProviderPool, {chain_name, chain_config}},
 
-      # Start ProviderRegistry for transport-agnostic channel management
-      {ProviderRegistry, {chain_name, chain_config}},
+      # Start TransportRegistry for transport-agnostic channel management
+      {TransportRegistry, {chain_name, chain_config}},
 
       # Start dynamic supervisor to manage WS connections
       {DynamicSupervisor, strategy: :one_for_one, name: connection_supervisor_name(chain_name)},
@@ -238,4 +324,93 @@ defmodule Livechain.RPC.ChainSupervisor do
   end
 
   defp collect_ws_connection_status(_), do: []
+
+  # Dynamic provider management helpers
+
+  defp get_chain_config(chain_name) do
+    case Livechain.Config.ConfigStore.get_chain(chain_name) do
+      {:ok, config} ->
+        {:ok, config}
+
+      {:error, :not_found} ->
+        # For dynamic chains or test scenarios, use minimal config
+        {:ok,
+         %{
+           chain_id: 0,
+           connection: %{
+             heartbeat_interval: 30_000,
+             reconnect_interval: 5_000,
+             max_reconnect_attempts: 10
+           }
+         }}
+    end
+  end
+
+  defp start_circuit_breakers_for_provider(chain_name, provider_config) do
+    # Start HTTP circuit breaker
+    case start_circuit_breaker(chain_name, provider_config, :http) do
+      {:ok, _} -> :ok
+      {:error, {:already_started, _}} -> :ok
+      {:error, reason} -> {:error, {:circuit_breaker_start_failed, :http, reason}}
+    end
+    |> case do
+      :ok ->
+        # Start WS circuit breaker if ws_url present
+        if is_binary(Map.get(provider_config, :ws_url)) do
+          case start_circuit_breaker(chain_name, provider_config, :ws) do
+            {:ok, _} -> :ok
+            {:error, {:already_started, _}} -> :ok
+            {:error, reason} -> {:error, {:circuit_breaker_start_failed, :ws, reason}}
+          end
+        else
+          :ok
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp maybe_start_ws_connection(chain_name, provider_config, chain_config, opts) do
+    start_ws = Keyword.get(opts, :start_ws, :auto)
+    ws_url = Map.get(provider_config, :ws_url)
+
+    should_start_ws? =
+      case start_ws do
+        :force -> true
+        :skip -> false
+        :auto -> is_binary(ws_url)
+      end
+
+    if should_start_ws? do
+      case ws_url do
+        nil ->
+          {:error, :no_ws_url}
+
+        url when is_binary(url) ->
+          start_provider_connection(chain_name, provider_config, chain_config)
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp stop_circuit_breakers_for_provider(chain_name, provider_id) do
+    # Try to stop both HTTP and WS circuit breakers
+    for transport <- [:http, :ws] do
+      cb_name =
+        {:via, Registry, {Livechain.Registry, {:circuit_breaker, "#{provider_id}:#{transport}"}}}
+
+      case GenServer.whereis(cb_name) do
+        nil ->
+          :ok
+
+        pid ->
+          DynamicSupervisor.terminate_child(circuit_breaker_supervisor_name(chain_name), pid)
+      end
+    end
+
+    :ok
+  end
 end
