@@ -14,7 +14,8 @@ defmodule Livechain.Config.ConfigStore do
   use GenServer
   require Logger
 
-  alias Livechain.Config.{ChainConfig, ProviderConfig}
+  alias Livechain.Config.ChainConfig
+  alias Livechain.Config.ChainConfig.Provider
 
   @config_table :livechain_config_store
   @chains_key :chains
@@ -147,6 +148,41 @@ defmodule Livechain.Config.ConfigStore do
   end
 
   @doc """
+  Registers a provider configuration in-memory (runtime only, not persisted to YAML).
+
+  This allows dynamically added providers to be found by TransportRegistry and other
+  components that query ConfigStore. The provider is added to the chain's provider list.
+
+  ## Example
+
+      ConfigStore.register_provider_runtime("ethereum", %{
+        id: "dynamic_provider",
+        name: "Dynamic Provider",
+        url: "https://rpc.example.com",
+        type: "test",
+        priority: 100
+      })
+
+  ## Returns
+
+  `:ok` on success, `{:error, reason}` if chain not found or provider ID already exists.
+  """
+  @spec register_provider_runtime(String.t(), map()) :: :ok | {:error, term()}
+  def register_provider_runtime(chain_name, provider_attrs) do
+    GenServer.call(__MODULE__, {:register_provider_runtime, chain_name, provider_attrs})
+  end
+
+  @doc """
+  Unregisters a provider from in-memory configuration (runtime only).
+
+  Removes the provider from the chain's provider list in ConfigStore.
+  """
+  @spec unregister_provider_runtime(String.t(), String.t()) :: :ok | {:error, term()}
+  def unregister_provider_runtime(chain_name, provider_id) do
+    GenServer.call(__MODULE__, {:unregister_provider_runtime, chain_name, provider_id})
+  end
+
+  @doc """
   Reloads configuration from the configured path.
   This atomically swaps the stored configuration.
   """
@@ -195,6 +231,60 @@ defmodule Livechain.Config.ConfigStore do
       {:error, reason} ->
         Logger.error("Failed to initialize ConfigStore: #{inspect(reason)}")
         {:stop, reason}
+    end
+  end
+
+  @impl true
+  def handle_call({:register_provider_runtime, chain_name, provider_attrs}, _from, state) do
+    case get_chain(chain_name) do
+      {:ok, chain_config} ->
+        provider_config = normalize_provider_config(provider_attrs)
+        provider_id = Map.get(provider_config, :id)
+
+        # Check if provider already exists
+        if Enum.any?(chain_config.providers, &(&1.id == provider_id)) do
+          {:reply, {:error, {:already_exists, provider_id}}, state}
+        else
+          # Add provider to chain config
+          updated_providers = chain_config.providers ++ [provider_config]
+          updated_chain = %{chain_config | providers: updated_providers}
+
+          # Update ETS
+          [{@chains_key, chains}] = :ets.lookup(@config_table, @chains_key)
+          updated_chains = Map.put(chains, chain_name, updated_chain)
+          :ets.insert(@config_table, {@chains_key, updated_chains})
+
+          Logger.debug("Registered provider #{provider_id} for #{chain_name} in ConfigStore (runtime)")
+          {:reply, :ok, state}
+        end
+
+      {:error, :not_found} ->
+        {:reply, {:error, :chain_not_found}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:unregister_provider_runtime, chain_name, provider_id}, _from, state) do
+    case get_chain(chain_name) do
+      {:ok, chain_config} ->
+        updated_providers = Enum.reject(chain_config.providers, &(&1.id == provider_id))
+
+        if length(updated_providers) == length(chain_config.providers) do
+          {:reply, {:error, :provider_not_found}, state}
+        else
+          updated_chain = %{chain_config | providers: updated_providers}
+
+          # Update ETS
+          [{@chains_key, chains}] = :ets.lookup(@config_table, @chains_key)
+          updated_chains = Map.put(chains, chain_name, updated_chain)
+          :ets.insert(@config_table, {@chains_key, updated_chains})
+
+          Logger.debug("Unregistered provider #{provider_id} from #{chain_name} in ConfigStore (runtime)")
+          {:reply, :ok, state}
+        end
+
+      {:error, :not_found} ->
+        {:reply, {:error, :chain_not_found}, state}
     end
   end
 
@@ -278,5 +368,19 @@ defmodule Livechain.Config.ConfigStore do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp normalize_provider_config(attrs) when is_map(attrs) do
+    # Convert to Provider struct
+    %Provider{
+      id: Map.get(attrs, :id) || Map.get(attrs, "id"),
+      name: Map.get(attrs, :name) || Map.get(attrs, "name"),
+      url: Map.get(attrs, :url) || Map.get(attrs, "url"),
+      ws_url: Map.get(attrs, :ws_url) || Map.get(attrs, "ws_url"),
+      type: Map.get(attrs, :type) || Map.get(attrs, "type") || "public",
+      priority: Map.get(attrs, :priority) || Map.get(attrs, "priority") || 100,
+      api_key_required: Map.get(attrs, :api_key_required) || Map.get(attrs, "api_key_required") || false,
+      region: Map.get(attrs, :region) || Map.get(attrs, "region") || "global"
+    }
   end
 end

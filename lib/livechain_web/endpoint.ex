@@ -19,7 +19,7 @@ defmodule LivechainWeb.Endpoint do
 
   # JSON-RPC WebSocket endpoints with route parameters
   # Using /ws/rpc/:chain_id path to avoid conflicts with HTTP /rpc/:chain_id
-  socket("/rpc/:chain_id", LivechainWeb.RPCSocket,
+  socket("/ws/rpc/:chain_id", LivechainWeb.RPCSocket,
     websocket: [path: ""],
     longpoll: false
   )

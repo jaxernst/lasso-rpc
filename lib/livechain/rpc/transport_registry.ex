@@ -1,18 +1,28 @@
-defmodule Livechain.RPC.ProviderRegistry do
+defmodule Livechain.RPC.TransportRegistry do
   @moduledoc """
-  Registry for managing provider channels across different transports.
+  Registry for managing transport channels across different providers and protocols.
 
   This module provides a unified interface for opening, managing, and selecting
   channels (HTTP pools, WebSocket connections) for different providers and transports.
   It acts as the bridge between the transport-agnostic RequestPipeline and the
   concrete transport implementations.
 
-  Each provider can have multiple channels:
+  Each provider can have multiple transport channels:
   - HTTP channel (connection pool)
-  - WebSocket channel (persistent connection/pool)
+  - WebSocket channel (persistent connection)
 
   The registry maintains channel lifecycle, health status, and provides
-  selection capabilities for the routing logic.
+  channel selection capabilities for the routing logic.
+  
+  Responsibilities:
+  - Lazy channel opening (on-demand)
+  - Channel health monitoring
+  - Capability caching (supported methods, subscription support)
+  - Channel lifecycle management
+  
+  Not responsible for:
+  - Provider health/availability (see ProviderPool)
+  - Provider selection strategy (see Selection)
   """
 
   use GenServer
@@ -38,7 +48,7 @@ defmodule Livechain.RPC.ProviderRegistry do
   @type channel_map :: %{transport => Channel.t()}
 
   @doc """
-  Starts the ProviderRegistry for a chain.
+  Starts the TransportRegistry for a chain.
   """
   @spec start_link({chain_name, map()}) :: GenServer.on_start()
   def start_link({chain_name, chain_config}) do
@@ -187,7 +197,15 @@ defmodule Livechain.RPC.ProviderRegistry do
   end
 
   defp create_channel(state, provider_id, transport, opts) do
-    case ConfigStore.get_provider(state.chain_name, provider_id) do
+    # Try to get provider config from opts first (for dynamic providers),
+    # fallback to ConfigStore for config-file providers
+    provider_config_result =
+      case Keyword.get(opts, :provider_config) do
+        nil -> ConfigStore.get_provider(state.chain_name, provider_id)
+        config when is_map(config) -> {:ok, config}
+      end
+
+    case provider_config_result do
       {:ok, provider_config} ->
         transport_module = get_transport_module(transport)
         channel_opts = Keyword.put(opts, :provider_id, provider_id)
@@ -335,6 +353,6 @@ defmodule Livechain.RPC.ProviderRegistry do
   defp get_transport_module(:ws), do: Livechain.RPC.Transport.WebSocket
 
   defp via_name(chain_name) do
-    {:via, Registry, {Livechain.Registry, {:provider_registry, chain_name}}}
+    {:via, Registry, {Livechain.Registry, {:transport_registry, chain_name}}}
   end
 end

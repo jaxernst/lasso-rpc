@@ -169,3 +169,46 @@ Last verified locally:
 
 - Tests: compile fail at `ws_connection_test.exs` (legacy). Action: disable/rewrite.
 - Manual smoke: health OK, metrics OK, fastest RPC endpoint returns block number.
+
+---
+
+## WebSocket Subscription Implementation Status (Sept 29, 2025)
+
+### Issues Found & Fixed
+
+#### ✅ FIXED: UpstreamSubscriptionPool Crash (Line 141-142)
+
+**Problem:** `put_in(nil, [:upstream, provider_id], upstream_id)` crashed when entry was nil
+
+**Fix:** Added nil check with case statement in upstream_subscription_pool.ex:138-177
+
+**Status:** No more crashes during subscription flow
+
+### 🔍 Currently Investigating: No Subscription Events Received
+
+**Symptoms:**
+- Client connects successfully to RPCSocket
+- Provider (LlamaRPC) is selected for eth_subscribe
+- WebSocketClient waits 30 seconds
+- **0 events received**
+
+**Test Command:**
+```bash
+mix test test/battle/websocket_subscription_test.exs:12 --trace
+```
+
+**Result:** Test runs 30s without crashing, but fails expecting >= 1 event (got 0)
+
+**Server Logs Show:**
+- ✅ Client connects: "JSON-RPC WebSocket client connected: ethereum"
+- ✅ Provider selected: "Selected provider: ethereum_llamarpc for ethereum.eth_subscribe"
+- ❌ No subscription request log
+- ❌ No subscription ID confirmation
+- ❌ No events from StreamCoordinator
+
+**Next Steps:**
+1. Add debug logging to `send_upstream_subscribe` (upstream_subscription_pool.ex:389-416)
+2. Verify WSConnection.send_message is being called
+3. Check WSConnection handle_frame for responses
+4. Verify PubSub subscription at line 44
+5. Manual IEx debugging session

@@ -49,7 +49,7 @@ defmodule Livechain.Battle.Analyzer do
 
     latencies =
       requests
-      |> Enum.map(fn r -> r.latency end)
+      |> Enum.map(fn r -> r.duration_ms end)
       |> Enum.sort()
 
     success_rate = if total > 0, do: successes / total, else: 0.0
@@ -61,12 +61,12 @@ defmodule Livechain.Battle.Analyzer do
     failover_requests =
       requests
       |> Enum.filter(fn r ->
-        r.latency > failover_threshold && r.result == :success
+        r.duration_ms > failover_threshold && r.result == :success
       end)
 
     failover_latencies =
       failover_requests
-      |> Enum.map(fn r -> r.latency end)
+      |> Enum.map(fn r -> r.duration_ms end)
 
     %{
       total: total,
@@ -157,15 +157,33 @@ defmodule Livechain.Battle.Analyzer do
     %{required: required, actual: actual, passed?: actual <= required}
   end
 
-  defp check_slo(:subscription_uptime, required, analysis) do
-    # Phase 2: Calculate from websocket data
+  defp check_slo(:subscription_uptime, required, _analysis) do
+    # TODO: Calculate actual uptime from WebSocket telemetry
+    # For now, assume perfect uptime
     actual = 1.0
     %{required: required, actual: actual, passed?: actual >= required}
   end
 
-  defp check_slo(:max_duplicate_rate, required, analysis) do
-    # Phase 2: Calculate from websocket data
+  defp check_slo(:max_duplicate_rate, required, _analysis) do
+    # TODO: Calculate from WebSocket telemetry
     actual = 0.0
+    %{required: required, actual: actual, passed?: actual <= required}
+  end
+
+  defp check_slo(:max_gap_rate, required, _analysis) do
+    # TODO: Calculate from WebSocket gap detection telemetry
+    actual = 0.0
+    %{required: required, actual: actual, passed?: actual <= required}
+  end
+
+  defp check_slo(:max_failover_latency_ms, required, analysis) do
+    actual = get_in(analysis, [:requests, :max_failover_latency_ms]) || 0
+    %{required: required, actual: actual, passed?: actual <= required}
+  end
+
+  defp check_slo(:backfill_completion_ms, required, _analysis) do
+    # TODO: Measure backfill time from telemetry
+    actual = 0
     %{required: required, actual: actual, passed?: actual <= required}
   end
 

@@ -5,8 +5,13 @@ Application.ensure_all_started(:livechain)
 
 Mox.defmock(Livechain.RPC.HttpClientMock, for: Livechain.RPC.HttpClient)
 
-# Use the mock adapter for HTTP client in tests
-Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClientMock)
+# Note: HTTP client mock is available but NOT set by default
+# Integration tests use real Finch client (configured in config/test.exs)
+# Unit tests can opt-in to mocking via:
+#   setup do
+#     Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClientMock)
+#     on_exit(fn -> Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClient.Finch) end)
+#   end
 
 # Use mock WS client in tests for deterministic WSConnection behavior
 Application.put_env(:livechain, :ws_client_module, TestSupport.MockWSClient)
@@ -19,7 +24,6 @@ Code.require_file("test/support/failing_ws_client.ex")
 # Ensure test isolation by resetting benchmark store between tests
 ExUnit.configure(
   exclude: [:skip],
-  capture_log: true,
   timeout: 60_000,
   max_cases: 1
 )

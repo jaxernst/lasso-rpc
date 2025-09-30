@@ -104,8 +104,16 @@ defmodule LivechainWeb.RPCController do
     end
   end
 
-  def rpc_base(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
-  def rpc_fastest(conn, params), do: rpc_with_strategy(conn, params, :fastest)
+  def rpc_base(conn, params) do
+    Logger.debug("RPC_BASE called with params: #{inspect(Map.keys(params))}")
+    rpc_with_strategy(conn, params, :cheapest)
+  end
+
+  def rpc_fastest(conn, params) do
+    Logger.debug("RPC_FASTEST called with params: #{inspect(Map.keys(params))}")
+    rpc_with_strategy(conn, params, :fastest)
+  end
+
   def rpc_cheapest(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
   def rpc_priority(conn, params), do: rpc_with_strategy(conn, params, :priority)
   def rpc_round_robin(conn, params), do: rpc_with_strategy(conn, params, :round_robin)

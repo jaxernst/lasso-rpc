@@ -11,16 +11,25 @@ defmodule Livechain.Battle.Collector do
   Starts collecting specified metrics.
 
   Available collectors:
-  - `:requests` - HTTP/RPC request metrics
+  - `:requests` - RPC request metrics (from RequestPipeline)
   - `:circuit_breaker` - Circuit breaker state changes
+  - `:selection` - Provider selection decisions
+  - `:normalization` - Response normalization events
   - `:system` - BEAM VM metrics (memory, processes)
-  - `:websocket` - WebSocket event metrics
+  - `:websocket` - WebSocket subscription events
   """
   def start_collectors(collectors) when is_list(collectors) do
-    # Store collector state in process dictionary (simple for Phase 1)
-    # Phase 2: Use Agent or ETS for better concurrency
+    # Stop existing Agent if present (from previous test run)
+    case Process.whereis(__MODULE__) do
+      pid when is_pid(pid) -> Agent.stop(pid)
+      nil -> :ok
+    end
+
+    # Use Agent for cross-process telemetry collection
+    # Telemetry handlers execute in the caller's process, so we need shared state
+    {:ok, agent} = Agent.start_link(fn -> %{} end, name: __MODULE__)
+    Process.put(:battle_agent, agent)
     Process.put(:battle_collectors, collectors)
-    Process.put(:battle_data, %{})
 
     Enum.each(collectors, fn collector ->
       attach_collector(collector)
@@ -38,9 +47,16 @@ defmodule Livechain.Battle.Collector do
       detach_collector(collector)
     end)
 
-    data = Process.get(:battle_data, %{})
+    # Get data from Agent and stop it
+    agent = Process.get(:battle_agent)
+    data = if agent, do: Agent.get(agent, & &1), else: %{}
+
+    if agent do
+      Agent.stop(agent)
+    end
+
     Process.delete(:battle_collectors)
-    Process.delete(:battle_data)
+    Process.delete(:battle_agent)
 
     Logger.debug("Stopped collectors, collected #{map_size(data)} data points")
     data
@@ -51,10 +67,39 @@ defmodule Livechain.Battle.Collector do
   defp attach_collector(:requests) do
     handler_id = {:battle, :requests, self()}
 
+    # Capture production request telemetry from RequestPipeline
+    result = :telemetry.attach(
+      handler_id,
+      [:livechain, :rpc, :request, :stop],
+      &handle_request_event/4,
+      nil
+    )
+
+    Logger.debug("Attached request collector: #{inspect(result)}, handler_id: #{inspect(handler_id)}")
+    result
+  end
+
+  defp attach_collector(:selection) do
+    handler_id = {:battle, :selection, self()}
+
     :telemetry.attach(
       handler_id,
-      [:livechain, :battle, :request],
-      &handle_request_event/4,
+      [:livechain, :selection, :success],
+      &handle_selection_event/4,
+      nil
+    )
+  end
+
+  defp attach_collector(:normalization) do
+    handler_id = {:battle, :normalization, self()}
+
+    :telemetry.attach_many(
+      handler_id,
+      [
+        [:livechain, :normalize, :result],
+        [:livechain, :normalize, :error]
+      ],
+      &handle_normalization_event/4,
       nil
     )
   end
@@ -80,9 +125,12 @@ defmodule Livechain.Battle.Collector do
   defp attach_collector(:websocket) do
     handler_id = {:battle, :websocket, self()}
 
-    :telemetry.attach(
+    :telemetry.attach_many(
       handler_id,
-      [:livechain, :battle, :websocket],
+      [
+        [:livechain, :subs, :client_subscribe],
+        [:livechain, :subs, :client_unsubscribe]
+      ],
       &handle_websocket_event/4,
       nil
     )
@@ -104,6 +152,16 @@ defmodule Livechain.Battle.Collector do
     :telemetry.detach(handler_id)
   end
 
+  defp detach_collector(:selection) do
+    handler_id = {:battle, :selection, self()}
+    :telemetry.detach(handler_id)
+  end
+
+  defp detach_collector(:normalization) do
+    handler_id = {:battle, :normalization, self()}
+    :telemetry.detach(handler_id)
+  end
+
   defp detach_collector(:system) do
     # Collect final system metrics
     record_system_metrics()
@@ -119,27 +177,83 @@ defmodule Livechain.Battle.Collector do
   # Event handlers
 
   defp handle_request_event(_event_name, measurements, metadata, _config) do
-    data = Process.get(:battle_data, %{})
-    requests = Map.get(data, :requests, [])
-
     request_data = %{
-      latency: measurements.latency,
+      duration_ms: measurements.duration_ms,
       chain: metadata.chain,
       method: metadata.method,
       strategy: metadata.strategy,
+      provider_id: metadata.provider_id,
       result: metadata.result,
-      request_id: metadata.request_id,
+      failovers: metadata.failovers,
+      transport: Map.get(metadata, :transport),
       timestamp: System.monotonic_time(:millisecond)
     }
 
-    updated_requests = [request_data | requests]
-    Process.put(:battle_data, Map.put(data, :requests, updated_requests))
+    Logger.debug("Collector received request event: #{metadata.chain}/#{metadata.method}")
+
+    # Update Agent (shared across processes)
+    try do
+      Agent.update(__MODULE__, fn data ->
+        requests = Map.get(data, :requests, [])
+        Logger.debug("Collector Agent update: #{length(requests)} -> #{length(requests) + 1} requests")
+        Map.put(data, :requests, [request_data | requests])
+      end)
+    catch
+      kind, reason ->
+        Logger.error("Failed to update collector Agent (#{kind}): #{inspect(reason)}")
+    end
+  end
+
+  defp handle_selection_event(_event_name, measurements, metadata, _config) do
+    selection_data = %{
+      count: measurements.count,
+      chain: metadata.chain,
+      method: metadata.method,
+      strategy: metadata.strategy,
+      protocol: metadata.protocol,
+      provider_id: metadata.provider_id,
+      timestamp: System.monotonic_time(:millisecond)
+    }
+
+    Agent.update(__MODULE__, fn data ->
+      selections = Map.get(data, :selections, [])
+      Map.put(data, :selections, [selection_data | selections])
+    end)
+  end
+
+  defp handle_normalization_event(event_name, measurements, metadata, _config) do
+    normalization_data =
+      case event_name do
+        [:livechain, :normalize, :result] ->
+          %{
+            type: :result,
+            count: measurements.count,
+            provider_id: metadata.provider_id,
+            method: metadata.method,
+            status: metadata.status,
+            timestamp: System.monotonic_time(:millisecond)
+          }
+
+        [:livechain, :normalize, :error] ->
+          %{
+            type: :error,
+            count: measurements.count,
+            provider_id: metadata.provider_id,
+            method: metadata.method,
+            code: metadata.code,
+            category: metadata.category,
+            retriable?: metadata.retriable?,
+            timestamp: System.monotonic_time(:millisecond)
+          }
+      end
+
+    Agent.update(__MODULE__, fn data ->
+      normalizations = Map.get(data, :normalizations, [])
+      Map.put(data, :normalizations, [normalization_data | normalizations])
+    end)
   end
 
   defp handle_circuit_breaker_event(_event_name, _measurements, metadata, _config) do
-    data = Process.get(:battle_data, %{})
-    cb_events = Map.get(data, :circuit_breaker, [])
-
     cb_data = %{
       provider_id: metadata.provider_id,
       old_state: metadata.old_state,
@@ -147,30 +261,38 @@ defmodule Livechain.Battle.Collector do
       timestamp: System.monotonic_time(:millisecond)
     }
 
-    updated_cb = [cb_data | cb_events]
-    Process.put(:battle_data, Map.put(data, :circuit_breaker, updated_cb))
+    Agent.update(__MODULE__, fn data ->
+      cb_events = Map.get(data, :circuit_breaker, [])
+      Map.put(data, :circuit_breaker, [cb_data | cb_events])
+    end)
   end
 
-  defp handle_websocket_event(_event_name, measurements, metadata, _config) do
-    data = Process.get(:battle_data, %{})
-    ws_events = Map.get(data, :websocket, [])
+  defp handle_websocket_event(event_name, measurements, metadata, _config) do
+    ws_data =
+      Map.merge(
+        %{
+          event: event_name,
+          timestamp: System.monotonic_time(:millisecond)
+        },
+        Map.merge(measurements, metadata)
+      )
 
-    ws_data = Map.merge(measurements, metadata)
-    updated_ws = [ws_data | ws_events]
-    Process.put(:battle_data, Map.put(data, :websocket, updated_ws))
+    Agent.update(__MODULE__, fn data ->
+      ws_events = Map.get(data, :websocket, [])
+      Map.put(data, :websocket, [ws_data | ws_events])
+    end)
   end
 
   defp record_system_metrics do
-    data = Process.get(:battle_data, %{})
-    system_samples = Map.get(data, :system, [])
-
     sample = %{
       memory_mb: :erlang.memory(:total) / 1_024 / 1_024,
       process_count: :erlang.system_info(:process_count),
       timestamp: System.monotonic_time(:millisecond)
     }
 
-    updated_samples = [sample | system_samples]
-    Process.put(:battle_data, Map.put(data, :system, updated_samples))
+    Agent.update(__MODULE__, fn data ->
+      system_samples = Map.get(data, :system, [])
+      Map.put(data, :system, [sample | system_samples])
+    end)
   end
 end

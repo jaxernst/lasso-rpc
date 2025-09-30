@@ -14,7 +14,9 @@ defmodule Livechain.Battle.DiagnosticTest do
 
   alias Livechain.Battle.{Scenario, Collector, Analyzer}
 
-  @moduletag :diagnostic
+  @moduletag :battle
+  @moduletag :diagnostic  # Framework validation tests
+  @moduletag :fast        # Quick tests for CI
   @moduletag timeout: :infinity
 
   setup do

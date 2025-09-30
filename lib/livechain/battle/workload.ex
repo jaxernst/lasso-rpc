@@ -9,6 +9,7 @@ defmodule Livechain.Battle.Workload do
   """
 
   require Logger
+  alias Livechain.Battle.WebSocketClient
 
   @doc """
   Generates HTTP requests at a constant rate.
@@ -158,39 +159,9 @@ defmodule Livechain.Battle.Workload do
     :ok
   end
 
-  @doc """
-  Creates WebSocket subscriptions for testing.
-
-  ## Options
-
-  - `:chain` - Target chain name (required)
-  - `:subscription` - Subscription type (e.g., "newHeads") (required)
-  - `:count` - Number of concurrent subscriptions (default: 1)
-  - `:duration` - How long to keep subscriptions open in ms (required)
-
-  ## Example
-
-      Workload.ws_subscribe(
-        chain: "testchain",
-        subscription: "newHeads",
-        count: 5,
-        duration: 60_000
-      )
-  """
-  def ws_subscribe(opts) do
-    # Phase 1: Placeholder
-    # Phase 2: Implement WebSocket client that subscribes and tracks events
-    Logger.info("WebSocket workload (placeholder for Phase 2)")
-    duration = Keyword.fetch!(opts, :duration)
-    Process.sleep(duration)
-    :ok
-  end
-
   # Private helpers
 
   defp make_http_request(chain, method, params, strategy, timeout, request_id) do
-    start_time = System.monotonic_time(:millisecond)
-
     # Build path based on strategy
     path =
       case strategy do
@@ -207,41 +178,32 @@ defmodule Livechain.Battle.Workload do
         "id" => request_id
       })
 
-    # Make request via HTTP client
-    result =
-      case Finch.build(:post, "http://localhost:4000#{path}", [{"content-type", "application/json"}], body)
-           |> Finch.request(Livechain.Finch, receive_timeout: timeout) do
-        {:ok, %Finch.Response{status: 200, body: response_body}} ->
-          case Jason.decode(response_body) do
-            {:ok, %{"result" => _}} -> :success
-            {:ok, %{"error" => error}} -> {:error, error}
-            {:error, _} -> {:error, :invalid_json}
-          end
+    # Make request via HTTP client - production telemetry emitted by RequestPipeline
+    # Use port 4002 in test environment, 4000 otherwise
+    port = if Mix.env() == :test, do: 4002, else: 4000
+    url = "http://localhost:#{port}#{path}"
 
-        {:ok, %Finch.Response{status: status}} ->
-          {:error, {:http_error, status}}
+    Logger.debug("HTTP Request ##{request_id}: POST #{url}")
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+    case Finch.build(:post, url, [{"content-type", "application/json"}], body)
+         |> Finch.request(Livechain.Finch, receive_timeout: timeout) do
+      {:ok, %Finch.Response{status: 200, body: response_body}} ->
+        Logger.debug("HTTP Response ##{request_id}: 200 - #{String.slice(response_body, 0, 100)}")
 
-    end_time = System.monotonic_time(:millisecond)
-    latency = end_time - start_time
+        case Jason.decode(response_body) do
+          {:ok, %{"result" => _}} -> :success
+          {:ok, %{"error" => error}} -> {:error, error}
+          {:error, _} -> {:error, :invalid_json}
+        end
 
-    # Emit telemetry event for collection
-    :telemetry.execute(
-      [:livechain, :battle, :request],
-      %{latency: latency},
-      %{
-        chain: chain,
-        method: method,
-        strategy: strategy,
-        result: result,
-        request_id: request_id
-      }
-    )
+      {:ok, %Finch.Response{status: status, body: body}} ->
+        Logger.warning("HTTP Response ##{request_id}: #{status} - #{body}")
+        {:error, {:http_error, status}}
 
-    result
+      {:error, reason} ->
+        Logger.error("HTTP Error ##{request_id}: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   defp build_cumulative_distribution(methods) do
@@ -272,4 +234,86 @@ defmodule Livechain.Battle.Workload do
     [%{"to" => "0x0000000000000000000000000000000000000000", "data" => "0x"}, "latest"]
   end
   defp default_params_for_method(_), do: []
+
+  @doc """
+  Creates WebSocket subscriptions and collects events.
+
+  ## Options
+
+  - `:chain` - Target chain name (required)
+  - `:subscription` - Subscription type: "newHeads" or {"logs", filter} (required)
+  - `:count` - Number of concurrent subscriptions (default: 1)
+  - `:duration` - Test duration in milliseconds (required)
+  - `:host` - WebSocket host (default: "localhost")
+  - `:port` - WebSocket port (default: 4000)
+
+  ## Returns
+
+  Map with subscription statistics:
+    - `:subscriptions` - Number of subscriptions created
+    - `:events_received` - Total events received across all subscriptions
+    - `:duplicates` - Number of duplicate events detected
+    - `:gaps` - Number of gaps detected (missing events)
+    - `:clients` - List of client PIDs for inspection
+
+  ## Example
+
+      Workload.ws_subscribe(
+        chain: "ethereum",
+        subscription: "newHeads",
+        count: 10,
+        duration: 300_000
+      )
+  """
+  def ws_subscribe(opts) do
+    chain = Keyword.fetch!(opts, :chain)
+    subscription = Keyword.fetch!(opts, :subscription)
+    count = Keyword.get(opts, :count, 1)
+    duration = Keyword.fetch!(opts, :duration)
+    host = Keyword.get(opts, :host, "localhost")
+    port = Keyword.get(opts, :port, 4000)
+
+    Logger.info(
+      "Starting WebSocket workload: #{count} subscription(s) for #{duration}ms"
+    )
+
+    url = "ws://#{host}:#{port}/rpc/#{chain}"
+
+    # Start WebSocket clients
+    clients =
+      for i <- 1..count do
+        {:ok, pid} = WebSocketClient.start_link(url, subscription, "sub_#{i}")
+        pid
+      end
+
+    # Wait for duration
+    Process.sleep(duration)
+
+    # Collect statistics from all clients
+    stats =
+      Enum.map(clients, fn pid ->
+        WebSocketClient.get_stats(pid)
+      end)
+
+    # Aggregate stats
+    total_events = Enum.reduce(stats, 0, fn s, acc -> acc + s.events_received end)
+    total_duplicates = Enum.reduce(stats, 0, fn s, acc -> acc + s.duplicates end)
+    total_gaps = Enum.reduce(stats, 0, fn s, acc -> acc + s.gaps end)
+
+    # Stop clients
+    Enum.each(clients, fn pid -> WebSocketClient.stop(pid) end)
+
+    Logger.info(
+      "WebSocket workload complete: #{total_events} events, #{total_duplicates} duplicates, #{total_gaps} gaps"
+    )
+
+    %{
+      subscriptions: count,
+      events_received: total_events,
+      duplicates: total_duplicates,
+      gaps: total_gaps,
+      clients: clients,
+      per_client_stats: stats
+    }
+  end
 end

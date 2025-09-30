@@ -1,17 +1,51 @@
-# Test-only chain configuration
-# Minimal setup to avoid interference with unit tests
+# Test environment chain configurations
+# Providers are registered dynamically in tests for maximum flexibility
+
 chains:
+  ethereum:
+    chain_id: 1
+    name: "Ethereum Mainnet"
+    providers: [] # Dynamically registered in test setup
+    connection:
+      heartbeat_interval: 30000
+      reconnect_interval: 5000
+      max_reconnect_attempts: 3
+    failover:
+      enabled: true
+      max_backfill_blocks: 10
+      backfill_timeout: 5000
+
+  base:
+    chain_id: 8453
+    name: "Base"
+    providers: [] # Dynamically registered in test setup
+    connection:
+      heartbeat_interval: 30000
+      reconnect_interval: 5000
+      max_reconnect_attempts: 3
+    failover:
+      enabled: true
+      max_backfill_blocks: 10
+      backfill_timeout: 5000
+
+  polygon:
+    chain_id: 137
+    name: "Polygon"
+    providers: [] # Dynamically registered in test setup
+    connection:
+      heartbeat_interval: 30000
+      reconnect_interval: 5000
+      max_reconnect_attempts: 3
+    failover:
+      enabled: true
+      max_backfill_blocks: 10
+      backfill_timeout: 5000
+
+  # Legacy test chain (for unit tests)
   test_chain:
     chain_id: 99999
     name: "Test Chain"
-    providers:
-      - id: "test_provider"
-        name: "Test Provider"
-        priority: 1
-        type: "test"
-        url: "https://test.example.com"
-        ws_url: "wss://test.example.com/ws"
-        api_key_required: false
+    providers: []
     connection:
       heartbeat_interval: 1000
       reconnect_interval: 100

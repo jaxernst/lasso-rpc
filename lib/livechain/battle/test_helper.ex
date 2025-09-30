@@ -2,97 +2,25 @@ defmodule Livechain.Battle.TestHelper do
   @moduledoc """
   Helper functions for battle testing with real Lasso RPC system.
 
-  Provides utilities to:
-  - Configure test chains with mock providers
-  - Start chain supervisors for testing
+  ⚠️  **DEPRECATED** - Most functions removed. Use SetupHelper instead.
+
+  This module now only provides benchmark seeding and utility functions.
+  For provider registration, use SetupHelper.setup_providers().
+
+  Remaining utilities:
   - Seed benchmark data for routing strategies
-  - Clean up test resources
+  - Wait for chain readiness
+  - Direct RPC requests for validation
   """
 
   require Logger
 
-  alias Livechain.Config.ChainConfig
   alias Livechain.RPC.ChainSupervisor
   alias Livechain.Benchmarking.BenchmarkStore
 
-  @doc """
-  Creates a test chain configuration with mock providers.
-
-  ## Example
-
-      TestHelper.create_test_chain("testchain", [
-        {"provider_a", "http://localhost:9000"},
-        {"provider_b", "http://localhost:9001"}
-      ])
-  """
-  def create_test_chain(chain_name, providers) when is_list(providers) do
-    provider_configs =
-      Enum.map(providers, fn {provider_id, url} ->
-        %ChainConfig.Provider{
-          id: provider_id,
-          name: provider_id,
-          url: url,
-          ws_url: String.replace(url, "http://", "ws://") <> "/ws",
-          type: "test",
-          priority: 100,
-          api_key_required: false,
-          region: "local"
-        }
-      end)
-
-    %ChainConfig{
-      chain_id: :rand.uniform(999_999),
-      name: chain_name,
-      providers: provider_configs,
-      connection: %ChainConfig.Connection{
-        heartbeat_interval: 30_000,
-        reconnect_interval: 5_000,
-        max_reconnect_attempts: 10
-      },
-      failover: %ChainConfig.Failover{
-        enabled: true,
-        max_backfill_blocks: 10,
-        backfill_timeout: 5_000
-      }
-    }
-  end
-
-  @doc """
-  Starts a chain supervisor for testing.
-
-  Returns the supervisor PID for later cleanup.
-
-  ## Example
-
-      {:ok, supervisor_pid} = TestHelper.start_test_chain("testchain", chain_config)
-  """
-  def start_test_chain(chain_name, chain_config) do
-    case ChainSupervisor.start_link({chain_name, chain_config}) do
-      {:ok, pid} ->
-        # Wait for chain to be ready
-        wait_for_chain_ready(chain_name, 50)
-        {:ok, pid}
-
-      {:error, {:already_started, pid}} ->
-        Logger.warning("Chain supervisor already started: #{chain_name}")
-        {:ok, pid}
-
-      {:error, reason} = error ->
-        Logger.error("Failed to start chain supervisor: #{inspect(reason)}")
-        error
-    end
-  end
-
-  @doc """
-  Stops a test chain supervisor.
-  """
-  def stop_test_chain(supervisor_pid) when is_pid(supervisor_pid) do
-    try do
-      DynamicSupervisor.terminate_child(Livechain.RPC.Supervisor, supervisor_pid)
-    catch
-      :exit, _ -> :ok
-    end
-  end
+  # REMOVED: create_test_chain, start_test_chain, stop_test_chain
+  # These functions don't work with ConfigStore (read-only after app startup).
+  # Use SetupHelper.setup_providers() for dynamic provider registration instead.
 
   @doc """
   Seeds benchmark data for a chain to influence routing strategies.
@@ -122,27 +50,8 @@ defmodule Livechain.Battle.TestHelper do
     wait_for_chain_ready_impl(chain_name, max_attempts, 0)
   end
 
-  @doc """
-  Cleans up all test resources (chains, benchmarks, etc.).
-  """
-  def cleanup_test_resources(chain_name) do
-    # Stop chain supervisor if running
-    case ChainSupervisor.get_chain_status(chain_name) do
-      %{error: :chain_not_started} ->
-        :ok
-
-      _ ->
-        # Try to find and stop the supervisor
-        try do
-          # This is a simplification - actual cleanup may vary
-          :ok
-        catch
-          _, _ -> :ok
-        end
-    end
-
-    Logger.debug("Cleaned up test resources for #{chain_name}")
-  end
+  # REMOVED: cleanup_test_resources
+  # Use SetupHelper.cleanup_providers() instead.
 
   # Private helpers
 

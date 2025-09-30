@@ -16,7 +16,6 @@ defmodule Livechain.RPC.ProviderPool do
 
   alias Livechain.Events.Provider
   alias Livechain.RPC.HealthPolicy
-  alias Livechain.Config.ConfigStore
 
   defstruct [
     :chain_name,
@@ -162,6 +161,22 @@ defmodule Livechain.RPC.ProviderPool do
     GenServer.cast(via_name(chain_name), {:report_ws_closed, provider_id, code, reason})
   end
 
+  @doc """
+  Unregisters a provider from the pool (for test cleanup).
+  """
+  @spec unregister_provider(chain_name, provider_id) :: :ok
+  def unregister_provider(chain_name, provider_id) do
+    GenServer.call(via_name(chain_name), {:unregister_provider, provider_id})
+  end
+
+  @doc """
+  Gets the WebSocket PID for a provider (for chaos testing).
+  """
+  @spec get_provider_ws_pid(chain_name, provider_id) :: {:ok, pid()} | {:error, :not_found}
+  def get_provider_ws_pid(chain_name, provider_id) do
+    GenServer.call(via_name(chain_name), {:get_provider_ws_pid, provider_id})
+  end
+
   # GenServer callbacks
 
   @impl true
@@ -213,7 +228,7 @@ defmodule Livechain.RPC.ProviderPool do
       |> update_active_providers()
 
     Logger.info(
-      "Registered provider #{provider_id} for #{state.chain_name} (pid: #{inspect(provider_state.pid)})"
+      "Registered provider #{provider_id} for #{state.chain_name} (status: #{provider_state.status}, active_providers: #{inspect(new_state.active_providers)})"
     )
 
     {:reply, :ok, new_state}
@@ -273,6 +288,7 @@ defmodule Livechain.RPC.ProviderPool do
         %{
           id: id,
           name: Map.get(provider.config, :name, id),
+          config: provider.config,
           status: provider.status,
           availability: availability,
           circuit_state: circuit_state,
@@ -300,6 +316,10 @@ defmodule Livechain.RPC.ProviderPool do
 
   @impl true
   def handle_call({:list_candidates, filters}, _from, state) do
+    Logger.debug(
+      "ProviderPool.list_candidates for #{state.chain_name}: active_providers=#{inspect(state.active_providers)}, all_providers=#{inspect(Map.keys(state.providers))}, filters=#{inspect(filters)}"
+    )
+
     candidates =
       state
       |> candidates_ready(filters)
@@ -318,7 +338,27 @@ defmodule Livechain.RPC.ProviderPool do
         }
       end)
 
+    Logger.debug(
+      "ProviderPool.list_candidates for #{state.chain_name}: returning #{length(candidates)} candidates: #{inspect(Enum.map(candidates, & &1.id))}"
+    )
+
     {:reply, candidates, state}
+  end
+
+  @impl true
+  def handle_call({:unregister_provider, provider_id}, _from, state) do
+    new_providers = Map.delete(state.providers, provider_id)
+    new_state = %{state | providers: new_providers}
+    new_state = update_active_providers(new_state)
+    {:reply, :ok, new_state}
+  end
+
+  @impl true
+  def handle_call({:get_provider_ws_pid, provider_id}, _from, state) do
+    case Map.get(state.providers, provider_id) do
+      %{pid: pid} when is_pid(pid) -> {:reply, {:ok, pid}, state}
+      _ -> {:reply, {:error, :not_found}, state}
+    end
   end
 
   @impl true
@@ -369,10 +409,14 @@ defmodule Livechain.RPC.ProviderPool do
             last_health_check: System.system_time(:millisecond)
         }
 
-        publish_provider_event(state.chain_name, provider_id, :ws_closed, %{
-          code: jerr.code,
-          reason: jerr.message
-        })
+        event_details =
+          case jerr do
+            nil -> %{code: nil, reason: "connection closed"}
+            %{code: code, message: msg} -> %{code: code, reason: msg}
+            _ -> %{code: nil, reason: inspect(jerr)}
+          end
+
+        publish_provider_event(state.chain_name, provider_id, :ws_closed, event_details)
 
         new_state = put_provider_and_refresh(state, provider_id, updated)
         {:noreply, new_state}
@@ -623,23 +667,14 @@ defmodule Livechain.RPC.ProviderPool do
   # Selection is centralized in Livechain.RPC.Selection; local strategy functions removed
 
   defp update_active_providers(state) do
-    available_providers =
-      case ConfigStore.get_chain(state.chain_name) do
-        {:ok, cfg} -> cfg.providers
-        _ -> []
-      end
-
-    # Active providers are ones we may route to under normal conditions
+    # Use runtime provider state instead of ConfigStore
+    # This allows dynamically registered providers (battle tests, mocks) to participate
     viable_providers =
-      available_providers
-      |> Enum.filter(fn provider ->
-        case Map.get(state.providers, provider.id) do
-          nil -> false
-          %{status: status} when status in [:healthy, :connecting] -> true
-          _ -> false
-        end
+      state.providers
+      |> Enum.filter(fn {_id, provider} ->
+        provider.status in [:healthy, :connecting]
       end)
-      |> Enum.map(& &1.id)
+      |> Enum.map(fn {id, _provider} -> id end)
 
     %{state | active_providers: viable_providers}
   end

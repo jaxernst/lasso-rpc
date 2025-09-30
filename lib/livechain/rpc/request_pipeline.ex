@@ -12,7 +12,7 @@ defmodule Livechain.RPC.RequestPipeline do
 
   require Logger
 
-  alias Livechain.RPC.{Selection, Transport, ProviderPool, Metrics, ProviderRegistry, Channel}
+  alias Livechain.RPC.{Selection, Transport, ProviderPool, Metrics, TransportRegistry, Channel}
   alias Livechain.Config.ConfigStore
   alias Livechain.JSONRPC.Error, as: JError
   alias Livechain.RPC.CircuitBreaker
@@ -574,7 +574,7 @@ defmodule Livechain.RPC.RequestPipeline do
 
     transports
     |> Enum.map(fn transport ->
-      case ProviderRegistry.get_channel(chain, provider_id, transport) do
+      case TransportRegistry.get_channel(chain, provider_id, transport) do
         {:ok, channel} -> channel
         {:error, _} -> nil
       end

@@ -1,26 +1,28 @@
-# Battle Test Report: Chaos Orchestration Test
+# Battle Test Report: High Concurrency Failover Test
 
-**Date:** 2025-09-30 03:48:23.456079Z
-**Duration:** 102ms
-**Result:** ✅ PASS
+**Date:** 2025-09-30 19:35:58.646851Z
+**Duration:** 1.0min
+**Result:** ❌ FAIL
 
 ## SLO Compliance
 
 | Metric | Required | Actual | Status |
 |--------|----------|--------|--------|
-| Success Rate | 95.0% | 100.0% | ✅ |
+| Success Rate | 95.0% | 0.0% | ❌ |
+| P95 Latency | 2000ms | 0ms | ✅ |
+| Max Memory | 500ms | 150.37 | ✅ |
 
 ## Performance Summary
 
 ### HTTP Requests
 
-- Total: 50
-- Successes: 50
+- Total: 0
+- Successes: 0
 - Failures: 0
-- Success Rate: 100.0%
-- P50 Latency: 76ms
-- P95 Latency: 97ms
-- P99 Latency: 99ms
+- Success Rate: 0.0%
+- P50 Latency: 0ms
+- P95 Latency: 0ms
+- P99 Latency: 0ms
 
 ### Circuit Breakers
 
@@ -31,16 +33,16 @@
 
 ### System Health
 
-- Peak Memory: 0MB
-- Avg Memory: 0MB
-- Peak Processes: 0
-- Avg Processes: 0
+- Peak Memory: 150.37MB
+- Avg Memory: 141.08MB
+- Peak Processes: 891
+- Avg Processes: 751
 
 
 ## Raw Data
 
-- Report ID: `20250930T034823.354223Z_cc67da40`
-- JSON Report: `20250930T034823.354223Z_cc67da40.json`
+- Report ID: `20250930T193457.642181Z_9fbde0a5`
+- JSON Report: `20250930T193457.642181Z_9fbde0a5.json`
 
 ---
 

@@ -17,31 +17,33 @@ defmodule Livechain.Battle.Chaos do
   ## Options
 
   - `:delay` - Milliseconds to wait before killing (default: 0)
+  - `:chain` - Chain name (required)
 
   ## Example
 
-      Chaos.kill_provider("provider_a", delay: 10_000)
-      # Waits 10s, then terminates provider_a
+      Chaos.kill_provider("provider_a", chain: "ethereum", delay: 10_000)
+      # Waits 10s, then terminates provider_a on ethereum chain
   """
   def kill_provider(provider_id, opts \\ []) do
-    fn ->
-      delay = Keyword.get(opts, :delay, 0)
+    chain = Keyword.fetch!(opts, :chain)
+    delay = Keyword.get(opts, :delay, 0)
 
+    fn ->
       if delay > 0 do
-        Logger.info("Chaos: Scheduled kill of #{provider_id} in #{delay}ms")
+        Logger.info("Chaos: Scheduled kill of #{provider_id} on #{chain} in #{delay}ms")
         Process.sleep(delay)
       end
 
-      Logger.warning("Chaos: Killing provider #{provider_id}")
+      Logger.warning("Chaos: Killing provider #{provider_id} on #{chain}")
 
-      case find_provider_process(provider_id) do
+      case Livechain.RPC.ProviderPool.get_provider_ws_pid(chain, provider_id) do
         {:ok, pid} ->
           Process.exit(pid, :kill)
           Logger.warning("Chaos: Killed provider #{provider_id} (pid: #{inspect(pid)})")
           :ok
 
         {:error, :not_found} ->
-          Logger.warning("Chaos: Provider #{provider_id} not found, cannot kill")
+          Logger.warning("Chaos: Provider #{provider_id} not found on #{chain}, cannot kill")
           {:error, :not_found}
       end
     end
@@ -52,6 +54,7 @@ defmodule Livechain.Battle.Chaos do
 
   ## Options
 
+  - `:chain` - Chain name (required)
   - `:down` - Milliseconds to stay down (default: 5_000)
   - `:up` - Milliseconds to stay up between flaps (default: 30_000)
   - `:count` - Number of flaps (default: :infinity)
@@ -59,26 +62,27 @@ defmodule Livechain.Battle.Chaos do
 
   ## Example
 
-      Chaos.flap_provider("provider_a", down: 10_000, up: 60_000, count: 3)
+      Chaos.flap_provider("provider_a", chain: "ethereum", down: 10_000, up: 60_000, count: 3)
       # Kills provider every 60s, stays down for 10s, repeats 3 times
   """
   def flap_provider(provider_id, opts \\ []) do
-    fn ->
-      down_time = Keyword.get(opts, :down, 5_000)
-      up_time = Keyword.get(opts, :up, 30_000)
-      count = Keyword.get(opts, :count, :infinity)
-      initial_delay = Keyword.get(opts, :initial_delay, 0)
+    chain = Keyword.fetch!(opts, :chain)
+    down_time = Keyword.get(opts, :down, 5_000)
+    up_time = Keyword.get(opts, :up, 30_000)
+    count = Keyword.get(opts, :count, :infinity)
+    initial_delay = Keyword.get(opts, :initial_delay, 0)
 
+    fn ->
       if initial_delay > 0 do
-        Logger.info("Chaos: Scheduled flap of #{provider_id} to start in #{initial_delay}ms")
+        Logger.info("Chaos: Scheduled flap of #{provider_id} on #{chain} to start in #{initial_delay}ms")
         Process.sleep(initial_delay)
       end
 
       Logger.info(
-        "Chaos: Starting flap sequence for #{provider_id} (down: #{down_time}ms, up: #{up_time}ms)"
+        "Chaos: Starting flap sequence for #{provider_id} on #{chain} (down: #{down_time}ms, up: #{up_time}ms)"
       )
 
-      flap_loop(provider_id, down_time, up_time, count, 0)
+      flap_loop(chain, provider_id, down_time, up_time, count, 0)
     end
   end
 
@@ -195,22 +199,22 @@ defmodule Livechain.Battle.Chaos do
 
   # Private helpers
 
-  defp flap_loop(_provider_id, _down_time, _up_time, 0, iteration) do
+  defp flap_loop(_chain, _provider_id, _down_time, _up_time, 0, iteration) do
     Logger.info("Chaos: Flap sequence complete (#{iteration} flaps)")
     :ok
   end
 
-  defp flap_loop(provider_id, down_time, up_time, count, iteration) do
+  defp flap_loop(chain, provider_id, down_time, up_time, count, iteration) do
     # Wait for up_time before next flap (unless first iteration)
     if iteration > 0 do
-      Logger.info("Chaos: Waiting #{up_time}ms before next flap of #{provider_id}")
+      Logger.info("Chaos: Waiting #{up_time}ms before next flap of #{provider_id} on #{chain}")
       Process.sleep(up_time)
     end
 
     # Kill the provider
-    Logger.warning("Chaos: Flap #{iteration + 1} - Killing #{provider_id}")
+    Logger.warning("Chaos: Flap #{iteration + 1} - Killing #{provider_id} on #{chain}")
 
-    case find_provider_process(provider_id) do
+    case Livechain.RPC.ProviderPool.get_provider_ws_pid(chain, provider_id) do
       {:ok, pid} ->
         Process.exit(pid, :kill)
         Logger.warning("Chaos: Killed #{provider_id} (will be restarted by supervisor)")
@@ -220,7 +224,7 @@ defmodule Livechain.Battle.Chaos do
         Process.sleep(down_time)
 
         # Supervisor should have restarted it by now
-        case find_provider_process(provider_id) do
+        case Livechain.RPC.ProviderPool.get_provider_ws_pid(chain, provider_id) do
           {:ok, new_pid} ->
             Logger.info("Chaos: Provider #{provider_id} restarted (new pid: #{inspect(new_pid)})")
 
@@ -229,29 +233,11 @@ defmodule Livechain.Battle.Chaos do
         end
 
       {:error, :not_found} ->
-        Logger.warning("Chaos: Provider #{provider_id} not found during flap #{iteration + 1}")
+        Logger.warning("Chaos: Provider #{provider_id} not found on #{chain} during flap #{iteration + 1}")
     end
 
     # Continue flapping
     new_count = if count == :infinity, do: :infinity, else: count - 1
-    flap_loop(provider_id, down_time, up_time, new_count, iteration + 1)
-  end
-
-  defp find_provider_process(provider_id) do
-    # Try to find WSConnection process via registry
-    case Registry.lookup(Livechain.Registry, {:ws_connection, provider_id}) do
-      [{pid, _}] when is_pid(pid) ->
-        {:ok, pid}
-
-      [] ->
-        # Try circuit breaker process
-        case Registry.lookup(Livechain.Registry, {:circuit_breaker, provider_id}) do
-          [{pid, _}] when is_pid(pid) ->
-            {:ok, pid}
-
-          [] ->
-            {:error, :not_found}
-        end
-    end
+    flap_loop(chain, provider_id, down_time, up_time, new_count, iteration + 1)
   end
 end
