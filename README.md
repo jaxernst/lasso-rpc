@@ -36,11 +36,14 @@ Lasso runs on the Erlang BEAM VM, a battle-tested platform that powers highly sc
 ## Core Features
 
 - **Multi-provider orchestration** with pluggable routing strategies (fastest, cheapest, priority, round-robin)
+- **Transport-agnostic routing** - single requests automatically route across both HTTP and WebSocket providers based on performance
 - **Full JSON-RPC compatibility** via HTTP and WebSocket proxies for all standard read-only methods
+- **WebSocket subscription management** - intelligent multiplexing, automatic failover with gap-filling during provider switches
 - **RPC Method failover** with per-provider circuit breakers and health monitoring
 - **Method-specific benchmarking** using real RPC call latencies to measure provider performance per-chain and per-method
 - **Intelligent routing** - automatically selects providers based on actual latency measurements for each RPC method
 - **Request observability** - structured logs and optional client-visible metadata for routing decisions, latencies, and retries
+- **Battle testing framework** - sophisticated load testing with chaos engineering capabilities for validating reliability
 - **Live dashboard** with real-time insights, provider leaderboards, and performance metrics
 - **Globally distributable** with BEAM's built-in clustering and fault-tolerance
 
@@ -74,12 +77,12 @@ Choose your preferred setup method:
 
 ```bash
 git clone <repository-url>
-cd livechain
+cd lasso-rpc
 ./run-docker.sh
 
 # Windows Command Prompt
 git clone <repository-url>
-cd livechain
+cd lasso-rpc
 run-docker.bat
 ```
 
@@ -346,16 +349,16 @@ Lasso has three types of tests organized for different purposes:
 
 ```bash
 # Unit tests (fast, run on every PR)
-# 151 tests covering core RPC functionality
+# 165 tests covering core RPC functionality, transport abstraction, and observability
 mix test --exclude battle --exclude real_providers
 
-# Framework validation (fast, CI-friendly)
-# Validates load testing framework setup
-mix test --only battle --only fast
+# Battle testing framework (integration & e2e)
+# Validates request pipeline, failover, circuit breakers, and chaos scenarios
+mix test --only battle
 
-# Integration tests (slow, requires network)
-# Real provider HTTP failover tests
-mix test --only battle --only real_providers --exclude slow
+# Real provider integration (slow, requires network)
+# Tests against live RPC providers (Ethereum, Base, etc.)
+mix test --only battle --only real_providers
 
 # WebSocket integration (very slow, weekly only)
 # Requires real blockchain events (~12s Ethereum blocks)
@@ -385,9 +388,33 @@ open http://localhost:4000
 open http://localhost:4000/simulator
 ```
 
-### Load Testing
+### Battle Testing & Load Testing
+
+Lasso includes a sophisticated battle testing framework for validating reliability under load and chaos conditions:
+
+```bash
+# Run battle testing scenarios with the DSL
+mix test test/battle/
+
+# Example: HTTP failover with provider chaos
+mix test test/battle/chaos_test.exs
+
+# Example: WebSocket subscription continuity
+mix test test/battle/websocket_subscription_test.exs
+```
+
+**Framework capabilities:**
+- Fluent scenario DSL for orchestrating complex test flows
+- Workload generation with configurable concurrency and duration
+- Chaos engineering: kill providers, inject latency, flap connections
+- Telemetry collection and percentile analysis (P50, P95, P99)
+- Automatic SLO verification and detailed reporting
+
+For quick manual load testing:
 
 ```bash
 # Basic RPC method load test (curl)
 for i in {1..20}; do for method in eth_blockNumber eth_gasPrice eth_getBlockByNumber eth_chainId; do curl -s -X POST http://localhost:4000/rpc/round-robin/ethereum -H 'Content-Type: application/json' -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$(if [ \"$method\" = "eth_getBlockByNumber" ]; then echo '[\"latest\", false]'; else echo '[]'; fi),\"id\":$i}" & done; wait; done
 ```
+
+See [project/battle-testing/BATTLE_TESTING_GUIDE.md](project/battle-testing/BATTLE_TESTING_GUIDE.md) for detailed documentation.

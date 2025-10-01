@@ -1,67 +1,278 @@
-# Livechain Architecture
+# Lasso RPC Architecture
 
 ## Core Technical Design
 
 ### **System Overview**
 
-Livechain is an Elixir/OTP application that provides intelligent RPC provider orchestration and client router, acting as a 'smart proxy' between blockchain RPC services and/or self hosted node infrastructure.
+Lasso RPC is an Elixir/OTP application that provides intelligent RPC provider orchestration and routing, acting as a 'smart proxy' between blockchain applications and multiple RPC providers. Built on the battle-tested BEAM VM, Lasso delivers production-grade fault tolerance, massive concurrency, and self-healing capabilities for mission-critical blockchain infrastructure.
 
 ### **Core Capabilities**
 
-- Multi-provider orchestration with pluggable provider selection strategies (default `:fastest`; also `:cheapest`, `:priority`, `:round_robin`)
-- WS + HTTP JSON-RPC proxy for all standard read-only methods; WS also supports real-time subscriptions (`eth_subscribe`, `eth_unsubscribe`)
-- Strong failover across HTTP and WS via per-provider circuit breakers and provider pools
-- Passive provider benchmarking on a per-chain and per-method basis using real RPC call latencies for intelligent routing
-- Live dashboard with real-time insights, provider performance metrics, chain status, and a system load simulator
+- **Transport-agnostic routing**: Single unified pipeline routes requests across HTTP and WebSocket providers based on real-time performance
+- **Multi-provider orchestration**: Pluggable selection strategies (`:fastest`, `:cheapest`, `:priority`, `:round_robin`)
+- **Full JSON-RPC compatibility**: HTTP and WebSocket proxies for all standard read-only methods
+- **WebSocket subscription management**: Intelligent multiplexing, automatic failover with gap-filling during provider switches
+- **Circuit breaker protection**: Per-provider, per-transport circuit breakers prevent cascade failures
+- **Method-specific benchmarking**: Passive latency measurement per-chain, per-method, per-transport for intelligent routing
+- **Request observability**: Structured logging and optional client-visible metadata for routing transparency
+- **Battle testing framework**: Integrated chaos engineering and load testing with sophisticated scenario DSL
+- **Live dashboard**: Real-time provider leaderboards, performance metrics, circuit breaker status, and system simulator
 
 ---
 
 ## Regionality and Latency-Aware Routing
 
-Livechain is designed to operate as a regional-first platform: clients connect to the nearest Livechain node, which then selects the lowest-latency upstream provider using region-local metrics.
+Lasso is designed to operate as a regional-first platform: clients connect to the nearest Lasso node, which then selects the lowest-latency upstream provider using region-local metrics.
 
-- **Client proximity**: Use geo routing at the edge (DNS or managed LB) to land clients on the closest region.
-- **Region-local benchmarking**: Maintain per-region leaderboards and latency/error metrics; prefer the top provider for that region and method.
-- **Persistent connections**: Keep warm HTTP pools and provider WebSockets to minimize handshakes and reduce hop latency.
-- **Failover without regressions**: Circuit breakers, cooldowns, and provider pools ensure graceful rotation to the next best provider.
-- **Minimal overhead**: Hot-path selection and routing are in-memory (ETS/Registry); typical added latency is single-digit milliseconds, often offset by better upstream choice.
+- **Client proximity**: Use geo routing at the edge (DNS or managed LB) to land clients on the closest region
+- **Region-local benchmarking**: Maintain per-region leaderboards and latency/error metrics; prefer the top provider for that region and method
+- **Persistent connections**: Keep warm HTTP pools and provider WebSockets to minimize handshakes and reduce hop latency
+- **Failover without regressions**: Circuit breakers, cooldowns, and provider pools ensure graceful rotation to the next best provider
+- **Minimal overhead**: Hot-path selection and routing are in-memory (ETS/Registry); typical added latency is single-digit milliseconds, often offset by better upstream choice
 
-Separation of concerns:
+**Separation of concerns:**
 
-- **BEAM/Elixir**: Selection logic, benchmarking, circuit breaking, WS/HTTP proxying, telemetry (region-tagged), and per-region supervision (using `Registry`).
-- **Infrastructure**: Global ingress/geo routing (DNS/LB), TLS termination and WS stickiness, environment config (`LIVECHAIN_REGION`), scaling, and observability stack.
+- **BEAM/Elixir**: Selection logic, benchmarking, circuit breaking, WS/HTTP proxying, telemetry (region-tagged), and per-region supervision (using `Registry`)
+- **Infrastructure**: Global ingress/geo routing (DNS/LB), TLS termination and WS stickiness, environment config (`LASSO_REGION`), scaling, and observability stack
 
 ---
 
 ## OTP Supervision Architecture
 
-Livechain leverages OTP for fault-tolerance and concurrency. The supervision tree is structured as follows:
+Lasso leverages OTP for fault-tolerance and concurrency. The supervision tree provides chain isolation and fault boundaries:
 
-- **Livechain.Application**: The top-level application supervisor.
-- **DynamicSupervisor**: A dynamic supervisor named `Livechain.RPC.Supervisor` is used to start and stop `ChainSupervisor` processes on demand.
-- **Livechain.RPC.ChainSupervisor**: A supervisor for each blockchain network, managing all processes related to that chain.
-- **Livechain.RPC.WSConnection**: A GenServer for each provider's WebSocket connection, supervised by the `ChainSupervisor`.
-- **Livechain.RPC.MessageAggregator**: A GenServer that deduplicates messages from different providers for a single chain.
-- **Livechain.RPC.ProviderPool**: Manages the health and status of providers for a chain.
-- **Livechain.RPC.CircuitBreaker**: A GenServer for each provider to track failures and open/close the circuit.
-- **Livechain.RPC.RequestContext**: Stateless struct for tracking request lifecycle (not a process).
-- **Livechain.RPC.Observability**: Module for structured logging and metadata generation (not a process).
-- **LivechainWeb.Plugs.ObservabilityPlug**: Phoenix plug for parsing client metadata opt-in preferences.
+```
+Livechain.Application (Supervisor)
+├── Phoenix.PubSub
+├── Finch (HTTP client pool)
+├── Livechain.Benchmarking.BenchmarkStore (ETS metrics storage)
+├── Livechain.Benchmarking.Persistence (historical snapshots)
+├── Livechain.RPC.ProcessRegistry (centralized registry)
+├── Registry (Livechain.Registry - dynamic process names)
+├── DynamicSupervisor (Livechain.RPC.Supervisor)
+│   ├── ChainSupervisor (ethereum)
+│   │   ├── ProviderSupervisor (alchemy)
+│   │   │   ├── CircuitBreaker (HTTP)
+│   │   │   ├── CircuitBreaker (WS)
+│   │   │   └── WSConnection (if WS configured)
+│   │   ├── ProviderSupervisor (infura)
+│   │   ├── ProviderPool (health tracking)
+│   │   ├── ProviderHealthMonitor
+│   │   ├── TransportRegistry (channel discovery)
+│   │   ├── UpstreamSubscriptionPool (WS multiplexing)
+│   │   └── ClientSubscriptionRegistry (client fan-out)
+│   ├── ChainSupervisor (base)
+│   └── ChainSupervisor (polygon)
+├── Livechain.Config.ConfigStore (ETS config cache)
+└── LivechainWeb.Endpoint
+```
+
+### **Key Components**
+
+- **Livechain.Application**: Top-level application supervisor
+- **ChainSupervisor**: Per-chain supervisor providing fault isolation between networks
+- **ProviderSupervisor**: Per-provider supervisor managing circuit breakers and WebSocket connections
+- **CircuitBreaker**: GenServer tracking failures per provider+transport, implementing open/half-open/closed states
+- **WSConnection**: GenServer managing persistent WebSocket connection to a single provider
+- **ProviderPool**: GenServer tracking provider health, availability, and capabilities
+- **TransportRegistry**: Registry for discovering available HTTP/WS channels per provider
+- **UpstreamSubscriptionPool**: GenServer multiplexing client subscriptions to minimal upstream connections
+- **StreamCoordinator**: GenServer managing subscription continuity, backfilling, and failover (spawned per subscription key)
+- **ClientSubscriptionRegistry**: Registry for fan-out of subscription events to connected clients
+- **RequestContext**: Stateless struct for tracking request lifecycle (not a process)
+- **Observability**: Module for structured logging and metadata generation (not a process)
+- **ObservabilityPlug**: Phoenix plug for parsing client metadata opt-in preferences
 
 ### **Supervision Strategy**
 
-- **Configuration caching**: `ConfigStore` eliminates hot-path YAML loading with fast ETS lookups.
-- **Lifecycle separation**: `ChainRegistry` handles only start/stop operations, never request processing.
-- **Chain isolation**: Each blockchain network runs in a separate supervision tree under a dynamic supervisor, allowing for chains to be started and stopped dynamically.
-- **Provider isolation**: Individual provider failures don't affect others, thanks to the `CircuitBreaker` and `ProviderPool`.
-- **Unified selection**: The `Selection` module handles all provider picking logic.
-- **Restart strategy**: Temporary failures trigger process restarts, while persistent failures trigger failover via the `CircuitBreaker`.
+- **Configuration caching**: `ConfigStore` eliminates hot-path YAML loading with fast ETS lookups
+- **Chain isolation**: Each blockchain network runs in a separate supervision tree under a dynamic supervisor, allowing chains to be started and stopped independently
+- **Provider isolation**: Each provider runs under its own `ProviderSupervisor` with dedicated circuit breakers per transport
+- **Transport abstraction**: `TransportRegistry` provides unified channel discovery across HTTP and WebSocket
+- **Subscription multiplexing**: `UpstreamSubscriptionPool` reduces upstream connections by sharing subscriptions across multiple clients
+- **Fault boundaries**: Provider failures are contained; circuit breakers prevent cascade failures across the system
+- **Restart strategy**: Temporary failures trigger process restarts, while persistent failures trigger failover via circuit breakers and provider selection
+
+---
+
+## Transport-Agnostic Request Pipeline
+
+Lasso implements a unified request pipeline that routes JSON-RPC requests across both HTTP and WebSocket transports based on real-time performance metrics.
+
+### **Core Design Principles**
+
+- **Single selection interface**: `RequestPipeline.execute_via_channels/4` routes to best provider regardless of transport
+- **Transport behaviour**: Both HTTP and WebSocket implement `Livechain.RPC.Transport` behaviour
+- **Channel abstraction**: `Channel` struct represents a realized connection (HTTP pool or WS connection)
+- **Protocol-aware selection**: Selection considers transport capabilities, method support, and performance per transport
+- **Unified metrics**: Circuit breakers and benchmarking track per-provider, per-transport, per-method metrics
+
+### **Request Flow**
+
+```
+Client Request
+     ↓
+RequestPipeline.execute_via_channels/4
+     ↓
+Selection.select_channels(chain, method, strategy, transport_filter)
+     ↓
+Returns ordered candidates: [
+  %Channel{provider: "alchemy", transport: :ws, ...},
+  %Channel{provider: "infura", transport: :http, ...},
+  %Channel{provider: "ankr", transport: :http, ...}
+]
+     ↓
+Attempt request on first channel via Transport behaviour
+     ↓
+On failure: Try next channel (automatic failover across transports)
+     ↓
+Record metrics per provider+transport+method
+```
+
+### **Transport Implementations**
+
+**`Livechain.RPC.Transport.HTTP`**
+
+- Uses Finch connection pools for HTTP/2 multiplexing
+- Implements `request/3` for single JSON-RPC calls
+- Per-provider circuit breaker wraps all requests
+- Supports batch requests (future)
+
+**`Livechain.RPC.Transport.WebSocket`**
+
+- Uses persistent WSConnection GenServers
+- Implements `request/3` via correlation ID mapping
+- Supports both unary calls and subscriptions
+- Connection pooling for high concurrency (configurable)
+
+### **Benefits**
+
+- **Automatic optimization**: Fastest strategy can route `eth_blockNumber` to WS if it has lower latency than HTTP
+- **Seamless failover**: HTTP failure can failover to WS provider automatically
+- **Unified observability**: All requests tracked with same RequestContext regardless of transport
+- **Simplified client code**: Applications use one endpoint; Lasso handles transport selection
+
+---
+
+## WebSocket Subscription Management
+
+Lasso provides production-grade WebSocket subscription management with intelligent multiplexing, automatic failover, and gap-filling.
+
+### **Architecture Overview**
+
+```
+Client (Viem/Wagmi)
+     ↓
+RPCSocket (Phoenix Channel)
+     ↓
+SubscriptionRouter (thin facade)
+     ↓
+UpstreamSubscriptionPool (multiplexing)
+     ↓
+WSConnection (upstream provider)
+     ↓
+StreamCoordinator (per-subscription key)
+     ↓
+├─→ GapFiller (HTTP backfill)
+└─→ ClientSubscriptionRegistry (fan-out)
+```
+
+### **Key Components**
+
+**UpstreamSubscriptionPool** (`lib/livechain/rpc/upstream_subscription_pool.ex`)
+
+- **Multiplexing**: Multiple clients subscribe to same upstream subscription (efficiency)
+- **Capability tracking**: Learns which providers support which subscription types
+- **Provider selection**: Uses Selection module to pick best WS provider
+- **Confirmation handling**: Maps upstream subscription IDs to client subscription IDs
+- **Automatic failover**: Detects provider failures and switches to next best provider
+
+**StreamCoordinator** (`lib/livechain/rpc/stream_coordinator.ex`)
+
+- **Spawned per subscription key**: Each `(chain, subscription_type, filter)` gets own coordinator
+- **Continuity management**: Tracks last seen block number/log index
+- **Gap detection**: Computes missing events during provider switch
+- **HTTP backfilling**: Uses `GapFiller` to fetch missed blocks/logs via HTTP
+- **Deduplication**: `StreamState` ensures events delivered once and in-order
+
+**ClientSubscriptionRegistry** (`lib/livechain/rpc/client_subscription_registry.ex`)
+
+- **Fan-out**: Distributes upstream events to all subscribed clients
+- **Client tracking**: Maps subscription IDs to Phoenix Channel PIDs
+- **Clean-up**: Automatically removes disconnected clients
+
+### **Subscription Flow**
+
+1. **Client subscribes**: `{"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}`
+2. **UpstreamSubscriptionPool checks**: Do we already have upstream subscription for `(ethereum, newHeads, {})`?
+   - **Yes**: Add client to fan-out list, return existing subscription ID
+   - **No**: Select best WS provider, send `eth_subscribe` upstream
+3. **Upstream confirms**: `{"jsonrpc":"2.0","id":1,"result":"0xabc123"}`
+4. **Pool maps IDs**: Store `upstream_sub_id -> client_sub_ids`
+5. **Events arrive**: `{"jsonrpc":"2.0","method":"eth_subscription","params":{"subscription":"0xabc123","result":{...}}}`
+6. **StreamCoordinator processes**: Dedupe, order, track continuity
+7. **Registry fans out**: Send to all subscribed clients
+
+### **Failover with Gap-Filling**
+
+When a provider fails mid-stream:
+
+1. **Failure detected**: WSConnection crashes or subscription stops delivering events
+2. **StreamCoordinator triggered**: `handle_info(:provider_failure, state)`
+3. **Gap computation**:
+   ```elixir
+   last_seen = StreamState.last_block_num(state.stream_state)
+   {:ok, new_provider} = Selection.select_best_ws_provider(state.chain)
+   {:ok, current_head} = fetch_current_head(new_provider)
+   gap = ContinuityPolicy.needed_block_range(last_seen, current_head, max_backfill: 32)
+   ```
+4. **HTTP backfill**: `GapFiller.ensure_blocks(chain, from_block, to_block, timeout: 30_000)`
+5. **Inject missed events**: Cast backfilled blocks to self as subscription events
+6. **Resume live stream**: Subscribe to new provider, continue from current head
+7. **Client sees**: Continuous event stream with no gaps
+
+### **Multiplexing Benefits**
+
+**Example**: 100 clients subscribe to `eth_subscribe("newHeads")` on Ethereum
+
+**Without multiplexing:**
+
+- 100 upstream WebSocket subscriptions
+- 100x bandwidth usage
+- 100x rate limit consumption
+- Providers may reject excess connections
+
+**With multiplexing (Lasso):**
+
+- 1 upstream WebSocket subscription
+- 1x bandwidth usage
+- Shared across all clients
+- Scales to thousands of clients per upstream subscription
+
+### **Configuration**
+
+```elixir
+# config/config.exs
+config :livechain, :subscriptions,
+  # Maximum blocks to backfill during failover
+  max_backfill_blocks: 32,
+
+  # Timeout for HTTP backfill requests
+  backfill_timeout_ms: 30_000,
+
+  # Subscription confirmation timeout
+  subscription_timeout_ms: 10_000,
+
+  # Enable gap-filling on provider switch
+  enable_gap_filling: true
+```
 
 ---
 
 ## Request Observability Architecture
 
 **Files**:
+
 - `lib/livechain/rpc/request_context.ex` - Request lifecycle tracking
 - `lib/livechain/rpc/observability.ex` - Structured logging and metadata
 - `lib/livechain_web/plugs/observability_plug.ex` - HTTP metadata injection
@@ -139,8 +350,11 @@ All requests emit structured JSON logs at configurable level (default `:info`):
   "jsonrpc_method": "eth_blockNumber",
   "params_present": false,
   "routing": {
-    "candidate_providers": ["ethereum_cloudflare:http", "ethereum_llamarpc:http"],
-    "selected_provider": {"id": "ethereum_llamarpc", "protocol": "http"},
+    "candidate_providers": [
+      "ethereum_cloudflare:http",
+      "ethereum_llamarpc:http"
+    ],
+    "selected_provider": { "id": "ethereum_llamarpc", "protocol": "http" },
     "selection_latency_ms": 0,
     "retries": 2,
     "circuit_breaker_state": "closed"
@@ -224,7 +438,7 @@ config :livechain, :observability,
 
 **File**: `lib/livechain/config/config_store.ex`
 
-Livechain uses a centralized configuration store to eliminate hot-path YAML loading:
+In-memory configuration store:
 
 - **ETS-based caching**: Configurations are loaded once at startup and cached in ETS tables
 - **Fast lookups**: Chain and provider configurations are retrieved via in-memory lookups
@@ -237,16 +451,14 @@ Livechain uses a centralized configuration store to eliminate hot-path YAML load
 {:ok, provider_config} = ConfigStore.get_provider("ethereum", "alchemy")
 ```
 
-### **Lifecycle Management**
+### **Dynamic Chain Management**
 
-**File**: `lib/livechain/rpc/chain_registry.ex`
+Chain supervisors are started dynamically at application boot from `config/chains.yml`:
 
-ChainRegistry provides thin lifecycle management separated from business logic:
-
-- **Start/stop operations**: Manages chain supervisor lifecycle only
-- **Registry maintenance**: Tracks running chain PIDs
-- **Status reporting**: Provides chain lifecycle information
-- **No hot-path involvement**: Never called during request processing
+- **Automatic startup**: `Application.start/2` enumerates configured chains and starts ChainSupervisors
+- **Independent lifecycles**: Each chain can be started/stopped without affecting others
+- **Configuration validation**: ChainConfig validates provider configs before supervisor startup
+- **Status tracking**: Per-chain health and provider status available via `ChainSupervisor.get_chain_status/1`
 
 ### **Unified Provider Selection**
 
@@ -357,10 +569,11 @@ eth_getBlockByNumber(number)     # Block data retrieval
 eth_getBalance(address)          # Account balance queries
 ```
 
-### **HTTP vs WebSocket Responsibilities**
+### **Transport Capabilities**
 
-- **WebSocket (WS)**: Real-time subscriptions only. Methods like `eth_subscribe` and `eth_unsubscribe` are WS-only. In addition, WS supports generic forwarding of read-only JSON-RPC methods using the same provider selection and failover logic as HTTP.
-- **HTTP**: Read-only JSON-RPC methods are forwarded to upstream providers via a smart proxy. HTTP requests to WS-only methods return a JSON-RPC error advising clients to use WS.
+- **HTTP**: Unary JSON-RPC method calls (e.g., `eth_blockNumber`, `eth_getBalance`)
+- **WebSocket**: Both unary calls AND subscriptions (`eth_subscribe`, `eth_unsubscribe`)
+- **Transport-agnostic routing**: RequestPipeline can route unary calls to either transport based on performance
 
 ### **Provider Selection Strategies**
 
@@ -381,6 +594,83 @@ config :livechain, :provider_selection_strategy, :fastest
 
 ---
 
+## Battle Testing Framework
+
+Lasso includes a production-grade battle testing framework for validating reliability under load and chaos conditions.
+
+### **Architecture**
+
+```
+Battle.Scenario (fluent DSL)
+     ├─→ Battle.Workload (HTTP request generation)
+     ├─→ Battle.Chaos (provider kill/flap/degrade)
+     ├─→ Battle.Collector (telemetry aggregation)
+     ├─→ Battle.Analyzer (percentile calculation, SLO verification)
+     └─→ Battle.Reporter (JSON + Markdown reports)
+```
+
+### **Key Components**
+
+**`Livechain.Battle.Scenario`** (`lib/livechain/battle/scenario.ex`)
+
+- Fluent API for orchestrating complex test flows
+- Step-by-step execution with timing control
+- Automatic telemetry attachment and collection
+- Clean-up and teardown management
+
+**`Livechain.Battle.Workload`** (`lib/livechain/battle/workload.ex`)
+
+- Configurable HTTP workload generation
+- Concurrent request execution
+- Method distribution (eth_blockNumber, eth_gasPrice, etc.)
+- Per-request telemetry events
+
+**`Livechain.Battle.Chaos`** (`lib/livechain/battle/chaos.ex`)
+
+- **Kill**: Terminate provider processes to simulate crashes
+- **Flap**: Repeatedly kill/restart to simulate instability
+- **Degrade**: Inject latency or errors to simulate degraded performance
+
+**`Livechain.Battle.Analyzer`** (`lib/livechain/battle/analyzer.ex`)
+
+- Percentile calculation (P50, P95, P99)
+- Success rate computation
+- Failover detection (>2x average latency = failover)
+- SLO verification with configurable thresholds
+
+**`Livechain.Battle.Reporter`** (`lib/livechain/battle/reporter.ex`)
+
+- JSON and Markdown report generation
+- Human-readable summaries
+- Detailed metrics breakdowns
+
+### **Example Usage**
+
+```elixir
+# test/battle/failover_test.exs
+test "HTTP failover under provider chaos" do
+  Scenario.new("HTTP failover test")
+  |> Scenario.setup_chain(:ethereum, providers: [:alchemy, :infura, :ankr])
+  |> Scenario.run_workload(
+    duration: 10 * 60_000,
+    concurrency: 50,
+    methods: ["eth_blockNumber", "eth_gasPrice"]
+  )
+  |> Scenario.inject_chaos(:kill_provider, target: :alchemy, interval: 30_000)
+  |> Scenario.verify_slo(success_rate: 1, p95_latency_ms: 400)
+  |> Scenario.generate_report()
+end
+```
+
+### **Benefits**
+
+- **Automated validation**: CI/CD integration for continuous reliability testing
+- **Chaos engineering**: Prove system resilience under failure conditions
+- **Performance regression**: Catch latency regressions before production
+- **SLO enforcement**: Define and verify service level objectives
+
+---
+
 ## Real-Time Dashboard Integration
 
 ### **Phoenix LiveView Components**
@@ -388,7 +678,9 @@ config :livechain, :provider_selection_strategy, :fastest
 - **Latency Metrics**: Live provider rankings based on RPC performance
 - **Routing Decision Events**: See how requests are routed in real time
 - **Performance matrix**: RPC call latencies by provider and method
-- **Chain selection**: Switch between Ethereum, Polygon, Arbitrum
+- **Circuit breaker status**: Real-time circuit breaker state visualization
+- **Chain selection**: Switch between Ethereum, Base, Polygon, Arbitrum
+- **System simulator**: Generate load for testing routing strategies
 - **Real-time updates**: WebSocket push updates on new RPC metrics
 
 ### **Data Integration**
@@ -398,7 +690,7 @@ def load_benchmark_data(socket) do
   chain_name = socket.assigns.benchmark_chain
   provider_leaderboard = BenchmarkStore.get_provider_leaderboard(chain_name)
   realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
-  # Leaderboard now based on RPC latency and success rate metrics
+  # Leaderboard based on method-specific RPC latency and success rate metrics
 end
 ```
 
@@ -446,4 +738,18 @@ config :livechain,
 
 ---
 
-This architecture leverages Elixir/OTP's fault tolerance and concurrency strengths to create a production-ready RPC orchestration system with unique competitive advantages through passive performance benchmarking and intelligent provider selection.
+## Summary
+
+Lasso RPC leverages Elixir/OTP's fault tolerance and concurrency to deliver production-ready blockchain RPC orchestration. Key architectural advantages:
+
+**Transport-agnostic routing** - Unified pipeline routes across HTTP and WebSocket based on real-time performance, providing seamless failover and automatic optimization.
+
+**WebSocket subscription management** - Intelligent multiplexing reduces upstream connections by orders of magnitude while providing automatic failover with gap-filling.
+
+**Comprehensive observability** - Structured logging, client-visible metadata, and real-time dashboard provide complete visibility into routing decisions and performance.
+
+**Battle-tested reliability** - Integrated chaos engineering framework validates system behavior under failure conditions, ensuring production resilience.
+
+**Massive concurrency** - BEAM VM's lightweight processes and fault isolation enable thousands of concurrent connections with minimal overhead.
+
+This architecture scales from single self-hosted instances to globally distributed networks, providing blockchain developers with infrastructure-grade reliability without infrastructure-grade complexity.

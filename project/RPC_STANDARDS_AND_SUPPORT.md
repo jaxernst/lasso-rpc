@@ -1,162 +1,386 @@
-## RPC Standards, Support Levels, and Roadmap
+# Lasso RPC: JSON-RPC Standards & Method Support
 
-This document defines Lasso’s JSON‑RPC support surfaces, known limitations, and roadmap. It also proposes a single “source of truth” registry to keep behavior, docs, and tests aligned.
+## Overview
 
-### Scope and philosophy
+Lasso provides production-grade routing for stateless Ethereum JSON-RPC reads and subscriptions with intelligent failover, performance-based selection, and comprehensive observability.
 
-- **Primary goal**: robust, cost/performance‑aware routing for stateless read methods and subscriptions.
-- **Out of scope (for now)**: wallet/signing, stateful filters, transaction writes without strong guarantees (stickiness, queues, dedupe).
+**In Scope:**
+- Stateless read methods with strategy-based routing
+- WebSocket subscriptions with multiplexing and gap-filling
+- Transport-agnostic routing (HTTP ↔ WebSocket failover)
+- Circuit breakers, rate limit handling, benchmarking
 
-## Current capabilities
+**Out of Scope (Current):**
+- Transaction writes without guarantees (nonce management, deduplication)
+- Wallet/signing methods (client-side per EIP-1193)
+- Stateful filters (require sticky sessions)
 
-### HTTP (read-only proxy)
+---
 
-- Strategy-based routing with failover; JSON‑RPC 2.0 normalization.
-- Explicitly supported and commonly used (pass‑through):
-  - Blocks/txs: `eth_getBlockByNumber`, `eth_getBlockByHash`, `eth_getTransactionByHash`, `eth_getTransactionReceipt`
-  - State: `eth_getBalance`, `eth_getTransactionCount`, `eth_getCode`, `eth_getStorageAt`
-  - Calls/gas/fees: `eth_call`, `eth_estimateGas`, `eth_gasPrice`, `eth_maxPriorityFeePerGas`, `eth_feeHistory`
-  - Chain/network: `eth_chainId` (native), `net_version`, `net_listening`, `web3_clientVersion` (pass‑through)
-  - Proofs/block params: `eth_getProof` (EIP‑1186), EIP‑1898 block parameter objects (pass‑through)
-- Non‑standard methods (e.g., `debug_*`, `trace_*`, client/chain‑specific like `eth_getBlockReceipts`) are forwarded when the upstream supports them; availability varies.
+## Supported Methods by Protocol
 
-### WebSocket
+### HTTP: Stateless Reads
 
-- Subscriptions: `eth_subscribe` (`newHeads`, `logs`, `newPendingTransactions`) and `eth_unsubscribe`.
-- Known limitation: failover backfill is implemented for `logs` only, not for `newHeads` (may miss blocks on provider failover).
-- Reads over WS (e.g., `eth_getBalance`) currently lack failover; prefer HTTP for reads.
+All standard Ethereum read methods are supported with failover, circuit breakers, and performance-based routing.
 
-### Explicitly blocked over HTTP (enforced)
+**Blocks & Transactions:**
+- `eth_blockNumber`, `eth_getBlockByNumber`, `eth_getBlockByHash`
+- `eth_getTransactionByHash`, `eth_getTransactionReceipt`, `eth_getBlockTransactionCountByNumber`
 
-- Subscriptions: `eth_subscribe`, `eth_unsubscribe` (WS only).
-- Signing/wallet/account: `eth_sign`, `eth_signTransaction`, `personal_sign`, `eth_accounts`.
-- Transaction writes: `eth_sendTransaction`, `eth_sendRawTransaction`.
-- Tx pool state: `txpool_content`, `txpool_inspect`, `txpool_status`.
+**Account State:**
+- `eth_getBalance`, `eth_getTransactionCount`, `eth_getCode`, `eth_getStorageAt`
 
-### Implicitly risky / special handling (policy: block or add stickiness)
+**Execution & Gas:**
+- `eth_call`, `eth_estimateGas`, `eth_gasPrice`, `eth_maxPriorityFeePerGas`, `eth_feeHistory`
 
-- Stateful filters: `eth_newFilter`, `eth_newBlockFilter`, `eth_newPendingTransactionFilter`, `eth_getFilterChanges`, `eth_uninstallFilter` (require sticky routing; prone to inconsistency across providers).
-- Additional signing: `eth_signTypedData`, `eth_signTypedData_v3`, `eth_signTypedData_v4`.
-- All `wallet_*` and `personal_*` namespaces (wallet UX API; not node RPC).
-- Tracing/debug: `trace_*`, `debug_*`, `parity_*`, `erigon_*`, chain‑specific (`arbtrace_*`, `optimism_*`) are expensive and non‑standard.
+**Logs & Events:**
+- `eth_getLogs` (note: large ranges subject to upstream limits; see best practices below)
 
-## Batching semantics (HTTP)
+**Network Info:**
+- `eth_chainId`, `net_version`, `net_listening`, `web3_clientVersion`
 
-- Order: responses preserve request order.
-- Partial failures: each entry returns its own `result` or `error`.
-- Limits: default `max_batch_requests = 50` (configurable).
-- IDs: Lasso echoes `id` values and types as provided.
-- JSON‑RPC version: normalized to `"jsonrpc": "2.0"`.
+**Advanced:**
+- `eth_getProof` (EIP-1186 state proofs)
+- EIP-1898 block parameter objects (`{blockNumber, blockHash, requireCanonical}`)
+- `finalized` and `safe` block tags
 
-## Provider override and region pinning
+**Non-Standard Methods:**
+- Debug/tracing: `debug_*`, `trace_*`, `parity_*`, `erigon_*`, `arbtrace_*`
+- Chain-specific: `eth_getBlockReceipts` (Alchemy/Erigon), `optimism_*`, etc.
+- **Policy:** Forwarded when upstream supports them; no guarantees; may be expensive
 
-- Provider override: pin a request to a specific `provider_id` (via path/params). If the provider fails and `allow_failover_on_override` is true, Lasso may fail over using the active strategy; otherwise it returns the error.
-- Region biasing: send `x-livechain-region: <region>` to prefer or constrain selection/failover to providers in that region (when configured).
+### WebSocket: Subscriptions & Reads
 
-## Error model
+**Subscriptions (WS only):**
+- `eth_subscribe(["newHeads"])` - Block headers with gap-filling on failover
+- `eth_subscribe(["logs", {...filter}])` - Transaction logs with gap-filling on failover
+- `eth_subscribe(["newPendingTransactions"])` - Pending tx hashes (no gap-filling)
+- `eth_unsubscribe([subscriptionId])`
 
-- JSON‑RPC 2.0 enforced: `{"jsonrpc":"2.0", ...}` with the original `id` when available.
-- Common codes:
-  - −32600 Invalid Request
-  - −32601 Method not found (or blocked in this context)
-  - −32602 Invalid params
-  - −32603 Internal error (upstream failure surfaced)
-  - −32000 Server error (proxy/failover errors with message)
-- Blocked-in-context errors include hints (e.g., “Use WebSocket for subscriptions”).
+**WebSocket Reads:**
+- All stateless read methods listed above
+- **Transport-agnostic routing:** Can route to either HTTP or WS providers based on performance
+- Automatic failover across transports (WS → HTTP or HTTP → WS)
 
-## Method coverage notes
+---
 
-- EIP‑1898: object block params with `hash/number/tag` and `finalized/safe` semantics are passed through; Lasso does not reinterpret.
-- `eth_getLogs`: large ranges are subject to upstream caps. Recommendation: page by block range/topics and back off on provider signals. (Pagination/splitting is a roadmap item.)
-- Gas and simulation variance: `eth_estimateGas` and `eth_call` can differ across providers. Consider pinning estimates to a single provider or using the “priority” strategy for consistency on latency‑sensitive flows.
-- Popular non‑standard reads: `eth_getBlockReceipts` (Erigon/Alchemy) may be available; Lasso forwards when supported upstream.
+## Blocked Methods
 
-## Write methods: implications and policy
+### Subscriptions Over HTTP ❌
+- `eth_subscribe`, `eth_unsubscribe` - Use WebSocket
 
-Enabling writes in a multi‑provider router introduces non‑trivial complexity:
+### Wallet/Signing ❌
+- `eth_sign`, `eth_signTransaction`, `eth_signTypedData*`
+- `personal_sign`, `personal_*` namespace
+- `wallet_*` namespace (EIP-1193 client APIs)
+- `eth_accounts` (server-side enumeration insecure)
 
-- Nonce/ordering: sticky routing per `(chain, from_address)` and a queued nonce manager to avoid gaps/collisions.
-- Idempotency/multi‑broadcast: dedupe by tx hash; only re‑broadcast on confirmed mempool drop to avoid duplicates/bans.
-- Lifecycle binding: bind follow‑up reads (`getTransactionByHash`, receipt polling) to the same upstream until mined to avoid “tx not found”.
-- Replacement/cancellation: upstream policies differ; must encode a coherent replacement policy.
-- Abuse/rate‑limits: writes are sensitive; require per‑source throttling, backoff, and observability.
-- Security: `eth_sendTransaction` implies server‑side keys/signing—out of scope for a stateless proxy.
+**Why:** Server-side key management is out of scope
 
-Policy: keep writes blocked until sticky routing, a tx queue, dedupe store, and controlled re‑broadcast are implemented. Wallet/signing methods remain blocked server‑side (client wallets per EIP‑1193).
+### Transaction Writes ❌
+- `eth_sendTransaction`, `eth_sendRawTransaction`
 
-## Subscriptions: reliability and shortcomings
+**Why:** Multi-provider routing requires nonce management, tx deduplication, and sticky routing. Enabling writes without these guarantees causes nonce gaps and duplicate transactions.
 
-- Today: failover with backfill is implemented for `logs` only.
-- Shortcoming: `newHeads` lacks backfill; provider failover can miss blocks.
-- Roadmap: add `newHeads` backfill, deduplication, and continuity guarantees; define sticky bindings and failover policy per subscription type.
+**Roadmap:** May support writes with proper nonce queue, sticky sessions, and idempotency tracking.
 
-## Community standards to track
+### Stateful Filters ❌
+- `eth_newFilter`, `eth_newBlockFilter`, `eth_newPendingTransactionFilter`
+- `eth_getFilterChanges`, `eth_getFilterLogs`, `eth_uninstallFilter`
 
-- EIP‑1474 (Ethereum JSON‑RPC): baseline method set; good reference for coverage/naming.
-- EIP‑1193 (Provider API): wallet/dapp JS interface; explains `wallet_*` — blocked server‑side.
-- EIP‑1898 (Block param object): safer block targeting; supported via pass‑through.
-- EIP‑1186 (`eth_getProof`): proofs for account/storage; pass‑through compatible.
-- EIP‑4337 (Account Abstraction): bundler RPCs (`eth_sendUserOperation`, `eth_estimateUserOperationGas`, `eth_getUserOperationReceipt`). Maintain a separate “bundler pool” and policy; do not mix with node pools.
-- EIP‑4844 (Proto‑danksharding / blobs): affects fee markets and schemas; standard methods continue to work; blob extras are provider‑specific.
+**Why:** Filters are stateful per-provider. Failover breaks filter state.
 
-## Recommendations and “source of truth”
+**Alternative:** Use WebSocket subscriptions (`eth_subscribe`) for real-time events.
 
-### Explicit allow/deny by category
+### Transaction Pool ❌
+- `txpool_content`, `txpool_inspect`, `txpool_status`
 
-- Categories: stateless reads, stateful filters, subscriptions, signing/wallet, writes, tracing/debug, AA bundler.
-- Define for each: allowed protocols (HTTP/WS), failover policy, stickiness, default allow/deny, observability.
+**Why:** Provider-specific internal state; no standardization.
 
-### Provider capability registry
+---
 
-- Track provider support for expensive/non‑standard features (tracing, AA, blob extras, `eth_getBlockReceipts`, etc.).
-- Use capabilities during selection to avoid routing to incompatible providers and to shape failover sets.
+## Advanced Features
 
-### Failover policy matrix
+### Batching (HTTP)
 
-- Stateless reads: allow failover.
-- Subscriptions: allow failover with backfill (`logs` today; `newHeads` roadmap).
-- Stateful filters: block or enforce sticky single‑provider routing with no failover.
-- Writes: block until write‑path design is complete.
+Lasso supports JSON-RPC batch requests:
 
-### Performance/cost hints
+```json
+POST /rpc/ethereum
+[
+  {"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]},
+  {"jsonrpc":"2.0","id":2,"method":"eth_gasPrice","params":[]}
+]
+```
 
-- Annotate “expensive” methods (e.g., `trace_*`, large `eth_getLogs`) so routing can prefer providers that tolerate them or require explicit opt‑in.
+**Behavior:**
+- Responses preserve request order
+- Each item returns individual `result` or `error`
+- Default limit: 50 requests per batch (configurable)
+- ID echoing: Exact `id` type and value preserved
 
-### Proposed MethodRegistry
+### Provider Override
 
-A central registry (e.g., `lib/livechain/rpc/method_registry.ex`) enumerates methods with metadata:
+Pin a request to specific provider:
 
-- `name`, `namespace`, `protocols`, `statefulness`, `allow_default`
-- `sticky_required`, `failover_policy`, `idempotent`
-- `security` tags (signing, account, wallet)
-- `cost_weight`, `capabilities`, `notes`
+```bash
+POST /rpc/ethereum?provider=alchemy_eth
+# or
+POST /rpc/ethereum
+X-Lasso-Provider: alchemy_eth
+```
 
-From the registry:
+**Failover on override:**
+- Default: Return provider's error if it fails
+- `?allow_failover=true`: Fall back to strategy-based selection on failure
 
-- Generate controller/router guards (HTTP blocklist, WS‑only).
-- Generate documentation (README and this file).
-- Validate requests at runtime with precise errors/hints.
-- Drive dashboard (“supported/blocked by provider/chain”).
-- Power tests (golden tests vs registry).
+### Region Biasing
 
-## Roadmap (high‑impact)
+Prefer providers in a specific region:
 
-1. Subscriptions: add `newHeads` backfill and policy; formalize WS provider stickiness and failover.
-2. Filters: explicitly block by default, or add sticky session routing with timeouts; promote WS subscriptions as the migration path.
-3. Write path (if pursued): per‑account stickiness, nonce manager, tx queue, dedupe store, controlled rebroadcast, receipt binding, and strong rate‑limits.
-4. Capability registry: static + active probing; selection/failover aware of features.
-5. Conformance/docs: OpenRPC/JSON Schema ingestion; auto‑generate README “Supported Methods” from the registry.
-6. Logs ergonomics: optional pagination/splitting helper for large `eth_getLogs` ranges.
+```bash
+POST /rpc/ethereum
+X-Lasso-Region: us-east
+```
 
-## Policy summary (what we block and why)
+**Behavior:** Filters candidates to specified region before strategy selection (when providers have region tags configured).
 
-- Block over HTTP: subscriptions, signing/wallet/account, writes, txpool state, stateful filters (unless sticky routing is implemented).
-- Allow over HTTP with failover: stateless reads (listed above).
-- Allow over WS: `eth_subscribe`/`eth_unsubscribe`; backfill policies vary by subscription type.
-- Forward non‑standard methods on a best‑effort basis; do not rely on them for core functionality.
+---
 
-## Alignment with current code
+## Error Handling
 
-- `@max_batch_requests` (default 50) enforces batch limits.
-- Provider override and `x-livechain-region` are supported; `allow_failover_on_override` controls failover after pinning.
-- Recommended alignment: expand the HTTP blocklist in `lib/livechain_web/controllers/rpc_controller.ex` to include `eth_signTypedData*`, all `wallet_*`, all `personal_*`, and filter methods (`eth_new*Filter`, `eth_getFilterChanges`, `eth_uninstallFilter`) to match this policy.
+Lasso normalizes all responses to JSON-RPC 2.0 format:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32601,
+    "message": "Method not found or blocked in this context",
+    "data": {"hint": "Use WebSocket for eth_subscribe"}
+  }
+}
+```
+
+**Standard Error Codes:**
+- `-32700` Parse error
+- `-32600` Invalid Request
+- `-32601` Method not found (or blocked)
+- `-32602` Invalid params
+- `-32603` Internal error (upstream failure)
+- `-32000` Server error (proxy/failover errors)
+
+**Context Hints:** Blocked methods include suggestions (e.g., "Use WebSocket for subscriptions").
+
+---
+
+## WebSocket Subscriptions: Reliability
+
+### Gap-Filling on Failover
+
+When a provider fails mid-stream, Lasso automatically:
+
+1. **Detects gap:** Computes missed blocks between last received and current head
+2. **HTTP backfill:** Fetches missing blocks/logs via `eth_getBlockByNumber` or `eth_getLogs`
+3. **Injects events:** Delivers backfilled events to clients
+4. **Resumes stream:** Subscribes to new provider and continues
+
+**Supported Subscription Types:**
+- ✅ `newHeads` - Full gap-filling with `eth_getBlockByNumber` backfill
+- ✅ `logs` - Full gap-filling with `eth_getLogs` backfill
+- ⚠️ `newPendingTransactions` - No gap-filling (pending txs are ephemeral)
+
+**Configuration:**
+```elixir
+config :livechain, :subscriptions,
+  max_backfill_blocks: 32,       # Max blocks to backfill
+  backfill_timeout_ms: 30_000,   # Timeout per backfill request
+  enable_gap_filling: true       # Enable/disable gap-filling
+```
+
+### Multiplexing
+
+Lasso multiplexes client subscriptions to minimize upstream connections:
+
+**Example:** 100 clients subscribe to `newHeads`
+- Without multiplexing: 100 upstream WS connections
+- With Lasso: 1 upstream connection, fanned out to 100 clients
+
+**Benefits:** Reduced bandwidth, lower rate limit consumption, better scalability.
+
+---
+
+## Best Practices
+
+### Large `eth_getLogs` Queries
+
+**Challenge:** Providers cap log results by block range (typically 2,000-10,000 blocks).
+
+**Recommendations:**
+- Page by block range: Query 2,000 blocks at a time
+- Filter aggressively: Use `address` and `topics` to narrow results
+- Monitor provider signals: Back off on rate limit errors
+- Use `:priority` strategy for consistency across paginated queries
+
+**Roadmap:** Automatic pagination/splitting helper.
+
+### Gas Estimation Consistency
+
+`eth_estimateGas` and `eth_call` can vary across providers due to:
+- Different node implementations (Geth, Erigon, etc.)
+- Timing of state (block lag)
+- Gas limit buffers
+
+**Recommendations:**
+- Pin estimates to single provider using `?provider=<id>`
+- Use `:priority` strategy for consistency
+- Add buffer (10-20%) on client side
+
+### Non-Standard Methods
+
+**Policy:** Forward on best-effort basis; no guarantees.
+
+**Examples:**
+- `eth_getBlockReceipts` (Alchemy/Erigon) - May not be available on all providers
+- `trace_*` methods - Expensive; provider may reject or rate-limit
+- Chain-specific methods (`arbtrace_*`, `optimism_*`) - Chain-dependent
+
+**Check Availability:** Use provider override to test specific provider support.
+
+---
+
+## EIP Compatibility
+
+### Supported EIPs
+
+**EIP-1474** (JSON-RPC) - Full baseline method set
+**EIP-1898** (Block Params) - Object block identifiers with `blockHash`, `blockNumber`, `requireCanonical`
+**EIP-1186** (`eth_getProof`) - State proofs for account/storage
+**EIP-1193** (Provider API) - Recognized (wallet methods blocked server-side)
+**EIP-4844** (Blobs) - Pass-through support; blob extras provider-specific
+
+### Account Abstraction (EIP-4337)
+
+**Bundler RPC Methods:**
+- `eth_sendUserOperation`, `eth_estimateUserOperationGas`
+- `eth_getUserOperationByHash`, `eth_getUserOperationReceipt`
+- `eth_supportedEntryPoints`
+
+**Policy:** Maintain separate bundler provider pools; do not mix with node pools. Bundler methods require different routing policies and SLAs.
+
+**Status:** Not yet implemented; roadmap item.
+
+---
+
+## Roadmap
+
+### Near-Term (P0)
+
+**MethodRegistry Implementation**
+- Central registry with method metadata (`statefulness`, `protocols`, `failover_policy`, `cost_weight`)
+- Auto-generate controller guards, docs, and tests
+- Runtime validation with precise error messages
+
+**Enhanced Subscription Policies**
+- Formalize WS provider stickiness and failover rules
+- Per-subscription-type SLO tracking
+- Better handling of subscription conflicts on failover
+
+### Mid-Term (P1)
+
+**Stateful Filter Support (Optional)**
+- Sticky session routing with TTLs
+- Explicit opt-in required
+- Recommend WS subscriptions as primary path
+
+**Provider Capability Registry**
+- Static capabilities: `supports_trace`, `supports_eip_1186`, etc.
+- Active probing for feature detection
+- Selection/failover aware of capabilities
+
+**Enhanced Error Normalization**
+- Map provider-specific error codes to standard taxonomy
+- Consistent error messages across providers
+
+### Long-Term (P2)
+
+**Transaction Write Support**
+- Per-account sticky routing
+- Nonce manager with queuing
+- Transaction deduplication store
+- Controlled rebroadcast logic
+- Receipt binding to same provider
+
+**`eth_getLogs` Pagination**
+- Automatic range splitting for large queries
+- Provider-aware batching
+- Parallel fetching with ordering guarantees
+
+**OpenRPC/JSON Schema**
+- Auto-generate API docs from MethodRegistry
+- Interactive API explorer
+- Client SDK generation
+
+---
+
+## Implementation Alignment
+
+### Current Blocklist Enforcement
+
+Located in `lib/livechain_web/controllers/rpc_controller.ex`:
+
+**Recommended additions to HTTP blocklist:**
+- `eth_signTypedData`, `eth_signTypedData_v3`, `eth_signTypedData_v4`
+- All `wallet_*` methods
+- All `personal_*` methods
+- Filter methods: `eth_newFilter`, `eth_newBlockFilter`, `eth_getFilterChanges`, `eth_uninstallFilter`
+
+### Configuration
+
+```elixir
+# config/config.exs
+config :livechain,
+  max_batch_requests: 50,
+  provider_selection_strategy: :fastest
+
+config :livechain, :circuit_breaker,
+  failure_threshold: 5,
+  recovery_timeout: 60_000,
+  success_threshold: 2
+
+config :livechain, :subscriptions,
+  max_backfill_blocks: 32,
+  backfill_timeout_ms: 30_000,
+  enable_gap_filling: true
+```
+
+---
+
+## Summary: What Lasso Allows
+
+**✅ Allow with Failover:**
+- All stateless read methods over HTTP or WebSocket
+- Non-standard methods (best-effort)
+- Batch requests (HTTP)
+
+**✅ Allow with Special Handling:**
+- Subscriptions over WebSocket (multiplexing + gap-filling)
+- Provider override with optional failover
+- Region-biased routing
+
+**❌ Block:**
+- Subscriptions over HTTP
+- Wallet/signing/account methods
+- Transaction writes (until write-path implementation)
+- Stateful filters (until sticky routing implementation)
+- Transaction pool introspection
+
+**⚠️ Forward But No Guarantees:**
+- Debug/trace methods (expensive, non-standard)
+- Chain-specific extensions
+- Bundler RPCs (requires separate pool)
+
+---
+
+**Last Updated:** October 1, 2025
