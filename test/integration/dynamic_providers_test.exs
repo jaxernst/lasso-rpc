@@ -1,6 +1,8 @@
 defmodule Livechain.Integration.DynamicProvidersTest do
   use ExUnit.Case, async: false
 
+  @moduletag :integration
+
   alias Livechain.Providers
   alias Livechain.Testing.MockProvider
 

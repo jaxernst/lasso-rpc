@@ -22,8 +22,9 @@ Code.require_file("test/support/mock_ws_client.ex")
 Code.require_file("test/support/failing_ws_client.ex")
 
 # Ensure test isolation by resetting benchmark store between tests
+# By default, exclude slow-running tests (integration, battle, real providers)
 ExUnit.configure(
-  exclude: [:skip],
+  exclude: [:skip, :integration, :battle, :real_providers, :slow],
   timeout: 60_000,
   max_cases: 1
 )

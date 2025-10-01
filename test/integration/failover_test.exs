@@ -9,6 +9,8 @@ defmodule Integration.FailoverTest do
   use ExUnit.Case, async: false
   import Mox
 
+  @moduletag :integration
+
   alias Livechain.RPC.{ChainSupervisor, CircuitBreaker}
   alias Livechain.Config.ChainConfig
   alias Livechain.Config.ChainConfig.{Provider, Connection, Failover}

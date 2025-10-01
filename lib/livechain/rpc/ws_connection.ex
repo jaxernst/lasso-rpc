@@ -206,7 +206,11 @@ defmodule Livechain.RPC.WSConnection do
   end
 
   @impl true
-  def handle_call({:request, method, params, timeout_ms, provided_id}, from, %{connected: true} = state) do
+  def handle_call(
+        {:request, method, params, timeout_ms, provided_id},
+        from,
+        %{connected: true} = state
+      ) do
     # Use provided request_id if available, otherwise generate one
     request_id = provided_id || generate_id()
 
@@ -236,7 +240,11 @@ defmodule Livechain.RPC.WSConnection do
     end
   end
 
-  def handle_call({:request, _method, _params, _timeout_ms, _request_id}, _from, %{connected: false} = state) do
+  def handle_call(
+        {:request, _method, _params, _timeout_ms, _request_id},
+        _from,
+        %{connected: false} = state
+      ) do
     jerr =
       ErrorNormalizer.normalize(:not_connected, provider_id: state.endpoint.id, transport: :ws)
 
@@ -302,6 +310,7 @@ defmodule Livechain.RPC.WSConnection do
             # ALSO broadcast to raw_messages for subscription management
             # This allows UpstreamSubscriptionPool to track subscription confirmations
             received_at = System.monotonic_time(:millisecond)
+
             Phoenix.PubSub.broadcast(
               Livechain.PubSub,
               "raw_messages:#{state.chain_name}",

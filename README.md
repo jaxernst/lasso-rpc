@@ -7,6 +7,7 @@
 #### [watch the demo](https://www.youtube.com/watch?v=ZhCqh001zNE)
 
 ---
+
 Building reliable blockchain applications is challenging, largely due to the complexity of choosing and managing RPC providers. With dozens of providers offering different performance, pricing models, and reliability guarantees, developers face an opaque decision that directly impacts their application's user experience.
 
 Lasso solves this by acting as an intelligent proxy that sits between your application and multiple RPC providers. While it provides the same JSON-RPC endpoints for WebSocket and HTTP that you'd expect from any provider, Lasso orchestrates **all** your providers across **all** your chains. It automatically routes requests to the best-performing provider, handles failures gracefully, and gives you the reliability and performance to build consumer-grade onchain applications.
