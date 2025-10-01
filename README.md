@@ -1,8 +1,12 @@
 # Lasso RPC
 
 **A smart blockchain RPC aggregator for building bulletproof onchain applications.**
+
 <img width="1466" height="1034" alt="Screenshot 2025-09-02 at 5 13 21 PM" src="https://github.com/user-attachments/assets/0fdd37bb-e4c2-4ae0-b3c8-3cb3f4ba04d6" />
 
+#### [watch the demo](https://www.youtube.com/watch?v=ZhCqh001zNE)
+
+---
 Building reliable blockchain applications is challenging, largely due to the complexity of choosing and managing RPC providers. With dozens of providers offering different performance, pricing models, and reliability guarantees, developers face an opaque decision that directly impacts their application's user experience.
 
 Lasso solves this by acting as an intelligent proxy that sits between your application and multiple RPC providers. While it provides the same JSON-RPC endpoints for WebSocket and HTTP that you'd expect from any provider, Lasso orchestrates **all** your providers across **all** your chains. It automatically routes requests to the best-performing provider, handles failures gracefully, and gives you the reliability and performance to build consumer-grade onchain applications.
@@ -16,7 +20,7 @@ POST /rpc/base # Automatically load balances across available providers
 Want the fastest possible responses? Lasso routes to your best-performing provider using real-world RPC latency benchmarks:
 
 ```
-POST /rpc/ethereum # Automatic routing based on per-method latency measurements
+POST /rpc/fastest/ethereum # Automatic routing based on passive performance measurement
 ```
 
 Want much better reliability? Lasso will quietly retry your failed request with circuit breakers and intelligent failover—your application stays resilient when providers don't.
@@ -66,6 +70,8 @@ This architecture scales from a single self-hosted instance to a global network 
 - HTTP (POST /rpc/:chain): Read-only methods proxied to upstream providers.
 
 ## Quick Start
+
+**🎯 For Hackathon Judges:** See [HACKATHON_SETUP.md](HACKATHON_SETUP.md) for the fastest setup guide
 
 Choose your preferred setup method:
 
@@ -170,7 +176,7 @@ chains:
 
 Routing strategies are determined by the endpoint you use:
 
-- `/rpc/fastest/:chain` - Routes to the fastest provider based on method-specific RPC latency measurements
+- `/rpc/fastest/:chain` - Routes to the fastest provider based on performance metrics
 - `/rpc/cheapest/:chain` - Prefers free/public providers
 - `/rpc/priority/:chain` - Uses static priority order from configuration
 - `/rpc/round-robin/:chain` - Load balances across all available providers
@@ -356,17 +362,8 @@ Lasso has three types of tests organized for different purposes:
 # 165 tests covering core RPC functionality, transport abstraction, and observability
 mix test --exclude battle --exclude real_providers
 
-# Battle testing framework (integration & e2e)
-# Validates request pipeline, failover, circuit breakers, and chaos scenarios
-mix test --only battle
-
-# Real provider integration (slow, requires network)
-# Tests against live RPC providers (Ethereum, Base, etc.)
-mix test --only battle --only real_providers
-
-# WebSocket integration (very slow, weekly only)
-# Requires real blockchain events (~12s Ethereum blocks)
-mix test --only battle --only slow
+# Start the dev server
+mix phx.server
 ```
 
 **For local development:** Run unit tests frequently. Run integration tests before pushing.
