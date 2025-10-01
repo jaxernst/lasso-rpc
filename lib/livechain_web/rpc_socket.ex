@@ -22,6 +22,15 @@ defmodule LivechainWeb.RPCSocket do
   alias Livechain.RPC.{SubscriptionRouter, RequestPipeline, RequestContext, Observability}
   alias Livechain.JSONRPC.Error, as: JError
   alias Livechain.Config.ConfigStore
+  alias LivechainWeb.ConnectionTracker
+
+  # Heartbeat configuration (aggressive keepalive for subscription connections)
+  # Send ping every 30 seconds
+  @heartbeat_interval 30_000
+  # Expect pong within 5 seconds (more aggressive than 10)
+  @heartbeat_timeout 5_000
+  # Allow 2 missed heartbeats before closing (stricter than 3)
+  @max_missed_heartbeats 2
 
   ## Phoenix.Socket.Transport callbacks
 
@@ -33,28 +42,50 @@ defmodule LivechainWeb.RPCSocket do
 
   @impl true
   def connect(transport_info) do
-    # Extract chain from path parameters
-    # transport_info is a map with :params key containing route params
-    chain = get_in(transport_info, [:params, "chain_id"]) || "ethereum"
+    # Extract client IP for connection tracking
+    client_ip = extract_client_ip(transport_info)
 
-    socket_state = %{
-      chain: chain,
-      subscriptions: %{},
-      client_pid: self()
-    }
+    # Check connection limits (feature-flagged; proceed if disabled)
+    case maybe_check_connection_allowed(client_ip) do
+      {:ok, connection_id} ->
+        # Extract chain from path parameters
+        chain = get_in(transport_info, [:params, "chain_id"]) || "ethereum"
 
-    Logger.info(
-      "JSON-RPC WebSocket client connected: #{chain} (params: #{inspect(transport_info)})"
-    )
+        socket_state = %{
+          chain: chain,
+          subscriptions: %{},
+          client_pid: self(),
+          heartbeat_ref: nil,
+          missed_heartbeats: 0,
+          last_ping_time: nil,
+          connection_id: connection_id,
+          client_ip: client_ip
+        }
 
-    {:ok, socket_state}
+        Logger.info(
+          "JSON-RPC WebSocket client connected: #{chain} (id: #{connection_id}, ip: #{client_ip})"
+        )
+
+        {:ok, socket_state}
+
+      {:error, reason} ->
+        Logger.warning("Connection rejected: #{reason} (ip: #{client_ip})")
+        {:error, reason}
+    end
   end
 
   @impl true
   def init(state) do
     # Subscribe to receive subscription events
     Process.flag(:trap_exit, true)
-    {:ok, state}
+
+    # Register connection with tracker if enabled
+    maybe_register_connection(state.connection_id, state.client_ip)
+
+    # Start heartbeat timer
+    heartbeat_ref = Process.send_after(self(), :send_heartbeat, @heartbeat_interval)
+
+    {:ok, %{state | heartbeat_ref: heartbeat_ref}}
   end
 
   @impl true
@@ -76,8 +107,15 @@ defmodule LivechainWeb.RPCSocket do
   end
 
   @impl true
+  def handle_in({_data, [opcode: :pong]}, state) do
+    # Handle pong response - reset heartbeat counter
+    Logger.debug("Received pong from client")
+    {:ok, %{state | missed_heartbeats: 0, last_ping_time: nil}}
+  end
+
+  @impl true
   def handle_in(_, state) do
-    # Ignore non-text frames (ping, pong, binary)
+    # Ignore other non-text frames (ping, binary)
     {:ok, state}
   end
 
@@ -102,6 +140,40 @@ defmodule LivechainWeb.RPCSocket do
   end
 
   @impl true
+  def handle_info(:send_heartbeat, state) do
+    # Send ping frame and set timeout for pong response
+    Logger.debug("Sending heartbeat ping to client")
+
+    # Cancel existing timeout if any
+    if state.heartbeat_ref, do: Process.cancel_timer(state.heartbeat_ref)
+
+    # Send ping frame (empty payload)
+    ping_frame = {:ping, ""}
+
+    # Set timeout for pong response
+    timeout_ref = Process.send_after(self(), :heartbeat_timeout, @heartbeat_timeout)
+
+    {:push, ping_frame,
+     %{state | heartbeat_ref: timeout_ref, last_ping_time: System.monotonic_time(:millisecond)}}
+  end
+
+  @impl true
+  def handle_info(:heartbeat_timeout, state) do
+    # Pong not received within timeout - increment missed counter
+    missed = state.missed_heartbeats + 1
+    Logger.warning("Heartbeat timeout - missed #{missed}/#{@max_missed_heartbeats} heartbeats")
+
+    if missed >= @max_missed_heartbeats do
+      Logger.error("Too many missed heartbeats (#{missed}), closing connection")
+      {:stop, :heartbeat_timeout, state}
+    else
+      # Schedule next heartbeat
+      heartbeat_ref = Process.send_after(self(), :send_heartbeat, @heartbeat_interval)
+      {:ok, %{state | missed_heartbeats: missed, heartbeat_ref: heartbeat_ref}}
+    end
+  end
+
+  @impl true
   def handle_info({:EXIT, _pid, reason}, state) do
     Logger.debug("WebSocket process exiting: #{inspect(reason)}")
     {:stop, reason, state}
@@ -115,6 +187,12 @@ defmodule LivechainWeb.RPCSocket do
   @impl true
   def terminate(reason, state) do
     Logger.debug("WebSocket terminated: #{inspect(reason)}")
+
+    # Cancel heartbeat timer
+    if state.heartbeat_ref, do: Process.cancel_timer(state.heartbeat_ref)
+
+    # Unregister connection from tracker if enabled
+    maybe_unregister_connection(state.connection_id, state.client_ip)
 
     # Unsubscribe all active subscriptions
     Enum.each(state.subscriptions, fn {subscription_id, _type} ->
@@ -343,5 +421,68 @@ defmodule LivechainWeb.RPCSocket do
       "method" => "lasso_meta",
       "params" => metadata
     }
+  end
+
+  ## Connection tracking helpers
+
+  defp extract_client_ip(transport_info) do
+    # Extract client IP from various possible locations in transport_info
+    # Phoenix WebSocket transport provides peer information
+
+    cond do
+      # Check for x-forwarded-for header (when behind proxy/load balancer)
+      x_forwarded_for = get_in(transport_info, [:connect_info, :x_headers, "x-forwarded-for"]) ->
+        # Take the first IP if multiple are present
+        String.split(x_forwarded_for, ",") |> List.first() |> String.trim()
+
+      # Check for peer data
+      peer = get_in(transport_info, [:connect_info, :peer]) ->
+        format_ip(peer)
+
+      # Fallback to unknown
+      true ->
+        "unknown"
+    end
+  end
+
+  defp format_ip({ip_tuple, _port}) when is_tuple(ip_tuple) do
+    # Convert IP tuple to string
+    ip_tuple
+    |> :inet.ntoa()
+    |> to_string()
+  end
+
+  defp format_ip(ip) when is_binary(ip) do
+    ip
+  end
+
+  defp format_ip(_), do: "unknown"
+
+  defp tracker_enabled? do
+    Application.get_env(:livechain, :enable_connection_tracker, false)
+  end
+
+  defp maybe_check_connection_allowed(client_ip) do
+    if tracker_enabled?() do
+      ConnectionTracker.check_connection_allowed(client_ip)
+    else
+      {:ok, "conn-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)}
+    end
+  end
+
+  defp maybe_register_connection(connection_id, client_ip) do
+    if tracker_enabled?() do
+      ConnectionTracker.register_connection(connection_id, client_ip)
+    else
+      :ok
+    end
+  end
+
+  defp maybe_unregister_connection(connection_id, client_ip) do
+    if tracker_enabled?() do
+      ConnectionTracker.unregister_connection(connection_id, client_ip)
+    else
+      :ok
+    end
   end
 end

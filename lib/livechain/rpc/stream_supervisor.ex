@@ -35,4 +35,16 @@ defmodule Livechain.RPC.StreamSupervisor do
         {:ok, pid}
     end
   end
+
+  def stop_coordinator(chain, key) do
+    name = StreamCoordinator.via(chain, key)
+
+    case GenServer.whereis(name) do
+      nil ->
+        :ok
+
+      pid ->
+        DynamicSupervisor.terminate_child(via(chain), pid)
+    end
+  end
 end

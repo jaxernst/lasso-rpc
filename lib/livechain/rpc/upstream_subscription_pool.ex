@@ -63,7 +63,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       keys: %{},
       # provider_id => %{upstream_id => key}
       upstream_index: %{},
-      # request_id => {provider_id, key}
+      # request_id => {provider_id, key, timestamp}
       pending_subscribe: %{},
       # provider capabilities discovered at runtime, e.g., %{provider_id => %{newHeads: true/false, logs: true/false}}
       provider_caps: %{},
@@ -72,8 +72,13 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       backfill_timeout: Map.get(failover_cfg, :backfill_timeout, 30_000),
       failover_enabled: Map.get(failover_cfg, :enabled, true),
       dedupe_max_items: Map.get(dedupe_cfg, :max_items, 256),
-      dedupe_max_age_ms: Map.get(dedupe_cfg, :max_age_ms, 30_000)
+      dedupe_max_age_ms: Map.get(dedupe_cfg, :max_age_ms, 30_000),
+      # Subscription confirmation timeout
+      subscription_timeout_ms: 30_000
     }
+
+    # Schedule periodic cleanup of stale pending subscriptions
+    schedule_pending_cleanup()
 
     {:ok, state}
   end
@@ -102,6 +107,42 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
   end
 
   @impl true
+  # Handle subscription events WITH subscription ID (most common case) - must come BEFORE the fallback handler
+  def handle_info(
+        {:raw_message, provider_id,
+         %{
+           "method" => "eth_subscription",
+           "params" => %{"subscription" => upstream_id, "result" => payload}
+         }, received_at},
+        state
+      ) do
+    Logger.debug(
+      "Received subscription event: provider=#{provider_id}, upstream_id=#{upstream_id}, upstream_index=#{inspect(state.upstream_index)}"
+    )
+
+    case get_in(state.upstream_index, [provider_id, upstream_id]) do
+      nil ->
+        Logger.warning(
+          "No key found for subscription event: provider=#{provider_id}, upstream_id=#{upstream_id}"
+        )
+
+        {:noreply, state}
+
+      key ->
+        StreamCoordinator.upstream_event(
+          state.chain,
+          key,
+          provider_id,
+          upstream_id,
+          payload,
+          received_at
+        )
+
+        {:noreply, state}
+    end
+  end
+
+  # Fallback handler for subscription events WITHOUT subscription ID (unusual case)
   def handle_info(
         {:raw_message, _provider_id,
          %{"method" => "eth_subscription", "params" => %{"result" => payload}}, received_at},
@@ -131,58 +172,25 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
         state
       )
       when is_binary(upstream_id) do
-    case Map.pop(state.pending_subscribe, request_id) do
+    Logger.debug(
+      "Received subscription confirmation: provider=#{provider_id}, request_id=#{request_id}, upstream_id=#{upstream_id}"
+    )
+
+    with {{expected_provider, key, _timestamp}, new_pending} <-
+           Map.pop(state.pending_subscribe, request_id),
+         :ok <- validate_provider_match(expected_provider, provider_id, new_pending),
+         {:ok, entry} <- fetch_key_entry(state.keys, key, new_pending) do
+      # Success path: confirmation for active subscription
+      handle_successful_confirmation(state, new_pending, key, provider_id, upstream_id, entry)
+    else
       {nil, _} ->
-        {:noreply, state}
+        handle_unknown_confirmation(state, request_id, provider_id)
 
-      {{prov, key}, new_pending} ->
-        # Only proceed if this confirmation matches the provider we expect
-        if prov == provider_id do
-          case Map.get(state.keys, key) do
-            nil ->
-              Logger.warning(
-                "Received subscription confirmation for unknown key: #{inspect(key)}"
-              )
+      {:error, :provider_mismatch, new_pending} ->
+        handle_provider_mismatch(state, new_pending)
 
-              {:noreply, %{state | pending_subscribe: new_pending}}
-
-            entry ->
-              updated_entry = put_in(entry, [:upstream, provider_id], upstream_id)
-
-              # Build nested upstream_index map
-              upstream_index =
-                Map.update(
-                  state.upstream_index,
-                  provider_id,
-                  %{upstream_id => key},
-                  fn provider_map ->
-                    Map.put(provider_map, upstream_id, key)
-                  end
-                )
-
-              # Mark capability for this provider/key as supported
-              cap = capability_from_key(key)
-
-              provider_caps =
-                Map.update(state.provider_caps, provider_id, %{cap => true}, fn provider_map ->
-                  Map.put(provider_map, cap, true)
-                end)
-
-              # Notify coordinator that upstream is confirmed
-              StreamCoordinator.upstream_confirmed(state.chain, key, provider_id, upstream_id)
-
-              {:noreply,
-               %{
-                 state
-                 | keys: Map.put(state.keys, key, updated_entry),
-                   upstream_index: upstream_index,
-                   pending_subscribe: new_pending,
-                   provider_caps: provider_caps
-               }}
-          end
-        else
-          {:noreply, %{state | pending_subscribe: new_pending}}
-        end
+      {:error, :key_not_found, new_pending, key} ->
+        handle_orphaned_confirmation(state, new_pending, key, provider_id, upstream_id)
     end
   end
 
@@ -195,14 +203,18 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
       {nil, _} ->
         {:noreply, state}
 
-      {{prov, key}, new_pending} ->
+      {{prov, key, _timestamp}, new_pending} ->
         if prov == provider_id do
           Logger.warning(
             "Upstream subscribe failed on #{provider_id} for #{inspect(key)}: #{inspect(error)}"
           )
 
           cap = capability_from_key(key)
-          provider_caps = put_in(state.provider_caps, [provider_id, cap], false)
+
+          provider_caps =
+            Map.update(state.provider_caps, provider_id, %{cap => false}, fn caps ->
+              Map.put(caps, cap, false)
+            end)
 
           entry = Map.get(state.keys, key)
           already_tried = Map.keys(entry.upstream)
@@ -219,6 +231,7 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
             {:ok, next_provider} ->
               request_id2 = send_upstream_subscribe(state.chain, next_provider, key)
               telemetry_upstream(:subscribe, state.chain, next_provider, key)
+              timestamp = System.monotonic_time(:millisecond)
 
               updated_entry =
                 entry
@@ -228,7 +241,8 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
               new_state = %{
                 state
                 | keys: Map.put(state.keys, key, updated_entry),
-                  pending_subscribe: Map.put(new_pending, request_id2, {next_provider, key}),
+                  pending_subscribe:
+                    Map.put(new_pending, request_id2, {next_provider, key, timestamp}),
                   provider_caps: provider_caps
               }
 
@@ -244,32 +258,6 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
         else
           {:noreply, %{state | pending_subscribe: new_pending}}
         end
-    end
-  end
-
-  def handle_info(
-        {:raw_message, provider_id,
-         %{
-           "method" => "eth_subscription",
-           "params" => %{"subscription" => upstream_id, "result" => payload}
-         }, received_at},
-        state
-      ) do
-    case get_in(state.upstream_index, [provider_id, upstream_id]) do
-      nil ->
-        {:noreply, state}
-
-      key ->
-        StreamCoordinator.upstream_event(
-          state.chain,
-          key,
-          provider_id,
-          upstream_id,
-          payload,
-          received_at
-        )
-
-        {:noreply, state}
     end
   end
 
@@ -306,6 +294,50 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
     {:noreply, state}
   end
 
+  # Periodic cleanup of stale pending subscriptions
+  def handle_info(:cleanup_stale_pending, state) do
+    now = System.monotonic_time(:millisecond)
+    timeout_ms = state.subscription_timeout_ms
+
+    {stale, valid} =
+      Enum.split_with(state.pending_subscribe, fn {_req_id, {_prov, _key, ts}} ->
+        now - ts > timeout_ms
+      end)
+
+    # Log and emit telemetry for stale entries
+    Enum.each(stale, fn {req_id, {provider_id, key, _ts}} ->
+      Logger.warning(
+        "Timeout waiting for subscription confirmation: provider=#{provider_id}, key=#{inspect(key)}, req_id=#{req_id}"
+      )
+
+      :telemetry.execute(
+        [:livechain, :subs, :confirmation_timeout],
+        %{count: 1},
+        %{chain: state.chain, provider_id: provider_id, key: inspect(key)}
+      )
+    end)
+
+    # Emit state size telemetry for leak detection
+    upstream_index_size = calculate_nested_map_size(state.upstream_index)
+    valid_map = Map.new(valid)
+
+    :telemetry.execute(
+      [:livechain, :subs, :pool_state],
+      %{
+        keys_count: map_size(state.keys),
+        pending_count: map_size(valid_map),
+        upstream_index_size: upstream_index_size,
+        stale_cleaned: length(stale)
+      },
+      %{chain: state.chain}
+    )
+
+    # Schedule next cleanup
+    schedule_pending_cleanup()
+
+    {:noreply, %{state | pending_subscribe: valid_map}}
+  end
+
   def handle_info(_, state), do: {:noreply, state}
 
   # Legacy no-op; failover is delegated to StreamCoordinator
@@ -315,6 +347,84 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
   # Explicit failover path: Upstream re-establish on next healthy provider when connection dies.
 
   # Internal helpers
+
+  # Confirmation handler helpers - cleaner separation of concerns
+
+  defp validate_provider_match(expected, actual, _new_pending) when expected == actual, do: :ok
+
+  defp validate_provider_match(_expected, _actual, new_pending),
+    do: {:error, :provider_mismatch, new_pending}
+
+  defp fetch_key_entry(keys, key, new_pending) do
+    case Map.get(keys, key) do
+      nil -> {:error, :key_not_found, new_pending, key}
+      entry -> {:ok, entry}
+    end
+  end
+
+  defp handle_unknown_confirmation(state, request_id, provider_id) do
+    Logger.warning(
+      "Subscription confirmation for unknown request_id: #{request_id}, provider=#{provider_id}"
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_provider_mismatch(state, new_pending) do
+    # Provider mismatch - likely a delayed response, just clean up pending
+    {:noreply, %{state | pending_subscribe: new_pending}}
+  end
+
+  defp handle_orphaned_confirmation(state, new_pending, key, provider_id, upstream_id) do
+    # Subscription was cancelled before confirmation arrived - clean up orphaned upstream
+    Logger.warning(
+      "Late confirmation for cancelled subscription: provider=#{provider_id}, upstream_id=#{upstream_id}, key=#{inspect(key)}. Cleaning up."
+    )
+
+    # Send eth_unsubscribe to provider
+    _ = send_upstream_unsubscribe(state.chain, provider_id, key, upstream_id)
+
+    # Emit telemetry for monitoring
+    :telemetry.execute(
+      [:livechain, :subs, :orphaned_upstream],
+      %{count: 1},
+      %{chain: state.chain, provider_id: provider_id, upstream_id: upstream_id}
+    )
+
+    {:noreply, %{state | pending_subscribe: new_pending}}
+  end
+
+  defp handle_successful_confirmation(state, new_pending, key, provider_id, upstream_id, entry) do
+    # Update entry with confirmed upstream_id
+    updated_entry = put_in(entry, [:upstream, provider_id], upstream_id)
+
+    # Build nested upstream_index map
+    upstream_index =
+      Map.update(
+        state.upstream_index,
+        provider_id,
+        %{upstream_id => key},
+        &Map.put(&1, upstream_id, key)
+      )
+
+    # Mark capability as supported
+    cap = capability_from_key(key)
+
+    provider_caps =
+      Map.update(state.provider_caps, provider_id, %{cap => true}, &Map.put(&1, cap, true))
+
+    # Notify coordinator
+    StreamCoordinator.upstream_confirmed(state.chain, key, provider_id, upstream_id)
+
+    {:noreply,
+     %{
+       state
+       | keys: Map.put(state.keys, key, updated_entry),
+         upstream_index: upstream_index,
+         pending_subscribe: new_pending,
+         provider_caps: provider_caps
+     }}
+  end
 
   defp ensure_upstream_for_key(state, key) do
     case Map.get(state.keys, key) do
@@ -339,10 +449,13 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
             dedupe: nil
           }
 
+          timestamp = System.monotonic_time(:millisecond)
+
           new_state = %{
             state
             | keys: Map.put(state.keys, key, entry),
-              pending_subscribe: Map.put(state.pending_subscribe, request_id, {provider_id, key})
+              pending_subscribe:
+                Map.put(state.pending_subscribe, request_id, {provider_id, key, timestamp})
           }
 
           {new_state, provider_id}
@@ -391,9 +504,41 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
 
       %{refcount: 1, upstream: upstream, primary_provider_id: provider_id} ->
         # Best-effort unsubscribe on current provider
-        _ = send_upstream_unsubscribe(provider_id, key, Map.get(upstream, provider_id))
+        upstream_id = Map.get(upstream, provider_id)
+        _ = send_upstream_unsubscribe(state.chain, provider_id, key, upstream_id)
         telemetry_upstream(:unsubscribe, state.chain, provider_id, key)
-        %{state | keys: Map.delete(state.keys, key)}
+
+        # Clean up upstream_index for all providers in the upstream map
+        new_upstream_index =
+          Enum.reduce(upstream, state.upstream_index, fn {prov_id, up_id}, acc ->
+            case up_id do
+              nil ->
+                # No upstream_id was assigned yet, nothing to clean
+                acc
+
+              _ ->
+                # Remove this upstream_id from the provider's map
+                case Map.get(acc, prov_id) do
+                  nil ->
+                    acc
+
+                  provider_map ->
+                    updated_map = Map.delete(provider_map, up_id)
+
+                    if map_size(updated_map) == 0 do
+                      # Provider has no more subscriptions, remove it entirely
+                      Map.delete(acc, prov_id)
+                    else
+                      Map.put(acc, prov_id, updated_map)
+                    end
+                end
+            end
+          end)
+
+        # Stop the StreamCoordinator for this key
+        StreamSupervisor.stop_coordinator(state.chain, key)
+
+        %{state | keys: Map.delete(state.keys, key), upstream_index: new_upstream_index}
 
       entry ->
         updated = %{entry | refcount: entry.refcount - 1}
@@ -465,8 +610,24 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
     end
   end
 
-  defp send_upstream_unsubscribe(_provider_id, _key, _upstream_id) do
-    # Many providers ignore ws eth_unsubscribe; best-effort or skip for MVP
+  defp send_upstream_unsubscribe(chain, provider_id, _key, upstream_id)
+       when is_binary(upstream_id) do
+    message = %{
+      "jsonrpc" => "2.0",
+      "id" => generate_id(),
+      "method" => "eth_unsubscribe",
+      "params" => [upstream_id]
+    }
+
+    Logger.debug("Sending upstream eth_unsubscribe to #{provider_id} for #{upstream_id}")
+
+    # Best-effort send via channel, fire-and-forget (don't wait for response)
+    _ = send_via_channel(chain, provider_id, message)
+    :ok
+  end
+
+  defp send_upstream_unsubscribe(_chain, _provider_id, _key, _upstream_id) do
+    # No upstream_id available, nothing to unsubscribe
     :ok
   end
 
@@ -498,4 +659,17 @@ defmodule Livechain.RPC.UpstreamSubscriptionPool do
   defp capability_from_key({:logs, _}), do: :logs
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+
+  # Stale pending subscription cleanup
+
+  defp schedule_pending_cleanup do
+    # Check every 30 seconds
+    Process.send_after(self(), :cleanup_stale_pending, 30_000)
+  end
+
+  defp calculate_nested_map_size(nested_map) do
+    Enum.reduce(nested_map, 0, fn {_provider, inner_map}, acc ->
+      acc + map_size(inner_map)
+    end)
+  end
 end

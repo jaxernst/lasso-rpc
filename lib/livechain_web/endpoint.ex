@@ -20,7 +20,12 @@ defmodule LivechainWeb.Endpoint do
   # JSON-RPC WebSocket endpoints with route parameters
   # Using /ws/rpc/:chain_id path to avoid conflicts with HTTP /rpc/:chain_id
   socket("/ws/rpc/:chain_id", LivechainWeb.RPCSocket,
-    websocket: [path: ""],
+    websocket: [
+      path: "",
+      # 2 hours for subscription connections (standard for persistent WebSocket connections)
+      timeout: 7_200_000,
+      compress: false
+    ],
     longpoll: false
   )
 

@@ -100,10 +100,10 @@ defmodule Livechain.RPC.WSConnection do
 
   Returns {:ok, result} | {:error, reason}.
   """
-  def request(connection_id, method, params, timeout_ms \\ 30_000) do
+  def request(connection_id, method, params, timeout_ms \\ 30_000, request_id \\ nil) do
     GenServer.call(
       via_name(connection_id),
-      {:request, method, params, timeout_ms},
+      {:request, method, params, timeout_ms, request_id},
       timeout_ms + 2_000
     )
   end
@@ -206,8 +206,9 @@ defmodule Livechain.RPC.WSConnection do
   end
 
   @impl true
-  def handle_call({:request, method, params, timeout_ms}, from, %{connected: true} = state) do
-    request_id = generate_id()
+  def handle_call({:request, method, params, timeout_ms, provided_id}, from, %{connected: true} = state) do
+    # Use provided request_id if available, otherwise generate one
+    request_id = provided_id || generate_id()
 
     message = %{
       "jsonrpc" => "2.0",
@@ -235,7 +236,7 @@ defmodule Livechain.RPC.WSConnection do
     end
   end
 
-  def handle_call({:request, _method, _params, _timeout_ms}, _from, %{connected: false} = state) do
+  def handle_call({:request, _method, _params, _timeout_ms, _request_id}, _from, %{connected: false} = state) do
     jerr =
       ErrorNormalizer.normalize(:not_connected, provider_id: state.endpoint.id, transport: :ws)
 
@@ -298,6 +299,16 @@ defmodule Livechain.RPC.WSConnection do
               end
 
             GenServer.reply(from, reply)
+
+            # ALSO broadcast to raw_messages for subscription management
+            # This allows UpstreamSubscriptionPool to track subscription confirmations
+            received_at = System.monotonic_time(:millisecond)
+            Phoenix.PubSub.broadcast(
+              Livechain.PubSub,
+              "raw_messages:#{state.chain_name}",
+              {:raw_message, state.endpoint.id, resp, received_at}
+            )
+
             {:noreply, %{state | pending_requests: new_pending}}
         end
 

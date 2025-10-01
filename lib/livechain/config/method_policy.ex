@@ -14,31 +14,31 @@ defmodule Livechain.Config.MethodPolicy do
 
   @default_timeouts %{
     # Heavy
-    "eth_getLogs" => 60_000,
-    "eth_getFilterLogs" => 60_000,
-    "eth_newFilter" => 30_000,
-    "debug_traceTransaction" => 120_000,
-    "debug_traceBlock" => 120_000,
+    "eth_getLogs" => 10_000,
+    "eth_getFilterLogs" => 10_000,
+    "eth_newFilter" => 10_000,
+    "debug_traceTransaction" => 10_000,
+    "debug_traceBlock" => 10_000,
     # Medium
-    "eth_getBlockByNumber" => 30_000,
-    "eth_getBlockByHash" => 30_000,
+    "eth_getBlockByNumber" => 10_000,
+    "eth_getBlockByHash" => 10_000,
     "eth_getTransactionByHash" => 20_000,
-    "eth_getTransactionReceipt" => 20_000,
-    "eth_call" => 20_000,
-    "eth_estimateGas" => 20_000,
+    "eth_getTransactionReceipt" => 10_000,
+    "eth_call" => 10_000,
+    "eth_estimateGas" => 30_000,
     # Quick
-    "eth_blockNumber" => 10_000,
-    "eth_chainId" => 5_000,
-    "eth_gasPrice" => 10_000,
-    "eth_getBalance" => 15_000,
-    "eth_getTransactionCount" => 15_000,
-    "eth_getCode" => 15_000,
-    "net_version" => 5_000,
-    "web3_clientVersion" => 5_000
+    "eth_blockNumber" => 1_000,
+    "eth_chainId" => 1_000,
+    "eth_gasPrice" => 2_000,
+    "eth_getBalance" => 3_000,
+    "eth_getTransactionCount" => 3_000,
+    "eth_getCode" => 3_000,
+    "net_version" => 1_000,
+    "web3_clientVersion" => 1_000
   }
 
   @default_fallback 30_000
-  @default_max_failovers 1
+  @default_max_failovers 3
 
   @spec timeout_for(method) :: non_neg_integer()
   def timeout_for(method) when is_binary(method) do
