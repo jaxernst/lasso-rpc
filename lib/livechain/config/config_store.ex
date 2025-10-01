@@ -148,6 +148,42 @@ defmodule Livechain.Config.ConfigStore do
   end
 
   @doc """
+  Registers a chain configuration in-memory (runtime only, not persisted to YAML).
+
+  This allows dynamically created test chains to be registered without requiring
+  them to be in the YAML config file.
+
+  ## Example
+
+      ConfigStore.register_chain_runtime("test_chain", %{
+        chain_id: 99998,
+        name: "Test Chain",
+        providers: [],
+        connection: %{heartbeat_interval: 1000},
+        failover: %{enabled: false}
+      })
+
+  ## Returns
+
+  `:ok` on success, `{:error, :already_exists}` if chain already exists.
+  """
+  @spec register_chain_runtime(String.t(), map()) :: :ok | {:error, term()}
+  def register_chain_runtime(chain_name, chain_attrs) do
+    GenServer.call(__MODULE__, {:register_chain_runtime, chain_name, chain_attrs})
+  end
+
+  @doc """
+  Unregisters a chain from in-memory configuration (runtime only).
+
+  Removes the chain from ConfigStore. Should only be used for dynamically
+  registered chains that need cleanup (e.g., test chains).
+  """
+  @spec unregister_chain_runtime(String.t()) :: :ok | {:error, term()}
+  def unregister_chain_runtime(chain_name) do
+    GenServer.call(__MODULE__, {:unregister_chain_runtime, chain_name})
+  end
+
+  @doc """
   Registers a provider configuration in-memory (runtime only, not persisted to YAML).
 
   This allows dynamically added providers to be found by TransportRegistry and other
@@ -235,6 +271,77 @@ defmodule Livechain.Config.ConfigStore do
   end
 
   @impl true
+  def handle_call({:register_chain_runtime, chain_name, chain_attrs}, _from, state) do
+    case get_chain(chain_name) do
+      {:ok, _existing_chain} ->
+        {:reply, {:error, :already_exists}, state}
+
+      {:error, :not_found} ->
+        # Create ChainConfig struct from attributes
+        chain_config = normalize_chain_config(chain_name, chain_attrs)
+
+        # Update ETS with new chain (safely handle missing key)
+        chains =
+          case :ets.lookup(@config_table, @chains_key) do
+            [{@chains_key, existing_chains}] -> existing_chains
+            [] -> %{}
+          end
+
+        updated_chains = Map.put(chains, chain_name, chain_config)
+        :ets.insert(@config_table, {@chains_key, updated_chains})
+
+        # Update chain ID index if chain_id is present (safely handle missing key)
+        if chain_config.chain_id do
+          id_index =
+            case :ets.lookup(@config_table, @chain_ids_key) do
+              [{@chain_ids_key, existing_index}] -> existing_index
+              [] -> %{}
+            end
+
+          updated_index = Map.put(id_index, chain_config.chain_id, chain_name)
+          :ets.insert(@config_table, {@chain_ids_key, updated_index})
+        end
+
+        Logger.debug("Registered chain #{chain_name} in ConfigStore (runtime)")
+        {:reply, :ok, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:unregister_chain_runtime, chain_name}, _from, state) do
+    case get_chain(chain_name) do
+      {:ok, chain_config} ->
+        # Remove from chains map (safely handle missing key)
+        chains =
+          case :ets.lookup(@config_table, @chains_key) do
+            [{@chains_key, existing_chains}] -> existing_chains
+            [] -> %{}
+          end
+
+        updated_chains = Map.delete(chains, chain_name)
+        :ets.insert(@config_table, {@chains_key, updated_chains})
+
+        # Remove from chain ID index if chain_id exists (safely handle missing key)
+        if chain_config.chain_id do
+          id_index =
+            case :ets.lookup(@config_table, @chain_ids_key) do
+              [{@chain_ids_key, existing_index}] -> existing_index
+              [] -> %{}
+            end
+
+          updated_index = Map.delete(id_index, chain_config.chain_id)
+          :ets.insert(@config_table, {@chain_ids_key, updated_index})
+        end
+
+        Logger.debug("Unregistered chain #{chain_name} from ConfigStore (runtime)")
+        {:reply, :ok, state}
+
+      {:error, :not_found} ->
+        {:reply, {:error, :chain_not_found}, state}
+    end
+  end
+
+  @impl true
   def handle_call({:register_provider_runtime, chain_name, provider_attrs}, _from, state) do
     case get_chain(chain_name) do
       {:ok, chain_config} ->
@@ -249,12 +356,20 @@ defmodule Livechain.Config.ConfigStore do
           updated_providers = chain_config.providers ++ [provider_config]
           updated_chain = %{chain_config | providers: updated_providers}
 
-          # Update ETS
-          [{@chains_key, chains}] = :ets.lookup(@config_table, @chains_key)
+          # Update ETS (safely handle missing key)
+          chains =
+            case :ets.lookup(@config_table, @chains_key) do
+              [{@chains_key, existing_chains}] -> existing_chains
+              [] -> %{}
+            end
+
           updated_chains = Map.put(chains, chain_name, updated_chain)
           :ets.insert(@config_table, {@chains_key, updated_chains})
 
-          Logger.debug("Registered provider #{provider_id} for #{chain_name} in ConfigStore (runtime)")
+          Logger.debug(
+            "Registered provider #{provider_id} for #{chain_name} in ConfigStore (runtime)"
+          )
+
           {:reply, :ok, state}
         end
 
@@ -274,12 +389,20 @@ defmodule Livechain.Config.ConfigStore do
         else
           updated_chain = %{chain_config | providers: updated_providers}
 
-          # Update ETS
-          [{@chains_key, chains}] = :ets.lookup(@config_table, @chains_key)
+          # Update ETS (safely handle missing key)
+          chains =
+            case :ets.lookup(@config_table, @chains_key) do
+              [{@chains_key, existing_chains}] -> existing_chains
+              [] -> %{}
+            end
+
           updated_chains = Map.put(chains, chain_name, updated_chain)
           :ets.insert(@config_table, {@chains_key, updated_chains})
 
-          Logger.debug("Unregistered provider #{provider_id} from #{chain_name} in ConfigStore (runtime)")
+          Logger.debug(
+            "Unregistered provider #{provider_id} from #{chain_name} in ConfigStore (runtime)"
+          )
+
           {:reply, :ok, state}
         end
 
@@ -370,6 +493,42 @@ defmodule Livechain.Config.ConfigStore do
     end
   end
 
+  defp normalize_chain_config(chain_name, attrs) when is_map(attrs) do
+    # Convert to ChainConfig struct with proper nested structs
+    connection_attrs = Map.get(attrs, :connection) || Map.get(attrs, "connection") || %{}
+    failover_attrs = Map.get(attrs, :failover) || Map.get(attrs, "failover") || %{}
+    providers_attrs = Map.get(attrs, :providers) || Map.get(attrs, "providers") || []
+
+    %ChainConfig{
+      chain_id: Map.get(attrs, :chain_id) || Map.get(attrs, "chain_id"),
+      name: Map.get(attrs, :name) || Map.get(attrs, "name") || chain_name,
+      providers: Enum.map(providers_attrs, &normalize_provider_config/1),
+      connection: normalize_connection_config(connection_attrs),
+      failover: normalize_failover_config(failover_attrs)
+    }
+  end
+
+  defp normalize_connection_config(attrs) when is_map(attrs) do
+    %ChainConfig.Connection{
+      heartbeat_interval:
+        Map.get(attrs, :heartbeat_interval) || Map.get(attrs, "heartbeat_interval") || 30_000,
+      reconnect_interval:
+        Map.get(attrs, :reconnect_interval) || Map.get(attrs, "reconnect_interval") || 5_000,
+      max_reconnect_attempts:
+        Map.get(attrs, :max_reconnect_attempts) || Map.get(attrs, "max_reconnect_attempts") || 5
+    }
+  end
+
+  defp normalize_failover_config(attrs) when is_map(attrs) do
+    %ChainConfig.Failover{
+      max_backfill_blocks:
+        Map.get(attrs, :max_backfill_blocks) || Map.get(attrs, "max_backfill_blocks") || 100,
+      backfill_timeout:
+        Map.get(attrs, :backfill_timeout) || Map.get(attrs, "backfill_timeout") || 30_000,
+      enabled: Map.get(attrs, :enabled) || Map.get(attrs, "enabled") || true
+    }
+  end
+
   defp normalize_provider_config(attrs) when is_map(attrs) do
     # Convert to Provider struct
     %Provider{
@@ -379,7 +538,8 @@ defmodule Livechain.Config.ConfigStore do
       ws_url: Map.get(attrs, :ws_url) || Map.get(attrs, "ws_url"),
       type: Map.get(attrs, :type) || Map.get(attrs, "type") || "public",
       priority: Map.get(attrs, :priority) || Map.get(attrs, "priority") || 100,
-      api_key_required: Map.get(attrs, :api_key_required) || Map.get(attrs, "api_key_required") || false,
+      api_key_required:
+        Map.get(attrs, :api_key_required) || Map.get(attrs, "api_key_required") || false,
       region: Map.get(attrs, :region) || Map.get(attrs, "region") || "global"
     }
   end

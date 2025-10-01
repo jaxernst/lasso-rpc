@@ -90,13 +90,15 @@ defmodule Livechain.RPC.Transport.WebSocket do
 
     method = Map.get(rpc_request, "method")
     params = Map.get(rpc_request, "params", [])
+    request_id = Map.get(rpc_request, "id")
 
     Logger.debug("WebSocket unary request via channel",
       provider: provider_id,
-      method: method
+      method: method,
+      request_id: request_id
     )
 
-    WSConnection.request(provider_id, method, params, timeout)
+    WSConnection.request(provider_id, method, params, timeout, request_id)
   end
 
   @impl true

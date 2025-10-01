@@ -37,6 +37,7 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
   end
 
   describe "WebSocket subscription failover" do
+    @tag :slow  # 90s test with failover, requires real blockchain events
     test "subscription continues receiving events during provider failure" do
       # Setup 2 real providers
       SetupHelper.setup_providers("ethereum", [
@@ -98,6 +99,7 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
       IO.puts("   Events received: #{stats.events_received}")
     end
 
+    @tag :slow  # 90s test with failover, requires real blockchain events
     test "multiple subscriptions continue during provider failure" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"},
@@ -150,7 +152,7 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
   end
 
   describe "Stream continuity validation" do
-    @tag :fast
+    @tag :slow  # 45s test requiring real blockchain events
     test "tracks gaps and duplicates during subscription" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -196,7 +198,7 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
       IO.puts("   Duplicates: #{stats.duplicates}")
     end
 
-    @tag :fast
+    @tag :slow  # 45s test requiring real blockchain events
     test "validates low duplicate rate during normal operation" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}

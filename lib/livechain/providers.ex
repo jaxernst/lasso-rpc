@@ -46,7 +46,7 @@ defmodule Livechain.Providers do
   """
 
   require Logger
-  alias Livechain.Config.{ConfigValidator, ChainConfigManager}
+  alias Livechain.Config.{ConfigStore, ConfigValidator, ChainConfigManager}
   alias Livechain.RPC.{ChainSupervisor, ProviderPool}
 
   @type provider_config :: %{
@@ -108,6 +108,7 @@ defmodule Livechain.Providers do
     provider_id = Map.get(provider_config, :id)
 
     with :ok <- maybe_validate(provider_config, validate?),
+         :ok <- ensure_chain_started(chain_name),
          :ok <- check_not_duplicate(chain_name, provider_id),
          :ok <- ChainSupervisor.ensure_provider(chain_name, provider_config, start_ws: start_ws),
          :ok <- maybe_persist_add(chain_name, provider_config, persist?) do
@@ -262,6 +263,68 @@ defmodule Livechain.Providers do
   end
 
   # Private functions
+
+  defp ensure_chain_started(chain_name) do
+    case ConfigStore.get_chain(chain_name) do
+      {:ok, _chain_config} ->
+        # Chain already exists and is running
+        :ok
+
+      {:error, :not_found} ->
+        # Chain doesn't exist - create it with sensible defaults
+        Logger.info("Chain '#{chain_name}' not found, creating with default configuration")
+
+        default_config = create_default_chain_config(chain_name)
+
+        with :ok <- ConfigStore.register_chain_runtime(chain_name, default_config),
+             {:ok, _pid} <- start_chain_supervisor(chain_name, default_config) do
+          Logger.info("Successfully started chain supervisor for '#{chain_name}'")
+          :ok
+        else
+          {:error, {:already_started, _pid}} ->
+            Logger.debug("Chain supervisor for '#{chain_name}' already started (race condition)")
+            :ok
+
+          {:error, reason} = error ->
+            Logger.error("Failed to start chain '#{chain_name}': #{inspect(reason)}")
+            error
+        end
+    end
+  end
+
+  defp create_default_chain_config(chain_name) do
+    %{
+      chain_id: nil,
+      # Will be assigned dynamically if needed
+      name: chain_name,
+      providers: [],
+      connection: %{
+        heartbeat_interval: 30_000,
+        reconnect_interval: 5_000,
+        max_reconnect_attempts: 5
+      },
+      failover: %{
+        enabled: true,
+        max_backfill_blocks: 100,
+        backfill_timeout: 30_000
+      }
+    }
+  end
+
+  defp start_chain_supervisor(chain_name, chain_config_attrs) do
+    # Get the full ChainConfig struct from ConfigStore (it was normalized during registration)
+    case Livechain.Config.ConfigStore.get_chain(chain_name) do
+      {:ok, chain_config} ->
+        # Start the ChainSupervisor under the dynamic supervisor
+        DynamicSupervisor.start_child(
+          Livechain.RPC.Supervisor,
+          {ChainSupervisor, {chain_name, chain_config}}
+        )
+
+      {:error, reason} ->
+        {:error, {:config_fetch_failed, reason}}
+    end
+  end
 
   defp normalize_provider_config(attrs) when is_map(attrs) do
     %{

@@ -187,12 +187,14 @@ Last verified locally:
 ### 🔍 Currently Investigating: No Subscription Events Received
 
 **Symptoms:**
+
 - Client connects successfully to RPCSocket
 - Provider (LlamaRPC) is selected for eth_subscribe
 - WebSocketClient waits 30 seconds
 - **0 events received**
 
 **Test Command:**
+
 ```bash
 mix test test/battle/websocket_subscription_test.exs:12 --trace
 ```
@@ -200,6 +202,7 @@ mix test test/battle/websocket_subscription_test.exs:12 --trace
 **Result:** Test runs 30s without crashing, but fails expecting >= 1 event (got 0)
 
 **Server Logs Show:**
+
 - ✅ Client connects: "JSON-RPC WebSocket client connected: ethereum"
 - ✅ Provider selected: "Selected provider: ethereum_llamarpc for ethereum.eth_subscribe"
 - ❌ No subscription request log
@@ -207,8 +210,57 @@ mix test test/battle/websocket_subscription_test.exs:12 --trace
 - ❌ No events from StreamCoordinator
 
 **Next Steps:**
+
 1. Add debug logging to `send_upstream_subscribe` (upstream_subscription_pool.ex:389-416)
 2. Verify WSConnection.send_message is being called
 3. Check WSConnection handle_frame for responses
 4. Verify PubSub subscription at line 44
 5. Manual IEx debugging session
+
+## WebSocket Subscriptions – Integration Test Update (Oct 1, 2025)
+
+### What We Did
+
+- Implemented a realistic WS mock provider and end-to-end integration for subscription flow.
+  - Mock registers under `{:via, Registry, {Livechain.Registry, {:ws_conn, provider_id}}}` (WSConnection-compatible).
+  - Added sync handlers in the mock to support `WSConnection.send_message/2` and `WSConnection.request/5` via `Channel.request/3`.
+  - Made `eth_unsubscribe` fire-and-forget in `UpstreamSubscriptionPool` to reduce coupling in tests.
+- Stabilized `UpstreamSubscriptionPool` integration tests.
+  - Dynamic chain/provider IDs per test; robust teardown for provider + chain supervisor + ConfigStore.
+  - Fixed assertions to use dynamic `provider` from setup.
+- Verified transport-agnostic routing.
+  - `eth_subscribe` flows through `TransportRegistry` → `Transport.WebSocket` → WS mock, with confirmations processed by the pool.
+
+### Files Touched (Core)
+
+- `lib/livechain/testing/mock_ws_provider.ex` (WSConnection naming, handle_call support, resilient stop)
+- `lib/livechain/rpc/upstream_subscription_pool.ex` (unsubscribe send made fire-and-forget)
+- `test/livechain/rpc/upstream_subscription_pool_integration_test.exs` (dynamic IDs, fixed assertions/teardown)
+
+### Results
+
+- Integration suite passes locally: 7 tests, 0 failures.
+- Confirms end-to-end routing with real subscription confirmations observed by the pool.
+
+### Remaining Gaps (High Priority)
+
+- Client delivery assertion: After `MockWSProvider.send_block/3` or `send_log/3`, assert the client receives `{:subscription_event, sub_id, payload}`.
+- Failover behavior: With 2+ WS mocks, kill primary; assert automatic switch and continued events.
+- Pending confirmation paths:
+  - Delayed confirmation (`confirm_delay > 0`) → pending then confirms.
+  - Timeout (auto_confirm: false) → pending cleaned after `subscription_timeout_ms` with telemetry.
+- Logs filter correctness: Multiple subscriptions with different filters; only matching events route.
+- Concurrency dedupe: Burst `subscribe_client` for same key yields one upstream subscribe (count in mock or PubSub tap).
+- Unsubscribe semantics: No upstream unsubscribe when refcount > 1; exactly one when refcount drops to 0; upstream state cleared.
+- Resilience: Kill mock PID mid-stream; verify provider pool state transitions and sub continuity/cleanup.
+- Cleanup/leaks: After `on_exit`, assert no lingering `{:ws_conn, provider}` registry entries or `TransportRegistry` channels.
+
+### Nice-to-Haves
+
+- Event without subscription ID: Send `eth_subscription` lacking `subscription` and assert fallback routing via payload detection.
+- Mixed transports: Include HTTP-only mock; ensure excluded from subscription selection but usable for HTTP requests elsewhere.
+
+### Follow-ups
+
+- Add 1–2 tests now: client receive assertion and basic two-provider failover.
+- Remove unused aliases flagged by warnings in tests and `RequestPipeline`.
