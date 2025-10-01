@@ -1,0 +1,55 @@
+{
+  "context": {
+    "chain": "ethereum",
+    "provider_count": 3
+  },
+  "passed": false,
+  "analysis": {
+    "system": {
+      "peak_memory_mb": 101.84512329101562,
+      "peak_processes": 523,
+      "avg_memory_mb": 94.34532165527344,
+      "avg_processes": 508.0
+    },
+    "requests": {
+      "total": 573,
+      "failures": 0,
+      "success_rate": 1.0,
+      "successes": 573,
+      "avg_latency_ms": 218.7068062827225,
+      "p50_latency_ms": 0,
+      "p95_latency_ms": 2116,
+      "min_latency_ms": 0,
+      "max_latency_ms": 2995,
+      "p99_latency_ms": 2905,
+      "failover_count": 60,
+      "avg_failover_latency_ms": 2058.65,
+      "max_failover_latency_ms": 2995
+    },
+    "websocket": {
+      "events": 0
+    },
+    "circuit_breaker": {
+      "state_changes": 0
+    },
+    "duration_ms": 61005
+  },
+  "slo_results": {
+    "success_rate": {
+      "required": 0.95,
+      "actual": 1.0,
+      "passed?": true
+    },
+    "p95_latency_ms": {
+      "required": 2000,
+      "actual": 2116,
+      "passed?": false
+    }
+  },
+  "report_id": "20250930T234005.263416Z_720da58d",
+  "scenario": {
+    "name": "Real Provider Failover Test",
+    "duration_ms": 61005
+  },
+  "generated_at": "2025-09-30T23:41:06.278907Z"
+}

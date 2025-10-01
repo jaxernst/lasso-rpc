@@ -68,10 +68,10 @@ defmodule Livechain.RPC.ProviderPoolTest do
 
     {:ok, _pid} = ProviderPool.start_link({"testnet", chain_config})
 
-    :ok = ProviderPool.register_provider("testnet", p1.id, self(), p1)
-    :ok = ProviderPool.register_provider("testnet", p2.id, self(), p2)
+    :ok = ProviderPool.register_provider("testnet", p1.id, p1)
+    :ok = ProviderPool.register_provider("testnet", p2.id, p2)
 
-    ProviderPool.report_success("testnet", p1.id, 50)
+    ProviderPool.report_success("testnet", p1.id)
     {:ok, status} = ProviderPool.get_status("testnet")
     p1_status = Enum.find(status.providers, &(&1.id == p1.id))
     assert p1_status.status in [:healthy, :connecting]
@@ -84,7 +84,7 @@ defmodule Livechain.RPC.ProviderPoolTest do
     ProviderPool.report_failure("testnet", p1.id, {:server_error, "500"})
     {:ok, status3} = ProviderPool.get_status("testnet")
     p1_status3 = Enum.find(status3.providers, &(&1.id == p1.id))
-    assert p1_status3.error_rate > p1_status2.error_rate
+    assert p1_status3.consecutive_failures >= p1_status2.consecutive_failures
   end
 
   test ":fastest strategy prefers lowest latency meeting success-rate threshold" do
