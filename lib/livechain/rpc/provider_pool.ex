@@ -632,8 +632,11 @@ defmodule Livechain.RPC.ProviderPool do
     |> Enum.filter(&supports_protocol?(&1.config, Map.get(filters, :protocol)))
     |> Enum.filter(fn provider ->
       case Map.get(filters, :protocol) do
-        :ws -> provider.status in [:healthy, :connecting] and is_pid(provider.pid)
-        _ -> true
+        :ws ->
+          provider.status in [:healthy, :connecting] and is_pid(ws_connection_pid(provider.id))
+
+        _ ->
+          true
       end
     end)
     |> Enum.filter(fn provider ->
@@ -649,6 +652,10 @@ defmodule Livechain.RPC.ProviderPool do
         _ -> true
       end
     end)
+  end
+
+  defp ws_connection_pid(provider_id) when is_binary(provider_id) do
+    GenServer.whereis({:via, Registry, {Livechain.Registry, {:ws_conn, provider_id}}})
   end
 
   defp supports_protocol?(_provider_config, nil), do: true

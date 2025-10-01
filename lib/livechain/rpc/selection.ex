@@ -145,7 +145,17 @@ defmodule Livechain.RPC.Selection do
     limit = Keyword.get(opts, :limit, 10)
 
     # Ask ProviderPool for provider candidates (single source of truth for provider availability)
-    pool_filters = %{protocol: transport, exclude: exclude}
+    # Use method-aware protocol for candidate filtering:
+    # - Subscriptions require WS
+    # - Otherwise, default to HTTP unless transport is explicitly :ws
+    pool_protocol =
+      case method do
+        "eth_subscribe" -> :ws
+        "eth_unsubscribe" -> :ws
+        _ -> if transport == :ws, do: :ws, else: :http
+      end
+
+    pool_filters = %{protocol: pool_protocol, exclude: exclude}
     provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
 
     require Logger

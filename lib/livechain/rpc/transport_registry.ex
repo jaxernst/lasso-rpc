@@ -13,13 +13,13 @@ defmodule Livechain.RPC.TransportRegistry do
 
   The registry maintains channel lifecycle, health status, and provides
   channel selection capabilities for the routing logic.
-  
+
   Responsibilities:
   - Lazy channel opening (on-demand)
   - Channel health monitoring
   - Capability caching (supported methods, subscription support)
   - Channel lifecycle management
-  
+
   Not responsible for:
   - Provider health/availability (see ProviderPool)
   - Provider selection strategy (see Selection)
@@ -30,6 +30,7 @@ defmodule Livechain.RPC.TransportRegistry do
 
   alias Livechain.RPC.Channel
   alias Livechain.Config.ConfigStore
+  alias Livechain.RPC.ProviderPool
   alias Livechain.JSONRPC.Error, as: JError
 
   defstruct [
@@ -201,8 +202,14 @@ defmodule Livechain.RPC.TransportRegistry do
     # fallback to ConfigStore for config-file providers
     provider_config_result =
       case Keyword.get(opts, :provider_config) do
-        nil -> ConfigStore.get_provider(state.chain_name, provider_id)
-        config when is_map(config) -> {:ok, config}
+        config when is_map(config) ->
+          {:ok, config}
+
+        _ ->
+          case ConfigStore.get_provider(state.chain_name, provider_id) do
+            {:ok, _} = ok -> ok
+            _ -> get_provider_config_from_pool(state.chain_name, provider_id)
+          end
       end
 
     case provider_config_result do
@@ -259,6 +266,19 @@ defmodule Livechain.RPC.TransportRegistry do
       {:error, reason} ->
         {:error,
          JError.new(-32000, "Provider not found: #{inspect(reason)}", provider_id: provider_id)}
+    end
+  end
+
+  defp get_provider_config_from_pool(chain_name, provider_id) do
+    case ProviderPool.get_status(chain_name) do
+      {:ok, status} ->
+        case Enum.find(status.providers, fn p -> p.id == provider_id end) do
+          nil -> {:error, :provider_not_found}
+          provider -> {:ok, Map.get(provider, :config, %{})}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
