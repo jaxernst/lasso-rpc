@@ -270,7 +270,6 @@ defmodule Livechain.RPC.WSConnection do
     {:noreply, state}
   end
 
-  @impl true
   def handle_info({:ws_message, decoded}, state) do
     case decoded do
       %{"jsonrpc" => "2.0", "id" => id} = resp ->
@@ -320,14 +319,12 @@ defmodule Livechain.RPC.WSConnection do
     end
   end
 
-  @impl true
   def handle_info({:ws_error, error}, state) do
     Logger.error("WebSocket error: #{inspect(error)}")
     ProviderPool.report_failure(state.chain_name, state.endpoint.id, error)
     {:noreply, state}
   end
 
-  @impl true
   def handle_info({:ws_closed, code, reason}, state) do
     Logger.info("WebSocket closed: #{code} - #{inspect(reason)}")
 
@@ -344,7 +341,6 @@ defmodule Livechain.RPC.WSConnection do
     {:noreply, state}
   end
 
-  @impl true
   def handle_info({:ws_disconnected, reason}, state) do
     Logger.warning("WebSocket disconnected: #{inspect(reason)}")
 
@@ -361,7 +357,6 @@ defmodule Livechain.RPC.WSConnection do
     {:noreply, state}
   end
 
-  @impl true
   def handle_info({:heartbeat}, state) do
     if state.connected do
       case ws_client().send_frame(state.connection, :ping) do
@@ -405,9 +400,11 @@ defmodule Livechain.RPC.WSConnection do
     {:noreply, state, {:continue, :connect}}
   end
 
-  @impl true
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
     Logger.warning("WebSocket connection lost: #{inspect(reason)}")
+
+    # Report disconnect as failure to circuit breaker with proper error classification
+    # Note: Circuit breaker reporting is handled by ProviderPool.report_failure
 
     case reason do
       {exception, stacktrace} when is_list(stacktrace) ->
@@ -419,7 +416,7 @@ defmodule Livechain.RPC.WSConnection do
     end
 
     state = %{state | connected: false, connection: nil}
-    broadcast_connection_status(state, {:disconnected, nil})
+    broadcast_connection_status(state, :disconnected)
     state = schedule_reconnect(state)
     {:noreply, state}
   end
