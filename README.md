@@ -67,8 +67,6 @@ This architecture scales from a single self-hosted instance to a global network 
 
 ## Quick Start
 
-**🎯 For Hackathon Judges:** See [HACKATHON_SETUP.md](HACKATHON_SETUP.md) for the fastest setup guide!
-
 Choose your preferred setup method:
 
 ### 🚀 Option 1: Docker (Production Optimized Build)
@@ -213,8 +211,11 @@ Every RPC request emits a structured `rpc.request.completed` event to server log
   "jsonrpc_method": "eth_blockNumber",
   "params_present": false,
   "routing": {
-    "candidate_providers": ["ethereum_cloudflare:http", "ethereum_llamarpc:http"],
-    "selected_provider": {"id": "ethereum_llamarpc", "protocol": "http"},
+    "candidate_providers": [
+      "ethereum_cloudflare:http",
+      "ethereum_llamarpc:http"
+    ],
+    "selected_provider": { "id": "ethereum_llamarpc", "protocol": "http" },
     "selection_latency_ms": 0,
     "retries": 2,
     "circuit_breaker_state": "unknown"
@@ -235,6 +236,7 @@ Every RPC request emits a structured `rpc.request.completed` event to server log
 Clients can request routing and performance metadata by adding `include_meta` to requests:
 
 **Via HTTP Headers:**
+
 ```bash
 # Request metadata in response headers
 curl -X POST "http://localhost:4000/rpc/ethereum?include_meta=headers" \
@@ -247,6 +249,7 @@ curl -X POST "http://localhost:4000/rpc/ethereum?include_meta=headers" \
 ```
 
 **Via JSON-RPC Response Body:**
+
 ```bash
 # Request metadata inline in response
 curl -X POST "http://localhost:4000/rpc/ethereum?include_meta=body" \
@@ -276,6 +279,7 @@ curl -X POST "http://localhost:4000/rpc/ethereum?include_meta=body" \
 ```
 
 **Alternative: Use request header instead of query param**
+
 ```bash
 curl -X POST "http://localhost:4000/rpc/ethereum" \
   -H 'Content-Type: application/json' \
@@ -404,6 +408,7 @@ mix test test/battle/websocket_subscription_test.exs
 ```
 
 **Framework capabilities:**
+
 - Fluent scenario DSL for orchestrating complex test flows
 - Workload generation with configurable concurrency and duration
 - Chaos engineering: kill providers, inject latency, flap connections
