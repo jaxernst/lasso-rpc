@@ -357,8 +357,8 @@ defmodule Livechain.Battle.DiagnosticTest do
 
         IO.puts("\nFirst request keys: #{inspect(Map.keys(first_request))}")
 
-        # Validate structure
-        assert Map.has_key?(first_request, :latency), "Missing :latency key"
+        # Validate structure (Collector normalizes latency to duration_ms)
+        assert Map.has_key?(first_request, :duration_ms), "Missing :duration_ms key"
         assert Map.has_key?(first_request, :chain), "Missing :chain key"
         assert Map.has_key?(first_request, :method), "Missing :method key"
         assert Map.has_key?(first_request, :result), "Missing :result key"

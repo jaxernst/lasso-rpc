@@ -19,7 +19,7 @@ defmodule LivechainWeb.RPCSocket do
   @behaviour Phoenix.Socket.Transport
   require Logger
 
-  alias Livechain.RPC.{SubscriptionRouter, RequestPipeline}
+  alias Livechain.RPC.{SubscriptionRouter, RequestPipeline, RequestContext, Observability}
   alias Livechain.JSONRPC.Error, as: JError
   alias Livechain.Config.ConfigStore
 
@@ -43,7 +43,10 @@ defmodule LivechainWeb.RPCSocket do
       client_pid: self()
     }
 
-    Logger.info("JSON-RPC WebSocket client connected: #{chain} (params: #{inspect(transport_info)})")
+    Logger.info(
+      "JSON-RPC WebSocket client connected: #{chain} (params: #{inspect(transport_info)})"
+    )
+
     {:ok, socket_state}
   end
 
@@ -93,6 +96,12 @@ defmodule LivechainWeb.RPCSocket do
   end
 
   @impl true
+  def handle_info({:send_notification, notification_json}, state) do
+    # Send metadata notification as separate WebSocket frame
+    {:push, {:text, notification_json}, state}
+  end
+
+  @impl true
   def handle_info({:EXIT, _pid, reason}, state) do
     Logger.debug("WebSocket process exiting: #{inspect(reason)}")
     {:stop, reason, state}
@@ -117,18 +126,57 @@ defmodule LivechainWeb.RPCSocket do
 
   ## JSON-RPC handling
 
-  defp handle_json_rpc(%{"method" => method, "params" => params, "id" => id}, state) do
-    case handle_rpc_method(method, params || [], state) do
-      {:ok, result, new_state} ->
+  defp handle_json_rpc(%{"method" => method, "params" => params, "id" => id} = request, state) do
+    # Extract and parse lasso_meta preference (inline, notify, or nil)
+    {lasso_meta_mode, _clean_request} = extract_lasso_meta(request)
+
+    # Create request context for observability
+    ctx =
+      RequestContext.new(state.chain, method,
+        params_present: params != nil and params != [],
+        params_digest: RequestContext.compute_params_digest(params),
+        transport: :ws,
+        strategy: default_provider_strategy()
+      )
+
+    case handle_rpc_method(method, params || [], state, ctx) do
+      {:ok, result, new_state, updated_ctx} ->
+        # Emit structured log
+        Observability.log_request_completed(updated_ctx)
+
+        # Build base response
         response = %{
           "jsonrpc" => "2.0",
           "id" => id,
           "result" => result
         }
 
-        {:reply, :ok, {:text, Jason.encode!(response)}, new_state}
+        # Inject metadata based on mode
+        case lasso_meta_mode do
+          :inline ->
+            # Add lasso_meta field to response
+            enriched_response = inject_inline_metadata(response, updated_ctx)
+            {:reply, :ok, {:text, Jason.encode!(enriched_response)}, new_state}
 
-      {:error, reason, new_state} ->
+          :notify ->
+            # Send response first, then notification
+            {:ok, json} = Jason.encode(response)
+            notification = build_metadata_notification(updated_ctx)
+            {:ok, notification_json} = Jason.encode(notification)
+
+            # Reply with response only, then send notification as separate push
+            send(self(), {:send_notification, notification_json})
+            {:reply, :ok, {:text, json}, new_state}
+
+          _ ->
+            # No metadata requested
+            {:reply, :ok, {:text, Jason.encode!(response)}, new_state}
+        end
+
+      {:error, reason, new_state, updated_ctx} ->
+        # Emit structured log even for errors
+        Observability.log_request_completed(updated_ctx)
+
         error = JError.from(reason)
         response = JError.to_response(error, id)
         {:reply, :ok, {:text, Jason.encode!(response)}, new_state}
@@ -148,16 +196,19 @@ defmodule LivechainWeb.RPCSocket do
 
   ## RPC method handlers
 
-  defp handle_rpc_method("eth_subscribe", [subscription_type | rest], state) do
+  defp handle_rpc_method("eth_subscribe", [subscription_type | rest], state, ctx) do
     case subscription_type do
       "newHeads" ->
         case SubscriptionRouter.subscribe(state.chain, {:newHeads}) do
           {:ok, subscription_id} ->
             new_state = update_subscriptions(state, subscription_id, "newHeads")
-            {:ok, subscription_id, new_state}
+            updated_ctx = RequestContext.record_success(ctx, subscription_id)
+            {:ok, subscription_id, new_state, updated_ctx}
 
           {:error, reason} ->
-            {:error, "Failed to create newHeads subscription: #{inspect(reason)}", state}
+            error_msg = "Failed to create newHeads subscription: #{inspect(reason)}"
+            updated_ctx = RequestContext.record_error(ctx, error_msg)
+            {:error, error_msg, state, updated_ctx}
         end
 
       "logs" ->
@@ -166,46 +217,69 @@ defmodule LivechainWeb.RPCSocket do
         case SubscriptionRouter.subscribe(state.chain, {:logs, filter}) do
           {:ok, subscription_id} ->
             new_state = update_subscriptions(state, subscription_id, {"logs", filter})
-            {:ok, subscription_id, new_state}
+            updated_ctx = RequestContext.record_success(ctx, subscription_id)
+            {:ok, subscription_id, new_state, updated_ctx}
 
           {:error, reason} ->
-            {:error, "Failed to create logs subscription: #{inspect(reason)}", state}
+            error_msg = "Failed to create logs subscription: #{inspect(reason)}"
+            updated_ctx = RequestContext.record_error(ctx, error_msg)
+            {:error, error_msg, state, updated_ctx}
         end
 
       _ ->
-        {:error, "Unsupported subscription type: #{subscription_type}", state}
+        error_msg = "Unsupported subscription type: #{subscription_type}"
+        updated_ctx = RequestContext.record_error(ctx, error_msg)
+        {:error, error_msg, state, updated_ctx}
     end
   end
 
-  defp handle_rpc_method("eth_unsubscribe", [subscription_id], state) do
+  defp handle_rpc_method("eth_unsubscribe", [subscription_id], state, ctx) do
     case Map.pop(state.subscriptions, subscription_id) do
       {nil, _} ->
-        {:ok, false, state}
+        updated_ctx = RequestContext.record_success(ctx, false)
+        {:ok, false, state, updated_ctx}
 
       {_subscription_type, updated_subscriptions} ->
         SubscriptionRouter.unsubscribe(state.chain, subscription_id)
         new_state = %{state | subscriptions: updated_subscriptions}
-        {:ok, true, new_state}
+        updated_ctx = RequestContext.record_success(ctx, true)
+        {:ok, true, new_state, updated_ctx}
     end
   end
 
-  defp handle_rpc_method("eth_chainId", [], state) do
+  defp handle_rpc_method("eth_chainId", [], state, ctx) do
     case get_chain_id(state.chain) do
-      {:ok, chain_id} -> {:ok, chain_id, state}
-      {:error, reason} -> {:error, reason, state}
+      {:ok, chain_id} ->
+        updated_ctx = RequestContext.record_success(ctx, chain_id)
+        {:ok, chain_id, state, updated_ctx}
+
+      {:error, reason} ->
+        updated_ctx = RequestContext.record_error(ctx, reason)
+        {:error, reason, state, updated_ctx}
     end
   end
 
   # Generic read-only method forwarding
-  defp handle_rpc_method(method, params, state) do
+  defp handle_rpc_method(method, params, state, ctx) do
     strategy = default_provider_strategy()
 
-    case RequestPipeline.execute_via_channels(state.chain, method, params, strategy: strategy) do
+    # Pass context to RequestPipeline
+    case RequestPipeline.execute_via_channels(
+           state.chain,
+           method,
+           params,
+           strategy: strategy,
+           request_context: ctx
+         ) do
       {:ok, result} ->
-        {:ok, result, state}
+        # Retrieve updated context from Process dictionary
+        updated_ctx = Process.get(:request_context, ctx)
+        {:ok, result, state, updated_ctx}
 
       {:error, reason} ->
-        {:error, reason, state}
+        # Retrieve updated context even on error
+        updated_ctx = Process.get(:request_context, ctx)
+        {:error, reason, state, updated_ctx}
     end
   end
 
@@ -234,5 +308,40 @@ defmodule LivechainWeb.RPCSocket do
 
   defp default_provider_strategy do
     Application.get_env(:livechain, :provider_selection_strategy, :cheapest)
+  end
+
+  ## Observability helpers
+
+  defp extract_lasso_meta(%{"lasso_meta" => meta_value} = request) when is_binary(meta_value) do
+    # Parse the lasso_meta field and strip it from request
+    mode =
+      case String.downcase(meta_value) do
+        "inline" -> :inline
+        "notify" -> :notify
+        _ -> nil
+      end
+
+    clean_request = Map.delete(request, "lasso_meta")
+    {mode, clean_request}
+  end
+
+  defp extract_lasso_meta(request) do
+    # No lasso_meta field present
+    {nil, request}
+  end
+
+  defp inject_inline_metadata(response, ctx) do
+    metadata = Observability.build_client_metadata(ctx)
+    Map.put(response, "lasso_meta", metadata)
+  end
+
+  defp build_metadata_notification(ctx) do
+    metadata = Observability.build_client_metadata(ctx)
+
+    %{
+      "jsonrpc" => "2.0",
+      "method" => "lasso_meta",
+      "params" => metadata
+    }
   end
 end

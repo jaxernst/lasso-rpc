@@ -13,9 +13,9 @@ defmodule Livechain.RPC.RequestPipeline do
   require Logger
 
   alias Livechain.RPC.{Selection, Transport, ProviderPool, Metrics, TransportRegistry, Channel}
+  alias Livechain.RPC.{RequestContext, Observability, CircuitBreaker}
   alias Livechain.Config.ConfigStore
   alias Livechain.JSONRPC.Error, as: JError
-  alias Livechain.RPC.CircuitBreaker
 
   @type chain :: String.t()
   @type method :: String.t()
@@ -34,6 +34,7 @@ defmodule Livechain.RPC.RequestPipeline do
   - :transport_override => :http | :ws (optional, force specific transport)
   - :failover_on_override => boolean (default: false)
   - :timeout => ms (per-attempt timeout)
+  - :request_context => RequestContext.t() (optional, for observability)
   """
   @spec execute_via_channels(chain, method, params, keyword()) :: {:ok, any()} | {:error, any()}
   def execute_via_channels(chain, method, params, opts \\ []) do
@@ -43,12 +44,34 @@ defmodule Livechain.RPC.RequestPipeline do
     failover_on_override = Keyword.get(opts, :failover_on_override, false)
     timeout = Keyword.get(opts, :timeout, 30_000)
 
+    # Get or create request context for observability
+    ctx =
+      case Keyword.get(opts, :request_context) do
+        %RequestContext{} = existing_ctx ->
+          existing_ctx
+
+        _ ->
+          params_digest =
+            if params != [] and not is_nil(params) do
+              RequestContext.compute_params_digest(params)
+            else
+              nil
+            end
+
+          RequestContext.new(chain, method,
+            params_present: params != [] and not is_nil(params),
+            params_digest: params_digest,
+            transport: transport_override || :http,
+            strategy: strategy
+          )
+      end
+
     # Build JSON-RPC request
     rpc_request = %{
       "jsonrpc" => "2.0",
       "method" => method,
       "params" => params,
-      "id" => generate_request_id()
+      "id" => ctx.request_id
     }
 
     case provider_override do
@@ -64,7 +87,21 @@ defmodule Livechain.RPC.RequestPipeline do
         )
 
       _ ->
-        execute_with_channel_selection(chain, rpc_request, strategy, transport_override, timeout)
+        case execute_with_channel_selection(chain, rpc_request, ctx, transport_override, timeout) do
+          {:ok, result, updated_ctx} ->
+            # Emit observability log
+            Observability.log_request_completed(updated_ctx)
+            # Store context for controller access (if needed for response metadata)
+            Process.put(:request_context, updated_ctx)
+            {:ok, result}
+
+          {:error, reason, updated_ctx} ->
+            # Emit observability log for errors too
+            Observability.log_request_completed(updated_ctx)
+            # Store context for controller access
+            Process.put(:request_context, updated_ctx)
+            {:error, reason}
+        end
     end
   end
 
@@ -497,8 +534,23 @@ defmodule Livechain.RPC.RequestPipeline do
     # Get channels for the specific provider
     channels = get_provider_channels(chain, provider_id, transport_override)
 
-    case attempt_request_on_channels(channels, rpc_request, timeout) do
-      {:ok, result, channel} ->
+    # Create minimal context for provider override path
+    ctx =
+      RequestContext.new(chain, method,
+        transport: transport_override || :http,
+        strategy: strategy
+      )
+
+    case attempt_request_on_channels(channels, rpc_request, timeout, ctx) do
+      {:ok, result, channel, updated_ctx} ->
+         duration_ms = System.monotonic_time(:millisecond) - start_time
+         record_channel_success_metrics(chain, channel, method, strategy, duration_ms)
+        Observability.log_request_completed(updated_ctx)
+        Process.put(:request_context, updated_ctx)
+         {:ok, result}
+
+       {:error, reason} ->
+         # …apply similar context-propagation and logging here…
         duration_ms = System.monotonic_time(:millisecond) - start_time
         record_channel_success_metrics(chain, channel, method, strategy, duration_ms)
         {:ok, result}
@@ -529,38 +581,52 @@ defmodule Livechain.RPC.RequestPipeline do
     end
   end
 
-  defp execute_with_channel_selection(chain, rpc_request, strategy, transport_override, timeout) do
+  defp execute_with_channel_selection(chain, rpc_request, ctx, transport_override, timeout) do
     method = Map.get(rpc_request, "method")
+
+    # Mark selection start
+    ctx = RequestContext.mark_selection_start(ctx)
 
     # Get candidate channels from unified Selection
     channels =
       Selection.select_channels(chain, method,
-        strategy: strategy,
+        strategy: ctx.strategy,
         transport: transport_override || :both,
         limit: 10
       )
 
+    # Update context with selection metadata
+    ctx =
+      RequestContext.mark_selection_end(ctx,
+        candidates: Enum.map(channels, & "#{&1.provider_id}:#{&1.transport}"),
+        selected: if(length(channels) > 0, do: List.first(channels), else: nil)
+      )
+
     case channels do
       [] ->
-        {:error, JError.new(-32000, "No available channels for method: #{method}")}
+        updated_ctx = RequestContext.record_error(ctx, JError.new(-32000, "No available channels"))
+        {:error, JError.new(-32000, "No available channels for method: #{method}"), updated_ctx}
 
       _ ->
         Logger.info(
           "Found #{length(channels)} candidate channels: #{inspect(Enum.map(channels, &Channel.to_string/1))}"
         )
 
-        start_time = System.monotonic_time(:millisecond)
+        # Mark upstream start and attempt request
+        ctx = RequestContext.mark_upstream_start(ctx)
 
-        case attempt_request_on_channels(channels, rpc_request, timeout) do
-          {:ok, result, channel} ->
-            duration_ms = System.monotonic_time(:millisecond) - start_time
-            record_channel_success_metrics(chain, channel, method, strategy, duration_ms)
-            {:ok, result}
+        case attempt_request_on_channels(channels, rpc_request, timeout, ctx) do
+          {:ok, result, channel, updated_ctx} ->
+            updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
+            updated_ctx = RequestContext.record_success(updated_ctx, result)
+            record_channel_success_metrics(chain, channel, method, ctx.strategy, updated_ctx.upstream_latency_ms || 0)
+            {:ok, result, updated_ctx}
 
           {:error, reason} ->
-            _duration_ms = System.monotonic_time(:millisecond) - start_time
+            updated_ctx = RequestContext.mark_upstream_end(ctx)
+            final_ctx = RequestContext.record_error(updated_ctx, reason)
             jerr = normalize_channel_error(reason, "no_channels")
-            {:error, jerr}
+            {:error, jerr, final_ctx}
         end
     end
   end
@@ -582,11 +648,11 @@ defmodule Livechain.RPC.RequestPipeline do
     |> Enum.filter(&(&1 != nil))
   end
 
-  defp attempt_request_on_channels([], _rpc_request, _timeout) do
-    {:error, :no_channels_available}
+  defp attempt_request_on_channels([], _rpc_request, _timeout, ctx) do
+    {:error, :no_channels_available, ctx}
   end
 
-  defp attempt_request_on_channels([channel | rest_channels], rpc_request, timeout) do
+  defp attempt_request_on_channels([channel | rest_channels], rpc_request, timeout, ctx) do
     attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
 
     cb_id =
@@ -595,10 +661,24 @@ defmodule Livechain.RPC.RequestPipeline do
         :ws -> {channel.provider_id, :ws}
       end
 
+    # Capture circuit breaker state before calling
+    cb_state =
+      case CircuitBreaker.get_state(cb_id) do
+        {:ok, state} -> state
+        _ -> :unknown
+      end
+
+    # Update context with selected provider and CB state
+    ctx = %{
+      ctx
+      | selected_provider: %{id: channel.provider_id, protocol: channel.transport},
+        circuit_breaker_state: cb_state
+    }
+
     case CircuitBreaker.call(cb_id, attempt_fun, timeout + 1_000) do
       {:ok, result} ->
         Logger.debug("✓ Request Success via #{Channel.to_string(channel)}", result: result)
-        {:ok, result, channel}
+        {:ok, result, channel, ctx}
 
       {:error, :unsupported_method} ->
         # Fast fallthrough - try next channel immediately
@@ -607,7 +687,7 @@ defmodule Livechain.RPC.RequestPipeline do
           method: Map.get(rpc_request, "method")
         )
 
-        attempt_request_on_channels(rest_channels, rpc_request, timeout)
+        attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
 
       {:error, reason} ->
         # Check if error is retriable and we have more channels to try
@@ -624,7 +704,9 @@ defmodule Livechain.RPC.RequestPipeline do
             remaining_channels: length(rest_channels)
           )
 
-          attempt_request_on_channels(rest_channels, rpc_request, timeout)
+          # Increment retries and try next channel
+          ctx = RequestContext.increment_retries(ctx)
+          attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
         else
           Logger.warning("Channel request failed - no failover",
             channel: Channel.to_string(channel),
@@ -660,8 +742,16 @@ defmodule Livechain.RPC.RequestPipeline do
           {:error, JError.new(-32000, "No more channels available for failover")}
 
         _ ->
-          case attempt_request_on_channels(channels, rpc_request, timeout) do
-            {:ok, result, _channel} ->
+          ctx =
+            RequestContext.new(chain, method,
+              strategy: strategy,
+              transport: :both
+            )
+
+          case attempt_request_on_channels(channels, rpc_request, timeout, ctx) do
+            {:ok, result, _channel, updated_ctx} ->
+              # Consider logging or returning context for observability
+              {:ok, result}
               {:ok, result}
 
             {:error, _reason} ->
@@ -766,7 +856,4 @@ defmodule Livechain.RPC.RequestPipeline do
     end
   end
 
-  defp generate_request_id do
-    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-  end
 end

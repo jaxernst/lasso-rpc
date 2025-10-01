@@ -44,6 +44,9 @@ Livechain leverages OTP for fault-tolerance and concurrency. The supervision tre
 - **Livechain.RPC.MessageAggregator**: A GenServer that deduplicates messages from different providers for a single chain.
 - **Livechain.RPC.ProviderPool**: Manages the health and status of providers for a chain.
 - **Livechain.RPC.CircuitBreaker**: A GenServer for each provider to track failures and open/close the circuit.
+- **Livechain.RPC.RequestContext**: Stateless struct for tracking request lifecycle (not a process).
+- **Livechain.RPC.Observability**: Module for structured logging and metadata generation (not a process).
+- **LivechainWeb.Plugs.ObservabilityPlug**: Phoenix plug for parsing client metadata opt-in preferences.
 
 ### **Supervision Strategy**
 
@@ -53,6 +56,165 @@ Livechain leverages OTP for fault-tolerance and concurrency. The supervision tre
 - **Provider isolation**: Individual provider failures don't affect others, thanks to the `CircuitBreaker` and `ProviderPool`.
 - **Unified selection**: The `Selection` module handles all provider picking logic.
 - **Restart strategy**: Temporary failures trigger process restarts, while persistent failures trigger failover via the `CircuitBreaker`.
+
+---
+
+## Request Observability Architecture
+
+**Files**:
+- `lib/livechain/rpc/request_context.ex` - Request lifecycle tracking
+- `lib/livechain/rpc/observability.ex` - Structured logging and metadata
+- `lib/livechain_web/plugs/observability_plug.ex` - HTTP metadata injection
+
+Livechain provides comprehensive request observability with minimal overhead:
+
+### **RequestContext Lifecycle**
+
+Every RPC request is tracked through its entire lifecycle using a `RequestContext` struct:
+
+```elixir
+%RequestContext{
+  request_id: "uuid",
+  chain: "ethereum",
+  method: "eth_blockNumber",
+  params_present: false,
+  params_digest: "sha256:...",
+  transport: :http,
+  strategy: :cheapest,
+
+  # Selection phase
+  candidate_providers: ["ethereum_cloudflare:http", "ethereum_llamarpc:http"],
+  selected_provider: %{id: "ethereum_llamarpc", protocol: :http},
+  selection_reason: "cost_optimized",
+  selection_latency_ms: 3,
+
+  # Execution phase
+  retries: 2,
+  circuit_breaker_state: :closed,
+  upstream_latency_ms: 592,
+  end_to_end_latency_ms: 595,
+
+  # Result phase
+  status: :success,
+  result_type: "string",
+  error: nil
+}
+```
+
+### **Context Threading**
+
+RequestContext flows through the execution pipeline:
+
+1. **Created** in `RequestPipeline.execute_via_channels/4` with initial request details
+2. **Updated** during provider selection with candidates and timing
+3. **Enriched** during execution with CB state, retries, and latencies
+4. **Logged** via `Observability.log_request_completed/1` after completion
+5. **Stored** in Process dictionary for controller access
+
+```elixir
+# RequestPipeline threads context through execution
+def execute_via_channels(chain, method, params, opts) do
+  ctx = RequestContext.new(chain, method, params_present: params != [])
+
+  case execute_with_channel_selection(chain, rpc_request, ctx, transport, timeout) do
+    {:ok, result, updated_ctx} ->
+      Observability.log_request_completed(updated_ctx)
+      Process.put(:request_context, updated_ctx)
+      {:ok, result}
+  end
+end
+```
+
+### **Structured Log Events**
+
+All requests emit structured JSON logs at configurable level (default `:info`):
+
+```json
+{
+  "event": "rpc.request.completed",
+  "request_id": "21027f767548a9b6ddff97c860e7e58c",
+  "strategy": "cheapest",
+  "chain": "ethereum",
+  "transport": "http",
+  "jsonrpc_method": "eth_blockNumber",
+  "params_present": false,
+  "routing": {
+    "candidate_providers": ["ethereum_cloudflare:http", "ethereum_llamarpc:http"],
+    "selected_provider": {"id": "ethereum_llamarpc", "protocol": "http"},
+    "selection_latency_ms": 0,
+    "retries": 2,
+    "circuit_breaker_state": "closed"
+  },
+  "timing": {
+    "upstream_latency_ms": 592,
+    "end_to_end_latency_ms": 592
+  },
+  "response": {
+    "status": "success",
+    "result_type": "string"
+  }
+}
+```
+
+### **Client-Visible Metadata (Opt-in)**
+
+Clients can request routing metadata via query parameters or headers:
+
+- `?include_meta=headers` - Adds `X-Lasso-Request-ID` and `X-Lasso-Meta` (base64url JSON) to response headers
+- `?include_meta=body` - Adds `lasso_meta` field to JSON-RPC response body
+- Header alternative: `X-Lasso-Include-Meta: headers|body`
+
+**ObservabilityPlug** parses the opt-in preference and stores it in `conn.assigns`:
+
+```elixir
+# In router pipeline
+pipeline :api_with_logging do
+  plug(Plug.Logger, log: :info)
+  plug(:accepts, ["json"])
+  plug(LivechainWeb.Plugs.ObservabilityPlug)
+end
+```
+
+**RPCController** injects metadata when rendering responses:
+
+```elixir
+defp maybe_inject_observability_metadata(conn) do
+  case conn.assigns[:include_meta] do
+    :headers ->
+      case Process.get(:request_context) do
+        nil -> conn
+        ctx -> ObservabilityPlug.inject_metadata(conn, ctx)
+      end
+    _ -> conn
+  end
+end
+```
+
+### **Privacy & Redaction**
+
+- **Params digest**: SHA-256 hash instead of raw params (configurable)
+- **Error truncation**: Max 256 chars for error messages (configurable)
+- **Size limits**: Max 4KB for header metadata (fallback to request ID only)
+- **Sampling**: Configurable sampling rate (0.0-1.0) for high-volume scenarios
+
+### **Configuration**
+
+```elixir
+# config/config.exs
+config :livechain, :observability,
+  log_level: :info,
+  include_params_digest: true,
+  max_error_message_chars: 256,
+  max_meta_header_bytes: 4096,
+  sampling: [rate: 1.0]
+```
+
+### **Performance Overhead**
+
+- **Context creation**: <1ms (single struct allocation)
+- **Timing markers**: <0.1ms per marker (System.monotonic_time/0)
+- **Log emission**: <5ms (async logger with sampling support)
+- **Header encoding**: <2ms (JSON encode + base64url)
 
 ---
 
@@ -141,6 +303,18 @@ end
 ---
 
 ## Data Flow Architecture
+
+### **Request Processing Pipeline**
+
+```
+[Client Request] → [ObservabilityPlug] → [RPCController] → [RequestPipeline]
+       ↓                  ↓                     ↓                  ↓
+  include_meta?      Parse Opt-in       Create Context     Select Provider
+       ↓                  ↓                     ↓                  ↓
+[Provider Call] → [Circuit Breaker] → [Update Context] → [Log & Store]
+       ↓                  ↓                     ↓                  ↓
+  HTTP/WS Call      Track Failures      Record Timing     Observability
+```
 
 ### **Event Processing Pipeline**
 

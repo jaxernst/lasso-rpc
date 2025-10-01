@@ -65,18 +65,28 @@ defmodule Livechain.Battle.Collector do
   # Private helpers - attach telemetry handlers
 
   defp attach_collector(:requests) do
-    handler_id = {:battle, :requests, self()}
+    # Attach to both production events and battle test events
+    prod_handler_id = {:battle, :requests_prod, self()}
+    battle_handler_id = {:battle, :requests_battle, self()}
 
     # Capture production request telemetry from RequestPipeline
-    result = :telemetry.attach(
-      handler_id,
+    :telemetry.attach(
+      prod_handler_id,
       [:livechain, :rpc, :request, :stop],
       &handle_request_event/4,
       nil
     )
 
-    Logger.debug("Attached request collector: #{inspect(result)}, handler_id: #{inspect(handler_id)}")
-    result
+    # Capture battle test telemetry events (from diagnostic tests)
+    :telemetry.attach(
+      battle_handler_id,
+      [:livechain, :battle, :request],
+      &handle_battle_request_event/4,
+      nil
+    )
+
+    Logger.debug("Attached request collectors: prod=#{inspect(prod_handler_id)}, battle=#{inspect(battle_handler_id)}")
+    :ok
   end
 
   defp attach_collector(:selection) do
@@ -143,8 +153,10 @@ defmodule Livechain.Battle.Collector do
   # Detach handlers
 
   defp detach_collector(:requests) do
-    handler_id = {:battle, :requests, self()}
-    :telemetry.detach(handler_id)
+    prod_handler_id = {:battle, :requests_prod, self()}
+    battle_handler_id = {:battle, :requests_battle, self()}
+    :telemetry.detach(prod_handler_id)
+    :telemetry.detach(battle_handler_id)
   end
 
   defp detach_collector(:circuit_breaker) do
@@ -196,6 +208,34 @@ defmodule Livechain.Battle.Collector do
       Agent.update(__MODULE__, fn data ->
         requests = Map.get(data, :requests, [])
         Logger.debug("Collector Agent update: #{length(requests)} -> #{length(requests) + 1} requests")
+        Map.put(data, :requests, [request_data | requests])
+      end)
+    catch
+      kind, reason ->
+        Logger.error("Failed to update collector Agent (#{kind}): #{inspect(reason)}")
+    end
+  end
+
+  defp handle_battle_request_event(_event_name, measurements, metadata, _config) do
+    # Battle test events use 'latency' instead of 'duration_ms'
+    request_data = %{
+      duration_ms: Map.get(measurements, :latency, Map.get(measurements, :duration_ms, 0)),
+      chain: metadata.chain,
+      method: metadata.method,
+      strategy: metadata.strategy,
+      provider_id: Map.get(metadata, :provider_id),
+      result: metadata.result,
+      failovers: Map.get(metadata, :failovers, 0),
+      transport: Map.get(metadata, :transport),
+      timestamp: System.monotonic_time(:millisecond)
+    }
+
+    Logger.debug("Collector received battle test event: #{metadata.chain}/#{metadata.method}")
+
+    # Update Agent (shared across processes)
+    try do
+      Agent.update(__MODULE__, fn data ->
+        requests = Map.get(data, :requests, [])
         Map.put(data, :requests, [request_data | requests])
       end)
     catch

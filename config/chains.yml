@@ -109,59 +109,59 @@ chains:
   #     backfill_timeout: 30000
   #     enabled: true
 
-  # base:
-  #   chain_id: 8453
-  #   name: "Base Mainnet"
+  base:
+    chain_id: 8453
+    name: "Base Mainnet"
 
-  #   providers:
-  #     - id: "base_publicnode"
-  #       name: "PublicNode Base"
-  #       priority: 1
-  #       type: "public"
-  #       url: "https://base-rpc.publicnode.com"
-  #       ws_url: "wss://base-rpc.publicnode.com"
-  #       api_key_required: false
+    providers:
+      - id: "base_publicnode"
+        name: "PublicNode Base"
+        priority: 1
+        type: "public"
+        url: "https://base-rpc.publicnode.com"
+        ws_url: "wss://base-rpc.publicnode.com"
+        api_key_required: false
 
-  #     - id: "base_ankr"
-  #       name: "Ankr Base"
-  #       priority: 2
-  #       type: "public"
-  #       url: "https://rpc.ankr.com/base"
-  #       ws_url: "wss://rpc.ankr.com/base/ws"
-  #       api_key_required: false
+      - id: "base_ankr"
+        name: "Ankr Base"
+        priority: 2
+        type: "public"
+        url: "https://rpc.ankr.com/base"
+        ws_url: "wss://rpc.ankr.com/base/ws"
+        api_key_required: false
 
-  #     - id: "base_omniatech"
-  #       name: "OmniaTech Base"
-  #       priority: 3
-  #       type: "public"
-  #       url: "https://endpoints.omniatech.io/v1/base/mainnet/public"
-  #       api_key_required: false
+      - id: "base_omniatech"
+        name: "OmniaTech Base"
+        priority: 3
+        type: "public"
+        url: "https://endpoints.omniatech.io/v1/base/mainnet/public"
+        api_key_required: false
 
-  #     - id: "base_blastapi"
-  #       name: "BlastAPI Base"
-  #       priority: 4
-  #       type: "public"
-  #       url: "https://base-mainnet.public.blastapi.io"
-  #       ws_url: "wss://base-mainnet.public.blastapi.io"
-  #       api_key_required: false
+      - id: "base_blastapi"
+        name: "BlastAPI Base"
+        priority: 4
+        type: "public"
+        url: "https://base-mainnet.public.blastapi.io"
+        ws_url: "wss://base-mainnet.public.blastapi.io"
+        api_key_required: false
 
-  #     - id: "base_0xrpc"
-  #       name: "0xRPC Base"
-  #       priority: 7
-  #       type: "public"
-  #       url: "https://0xrpc.io/base"
-  #       ws_url: "wss://0xrpc.io/base"
-  #       api_key_required: false
+      - id: "base_0xrpc"
+        name: "0xRPC Base"
+        priority: 7
+        type: "public"
+        url: "https://0xrpc.io/base"
+        ws_url: "wss://0xrpc.io/base"
+        api_key_required: false
 
-  #   connection:
-  #     heartbeat_interval: 20000
-  #     reconnect_interval: 3000
-  #     max_reconnect_attempts: 15
+    connection:
+      heartbeat_interval: 20000
+      reconnect_interval: 3000
+      max_reconnect_attempts: 15
 
-  #   failover:
-  #     max_backfill_blocks: 100
-  #     backfill_timeout: 30000
-  #     enabled: true
+    failover:
+      max_backfill_blocks: 100
+      backfill_timeout: 30000
+      enabled: true
 
   # arbitrum:
   #   chain_id: 42161
