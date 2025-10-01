@@ -1,5 +1,7 @@
 # Lasso RPC Test Plan
 
+Last updated: 10/01/25
+
 ## Purpose
 
 Single source of truth for testing: what’s covered today, gaps, and a pragmatic plan forward to gain end-to-end confidence for the RPC aggregator.
