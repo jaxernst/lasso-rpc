@@ -50,6 +50,28 @@ defmodule Livechain.RPC.Selection do
     end
   end
 
+  @doc """
+  Picks the best provider and returns enriched selection metadata for observability.
+
+  Returns {:ok, %{provider_id: String.t(), metadata: map()}} or {:error, reason}
+
+  Metadata includes:
+  - candidates: list of candidate provider IDs considered
+  - selected: selected provider with protocol
+  - reason: selection reason (e.g., "fastest_method_latency")
+  - cb_state: circuit breaker state of selected provider
+  """
+  @spec select_provider_with_metadata(String.t(), String.t(), keyword()) ::
+          {:ok, %{provider_id: String.t(), metadata: map()}} | {:error, term()}
+  def select_provider_with_metadata(chain, method, opts \\ [])
+      when is_binary(chain) and is_binary(method) do
+    ctx = SelectionContext.new(chain, method, opts)
+
+    with {:ok, validated_ctx} <- SelectionContext.validate(ctx) do
+      do_select_provider_with_metadata(validated_ctx)
+    end
+  end
+
   # Private implementation
 
   defp do_select_provider(%SelectionContext{} = ctx) do
@@ -78,6 +100,47 @@ defmodule Livechain.RPC.Selection do
             })
 
             {:ok, pid}
+
+          _ ->
+            {:error, :no_providers_available}
+        end
+    end
+  end
+
+  defp do_select_provider_with_metadata(%SelectionContext{} = ctx) do
+    filters = %{exclude: ctx.exclude, protocol: ctx.protocol}
+    candidates = ProviderPool.list_candidates(ctx.chain, filters)
+
+    case candidates do
+      [] ->
+        {:error, :no_providers_available}
+
+      _ ->
+        candidate_ids = Enum.map(candidates, & &1.id)
+        strategy_mod = resolve_strategy_module(ctx.strategy)
+        prepared_ctx = strategy_mod.prepare_context(ctx)
+        selected_provider_id = strategy_mod.choose(candidates, ctx.method, prepared_ctx)
+
+        case selected_provider_id do
+          pid when is_binary(pid) ->
+            Logger.debug("Selected provider: #{pid} for #{ctx.chain}.#{ctx.method}")
+
+            # Build selection metadata (minimal, no external dependencies)
+            metadata = %{
+              candidates: candidate_ids,
+              selected: %{id: pid, protocol: ctx.protocol},
+              reason: build_selection_reason(ctx.strategy)
+            }
+
+            :telemetry.execute([:livechain, :selection, :success], %{count: 1}, %{
+              chain: ctx.chain,
+              method: ctx.method,
+              strategy: ctx.strategy,
+              protocol: ctx.protocol,
+              provider_id: pid
+            })
+
+            {:ok, %{provider_id: pid, metadata: metadata}}
 
           _ ->
             {:error, :no_providers_available}
@@ -282,5 +345,17 @@ defmodule Livechain.RPC.Selection do
   defp apply_channel_strategy(channels, _strategy, _method, _chain) do
     # Default: preserve original order
     channels
+  end
+
+  # Selection metadata helpers
+
+  defp build_selection_reason(strategy) do
+    case strategy do
+      :fastest -> "fastest_method_latency"
+      :cheapest -> "cost_optimized"
+      :priority -> "static_priority"
+      :round_robin -> "round_robin_rotation"
+      _ -> "default_strategy"
+    end
   end
 end

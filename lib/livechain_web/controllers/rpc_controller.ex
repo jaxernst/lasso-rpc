@@ -196,9 +196,25 @@ defmodule LivechainWeb.RPCController do
         id: request["id"]
       }
 
+      # Inject observability metadata if requested
+      conn = maybe_inject_observability_metadata(conn)
+
+      # Enrich response body if include_meta=body
+      response = case conn.assigns[:include_meta] do
+        :body ->
+          case Process.get(:request_context) do
+            nil -> response
+            ctx -> LivechainWeb.Plugs.ObservabilityPlug.enrich_response_body(response, ctx)
+          end
+        _ -> response
+      end
+
       json(conn, response)
     else
       {:error, error} ->
+        # Inject observability metadata even for errors
+        conn = maybe_inject_observability_metadata(conn)
+
         json(
           conn,
           error
@@ -480,6 +496,17 @@ defmodule LivechainWeb.RPCController do
 
       {:error, :not_found} ->
         {:error, "Chain not configured: #{chain_name}"}
+    end
+  end
+
+  defp maybe_inject_observability_metadata(conn) do
+    case conn.assigns[:include_meta] do
+      :headers ->
+        case Process.get(:request_context) do
+          nil -> conn
+          ctx -> LivechainWeb.Plugs.ObservabilityPlug.inject_metadata(conn, ctx)
+        end
+      _ -> conn
     end
   end
 end

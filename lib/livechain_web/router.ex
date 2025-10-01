@@ -19,6 +19,7 @@ defmodule LivechainWeb.Router do
   pipeline :api_with_logging do
     plug(Plug.Logger, log: :info)
     plug(:accepts, ["json"])
+    plug(LivechainWeb.Plugs.ObservabilityPlug)
   end
 
   scope "/", LivechainWeb do

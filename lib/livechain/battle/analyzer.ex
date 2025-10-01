@@ -40,7 +40,23 @@ defmodule Livechain.Battle.Analyzer do
 
   # Private analysis functions
 
-  defp analyze_requests([]), do: %{total: 0, success_rate: 0.0, failover_count: 0}
+  defp analyze_requests([]) do
+    %{
+      total: 0,
+      successes: 0,
+      failures: 0,
+      success_rate: 0.0,
+      p50_latency_ms: 0,
+      p95_latency_ms: 0,
+      p99_latency_ms: 0,
+      min_latency_ms: 0,
+      max_latency_ms: 0,
+      avg_latency_ms: 0.0,
+      failover_count: 0,
+      avg_failover_latency_ms: 0.0,
+      max_failover_latency_ms: 0
+    }
+  end
 
   defp analyze_requests(requests) do
     total = length(requests)
@@ -86,7 +102,15 @@ defmodule Livechain.Battle.Analyzer do
     }
   end
 
-  defp analyze_circuit_breaker([]), do: %{state_changes: 0}
+  defp analyze_circuit_breaker([]) do
+    %{
+      state_changes: 0,
+      opens: 0,
+      closes: 0,
+      half_opens: 0,
+      time_open_ms: 0
+    }
+  end
 
   defp analyze_circuit_breaker(events) do
     opens = Enum.count(events, fn e -> e.new_state == :open end)
@@ -105,7 +129,14 @@ defmodule Livechain.Battle.Analyzer do
     }
   end
 
-  defp analyze_system([]), do: %{peak_memory_mb: 0, peak_processes: 0}
+  defp analyze_system([]) do
+    %{
+      peak_memory_mb: 0,
+      avg_memory_mb: 0.0,
+      peak_processes: 0,
+      avg_processes: 0.0
+    }
+  end
 
   defp analyze_system(samples) do
     memories = Enum.map(samples, fn s -> s.memory_mb end)
@@ -119,7 +150,13 @@ defmodule Livechain.Battle.Analyzer do
     }
   end
 
-  defp analyze_websocket([]), do: %{events: 0}
+  defp analyze_websocket([]) do
+    %{
+      events: 0,
+      duplicates: 0,
+      gaps: 0
+    }
+  end
 
   defp analyze_websocket(events) do
     %{
@@ -144,11 +181,6 @@ defmodule Livechain.Battle.Analyzer do
 
   defp check_slo(:p99_latency_ms, required, analysis) do
     actual = get_in(analysis, [:requests, :p99_latency_ms]) || 0
-    %{required: required, actual: actual, passed?: actual <= required}
-  end
-
-  defp check_slo(:max_failover_latency_ms, required, analysis) do
-    actual = get_in(analysis, [:requests, :max_latency_ms]) || 0
     %{required: required, actual: actual, passed?: actual <= required}
   end
 

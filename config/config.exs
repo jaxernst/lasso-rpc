@@ -38,6 +38,14 @@ config :livechain, :failover_enabled, true
 config :livechain, :max_backfill_blocks, 100
 config :livechain, :backfill_timeout, 30_000
 
+# Observability configuration
+config :livechain, :observability,
+  log_level: :info,
+  include_params_digest: true,
+  max_error_message_chars: 256,
+  max_meta_header_bytes: 4096,
+  sampling: [rate: 1.0]
+
 # Configure JSON library
 config :phoenix, :json_library, Jason
 

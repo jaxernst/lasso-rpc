@@ -40,6 +40,7 @@ Lasso runs on the Erlang BEAM VM, a battle-tested platform that powers highly sc
 - **RPC Method failover** with per-provider circuit breakers and health monitoring
 - **Method-specific benchmarking** using real RPC call latencies to measure provider performance per-chain and per-method
 - **Intelligent routing** - automatically selects providers based on actual latency measurements for each RPC method
+- **Request observability** - structured logs and optional client-visible metadata for routing decisions, latencies, and retries
 - **Live dashboard** with real-time insights, provider leaderboards, and performance metrics
 - **Globally distributable** with BEAM's built-in clustering and fault-tolerance
 
@@ -191,6 +192,106 @@ config :livechain, :circuit_breaker,
   success_threshold: 2       # successes before closing
 ```
 
+## Observability & Request Metadata
+
+Lasso provides comprehensive request observability with optional client-visible metadata to help you understand routing decisions and performance characteristics.
+
+### Structured Server Logs
+
+Every RPC request emits a structured `rpc.request.completed` event to server logs (`:info` level by default):
+
+```json
+{
+  "event": "rpc.request.completed",
+  "request_id": "21027f767548a9b6ddff97c860e7e58c",
+  "strategy": "cheapest",
+  "chain": "ethereum",
+  "transport": "http",
+  "jsonrpc_method": "eth_blockNumber",
+  "params_present": false,
+  "routing": {
+    "candidate_providers": ["ethereum_cloudflare:http", "ethereum_llamarpc:http"],
+    "selected_provider": {"id": "ethereum_llamarpc", "protocol": "http"},
+    "selection_latency_ms": 0,
+    "retries": 2,
+    "circuit_breaker_state": "unknown"
+  },
+  "timing": {
+    "upstream_latency_ms": 592,
+    "end_to_end_latency_ms": 592
+  },
+  "response": {
+    "status": "success",
+    "result_type": "string"
+  }
+}
+```
+
+### Client-Visible Metadata (Opt-in)
+
+Clients can request routing and performance metadata by adding `include_meta` to requests:
+
+**Via HTTP Headers:**
+```bash
+# Request metadata in response headers
+curl -X POST "http://localhost:4000/rpc/ethereum?include_meta=headers" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+
+# Response includes:
+# X-Lasso-Request-ID: d12fd341cc14fc97ce9f09876fffa7a3
+# X-Lasso-Meta: <base64url-encoded JSON with routing details>
+```
+
+**Via JSON-RPC Response Body:**
+```bash
+# Request metadata inline in response
+curl -X POST "http://localhost:4000/rpc/ethereum?include_meta=body" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":1}'
+
+# Response includes lasso_meta field:
+{
+  "id": 1,
+  "result": "0x8471c9a",
+  "jsonrpc": "2.0",
+  "lasso_meta": {
+    "version": "1.0",
+    "request_id": "2306632247e756bfbf451c23c9041644",
+    "strategy": "cheapest",
+    "chain": "ethereum",
+    "transport": "http",
+    "selected_provider": {"id": "ethereum_llamarpc", "protocol": "http"},
+    "candidate_providers": ["ethereum_cloudflare:http", "ethereum_llamarpc:http"],
+    "upstream_latency_ms": 525,
+    "retries": 1,
+    "circuit_breaker_state": "unknown",
+    "selection_latency_ms": 0,
+    "end_to_end_latency_ms": 525
+  }
+}
+```
+
+**Alternative: Use request header instead of query param**
+```bash
+curl -X POST "http://localhost:4000/rpc/ethereum" \
+  -H 'Content-Type: application/json' \
+  -H 'X-Lasso-Include-Meta: body' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+### Observability Configuration
+
+```elixir
+# config/config.exs
+config :livechain, :observability,
+  log_level: :info,                    # Log level for request completed events
+  include_params_digest: true,         # Include SHA-256 digest of params in logs
+  max_error_message_chars: 256,        # Truncate error messages for logs
+  max_meta_header_bytes: 4096,         # Max size for X-Lasso-Meta header
+  sampling: [rate: 1.0]                # Sample rate (0.0-1.0) for high-volume scenarios
+```
+
 ## Integration
 
 ### Using with Web3 Libraries
@@ -239,14 +340,54 @@ GET /api/metrics/:chain
 
 ## Development & Testing
 
+### Running Tests
+
+Lasso has three types of tests organized for different purposes:
+
 ```bash
-# Run tests
-mix test
+# Unit tests (fast, run on every PR)
+# 151 tests covering core RPC functionality
+mix test --exclude battle --exclude real_providers
 
-# Start with simulation mode
+# Framework validation (fast, CI-friendly)
+# Validates load testing framework setup
+mix test --only battle --only fast
+
+# Integration tests (slow, requires network)
+# Real provider HTTP failover tests
+mix test --only battle --only real_providers --exclude slow
+
+# WebSocket integration (very slow, weekly only)
+# Requires real blockchain events (~12s Ethereum blocks)
+mix test --only battle --only slow
+```
+
+**For local development:** Run unit tests frequently. Run integration tests before pushing.
+
+### Test Tags
+
+- `:battle` - Battle testing framework (integration & e2e tests)
+- `:fast` - Fast tests suitable for CI (<30s)
+- `:slow` - Slow tests requiring real blockchain events (5+ min)
+- `:real_providers` - Uses external RPC providers (network-dependent)
+- `:diagnostic` - Framework validation tests
+
+### Development Mode
+
+```bash
+# Start with hot reloading
 mix phx.server
-# Visit http://localhost:4000/simulator
 
-# Load testing (curl) - basic rpc methods
+# Visit dashboard
+open http://localhost:4000
+
+# Visit simulator
+open http://localhost:4000/simulator
+```
+
+### Load Testing
+
+```bash
+# Basic RPC method load test (curl)
 for i in {1..20}; do for method in eth_blockNumber eth_gasPrice eth_getBlockByNumber eth_chainId; do curl -s -X POST http://localhost:4000/rpc/round-robin/ethereum -H 'Content-Type: application/json' -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$(if [ \"$method\" = "eth_getBlockByNumber" ]; then echo '[\"latest\", false]'; else echo '[]'; fi),\"id\":$i}" & done; wait; done
 ```

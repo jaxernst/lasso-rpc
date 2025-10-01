@@ -271,27 +271,44 @@ defmodule Livechain.Battle.Workload do
     count = Keyword.get(opts, :count, 1)
     duration = Keyword.fetch!(opts, :duration)
     host = Keyword.get(opts, :host, "localhost")
-    port = Keyword.get(opts, :port, 4000)
+    port = Keyword.get(opts, :port, 4002)
 
     Logger.info(
       "Starting WebSocket workload: #{count} subscription(s) for #{duration}ms"
     )
 
-    url = "ws://#{host}:#{port}/rpc/#{chain}"
+    url = "ws://#{host}:#{port}/ws/rpc/#{chain}"
 
-    # Start WebSocket clients
+    # Start WebSocket clients (handle connection errors gracefully)
     clients =
       for i <- 1..count do
-        {:ok, pid} = WebSocketClient.start_link(url, subscription, "sub_#{i}")
-        pid
+        case WebSocketClient.start_link(url, subscription, "sub_#{i}") do
+          {:ok, pid} ->
+            {:ok, pid}
+
+          {:error, reason} ->
+            Logger.warning("Failed to start WebSocket client #{i}: #{inspect(reason)}")
+            {:error, reason}
+        end
       end
+
+    # Filter out failed connections
+    successful_clients = Enum.flat_map(clients, fn
+      {:ok, pid} -> [pid]
+      {:error, _} -> []
+    end)
+
+    failure_count = count - length(successful_clients)
+    if failure_count > 0 do
+      Logger.warning("#{failure_count}/#{count} WebSocket clients failed to connect")
+    end
 
     # Wait for duration
     Process.sleep(duration)
 
-    # Collect statistics from all clients
+    # Collect statistics from all successful clients
     stats =
-      Enum.map(clients, fn pid ->
+      Enum.map(successful_clients, fn pid ->
         WebSocketClient.get_stats(pid)
       end)
 
@@ -301,18 +318,20 @@ defmodule Livechain.Battle.Workload do
     total_gaps = Enum.reduce(stats, 0, fn s, acc -> acc + s.gaps end)
 
     # Stop clients
-    Enum.each(clients, fn pid -> WebSocketClient.stop(pid) end)
+    Enum.each(successful_clients, fn pid -> WebSocketClient.stop(pid) end)
 
     Logger.info(
-      "WebSocket workload complete: #{total_events} events, #{total_duplicates} duplicates, #{total_gaps} gaps"
+      "WebSocket workload complete: #{total_events} events, #{total_duplicates} duplicates, #{total_gaps} gaps (#{length(successful_clients)}/#{count} clients connected)"
     )
 
     %{
       subscriptions: count,
+      successful_connections: length(successful_clients),
+      failed_connections: failure_count,
       events_received: total_events,
       duplicates: total_duplicates,
       gaps: total_gaps,
-      clients: clients,
+      clients: successful_clients,
       per_client_stats: stats
     }
   end
