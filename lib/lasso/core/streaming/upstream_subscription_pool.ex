@@ -41,7 +41,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
   @impl true
   def init(chain) do
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "raw_messages:#{chain}")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:#{chain}")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{chain}")
 
     # Load backfill config
@@ -63,8 +63,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       keys: %{},
       # provider_id => %{upstream_id => key}
       upstream_index: %{},
-      # request_id => {provider_id, key, timestamp}
-      pending_subscribe: %{},
       # provider capabilities discovered at runtime, e.g., %{provider_id => %{newHeads: true/false, logs: true/false}}
       provider_caps: %{},
       # config
@@ -72,13 +70,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       backfill_timeout: Map.get(failover_cfg, :backfill_timeout, 30_000),
       failover_enabled: Map.get(failover_cfg, :enabled, true),
       dedupe_max_items: Map.get(dedupe_cfg, :max_items, 256),
-      dedupe_max_age_ms: Map.get(dedupe_cfg, :max_age_ms, 30_000),
-      # Subscription confirmation timeout
-      subscription_timeout_ms: 30_000
+      dedupe_max_age_ms: Map.get(dedupe_cfg, :max_age_ms, 30_000)
     }
-
-    # Schedule periodic cleanup of stale pending subscriptions
-    schedule_pending_cleanup()
 
     {:ok, state}
   end
@@ -107,15 +100,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   end
 
   @impl true
-  # Handle subscription events WITH subscription ID (most common case) - must come BEFORE the fallback handler
+  # Handle typed subscription events from WSConnection
   def handle_info(
-        {:raw_message, provider_id,
-         %{
-           "method" => "eth_subscription",
-           "params" => %{"subscription" => upstream_id, "result" => payload}
-         }, received_at},
+        {:subscription_event, provider_id, upstream_id, payload, received_at},
         state
-      ) do
+      )
+      when is_binary(upstream_id) do
     Logger.debug(
       "Received subscription event: provider=#{provider_id}, upstream_id=#{upstream_id}, upstream_index=#{inspect(state.upstream_index)}"
     )
@@ -142,12 +132,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     end
   end
 
-  # Fallback handler for subscription events WITHOUT subscription ID (unusual case)
-  def handle_info(
-        {:raw_message, _provider_id,
-         %{"method" => "eth_subscription", "params" => %{"result" => payload}}, received_at},
-        state
-      ) do
+  # Fallback handler for subscription events WITHOUT subscription ID (still supported if needed)
+  def handle_info({:subscription_event, _provider_id, nil, payload, received_at}, state) do
     # Determine key for routing and update markers/dedupe
     case detect_key_from_payload(payload) do
       {:ok, key} ->
@@ -167,107 +153,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     end
   end
 
-  def handle_info(
-        {:raw_message, provider_id, %{"id" => request_id, "result" => upstream_id}, _received_at},
-        state
-      )
-      when is_binary(upstream_id) do
-    Logger.debug(
-      "Received subscription confirmation: provider=#{provider_id}, request_id=#{request_id}, upstream_id=#{upstream_id}"
-    )
-
-    with {{expected_provider, key, _timestamp}, new_pending} <-
-           Map.pop(state.pending_subscribe, request_id),
-         :ok <- validate_provider_match(expected_provider, provider_id, new_pending),
-         {:ok, entry} <- fetch_key_entry(state.keys, key, new_pending) do
-      # Success path: confirmation for active subscription
-      handle_successful_confirmation(state, new_pending, key, provider_id, upstream_id, entry)
-    else
-      {nil, _} ->
-        handle_unknown_confirmation(state, request_id, provider_id)
-
-      {:error, :provider_mismatch, new_pending} ->
-        handle_provider_mismatch(state, new_pending)
-
-      {:error, :key_not_found, new_pending, key} ->
-        handle_orphaned_confirmation(state, new_pending, key, provider_id, upstream_id)
-    end
-  end
-
-  # Handle subscription errors (e.g., provider does not support specific subscription type)
-  def handle_info(
-        {:raw_message, provider_id, %{"id" => request_id, "error" => error}, _received_at},
-        state
-      ) do
-    case Map.pop(state.pending_subscribe, request_id) do
-      {nil, _} ->
-        {:noreply, state}
-
-      {{prov, key, _timestamp}, new_pending} ->
-        if prov == provider_id do
-          Logger.warning(
-            "Upstream subscribe failed on #{provider_id} for #{inspect(key)}: #{inspect(error)}"
-          )
-
-          cap = capability_from_key(key)
-
-          provider_caps =
-            Map.update(state.provider_caps, provider_id, %{cap => false}, fn caps ->
-              Map.put(caps, cap, false)
-            end)
-
-          entry = Map.get(state.keys, key)
-          already_tried = Map.keys(entry.upstream)
-
-          exclude = Enum.uniq([provider_id | already_tried])
-
-          case Selection.select_provider(
-                 SelectionContext.new(state.chain, "eth_subscribe",
-                   strategy: :priority,
-                   protocol: :ws,
-                   exclude: exclude
-                 )
-               ) do
-            {:ok, next_provider} ->
-              request_id2 = send_upstream_subscribe(state.chain, next_provider, key)
-              telemetry_upstream(:subscribe, state.chain, next_provider, key)
-              timestamp = System.monotonic_time(:millisecond)
-
-              updated_entry =
-                entry
-                |> Map.put(:primary_provider_id, next_provider)
-                |> update_in([:upstream], &Map.put(&1, next_provider, nil))
-
-              new_state = %{
-                state
-                | keys: Map.put(state.keys, key, updated_entry),
-                  pending_subscribe:
-                    Map.put(new_pending, request_id2, {next_provider, key, timestamp}),
-                  provider_caps: provider_caps
-              }
-
-              {:noreply, new_state}
-
-            {:error, reason} ->
-              Logger.error(
-                "No alternative provider available for #{inspect(key)} after failure on #{provider_id}: #{inspect(reason)}"
-              )
-
-              {:noreply, %{state | pending_subscribe: new_pending, provider_caps: provider_caps}}
-          end
-        else
-          {:noreply, %{state | pending_subscribe: new_pending}}
-        end
-    end
-  end
-
-  def handle_info({:raw_message, provider_id, other, received_at}, state) do
-    Logger.warning(
-      "Unexpected raw message received from provider #{provider_id} at #{received_at}: #{inspect(other)}"
-    )
-
-    {:noreply, state}
-  end
+  # No longer handle subscription confirmations via PubSub; handled synchronously on request
 
   def handle_info(evt, state)
       when is_struct(evt, Provider.Unhealthy) or
@@ -294,50 +180,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     {:noreply, state}
   end
 
-  # Periodic cleanup of stale pending subscriptions
-  def handle_info(:cleanup_stale_pending, state) do
-    now = System.monotonic_time(:millisecond)
-    timeout_ms = state.subscription_timeout_ms
-
-    {stale, valid} =
-      Enum.split_with(state.pending_subscribe, fn {_req_id, {_prov, _key, ts}} ->
-        now - ts > timeout_ms
-      end)
-
-    # Log and emit telemetry for stale entries
-    Enum.each(stale, fn {req_id, {provider_id, key, _ts}} ->
-      Logger.warning(
-        "Timeout waiting for subscription confirmation: provider=#{provider_id}, key=#{inspect(key)}, req_id=#{req_id}"
-      )
-
-      :telemetry.execute(
-        [:lasso, :subs, :confirmation_timeout],
-        %{count: 1},
-        %{chain: state.chain, provider_id: provider_id, key: inspect(key)}
-      )
-    end)
-
-    # Emit state size telemetry for leak detection
-    upstream_index_size = calculate_nested_map_size(state.upstream_index)
-    valid_map = Map.new(valid)
-
-    :telemetry.execute(
-      [:lasso, :subs, :pool_state],
-      %{
-        keys_count: map_size(state.keys),
-        pending_count: map_size(valid_map),
-        upstream_index_size: upstream_index_size,
-        stale_cleaned: length(stale)
-      },
-      %{chain: state.chain}
-    )
-
-    # Schedule next cleanup
-    schedule_pending_cleanup()
-
-    {:noreply, %{state | pending_subscribe: valid_map}}
-  end
-
   def handle_info(_, state), do: {:noreply, state}
 
   # Legacy no-op; failover is delegated to StreamCoordinator
@@ -350,81 +192,9 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
   # Confirmation handler helpers - cleaner separation of concerns
 
-  defp validate_provider_match(expected, actual, _new_pending) when expected == actual, do: :ok
+  # Confirmation helpers no longer needed with synchronous confirms
 
-  defp validate_provider_match(_expected, _actual, new_pending),
-    do: {:error, :provider_mismatch, new_pending}
-
-  defp fetch_key_entry(keys, key, new_pending) do
-    case Map.get(keys, key) do
-      nil -> {:error, :key_not_found, new_pending, key}
-      entry -> {:ok, entry}
-    end
-  end
-
-  defp handle_unknown_confirmation(state, request_id, provider_id) do
-    Logger.warning(
-      "Subscription confirmation for unknown request_id: #{request_id}, provider=#{provider_id}"
-    )
-
-    {:noreply, state}
-  end
-
-  defp handle_provider_mismatch(state, new_pending) do
-    # Provider mismatch - likely a delayed response, just clean up pending
-    {:noreply, %{state | pending_subscribe: new_pending}}
-  end
-
-  defp handle_orphaned_confirmation(state, new_pending, key, provider_id, upstream_id) do
-    # Subscription was cancelled before confirmation arrived - clean up orphaned upstream
-    Logger.warning(
-      "Late confirmation for cancelled subscription: provider=#{provider_id}, upstream_id=#{upstream_id}, key=#{inspect(key)}. Cleaning up."
-    )
-
-    # Send eth_unsubscribe to provider
-    _ = send_upstream_unsubscribe(state.chain, provider_id, key, upstream_id)
-
-    # Emit telemetry for monitoring
-    :telemetry.execute(
-      [:lasso, :subs, :orphaned_upstream],
-      %{count: 1},
-      %{chain: state.chain, provider_id: provider_id, upstream_id: upstream_id}
-    )
-
-    {:noreply, %{state | pending_subscribe: new_pending}}
-  end
-
-  defp handle_successful_confirmation(state, new_pending, key, provider_id, upstream_id, entry) do
-    # Update entry with confirmed upstream_id
-    updated_entry = put_in(entry, [:upstream, provider_id], upstream_id)
-
-    # Build nested upstream_index map
-    upstream_index =
-      Map.update(
-        state.upstream_index,
-        provider_id,
-        %{upstream_id => key},
-        &Map.put(&1, upstream_id, key)
-      )
-
-    # Mark capability as supported
-    cap = capability_from_key(key)
-
-    provider_caps =
-      Map.update(state.provider_caps, provider_id, %{cap => true}, &Map.put(&1, cap, true))
-
-    # Notify coordinator
-    StreamCoordinator.upstream_confirmed(state.chain, key, provider_id, upstream_id)
-
-    {:noreply,
-     %{
-       state
-       | keys: Map.put(state.keys, key, updated_entry),
-         upstream_index: upstream_index,
-         pending_subscribe: new_pending,
-         provider_caps: provider_caps
-     }}
-  end
+  # Confirmation path removed
 
   defp ensure_upstream_for_key(state, key) do
     case Map.get(state.keys, key) do
@@ -438,27 +208,39 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
                    protocol: :ws
                  )
                ) do
-          request_id = send_upstream_subscribe(state.chain, provider_id, key)
-          telemetry_upstream(:subscribe, state.chain, provider_id, key)
+          case send_upstream_subscribe(state.chain, provider_id, key) do
+            {:ok, upstream_id} ->
+              telemetry_upstream(:subscribe, state.chain, provider_id, key)
 
-          entry = %{
-            refcount: 1,
-            primary_provider_id: provider_id,
-            upstream: %{provider_id => nil},
-            markers: %{},
-            dedupe: nil
-          }
+              entry = %{
+                refcount: 1,
+                primary_provider_id: provider_id,
+                upstream: %{provider_id => upstream_id},
+                markers: %{},
+                dedupe: nil
+              }
 
-          timestamp = System.monotonic_time(:millisecond)
+              upstream_index =
+                Map.update(state.upstream_index, provider_id, %{upstream_id => key}, fn m ->
+                  Map.put(m, upstream_id, key)
+                end)
 
-          new_state = %{
-            state
-            | keys: Map.put(state.keys, key, entry),
-              pending_subscribe:
-                Map.put(state.pending_subscribe, request_id, {provider_id, key, timestamp})
-          }
+              new_state = %{
+                state
+                | keys: Map.put(state.keys, key, entry),
+                  upstream_index: upstream_index
+              }
 
-          {new_state, provider_id}
+              {new_state, provider_id}
+
+            {:error, jerr} ->
+              # Try select next provider; for simplicity, return original state and nil
+              Logger.warning(
+                "Initial upstream subscribe failed for #{inspect(key)} on #{provider_id}: #{inspect(jerr)}"
+              )
+
+              {state, nil}
+          end
         else
           {:error, reason} ->
             Logger.error("Failed to select provider for #{inspect(key)}: #{inspect(reason)}")
@@ -503,9 +285,9 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
         state
 
       %{refcount: 1, upstream: upstream, primary_provider_id: provider_id} ->
-        # Best-effort unsubscribe on current provider
+        # Best-effort unsubscribe on current provider (async to avoid blocking)
         upstream_id = Map.get(upstream, provider_id)
-        _ = send_upstream_unsubscribe(state.chain, provider_id, key, upstream_id)
+        Task.start(fn -> send_upstream_unsubscribe(state.chain, provider_id, key, upstream_id) end)
         telemetry_upstream(:unsubscribe, state.chain, provider_id, key)
 
         # Clean up upstream_index for all providers in the upstream map
@@ -535,8 +317,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
             end
           end)
 
-        # Stop the StreamCoordinator for this key
-        StreamSupervisor.stop_coordinator(state.chain, key)
+        # Stop the StreamCoordinator for this key (async to avoid blocking)
+        Task.start(fn -> StreamSupervisor.stop_coordinator(state.chain, key) end)
 
         %{state | keys: Map.delete(state.keys, key), upstream_index: new_upstream_index}
 
@@ -558,12 +340,32 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
     Logger.debug("Sending upstream eth_subscribe to #{provider_id} with id #{id}")
 
-    # Use Channel abstraction instead of direct WSConnection call
-    # This supports dynamic providers that weren't started via ChainSupervisor init
-    result = send_via_channel(chain, provider_id, message)
+    case TransportRegistry.get_channel(chain, provider_id, :ws) do
+      {:ok, channel} ->
+        case Channel.request(channel, message, 10_000) do
+          {:ok, upstream_id} when is_binary(upstream_id) ->
+            {:ok, upstream_id}
 
-    Logger.debug("Channel send result: #{inspect(result)}")
-    id
+          {:error, %Lasso.JSONRPC.Error{} = jerr} ->
+            {:error, jerr}
+
+          {:error, reason} ->
+            {:error,
+             Lasso.RPC.ErrorNormalizer.normalize(reason,
+               provider_id: provider_id,
+               context: :transport,
+               transport: :ws
+             )}
+        end
+
+      {:error, _reason} ->
+        {:error,
+         Lasso.JSONRPC.Error.new(-32000, "No WebSocket channel available",
+           provider_id: provider_id,
+           transport: :ws,
+           retriable?: true
+         )}
+    end
   end
 
   defp send_upstream_subscribe(chain, provider_id, {:logs, filter}) do
@@ -579,36 +381,35 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
     Logger.debug("Sending upstream eth_subscribe (logs) to #{provider_id} with id #{id}")
 
-    # Use Channel abstraction instead of direct WSConnection call
-    result = send_via_channel(chain, provider_id, message)
-
-    Logger.debug("Channel send result: #{inspect(result)}")
-    id
-  end
-
-  # Helper to send message via Channel (falls back to WSConnection for compatibility)
-  defp send_via_channel(chain, provider_id, message) do
     case TransportRegistry.get_channel(chain, provider_id, :ws) do
       {:ok, channel} ->
-        # Channel exists, use it
-        case Channel.request(channel, message, 5_000) do
-          {:ok, _result} -> :ok
-          {:error, _reason} = error -> error
+        case Channel.request(channel, message, 10_000) do
+          {:ok, upstream_id} when is_binary(upstream_id) ->
+            {:ok, upstream_id}
+
+          {:error, %Lasso.JSONRPC.Error{} = jerr} ->
+            {:error, jerr}
+
+          {:error, reason} ->
+            {:error,
+             Lasso.RPC.ErrorNormalizer.normalize(reason,
+               provider_id: provider_id,
+               context: :transport,
+               transport: :ws
+             )}
         end
 
       {:error, _reason} ->
-        # Fall back to direct WSConnection for providers started by ChainSupervisor
-        # This maintains backward compatibility during transition
-        case GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, provider_id}}}) do
-          nil ->
-            {:error, :no_ws_connection}
-
-          _pid ->
-            # WSConnection exists, send directly (fire and forget style)
-            Lasso.RPC.WSConnection.send_message(provider_id, message)
-        end
+        {:error,
+         Lasso.JSONRPC.Error.new(-32000, "No WebSocket channel available",
+           provider_id: provider_id,
+           transport: :ws,
+           retriable?: true
+         )}
     end
   end
+
+  # Removed send_via_channel helper; Channel.request is invoked directly above
 
   defp send_upstream_unsubscribe(chain, provider_id, _key, upstream_id)
        when is_binary(upstream_id) do
@@ -621,8 +422,15 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
     Logger.debug("Sending upstream eth_unsubscribe to #{provider_id} for #{upstream_id}")
 
-    # Best-effort send via channel, fire-and-forget (don't wait for response)
-    _ = send_via_channel(chain, provider_id, message)
+    case TransportRegistry.get_channel(chain, provider_id, :ws) do
+      {:ok, channel} ->
+        _ = Channel.request(channel, message, 5_000)
+        :ok
+
+      {:error, _} ->
+        :ok
+    end
+
     :ok
   end
 
@@ -655,21 +463,9 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     })
   end
 
-  defp capability_from_key({:newHeads}), do: :newHeads
-  defp capability_from_key({:logs, _}), do: :logs
+  # capability_from_key no longer required with synchronous confirms
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
-  # Stale pending subscription cleanup
-
-  defp schedule_pending_cleanup do
-    # Check every 30 seconds
-    Process.send_after(self(), :cleanup_stale_pending, 30_000)
-  end
-
-  defp calculate_nested_map_size(nested_map) do
-    Enum.reduce(nested_map, 0, fn {_provider, inner_map}, acc ->
-      acc + map_size(inner_map)
-    end)
-  end
+  # Removed stale pending cleanup (no pending confirms with synchronous path)
 end

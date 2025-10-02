@@ -107,16 +107,30 @@ defmodule LassoWeb.RPCSocket do
   end
 
   @impl true
-  def handle_in({_data, [opcode: :pong]}, state) do
-    # Handle pong response - reset heartbeat counter
-    Logger.debug("Received pong from client")
-    {:ok, %{state | missed_heartbeats: 0, last_ping_time: nil}}
+  def handle_in(_, state) do
+    # Ignore other non-text frames (binary, etc)
+    {:ok, state}
   end
 
   @impl true
-  def handle_in(_, state) do
-    # Ignore other non-text frames (ping, binary)
-    {:ok, state}
+  def handle_control({_payload, [opcode: :pong]}, state) do
+    # Handle pong response from client - reset heartbeat counter and cancel timeout
+    Logger.debug("[Client←] Received pong from downstream client")
+
+    # Cancel the pending heartbeat timeout since we received the pong
+    if state.heartbeat_ref, do: Process.cancel_timer(state.heartbeat_ref)
+
+    # Schedule the next heartbeat
+    heartbeat_ref = Process.send_after(self(), :send_heartbeat, @heartbeat_interval)
+
+    {:ok, %{state | missed_heartbeats: 0, last_ping_time: nil, heartbeat_ref: heartbeat_ref}}
+  end
+
+  @impl true
+  def handle_control({_payload, [opcode: :ping]}, state) do
+    # Client sent us a ping - respond with pong (standard keepalive behavior)
+    Logger.debug("[Client←] Received ping from client, responding with pong")
+    {:reply, :ok, {:pong, ""}, state}
   end
 
   @impl true
@@ -142,7 +156,7 @@ defmodule LassoWeb.RPCSocket do
   @impl true
   def handle_info(:send_heartbeat, state) do
     # Send ping frame and set timeout for pong response
-    Logger.debug("Sending heartbeat ping to client")
+    Logger.debug("[Client→] Sending heartbeat ping to downstream client")
 
     # Cancel existing timeout if any
     if state.heartbeat_ref, do: Process.cancel_timer(state.heartbeat_ref)
@@ -161,11 +175,12 @@ defmodule LassoWeb.RPCSocket do
   def handle_info(:heartbeat_timeout, state) do
     # Pong not received within timeout - increment missed counter
     missed = state.missed_heartbeats + 1
-    Logger.warning("Heartbeat timeout - missed #{missed}/#{@max_missed_heartbeats} heartbeats")
+    Logger.warning("Client heartbeat timeout - missed #{missed}/#{@max_missed_heartbeats} heartbeats")
 
     if missed >= @max_missed_heartbeats do
-      Logger.error("Too many missed heartbeats (#{missed}), closing connection")
-      {:stop, :heartbeat_timeout, state}
+      Logger.error("Too many missed client heartbeats (#{missed}), closing connection")
+      # Close with proper WebSocket code: 1002 = Protocol Error (failed to respond to pings)
+      {:stop, {:shutdown, {1002, "Heartbeat timeout - no pong responses"}}, state}
     else
       # Schedule next heartbeat
       heartbeat_ref = Process.send_after(self(), :send_heartbeat, @heartbeat_interval)

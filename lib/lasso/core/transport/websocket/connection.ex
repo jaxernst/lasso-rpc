@@ -20,7 +20,6 @@ defmodule Lasso.RPC.WSConnection do
 
   alias Lasso.RPC.WSEndpoint
   alias Lasso.RPC.CircuitBreaker
-  alias Lasso.RPC.ProviderPool
   alias Lasso.RPC.ErrorNormalizer
   alias Lasso.JSONRPC.Error, as: JError
 
@@ -126,7 +125,11 @@ defmodule Lasso.RPC.WSConnection do
           "Failed to connect to #{state.endpoint.name} (WebSocket): #{jerr.message} (code=#{inspect(jerr.code)})"
         )
 
-        broadcast_connection_status(state, :disconnected)
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.chain_name}",
+          {:connection_error, state.endpoint.id, jerr}
+        )
 
         state =
           if jerr.retriable? do
@@ -139,6 +142,14 @@ defmodule Lasso.RPC.WSConnection do
 
       {:error, :circuit_open} ->
         Logger.debug("Circuit breaker open for #{state.endpoint.id}, skipping connect attempt")
+
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.chain_name}",
+          {:connection_error, state.endpoint.id,
+           JError.new(-32000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)}
+        )
+
         # Try again later (uses existing backoff)
         state = schedule_reconnect(state)
         {:noreply, state}
@@ -147,7 +158,12 @@ defmodule Lasso.RPC.WSConnection do
         Logger.debug("Circuit breaker call error: #{inspect(other)}")
 
         jerr = JError.from(other, provider_id: state.endpoint.id)
-        broadcast_connection_status(state, :disconnected)
+
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.chain_name}",
+          {:connection_error, state.endpoint.id, jerr}
+        )
 
         state =
           if jerr.retriable? do
@@ -221,6 +237,8 @@ defmodule Lasso.RPC.WSConnection do
       "params" => params || []
     }
 
+    sent_at = System.monotonic_time(:microsecond)
+
     case ws_client().send_frame(state.connection, {:text, Jason.encode!(message)}) do
       :ok ->
         timer = Process.send_after(self(), {:request_timeout, request_id}, timeout_ms)
@@ -229,7 +247,8 @@ defmodule Lasso.RPC.WSConnection do
           Map.put(state.pending_requests, request_id, %{
             from: from,
             timer: timer,
-            sent_at: System.monotonic_time(:millisecond)
+            sent_at: sent_at,
+            method: method
           })
 
         {:noreply, %{state | pending_requests: pending}}
@@ -272,7 +291,12 @@ defmodule Lasso.RPC.WSConnection do
     CircuitBreaker.record_success({state.endpoint.id, :ws})
 
     state = %{state | connected: true, reconnect_attempts: 0}
-    broadcast_connection_status(state, :connected)
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:conn:#{state.chain_name}",
+      {:ws_connected, state.endpoint.id}
+    )
 
     state = schedule_heartbeat(state)
     {:noreply, state}
@@ -289,8 +313,12 @@ defmodule Lasso.RPC.WSConnection do
               new_state -> {:noreply, new_state}
             end
 
-          {%{from: from, timer: timer}, new_pending} ->
+          {%{from: from, timer: timer, sent_at: sent_at} = meta, new_pending} ->
             Process.cancel_timer(timer)
+            received_at = System.monotonic_time(:microsecond)
+            ws_latency_us = received_at - sent_at
+            ws_latency_ms = ws_latency_us / 1000.0
+            req_method = Map.get(meta, :method)
 
             reply =
               cond do
@@ -307,15 +335,22 @@ defmodule Lasso.RPC.WSConnection do
 
             GenServer.reply(from, reply)
 
-            # ALSO broadcast to raw_messages for subscription management
-            # This allows UpstreamSubscriptionPool to track subscription confirmations
-            received_at = System.monotonic_time(:millisecond)
+            # For subscription requests, emit typed confirmation to ws:subs
+            if req_method == "eth_subscribe" do
+              received_at = System.monotonic_time(:millisecond)
 
-            Phoenix.PubSub.broadcast(
-              Lasso.PubSub,
-              "raw_messages:#{state.chain_name}",
-              {:raw_message, state.endpoint.id, resp, received_at}
-            )
+              case reply do
+                {:ok, upstream_id} when is_binary(upstream_id) ->
+                  Phoenix.PubSub.broadcast(
+                    Lasso.PubSub,
+                    "ws:subs:#{state.chain_name}",
+                    {:subscription_confirmed, state.endpoint.id, id, upstream_id, received_at}
+                  )
+
+                _ ->
+                  :ok
+              end
+            end
 
             {:noreply, %{state | pending_requests: new_pending}}
         end
@@ -330,7 +365,20 @@ defmodule Lasso.RPC.WSConnection do
 
   def handle_info({:ws_error, error}, state) do
     Logger.error("WebSocket error: #{inspect(error)}")
-    ProviderPool.report_failure(state.chain_name, state.endpoint.id, error)
+
+    jerr =
+      ErrorNormalizer.normalize(error,
+        provider_id: state.endpoint.id,
+        context: :transport,
+        transport: :ws
+      )
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:conn:#{state.chain_name}",
+      {:connection_error, state.endpoint.id, jerr}
+    )
+
     {:noreply, state}
   end
 
@@ -343,8 +391,15 @@ defmodule Lasso.RPC.WSConnection do
         transport: :ws
       )
 
+    # Clean up any pending requests
+    state = cleanup_pending_requests(state, jerr)
     state = %{state | connected: false, connection: nil}
-    broadcast_connection_status(state, {:disconnected, jerr})
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:conn:#{state.chain_name}",
+      {:ws_closed, state.endpoint.id, code, jerr}
+    )
 
     state = if jerr.retriable?, do: schedule_reconnect(state), else: state
     {:noreply, state}
@@ -359,8 +414,15 @@ defmodule Lasso.RPC.WSConnection do
         transport: :ws
       )
 
+    # Clean up any pending requests
+    state = cleanup_pending_requests(state, jerr)
     state = %{state | connected: false, connection: nil}
-    broadcast_connection_status(state, {:disconnected, jerr})
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:conn:#{state.chain_name}",
+      {:ws_disconnected, state.endpoint.id, jerr}
+    )
 
     state = if jerr.retriable?, do: schedule_reconnect(state), else: state
     {:noreply, state}
@@ -375,8 +437,7 @@ defmodule Lasso.RPC.WSConnection do
 
         {:error, reason} ->
           jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
-          Logger.debug("Heartbeat failed for #{state.endpoint.id}: #{inspect(jerr)}")
-          ProviderPool.report_failure(state.chain_name, state.endpoint.id, jerr)
+          Logger.debug("[Provider→] Heartbeat ping failed for upstream #{state.endpoint.id}: #{inspect(jerr)}")
           state = schedule_heartbeat(state)
           {:noreply, state}
       end
@@ -424,8 +485,22 @@ defmodule Lasso.RPC.WSConnection do
         :ok
     end
 
+    jerr =
+      JError.new(-32000, "Connection process died: #{inspect(reason)}",
+        provider_id: state.endpoint.id,
+        retriable?: true
+      )
+
+    # Clean up any pending requests
+    state = cleanup_pending_requests(state, jerr)
     state = %{state | connected: false, connection: nil}
-    broadcast_connection_status(state, :disconnected)
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:conn:#{state.chain_name}",
+      {:ws_disconnected, state.endpoint.id, jerr}
+    )
+
     state = schedule_reconnect(state)
     {:noreply, state}
   end
@@ -446,8 +521,13 @@ defmodule Lasso.RPC.WSConnection do
       Process.cancel_timer(state.reconnect_ref)
     end
 
-    # Notify of disconnection
-    broadcast_connection_status(state, {:terminated, nil})
+    # Notify of disconnection via typed events
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:conn:#{state.chain_name}",
+      {:ws_disconnected, state.endpoint.id,
+       JError.new(-32000, "terminated", provider_id: state.endpoint.id, retriable?: false)}
+    )
 
     :ok
   end
@@ -512,12 +592,29 @@ defmodule Lasso.RPC.WSConnection do
     end
   end
 
-  # TODO: Consider consilidating these duplicative function handlers (only difference is in the debug calls)
+  defp cleanup_pending_requests(state, error) do
+    if map_size(state.pending_requests) > 0 do
+      Logger.debug(
+        "Cleaning up #{map_size(state.pending_requests)} pending requests due to disconnect"
+      )
+
+      Enum.each(state.pending_requests, fn {_id, %{from: from, timer: timer}} ->
+        Process.cancel_timer(timer)
+        GenServer.reply(from, {:error, error})
+      end)
+
+      %{state | pending_requests: %{}}
+    else
+      state
+    end
+  end
+
+  # TODO: Consider consolidating these duplicative function handlers (only difference is in the debug calls)
   defp handle_websocket_message(
          %{
            "method" => "eth_subscription",
-           "params" => %{"result" => block_data, "subscription" => _sub_id}
-         } = message,
+           "params" => %{"result" => block_data, "subscription" => sub_id}
+         },
          state
        ) do
     # Handle new block subscription notifications
@@ -538,19 +635,54 @@ defmodule Lasso.RPC.WSConnection do
       %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :newHeads}
     )
 
-    # Send to raw messages channel for aggregation
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "raw_messages:#{state.chain_name}",
-      {:raw_message, state.endpoint.id, message, received_at}
+      "ws:subs:#{state.chain_name}",
+      {:subscription_event, state.endpoint.id, sub_id, block_data, received_at}
     )
 
     {:ok, state}
   end
 
-  defp handle_websocket_message(%{"method" => "eth_subscription"} = message, state) do
+  # Provider-emitted JSON-RPC error without correlation id -> treat as connection-level
+  defp handle_websocket_message(
+         %{"jsonrpc" => "2.0", "error" => %{"code" => code, "message" => msg}} = message,
+         state
+       ) do
+    if Map.has_key?(message, "id") do
+      # Not our clause; fall through to generic handler
+      {:ok, state}
+    else
+      jerr =
+        ErrorNormalizer.normalize(message,
+          provider_id: state.endpoint.id,
+          context: :jsonrpc,
+          transport: :ws
+        )
+
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        "ws:conn:#{state.chain_name}",
+        {:connection_error, state.endpoint.id, jerr}
+      )
+
+      # Proactively close on timeout-like provider errors to force clean reconnect
+      try do
+        if (is_integer(code) and code == -32701) or
+             (is_binary(msg) and String.contains?(String.downcase(msg), "timeout")) do
+          _ = ws_client().send_frame(state.connection, {:close, 1013, "connection timeout"})
+        end
+      rescue
+        _ -> :ok
+      end
+
+      {:ok, state}
+    end
+  end
+
+  defp handle_websocket_message(%{"method" => "eth_subscription", "params" => params}, state) do
     # Handle other subscription notifications
-    Logger.debug("Received subscription: #{inspect(message)}")
+    Logger.debug("Received subscription: #{inspect(params)}")
 
     # Send all subscription messages through aggregator
     received_at = System.monotonic_time(:millisecond)
@@ -566,21 +698,24 @@ defmodule Lasso.RPC.WSConnection do
       %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :subscription}
     )
 
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
-      "raw_messages:#{state.chain_name}",
-      {:raw_message, state.endpoint.id, message, received_at}
-    )
+    case params do
+      %{"subscription" => sub_id, "result" => payload} ->
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:subs:#{state.chain_name}",
+          {:subscription_event, state.endpoint.id, sub_id, payload, received_at}
+        )
+
+      _ ->
+        :ok
+    end
 
     {:ok, state}
   end
 
   defp handle_websocket_message(message, state) do
     # Handle other RPC responses
-    Logger.debug("Received message: #{inspect(message)}")
-
-    # Send through aggregator for consistency
-    received_at = System.monotonic_time(:millisecond)
+    Logger.debug("Received message from #{state.endpoint.id}: #{inspect(message)}")
 
     :telemetry.execute(
       [
@@ -593,12 +728,6 @@ defmodule Lasso.RPC.WSConnection do
       %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :other}
     )
 
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
-      "raw_messages:#{state.chain_name}",
-      {:raw_message, state.endpoint.id, message, received_at}
-    )
-
     {:ok, state}
   end
 
@@ -606,14 +735,6 @@ defmodule Lasso.RPC.WSConnection do
 
   defp via_name(connection_id) do
     {:via, Registry, {Lasso.Registry, {:ws_conn, connection_id}}}
-  end
-
-  defp broadcast_connection_status(state, status) do
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
-      "ws_connections",
-      {:ws_connection_status_changed, state.endpoint.id, status}
-    )
   end
 
   defp ws_client do

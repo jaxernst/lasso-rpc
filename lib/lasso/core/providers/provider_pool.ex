@@ -182,7 +182,7 @@ defmodule Lasso.RPC.ProviderPool do
   @impl true
   def init({chain_name, chain_config}) do
     Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
 
     state = %__MODULE__{
       chain_name: chain_name,
@@ -373,8 +373,9 @@ defmodule Lasso.RPC.ProviderPool do
     {:noreply, new_state}
   end
 
+  # Typed WS connection events
   @impl true
-  def handle_info({:ws_connection_status_changed, provider_id, :connected}, state) do
+  def handle_info({:ws_connected, provider_id}, state) do
     case Map.get(state.providers, provider_id) do
       nil ->
         {:noreply, state}
@@ -395,7 +396,7 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   @impl true
-  def handle_info({:ws_connection_status_changed, provider_id, {:disconnected, jerr}}, state) do
+  def handle_info({:ws_closed, provider_id, code, %_{} = jerr}, state) do
     case Map.get(state.providers, provider_id) do
       nil ->
         {:noreply, state}
@@ -409,13 +410,7 @@ defmodule Lasso.RPC.ProviderPool do
             last_health_check: System.system_time(:millisecond)
         }
 
-        event_details =
-          case jerr do
-            nil -> %{code: nil, reason: "connection closed"}
-            %{code: code, message: msg} -> %{code: code, reason: msg}
-            _ -> %{code: nil, reason: inspect(jerr)}
-          end
-
+        event_details = %{code: code, reason: jerr.message}
         publish_provider_event(state.chain_name, provider_id, :ws_closed, event_details)
 
         new_state = put_provider_and_refresh(state, provider_id, updated)
@@ -424,7 +419,34 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   @impl true
-  def handle_info({:ws_connection_status_changed, _, _}, state), do: {:noreply, state}
+  def handle_info({:ws_disconnected, provider_id, %_{} = jerr}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated = %{
+          provider
+          | status: :disconnected,
+            consecutive_failures: provider.consecutive_failures + 1,
+            last_error: jerr,
+            last_health_check: System.system_time(:millisecond)
+        }
+
+        event_details = %{reason: jerr.message}
+        publish_provider_event(state.chain_name, provider_id, :ws_closed, event_details)
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info({:connection_error, provider_id, %_{} = jerr}, state) do
+    # Treat connection error as a failure signal; reuse existing failure path
+    new_state = update_provider_failure(state, provider_id, jerr)
+    {:noreply, new_state}
+  end
 
   @impl true
   def handle_info(
@@ -633,7 +655,7 @@ defmodule Lasso.RPC.ProviderPool do
     |> Enum.filter(fn provider ->
       case Map.get(filters, :protocol) do
         :ws ->
-          provider.status in [:healthy, :connecting] and is_pid(ws_connection_pid(provider.id))
+          provider.status == :healthy and is_pid(ws_connection_pid(provider.id))
 
         _ ->
           true

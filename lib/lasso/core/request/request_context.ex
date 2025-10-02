@@ -81,7 +81,7 @@ defmodule Lasso.RPC.RequestContext do
   """
   def new(chain, method, opts \\ []) do
     request_id = generate_request_id()
-    start_time = System.monotonic_time(:millisecond)
+    start_time = System.monotonic_time(:microsecond)
 
     %__MODULE__{
       request_id: request_id,
@@ -102,18 +102,18 @@ defmodule Lasso.RPC.RequestContext do
   Records the start of provider selection phase.
   """
   def mark_selection_start(%__MODULE__{} = ctx) do
-    %{ctx | selection_start: System.monotonic_time(:millisecond)}
+    %{ctx | selection_start: System.monotonic_time(:microsecond)}
   end
 
   @doc """
   Records provider selection completion with metadata.
   """
   def mark_selection_end(%__MODULE__{} = ctx, opts \\ []) do
-    now = System.monotonic_time(:millisecond)
+    now = System.monotonic_time(:microsecond)
 
     selection_latency_ms =
       if ctx.selection_start do
-        (now - ctx.selection_start) * 1.0
+        (now - ctx.selection_start) / 1000.0
       else
         nil
       end
@@ -133,18 +133,18 @@ defmodule Lasso.RPC.RequestContext do
   Records the start of upstream request.
   """
   def mark_upstream_start(%__MODULE__{} = ctx) do
-    %{ctx | upstream_start: System.monotonic_time(:millisecond)}
+    %{ctx | upstream_start: System.monotonic_time(:microsecond)}
   end
 
   @doc """
   Records upstream request completion.
   """
   def mark_upstream_end(%__MODULE__{} = ctx) do
-    now = System.monotonic_time(:millisecond)
+    now = System.monotonic_time(:microsecond)
 
     upstream_latency_ms =
       if ctx.upstream_start do
-        now - ctx.upstream_start
+        (now - ctx.upstream_start) / 1000.0
       else
         nil
       end
@@ -156,8 +156,8 @@ defmodule Lasso.RPC.RequestContext do
   Records successful result shape.
   """
   def record_success(%__MODULE__{} = ctx, result) do
-    now = System.monotonic_time(:millisecond)
-    end_to_end_ms = now - ctx.start_time
+    now = System.monotonic_time(:microsecond)
+    end_to_end_ms = (now - ctx.start_time) / 1000.0
 
     {result_type, result_size} = analyze_result(result)
 
@@ -174,8 +174,8 @@ defmodule Lasso.RPC.RequestContext do
   Records error shape.
   """
   def record_error(%__MODULE__{} = ctx, error) do
-    now = System.monotonic_time(:millisecond)
-    end_to_end_ms = now - ctx.start_time
+    now = System.monotonic_time(:microsecond)
+    end_to_end_ms = (now - ctx.start_time) / 1000.0
 
     error_map =
       case error do

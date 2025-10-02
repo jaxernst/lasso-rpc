@@ -23,6 +23,7 @@ defmodule Lasso.RPC.Channel do
           created_at: integer()
         }
 
+  @derive {Jason.Encoder, only: [:provider_id, :transport]}
   defstruct [
     :provider_id,
     :transport,

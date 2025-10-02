@@ -116,12 +116,12 @@ defmodule Lasso.RPC.WSConnectionTest do
     end
 
     test "automatically connects to the endpoint after initialization", %{endpoint: endpoint} do
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       endpoint_id = endpoint.id
       {:ok, pid} = WSConnection.start_link(endpoint)
 
-      assert_receive {:ws_connection_status_changed, ^endpoint_id, :connected}, 100
+      assert_receive {:ws_connected, ^endpoint_id}, 100
 
       status = WSConnection.status(endpoint_id)
       assert status.connected == true
@@ -212,7 +212,7 @@ defmodule Lasso.RPC.WSConnectionTest do
   describe "Error Handling" do
     test "handles websocket disconnection gracefully", %{endpoint: endpoint} do
       {:ok, pid} = WSConnection.start_link(endpoint)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       # Wait for connection
       assert TestHelper.eventually(fn ->
@@ -227,7 +227,7 @@ defmodule Lasso.RPC.WSConnectionTest do
       TestSupport.MockWSClient.close(mock_client_pid, 1001, "going away")
 
       # Should receive disconnection status
-      assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 500
+      assert_receive {:ws_closed, _, _, %Lasso.JSONRPC.Error{}}, 500
 
       # Connection should be marked as disconnected
       assert TestHelper.eventually(fn ->
@@ -270,16 +270,16 @@ defmodule Lasso.RPC.WSConnectionTest do
 
   describe "Health Monitoring" do
     test "broadcasts terminated status on stop", %{endpoint: endpoint} do
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
       endpoint_id = endpoint.id
 
       {:ok, pid} = WSConnection.start_link(endpoint)
 
-      assert_receive {:ws_connection_status_changed, ^endpoint_id, :connected}, 1000
+      assert_receive {:ws_connected, ^endpoint_id}, 1000
 
       GenServer.stop(pid, :normal)
 
-      assert_receive {:ws_connection_status_changed, ^endpoint_id, {:terminated, nil}}, 1000
+      assert_receive {:ws_disconnected, ^endpoint_id, %Lasso.JSONRPC.Error{}}, 1000
     end
 
     test "reports comprehensive connection status", %{endpoint: endpoint} do
@@ -336,12 +336,12 @@ defmodule Lasso.RPC.WSConnectionTest do
     end
 
     test "publishes status changes via PubSub", %{endpoint: endpoint} do
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       {:ok, pid} = WSConnection.start_link(endpoint)
 
       # Should receive connection status
-      assert_receive {:ws_connection_status_changed, connection_id, :connected}, 1000
+      assert_receive {:ws_connected, connection_id}, 1000
       assert connection_id == endpoint.id
 
       GenServer.stop(pid)
@@ -400,7 +400,7 @@ defmodule Lasso.RPC.WSConnectionTest do
   describe "Disconnect and Recovery" do
     test "handles graceful websocket close", %{endpoint: endpoint} do
       {:ok, pid} = WSConnection.start_link(endpoint)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       # Wait for connection
       assert TestHelper.eventually(fn ->
@@ -413,7 +413,7 @@ defmodule Lasso.RPC.WSConnectionTest do
       TestSupport.MockWSClient.close(mock_client_pid, 1000, "normal close")
 
       # Should receive disconnection status
-      assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 500
+      assert_receive {:ws_closed, _, _, %Lasso.JSONRPC.Error{}}, 500
 
       # Connection should be marked as disconnected
       assert TestHelper.eventually(fn ->
@@ -425,7 +425,7 @@ defmodule Lasso.RPC.WSConnectionTest do
 
     test "handles unexpected websocket disconnect", %{endpoint: endpoint} do
       {:ok, pid} = WSConnection.start_link(endpoint)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       # Wait for connection
       assert TestHelper.eventually(fn ->
@@ -438,7 +438,7 @@ defmodule Lasso.RPC.WSConnectionTest do
       TestSupport.MockWSClient.disconnect(mock_client_pid, :connection_lost)
 
       # Should receive disconnection status
-      assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 500
+      assert_receive {:ws_disconnected, _, %Lasso.JSONRPC.Error{}}, 500
 
       # Connection should be marked as disconnected
       assert TestHelper.eventually(fn ->
@@ -453,7 +453,7 @@ defmodule Lasso.RPC.WSConnectionTest do
       Process.flag(:trap_exit, true)
 
       {:ok, pid} = WSConnection.start_link(endpoint)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       # Wait for connection
       assert TestHelper.eventually(fn ->
@@ -468,7 +468,7 @@ defmodule Lasso.RPC.WSConnectionTest do
       TestSupport.MockWSClient.force_crash(mock_client_pid, :simulated_crash)
 
       # Should receive disconnection status (from process monitor)
-      assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 500
+      assert_receive {:ws_disconnected, _, %Lasso.JSONRPC.Error{}}, 500
 
       # Connection should be marked as disconnected
       assert TestHelper.eventually(fn ->
@@ -486,7 +486,7 @@ defmodule Lasso.RPC.WSConnectionTest do
       reconnect_endpoint = %{endpoint | reconnect_interval: 50, max_reconnect_attempts: 3}
 
       {:ok, pid} = WSConnection.start_link(reconnect_endpoint)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       # Wait for initial connection
       assert TestHelper.eventually(fn ->
@@ -499,7 +499,7 @@ defmodule Lasso.RPC.WSConnectionTest do
       TestSupport.MockWSClient.disconnect(mock_client_pid, :connection_lost)
 
       # Should receive disconnection
-      assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 500
+      assert_receive {:ws_disconnected, _, %Lasso.JSONRPC.Error{}}, 500
 
       # Verify disconnection and that reconnect attempts will be incremented
       assert TestHelper.eventually(
@@ -656,12 +656,12 @@ defmodule Lasso.RPC.WSConnectionTest do
       {:ok, _} = CircuitBreaker.start_link({{fail_endpoint.id, :ws}, circuit_breaker_config})
 
       try do
-        Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+        Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
         {:ok, _pid} = WSConnection.start_link(fail_endpoint)
 
-        # Should broadcast disconnected due to failed connect (atom, not tuple on initial failure)
-        assert_receive {:ws_connection_status_changed, "fail_init_1", :disconnected}, 1000
+        # Should broadcast connection_error due to failed connect
+        assert_receive {:connection_error, "fail_init_1", %Lasso.JSONRPC.Error{}}, 1000
 
         # Status should show not connected and at least one reconnect attempt scheduled soon
         status = WSConnection.status("fail_init_1")
@@ -718,10 +718,10 @@ defmodule Lasso.RPC.WSConnectionTest do
     test "successfully reconnects after disconnect", %{endpoint: endpoint} do
       reconnect_endpoint = %{endpoint | reconnect_interval: 100, max_reconnect_attempts: 5}
       {:ok, pid} = WSConnection.start_link(reconnect_endpoint)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       # Wait for initial connection
-      assert_receive {:ws_connection_status_changed, _, :connected}, 500
+      assert_receive {:ws_connected, _}, 500
 
       # Force disconnect
       ws_state = :sys.get_state(pid)
@@ -729,10 +729,10 @@ defmodule Lasso.RPC.WSConnectionTest do
       TestSupport.MockWSClient.disconnect(mock_client_pid, :connection_lost)
 
       # Should receive disconnection
-      assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 500
+      assert_receive {:ws_disconnected, _, %Lasso.JSONRPC.Error{}}, 500
 
       # Should automatically reconnect (wait for reconnect interval + jitter + buffer)
-      assert_receive {:ws_connection_status_changed, _, :connected}, 2000
+      assert_receive {:ws_connected, _}, 2000
 
       # Verify reconnection was successful
       status = WSConnection.status(reconnect_endpoint.id)
@@ -757,18 +757,18 @@ defmodule Lasso.RPC.WSConnectionTest do
              end)
 
       # Record timestamps for reconnection attempts
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       # Disconnect
       ws_state = :sys.get_state(pid)
       mock_client_pid = ws_state.connection
       TestSupport.MockWSClient.disconnect(mock_client_pid, :connection_lost)
 
-      assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 500
+      assert_receive {:ws_disconnected, _, %Lasso.JSONRPC.Error{}}, 500
       t1 = System.monotonic_time(:millisecond)
 
       # Should reconnect with delay (50ms base + reconnect_attempts * 50ms + jitter up to 1000ms)
-      assert_receive {:ws_connection_status_changed, _, :connected}, 2000
+      assert_receive {:ws_connected, _}, 2000
       t2 = System.monotonic_time(:millisecond)
 
       # First reconnect should take at least 50ms (base interval)
@@ -816,10 +816,10 @@ defmodule Lasso.RPC.WSConnectionTest do
     test "handles multiple disconnect/reconnect cycles", %{endpoint: endpoint} do
       reconnect_endpoint = %{endpoint | reconnect_interval: 100, max_reconnect_attempts: 10}
       {:ok, pid} = WSConnection.start_link(reconnect_endpoint)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:testchain")
 
       # Wait for initial connection
-      assert_receive {:ws_connection_status_changed, _, :connected}, 500
+      assert_receive {:ws_connected, _}, 500
 
       # Perform 2 disconnect/reconnect cycles (reduced from 3 for test stability)
       for _i <- 1..2 do
@@ -829,8 +829,8 @@ defmodule Lasso.RPC.WSConnectionTest do
         TestSupport.MockWSClient.disconnect(mock_client_pid, :test_cycle)
 
         # Should disconnect then reconnect
-        assert_receive {:ws_connection_status_changed, _, {:disconnected, _}}, 1000
-        assert_receive {:ws_connection_status_changed, _, :connected}, 2000
+        assert_receive {:ws_disconnected, _, %Lasso.JSONRPC.Error{}}, 1000
+        assert_receive {:ws_connected, _}, 2000
       end
 
       # Final state should be connected with reset attempts

@@ -156,6 +156,7 @@ defmodule Lasso.RPC.TransportRegistry do
 
   @impl true
   def handle_call({:list_provider_channels, provider_id}, _from, state) do
+    IO.puts("List provider channels for #{provider_id}: #{inspect(state)}")
     channels = Map.get(state.channels, provider_id, %{})
     channel_list = Enum.to_list(channels)
     {:reply, channel_list, state}
