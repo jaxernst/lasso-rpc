@@ -98,7 +98,21 @@ defmodule Lasso.RPC.Transports.WebSocket do
       request_id: request_id
     )
 
-    WSConnection.request(provider_id, method, params, timeout, request_id)
+    case WSConnection.request(provider_id, method, params, timeout, request_id) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, %JError{} = jerr} ->
+        {:error, jerr}
+
+      {:error, other} ->
+        {:error,
+         ErrorNormalizer.normalize(other,
+           provider_id: provider_id,
+           context: :transport,
+           transport: :ws
+         )}
+    end
   end
 
   @impl true
