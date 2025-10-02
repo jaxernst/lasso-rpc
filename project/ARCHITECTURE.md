@@ -662,9 +662,8 @@ end
 
 - **RPC latency measurement**: <5ms overhead for latency tracking
 - **Provider Configuration + capability lookups**: <1ms via ETS cache (no file I/O)
-- **Provider selection**: <2ms via Selection module
+- **Provider selection**: <2ms via ETC Cache based Selection module (metrics lookup)
 - **Dashboard updates**: <100ms from RPC metrics to UI update
-- **Memory usage**: ~10MB per chain for 24 hours of data
 
 ### **Fault Tolerance**
 
