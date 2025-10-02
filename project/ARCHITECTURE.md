@@ -554,7 +554,7 @@ config :lasso, :provider_selection_strategy, :fastest
 
 ## Battle Testing Framework
 
-Lasso includes a production-grade battle testing framework for validating reliability under load and chaos conditions.
+Lasso includes a custom battle testing framework for validating reliability under load and chaos conditions.
 
 ### **Architecture**
 
