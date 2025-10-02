@@ -514,46 +514,6 @@ end
 
 ---
 
-## Data Flow Architecture
-
-### **Request Processing Pipeline**
-
-```
-[Client Request] → [ObservabilityPlug] → [RPCController] → [RequestPipeline]
-       ↓                  ↓                     ↓                  ↓
-  include_meta?      Parse Opt-in       Create Context     Select Provider
-       ↓                  ↓                     ↓                  ↓
-[Provider Call] → [Circuit Breaker] → [Update Context] → [Log & Store]
-       ↓                  ↓                     ↓                  ↓
-  HTTP/WS Call      Track Failures      Record Timing     Observability
-```
-
-### **Event Processing Pipeline**
-
-```
-[RPC Provider] → [RPC Call] → [Latency Measurement] → [BenchmarkStore]
-     ↓              ↓              ↓                     ↓
-  HTTP/WS        Request         Response Time         ETS Tables
- Connection      Processing      Tracking             Metrics Storage
-```
-
-### **Performance Data Storage**
-
-```
-ETS Tables (Per Chain):
-├── rpc_metrics_#{chain}        # {timestamp, provider_id, method, duration_ms, result}
-└── provider_scores_#{chain}    # {provider_id, method, :rpc} => {successes, total, avg_duration}
-```
-
-### **Memory Management**
-
-- **24-hour retention**: Detailed metrics kept for last 24 hours
-- **Automatic cleanup**: Hourly removal of oldest entries
-- **Bounded tables**: Maximum 86,400 entries per chain (~1 per second)
-- **Snapshot persistence**: Hourly JSON dumps for historical analysis
-
----
-
 ## JSON-RPC Integration
 
 ### **Standard Method Support**

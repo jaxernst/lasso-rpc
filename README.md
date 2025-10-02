@@ -140,15 +140,6 @@ curl -X POST http://localhost:4000/rpc/round-robin/ethereum \
 
 **📊 Live Dashboard:** http://localhost:4000
 
-### 🎬 Automated Demo
-
-Run the interactive demo script:
-
-```bash
-# Demonstrates all 4 routing strategies with live examples
-./scripts/demo_routing_strategies.exs
-```
-
 ## Configuration
 
 ### Provider Setup
