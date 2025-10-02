@@ -2,7 +2,7 @@ defmodule Integration.FailoverTest do
   @moduledoc """
   Integration tests for provider failover and resilience functionality.
 
-  This tests Livechain's key selling point: bulletproof failover between
+  This tests Lasso's key selling point: bulletproof failover between
   providers with no interruption to client connections or data loss.
   """
 
@@ -11,16 +11,16 @@ defmodule Integration.FailoverTest do
 
   @moduletag :integration
 
-  alias Livechain.RPC.{ChainSupervisor, CircuitBreaker}
-  alias Livechain.Config.ChainConfig
-  alias Livechain.Config.ChainConfig.{Provider, Connection, Failover}
+  alias Lasso.RPC.{ChainSupervisor, CircuitBreaker}
+  alias Lasso.Config.ChainConfig
+  alias Lasso.Config.ChainConfig.{Provider, Connection, Failover}
 
   setup do
     # Start the application to ensure all dependencies are available
-    Application.ensure_all_started(:livechain)
+    Application.ensure_all_started(:lasso)
 
     # Mock HTTP client with controlled failure scenarios
-    stub(Livechain.RPC.HttpClientMock, :request, fn config, _method, _params, _timeout ->
+    stub(Lasso.RPC.HttpClientMock, :request, fn config, _method, _params, _timeout ->
       # Simulate different provider reliability
       case config.url do
         "http://localhost:8545" ->
@@ -112,7 +112,7 @@ defmodule Integration.FailoverTest do
       # Cleanup any started processes more gracefully
       try do
         # Stop test-specific processes
-        case GenServer.whereis(Livechain.RPC.SubscriptionManagerTest.MockChainManager) do
+        case GenServer.whereis(Lasso.RPC.SubscriptionManagerTest.MockChainManager) do
           nil ->
             :ok
 
@@ -193,7 +193,7 @@ defmodule Integration.FailoverTest do
 
       for provider <- chain_config.providers do
         try do
-          via_name = {:via, Registry, {Livechain.Registry, {:circuit_breaker, provider.id}}}
+          via_name = {:via, Registry, {Lasso.Registry, {:circuit_breaker, provider.id}}}
           GenServer.stop(via_name)
         catch
           :exit, _ -> :ok

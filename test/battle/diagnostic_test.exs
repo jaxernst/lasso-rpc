@@ -1,4 +1,4 @@
-defmodule Livechain.Battle.DiagnosticTest do
+defmodule Lasso.Battle.DiagnosticTest do
   @moduledoc """
   Diagnostic tests to validate framework behavior and inspect outputs.
 
@@ -12,15 +12,17 @@ defmodule Livechain.Battle.DiagnosticTest do
   use ExUnit.Case, async: false
   require Logger
 
-  alias Livechain.Battle.{Scenario, Collector, Analyzer}
+  alias Lasso.Battle.{Scenario, Collector, Analyzer}
 
   @moduletag :battle
-  @moduletag :diagnostic  # Framework validation tests
-  @moduletag :fast        # Quick tests for CI
+  # Framework validation tests
+  @moduletag :diagnostic
+  # Quick tests for CI
+  @moduletag :fast
   @moduletag timeout: :infinity
 
   setup do
-    Application.ensure_all_started(:livechain)
+    Application.ensure_all_started(:lasso)
     :ok
   end
 
@@ -36,11 +38,12 @@ defmodule Livechain.Battle.DiagnosticTest do
 
     # Emit exactly 10 events with known values
     for i <- 1..10 do
-      latency = i * 10  # 10ms, 20ms, 30ms, ... 100ms
+      # 10ms, 20ms, 30ms, ... 100ms
+      latency = i * 10
       result = if i <= 8, do: :success, else: {:error, :timeout}
 
       :telemetry.execute(
-        [:livechain, :battle, :request],
+        [:lasso, :battle, :request],
         %{latency: latency},
         %{
           chain: "test",
@@ -58,19 +61,21 @@ defmodule Livechain.Battle.DiagnosticTest do
     IO.puts("\n🔌 Emitting circuit breaker events...")
 
     :telemetry.execute(
-      [:livechain, :circuit_breaker, :state_change],
+      [:lasso, :circuit_breaker, :state_change],
       %{},
       %{provider_id: "test_provider", old_state: :closed, new_state: :open}
     )
+
     IO.puts("  CB: closed -> open")
 
     Process.sleep(50)
 
     :telemetry.execute(
-      [:livechain, :circuit_breaker, :state_change],
+      [:lasso, :circuit_breaker, :state_change],
       %{},
       %{provider_id: "test_provider", old_state: :open, new_state: :closed}
     )
+
     IO.puts("  CB: open -> closed")
 
     # Stop collectors and inspect data
@@ -97,10 +102,14 @@ defmodule Livechain.Battle.DiagnosticTest do
     assert analysis.requests.total == 10, "Expected 10 requests, got #{analysis.requests.total}"
     IO.puts("  ✓ Total requests: #{analysis.requests.total}")
 
-    assert analysis.requests.successes == 8, "Expected 8 successes, got #{analysis.requests.successes}"
+    assert analysis.requests.successes == 8,
+           "Expected 8 successes, got #{analysis.requests.successes}"
+
     IO.puts("  ✓ Successes: #{analysis.requests.successes}")
 
-    assert analysis.requests.failures == 2, "Expected 2 failures, got #{analysis.requests.failures}"
+    assert analysis.requests.failures == 2,
+           "Expected 2 failures, got #{analysis.requests.failures}"
+
     IO.puts("  ✓ Failures: #{analysis.requests.failures}")
 
     expected_success_rate = 0.8
@@ -183,6 +192,7 @@ defmodule Livechain.Battle.DiagnosticTest do
       IO.puts("\n#{status} - #{description}")
       IO.puts("  SLOs: #{inspect(slos)}")
       IO.puts("  Results:")
+
       for {key, result} <- slo_results do
         pass_status = if result.passed?, do: "✅", else: "❌"
         IO.puts("    #{pass_status} #{key}: required=#{result.required}, actual=#{result.actual}")
@@ -212,11 +222,12 @@ defmodule Livechain.Battle.DiagnosticTest do
         IO.puts("  Generating 20 test requests...")
 
         for i <- 1..20 do
-          latency = 40 + :rand.uniform(60)  # 40-100ms
+          # 40-100ms
+          latency = 40 + :rand.uniform(60)
           result = if i <= 19, do: :success, else: {:error, :timeout}
 
           :telemetry.execute(
-            [:livechain, :battle, :request],
+            [:lasso, :battle, :request],
             %{latency: latency},
             %{
               chain: "test",
@@ -256,6 +267,7 @@ defmodule Livechain.Battle.DiagnosticTest do
     IO.puts("  Peak Memory: #{Float.round(result.analysis.system.peak_memory_mb, 2)}MB")
 
     IO.puts("\n📋 SLO Results:")
+
     for {key, slo_result} <- result.slo_results do
       status = if slo_result.passed?, do: "✅", else: "❌"
       IO.puts("  #{status} #{key}: #{slo_result.actual} (required: #{slo_result.required})")
@@ -285,7 +297,7 @@ defmodule Livechain.Battle.DiagnosticTest do
 
     for i <- 1..100 do
       :telemetry.execute(
-        [:livechain, :battle, :request],
+        [:lasso, :battle, :request],
         %{latency: i},
         %{
           chain: "test",
@@ -329,7 +341,7 @@ defmodule Livechain.Battle.DiagnosticTest do
 
     # Emit single event
     :telemetry.execute(
-      [:livechain, :battle, :request],
+      [:lasso, :battle, :request],
       %{latency: 42},
       %{
         chain: "test",

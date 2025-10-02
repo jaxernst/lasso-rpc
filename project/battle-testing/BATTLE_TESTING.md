@@ -108,7 +108,7 @@ end
 **Implementation Pattern:**
 
 ```elixir
-defmodule Livechain.Integration.ChaosHelper do
+defmodule Lasso.Integration.ChaosHelper do
   # Orchestrate controlled chaos
   def with_flaky_provider(provider_id, opts, test_fn) do
     # Randomly kill/restart provider during test
@@ -137,7 +137,7 @@ Build a **data-collection framework** that proves your system works under realis
 # Runs a 30-minute battle test with chaos injection
 # Outputs: JSON report with metrics, charts, pass/fail SLOs
 
-defmodule Livechain.BattleTest do
+defmodule Lasso.BattleTest do
   @doc """
   Scenario: 10,000 requests over 30 minutes with:
   - 2 providers healthy, 1 flapping (up/down every 3 min)
@@ -200,8 +200,8 @@ Keep unit tests **focused and pragmatic**:
 
 ```bash
 # Week 1: Stabilize what exists
-mix test test/livechain/rpc/circuit_breaker_test.exs
-mix test test/livechain/rpc/selection_test.exs
+mix test test/lasso/rpc/circuit_breaker_test.exs
+mix test test/lasso/rpc/selection_test.exs
 # Remove/skip failing WS tests until integration suite is ready
 ```
 

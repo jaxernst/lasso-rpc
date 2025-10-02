@@ -1,20 +1,20 @@
 ExUnit.start()
 
 # Start the full application to ensure all registries and services are available
-Application.ensure_all_started(:livechain)
+Application.ensure_all_started(:lasso)
 
-Mox.defmock(Livechain.RPC.HttpClientMock, for: Livechain.RPC.HttpClient)
+Mox.defmock(Lasso.RPC.HttpClientMock, for: Lasso.RPC.HttpClient)
 
 # Note: HTTP client mock is available but NOT set by default
 # Integration tests use real Finch client (configured in config/test.exs)
 # Unit tests can opt-in to mocking via:
 #   setup do
-#     Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClientMock)
-#     on_exit(fn -> Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClient.Finch) end)
+#     Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClientMock)
+#     on_exit(fn -> Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClient.Finch) end)
 #   end
 
 # Use mock WS client in tests for deterministic WSConnection behavior
-Application.put_env(:livechain, :ws_client_module, TestSupport.MockWSClient)
+Application.put_env(:lasso, :ws_client_module, TestSupport.MockWSClient)
 
 # Load support modules
 Code.require_file("test/support/mock_http_client.ex")
@@ -44,7 +44,7 @@ defmodule TestHelper do
   def ensure_clean_state() do
     # Clean benchmark store if it's running
     try do
-      case GenServer.whereis(Livechain.Benchmarking.BenchmarkStore) do
+      case GenServer.whereis(Lasso.Benchmarking.BenchmarkStore) do
         nil ->
           :ok
 
@@ -53,7 +53,7 @@ defmodule TestHelper do
           Enum.each(
             ["ethereum", "polygon", "testnet", "test_chain", "integration_test_chain"],
             fn chain ->
-              Livechain.Benchmarking.BenchmarkStore.clear_chain_metrics(chain)
+              Lasso.Benchmarking.BenchmarkStore.clear_chain_metrics(chain)
             end
           )
       end
@@ -64,7 +64,7 @@ defmodule TestHelper do
     # Clean subscription pools if they're running
     try do
       # Clean up any active upstream subscription pools
-      Registry.select(Livechain.Registry, [{{:pool, :"$1"}, :_, :_}])
+      Registry.select(Lasso.Registry, [{{:pool, :"$1"}, :_, :_}])
       |> Enum.each(fn {_key, pool_pid} ->
         if Process.alive?(pool_pid) do
           # Pool cleanup is handled by supervisor termination
@@ -102,28 +102,28 @@ defmodule TestHelper do
 
   def ensure_test_environment_ready() do
     # First ensure the main application is started
-    case Application.ensure_all_started(:livechain) do
+    case Application.ensure_all_started(:lasso) do
       {:ok, _} -> :ok
-      {:error, reason} -> raise "Failed to start livechain application: #{inspect(reason)}"
+      {:error, reason} -> raise "Failed to start lasso application: #{inspect(reason)}"
     end
 
     # Wait for critical services with specific checks
-    # Phoenix.PubSub is started with name: Livechain.PubSub
+    # Phoenix.PubSub is started with name: Lasso.PubSub
     wait_for_service_with_check(
       fn ->
         # Simple test: try to get child spec
-        :supervisor.which_children(Livechain.PubSub)
+        :supervisor.which_children(Lasso.PubSub)
       end,
-      "PubSub (Livechain.PubSub)"
+      "PubSub (Lasso.PubSub)"
     )
 
-    # Registry is started with name: Livechain.Registry
+    # Registry is started with name: Lasso.Registry
     wait_for_service_with_check(
-      fn -> Registry.select(Livechain.Registry, []) end,
-      "Registry (Livechain.Registry)"
+      fn -> Registry.select(Lasso.Registry, []) end,
+      "Registry (Lasso.Registry)"
     )
 
-    wait_for_service(Livechain.RPC.ProcessRegistry, "ProcessRegistry")
+    wait_for_service(Lasso.RPC.ProcessRegistry, "ProcessRegistry")
 
     # Give a moment for any post-startup initialization
     Process.sleep(100)
@@ -249,7 +249,7 @@ defmodule TestHelper do
 
     Enum.each(provider_ids, fn provider_id ->
       # Add some benchmark data so the provider appears in selection
-      Livechain.Benchmarking.BenchmarkStore.record_rpc_call(
+      Lasso.Benchmarking.BenchmarkStore.record_rpc_call(
         chain_name,
         provider_id,
         "eth_blockNumber",

@@ -1,28 +1,29 @@
-defmodule Livechain.Battle.WebSocketSubscriptionTest do
+defmodule Lasso.Battle.WebSocketSubscriptionTest do
   use ExUnit.Case, async: false
   require Logger
 
-  alias Livechain.Battle.{Scenario, Workload, SetupHelper}
+  alias Lasso.Battle.{Scenario, Workload, SetupHelper}
 
   @moduletag :battle
   @moduletag :websocket
-  @moduletag :real_providers  # Uses real WebSocket connections
+  # Uses real WebSocket connections
+  @moduletag :real_providers
   @moduletag timeout: 120_000
 
   setup_all do
     # Override HTTP client for real provider tests
-    original_client = Application.get_env(:livechain, :http_client)
-    Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClient.Finch)
+    original_client = Application.get_env(:lasso, :http_client)
+    Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClient.Finch)
 
     on_exit(fn ->
-      Application.put_env(:livechain, :http_client, original_client)
+      Application.put_env(:lasso, :http_client, original_client)
     end)
 
     :ok
   end
 
   setup do
-    Application.ensure_all_started(:livechain)
+    Application.ensure_all_started(:lasso)
 
     on_exit(fn ->
       try do
@@ -36,7 +37,8 @@ defmodule Livechain.Battle.WebSocketSubscriptionTest do
   end
 
   describe "WebSocket newHeads subscription" do
-    @tag :slow  # Requires real blockchain events (~12s Ethereum blocks)
+    # Requires real blockchain events (~12s Ethereum blocks)
+    @tag :slow
     test "basic subscription receives events" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -63,7 +65,8 @@ defmodule Livechain.Battle.WebSocketSubscriptionTest do
       IO.puts("   Gaps: #{stats.gaps}")
     end
 
-    @tag :slow  # 60s test requiring real blockchain events
+    # 60s test requiring real blockchain events
+    @tag :slow
     test "multiple concurrent subscriptions receive events" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -93,7 +96,8 @@ defmodule Livechain.Battle.WebSocketSubscriptionTest do
       IO.puts("   Clients: #{stats.subscriptions}")
     end
 
-    @tag :slow  # 30s test requiring real blockchain events
+    # 30s test requiring real blockchain events
+    @tag :slow
     test "subscription tracks duplicates and gaps" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -121,7 +125,8 @@ defmodule Livechain.Battle.WebSocketSubscriptionTest do
   end
 
   describe "WebSocket logs subscription" do
-    @tag :skip  # Logs subscriptions are sparse and unpredictable
+    # Logs subscriptions are sparse and unpredictable
+    @tag :skip
     test "logs subscription with empty filter" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -143,7 +148,8 @@ defmodule Livechain.Battle.WebSocketSubscriptionTest do
   end
 
   describe "WebSocket subscription lifecycle" do
-    @tag :slow  # 10s test requiring real blockchain connection
+    # 10s test requiring real blockchain connection
+    @tag :slow
     test "subscriptions clean up properly" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}

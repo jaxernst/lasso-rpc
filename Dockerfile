@@ -40,8 +40,8 @@ RUN mix compile
 # Build static assets (CSS/JS)
 RUN mix tailwind.install
 RUN mix esbuild.install
-RUN mix tailwind livechain --minify
-RUN mix esbuild livechain --minify
+RUN mix tailwind lasso --minify
+RUN mix esbuild lasso --minify
 RUN mix phx.digest
 
 # Expose port

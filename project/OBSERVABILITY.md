@@ -8,19 +8,19 @@ Lasso's observability system provides comprehensive visibility into RPC request 
 
 ### Core Components
 
-1. **RequestContext** (`lib/livechain/rpc/request_context.ex`)
+1. **RequestContext** (`lib/lasso/rpc/request_context.ex`)
 
    - Stateless struct tracking request lifecycle
    - Threads through entire execution pipeline
    - Captures selection, execution, and result phases
 
-2. **Observability** (`lib/livechain/rpc/observability.ex`)
+2. **Observability** (`lib/lasso/rpc/observability.ex`)
 
    - Emits structured `rpc.request.completed` events
    - Builds client-visible metadata
    - Handles sampling, redaction, and size limits
 
-3. **ObservabilityPlug** (`lib/livechain_web/plugs/observability_plug.ex`)
+3. **ObservabilityPlug** (`lib/lasso_web/plugs/observability_plug.ex`)
    - Parses client opt-in preferences
    - Injects metadata into HTTP headers or response body
    - Middleware for all `/rpc/*` endpoints
@@ -275,7 +275,7 @@ Standard JSON-RPC response enriched with `lasso_meta` field:
 High-volume scenarios can use sampling to reduce log volume:
 
 ```elixir
-config :livechain, :observability,
+config :lasso, :observability,
   sampling: [rate: 0.1]  # Log 10% of requests
 ```
 
@@ -289,7 +289,7 @@ config :livechain, :observability,
 
 ```elixir
 # config/config.exs
-config :livechain, :observability,
+config :lasso, :observability,
   # Log level for rpc.request.completed events
   log_level: :info,
 
@@ -315,7 +315,7 @@ config :livechain, :observability,
 
 ```elixir
 # config/dev.exs
-config :livechain, :observability,
+config :lasso, :observability,
   log_level: :debug,
   sampling: [rate: 1.0]
 ```
@@ -324,7 +324,7 @@ config :livechain, :observability,
 
 ```elixir
 # config/prod.exs
-config :livechain, :observability,
+config :lasso, :observability,
   log_level: :info,
   sampling: [rate: 0.5]  # 50% sampling for high traffic
 ```
@@ -333,7 +333,7 @@ config :livechain, :observability,
 
 ```elixir
 # config/test.exs
-config :livechain, :observability,
+config :lasso, :observability,
   log_level: :warn,
   sampling: [rate: 0.0]  # Disable in tests
 ```
@@ -556,7 +556,7 @@ WebSocket observability will follow similar patterns:
 
 ```elixir
 :telemetry.execute(
-  [:livechain, :observability, :request_completed],
+  [:lasso, :observability, :request_completed],
   %{count: 1},
   %{
     event: "rpc.request.completed",
@@ -574,7 +574,7 @@ WebSocket observability will follow similar patterns:
 # In your application
 :telemetry.attach(
   "my-observability-handler",
-  [:livechain, :observability, :request_completed],
+  [:lasso, :observability, :request_completed],
   &MyApp.Observability.handle_request_completed/4,
   nil
 )
@@ -595,14 +595,14 @@ end
 
 ```elixir
 # config/config.exs
-config :livechain, :observability,
+config :lasso, :observability,
   sampling: [rate: 1.0]  # Ensure this is > 0
 ```
 
 **Check log level**:
 
 ```elixir
-config :livechain, :observability,
+config :lasso, :observability,
   log_level: :info  # Must be enabled in logger config
 ```
 
@@ -621,9 +621,9 @@ curl "http://localhost:4000/rpc/ethereum"
 **Check ObservabilityPlug**:
 
 ```elixir
-# lib/livechain_web/router.ex
+# lib/lasso_web/router.ex
 pipeline :api_with_logging do
-  plug(LivechainWeb.Plugs.ObservabilityPlug)  # Must be present
+  plug(LassoWeb.Plugs.ObservabilityPlug)  # Must be present
 end
 ```
 
@@ -636,7 +636,7 @@ end
 **Solution**: Use `include_meta=body` instead, or increase limit:
 
 ```elixir
-config :livechain, :observability,
+config :lasso, :observability,
   max_meta_header_bytes: 8192  # Increase from default 4096
 ```
 

@@ -187,14 +187,14 @@ Routing strategies are determined by the endpoint you use:
 
 ```elixir
 # config/config.exs
-config :livechain, :provider_selection_strategy, :cheapest
+config :lasso, :provider_selection_strategy, :cheapest
 # Options: :fastest, :cheapest, :priority, :round_robin
 ```
 
 ### Circuit Breaker Settings
 
 ```elixir
-config :livechain, :circuit_breaker,
+config :lasso, :circuit_breaker,
   failure_threshold: 5,      # failures before opening
   recovery_timeout: 60_000,  # ms before retry
   success_threshold: 2       # successes before closing
@@ -298,7 +298,7 @@ curl -X POST "http://localhost:4000/rpc/ethereum" \
 
 ```elixir
 # config/config.exs
-config :livechain, :observability,
+config :lasso, :observability,
   log_level: :info,                    # Log level for request completed events
   include_params_digest: true,         # Include SHA-256 digest of params in logs
   max_error_message_chars: 256,        # Truncate error messages for logs

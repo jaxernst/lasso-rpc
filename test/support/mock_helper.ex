@@ -1,11 +1,11 @@
-defmodule Livechain.Test.MockHelper do
+defmodule Lasso.Test.MockHelper do
   @moduledoc """
   Test helpers for mock provider setup.
 
   Simplifies common mock provider patterns in integration tests.
   """
 
-  alias Livechain.Testing.MockProvider
+  alias Lasso.Testing.MockProvider
 
   @doc """
   Creates a fast, reliable mock provider for testing the happy path.

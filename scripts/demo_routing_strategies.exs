@@ -1,6 +1,6 @@
 #!/usr/bin/env elixir
 
-# Demo script to showcase all 4 routing strategies in Livechain
+# Demo script to showcase all 4 routing strategies in Lasso
 # Run with: elixir scripts/demo_routing_strategies.exs
 
 Mix.install([
@@ -8,15 +8,15 @@ Mix.install([
   {:finch, "~> 0.18"}
 ])
 
-defmodule LivechainDemo do
-  @base_url System.get_env("LIVECHAIN_URL") || "http://localhost:4000"
+defmodule LassoDemo do
+  @base_url System.get_env("lasso_URL") || "http://localhost:4000"
 
   def start do
     IO.puts """
-    🚀 Livechain Routing Strategy Demo
+    🚀 Lasso Routing Strategy Demo
     ==================================
 
-    This demo showcases Livechain's 4 routing strategies:
+    This demo showcases Lasso's 4 routing strategies:
 
     1. 💰 CHEAPEST - Prefers free providers over paid ones
     2. ⚡ FASTEST  - Routes to providers with best performance
@@ -95,19 +95,19 @@ defmodule LivechainDemo do
   end
 end
 
-# Check if Livechain is running
-base_url = System.get_env("LIVECHAIN_URL") || "http://localhost:4000"
+# Check if Lasso is running
+base_url = System.get_env("lasso_URL") || "http://localhost:4000"
 case System.cmd("curl", ["-s", "#{base_url}/api/health"], stderr_to_stdout: true) do
   {response, 0} ->
     case Jason.decode(response) do
       {:ok, %{"status" => "healthy"}} ->
-        LivechainDemo.start()
+        LassoDemo.start()
 
       _ ->
         IO.puts """
-        ❌ Livechain is not responding properly.
+        ❌ Lasso is not responding properly.
 
-        Please start Livechain first:
+        Please start Lasso first:
         mix phx.server
 
         Then run this demo again.
@@ -117,9 +117,9 @@ case System.cmd("curl", ["-s", "#{base_url}/api/health"], stderr_to_stdout: true
 
   _ ->
     IO.puts """
-    ❌ Cannot connect to Livechain at #{base_url}
+    ❌ Cannot connect to Lasso at #{base_url}
 
-    Please start Livechain first:
+    Please start Lasso first:
     mix phx.server
 
     Then run this demo again.

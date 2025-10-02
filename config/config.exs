@@ -1,45 +1,45 @@
 import Config
 
 # Configure Phoenix
-config :livechain, LivechainWeb.Endpoint,
+config :lasso, LassoWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Phoenix.Endpoint.Cowboy2Adapter,
   render_errors: [
-    formats: [json: LivechainWeb.ErrorJSON],
+    formats: [json: LassoWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Livechain.PubSub,
+  pubsub_server: Lasso.PubSub,
   live_view: [signing_salt: "QxjVyFyh"],
   secret_key_base: "YourSecretKeyBaseHere" <> String.duplicate("a", 32)
 
 # Default provider selection strategy
-config :livechain, :provider_selection_strategy, :cheapest
+config :lasso, :provider_selection_strategy, :cheapest
 
 # Default HTTP client adapter
-config :livechain, :http_client, Livechain.RPC.HttpClient.Finch
+config :lasso, :http_client, Lasso.RPC.HttpClient.Finch
 
 # Health check and provider management defaults
-config :livechain, :health_check_interval, 30_000
-config :livechain, :health_check_timeout, 10_000
-config :livechain, :health_check_failure_threshold, 3
-config :livechain, :health_check_recovery_threshold, 2
+config :lasso, :health_check_interval, 30_000
+config :lasso, :health_check_timeout, 10_000
+config :lasso, :health_check_failure_threshold, 3
+config :lasso, :health_check_recovery_threshold, 2
 
 # Provider management defaults
-config :livechain, :auto_failover, true
-config :livechain, :load_balancing, "priority"
+config :lasso, :auto_failover, true
+config :lasso, :load_balancing, "priority"
 
 # Connection defaults
-config :livechain, :reconnect_attempts, 10
-config :livechain, :heartbeat_interval, 30_000
-config :livechain, :reconnect_interval, 5_000
+config :lasso, :reconnect_attempts, 10
+config :lasso, :heartbeat_interval, 30_000
+config :lasso, :reconnect_interval, 5_000
 
 # Failover defaults
-config :livechain, :failover_enabled, true
-config :livechain, :max_backfill_blocks, 100
-config :livechain, :backfill_timeout, 30_000
+config :lasso, :failover_enabled, true
+config :lasso, :max_backfill_blocks, 100
+config :lasso, :backfill_timeout, 30_000
 
 # Observability configuration
-config :livechain, :observability,
+config :lasso, :observability,
   log_level: :info,
   include_params_digest: true,
   max_error_message_chars: 256,
@@ -52,7 +52,7 @@ config :phoenix, :json_library, Jason
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.17.11",
-  livechain: [
+  lasso: [
     args:
       ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
     cd: Path.expand("../assets", __DIR__),
@@ -62,7 +62,7 @@ config :esbuild,
 # Configure tailwind (the version is required)
 config :tailwind,
   version: "3.4.3",
-  livechain: [
+  lasso: [
     args: ~w(
       --config=tailwind.config.js
       --input=css/app.css

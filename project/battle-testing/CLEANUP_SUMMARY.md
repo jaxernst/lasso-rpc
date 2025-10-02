@@ -68,7 +68,7 @@
 
 ### 3. Removed Dead Code from Framework
 
-#### MockProvider (`lib/livechain/battle/mock_provider.ex`)
+#### MockProvider (`lib/lasso/battle/mock_provider.ex`)
 
 **Changes:**
 
@@ -83,7 +83,7 @@
 ⚠️  **NOT RECOMMENDED** - Use real providers with SetupHelper instead.
 ```
 
-#### TestHelper (`lib/livechain/battle/test_helper.ex`)
+#### TestHelper (`lib/lasso/battle/test_helper.ex`)
 
 **Changes:**
 
@@ -213,6 +213,7 @@ mix test --only battle --only soak
 **NOTE:** Do NOT rebuild MockProvider system. Unit tests already have mocks where appropriate. Battle framework SHOULD use real providers for integration confidence. See BATTLE_TESTING_IMPROVEMENTS.md for rationale.
 
 1. **Configure CI Pipeline** (~1 hour)
+
    - Set up tier-based testing (unit → fast → slow)
    - See BATTLE_TESTING_IMPROVEMENTS.md for YAML example
 
@@ -223,21 +224,21 @@ mix test --only battle --only soak
    - Add fastest strategy routing verification
    - Goal: 6-8 comprehensive test cases
 
-2. **Complete `websocket_subscription_test.exs`**
+3. **Complete `websocket_subscription_test.exs`**
 
    - Fix workload_result handling
    - Add failover test (subscribe, kill provider, verify continuity)
    - Add duplicate detection test
    - Remove @tag :skip
 
-3. **Complete `websocket_failover_test.exs`**
+4. **Complete `websocket_failover_test.exs`**
 
    - Convert from MockProvider to real providers
    - Implement subscription failover validation
    - Test gap detection and backfill
    - Remove @tag :skip
 
-4. **Create `transport_routing_test.exs`**
+5. **Create `transport_routing_test.exs`**
    - Validate Phase 1 of TRANSPORT_AGNOSTIC_ARCHITECTURE.md
    - Test mixed HTTP/WS routing
    - Test unsupported method fall-through
@@ -283,8 +284,8 @@ mix test --only battle --only soak
 
 **Modified:**
 
-- `lib/livechain/battle/mock_provider.ex` - Removed dead code, added warnings
-- `lib/livechain/battle/test_helper.ex` - Removed broken functions
+- `lib/lasso/battle/mock_provider.ex` - Removed dead code, added warnings
+- `lib/lasso/battle/test_helper.ex` - Removed broken functions
 - `test/battle/real_provider_failover_test.exs` - Added test tags
 - `test/battle/websocket_subscription_test.exs` - Added test tags
 - `test/battle/websocket_failover_test.exs` - Added test tags

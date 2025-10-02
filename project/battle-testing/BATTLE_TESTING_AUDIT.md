@@ -17,6 +17,7 @@ The battle testing framework has solid architectural foundations (~2,200 LOC) bu
 ## What Works ✅
 
 ### 1. **Core Framework Architecture (Strong)**
+
 - **Scenario orchestration** (`scenario.ex`): Clean API for composing tests ✅
 - **Workload generation** (`workload.ex`): HTTP constant-rate load working ✅
 - **Data collection** (`collector.ex`): Telemetry attachment pattern correct ✅
@@ -24,12 +25,14 @@ The battle testing framework has solid architectural foundations (~2,200 LOC) bu
 - **Reporting** (`reporter.ex`): JSON + Markdown output functional ✅
 
 ### 2. **HTTP Failover Tests (Partially Working)**
+
 - `failover_test.exs` successfully tests provider failover scenarios
 - Circuit breaker state changes are captured
 - Reports generate correctly with SLO pass/fail
 - **Evidence:** `priv/battle_results/latest.md` shows a passing circuit breaker test
 
 ### 3. **WebSocket Client (Well-Implemented)**
+
 - `websocket_client.ex`: Proper gap detection, duplicate tracking ✅
 - Telemetry emission for WS events ✅
 - Block sequence validation ✅
@@ -43,6 +46,7 @@ The battle testing framework has solid architectural foundations (~2,200 LOC) bu
 **Problem:** Tests are confused about whether to use mock providers or real providers.
 
 **Evidence:**
+
 ```elixir
 # websocket_subscription_test.exs (line 17)
 setup(fn -> {:ok, %{chain: "ethereum"}} end)  # Uses real chain config
@@ -55,11 +59,13 @@ TestHelper.create_test_chain("battlechain", [...])  # Dynamic chain creation
 ```
 
 **Impact:**
+
 - WebSocket tests try to use real "ethereum" chain but have no providers configured in test env
 - Mock provider tests create dynamic chains that conflict with static ConfigStore
 - 50% of tests are `@tag :skip` due to this confusion
 
 **Root Cause:**
+
 - ConfigStore is read-only after app startup (loads from `config/chains.yml`)
 - TestHelper tries to dynamically create chains at runtime (doesn't work)
 - No clear testing strategy: mock vs real providers
@@ -71,25 +77,28 @@ TestHelper.create_test_chain("battlechain", [...])  # Dynamic chain creation
 **Problem:** Tests emit custom telemetry events instead of capturing production events.
 
 **Current State:**
+
 ```elixir
 # workload.ex (line 205) - Test emits custom events
 :telemetry.execute(
-  [:livechain, :battle, :request],  # ❌ Custom test event
+  [:lasso, :battle, :request],  # ❌ Custom test event
   %{latency: latency},
   metadata
 )
 
 # But collector expects to attach to production events:
-# [:livechain, :rpc, :request, :start]  # ✅ Production event
-# [:livechain, :rpc, :request, :stop]   # ✅ Production event
+# [:lasso, :rpc, :request, :start]  # ✅ Production event
+# [:lasso, :rpc, :request, :stop]   # ✅ Production event
 ```
 
 **Impact:**
+
 - Tests don't validate that production telemetry is working
 - Cannot verify metrics accuracy in real system
 - Analysis based on synthetic test data, not actual RPC pipeline data
 
 **What's Missing:**
+
 - Integration with `RequestPipeline.execute/4` telemetry
 - Capture of `Circuit Breaker` state changes from production code
 - Metrics from `BenchmarkStore` updates during test
@@ -101,6 +110,7 @@ TestHelper.create_test_chain("battlechain", [...])  # Dynamic chain creation
 **Problem:** WebSocket support is stubbed but not implemented.
 
 **Evidence:**
+
 ```elixir
 # websocket_failover_test.exs (line 13)
 @tag :skip  # Enable when mock providers support WS
@@ -110,11 +120,13 @@ TestHelper.create_test_chain("battlechain", [...])  # Dynamic chain creation
 ```
 
 **Impact:**
+
 - Cannot test subscription continuity during failover (core value prop!)
 - Gap detection, backfill, and duplicate prevention untested
 - ~30% of test suite skipped
 
 **What's Needed:**
+
 - MockProvider WebSocket server using `Plug.Cowboy.WebSocket`
 - Ability to simulate `eth_subscription` events (newHeads, logs)
 - Integration with Lasso's `UpstreamSubscriptionPool` and `StreamCoordinator`
@@ -126,10 +138,11 @@ TestHelper.create_test_chain("battlechain", [...])  # Dynamic chain creation
 **Problem:** Chaos.kill_provider assumes specific process registry structure.
 
 **Code:**
+
 ```elixir
 # chaos.ex:242
 defp find_provider_process(provider_id) do
-  case Registry.lookup(Livechain.Registry, {:ws_connection, provider_id}) do
+  case Registry.lookup(Lasso.Registry, {:ws_connection, provider_id}) do
     [{pid, _}] -> {:ok, pid}
     [] -> {:error, :not_found}
   end
@@ -137,12 +150,14 @@ end
 ```
 
 **Issues:**
+
 - Hardcoded registry keys may not match actual registration
 - Mock providers don't register in same way as real providers
 - Kill doesn't trigger circuit breaker correctly
 - No verification that supervisor restarts provider
 
 **Impact:**
+
 - Flap and kill chaos functions may silently fail
 - Tests pass even when chaos didn't execute
 - False confidence in failover behavior
@@ -154,9 +169,10 @@ end
 **Problem:** Dynamic chain creation conflicts with static configuration.
 
 **Architecture Issue:**
+
 ```
 Application.start
-  └─> Livechain.Application.start/2
+  └─> Lasso.Application.start/2
       └─> Start chains from config/chains.yml (static)
 
 Battle Test Setup
@@ -165,11 +181,13 @@ Battle Test Setup
 ```
 
 **Consequences:**
+
 - Cannot cleanly isolate test chains from production chains
 - Risk of polluting BenchmarkStore with test data
 - Cleanup (on_exit) doesn't fully reset state
 
 **What's Needed:**
+
 - Test-specific ConfigStore or override mechanism
 - Isolated BenchmarkStore tables for tests
 - Proper supervision tree teardown
@@ -181,17 +199,20 @@ Battle Test Setup
 **Not Testing:**
 
 1. **RequestPipeline**: Tests bypass via HTTP, don't validate:
+
    - Provider selection logic
    - Strategy routing (fastest/cheapest/priority/round-robin)
    - Timeout handling
    - Error normalization
 
 2. **Circuit Breaker**: Limited validation:
+
    - State transitions captured but not analyzed deeply
    - Recovery timeout not tested
    - Half-open state behavior untested
 
 3. **Metrics/BenchmarkStore**: No verification:
+
    - Latency recording accuracy
    - Provider ranking updates
    - Method-specific metrics
@@ -206,20 +227,21 @@ Battle Test Setup
 
 ## Quantitative Assessment
 
-| Component | Lines of Code | Completeness | Integration Quality |
-|-----------|---------------|--------------|---------------------|
-| Scenario API | 237 | 90% | ✅ Good |
-| Workload | 330 | 70% | ⚠️ HTTP only, WS stubbed |
-| Collector | 176 | 50% | ❌ Wrong telemetry events |
-| Analyzer | 235 | 80% | ✅ Good |
-| Reporter | 264 | 95% | ✅ Excellent |
-| MockProvider | 252 | 60% | ⚠️ HTTP only, no WS |
-| Chaos | 257 | 40% | ❌ Unreliable process finding |
-| TestHelper | 199 | 30% | ❌ Config conflicts |
-| WebSocketClient | 250 | 95% | ✅ Excellent |
-| **Total** | **2,200** | **~65%** | **⚠️ Needs Work** |
+| Component       | Lines of Code | Completeness | Integration Quality           |
+| --------------- | ------------- | ------------ | ----------------------------- |
+| Scenario API    | 237           | 90%          | ✅ Good                       |
+| Workload        | 330           | 70%          | ⚠️ HTTP only, WS stubbed      |
+| Collector       | 176           | 50%          | ❌ Wrong telemetry events     |
+| Analyzer        | 235           | 80%          | ✅ Good                       |
+| Reporter        | 264           | 95%          | ✅ Excellent                  |
+| MockProvider    | 252           | 60%          | ⚠️ HTTP only, no WS           |
+| Chaos           | 257           | 40%          | ❌ Unreliable process finding |
+| TestHelper      | 199           | 30%          | ❌ Config conflicts           |
+| WebSocketClient | 250           | 95%          | ✅ Excellent                  |
+| **Total**       | **2,200**     | **~65%**     | **⚠️ Needs Work**             |
 
 **Test Coverage:**
+
 - Total test files: 5
 - Lines of test code: ~1,515
 - Skipped tests: ~40% (due to WS not ready)
@@ -234,12 +256,14 @@ Battle Test Setup
 **Goal:** Make tests work with REAL Lasso RPC system, not mocks.
 
 #### Task 1.1: Switch to Real Provider Testing
+
 **Change Strategy:** Use real configured providers (from `config/chains.yml` in test env) instead of dynamic mocks.
 
 **Implementation:**
+
 ```elixir
 # test/support/battle_helper.ex (NEW FILE)
-defmodule Livechain.BattleHelper do
+defmodule Lasso.BattleHelper do
   @doc """
   Returns a test chain that's pre-configured in config/test.exs
   """
@@ -269,7 +293,7 @@ defmodule Livechain.BattleHelper do
 end
 
 # config/test.exs (UPDATE)
-config :livechain, :chains, [
+config :lasso, :chains, [
   %{
     name: "test_chain",
     chain_id: 999,
@@ -282,12 +306,14 @@ config :livechain, :chains, [
 ```
 
 **Changes Required:**
+
 - Remove `MockProvider` usage from most tests (keep for Phase 2 advanced scenarios)
 - Remove `TestHelper.create_test_chain` and `TestHelper.start_test_chain`
 - Use `BattleHelper.get_test_chain()` in all tests
 - Update tests to use "test_chain" instead of "ethereum" or "battlechain"
 
 **Validation:**
+
 ```bash
 # After changes, this should pass without @tag :skip
 mix test test/battle/failover_test.exs
@@ -296,23 +322,25 @@ mix test test/battle/failover_test.exs
 ---
 
 #### Task 1.2: Fix Telemetry Collection
+
 **Capture production events instead of emitting test events.**
 
 **Implementation:**
+
 ```elixir
-# lib/livechain/battle/collector.ex (UPDATE)
+# lib/lasso/battle/collector.ex (UPDATE)
 defp attach_collector(:requests) do
   # Listen to PRODUCTION telemetry events
   :telemetry.attach(
     {:battle, :rpc_start, self()},
-    [:livechain, :rpc, :request, :start],  # ✅ Production event
+    [:lasso, :rpc, :request, :start],  # ✅ Production event
     &handle_rpc_start/4,
     nil
   )
 
   :telemetry.attach(
     {:battle, :rpc_stop, self()},
-    [:livechain, :rpc, :request, :stop],  # ✅ Production event
+    [:lasso, :rpc, :request, :stop],  # ✅ Production event
     &handle_rpc_stop/4,
     nil
   )
@@ -342,12 +370,14 @@ end
 ```
 
 **Changes Required:**
+
 - Update Collector to attach to production telemetry events
 - Remove custom telemetry emission from Workload
 - Verify RequestPipeline emits these events (check code)
 - Add correlation IDs to track requests end-to-end
 
 **Validation:**
+
 ```elixir
 # Test that production telemetry is captured
 test "collector captures production RPC events" do
@@ -366,11 +396,13 @@ end
 ---
 
 #### Task 1.3: Fix Workload to Use RequestPipeline Directly
+
 **Make requests through production code, not HTTP endpoints.**
 
 **Implementation:**
+
 ```elixir
-# lib/livechain/battle/workload.ex (UPDATE)
+# lib/lasso/battle/workload.ex (UPDATE)
 defp make_http_request(chain, method, params, strategy, timeout, request_id) do
   start_time = System.monotonic_time(:millisecond)
 
@@ -389,18 +421,20 @@ defp make_http_request(chain, method, params, strategy, timeout, request_id) do
   end_time = System.monotonic_time(:millisecond)
 
   # Production telemetry already emitted by RequestPipeline
-  # No need to emit [:livechain, :battle, :request]
+  # No need to emit [:lasso, :battle, :request]
 
   result
 end
 ```
 
 **Benefits:**
+
 - Tests validate real production code paths
 - Telemetry comes from actual system components
 - Metrics, circuit breakers, selection all exercised
 
 **Validation:**
+
 ```bash
 # Should show circuit breaker opens during failover
 mix test test/battle/failover_test.exs --trace
@@ -411,11 +445,13 @@ mix test test/battle/failover_test.exs --trace
 ### Phase 2: Add WebSocket Support (Priority 2 - 2-3 days)
 
 #### Task 2.1: Implement Real WebSocket Testing
+
 **Use real provider WebSocket connections instead of mocks.**
 
 **Implementation:**
+
 ```elixir
-# lib/livechain/battle/workload.ex (UPDATE ws_subscribe)
+# lib/lasso/battle/workload.ex (UPDATE ws_subscribe)
 def ws_subscribe(opts) do
   chain = Keyword.fetch!(opts, :chain)
   subscription = Keyword.fetch!(opts, :subscription)
@@ -438,6 +474,7 @@ end
 **Remove @tag :skip from WebSocket tests.**
 
 **Validation:**
+
 ```bash
 # Should now work with real providers
 mix test test/battle/websocket_subscription_test.exs
@@ -447,11 +484,13 @@ mix test test/battle/websocket_failover_test.exs
 ---
 
 #### Task 2.2: Test WebSocket Failover with Real Chaos
+
 **Kill real provider connections, verify failover.**
 
 **Implementation:**
+
 ```elixir
-# lib/livechain/battle/chaos.ex (FIX kill_provider)
+# lib/lasso/battle/chaos.ex (FIX kill_provider)
 defp find_provider_process(provider_id) do
   # Try multiple registry patterns based on actual system
   candidates = [
@@ -461,7 +500,7 @@ defp find_provider_process(provider_id) do
   ]
 
   Enum.find_value(candidates, {:error, :not_found}, fn key ->
-    case Registry.lookup(Livechain.Registry, key) do
+    case Registry.lookup(Lasso.Registry, key) do
       [{pid, _}] when is_pid(pid) -> {:ok, pid}
       [] -> nil
     end
@@ -470,6 +509,7 @@ end
 ```
 
 **Better: Query ProviderPool for provider PIDs:**
+
 ```elixir
 def kill_provider(provider_id, opts \\ []) do
   fn ->
@@ -496,14 +536,16 @@ end
 ### Phase 3: Deep Integration Testing (Priority 3 - 2-3 days)
 
 #### Task 3.1: Test All Routing Strategies
+
 **Validate fastest, cheapest, priority, round-robin.**
 
 **New Test File:**
+
 ```elixir
 # test/battle/routing_strategies_test.exs
-defmodule Livechain.Battle.RoutingStrategiesTest do
+defmodule Lasso.Battle.RoutingStrategiesTest do
   use ExUnit.Case, async: false
-  alias Livechain.Battle.{Scenario, Workload, BattleHelper}
+  alias Lasso.Battle.{Scenario, Workload, BattleHelper}
 
   test "fastest strategy routes to lowest latency provider" do
     # Seed benchmarks: provider_a=50ms, provider_b=150ms
@@ -541,9 +583,11 @@ end
 ---
 
 #### Task 3.2: Validate Circuit Breaker Integration
+
 **Ensure circuit breakers actually protect providers.**
 
 **Enhanced Test:**
+
 ```elixir
 test "circuit breaker opens after repeated failures" do
   result = Scenario.new("Circuit Breaker Protection")
@@ -576,11 +620,13 @@ end
 ### Phase 4: Battle Report Enhancements (Priority 4 - 1-2 days)
 
 #### Task 4.1: Add Request Flow Visualization
+
 **Show which providers handled requests over time.**
 
 **Implementation:**
+
 ```elixir
-# lib/livechain/battle/reporter.ex (ADD)
+# lib/lasso/battle/reporter.ex (ADD)
 defp format_provider_distribution(analysis) do
   """
   ### Provider Distribution
@@ -606,9 +652,11 @@ end
 ---
 
 #### Task 4.2: Add Real-World Scenario Tests
+
 **Create tests that match actual usage patterns.**
 
 **New Tests:**
+
 ```elixir
 # test/battle/production_scenarios_test.exs
 
@@ -640,6 +688,7 @@ end
 ## Success Criteria (Post-Integration)
 
 ### Must Have (P0)
+
 - [ ] All tests use real Lasso RPC components (RequestPipeline, CircuitBreaker, etc.)
 - [ ] Telemetry captured from production code paths
 - [ ] WebSocket tests run without @tag :skip
@@ -648,6 +697,7 @@ end
 - [ ] Reports show actual provider IDs, latencies from BenchmarkStore
 
 ### Should Have (P1)
+
 - [ ] Coverage of all 4 routing strategies (fastest, cheapest, priority, round-robin)
 - [ ] Circuit breaker behavior deeply validated (open, half-open, close transitions)
 - [ ] WebSocket failover with backfill verified
@@ -655,6 +705,7 @@ end
 - [ ] Reports include provider distribution analysis
 
 ### Nice to Have (P2)
+
 - [ ] Long-running soak tests (30+ minutes)
 - [ ] Memory leak detection
 - [ ] Performance regression detection (compare to baseline)
@@ -665,21 +716,27 @@ end
 ## Risks & Mitigation
 
 ### Risk 1: Real Providers May Be Unreliable
+
 **Mitigation:**
+
 - Use multiple free providers as fallback
 - Add retry logic to test setup
 - Accept 95% success rate instead of 100%
 
 ### Risk 2: Tests May Be Slow
+
 **Current estimate:** ~5-10 minutes for full suite with real providers
 
 **Mitigation:**
+
 - Tag tests as :battle_fast (<2 min) and :battle_full (5-10 min)
 - Run fast tests in CI, full tests nightly
 - Use short durations (10-30s per test) for CI
 
 ### Risk 3: Flaky Tests Due to Network
+
 **Mitigation:**
+
 - Generous timeouts (10s per request)
 - Retry failed requests once
 - Accept transient failures in SLOs (99% vs 100%)
@@ -688,13 +745,13 @@ end
 
 ## Timeline Estimate
 
-| Phase | Tasks | Estimated Time | Priority |
-|-------|-------|----------------|----------|
-| Phase 1: Core Integration | Switch to real providers, fix telemetry, update workload | 2-3 days | **P0** |
-| Phase 2: WebSocket Support | Real WS testing, failover validation | 2-3 days | **P0** |
-| Phase 3: Deep Integration | Routing strategies, circuit breaker validation | 2-3 days | **P1** |
-| Phase 4: Report Enhancements | Provider distribution, production scenarios | 1-2 days | **P2** |
-| **Total** | | **7-11 days** | |
+| Phase                        | Tasks                                                    | Estimated Time | Priority |
+| ---------------------------- | -------------------------------------------------------- | -------------- | -------- |
+| Phase 1: Core Integration    | Switch to real providers, fix telemetry, update workload | 2-3 days       | **P0**   |
+| Phase 2: WebSocket Support   | Real WS testing, failover validation                     | 2-3 days       | **P0**   |
+| Phase 3: Deep Integration    | Routing strategies, circuit breaker validation           | 2-3 days       | **P1**   |
+| Phase 4: Report Enhancements | Provider distribution, production scenarios              | 1-2 days       | **P2**   |
+| **Total**                    |                                                          | **7-11 days**  |          |
 
 **Recommended approach:** Execute phases sequentially, validating after each phase before moving forward.
 

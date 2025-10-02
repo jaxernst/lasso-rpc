@@ -1,15 +1,15 @@
 import Config
 
 # For development, we configure the endpoint to listen on all interfaces
-config :livechain, LivechainWeb.Endpoint,
+config :lasso, LassoWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4000],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
   secret_key_base: "FvHQmKTwY0gU9P0aH8gi9M5rO4+q2qIIhpKjLlMcOqfeN4YubVHibH/rbN3e7OMH",
   watchers: [
-    esbuild: {Esbuild, :install_and_run, [:livechain, ~w(--sourcemap=inline --watch)]},
-    tailwind: {Tailwind, :install_and_run, [:livechain, ~w(--watch)]}
+    esbuild: {Esbuild, :install_and_run, [:lasso, ~w(--sourcemap=inline --watch)]},
+    tailwind: {Tailwind, :install_and_run, [:lasso, ~w(--watch)]}
   ]
 
 # Enhanced logging for development debugging
@@ -41,6 +41,6 @@ config :phoenix, :stacktrace_depth, 20
 # Initialize plugs at runtime for faster development compilation
 config :phoenix, :plug_init_mode, :runtime
 
-config :livechain,
+config :lasso,
   environment: :dev,
   chains_config_path: "config/chains.yml"

@@ -1,4 +1,4 @@
-# Livechain Chain Configuration
+# Lasso Chain Configuration
 # Defines multiple RPC providers per blockchain for redundancy and speed optimization
 
 chains:
