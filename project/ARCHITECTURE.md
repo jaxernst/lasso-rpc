@@ -451,12 +451,12 @@ In-memory configuration store:
 
 ### **Dynamic Chain Management**
 
-Chain supervisors are started dynamically at application boot from `config/chains.yml`:
+Chain supervisors boot from the static config in `config/chains.yml`, but chains + providers can be added/removed/updated dynamically
 
 - **Automatic startup**: `Application.start/2` enumerates configured chains and starts ChainSupervisors
 - **Independent lifecycles**: Each chain can be started/stopped without affecting others
-- **Configuration validation**: ChainConfig validates provider configs before supervisor startup
 - **Status tracking**: Per-chain health and provider status available via `ChainSupervisor.get_chain_status/1`
+- **Provider/chain registration**: Lasso.RPC.Provider exposes CRUD operations for chains/providers that orchestrate Chain/Provider supervisors
 
 ### **Unified Provider Selection**
 
