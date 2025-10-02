@@ -43,26 +43,24 @@ Lasso leverages OTP for fault-tolerance and concurrency. The supervision tree pr
 
 ```
 Lasso.Application (Supervisor)
-├── Phoenix.PubSub
+├── Phoenix.PubSub (event bus)
 ├── Finch (HTTP client pool)
 ├── Lasso.Benchmarking.BenchmarkStore (ETS metrics storage)
 ├── Lasso.Benchmarking.Persistence (historical snapshots)
-├── Lasso.RPC.ProcessRegistry (centralized registry)
-├── Registry (Lasso.Registry - dynamic process names)
+├── Registry (Lasso.Registry - dynamic process lookup)
 ├── DynamicSupervisor (Lasso.RPC.Supervisor)
 │   ├── ChainSupervisor (ethereum)
 │   │   ├── ProviderSupervisor (alchemy)
 │   │   │   ├── CircuitBreaker (HTTP)
 │   │   │   ├── CircuitBreaker (WS)
 │   │   │   └── WSConnection (if WS configured)
-│   │   ├── ProviderSupervisor (infura)
-│   │   ├── ProviderPool (health tracking)
-│   │   ├── ProviderHealthMonitor
-│   │   ├── TransportRegistry (channel discovery)
+│   │   ├── ProviderSupervisor (other public/private rpc providers)
+│   │   ├── ProviderPool (metrics, health, connection tracking)
+│   │   ├── ProviderHealthMonitor (monitor and probe health metrics)
+│   │   ├── TransportRegistry (request channel discovery)
 │   │   ├── UpstreamSubscriptionPool (WS multiplexing)
 │   │   └── ClientSubscriptionRegistry (client fan-out)
-│   ├── ChainSupervisor (base)
-│   └── ChainSupervisor (polygon)
+│   ├── ChainSupervisor (any other evm chain)
 ├── Lasso.Config.ConfigStore (ETS config cache)
 └── LassoWeb.Endpoint
 ```
