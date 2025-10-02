@@ -654,30 +654,6 @@ end
 
 ---
 
-## Performance Characteristics
-
-### **Throughput**
-
-- **RPC latency measurement**: <5ms overhead for latency tracking
-- **Provider Configuration + capability lookups**: <1ms via ETS cache (no file I/O)
-- **Provider selection**: <2ms via ETC Cache based Selection module (metrics lookup)
-- **Dashboard updates**: <100ms from RPC metrics to UI update
-
-### **Fault Tolerance**
-
-- **Provider failures**: Detected within 5 seconds, failover in <1 second
-- **Process crashes**: Automatic restart within 500ms
-- **Network partitions**: Circuit breakers prevent cascade failures
-- **Data persistence**: No RPC metrics loss during normal operation
-
-### **Scalability**
-
-- **Concurrent providers**: Can support an unbounded number of RPC providers
-- **Multiple chains**: Independent supervision trees scale horizontally
-- **Historical data**: Bounded memory with persistent snapshots
-
----
-
 ## Configuration and Deployment
 
 ### **Environment Configuration**
