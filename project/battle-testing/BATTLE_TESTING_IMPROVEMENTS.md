@@ -44,17 +44,17 @@ end
 
 ### 2. Collector Telemetry Event Handling ✅
 
-**Problem:** Battle diagnostic tests emit `[:livechain, :battle, :request]` events with `:latency` field, but Collector only listened for production events with `:duration_ms`.
+**Problem:** Battle diagnostic tests emit `[:lasso, :battle, :request]` events with `:latency` field, but Collector only listened for production events with `:duration_ms`.
 
 **Fix:** Added dual-handler support for both production and test events.
 
 ```elixir
 defp attach_collector(:requests) do
-  # Production events: [:livechain, :rpc, :request, :stop]
-  :telemetry.attach(prod_handler_id, [:livechain, :rpc, :request, :stop], ...)
+  # Production events: [:lasso, :rpc, :request, :stop]
+  :telemetry.attach(prod_handler_id, [:lasso, :rpc, :request, :stop], ...)
 
-  # Battle test events: [:livechain, :battle, :request]
-  :telemetry.attach(battle_handler_id, [:livechain, :battle, :request], ...)
+  # Battle test events: [:lasso, :battle, :request]
+  :telemetry.attach(battle_handler_id, [:lasso, :battle, :request], ...)
 end
 
 defp handle_battle_request_event(_event_name, measurements, metadata, _config) do
@@ -127,6 +127,7 @@ url = "ws://#{host}:#{port}/ws/rpc/#{chain}"  # Correct endpoint path
 ## Test Suite Health: Excellent ✅
 
 ### Unit Test Coverage
+
 ```bash
 $ mix test --exclude battle --exclude real_providers
 Finished in 15.6 seconds
@@ -134,6 +135,7 @@ Finished in 15.6 seconds
 ```
 
 **Coverage areas:**
+
 - RPC.ChainSupervisor (dynamic provider management)
 - RPC.ProviderPool (health checks, failover)
 - RPC.CircuitBreaker (state transitions)
@@ -144,6 +146,7 @@ Finished in 15.6 seconds
 - Integration tests (failover scenarios)
 
 ### Battle Test Framework
+
 ```bash
 $ mix test test/battle/diagnostic_test.exs
 Finished in 0.3 seconds
@@ -151,6 +154,7 @@ Finished in 0.3 seconds
 ```
 
 **Diagnostic tests validate:**
+
 - Raw telemetry collection (10 events → correct aggregation)
 - SLO verification edge cases (8 scenarios)
 - Full scenario execution (setup → workload → analyze → verify)
@@ -164,11 +168,13 @@ Finished in 0.3 seconds
 ### What's Working Well
 
 1. **Test Architecture is Sound**
+
    - Clear separation: unit tests vs integration tests vs battle tests
    - Proper use of tags (`:battle`, `:fast`, `:real_providers`, `:diagnostic`)
    - Battle framework is a test harness for integration scenarios, not a replacement for unit tests
 
 2. **Code Quality is High**
+
    - 151 unit tests covering core functionality
    - Telemetry-driven observability throughout
    - Proper error handling and circuit breakers
@@ -181,6 +187,7 @@ Finished in 0.3 seconds
 ### What Doesn't Need Fixing
 
 **The CLEANUP_SUMMARY.md suggests:**
+
 > "0. Bring back Mock provider system and expand + re-validate existing tests"
 
 **Staff Engineer Take:** **This is the wrong direction.** Here's why:
@@ -188,6 +195,7 @@ Finished in 0.3 seconds
 1. **Mock systems hide real problems** - You have 151 passing unit tests with mocks where appropriate. The battle framework SHOULD use real providers for integration confidence.
 
 2. **SetupHelper already solves this** - Dynamic provider registration is cleaner than elaborate mock infrastructure:
+
    ```elixir
    SetupHelper.setup_providers("ethereum", [
      {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"},
@@ -257,7 +265,7 @@ jobs:
 
   integration_weekly:
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'  # Weekly cron
+    if: github.event_name == 'schedule' # Weekly cron
     steps:
       - run: mix test --only battle --only slow
       # WebSocket integration tests: ~5min (network-dependent)
@@ -269,19 +277,27 @@ jobs:
 ## Running Tests
 
 ### Unit Tests (Fast - Run on Every PR)
+
 mix test --exclude battle --exclude real_providers
+
 # 151 tests, ~16s
 
 ### Battle Framework Diagnostic (Fast - CI Friendly)
+
 mix test --only battle --only fast
+
 # 5 tests, ~0.3s - validates framework works
 
 ### Integration Tests (Slow - Requires Network)
+
 mix test --only battle --only real_providers --exclude slow
+
 # Real provider HTTP failover tests: ~60s
 
 ### WebSocket Integration (Very Slow - Weekly Only)
+
 mix test --only battle --only slow
+
 # Requires real blockchain events: ~5min
 ```
 
@@ -382,17 +398,20 @@ end
 ## What Success Looks Like
 
 ### Short Term (This Week)
+
 - ✅ Diagnostic tests passing (DONE)
 - ✅ Framework bugs fixed (DONE)
 - [ ] CI pipeline configured (Tier 1, ~1 hour)
 - [ ] Test type documentation added (Tier 1, ~30 min)
 
 ### Medium Term (This Month)
+
 - [ ] 2-3 fast HTTP battle tests added (Tier 2)
 - [ ] WebSocket tests marked as `:slow` and run weekly
 - [ ] Developer onboarding: "How to write a battle test" guide
 
 ### Long Term (Ongoing)
+
 - Add battle tests for new major features
 - Keep test suite fast (unit tests < 20s, fast integration < 1min)
 - Review and prune tests annually to prevent accumulation

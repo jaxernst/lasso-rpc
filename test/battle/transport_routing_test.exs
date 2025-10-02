@@ -1,4 +1,4 @@
-defmodule Livechain.Battle.TransportRoutingTest do
+defmodule Lasso.Battle.TransportRoutingTest do
   @moduledoc """
   Tests for Phase 1 of Transport-Agnostic Architecture.
 
@@ -13,8 +13,8 @@ defmodule Livechain.Battle.TransportRoutingTest do
   use ExUnit.Case, async: false
   require Logger
 
-  alias Livechain.Battle.SetupHelper
-  alias Livechain.RPC.RequestPipeline
+  alias Lasso.Battle.SetupHelper
+  alias Lasso.RPC.RequestPipeline
 
   @moduletag :battle
   @moduletag :transport
@@ -23,18 +23,18 @@ defmodule Livechain.Battle.TransportRoutingTest do
 
   setup_all do
     # Override HTTP client for real provider tests
-    original_client = Application.get_env(:livechain, :http_client)
-    Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClient.Finch)
+    original_client = Application.get_env(:lasso, :http_client)
+    Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClient.Finch)
 
     on_exit(fn ->
-      Application.put_env(:livechain, :http_client, original_client)
+      Application.put_env(:lasso, :http_client, original_client)
     end)
 
     :ok
   end
 
   setup do
-    Application.ensure_all_started(:livechain)
+    Application.ensure_all_started(:lasso)
 
     on_exit(fn ->
       try do

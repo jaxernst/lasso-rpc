@@ -1,10 +1,10 @@
-defmodule Livechain.Integration.DynamicProvidersTest do
+defmodule Lasso.Integration.DynamicProvidersTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
 
-  alias Livechain.Providers
-  alias Livechain.Testing.MockProvider
+  alias Lasso.Providers
+  alias Lasso.Testing.MockProvider
 
   @test_chain "ethereum"
 
@@ -191,7 +191,7 @@ defmodule Livechain.Integration.DynamicProvidersTest do
     test "can route RPC requests through dynamically added provider (mock)", %{
       test_id: test_id
     } do
-      alias Livechain.RPC.RequestPipeline
+      alias Lasso.RPC.RequestPipeline
 
       # Use mock provider for deterministic testing
       assert {:ok, ^test_id} =
@@ -233,7 +233,7 @@ defmodule Livechain.Integration.DynamicProvidersTest do
     end
 
     test "can route requests without provider override (mock)", %{test_id: test_id} do
-      alias Livechain.RPC.RequestPipeline
+      alias Lasso.RPC.RequestPipeline
 
       # Add mock provider that will be selected by strategy
       assert {:ok, ^test_id} =

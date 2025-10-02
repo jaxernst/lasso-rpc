@@ -48,7 +48,7 @@ A pragmatic battle testing framework for Lasso RPC that validates reliability un
 ### Module Organization
 
 ```
-lib/livechain/battle/
+lib/lasso/battle/
 ├── scenario.ex              # Test definition & execution
 ├── workload.ex              # Load generation (HTTP, WS)
 ├── chaos.ex                 # Failure injection
@@ -67,7 +67,7 @@ lib/livechain/battle/
 **Purpose:** Compose tests from reusable primitives.
 
 ```elixir
-alias Livechain.Battle.{Scenario, Workload, Chaos, Collector, Analyzer, Reporter}
+alias Lasso.Battle.{Scenario, Workload, Chaos, Collector, Analyzer, Reporter}
 
 # Define test scenario
 result =
@@ -220,8 +220,8 @@ defmodule Collector do
   Collect request metrics (latency, success rate, failovers).
 
   Automatically attaches to:
-  - [:livechain, :rpc, :request, :start]
-  - [:livechain, :rpc, :request, :stop]
+  - [:lasso, :rpc, :request, :start]
+  - [:lasso, :rpc, :request, :stop]
 
   Captures: duration, result, provider, failover count
   """
@@ -318,7 +318,7 @@ Battle tests use **production telemetry events**:
 
 ```elixir
 # Production code emits:
-:telemetry.execute([:livechain, :rpc, :request, :stop],
+:telemetry.execute([:lasso, :rpc, :request, :stop],
   %{duration_ms: 123},
   %{chain: "ethereum", method: "eth_blockNumber", result: :success}
 )
@@ -389,10 +389,10 @@ end
 
 ```elixir
 # test/battle/http_failover_test.exs
-defmodule Livechain.Battle.HTTPFailoverTest do
+defmodule Lasso.Battle.HTTPFailoverTest do
   use ExUnit.Case, async: false
 
-  alias Livechain.Battle.{Scenario, Workload, Chaos, Reporter}
+  alias Lasso.Battle.{Scenario, Workload, Chaos, Reporter}
 
   @moduletag :battle
   @moduletag timeout: :infinity
@@ -472,7 +472,7 @@ mix battle.baseline
 ### Source Files
 
 ```
-lib/livechain/battle/
+lib/lasso/battle/
 ├── scenario.ex              # 150 LOC - Orchestration
 ├── workload.ex              # 200 LOC - Load generation
 ├── chaos.ex                 # 150 LOC - Failure injection

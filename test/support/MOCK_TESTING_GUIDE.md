@@ -4,7 +4,7 @@
 
 ## Overview
 
-`Livechain.Testing.MockProvider` provides lightweight HTTP mock servers that integrate with Lasso's real provider infrastructure. Unlike process-level mocks, these are real HTTP servers running on localhost that work with the full routing stack.
+`Lasso.Testing.MockProvider` provides lightweight HTTP mock servers that integrate with Lasso's real provider infrastructure. Unlike process-level mocks, these are real HTTP servers running on localhost that work with the full routing stack.
 
 ## Key Benefits
 
@@ -20,8 +20,8 @@
 
 ```elixir
 test "provider routing" do
-  alias Livechain.Testing.MockProvider
-  alias Livechain.RPC.RequestPipeline
+  alias Lasso.Testing.MockProvider
+  alias Lasso.RPC.RequestPipeline
 
   # Start a mock provider
   {:ok, "mock_1"} = MockProvider.start_mock("ethereum", %{
@@ -47,7 +47,7 @@ end
 
 ```elixir
 test "fast mock helper" do
-  alias Livechain.Test.MockHelper
+  alias Lasso.Test.MockHelper
 
   # Create a fast, reliable mock (10ms latency, 100% reliability)
   {:ok, provider_id} = MockHelper.create_fast_mock("ethereum")
@@ -334,7 +334,7 @@ See real examples in:
 
 ## Migration from Old MockProvider
 
-If you're using the old `Livechain.Battle.MockProvider`:
+If you're using the old `Lasso.Battle.MockProvider`:
 
 ### Before (Battle.MockProvider)
 ```elixir

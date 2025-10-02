@@ -6,19 +6,23 @@ Comprehensive guide to all observable events in Lasso RPC for battle testing int
 
 ### Request Lifecycle
 
-#### `[:livechain, :rpc, :request, :start]`
+#### `[:lasso, :rpc, :request, :start]`
+
 **When**: RPC request begins in RequestPipeline
 **Measurements**: `%{count: 1}`
 **Metadata**:
+
 - `chain` - Target chain
 - `method` - RPC method
 - `strategy` - Routing strategy used
 - `provider_id` - Selected provider
 
-#### `[:livechain, :rpc, :request, :stop]`
+#### `[:lasso, :rpc, :request, :stop]`
+
 **When**: RPC request completes (success or failure)
 **Measurements**: `%{duration_ms: integer}`
 **Metadata**:
+
 - `chain` - Target chain
 - `method` - RPC method
 - `strategy` - Routing strategy used
@@ -31,27 +35,32 @@ Comprehensive guide to all observable events in Lasso RPC for battle testing int
 
 ### Circuit Breaker
 
-#### `[:livechain, :circuit_breaker, :open]`
+#### `[:lasso, :circuit_breaker, :open]`
+
 **When**: Circuit breaker opens due to failures
 **Measurements**: `%{count: 1}`
 **Metadata**: `%{provider_id: string}`
 
-#### `[:livechain, :circuit_breaker, :half_open]`
+#### `[:lasso, :circuit_breaker, :half_open]`
+
 **When**: Circuit breaker attempts recovery
 **Measurements**: `%{count: 1}`
 **Metadata**: `%{provider_id: string}`
 
-#### `[:livechain, :circuit_breaker, :close]`
+#### `[:lasso, :circuit_breaker, :close]`
+
 **When**: Circuit breaker closes after successful recovery
 **Measurements**: `%{count: 1}`
 **Metadata**: `%{provider_id: string}`
 
 ### Provider Selection
 
-#### `[:livechain, :selection, :success]`
+#### `[:lasso, :selection, :success]`
+
 **When**: Provider successfully selected by Selection module
 **Measurements**: `%{count: 1}`
 **Metadata**:
+
 - `chain`
 - `method`
 - `strategy` - `:priority`, `:fastest`, `:cheapest`, `:round_robin`
@@ -60,15 +69,18 @@ Comprehensive guide to all observable events in Lasso RPC for battle testing int
 
 ### Response Normalization
 
-#### `[:livechain, :normalize, :result]`
+#### `[:lasso, :normalize, :result]`
+
 **When**: Response successfully normalized
 **Measurements**: `%{count: 1}`
 **Metadata**: `%{provider_id, method, status}`
 
-#### `[:livechain, :normalize, :error]`
+#### `[:lasso, :normalize, :error]`
+
 **When**: Error response normalized
 **Measurements**: `%{count: 1}`
 **Metadata**:
+
 - `provider_id`
 - `method`
 - `code` - Error code
@@ -77,12 +89,14 @@ Comprehensive guide to all observable events in Lasso RPC for battle testing int
 
 ### WebSocket Subscriptions
 
-#### `[:livechain, :subs, :client_subscribe]`
+#### `[:lasso, :subs, :client_subscribe]`
+
 **When**: Client creates subscription
 **Measurements**: `%{count: 1}`
 **Metadata**: `%{chain, subscription_id}`
 
-#### `[:livechain, :subs, :client_unsubscribe]`
+#### `[:lasso, :subs, :client_unsubscribe]`
+
 **When**: Client cancels subscription
 **Measurements**: `%{count: 1}`
 **Metadata**: `%{chain, subscription_id}`
@@ -90,9 +104,11 @@ Comprehensive guide to all observable events in Lasso RPC for battle testing int
 ## PubSub Events (`Phoenix.PubSub.broadcast`)
 
 ### Circuit Breaker Events
+
 **Topic**: `"circuit:events"`
 **Format**: `{:circuit_breaker_event, event_map}`
 **Event Map**:
+
 ```elixir
 %{
   ts: System.system_time(:millisecond),
@@ -105,13 +121,16 @@ Comprehensive guide to all observable events in Lasso RPC for battle testing int
 ```
 
 ### WebSocket Connection Status
+
 **Topic**: `"ws_connections"`
 **Format**: `{:ws_connection_status_changed, provider_id, status}`
 **Status**: Connection state (`:connected`, `:disconnected`, etc.)
 
 ### Routing Decisions
+
 **Topic**: `"routing:decisions"`
 **Format**: Map with routing decision details
+
 ```elixir
 %{
   ts: System.system_time(:millisecond),
@@ -126,37 +145,42 @@ Comprehensive guide to all observable events in Lasso RPC for battle testing int
 ```
 
 ### Raw WebSocket Messages
+
 **Topic**: `"raw_messages:#{chain_name}"`
 **Format**: `{:raw_message, provider_id, message, received_at}`
 
 ### Provider Health Events
+
 **Topic**: `Provider.topic(chain_name)` (e.g., `"provider:ethereum"`)
 **Various provider state change events**
 
 ## Battle Testing Integration Recommendations
 
 ### Essential Events for Core Metrics
-1. **Request Performance**: `[:livechain, :rpc, :request, :stop]`
+
+1. **Request Performance**: `[:lasso, :rpc, :request, :stop]`
    - Latency, success rate, failover rate
 2. **Circuit Breaker Behavior**: All circuit breaker telemetry events
    - Track opens, recoveries, half-open attempts
-3. **Provider Selection**: `[:livechain, :selection, :success]`
+3. **Provider Selection**: `[:lasso, :selection, :success]`
    - Strategy effectiveness
 
 ### Valuable for Deep Analysis
+
 1. **Routing Decisions** PubSub: Detailed failover path analysis
 2. **WebSocket Connection Status**: Connection stability
-3. **Error Classification**: `[:livechain, :normalize, :error]`
+3. **Error Classification**: `[:lasso, :normalize, :error]`
 
 ### For WebSocket Testing
-1. **Subscription Events**: `[:livechain, :subs, :*]`
+
+1. **Subscription Events**: `[:lasso, :subs, :*]`
 2. **Raw Messages**: For continuity/deduplication analysis
 3. **Connection Events**: For failover testing
 
 ## Current Battle Testing Issues
 
-**Problem**: Workload emits custom `[:livechain, :battle, :request]` event
-**Solution**: Remove custom emission, capture production `[:livechain, :rpc, :request, :stop]`
+**Problem**: Workload emits custom `[:lasso, :battle, :request]` event
+**Solution**: Remove custom emission, capture production `[:lasso, :rpc, :request, :stop]`
 
 **Problem**: Collector only listens to custom events
 **Solution**: Update Collector to attach to production telemetry events

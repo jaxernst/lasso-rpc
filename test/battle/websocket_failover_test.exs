@@ -1,29 +1,30 @@
-defmodule Livechain.Battle.WebSocketFailoverTest do
+defmodule Lasso.Battle.WebSocketFailoverTest do
   use ExUnit.Case, async: false
   require Logger
 
-  alias Livechain.Battle.{Workload, Chaos, SetupHelper}
+  alias Lasso.Battle.{Workload, Chaos, SetupHelper}
 
   @moduletag :battle
   @moduletag :websocket
   @moduletag :failover
-  @moduletag :real_providers  # Uses real WebSocket connections
+  # Uses real WebSocket connections
+  @moduletag :real_providers
   @moduletag timeout: 180_000
 
   setup_all do
     # Override HTTP client for real provider tests
-    original_client = Application.get_env(:livechain, :http_client)
-    Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClient.Finch)
+    original_client = Application.get_env(:lasso, :http_client)
+    Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClient.Finch)
 
     on_exit(fn ->
-      Application.put_env(:livechain, :http_client, original_client)
+      Application.put_env(:lasso, :http_client, original_client)
     end)
 
     :ok
   end
 
   setup do
-    Application.ensure_all_started(:livechain)
+    Application.ensure_all_started(:lasso)
 
     on_exit(fn ->
       try do
@@ -37,7 +38,8 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
   end
 
   describe "WebSocket subscription failover" do
-    @tag :slow  # 90s test with failover, requires real blockchain events
+    # 90s test with failover, requires real blockchain events
+    @tag :slow
     test "subscription continues receiving events during provider failure" do
       # Setup 2 real providers
       SetupHelper.setup_providers("ethereum", [
@@ -83,6 +85,7 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
 
       # Verify subscription received events
       assert stats.subscriptions == 1
+
       assert stats.events_received >= 3,
              "Expected events despite failover, got #{stats.events_received}"
 
@@ -99,7 +102,8 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
       IO.puts("   Events received: #{stats.events_received}")
     end
 
-    @tag :slow  # 90s test with failover, requires real blockchain events
+    # 90s test with failover, requires real blockchain events
+    @tag :slow
     test "multiple subscriptions continue during provider failure" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"},
@@ -152,7 +156,8 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
   end
 
   describe "Stream continuity validation" do
-    @tag :slow  # 45s test requiring real blockchain events
+    # 45s test requiring real blockchain events
+    @tag :slow
     test "tracks gaps and duplicates during subscription" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -198,7 +203,8 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
       IO.puts("   Duplicates: #{stats.duplicates}")
     end
 
-    @tag :slow  # 45s test requiring real blockchain events
+    # 45s test requiring real blockchain events
+    @tag :slow
     test "validates low duplicate rate during normal operation" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -228,7 +234,8 @@ defmodule Livechain.Battle.WebSocketFailoverTest do
       """)
 
       # Allow up to 2% duplicates
-      assert duplicate_rate <= 0.02, "Duplicate rate too high: #{Float.round(duplicate_rate * 100, 2)}%"
+      assert duplicate_rate <= 0.02,
+             "Duplicate rate too high: #{Float.round(duplicate_rate * 100, 2)}%"
 
       IO.puts("\n✅ Duplicate Detection Test Passed!")
       IO.puts("   Duplicate rate: #{Float.round(duplicate_rate * 100, 2)}%")

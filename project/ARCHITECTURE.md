@@ -42,14 +42,14 @@ Lasso is designed to operate as a regional-first platform: clients connect to th
 Lasso leverages OTP for fault-tolerance and concurrency. The supervision tree provides chain isolation and fault boundaries:
 
 ```
-Livechain.Application (Supervisor)
+Lasso.Application (Supervisor)
 ├── Phoenix.PubSub
 ├── Finch (HTTP client pool)
-├── Livechain.Benchmarking.BenchmarkStore (ETS metrics storage)
-├── Livechain.Benchmarking.Persistence (historical snapshots)
-├── Livechain.RPC.ProcessRegistry (centralized registry)
-├── Registry (Livechain.Registry - dynamic process names)
-├── DynamicSupervisor (Livechain.RPC.Supervisor)
+├── Lasso.Benchmarking.BenchmarkStore (ETS metrics storage)
+├── Lasso.Benchmarking.Persistence (historical snapshots)
+├── Lasso.RPC.ProcessRegistry (centralized registry)
+├── Registry (Lasso.Registry - dynamic process names)
+├── DynamicSupervisor (Lasso.RPC.Supervisor)
 │   ├── ChainSupervisor (ethereum)
 │   │   ├── ProviderSupervisor (alchemy)
 │   │   │   ├── CircuitBreaker (HTTP)
@@ -63,13 +63,13 @@ Livechain.Application (Supervisor)
 │   │   └── ClientSubscriptionRegistry (client fan-out)
 │   ├── ChainSupervisor (base)
 │   └── ChainSupervisor (polygon)
-├── Livechain.Config.ConfigStore (ETS config cache)
-└── LivechainWeb.Endpoint
+├── Lasso.Config.ConfigStore (ETS config cache)
+└── LassoWeb.Endpoint
 ```
 
 ### **Key Components**
 
-- **Livechain.Application**: Top-level application supervisor
+- **Lasso.Application**: Top-level application supervisor
 - **ChainSupervisor**: Per-chain supervisor providing fault isolation between networks
 - **ProviderSupervisor**: Per-provider supervisor managing circuit breakers and WebSocket connections
 - **CircuitBreaker**: GenServer tracking failures per provider+transport, implementing open/half-open/closed states
@@ -102,7 +102,7 @@ Lasso implements a unified request pipeline that routes JSON-RPC requests across
 ### **Core Design Principles**
 
 - **Single selection interface**: `RequestPipeline.execute_via_channels/4` routes to best provider regardless of transport
-- **Transport behaviour**: Both HTTP and WebSocket implement `Livechain.RPC.Transport` behaviour
+- **Transport behaviour**: Both HTTP and WebSocket implement `Lasso.RPC.Transport` behaviour
 - **Channel abstraction**: `Channel` struct represents a realized connection (HTTP pool or WS connection)
 - **Protocol-aware selection**: Selection considers transport capabilities, method support, and performance per transport
 - **Unified metrics**: Circuit breakers and benchmarking track per-provider, per-transport, per-method metrics
@@ -131,14 +131,14 @@ Record metrics per provider+transport+method
 
 ### **Transport Implementations**
 
-**`Livechain.RPC.Transport.HTTP`**
+**`Lasso.RPC.Transport.HTTP`**
 
 - Uses Finch connection pools for HTTP/2 multiplexing
 - Implements `request/3` for single JSON-RPC calls
 - Per-provider circuit breaker wraps all requests
 - Supports batch requests (future)
 
-**`Livechain.RPC.Transport.WebSocket`**
+**`Lasso.RPC.Transport.WebSocket`**
 
 - Uses persistent WSConnection GenServers
 - Implements `request/3` via correlation ID mapping
@@ -179,7 +179,7 @@ StreamCoordinator (per-subscription key)
 
 ### **Key Components**
 
-**UpstreamSubscriptionPool** (`lib/livechain/rpc/upstream_subscription_pool.ex`)
+**UpstreamSubscriptionPool** (`lib/lasso/rpc/upstream_subscription_pool.ex`)
 
 - **Multiplexing**: Multiple clients subscribe to same upstream subscription (efficiency)
 - **Capability tracking**: Learns which providers support which subscription types
@@ -187,7 +187,7 @@ StreamCoordinator (per-subscription key)
 - **Confirmation handling**: Maps upstream subscription IDs to client subscription IDs
 - **Automatic failover**: Detects provider failures and switches to next best provider
 
-**StreamCoordinator** (`lib/livechain/rpc/stream_coordinator.ex`)
+**StreamCoordinator** (`lib/lasso/rpc/stream_coordinator.ex`)
 
 - **Spawned per subscription key**: Each `(chain, subscription_type, filter)` gets own coordinator
 - **Continuity management**: Tracks last seen block number/log index
@@ -195,7 +195,7 @@ StreamCoordinator (per-subscription key)
 - **HTTP backfilling**: Uses `GapFiller` to fetch missed blocks/logs via HTTP
 - **Deduplication**: `StreamState` ensures events delivered once and in-order
 
-**ClientSubscriptionRegistry** (`lib/livechain/rpc/client_subscription_registry.ex`)
+**ClientSubscriptionRegistry** (`lib/lasso/rpc/client_subscription_registry.ex`)
 
 - **Fan-out**: Distributes upstream events to all subscribed clients
 - **Client tracking**: Maps subscription IDs to Phoenix Channel PIDs
@@ -253,7 +253,7 @@ When a provider fails mid-stream:
 
 ```elixir
 # config/config.exs
-config :livechain, :subscriptions,
+config :lasso, :subscriptions,
   # Maximum blocks to backfill during failover
   max_backfill_blocks: 32,
 
@@ -273,11 +273,11 @@ config :livechain, :subscriptions,
 
 **Files**:
 
-- `lib/livechain/rpc/request_context.ex` - Request lifecycle tracking
-- `lib/livechain/rpc/observability.ex` - Structured logging and metadata
-- `lib/livechain_web/plugs/observability_plug.ex` - HTTP metadata injection
+- `lib/lasso/rpc/request_context.ex` - Request lifecycle tracking
+- `lib/lasso/rpc/observability.ex` - Structured logging and metadata
+- `lib/lasso_web/plugs/observability_plug.ex` - HTTP metadata injection
 
-Livechain provides comprehensive request observability with minimal overhead:
+Lasso provides comprehensive request observability with minimal overhead:
 
 ### **RequestContext Lifecycle**
 
@@ -385,7 +385,7 @@ Clients can request routing metadata via query parameters or headers:
 pipeline :api_with_logging do
   plug(Plug.Logger, log: :info)
   plug(:accepts, ["json"])
-  plug(LivechainWeb.Plugs.ObservabilityPlug)
+  plug(LassoWeb.Plugs.ObservabilityPlug)
 end
 ```
 
@@ -415,7 +415,7 @@ end
 
 ```elixir
 # config/config.exs
-config :livechain, :observability,
+config :lasso, :observability,
   log_level: :info,
   include_params_digest: true,
   max_error_message_chars: 256,
@@ -436,7 +436,7 @@ config :livechain, :observability,
 
 ### **Configuration Management**
 
-**File**: `lib/livechain/config/config_store.ex`
+**File**: `lib/lasso/config/config_store.ex`
 
 In-memory configuration store:
 
@@ -462,7 +462,7 @@ Chain supervisors are started dynamically at application boot from `config/chain
 
 ### **Unified Provider Selection**
 
-**File**: `lib/livechain/rpc/selection.ex`
+**File**: `lib/lasso/rpc/selection.ex`
 
 Selection module consolidates all provider picking logic:
 
@@ -485,7 +485,7 @@ Selection module consolidates all provider picking logic:
 
 ### **Circuit Breaker State Machine**
 
-**File**: `lib/livechain/rpc/circuit_breaker.ex`
+**File**: `lib/lasso/rpc/circuit_breaker.ex`
 
 ```elixir
 def handle_call({:call, fun}, _from, state) do
@@ -588,7 +588,7 @@ Configuration:
 
 ```elixir
 # config/config.exs
-config :livechain, :provider_selection_strategy, :fastest
+config :lasso, :provider_selection_strategy, :fastest
 # Alternatives: :cheapest | :priority | :round_robin
 ```
 
@@ -611,34 +611,34 @@ Battle.Scenario (fluent DSL)
 
 ### **Key Components**
 
-**`Livechain.Battle.Scenario`** (`lib/livechain/battle/scenario.ex`)
+**`Lasso.Battle.Scenario`** (`lib/lasso/battle/scenario.ex`)
 
 - Fluent API for orchestrating complex test flows
 - Step-by-step execution with timing control
 - Automatic telemetry attachment and collection
 - Clean-up and teardown management
 
-**`Livechain.Battle.Workload`** (`lib/livechain/battle/workload.ex`)
+**`Lasso.Battle.Workload`** (`lib/lasso/battle/workload.ex`)
 
 - Configurable HTTP workload generation
 - Concurrent request execution
 - Method distribution (eth_blockNumber, eth_gasPrice, etc.)
 - Per-request telemetry events
 
-**`Livechain.Battle.Chaos`** (`lib/livechain/battle/chaos.ex`)
+**`Lasso.Battle.Chaos`** (`lib/lasso/battle/chaos.ex`)
 
 - **Kill**: Terminate provider processes to simulate crashes
 - **Flap**: Repeatedly kill/restart to simulate instability
 - **Degrade**: Inject latency or errors to simulate degraded performance
 
-**`Livechain.Battle.Analyzer`** (`lib/livechain/battle/analyzer.ex`)
+**`Lasso.Battle.Analyzer`** (`lib/lasso/battle/analyzer.ex`)
 
 - Percentile calculation (P50, P95, P99)
 - Success rate computation
 - Failover detection (>2x average latency = failover)
 - SLO verification with configurable thresholds
 
-**`Livechain.Battle.Reporter`** (`lib/livechain/battle/reporter.ex`)
+**`Lasso.Battle.Reporter`** (`lib/lasso/battle/reporter.ex`)
 
 - JSON and Markdown report generation
 - Human-readable summaries
@@ -727,7 +727,7 @@ end
 
 ```elixir
 # config/prod.exs
-config :livechain,
+config :lasso,
   providers: [
     ethereum: [
       %{id: "infura", url: "wss://mainnet.infura.io/ws/v3/#{api_key}", type: :infura},

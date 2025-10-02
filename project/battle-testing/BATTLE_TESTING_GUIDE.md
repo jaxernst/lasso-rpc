@@ -66,7 +66,7 @@ Scenario         → Orchestrates test flow
 defmodule MyBattleTest do
   use ExUnit.Case, async: false
 
-  alias Livechain.Battle.{Scenario, Workload, Reporter, SetupHelper}
+  alias Lasso.Battle.{Scenario, Workload, Reporter, SetupHelper}
 
   @moduletag :battle
   @moduletag timeout: :infinity
@@ -129,7 +129,7 @@ Use `SetupHelper` to register providers at test runtime:
 
 ```elixir
 setup do
-  Application.ensure_all_started(:livechain)
+  Application.ensure_all_started(:lasso)
 
   on_exit(fn ->
     # Cleanup registered providers
@@ -159,6 +159,7 @@ end
 ```
 
 **Why this works:**
+
 - `SetupHelper.setup_providers` registers providers in `ProviderPool` at runtime
 - Creates circuit breakers automatically
 - No config file modifications needed
@@ -171,11 +172,11 @@ Tests run in `:test` environment which uses `HttpClientMock` by default. Overrid
 ```elixir
 setup_all do
   # Override to use real HTTP client
-  original_client = Application.get_env(:livechain, :http_client)
-  Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClient.Finch)
+  original_client = Application.get_env(:lasso, :http_client)
+  Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClient.Finch)
 
   on_exit(fn ->
-    Application.put_env(:livechain, :http_client, original_client)
+    Application.put_env(:lasso, :http_client, original_client)
   end)
 
   :ok
@@ -189,10 +190,10 @@ end
 ### Test Structure
 
 ```elixir
-defmodule Livechain.Battle.MyTest do
+defmodule Lasso.Battle.MyTest do
   use ExUnit.Case, async: false  # Battle tests can't run in parallel
 
-  alias Livechain.Battle.{Scenario, Workload, Chaos, Reporter, SetupHelper}
+  alias Lasso.Battle.{Scenario, Workload, Chaos, Reporter, SetupHelper}
 
   @moduletag :battle                 # Tag all tests
   @moduletag :real_providers         # Uses external providers
@@ -203,7 +204,7 @@ defmodule Livechain.Battle.MyTest do
   end
 
   setup do
-    Application.ensure_all_started(:livechain)
+    Application.ensure_all_started(:lasso)
 
     on_exit(fn ->
       # Cleanup providers
@@ -281,9 +282,10 @@ Specify which metrics to collect:
 ```
 
 Telemetry events are captured from **production code paths**:
-- `[:livechain, :rpc, :request, :stop]` - Request pipeline
-- `[:livechain, :circuit_breaker, :state_change]` - Circuit breakers
-- `[:livechain, :selection, :success]` - Provider selection
+
+- `[:lasso, :rpc, :request, :stop]` - Request pipeline
+- `[:lasso, :circuit_breaker, :state_change]` - Circuit breakers
+- `[:lasso, :selection, :success]` - Provider selection
 
 ### SLO Definition
 
@@ -333,13 +335,13 @@ mix test --only battle --only real_providers
 
 ### Test Organization
 
-| Tag | Purpose | Duration | When to Run |
-|-----|---------|----------|-------------|
-| `:battle` | All battle tests | Varies | Local dev |
-| `:fast` | Quick validation | <30s | Every PR |
-| `:quick` | Smoke tests | <10s | Pre-commit |
-| `:real_providers` | External providers | 30s-5min | Nightly |
-| `:soak` | Long-running | 10min+ | Weekly |
+| Tag               | Purpose            | Duration | When to Run |
+| ----------------- | ------------------ | -------- | ----------- |
+| `:battle`         | All battle tests   | Varies   | Local dev   |
+| `:fast`           | Quick validation   | <30s     | Every PR    |
+| `:quick`          | Smoke tests        | <10s     | Pre-commit  |
+| `:real_providers` | External providers | 30s-5min | Nightly     |
+| `:soak`           | Long-running       | 10min+   | Weekly      |
 
 ---
 
@@ -366,14 +368,15 @@ priv/battle_results/
 
 ## SLO Compliance
 
-| Metric | Required | Actual | Status |
-|--------|----------|--------|--------|
-| Success Rate | ≥99% | 99.5% | ✅ |
-| P95 Latency | ≤500ms | 342ms | ✅ |
+| Metric       | Required | Actual | Status |
+| ------------ | -------- | ------ | ------ |
+| Success Rate | ≥99%     | 99.5%  | ✅     |
+| P95 Latency  | ≤500ms   | 342ms  | ✅     |
 
 ## Performance Summary
 
 ### HTTP Requests
+
 - Total: 600
 - Successes: 597
 - Failures: 3
@@ -382,6 +385,7 @@ priv/battle_results/
 - P95 Latency: 342ms
 
 ### Circuit Breakers
+
 - State Changes: 2
 - Opens: 1
 - Closes: 1
@@ -436,9 +440,9 @@ name: Battle Tests
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
   schedule:
-    - cron: '0 2 * * *'  # Nightly at 2 AM
+    - cron: "0 2 * * *" # Nightly at 2 AM
 
 jobs:
   fast-tests:
@@ -447,8 +451,8 @@ jobs:
       - uses: actions/checkout@v3
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: '26.0'
-          elixir-version: '1.15.0'
+          otp-version: "26.0"
+          elixir-version: "1.15.0"
 
       - name: Install dependencies
         run: mix deps.get
@@ -464,8 +468,8 @@ jobs:
       - uses: actions/checkout@v3
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: '26.0'
-          elixir-version: '1.15.0'
+          otp-version: "26.0"
+          elixir-version: "1.15.0"
 
       - name: Install dependencies
         run: mix deps.get
@@ -484,6 +488,7 @@ jobs:
 **Cause:** Providers not registered correctly.
 
 **Fix:**
+
 ```elixir
 # Verify providers are registered
 SetupHelper.setup_providers("ethereum", [
@@ -491,7 +496,7 @@ SetupHelper.setup_providers("ethereum", [
 ])
 
 # Check ProviderPool
-candidates = Livechain.RPC.ProviderPool.list_candidates("ethereum", %{})
+candidates = Lasso.RPC.ProviderPool.list_candidates("ethereum", %{})
 IO.inspect(candidates, label: "Registered providers")
 ```
 
@@ -500,6 +505,7 @@ IO.inspect(candidates, label: "Registered providers")
 **Cause:** Timeout or rate too high.
 
 **Fix:**
+
 - Reduce `duration` (start with 10_000ms)
 - Lower `rate` (start with 5-10 req/s)
 - Check provider connectivity manually:
@@ -514,6 +520,7 @@ IO.inspect(candidates, label: "Registered providers")
 **Cause:** Thresholds too strict or real provider issues.
 
 **Fix:**
+
 - Loosen SLOs initially (95% → 99%)
 - Check provider latency in reports
 - Use `--trace` to see individual request failures
@@ -523,10 +530,11 @@ IO.inspect(candidates, label: "Registered providers")
 **Cause:** Not enough consecutive failures.
 
 **Fix:**
+
 - Check circuit breaker config:
   ```elixir
   # config/config.exs
-  config :livechain, :circuit_breaker,
+  config :lasso, :circuit_breaker,
     failure_threshold: 5,      # Failures needed to open
     recovery_timeout: 60_000,  # ms before retry
     success_threshold: 2       # Successes needed to close
@@ -538,13 +546,14 @@ IO.inspect(candidates, label: "Registered providers")
 **Cause:** Telemetry not attached correctly.
 
 **Fix:**
+
 ```elixir
 # Verify telemetry is firing
 :telemetry.attach_many(
   :debug_handler,
   [
-    [:livechain, :rpc, :request, :stop],
-    [:livechain, :circuit_breaker, :state_change]
+    [:lasso, :rpc, :request, :stop],
+    [:lasso, :circuit_breaker, :state_change]
   ],
   fn event_name, measurements, metadata, _config ->
     IO.inspect({event_name, measurements, metadata}, label: "Telemetry Event")
@@ -616,6 +625,7 @@ See `project/battle-testing/TECHNICAL_SPEC.md` for complete API documentation.
 ## Best Practices
 
 ### DO ✅
+
 - Use real providers to validate production behavior
 - Start with small load (10 req/s, 30s) and scale up
 - Tag tests appropriately (`:fast`, `:real_providers`, etc.)
@@ -625,6 +635,7 @@ See `project/battle-testing/TECHNICAL_SPEC.md` for complete API documentation.
 - Clean up providers in `on_exit`
 
 ### DON'T ❌
+
 - Run battle tests with `async: true` (they modify global state)
 - Use 100% success rate SLOs with real providers (network issues happen)
 - Skip cleanup in `on_exit` (providers linger in ProviderPool)

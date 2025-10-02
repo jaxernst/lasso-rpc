@@ -80,17 +80,17 @@ curl -s -X POST http://localhost:4000/rpc/ethereum \
 
 ### ✅ Keep & Fix
 
-- `test/livechain/rpc/circuit_breaker_test.exs`: Solid; add edge cases (half-open user errors are neutral, recovery thresholds).
-- `test/livechain/rpc/provider_pool_test.exs`: Keep; refine setup to current ProviderPool contract.
-- `test/livechain/rpc/selection_test.exs`: Keep; remove config flakiness with deterministic metrics stubs.
+- `test/lasso/rpc/circuit_breaker_test.exs`: Solid; add edge cases (half-open user errors are neutral, recovery thresholds).
+- `test/lasso/rpc/provider_pool_test.exs`: Keep; refine setup to current ProviderPool contract.
+- `test/lasso/rpc/selection_test.exs`: Keep; remove config flakiness with deterministic metrics stubs.
 - `test/integration/failover_test.exs`: Keep structure; reduce mocking; use local fake providers.
-- `test/livechain/error_scenarios_test.exs`: Keep; add realistic retriable vs non-retriable scenarios.
+- `test/lasso/error_scenarios_test.exs`: Keep; add realistic retriable vs non-retriable scenarios.
 
 ### 🔧 Scrap Implementation, Keep Intent
 
-- `test/livechain_web/controllers/rpc_controller_test.exs`: Rewrite as HTTP integration tests via `ConnCase` against fake providers.
-- `test/livechain/rpc/live_stream_test.exs`: Defer until WS subscription architecture stabilizes; then rewrite.
-- `test/livechain/rpc/endpoint_test.exs`, `chain_supervisor_test.exs`, `ws_connection_test.exs`: Examine; likely outdated—either remove or fully rewrite for new WS/channel model.
+- `test/lasso_web/controllers/rpc_controller_test.exs`: Rewrite as HTTP integration tests via `ConnCase` against fake providers.
+- `test/lasso/rpc/live_stream_test.exs`: Defer until WS subscription architecture stabilizes; then rewrite.
+- `test/lasso/rpc/endpoint_test.exs`, `chain_supervisor_test.exs`, `ws_connection_test.exs`: Examine; likely outdated—either remove or fully rewrite for new WS/channel model.
 
 ### 🗑️ Scrap Entirely (Low Value)
 
@@ -107,7 +107,7 @@ curl -s -X POST http://localhost:4000/rpc/ethereum \
 ### Week 2: Core Resilience & Routing
 
 - Unit/integration tests for: failover loop limits, provider override with/without failover, and channel fall-through on `:unsupported_method`.
-- Telemetry assertions for `[:livechain, :rpc, :request, :start|:stop]` and circuit events.
+- Telemetry assertions for `[:lasso, :rpc, :request, :start|:stop]` and circuit events.
 
 ### Week 3: HTTP Integration
 
@@ -143,7 +143,7 @@ curl -s -X POST http://localhost:4000/rpc/ethereum \
 
 ## Performance & Load Testing Position
 
-- Keep `Livechain.Testing` Load Tester as a manual benchmarking/demo tool (not CI gating).
+- Keep `Lasso.Testing` Load Tester as a manual benchmarking/demo tool (not CI gating).
 - Add base URL override + random seed for reproducibility; prefer targeting local fakes first.
 - Track: success rate, P95 latency by method, failover rate, breaker open rate, RPS, and memory over time.
 
@@ -224,7 +224,7 @@ mix test test/battle/websocket_subscription_test.exs:12 --trace
 ### What We Did
 
 - Implemented a realistic WS mock provider and end-to-end integration for subscription flow.
-  - Mock registers under `{:via, Registry, {Livechain.Registry, {:ws_conn, provider_id}}}` (WSConnection-compatible).
+  - Mock registers under `{:via, Registry, {Lasso.Registry, {:ws_conn, provider_id}}}` (WSConnection-compatible).
   - Added sync handlers in the mock to support `WSConnection.send_message/2` and `WSConnection.request/5` via `Channel.request/3`.
   - Made `eth_unsubscribe` fire-and-forget in `UpstreamSubscriptionPool` to reduce coupling in tests.
 - Stabilized `UpstreamSubscriptionPool` integration tests.
@@ -235,9 +235,9 @@ mix test test/battle/websocket_subscription_test.exs:12 --trace
 
 ### Files Touched (Core)
 
-- `lib/livechain/testing/mock_ws_provider.ex` (WSConnection naming, handle_call support, resilient stop)
-- `lib/livechain/rpc/upstream_subscription_pool.ex` (unsubscribe send made fire-and-forget)
-- `test/livechain/rpc/upstream_subscription_pool_integration_test.exs` (dynamic IDs, fixed assertions/teardown)
+- `lib/lasso/testing/mock_ws_provider.ex` (WSConnection naming, handle_call support, resilient stop)
+- `lib/lasso/rpc/upstream_subscription_pool.ex` (unsubscribe send made fire-and-forget)
+- `test/lasso/rpc/upstream_subscription_pool_integration_test.exs` (dynamic IDs, fixed assertions/teardown)
 
 ### Results
 

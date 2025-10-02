@@ -23,28 +23,28 @@
 
 ### Proposed modules and responsibilities
 
-- `Livechain.RPC.Provider` (struct)
+- `Lasso.RPC.Provider` (struct)
   - `id`, `chain_id`, `http_url?`, `ws_url?`, `cost_tier`, `priority`, `tags`.
   - `capabilities`: per-transport support (unary?, subscriptions?, supported_methods: set|wildcard|discover).
-- `Livechain.RPC.Transport` (behaviour)
+- `Lasso.RPC.Transport` (behaviour)
   - Implementations: `Transport.HTTP`, `Transport.WebSocket`.
   - Presents a single interface to the pipeline for unary and streaming operations.
-- `Livechain.RPC.Channel` (runtime)
+- `Lasso.RPC.Channel` (runtime)
   - A realized connection or pool (HTTP pool or WS connection/pool).
   - Lifecycle: open, healthy?, request, subscribe, close.
-- `Livechain.RPC.RequestPipeline` (unary)
+- `Lasso.RPC.RequestPipeline` (unary)
   - Entry point for all single-shot JSON-RPC calls (from HTTP or inbound WS).
   - Selects channel via `Selection`, performs hedging/timeouts, records metrics, handles failover and circuits.
-- `Livechain.RPC.StreamCoordinator` (streaming)
+- `Lasso.RPC.StreamCoordinator` (streaming)
   - Manages inbound WS sessions, subscription lifecycles, upstream selection, and re-subscribe failover.
-- `Livechain.RPC.Selection` (strategy engine)
+- `Lasso.RPC.Selection` (strategy engine)
   - Input: chain, method, provider registry, metrics, circuits, strategy (:fastest, :cheapest, etc.).
   - Output: an ordered set of candidate channels (may mix HTTP and WS).
-- `Livechain.RPC.CircuitBreaker`
+- `Lasso.RPC.CircuitBreaker`
   - Circuit keyed at least by `provider_id + transport`, optionally with method-aware sub-state for fast opens on method-specific failures.
-- `Livechain.RPC.Metrics`
+- `Lasso.RPC.Metrics`
   - Per-method latency histograms, success/error counts, timeout/hedge counts, tagged by provider/transport.
-- `Livechain.RPC.BenchmarkProber`
+- `Lasso.RPC.BenchmarkProber`
   - Background probes for top-N methods to keep the performance matrix fresh across transports.
 
 ---
@@ -52,7 +52,7 @@
 ## Core interfaces (concise)
 
 ```elixir
-defmodule Livechain.RPC.Transport do
+defmodule Lasso.RPC.Transport do
   @type channel :: term()
   @type rpc_request :: map()
   @type rpc_response :: map()

@@ -1,4 +1,4 @@
-defmodule Livechain.Battle.RealProviderFailoverTest do
+defmodule Lasso.Battle.RealProviderFailoverTest do
   @moduledoc """
   Battle test using real Ethereum providers to validate end-to-end failover.
 
@@ -12,21 +12,22 @@ defmodule Livechain.Battle.RealProviderFailoverTest do
   use ExUnit.Case, async: false
   require Logger
 
-  alias Livechain.Battle.{Scenario, Workload, Chaos, Reporter, SetupHelper}
+  alias Lasso.Battle.{Scenario, Workload, Chaos, Reporter, SetupHelper}
 
   @moduletag :battle
-  @moduletag :real_providers  # Uses external RPC providers (slower)
+  # Uses external RPC providers (slower)
+  @moduletag :real_providers
   @moduletag timeout: :infinity
 
   setup_all do
     # Override HTTP client for real provider tests
-    original_client = Application.get_env(:livechain, :http_client)
-    Application.put_env(:livechain, :http_client, Livechain.RPC.HttpClient.Finch)
+    original_client = Application.get_env(:lasso, :http_client)
+    Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClient.Finch)
 
-    Logger.info("Battle test: Using real HTTP client (#{inspect(Livechain.RPC.HttpClient.Finch)})")
+    Logger.info("Battle test: Using real HTTP client (#{inspect(Lasso.RPC.HttpClient.Finch)})")
 
     on_exit(fn ->
-      Application.put_env(:livechain, :http_client, original_client)
+      Application.put_env(:lasso, :http_client, original_client)
       Logger.info("Battle test: Restored HTTP client to #{inspect(original_client)}")
     end)
 
@@ -34,7 +35,7 @@ defmodule Livechain.Battle.RealProviderFailoverTest do
   end
 
   setup do
-    Application.ensure_all_started(:livechain)
+    Application.ensure_all_started(:lasso)
 
     on_exit(fn ->
       # Cleanup dynamically registered providers
@@ -90,7 +91,8 @@ defmodule Livechain.Battle.RealProviderFailoverTest do
       |> Scenario.collect([:requests, :circuit_breaker, :selection, :system])
       |> Scenario.slo(
         success_rate: 0.95,
-        p95_latency_ms: 2000  # Allow higher latency for real providers
+        # Allow higher latency for real providers
+        p95_latency_ms: 2000
       )
       |> Scenario.run()
 
@@ -114,7 +116,9 @@ defmodule Livechain.Battle.RealProviderFailoverTest do
     # The analysis is computed from collected_data, but collected_data isn't exposed in result type
     # We can infer telemetry worked if we have requests in analysis
     if result.analysis.requests.total > 0 do
-      Logger.info("✓ Captured #{result.analysis.requests.total} requests via production telemetry")
+      Logger.info(
+        "✓ Captured #{result.analysis.requests.total} requests via production telemetry"
+      )
     end
 
     # Verify circuit breaker activity
@@ -212,8 +216,10 @@ defmodule Livechain.Battle.RealProviderFailoverTest do
 
         # Seed with clear latency difference
         SetupHelper.seed_benchmarks("ethereum", "eth_blockNumber", [
-          {"llamarpc", 50},   # Faster
-          {"ankr", 200}       # Slower
+          # Faster
+          {"llamarpc", 50},
+          # Slower
+          {"ankr", 200}
         ])
 
         {:ok, %{chain: "ethereum"}}
@@ -280,8 +286,10 @@ defmodule Livechain.Battle.RealProviderFailoverTest do
     IO.puts("   Total requests: #{result.analysis.requests.total}")
   end
 
-  @tag :quick     # Fast smoke test (~5s)
-  @tag :fast      # Suitable for CI
+  # Fast smoke test (~5s)
+  @tag :quick
+  # Suitable for CI
+  @tag :fast
   test "basic connectivity with real providers (smoke test)" do
     Logger.info("Running smoke test with real providers...")
 
@@ -302,7 +310,8 @@ defmodule Livechain.Battle.RealProviderFailoverTest do
         )
       end)
       |> Scenario.collect([:requests])
-      |> Scenario.slo(success_rate: 0.80)  # Lenient for smoke test
+      # Lenient for smoke test
+      |> Scenario.slo(success_rate: 0.80)
       |> Scenario.run()
 
     assert result.passed?, "Smoke test failed - check network connectivity"
