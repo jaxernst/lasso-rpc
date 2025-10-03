@@ -16,7 +16,6 @@ defmodule Lasso.RPC.Strategies.RoundRobin do
         _ -> base_ctx.total_requests || 0
       end
 
-    IO.inspect(total_requests, label: "total_requests")
     %{base_ctx | total_requests: total_requests}
   end
 

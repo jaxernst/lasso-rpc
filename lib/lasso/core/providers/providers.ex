@@ -311,7 +311,7 @@ defmodule Lasso.Providers do
     }
   end
 
-  defp start_chain_supervisor(chain_name, chain_config_attrs) do
+  defp start_chain_supervisor(chain_name, _chain_config_attrs) do
     # Get the full ChainConfig struct from ConfigStore (it was normalized during registration)
     case Lasso.Config.ConfigStore.get_chain(chain_name) do
       {:ok, chain_config} ->
