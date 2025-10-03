@@ -60,6 +60,36 @@ defmodule TestSupport.MockWSClient do
     GenServer.start_link(__MODULE__, {url, handler_mod, state, []})
   end
 
+  # Private helper function to generate different error types based on method
+  defp get_error_for_method(method, id) do
+    case method do
+      "nonexistent_method" ->
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32601,"message":"Method not found"}})
+
+      "eth_getBalance" ->
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32602,"message":"Invalid params"}})
+
+      "eth_call" ->
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32603,"message":"Internal error"}})
+
+      "eth_blockNumber" ->
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32000,"message":"Server error"}})
+
+      "eth_getLogs" ->
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":429,"message":"Too Many Requests"}})
+
+      "custom_method" ->
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32001,"message":"Custom provider error"}})
+
+      "eth_err" ->
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32001,"message":"mock error"}})
+
+      _ ->
+        # Default error for any other method
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32001,"message":"mock error"}})
+    end
+  end
+
   # GenServer
   @impl true
   def init({url, handler_mod, state, opts}) do
@@ -138,36 +168,37 @@ defmodule TestSupport.MockWSClient do
         } = s
       ) do
     # Parse request and create proper JSON-RPC response
+    # Use raw payload to preserve param structure through round-trip
     response_payload =
       case Jason.decode(payload) do
+        {:ok, %{"id" => id, "method" => "eth_subscribe", "params" => _params}} ->
+          # eth_subscribe should return a subscription ID
+          subscription_id = "0x" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+          case mode do
+            :result ->
+              ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"result":#{Jason.encode!(subscription_id)}})
+
+            :error ->
+              ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32601,"message":"Subscription not supported"}})
+          end
+
         {:ok, %{"id" => id, "method" => method, "params" => params}} ->
-          # Create a proper JSON-RPC response with the same ID
+          # Other methods return mock response with method/params echo
           response =
             case mode do
               :result ->
-                %{
-                  "jsonrpc" => "2.0",
-                  "id" => id,
-                  "result" => %{
-                    "method" => method,
-                    "params" => params,
-                    "mock_response" => true
-                  }
-                }
+                # Return the JSON string directly with properly formatted params
+                # This ensures params round-trip correctly through JSON encoding
+                ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"result":{"method":#{Jason.encode!(method)},"params":#{Jason.encode!(params)},"mock_response":true}})
 
               :error ->
-                %{
-                  "jsonrpc" => "2.0",
-                  "id" => id,
-                  "error" => %{
-                    "code" => -32001,
-                    "message" => "mock error",
-                    "data" => %{"method" => method, "params" => params}
-                  }
-                }
+                # Return different error types based on method for more realistic testing
+                error_response = get_error_for_method(method, id)
+                error_response
             end
 
-          Jason.encode!(response)
+          response
 
         _ ->
           # Fallback to echo for non-standard messages

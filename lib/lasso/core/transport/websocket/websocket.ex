@@ -122,18 +122,15 @@ defmodule Lasso.RPC.Transports.WebSocket do
     method = Map.get(rpc_request, "method")
     params = Map.get(rpc_request, "params", [])
 
-    # For subscriptions, we use the existing WSConnection.subscribe mechanism
     case method do
       "eth_subscribe" ->
-        [topic | _] = params
+        case WSConnection.request(provider_id, method, params, 30_000) do
+          {:ok, subscription_id, _latency} ->
+            # Return a subscription reference with the upstream subscription ID
+            {:ok, {provider_id, subscription_id, handler_pid}}
 
-        case WSConnection.subscribe(provider_id, topic) do
-          :ok ->
-            # Return a subscription reference (simplified)
-            {:ok, {provider_id, topic, handler_pid}}
-
-          error ->
-            {:error, error}
+          {:error, reason} ->
+            {:error, reason}
         end
 
       _ ->

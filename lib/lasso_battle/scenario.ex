@@ -30,7 +30,7 @@ defmodule Lasso.Battle.Scenario do
           report_id: String.t() | nil
         }
 
-  alias Lasso.Battle.{Collector, Analyzer, Reporter}
+  alias Lasso.Battle.{Collector, Analyzer}
 
   @doc """
   Creates a new battle test scenario.

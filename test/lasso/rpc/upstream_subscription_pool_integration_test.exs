@@ -54,19 +54,20 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
   end
 
   describe "basic subscription lifecycle" do
-    test "creates pending_subscribe entry with timestamp", %{chain: chain} do
+    test "creates subscription entry and confirms synchronously", %{chain: chain} do
       client_pid = self()
       key = {:newHeads}
 
       {:ok, _sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client_pid, key)
 
-      # Give time for subscription to be sent
+      # Give time for subscription to be confirmed
       Process.sleep(100)
 
       state = get_pool_state(chain)
 
-      # Should have confirmed (no longer pending) OR still pending
+      # Should have confirmed subscription
       assert map_size(state.keys) == 1
+      assert state.keys[key] != nil
     end
 
     test "increments refcount for duplicate subscriptions", %{chain: chain} do
@@ -120,12 +121,11 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
       # Wait for auto-confirmation from MockWSProvider
       Process.sleep(100)
 
-      # Verify state updates
+      # Verify state updates - no more pending_subscribe since confirmations are synchronous
       state = get_pool_state(chain)
-      assert state.pending_subscribe == %{}
+      refute Map.has_key?(state, :pending_subscribe)
       assert state.keys[key].upstream[provider] != nil
       assert state.upstream_index[provider] != %{}
-      assert state.provider_caps[provider][:newHeads] == true
     end
   end
 

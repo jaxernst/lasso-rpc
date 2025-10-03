@@ -295,16 +295,101 @@ defmodule Integration.FailoverTest do
 
   describe "Load Balancing During Failures" do
     test "redistributes load when providers fail", %{chain_config: chain_config} do
+      chain_name = "load_balance_test"
+
+      {:ok, supervisor_pid} = ChainSupervisor.start_link({chain_name, chain_config})
+      wait_for_chain_ready(chain_name)
+
+      # Get initial active providers
+      initial_providers = ChainSupervisor.get_active_providers(chain_name)
+      assert length(initial_providers) > 0, "Should have active providers initially"
+
+      # Simulate provider failures by marking circuit breakers as open
+      failing_provider = "unreliable_provider"
+
+      for _i <- 1..5 do
+        CircuitBreaker.record_failure(failing_provider)
+        Process.sleep(10)
+      end
+
+      Process.sleep(200)
+
+      # Check that load is redistributed to remaining providers
+      remaining_providers = ChainSupervisor.get_active_providers(chain_name)
+      assert is_list(remaining_providers), "Should have list of remaining providers"
+
+      # Should still be able to get status even with some providers down
+      status = ChainSupervisor.get_chain_status(chain_name)
+      assert is_map(status), "Chain status should still be available"
+
+      # Cleanup
+      Supervisor.stop(supervisor_pid)
     end
   end
 
   describe "Performance Under Failure" do
     test "maintains acceptable latency during failover", %{chain_config: chain_config} do
+      chain_name = "latency_test"
+
+      {:ok, supervisor_pid} = ChainSupervisor.start_link({chain_name, chain_config})
+      wait_for_chain_ready(chain_name)
+
+      # Measure baseline latency
+      start_time = System.monotonic_time(:millisecond)
+      _status = ChainSupervisor.get_chain_status(chain_name)
+      baseline_latency = System.monotonic_time(:millisecond) - start_time
+
+      # Trigger failover by making fastest provider fail
+      for _i <- 1..5 do
+        CircuitBreaker.record_failure("reliable_provider")
+        Process.sleep(10)
+      end
+
+      Process.sleep(200)
+
+      # Measure latency during failover
+      start_time = System.monotonic_time(:millisecond)
+      _status = ChainSupervisor.get_chain_status(chain_name)
+      failover_latency = System.monotonic_time(:millisecond) - start_time
+
+      # Latency during failover should be within reasonable bounds
+      # Allow 10x degradation during failover
+      assert failover_latency < baseline_latency * 10,
+             "Failover latency #{failover_latency}ms should be within 10x of baseline #{baseline_latency}ms"
+
+      # Cleanup
+      Supervisor.stop(supervisor_pid)
     end
   end
 
   describe "Edge Case Scenarios" do
     test "handles all providers failing simultaneously", %{chain_config: chain_config} do
+      chain_name = "all_fail_test"
+
+      {:ok, supervisor_pid} = ChainSupervisor.start_link({chain_name, chain_config})
+      wait_for_chain_ready(chain_name)
+
+      # Make all providers fail
+      for provider <- chain_config.providers do
+        for _i <- 1..5 do
+          CircuitBreaker.record_failure(provider.id)
+          Process.sleep(5)
+        end
+      end
+
+      Process.sleep(300)
+
+      # System should still respond (even if with errors)
+      # This tests graceful degradation
+      status = ChainSupervisor.get_chain_status(chain_name)
+      assert is_map(status), "Should return status even when all providers fail"
+
+      # Active providers list might be empty
+      active_providers = ChainSupervisor.get_active_providers(chain_name)
+      assert is_list(active_providers), "Should return list (possibly empty) when all providers fail"
+
+      # Cleanup
+      Supervisor.stop(supervisor_pid)
     end
   end
 end

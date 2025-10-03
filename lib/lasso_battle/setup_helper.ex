@@ -195,7 +195,7 @@ defmodule Lasso.Battle.SetupHelper do
       {:error, :timeout}
     else
       case Providers.get_provider(chain_name, provider_id) do
-        {:ok, provider_config} ->
+        {:ok, _provider_config} ->
           # Get status from Providers.list_providers
           case Providers.list_providers(chain_name) do
             {:ok, providers} ->

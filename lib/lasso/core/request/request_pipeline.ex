@@ -12,9 +12,8 @@ defmodule Lasso.RPC.RequestPipeline do
 
   require Logger
 
-  alias Lasso.RPC.{Selection, Transport, ProviderPool, Metrics, TransportRegistry, Channel}
+  alias Lasso.RPC.{Selection, ProviderPool, Metrics, TransportRegistry, Channel}
   alias Lasso.RPC.{RequestContext, Observability, CircuitBreaker}
-  alias Lasso.Config.ConfigStore
   alias Lasso.JSONRPC.Error, as: JError
 
   @type chain :: String.t()
@@ -267,18 +266,11 @@ defmodule Lasso.RPC.RequestPipeline do
         :ws -> {channel.provider_id, :ws}
       end
 
-    # Capture circuit breaker state before calling
-    cb_state =
-      case CircuitBreaker.get_state(cb_id) do
-        {:ok, state} -> state
-        _ -> :unknown
-      end
-
-    # Update context with selected provider and CB state
+    # Update context with selected provider (CB state captured later to avoid blocking)
     ctx = %{
       ctx
       | selected_provider: %{id: channel.provider_id, protocol: channel.transport},
-        circuit_breaker_state: cb_state
+        circuit_breaker_state: :unknown
     }
 
     case CircuitBreaker.call(cb_id, attempt_fun, timeout + 1_000) do
