@@ -5,7 +5,7 @@ config :lasso, LassoWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4000],
   check_origin: false,
   code_reloader: true,
-  debug_errors: true,
+  debug_errors: false,
   secret_key_base: "FvHQmKTwY0gU9P0aH8gi9M5rO4+q2qIIhpKjLlMcOqfeN4YubVHibH/rbN3e7OMH",
   watchers: [
     esbuild: {Esbuild, :install_and_run, [:lasso, ~w(--sourcemap=inline --watch)]},

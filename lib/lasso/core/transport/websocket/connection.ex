@@ -51,18 +51,6 @@ defmodule Lasso.RPC.WSConnection do
   end
 
   @doc """
-  Subscribes to a topic on the WebSocket connection.
-
-  ## Examples
-
-      iex> Lasso.RPC.WSConnection.subscribe("ethereum_ws", "newHeads")
-      :ok
-  """
-  def subscribe(connection_id, topic) do
-    GenServer.call(via_name(connection_id), {:subscribe, topic})
-  end
-
-  @doc """
   Gets the current connection status.
 
   ## Examples
@@ -84,7 +72,6 @@ defmodule Lasso.RPC.WSConnection do
       connection: nil,
       connected: false,
       reconnect_attempts: 0,
-      subscriptions: MapSet.new(),
       pending_requests: %{},
       heartbeat_ref: nil,
       reconnect_ref: nil
@@ -195,33 +182,6 @@ defmodule Lasso.RPC.WSConnection do
   end
 
   @impl true
-  def handle_call({:subscribe, topic}, _from, %{connected: true, connection: connection} = state) do
-    subscription_message = %{
-      "jsonrpc" => "2.0",
-      "id" => generate_id(),
-      "method" => "eth_subscribe",
-      "params" => [topic]
-    }
-
-    case ws_client().send_frame(connection, {:text, Jason.encode!(subscription_message)}) do
-      :ok ->
-        state = %{state | subscriptions: MapSet.put(state.subscriptions, topic)}
-        {:reply, :ok, state}
-
-      {:error, reason} ->
-        jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
-        {:reply, {:error, jerr}, state}
-    end
-  end
-
-  def handle_call({:subscribe, _topic}, _from, %{connected: false} = state) do
-    jerr =
-      ErrorNormalizer.normalize(:not_connected, provider_id: state.endpoint.id, transport: :ws)
-
-    {:reply, {:error, jerr}, state}
-  end
-
-  @impl true
   def handle_call(
         {:request, method, params, timeout_ms, provided_id},
         from,
@@ -247,8 +207,7 @@ defmodule Lasso.RPC.WSConnection do
           Map.put(state.pending_requests, request_id, %{
             from: from,
             timer: timer,
-            sent_at: sent_at,
-            method: method
+            sent_at: sent_at
           })
 
         {:noreply, %{state | pending_requests: pending}}
@@ -276,7 +235,6 @@ defmodule Lasso.RPC.WSConnection do
       connected: state.connected,
       endpoint_id: state.endpoint.id,
       reconnect_attempts: state.reconnect_attempts,
-      subscriptions: MapSet.size(state.subscriptions),
       pending_requests: map_size(state.pending_requests)
     }
 
@@ -302,7 +260,7 @@ defmodule Lasso.RPC.WSConnection do
     {:noreply, state}
   end
 
-  def handle_info({:ws_message, decoded, frame_received_at}, state) do
+  def handle_info({:ws_message, decoded, _frame_received_at}, state) do
     case decoded do
       %{"jsonrpc" => "2.0", "id" => id} = resp ->
         case Map.pop(state.pending_requests, id) do
@@ -313,44 +271,23 @@ defmodule Lasso.RPC.WSConnection do
               new_state -> {:noreply, new_state}
             end
 
-          {%{from: from, timer: timer, sent_at: sent_at, method: req_method} = _meta, new_pending} ->
+          {%{from: from, timer: timer, sent_at: _sent_at}, new_pending} ->
             Process.cancel_timer(timer)
-            # Use the timestamp from when WebSockex received the frame from the network
-            # This measures actual network round-trip time for this specific request
-            ws_latency_us = frame_received_at - sent_at
 
             reply =
-              cond do
-                Map.has_key?(resp, "result") ->
-                  # Return result with network latency measurement
-                  {:ok, Map.get(resp, "result"), ws_latency_us}
+              case resp do
+                %{"result" => result} ->
+                  {:ok, result}
 
-                Map.has_key?(resp, "error") ->
-                  {:error, JError.from(Map.get(resp, "error"), provider_id: state.endpoint.id)}
+                %{"error" => _} ->
+                  {:error, JError.from(resp, provider_id: state.endpoint.id, transport: :ws)}
 
-                true ->
+                _ ->
                   {:error,
                    JError.new(-32700, "Invalid JSON-RPC response", provider_id: state.endpoint.id)}
               end
 
             GenServer.reply(from, reply)
-
-            # For subscription requests, emit typed confirmation to ws:subs
-            if req_method == "eth_subscribe" do
-              received_at = System.monotonic_time(:millisecond)
-
-              case reply do
-                {:ok, upstream_id, _latency} when is_binary(upstream_id) ->
-                  Phoenix.PubSub.broadcast(
-                    Lasso.PubSub,
-                    "ws:subs:#{state.chain_name}",
-                    {:subscription_confirmed, state.endpoint.id, id, upstream_id, received_at}
-                  )
-
-                _ ->
-                  :ok
-              end
-            end
 
             {:noreply, %{state | pending_requests: new_pending}}
         end
@@ -361,12 +298,6 @@ defmodule Lasso.RPC.WSConnection do
           new_state -> {:noreply, new_state}
         end
     end
-  end
-
-  # Fallback for old 2-tuple format (backwards compatibility)
-  def handle_info({:ws_message, decoded}, state) do
-    # If we receive old format without timestamp, use current time
-    handle_info({:ws_message, decoded, System.monotonic_time(:microsecond)}, state)
   end
 
   def handle_info({:ws_error, error}, state) do
@@ -443,7 +374,11 @@ defmodule Lasso.RPC.WSConnection do
 
         {:error, reason} ->
           jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
-          Logger.debug("[Provider→] Heartbeat ping failed for upstream #{state.endpoint.id}: #{inspect(jerr)}")
+
+          Logger.debug(
+            "[Provider→] Heartbeat ping failed for upstream #{state.endpoint.id}: #{inspect(jerr)}"
+          )
+
           state = schedule_heartbeat(state)
           {:noreply, state}
       end
@@ -720,8 +655,8 @@ defmodule Lasso.RPC.WSConnection do
   end
 
   defp handle_websocket_message(message, state) do
-    # Handle other RPC responses
-    Logger.debug("Received message from #{state.endpoint.id}: #{inspect(message)}")
+    # Handle other RPC responses (unknown IDs, unexpected messages, etc)
+    Logger.debug("Received unexpected message from #{state.endpoint.id}: #{inspect(message)}")
 
     :telemetry.execute(
       [

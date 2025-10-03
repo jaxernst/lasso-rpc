@@ -153,8 +153,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     end
   end
 
-  # No longer handle subscription confirmations via PubSub; handled synchronously on request
-
   def handle_info(evt, state)
       when is_struct(evt, Provider.Unhealthy) or
              is_struct(evt, Provider.CooldownStart) or
@@ -182,19 +180,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
   def handle_info(_, state), do: {:noreply, state}
 
-  # Legacy no-op; failover is delegated to StreamCoordinator
-  # Legacy no-op removed; failover handled via StreamCoordinator
-
-  # Provider close/disconnect signals propagate via WSConnection topics; rely on reconnect.
-  # Explicit failover path: Upstream re-establish on next healthy provider when connection dies.
-
   # Internal helpers
-
-  # Confirmation handler helpers - cleaner separation of concerns
-
-  # Confirmation helpers no longer needed with synchronous confirms
-
-  # Confirmation path removed
 
   defp ensure_upstream_for_key(state, key) do
     case Map.get(state.keys, key) do
@@ -409,8 +395,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     end
   end
 
-  # Removed send_via_channel helper; Channel.request is invoked directly above
-
   defp send_upstream_unsubscribe(chain, provider_id, _key, upstream_id)
        when is_binary(upstream_id) do
     message = %{
@@ -453,8 +437,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
   defp detect_key_from_payload(_), do: :unknown
 
-  # All dedupe/markers/backfill moved into StreamCoordinator
-
   defp telemetry_upstream(action, chain, provider_id, key) do
     :telemetry.execute([:lasso, :subs, :upstream, action], %{count: 1}, %{
       chain: chain,
@@ -463,9 +445,5 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     })
   end
 
-  # capability_from_key no longer required with synchronous confirms
-
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-
-  # Removed stale pending cleanup (no pending confirms with synchronous path)
 end
