@@ -3,6 +3,14 @@ defmodule LassoWeb.ErrorJSON do
   This module is invoked by your endpoint in case of errors on JSON requests.
   """
 
+  alias Lasso.JSONRPC.Error, as: JError
+
+  # Handle parse errors with JSON-RPC format
+  def render("400.json", _assigns) do
+    error_response = JError.new(-32700, "Parse error: Invalid JSON")
+    JError.to_response(error_response, nil)
+  end
+
   # If you want to customize a particular status code,
   # you may add your own clauses, such as:
   #
