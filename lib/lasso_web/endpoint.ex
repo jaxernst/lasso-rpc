@@ -59,6 +59,9 @@ defmodule LassoWeb.Endpoint do
     json_decoder: Phoenix.json_library()
   )
 
+  # JSON parse error handling is now handled by LassoWeb.ErrorJSON
+  # which returns proper JSON-RPC error responses instead of HTML error pages.
+
   plug(Plug.MethodOverride)
   plug(Plug.Head)
   plug(Plug.Session, @session_options)

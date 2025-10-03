@@ -22,7 +22,6 @@ defmodule LassoWeb.RPCSocket do
   alias Lasso.RPC.{SubscriptionRouter, RequestPipeline, RequestContext, Observability}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Config.ConfigStore
-  alias LassoWeb.ConnectionTracker
 
   # Heartbeat configuration (aggressive keepalive for subscription connections)
   # Send ping every 30 seconds
@@ -44,43 +43,33 @@ defmodule LassoWeb.RPCSocket do
   def connect(transport_info) do
     # Extract client IP for connection tracking
     client_ip = extract_client_ip(transport_info)
+    connection_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
-    # Check connection limits (feature-flagged; proceed if disabled)
-    case maybe_check_connection_allowed(client_ip) do
-      {:ok, connection_id} ->
-        # Extract chain from path parameters
-        chain = get_in(transport_info, [:params, "chain_id"]) || "ethereum"
+    # Extract chain from path parameters
+    chain = get_in(transport_info, [:params, "chain_id"]) || "ethereum"
 
-        socket_state = %{
-          chain: chain,
-          subscriptions: %{},
-          client_pid: self(),
-          heartbeat_ref: nil,
-          missed_heartbeats: 0,
-          last_ping_time: nil,
-          connection_id: connection_id,
-          client_ip: client_ip
-        }
+    socket_state = %{
+      chain: chain,
+      subscriptions: %{},
+      client_pid: self(),
+      heartbeat_ref: nil,
+      missed_heartbeats: 0,
+      last_ping_time: nil,
+      connection_id: connection_id,
+      client_ip: client_ip
+    }
 
-        Logger.info(
-          "JSON-RPC WebSocket client connected: #{chain} (id: #{connection_id}, ip: #{client_ip})"
-        )
+    Logger.info(
+      "JSON-RPC WebSocket client connected: #{chain} (id: #{connection_id}, ip: #{client_ip})"
+    )
 
-        {:ok, socket_state}
-
-      {:error, reason} ->
-        Logger.warning("Connection rejected: #{reason} (ip: #{client_ip})")
-        {:error, reason}
-    end
+    {:ok, socket_state}
   end
 
   @impl true
   def init(state) do
     # Subscribe to receive subscription events
     Process.flag(:trap_exit, true)
-
-    # Register connection with tracker if enabled
-    maybe_register_connection(state.connection_id, state.client_ip)
 
     # Start heartbeat timer
     heartbeat_ref = Process.send_after(self(), :send_heartbeat, @heartbeat_interval)
@@ -175,7 +164,10 @@ defmodule LassoWeb.RPCSocket do
   def handle_info(:heartbeat_timeout, state) do
     # Pong not received within timeout - increment missed counter
     missed = state.missed_heartbeats + 1
-    Logger.warning("Client heartbeat timeout - missed #{missed}/#{@max_missed_heartbeats} heartbeats")
+
+    Logger.warning(
+      "Client heartbeat timeout - missed #{missed}/#{@max_missed_heartbeats} heartbeats"
+    )
 
     if missed >= @max_missed_heartbeats do
       Logger.error("Too many missed client heartbeats (#{missed}), closing connection")
@@ -205,9 +197,6 @@ defmodule LassoWeb.RPCSocket do
 
     # Cancel heartbeat timer
     if state.heartbeat_ref, do: Process.cancel_timer(state.heartbeat_ref)
-
-    # Unregister connection from tracker if enabled
-    maybe_unregister_connection(state.connection_id, state.client_ip)
 
     # Unsubscribe all active subscriptions
     Enum.each(state.subscriptions, fn {subscription_id, _type} ->
@@ -472,32 +461,4 @@ defmodule LassoWeb.RPCSocket do
   end
 
   defp format_ip(_), do: "unknown"
-
-  defp tracker_enabled? do
-    Application.get_env(:lasso, :enable_connection_tracker, false)
-  end
-
-  defp maybe_check_connection_allowed(client_ip) do
-    if tracker_enabled?() do
-      ConnectionTracker.check_connection_allowed(client_ip)
-    else
-      {:ok, "conn-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)}
-    end
-  end
-
-  defp maybe_register_connection(connection_id, client_ip) do
-    if tracker_enabled?() do
-      ConnectionTracker.register_connection(connection_id, client_ip)
-    else
-      :ok
-    end
-  end
-
-  defp maybe_unregister_connection(connection_id, client_ip) do
-    if tracker_enabled?() do
-      ConnectionTracker.unregister_connection(connection_id, client_ip)
-    else
-      :ok
-    end
-  end
 end
