@@ -8,13 +8,28 @@ defmodule Lasso.Application do
 
   @impl true
   def start(_type, _args) do
+    # Store application start time for uptime calculation
+    Application.put_env(:lasso, :start_time, System.monotonic_time(:millisecond))
+
     children =
       [
         # Start PubSub for real-time messaging
         {Phoenix.PubSub, name: Lasso.PubSub},
 
         # Start Finch HTTP client for RPC provider requests
-        {Finch, name: Lasso.Finch},
+        # Use larger pool for battle tests (pool_size * count = total connections)
+        {Finch,
+         name: Lasso.Finch,
+         pools: %{
+           default: [
+             size: 100,
+             # Max connections per pool
+             count: 10,
+             # Number of pools
+             pool_max_idle_time: :timer.seconds(30),
+             conn_opts: [timeout: 30_000]
+           ]
+         }},
 
         # Start benchmark store for performance metrics
         Lasso.Benchmarking.BenchmarkStore,

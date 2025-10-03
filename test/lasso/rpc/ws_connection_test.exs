@@ -1,9 +1,6 @@
 defmodule Lasso.RPC.WSConnectionTest do
   @moduledoc """
   Tests for WebSocket connection lifecycle and management.
-
-  This tests the critical WebSocket functionality that powers
-  real-time subscriptions and failover capabilities.
   """
 
   use ExUnit.Case, async: false
@@ -183,7 +180,7 @@ defmodule Lasso.RPC.WSConnectionTest do
 
       # Should get some kind of response (either success or error)
       result = Task.await(task)
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+      assert match?({:ok, _}, result)
 
       GenServer.stop(pid)
     end
@@ -196,14 +193,14 @@ defmodule Lasso.RPC.WSConnectionTest do
                WSConnection.status(endpoint.id).connected
              end)
 
-      # Subscribe to a topic
-      WSConnection.subscribe(endpoint.id, "newHeads")
-      Process.sleep(50)
+      # Subscribe to a topic using request/4
+      {:ok, subscription_id} =
+        WSConnection.request(endpoint.id, "eth_subscribe", ["newHeads"], 2000)
 
-      # Verify subscription is tracked
+      # Verify request completed successfully (subscription tracked by upstream provider)
+      assert is_binary(subscription_id)
       status = WSConnection.status(endpoint.id)
-      assert is_integer(status.subscriptions)
-      assert status.subscriptions >= 1
+      assert status.connected
 
       GenServer.stop(pid)
     end
@@ -245,24 +242,73 @@ defmodule Lasso.RPC.WSConnectionTest do
                WSConnection.status(endpoint.id).connected
              end)
 
-      # Make a request with very short timeout - MockWSClient will echo back immediately
-      # which may result in various error types depending on the echo structure
-      result = WSConnection.request(endpoint.id, "test_method", [], 10)
+      ws_state = :sys.get_state(pid)
+      mock_client_pid = ws_state.connection
 
-      # Should get some kind of result (success or error)
-      # MockWSClient echoes, so the structure might not be valid JSON-RPC
-      case result do
-        {:ok, _} ->
-          # Echo created a valid response structure
-          :ok
+      # Test 1: JSON-RPC method not found error (-32601)
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :error)
 
-        {:error, %Lasso.JSONRPC.Error{message: _msg}} ->
-          # Echo created an invalid structure or proper JError, which is fine for this test
-          :ok
+      result = WSConnection.request(endpoint.id, "nonexistent_method", [], 1000)
+      assert {:error, %Lasso.JSONRPC.Error{} = jerr} = result
+      assert jerr.code == -32601
+      assert jerr.message == "Method not found"
 
-        other ->
-          flunk("Unexpected result type: #{inspect(other)}")
-      end
+      # Test 2: Invalid params error (-32602)
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :error)
+
+      result = WSConnection.request(endpoint.id, "eth_getBalance", ["invalid_address"], 1000)
+      assert {:error, %Lasso.JSONRPC.Error{} = jerr} = result
+      assert jerr.code == -32602
+      assert jerr.message == "Invalid params"
+
+      # Test 3: Internal error (-32603)
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :error)
+
+      result = WSConnection.request(endpoint.id, "eth_call", [], 1000)
+      assert {:error, %Lasso.JSONRPC.Error{} = jerr} = result
+      assert jerr.code == -32603
+      assert jerr.message == "Internal error"
+
+      # Test 4: Server error (-32000)
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :error)
+
+      result = WSConnection.request(endpoint.id, "eth_blockNumber", [], 1000)
+      assert {:error, %Lasso.JSONRPC.Error{} = jerr} = result
+      assert jerr.code == -32000
+      assert jerr.message == "Server error"
+
+      # Test 5: Rate limit error (429 -> normalized to -32005)
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :error)
+
+      result = WSConnection.request(endpoint.id, "eth_getLogs", [], 1000)
+      assert {:error, %Lasso.JSONRPC.Error{} = jerr} = result
+      # Rate limit error code
+      assert jerr.code == -32005
+      assert jerr.message == "Too Many Requests"
+      assert jerr.category == :rate_limit
+
+      # Test 6: Custom provider error (-32001)
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :error)
+
+      result = WSConnection.request(endpoint.id, "custom_method", [], 1000)
+      assert {:error, %Lasso.JSONRPC.Error{} = jerr} = result
+      assert jerr.code == -32001
+      assert jerr.message == "Custom provider error"
+
+      # Test 7: Verify error categorization and retriability
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :error)
+
+      result = WSConnection.request(endpoint.id, "test_method", [], 1000)
+      assert {:error, %Lasso.JSONRPC.Error{} = jerr} = result
+
+      # Verify error has proper categorization
+      assert jerr.category in [:server_error, :client_error, :rate_limit, :network_error]
+      assert is_boolean(jerr.retriable?)
+      assert jerr.transport == :ws
+      assert jerr.provider_id == endpoint.id
+
+      # Reset to normal mode
+      TestSupport.MockWSClient.set_response_mode(mock_client_pid, :result)
 
       GenServer.stop(pid)
     end
@@ -296,13 +342,11 @@ defmodule Lasso.RPC.WSConnectionTest do
       assert Map.has_key?(status, :endpoint_id)
       assert Map.has_key?(status, :connected)
       assert Map.has_key?(status, :reconnect_attempts)
-      assert Map.has_key?(status, :subscriptions)
       assert Map.has_key?(status, :pending_requests)
 
       assert status.endpoint_id == endpoint.id
       assert status.connected == true
       assert status.reconnect_attempts == 0
-      assert is_integer(status.subscriptions)
       assert is_integer(status.pending_requests)
 
       GenServer.stop(pid)
@@ -996,28 +1040,20 @@ defmodule Lasso.RPC.WSConnectionTest do
 
       result = WSConnection.request(endpoint.id, "eth_err", [1], 500)
       assert {:error, %Lasso.JSONRPC.Error{} = jerr} = result
-      # Error normalizer wraps the error map, but original info should be in message
-      assert jerr.message =~ "-32001"
-      assert jerr.message =~ "mock error"
+      # Error normalizer correctly maps JSON-RPC error to JError
+      assert jerr.code == -32001
+      assert jerr.message == "mock error"
 
       TestSupport.MockWSClient.set_response_mode(mock_client_pid, :result)
       GenServer.stop(pid)
     end
 
-    test "unknown-id messages are routed to raw PubSub", %{endpoint: endpoint} do
+    @tag :skip
+    test "unknown-id messages are handled gracefully (deprecated test)", %{endpoint: endpoint} do
+      # This test is deprecated - unknown-id messages are no longer broadcast to PubSub
+      # They are simply logged for debugging. This behavior may be restored if needed
+      # for monitoring/debugging purposes, but currently not required.
       {:ok, pid} = WSConnection.start_link(endpoint)
-      endpoint_id = endpoint.id
-      assert TestHelper.eventually(fn -> WSConnection.status(endpoint_id).connected end)
-
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "raw_messages:#{endpoint.chain_name}")
-
-      # Emit a message with an id that isn't tracked as pending
-      ws_state = :sys.get_state(pid)
-      mock_client_pid = ws_state.connection
-      unknown = %{"jsonrpc" => "2.0", "id" => "deadbeef", "result" => %{"ok" => true}}
-      TestSupport.MockWSClient.emit_message(mock_client_pid, unknown)
-
-      assert_receive {:raw_message, ^endpoint_id, ^unknown, _}, 1000
       GenServer.stop(pid)
     end
 
@@ -1030,10 +1066,11 @@ defmodule Lasso.RPC.WSConnectionTest do
              end)
 
       # Launch 5 concurrent requests with unique params
+      # Use values > 127 to avoid Jason charlist conversion ([100] -> ~c"d")
       tasks =
         for i <- 1..5 do
           Task.async(fn ->
-            result = WSConnection.request(endpoint.id, "eth_method_#{i}", [i * 100], 2000)
+            result = WSConnection.request(endpoint.id, "eth_method_#{i}", [i * 1000], 2000)
             {i, result}
           end)
         end
@@ -1046,12 +1083,13 @@ defmodule Lasso.RPC.WSConnectionTest do
 
       # Verify each response is correctly correlated to its request
       for {i, result} <- results do
+        # WSConnection.request/4 returns {:ok, result} tuple
         assert {:ok, response} = result, "Request #{i} should succeed"
         # MockWSClient now returns proper JSON-RPC with method/params in result
         assert response["method"] == "eth_method_#{i}",
                "Response for request #{i} has wrong method"
 
-        assert response["params"] == [i * 100],
+        assert response["params"] == [i * 1000],
                "Response for request #{i} has wrong params: got #{inspect(response["params"])}"
 
         assert response["mock_response"] == true
@@ -1334,18 +1372,20 @@ defmodule Lasso.RPC.WSConnectionTest do
                WSConnection.status(endpoint.id).connected
              end)
 
-      # Subscribe to raw messages to intercept notifications
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "raw_messages:#{endpoint.chain_name}")
+      # Subscribe to ws:subs channel to intercept subscription events
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:#{endpoint.chain_name}")
 
-      # Subscribe to newHeads
-      :ok = WSConnection.subscribe(endpoint.id, "newHeads")
+      # Subscribe to newHeads using request/4 (not subscribe/2) to get confirmation broadcast
+      {:ok, upstream_sub_id} =
+        WSConnection.request(endpoint.id, "eth_subscribe", ["newHeads"], 2000)
 
-      # Drain the subscribe response message (mock now returns proper JSON-RPC response)
-      assert_receive {:raw_message, _, %{"result" => %{"method" => "eth_subscribe"}}, _}, 500
+      # Should receive subscription confirmation event
+      assert_receive {:subscription_confirmed, provider_id, _request_id, ^upstream_sub_id,
+                      _received_at},
+                     500
 
-      # Verify subscription tracked
-      status = WSConnection.status(endpoint.id)
-      assert status.subscriptions >= 1
+      assert provider_id == endpoint.id
+      assert is_binary(upstream_sub_id)
 
       # Simulate receiving a subscription notification
       ws_state = :sys.get_state(pid)
@@ -1359,15 +1399,14 @@ defmodule Lasso.RPC.WSConnectionTest do
 
       TestSupport.MockWSClient.emit_subscription_notification(
         mock_client_pid,
-        "0xtest123",
+        upstream_sub_id,
         block_data
       )
 
-      # Should receive the notification via PubSub
-      assert_receive {:raw_message, _, message, _received_at}, 500
-
-      assert message["method"] == "eth_subscription"
-      assert message["params"]["result"] == block_data
+      # Should receive the notification via PubSub on ws:subs channel
+      assert_receive {:subscription_event, ^provider_id, ^upstream_sub_id, ^block_data,
+                      _received_at},
+                     500
 
       GenServer.stop(pid)
     end
@@ -1380,16 +1419,19 @@ defmodule Lasso.RPC.WSConnectionTest do
                WSConnection.status(endpoint.id).connected
              end)
 
-      # Subscribe to multiple topics
-      :ok = WSConnection.subscribe(endpoint.id, "newHeads")
-      Process.sleep(10)
-      :ok = WSConnection.subscribe(endpoint.id, "logs")
-      Process.sleep(10)
-      :ok = WSConnection.subscribe(endpoint.id, "newPendingTransactions")
+      # Subscribe to multiple topics using request/4
+      {:ok, sub_id1} = WSConnection.request(endpoint.id, "eth_subscribe", ["newHeads"], 2000)
+      {:ok, sub_id2} = WSConnection.request(endpoint.id, "eth_subscribe", ["logs"], 2000)
 
-      # Verify all tracked
-      status = WSConnection.status(endpoint.id)
-      assert status.subscriptions >= 3
+      {:ok, sub_id3} =
+        WSConnection.request(endpoint.id, "eth_subscribe", ["newPendingTransactions"], 2000)
+
+      # Verify all subscriptions completed successfully with unique IDs
+      assert is_binary(sub_id1)
+      assert is_binary(sub_id2)
+      assert is_binary(sub_id3)
+      assert sub_id1 != sub_id2
+      assert sub_id2 != sub_id3
 
       GenServer.stop(pid)
     end
@@ -1402,28 +1444,37 @@ defmodule Lasso.RPC.WSConnectionTest do
                WSConnection.status(endpoint.id).connected
              end)
 
-      # Subscribe to the raw messages channel
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "raw_messages:#{endpoint.chain_name}")
+      # Subscribe to the ws:subs channel
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:#{endpoint.chain_name}")
 
-      # Subscribe
-      :ok = WSConnection.subscribe(endpoint.id, "newHeads")
+      # Subscribe using request/4
+      {:ok, upstream_sub_id} =
+        WSConnection.request(endpoint.id, "eth_subscribe", ["newHeads"], 2000)
 
-      # Drain the subscribe response message (mock now returns proper JSON-RPC response)
-      assert_receive {:raw_message, _, %{"result" => %{"method" => "eth_subscribe"}}, _}, 500
+      # Receive subscription confirmation
+      assert_receive {:subscription_confirmed, provider_id, _request_id, ^upstream_sub_id,
+                      _received_at},
+                     500
+
+      assert provider_id == endpoint.id
 
       # Emit notification
       ws_state = :sys.get_state(pid)
       mock_client_pid = ws_state.connection
 
-      TestSupport.MockWSClient.emit_subscription_notification(mock_client_pid, "0xsub1", %{
-        "number" => "0x999"
-      })
+      block_data = %{"number" => "0x999"}
 
-      # Should be broadcast to subscribers
-      assert_receive {:raw_message, provider_id, message, timestamp}, 500
+      TestSupport.MockWSClient.emit_subscription_notification(
+        mock_client_pid,
+        upstream_sub_id,
+        block_data
+      )
 
-      assert provider_id == endpoint.id
-      assert message["method"] == "eth_subscription"
+      # Should be broadcast to subscribers as subscription_event
+      assert_receive {:subscription_event, ^provider_id, ^upstream_sub_id, ^block_data,
+                      timestamp},
+                     500
+
       assert is_integer(timestamp)
 
       GenServer.stop(pid)
@@ -1442,8 +1493,8 @@ defmodule Lasso.RPC.WSConnectionTest do
       mock_client_pid = ws_state.connection
       TestSupport.MockWSClient.set_failure_mode(mock_client_pid, :fail_sends)
 
-      # Try to subscribe
-      result = WSConnection.subscribe(endpoint.id, "newHeads")
+      # Try to subscribe using request/4
+      result = WSConnection.request(endpoint.id, "eth_subscribe", ["newHeads"], 2000)
 
       # Should get error
       assert {:error, %Lasso.JSONRPC.Error{}} = result
@@ -1476,12 +1527,205 @@ defmodule Lasso.RPC.WSConnectionTest do
                not WSConnection.status(endpoint.id).connected
              end)
 
-      # Try to subscribe while disconnected
-      result = WSConnection.subscribe(endpoint.id, "newHeads")
+      # Try to subscribe while disconnected using request/4
+      result = WSConnection.request(endpoint.id, "eth_subscribe", ["newHeads"], 2000)
 
       # Should get proper error
       assert {:error, %Lasso.JSONRPC.Error{message: msg}} = result
       assert msg == "WebSocket not connected"
+
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "JSON-RPC nil ID handling" do
+    test "handles JSON-RPC responses with nil ID correctly", %{endpoint: endpoint} do
+      {:ok, pid} = WSConnection.start_link(endpoint)
+
+      # Wait for connection
+      assert TestHelper.eventually(fn ->
+               WSConnection.status(endpoint.id).connected
+             end)
+
+      # Get the mock client to emit messages
+      ws_state = :sys.get_state(pid)
+      mock_client_pid = ws_state.connection
+
+      # Test 1: Valid JSON-RPC response with nil ID (should be treated as untracked)
+      response_with_nil_id = %{
+        "jsonrpc" => "2.0",
+        "id" => nil,
+        "result" => "0x123"
+      }
+
+      # This should not crash and should be handled as a generic message
+      TestSupport.MockWSClient.emit_message(mock_client_pid, response_with_nil_id)
+
+      # Give it a moment to process
+      Process.sleep(10)
+
+      # Test 2: JSON-RPC error response with nil ID
+      error_with_nil_id = %{
+        "jsonrpc" => "2.0",
+        "id" => nil,
+        "error" => %{
+          "code" => -32601,
+          "message" => "Method not found"
+        }
+      }
+
+      # This should not crash either
+      TestSupport.MockWSClient.emit_message(mock_client_pid, error_with_nil_id)
+
+      # Give it a moment to process
+      Process.sleep(10)
+
+      # Test 3: JSON-RPC notification (no ID field) - this should work normally
+      notification = %{
+        "jsonrpc" => "2.0",
+        "method" => "eth_subscription",
+        "params" => %{
+          "subscription" => "0x123",
+          "result" => %{"number" => "0x456"}
+        }
+      }
+
+      # This should be handled as a subscription notification
+      TestSupport.MockWSClient.emit_message(mock_client_pid, notification)
+
+      # Give it a moment to process
+      Process.sleep(10)
+
+      # Verify the connection is still alive and functioning
+      assert WSConnection.status(endpoint.id).connected
+
+      # Test 4: Send a normal request to ensure the connection still works
+      result =
+        WSConnection.send_message(endpoint.id, %{
+          "jsonrpc" => "2.0",
+          "method" => "eth_blockNumber",
+          "params" => [],
+          "id" => 1
+        })
+
+      # Should succeed (connection is still working)
+      assert result == :ok
+
+      GenServer.stop(pid)
+    end
+
+    test "handles JSON-RPC responses with various falsy ID values", %{endpoint: endpoint} do
+      {:ok, pid} = WSConnection.start_link(endpoint)
+
+      # Wait for connection
+      assert TestHelper.eventually(fn ->
+               WSConnection.status(endpoint.id).connected
+             end)
+
+      # Get the mock client to emit messages
+      ws_state = :sys.get_state(pid)
+      mock_client_pid = ws_state.connection
+
+      # Test various falsy ID values that JSON-RPC providers might send
+      falsy_ids = [nil, false, 0, ""]
+
+      Enum.each(falsy_ids, fn falsy_id ->
+        response = %{
+          "jsonrpc" => "2.0",
+          "id" => falsy_id,
+          "result" => "0x123"
+        }
+
+        # This should not crash for any falsy ID
+        TestSupport.MockWSClient.emit_message(mock_client_pid, response)
+        Process.sleep(5)
+      end)
+
+      # Verify the connection is still alive
+      assert WSConnection.status(endpoint.id).connected
+
+      GenServer.stop(pid)
+    end
+
+    test "nil ID responses do not interfere with pending request tracking", %{endpoint: endpoint} do
+      {:ok, pid} = WSConnection.start_link(endpoint)
+
+      # Wait for connection
+      assert TestHelper.eventually(fn ->
+               WSConnection.status(endpoint.id).connected
+             end)
+
+      # Get the mock client to emit messages
+      ws_state = :sys.get_state(pid)
+      mock_client_pid = ws_state.connection
+
+      # Send a request with a real ID
+      request_id = 42
+
+      WSConnection.send_message(endpoint.id, %{
+        "jsonrpc" => "2.0",
+        "method" => "eth_blockNumber",
+        "params" => [],
+        "id" => request_id
+      })
+
+      # Emit a nil ID response (should not interfere with pending request)
+      nil_response = %{
+        "jsonrpc" => "2.0",
+        "id" => nil,
+        "result" => "0x999"
+      }
+
+      TestSupport.MockWSClient.emit_message(mock_client_pid, nil_response)
+
+      # Now emit the actual response for our request
+      actual_response = %{
+        "jsonrpc" => "2.0",
+        "id" => request_id,
+        "result" => "0x123"
+      }
+
+      TestSupport.MockWSClient.emit_message(mock_client_pid, actual_response)
+
+      # Give it time to process
+      Process.sleep(50)
+
+      # Connection should still be working
+      assert WSConnection.status(endpoint.id).connected
+
+      GenServer.stop(pid)
+    end
+
+    test "handles malformed JSON-RPC with nil ID gracefully", %{endpoint: endpoint} do
+      {:ok, pid} = WSConnection.start_link(endpoint)
+
+      # Wait for connection
+      assert TestHelper.eventually(fn ->
+               WSConnection.status(endpoint.id).connected
+             end)
+
+      # Get the mock client to emit messages
+      ws_state = :sys.get_state(pid)
+      mock_client_pid = ws_state.connection
+
+      # Test malformed responses with nil ID
+      malformed_responses = [
+        # Missing result/error
+        %{"jsonrpc" => "2.0", "id" => nil},
+        # Invalid jsonrpc version
+        %{"jsonrpc" => "1.0", "id" => nil, "result" => "0x123"},
+        # Missing jsonrpc field
+        %{"id" => nil, "result" => "0x123"}
+      ]
+
+      Enum.each(malformed_responses, fn response ->
+        # These should not crash the connection
+        TestSupport.MockWSClient.emit_message(mock_client_pid, response)
+        Process.sleep(5)
+      end)
+
+      # Connection should still be alive
+      assert WSConnection.status(endpoint.id).connected
 
       GenServer.stop(pid)
     end

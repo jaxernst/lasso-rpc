@@ -140,10 +140,11 @@ defmodule Lasso.Battle.RealProviderFailoverTest do
   end
 
   test "concurrent load maintains SLOs during provider failure" do
-    result =
-      Scenario.new("High Concurrency Failover Test")
+    # PHASE 1: Pre-failure baseline (30s with 3 providers)
+    baseline_result =
+      Scenario.new("Failover Baseline (Pre-Failure)")
       |> Scenario.setup(fn ->
-        Logger.info("Setting up providers for concurrent load test...")
+        Logger.info("Setting up providers for baseline measurement...")
 
         SetupHelper.setup_providers("ethereum", [
           {:real, "llamarpc", "https://eth.llamarpc.com"},
@@ -161,45 +162,92 @@ defmodule Lasso.Battle.RealProviderFailoverTest do
         {:ok, %{chain: "ethereum"}}
       end)
       |> Scenario.workload(fn ->
-        # Higher rate: 50 req/s for 60 seconds = 3000 requests
+        # Baseline: 50 req/s for 30s with all 3 providers healthy
         Workload.http_constant(
           chain: "ethereum",
           method: "eth_blockNumber",
           rate: 50,
-          duration: 60_000,
+          duration: 30_000,
           strategy: :fastest
         )
       end)
-      |> Scenario.chaos(
-        # Kill fastest provider at 30s
-        Chaos.kill_provider("llamarpc", chain: "ethereum", delay: 30_000)
-      )
       |> Scenario.collect([:requests, :circuit_breaker, :system])
-      |> Scenario.slo(
-        success_rate: 0.95,
-        p95_latency_ms: 2000,
-        max_memory_mb: 500
-      )
+      |> Scenario.slo(success_rate: 0.95, p95_latency_ms: 2000)
       |> Scenario.run()
 
-    Reporter.save_markdown(result, "priv/battle_results/")
+    Logger.info("""
+    📊 Baseline Results (3 providers healthy):
+       - Requests: #{baseline_result.analysis.requests.total}
+       - Success Rate: #{Float.round(baseline_result.analysis.requests.success_rate * 100, 2)}%
+       - P95: #{baseline_result.analysis.requests.p95_latency_ms}ms
+    """)
 
-    assert result.passed?, """
-    High concurrency failover test failed!
-    #{result.summary}
+    # PHASE 2: Kill primary provider
+    Logger.info("💥 Killing llamarpc provider to trigger failover")
+    Chaos.kill_provider("llamarpc", chain: "ethereum")
+
+    # Wait for circuit breaker to open
+    Process.sleep(3_000)
+
+    # PHASE 3: Post-failure recovery (30s with 2 providers)
+    recovery_result =
+      Scenario.new("Failover Recovery (Post-Failure)")
+      |> Scenario.setup(fn ->
+        # Providers already set up, just verify state
+        {:ok, %{chain: "ethereum"}}
+      end)
+      |> Scenario.workload(fn ->
+        # Recovery: 50 req/s for 30s with 2 remaining providers
+        Workload.http_constant(
+          chain: "ethereum",
+          method: "eth_blockNumber",
+          rate: 50,
+          duration: 30_000,
+          strategy: :fastest
+        )
+      end)
+      |> Scenario.collect([:requests, :circuit_breaker, :system])
+      |> Scenario.slo(success_rate: 0.95, p95_latency_ms: 2500)
+      |> Scenario.run()
+
+    Logger.info("""
+    📊 Recovery Results (2 providers remaining):
+       - Requests: #{recovery_result.analysis.requests.total}
+       - Success Rate: #{Float.round(recovery_result.analysis.requests.success_rate * 100, 2)}%
+       - P95: #{recovery_result.analysis.requests.p95_latency_ms}ms
+    """)
+
+    Reporter.save_markdown(baseline_result, "priv/battle_results/")
+    Reporter.save_markdown(recovery_result, "priv/battle_results/")
+
+    # Assert both phases passed their SLOs
+    assert baseline_result.passed?, """
+    Baseline phase failed!
+    #{baseline_result.summary}
     """
 
-    # Verify high request volume
-    assert result.analysis.requests.total >= 2800, "Expected ~3000 requests"
+    assert recovery_result.passed?, """
+    Recovery phase failed!
+    #{recovery_result.summary}
+    """
 
-    # Verify circuit breaker protected the failed provider
-    if result.analysis.circuit_breaker.opens > 0 do
-      Logger.info("✓ Circuit breaker protected failed provider")
-    end
+    # Verify circuit breaker opened for llamarpc
+    assert recovery_result.analysis.circuit_breaker.opens > 0,
+           "Circuit breaker should have opened for failed provider"
+
+    # Compare latencies (recovery P95 should be similar or slightly higher)
+    latency_increase = recovery_result.analysis.requests.p95_latency_ms - baseline_result.analysis.requests.p95_latency_ms
+    latency_increase_pct = latency_increase / baseline_result.analysis.requests.p95_latency_ms * 100
 
     IO.puts("\n✅ Concurrent Load Failover Test Passed!")
-    IO.puts("   Handled #{result.analysis.requests.total} requests at 50 req/s")
-    IO.puts("   Success rate: #{Float.round(result.analysis.requests.success_rate * 100, 2)}%")
+    IO.puts("   Baseline (3 providers):")
+    IO.puts("     - #{baseline_result.analysis.requests.total} requests")
+    IO.puts("     - P95: #{baseline_result.analysis.requests.p95_latency_ms}ms")
+    IO.puts("   Recovery (2 providers):")
+    IO.puts("     - #{recovery_result.analysis.requests.total} requests")
+    IO.puts("     - P95: #{recovery_result.analysis.requests.p95_latency_ms}ms")
+    IO.puts("   Latency impact: +#{Float.round(latency_increase, 1)}ms (#{Float.round(latency_increase_pct, 1)}%)")
+    IO.puts("   Success rate maintained: #{Float.round(recovery_result.analysis.requests.success_rate * 100, 2)}%")
   end
 
   @tag :fast

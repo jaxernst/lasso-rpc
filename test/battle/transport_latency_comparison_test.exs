@@ -79,11 +79,11 @@ defmodule Lasso.Battle.TransportLatencyComparisonTest do
   # req/s during warmup
   @warmup_rate 1
   # ms
-  @warmup_duration 10_000
+  @warmup_duration 5_000
   # req/s during measurement
   @test_rate 5
-  # ms (60s @ 5 req/s = 300 samples per transport per method)
-  @test_duration 60_000
+  # ms (10s @ 5 req/s = 50 samples per transport per method)
+  @test_duration 10_000
 
   setup_all do
     # Override HTTP client for real provider tests

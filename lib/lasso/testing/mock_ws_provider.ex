@@ -220,7 +220,6 @@ defmodule Lasso.Testing.MockWSProvider do
   @impl true
   def handle_call({:request, method, params, _timeout_ms, provided_id}, _from, state) do
     # Support WSConnection.request/5 compatibility used by Transport.WebSocket.request/3
-    # Build a JSON-RPC message and process it using the same pipeline as casts.
     request_id = provided_id || :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
     message = %{
@@ -230,10 +229,27 @@ defmodule Lasso.Testing.MockWSProvider do
       "params" => params || []
     }
 
-    new_state = handle_rpc_request(message, state)
+    # Handle eth_subscribe specially to return subscription ID synchronously
+    case method do
+      "eth_subscribe" ->
+        # Generate subscription ID first
+        sub_id = generate_sub_id(state)
 
-    # Reply immediately; confirmations/results are published via PubSub like a real WS
-    {:reply, {:ok, :sent}, new_state}
+        # Process the subscription and update state
+        new_state = handle_rpc_request(message, state)
+
+        # Broadcast confirmation immediately
+        send_response(state.chain, state.provider_id, request_id, sub_id)
+
+        # Return subscription ID with mock latency
+        {:reply, {:ok, sub_id, 0}, new_state}
+
+      _ ->
+        # For other methods, process normally
+        new_state = handle_rpc_request(message, state)
+        # Mock response - in real implementation this would wait for upstream
+        {:reply, {:ok, %{"mock" => true}, 0}, new_state}
+    end
   end
 
   @impl true

@@ -78,7 +78,7 @@ defmodule Lasso.Battle.Reporter do
   @doc """
   Saves test results as HTML (Phase 2).
   """
-  def save_html(result, output_dir) do
+  def save_html(_result, _output_dir) do
     # Phase 2: Generate interactive HTML with charts
     Logger.info("HTML reports (Phase 2)")
     {:ok, "phase2"}

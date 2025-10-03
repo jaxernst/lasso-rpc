@@ -425,7 +425,7 @@ defmodule Lasso.Battle.Workload do
     end
   end
 
-  defp make_http_request(chain, method, params, strategy, timeout, request_id) do
+  defp make_http_request(chain, method, params, _strategy, timeout, request_id) do
     # HTTP path is always /rpc/{chain} - strategy is not in the path
     path = "/rpc/#{chain}"
 
