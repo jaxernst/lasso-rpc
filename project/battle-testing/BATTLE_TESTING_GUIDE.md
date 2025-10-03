@@ -2,6 +2,20 @@
 
 **Prove your RPC aggregator works under chaos with data-driven validation.**
 
+**Version:** 2.0 (October 2025) - Now with Composable Workload API
+
+---
+
+## What's New in v2.0?
+
+🎉 **Composable Workload API** - Mix and match request primitives with load patterns for maximum flexibility
+
+✅ **Fair Transport Comparison** - Use `Workload.direct()` to properly test HTTP vs WebSocket upstream routing
+
+📊 **Transport-Specific Reporting** - Analyzer now separates HTTP from WebSocket metrics
+
+See [COMPOSABLE_WORKLOAD_API.md](./COMPOSABLE_WORKLOAD_API.md) for full documentation.
+
 ---
 
 ## What is Battle Testing?

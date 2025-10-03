@@ -302,7 +302,7 @@ defmodule Lasso.RPC.WSConnection do
     {:noreply, state}
   end
 
-  def handle_info({:ws_message, decoded}, state) do
+  def handle_info({:ws_message, decoded, frame_received_at}, state) do
     case decoded do
       %{"jsonrpc" => "2.0", "id" => id} = resp ->
         case Map.pop(state.pending_requests, id) do
@@ -313,17 +313,17 @@ defmodule Lasso.RPC.WSConnection do
               new_state -> {:noreply, new_state}
             end
 
-          {%{from: from, timer: timer, sent_at: sent_at} = meta, new_pending} ->
+          {%{from: from, timer: timer, sent_at: sent_at, method: req_method} = _meta, new_pending} ->
             Process.cancel_timer(timer)
-            received_at = System.monotonic_time(:microsecond)
-            ws_latency_us = received_at - sent_at
-            ws_latency_ms = ws_latency_us / 1000.0
-            req_method = Map.get(meta, :method)
+            # Use the timestamp from when WebSockex received the frame from the network
+            # This measures actual network round-trip time for this specific request
+            ws_latency_us = frame_received_at - sent_at
 
             reply =
               cond do
                 Map.has_key?(resp, "result") ->
-                  {:ok, Map.get(resp, "result")}
+                  # Return result with network latency measurement
+                  {:ok, Map.get(resp, "result"), ws_latency_us}
 
                 Map.has_key?(resp, "error") ->
                   {:error, JError.from(Map.get(resp, "error"), provider_id: state.endpoint.id)}
@@ -340,7 +340,7 @@ defmodule Lasso.RPC.WSConnection do
               received_at = System.monotonic_time(:millisecond)
 
               case reply do
-                {:ok, upstream_id} when is_binary(upstream_id) ->
+                {:ok, upstream_id, _latency} when is_binary(upstream_id) ->
                   Phoenix.PubSub.broadcast(
                     Lasso.PubSub,
                     "ws:subs:#{state.chain_name}",
@@ -361,6 +361,12 @@ defmodule Lasso.RPC.WSConnection do
           new_state -> {:noreply, new_state}
         end
     end
+  end
+
+  # Fallback for old 2-tuple format (backwards compatibility)
+  def handle_info({:ws_message, decoded}, state) do
+    # If we receive old format without timestamp, use current time
+    handle_info({:ws_message, decoded, System.monotonic_time(:microsecond)}, state)
   end
 
   def handle_info({:ws_error, error}, state) do

@@ -11,10 +11,15 @@ defmodule Lasso.Battle.Analyzer do
 
   @doc """
   Analyzes collected data and produces summary statistics.
+
+  Now includes transport-specific breakdown for HTTP vs WebSocket comparison.
   """
   def analyze(collected_data, opts \\ %{}) do
+    requests = Map.get(collected_data, :requests, [])
+
     %{
-      requests: analyze_requests(Map.get(collected_data, :requests, [])),
+      requests: analyze_requests(requests),
+      requests_by_transport: analyze_requests_by_transport(requests),
       circuit_breaker: analyze_circuit_breaker(Map.get(collected_data, :circuit_breaker, [])),
       system: analyze_system(Map.get(collected_data, :system, [])),
       websocket: analyze_websocket(Map.get(collected_data, :websocket, [])),
@@ -99,6 +104,94 @@ defmodule Lasso.Battle.Analyzer do
       failover_count: length(failover_requests),
       avg_failover_latency_ms: avg(failover_latencies),
       max_failover_latency_ms: Enum.max(failover_latencies, fn -> 0 end)
+    }
+  end
+
+  defp analyze_requests_by_transport([]) do
+    %{
+      http: nil,
+      ws: nil,
+      combined: nil
+    }
+  end
+
+  defp analyze_requests_by_transport(requests) do
+    # Group requests by transport
+    by_transport = Enum.group_by(requests, fn r -> r.transport end)
+
+    http_requests = Map.get(by_transport, :http, [])
+    ws_requests = Map.get(by_transport, :ws, [])
+
+    # Statistical significance test
+    http_latencies = Enum.map(http_requests, fn r -> r.duration_ms end)
+    ws_latencies = Enum.map(ws_requests, fn r -> r.duration_ms end)
+
+    statistical_test =
+      if length(http_latencies) > 0 && length(ws_latencies) > 0 do
+        mann_whitney_u_test(http_latencies, ws_latencies)
+      else
+        nil
+      end
+
+    %{
+      http: analyze_transport(http_requests, "HTTP"),
+      ws: analyze_transport(ws_requests, "WebSocket"),
+      combined: analyze_transport(requests, "Combined"),
+      statistical_comparison: statistical_test
+    }
+  end
+
+  defp analyze_transport([], _label) do
+    %{
+      total: 0,
+      successes: 0,
+      failures: 0,
+      success_rate: 0.0,
+      p50_latency_ms: 0,
+      p95_latency_ms: 0,
+      p99_latency_ms: 0,
+      min_latency_ms: 0,
+      max_latency_ms: 0,
+      avg_latency_ms: 0.0
+    }
+  end
+
+  defp analyze_transport(requests, _label) do
+    total = length(requests)
+    successes = Enum.count(requests, fn r -> r.result == :success end)
+    failures = total - successes
+
+    latencies =
+      requests
+      |> Enum.map(fn r -> r.duration_ms end)
+      |> Enum.sort()
+
+    success_rate = if total > 0, do: successes / total, else: 0.0
+
+    avg_latency = avg(latencies)
+    stddev = standard_deviation(latencies, avg_latency)
+
+    # 95% confidence interval using t-distribution approximation
+    ci_95 = confidence_interval_95(latencies, avg_latency, stddev)
+
+    # Provider distribution analysis
+    provider_dist = analyze_provider_distribution(requests)
+
+    %{
+      total: total,
+      successes: successes,
+      failures: failures,
+      success_rate: success_rate,
+      p50_latency_ms: percentile(latencies, 0.5),
+      p95_latency_ms: percentile(latencies, 0.95),
+      p99_latency_ms: percentile(latencies, 0.99),
+      min_latency_ms: List.first(latencies) || 0,
+      max_latency_ms: List.last(latencies) || 0,
+      avg_latency_ms: avg_latency,
+      stddev_latency_ms: stddev,
+      ci_95_lower_ms: ci_95.lower,
+      ci_95_upper_ms: ci_95.upper,
+      provider_distribution: provider_dist
     }
   end
 
@@ -263,5 +356,182 @@ defmodule Lasso.Battle.Analyzer do
       end)
 
     total_time
+  end
+
+  # Advanced statistical helpers
+
+  defp standard_deviation([], _mean), do: 0.0
+
+  defp standard_deviation(values, mean) do
+    n = length(values)
+    if n <= 1 do
+      0.0
+    else
+      variance =
+        values
+        |> Enum.map(fn v -> :math.pow(v - mean, 2) end)
+        |> Enum.sum()
+        |> Kernel./(n - 1)
+
+      :math.sqrt(variance)
+    end
+  end
+
+  defp confidence_interval_95([], _mean, _stddev) do
+    %{lower: 0, upper: 0}
+  end
+
+  defp confidence_interval_95(values, mean, stddev) do
+    n = length(values)
+
+    if n <= 1 do
+      %{lower: mean, upper: mean}
+    else
+      # t-value approximation for 95% CI (df > 30 ≈ 1.96, smaller samples use higher values)
+      t_value = t_critical_value(n)
+      margin_of_error = t_value * stddev / :math.sqrt(n)
+
+      %{
+        lower: mean - margin_of_error,
+        upper: mean + margin_of_error
+      }
+    end
+  end
+
+  defp t_critical_value(n) when n <= 5, do: 2.776
+  defp t_critical_value(n) when n <= 10, do: 2.262
+  defp t_critical_value(n) when n <= 20, do: 2.093
+  defp t_critical_value(n) when n <= 30, do: 2.045
+  defp t_critical_value(_n), do: 1.96
+
+  defp analyze_provider_distribution([]) do
+    %{total: 0, by_provider: %{}, balance_score: 1.0}
+  end
+
+  defp analyze_provider_distribution(requests) do
+    total = length(requests)
+
+    by_provider =
+      requests
+      |> Enum.group_by(fn r -> Map.get(r, :provider_id, Map.get(r, :provider, "unknown")) end)
+      |> Enum.map(fn {provider, reqs} ->
+        count = length(reqs)
+        percentage = count / total * 100
+        {provider, %{count: count, percentage: percentage}}
+      end)
+      |> Enum.into(%{})
+
+    # Calculate balance score (1.0 = perfectly balanced, 0.0 = all requests to one provider)
+    # Using coefficient of variation: lower is better balanced
+    provider_counts = Enum.map(by_provider, fn {_, %{count: c}} -> c end)
+    expected_per_provider = total / map_size(by_provider)
+
+    balance_score =
+      if map_size(by_provider) <= 1 do
+        1.0
+      else
+        variance =
+          provider_counts
+          |> Enum.map(fn c -> :math.pow(c - expected_per_provider, 2) end)
+          |> Enum.sum()
+          |> Kernel./(map_size(by_provider))
+
+        stddev = :math.sqrt(variance)
+        coefficient_of_variation = stddev / expected_per_provider
+
+        # Convert to 0-1 score (lower CV = higher score)
+        max(0.0, 1.0 - coefficient_of_variation)
+      end
+
+    %{
+      total: total,
+      by_provider: by_provider,
+      balance_score: Float.round(balance_score, 3)
+    }
+  end
+
+  @doc """
+  Performs Mann-Whitney U test to determine if two distributions are statistically different.
+  Returns p-value and whether the difference is significant at 0.05 level.
+  """
+  def mann_whitney_u_test(sample1, sample2) do
+    n1 = length(sample1)
+    n2 = length(sample2)
+
+    if n1 == 0 or n2 == 0 do
+      %{u_statistic: 0, p_value: 1.0, significant?: false, message: "Empty sample(s)"}
+    else
+      # Combine and rank all values
+      combined =
+        (Enum.map(sample1, fn v -> {v, :sample1} end) ++
+           Enum.map(sample2, fn v -> {v, :sample2} end))
+        |> Enum.sort_by(fn {v, _} -> v end)
+
+      # Assign ranks (handling ties by averaging ranks)
+      {ranked, _} =
+        Enum.reduce(combined, {[], 1}, fn {value, group}, {acc, rank} ->
+          {[{value, group, rank} | acc], rank + 1}
+        end)
+
+      ranked = Enum.reverse(ranked)
+
+      # Sum ranks for sample 1
+      r1 = ranked |> Enum.filter(fn {_, g, _} -> g == :sample1 end) |> Enum.map(fn {_, _, r} -> r end) |> Enum.sum()
+
+      # Calculate U statistic
+      u1 = r1 - n1 * (n1 + 1) / 2
+      u2 = n1 * n2 - u1
+      u = min(u1, u2)
+
+      # Normal approximation for large samples (n1, n2 > 20)
+      mean_u = n1 * n2 / 2
+      std_u = :math.sqrt(n1 * n2 * (n1 + n2 + 1) / 12)
+
+      # Z-score
+      z = (u - mean_u) / std_u
+
+      # Two-tailed p-value (approximation using normal distribution)
+      p_value = 2 * (1 - normal_cdf(abs(z)))
+
+      %{
+        u_statistic: u,
+        z_score: Float.round(z, 3),
+        p_value: Float.round(p_value, 4),
+        significant?: p_value < 0.05,
+        interpretation:
+          if p_value < 0.05 do
+            "Statistically significant difference (p < 0.05)"
+          else
+            "No statistically significant difference (p ≥ 0.05)"
+          end
+      }
+    end
+  end
+
+  # Normal CDF approximation (for p-value calculation)
+  defp normal_cdf(z) do
+    0.5 * (1 + erf(z / :math.sqrt(2)))
+  end
+
+  # Error function approximation
+  defp erf(x) do
+    # Abramowitz and Stegun approximation
+    sign = if x < 0, do: -1, else: 1
+    x = abs(x)
+
+    a1 = 0.254829592
+    a2 = -0.284496736
+    a3 = 1.421413741
+    a4 = -1.453152027
+    a5 = 1.061405429
+    p = 0.3275911
+
+    t = 1.0 / (1.0 + p * x)
+
+    y =
+      1.0 -
+        ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * :math.exp(-x * x)
+
+    sign * y
   end
 end
