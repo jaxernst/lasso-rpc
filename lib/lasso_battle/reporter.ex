@@ -183,6 +183,14 @@ defmodule Lasso.Battle.Reporter do
     requests = Map.get(analysis, :requests, %{})
     cb = Map.get(analysis, :circuit_breaker, %{})
     system = Map.get(analysis, :system, %{})
+    by_transport = Map.get(analysis, :requests_by_transport, %{})
+
+    transport_breakdown =
+      if by_transport && (by_transport.http || by_transport.ws) do
+        format_transport_breakdown(by_transport)
+      else
+        ""
+      end
 
     """
     ### HTTP Requests
@@ -194,7 +202,7 @@ defmodule Lasso.Battle.Reporter do
     - P50 Latency: #{Map.get(requests, :p50_latency_ms, 0)}ms
     - P95 Latency: #{Map.get(requests, :p95_latency_ms, 0)}ms
     - P99 Latency: #{Map.get(requests, :p99_latency_ms, 0)}ms
-
+    #{transport_breakdown}
     ### Circuit Breakers
 
     - State Changes: #{Map.get(cb, :state_changes, 0)}
@@ -210,6 +218,141 @@ defmodule Lasso.Battle.Reporter do
     - Avg Processes: #{Map.get(system, :avg_processes, 0) |> trunc()}
     """
   end
+
+  defp format_transport_breakdown(by_transport) do
+    http = by_transport[:http]
+    ws = by_transport[:ws]
+
+    http_section =
+      if http && http.total > 0 do
+        provider_dist_text = format_provider_distribution(http.provider_distribution)
+
+        """
+
+        #### HTTP Transport to Upstream
+
+        - Total: #{http.total}
+        - Successes: #{http.successes}
+        - Failures: #{http.failures}
+        - Success Rate: #{format_percent(http.success_rate)}
+        - P50 Latency: #{http.p50_latency_ms}ms
+        - P95 Latency: #{http.p95_latency_ms}ms
+        - P99 Latency: #{http.p99_latency_ms}ms
+        - Min: #{http.min_latency_ms}ms | Max: #{http.max_latency_ms}ms | Avg: #{Float.round(http.avg_latency_ms, 2)}ms
+        - **Std Dev:** #{Float.round(http.stddev_latency_ms, 2)}ms
+        - **95% CI:** [#{Float.round(http.ci_95_lower_ms, 2)}ms, #{Float.round(http.ci_95_upper_ms, 2)}ms]
+        #{provider_dist_text}
+        """
+      else
+        ""
+      end
+
+    ws_section =
+      if ws && ws.total > 0 do
+        provider_dist_text = format_provider_distribution(ws.provider_distribution)
+
+        """
+
+        #### WebSocket Transport to Upstream
+
+        - Total: #{ws.total}
+        - Successes: #{ws.successes}
+        - Failures: #{ws.failures}
+        - Success Rate: #{format_percent(ws.success_rate)}
+        - P50 Latency: #{ws.p50_latency_ms}ms
+        - P95 Latency: #{ws.p95_latency_ms}ms
+        - P99 Latency: #{ws.p99_latency_ms}ms
+        - Min: #{ws.min_latency_ms}ms | Max: #{ws.max_latency_ms}ms | Avg: #{Float.round(ws.avg_latency_ms, 2)}ms
+        - **Std Dev:** #{Float.round(ws.stddev_latency_ms, 2)}ms
+        - **95% CI:** [#{Float.round(ws.ci_95_lower_ms, 2)}ms, #{Float.round(ws.ci_95_upper_ms, 2)}ms]
+        #{provider_dist_text}
+        """
+      else
+        ""
+      end
+
+    comparison =
+      if http && ws && http.total > 0 && ws.total > 0 do
+        ws_faster_p50 = http.p50_latency_ms - ws.p50_latency_ms
+        ws_faster_p95 = http.p95_latency_ms - ws.p95_latency_ms
+        ws_faster_p99 = http.p99_latency_ms - ws.p99_latency_ms
+
+        # Statistical significance test
+        stat_test = by_transport[:statistical_comparison]
+
+        stat_section =
+          if stat_test do
+            """
+
+            **Statistical Significance Test (Mann-Whitney U):**
+            - U-statistic: #{stat_test.u_statistic}
+            - Z-score: #{stat_test.z_score}
+            - p-value: #{stat_test.p_value}
+            - #{stat_test.interpretation}
+            """
+          else
+            ""
+          end
+
+        """
+
+        #### Transport Comparison
+
+        - **P50:** WebSocket is #{format_latency_diff(ws_faster_p50)} HTTP
+        - **P95:** WebSocket is #{format_latency_diff(ws_faster_p95)} HTTP
+        - **P99:** WebSocket is #{format_latency_diff(ws_faster_p99)} HTTP
+        #{stat_section}
+        """
+      else
+        ""
+      end
+
+    http_section <> ws_section <> comparison
+  end
+
+  defp format_latency_diff(diff) when diff > 0 and is_float(diff),
+    do: "#{Float.round(diff, 2)}ms faster than"
+
+  defp format_latency_diff(diff) when diff > 0 and is_integer(diff),
+    do: "#{diff}ms faster than"
+
+  defp format_latency_diff(diff) when diff < 0 and is_float(diff),
+    do: "#{Float.round(abs(diff), 2)}ms slower than"
+
+  defp format_latency_diff(diff) when diff < 0 and is_integer(diff),
+    do: "#{abs(diff)}ms slower than"
+
+  defp format_latency_diff(_), do: "same as"
+
+  defp format_provider_distribution(%{total: 0}), do: ""
+
+  defp format_provider_distribution(%{by_provider: by_provider, balance_score: balance_score}) do
+    if map_size(by_provider) == 0 do
+      ""
+    else
+      provider_lines =
+        by_provider
+        |> Enum.sort_by(fn {_, %{count: c}} -> c end, :desc)
+        |> Enum.map(fn {provider, %{count: count, percentage: pct}} ->
+          "  - #{provider}: #{count} (#{Float.round(pct, 1)}%)"
+        end)
+        |> Enum.join("\n")
+
+      balance_emoji =
+        cond do
+          balance_score >= 0.9 -> "✅"
+          balance_score >= 0.7 -> "⚠️"
+          true -> "❌"
+        end
+
+      """
+      - **Provider Distribution (Balance Score: #{balance_score} #{balance_emoji}):**
+      #{provider_lines}
+      """
+    end
+  end
+
+  defp format_provider_distribution(_), do: ""
 
   defp format_metric_name(:success_rate), do: "Success Rate"
   defp format_metric_name(:p95_latency_ms), do: "P95 Latency"

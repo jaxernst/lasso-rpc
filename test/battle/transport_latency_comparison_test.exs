@@ -1,38 +1,102 @@
 defmodule Lasso.Battle.TransportLatencyComparisonTest do
   @moduledoc """
-  End-to-end smoke test comparing WebSocket vs HTTP latencies for common RPC methods.
+  Transport latency benchmarking test to compare HTTP vs WebSocket.
 
-  This test:
-  1. Sets up real providers with both HTTP and WebSocket endpoints
-  2. Executes multiple requests for each method using both transports
-  3. Queries BenchmarkStore directly to compare transport-specific latencies
-  4. Reports the results in a readable format
+  ## Methodology
+
+  This test implements rigorous statistical methodology by isolating the transport variable:
+
+  1. **Single Provider Focus:** Tests one provider at a time with NO failover
+     - Ensures HTTP and WebSocket are tested against identical infrastructure
+     - Eliminates provider performance variance from comparison
+     - Change @test_provider to benchmark different providers
+
+  2. **Fair Comparison:** Uses `Workload.direct()` with `provider_override` and `failover_on_override: false`
+     - Identical code paths except for transport layer
+     - No fallback to other providers
+     - Forces exclusive use of specified provider
+
+  3. **Statistical Power:** 300 samples per transport per method (600 total per transport)
+     - Sufficient for reliable P95/P99 and significance testing
+     - Light load avoids rate limiting
+
+  4. **Warmup Phase:** 10-second warmup eliminates cold start effects
+     (connection establishment, DNS resolution, TLS handshake)
+
+  5. **Statistical Analysis:**
+     - Standard deviation and 95% confidence intervals
+     - Provider distribution verification (should be 100% single provider)
+     - Mann-Whitney U test for statistical significance (p < 0.05)
+
+  ## Usage
+
+  To test different providers, change @test_provider:
+  - "llamarpc" - LlamaNodes
+  - "ankr" - Ankr
+  - "publicnode" - PublicNode
+  - "blockpi" - BlockPI
+  - Or add your own provider to @available_providers
+
+  ## Expected Results
+
+  - WebSocket should show significantly lower latency (p < 0.05)
+  - Provider distribution: 100% to test provider (balance score = 1.0)
+  - Statistical significance confirmed by Mann-Whitney U test
   """
 
   use ExUnit.Case, async: false
   require Logger
 
-  alias Lasso.Battle.SetupHelper
-  alias Lasso.RPC.RequestPipeline
-  alias Lasso.RPC.Metrics
-  alias Lasso.Benchmarking.BenchmarkStore
+  alias Lasso.Battle.{Scenario, Workload, Reporter, SetupHelper}
 
   @moduletag :battle
   @moduletag :transport_bench
   @moduletag :real_providers
-  @moduletag timeout: 180_000
+  @moduletag timeout: :infinity
 
   @chain "ethereum"
-  @methods ["eth_blockNumber", "eth_chainId", "eth_gasPrice"]
-  @requests_per_method_per_transport 20
+
+  # Test methods: simple queries only to minimize response size variance
+  @methods ["eth_blockNumber", "eth_chainId"]
+
+  # Available providers with both HTTP and WebSocket support
+  @available_providers %{
+    "llamarpc" => {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"},
+    "ankr" => {:real, "ankr", "https://rpc.ankr.com/eth", "wss://rpc.ankr.com/eth/ws"},
+    "publicnode" =>
+      {:real, "publicnode", "https://ethereum-rpc.publicnode.com",
+       "wss://ethereum-rpc.publicnode.com"},
+    "blockpi" =>
+      {:real, "blockpi", "https://ethereum.blockpi.network/v1/rpc/public",
+       "wss://ethereum.blockpi.network/v1/ws/public"}
+  }
+
+  # CONFIGURE THIS: Provider to test (must have both HTTP and WebSocket)
+  # Options: "llamarpc", "ankr", "publicnode", "blockpi"
+  @test_provider "publicnode"
+
+  # Light load configuration to avoid rate limits
+  # req/s during warmup
+  @warmup_rate 1
+  # ms
+  @warmup_duration 10_000
+  # req/s during measurement
+  @test_rate 5
+  # ms (60s @ 5 req/s = 300 samples per transport per method)
+  @test_duration 60_000
 
   setup_all do
     # Override HTTP client for real provider tests
     original_client = Application.get_env(:lasso, :http_client)
     Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClient.Finch)
 
+    # Use real WebSockex client (override global mock from test_helper)
+    prev_ws_client = Application.get_env(:lasso, :ws_client_module)
+    Application.put_env(:lasso, :ws_client_module, WebSockex)
+
     on_exit(fn ->
       Application.put_env(:lasso, :http_client, original_client)
+      Application.put_env(:lasso, :ws_client_module, prev_ws_client)
     end)
 
     :ok
@@ -41,12 +105,9 @@ defmodule Lasso.Battle.TransportLatencyComparisonTest do
   setup do
     Application.ensure_all_started(:lasso)
 
-    # Clear any existing metrics to get clean data
-    BenchmarkStore.clear_chain_metrics(@chain)
-
     on_exit(fn ->
       try do
-        SetupHelper.cleanup_providers(@chain, ["llamarpc", "ankr"])
+        SetupHelper.cleanup_providers(@chain, [@test_provider])
       catch
         _, _ -> :ok
       end
@@ -55,216 +116,258 @@ defmodule Lasso.Battle.TransportLatencyComparisonTest do
     :ok
   end
 
-  test "HTTP vs WebSocket latency comparison for common RPC methods" do
-    # Setup providers with both HTTP and WebSocket URLs
-    SetupHelper.setup_providers(@chain, [
-      {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"},
-      {:real, "ankr", "https://rpc.ankr.com/eth", "wss://rpc.ankr.com/eth/ws"}
-    ])
+  test "transport latency comparison: HTTP vs WebSocket on single provider" do
+    # Verify real WebSocket client is configured
+    ws_mod = Application.get_env(:lasso, :ws_client_module)
+    assert ws_mod == WebSockex, "Battle test requires real WebSockex; got #{inspect(ws_mod)}"
 
-    Logger.info("\n" <> String.duplicate("=", 80))
-    Logger.info("🚀 Starting Transport Latency Comparison Test")
-    Logger.info(String.duplicate("=", 80))
+    provider_config = Map.fetch!(@available_providers, @test_provider)
 
-    # Execute requests for each method and transport
-    results =
-      Enum.reduce(@methods, %{}, fn method, acc ->
-        Logger.info("\n📊 Testing method: #{method}")
+    result =
+      Scenario.new("Transport Latency: HTTP vs WebSocket [@#{@test_provider}]")
+      |> Scenario.setup(fn ->
+        Logger.info("Setting up single provider for isolated transport comparison...")
+        Logger.info("Provider: #{@test_provider}")
+        Logger.info("Configuration: #{inspect(provider_config)}")
 
-        # HTTP requests
-        Logger.info("  → Running #{@requests_per_method_per_transport} HTTP requests...")
-        http_start = System.monotonic_time(:millisecond)
+        # Setup single provider with both HTTP and WebSocket
+        SetupHelper.setup_providers(@chain, [provider_config])
 
-        http_results =
-          for i <- 1..@requests_per_method_per_transport do
-            result =
-              RequestPipeline.execute_via_channels(
-                @chain,
-                method,
-                [],
-                transport_override: :http,
-                strategy: :round_robin,
-                timeout: 10_000
-              )
+        Logger.info("✓ Provider configured for transport benchmarking")
+        Logger.info("✓ Failover disabled - testing single provider only")
 
-            if rem(i, 5) == 0 do
-              Logger.info("    HTTP: #{i}/#{@requests_per_method_per_transport} completed")
-            end
-
-            # Small delay to avoid rate limiting
-            Process.sleep(100)
-            result
-          end
-
-        http_duration = System.monotonic_time(:millisecond) - http_start
-        http_successes = Enum.count(http_results, fn {status, _} -> status == :ok end)
-
-        Logger.info(
-          "    ✅ HTTP: #{http_successes}/#{@requests_per_method_per_transport} succeeded in #{http_duration}ms"
-        )
-
-        # WebSocket requests
-        Logger.info("  → Running #{@requests_per_method_per_transport} WebSocket requests...")
-        ws_start = System.monotonic_time(:millisecond)
-
-        ws_results =
-          for i <- 1..@requests_per_method_per_transport do
-            result =
-              RequestPipeline.execute_via_channels(
-                @chain,
-                method,
-                [],
-                transport_override: :ws,
-                strategy: :round_robin,
-                timeout: 10_000
-              )
-
-            if rem(i, 5) == 0 do
-              Logger.info("    WS: #{i}/#{@requests_per_method_per_transport} completed")
-            end
-
-            # Small delay to avoid overwhelming the connection
-            Process.sleep(100)
-            result
-          end
-
-        ws_duration = System.monotonic_time(:millisecond) - ws_start
-        ws_successes = Enum.count(ws_results, fn {status, _} -> status == :ok end)
-
-        Logger.info(
-          "    ✅ WS: #{ws_successes}/#{@requests_per_method_per_transport} succeeded in #{ws_duration}ms"
-        )
-
-        Map.put(acc, method, %{
-          http_results: http_results,
-          http_successes: http_successes,
-          ws_results: ws_results,
-          ws_successes: ws_successes
-        })
+        {:ok,
+         %{
+           chain: @chain,
+           provider: @test_provider,
+           method_count: length(@methods),
+           sample_size_per_transport: @test_rate * (@test_duration / 1000) * length(@methods)
+         }}
       end)
+      |> Scenario.workload(fn ->
+        Logger.info("Starting single-provider transport comparison...")
+        Logger.info("Provider: #{@test_provider} | Methods: #{inspect(@methods)}")
 
-    # Allow a moment for async metrics to be recorded
-    Process.sleep(500)
+        # WARMUP PHASE: Establish connections and warm caches
+        Logger.info(
+          "🔥 Warmup phase: #{@warmup_duration / 1000}s at #{@warmup_rate} req/s per transport..."
+        )
 
-    # Query BenchmarkStore for transport-specific metrics
-    Logger.info("\n" <> String.duplicate("=", 80))
-    Logger.info("📈 TRANSPORT LATENCY COMPARISON RESULTS")
-    Logger.info(String.duplicate("=", 80))
-
-    comparison_results =
-      Enum.flat_map(@methods, fn method ->
-        Logger.info("\n🔍 Method: #{method}")
-        Logger.info(String.duplicate("-", 80))
-
-        # Get metrics for each provider and transport
-        providers = ["llamarpc", "ankr"]
-
-        Enum.flat_map(providers, fn provider_id ->
-          http_perf =
-            Metrics.get_provider_transport_performance(@chain, provider_id, method, :http)
-
-          ws_perf = Metrics.get_provider_transport_performance(@chain, provider_id, method, :ws)
-
-          Logger.info("\n  Provider: #{provider_id}")
-
-          if http_perf do
-            Logger.info("    HTTP:")
-            Logger.info("      Latency: #{Float.round(http_perf.latency_ms, 2)}ms")
-            Logger.info("      Success Rate: #{Float.round(http_perf.success_rate * 100, 2)}%")
-            Logger.info("      Total Calls: #{http_perf.total_calls}")
-          else
-            Logger.info("    HTTP: No data recorded")
-          end
-
-          if ws_perf do
-            Logger.info("    WebSocket:")
-            Logger.info("      Latency: #{Float.round(ws_perf.latency_ms, 2)}ms")
-            Logger.info("      Success Rate: #{Float.round(ws_perf.success_rate * 100, 2)}%")
-            Logger.info("      Total Calls: #{ws_perf.total_calls}")
-          else
-            Logger.info("    WebSocket: No data recorded")
-          end
-
-          # Calculate comparison
-          if http_perf && ws_perf do
-            diff = ws_perf.latency_ms - http_perf.latency_ms
-            diff_pct = (diff / http_perf.latency_ms * 100) |> Float.round(2)
-
-            faster_transport = if diff < 0, do: "WebSocket", else: "HTTP"
-            faster_by = abs(diff) |> Float.round(2)
-
-            Logger.info(
-              "    🏆 Winner: #{faster_transport} (faster by #{faster_by}ms / #{abs(diff_pct)}%)"
-            )
+        warmup_tasks =
+          Enum.flat_map(@methods, fn method ->
+            params = get_params_for_method(method)
 
             [
-              %{
-                method: method,
-                provider: provider_id,
-                http_latency: http_perf.latency_ms,
-                ws_latency: ws_perf.latency_ms,
-                faster: faster_transport,
-                diff_ms: faster_by
-              }
+              Task.async(fn ->
+                http_fn = fn ->
+                  Workload.direct(@chain, method, params,
+                    transport: :http,
+                    provider_override: @test_provider,
+                    failover_on_override: false
+                  )
+                end
+
+                Workload.constant(http_fn, rate: @warmup_rate, duration: @warmup_duration)
+              end),
+              Task.async(fn ->
+                ws_fn = fn ->
+                  Workload.direct(@chain, method, params,
+                    transport: :ws,
+                    provider_override: @test_provider,
+                    failover_on_override: false
+                  )
+                end
+
+                Workload.constant(ws_fn, rate: @warmup_rate, duration: @warmup_duration)
+              end)
             ]
-          else
-            []
-          end
-        end)
+          end)
+
+        Task.await_many(warmup_tasks, @warmup_duration * 2)
+        Logger.info("✓ Warmup complete")
+
+        # MEASUREMENT PHASE
+        # - Single provider with NO failover
+        # - 60s @ 5 req/s = 300 samples per transport per method (600 total per transport)
+        # - Light load avoids rate limiting
+        # - Identical infrastructure, only transport differs
+
+        Logger.info(
+          "📊 Measurement phase: #{@test_duration / 1000}s at #{@test_rate} req/s per transport..."
+        )
+
+        measurement_tasks =
+          Enum.flat_map(@methods, fn method ->
+            params = get_params_for_method(method)
+
+            [
+              # HTTP upstream routing - LOCKED to test provider
+              Task.async(fn ->
+                http_fn = fn ->
+                  Workload.direct(@chain, method, params,
+                    transport: :http,
+                    provider_override: @test_provider,
+                    failover_on_override: false
+                  )
+                end
+
+                Workload.constant(http_fn, rate: @test_rate, duration: @test_duration)
+              end),
+              # WebSocket upstream routing - LOCKED to test provider
+              Task.async(fn ->
+                ws_fn = fn ->
+                  Workload.direct(@chain, method, params,
+                    transport: :ws,
+                    provider_override: @test_provider,
+                    failover_on_override: false
+                  )
+                end
+
+                Workload.constant(ws_fn, rate: @test_rate, duration: @test_duration)
+              end)
+            ]
+          end)
+
+        Task.await_many(measurement_tasks, @test_duration * 2)
+
+        Logger.info("✓ All workloads completed")
+        :ok
       end)
+      |> Scenario.collect([:requests, :system])
+      |> Scenario.slo(
+        # Success rate: Allow 5% failures for real provider variability
+        success_rate: 0.95
+        # Note: No latency SLOs - we're comparing transports, not validating absolute performance
+      )
+      |> Scenario.run()
 
-    # Summary
-    Logger.info("\n" <> String.duplicate("=", 80))
-    Logger.info("📊 SUMMARY")
-    Logger.info(String.duplicate("=", 80))
+    # Save detailed reports
+    Reporter.save_json(result, "priv/battle_results/")
+    Reporter.save_markdown(result, "priv/battle_results/")
 
-    if length(comparison_results) > 0 do
-      http_wins = Enum.count(comparison_results, fn r -> r.faster == "HTTP" end)
-      ws_wins = Enum.count(comparison_results, fn r -> r.faster == "WebSocket" end)
-      total = length(comparison_results)
+    # Assert SLOs passed
+    assert result.passed?, """
+    Transport latency benchmark failed SLO requirements!
 
-      avg_http_latency =
-        comparison_results
-        |> Enum.map(& &1.http_latency)
-        |> Enum.sum()
-        |> Kernel./(total)
-        |> Float.round(2)
+    #{result.summary}
+    """
 
-      avg_ws_latency =
-        comparison_results
-        |> Enum.map(& &1.ws_latency)
-        |> Enum.sum()
-        |> Kernel./(total)
-        |> Float.round(2)
+    # Extract transport-specific metrics
+    http_stats = result.analysis.requests_by_transport.http
+    ws_stats = result.analysis.requests_by_transport.ws
+    stat_test = result.analysis.requests_by_transport.statistical_comparison
 
-      Logger.info("\nTotal Comparisons: #{total}")
-      Logger.info("  HTTP Wins: #{http_wins} (#{Float.round(http_wins / total * 100, 1)}%)")
-      Logger.info("  WebSocket Wins: #{ws_wins} (#{Float.round(ws_wins / total * 100, 1)}%)")
-      Logger.info("\nAverage Latencies:")
-      Logger.info("  HTTP: #{avg_http_latency}ms")
-      Logger.info("  WebSocket: #{avg_ws_latency}ms")
+    # Print detailed summary
+    IO.puts("\n" <> String.duplicate("=", 80))
+    IO.puts("✅ TRANSPORT LATENCY COMPARISON COMPLETE")
+    IO.puts(String.duplicate("=", 80))
+    IO.puts("\n📋 Test Configuration:")
+    IO.puts("   Provider: #{@test_provider}")
+    IO.puts("   Methods: #{inspect(@methods)}")
+    IO.puts("   Sample Size: #{http_stats.total} HTTP, #{ws_stats.total} WebSocket")
+    IO.puts("   Total Requests: #{result.analysis.requests.total}")
 
-      overall_faster = if avg_ws_latency < avg_http_latency, do: "WebSocket", else: "HTTP"
-      overall_diff = abs(avg_ws_latency - avg_http_latency) |> Float.round(2)
+    IO.puts("\n🔴 HTTP Transport:")
+    IO.puts("   P50: #{http_stats.p50_latency_ms}ms")
+    IO.puts("   P95: #{http_stats.p95_latency_ms}ms")
+    IO.puts("   P99: #{http_stats.p99_latency_ms}ms")
 
-      Logger.info("\n🏆 Overall Winner: #{overall_faster} (faster by #{overall_diff}ms)")
-    else
-      Logger.warning("⚠️  No comparison data available - metrics may not have been recorded")
-    end
+    IO.puts(
+      "   Avg: #{Float.round(http_stats.avg_latency_ms, 2)}ms ± #{Float.round(http_stats.stddev_latency_ms, 2)}ms"
+    )
 
-    Logger.info("\n" <> String.duplicate("=", 80))
-    Logger.info("✅ Test Complete")
-    Logger.info(String.duplicate("=", 80) <> "\n")
+    http_dist = http_stats.provider_distribution
 
-    # Assertions
-    for method <- @methods do
-      method_results = Map.get(results, method)
-      assert method_results.http_successes > 0, "HTTP requests for #{method} should succeed"
-      assert method_results.ws_successes > 0, "WebSocket requests for #{method} should succeed"
-    end
+    http_primary =
+      http_dist.by_provider
+      |> Enum.max_by(fn {_, %{count: c}} -> c end)
+      |> then(fn {name, %{percentage: pct}} -> "#{name} (#{Float.round(pct, 1)}%)" end)
 
-    # At least some metrics should be recorded
-    assert length(comparison_results) > 0,
-           "Should have recorded transport-specific metrics in BenchmarkStore"
+    IO.puts("   Provider: #{http_primary} | Balance: #{http_dist.balance_score}")
+
+    IO.puts("\n🟢 WebSocket Transport:")
+    IO.puts("   P50: #{ws_stats.p50_latency_ms}ms")
+    IO.puts("   P95: #{ws_stats.p95_latency_ms}ms")
+    IO.puts("   P99: #{ws_stats.p99_latency_ms}ms")
+
+    IO.puts(
+      "   Avg: #{Float.round(ws_stats.avg_latency_ms, 2)}ms ± #{Float.round(ws_stats.stddev_latency_ms, 2)}ms"
+    )
+
+    ws_dist = ws_stats.provider_distribution
+
+    ws_primary =
+      ws_dist.by_provider
+      |> Enum.max_by(fn {_, %{count: c}} -> c end)
+      |> then(fn {name, %{percentage: pct}} -> "#{name} (#{Float.round(pct, 1)}%)" end)
+
+    IO.puts("   Provider: #{ws_primary} | Balance: #{ws_dist.balance_score}")
+
+    IO.puts("\n⚡ Performance Difference:")
+    ws_faster_p50 = http_stats.p50_latency_ms - ws_stats.p50_latency_ms
+    ws_faster_p95 = http_stats.p95_latency_ms - ws_stats.p95_latency_ms
+
+    speedup_p50 =
+      if ws_stats.p50_latency_ms > 0 do
+        Float.round(http_stats.p50_latency_ms / ws_stats.p50_latency_ms, 1)
+      else
+        "∞"
+      end
+
+    ws_faster_p50_str =
+      if is_float(ws_faster_p50), do: Float.round(ws_faster_p50, 2), else: ws_faster_p50
+
+    ws_faster_p95_str =
+      if is_float(ws_faster_p95), do: Float.round(ws_faster_p95, 2), else: ws_faster_p95
+
+    IO.puts("   P50: WebSocket #{ws_faster_p50_str}ms faster (#{speedup_p50}x speedup)")
+    IO.puts("   P95: WebSocket #{ws_faster_p95_str}ms faster")
+
+    IO.puts("\n📊 Statistical Significance:")
+    IO.puts("   p-value: #{stat_test.p_value}")
+    IO.puts("   Z-score: #{stat_test.z_score}")
+    IO.puts("   Result: #{stat_test.interpretation}")
+
+    IO.puts("\n📈 Full report: priv/battle_results/latest.md")
+    IO.puts(String.duplicate("=", 80) <> "\n")
   end
+
+  # Helper to provide appropriate params for each method
+  defp get_params_for_method("eth_getBalance"),
+    do: ["0x0000000000000000000000000000000000000000", "latest"]
+
+  defp get_params_for_method("eth_getTransactionCount"),
+    do: ["0x0000000000000000000000000000000000000000", "latest"]
+
+  defp get_params_for_method("eth_getBlockByNumber"), do: ["latest", false]
+
+  defp get_params_for_method("eth_call") do
+    [
+      %{
+        "to" => "0x0000000000000000000000000000000000000000",
+        "data" => "0x"
+      },
+      "latest"
+    ]
+  end
+
+  defp get_params_for_method("eth_estimateGas") do
+    [
+      %{
+        "to" => "0x0000000000000000000000000000000000000000",
+        "data" => "0x"
+      }
+    ]
+  end
+
+  defp get_params_for_method("eth_getLogs") do
+    [
+      %{
+        "fromBlock" => "latest",
+        "toBlock" => "latest"
+      }
+    ]
+  end
+
+  defp get_params_for_method(_method), do: []
 end

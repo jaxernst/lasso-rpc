@@ -33,3 +33,5 @@ lasso-*.tar
 
 # Configuration backups (auto-generated)
 /priv/config_backups/
+
+/priv/battle_results/
