@@ -20,9 +20,7 @@ defmodule Lasso.RPC.WSHandler do
     # Timestamp when frame arrives from network
     received_at = System.monotonic_time(:microsecond)
 
-    # Decode with :strings option to preserve integer lists (not charlists)
-    # Without this, Jason treats [100] as ~c"d" which breaks param preservation
-    case Jason.decode(message, strings: :copy) do
+    case Jason.decode(message) do
       {:ok, decoded} ->
         send(state.parent, {:ws_message, decoded, received_at})
         {:ok, state}
