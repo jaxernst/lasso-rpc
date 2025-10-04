@@ -1,13 +1,11 @@
 defmodule Lasso.Battle.TestHelper do
   @moduledoc """
-  Helper functions for battle testing with real Lasso RPC system.
+  Utility functions for battle testing with real Lasso RPC system.
 
-  ⚠️  **DEPRECATED** - Most functions removed. Use SetupHelper instead.
-
-  This module now only provides benchmark seeding and utility functions.
+  This module provides benchmark seeding and utility functions.
   For provider registration, use SetupHelper.setup_providers().
 
-  Remaining utilities:
+  Available utilities:
   - Seed benchmark data for routing strategies
   - Wait for chain readiness
   - Direct RPC requests for validation
@@ -67,10 +65,6 @@ defmodule Lasso.Battle.TestHelper do
 
         status when is_map(status) ->
           :ok
-
-        _ ->
-          Process.sleep(100)
-          wait_for_chain_ready_impl(chain_name, max_attempts, attempt + 1)
       end
     end
   end

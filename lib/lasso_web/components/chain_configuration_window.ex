@@ -903,12 +903,12 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
         case Lasso.Config.ChainConfigManager.get_chain(target_chain) do
           {:ok, cfg} ->
             providers =
-              (cfg.providers || []) ++
+              cfg.providers ++
                 [provider |> Map.new(fn {k, v} -> {String.to_atom(k), v} end)]
 
             attrs = %{
-              "name" => cfg.name || name,
-              "chain_id" => cfg.chain_id || chain_id,
+              "name" => cfg.name,
+              "chain_id" => cfg.chain_id,
               "block_time" => cfg.block_time || 12000,
               "providers" =>
                 Enum.map(providers, fn p ->
@@ -970,17 +970,13 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
   # Helper functions
 
   defp load_available_chains(socket) do
-    case Lasso.Config.ChainConfigManager.list_chains() do
-      {:ok, chains} ->
-        chain_list =
-          Enum.map(chains, fn {name, config} ->
-            %{name: name, chain_id: config.chain_id, providers: config.providers}
-          end)
+    {:ok, chains} = Lasso.Config.ChainConfigManager.list_chains()
 
-        assign(socket, :available_chains, chain_list)
+    chain_list =
+      Enum.map(chains, fn {name, config} ->
+        %{name: name, chain_id: config.chain_id, providers: config.providers}
+      end)
 
-      {:error, _} ->
-        assign(socket, :available_chains, [])
-    end
+    assign(socket, :available_chains, chain_list)
   end
 end

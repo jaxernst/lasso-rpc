@@ -76,8 +76,6 @@ defmodule Lasso.RPC.Transport do
   """
   @callback close(channel) :: :ok
 
-  # Legacy compatibility functions
-
   @doc """
   Forwards a request via the specified protocol.
 

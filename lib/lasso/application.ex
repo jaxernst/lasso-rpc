@@ -6,6 +6,9 @@ defmodule Lasso.Application do
   use Application
   require Logger
 
+  # Compile-time environment check
+  @env Mix.env()
+
   @impl true
   def start(_type, _args) do
     # Store application start time for uptime calculation
@@ -99,7 +102,14 @@ defmodule Lasso.Application do
   end
 
   defp start_chain_supervisor(chain_name, chain_config) do
-    :ok = Lasso.Config.ChainConfig.validate_chain_config(chain_config)
+    # Skip validation in test environment since providers are registered dynamically
+    if @env != :test do
+      case Lasso.Config.ChainConfig.validate_chain_config(chain_config) do
+        :ok -> :ok
+        {:error, reason} ->
+          Logger.warning("Chain #{chain_name} validation failed: #{inspect(reason)}")
+      end
+    end
 
     DynamicSupervisor.start_child(
       Lasso.RPC.Supervisor,

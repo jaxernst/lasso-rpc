@@ -693,8 +693,6 @@ defmodule Lasso.RPC.ProviderPool do
     update_active_providers(new_state)
   end
 
-  # Selection is centralized in Lasso.RPC.Selection; local strategy functions removed
-
   defp update_active_providers(state) do
     # Use runtime provider state instead of ConfigStore
     # This allows dynamically registered providers (battle tests, mocks) to participate
@@ -931,16 +929,6 @@ defmodule Lasso.RPC.ProviderPool do
         :cooldown_end ->
           %Provider.CooldownEnd{ts: ts, chain: chain_name, provider_id: provider_id}
 
-        :health_check_failed ->
-          %Provider.HealthCheckFailed{
-            ts: ts,
-            chain: chain_name,
-            provider_id: provider_id,
-            reason: Map.get(details, :reason) || Map.get(details, "reason"),
-            consecutive_failures:
-              Map.get(details, :consecutive_failures) || Map.get(details, "consecutive_failures")
-          }
-
         :ws_connected ->
           %Provider.WSConnected{ts: ts, chain: chain_name, provider_id: provider_id}
 
@@ -950,14 +938,6 @@ defmodule Lasso.RPC.ProviderPool do
             chain: chain_name,
             provider_id: provider_id,
             code: Map.get(details, :code) || Map.get(details, "code"),
-            reason: Map.get(details, :reason) || Map.get(details, "reason")
-          }
-
-        :ws_disconnected ->
-          %Provider.WSDisconnected{
-            ts: ts,
-            chain: chain_name,
-            provider_id: provider_id,
             reason: Map.get(details, :reason) || Map.get(details, "reason")
           }
       end

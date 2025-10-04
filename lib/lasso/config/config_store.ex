@@ -62,7 +62,8 @@ defmodule Lasso.Config.ConfigStore do
   @doc """
   Gets provider configuration for a specific provider within a chain.
   """
-  @spec get_provider(String.t(), String.t()) :: {:ok, ProviderConfig.t()} | {:error, :not_found}
+  @spec get_provider(String.t(), String.t()) ::
+          {:ok, ChainConfig.Provider.t()} | {:error, :not_found}
   def get_provider(chain_name, provider_id) do
     with {:ok, chain_config} <- get_chain(chain_name) do
       case Enum.find(chain_config.providers, &(&1.id == provider_id)) do
@@ -75,7 +76,7 @@ defmodule Lasso.Config.ConfigStore do
   @doc """
   Gets all providers for a specific chain.
   """
-  @spec get_providers(String.t()) :: {:ok, [ProviderConfig.t()]} | {:error, :not_found}
+  @spec get_providers(String.t()) :: {:ok, [ChainConfig.Provider.t()]} | {:error, :not_found}
   def get_providers(chain_name) do
     case get_chain(chain_name) do
       {:ok, chain_config} -> {:ok, chain_config.providers}
@@ -291,7 +292,7 @@ defmodule Lasso.Config.ConfigStore do
         :ets.insert(@config_table, {@chains_key, updated_chains})
 
         # Update chain ID index if chain_id is present (safely handle missing key)
-        if chain_config.chain_id do
+        if not is_nil(chain_config.chain_id) do
           id_index =
             case :ets.lookup(@config_table, @chain_ids_key) do
               [{@chain_ids_key, existing_index}] -> existing_index
@@ -322,7 +323,7 @@ defmodule Lasso.Config.ConfigStore do
         :ets.insert(@config_table, {@chains_key, updated_chains})
 
         # Remove from chain ID index if chain_id exists (safely handle missing key)
-        if chain_config.chain_id do
+        if not is_nil(chain_config.chain_id) do
           id_index =
             case :ets.lookup(@config_table, @chain_ids_key) do
               [{@chain_ids_key, existing_index}] -> existing_index

@@ -152,7 +152,6 @@ defmodule Lasso.RPC.Selection do
   defp resolve_strategy_module(:round_robin), do: Lasso.RPC.Strategies.RoundRobin
   defp resolve_strategy_module(:cheapest), do: Lasso.RPC.Strategies.Cheapest
   defp resolve_strategy_module(:fastest), do: Lasso.RPC.Strategies.Fastest
-  defp resolve_strategy_module(_), do: Lasso.RPC.Strategies.Priority
 
   @doc """
   Gets all available providers for a chain, respecting protocol requirements.
@@ -355,7 +354,6 @@ defmodule Lasso.RPC.Selection do
       :cheapest -> "cost_optimized"
       :priority -> "static_priority"
       :round_robin -> "round_robin_rotation"
-      _ -> "default_strategy"
     end
   end
 end

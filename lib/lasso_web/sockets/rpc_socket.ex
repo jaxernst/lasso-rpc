@@ -374,17 +374,11 @@ defmodule LassoWeb.RPCSocket do
 
   defp get_chain_id(chain_name) do
     case ConfigStore.get_chain(chain_name) do
-      {:ok, %{chain_id: chain_id}} when is_integer(chain_id) ->
+      {:ok, %{chain_id: chain_id}} ->
         {:ok, "0x" <> Integer.to_string(chain_id, 16)}
-
-      {:ok, %{chain_id: chain_id}} when is_binary(chain_id) ->
-        {:ok, chain_id}
 
       {:error, :not_found} ->
         {:error, "Chain not configured: #{chain_name}"}
-
-      {:ok, _} ->
-        {:error, "Invalid chain configuration for: #{chain_name}"}
     end
   end
 

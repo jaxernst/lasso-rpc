@@ -266,10 +266,8 @@ defmodule Lasso.RPC.WSConnection do
         case Map.pop(state.pending_requests, id) do
           {nil, _pending} ->
             # Not a tracked request; treat as generic message
-            case handle_websocket_message(decoded, state) do
-              {:ok, new_state} -> {:noreply, new_state}
-              new_state -> {:noreply, new_state}
-            end
+            {:ok, new_state} = handle_websocket_message(decoded, state)
+            {:noreply, new_state}
 
           {%{from: from, timer: timer, sent_at: _sent_at}, new_pending} ->
             Process.cancel_timer(timer)
@@ -293,10 +291,8 @@ defmodule Lasso.RPC.WSConnection do
         end
 
       _other ->
-        case handle_websocket_message(decoded, state) do
-          {:ok, new_state} -> {:noreply, new_state}
-          new_state -> {:noreply, new_state}
-        end
+        {:ok, new_state} = handle_websocket_message(decoded, state)
+        {:noreply, new_state}
     end
   end
 
@@ -550,36 +546,22 @@ defmodule Lasso.RPC.WSConnection do
     end
   end
 
-  # TODO: Consider consolidating these duplicative function handlers (only difference is in the debug calls)
   defp handle_websocket_message(
-         %{
-           "method" => "eth_subscription",
-           "params" => %{"result" => block_data, "subscription" => sub_id}
-         },
+         %{"method" => "eth_subscription", "params" => %{"subscription" => sub_id, "result" => payload}},
          state
        ) do
-    # Handle new block subscription notifications
-    Logger.debug("Received new block: #{inspect(block_data)}")
-
-    # Send to MessageAggregator for deduplication and speed optimization
     received_at = System.monotonic_time(:millisecond)
 
-    # Telemetry: message received
     :telemetry.execute(
-      [
-        :lasso,
-        :ws,
-        :message,
-        :received
-      ],
+      [:lasso, :ws, :message, :received],
       %{count: 1},
-      %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :newHeads}
+      %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :subscription}
     )
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
       "ws:subs:#{state.chain_name}",
-      {:subscription_event, state.endpoint.id, sub_id, block_data, received_at}
+      {:subscription_event, state.endpoint.id, sub_id, payload, received_at}
     )
 
     {:ok, state}
@@ -619,39 +601,6 @@ defmodule Lasso.RPC.WSConnection do
 
       {:ok, state}
     end
-  end
-
-  defp handle_websocket_message(%{"method" => "eth_subscription", "params" => params}, state) do
-    # Handle other subscription notifications
-    Logger.debug("Received subscription: #{inspect(params)}")
-
-    # Send all subscription messages through aggregator
-    received_at = System.monotonic_time(:millisecond)
-
-    :telemetry.execute(
-      [
-        :lasso,
-        :ws,
-        :message,
-        :received
-      ],
-      %{count: 1},
-      %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :subscription}
-    )
-
-    case params do
-      %{"subscription" => sub_id, "result" => payload} ->
-        Phoenix.PubSub.broadcast(
-          Lasso.PubSub,
-          "ws:subs:#{state.chain_name}",
-          {:subscription_event, state.endpoint.id, sub_id, payload, received_at}
-        )
-
-      _ ->
-        :ok
-    end
-
-    {:ok, state}
   end
 
   defp handle_websocket_message(message, state) do

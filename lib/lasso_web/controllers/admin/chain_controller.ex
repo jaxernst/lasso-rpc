@@ -50,11 +50,6 @@ defmodule LassoWeb.Admin.ChainController do
           |> Enum.sort_by(& &1.id)
 
         json(conn, %{chains: chains_list})
-
-      {:error, reason} ->
-        conn
-        |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to list chains", details: inspect(reason)})
     end
   end
 
@@ -100,11 +95,6 @@ defmodule LassoWeb.Admin.ChainController do
         conn
         |> put_status(:not_found)
         |> json(%{error: "Chain not found"})
-
-      {:error, reason} ->
-        conn
-        |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to get chain", details: inspect(reason)})
     end
   end
 
@@ -285,11 +275,6 @@ defmodule LassoWeb.Admin.ChainController do
         conn
         |> put_status(:not_found)
         |> json(%{error: "Chain not found"})
-
-      {:error, reason} ->
-        conn
-        |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to get chain for testing", details: inspect(reason)})
     end
   end
 
@@ -379,9 +364,6 @@ defmodule LassoWeb.Admin.ChainController do
     do: "Provider #{provider_id} connectivity failed: #{inspect(reason)}"
 
   defp format_error(reason), do: inspect(reason)
-
-  defp format_validation_errors({:missing_required_fields, fields}),
-    do: "Missing required fields: #{Enum.join(fields, ", ")}"
 
   defp format_validation_errors(reason), do: ConfigValidator.format_error(reason)
 end

@@ -11,9 +11,9 @@ defmodule Lasso.Config.ChainConfig do
   @type t :: %__MODULE__{
           chain_id: non_neg_integer(),
           name: String.t(),
-          providers: [Provider.t()],
-          connection: Connection.t(),
-          failover: Failover.t()
+          providers: [__MODULE__.Provider.t()],
+          connection: __MODULE__.Connection.t(),
+          failover: __MODULE__.Failover.t()
         }
 
   defstruct [
@@ -26,7 +26,7 @@ defmodule Lasso.Config.ChainConfig do
 
   defmodule Config do
     @type t :: %__MODULE__{
-            chains: %{String.t() => ChainConfig.t()}
+            chains: %{String.t() => Lasso.Config.ChainConfig.t()}
           }
 
     defstruct [
@@ -110,10 +110,6 @@ defmodule Lasso.Config.ChainConfig do
       {:error, :enoent} ->
         Logger.error("Configuration file not found: #{config_path}")
         {:error, :config_file_not_found}
-
-      {:error, reason} when is_binary(reason) ->
-        Logger.error("Failed to parse YAML configuration: #{reason}")
-        {:error, :invalid_yaml}
 
       {:error, reason} ->
         Logger.error("Configuration error: #{inspect(reason)}")
@@ -281,18 +277,13 @@ defmodule Lasso.Config.ChainConfig do
   Validates that a chain configuration has valid providers.
   """
   def validate_chain_config(%__MODULE__{} = chain_config) do
-    :ok = validate_providers(chain_config.providers)
-    :ok = validate_connection(chain_config.connection)
-  end
-
-  defp validate_providers([]) do
-    # Allow empty providers in test environment for dynamic registration
-    if Mix.env() == :test do
+    with :ok <- validate_providers(chain_config.providers),
+         :ok <- validate_connection(chain_config.connection) do
       :ok
-    else
-      {:error, :no_providers}
     end
   end
+
+  defp validate_providers([]), do: {:error, :no_providers}
 
   defp validate_providers(providers) do
     if Enum.all?(providers, &valid_provider?/1) do

@@ -46,8 +46,8 @@ defmodule Lasso.Battle.Workload do
 
   ## Backward Compatibility
 
-  Legacy functions (`http_constant/1`, `ws_constant/1`, etc.) are still supported
-  but are implemented using the new composable primitives internally.
+  Classic functions (`http_constant/1`, `ws_constant/1`, etc.) are implemented
+  using the new composable primitives internally.
   """
 
   require Logger
@@ -242,11 +242,10 @@ defmodule Lasso.Battle.Workload do
   end
 
   ## ============================================================================
-  ## Layer 3: Legacy API (Backward Compatibility)
+  ## Layer 3: Classic API
   ## ============================================================================
   ##
-  ## These functions are now implemented using the new composable primitives.
-  ## They remain for backward compatibility with existing tests.
+  ## These functions are implemented using the new composable primitives.
 
   @doc """
   Generates HTTP requests at a constant rate (LEGACY).
@@ -439,8 +438,8 @@ defmodule Lasso.Battle.Workload do
       })
 
     # Make request via HTTP client - production telemetry emitted by RequestPipeline
-    # Use port 4002 in test environment, 4000 otherwise
-    port = if Mix.env() == :test, do: 4002, else: 4000
+    # Use port from application config (4002 in test, 4000 otherwise)
+    port = Application.get_env(:lasso_web, LassoWeb.Endpoint)[:http][:port] || 4000
     url = "http://localhost:#{port}#{path}"
 
     Logger.debug("HTTP Request ##{request_id}: POST #{url}")

@@ -241,14 +241,14 @@ defmodule Lasso.Testing.MockWSProvider do
         # Broadcast confirmation immediately
         send_response(state.chain, state.provider_id, request_id, sub_id)
 
-        # Return subscription ID with mock latency
-        {:reply, {:ok, sub_id, 0}, new_state}
+        # Return subscription ID
+        {:reply, {:ok, sub_id}, new_state}
 
       _ ->
         # For other methods, process normally
         new_state = handle_rpc_request(message, state)
         # Mock response - in real implementation this would wait for upstream
-        {:reply, {:ok, %{"mock" => true}, 0}, new_state}
+        {:reply, {:ok, %{"mock" => true}}, new_state}
     end
   end
 
