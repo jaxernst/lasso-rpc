@@ -84,7 +84,7 @@ defmodule Lasso.Battle.DiagnosticTest do
     IO.puts("\n" <> String.duplicate("-", 80))
     IO.puts("📦 RAW COLLECTED DATA:")
     IO.puts(String.duplicate("-", 80))
-    IO.inspect(collected_data, pretty: true, limit: :infinity)
+    IO.puts("Collected #{map_size(collected_data)} data categories")
 
     # Analyze data
     analysis = Analyzer.analyze(collected_data, %{duration_ms: 1000})
@@ -92,7 +92,7 @@ defmodule Lasso.Battle.DiagnosticTest do
     IO.puts("\n" <> String.duplicate("-", 80))
     IO.puts("📈 ANALYSIS RESULTS:")
     IO.puts(String.duplicate("-", 80))
-    IO.inspect(analysis, pretty: true, limit: :infinity)
+    IO.puts("Analysis complete with #{map_size(analysis)} categories")
 
     # Verify expected values
     IO.puts("\n" <> String.duplicate("-", 80))
@@ -164,7 +164,7 @@ defmodule Lasso.Battle.DiagnosticTest do
     }
 
     IO.puts("\n📊 Test Analysis Data:")
-    IO.inspect(analysis.requests, pretty: true)
+    IO.puts("Requests: #{analysis.requests.total} total, #{analysis.requests.successes} successes")
 
     # Test various SLO scenarios
     test_cases = [
@@ -365,9 +365,7 @@ defmodule Lasso.Battle.DiagnosticTest do
       if length(requests) > 0 do
         first_request = List.first(requests)
         IO.puts("\nFirst request structure:")
-        IO.inspect(first_request, pretty: true)
-
-        IO.puts("\nFirst request keys: #{inspect(Map.keys(first_request))}")
+        IO.puts("Keys: #{inspect(Map.keys(first_request))}")
 
         # Validate structure (Collector normalizes latency to duration_ms)
         assert Map.has_key?(first_request, :duration_ms), "Missing :duration_ms key"
@@ -387,7 +385,7 @@ defmodule Lasso.Battle.DiagnosticTest do
       if length(system) > 0 do
         first_sample = List.first(system)
         IO.puts("\nFirst system sample:")
-        IO.inspect(first_sample, pretty: true)
+        IO.puts("Keys: #{inspect(Map.keys(first_sample))}")
 
         assert Map.has_key?(first_sample, :memory_mb), "Missing :memory_mb key"
         assert Map.has_key?(first_sample, :process_count), "Missing :process_count key"

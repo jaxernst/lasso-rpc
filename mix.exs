@@ -8,7 +8,8 @@ defmodule Lasso.MixProject do
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       listeners: [Phoenix.CodeReloader],
-      deps: deps()
+      deps: deps(),
+      dialyzer: dialyzer()
     ]
   end
 
@@ -43,6 +44,14 @@ defmodule Lasso.MixProject do
       {:telemetry_metrics, "~> 0.6"},
       {:telemetry_poller, "~> 1.0"},
       {:mox, "~> 1.0", only: :test}
+    ]
+  end
+
+  defp dialyzer do
+    [
+      # Suppress known false positives from opaque type internals
+      ignore_warnings: ".dialyzer_ignore.exs",
+      list_unused_filters: true
     ]
   end
 end

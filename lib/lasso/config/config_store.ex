@@ -322,17 +322,15 @@ defmodule Lasso.Config.ConfigStore do
         updated_chains = Map.delete(chains, chain_name)
         :ets.insert(@config_table, {@chains_key, updated_chains})
 
-        # Remove from chain ID index if chain_id exists (safely handle missing key)
-        if not is_nil(chain_config.chain_id) do
-          id_index =
-            case :ets.lookup(@config_table, @chain_ids_key) do
-              [{@chain_ids_key, existing_index}] -> existing_index
-              [] -> %{}
-            end
+        # Remove from chain ID index
+        id_index =
+          case :ets.lookup(@config_table, @chain_ids_key) do
+            [{@chain_ids_key, existing_index}] -> existing_index
+            [] -> %{}
+          end
 
-          updated_index = Map.delete(id_index, chain_config.chain_id)
-          :ets.insert(@config_table, {@chain_ids_key, updated_index})
-        end
+        updated_index = Map.delete(id_index, chain_config.chain_id)
+        :ets.insert(@config_table, {@chain_ids_key, updated_index})
 
         Logger.debug("Unregistered chain #{chain_name} from ConfigStore (runtime)")
         {:reply, :ok, state}

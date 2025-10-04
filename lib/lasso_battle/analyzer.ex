@@ -283,20 +283,22 @@ defmodule Lasso.Battle.Analyzer do
   end
 
   defp check_slo(:subscription_uptime, required, _analysis) do
-    # TODO: Calculate actual uptime from WebSocket telemetry
-    # For now, assume perfect uptime
+    # Not yet implemented: Calculate actual uptime from WebSocket connection/disconnection events
+    # Currently assumes perfect uptime (1.0)
     actual = 1.0
     %{required: required, actual: actual, passed?: actual >= required}
   end
 
   defp check_slo(:max_duplicate_rate, required, _analysis) do
-    # TODO: Calculate from WebSocket telemetry
+    # Not yet implemented: Calculate from analyze_websocket/1 duplicate detection
+    # Currently returns 0.0 duplicates
     actual = 0.0
     %{required: required, actual: actual, passed?: actual <= required}
   end
 
   defp check_slo(:max_gap_rate, required, _analysis) do
-    # TODO: Calculate from WebSocket gap detection telemetry
+    # Not yet implemented: Calculate from analyze_websocket/1 gap detection
+    # Currently returns 0.0 gaps
     actual = 0.0
     %{required: required, actual: actual, passed?: actual <= required}
   end
@@ -307,7 +309,8 @@ defmodule Lasso.Battle.Analyzer do
   end
 
   defp check_slo(:backfill_completion_ms, required, _analysis) do
-    # TODO: Measure backfill time from telemetry
+    # Not yet implemented: Measure backfill time from stream_coordinator telemetry events
+    # Currently returns 0 ms
     actual = 0
     %{required: required, actual: actual, passed?: actual <= required}
   end
