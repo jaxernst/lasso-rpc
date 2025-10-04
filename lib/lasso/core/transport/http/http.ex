@@ -170,19 +170,9 @@ defmodule Lasso.RPC.Transports.HTTP do
     end
   end
 
-  def supports_protocol?(provider_config, :http), do: has_http_url?(provider_config)
-  def supports_protocol?(provider_config, :both), do: has_http_url?(provider_config)
-  def supports_protocol?(_provider_config, :ws), do: false
-
-  def get_transport_type(_provider_config), do: :http
-
   # Private functions
 
   defp get_http_url(provider_config) do
     Map.get(provider_config, :url) || Map.get(provider_config, :http_url)
-  end
-
-  defp has_http_url?(provider_config) do
-    is_binary(get_http_url(provider_config))
   end
 end

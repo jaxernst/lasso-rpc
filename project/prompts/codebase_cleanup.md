@@ -1,11 +1,14 @@
 # Codebase Structural Cleanup & Code Quality Review
 
 ## Overview
+
 Perform a systematic, multi-phase review and cleanup of the Lasso RPC codebase to identify and eliminate:
+
 - Dead code (unused functions, stale comments, obsolete patterns)
 - Code smells (duplicative handlers, inconsistent patterns)
 - Static analysis issues (Credo warnings, Dialyzer type issues)
 - Documentation drift (stale comments, outdated TODOs)
+- Architectural issues indicated by code smells or unexpected test results or logs (flag these when encountered so we can stop and asses)
 
 ## Approach
 
@@ -16,21 +19,26 @@ This is a **large codebase** that requires incremental, focused cleanup. Break t
 **Goal:** Establish current code quality metrics and identify low-hanging fruit.
 
 1. **Run Credo** for style and consistency issues:
+
    ```bash
    mix credo --strict
    ```
+
    - Group issues by severity (design, readability, refactor, warning)
    - Prioritize design-level issues and consistency problems
    - Skip trivial formatting issues if they're auto-fixable
 
 2. **Run Dialyzer** for type issues:
+
    ```bash
    mix dialyzer
    ```
+
    - Focus on contract violations and type mismatches
    - Document any intentional violations that should be suppressed
 
 3. **Identify dead code patterns:**
+
    - Search for stale comment markers: `grep -rn "Legacy\|no longer\|removed\|TODO\|FIXME\|HACK" lib/`
    - Find unused functions: Look for private functions with no references
    - Locate obsolete backwards-compatibility code
@@ -44,43 +52,51 @@ This is a **large codebase** that requires incremental, focused cleanup. Break t
 Review modules in this order (from transport layer up):
 
 #### Layer 1: Transport & Connection Management
+
 - `lib/lasso/core/transport/websocket/` (handler, connection, websocket)
 - `lib/lasso/core/transport/http/`
 - `lib/lasso/core/transport/registry.ex`
 - `lib/lasso/core/transport/channel.ex`
 
 **Focus areas:**
+
 - Unused message handlers or backwards-compatibility code
 - Duplicative error handling patterns
 - Stale PubSub broadcasts that aren't consumed
 - Unused fields in state structs
 
 #### Layer 2: Provider & Selection Logic
+
 - `lib/lasso/core/providers/`
 - `lib/lasso/core/selection/`
 - `lib/lasso/circuit_breaker/`
 
 **Focus areas:**
+
 - Unused provider capabilities tracking
 - Stale selection strategy code
 - Circuit breaker state cleanup
 
 #### Layer 3: Request & Streaming Pipeline
+
 - `lib/lasso/core/request/`
 - `lib/lasso/core/streaming/`
 - `lib/lasso/rpc/` (subscription management)
 
 **Focus areas:**
+
 - Dead subscription confirmation handlers
 - Unused dedupe/marker fields
 - Obsolete failover logic
 
 #### Layer 4: Application & Configuration
+
 - `lib/lasso/application.ex`
 - `lib/lasso/config/`
 - `lib/lasso_web/`
 
 **Focus areas:**
+
 - Unused configuration options
 - Stale supervisor children
 - Dead endpoints or controllers
@@ -90,14 +106,17 @@ Review modules in this order (from transport layer up):
 **Goal:** Identify and consolidate duplicative patterns discovered during deep dive.
 
 1. **Duplicative message handlers:**
+
    - Example: Multiple `handle_websocket_message` clauses that differ only in telemetry tags
    - Consolidate into parameterized functions
 
 2. **Inconsistent error normalization:**
+
    - Ensure all error paths use `ErrorNormalizer.normalize/2`
    - Standardize error context metadata
 
 3. **PubSub event structure:**
+
    - Audit all PubSub topics and ensure events follow consistent tuple structure
    - Document expected event schemas
 
@@ -110,15 +129,18 @@ Review modules in this order (from transport layer up):
 **Goal:** Ensure comments and documentation are accurate and useful.
 
 1. **Remove stale comments:**
+
    - Comments referring to removed features ("no longer", "legacy", "removed")
    - Outdated architectural notes
    - Commented-out code blocks
 
 2. **Update misleading comments:**
+
    - References to components that were renamed or removed (e.g., "MessageAggregator")
    - Incorrect behavioral descriptions
 
 3. **Resolve TODOs:**
+
    - Categorize TODOs as: actionable now, defer, or obsolete
    - Create issues for deferred work
    - Remove obsolete TODOs

@@ -13,7 +13,6 @@ defmodule Lasso.RPC.StrategyContext do
     :chain,
     :now_ms,
     :timeout,
-    :region_filter,
     # Optional fields populated by strategies
     :total_requests,
     :freshness_cutoff_ms,
@@ -25,7 +24,6 @@ defmodule Lasso.RPC.StrategyContext do
           chain: String.t(),
           now_ms: integer(),
           timeout: non_neg_integer(),
-          region_filter: String.t() | nil,
           total_requests: non_neg_integer() | nil,
           freshness_cutoff_ms: non_neg_integer() | nil,
           min_calls: non_neg_integer() | nil,
@@ -40,8 +38,7 @@ defmodule Lasso.RPC.StrategyContext do
     %__MODULE__{
       chain: selection.chain,
       now_ms: System.monotonic_time(:millisecond),
-      timeout: selection.timeout,
-      region_filter: selection.region_filter
+      timeout: selection.timeout
     }
   end
 end

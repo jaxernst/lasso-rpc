@@ -8,13 +8,12 @@ defmodule Lasso.RPC.StreamState do
   alias Lasso.RPC.DedupeCache
 
   @enforce_keys [:markers, :dedupe]
-  defstruct markers: %{last_block_num: nil, last_block_hash: nil, last_log_block: nil},
+  defstruct markers: %{last_block_num: nil, last_log_block: nil},
             dedupe: DedupeCache.new(max_items: 256, max_age_ms: 30_000)
 
   @type t :: %__MODULE__{
           markers: %{
             last_block_num: integer() | nil,
-            last_block_hash: binary() | nil,
             last_log_block: integer() | nil
           },
           dedupe: DedupeCache.t()
@@ -23,7 +22,7 @@ defmodule Lasso.RPC.StreamState do
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
     %__MODULE__{
-      markers: %{last_block_num: nil, last_block_hash: nil, last_log_block: nil},
+      markers: %{last_block_num: nil, last_log_block: nil},
       dedupe:
         DedupeCache.new(
           max_items: Keyword.get(opts, :dedupe_max_items, 256),
@@ -42,13 +41,13 @@ defmodule Lasso.RPC.StreamState do
       num = decode_hex(Map.get(payload, "number"))
       now = System.monotonic_time(:millisecond)
       dedupe1 = state.dedupe |> DedupeCache.put({:block, hash}, now) |> DedupeCache.cleanup(now)
-      markers1 = %{state.markers | last_block_num: num, last_block_hash: hash}
+      markers1 = %{state.markers | last_block_num: num}
       {%{state | dedupe: dedupe1, markers: markers1}, :emit}
     end
   end
 
   @spec ingest_log(t(), map()) :: {t(), :emit | :skip}
-  def ingest_log(state = %__MODULE__{}, payload) do
+  def ingest_log(%__MODULE__{} = state, payload) do
     key = {Map.get(payload, "blockHash"), Map.get(payload, "logIndex")}
 
     if DedupeCache.member?(state.dedupe, {:log, key}) do

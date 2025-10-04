@@ -17,7 +17,6 @@ defmodule Lasso.RPC.Selection do
 
   require Logger
 
-  alias Lasso.Config.ConfigStore
   alias Lasso.RPC.{ProviderPool, SelectionContext, TransportRegistry, Channel}
 
   @doc """
@@ -154,38 +153,6 @@ defmodule Lasso.RPC.Selection do
   defp resolve_strategy_module(:fastest), do: Lasso.RPC.Strategies.Fastest
 
   @doc """
-  Gets all available providers for a chain, respecting protocol requirements.
-
-  Returns providers from ProviderPool in the order determined by availability and health.
-  """
-  @spec get_available_providers(String.t(), keyword()) ::
-          {:ok, [String.t()]} | {:error, term()}
-  def get_available_providers(chain_name, opts \\ []) do
-    protocol = Keyword.get(opts, :protocol, :both)
-    exclude = Keyword.get(opts, :exclude, [])
-
-    filters = %{protocol: protocol, exclude: exclude}
-    candidates = ProviderPool.list_candidates(chain_name, filters)
-    provider_ids = Enum.map(candidates, & &1.id)
-
-    {:ok, provider_ids}
-  end
-
-  @doc """
-  Checks if a specific provider is available for the given chain and protocol.
-  """
-  @spec provider_available?(String.t(), String.t(), atom()) :: boolean()
-  def provider_available?(chain_name, provider_id, protocol \\ :both) do
-    case ConfigStore.get_provider(chain_name, provider_id) do
-      {:ok, provider_config} ->
-        supports_protocol?(provider_config, protocol)
-
-      {:error, :not_found} ->
-        false
-    end
-  end
-
-  @doc """
   Selects the best channels for a method across all available transports.
 
   This is the new channel-based selection API that considers transport capabilities,
@@ -277,14 +244,6 @@ defmodule Lasso.RPC.Selection do
   end
 
   ## Private Functions
-
-  defp supports_protocol?(provider, :both),
-    do: supports_protocol?(provider, :http) and supports_protocol?(provider, :ws)
-
-  defp supports_protocol?(provider, :http),
-    do: is_binary(Map.get(provider, :http_url)) or is_binary(Map.get(provider, :url))
-
-  defp supports_protocol?(provider, :ws), do: is_binary(Map.get(provider, :ws_url))
 
   # Channel-specific strategy application
 

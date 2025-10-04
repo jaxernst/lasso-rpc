@@ -19,10 +19,8 @@ defmodule Lasso.RPC.ProviderPool do
 
   defstruct [
     :chain_name,
-    :chain_config,
     :providers,
     :active_providers,
-    :health_checks,
     :stats,
     # Circuit breaker state per provider_id: :closed | :open | :half_open
     circuit_states: %{}
@@ -48,19 +46,6 @@ defmodule Lasso.RPC.ProviderPool do
       # Centralized health policy state (availability + signals)
       :policy
     ]
-
-    # Implement Access behavior for get_in/put_in/update_in
-    def fetch(%__MODULE__{} = struct, key) do
-      Map.fetch(struct, key)
-    end
-
-    def get_and_update(%__MODULE__{} = struct, key, fun) do
-      Map.get_and_update(struct, key, fun)
-    end
-
-    def pop(%__MODULE__{} = struct, key) do
-      Map.pop(struct, key)
-    end
   end
 
   defmodule PoolStats do
@@ -154,14 +139,6 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   @doc """
-  Reports that a provider's WebSocket connection was closed with a code and reason.
-  """
-  @spec report_ws_closed(chain_name, provider_id, integer(), term()) :: :ok
-  def report_ws_closed(chain_name, provider_id, code, reason) do
-    GenServer.cast(via_name(chain_name), {:report_ws_closed, provider_id, code, reason})
-  end
-
-  @doc """
   Unregisters a provider from the pool (for test cleanup).
   """
   @spec unregister_provider(chain_name, provider_id) :: :ok
@@ -180,16 +157,14 @@ defmodule Lasso.RPC.ProviderPool do
   # GenServer callbacks
 
   @impl true
-  def init({chain_name, chain_config}) do
+  def init({chain_name, _chain_config}) do
     Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
 
     state = %__MODULE__{
       chain_name: chain_name,
-      chain_config: chain_config,
       providers: %{},
       active_providers: [],
-      health_checks: %{},
       stats: %PoolStats{},
       circuit_states: %{}
     }

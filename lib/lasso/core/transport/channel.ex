@@ -19,8 +19,7 @@ defmodule Lasso.RPC.Channel do
           transport: :http | :ws,
           raw_channel: term(),
           transport_module: module(),
-          capabilities: map() | nil,
-          created_at: integer()
+          capabilities: map() | nil
         }
 
   @derive {Jason.Encoder, only: [:provider_id, :transport]}
@@ -29,8 +28,7 @@ defmodule Lasso.RPC.Channel do
     :transport,
     :raw_channel,
     :transport_module,
-    :capabilities,
-    :created_at
+    :capabilities
   ]
 
   @doc """
@@ -44,8 +42,7 @@ defmodule Lasso.RPC.Channel do
       raw_channel: raw_channel,
       transport_module: transport_module,
       # Lazily loaded
-      capabilities: nil,
-      created_at: System.monotonic_time(:millisecond)
+      capabilities: nil
     }
   end
 
@@ -142,20 +139,5 @@ defmodule Lasso.RPC.Channel do
   @spec to_string(t()) :: String.t()
   def to_string(%__MODULE__{} = channel) do
     "#{channel.provider_id}:#{channel.transport}"
-  end
-
-  @doc """
-  Returns debug information about the channel.
-  """
-  @spec debug_info(t()) :: map()
-  def debug_info(%__MODULE__{} = channel) do
-    %{
-      provider_id: channel.provider_id,
-      transport: channel.transport,
-      capabilities: get_capabilities(channel),
-      healthy: healthy?(channel),
-      created_at: channel.created_at,
-      age_ms: System.monotonic_time(:millisecond) - channel.created_at
-    }
   end
 end

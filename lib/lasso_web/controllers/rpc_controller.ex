@@ -54,7 +54,7 @@ defmodule LassoWeb.RPCController do
   @doc """
   Handle JSON-RPC requests for any supported chain.
   """
-  def rpc(conn, params = %{"chain_id" => chain_id}) do
+  def rpc(conn, %{"chain_id" => chain_id} = params) do
     case chain_id do
       nil ->
         Logger.error("Missing chain_id parameter", params: inspect(params))

@@ -11,6 +11,8 @@ defmodule Lasso.Battle.Chaos do
 
   require Logger
 
+  alias Lasso.RPC.ProviderPool
+
   @doc """
   Kills a provider after a specified delay.
 
@@ -36,7 +38,7 @@ defmodule Lasso.Battle.Chaos do
 
       Logger.warning("Chaos: Killing provider #{provider_id} on #{chain}")
 
-      case Lasso.RPC.ProviderPool.get_provider_ws_pid(chain, provider_id) do
+      case ProviderPool.get_provider_ws_pid(chain, provider_id) do
         {:ok, pid} ->
           Process.exit(pid, :kill)
           Logger.warning("Chaos: Killed provider #{provider_id} (pid: #{inspect(pid)})")
@@ -217,7 +219,7 @@ defmodule Lasso.Battle.Chaos do
     # Kill the provider
     Logger.warning("Chaos: Flap #{iteration + 1} - Killing #{provider_id} on #{chain}")
 
-    case Lasso.RPC.ProviderPool.get_provider_ws_pid(chain, provider_id) do
+    case ProviderPool.get_provider_ws_pid(chain, provider_id) do
       {:ok, pid} ->
         Process.exit(pid, :kill)
         Logger.warning("Chaos: Killed #{provider_id} (will be restarted by supervisor)")
@@ -227,7 +229,7 @@ defmodule Lasso.Battle.Chaos do
         Process.sleep(down_time)
 
         # Supervisor should have restarted it by now
-        case Lasso.RPC.ProviderPool.get_provider_ws_pid(chain, provider_id) do
+        case ProviderPool.get_provider_ws_pid(chain, provider_id) do
           {:ok, new_pid} ->
             Logger.info("Chaos: Provider #{provider_id} restarted (new pid: #{inspect(new_pid)})")
 
