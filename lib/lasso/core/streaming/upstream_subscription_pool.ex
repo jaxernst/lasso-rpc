@@ -12,9 +12,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   alias Lasso.RPC.StreamSupervisor
   alias Lasso.RPC.StreamCoordinator
   alias Lasso.RPC.{TransportRegistry, Channel}
-  alias Lasso.RPC.FilterNormalizer
+  alias Lasso.RPC.{FilterNormalizer, ErrorNormalizer}
   alias Lasso.Config.ConfigStore
   alias Lasso.Events.Provider
+  alias Lasso.JSONRPC
 
   @type chain :: String.t()
   @type provider_id :: String.t()
@@ -44,13 +45,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:#{chain}")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{chain}")
 
-    # Load backfill config
-    failover_cfg =
-      case ConfigStore.get_chain(chain) do
-        {:ok, cfg} -> Map.get(cfg, :failover, %{})
-        _ -> %{}
-      end
-
+    # Load dedupe config
     dedupe_cfg =
       case ConfigStore.get_chain(chain) do
         {:ok, cfg} -> Map.get(cfg, :dedupe, %{})
@@ -63,12 +58,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       keys: %{},
       # provider_id => %{upstream_id => key}
       upstream_index: %{},
-      # provider capabilities discovered at runtime, e.g., %{provider_id => %{newHeads: true/false, logs: true/false}}
-      provider_caps: %{},
       # config
-      max_backfill_blocks: Map.get(failover_cfg, :max_backfill_blocks, 32),
-      backfill_timeout: Map.get(failover_cfg, :backfill_timeout, 30_000),
-      failover_enabled: Map.get(failover_cfg, :enabled, true),
       dedupe_max_items: Map.get(dedupe_cfg, :max_items, 256),
       dedupe_max_age_ms: Map.get(dedupe_cfg, :max_age_ms, 30_000)
     }
@@ -332,12 +322,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
           {:ok, upstream_id} when is_binary(upstream_id) ->
             {:ok, upstream_id}
 
-          {:error, %Lasso.JSONRPC.Error{} = jerr} ->
+          {:error, %JSONRPC.Error{} = jerr} ->
             {:error, jerr}
 
           {:error, reason} ->
             {:error,
-             Lasso.RPC.ErrorNormalizer.normalize(reason,
+             ErrorNormalizer.normalize(reason,
                provider_id: provider_id,
                context: :transport,
                transport: :ws
@@ -346,7 +336,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
       {:error, _reason} ->
         {:error,
-         Lasso.JSONRPC.Error.new(-32000, "No WebSocket channel available",
+         JSONRPC.Error.new(-32000, "No WebSocket channel available",
            provider_id: provider_id,
            transport: :ws,
            retriable?: true
@@ -373,12 +363,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
           {:ok, upstream_id} when is_binary(upstream_id) ->
             {:ok, upstream_id}
 
-          {:error, %Lasso.JSONRPC.Error{} = jerr} ->
+          {:error, %JSONRPC.Error{} = jerr} ->
             {:error, jerr}
 
           {:error, reason} ->
             {:error,
-             Lasso.RPC.ErrorNormalizer.normalize(reason,
+             ErrorNormalizer.normalize(reason,
                provider_id: provider_id,
                context: :transport,
                transport: :ws
@@ -387,7 +377,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
       {:error, _reason} ->
         {:error,
-         Lasso.JSONRPC.Error.new(-32000, "No WebSocket channel available",
+         JSONRPC.Error.new(-32000, "No WebSocket channel available",
            provider_id: provider_id,
            transport: :ws,
            retriable?: true

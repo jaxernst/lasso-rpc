@@ -7,6 +7,9 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
   use LassoWeb, :live_component
   require Logger
 
+  alias Lasso.Config.ChainConfigManager
+  alias Lasso.Config.ConfigValidator
+
   @impl true
   def mount(socket) do
     {:ok, socket}
@@ -53,7 +56,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
 
     if selected_chain do
       # Load the selected chain configuration
-      case Lasso.Config.ChainConfigManager.get_chain(selected_chain) do
+      case ChainConfigManager.get_chain(selected_chain) do
         {:ok, config} ->
           form_data = %{
             name: config.name,
@@ -542,7 +545,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
 
   @impl true
   def handle_event("select_chain", %{"chain" => chain_name}, socket) do
-    case Lasso.Config.ChainConfigManager.get_chain(chain_name) do
+    case ChainConfigManager.get_chain(chain_name) do
       {:ok, config} ->
         form_data = %{
           name: config.name,
@@ -756,10 +759,10 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
         actual_chain_name =
           String.downcase(Map.get(form_data, :name, "")) |> String.replace(~r/[^a-z0-9]/, "_")
 
-        Lasso.Config.ChainConfigManager.create_chain(actual_chain_name, chain_attrs)
+        ChainConfigManager.create_chain(actual_chain_name, chain_attrs)
       else
         # Update existing chain
-        Lasso.Config.ChainConfigManager.update_chain(chain_name, chain_attrs)
+        ChainConfigManager.update_chain(chain_name, chain_attrs)
       end
 
     case result do
@@ -791,12 +794,12 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
   def handle_event("test_connection", _params, socket) do
     chain_name = socket.assigns.config_selected_chain
 
-    case Lasso.Config.ChainConfigManager.get_chain(chain_name) do
+    case ChainConfigManager.get_chain(chain_name) do
       {:ok, config} ->
         # Test each provider (simplified version for now)
         test_results =
           Enum.map(config.providers, fn provider ->
-            case Lasso.Config.ConfigValidator.test_provider_connectivity(provider) do
+            case ConfigValidator.test_provider_connectivity(provider) do
               :ok -> "✓ #{provider.name}: Connected"
               {:error, reason} -> "✗ #{provider.name}: #{inspect(reason)}"
             end
@@ -816,7 +819,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
   def handle_event("delete_chain", _params, socket) do
     chain_name = socket.assigns.config_selected_chain
 
-    case Lasso.Config.ChainConfigManager.delete_chain(chain_name) do
+    case ChainConfigManager.delete_chain(chain_name) do
       :ok ->
         socket =
           socket
@@ -882,7 +885,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
     target_chain = String.downcase(name) |> String.replace(~r/[^a-z0-9]/, "_")
 
     chain_exists =
-      case Lasso.Config.ChainConfigManager.get_chain(target_chain) do
+      case ChainConfigManager.get_chain(target_chain) do
         {:ok, _} -> true
         _ -> false
       end
@@ -900,7 +903,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
     result =
       if chain_exists do
         # Append provider to existing chain
-        case Lasso.Config.ChainConfigManager.get_chain(target_chain) do
+        case ChainConfigManager.get_chain(target_chain) do
           {:ok, cfg} ->
             providers =
               cfg.providers ++
@@ -925,7 +928,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
                 end)
             }
 
-            Lasso.Config.ChainConfigManager.update_chain(target_chain, attrs)
+            ChainConfigManager.update_chain(target_chain, attrs)
 
           err ->
             err
@@ -939,7 +942,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
           "providers" => [provider]
         }
 
-        Lasso.Config.ChainConfigManager.create_chain(target_chain, attrs)
+        ChainConfigManager.create_chain(target_chain, attrs)
       end
 
     case result do
@@ -970,7 +973,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
   # Helper functions
 
   defp load_available_chains(socket) do
-    {:ok, chains} = Lasso.Config.ChainConfigManager.list_chains()
+    {:ok, chains} = ChainConfigManager.list_chains()
 
     chain_list =
       Enum.map(chains, fn {name, config} ->

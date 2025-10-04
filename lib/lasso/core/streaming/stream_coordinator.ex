@@ -33,10 +33,6 @@ defmodule Lasso.RPC.StreamCoordinator do
     GenServer.cast(via(chain, key), {:provider_unhealthy, failed_id, proposed_new_id})
   end
 
-  def upstream_confirmed(chain, key, provider_id, upstream_id) do
-    GenServer.cast(via(chain, key), {:upstream_confirmed, provider_id, upstream_id})
-  end
-
   # GenServer
 
   @impl true
@@ -53,9 +49,7 @@ defmodule Lasso.RPC.StreamCoordinator do
       # backfill config
       max_backfill_blocks: Keyword.get(opts, :max_backfill_blocks, 32),
       backfill_timeout: Keyword.get(opts, :backfill_timeout, 30_000),
-      continuity_policy: Keyword.get(opts, :continuity_policy, :best_effort),
-      # track pending subscribe
-      awaiting_confirm: nil
+      continuity_policy: Keyword.get(opts, :continuity_policy, :best_effort)
     }
 
     {:ok, state}
@@ -91,12 +85,6 @@ defmodule Lasso.RPC.StreamCoordinator do
     # Compute head and ranges using continuity policy, then backfill via Task
     Task.start(fn -> do_backfill_and_switch(state, failed_id, proposed_new_id) end)
     {:noreply, state}
-  end
-
-  @impl true
-  def handle_cast({:upstream_confirmed, provider_id, upstream_id}, state) do
-    _ = {provider_id, upstream_id}
-    {:noreply, %{state | awaiting_confirm: nil, primary_provider_id: provider_id}}
   end
 
   # Internal
@@ -183,17 +171,7 @@ defmodule Lasso.RPC.StreamCoordinator do
       end
     rescue
       e -> Logger.error("StreamCoordinator backfill error: #{inspect(e)}", chain: state.chain)
-    after
-      # Ask pool to subscribe on the new provider
-      send(self(), {:subscribe_on, new_provider})
     end
-  end
-
-  @impl true
-  def handle_info({:subscribe_on, provider_id}, state) do
-    # delegate to pool via message; pool owns WS interaction
-    send_to_pool(state.chain, {:subscribe_on, provider_id, state.key, self()})
-    {:noreply, %{state | awaiting_confirm: provider_id}}
   end
 
   defp fetch_head(chain, provider_id) do
@@ -205,10 +183,5 @@ defmodule Lasso.RPC.StreamCoordinator do
       {:ok, "0x" <> _ = hex} -> String.to_integer(String.trim_leading(hex, "0x"), 16)
       _ -> 0
     end
-  end
-
-  defp send_to_pool(chain, msg) do
-    pid = GenServer.whereis({:via, Registry, {Lasso.Registry, {:pool, chain}}})
-    if is_pid(pid), do: send(pid, msg), else: :ok
   end
 end

@@ -207,19 +207,9 @@ defmodule Lasso.RPC.Transports.WebSocket do
     end
   end
 
-  def supports_protocol?(provider_config, :ws), do: has_ws_url?(provider_config)
-  def supports_protocol?(provider_config, :both), do: has_ws_url?(provider_config)
-  def supports_protocol?(_provider_config, :http), do: false
-
-  def get_transport_type(_provider_config), do: :ws
-
   # Private functions
 
   defp get_ws_url(provider_config) do
     Map.get(provider_config, :ws_url)
-  end
-
-  defp has_ws_url?(provider_config) do
-    is_binary(get_ws_url(provider_config))
   end
 end

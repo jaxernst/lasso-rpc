@@ -15,9 +15,7 @@ defmodule Lasso.RPC.SelectionContext do
     :protocol,
     :exclude,
     :metrics,
-    :timeout,
-    :region_filter,
-    :prefer_cached
+    :timeout
   ]
 
   @type strategy :: :fastest | :cheapest | :priority | :round_robin
@@ -30,9 +28,7 @@ defmodule Lasso.RPC.SelectionContext do
           protocol: protocol(),
           exclude: [String.t()],
           metrics: module(),
-          timeout: non_neg_integer(),
-          region_filter: String.t() | nil,
-          prefer_cached: boolean()
+          timeout: non_neg_integer()
         }
 
   @doc """
@@ -52,9 +48,7 @@ defmodule Lasso.RPC.SelectionContext do
       protocol: Keyword.get(opts, :protocol, :both),
       exclude: Keyword.get(opts, :exclude, []),
       metrics: Keyword.get(opts, :metrics, Lasso.RPC.Metrics),
-      timeout: Keyword.get(opts, :timeout, 30_000),
-      region_filter: Keyword.get(opts, :region_filter),
-      prefer_cached: Keyword.get(opts, :prefer_cached, false)
+      timeout: Keyword.get(opts, :timeout, 30_000)
     }
   end
 

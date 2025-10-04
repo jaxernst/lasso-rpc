@@ -42,7 +42,7 @@ defmodule Lasso.RPC.DedupeCache do
   def member?(%__MODULE__{items: items}, item), do: MapSet.member?(items, item)
 
   @spec put(t(), term(), non_neg_integer()) :: t()
-  def put(cache = %__MODULE__{}, item, now_ms) do
+  def put(%__MODULE__{} = cache, item, now_ms) do
     if MapSet.member?(cache.items, item) do
       cache
     else
@@ -100,7 +100,7 @@ defmodule Lasso.RPC.DedupeCache do
   end
 
   defp remove_while_old(
-         cache = %__MODULE__{order: order, timestamps: ts, items: items},
+         %__MODULE__{order: order, timestamps: ts, items: items} = cache,
          expire_before
        ) do
     case :queue.out(order) do

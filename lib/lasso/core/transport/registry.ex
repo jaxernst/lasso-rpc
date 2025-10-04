@@ -38,9 +38,7 @@ defmodule Lasso.RPC.TransportRegistry do
     # Map of provider_id => %{http: channel, ws: channel}
     :channels,
     # Map of {provider_id, transport} => capabilities
-    :capabilities,
-    # Map of {provider_id, transport} => timestamp
-    :last_health_check
+    :capabilities
   ]
 
   @type chain_name :: String.t()
@@ -116,8 +114,7 @@ defmodule Lasso.RPC.TransportRegistry do
     state = %__MODULE__{
       chain_name: chain_name,
       channels: %{},
-      capabilities: %{},
-      last_health_check: %{}
+      capabilities: %{}
     }
 
     {:ok, state}
