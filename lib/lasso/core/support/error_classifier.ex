@@ -34,9 +34,11 @@ defmodule Lasso.RPC.ErrorClassifier do
   end
 
   @doc """
-  Legacy classification function for backwards compatibility.
+  Classifies errors as infrastructure failures or user errors.
 
-  Use normalize_error/2 for new code.
+  Returns a simple classification for components that need binary
+  decision-making (e.g., CircuitBreaker). For full error normalization
+  with JError structs, use normalize_error/2 instead.
   """
   @spec classify_error(any()) :: :infrastructure_failure | :user_error
   def classify_error(reason) do
