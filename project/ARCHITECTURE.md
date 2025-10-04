@@ -43,26 +43,24 @@ Lasso leverages OTP for fault-tolerance and concurrency. The supervision tree pr
 
 ```
 Lasso.Application (Supervisor)
-├── Phoenix.PubSub
+├── Phoenix.PubSub (event bus)
 ├── Finch (HTTP client pool)
 ├── Lasso.Benchmarking.BenchmarkStore (ETS metrics storage)
 ├── Lasso.Benchmarking.Persistence (historical snapshots)
-├── Lasso.RPC.ProcessRegistry (centralized registry)
-├── Registry (Lasso.Registry - dynamic process names)
+├── Registry (Lasso.Registry - dynamic process lookup)
 ├── DynamicSupervisor (Lasso.RPC.Supervisor)
 │   ├── ChainSupervisor (ethereum)
 │   │   ├── ProviderSupervisor (alchemy)
 │   │   │   ├── CircuitBreaker (HTTP)
 │   │   │   ├── CircuitBreaker (WS)
 │   │   │   └── WSConnection (if WS configured)
-│   │   ├── ProviderSupervisor (infura)
-│   │   ├── ProviderPool (health tracking)
-│   │   ├── ProviderHealthMonitor
-│   │   ├── TransportRegistry (channel discovery)
+│   │   ├── ProviderSupervisor (other public/private rpc providers)
+│   │   ├── ProviderPool (metrics, health, connection tracking)
+│   │   ├── ProviderHealthMonitor (monitor and probe health metrics)
+│   │   ├── TransportRegistry (request channel discovery)
 │   │   ├── UpstreamSubscriptionPool (WS multiplexing)
 │   │   └── ClientSubscriptionRegistry (client fan-out)
-│   ├── ChainSupervisor (base)
-│   └── ChainSupervisor (polygon)
+│   ├── ChainSupervisor (any other evm chain)
 ├── Lasso.Config.ConfigStore (ETS config cache)
 └── LassoWeb.Endpoint
 ```
@@ -453,12 +451,12 @@ In-memory configuration store:
 
 ### **Dynamic Chain Management**
 
-Chain supervisors are started dynamically at application boot from `config/chains.yml`:
+Chain supervisors boot from the static config in `config/chains.yml`, but chains + providers can be added/removed/updated dynamically
 
 - **Automatic startup**: `Application.start/2` enumerates configured chains and starts ChainSupervisors
 - **Independent lifecycles**: Each chain can be started/stopped without affecting others
-- **Configuration validation**: ChainConfig validates provider configs before supervisor startup
 - **Status tracking**: Per-chain health and provider status available via `ChainSupervisor.get_chain_status/1`
+- **Provider/chain registration**: Lasso.RPC.Provider exposes CRUD operations for chains/providers that orchestrate Chain/Provider supervisors
 
 ### **Unified Provider Selection**
 
@@ -556,7 +554,7 @@ config :lasso, :provider_selection_strategy, :fastest
 
 ## Battle Testing Framework
 
-Lasso includes a production-grade battle testing framework for validating reliability under load and chaos conditions.
+Lasso includes a custom battle testing framework for validating reliability under load and chaos conditions.
 
 ### **Architecture**
 
@@ -653,31 +651,6 @@ def load_benchmark_data(socket) do
   # Leaderboard based on method-specific RPC latency and success rate metrics
 end
 ```
-
----
-
-## Performance Characteristics
-
-### **Throughput**
-
-- **RPC latency measurement**: <5ms overhead for latency tracking
-- **Provider Configuration + capability lookups**: <1ms via ETS cache (no file I/O)
-- **Provider selection**: <2ms via Selection module
-- **Dashboard updates**: <100ms from RPC metrics to UI update
-- **Memory usage**: ~10MB per chain for 24 hours of data
-
-### **Fault Tolerance**
-
-- **Provider failures**: Detected within 5 seconds, failover in <1 second
-- **Process crashes**: Automatic restart within 500ms
-- **Network partitions**: Circuit breakers prevent cascade failures
-- **Data persistence**: No RPC metrics loss during normal operation
-
-### **Scalability**
-
-- **Concurrent providers**: Can support an unbounded number of RPC providers
-- **Multiple chains**: Independent supervision trees scale horizontally
-- **Historical data**: Bounded memory with persistent snapshots
 
 ---
 
