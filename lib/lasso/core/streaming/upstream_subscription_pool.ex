@@ -60,7 +60,9 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       upstream_index: %{},
       # config
       dedupe_max_items: Map.get(dedupe_cfg, :max_items, 256),
-      dedupe_max_age_ms: Map.get(dedupe_cfg, :max_age_ms, 30_000)
+      dedupe_max_age_ms: Map.get(dedupe_cfg, :max_age_ms, 30_000),
+      max_backfill_blocks: 32,
+      backfill_timeout: 30_000
     }
 
     {:ok, state}
@@ -86,6 +88,97 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       {:ok, key} ->
         new_state = maybe_drop_upstream_when_unref(state, key)
         {:reply, :ok, new_state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:resubscribe, key, new_provider_id, coordinator_pid}, state) do
+    Logger.info("Resubscribing key #{inspect(key)} to provider #{new_provider_id}")
+
+    # Get existing entry to preserve refcount
+    entry = Map.get(state.keys, key)
+
+    if entry do
+      # Get old provider info for cleanup
+      {old_provider_id, old_upstream_id} =
+        case Map.get(entry.upstream, entry.primary_provider_id) do
+          nil -> {entry.primary_provider_id, nil}
+          up_id -> {entry.primary_provider_id, up_id}
+        end
+
+      # Execute new subscription
+      case send_upstream_subscribe(state.chain, new_provider_id, key) do
+        {:ok, upstream_id} ->
+          # Unsubscribe old upstream if present to avoid stragglers and leaks
+          if old_upstream_id do
+            Task.start(fn ->
+              send_upstream_unsubscribe(state.chain, old_provider_id, key, old_upstream_id)
+            end)
+          end
+
+          # Update entry with new provider
+          updated_entry = %{
+            entry
+            | primary_provider_id: new_provider_id,
+              upstream: Map.put(entry.upstream, new_provider_id, upstream_id)
+          }
+
+          # Clean old upstream from index
+          new_upstream_index =
+            if old_upstream_id do
+              case Map.get(state.upstream_index, old_provider_id) do
+                nil ->
+                  state.upstream_index
+
+                provider_map ->
+                  updated_map = Map.delete(provider_map, old_upstream_id)
+
+                  if map_size(updated_map) == 0 do
+                    Map.delete(state.upstream_index, old_provider_id)
+                  else
+                    Map.put(state.upstream_index, old_provider_id, updated_map)
+                  end
+              end
+            else
+              state.upstream_index
+            end
+
+          # Add new upstream to index
+          new_upstream_index =
+            Map.update(new_upstream_index, new_provider_id, %{upstream_id => key}, fn m ->
+              Map.put(m, upstream_id, key)
+            end)
+
+          new_state = %{
+            state
+            | keys: Map.put(state.keys, key, updated_entry),
+              upstream_index: new_upstream_index
+          }
+
+          # Confirm to coordinator
+          send(coordinator_pid, {:subscription_confirmed, new_provider_id, upstream_id})
+
+          telemetry_resubscribe_success(state.chain, key, new_provider_id)
+
+          {:noreply, new_state}
+
+        {:error, reason} ->
+          Logger.error(
+            "Resubscription failed for #{inspect(key)} to #{new_provider_id}: #{inspect(reason)}"
+          )
+
+          # Notify coordinator of failure
+          send(coordinator_pid, {:subscription_failed, reason})
+
+          telemetry_resubscribe_failed(state.chain, key, new_provider_id, reason)
+
+          {:noreply, state}
+      end
+    else
+      # Key no longer exists (all clients unsubscribed during failover)
+      Logger.debug("Resubscription skipped: key #{inspect(key)} no longer active")
+      send(coordinator_pid, {:subscription_failed, :key_inactive})
+      {:noreply, state}
     end
   end
 
@@ -432,6 +525,23 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       chain: chain,
       provider_id: provider_id,
       key: inspect(key)
+    })
+  end
+
+  defp telemetry_resubscribe_success(chain, key, provider_id) do
+    :telemetry.execute([:lasso, :subs, :resubscribe, :success], %{count: 1}, %{
+      chain: chain,
+      key: inspect(key),
+      provider_id: provider_id
+    })
+  end
+
+  defp telemetry_resubscribe_failed(chain, key, provider_id, reason) do
+    :telemetry.execute([:lasso, :subs, :resubscribe, :failed], %{count: 1}, %{
+      chain: chain,
+      key: inspect(key),
+      provider_id: provider_id,
+      reason: inspect(reason)
     })
   end
 
