@@ -15,14 +15,12 @@ defmodule Lasso.RPC.Strategies.Fastest do
     min_calls = Application.get_env(:lasso, :fastest_min_calls, 3)
     min_success_rate = Application.get_env(:lasso, :fastest_min_success_rate, 0.9)
 
-    chain = selection.chain || Map.get(base_ctx, :chain)
-
     %{
       base_ctx
       | freshness_cutoff_ms: base_ctx.freshness_cutoff_ms || freshness_cutoff_ms,
         min_calls: base_ctx.min_calls || min_calls,
         min_success_rate: base_ctx.min_success_rate || min_success_rate,
-        chain: chain
+        chain: selection.chain
     }
   end
 

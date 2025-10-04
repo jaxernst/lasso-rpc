@@ -23,9 +23,6 @@ defmodule Lasso.RPC.HttpClient.Finch do
            Finch.request(req, Lasso.Finch, receive_timeout: timeout_ms) do
       handle_response(status, resp_body)
     else
-      {:error, :timeout} ->
-        {:error, {:network_error, "Timeout"}}
-
       {:error, %Mint.TransportError{reason: :timeout}} ->
         {:error, {:network_error, "Connection timeout"}}
 

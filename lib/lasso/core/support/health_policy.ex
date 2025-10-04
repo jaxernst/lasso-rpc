@@ -100,13 +100,9 @@ defmodule Lasso.RPC.HealthPolicy do
   @spec availability(t(), method()) :: availability()
   def availability(%__MODULE__{} = s, _method), do: s.availability
 
-  # routing_score removed – BenchmarkStore is the single source of truth for performance
-
   @spec cooldown?(t(), integer()) :: boolean()
   def cooldown?(%__MODULE__{cooldown_until: nil}, _now_ms), do: false
   def cooldown?(%__MODULE__{cooldown_until: until_ms}, now_ms), do: now_ms < until_ms
-
-  # method-specific performance tracking removed; keep placeholders if needed later
 
   defp compute_cooldown(now_ms, s) do
     base = s.config.base_cooldown_ms

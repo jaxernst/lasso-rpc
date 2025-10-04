@@ -125,7 +125,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
     case method do
       "eth_subscribe" ->
         case WSConnection.request(provider_id, method, params, 30_000) do
-          {:ok, subscription_id, _latency} ->
+          {:ok, subscription_id} ->
             # Return a subscription reference with the upstream subscription ID
             {:ok, {provider_id, subscription_id, handler_pid}}
 
@@ -164,8 +164,6 @@ defmodule Lasso.RPC.Transports.WebSocket do
   defp generate_request_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
-
-  # Legacy compatibility functions (no longer part of behaviour)
 
   def forward_request(provider_config, method, params, opts) do
     provider_id = Keyword.get(opts, :provider_id, "unknown")

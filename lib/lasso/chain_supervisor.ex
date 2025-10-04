@@ -266,6 +266,4 @@ defmodule Lasso.RPC.ChainSupervisor do
          }}
     end
   end
-
-  # legacy start/stop helpers removed
 end

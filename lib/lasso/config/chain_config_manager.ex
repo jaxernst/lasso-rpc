@@ -18,12 +18,10 @@ defmodule Lasso.Config.ChainConfigManager do
   @doc """
   Lists all available chains with their configurations.
   """
-  @spec list_chains() :: {:ok, %{String.t() => ChainConfig.t()}} | {:error, term()}
+  @spec list_chains() :: {:ok, %{String.t() => ChainConfig.t()}}
   def list_chains do
-    case ConfigStore.get_all_chains() do
-      chains when is_map(chains) -> {:ok, chains}
-      _ -> {:error, :no_chains_loaded}
-    end
+    chains = ConfigStore.get_all_chains()
+    {:ok, chains}
   end
 
   @doc """

@@ -473,8 +473,6 @@ defmodule LassoWeb.RPCController do
     {:ok, strategy}
   end
 
-  # defp extract_provider_override/1 removed: provider overrides handled in forward_rpc_request heads
-
   defp default_provider_strategy do
     Application.get_env(:lasso, :provider_selection_strategy, :cheapest)
   end

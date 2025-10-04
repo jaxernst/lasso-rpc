@@ -117,8 +117,6 @@ defmodule Lasso.RPC.Transports.HTTP do
     :ok
   end
 
-  # Legacy compatibility functions (no longer part of behaviour)
-
   def forward_request(provider_config, method, params, opts) do
     provider_id = Keyword.get(opts, :provider_id, "unknown")
     timeout_ms = Keyword.get(opts, :timeout, 30_000)
