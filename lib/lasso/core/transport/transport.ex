@@ -7,6 +7,7 @@ defmodule Lasso.RPC.Transport do
   """
 
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.Transports.{HTTP, WebSocket}
 
   @type channel :: term()
   @type rpc_request :: map()
@@ -92,7 +93,7 @@ defmodule Lasso.RPC.Transport do
 
     case protocol do
       :http ->
-        Lasso.RPC.Transports.HTTP.forward_request(
+        HTTP.forward_request(
           provider_config,
           method,
           params,
@@ -100,7 +101,7 @@ defmodule Lasso.RPC.Transport do
         )
 
       :ws ->
-        Lasso.RPC.Transports.WebSocket.forward_request(
+        WebSocket.forward_request(
           provider_config,
           method,
           params,

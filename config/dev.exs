@@ -15,9 +15,10 @@ config :lasso, LassoWeb.Endpoint,
 # Enhanced logging for development debugging
 config :logger, :console,
   format: "[$level] $message => $metadata\n",
-  level: :debug,
+  level: :info,
   metadata: [
     :provider,
+    :provider_id,
     :method,
     :url,
     :request_id,
@@ -27,7 +28,17 @@ config :logger, :console,
     :retry_count,
     :error,
     :channel,
-    :result
+    :result,
+    :chain,
+    :chain_id,
+    :key,
+    :id,
+    :connection,
+    :topic,
+    :params,
+    :remaining_channels,
+    :retriable,
+    :current_status
   ]
 
 # Enable detailed Phoenix logging

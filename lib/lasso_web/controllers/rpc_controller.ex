@@ -28,6 +28,7 @@ defmodule LassoWeb.RPCController do
 
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Config.ConfigStore
+  alias LassoWeb.Plugs.ObservabilityPlug
 
   @jsonrpc_version "2.0"
 
@@ -205,7 +206,7 @@ defmodule LassoWeb.RPCController do
           :body ->
             case Process.get(:request_context) do
               nil -> response
-              ctx -> LassoWeb.Plugs.ObservabilityPlug.enrich_response_body(response, ctx)
+              ctx -> ObservabilityPlug.enrich_response_body(response, ctx)
             end
 
           _ ->
@@ -505,7 +506,7 @@ defmodule LassoWeb.RPCController do
       :headers ->
         case Process.get(:request_context) do
           nil -> conn
-          ctx -> LassoWeb.Plugs.ObservabilityPlug.inject_metadata(conn, ctx)
+          ctx -> ObservabilityPlug.inject_metadata(conn, ctx)
         end
 
       _ ->
