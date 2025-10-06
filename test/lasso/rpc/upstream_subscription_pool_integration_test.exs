@@ -1,15 +1,7 @@
 defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.RPC.{
-    UpstreamSubscriptionPool,
-    ClientSubscriptionRegistry,
-    ProviderPool,
-    StreamSupervisor,
-    TransportRegistry
-  }
-
-  alias Lasso.Config.ChainConfig
+  alias Lasso.RPC.UpstreamSubscriptionPool
   alias Lasso.Testing.MockWSProvider
 
   setup do

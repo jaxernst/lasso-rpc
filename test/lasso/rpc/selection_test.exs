@@ -9,8 +9,6 @@ defmodule Lasso.RPC.SelectionTest do
   use ExUnit.Case, async: false
   import Mox
 
-  alias Lasso.RPC.Selection
-
   setup_all do
     # Ensure test environment is ready with all services
     TestHelper.ensure_test_environment_ready()

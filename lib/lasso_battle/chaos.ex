@@ -11,8 +11,6 @@ defmodule Lasso.Battle.Chaos do
 
   require Logger
 
-  alias Lasso.RPC.ProviderPool
-
   @doc """
   Kills a provider after a specified delay.
 

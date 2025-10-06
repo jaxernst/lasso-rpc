@@ -9,9 +9,6 @@ defmodule Lasso.RPC.LiveStreamTest do
   """
 
   use ExUnit.Case
-
-  alias Lasso.RPC.{WSConnection}
-
   require Logger
 
   @moduletag :live

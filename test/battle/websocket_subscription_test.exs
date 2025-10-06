@@ -2,7 +2,7 @@ defmodule Lasso.Battle.WebSocketSubscriptionTest do
   use ExUnit.Case, async: false
   require Logger
 
-  alias Lasso.Battle.{Scenario, Workload, SetupHelper}
+  alias Lasso.Battle.{Workload, SetupHelper}
 
   @moduletag :battle
   @moduletag :websocket

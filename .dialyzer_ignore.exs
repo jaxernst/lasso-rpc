@@ -1,8 +1,7 @@
 [
-  # Opaque type internals - MapSet and :queue internal representations
-  # These are false positives from Dialyzer's strict checking of opaque types
+  # Opaque type internals - MapSet internal representation
+  # This is a false positive from Dialyzer's strict checking of opaque types
   ~r"lib/lasso/core/support/dedupe_cache.ex:30.*contract_with_opaque",
-  ~r"lib/lasso/core/streaming/stream_state.ex:23.*contract_with_opaque",
 
   # MockProvider is test-only utility with intentional type flexibility
   ~r"lib/lasso_battle/mock_provider.ex:91.*call",

@@ -58,8 +58,6 @@ defmodule Lasso.RPC.WSEndpoint do
     struct(__MODULE__, attrs)
   end
 
-  # Removed legacy conversion from HTTP Endpoint; callers construct this struct directly
-
   @doc """
   Validates that a WebSocket endpoint configuration is complete and valid.
 
