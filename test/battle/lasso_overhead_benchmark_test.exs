@@ -461,7 +461,7 @@ defmodule Lasso.Battle.LassoOverheadBenchmarkTest do
   end
 
   # Calculate statistics for a list of latencies
-  defp calculate_stats(latencies, _label) when length(latencies) == 0 do
+  defp calculate_stats([], _label) do
     %{count: 0, min: 0, max: 0, mean: 0, stddev: 0, p50: 0, p95: 0, p99: 0}
   end
 

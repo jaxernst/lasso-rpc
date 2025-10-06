@@ -4,28 +4,45 @@ Living backlog of high-impact improvements. Active features are prioritized at t
 
 ---
 
+## Triage + Backlog
+
+- Transport channels should use 'lazy' creation, and should be created at startup and actively monitored
+  - Mostly due to the concern of channels being slo to open or failing to open
+  - (Bug) When channels get created, it will try to create with both http and ws even if there is no ws_url configured, resulting in a warning:
+    ```
+    [info] Created http channel for provider ethereum_cloudflare =>
+    [warning] Failed to create ws channel for provider ethereum_cloudflare: :no_ws_config =>
+    [info] Created http channel for provider ethereum_llamarpc =>
+    [info] Created http channel for provider ethereum_merkle =>
+    [warning] Failed to create ws channel for provider ethereum_merkle: :no_ws_config =>
+    ```
+
 ## Active Roadmap
 
 ### Performance Optimizations
 
 **Hedged Requests (Race Top N)**
+
 - Race top N providers for hot methods; cancel on first success
 - Configurable per-method hedging policies
 - Metrics for hedge success rate and latency improvements
 - Early-cancel mechanism to avoid wasted upstream calls
 
 **Result Caching**
+
 - Short TTL cache for hot reads (e.g., `eth_blockNumber`, 250–500ms)
 - Cache key normalization for deduplication
 - Instrumentation for cache hit rate per method
 - Configurable TTLs and cache size limits per chain
 
 **Request Coalescing**
+
 - Collapse identical concurrent requests while in-flight
 - Single upstream call for multiple clients requesting same data
 - Response fan-out to all waiting clients
 
 **Connection Pool Tuning**
+
 - Fine-tune Finch pools per host/region
 - HTTP/2 where supported, keep-alive optimization
 - Per-provider connection limits based on rate limits
@@ -33,6 +50,7 @@ Living backlog of high-impact improvements. Active features are prioritized at t
 ### Advanced Routing Strategies
 
 **Best Sync Strategy**
+
 - Prefer providers with most up-to-date head/safe/finalized blocks
 - Minimize stale reads and chain inconsistencies
 - `HeadTracker` for periodic block height sampling
@@ -41,22 +59,26 @@ Living backlog of high-impact improvements. Active features are prioritized at t
 - See implementation notes below for detailed design
 
 **Per-Method Strategy Overrides**
+
 - Configure routing strategy per JSON-RPC method
 - Example: `eth_getBlockByNumber` → `:best_sync`, `eth_gasPrice` → `:fastest`
 - Protocol requirements per method (`:http` only, `:ws` preferred, etc.)
 - Timeout budgets per method via MethodPolicy
 
 **Cost-Aware Routing**
+
 - Track provider cost per call ($ per request)
 - Optimize selection for cost while meeting SLO constraints
 - Configurable cost weights vs latency weights
 
 **Quota-Aware Routing**
+
 - Track provider rate limits and quota consumption
 - Dynamically reduce traffic to providers approaching limits
 - Proactive load balancing before hitting 429s
 
 **Sticky Session Routing**
+
 - Client/session affinity for stateful workflows
 - Consistent provider selection for same client over time window
 
@@ -65,16 +87,18 @@ Living backlog of high-impact improvements. Active features are prioritized at t
 Some providers excel at specific methods or handle significantly greater throughput for certain calls.
 
 **Config Example:**
+
 ```yaml
 providers:
   - id: "alchemy_eth"
-    preferred_methods: ["eth_getLogs", "eth_call"]  # Archival queries
-    priority_multiplier: 1.5  # Boost selection weight for these methods
+    preferred_methods: ["eth_getLogs", "eth_call"] # Archival queries
+    priority_multiplier: 1.5 # Boost selection weight for these methods
   - id: "quicknode_eth"
-    preferred_subscriptions: ["newHeads", "logs"]  # Better WS stability
+    preferred_subscriptions: ["newHeads", "logs"] # Better WS stability
 ```
 
 **Benefits:**
+
 - Route archival queries to providers optimized for historical data
 - Balance subscription load across providers with proven WS reliability
 - Allow manual tuning when passive benchmarking insufficient
@@ -86,6 +110,7 @@ providers:
 **Current State:** Subscriptions picked via manually configured `priority`
 
 **Improvements Needed:**
+
 - Track WS feed quality metrics: event delivery rate, gap frequency, connection stability
 - Load balancing when single provider has too many multiplexed subscriptions
 - Automatic failover based on stream health, not just connection failures
@@ -94,17 +119,20 @@ providers:
 ### Resilience Enhancements
 
 **Enhanced Retry/Backoff**
+
 - **Jittered backoff** - Add randomization to exponential backoff (prevent thundering herd)
 - **Selective retries** - Only retry retriable errors (don't retry invalid params, auth failures)
 - **Method-aware limits** - Per-method retry configuration (don't retry expensive archival queries)
 - Note: Basic exponential backoff (1s → 5min) for 429s already implemented
 
 **Auto-Disable/Rehabilitate**
+
 - Remove severely degraded providers from rotation automatically
 - Probationary period upon recovery with limited traffic
 - Gradual traffic ramp-up when provider health improves
 
 **Circuit Breaker Tuning**
+
 - Per-provider thresholds based on provider tier (premium vs public)
 - Breaker state included in telemetry and dashboard
 - Partial brownout handling (allow some traffic through open breaker for probing)
@@ -116,6 +144,7 @@ providers:
 **Design Decision:** Don't explicitly tag providers with regions; infer from latency benchmarking
 
 **Roadmap:**
+
 - Passive latency measurement reveals effective "regions" per provider
 - Client region detection (header, IP geolocation, or config)
 - Prefer providers with lowest RTT for client's region
@@ -125,16 +154,19 @@ providers:
 ### Configuration & Operations
 
 **Live Config Reload**
+
 - Atomic config reloads via `ConfigStore.reload/1` with validation
 - Zero-downtime provider additions/removals
 - Config version tracking and rollback support
 
 **Staged Rollout**
+
 - Canary percentage for new providers (5% → 25% → 100%)
 - Progressive traffic shifting with automatic rollback on errors
 - A/B testing for new routing strategies
 
 **Admin Tooling**
+
 - Dashboard UI for enabling/disabling providers at runtime
 - Provider weight adjustments without config file edits
 - Real-time circuit breaker control (force open/close)
@@ -142,11 +174,13 @@ providers:
 ### Observability Enhancements
 
 **OpenTelemetry Integration**
+
 - Distributed tracing spans: selection → upstream → response
 - Context propagation across service boundaries
 - Integration with standard observability stacks (Datadog, New Relic, Honeycomb)
 
 **Enhanced Dashboards**
+
 - Cache hit rate visualization per method
 - Hedged request success rate and latency improvements
 - Regional latency heatmaps
@@ -155,21 +189,25 @@ providers:
 ### Multi-Tenant & Productization
 
 **API Keys & Auth**
+
 - Tenant identity via API keys
 - Per-tenant routing policies and provider access controls
 - Usage attribution per tenant
 
 **Quotas & Rate Limits**
+
 - Global and tenant-scoped request quotas
 - Rate limiting per API key
 - Soft limits with overage billing vs hard cutoffs
 
 **Billing & Reporting**
+
 - Per-tenant usage breakdowns (requests, methods, latency percentiles)
 - Provider cost tracking and spend estimates
 - SLO compliance reporting (P95 latency, error budget burn rate)
 
 **Abuse Detection**
+
 - Anomaly detection for unusual traffic patterns
 - IP reputation checks and blocklists
 - WAF integration for DDoS protection
@@ -177,16 +215,19 @@ providers:
 ### API Compatibility
 
 **JSON-RPC Batching**
+
 - Support batch requests with per-item routing
 - Partial error handling (some requests succeed, some fail)
 - Per-item failover and retry logic
 
 **JSON-RPC Normalization**
+
 - Consistent error taxonomy across providers
 - Provider-specific quirks masked from clients
 - Error code mapping to standard JSON-RPC error codes
 
 **Client Library Testing**
+
 - Viem/Wagmi/Ethers compatibility testing
 - Recorded fixtures for tricky methods
 - Provider-specific JSON-RPC diff tests
@@ -196,11 +237,13 @@ providers:
 **Challenge:** Temporal differences between providers create consistency issues
 
 **Symptoms:**
+
 - Block height variations (provider A at block N, provider B at N-2)
 - Chain reorg handling differences
 - Identical queries returning different results
 
 **Mitigation Strategies:**
+
 - Block height awareness (route to providers within acceptable lag)
 - Quorum-based validation for critical queries
 - Reorg detection and automatic retry with consistent provider set
@@ -209,6 +252,7 @@ providers:
 ### Dashboard UI Enhancements
 
 **Provider Configuration UI**
+
 - Add chains and providers directly through dashboard
 - API key management with secure storage
 - Provider health visualization and manual override controls
@@ -218,24 +262,28 @@ providers:
 ## Priority Phases
 
 **P0 (Core Routing)** - Q1 2026
+
 - Per-method strategy overrides
 - Best sync routing strategy
 - MethodPolicy timeout configuration
 - Per-method provider priorities
 
 **P1 (Performance)** - Q2 2026
+
 - Hedged requests (race top N)
 - Result caching with instrumentation
 - Request coalescing
 - Enhanced telemetry and OpenTelemetry integration
 
 **P2 (Resilience & Scale)** - Q3 2026
+
 - Adaptive retry/backoff
 - Regional/geo-aware routing
 - Live config reload
 - Staged provider rollouts
 
 **P3 (Product & Multi-Tenancy)** - Q4 2026
+
 - Cost-aware routing
 - Multi-tenant quotas and auth
 - Billing and usage reporting
@@ -250,6 +298,7 @@ providers:
 **Goal:** Minimize stale reads by routing to most up-to-date providers
 
 **Signals to Track (per provider):**
+
 - Latest observed `block_number` from passive traffic
 - Periodic `eth_blockNumber` probes (every 1-2s under load, 3-5s idle)
 - `eth_syncing` status (current block vs highest block)
@@ -257,11 +306,13 @@ providers:
 - Timestamp of last update (avoid stale measurements)
 
 **Global Head Tracking:**
+
 - `HeadTracker` GenServer samples subset of providers with jitter
 - Compute `global_best_head` via k-of-n majority (avoid outliers)
 - Track `global_safe_head` and `global_finalized_head` when supported
 
 **Selection Algorithm:**
+
 ```elixir
 def pick_best_sync(candidates, opts) do
   reference = opts[:reference] || :latest # :latest | :safe | :finalized
@@ -290,6 +341,7 @@ end
 ```
 
 **Configuration:**
+
 ```yaml
 selection:
   default_strategy: :best_sync
@@ -297,11 +349,11 @@ selection:
     eth_getBlockByNumber:
       strategy: :best_sync
       reference: latest
-      max_lag_blocks: 0  # Require perfect sync
+      max_lag_blocks: 0 # Require perfect sync
     eth_getBalance:
       strategy: :best_sync
       reference: safe
-      max_lag_blocks: 1  # Allow 1 block lag
+      max_lag_blocks: 1 # Allow 1 block lag
   strategies:
     best_sync:
       reference: latest
@@ -311,10 +363,12 @@ selection:
 ```
 
 **Telemetry:**
+
 - Emit `[:lasso, :selection, :best_sync]` with provider_id, head, lag_blocks, reference
 - Track global head gauges: `global_best_head`, `global_safe_head`, `global_finalized_head`
 
 **Safeguards:**
+
 - Cold start: use fallback until enough samples collected
 - Outlier detection: require k-of-n concordance on heads
 - Oscillation prevention: hysteresis for N samples before promoting provider
@@ -327,6 +381,7 @@ selection:
 Development log of implemented features, moved from active roadmap.
 
 ### ✅ Transport-Agnostic Architecture (Oct 2025)
+
 - Unified request pipeline routing across HTTP and WebSocket
 - `Transport` behaviour with HTTP and WebSocket implementations
 - `Channel` abstraction for realized connections
@@ -336,6 +391,7 @@ Development log of implemented features, moved from active roadmap.
 - Automatic failover across transports (HTTP → WS or WS → HTTP)
 
 ### ✅ WebSocket Subscription Management (Sept 2025)
+
 - Intelligent multiplexing via `UpstreamSubscriptionPool`
 - Automatic failover with gap-filling during provider switches
 - `StreamCoordinator` per subscription key for continuity management
@@ -345,6 +401,7 @@ Development log of implemented features, moved from active roadmap.
 - Reduced upstream connections by orders of magnitude
 
 ### ✅ Circuit Breaker System (Sept 2025)
+
 - Per-provider circuit breakers with open/half-open/closed states
 - Configurable failure thresholds and recovery timeouts
 - Integration with provider selection (exclude open breakers)
@@ -352,6 +409,7 @@ Development log of implemented features, moved from active roadmap.
 - Telemetry events for breaker state transitions
 
 ### ✅ HTTP Failover & Rate Limit Handling (Sept 2025)
+
 - Automatic 429 detection with exponential backoff (1s → 5min max, `base * 2^failures`)
 - Provider exclusion during cooldown period via `HealthPolicy`
 - Seamless failover via `execute_rpc_with_failover/6`
@@ -360,6 +418,7 @@ Development log of implemented features, moved from active roadmap.
 - Note: Jittered backoff and selective retry logic still pending
 
 ### ✅ Method-Specific Benchmarking (Aug 2025)
+
 - Passive latency measurement per chain, provider, method, transport
 - ETS-based metrics storage with 24-hour retention
 - Provider leaderboards based on real RPC performance
@@ -367,6 +426,7 @@ Development log of implemented features, moved from active roadmap.
 - Feeds `:fastest` routing strategy
 
 ### ✅ Four Routing Strategies (Aug 2025)
+
 - `:fastest` - Performance-based via benchmarking
 - `:cheapest` - Cost-optimized (public providers first)
 - `:priority` - Static config-based ordering
@@ -374,6 +434,7 @@ Development log of implemented features, moved from active roadmap.
 - Strategy selection per endpoint: `/rpc/fastest/:chain`, etc.
 
 ### ✅ Request Observability (Sept 2025)
+
 - `RequestContext` struct threading through execution pipeline
 - Structured JSON logs: `rpc.request.completed` events
 - Client-visible metadata (opt-in via headers or body)
@@ -382,6 +443,7 @@ Development log of implemented features, moved from active roadmap.
 - See [OBSERVABILITY.md](OBSERVABILITY.md) for details
 
 ### ✅ Battle Testing Framework (Sept 2025)
+
 - Fluent scenario DSL for complex test orchestration
 - HTTP workload generation with configurable concurrency
 - Chaos engineering: kill, flap, degrade providers
@@ -390,6 +452,7 @@ Development log of implemented features, moved from active roadmap.
 - See [battle-testing/BATTLE_TESTING_GUIDE.md](battle-testing/BATTLE_TESTING_GUIDE.md)
 
 ### ✅ Live Dashboard (Aug 2025)
+
 - Real-time provider leaderboards with Phoenix LiveView
 - Performance matrix: latency by provider and method
 - Circuit breaker status visualization
@@ -398,6 +461,7 @@ Development log of implemented features, moved from active roadmap.
 - WebSocket push updates for live metrics
 
 ### ✅ Telemetry Events (Aug 2025)
+
 - `[:lasso, :rpc, :request]` start/stop/error events
 - Per-request metadata: chain, provider, method, protocol, duration, breaker state
 - Integration with standard Elixir telemetry ecosystem
