@@ -475,26 +475,31 @@ defmodule Lasso.RPC.ErrorNormalizer do
     "permission denied"
   ]
 
-  # Rate limit keywords
+  # Rate limit keywords - based on real provider error messages
   @rate_limit_keywords [
     "rate limit",
     "too many requests",
     "throttled",
     "quota exceeded",
-    "capacity exceeded"
+    "capacity exceeded",
+    "request count exceeded", 
+    "maximum requests",       
+    "credits quota",          
+    "requests per second"     
   ]
 
   defp categorize_and_assess_retriability(code, message) when is_binary(message) do
     message_lower = String.downcase(message)
 
     cond do
+      # Rate limits should be checked FIRST (more specific than auth errors)
+      # Example: "Quota exceeded for this API key" should be rate_limit, not auth_error
+      contains_any?(message_lower, @rate_limit_keywords) ->
+        {:rate_limit, true}
+
       # Auth errors should trigger failover (other providers may not require auth)
       contains_any?(message_lower, @auth_keywords) ->
         {:auth_error, true}
-
-      # Rate limits should trigger failover
-      contains_any?(message_lower, @rate_limit_keywords) ->
-        {:rate_limit, true}
 
       # Fall back to code-based categorization
       true ->

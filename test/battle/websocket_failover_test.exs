@@ -47,9 +47,9 @@ defmodule Lasso.Battle.WebSocketFailoverTest do
         {:real, "ankr", "https://rpc.ankr.com/eth", "wss://rpc.ankr.com/eth/ws"}
       ])
 
-      # Seed benchmarks to prefer llamarpc initially
+      # Seed benchmarks to prefer llamarpc initially (lower latency = higher priority)
       SetupHelper.seed_benchmarks("ethereum", "eth_subscribe", [
-        {"llamarpc", 100},
+        {"llamarpc", 50},
         {"ankr", 200}
       ])
 
@@ -76,31 +76,34 @@ defmodule Lasso.Battle.WebSocketFailoverTest do
       # Wait for subscription to establish
       Process.sleep(5_000)
 
-      # Verify we're initially connected to llamarpc by checking metrics
-      # (In real test, you'd query TransportRegistry for active connection)
-      Logger.info("📡 Subscription established (assuming llamarpc per seeded benchmarks)")
+      # Detect which provider is actually being used by checking Pool state
+      pool_pid = Lasso.RPC.UpstreamSubscriptionPool.via("ethereum")
+      pool_state = :sys.get_state(pool_pid)
 
-      # Track pre-failover events
-      receive do
-        {:stats, interim_stats} ->
-          Logger.info("Pre-failover: #{interim_stats.events_received} events received")
-      after
-        1000 -> :ok
-      end
+      active_provider =
+        case pool_state.keys do
+          %{{:newHeads} => %{primary_provider_id: provider_id}} ->
+            Logger.info("📡 Detected active provider: #{provider_id}")
+            provider_id
+          _ ->
+            Logger.info("📡 No active subscription found, defaulting to ankr")
+            "ankr"
+        end
 
-      # Kill primary provider mid-subscription
-      Logger.info("💥 Killing llamarpc provider to trigger failover")
-      Chaos.kill_provider("llamarpc", chain: "ethereum")
+      # Kill the ACTIVE provider (not necessarily llamarpc)
+      Logger.info("💥 Killing #{active_provider} provider to trigger failover")
+      kill_fn = Chaos.kill_provider(active_provider, chain: "ethereum")
+      kill_fn.()
 
       # Wait for circuit breaker to open (failover indicator)
       circuit_opened =
         receive do
-          {:circuit_breaker_event, %{provider_id: "llamarpc", to: :open}} ->
-            Logger.info("✓ Circuit breaker opened for llamarpc - failover triggered")
+          {:circuit_breaker_event, %{provider_id: ^active_provider, to: :open}} ->
+            Logger.info("✓ Circuit breaker opened for #{active_provider} - failover triggered")
             true
         after
           10_000 ->
-            Logger.warning("⚠️  Circuit breaker did not open for llamarpc within 10s")
+            Logger.warning("⚠️  Circuit breaker did not open for #{active_provider} within 10s")
             false
         end
 
@@ -118,21 +121,46 @@ defmodule Lasso.Battle.WebSocketFailoverTest do
 
       # Verify failover actually occurred
       assert circuit_opened,
-             "Failover test invalid: llamarpc circuit breaker never opened"
+             "Failover test invalid: #{active_provider} circuit breaker never opened"
+
+      # Critical: Assert zero gaps during failover
+      assert stats.gaps == 0,
+             "ZERO-GAP GUARANTEE VIOLATED: Expected 0 gaps during failover, got #{stats.gaps}"
+
+      # Assert bounded duplicate rate during failover
+      # During failover, backfill + new subscription may create some overlap
+      # Allow up to 30% duplicates (higher than normal 5% due to failover overlap)
+      duplicate_rate =
+        if stats.events_received > 0 do
+          stats.duplicates / stats.events_received
+        else
+          0.0
+        end
+
+      assert duplicate_rate <= 0.30,
+             "Duplicate rate too high during failover: #{Float.round(duplicate_rate * 100, 2)}% (expected ≤30%)"
 
       # Log failover metrics
       Logger.info("""
       ✅ WebSocket Failover Test Results:
          Events received: #{stats.events_received}
-         Gaps: #{stats.gaps}
-         Duplicates: #{stats.duplicates}
+         Gaps: #{stats.gaps} ✓ (ZERO)
+         Duplicates: #{stats.duplicates} (#{Float.round(duplicate_rate * 100, 2)}%)
+         Duplicate rate: #{Float.round(duplicate_rate * 100, 2)}% (within 30% threshold)
          Failover verified: #{circuit_opened}
       """)
 
       IO.puts("\n✅ WebSocket Failover Test Passed!")
       IO.puts("   Subscription continued during provider failure")
+      IO.puts("   Failed provider: #{active_provider}")
       IO.puts("   Events received: #{stats.events_received}")
-      IO.puts("   Failover verified: Circuit breaker opened for llamarpc")
+      IO.puts("   Gaps: #{stats.gaps} (ZERO - failover guarantee met!)")
+
+      IO.puts(
+        "   Duplicates: #{stats.duplicates} (#{Float.round(duplicate_rate * 100, 2)}% - within threshold)"
+      )
+
+      IO.puts("   Failover verified: Circuit breaker opened for #{active_provider}")
     end
 
     # 90s test with failover, requires real blockchain events
@@ -163,9 +191,22 @@ defmodule Lasso.Battle.WebSocketFailoverTest do
       # Wait for subscriptions to start
       Process.sleep(5_000)
 
+      # Detect which provider is active by checking Pool state
+      pool_pid = Lasso.RPC.UpstreamSubscriptionPool.via("ethereum")
+      pool_state = :sys.get_state(pool_pid)
+
+      active_provider =
+        case pool_state.keys do
+          %{{:newHeads} => %{primary_provider_id: provider_id}} ->
+            provider_id
+          _ ->
+            "ankr"
+        end
+
       # Kill provider mid-test
-      Logger.info("💥 Killing llamarpc provider")
-      Chaos.kill_provider("llamarpc", chain: "ethereum")
+      Logger.info("💥 Killing #{active_provider} provider")
+      kill_fn = Chaos.kill_provider(active_provider, chain: "ethereum")
+      kill_fn.()
 
       # Wait for failover
       Process.sleep(5_000)

@@ -189,14 +189,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
         state
       )
       when is_binary(upstream_id) do
-    Logger.debug(
-      "Received subscription event: provider=#{provider_id}, upstream_id=#{upstream_id}, upstream_index=#{inspect(state.upstream_index)}"
-    )
-
     case get_in(state.upstream_index, [provider_id, upstream_id]) do
       nil ->
         Logger.warning(
-          "No key found for subscription event: provider=#{provider_id}, upstream_id=#{upstream_id}"
+          "No key found for subscription event: provider=#{provider_id}, upstream_id=#{upstream_id}, full_index=#{inspect(state.upstream_index)}"
         )
 
         {:noreply, state}
@@ -356,7 +352,11 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       %{refcount: 1, upstream: upstream, primary_provider_id: provider_id} ->
         # Best-effort unsubscribe on current provider (async to avoid blocking)
         upstream_id = Map.get(upstream, provider_id)
-        Task.start(fn -> send_upstream_unsubscribe(state.chain, provider_id, key, upstream_id) end)
+
+        Task.start(fn ->
+          send_upstream_unsubscribe(state.chain, provider_id, key, upstream_id)
+        end)
+
         telemetry_upstream(:unsubscribe, state.chain, provider_id, key)
 
         # Clean up upstream_index for all providers in the upstream map
@@ -407,32 +407,18 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       "params" => ["newHeads"]
     }
 
-    Logger.debug("Sending upstream eth_subscribe to #{provider_id} with id #{id}")
+    Logger.info("Sending upstream eth_subscribe to #{provider_id} with request id #{id}")
 
-    case TransportRegistry.get_channel(chain, provider_id, :ws) do
-      {:ok, channel} ->
-        case Channel.request(channel, message, 10_000) do
-          {:ok, upstream_id} when is_binary(upstream_id) ->
-            {:ok, upstream_id}
-
-          {:error, %JSONRPC.Error{} = jerr} ->
-            {:error, jerr}
-
-          {:error, reason} ->
-            {:error,
-             ErrorNormalizer.normalize(reason,
-               provider_id: provider_id,
-               context: :transport,
-               transport: :ws
-             )}
-        end
-
-      {:error, _reason} ->
+    with {:ok, channel} <- TransportRegistry.get_channel(chain, provider_id, :ws),
+         {:ok, upstream_id} <- Channel.request(channel, message, 10_000) do
+      {:ok, upstream_id}
+    else
+      {:error, reason} ->
         {:error,
-         JSONRPC.Error.new(-32000, "No WebSocket channel available",
+         ErrorNormalizer.normalize(reason,
            provider_id: provider_id,
-           transport: :ws,
-           retriable?: true
+           context: :transport,
+           transport: :ws
          )}
     end
   end
@@ -450,30 +436,16 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
     Logger.debug("Sending upstream eth_subscribe (logs) to #{provider_id} with id #{id}")
 
-    case TransportRegistry.get_channel(chain, provider_id, :ws) do
-      {:ok, channel} ->
-        case Channel.request(channel, message, 10_000) do
-          {:ok, upstream_id} when is_binary(upstream_id) ->
-            {:ok, upstream_id}
-
-          {:error, %JSONRPC.Error{} = jerr} ->
-            {:error, jerr}
-
-          {:error, reason} ->
-            {:error,
-             ErrorNormalizer.normalize(reason,
-               provider_id: provider_id,
-               context: :transport,
-               transport: :ws
-             )}
-        end
-
-      {:error, _reason} ->
+    with {:ok, channel} <- TransportRegistry.get_channel(chain, provider_id, :ws),
+         {:ok, upstream_id} <- Channel.request(channel, message, 10_000) do
+      {:ok, upstream_id}
+    else
+      {:error, reason} ->
         {:error,
-         JSONRPC.Error.new(-32000, "No WebSocket channel available",
+         ErrorNormalizer.normalize(reason,
            provider_id: provider_id,
-           transport: :ws,
-           retriable?: true
+           context: :transport,
+           transport: :ws
          )}
     end
   end

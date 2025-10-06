@@ -38,14 +38,15 @@ defmodule Lasso.Battle.Chaos do
 
       Logger.warning("Chaos: Killing provider #{provider_id} on #{chain}")
 
-      case ProviderPool.get_provider_ws_pid(chain, provider_id) do
-        {:ok, pid} ->
+      # Look up WS connection directly in Registry
+      case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
+        [{pid, _}] when is_pid(pid) ->
           Process.exit(pid, :kill)
-          Logger.warning("Chaos: Killed provider #{provider_id} (pid: #{inspect(pid)})")
+          Logger.warning("Chaos: Killed WS connection for #{provider_id} (pid: #{inspect(pid)})")
           :ok
 
-        {:error, :not_found} ->
-          Logger.warning("Chaos: Provider #{provider_id} not found on #{chain}, cannot kill")
+        [] ->
+          Logger.warning("Chaos: WS connection for #{provider_id} not found in Registry, cannot kill")
           {:error, :not_found}
       end
     end
@@ -219,8 +220,8 @@ defmodule Lasso.Battle.Chaos do
     # Kill the provider
     Logger.warning("Chaos: Flap #{iteration + 1} - Killing #{provider_id} on #{chain}")
 
-    case ProviderPool.get_provider_ws_pid(chain, provider_id) do
-      {:ok, pid} ->
+    case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
+      [{pid, _}] ->
         Process.exit(pid, :kill)
         Logger.warning("Chaos: Killed #{provider_id} (will be restarted by supervisor)")
 
@@ -229,15 +230,15 @@ defmodule Lasso.Battle.Chaos do
         Process.sleep(down_time)
 
         # Supervisor should have restarted it by now
-        case ProviderPool.get_provider_ws_pid(chain, provider_id) do
-          {:ok, new_pid} ->
+        case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
+          [{new_pid, _}] ->
             Logger.info("Chaos: Provider #{provider_id} restarted (new pid: #{inspect(new_pid)})")
 
-          {:error, :not_found} ->
+          [] ->
             Logger.warning("Chaos: Provider #{provider_id} not yet restarted")
         end
 
-      {:error, :not_found} ->
+      [] ->
         Logger.warning(
           "Chaos: Provider #{provider_id} not found on #{chain} during flap #{iteration + 1}"
         )

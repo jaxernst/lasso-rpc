@@ -101,19 +101,27 @@ defmodule Lasso.RPC.ClientSubscriptionRegistry do
   def handle_cast({:dispatch, key, payload}, state) do
     ids = Map.get(state.by_key, key, [])
 
+    Logger.info(
+      "Dispatching to #{length(ids)} clients for key #{inspect(key)}, subscription_ids=#{inspect(ids)}"
+    )
+
     Enum.each(ids, fn subscription_id ->
-      %{client_pid: pid} = Map.get(state.by_id, subscription_id)
+      case Map.get(state.by_id, subscription_id) do
+        nil ->
+          Logger.warning("Subscription ID #{subscription_id} not found in by_id registry")
 
-      notification = %{
-        "jsonrpc" => "2.0",
-        "method" => "eth_subscription",
-        "params" => %{
-          "subscription" => subscription_id,
-          "result" => payload
-        }
-      }
+        %{client_pid: pid} ->
+          notification = %{
+            "jsonrpc" => "2.0",
+            "method" => "eth_subscription",
+            "params" => %{
+              "subscription" => subscription_id,
+              "result" => payload
+            }
+          }
 
-      send(pid, {:subscription_event, notification})
+          send(pid, {:subscription_event, notification})
+      end
     end)
 
     {:noreply, state}
