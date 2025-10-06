@@ -54,9 +54,6 @@ defmodule Lasso.Battle.SetupHelper do
       end
     end)
 
-    # Wait for providers to stabilize (especially WS connections)
-    Process.sleep(1000)
-
     Logger.info("✓ Registered providers for #{chain_name}: #{inspect(provider_ids)}")
     :ok
   end
@@ -134,8 +131,26 @@ defmodule Lasso.Battle.SetupHelper do
     # Use the production Providers API
     case Providers.add_provider(chain_name, config, validate: false) do
       {:ok, _id} ->
-        Logger.debug("Registered real provider: #{provider_id} (#{url})")
-        :ok
+        # Wait for WebSocket connection if ws_url is present
+        if ws_url do
+          case wait_for_ws_connection(chain_name, provider_id, timeout: 15_000) do
+            :ok ->
+              Logger.debug("Registered real provider: #{provider_id} (#{url})")
+              :ok
+
+            {:error, reason} ->
+              Logger.error(
+                "Registered real provider #{provider_id} but WebSocket connection failed: #{inspect(reason)}"
+              )
+
+              :ok
+          end
+        else
+          # HTTP-only provider, brief delay for initialization
+          Process.sleep(100)
+          Logger.debug("Registered real provider: #{provider_id} (#{url})")
+          :ok
+        end
 
       {:error, {:already_exists, _}} ->
         Logger.debug("Provider #{provider_id} already exists, skipping")
@@ -241,6 +256,31 @@ defmodule Lasso.Battle.SetupHelper do
             elapsed_ms + 100
           )
       end
+    end
+  end
+
+  defp wait_for_ws_connection(chain_name, provider_id, opts) do
+    timeout = Keyword.get(opts, :timeout, 15_000)
+
+    # Subscribe to WebSocket connection events
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
+
+    try do
+      receive do
+        {:ws_connected, ^provider_id} ->
+          Logger.info("✓ WebSocket connected for #{provider_id}")
+          :ok
+
+        {:connection_error, ^provider_id, error} ->
+          Logger.error("✗ WebSocket connection failed for #{provider_id}: #{inspect(error)}")
+          {:error, error}
+      after
+        timeout ->
+          Logger.error("✗ WebSocket connection timeout for #{provider_id} after #{timeout}ms")
+          {:error, :connection_timeout}
+      end
+    after
+      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
     end
   end
 end

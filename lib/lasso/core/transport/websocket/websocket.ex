@@ -49,14 +49,32 @@ defmodule Lasso.RPC.Transports.WebSocket do
              )}
 
           connection_pid ->
-            channel = %{
-              ws_url: ws_url,
-              provider_id: provider_id,
-              connection_pid: connection_pid,
-              config: provider_config
-            }
+            # Verify the WebSocket connection is actually established
+            case WSConnection.status(provider_id) do
+              %{connected: true} ->
+                channel = %{
+                  ws_url: ws_url,
+                  provider_id: provider_id,
+                  connection_pid: connection_pid,
+                  config: provider_config
+                }
 
-            {:ok, channel}
+                {:ok, channel}
+
+              %{connected: false} ->
+                {:error,
+                 JError.new(-32000, "WebSocket not connected",
+                   provider_id: provider_id,
+                   retriable?: true
+                 )}
+
+              _ ->
+                {:error,
+                 JError.new(-32000, "WebSocket connection status unknown",
+                   provider_id: provider_id,
+                   retriable?: true
+                 )}
+            end
         end
     end
   end

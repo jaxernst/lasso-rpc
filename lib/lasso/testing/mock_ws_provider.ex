@@ -114,6 +114,36 @@ defmodule Lasso.Testing.MockWSProvider do
   end
 
   @doc """
+  Sends a sequence of blocks to all subscribers.
+
+  Useful for testing ordered delivery and backfill scenarios.
+  """
+  def send_block_sequence(chain, provider_id, start_block, count, opts \\ []) do
+    delay_ms = Keyword.get(opts, :delay_ms, 10)
+
+    Enum.each(start_block..(start_block + count - 1), fn block_num ->
+      send_block(chain, provider_id, %{
+        "number" => "0x" <> String.downcase(Integer.to_string(block_num, 16)),
+        "hash" => "0x" <> String.downcase(Integer.to_string(block_num * 1000, 16)),
+        "timestamp" => "0x" <> String.downcase(Integer.to_string(:os.system_time(:second), 16))
+      })
+
+      if delay_ms > 0 do
+        Process.sleep(delay_ms)
+      end
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Simulates a disconnect by stopping the mock provider.
+  """
+  def simulate_disconnect(chain, provider_id) do
+    stop_mock(chain, provider_id)
+  end
+
+  @doc """
   Sends a mock log event to all log subscribers.
   """
   def send_log(chain, provider_id, log) when is_map(log) do
@@ -446,19 +476,12 @@ defmodule Lasso.Testing.MockWSProvider do
   end
 
   defp send_subscription_event(chain, provider_id, subscription_id, payload) do
-    message = %{
-      "jsonrpc" => "2.0",
-      "method" => "eth_subscription",
-      "params" => %{
-        "subscription" => subscription_id,
-        "result" => payload
-      }
-    }
+    received_at = System.monotonic_time(:millisecond)
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "raw_messages:#{chain}",
-      {:raw_message, provider_id, message, System.monotonic_time(:millisecond)}
+      "ws:subs:#{chain}",
+      {:subscription_event, provider_id, subscription_id, payload, received_at}
     )
   end
 
