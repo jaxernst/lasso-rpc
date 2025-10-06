@@ -15,7 +15,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   alias Lasso.RPC.{FilterNormalizer, ErrorNormalizer}
   alias Lasso.Config.ConfigStore
   alias Lasso.Events.Provider
-  alias Lasso.JSONRPC
 
   @type chain :: String.t()
   @type provider_id :: String.t()

@@ -10,7 +10,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
   import Mox
   import ExUnit.CaptureLog
 
-  alias Lasso.RPC.{ChainSupervisor, ProviderPool}
+  alias Lasso.RPC.ChainSupervisor
   alias Lasso.Config.ChainConfig
   alias Lasso.Config.ChainConfig.{Provider, Connection, Failover}
 

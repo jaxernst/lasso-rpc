@@ -391,32 +391,23 @@ defmodule Lasso.RPC.StreamCoordinator do
       {:range, from_n, to_n} ->
         telemetry_backfill_started(chain, from_n, to_n, http_provider)
 
-        case GapFiller.ensure_blocks(chain, http_provider, from_n, to_n,
-               timeout_ms: backfill_timeout
-             ) do
-          {:ok, blocks} ->
-            # Send blocks to coordinator via cast
-            coordinator_pid = via(chain, key)
+        {:ok, blocks} =
+          GapFiller.ensure_blocks(chain, http_provider, from_n, to_n,
+            timeout_ms: backfill_timeout
+          )
 
-            Enum.each(blocks, fn block ->
-              GenServer.cast(
-                coordinator_pid,
-                {:upstream_event, http_provider, nil, block, System.monotonic_time(:millisecond)}
-              )
-            end)
+        # Send blocks to coordinator via cast
+        coordinator_pid = via(chain, key)
 
-            telemetry_backfill_completed(chain, from_n, to_n, length(blocks))
-            :ok
+        Enum.each(blocks, fn block ->
+          GenServer.cast(
+            coordinator_pid,
+            {:upstream_event, http_provider, nil, block, System.monotonic_time(:millisecond)}
+          )
+        end)
 
-          {:error, reason} ->
-            Logger.error("Backfill failed: #{inspect(reason)}",
-              chain: chain,
-              from: from_n,
-              to: to_n
-            )
-
-            :error
-        end
+        telemetry_backfill_completed(chain, from_n, to_n, length(blocks))
+        :ok
 
       {:exceeded, from_n, to_n} ->
         Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
@@ -429,27 +420,23 @@ defmodule Lasso.RPC.StreamCoordinator do
             # Fill what we can
             telemetry_backfill_started(chain, from_n, to_n, http_provider)
 
-            case GapFiller.ensure_blocks(chain, http_provider, from_n, to_n,
-                   timeout_ms: backfill_timeout
-                 ) do
-              {:ok, blocks} ->
-                coordinator_pid = via(chain, key)
+            {:ok, blocks} =
+              GapFiller.ensure_blocks(chain, http_provider, from_n, to_n,
+                timeout_ms: backfill_timeout
+              )
 
-                Enum.each(blocks, fn block ->
-                  GenServer.cast(
-                    coordinator_pid,
-                    {:upstream_event, http_provider, nil, block,
-                     System.monotonic_time(:millisecond)}
-                  )
-                end)
+            coordinator_pid = via(chain, key)
 
-                telemetry_backfill_completed(chain, from_n, to_n, length(blocks))
-                :ok
+            Enum.each(blocks, fn block ->
+              GenServer.cast(
+                coordinator_pid,
+                {:upstream_event, http_provider, nil, block,
+                 System.monotonic_time(:millisecond)}
+              )
+            end)
 
-              {:error, reason} ->
-                Logger.error("Best-effort backfill failed: #{inspect(reason)}")
-                :error
-            end
+            telemetry_backfill_completed(chain, from_n, to_n, length(blocks))
+            :ok
 
           :strict_abort ->
             :error

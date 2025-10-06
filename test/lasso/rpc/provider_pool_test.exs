@@ -2,7 +2,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
   use ExUnit.Case, async: false
   import Mox
 
-  alias Lasso.RPC.{ProviderPool, CircuitBreaker}
+  alias Lasso.RPC.ProviderPool
   alias Lasso.Config.ChainConfig
 
   setup_all do
