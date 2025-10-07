@@ -87,12 +87,4 @@ defmodule Lasso.RPC.ProviderPoolTest do
     assert p1_status3.consecutive_failures >= p1_status2.consecutive_failures
   end
 
-  test ":fastest strategy prefers lowest latency meeting success-rate threshold" do
-  end
-
-  test ":cheapest prefers public type with fallback to paid and respects region filter" do
-  end
-
-  test "excludes providers with open circuit from candidates" do
-  end
 end

@@ -220,22 +220,6 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     end
   end
 
-  describe "Message Routing" do
-    test "handles message routing through provider selection", %{chain_config: chain_config} do
-    end
-
-    test "handles routing when no providers are available", %{chain_config: chain_config} do
-    end
-  end
-
-  describe "Failover Management" do
-    test "triggers provider failover", %{chain_config: chain_config} do
-    end
-
-    test "handles failover for non-existent provider", %{chain_config: chain_config} do
-    end
-  end
-
   describe "Integration with Child Processes" do
     test "coordinates with child processes for integration", %{chain_config: chain_config} do
       chain_name = "integration_test_chain"
