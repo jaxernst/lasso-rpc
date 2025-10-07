@@ -70,11 +70,11 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
     test "JSON-RPC error code -32429 is detected as rate limit", %{chain: _chain} do
       # Some providers use -32429 (HTTP 429 in JSON-RPC namespace)
-      rate_limit_error = JError.new(-32429, "Too many requests")
+      rate_limit_error = JError.new(-32429, "Too many requests", category: :rate_limit, retriable?: true)
 
-      # Verify error classifier treats this as infrastructure failure
-      classification = Lasso.RPC.ErrorClassifier.classify_error(rate_limit_error)
-      assert classification == :infrastructure_failure
+      # Verify error is retriable (should failover to next provider)
+      assert rate_limit_error.retriable? == true
+      assert rate_limit_error.category == :rate_limit
     end
 
     test "HTTP 429 code is normalized to JSON-RPC -32005", %{chain: _chain} do

@@ -68,7 +68,7 @@ chains:
       #   api_key_required: false
 
     connection:
-      heartbeat_interval: 15000
+      heartbeat_interval: 10000
       reconnect_interval: 5000
       max_reconnect_attempts: 10
 

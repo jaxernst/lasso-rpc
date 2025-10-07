@@ -2,12 +2,15 @@ defmodule Lasso.RPC.ErrorNormalizer do
   @moduledoc """
   Centralized error normalization for consistent error handling across the system.
 
-  Provides a single point to normalize errors from different sources (transport,
+  Provides a single entry point to normalize errors from different sources (transport,
   providers, health checks) into standardized JError structures with consistent
   categorization and retry semantics.
+
+  All categorization logic is delegated to ErrorClassification for maintainability.
   """
 
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.ErrorClassification
 
   @type context :: :health_check | :live_traffic | :transport | :jsonrpc
   @type transport :: :http | :ws | nil
@@ -22,10 +25,10 @@ defmodule Lasso.RPC.ErrorNormalizer do
   ## Examples
 
       iex> normalize({:rate_limit, %{}}, provider_id: "test", context: :transport)
-      %JError{category: :rate_limit, retriable?: true}
+      %JError{category: :rate_limit, retriable?: true, breaker_penalty?: true}
 
-      iex> normalize(%{"error" => %{"code" => -32000}}, provider_id: "test", context: :jsonrpc)
-      %JError{code: -32000, category: :server_error}
+      iex> normalize(%{"error" => %{"code" => -32000, "message" => "block range too large"}}, provider_id: "test")
+      %JError{category: :capability_violation, retriable?: true, breaker_penalty?: false}
   """
   @spec normalize(any(), keyword()) :: JError.t()
   def normalize(error, opts \\ [])
@@ -40,19 +43,23 @@ defmodule Lasso.RPC.ErrorNormalizer do
     |> maybe_add_transport(transport)
   end
 
-  # JSON-RPC error response
+  # JSON-RPC error response - most common case
   def normalize(%{"error" => error} = _response, opts) when is_map(error) do
     provider_id = Keyword.get(opts, :provider_id)
     context = Keyword.get(opts, :context, :jsonrpc)
     transport = Keyword.get(opts, :transport)
 
-    code = Map.get(error, "code", -32000)
+    raw_code = Map.get(error, "code", -32000)
     message = Map.get(error, "message", "Unknown error")
     data = Map.get(error, "data")
 
-    # Detect authentication/authorization errors by message content
-    # These should be retriable (failover to other providers that may not require auth)
-    {category, retriable?} = categorize_and_assess_retriability(code, message)
+    # Normalize HTTP status codes to JSON-RPC error codes
+    code = normalize_code(raw_code)
+
+    # Use centralized classification
+    category = ErrorClassification.categorize(code, message)
+    retriable? = ErrorClassification.retriable?(code, message)
+    breaker_penalty? = ErrorClassification.breaker_penalty?(category)
 
     JError.new(code, message,
       data: data,
@@ -61,7 +68,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       transport: transport,
       category: category,
       retriable?: retriable?,
-      breaker_penalty?: breaker_penalty_for(category)
+      breaker_penalty?: breaker_penalty?,
+      original_code: raw_code
     )
   end
 
@@ -71,13 +79,14 @@ defmodule Lasso.RPC.ErrorNormalizer do
     context = Keyword.get(opts, :context, :transport)
     transport = Keyword.get(opts, :transport)
 
-    JError.new(-32001, "Rate limited by provider",
+    JError.new(-32005, "Rate limited by provider",
       data: payload,
       provider_id: provider_id,
       source: context,
       transport: transport,
       category: :rate_limit,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -92,7 +101,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: context,
       transport: transport,
       category: :network_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -108,7 +118,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: context,
       transport: transport,
       category: :server_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -124,7 +135,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: context,
       transport: transport,
       category: :client_error,
-      retriable?: false
+      retriable?: false,
+      breaker_penalty?: true
     )
   end
 
@@ -139,7 +151,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: context,
       transport: transport,
       category: :network_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -152,7 +165,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: :transport,
       transport: :ws,
       category: :network_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -164,7 +178,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: :transport,
       transport: :ws,
       category: :network_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -176,7 +191,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: :transport,
       transport: :ws,
       category: :network_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -189,7 +205,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: :transport,
       transport: :ws,
       category: :rate_limit,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -201,7 +218,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: :transport,
       transport: :ws,
       category: :network_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -214,7 +232,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: :transport,
       transport: :ws,
       category: :server_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
@@ -227,7 +246,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: :transport,
       transport: :ws,
       category: :client_error,
-      retriable?: false
+      retriable?: false,
+      breaker_penalty?: true
     )
   end
 
@@ -241,133 +261,146 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
     case code do
       1000 ->
-        # Normal closure - allow reconnect (transient)
+        # Normal closure
         JError.new(-32000, "WebSocket normal closure",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :network_error,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
 
       1001 ->
-        # Going away - treat as network/transient
+        # Going away
         JError.new(-32000, "WebSocket going away",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :network_error,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
 
       1002 ->
-        # Protocol error - server-side
+        # Protocol error
         JError.new(-32000, "WebSocket protocol error",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :server_error,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
 
       1003 ->
-        # Unsupported data - client-side, non-retriable
+        # Unsupported data
         JError.new(-32600, "WebSocket unsupported data",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :client_error,
-          retriable?: false
+          retriable?: false,
+          breaker_penalty?: true
         )
 
       1006 ->
-        # Abnormal closure - network/transient
+        # Abnormal closure
         JError.new(-32000, "WebSocket abnormal closure",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :network_error,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
 
       1008 ->
-        # Policy violation - client-side
+        # Policy violation
         JError.new(-32600, "WebSocket policy violation",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :client_error,
-          retriable?: false
+          retriable?: false,
+          breaker_penalty?: true
         )
 
       1009 ->
-        # Message too big - client-side
+        # Message too big
         JError.new(-32602, "WebSocket message too big",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :client_error,
-          retriable?: false
+          retriable?: false,
+          breaker_penalty?: true
         )
 
       1011 ->
-        # Internal server error - retriable
+        # Internal server error
         JError.new(-32000, "WebSocket server error",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :server_error,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
 
       1012 ->
-        # Service restart - retriable
+        # Service restart
         JError.new(-32000, "WebSocket service restart",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :server_error,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
 
       1013 ->
-        # Try again later / overload - map to 429 (retriable)
+        # Try again later / overload - treat as rate limit
         JError.new(429, "WebSocket try again later",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :rate_limit,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
 
       1014 ->
-        # Bad gateway - retriable
+        # Bad gateway
         JError.new(-32000, "WebSocket bad gateway",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :network_error,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
 
       1015 ->
-        # TLS handshake failure - network/transient
+        # TLS handshake failure
         JError.new(-32000, "WebSocket TLS handshake failure",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :network_error,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
 
       _ ->
-        # Unknown/abnormal - treat as network/transient by default
+        # Unknown/abnormal - treat as network/transient
         JError.new(-32000, "WebSocket close (code #{code}): #{inspect(reason)}",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
           category: :network_error,
-          retriable?: true
+          retriable?: true,
+          breaker_penalty?: true
         )
     end
   end
@@ -383,7 +416,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
         source: :transport,
         transport: :ws,
         category: :rate_limit,
-        retriable?: true
+        retriable?: true,
+        breaker_penalty?: true
       )
     else
       normalize({:ws_close, code, msg}, opts)
@@ -399,14 +433,16 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: :transport,
       transport: :ws,
       category: :network_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
   # Health check context wrapper
   def normalize({:health_check, error}, opts) do
-    opts = Keyword.put(opts, :context, :health_check)
-    normalize(error, opts)
+    opts
+    |> Keyword.put(:context, :health_check)
+    |> then(&normalize(error, &1))
   end
 
   # Generic fallback
@@ -420,127 +456,30 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: context,
       transport: transport,
       category: :unknown_error,
-      retriable?: true
+      retriable?: true,
+      breaker_penalty?: true
     )
   end
 
-  # Private functions
+  # ===========================================================================
+  # Private Helpers
+  # ===========================================================================
+
+  # Normalize HTTP status codes embedded in JSON-RPC responses to standard JSON-RPC codes
+  defp normalize_code(429), do: -32005  # Rate limit
+  defp normalize_code(code) when code >= 500 and code <= 599, do: -32000  # Server error
+  defp normalize_code(code) when code >= 400 and code <= 499, do: -32600  # Client error
+  defp normalize_code(code), do: code  # JSON-RPC codes pass through
 
   defp maybe_add_provider_id(%JError{provider_id: nil} = jerr, provider_id)
-       when is_binary(provider_id) do
-    %{jerr | provider_id: provider_id}
-  end
+       when is_binary(provider_id),
+       do: %{jerr | provider_id: provider_id}
 
-  defp maybe_add_provider_id(jerr, _), do: jerr
+  defp maybe_add_provider_id(jerr, _provider_id), do: jerr
 
   defp maybe_add_transport(%JError{transport: nil} = jerr, transport)
-       when not is_nil(transport) do
-    %{jerr | transport: transport}
-  end
+       when not is_nil(transport),
+       do: %{jerr | transport: transport}
 
-  defp maybe_add_transport(jerr, _), do: jerr
-
-  defp categorize_jsonrpc_error(code) when code >= -32099 and code <= -32000, do: :server_error
-  defp categorize_jsonrpc_error(-32700), do: :parse_error
-  defp categorize_jsonrpc_error(-32600), do: :invalid_request
-  defp categorize_jsonrpc_error(-32601), do: :method_not_found
-  defp categorize_jsonrpc_error(-32602), do: :invalid_params
-  defp categorize_jsonrpc_error(-32603), do: :internal_error
-  defp categorize_jsonrpc_error(code) when code >= -32001 and code <= -32099, do: :server_error
-  defp categorize_jsonrpc_error(_), do: :application_error
-
-  # Parse error
-  defp retriable_jsonrpc_error?(-32700), do: false
-  # Invalid request
-  defp retriable_jsonrpc_error?(-32600), do: false
-  # Method not found
-  defp retriable_jsonrpc_error?(-32601), do: false
-  # Invalid params
-  defp retriable_jsonrpc_error?(-32602), do: false
-  # Server errors
-  defp retriable_jsonrpc_error?(code) when code >= -32099 and code <= -32000, do: true
-  # Application errors - usually retriable
-  defp retriable_jsonrpc_error?(_), do: true
-
-  # Error categorization with message content inspection
-  # Simple string matching - no regex needed
-
-  # Authentication error keywords
-  @auth_keywords [
-    "unauthorized",
-    "authentication",
-    "authenticate",
-    "api key",
-    "forbidden",
-    "access denied",
-    "permission denied"
-  ]
-
-  # Rate limit keywords - based on real provider error messages
-  @rate_limit_keywords [
-    "rate limit",
-    "too many requests",
-    "throttled",
-    "quota exceeded",
-    "capacity exceeded",
-    "request count exceeded",
-    "maximum requests",
-    "credits quota",
-    "requests per second"
-  ]
-
-  # Capability violation keywords, extensible over time
-  @capability_violation_keywords [
-    "specify less number of addresses",
-    "less number of addresses",
-    "maximum number of addresses",
-    "max addresses",
-    "max block range",
-    "block range too large",
-    "range too large",
-    "archive node required",
-    "requires archival",
-    "tracing not enabled",
-    "unsupported parameter range",
-    "unsupported param range",
-    "limit exceeded for this method",
-    "result set too large"
-  ]
-
-  defp categorize_and_assess_retriability(code, message) when is_binary(message) do
-    message_lower = String.downcase(message)
-
-    cond do
-      # Rate limits should be checked FIRST (more specific than auth errors)
-      # Example: "Quota exceeded for this API key" should be rate_limit, not auth_error
-      contains_any?(message_lower, @rate_limit_keywords) ->
-        {:rate_limit, true}
-
-      # Auth errors should trigger failover (other providers may not require auth)
-      contains_any?(message_lower, @auth_keywords) ->
-        {:auth_error, true}
-
-      # Provider capability/limits surfaced as internal/server errors
-      # e.g., "specify less number of addresses", "max block range", "archive node required"
-      contains_any?(message_lower, @capability_violation_keywords) ->
-        {:capability_violation, true}
-
-      # Fall back to code-based categorization
-      true ->
-        {categorize_jsonrpc_error(code), retriable_jsonrpc_error?(code)}
-    end
-  end
-
-  # Catch-all for non-string messages
-  defp categorize_and_assess_retriability(code, _message) do
-    {categorize_jsonrpc_error(code), retriable_jsonrpc_error?(code)}
-  end
-
-  defp contains_any?(message, keywords) do
-    Enum.any?(keywords, fn keyword -> String.contains?(message, keyword) end)
-  end
-
-  # Whether a categorized error should contribute to breaker failure counts
-  defp breaker_penalty_for(:capability_violation), do: false
-  defp breaker_penalty_for(_), do: true
+  defp maybe_add_transport(jerr, _transport), do: jerr
 end
