@@ -17,7 +17,6 @@ defmodule Lasso.Battle.TransportRoutingTest do
   alias Lasso.RPC.RequestPipeline
 
   @moduletag :battle
-  @moduletag :transport
   @moduletag :real_providers
   @moduletag timeout: 120_000
 
@@ -48,7 +47,6 @@ defmodule Lasso.Battle.TransportRoutingTest do
   end
 
   describe "Transport selection" do
-    @tag :fast
     test "execute_via_channels routes to HTTP when transport_override is :http" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -71,7 +69,6 @@ defmodule Lasso.Battle.TransportRoutingTest do
       Logger.info("✅ HTTP transport override: block #{block_number}")
     end
 
-    @tag :fast
     test "execute_via_channels routes to WebSocket when transport_override is :ws" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -94,7 +91,6 @@ defmodule Lasso.Battle.TransportRoutingTest do
       Logger.info("✅ WebSocket transport override: block #{block_number}")
     end
 
-    @tag :fast
     test "execute_via_channels considers both transports when no override" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -120,7 +116,6 @@ defmodule Lasso.Battle.TransportRoutingTest do
   end
 
   describe "Method-aware routing" do
-    @tag :fast
     test "unary methods can route to either HTTP or WebSocket" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -201,7 +196,6 @@ defmodule Lasso.Battle.TransportRoutingTest do
   end
 
   describe "Strategy-based channel selection" do
-    @tag :fast
     test "round-robin strategy works across transports" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
@@ -228,7 +222,6 @@ defmodule Lasso.Battle.TransportRoutingTest do
       IO.puts("   #{length(results)} requests completed successfully")
     end
 
-    @tag :fast
     test "fastest strategy selects channels based on latency" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"},
@@ -270,7 +263,6 @@ defmodule Lasso.Battle.TransportRoutingTest do
   end
 
   describe "Transport capabilities" do
-    @tag :fast
     test "providers with both HTTP and WebSocket URLs support both transports" do
       SetupHelper.setup_providers("ethereum", [
         {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}

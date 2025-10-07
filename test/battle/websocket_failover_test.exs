@@ -5,9 +5,6 @@ defmodule Lasso.Battle.WebSocketFailoverTest do
   alias Lasso.Battle.{Workload, Chaos, SetupHelper}
 
   @moduletag :battle
-  @moduletag :websocket
-  @moduletag :failover
-  # Uses real WebSocket connections
   @moduletag :real_providers
   @moduletag timeout: 180_000
 
