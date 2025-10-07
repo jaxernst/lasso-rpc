@@ -52,36 +52,36 @@ defmodule Lasso.RPC.Providers.Adapters.CloudflareTest do
 
   describe "supports_method?/3 - supported methods" do
     test "supports eth_blockNumber" do
-      assert Cloudflare.supports_method?("eth_blockNumber", :http, %{}) == :skip_params
+      assert Cloudflare.supports_method?("eth_blockNumber", :http, %{}) == :ok
     end
 
     test "supports eth_getBlockByNumber" do
-      assert Cloudflare.supports_method?("eth_getBlockByNumber", :http, %{}) == :skip_params
+      assert Cloudflare.supports_method?("eth_getBlockByNumber", :http, %{}) == :ok
     end
 
     test "supports eth_call" do
-      assert Cloudflare.supports_method?("eth_call", :http, %{}) == :skip_params
+      assert Cloudflare.supports_method?("eth_call", :http, %{}) == :ok
     end
 
     test "supports eth_estimateGas" do
-      assert Cloudflare.supports_method?("eth_estimateGas", :http, %{}) == :skip_params
+      assert Cloudflare.supports_method?("eth_estimateGas", :http, %{}) == :ok
     end
 
     test "supports eth_getTransactionReceipt" do
       assert Cloudflare.supports_method?("eth_getTransactionReceipt", :http, %{}) ==
-               :skip_params
+               :ok
     end
 
     test "supports eth_getBalance" do
-      assert Cloudflare.supports_method?("eth_getBalance", :http, %{}) == :skip_params
+      assert Cloudflare.supports_method?("eth_getBalance", :http, %{}) == :ok
     end
 
     test "supports eth_chainId" do
-      assert Cloudflare.supports_method?("eth_chainId", :http, %{}) == :skip_params
+      assert Cloudflare.supports_method?("eth_chainId", :http, %{}) == :ok
     end
 
     test "supports net_version" do
-      assert Cloudflare.supports_method?("net_version", :http, %{}) == :skip_params
+      assert Cloudflare.supports_method?("net_version", :http, %{}) == :ok
     end
   end
 
@@ -95,8 +95,8 @@ defmodule Lasso.RPC.Providers.Adapters.CloudflareTest do
                {:error, :method_unsupported}
 
       # Supported method works on both transports
-      assert Cloudflare.supports_method?("eth_blockNumber", :http, %{}) == :skip_params
-      assert Cloudflare.supports_method?("eth_blockNumber", :ws, %{}) == :skip_params
+      assert Cloudflare.supports_method?("eth_blockNumber", :http, %{}) == :ok
+      assert Cloudflare.supports_method?("eth_blockNumber", :ws, %{}) == :ok
     end
   end
 
