@@ -17,7 +17,6 @@ defmodule Lasso.Battle.ProviderCapabilityTest do
 
   @moduletag :battle
   @moduletag :real_providers
-  @moduletag :capability
   @moduletag timeout: :infinity
 
   # Methods that should be widely supported

@@ -250,7 +250,6 @@ defmodule Lasso.Battle.RealProviderFailoverTest do
     IO.puts("   Success rate maintained: #{Float.round(recovery_result.analysis.requests.success_rate * 100, 2)}%")
   end
 
-  @tag :fast
   test "fastest strategy routes to lowest latency provider" do
     result =
       Scenario.new("Fastest Strategy Routing Test")
@@ -299,7 +298,6 @@ defmodule Lasso.Battle.RealProviderFailoverTest do
     IO.puts("   Avg latency: #{trunc(result.analysis.requests.avg_latency_ms)}ms")
   end
 
-  @tag :fast
   test "round-robin strategy distributes load across providers" do
     result =
       Scenario.new("Round-Robin Distribution Test")
@@ -334,10 +332,7 @@ defmodule Lasso.Battle.RealProviderFailoverTest do
     IO.puts("   Total requests: #{result.analysis.requests.total}")
   end
 
-  # Fast smoke test (~5s)
-  @tag :quick
-  # Suitable for CI
-  @tag :fast
+  # Smoke test (~5s) - still hits real providers so not truly "fast"
   test "basic connectivity with real providers (smoke test)" do
     Logger.info("Running smoke test with real providers...")
 

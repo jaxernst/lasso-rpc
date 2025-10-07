@@ -17,7 +17,6 @@ defmodule Lasso.Battle.FuzzRPCMethodsTest do
 
   @moduletag :battle
   @moduletag :real_providers
-  @moduletag :fuzz
   @moduletag timeout: :infinity
 
   # Common RPC methods to test

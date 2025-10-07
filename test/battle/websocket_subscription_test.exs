@@ -5,8 +5,6 @@ defmodule Lasso.Battle.WebSocketSubscriptionTest do
   alias Lasso.Battle.{Workload, SetupHelper}
 
   @moduletag :battle
-  @moduletag :websocket
-  # Uses real WebSocket connections
   @moduletag :real_providers
   @moduletag timeout: 120_000
 
@@ -124,28 +122,9 @@ defmodule Lasso.Battle.WebSocketSubscriptionTest do
     end
   end
 
-  describe "WebSocket logs subscription" do
-    # Logs subscriptions are sparse and unpredictable
-    @tag :skip
-    test "logs subscription with empty filter" do
-      SetupHelper.setup_providers("ethereum", [
-        {:real, "llamarpc", "https://eth.llamarpc.com", "wss://eth.llamarpc.com"}
-      ])
-
-      stats =
-        Workload.ws_subscribe(
-          chain: "ethereum",
-          subscription: {"logs", %{}},
-          count: 1,
-          duration: 30_000
-        )
-
-      assert stats.subscriptions == 1
-      # Logs may be sparse, just verify subscription works
-      assert is_integer(stats.events_received)
-      Logger.info("✅ Logs subscription stats: #{inspect(stats)}")
-    end
-  end
+  # WebSocket logs subscription tests removed - logs subscriptions are too sparse
+  # and unpredictable for reliable testing. If needed, test logs subscriptions
+  # separately with controlled test infrastructure.
 
   describe "WebSocket subscription lifecycle" do
     # 10s test requiring real blockchain connection
