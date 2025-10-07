@@ -254,6 +254,31 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp attempt_request_on_channels([channel | rest_channels], rpc_request, timeout, ctx) do
+    method = Map.get(rpc_request, "method")
+    params = Map.get(rpc_request, "params")
+
+    # Validate parameters for this specific channel before attempting request
+    case Lasso.RPC.Providers.AdapterFilter.validate_params(channel, method, params) do
+      :ok ->
+        # Params valid, proceed with request
+        execute_channel_request(channel, rpc_request, timeout, ctx, rest_channels)
+
+      {:error, reason} ->
+        # Params invalid for this provider, skip to next channel
+        Logger.debug(
+          "Parameters invalid for channel, trying next: #{inspect(reason)}",
+          channel: Channel.to_string(channel),
+          method: method,
+          reason: reason
+        )
+
+        # Increment retries and try next channel
+        ctx = RequestContext.increment_retries(ctx)
+        attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
+    end
+  end
+
+  defp execute_channel_request(channel, rpc_request, timeout, ctx, rest_channels) do
     attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
 
     cb_id =
