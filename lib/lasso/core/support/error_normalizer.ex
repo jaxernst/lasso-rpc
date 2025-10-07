@@ -60,7 +60,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       source: context,
       transport: transport,
       category: category,
-      retriable?: retriable?
+      retriable?: retriable?,
+      breaker_penalty?: breaker_penalty_for(category)
     )
   end
 
@@ -482,10 +483,28 @@ defmodule Lasso.RPC.ErrorNormalizer do
     "throttled",
     "quota exceeded",
     "capacity exceeded",
-    "request count exceeded", 
-    "maximum requests",       
-    "credits quota",          
-    "requests per second"     
+    "request count exceeded",
+    "maximum requests",
+    "credits quota",
+    "requests per second"
+  ]
+
+  # Capability violation keywords, extensible over time
+  @capability_violation_keywords [
+    "specify less number of addresses",
+    "less number of addresses",
+    "maximum number of addresses",
+    "max addresses",
+    "max block range",
+    "block range too large",
+    "range too large",
+    "archive node required",
+    "requires archival",
+    "tracing not enabled",
+    "unsupported parameter range",
+    "unsupported param range",
+    "limit exceeded for this method",
+    "result set too large"
   ]
 
   defp categorize_and_assess_retriability(code, message) when is_binary(message) do
@@ -501,6 +520,11 @@ defmodule Lasso.RPC.ErrorNormalizer do
       contains_any?(message_lower, @auth_keywords) ->
         {:auth_error, true}
 
+      # Provider capability/limits surfaced as internal/server errors
+      # e.g., "specify less number of addresses", "max block range", "archive node required"
+      contains_any?(message_lower, @capability_violation_keywords) ->
+        {:capability_violation, true}
+
       # Fall back to code-based categorization
       true ->
         {categorize_jsonrpc_error(code), retriable_jsonrpc_error?(code)}
@@ -515,4 +539,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
   defp contains_any?(message, keywords) do
     Enum.any?(keywords, fn keyword -> String.contains?(message, keyword) end)
   end
+
+  # Whether a categorized error should contribute to breaker failure counts
+  defp breaker_penalty_for(:capability_violation), do: false
+  defp breaker_penalty_for(_), do: true
 end
