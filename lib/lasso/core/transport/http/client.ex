@@ -15,7 +15,8 @@ defmodule Lasso.RPC.HttpClient do
   @type json_map :: map()
   @type method :: String.t()
   @type params :: list()
-  @type timeout_ms :: non_neg_integer()
+
+  @type opts :: keyword()
   @type error_payload :: String.t() | map()
   @type error_reason ::
           {:rate_limit, error_payload}
@@ -25,15 +26,15 @@ defmodule Lasso.RPC.HttpClient do
           | {:encode_error, String.t()}
           | {:response_decode_error, String.t()}
 
-  @callback request(provider_config, method, params, timeout_ms) ::
+  @callback request(provider_config, method, params, opts) ::
               {:ok, json_map} | {:error, error_reason}
 
   # Facade to configured adapter
-  @spec request(provider_config, method, params, timeout_ms) ::
+  @spec request(provider_config, method, params, opts) ::
           {:ok, json_map} | {:error, error_reason}
-  def request(provider_config, method, params, timeout_ms) do
+  def request(provider_config, method, params, opts \\ []) do
     adapter()
-    |> apply(:request, [provider_config, method, params, timeout_ms])
+    |> apply(:request, [provider_config, method, params, opts])
   end
 
   defp adapter do

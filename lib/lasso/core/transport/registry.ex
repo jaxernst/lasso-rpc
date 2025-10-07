@@ -66,6 +66,20 @@ defmodule Lasso.RPC.TransportRegistry do
   end
 
   @doc """
+  Pre-warms channels for a provider by creating configured transports that are viable.
+
+  HTTP is created if url/http_url is configured. WS is created only if ws_url is
+  configured and the WS connection is currently established.
+  """
+  @spec initialize_provider_channels(chain_name, provider_id, map()) :: :ok | {:error, term()}
+  def initialize_provider_channels(chain_name, provider_id, provider_config) do
+    GenServer.call(
+      via_name(chain_name),
+      {:initialize_provider_channels, provider_id, provider_config}
+    )
+  end
+
+  @doc """
   Lists all available channels for a provider.
 
   Returns a list of {transport, channel} tuples.
@@ -117,6 +131,8 @@ defmodule Lasso.RPC.TransportRegistry do
       capabilities: %{}
     }
 
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
+
     {:ok, state}
   end
 
@@ -152,6 +168,25 @@ defmodule Lasso.RPC.TransportRegistry do
   end
 
   @impl true
+  def handle_call({:initialize_provider_channels, provider_id, provider_config}, _from, state) do
+    # HTTP pre-warm if configured
+    state =
+    state =
+      if is_binary(Map.get(provider_config, :url)) or
+           is_binary(Map.get(provider_config, :http_url)) do
+        case create_channel(state, provider_id, :http, provider_config: provider_config) do
+          {:ok, _chan, s} -> s
+          {:error, _}    -> state
+        end
+      else
+        state
+      end
+
+    # WS channels are created on ws_connected events to avoid races
+    {:reply, :ok, state}
+  end
+
+  @impl true
   def handle_call({:list_provider_channels, provider_id}, _from, state) do
     channels = Map.get(state.channels, provider_id, %{})
     channel_list = Enum.to_list(channels)
@@ -184,6 +219,33 @@ defmodule Lasso.RPC.TransportRegistry do
     new_state = remove_channel(state, provider_id, transport)
     {:noreply, new_state}
   end
+
+  @impl true
+  def handle_info({:ws_connected, provider_id}, state) do
+    # Create WS channel on connect (idempotent)
+    new_state =
+      case create_channel(state, provider_id, :ws, []) do
+        {:ok, _ch, s} -> s
+        {:error, _} -> state
+      end
+
+    {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_info({:ws_closed, provider_id, _code, _jerr}, state) do
+    new_state = remove_channel(state, provider_id, :ws)
+    {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_info({:ws_disconnected, provider_id, _jerr}, state) do
+    new_state = remove_channel(state, provider_id, :ws)
+    {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_info({_event, _provider_id, _jerr}, state), do: {:noreply, state}
 
   # Private functions
 
@@ -249,7 +311,7 @@ defmodule Lasso.RPC.TransportRegistry do
             new_capabilities = Map.put(state.capabilities, cap_key, capabilities)
             final_state = %{new_state | capabilities: new_capabilities}
 
-            Logger.info("Created #{transport} channel for provider #{provider_id}")
+            Logger.debug("Created #{transport} channel for provider #{provider_id}")
             {:ok, channel, final_state}
 
           {:error, reason} ->

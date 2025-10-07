@@ -18,7 +18,8 @@ defmodule Lasso.RPC.ProviderHealthMonitor do
 
   @impl true
   def init(chain) do
-    schedule()
+    # Delay first tick to allow provider supervisors to start breakers
+    Process.send_after(self(), :tick, @default_interval)
     {:ok, %{chain: chain, last: nil}}
   end
 
@@ -43,15 +44,30 @@ defmodule Lasso.RPC.ProviderHealthMonitor do
     http_url = provider.url
     _ts = System.system_time(:millisecond)
 
+    # Call circuit breaker only if it's running to avoid :noproc exits on boot
     result =
-      CircuitBreaker.call({provider.id, :http}, fn ->
-        HttpClient.request(
-          %{url: http_url, api_key: Map.get(provider, :api_key)},
-          "eth_chainId",
-          [],
-          @default_timeout
-        )
-      end)
+      case GenServer.whereis(
+             {:via, Registry, {Lasso.Registry, {:circuit_breaker, "#{provider.id}:http"}}}
+           ) do
+        nil ->
+          # Fall back to direct request; breaker will be engaged on next tick once started
+          HttpClient.request(
+            %{url: http_url, api_key: Map.get(provider, :api_key)},
+            "eth_chainId",
+            [],
+            timeout: @default_timeout
+          )
+
+        _pid ->
+          CircuitBreaker.call({provider.id, :http}, fn ->
+            HttpClient.request(
+              %{url: http_url, api_key: Map.get(provider, :api_key)},
+              "eth_chainId",
+              [],
+              timeout: @default_timeout
+            )
+          end)
+      end
 
     case result do
       {:ok, %{"jsonrpc" => "2.0"} = response} ->

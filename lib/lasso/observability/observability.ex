@@ -35,8 +35,9 @@ defmodule Lasso.RPC.Observability do
       event = build_log_event(ctx)
       log_level = get_config(:log_level, :info)
 
+      # Human-readable log line
       Logger.log(log_level, fn ->
-        Jason.encode!(event)
+        format_readable_log(ctx, event)
       end)
 
       # Also emit telemetry for external consumption
@@ -118,12 +119,8 @@ defmodule Lasso.RPC.Observability do
 
   defp build_routing_section(ctx) do
     %{
-      candidate_providers: format_candidate_providers(ctx.candidate_providers),
       selected_provider: ctx.selected_provider,
-      selection_reason: ctx.selection_reason,
-      selection_latency_ms: ctx.selection_latency_ms,
-      retries: ctx.retries,
-      circuit_breaker_state: to_string(ctx.circuit_breaker_state || :unknown)
+      retries: ctx.retries
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()
@@ -131,8 +128,7 @@ defmodule Lasso.RPC.Observability do
 
   defp build_timing_section(ctx) do
     %{
-      upstream_latency_ms: ctx.upstream_latency_ms,
-      end_to_end_latency_ms: ctx.end_to_end_latency_ms
+      upstream_latency_ms: ctx.upstream_latency_ms
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()
@@ -153,6 +149,47 @@ defmodule Lasso.RPC.Observability do
 
       _ ->
         base
+    end
+  end
+
+  defp format_readable_log(ctx, _event) do
+    provider =
+      case ctx.selected_provider do
+        %{id: id, protocol: protocol} -> "#{id}:#{protocol}"
+        _ -> "unknown"
+      end
+
+    latency_str =
+      if ctx.upstream_latency_ms do
+        " (upstream: #{Float.round(ctx.upstream_latency_ms, 1)}ms)"
+      else
+        ""
+      end
+
+    retry_str = if ctx.retries > 0, do: " retries=#{ctx.retries}", else: ""
+
+    case ctx.status do
+      :success ->
+        result_info =
+          if ctx.result_type && ctx.result_size_bytes do
+            " #{ctx.result_type} #{ctx.result_size_bytes}b"
+          else
+            ""
+          end
+
+        "RPC #{ctx.method} → #{provider}#{latency_str}#{retry_str} ✓#{result_info}"
+
+      :error ->
+        error_msg =
+          case ctx.error do
+            %{code: code, message: msg} -> " #{code}: #{msg}"
+            _ -> ""
+          end
+
+        "RPC #{ctx.method} → #{provider}#{latency_str}#{retry_str} ✗#{error_msg}"
+
+      _ ->
+        "RPC #{ctx.method} → #{provider}#{retry_str}"
     end
   end
 

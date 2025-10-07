@@ -86,7 +86,12 @@ defmodule Lasso.RPC.ChainSupervisor do
     with {:ok, chain_config} <- get_chain_config(chain_name),
          :ok <- ProviderPool.register_provider(chain_name, provider_config.id, provider_config),
          :ok <- start_provider_supervisor(chain_name, chain_config, provider_config, opts),
-         :ok <- TransportRegistry.initialize_provider_channels(chain_name, provider_config.id, provider_config) do
+         :ok <-
+           TransportRegistry.initialize_provider_channels(
+             chain_name,
+             provider_config.id,
+             provider_config
+           ) do
       :ok
     else
       {:error, reason} = error ->

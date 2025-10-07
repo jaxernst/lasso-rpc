@@ -28,7 +28,7 @@ defmodule Lasso.RPC.WSEndpoint do
 
     # WebSocket specific fields
     reconnect_interval: 5_000,
-    heartbeat_interval: 30_000,
+    heartbeat_interval: 15_000,
     max_reconnect_attempts: :infinity
   ]
 
@@ -50,7 +50,7 @@ defmodule Lasso.RPC.WSEndpoint do
         ws_url: "wss://mainnet.infura.io/ws/v3/YOUR_KEY",
         chain_id: 1,
         reconnect_interval: 5000,
-        heartbeat_interval: 30000,
+        heartbeat_interval: 15000,
         max_reconnect_attempts: :infinity
       }
   """

@@ -205,10 +205,6 @@ defmodule Lasso.RPC.RequestPipeline do
         {:error, JError.new(-32000, "No available channels for method: #{method}"), updated_ctx}
 
       _ ->
-        Logger.info(
-          "Found #{length(channels)} candidate channels: #{inspect(Enum.map(channels, &Channel.to_string/1))}"
-        )
-
         # Mark upstream start and attempt request
         ctx = RequestContext.mark_upstream_start(ctx)
 
