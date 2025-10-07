@@ -22,6 +22,7 @@ defmodule Lasso.JSONRPC.Error do
              :provider_id,
              :http_status,
              :retriable?,
+             :breaker_penalty?,
              :original_code,
              :source,
              :transport
@@ -35,6 +36,7 @@ defmodule Lasso.JSONRPC.Error do
     :provider_id,
     :http_status,
     :retriable?,
+    :breaker_penalty?,
     :original_code,
     # Transport context
     :source,
@@ -49,6 +51,7 @@ defmodule Lasso.JSONRPC.Error do
           provider_id: String.t() | nil,
           http_status: integer() | nil,
           retriable?: boolean() | nil,
+          breaker_penalty?: boolean() | nil,
           original_code: integer() | nil,
           source: :jsonrpc | :transport | :infrastructure | nil,
           transport: :http | :ws | nil
@@ -87,6 +90,7 @@ defmodule Lasso.JSONRPC.Error do
       provider_id: Keyword.get(opts, :provider_id),
       http_status: Keyword.get(opts, :http_status),
       retriable?: Keyword.get(opts, :retriable?) || assess_retriability(normalized_code),
+      breaker_penalty?: Keyword.get(opts, :breaker_penalty?, true),
       original_code: code,
       source: Keyword.get(opts, :source),
       transport: Keyword.get(opts, :transport)

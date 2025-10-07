@@ -211,8 +211,12 @@ defmodule Lasso.RPC.CircuitBreaker do
       {:ok, value} ->
         handle_success(value, state)
 
-      {:error, %JError{retriable?: true} = reason} ->
+      {:error, %JError{retriable?: true, breaker_penalty?: true} = reason} ->
         handle_failure(reason, state)
+
+      # Retriable but no breaker penalty (e.g., capability_violation)
+      {:error, %JError{retriable?: true, breaker_penalty?: false} = reason} ->
+        handle_non_breaker_error({:error, reason}, state)
 
       {:error, %JError{retriable?: false}} ->
         # User/client errors don't affect circuit breaker state
