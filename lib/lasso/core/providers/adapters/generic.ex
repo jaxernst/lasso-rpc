@@ -2,11 +2,31 @@ defmodule Lasso.RPC.Providers.Generic do
   @moduledoc """
   Default provider adapter that assumes standard JSON-RPC 2.0 behavior and
   performs minimal normalization.
+
+  This adapter provides:
+  - Permissive capability validation (assumes all methods supported)
+  - Standard JSON-RPC 2.0 normalization
+  - No provider-specific headers
+
+  Used as the fallback adapter for providers without custom adapters.
+
+  Note: This module does NOT use `use Lasso.RPC.ProviderAdapter` because it IS
+  the base implementation that other adapters delegate to.
   """
 
   @behaviour Lasso.RPC.ProviderAdapter
 
   alias Lasso.JSONRPC.Error, as: JError
+
+  # Capability Validation (Permissive - assumes all methods supported)
+
+  @impl true
+  def supports_method?(_method, _transport, _ctx), do: :ok
+
+  @impl true
+  def validate_params(_method, _params, _transport, _ctx), do: :ok
+
+  # Normalization (Standard JSON-RPC 2.0)
 
   @impl true
   def normalize_request(request, _ctx), do: request
@@ -48,4 +68,12 @@ defmodule Lasso.RPC.Providers.Generic do
 
   @impl true
   def headers(_ctx), do: []
+
+  @impl true
+  def metadata do
+    %{
+      type: :default,
+      description: "Standard JSON-RPC 2.0 adapter (assumes all methods supported)"
+    }
+  end
 end

@@ -212,29 +212,24 @@ defmodule Lasso.RPC.ErrorClassification do
       code == @method_not_found -> :method_not_found
       code == @invalid_params -> :invalid_params
       code == @internal_error -> :internal_error
-
       # Lasso custom error codes
       code == @rate_limit_error -> :rate_limit
       code == @network_error_code -> :network_error
       code == @client_error_code -> :client_error
       code == @server_error_code -> :server_error
       code == @generic_server_error -> :server_error
-
       # JSON-RPC server error range
       code >= -32099 and code <= -32000 -> :server_error
-
       # EIP-1193 provider errors
       code == @user_rejected -> :user_error
       code == @unauthorized -> :auth_error
       code == @unsupported_method -> :method_error
       code == @unsupported_chain -> :chain_error
       code == @chain_disconnected -> :network_error
-
       # HTTP status codes
       code == 429 -> :rate_limit
       code >= 500 and code <= 599 -> :server_error
       code >= 400 and code <= 499 -> :client_error
-
       # Unknown codes
       true -> :unknown_error
     end
@@ -245,17 +240,14 @@ defmodule Lasso.RPC.ErrorClassification do
       # Non-retriable: client/user errors (bad input)
       code in [@invalid_request, @method_not_found, @invalid_params] -> false
       code in [@user_rejected, @unauthorized] -> false
-
       # Retriable: server/network/transient errors (check before 4xx range)
       code in [@parse_error, @internal_error, @rate_limit_error] -> true
       code in [@chain_disconnected, @network_error_code] -> true
       code >= -32099 and code <= -32000 -> true
       code == 429 -> true
       code >= 500 -> true
-
       # Non-retriable 4xx range (after checking 429)
       code >= 400 and code < 500 -> false
-
       # Conservative default: non-retriable
       true -> false
     end

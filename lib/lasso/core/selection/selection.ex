@@ -252,7 +252,28 @@ defmodule Lasso.RPC.Selection do
       end)
       |> Enum.reject(&is_nil/1)
 
-    channels
+    # Filter channels by method capability (adapter-based filtering)
+    capable_channels =
+      case Lasso.RPC.Providers.AdapterFilter.filter_channels(channels, method) do
+        {:ok, capable, filtered} ->
+          if length(filtered) > 0 do
+            Logger.debug(
+              "Filtered #{length(filtered)} channels for #{method}: #{inspect(Enum.map(filtered, & &1.provider_id))}"
+            )
+          end
+
+          capable
+
+        {:error, reason} ->
+          Logger.error(
+            "Adapter filtering failed for #{method}: #{inspect(reason)}, using all channels"
+          )
+
+          # Fail open: use all channels if filtering fails
+          channels
+      end
+
+    capable_channels
     |> apply_channel_strategy(strategy, method, chain)
     |> Enum.take(limit)
   end

@@ -101,7 +101,7 @@ defmodule Lasso.RPC.ClientSubscriptionRegistry do
   def handle_cast({:dispatch, key, payload}, state) do
     ids = Map.get(state.by_key, key, [])
 
-    Logger.info(
+    Logger.debug(
       "Dispatching to #{length(ids)} clients for key #{inspect(key)}, subscription_ids=#{inspect(ids)}"
     )
 
