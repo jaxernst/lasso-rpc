@@ -9,7 +9,7 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   use GenServer
   require Logger
-  alias Lasso.RPC.ErrorClassifier
+  alias Lasso.RPC.ErrorNormalizer
   alias Lasso.JSONRPC.Error, as: JError
 
   defstruct [
@@ -223,14 +223,13 @@ defmodule Lasso.RPC.CircuitBreaker do
         handle_non_breaker_error(result, state)
 
       {:error, reason} ->
-        # Fall back to ErrorClassifier for legacy error shapes
-        case ErrorClassifier.classify_error(reason) do
-          :infrastructure_failure ->
-            handle_failure(reason, state)
+        # Normalize unknown error shapes to JError for consistent handling
+        jerr = ErrorNormalizer.normalize(reason, provider_id: state.provider_id, transport: state.transport)
 
-          :user_error ->
-            # User/client errors don't affect circuit breaker state
-            handle_non_breaker_error(result, state)
+        if jerr.retriable? and jerr.breaker_penalty? do
+          handle_failure(jerr, state)
+        else
+          handle_non_breaker_error({:error, jerr}, state)
         end
 
       other ->

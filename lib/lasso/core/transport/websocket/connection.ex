@@ -243,7 +243,9 @@ defmodule Lasso.RPC.WSConnection do
 
   @impl true
   def handle_info({:ws_connected}, state) do
-    Logger.debug("Connected to WebSocket: #{state.endpoint.name}")
+    Logger.info(
+      "Connected to WebSocket: #{state.endpoint.name} (provider: #{state.endpoint.id})"
+    )
 
     # Report successful connection to circuit breaker
     CircuitBreaker.record_success({state.endpoint.id, :ws})
@@ -316,13 +318,21 @@ defmodule Lasso.RPC.WSConnection do
   end
 
   def handle_info({:ws_closed, code, reason}, state) do
-    Logger.info("WebSocket closed: #{code} - #{inspect(reason)}")
-
     jerr =
       ErrorNormalizer.normalize({:ws_close, code, reason},
         provider_id: state.endpoint.id,
         transport: :ws
       )
+
+    if jerr.retriable? do
+      Logger.warning(
+        "WebSocket closed: #{code} - #{inspect(reason)} (provider: #{state.endpoint.id}), reconnecting immediately"
+      )
+    else
+      Logger.warning(
+        "WebSocket closed: #{code} - #{inspect(reason)} (provider: #{state.endpoint.id}), not retriable"
+      )
+    end
 
     # Clean up any pending requests
     state = cleanup_pending_requests(state, jerr)
@@ -339,13 +349,21 @@ defmodule Lasso.RPC.WSConnection do
   end
 
   def handle_info({:ws_disconnected, reason}, state) do
-    Logger.warning("WebSocket disconnected: #{inspect(reason)}")
-
     jerr =
       ErrorNormalizer.normalize({:ws_disconnect, reason},
         provider_id: state.endpoint.id,
         transport: :ws
       )
+
+    if jerr.retriable? do
+      Logger.warning(
+        "WebSocket disconnected: #{inspect(reason)} (provider: #{state.endpoint.id}), reconnecting immediately"
+      )
+    else
+      Logger.warning(
+        "WebSocket disconnected: #{inspect(reason)} (provider: #{state.endpoint.id}), not retriable"
+      )
+    end
 
     # Clean up any pending requests
     state = cleanup_pending_requests(state, jerr)
@@ -401,14 +419,19 @@ defmodule Lasso.RPC.WSConnection do
 
   @impl true
   def handle_info({:reconnect}, state) do
-    Logger.info("Attempting to reconnect to #{state.endpoint.name}")
+    Logger.info(
+      "Reconnecting to #{state.endpoint.name} (attempt #{state.reconnect_attempts}, provider: #{state.endpoint.id})"
+    )
+
     # Clear the reconnect timer ref since it's already fired
     state = %{state | reconnect_ref: nil}
     {:noreply, state, {:continue, :connect}}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
-    Logger.warning("WebSocket connection lost: #{inspect(reason)}")
+    Logger.warning(
+      "WebSocket connection lost: #{inspect(reason)} (provider: #{state.endpoint.id}), reconnecting immediately"
+    )
 
     # Report disconnect as failure to circuit breaker with proper error classification
     # Note: Circuit breaker reporting is handled by ProviderPool.report_failure
@@ -512,14 +535,38 @@ defmodule Lasso.RPC.WSConnection do
 
     cond do
       max_attempts == :infinity ->
-        delay = min(state.endpoint.reconnect_interval * (state.reconnect_attempts + 1), 30_000)
-        jitter = :rand.uniform(1000)
+        # First attempt is immediate, subsequent attempts use backoff
+        delay =
+          if state.reconnect_attempts == 0 do
+            0
+          else
+            min(state.endpoint.reconnect_interval * state.reconnect_attempts, 30_000)
+          end
+
+        jitter = if delay > 0, do: :rand.uniform(1000), else: 0
+
+        Logger.info(
+          "Scheduling reconnect for #{state.endpoint.name} (attempt #{state.reconnect_attempts + 1}) in #{delay + jitter}ms"
+        )
+
         ref = Process.send_after(self(), {:reconnect}, delay + jitter)
         %{state | reconnect_attempts: state.reconnect_attempts + 1, reconnect_ref: ref}
 
       state.reconnect_attempts < max_attempts ->
-        delay = min(state.endpoint.reconnect_interval * (state.reconnect_attempts + 1), 30_000)
-        jitter = :rand.uniform(1000)
+        # First attempt is immediate, subsequent attempts use backoff
+        delay =
+          if state.reconnect_attempts == 0 do
+            0
+          else
+            min(state.endpoint.reconnect_interval * state.reconnect_attempts, 30_000)
+          end
+
+        jitter = if delay > 0, do: :rand.uniform(1000), else: 0
+
+        Logger.info(
+          "Scheduling reconnect for #{state.endpoint.name} (attempt #{state.reconnect_attempts + 1}/#{max_attempts}) in #{delay + jitter}ms"
+        )
+
         ref = Process.send_after(self(), {:reconnect}, delay + jitter)
         %{state | reconnect_attempts: state.reconnect_attempts + 1, reconnect_ref: ref}
 
