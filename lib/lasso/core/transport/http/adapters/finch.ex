@@ -6,8 +6,10 @@ defmodule Lasso.RPC.HttpClient.Finch do
   @behaviour Lasso.RPC.HttpClient
 
   @impl true
-  def request(%{url: url} = provider, method, params, timeout_ms) do
-    request_id = generate_id()
+  def request(%{url: url} = provider, method, params, opts) do
+    # Extract options with defaults
+    request_id = Keyword.get(opts, :request_id) || generate_id()
+    timeout_ms = Keyword.get(opts, :timeout, 30_000)
 
     body = %{
       "jsonrpc" => "2.0",

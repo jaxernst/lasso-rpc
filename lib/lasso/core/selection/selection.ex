@@ -173,15 +173,13 @@ defmodule Lasso.RPC.Selection do
     exclude = Keyword.get(opts, :exclude, [])
     limit = Keyword.get(opts, :limit, 10)
 
-    # Ask ProviderPool for provider candidates (single source of truth for provider availability)
-    # Use method-aware protocol for candidate filtering:
-    # - Subscriptions require WS
-    # - Otherwise, default to HTTP unless transport is explicitly :ws
+    # Ask pool for provider candidates without over-constraining transport for unary.
+    # For subscriptions, strictly require WS at the provider layer.
     pool_protocol =
       case method do
         "eth_subscribe" -> :ws
         "eth_unsubscribe" -> :ws
-        _ -> if transport == :ws, do: :ws, else: :http
+        _ -> :both
       end
 
     pool_filters = %{protocol: pool_protocol, exclude: exclude}
@@ -216,16 +214,43 @@ defmodule Lasso.RPC.Selection do
 
         transports
         |> Enum.flat_map(fn t ->
-          # Pass provider_config through opts for dynamic providers
-          case TransportRegistry.get_channel(chain, provider_id, t,
-                 method: method,
-                 provider_config: provider_config
-               ) do
-            {:ok, channel} -> [channel]
-            _ -> []
+          has_http? = is_binary(Map.get(provider_config, :url))
+          has_ws? = is_binary(Map.get(provider_config, :ws_url))
+
+          cond do
+            t == :http and not has_http? ->
+              []
+
+            t == :ws and not has_ws? ->
+              []
+
+            t == :ws and has_ws? ->
+              # Only include WS if WSConnection shows connected; otherwise skip from candidates
+              with status <- safe_ws_status(provider_id),
+                   %{connected: true} <- status,
+                   {:ok, channel} <-
+                     TransportRegistry.get_channel(chain, provider_id, t,
+                       method: method,
+                       provider_config: provider_config
+                     ) do
+                [channel]
+              else
+                _ ->
+                  []
+              end
+
+            true ->
+              case TransportRegistry.get_channel(chain, provider_id, t,
+                     method: method,
+                     provider_config: provider_config
+                   ) do
+                {:ok, channel} -> [channel]
+                _ -> []
+              end
           end
         end)
       end)
+      |> Enum.reject(&is_nil/1)
 
     channels
     |> apply_channel_strategy(strategy, method, chain)
@@ -313,6 +338,16 @@ defmodule Lasso.RPC.Selection do
       :cheapest -> "cost_optimized"
       :priority -> "static_priority"
       :round_robin -> "round_robin_rotation"
+    end
+  end
+
+  # Private helpers
+  defp safe_ws_status(provider_id) when is_binary(provider_id) do
+    try do
+      Lasso.RPC.WSConnection.status(provider_id)
+    catch
+      :exit, _ -> :error
+      _ -> :error
     end
   end
 end

@@ -33,7 +33,7 @@ defmodule Lasso.RPC.ProviderSupervisor do
   end
 
   defp maybe_add_http_circuit(children, provider) do
-    if is_binary(Map.get(provider, :url)) or is_binary(Map.get(provider, :http_url)) do
+    if is_binary(Map.get(provider, :url)) do
       circuit_config = %{failure_threshold: 5, recovery_timeout: 60_000, success_threshold: 2}
 
       child = %{
