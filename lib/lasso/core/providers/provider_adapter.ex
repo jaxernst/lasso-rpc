@@ -16,7 +16,7 @@ defmodule Lasso.RPC.ProviderAdapter do
         def supports_method?("unsupported_method", _transport, _ctx),
           do: {:error, :method_unsupported}
         def supports_method?(_method, _transport, _ctx),
-          do: :skip_params
+          do: :ok
 
         @impl true
         def validate_params(_method, _params, _transport, _ctx),
