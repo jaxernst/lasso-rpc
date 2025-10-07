@@ -314,8 +314,13 @@ const client = createPublicClient({
 **WebSocket subscriptions:**
 
 ```bash
-wscat -c ws://localhost:4000/rpc/ethereum
+wscat -c ws://localhost:4000/ws/rpc/ethereum
 {"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
+```
+
+```bash
+wscat -c ws://localhost:4000/ws/rpc/ethereum
+{"jsonrpc":"2.0","method":"eth_subscribe","params":["logs",{"address":"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48","topics":["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"]}],"id":1}
 ```
 
 ## Live Dashboard
