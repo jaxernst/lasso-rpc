@@ -23,7 +23,7 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
   # This will be populated as we create each adapter
   @adapter_mapping %{
     "ethereum_cloudflare" => Adapters.Cloudflare,
-    "ethereum_publicnode" => Adapters.PublicNode,
+    "ethereum_publicnode" => Adapters.PublicNode
     # More adapters will be added as they are implemented
     # "ethereum_llamarpc" => Adapters.LlamaRPC,
     # "ethereum_alchemy" => Adapters.Alchemy,
@@ -42,11 +42,11 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
       Lasso.RPC.Providers.Adapters.Cloudflare
 
       iex> AdapterRegistry.adapter_for("unknown_provider")
-      Lasso.RPC.Providers.Adapters.Generic
+      Lasso.RPC.Providers.Generic
   """
   @spec adapter_for(String.t()) :: module()
   def adapter_for(provider_id) when is_binary(provider_id) do
-    Map.get(@adapter_mapping, provider_id, Adapters.Generic)
+    Map.get(@adapter_mapping, provider_id, Lasso.RPC.Providers.Generic)
   end
 
   @doc """
@@ -79,7 +79,7 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
 
     # Find those not in mapping
     Enum.filter(all_providers, fn provider_id ->
-      adapter_for(provider_id) == Adapters.Generic
+      adapter_for(provider_id) == Lasso.RPC.Providers.Generic
     end)
   end
 
@@ -96,7 +96,7 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
   """
   @spec has_custom_adapter?(String.t()) :: boolean()
   def has_custom_adapter?(provider_id) when is_binary(provider_id) do
-    adapter_for(provider_id) != Adapters.Generic
+    adapter_for(provider_id) != Lasso.RPC.Providers.Generic
   end
 
   # Private Helpers

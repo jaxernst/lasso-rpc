@@ -171,14 +171,19 @@ defmodule Lasso.RPC.TransportRegistry do
   def handle_call({:initialize_provider_channels, provider_id, provider_config}, _from, state) do
     # HTTP pre-warm if configured
     state =
-    state =
       if is_binary(Map.get(provider_config, :url)) or
            is_binary(Map.get(provider_config, :http_url)) do
         case create_channel(state, provider_id, :http, provider_config: provider_config) do
-          {:ok, _chan, s} -> s
-          {:error, _}    -> state
+          {:ok, _chan, s} ->
+            Logger.info("TransportRegistry: HTTP channel created for #{provider_id}")
+            s
+
+          {:error, reason} ->
+            Logger.warning("TransportRegistry: Failed to create HTTP channel for #{provider_id}: #{inspect(reason)}")
+            state
         end
       else
+        Logger.warning("TransportRegistry: No HTTP URL configured for #{provider_id}")
         state
       end
 
