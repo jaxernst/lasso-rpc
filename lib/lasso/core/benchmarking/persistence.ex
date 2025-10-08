@@ -36,7 +36,7 @@ defmodule Lasso.Benchmarking.Persistence do
 
   require Logger
 
-  @snapshots_dir "priv/benchmark_snapshots"
+  @snapshots_dir System.get_env("LASSO_SNAPSHOTS_DIR") || "priv/benchmark_snapshots"
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
