@@ -15,12 +15,43 @@ config :lasso, LassoWeb.Endpoint,
   # Check origin to prevent CSRF attacks
   check_origin: true
 
-# Logging configuration
-config :logger,
+# Enhanced logging for production debugging (same as dev)
+config :logger, :console,
+  format: "[$level] $message => $metadata\n",
   level: :info,
+  metadata: [
+    :provider,
+    :provider_id,
+    :method,
+    :url,
+    :request_id,
+    :transport,
+    :context,
+    :timeout,
+    :retry_count,
+    :error,
+    :channel,
+    :result,
+    :chain,
+    :chain_id,
+    :key,
+    :id,
+    :connection,
+    :topic,
+    :params,
+    :remaining_channels,
+    :retriable,
+    :current_status
+  ]
+
+# Additional logger configuration for production
+config :logger,
   compile_time_purge_matching: [
     [level_lower_than: :info]
   ]
+
+# Enable detailed Phoenix logging (same as dev)
+config :phoenix, :logger, true
 
 # Observability in production
 config :lasso, :observability,
