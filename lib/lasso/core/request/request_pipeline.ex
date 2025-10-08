@@ -309,6 +309,13 @@ defmodule Lasso.RPC.RequestPipeline do
         attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
 
       {:error, reason} ->
+        Logger.warning("Channel request failed",
+          channel: Channel.to_string(channel),
+          error: inspect(reason),
+          retriable: false,
+          remaining_channels: length(rest_channels)
+        )
+
         # Check if error is retriable and we have more channels to try
         should_retry =
           case reason do

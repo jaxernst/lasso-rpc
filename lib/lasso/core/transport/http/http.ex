@@ -66,7 +66,10 @@ defmodule Lasso.RPC.Transports.HTTP do
 
     Logger.debug("HTTP request via channel", provider: provider_id, method: method, url: url)
 
-    case HttpClient.request(provider_config, method, params, request_id: request_id, timeout: timeout) do
+    case HttpClient.request(provider_config, method, params,
+           request_id: request_id,
+           timeout: timeout
+         ) do
       {:ok, %{"error" => _error} = response} ->
         jerr =
           ErrorNormalizer.normalize(response,
@@ -136,7 +139,10 @@ defmodule Lasso.RPC.Transports.HTTP do
 
         Logger.debug("Forwarding HTTP request", provider: provider_id, method: method, url: url)
 
-        case HttpClient.request(http_config, method, params, request_id: request_id, timeout: timeout_ms) do
+        case HttpClient.request(http_config, method, params,
+               request_id: request_id,
+               timeout: timeout_ms
+             ) do
           {:ok, %{"error" => _error} = response} ->
             # JSON-RPC error response - normalize using centralized logic
             jerr =

@@ -291,8 +291,8 @@ defmodule Lasso.RPC.ProviderPool do
 
   @impl true
   def handle_call({:list_candidates, filters}, _from, state) do
-    Logger.debug(
-      "ProviderPool.list_candidates for #{state.chain_name}: active_providers=#{inspect(state.active_providers)}, all_providers=#{inspect(Map.keys(state.providers))}, filters=#{inspect(filters)}"
+    Logger.info(
+      "ProviderPool.list_candidates for #{state.chain_name}: active_providers=#{inspect(state.active_providers)}, circuit_states=#{inspect(state.circuit_states)}, filters=#{inspect(filters)}"
     )
 
     candidates =
@@ -313,7 +313,7 @@ defmodule Lasso.RPC.ProviderPool do
         }
       end)
 
-    Logger.debug(
+    Logger.info(
       "ProviderPool.list_candidates for #{state.chain_name}: returning #{length(candidates)} candidates: #{inspect(Enum.map(candidates, & &1.id))}"
     )
 
@@ -430,6 +430,7 @@ defmodule Lasso.RPC.ProviderPool do
       )
       when is_binary(provider_id) and from in [:closed, :open, :half_open] and
              to in [:closed, :open, :half_open] do
+    Logger.info("ProviderPool[#{state.chain_name}]: CB event #{provider_id} #{from} -> #{to}")
     new_states = Map.put(state.circuit_states, provider_id, to)
     {:noreply, %{state | circuit_states: new_states}}
   end
@@ -703,9 +704,10 @@ defmodule Lasso.RPC.ProviderPool do
         state = maybe_emit_cooldown_end(state, provider_id, provider)
         state = maybe_emit_became_healthy(state, provider_id, provider)
 
-        new_providers = Map.put(state.providers, provider_id, updated_provider)
         new_stats = %{state.stats | total_requests: state.stats.total_requests + 1}
-        %{state | providers: new_providers, stats: new_stats}
+        state
+        |> put_provider_and_refresh(provider_id, updated_provider)
+        |> Map.put(:stats, new_stats)
     end
   end
 
