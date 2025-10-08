@@ -15,6 +15,7 @@ defmodule Lasso.RPC.Channel do
   """
 
   @type t :: %__MODULE__{
+          chain: String.t(),
           provider_id: String.t(),
           transport: :http | :ws,
           raw_channel: term(),
@@ -22,8 +23,9 @@ defmodule Lasso.RPC.Channel do
           capabilities: map() | nil
         }
 
-  @derive {Jason.Encoder, only: [:provider_id, :transport]}
+  @derive {Jason.Encoder, only: [:chain, :provider_id, :transport]}
   defstruct [
+    :chain,
     :provider_id,
     :transport,
     :raw_channel,
@@ -34,9 +36,10 @@ defmodule Lasso.RPC.Channel do
   @doc """
   Creates a new Channel wrapper.
   """
-  @spec new(String.t(), :http | :ws, term(), module()) :: t()
-  def new(provider_id, transport, raw_channel, transport_module) do
+  @spec new(String.t(), String.t(), :http | :ws, term(), module()) :: t()
+  def new(chain, provider_id, transport, raw_channel, transport_module) do
     %__MODULE__{
+      chain: chain,
       provider_id: provider_id,
       transport: transport,
       raw_channel: raw_channel,
@@ -138,6 +141,6 @@ defmodule Lasso.RPC.Channel do
   """
   @spec to_string(t()) :: String.t()
   def to_string(%__MODULE__{} = channel) do
-    "#{channel.provider_id}:#{channel.transport}"
+    "#{channel.chain}:#{channel.provider_id}:#{channel.transport}"
   end
 end

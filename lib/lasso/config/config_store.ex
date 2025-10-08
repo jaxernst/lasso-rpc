@@ -539,7 +539,8 @@ defmodule Lasso.Config.ConfigStore do
       priority: Map.get(attrs, :priority) || Map.get(attrs, "priority") || 100,
       api_key_required:
         Map.get(attrs, :api_key_required) || Map.get(attrs, "api_key_required") || false,
-      region: Map.get(attrs, :region) || Map.get(attrs, "region") || "global"
+      region: Map.get(attrs, :region) || Map.get(attrs, "region") || "global",
+      __mock__: Map.get(attrs, :__mock__)  # Preserve mock flag for test providers
     }
   end
 end

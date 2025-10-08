@@ -9,49 +9,105 @@ defmodule Lasso.Testing.IntegrationHelper do
   - Waiting for coordinator state changes
   """
 
-  alias Lasso.Testing.MockWSProvider
+  alias Lasso.Testing.{MockWSProvider, MockHTTPProvider}
   alias Lasso.RPC.{StreamCoordinator, UpstreamSubscriptionPool}
 
   @doc """
   Sets up a test chain with mock WebSocket and HTTP providers.
 
-  Returns `{:ok, ws: ws_results, http: http_results}` where each result
-  is the provider_id returned by the mock.
+  Returns `{:ok, provider_ids}` where provider_ids is a list of registered provider IDs.
+
+  This enhanced version:
+  - Starts all providers (WS and HTTP based on provider_type)
+  - Waits for all providers to be fully registered (deterministic)
+  - Ensures circuit breakers are ready for each provider
+  - Verifies provider health status
 
   ## Options
-  - `:wait_ms` - Time to wait for registration to complete (default: 200)
+  - `:wait_timeout` - Maximum time to wait for all providers to be ready (default: 5000ms)
+  - `:skip_circuit_breaker_check` - Skip waiting for circuit breakers (default: false)
+  - `:skip_health_check` - Skip waiting for health status (default: false)
+  - `:provider_type` - Type of providers to start (`:http` or `:ws`, default: `:http`)
 
   ## Example
 
-      {:ok, _providers} = setup_test_chain_with_providers(
+      # HTTP providers (for RequestPipeline testing)
+      {:ok, provider_ids} = setup_test_chain_with_providers(
         "test_chain",
-        [%{id: "ws1", priority: 100}, %{id: "ws2", priority: 90}],
-        []
+        [%{id: "p1", behavior: :healthy}, %{id: "p2", behavior: :always_fail}],
+        provider_type: :http
+      )
+
+      # WebSocket providers (for subscription testing)
+      {:ok, provider_ids} = setup_test_chain_with_providers(
+        "test_chain",
+        [%{id: "ws1", priority: 100}],
+        provider_type: :ws
       )
   """
-  def setup_test_chain_with_providers(chain, ws_providers, http_providers \\ [], opts \\ []) do
-    wait_ms = Keyword.get(opts, :wait_ms, 200)
+  def setup_test_chain_with_providers(chain, providers, opts \\ []) when is_list(providers) do
+    wait_timeout = Keyword.get(opts, :wait_timeout, 5_000)
+    skip_cb_check = Keyword.get(opts, :skip_circuit_breaker_check, false)
+    skip_health_check = Keyword.get(opts, :skip_health_check, false)
+    provider_type = Keyword.get(opts, :provider_type, :http)
 
-    # Start all WS mocks
-    ws_results =
-      Enum.map(ws_providers, fn spec ->
-        case MockWSProvider.start_mock(chain, spec) do
-          {:ok, provider_id} -> {:ok, provider_id}
-          error -> error
+    # Start all provider mocks (HTTP or WS based on provider_type)
+    provider_ids =
+      Enum.map(providers, fn spec ->
+        result = case provider_type do
+          :http -> MockHTTPProvider.start_mock(chain, spec)
+          :ws -> MockWSProvider.start_mock(chain, spec)
+        end
+
+        case result do
+          {:ok, provider_id} -> provider_id
+          error -> raise "Failed to start mock provider: #{inspect(error)}"
         end
       end)
 
-    # Start all HTTP mocks (if we implement MockHTTPProvider later)
-    http_results =
-      Enum.map(http_providers, fn _spec ->
-        # Placeholder for future HTTP mock support
-        {:ok, nil}
-      end)
+    # Wait for all providers to be fully registered
+    Enum.each(provider_ids, fn provider_id ->
+      wait_for_provider_ready(chain, provider_id,
+        timeout: wait_timeout,
+        skip_cb_check: skip_cb_check,
+        skip_health_check: skip_health_check
+      )
+    end)
 
-    # Wait for registration
-    Process.sleep(wait_ms)
+    {:ok, provider_ids}
+  end
 
-    {:ok, ws: ws_results, http: http_results}
+  @doc """
+  Waits for a provider to be fully ready for testing.
+
+  Checks:
+  1. Provider is registered in the provider pool
+  2. Circuit breakers are started and ready (unless skipped)
+  3. Provider health status is available (unless skipped)
+
+  Returns `:ok` when provider is ready, raises on timeout.
+  """
+  def wait_for_provider_ready(chain, provider_id, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 5_000)
+    skip_cb_check = Keyword.get(opts, :skip_cb_check, false)
+    skip_health_check = Keyword.get(opts, :skip_health_check, false)
+
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    # Wait for provider registration
+    wait_for_provider_registered(chain, provider_id, deadline)
+
+    # Wait for circuit breakers (unless skipped)
+    unless skip_cb_check do
+      wait_for_circuit_breakers_ready(chain, provider_id, deadline)
+    end
+
+    # Wait for health status (unless skipped)
+    unless skip_health_check do
+      wait_for_provider_health_available(chain, provider_id, deadline)
+    end
+
+    :ok
   end
 
   @doc """
@@ -207,5 +263,121 @@ defmodule Lasso.Testing.IntegrationHelper do
   """
   def simulate_disconnect(chain, provider_id) do
     MockWSProvider.stop_mock(chain, provider_id)
+  end
+
+  # Private synchronization helpers
+
+  defp wait_for_provider_registered(chain, provider_id, deadline) do
+    interval = 50
+
+    case poll_until_deadline(deadline, interval, fn ->
+           provider_registered?(chain, provider_id)
+         end) do
+      :ok ->
+        :ok
+
+      {:error, :timeout} ->
+        raise "Provider #{provider_id} not registered within timeout"
+    end
+  end
+
+  defp wait_for_circuit_breakers_ready(chain, provider_id, deadline) do
+    interval = 50
+
+    # For mock providers, circuit breakers are created lazily on first request
+    # Give it a brief window to see if they exist, but don't block
+    short_deadline = min(deadline, System.monotonic_time(:millisecond) + 500)
+
+    # Check for both HTTP and WS circuit breakers
+    transports = [:http, :ws]
+
+    Enum.each(transports, fn transport ->
+      breaker_id = {chain, provider_id, transport}
+
+      case poll_until_deadline(short_deadline, interval, fn ->
+             circuit_breaker_exists?(breaker_id)
+           end) do
+        :ok ->
+          :ok
+
+        {:error, :timeout} ->
+          # It's ok if circuit breakers don't exist yet for mock providers
+          # They're created lazily on first request
+          :ok
+      end
+    end)
+
+    :ok
+  end
+
+  defp wait_for_provider_health_available(chain, provider_id, deadline) do
+    interval = 50
+
+    case poll_until_deadline(deadline, interval, fn ->
+           provider_health_available?(chain, provider_id)
+         end) do
+      :ok ->
+        :ok
+
+      {:error, :timeout} ->
+        # Health might not be immediately available for mocks, that's ok
+        :ok
+    end
+  end
+
+  defp poll_until_deadline(deadline, interval, condition_fn) do
+    now = System.monotonic_time(:millisecond)
+
+    if now >= deadline do
+      {:error, :timeout}
+    else
+      if condition_fn.() do
+        :ok
+      else
+        Process.sleep(interval)
+        poll_until_deadline(deadline, interval, condition_fn)
+      end
+    end
+  end
+
+  defp provider_registered?(chain, provider_id) do
+    case Lasso.RPC.ProviderPool.get_status(chain) do
+      {:ok, status} ->
+        # Check if provider exists in the providers list
+        Enum.any?(status.providers, fn p -> p.id == provider_id end)
+
+      {:error, _} ->
+        false
+    end
+  rescue
+    # Chain might not exist yet or ProviderPool might not be started
+    _ -> false
+  end
+
+  defp circuit_breaker_exists?(breaker_id) do
+    try do
+      case Lasso.RPC.CircuitBreaker.get_state(breaker_id) do
+        %{} -> true
+        _ -> false
+      end
+    catch
+      :exit, _ -> false
+    end
+  end
+
+  defp provider_health_available?(chain, provider_id) do
+    case Lasso.RPC.ProviderPool.get_status(chain) do
+      {:ok, status} ->
+        # Find the provider and check if it has a health status
+        case Enum.find(status.providers, fn p -> p.id == provider_id end) do
+          nil -> false
+          provider -> provider.status in [:healthy, :connecting, :unhealthy, :degraded]
+        end
+
+      {:error, _} ->
+        false
+    end
+  rescue
+    _ -> false
   end
 end

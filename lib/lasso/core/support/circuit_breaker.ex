@@ -13,6 +13,7 @@ defmodule Lasso.RPC.CircuitBreaker do
   alias Lasso.JSONRPC.Error, as: JError
 
   defstruct [
+    :chain,
     :provider_id,
     :transport,
     :failure_threshold,
@@ -26,11 +27,13 @@ defmodule Lasso.RPC.CircuitBreaker do
     :config
   ]
 
+  @type chain :: String.t()
   @type provider_id :: String.t()
   @type transport :: :http | :ws | :unknown
-  @type breaker_id :: provider_id | {provider_id, transport}
+  @type breaker_id :: {chain, provider_id, transport} | {provider_id, transport} | provider_id
   @type breaker_state :: :closed | :open | :half_open
   @type state_t :: %__MODULE__{
+          chain: chain,
           provider_id: provider_id,
           failure_threshold: non_neg_integer(),
           recovery_timeout: non_neg_integer(),
@@ -63,6 +66,7 @@ defmodule Lasso.RPC.CircuitBreaker do
   Gets the current state of the circuit breaker.
   """
   @spec get_state(breaker_id) :: %{
+          chain: chain | nil,
           provider_id: provider_id,
           transport: transport,
           state: breaker_state,
@@ -94,13 +98,15 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   @impl true
   def init({id, config}) do
-    {provider_id, transport} =
+    {chain, provider_id, transport} =
       case id do
-        {pid, t} -> {pid, t}
-        pid when is_binary(pid) -> {pid, :unknown}
+        {c, pid, t} -> {c, pid, t}
+        {pid, t} -> {nil, pid, t}
+        pid when is_binary(pid) -> {nil, pid, :unknown}
       end
 
     state = %__MODULE__{
+      chain: chain,
       provider_id: provider_id,
       transport: transport,
       failure_threshold: Map.get(config, :failure_threshold, 5),
@@ -131,7 +137,7 @@ defmodule Lasso.RPC.CircuitBreaker do
             provider_id: state.provider_id
           })
 
-          publish_circuit_event(state.provider_id, :open, :half_open, :attempt_recovery)
+          publish_circuit_event(state.provider_id, :open, :half_open, :attempt_recovery, state.transport, state.chain)
 
           execute_call(fun, new_state)
         else
@@ -146,6 +152,7 @@ defmodule Lasso.RPC.CircuitBreaker do
   @impl true
   def handle_call(:get_state, _from, state) do
     status = %{
+      chain: state.chain,
       provider_id: state.provider_id,
       transport: state.transport,
       state: state.state,
@@ -165,7 +172,7 @@ defmodule Lasso.RPC.CircuitBreaker do
       provider_id: state.provider_id
     })
 
-    publish_circuit_event(state.provider_id, state.state, :open, :manual_open)
+    publish_circuit_event(state.provider_id, state.state, :open, :manual_open, state.transport, state.chain)
 
     new_state = %{state | state: :open, last_failure_time: System.monotonic_time(:millisecond)}
     {:noreply, new_state}
@@ -179,7 +186,7 @@ defmodule Lasso.RPC.CircuitBreaker do
       provider_id: state.provider_id
     })
 
-    publish_circuit_event(state.provider_id, state.state, :closed, :manual_close)
+    publish_circuit_event(state.provider_id, state.state, :closed, :manual_close, state.transport, state.chain)
 
     new_state = %{
       state
@@ -274,7 +281,7 @@ defmodule Lasso.RPC.CircuitBreaker do
             provider_id: state.provider_id
           })
 
-          publish_circuit_event(state.provider_id, :half_open, :closed, :recovered)
+          publish_circuit_event(state.provider_id, :half_open, :closed, :recovered, state.transport, state.chain)
 
           new_state = %{
             state
@@ -311,7 +318,7 @@ defmodule Lasso.RPC.CircuitBreaker do
             provider_id: state.provider_id
           })
 
-          publish_circuit_event(state.provider_id, :closed, :open, :failure_threshold_exceeded)
+          publish_circuit_event(state.provider_id, :closed, :open, :failure_threshold_exceeded, state.transport, state.chain)
 
           new_state = %{
             state
@@ -336,7 +343,7 @@ defmodule Lasso.RPC.CircuitBreaker do
           provider_id: state.provider_id
         })
 
-        publish_circuit_event(state.provider_id, :half_open, :open, :reopen_due_to_failure)
+        publish_circuit_event(state.provider_id, :half_open, :open, :reopen_due_to_failure, state.transport, state.chain)
 
         new_state = %{
           state
@@ -361,13 +368,14 @@ defmodule Lasso.RPC.CircuitBreaker do
     end
   end
 
-  defp publish_circuit_event(provider_id, from, to, reason, transport \\ :unknown) do
+  defp publish_circuit_event(provider_id, from, to, reason, transport, chain) do
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
       "circuit:events",
       {:circuit_breaker_event,
        %{
          ts: System.system_time(:millisecond),
+         chain: chain,
          provider_id: provider_id,
          transport: transport,
          from: from,
@@ -400,6 +408,7 @@ defmodule Lasso.RPC.CircuitBreaker do
   defp via_name(id) do
     key =
       case id do
+        {chain, provider_id, transport} -> "#{chain}:#{provider_id}:#{transport}"
         {provider_id, transport} -> "#{provider_id}:#{transport}"
         provider_id when is_binary(provider_id) -> provider_id
       end

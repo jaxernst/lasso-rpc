@@ -425,14 +425,20 @@ defmodule Lasso.RPC.ProviderPool do
 
   @impl true
   def handle_info(
-        {:circuit_breaker_event, %{provider_id: provider_id, from: from, to: to}},
+        {:circuit_breaker_event, %{chain: event_chain, provider_id: provider_id, from: from, to: to}},
         state
       )
       when is_binary(provider_id) and from in [:closed, :open, :half_open] and
              to in [:closed, :open, :half_open] do
-    Logger.info("ProviderPool[#{state.chain_name}]: CB event #{provider_id} #{from} -> #{to}")
-    new_states = Map.put(state.circuit_states, provider_id, to)
-    {:noreply, %{state | circuit_states: new_states}}
+    # Only handle circuit breaker events for THIS chain
+    if event_chain == state.chain_name or is_nil(event_chain) do
+      Logger.info("ProviderPool[#{state.chain_name}]: CB event #{provider_id} #{from} -> #{to}")
+      new_states = Map.put(state.circuit_states, provider_id, to)
+      {:noreply, %{state | circuit_states: new_states}}
+    else
+      # Ignore events from other chains
+      {:noreply, state}
+    end
   end
 
   @impl true
