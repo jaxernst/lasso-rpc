@@ -2,11 +2,7 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   @moduledoc """
   PublicNode Ethereum adapter.
 
-  ## Known Limitations (observed from production errors)
 
-  - `eth_getLogs`: max 3 addresses
-  - `eth_getLogs`: max 2000 block range
-  - No archival data (>10k blocks old)
 
   ## Error Messages Observed
 
@@ -25,12 +21,12 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
 
   alias Lasso.RPC.Providers.Generic
 
-  # validated with an empircal test on 10/07/2025:
-  # http limit is 50, ws limit is 25
+  @doc """
+  request params limits validated with an empircal test on 10/07/2025:
+  http limit is 50, ws limit is 30
+  """
   @max_addresses_http 49
-  @max_addresses_ws 24
-  @max_block_range 2000
-  @archival_threshold 10_000
+  @max_addresses_ws 29
 
   # Capability Validation
 
