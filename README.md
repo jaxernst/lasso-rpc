@@ -100,7 +100,17 @@ docker run --rm -p 4000:4000 lasso-rpc
 
 **🎯 Access at:** http://localhost:4000
 
-### 🚀 Option 2: Local Development
+### 🚀 Option 2: Local Production Build
+
+**Build and run a production release locally:**
+
+```bash
+MIX_ENV=prod PORT=4000 PHX_HOST=localhost SECRET_KEY_BASE=$(mix phx.gen.secret) mix phx.server
+```
+
+**🎯 Access at:** http://localhost:4000
+
+### 🚀 Option 3: Local Development
 
 **Prerequisites:** [Elixir/OTP 26+](https://elixir-lang.org/install.html)
 
