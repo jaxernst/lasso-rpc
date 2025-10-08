@@ -27,6 +27,7 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   """
   @max_addresses_http 49
   @max_addresses_ws 29
+  @max_block_range 10_000
 
   # Capability Validation
 
@@ -86,7 +87,7 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
 
   defp validate_block_range(_), do: :ok
 
-  defp validate_archival([%{"fromBlock" => from}]) do
+  defp validate_archival([%{"fromBlock" => _from}]) do
     :ok
 
     # Example

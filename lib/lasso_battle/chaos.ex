@@ -14,6 +14,8 @@ defmodule Lasso.Battle.Chaos do
   @doc """
   Kills a provider after a specified delay.
 
+  Returns a Task that can be stopped with `Task.shutdown/1`.
+
   ## Options
 
   - `:delay` - Milliseconds to wait before killing (default: 0)
@@ -21,14 +23,15 @@ defmodule Lasso.Battle.Chaos do
 
   ## Example
 
-      Chaos.kill_provider("provider_a", chain: "ethereum", delay: 10_000)
+      task = Chaos.kill_provider("provider_a", chain: "ethereum", delay: 10_000)
       # Waits 10s, then terminates provider_a on ethereum chain
+      # Stop early if needed: Task.shutdown(task)
   """
   def kill_provider(provider_id, opts \\ []) do
     chain = Keyword.fetch!(opts, :chain)
     delay = Keyword.get(opts, :delay, 0)
 
-    fn ->
+    Task.async(fn ->
       if delay > 0 do
         Logger.info("Chaos: Scheduled kill of #{provider_id} on #{chain} in #{delay}ms")
         Process.sleep(delay)
@@ -47,11 +50,13 @@ defmodule Lasso.Battle.Chaos do
           Logger.warning("Chaos: WS connection for #{provider_id} not found in Registry, cannot kill")
           {:error, :not_found}
       end
-    end
+    end)
   end
 
   @doc """
   Flaps a provider (kills and restarts periodically).
+
+  Returns a Task that can be stopped with `Task.shutdown/1`.
 
   ## Options
 
@@ -63,8 +68,9 @@ defmodule Lasso.Battle.Chaos do
 
   ## Example
 
-      Chaos.flap_provider("provider_a", chain: "ethereum", down: 10_000, up: 60_000, count: 3)
+      task = Chaos.flap_provider("provider_a", chain: "ethereum", down: 10_000, up: 60_000, count: 3)
       # Kills provider every 60s, stays down for 10s, repeats 3 times
+      # Stop early if needed: Task.shutdown(task)
   """
   def flap_provider(provider_id, opts \\ []) do
     chain = Keyword.fetch!(opts, :chain)
@@ -73,7 +79,7 @@ defmodule Lasso.Battle.Chaos do
     count = Keyword.get(opts, :count, :infinity)
     initial_delay = Keyword.get(opts, :initial_delay, 0)
 
-    fn ->
+    Task.async(fn ->
       if initial_delay > 0 do
         Logger.info(
           "Chaos: Scheduled flap of #{provider_id} on #{chain} to start in #{initial_delay}ms"
@@ -87,11 +93,13 @@ defmodule Lasso.Battle.Chaos do
       )
 
       flap_loop(chain, provider_id, down_time, up_time, count, 0)
-    end
+    end)
   end
 
   @doc """
   Degrades a provider by injecting artificial latency.
+
+  Returns a Task that can be stopped with `Task.shutdown/1`.
 
   This modifies the provider's latency configuration dynamically.
 
@@ -103,11 +111,12 @@ defmodule Lasso.Battle.Chaos do
 
   ## Example
 
-      Chaos.degrade_provider("provider_a", latency: 500, after: 30_000, duration: 60_000)
+      task = Chaos.degrade_provider("provider_a", latency: 500, after: 30_000, duration: 60_000)
       # After 30s, add 500ms latency for 60s
+      # Stop early if needed: Task.shutdown(task)
   """
   def degrade_provider(provider_id, opts) do
-    fn ->
+    Task.async(fn ->
       latency = Keyword.fetch!(opts, :latency)
       delay = Keyword.get(opts, :after, 0)
       duration = Keyword.get(opts, :duration, :infinity)
@@ -140,21 +149,24 @@ defmodule Lasso.Battle.Chaos do
       end
 
       :ok
-    end
+    end)
   end
 
   @doc """
   Opens a circuit breaker manually.
 
+  Returns a Task that can be stopped with `Task.shutdown/1`.
+
   Useful for simulating circuit breaker behavior without actual failures.
 
   ## Example
 
-      Chaos.open_circuit_breaker("provider_a", duration: 30_000)
+      task = Chaos.open_circuit_breaker("provider_a", duration: 30_000)
       # Opens circuit breaker for 30s
+      # Stop early if needed: Task.shutdown(task)
   """
   def open_circuit_breaker(provider_id, opts \\ []) do
-    fn ->
+    Task.async(fn ->
       delay = Keyword.get(opts, :delay, 0)
       duration = Keyword.get(opts, :duration, 30_000)
 
@@ -175,7 +187,7 @@ defmodule Lasso.Battle.Chaos do
 
           :ok
       end
-    end
+    end)
   end
 
   @doc """
@@ -201,7 +213,208 @@ defmodule Lasso.Battle.Chaos do
     end
   end
 
+  @doc """
+  Injects random provider failures at intervals.
+
+  Returns a Task that can be shutdown to stop the chaos.
+
+  ## Options
+
+  - `:chain` - Chain name (required)
+  - `:kill_interval` - How often to potentially kill a provider (default: 5000ms)
+  - `:recovery_delay` - How long before provider recovers (default: 2000ms)
+  - `:kill_probability` - Chance of kill on each interval 0.0-1.0 (default: 0.3)
+  - `:min_providers` - Minimum providers to keep alive (default: 1)
+
+  ## Example
+
+      task = Chaos.random_provider_chaos(
+        chain: "ethereum",
+        kill_interval: 10_000,
+        kill_probability: 0.5
+      )
+
+      # Later stop chaos
+      Task.shutdown(task)
+  """
+  def random_provider_chaos(opts) do
+    chain = Keyword.fetch!(opts, :chain)
+    kill_interval = Keyword.get(opts, :kill_interval, 5_000)
+    recovery_delay = Keyword.get(opts, :recovery_delay, 2_000)
+    kill_probability = Keyword.get(opts, :kill_probability, 0.3)
+    min_providers = Keyword.get(opts, :min_providers, 1)
+
+    Task.async(fn ->
+      random_chaos_loop(chain, kill_interval, recovery_delay, kill_probability, min_providers)
+    end)
+  end
+
+  @doc """
+  Simulates memory pressure by allocating large binaries.
+
+  Forces garbage collection activity to test system behavior under memory pressure.
+
+  ## Options
+
+  - `:target_mb` - Amount of memory to allocate per cycle (default: 100MB)
+  - `:interval_ms` - How often to allocate (default: 1000ms)
+  - `:duration_ms` - How long to maintain pressure (default: :infinity)
+
+  ## Example
+
+      task = Chaos.memory_pressure(
+        target_mb: 200,
+        interval_ms: 500,
+        duration_ms: 60_000
+      )
+  """
+  def memory_pressure(opts \\ []) do
+    target_mb = Keyword.get(opts, :target_mb, 100)
+    interval_ms = Keyword.get(opts, :interval_ms, 1_000)
+    duration_ms = Keyword.get(opts, :duration_ms, :infinity)
+
+    Task.async(fn ->
+      start_time = System.monotonic_time(:millisecond)
+      memory_pressure_loop(target_mb, interval_ms, start_time, duration_ms)
+    end)
+  end
+
+  @doc """
+  Applies multiple chaos scenarios simultaneously.
+
+  ## Options
+
+  Each chaos type can be configured independently.
+
+  ## Example
+
+      tasks = Chaos.combined_chaos(
+        chain: "ethereum",
+        provider_chaos: [kill_interval: 5_000],
+        memory_pressure: [target_mb: 100]
+      )
+
+      # Later stop all chaos
+      Chaos.stop_all_chaos(tasks)
+  """
+  def combined_chaos(opts) do
+    chain = Keyword.fetch!(opts, :chain)
+    chaos_tasks = []
+
+    chaos_tasks =
+      if provider_opts = Keyword.get(opts, :provider_chaos) do
+        task = random_provider_chaos(Keyword.put(provider_opts, :chain, chain))
+        [task | chaos_tasks]
+      else
+        chaos_tasks
+      end
+
+    chaos_tasks =
+      if memory_opts = Keyword.get(opts, :memory_pressure) do
+        task = memory_pressure(memory_opts)
+        [task | chaos_tasks]
+      else
+        chaos_tasks
+      end
+
+    chaos_tasks
+  end
+
+  @doc """
+  Stops all chaos tasks gracefully.
+
+  ## Example
+
+      tasks = Chaos.combined_chaos(...)
+      Chaos.stop_all_chaos(tasks)
+  """
+  def stop_all_chaos(tasks) when is_list(tasks) do
+    Enum.each(tasks, fn task ->
+      Task.shutdown(task, :brutal_kill)
+    end)
+
+    :ok
+  end
+
   # Private helpers
+
+  defp random_chaos_loop(chain, interval, recovery, probability, min_providers) do
+    Process.sleep(interval)
+
+    # Get list of active providers (from Registry)
+    providers = list_active_providers_for_chain(chain)
+
+    # Only kill if we have more than minimum and probability succeeds
+    if length(providers) > min_providers and :rand.uniform() < probability do
+      target = Enum.random(providers)
+
+      Logger.warning("🔥 CHAOS: Random kill - killing #{target} on #{chain}")
+
+      # Kill the provider
+      case Registry.lookup(Lasso.Registry, {:ws_conn, target}) do
+        [{pid, _}] ->
+          Process.exit(pid, :kill)
+
+          # Schedule recovery
+          Task.start(fn ->
+            Process.sleep(recovery)
+            Logger.info("♻️  CHAOS: Random kill - provider #{target} should recover via supervisor")
+          end)
+
+        [] ->
+          :ok
+      end
+    end
+
+    random_chaos_loop(chain, interval, recovery, probability, min_providers)
+  end
+
+  defp memory_pressure_loop(target_mb, interval, start_time, total_duration) do
+    elapsed = System.monotonic_time(:millisecond) - start_time
+
+    if total_duration != :infinity and elapsed >= total_duration do
+      Logger.info("CHAOS: Memory pressure completed")
+      :done
+    else
+      # Allocate large binary
+      size = target_mb * 1024 * 1024
+      _blob = :binary.copy(<<0>>, size)
+
+      Logger.debug("CHAOS: Allocated #{target_mb}MB memory")
+
+      # Wait for interval (binary gets GC'd)
+      Process.sleep(interval)
+
+      memory_pressure_loop(target_mb, interval, start_time, total_duration)
+    end
+  end
+
+  defp list_active_providers_for_chain(chain) do
+    # FIXME: Currently returns ALL providers across all chains
+    # because Registry key {:ws_conn, provider_id} doesn't include chain info.
+    #
+    # This means random_provider_chaos could kill providers from other tests
+    # running in parallel on different chains.
+    #
+    # Solutions:
+    # 1. Change Registry key to {:ws_conn, chain, provider_id}
+    # 2. Store chain in Registry value metadata
+    # 3. Query ProviderPool.list_providers(chain) if available
+    #
+    # For now, logging a warning if this function is used.
+    Logger.warning(
+      "Chaos: list_active_providers_for_chain/1 ignores chain parameter! " <>
+        "May affect providers from other chains. Chain: #{chain}"
+    )
+
+    # Get all WS connections from Registry (ignores chain)
+    Registry.select(Lasso.Registry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.filter(fn
+      {{:ws_conn, _provider_id}, _pid} -> true
+      _ -> false
+    end)
+    |> Enum.map(fn {{:ws_conn, provider_id}, _pid} -> provider_id end)
+  end
 
   defp flap_loop(_chain, _provider_id, _down_time, _up_time, 0, iteration) do
     Logger.info("Chaos: Flap sequence complete (#{iteration} flaps)")

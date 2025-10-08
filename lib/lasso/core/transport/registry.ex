@@ -300,7 +300,7 @@ defmodule Lasso.RPC.TransportRegistry do
         |> case do
           {:ok, raw_channel} ->
             # Wrap in Channel struct
-            channel = Channel.new(provider_id, transport, raw_channel, transport_module)
+            channel = Channel.new(state.chain_name, provider_id, transport, raw_channel, transport_module)
 
             # Store channel
             updated_channels =

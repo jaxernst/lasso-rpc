@@ -86,17 +86,53 @@ defmodule Lasso.RPC.RequestPipeline do
         )
 
       _ ->
+        start_time = System.monotonic_time(:millisecond)
+
+        # Emit telemetry start event
+        :telemetry.execute([:lasso, :rpc, :request, :start], %{count: 1}, %{
+          chain: chain,
+          method: method,
+          strategy: strategy
+        })
+
         case execute_with_channel_selection(chain, rpc_request, ctx, transport_override, timeout) do
           {:ok, result, updated_ctx} ->
+            duration_ms = System.monotonic_time(:millisecond) - start_time
+
             # Emit observability log
             Observability.log_request_completed(updated_ctx)
+
+            # Emit telemetry stop event for success
+            :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
+              chain: chain,
+              method: method,
+              provider_id: updated_ctx.selected_provider,
+              transport: updated_ctx.transport,
+              status: :success,
+              retry_count: updated_ctx.retries
+            })
+
             # Store context for controller access (if needed for response metadata)
             Process.put(:request_context, updated_ctx)
             {:ok, result}
 
           {:error, reason, updated_ctx} ->
+            duration_ms = System.monotonic_time(:millisecond) - start_time
+
             # Emit observability log for errors too
             Observability.log_request_completed(updated_ctx)
+
+            # Emit telemetry stop event for error
+            :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
+              chain: chain,
+              method: method,
+              provider_id: updated_ctx.selected_provider,
+              transport: updated_ctx.transport,
+              status: :error,
+              error: reason,
+              retry_count: updated_ctx.retries
+            })
+
             # Store context for controller access
             Process.put(:request_context, updated_ctx)
             {:error, reason}
@@ -148,7 +184,36 @@ defmodule Lasso.RPC.RequestPipeline do
         record_channel_success_metrics(chain, channel, method, strategy, duration_ms)
         Observability.log_request_completed(updated_ctx)
         Process.put(:request_context, updated_ctx)
+
+        # Emit telemetry stop event for success
+        :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
+          chain: chain,
+          method: method,
+          provider_id: provider_id,
+          transport: transport_override || :http,
+          status: :success,
+          retry_count: 0
+        })
+
         {:ok, result}
+
+      {:error, :no_channels_available, _updated_ctx} ->
+        duration_ms = System.monotonic_time(:millisecond) - start_time
+        jerr = JError.new(-32000, "Provider not found or no channels available", category: :provider_error)
+        record_channel_failure_metrics(chain, provider_id, method, strategy, jerr, duration_ms)
+
+        # Emit telemetry stop event for no channels
+        :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
+          chain: chain,
+          method: method,
+          provider_id: provider_id,
+          transport: transport_override || :http,
+          status: :error,
+          error: jerr,
+          retry_count: 0
+        })
+
+        {:error, jerr}
 
       {:error, reason} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
@@ -162,15 +227,56 @@ defmodule Lasso.RPC.RequestPipeline do
           end
 
         if failover_on_override and should_failover do
-          try_channel_failover(
-            chain,
-            rpc_request,
-            strategy,
-            [provider_id],
-            1,
-            timeout
-          )
+          # Attempt failover and emit telemetry for final result
+          case try_channel_failover(
+                 chain,
+                 rpc_request,
+                 strategy,
+                 [provider_id],
+                 1,
+                 timeout
+               ) do
+            {:ok, _result} = success ->
+              final_duration_ms = System.monotonic_time(:millisecond) - start_time
+
+              :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: final_duration_ms}, %{
+                chain: chain,
+                method: method,
+                provider_id: provider_id,
+                transport: transport_override || :http,
+                status: :success,
+                retry_count: 1
+              })
+
+              success
+
+            {:error, failover_err} = failure ->
+              final_duration_ms = System.monotonic_time(:millisecond) - start_time
+
+              :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: final_duration_ms}, %{
+                chain: chain,
+                method: method,
+                provider_id: provider_id,
+                transport: transport_override || :http,
+                status: :error,
+                error: failover_err,
+                retry_count: 1
+              })
+
+              failure
+          end
         else
+          # Emit telemetry stop event for failure (no failover)
+          :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
+            chain: chain,
+            method: method,
+            provider_id: provider_id,
+            transport: transport_override || :http,
+            status: :error,
+            error: jerr,
+            retry_count: 0
+          })
+
           {:error, jerr}
         end
     end
@@ -241,9 +347,18 @@ defmodule Lasso.RPC.RequestPipeline do
 
     transports
     |> Enum.map(fn transport ->
-      case TransportRegistry.get_channel(chain, provider_id, transport) do
-        {:ok, channel} -> channel
-        {:error, _} -> nil
+      try do
+        case TransportRegistry.get_channel(chain, provider_id, transport) do
+          {:ok, channel} -> channel
+          {:error, _} -> nil
+        end
+      catch
+        :exit, {:noproc, _} ->
+          # Registry or chain supervisor not running
+          nil
+        :exit, _ ->
+          # Other exit reasons
+          nil
       end
     end)
     |> Enum.filter(&(&1 != nil))
@@ -283,8 +398,8 @@ defmodule Lasso.RPC.RequestPipeline do
 
     cb_id =
       case channel.transport do
-        :http -> {channel.provider_id, :http}
-        :ws -> {channel.provider_id, :ws}
+        :http -> {channel.chain, channel.provider_id, :http}
+        :ws -> {channel.chain, channel.provider_id, :ws}
       end
 
     # Update context with selected provider (CB state captured later to avoid blocking)
@@ -294,7 +409,22 @@ defmodule Lasso.RPC.RequestPipeline do
         circuit_breaker_state: :unknown
     }
 
-    case CircuitBreaker.call(cb_id, attempt_fun, timeout + 1_000) do
+    # Add small buffer to circuit breaker timeout to allow for GenServer processing
+    # while still respecting the overall timeout constraint
+    cb_timeout = timeout + 200
+
+    result = try do
+      CircuitBreaker.call(cb_id, attempt_fun, cb_timeout)
+    catch
+      :exit, {:timeout, _} ->
+        # GenServer.call timeout - convert to JSONRPC timeout error
+        {:error, JError.new(-32000, "Request timeout", category: :timeout, retriable?: true)}
+      :exit, reason ->
+        # Other exit reasons
+        {:error, JError.new(-32000, "Circuit breaker error: #{inspect(reason)}", category: :provider_error, retriable?: true)}
+    end
+
+    case result do
       {:ok, result} ->
         Logger.debug("✓ Request Success via #{Channel.to_string(channel)}", result: result)
         {:ok, result, channel, ctx}
@@ -415,7 +545,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     :telemetry.execute(
       [:lasso, :rpc, :request, :stop],
-      %{duration_ms: duration_ms},
+      %{duration: duration_ms},
       %{
         chain: chain,
         method: method,
@@ -434,7 +564,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     :telemetry.execute(
       [:lasso, :rpc, :request, :stop],
-      %{duration_ms: duration_ms},
+      %{duration: duration_ms},
       %{
         chain: chain,
         method: method,

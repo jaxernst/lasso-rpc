@@ -56,7 +56,8 @@ defmodule Lasso.Config.ChainConfig do
       :url,
       :ws_url,
       :api_key_required,
-      :region
+      :region,
+      :__mock__  # For test mock providers
     ]
   end
 

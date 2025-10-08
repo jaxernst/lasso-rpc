@@ -21,6 +21,16 @@ Code.require_file("test/support/mock_http_client.ex")
 Code.require_file("test/support/mock_ws_client.ex")
 Code.require_file("test/support/failing_ws_client.ex")
 
+# Load new test infrastructure
+Code.require_file("test/support/telemetry_sync.ex")
+Code.require_file("test/support/eventually.ex")
+Code.require_file("test/support/circuit_breaker_helper.ex")
+Code.require_file("test/support/lasso_integration_case.ex")
+
+# Configure behavior-based HTTP client for integration tests
+# This routes HTTP RPC requests to MockHTTPProvider instances with rich behaviors
+Application.put_env(:lasso, :http_client, Lasso.Testing.BehaviorHttpClient)
+
 # Ensure test isolation by resetting benchmark store between tests
 # By default, exclude slow-running tests (integration, battle, real providers)
 ExUnit.configure(
