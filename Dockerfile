@@ -47,5 +47,7 @@ RUN mix phx.digest
 # Expose port
 EXPOSE 4000
 
-# Start the application
-CMD ["mix", "phx.server"]
+# Use entrypoint to seed /data/chains.yml on first boot, then start Phoenix
+COPY deployment/entrypoint.sh ./deployment/entrypoint.sh
+RUN chmod +x ./deployment/entrypoint.sh
+CMD ["/app/deployment/entrypoint.sh"]
