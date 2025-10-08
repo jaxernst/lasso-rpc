@@ -144,6 +144,52 @@ defmodule Lasso.Testing.MockWSProvider do
   end
 
   @doc """
+  Simulates a provider failure by emitting WSDisconnected event.
+
+  This triggers the failover mechanism in UpstreamSubscriptionPool
+  and StreamCoordinator, matching what happens when a real WebSocket
+  connection fails.
+
+  Use this in tests instead of directly killing the GenServer, as it
+  allows the production failover code to execute and be tested.
+
+  ## Example
+
+      # Send blocks from primary
+      MockWSProvider.send_block_sequence(chain, "primary", 1000, 5)
+
+      # Simulate primary failure - triggers failover
+      MockWSProvider.simulate_provider_failure(chain, "primary")
+
+      # Wait for failover completion
+      assert_receive {:telemetry, [:lasso, :subs, :failover, :completed], _, _}
+
+      # Send blocks from backup
+      MockWSProvider.send_block_sequence(chain, "backup", 1005, 5)
+  """
+  def simulate_provider_failure(chain, provider_id, reason \\ :test_failure) do
+    # Emit the same WSDisconnected event that real WS connections emit
+    event = %Lasso.Events.Provider.WSDisconnected{
+      ts: System.system_time(:millisecond),
+      chain: chain,
+      provider_id: provider_id,
+      reason: reason
+    }
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      Lasso.Events.Provider.topic(chain),
+      event
+    )
+
+    Logger.debug(
+      "Simulated provider failure: #{provider_id} on #{chain} (reason: #{inspect(reason)})"
+    )
+
+    :ok
+  end
+
+  @doc """
   Sends a mock log event to all log subscribers.
   """
   def send_log(chain, provider_id, log) when is_map(log) do

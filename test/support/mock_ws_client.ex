@@ -52,12 +52,38 @@ defmodule TestSupport.MockWSClient do
 
   # Configuration options for connection behavior
   def start_link(url, handler_mod, state, opts) when is_list(opts) do
-    GenServer.start_link(__MODULE__, {url, handler_mod, state, opts})
+    # Extract connection identifier from opts for FailureInjector lookup
+    connection_id = Keyword.get(opts, :connection_id)
+
+    # Check FailureInjector for test-mode failure configuration
+    failure_mode =
+      if connection_id && TestSupport.FailureInjector.available?() do
+        TestSupport.FailureInjector.check_failure(connection_id)
+      else
+        :ok
+      end
+
+    case failure_mode do
+      {:error, reason} ->
+        {:error, reason}
+
+      {:delay, ms} ->
+        # Delay the connection
+        Process.sleep(ms)
+        GenServer.start_link(__MODULE__, {url, handler_mod, state, opts})
+
+      {:hang} ->
+        # Simulate hanging connection - start process but never complete connection
+        GenServer.start_link(__MODULE__, {url, handler_mod, state, Keyword.put(opts, :hang_mode, true)})
+
+      :ok ->
+        GenServer.start_link(__MODULE__, {url, handler_mod, state, opts})
+    end
   end
 
   # Maintain compatibility with original 3-argument version
   def start_link(url, handler_mod, state) do
-    GenServer.start_link(__MODULE__, {url, handler_mod, state, []})
+    start_link(url, handler_mod, state, [])
   end
 
   # Private helper function to generate different error types based on method
@@ -95,31 +121,36 @@ defmodule TestSupport.MockWSClient do
   def init({url, handler_mod, state, opts}) do
     _ = url
     connect_delay = Keyword.get(opts, :connect_delay, 0)
-    should_fail = Keyword.get(opts, :fail_connection, false)
+    hang_mode = Keyword.get(opts, :hang_mode, false)
 
     mock_state = %{
       handler: handler_mod,
       state: state,
       failure_mode: :normal,
-      should_fail_connection: should_fail,
+      should_fail_connection: false,
       connected: false,
       response_delay: 0,
       pending_responses: %{},
-      response_mode: :result
+      response_mode: :result,
+      hang_mode: hang_mode
     }
 
-    if should_fail do
-      # Don't connect at all
-      {:ok, mock_state}
-    else
-      # Schedule connection after delay
-      if connect_delay > 0 do
-        Process.send_after(self(), :after_init, connect_delay)
-      else
-        send(self(), :after_init)
-      end
+    cond do
+      hang_mode ->
+        # Hang mode - never complete connection, never call handle_connect
+        # Process exists but is effectively hung
+        {:ok, mock_state}
 
-      {:ok, mock_state}
+      connect_delay > 0 ->
+        # Schedule connection after delay for tests that need it
+        Process.send_after(self(), :after_init, connect_delay)
+        {:ok, mock_state}
+
+      true ->
+        # Immediate connection: call handler synchronously during init
+        # This eliminates the race condition between telemetry attachment and handler execution
+        {:ok, new_state} = handler_mod.handle_connect(nil, state)
+        {:ok, %{mock_state | state: new_state, connected: true}}
     end
   end
 

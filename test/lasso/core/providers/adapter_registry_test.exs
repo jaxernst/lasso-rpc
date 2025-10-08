@@ -3,6 +3,7 @@ defmodule Lasso.RPC.Providers.AdapterRegistryTest do
 
   alias Lasso.RPC.Providers.AdapterRegistry
   alias Lasso.RPC.Providers.Adapters
+  alias Lasso.RPC.Providers.Generic
 
   describe "adapter_for/1" do
     test "returns Cloudflare adapter for ethereum_cloudflare" do
@@ -14,15 +15,15 @@ defmodule Lasso.RPC.Providers.AdapterRegistryTest do
     end
 
     test "returns Generic adapter for unknown provider" do
-      assert AdapterRegistry.adapter_for("unknown_provider") == Adapters.Generic
+      assert AdapterRegistry.adapter_for("unknown_provider") == Generic
     end
 
     test "returns Generic adapter for provider with no custom adapter" do
-      assert AdapterRegistry.adapter_for("ethereum_llamarpc") == Adapters.Generic
+      assert AdapterRegistry.adapter_for("ethereum_llamarpc") == Generic
     end
 
     test "handles empty string" do
-      assert AdapterRegistry.adapter_for("") == Adapters.Generic
+      assert AdapterRegistry.adapter_for("") == Generic
     end
   end
 
@@ -70,7 +71,7 @@ defmodule Lasso.RPC.Providers.AdapterRegistryTest do
 
       # All providers in the list should use Generic adapter
       Enum.each(providers, fn provider_id ->
-        assert AdapterRegistry.adapter_for(provider_id) == Adapters.Generic
+        assert AdapterRegistry.adapter_for(provider_id) == Generic
       end)
     end
   end
