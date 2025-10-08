@@ -199,7 +199,12 @@ defmodule Lasso.RPC.RequestPipeline do
 
       {:error, :no_channels_available, _updated_ctx} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
-        jerr = JError.new(-32000, "Provider not found or no channels available", category: :provider_error)
+
+        jerr =
+          JError.new(-32000, "Provider not found or no channels available",
+            category: :provider_error
+          )
+
         record_channel_failure_metrics(chain, provider_id, method, strategy, jerr, duration_ms)
 
         # Emit telemetry stop event for no channels
@@ -239,29 +244,37 @@ defmodule Lasso.RPC.RequestPipeline do
             {:ok, _result} = success ->
               final_duration_ms = System.monotonic_time(:millisecond) - start_time
 
-              :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: final_duration_ms}, %{
-                chain: chain,
-                method: method,
-                provider_id: provider_id,
-                transport: transport_override || :http,
-                status: :success,
-                retry_count: 1
-              })
+              :telemetry.execute(
+                [:lasso, :rpc, :request, :stop],
+                %{duration: final_duration_ms},
+                %{
+                  chain: chain,
+                  method: method,
+                  provider_id: provider_id,
+                  transport: transport_override || :http,
+                  status: :success,
+                  retry_count: 1
+                }
+              )
 
               success
 
             {:error, failover_err} = failure ->
               final_duration_ms = System.monotonic_time(:millisecond) - start_time
 
-              :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: final_duration_ms}, %{
-                chain: chain,
-                method: method,
-                provider_id: provider_id,
-                transport: transport_override || :http,
-                status: :error,
-                error: failover_err,
-                retry_count: 1
-              })
+              :telemetry.execute(
+                [:lasso, :rpc, :request, :stop],
+                %{duration: final_duration_ms},
+                %{
+                  chain: chain,
+                  method: method,
+                  provider_id: provider_id,
+                  transport: transport_override || :http,
+                  status: :error,
+                  error: failover_err,
+                  retry_count: 1
+                }
+              )
 
               failure
           end
@@ -356,6 +369,7 @@ defmodule Lasso.RPC.RequestPipeline do
         :exit, {:noproc, _} ->
           # Registry or chain supervisor not running
           nil
+
         :exit, _ ->
           # Other exit reasons
           nil
@@ -398,8 +412,8 @@ defmodule Lasso.RPC.RequestPipeline do
 
     cb_id =
       case channel.transport do
-        :http -> {channel.chain, channel.provider_id, :http}
-        :ws -> {channel.chain, channel.provider_id, :ws}
+        :http -> {channel.provider_id, :http}
+        :ws -> {channel.provider_id, :ws}
       end
 
     # Update context with selected provider (CB state captured later to avoid blocking)
@@ -413,16 +427,45 @@ defmodule Lasso.RPC.RequestPipeline do
     # while still respecting the overall timeout constraint
     cb_timeout = timeout + 200
 
-    result = try do
-      CircuitBreaker.call(cb_id, attempt_fun, cb_timeout)
-    catch
-      :exit, {:timeout, _} ->
-        # GenServer.call timeout - convert to JSONRPC timeout error
-        {:error, JError.new(-32000, "Request timeout", category: :timeout, retriable?: true)}
-      :exit, reason ->
-        # Other exit reasons
-        {:error, JError.new(-32000, "Circuit breaker error: #{inspect(reason)}", category: :provider_error, retriable?: true)}
-    end
+    result =
+      try do
+        CircuitBreaker.call(cb_id, attempt_fun, cb_timeout)
+      catch
+        :exit, {:timeout, _} ->
+          # GenServer.call timeout - convert to JSONRPC timeout error
+          Logger.warning("Request timeout on channel",
+            channel: Channel.to_string(channel),
+            timeout: cb_timeout
+          )
+
+          {:error, JError.new(-32000, "Request timeout", category: :timeout, retriable?: true)}
+
+        :exit, {:noproc, _} ->
+          # Circuit breaker not started - log error and fail with non-retriable error
+          Logger.error("Circuit breaker not found for channel - provider may not be initialized",
+            channel: Channel.to_string(channel),
+            circuit_breaker_id: inspect(cb_id)
+          )
+
+          {:error,
+           JError.new(-32000, "Provider not available",
+             category: :provider_error,
+             retriable?: true
+           )}
+
+        :exit, reason ->
+          # Other exit reasons
+          Logger.error("Circuit breaker unexpected exit",
+            channel: Channel.to_string(channel),
+            reason: inspect(reason)
+          )
+
+          {:error,
+           JError.new(-32000, "Circuit breaker error",
+             category: :provider_error,
+             retriable?: true
+           )}
+      end
 
     case result do
       {:ok, result} ->

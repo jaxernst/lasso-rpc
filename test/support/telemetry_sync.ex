@@ -25,7 +25,164 @@ defmodule Lasso.Test.TelemetrySync do
   @default_timeout 5_000
 
   @doc """
+  Attaches a telemetry collector (API-compatible with Lasso.Testing.TelemetrySync).
+
+  This is an alias for `start_collector/2` but returns `{:ok, ref}` tuple for compatibility.
+
+  ## Example
+
+      {:ok, collector} = TelemetrySync.attach_collector([:lasso, :websocket, :connected],
+        match: [provider_id: "test_id"],
+        count: 2
+      )
+
+      # Trigger actions...
+      {:ok, _m, meta} = TelemetrySync.await_event(collector)
+  """
+  @spec attach_collector([atom()], keyword()) :: {:ok, reference()}
+  def attach_collector(event_name, opts \\ []) do
+    ref = start_collector(event_name, opts)
+    {:ok, ref}
+  end
+
+  @doc """
+  Starts collecting telemetry events in the background.
+
+  This attaches a handler BEFORE triggering actions, ensuring no events are missed.
+  Use this when events may fire faster than `wait_for_event/2` can attach.
+
+  Returns a collector reference to be used with `await_event/2`.
+
+  ## Example
+
+      # Start collecting before triggering action
+      collector = TelemetrySync.start_collector([:lasso, :subs, :failover, :initiated],
+        match: %{chain: chain}
+      )
+
+      # Trigger the action that emits events
+      MockWSProvider.simulate_provider_failure(chain, "primary")
+
+      # Now wait for the event
+      {:ok, _measurements, metadata} = TelemetrySync.await_event(collector)
+  """
+  @spec start_collector([atom()], keyword()) :: reference()
+  def start_collector(event_name, opts \\ []) do
+    match_map = Keyword.get(opts, :match, %{})
+    predicate = Keyword.get(opts, :predicate)
+
+    test_pid = self()
+    ref = make_ref()
+    handler_id = {__MODULE__, ref, :erlang.unique_integer()}
+
+    :telemetry.attach(
+      handler_id,
+      event_name,
+      fn ^event_name, measurements, metadata, _config ->
+        if should_send_event?(measurements, metadata, match_map, predicate) do
+          send(test_pid, {ref, :event, measurements, metadata})
+        end
+      end,
+      nil
+    )
+
+    ref
+  end
+
+  @doc """
+  Waits for an event from a pre-attached collector.
+
+  Use this after `start_collector/2` to wait for events without race conditions.
+
+  ## Options
+
+  - `:timeout` - Maximum time to wait in milliseconds (default: 5000)
+
+  ## Returns
+
+  - `{:ok, measurements, metadata}` when event received
+  - `{:error, :timeout}` if timeout exceeded
+
+  ## Example
+
+      collector = start_collector([:lasso, :subs, :failover, :initiated])
+      trigger_failover()
+      {:ok, _m, meta} = await_event(collector, timeout: 5000)
+  """
+  @spec await_event(reference(), keyword()) :: {:ok, map(), map()} | {:error, :timeout}
+  def await_event(ref, opts \\ []) when is_reference(ref) do
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+
+    # The collector remains active after await_event returns, allowing multiple
+    # await_event calls on the same collector. The handler is only detached when
+    # stop_collector/1 is explicitly called or the test process exits.
+    receive do
+      {^ref, :event, measurements, metadata} ->
+        {:ok, measurements, metadata}
+    after
+      timeout ->
+        {:error, :timeout}
+    end
+  end
+
+  @doc """
+  Stops a collector and detaches its handler.
+
+  Call this to clean up if you don't plan to await the event.
+  """
+  @spec stop_collector(reference()) :: :ok
+  def stop_collector(ref) when is_reference(ref) do
+    detach_collector_handler(ref)
+  end
+
+  @doc """
+  Stops all collectors (detaches all TelemetrySync handlers).
+
+  This is useful for test cleanup to prevent handler pollution between tests.
+  Call this in on_exit callbacks or at the end of tests that create many collectors.
+  """
+  @spec stop_all_collectors() :: :ok
+  def stop_all_collectors do
+    handlers = :telemetry.list_handlers([])
+
+    Enum.each(handlers, fn handler ->
+      case handler.id do
+        {__MODULE__, _ref, _unique_int} ->
+          :telemetry.detach(handler.id)
+
+        _ ->
+          :ok
+      end
+    end)
+
+    :ok
+  end
+
+  # Helper to detach handler by finding it via the ref
+  defp detach_collector_handler(ref) do
+    # Find handler matching our ref
+    handlers = :telemetry.list_handlers([])
+
+    matching_handler =
+      Enum.find(handlers, fn handler ->
+        case handler.id do
+          {__MODULE__, ^ref, _unique_int} -> true
+          _ -> false
+        end
+      end)
+
+    case matching_handler do
+      %{id: handler_id} -> :telemetry.detach(handler_id)
+      nil -> :ok
+    end
+  end
+
+  @doc """
   Waits for a specific telemetry event with optional metadata matching.
+
+  WARNING: This function attaches the handler AFTER being called, which creates
+  a race condition for fast-executing code (<10ms). For events that fire quickly,
+  use `start_collector/2` + `await_event/2` instead.
 
   ## Options
 
@@ -198,6 +355,31 @@ defmodule Lasso.Test.TelemetrySync do
            [:lasso, :circuit_breaker, :half_open],
            timeout: timeout,
            match: %{provider_id: provider_id}
+         ) do
+      {:ok, _measurements, metadata} -> {:ok, metadata}
+      {:error, :timeout} -> {:error, :timeout}
+    end
+  end
+
+  @doc """
+  Waits for an upstream subscription to be established.
+
+  This waits for [:lasso, :subs, :upstream, :subscribe] which is emitted when
+  UpstreamSubscriptionPool successfully subscribes to a provider.
+
+  ## Example
+
+      {:ok, sub_id} = subscribe_client(chain, self(), {:newHeads})
+      {:ok, meta} = wait_for_subscription_established(chain, {:newHeads})
+      assert meta.provider_id != nil
+  """
+  @spec wait_for_subscription_established(String.t(), tuple(), non_neg_integer()) ::
+          {:ok, map()} | {:error, :timeout}
+  def wait_for_subscription_established(chain, key, timeout \\ @default_timeout) do
+    case wait_for_event(
+           [:lasso, :subs, :upstream, :subscribe],
+           timeout: timeout,
+           match: %{chain: chain, key: key}
          ) do
       {:ok, _measurements, metadata} -> {:ok, metadata}
       {:error, :timeout} -> {:error, :timeout}

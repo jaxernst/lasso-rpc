@@ -24,9 +24,12 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   @doc """
   request params limits validated with an empircal test on 10/07/2025:
   http limit is 50, ws limit is 30
+
+  Update 10/08/2025:
+  This seems to be a dynamic limit that changes, so default to more conservative values.
   """
-  @max_addresses_http 49
-  @max_addresses_ws 29
+  @max_addresses_http 30
+  @max_addresses_ws 20
   @max_block_range 10_000
 
   # Capability Validation

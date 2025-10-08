@@ -13,6 +13,58 @@ defmodule Lasso.RPC.WSConnection do
   - Fault isolation (one connection failure doesn't affect others)
   - Independent reconnection strategies
   - Process supervision and monitoring
+
+  ## Telemetry Events
+
+  This module emits comprehensive telemetry events for observability:
+
+  ### Connection Lifecycle
+
+  * `[:lasso, :websocket, :connected]` - Connection established successfully
+    * Measurements: `%{}`
+    * Metadata: `%{provider_id, chain, reconnect_attempt}`
+
+  * `[:lasso, :websocket, :disconnected]` - Connection lost or closed
+    * Measurements: `%{}`
+    * Metadata: `%{provider_id, chain, reason, unexpected, pending_request_count}`
+
+  * `[:lasso, :websocket, :connection_failed]` - Connection attempt failed
+    * Measurements: `%{}`
+    * Metadata: `%{provider_id, chain, error_code, error_message, retriable, will_reconnect}`
+
+  ### Reconnection Logic
+
+  * `[:lasso, :websocket, :reconnect_scheduled]` - Reconnection scheduled
+    * Measurements: `%{delay_ms, jitter_ms}`
+    * Metadata: `%{provider_id, attempt, max_attempts}`
+
+  * `[:lasso, :websocket, :reconnect_exhausted]` - Max reconnection attempts reached
+    * Measurements: `%{}`
+    * Metadata: `%{provider_id, attempts, max_attempts}`
+
+  ### Request Lifecycle
+
+  * `[:lasso, :websocket, :request, :sent]` - Request sent to WebSocket
+    * Measurements: `%{}`
+    * Metadata: `%{provider_id, method, request_id, timeout_ms}`
+
+  * `[:lasso, :websocket, :request, :completed]` - Request received response
+    * Measurements: `%{duration_ms}`
+    * Metadata: `%{provider_id, method, request_id, status}`
+
+  * `[:lasso, :websocket, :request, :timeout]` - Request timed out
+    * Measurements: `%{timeout_ms}`
+    * Metadata: `%{provider_id, method, request_id}`
+
+  ### Heartbeat
+
+  * `[:lasso, :websocket, :heartbeat, :sent]` - Heartbeat ping sent
+    * Measurements: `%{}`
+    * Metadata: `%{provider_id}`
+
+  * `[:lasso, :websocket, :heartbeat, :failed]` - Heartbeat ping failed
+    * Measurements: `%{}`
+    * Metadata: `%{provider_id, reason}`
   """
 
   use GenServer, restart: :permanent
@@ -112,6 +164,20 @@ defmodule Lasso.RPC.WSConnection do
           "Failed to connect to #{state.endpoint.name} (WebSocket): #{jerr.message} (code=#{inspect(jerr.code)})"
         )
 
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :connection_failed],
+          %{},
+          %{
+            provider_id: state.endpoint.id,
+            chain: state.chain_name,
+            error_code: jerr.code,
+            error_message: jerr.message,
+            retriable: jerr.retriable?,
+            will_reconnect: jerr.retriable?
+          }
+        )
+
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
           "ws:conn:#{state.chain_name}",
@@ -130,11 +196,26 @@ defmodule Lasso.RPC.WSConnection do
       {:error, :circuit_open} ->
         Logger.debug("Circuit breaker open for #{state.endpoint.id}, skipping connect attempt")
 
+        jerr = JError.new(-32000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)
+
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :connection_failed],
+          %{},
+          %{
+            provider_id: state.endpoint.id,
+            chain: state.chain_name,
+            error_code: jerr.code,
+            error_message: jerr.message,
+            retriable: true,
+            will_reconnect: true
+          }
+        )
+
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
           "ws:conn:#{state.chain_name}",
-          {:connection_error, state.endpoint.id,
-           JError.new(-32000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)}
+          {:connection_error, state.endpoint.id, jerr}
         )
 
         # Try again later (uses existing backoff)
@@ -145,6 +226,20 @@ defmodule Lasso.RPC.WSConnection do
         Logger.debug("Circuit breaker call error: #{inspect(other)}")
 
         jerr = JError.from(other, provider_id: state.endpoint.id)
+
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :connection_failed],
+          %{},
+          %{
+            provider_id: state.endpoint.id,
+            chain: state.chain_name,
+            error_code: jerr.code,
+            error_message: jerr.message,
+            retriable: jerr.retriable?,
+            will_reconnect: jerr.retriable?
+          }
+        )
 
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
@@ -201,13 +296,26 @@ defmodule Lasso.RPC.WSConnection do
 
     case ws_client().send_frame(state.connection, {:text, Jason.encode!(message)}) do
       :ok ->
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :request, :sent],
+          %{},
+          %{
+            provider_id: state.endpoint.id,
+            method: method,
+            request_id: request_id,
+            timeout_ms: timeout_ms
+          }
+        )
+
         timer = Process.send_after(self(), {:request_timeout, request_id}, timeout_ms)
 
         pending =
           Map.put(state.pending_requests, request_id, %{
             from: from,
             timer: timer,
-            sent_at: sent_at
+            sent_at: sent_at,
+            method: method
           })
 
         {:noreply, %{state | pending_requests: pending}}
@@ -250,6 +358,19 @@ defmodule Lasso.RPC.WSConnection do
     # Report successful connection to circuit breaker
     CircuitBreaker.record_success({state.endpoint.id, :ws})
 
+    # Emit telemetry event BEFORE resetting reconnect_attempts
+    # This ensures the event reflects the actual attempt number that succeeded
+    :telemetry.execute(
+      [:lasso, :websocket, :connected],
+      %{},
+      %{
+        provider_id: state.endpoint.id,
+        chain: state.chain_name,
+        reconnect_attempt: state.reconnect_attempts
+      }
+    )
+
+    # Now reset the state for next potential disconnect/reconnect cycle
     state = %{state | connected: true, reconnect_attempts: 0}
 
     Phoenix.PubSub.broadcast(
@@ -271,8 +392,10 @@ defmodule Lasso.RPC.WSConnection do
             {:ok, new_state} = handle_websocket_message(decoded, state)
             {:noreply, new_state}
 
-          {%{from: from, timer: timer, sent_at: _sent_at}, new_pending} ->
+          {%{from: from, timer: timer, sent_at: sent_at, method: method}, new_pending} ->
             Process.cancel_timer(timer)
+
+            duration_ms = div(System.monotonic_time(:microsecond) - sent_at, 1000)
 
             reply =
               case resp do
@@ -286,6 +409,22 @@ defmodule Lasso.RPC.WSConnection do
                   {:error,
                    JError.new(-32700, "Invalid JSON-RPC response", provider_id: state.endpoint.id)}
               end
+
+            status = if match?({:ok, _}, reply), do: :success, else: :error
+
+            # Emit telemetry event
+            :telemetry.execute(
+              [:lasso, :websocket, :request, :completed],
+              %{
+                duration_ms: duration_ms
+              },
+              %{
+                provider_id: state.endpoint.id,
+                method: method,
+                request_id: id,
+                status: status
+              }
+            )
 
             GenServer.reply(from, reply)
 
@@ -336,7 +475,23 @@ defmodule Lasso.RPC.WSConnection do
 
     # Clean up any pending requests
     state = cleanup_pending_requests(state, jerr)
+
+    pending_count = map_size(state.pending_requests)
+
     state = %{state | connected: false, connection: nil}
+
+    # Emit telemetry event
+    :telemetry.execute(
+      [:lasso, :websocket, :disconnected],
+      %{},
+      %{
+        provider_id: state.endpoint.id,
+        chain: state.chain_name,
+        reason: reason,
+        unexpected: code != 1000,
+        pending_request_count: pending_count
+      }
+    )
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
@@ -367,7 +522,23 @@ defmodule Lasso.RPC.WSConnection do
 
     # Clean up any pending requests
     state = cleanup_pending_requests(state, jerr)
+
+    pending_count = map_size(state.pending_requests)
+
     state = %{state | connected: false, connection: nil}
+
+    # Emit telemetry event
+    :telemetry.execute(
+      [:lasso, :websocket, :disconnected],
+      %{},
+      %{
+        provider_id: state.endpoint.id,
+        chain: state.chain_name,
+        reason: reason,
+        unexpected: true,
+        pending_request_count: pending_count
+      }
+    )
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
@@ -383,6 +554,15 @@ defmodule Lasso.RPC.WSConnection do
     if state.connected do
       case ws_client().send_frame(state.connection, :ping) do
         :ok ->
+          # Emit telemetry event
+          :telemetry.execute(
+            [:lasso, :websocket, :heartbeat, :sent],
+            %{},
+            %{
+              provider_id: state.endpoint.id
+            }
+          )
+
           state = schedule_heartbeat(state)
           {:noreply, state}
 
@@ -391,6 +571,16 @@ defmodule Lasso.RPC.WSConnection do
 
           Logger.debug(
             "[Provider→] Heartbeat ping failed for upstream #{state.endpoint.id}: #{inspect(jerr)}"
+          )
+
+          # Emit telemetry event
+          :telemetry.execute(
+            [:lasso, :websocket, :heartbeat, :failed],
+            %{},
+            %{
+              provider_id: state.endpoint.id,
+              reason: reason
+            }
           )
 
           state = schedule_heartbeat(state)
@@ -406,7 +596,22 @@ defmodule Lasso.RPC.WSConnection do
       {nil, _} ->
         {:noreply, state}
 
-      {%{from: from}, new_pending} ->
+      {%{from: from, sent_at: sent_at, method: method}, new_pending} ->
+        timeout_ms = div(System.monotonic_time(:microsecond) - sent_at, 1000)
+
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :request, :timeout],
+          %{
+            timeout_ms: timeout_ms
+          },
+          %{
+            provider_id: state.endpoint.id,
+            method: method,
+            request_id: request_id
+          }
+        )
+
         GenServer.reply(
           from,
           {:error,
@@ -499,10 +704,15 @@ defmodule Lasso.RPC.WSConnection do
 
   defp connect_to_websocket(endpoint, parent_pid) do
     # Start a separate WebSocket handler process
+    # Pass connection_id in opts for test-mode failure injection (MockWSClient)
+    # WebSockex ignores unknown opts, so this is safe for production
+    opts = [connection_id: endpoint.id]
+
     case ws_client().start_link(
            endpoint.ws_url,
            Lasso.RPC.WSHandler,
-           %{endpoint: endpoint, parent: parent_pid}
+           %{endpoint: endpoint, parent: parent_pid},
+           opts
          ) do
       {:ok, pid} ->
         {:ok, pid}
@@ -549,6 +759,20 @@ defmodule Lasso.RPC.WSConnection do
           "Scheduling reconnect for #{state.endpoint.name} (attempt #{state.reconnect_attempts + 1}) in #{delay + jitter}ms"
         )
 
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :reconnect_scheduled],
+          %{
+            delay_ms: delay + jitter,
+            jitter_ms: jitter
+          },
+          %{
+            provider_id: state.endpoint.id,
+            attempt: state.reconnect_attempts + 1,
+            max_attempts: :infinity
+          }
+        )
+
         ref = Process.send_after(self(), {:reconnect}, delay + jitter)
         %{state | reconnect_attempts: state.reconnect_attempts + 1, reconnect_ref: ref}
 
@@ -567,11 +791,37 @@ defmodule Lasso.RPC.WSConnection do
           "Scheduling reconnect for #{state.endpoint.name} (attempt #{state.reconnect_attempts + 1}/#{max_attempts}) in #{delay + jitter}ms"
         )
 
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :reconnect_scheduled],
+          %{
+            delay_ms: delay + jitter,
+            jitter_ms: jitter
+          },
+          %{
+            provider_id: state.endpoint.id,
+            attempt: state.reconnect_attempts + 1,
+            max_attempts: max_attempts
+          }
+        )
+
         ref = Process.send_after(self(), {:reconnect}, delay + jitter)
         %{state | reconnect_attempts: state.reconnect_attempts + 1, reconnect_ref: ref}
 
       true ->
         Logger.error("Max reconnection attempts reached for #{state.endpoint.name}")
+
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :reconnect_exhausted],
+          %{},
+          %{
+            provider_id: state.endpoint.id,
+            attempts: state.reconnect_attempts,
+            max_attempts: max_attempts
+          }
+        )
+
         state
     end
   end
@@ -582,9 +832,9 @@ defmodule Lasso.RPC.WSConnection do
         "Cleaning up #{map_size(state.pending_requests)} pending requests due to disconnect"
       )
 
-      Enum.each(state.pending_requests, fn {_id, %{from: from, timer: timer}} ->
-        Process.cancel_timer(timer)
-        GenServer.reply(from, {:error, error})
+      Enum.each(state.pending_requests, fn {_id, req_info} ->
+        Process.cancel_timer(req_info.timer)
+        GenServer.reply(req_info.from, {:error, error})
       end)
 
       %{state | pending_requests: %{}}

@@ -20,6 +20,7 @@ Application.put_env(:lasso, :ws_client_module, TestSupport.MockWSClient)
 Code.require_file("test/support/mock_http_client.ex")
 Code.require_file("test/support/mock_ws_client.ex")
 Code.require_file("test/support/failing_ws_client.ex")
+Code.require_file("test/support/failure_injector.ex")
 
 # Load new test infrastructure
 Code.require_file("test/support/telemetry_sync.ex")

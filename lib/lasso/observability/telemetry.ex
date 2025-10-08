@@ -227,8 +227,11 @@ defmodule Lasso.Telemetry.Handlers do
   end
 
   def handle_event([:lasso, :websocket, event], _measurements, metadata, _config) do
+    # Support both connection_id (legacy) and provider_id (new)
+    id = Map.get(metadata, :provider_id) || Map.get(metadata, :connection_id)
+
     Logger.info("WebSocket #{event}", %{
-      connection_id: metadata.connection_id
+      provider_id: id
     })
   end
 
