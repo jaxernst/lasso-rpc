@@ -25,7 +25,10 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
 
   alias Lasso.RPC.Providers.Generic
 
-  @max_addresses 3
+  # validated with an empircal test on 10/07/2025:
+  # http limit is 50, ws limit is 25
+  @max_addresses_http 49
+  @max_addresses_ws 24
   @max_block_range 2000
   @archival_threshold 10_000
 
@@ -35,8 +38,8 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   def supports_method?(_method, _t, _c), do: :ok
 
   @impl true
-  def validate_params("eth_getLogs", params, _t, _c) do
-    with :ok <- validate_address_count(params),
+  def validate_params("eth_getLogs", params, transport, _c) do
+    with :ok <- validate_address_count(params, transport),
          :ok <- validate_block_range(params),
          :ok <- validate_archival(params) do
       :ok
@@ -56,19 +59,25 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
 
   # Private validation helpers
 
-  defp validate_address_count([%{"address" => addrs}]) when is_list(addrs) do
+  defp validate_address_count([%{"address" => addrs}], transport) when is_list(addrs) do
+    max_addresses = get_max_addresses(transport)
+
     # Early-exit counting for performance
     count =
       Enum.reduce_while(addrs, 0, fn _, acc ->
-        if acc + 1 > @max_addresses, do: {:halt, acc + 1}, else: {:cont, acc + 1}
+        if acc + 1 > max_addresses, do: {:halt, acc + 1}, else: {:cont, acc + 1}
       end)
 
-    if count <= @max_addresses,
+    if count <= max_addresses,
       do: :ok,
-      else: {:error, {:param_limit, "max #{@max_addresses} addresses (got #{count})"}}
+      else: {:error, {:param_limit, "max #{max_addresses} addresses (got #{count})"}}
   end
 
-  defp validate_address_count(_), do: :ok
+  defp validate_address_count(_, _), do: :ok
+
+  defp get_max_addresses(:ws), do: @max_addresses_ws
+  defp get_max_addresses(:http), do: @max_addresses_http
+  defp get_max_addresses(_), do: @max_addresses_http
 
   defp validate_block_range([%{"fromBlock" => from, "toBlock" => to}]) do
     with {:ok, range} <- compute_block_range(from, to),
@@ -82,12 +91,15 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   defp validate_block_range(_), do: :ok
 
   defp validate_archival([%{"fromBlock" => from}]) do
-    with {:ok, block_num} <- parse_block_number(from),
-         true <- estimate_current_block() - block_num > @archival_threshold do
-      {:error, {:requires_archival, "blocks older than #{@archival_threshold} not supported"}}
-    else
-      _ -> :ok
-    end
+    :ok
+
+    # Example
+    # with {:ok, block_num} <- parse_block_number(from),
+    #      true <- estimate_current_block() - block_num > @archival_threshold do
+    #   {:error, {:requires_archival, "blocks older than #{@archival_threshold} not supported"}}
+    # else
+    #   _ -> :ok
+    # end
   end
 
   defp validate_archival(_), do: :ok
@@ -145,9 +157,7 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
       type: :public,
       tier: :free,
       known_limitations: [
-        "eth_getLogs: max #{@max_addresses} addresses",
-        "eth_getLogs: max #{@max_block_range} block range",
-        "No archival data (>#{@archival_threshold} blocks old)"
+        "eth_getLogs: max #{@max_addresses_http} addresses (HTTP), #{@max_addresses_ws} addresses (WS)"
       ],
       sources: ["Production error logs", "Community documentation"],
       last_verified: ~D[2025-01-05]
