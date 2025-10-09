@@ -35,3 +35,9 @@ lasso-*.tar
 /priv/config_backups/
 
 /priv/battle_results/
+
+# Deployment environment files
+.env.deploy
+.env
+deployment/.env.production
+deployment/.env.staging

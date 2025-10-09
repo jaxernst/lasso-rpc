@@ -15,8 +15,13 @@ defmodule Lasso.MixProject do
 
   # Run "mix help compile.app" to learn about applications.
   def application do
+    extra_apps = [:logger, :runtime_tools]
+
+    extra_apps =
+      if Mix.env() in [:dev, :test], do: extra_apps ++ [:wx, :observer], else: extra_apps
+
     [
-      extra_applications: [:logger, :wx, :observer, :runtime_tools],
+      extra_applications: extra_apps,
       mod: {Lasso.Application, []}
     ]
   end

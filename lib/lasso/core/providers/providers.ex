@@ -228,8 +228,8 @@ defmodule Lasso.Providers do
               name: Map.get(provider, :name, provider.id),
               status: provider.status,
               availability: provider.availability,
-              has_http: is_binary(get_in(provider, [:config, :url])),
-              has_ws: is_binary(get_in(provider, [:config, :ws_url]))
+              has_http: is_binary(provider.config.url),
+              has_ws: is_binary(provider.config.ws_url)
             }
           end)
 

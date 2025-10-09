@@ -11,8 +11,8 @@ defmodule Lasso.Config.ChainConfigManager do
   alias Lasso.Config.{ChainConfig, ConfigStore}
   alias Phoenix.PubSub
 
-  @config_file "config/chains.yml"
-  @backup_dir "priv/config_backups"
+  @config_file System.get_env("LASSO_CHAINS_PATH") || "config/chains.yml"
+  @backup_dir System.get_env("LASSO_BACKUP_DIR") || "priv/config_backups"
   @pubsub Lasso.PubSub
 
   @doc """
