@@ -179,7 +179,7 @@ defmodule Lasso.RPC.Selection do
       case method do
         "eth_subscribe" -> :ws
         "eth_unsubscribe" -> :ws
-        _ -> :both
+        _ -> nil
       end
 
     pool_filters = %{protocol: pool_protocol, exclude: exclude}
