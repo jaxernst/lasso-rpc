@@ -118,7 +118,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       # Simulate rapid rate limit failures
       for _i <- 1..3 do
         result =
-          CircuitBreaker.call(provider_id, fn ->
+          CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
             {:error, JError.new(429, "Too Many Requests", provider_id: provider_id)}
           end)
 
@@ -126,12 +126,12 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       end
 
       # Circuit breaker should now be open
-      state = CircuitBreaker.get_state(provider_id)
+      state = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state.state == :open
       assert state.failure_count >= 3
 
       # Subsequent requests should be blocked immediately
-      result = CircuitBreaker.call(provider_id, fn -> {:ok, "success"} end)
+      result = CircuitBreaker.call({"test_chain", provider_id, :http}, fn -> {:ok, "success"} end)
       assert result == {:error, :circuit_open}
     end
 
@@ -145,32 +145,32 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       # First rate limit error
       {:error, _} =
-        CircuitBreaker.call(provider_id, fn ->
+        CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
           {:error, JError.new(-32005, "Rate limit exceeded")}
         end)
 
-      state1 = CircuitBreaker.get_state(provider_id)
+      state1 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state1.failure_count == 1
       assert state1.state == :closed
 
       # Second rate limit error
       {:error, _} =
-        CircuitBreaker.call(provider_id, fn ->
+        CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
           {:error, JError.new(429, "Too Many Requests")}
         end)
 
-      state2 = CircuitBreaker.get_state(provider_id)
+      state2 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state2.failure_count == 2
       assert state2.state == :closed
 
       # Continue until circuit opens
       for _i <- 1..3 do
-        CircuitBreaker.call(provider_id, fn ->
+        CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
           {:error, JError.new(429, "Rate limited")}
         end)
       end
 
-      final_state = CircuitBreaker.get_state(provider_id)
+      final_state = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert final_state.state == :open
     end
   end
@@ -210,7 +210,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       # Trigger rate limit failures
       for _i <- 1..3 do
-        CircuitBreaker.call(provider_id, fn ->
+        CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
           {:error, JError.new(429, "Too Many Requests", provider_id: provider_id)}
         end)
 
@@ -218,7 +218,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       end
 
       # Verify circuit is open
-      state = CircuitBreaker.get_state(provider_id)
+      state = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state.state == :open
 
       # Mark provider as rate_limited in the pool
@@ -285,7 +285,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       tasks =
         for _i <- 1..10 do
           Task.async(fn ->
-            CircuitBreaker.call(primary_id, fn ->
+            CircuitBreaker.call({"test_chain", primary_id, :http}, fn ->
               {:error, JError.new(429, "Too Many Requests")}
             end)
           end)
@@ -297,7 +297,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert Enum.all?(results, fn result -> match?({:error, _}, result) end)
 
       # Circuit should be open after concurrent failures
-      state = CircuitBreaker.get_state(primary_id)
+      state = CircuitBreaker.get_state({"test_chain", primary_id, :http})
       assert state.state == :open
 
       # Mark as rate limited
@@ -330,27 +330,27 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       # Trigger rate limit failures to open circuit
       for _i <- 1..2 do
-        CircuitBreaker.call(provider_id, fn ->
+        CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
           {:error, JError.new(429, "Rate limited")}
         end)
       end
 
-      assert CircuitBreaker.get_state(provider_id).state == :open
+      assert CircuitBreaker.get_state({"test_chain", provider_id, :http}).state == :open
 
       # Wait for recovery timeout
       Process.sleep(150)
 
       # Next request should attempt recovery (half-open state)
-      result = CircuitBreaker.call(provider_id, fn -> {:ok, "success"} end)
+      result = CircuitBreaker.call({"test_chain", provider_id, :http}, fn -> {:ok, "success"} end)
       assert result == {:ok, "success"}
 
-      state_after_recovery = CircuitBreaker.get_state(provider_id)
+      state_after_recovery = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state_after_recovery.state in [:half_open, :closed]
 
       # One more success should close the circuit
-      CircuitBreaker.call(provider_id, fn -> {:ok, "success"} end)
+      CircuitBreaker.call({"test_chain", provider_id, :http}, fn -> {:ok, "success"} end)
 
-      final_state = CircuitBreaker.get_state(provider_id)
+      final_state = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert final_state.state == :closed
       assert final_state.failure_count == 0
     end
@@ -586,18 +586,18 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
         )
 
       # Rate limit errors increment failure count
-      CircuitBreaker.call(provider_id, fn -> {:error, JError.new(429, "Rate limited")} end)
-      state1 = CircuitBreaker.get_state(provider_id)
+      CircuitBreaker.call({"test_chain", provider_id, :http}, fn -> {:error, JError.new(429, "Rate limited")} end)
+      state1 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state1.failure_count == 1
 
       # User errors do NOT increment failure count
-      CircuitBreaker.call(provider_id, fn -> {:error, JError.new(-32602, "Invalid params")} end)
-      state2 = CircuitBreaker.get_state(provider_id)
+      CircuitBreaker.call({"test_chain", provider_id, :http}, fn -> {:error, JError.new(-32602, "Invalid params")} end)
+      state2 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state2.failure_count == 1  # Still 1, user error didn't increment
 
       # Another rate limit error increments
-      CircuitBreaker.call(provider_id, fn -> {:error, JError.new(-32005, "Rate limited")} end)
-      state3 = CircuitBreaker.get_state(provider_id)
+      CircuitBreaker.call({"test_chain", provider_id, :http}, fn -> {:error, JError.new(-32005, "Rate limited")} end)
+      state3 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state3.failure_count == 2
     end
   end
@@ -615,7 +615,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       tasks =
         for _i <- 1..100 do
           Task.async(fn ->
-            CircuitBreaker.call(provider_id, fn ->
+            CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
               {:error, JError.new(429, "Rate limited")}
             end)
           end)
@@ -627,7 +627,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert Enum.all?(results, fn result -> match?({:error, _}, result) end)
 
       # Circuit breaker should be open
-      final_state = CircuitBreaker.get_state(provider_id)
+      final_state = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert final_state.state == :open
       # Failure count should not exceed the number of actual requests
       assert final_state.failure_count <= 100

@@ -35,6 +35,9 @@ defmodule Lasso.RPC.ProviderPool do
       # Health status of the provider:
       # :healthy | :unhealthy | :connecting | :disconnected | :rate_limited | :misconfigured | :degraded
       :status,
+      # Transport-specific status (if configured)
+      :http_status,
+      :ws_status,
       # Policy-derived availability for routing: :up | :limited | :down | :misconfigured
       :availability,
       :last_health_check,
@@ -44,7 +47,10 @@ defmodule Lasso.RPC.ProviderPool do
       # Cooldown fields for rate limit handling
       :cooldown_until,
       # Centralized health policy state (availability + signals)
-      :policy
+      :policy,
+      # Transport-specific health policies
+      :http_policy,
+      :ws_policy
     ]
   end
 
@@ -124,18 +130,30 @@ defmodule Lasso.RPC.ProviderPool do
 
   @doc """
   Reports a successful operation (no latency needed; performance is tracked elsewhere).
+  If transport is provided, updates the corresponding transport policy/status.
   """
   @spec report_success(chain_name, provider_id) :: :ok
   def report_success(chain_name, provider_id) do
     GenServer.cast(via_name(chain_name), {:report_success, provider_id})
   end
 
+  @spec report_success(chain_name, provider_id, :http | :ws | nil) :: :ok
+  def report_success(chain_name, provider_id, transport) when transport in [:http, :ws, nil] do
+    GenServer.cast(via_name(chain_name), {:report_success, provider_id, transport})
+  end
+
   @doc """
-  Reports a failure for error rate tracking.
+  Reports a failure for error rate tracking. If transport is provided, updates that transport.
   """
   @spec report_failure(chain_name, provider_id, term()) :: :ok
   def report_failure(chain_name, provider_id, error) do
     GenServer.cast(via_name(chain_name), {:report_failure, provider_id, error})
+  end
+
+  @spec report_failure(chain_name, provider_id, term(), :http | :ws | nil) :: :ok
+  def report_failure(chain_name, provider_id, error, transport)
+      when transport in [:http, :ws, nil] do
+    GenServer.cast(via_name(chain_name), {:report_failure, provider_id, error, transport})
   end
 
   @doc """
@@ -184,12 +202,18 @@ defmodule Lasso.RPC.ProviderPool do
             config: provider_config,
             pid: nil,
             status: :connecting,
+            http_status:
+              if(is_binary(Map.get(provider_config, :url)), do: :connecting, else: nil),
+            ws_status:
+              if(is_binary(Map.get(provider_config, :ws_url)), do: :connecting, else: nil),
             last_health_check: System.system_time(:millisecond),
             consecutive_failures: 0,
             consecutive_successes: 0,
             last_error: nil,
             cooldown_until: nil,
-            policy: Lasso.RPC.HealthPolicy.new()
+            policy: Lasso.RPC.HealthPolicy.new(),
+            http_policy: Lasso.RPC.HealthPolicy.new(),
+            ws_policy: Lasso.RPC.HealthPolicy.new()
           }
 
         %ProviderState{} = prev ->
@@ -213,7 +237,11 @@ defmodule Lasso.RPC.ProviderPool do
   def handle_call({:attach_ws_connection, provider_id, pid}, _from, state) when is_pid(pid) do
     case Map.get(state.providers, provider_id) do
       %ProviderState{} = prev ->
-        updated = %{prev | pid: pid, status: prev.status || :connecting}
+        updated =
+          prev
+          |> Map.put(:pid, pid)
+          |> Map.put(:ws_status, prev.ws_status || :connecting)
+          |> Map.put(:status, derive_aggregate_status(prev))
 
         new_state =
           state
@@ -243,6 +271,8 @@ defmodule Lasso.RPC.ProviderPool do
     providers =
       Enum.map(state.providers, fn {id, provider} ->
         circuit_state = Map.get(state.circuit_states, id, :closed)
+        http_cb_state = get_cb_state(state.circuit_states, id, :http)
+        ws_cb_state = get_cb_state(state.circuit_states, id, :ws)
 
         {cooldown_until, is_in_cooldown} =
           case Map.get(provider, :policy) do
@@ -260,13 +290,31 @@ defmodule Lasso.RPC.ProviderPool do
             _ -> Map.get(provider, :availability, :up)
           end
 
+        http_availability =
+          case Map.get(provider, :http_policy) do
+            %Lasso.RPC.HealthPolicy{} = pol -> Lasso.RPC.HealthPolicy.availability(pol)
+            _ -> if(is_binary(Map.get(provider.config, :url)), do: :up, else: :misconfigured)
+          end
+
+        ws_availability =
+          case Map.get(provider, :ws_policy) do
+            %Lasso.RPC.HealthPolicy{} = pol -> Lasso.RPC.HealthPolicy.availability(pol)
+            _ -> if(is_binary(Map.get(provider.config, :ws_url)), do: :up, else: :misconfigured)
+          end
+
         %{
           id: id,
           name: Map.get(provider.config, :name, id),
           config: provider.config,
           status: provider.status,
+          http_status: Map.get(provider, :http_status),
+          ws_status: Map.get(provider, :ws_status),
           availability: availability,
+          http_availability: http_availability,
+          ws_availability: ws_availability,
           circuit_state: circuit_state,
+          http_cb_state: http_cb_state,
+          ws_cb_state: ws_cb_state,
           consecutive_failures: provider.consecutive_failures,
           consecutive_successes: provider.consecutive_successes,
           last_health_check: provider.last_health_check,
@@ -344,6 +392,26 @@ defmodule Lasso.RPC.ProviderPool do
     {:noreply, new_state}
   end
 
+  @impl true
+  def handle_cast({:report_success, provider_id, :http}, state),
+    do: {:noreply, update_provider_success_http(state, provider_id)}
+
+  def handle_cast({:report_success, provider_id, :ws}, state),
+    do: {:noreply, update_provider_success_ws(state, provider_id)}
+
+  def handle_cast({:report_success, provider_id, nil}, state),
+    do: {:noreply, update_provider_success(state, provider_id)}
+
+  @impl true
+  def handle_cast({:report_failure, provider_id, error, :http}, state),
+    do: {:noreply, update_provider_failure_http(state, provider_id, error)}
+
+  def handle_cast({:report_failure, provider_id, error, :ws}, state),
+    do: {:noreply, update_provider_failure_ws(state, provider_id, error)}
+
+  def handle_cast({:report_failure, provider_id, error, nil}, state),
+    do: {:noreply, update_provider_failure(state, provider_id, error)}
+
   # Typed WS connection events
   @impl true
   def handle_info({:ws_connected, provider_id}, state) do
@@ -352,13 +420,13 @@ defmodule Lasso.RPC.ProviderPool do
         {:noreply, state}
 
       provider ->
-        updated = %{
+        updated =
           provider
-          | status: :healthy,
-            consecutive_successes: provider.consecutive_successes + 1,
-            consecutive_failures: 0,
-            last_health_check: System.system_time(:millisecond)
-        }
+          |> Map.put(:ws_status, :healthy)
+          |> Map.put(:status, derive_aggregate_status(provider))
+          |> Map.put(:consecutive_successes, provider.consecutive_successes + 1)
+          |> Map.put(:consecutive_failures, 0)
+          |> Map.put(:last_health_check, System.system_time(:millisecond))
 
         publish_provider_event(state.chain_name, provider_id, :ws_connected, %{})
         new_state = put_provider_and_refresh(state, provider_id, updated)
@@ -373,13 +441,13 @@ defmodule Lasso.RPC.ProviderPool do
         {:noreply, state}
 
       provider ->
-        updated = %{
+        updated =
           provider
-          | status: :disconnected,
-            consecutive_failures: provider.consecutive_failures + 1,
-            last_error: jerr,
-            last_health_check: System.system_time(:millisecond)
-        }
+          |> Map.put(:ws_status, :disconnected)
+          |> Map.put(:status, derive_aggregate_status(provider))
+          |> Map.put(:consecutive_failures, provider.consecutive_failures + 1)
+          |> Map.put(:last_error, jerr)
+          |> Map.put(:last_health_check, System.system_time(:millisecond))
 
         event_details = %{code: code, reason: jerr.message}
         publish_provider_event(state.chain_name, provider_id, :ws_closed, event_details)
@@ -396,13 +464,13 @@ defmodule Lasso.RPC.ProviderPool do
         {:noreply, state}
 
       provider ->
-        updated = %{
+        updated =
           provider
-          | status: :disconnected,
-            consecutive_failures: provider.consecutive_failures + 1,
-            last_error: jerr,
-            last_health_check: System.system_time(:millisecond)
-        }
+          |> Map.put(:ws_status, :disconnected)
+          |> Map.put(:status, derive_aggregate_status(provider))
+          |> Map.put(:consecutive_failures, provider.consecutive_failures + 1)
+          |> Map.put(:last_error, jerr)
+          |> Map.put(:last_health_check, System.system_time(:millisecond))
 
         event_details = %{reason: jerr.message}
         publish_provider_event(state.chain_name, provider_id, :ws_closed, event_details)
@@ -421,7 +489,8 @@ defmodule Lasso.RPC.ProviderPool do
 
   @impl true
   def handle_info(
-        {:circuit_breaker_event, %{chain: event_chain, provider_id: provider_id, from: from, to: to}},
+        {:circuit_breaker_event,
+         %{chain: event_chain, provider_id: provider_id, from: from, to: to}},
         state
       )
       when is_binary(provider_id) and from in [:closed, :open, :half_open] and
@@ -603,46 +672,41 @@ defmodule Lasso.RPC.ProviderPool do
 
   # Private functions
 
-  # NOTE: candidates_ready and supports_protocol? are used by list_candidates/2
-  # Keep them private helpers for candidate construction.
+  # NOTE: candidates_ready is used by list_candidates/2
+  # Keep it a private helper for candidate construction.
   defp candidates_ready(state, filters) do
     current_time = System.monotonic_time(:millisecond)
 
     state.active_providers
     |> Enum.map(&Map.get(state.providers, &1))
     |> Enum.filter(fn p ->
-      av =
-        Map.get(p, :availability) ||
-          case Map.get(p, :policy) do
-            %Lasso.RPC.HealthPolicy{} = pol -> Lasso.RPC.HealthPolicy.availability(pol)
-            _ -> :up
-          end
+      case Map.get(filters, :protocol) do
+        :http ->
+          transport_available?(p, :http, current_time)
 
-      av in [:up, :limited]
-    end)
-    |> Enum.filter(fn p ->
-      case Map.get(p, :policy) do
-        %Lasso.RPC.HealthPolicy{} = pol ->
-          not Lasso.RPC.HealthPolicy.cooldown?(pol, current_time)
+        :ws ->
+          transport_available?(p, :ws, current_time) and is_pid(ws_connection_pid(p.id))
+
+        :both ->
+          transport_available?(p, :http, current_time) and
+            transport_available?(p, :ws, current_time)
 
         _ ->
-          is_nil(p.cooldown_until) or p.cooldown_until <= current_time
+          transport_available?(p, :http, current_time) or
+            transport_available?(p, :ws, current_time)
       end
     end)
-    |> Enum.filter(&supports_protocol?(&1.config, Map.get(filters, :protocol)))
     |> Enum.filter(fn provider ->
       case Map.get(filters, :protocol) do
+        :http ->
+          get_cb_state(state.circuit_states, provider.id, :http) != :open
+
         :ws ->
-          provider.status == :healthy and is_pid(ws_connection_pid(provider.id))
+          get_cb_state(state.circuit_states, provider.id, :ws) != :open
 
         _ ->
-          true
-      end
-    end)
-    |> Enum.filter(fn provider ->
-      case Map.get(state.circuit_states, provider.id) do
-        :open -> false
-        _ -> true
+          not (get_cb_state(state.circuit_states, provider.id, :http) == :open and
+                 get_cb_state(state.circuit_states, provider.id, :ws) == :open)
       end
     end)
     |> Enum.filter(fn provider ->
@@ -658,12 +722,35 @@ defmodule Lasso.RPC.ProviderPool do
     GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, provider_id}}})
   end
 
-  defp supports_protocol?(_provider_config, nil), do: true
-  defp supports_protocol?(provider_config, :http), do: is_binary(Map.get(provider_config, :url))
-  defp supports_protocol?(provider_config, :ws), do: is_binary(Map.get(provider_config, :ws_url))
+  defp get_cb_state(circuit_states, provider_id, transport) do
+    case Map.get(circuit_states, provider_id) do
+      %{} = m -> Map.get(m, transport, :closed)
+      other when other in [:open, :closed, :half_open] -> other
+      _ -> :closed
+    end
+  end
 
-  defp supports_protocol?(provider_config, :both),
-    do: is_binary(Map.get(provider_config, :url)) and is_binary(Map.get(provider_config, :ws_url))
+  defp transport_available?(provider, :http, now_ms) do
+    has_http = is_binary(Map.get(provider.config, :url))
+
+    if not has_http,
+      do: false,
+      else: not in_cooldown?(Map.get(provider, :http_policy), provider, now_ms)
+  end
+
+  defp transport_available?(provider, :ws, now_ms) do
+    has_ws = is_binary(Map.get(provider.config, :ws_url))
+
+    if not has_ws,
+      do: false,
+      else: not in_cooldown?(Map.get(provider, :ws_policy), provider, now_ms)
+  end
+
+  defp in_cooldown?(%Lasso.RPC.HealthPolicy{} = pol, _provider, now_ms),
+    do: Lasso.RPC.HealthPolicy.cooldown?(pol, now_ms)
+
+  defp in_cooldown?(_other, provider, now_ms),
+    do: not (is_nil(provider.cooldown_until) or provider.cooldown_until <= now_ms)
 
   defp put_provider_and_refresh(state, provider_id, updated) do
     new_providers = Map.put(state.providers, provider_id, updated)
@@ -677,7 +764,7 @@ defmodule Lasso.RPC.ProviderPool do
     viable_providers =
       state.providers
       |> Enum.filter(fn {_id, provider} ->
-        provider.status in [:healthy, :connecting]
+        provider.status in [:healthy, :connecting, :degraded]
       end)
       |> Enum.map(fn {id, _provider} -> id end)
 
@@ -696,7 +783,7 @@ defmodule Lasso.RPC.ProviderPool do
         updated_provider =
           provider
           |> Map.merge(%{
-            status: :healthy,
+            status: derive_aggregate_status(provider) || :healthy,
             consecutive_successes: provider.consecutive_successes + 1,
             consecutive_failures: 0,
             last_health_check: System.system_time(:millisecond),
@@ -711,6 +798,129 @@ defmodule Lasso.RPC.ProviderPool do
         state
         |> put_provider_and_refresh(provider_id, updated_provider)
         |> Map.put(:stats, new_stats)
+    end
+  end
+
+  defp update_provider_success_http(state, provider_id) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        state
+
+      provider ->
+        pol = provider.http_policy || Lasso.RPC.HealthPolicy.new()
+        new_pol = Lasso.RPC.HealthPolicy.apply_event(pol, {:success, 0, nil})
+
+        updated =
+          provider
+          |> Map.put(:http_policy, new_pol)
+          |> Map.put(:http_status, :healthy)
+          |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
+          |> Map.put(:consecutive_successes, provider.consecutive_successes + 1)
+          |> Map.put(:consecutive_failures, 0)
+          |> Map.put(:last_health_check, System.system_time(:millisecond))
+
+        state
+        |> put_provider_and_refresh(provider_id, updated)
+    end
+  end
+
+  defp update_provider_success_ws(state, provider_id) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        state
+
+      provider ->
+        pol = provider.ws_policy || Lasso.RPC.HealthPolicy.new()
+        new_pol = Lasso.RPC.HealthPolicy.apply_event(pol, {:success, 0, nil})
+
+        updated =
+          provider
+          |> Map.put(:ws_policy, new_pol)
+          |> Map.put(:ws_status, :healthy)
+          |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
+          |> Map.put(:consecutive_successes, provider.consecutive_successes + 1)
+          |> Map.put(:consecutive_failures, 0)
+          |> Map.put(:last_health_check, System.system_time(:millisecond))
+
+        state
+        |> put_provider_and_refresh(provider_id, updated)
+    end
+  end
+
+  defp update_provider_failure_http(state, provider_id, error) do
+    update_provider_failure_with_transport(state, provider_id, error, :http)
+  end
+
+  defp update_provider_failure_ws(state, provider_id, error) do
+    update_provider_failure_with_transport(state, provider_id, error, :ws)
+  end
+
+  defp update_provider_failure_with_transport(state, provider_id, error, transport) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        state
+
+      provider ->
+        {jerr, context} = normalize_error_for_pool(error, provider_id)
+        now_ms = System.monotonic_time(:millisecond)
+
+        pol =
+          case transport do
+            :http -> provider.http_policy || Lasso.RPC.HealthPolicy.new()
+            :ws -> provider.ws_policy || Lasso.RPC.HealthPolicy.new()
+          end
+
+        new_pol = Lasso.RPC.HealthPolicy.apply_event(pol, {:failure, jerr, context, nil, now_ms})
+
+        cond do
+          jerr.category == :rate_limit ->
+            cooldown_until = new_pol.cooldown_until
+
+            updated =
+              provider
+              |> Map.put((transport == :http && :http_policy) || :ws_policy, new_pol)
+              |> Map.put((transport == :http && :http_status) || :ws_status, :rate_limited)
+              |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
+              |> Map.put(:last_error, jerr)
+              |> Map.put(:last_health_check, System.system_time(:millisecond))
+
+            publish_provider_event(state.chain_name, provider_id, :cooldown_start, %{
+              until: cooldown_until
+            })
+
+            state
+            |> put_provider_and_refresh(provider_id, updated)
+            |> increment_failure_stats()
+
+          jerr.category == :client_error and context == :live_traffic ->
+            updated =
+              provider
+              |> Map.put(:last_error, jerr)
+              |> Map.put(:last_health_check, System.system_time(:millisecond))
+
+            state |> put_provider_and_refresh(provider_id, updated) |> increment_failure_stats()
+
+          true ->
+            new_failures = provider.consecutive_failures + 1
+            failure_threshold = new_pol.config.failure_threshold
+
+            new_status =
+              HealthPolicy.decide_failure_status(jerr, context, new_failures, failure_threshold)
+
+            updated =
+              provider
+              |> Map.put((transport == :http && :http_policy) || :ws_policy, new_pol)
+              |> Map.put((transport == :http && :http_status) || :ws_status, new_status)
+              |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
+              |> Map.put(:consecutive_failures, new_failures)
+              |> Map.put(:consecutive_successes, 0)
+              |> Map.put(:last_error, jerr)
+              |> Map.put(:last_health_check, System.system_time(:millisecond))
+
+            state
+            |> put_provider_and_refresh(provider_id, updated)
+            |> increment_failure_stats()
+        end
     end
   end
 
@@ -878,6 +1088,26 @@ defmodule Lasso.RPC.ProviderPool do
     }
 
     %{state | stats: new_stats}
+  end
+
+  defp derive_aggregate_status(provider) do
+    http = Map.get(provider, :http_status)
+    ws = Map.get(provider, :ws_status)
+
+    cond do
+      http == :healthy or ws == :healthy ->
+        :healthy
+
+      http == :connecting or ws == :connecting ->
+        :connecting
+
+      (http in [:unhealthy, :disconnected, :rate_limited] or is_nil(http)) and
+          (ws in [:unhealthy, :disconnected, :rate_limited] or is_nil(ws)) ->
+        :unhealthy
+
+      true ->
+        :degraded
+    end
   end
 
   defp publish_provider_event(chain_name, provider_id, event, details) do

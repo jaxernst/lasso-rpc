@@ -28,7 +28,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
 
     # Start circuit breaker for the endpoint
     circuit_breaker_config = %{failure_threshold: 3, recovery_timeout: 200, success_threshold: 1}
-    {:ok, _} = CircuitBreaker.start_link({{endpoint.id, :ws}, circuit_breaker_config})
+    {:ok, _} = CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
 
     on_exit(fn ->
       # Clean up WebSocket connection

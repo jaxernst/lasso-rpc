@@ -20,15 +20,17 @@ defmodule Lasso.Application do
         {Phoenix.PubSub, name: Lasso.PubSub},
 
         # Start Finch HTTP client for RPC provider requests
-        # Use larger pool for battle tests (pool_size * count = total connections)
+        # High connection limit per pool to handle concurrent requests to same provider
+        # Each unique provider URL gets its own pool, so size must be high enough
+        # to handle burst traffic without queueing
         {Finch,
          name: Lasso.Finch,
          pools: %{
            default: [
-             size: 100,
-             # Max connections per pool
+             size: 500,
+             # Max connections per pool (per unique host)
              count: 10,
-             # Number of pools
+             # Number of pools for load distribution
              pool_max_idle_time: :timer.seconds(30),
              conn_opts: [timeout: 30_000]
            ]

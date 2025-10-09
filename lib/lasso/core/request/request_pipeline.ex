@@ -140,9 +140,13 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp record_rpc_failure(chain, provider_id, method, reason, duration_ms) do
+  defp record_rpc_failure(chain, provider_id, method, reason, duration_ms, transport \\ nil) do
     Metrics.record_failure(chain, provider_id, method, duration_ms)
-    ProviderPool.report_failure(chain, provider_id, reason)
+
+    case transport do
+      nil -> ProviderPool.report_failure(chain, provider_id, reason)
+      t -> ProviderPool.report_failure(chain, provider_id, reason, t)
+    end
   end
 
   # New channel-based implementation functions
@@ -220,10 +224,19 @@ defmodule Lasso.RPC.RequestPipeline do
 
         {:error, jerr}
 
-      {:error, reason} ->
+      {:error, reason, channel, _ctx1} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
         jerr = normalize_channel_error(reason, provider_id)
-        record_channel_failure_metrics(chain, provider_id, method, strategy, jerr, duration_ms)
+
+        record_channel_failure_metrics(
+          chain,
+          provider_id,
+          method,
+          strategy,
+          jerr,
+          duration_ms,
+          channel.transport
+        )
 
         should_failover =
           case jerr do
@@ -305,7 +318,7 @@ defmodule Lasso.RPC.RequestPipeline do
     channels =
       Selection.select_channels(chain, method,
         strategy: ctx.strategy,
-        transport: transport_override || :both,
+        transport: :http,
         limit: 10
       )
 
@@ -341,6 +354,26 @@ defmodule Lasso.RPC.RequestPipeline do
             )
 
             {:ok, result, updated_ctx}
+
+          {:error, reason, channel, _ctx1} ->
+            updated_ctx = RequestContext.mark_upstream_end(ctx)
+            final_ctx = RequestContext.record_error(updated_ctx, reason)
+            jerr = normalize_channel_error(reason, "no_channels")
+
+            # If we have upstream timing, report failure with transport
+            duration = final_ctx.upstream_latency_ms || 0
+
+            record_channel_failure_metrics(
+              chain,
+              channel.provider_id,
+              method,
+              ctx.strategy,
+              jerr,
+              duration,
+              channel.transport
+            )
+
+            {:error, jerr, final_ctx}
 
           {:error, reason} ->
             updated_ctx = RequestContext.mark_upstream_end(ctx)
@@ -412,8 +445,8 @@ defmodule Lasso.RPC.RequestPipeline do
 
     cb_id =
       case channel.transport do
-        :http -> {channel.provider_id, :http}
-        :ws -> {channel.provider_id, :ws}
+        :http -> {channel.chain, channel.provider_id, :http}
+        :ws -> {channel.chain, channel.provider_id, :ws}
       end
 
     # Update context with selected provider (CB state captured later to avoid blocking)
@@ -514,7 +547,7 @@ defmodule Lasso.RPC.RequestPipeline do
             remaining_channels: length(rest_channels)
           )
 
-          {:error, reason}
+          {:error, reason, channel, ctx}
         end
     end
   end
@@ -573,7 +606,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     # Record with transport dimension
     Metrics.record_success(chain, provider_id, method, duration_ms, transport: transport)
-    ProviderPool.report_success(chain, provider_id)
+    ProviderPool.report_success(chain, provider_id, transport)
 
     publish_channel_routing_decision(
       chain,
@@ -602,7 +635,7 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp record_channel_failure_metrics(chain, provider_id, method, strategy, reason, duration_ms) do
-    # For now, we don't know the transport that failed, so use legacy metrics
+    # We may not always know the transport here; leave as legacy for now
     record_rpc_failure(chain, provider_id, method, reason, duration_ms)
 
     :telemetry.execute(
@@ -614,6 +647,32 @@ defmodule Lasso.RPC.RequestPipeline do
         strategy: strategy,
         provider_id: provider_id,
         transport: :unknown,
+        result: :error,
+        failovers: 0
+      }
+    )
+  end
+
+  defp record_channel_failure_metrics(
+         chain,
+         provider_id,
+         method,
+         strategy,
+         reason,
+         duration_ms,
+         transport
+       ) do
+    record_rpc_failure(chain, provider_id, method, reason, duration_ms, transport)
+
+    :telemetry.execute(
+      [:lasso, :rpc, :request, :stop],
+      %{duration: duration_ms},
+      %{
+        chain: chain,
+        method: method,
+        strategy: strategy,
+        provider_id: provider_id,
+        transport: transport || :unknown,
         result: :error,
         failovers: 0
       }

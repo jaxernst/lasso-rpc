@@ -49,7 +49,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
   defp start_connection_with_cb(endpoint) do
     # Start circuit breaker for the endpoint
     circuit_breaker_config = %{failure_threshold: 5, recovery_timeout: 200, success_threshold: 1}
-    {:ok, _cb_pid} = CircuitBreaker.start_link({{endpoint.id, :ws}, circuit_breaker_config})
+    {:ok, _cb_pid} = CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
 
     # Start connection
     {:ok, pid} = WSConnection.start_link(endpoint)

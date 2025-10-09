@@ -229,7 +229,13 @@ defmodule Lasso.Providers do
               status: provider.status,
               availability: provider.availability,
               has_http: is_binary(provider.config.url),
-              has_ws: is_binary(provider.config.ws_url)
+              has_ws: is_binary(provider.config.ws_url),
+              http_status: Map.get(provider, :http_status),
+              ws_status: Map.get(provider, :ws_status),
+              http_availability: Map.get(provider, :http_availability),
+              ws_availability: Map.get(provider, :ws_availability),
+              http_cb_state: Map.get(provider, :http_cb_state),
+              ws_cb_state: Map.get(provider, :ws_cb_state)
             }
           end)
 

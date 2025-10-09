@@ -150,7 +150,7 @@ defmodule Lasso.RPC.WSConnection do
   def handle_continue(:connect, state) do
     ws_connection_pid = self()
 
-    case CircuitBreaker.call({state.endpoint.id, :ws}, fn ->
+    case CircuitBreaker.call({state.chain_name, state.endpoint.id, :ws}, fn ->
            connect_to_websocket(state.endpoint, ws_connection_pid)
          end) do
       {:ok, connection} ->
@@ -356,7 +356,7 @@ defmodule Lasso.RPC.WSConnection do
     )
 
     # Report successful connection to circuit breaker
-    CircuitBreaker.record_success({state.endpoint.id, :ws})
+    CircuitBreaker.record_success({state.chain_name, state.endpoint.id, :ws})
 
     # Emit telemetry event BEFORE resetting reconnect_attempts
     # This ensures the event reflects the actual attempt number that succeeded

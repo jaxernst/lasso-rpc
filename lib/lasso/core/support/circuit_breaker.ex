@@ -29,8 +29,8 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   @type chain :: String.t()
   @type provider_id :: String.t()
-  @type transport :: :http | :ws | :unknown
-  @type breaker_id :: {chain, provider_id, transport} | {provider_id, transport} | provider_id
+  @type transport :: :http | :ws
+  @type breaker_id :: {chain, provider_id, transport}
   @type breaker_state :: :closed | :open | :half_open
   @type state_t :: %__MODULE__{
           chain: chain,
@@ -81,30 +81,23 @@ defmodule Lasso.RPC.CircuitBreaker do
   @doc """
   Manually opens the circuit breaker.
   """
-  @spec open(provider_id) :: :ok
-  def open(provider_id) do
-    GenServer.cast(via_name(provider_id), :open)
+  @spec open(breaker_id) :: :ok
+  def open(breaker_id) do
+    GenServer.cast(via_name(breaker_id), :open)
   end
 
   @doc """
   Manually closes the circuit breaker.
   """
-  @spec close(provider_id) :: :ok
-  def close(provider_id) do
-    GenServer.cast(via_name(provider_id), :close)
+  @spec close(breaker_id) :: :ok
+  def close(breaker_id) do
+    GenServer.cast(via_name(breaker_id), :close)
   end
 
   # GenServer callbacks
 
   @impl true
-  def init({id, config}) do
-    {chain, provider_id, transport} =
-      case id do
-        {c, pid, t} -> {c, pid, t}
-        {pid, t} -> {nil, pid, t}
-        pid when is_binary(pid) -> {nil, pid, :unknown}
-      end
-
+  def init({{chain, provider_id, transport}, config}) do
     state = %__MODULE__{
       chain: chain,
       provider_id: provider_id,
@@ -405,14 +398,8 @@ defmodule Lasso.RPC.CircuitBreaker do
     end
   end
 
-  defp via_name(id) do
-    key =
-      case id do
-        {chain, provider_id, transport} -> "#{chain}:#{provider_id}:#{transport}"
-        {provider_id, transport} -> "#{provider_id}:#{transport}"
-        provider_id when is_binary(provider_id) -> provider_id
-      end
-
+  defp via_name({chain, provider_id, transport}) do
+    key = "#{chain}:#{provider_id}:#{transport}"
     {:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}
   end
 end
