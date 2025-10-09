@@ -291,7 +291,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   @impl true
   def handle_call({:list_candidates, filters}, _from, state) do
-    Logger.info(
+    Logger.debug(
       "ProviderPool.list_candidates for #{state.chain_name}: active_providers=#{inspect(state.active_providers)}, circuit_states=#{inspect(state.circuit_states)}, filters=#{inspect(filters)}"
     )
 
@@ -312,10 +312,6 @@ defmodule Lasso.RPC.ProviderPool do
           policy: Map.get(p, :policy)
         }
       end)
-
-    Logger.info(
-      "ProviderPool.list_candidates for #{state.chain_name}: returning #{length(candidates)} candidates: #{inspect(Enum.map(candidates, & &1.id))}"
-    )
 
     {:reply, candidates, state}
   end
@@ -705,6 +701,7 @@ defmodule Lasso.RPC.ProviderPool do
         state = maybe_emit_became_healthy(state, provider_id, provider)
 
         new_stats = %{state.stats | total_requests: state.stats.total_requests + 1}
+
         state
         |> put_provider_and_refresh(provider_id, updated_provider)
         |> Map.put(:stats, new_stats)
