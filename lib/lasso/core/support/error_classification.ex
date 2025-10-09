@@ -77,12 +77,15 @@ defmodule Lasso.RPC.ErrorClassification do
     "maximum number of addresses",
     "max addresses",
     "too many addresses",
+    "specify an address",
     # Block range constraints
     "max block range",
     "block range too large",
     "range too large",
     "exceeds maximum block range",
     "invalid block range",
+    "max is 1k blocks",
+    "range is too large",
     # Archival/historical data
     "archive node required",
     "requires archival",
@@ -101,7 +104,14 @@ defmodule Lasso.RPC.ErrorClassification do
     "query returned more than",
     "too many results",
     "exceeds limit",
-    "limit reached"
+    "limit reached",
+    # Provider-specific limitations
+    "dedicated full node",
+    "remove restrictions",
+    "order a dedicated",
+    "upgrade",
+    "premium plan",
+    "paid plan"
   ]
 
   # ===========================================================================
@@ -240,6 +250,8 @@ defmodule Lasso.RPC.ErrorClassification do
       # Non-retriable: client/user errors (bad input)
       code in [@invalid_request, @method_not_found, @invalid_params] -> false
       code in [@user_rejected, @unauthorized] -> false
+      # Retriable: capability violations (try different provider)
+      code == @publicnode_capability_violation -> true
       # Retriable: server/network/transient errors (check before 4xx range)
       code in [@parse_error, @internal_error, @rate_limit_error] -> true
       code in [@chain_disconnected, @network_error_code] -> true
