@@ -7,6 +7,7 @@ if [ ! -f /data/chains.yml ] && [ -f /app/config/chains.yml ]; then
   cp /app/config/chains.yml /data/chains.yml
 fi
 
-exec mix phx.server
+# Start the release
+exec /app/bin/lasso start
 
 

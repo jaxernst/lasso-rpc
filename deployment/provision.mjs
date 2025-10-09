@@ -93,10 +93,11 @@ async function ensureVolume(region, name) {
 function machineConfig(region, volumeName) {
   return {
     image: IMAGE,
+    platform: "linux/amd64",
     restart: { policy: "always" },
     auto_destroy: false,
     stop: { signal: "SIGINT", timeout: "30s" },
-    guest: { cpu_kind: "shared", cpus: 1, memory_mb: 512 },
+    guest: { cpu_kind: "shared", cpus: 1, memory_mb: 1024 },
     mounts: [{ volume: volumeName, path: "/data" }],
     env: { PORT: "4000", PHX_SERVER: "true" },
     services: [
