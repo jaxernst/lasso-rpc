@@ -24,21 +24,21 @@ defmodule Lasso.RPC.ProviderSupervisor do
   def init({chain_name, chain_config, provider}) do
     children =
       []
-      |> maybe_add_http_circuit(provider)
-      |> maybe_add_ws_circuit(provider)
+      |> maybe_add_http_circuit(chain_name, provider)
+      |> maybe_add_ws_circuit(chain_name, provider)
       |> maybe_add_ws_connection(chain_name, chain_config, provider)
 
     # Start breakers first, then WS (reverse stop order on shutdown)
     Supervisor.init(children, strategy: :rest_for_one)
   end
 
-  defp maybe_add_http_circuit(children, provider) do
+  defp maybe_add_http_circuit(children, chain_name, provider) do
     if is_binary(Map.get(provider, :url)) do
       circuit_config = %{failure_threshold: 5, recovery_timeout: 60_000, success_threshold: 2}
 
       child = %{
         id: {:circuit_http, provider.id},
-        start: {CircuitBreaker, :start_link, [{{provider.id, :http}, circuit_config}]},
+        start: {CircuitBreaker, :start_link, [{{chain_name, provider.id, :http}, circuit_config}]},
         type: :worker,
         restart: :permanent,
         shutdown: 5_000
@@ -50,13 +50,13 @@ defmodule Lasso.RPC.ProviderSupervisor do
     end
   end
 
-  defp maybe_add_ws_circuit(children, provider) do
+  defp maybe_add_ws_circuit(children, chain_name, provider) do
     if is_binary(Map.get(provider, :ws_url)) do
       circuit_config = %{failure_threshold: 5, recovery_timeout: 60_000, success_threshold: 2}
 
       child = %{
         id: {:circuit_ws, provider.id},
-        start: {CircuitBreaker, :start_link, [{{provider.id, :ws}, circuit_config}]},
+        start: {CircuitBreaker, :start_link, [{{chain_name, provider.id, :ws}, circuit_config}]},
         type: :worker,
         restart: :permanent,
         shutdown: 5_000

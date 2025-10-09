@@ -10,7 +10,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   end
 
   test "opens after failure_threshold failures and rejects until recovery timeout" do
-    id = "cb_provider"
+    id = {"test_chain", "cb_provider", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -33,7 +33,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   end
 
   test "half-open requires success_threshold successes to close; failure re-opens" do
-    id = "cb_provider2"
+    id = {"test_chain", "cb_provider2", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -52,7 +52,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   end
 
   test "opens after failure_threshold typed errors and rejects until recovery" do
-    id = "cb_provider_typed"
+    id = {"test_chain", "cb_provider_typed", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -75,7 +75,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   end
 
   test "record_failure increments failures and can open the circuit" do
-    id = "cb_provider_record"
+    id = {"test_chain", "cb_provider_record", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(

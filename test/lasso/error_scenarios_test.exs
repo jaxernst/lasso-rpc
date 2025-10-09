@@ -20,9 +20,14 @@ defmodule Lasso.ErrorScenariosTest do
     # Cleanup any existing circuit breakers before test
     on_exit(fn ->
       # Stop any circuit breakers that might have been started
-      ["test_provider_failures", "test_provider_recovery"]
-      |> Enum.each(fn provider_id ->
-        via_name = {:via, Registry, {Lasso.Registry, {:circuit_breaker, provider_id}}}
+      [
+        {"test_chain", "test_provider_failures", :http},
+        {"test_chain", "test_provider_recovery", :http}
+      ]
+      |> Enum.each(fn breaker_id ->
+        {chain, provider_id, transport} = breaker_id
+        key = "#{chain}:#{provider_id}:#{transport}"
+        via_name = {:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}
 
         case GenServer.whereis(via_name) do
           nil ->
@@ -43,15 +48,17 @@ defmodule Lasso.ErrorScenariosTest do
 
   describe "circuit breaker behavior" do
     test "opens circuit after consecutive failures" do
+      chain = "test_chain"
       provider_id = "test_provider_failures"
+      breaker_id = {chain, provider_id, :http}
       config = %{failure_threshold: 3, recovery_timeout: 1000, success_threshold: 2}
 
-      {:ok, _pid} = CircuitBreaker.start_link({provider_id, config})
+      {:ok, _pid} = CircuitBreaker.start_link({breaker_id, config})
 
       # Simulate consecutive failures
       for i <- 1..3 do
         result =
-          CircuitBreaker.call(provider_id, fn ->
+          CircuitBreaker.call(breaker_id, fn ->
             raise "Simulated failure #{i}"
           end)
 
@@ -60,54 +67,56 @@ defmodule Lasso.ErrorScenariosTest do
       end
 
       # Circuit should be open
-      state = CircuitBreaker.get_state(provider_id)
+      state = CircuitBreaker.get_state(breaker_id)
       assert state.state == :open
       assert state.failure_count >= 3
     end
 
     test "recovers circuit after success threshold" do
+      chain = "test_chain"
       provider_id = "test_provider_recovery"
+      breaker_id = {chain, provider_id, :http}
       config = %{failure_threshold: 2, recovery_timeout: 100, success_threshold: 2}
 
-      {:ok, _pid} = CircuitBreaker.start_link({provider_id, config})
+      {:ok, _pid} = CircuitBreaker.start_link({breaker_id, config})
 
       # Open the circuit
       for _ <- 1..2 do
-        CircuitBreaker.call(provider_id, fn -> raise "test error" end)
+        CircuitBreaker.call(breaker_id, fn -> raise "test error" end)
       end
 
       # Verify circuit is open
-      state = CircuitBreaker.get_state(provider_id)
+      state = CircuitBreaker.get_state(breaker_id)
       assert state.state == :open
 
       # Wait for recovery timeout with proper polling instead of fixed sleep
-      wait_for_recovery_timeout(provider_id, 100)
+      wait_for_recovery_timeout(breaker_id, 100)
 
       # Attempt recovery with successes
       for _ <- 1..2 do
-        result = CircuitBreaker.call(provider_id, fn -> :ok end)
+        result = CircuitBreaker.call(breaker_id, fn -> :ok end)
         assert {:ok, :ok} = result
       end
 
       # Circuit should be closed
-      state = CircuitBreaker.get_state(provider_id)
+      state = CircuitBreaker.get_state(breaker_id)
       assert state.state == :closed
     end
   end
 
   # Helper function to wait for circuit breaker recovery timeout
-  defp wait_for_recovery_timeout(provider_id, timeout_ms, max_attempts \\ 50) do
-    wait_for_recovery_timeout_impl(provider_id, timeout_ms, max_attempts, 0)
+  defp wait_for_recovery_timeout(breaker_id, timeout_ms, max_attempts \\ 50) do
+    wait_for_recovery_timeout_impl(breaker_id, timeout_ms, max_attempts, 0)
   end
 
-  defp wait_for_recovery_timeout_impl(provider_id, timeout_ms, max_attempts, attempt) do
+  defp wait_for_recovery_timeout_impl(breaker_id, timeout_ms, max_attempts, attempt) do
     if attempt >= max_attempts do
       flunk(
-        "Circuit breaker #{provider_id} did not reach recovery timeout after #{max_attempts} attempts"
+        "Circuit breaker #{inspect(breaker_id)} did not reach recovery timeout after #{max_attempts} attempts"
       )
     end
 
-    state = CircuitBreaker.get_state(provider_id)
+    state = CircuitBreaker.get_state(breaker_id)
 
     case state.state do
       :open ->
@@ -125,7 +134,7 @@ defmodule Lasso.ErrorScenariosTest do
             else
               # Wait a bit and try again
               Process.sleep(10)
-              wait_for_recovery_timeout_impl(provider_id, timeout_ms, max_attempts, attempt + 1)
+              wait_for_recovery_timeout_impl(breaker_id, timeout_ms, max_attempts, attempt + 1)
             end
         end
 

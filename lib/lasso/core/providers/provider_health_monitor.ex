@@ -47,7 +47,7 @@ defmodule Lasso.RPC.ProviderHealthMonitor do
     # Call circuit breaker only if it's running to avoid :noproc exits on boot
     result =
       case GenServer.whereis(
-             {:via, Registry, {Lasso.Registry, {:circuit_breaker, "#{provider.id}:http"}}}
+             {:via, Registry, {Lasso.Registry, {:circuit_breaker, "#{chain}:#{provider.id}:http"}}}
            ) do
         nil ->
           # Fall back to direct request; breaker will be engaged on next tick once started
@@ -59,7 +59,7 @@ defmodule Lasso.RPC.ProviderHealthMonitor do
           )
 
         _pid ->
-          CircuitBreaker.call({provider.id, :http}, fn ->
+          CircuitBreaker.call({chain, provider.id, :http}, fn ->
             HttpClient.request(
               %{url: http_url, api_key: Map.get(provider, :api_key)},
               "eth_chainId",
@@ -73,7 +73,7 @@ defmodule Lasso.RPC.ProviderHealthMonitor do
       {:ok, %{"jsonrpc" => "2.0"} = response} ->
         case Lasso.RPC.Normalizer.run(provider.id, "eth_chainId", response) do
           {:ok, _} ->
-            ProviderPool.report_success(chain, provider.id)
+            ProviderPool.report_success(chain, provider.id, :http)
 
           {:error, %Lasso.JSONRPC.Error{} = jerr} ->
             ProviderPool.report_failure(chain, provider.id, {:health_check, jerr})
@@ -86,11 +86,11 @@ defmodule Lasso.RPC.ProviderHealthMonitor do
             provider_id: provider.id
           )
 
-        ProviderPool.report_failure(chain, provider.id, {:health_check, jerr})
+        ProviderPool.report_failure(chain, provider.id, {:health_check, jerr}, :http)
 
       {:error, reason} ->
         jerr = Lasso.JSONRPC.Error.from(reason, provider_id: provider.id)
-        ProviderPool.report_failure(chain, provider.id, {:health_check, jerr})
+        ProviderPool.report_failure(chain, provider.id, {:health_check, jerr}, :http)
     end
   end
 
