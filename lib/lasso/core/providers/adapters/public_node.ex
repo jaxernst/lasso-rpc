@@ -28,9 +28,8 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   Update 10/08/2025:
   This seems to be a dynamic limit that changes, so default to more conservative values.
   """
-  @max_addresses_http 30
+  @max_addresses_http 25
   @max_addresses_ws 20
-  @max_block_range 10_000
 
   # Capability Validation
 
@@ -39,9 +38,8 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
 
   @impl true
   def validate_params("eth_getLogs", params, transport, _c) do
-    with :ok <- validate_address_count(params, transport),
-         :ok <- validate_block_range(params),
-         :ok <- validate_archival(params) do
+    with :ok <- validate_address_inclusion(params),
+         :ok <- validate_address_count(params, transport) do
       :ok
     else
       {:error, reason} = err ->
@@ -58,6 +56,12 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   def validate_params(_method, _params, _t, _c), do: :ok
 
   # Private validation helpers
+
+  # Requires address param to be included in requests
+  defp validate_address_inclusion([%{"address" => _}]), do: :ok
+
+  defp validate_address_inclusion(_),
+    do: {:error, {:param_limit, "address or addresses not found"}}
 
   defp validate_address_count([%{"address" => addrs}], transport) when is_list(addrs) do
     max_addresses = get_max_addresses(transport)
@@ -78,62 +82,6 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   defp get_max_addresses(:ws), do: @max_addresses_ws
   defp get_max_addresses(:http), do: @max_addresses_http
   defp get_max_addresses(_), do: @max_addresses_http
-
-  defp validate_block_range([%{"fromBlock" => from, "toBlock" => to}]) do
-    with {:ok, range} <- compute_block_range(from, to),
-         false <- range <= @max_block_range do
-      {:error, {:param_limit, "max #{@max_block_range} block range (got #{range})"}}
-    else
-      _ -> :ok
-    end
-  end
-
-  defp validate_block_range(_), do: :ok
-
-  defp validate_archival([%{"fromBlock" => _from}]) do
-    :ok
-
-    # Example
-    # with {:ok, block_num} <- parse_block_number(from),
-    #      true <- estimate_current_block() - block_num > @archival_threshold do
-    #   {:error, {:requires_archival, "blocks older than #{@archival_threshold} not supported"}}
-    # else
-    #   _ -> :ok
-    # end
-  end
-
-  defp validate_archival(_), do: :ok
-
-  defp compute_block_range(from_block, to_block) do
-    with {:ok, from_num} <- parse_block_number(from_block),
-         {:ok, to_num} <- parse_block_number(to_block) do
-      {:ok, abs(to_num - from_num)}
-    else
-      _ -> :error
-    end
-  end
-
-  defp parse_block_number("latest"), do: {:ok, estimate_current_block()}
-  defp parse_block_number("earliest"), do: {:ok, 0}
-  defp parse_block_number("pending"), do: {:ok, estimate_current_block()}
-
-  defp parse_block_number("0x" <> hex) do
-    case Integer.parse(hex, 16) do
-      {num, ""} -> {:ok, num}
-      _ -> :error
-    end
-  end
-
-  defp parse_block_number(num) when is_integer(num), do: {:ok, num}
-  defp parse_block_number(_), do: :error
-
-  # Rough estimate, doesn't need to be exact (used for filtering decisions)
-  # TODO: Pull from block height ets tables once implemented
-  defp estimate_current_block do
-    # Ethereum mainnet is ~21M blocks as of Jan 2025
-    # This is just for validation, doesn't need to be precise
-    21_000_000
-  end
 
   # Normalization - delegate to Generic adapter
 
