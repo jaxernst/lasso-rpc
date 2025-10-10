@@ -14,7 +14,7 @@ config :lasso, LassoWeb.Endpoint,
 
 # Enhanced logging for development debugging
 config :logger, :console,
-  format: "[$level] $message => $metadata\n",
+  format: {Lasso.Logger.ChainFormatter, :format},
   level: :info,
   metadata: [
     :provider,

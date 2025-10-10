@@ -19,6 +19,8 @@ defmodule Lasso.RPC.StreamCoordinator do
     SelectionContext
   }
 
+  alias Lasso.RPC.Caching.BlockchainMetadataCache
+
   @type key :: {:newHeads} | {:logs, map()}
 
   # Circuit breaker defaults
@@ -726,10 +728,32 @@ defmodule Lasso.RPC.StreamCoordinator do
     end
   end
 
-  defp fetch_head(chain, provider_id) do
+  defp fetch_head(chain, _provider_id) do
+    # Use cached block height for fast failover (<1ms vs 200-500ms)
+    case BlockchainMetadataCache.get_block_height(chain) do
+      {:ok, height} ->
+        Logger.debug("Using cached block height for failover gap calculation",
+          chain: chain,
+          height: height
+        )
+
+        height
+
+      {:error, reason} ->
+        Logger.warning("Cache miss during failover, using blocking request",
+          chain: chain,
+          reason: reason
+        )
+
+        # Fallback to blocking HTTP request if cache unavailable
+        fetch_head_blocking(chain)
+    end
+  end
+
+  defp fetch_head_blocking(chain) do
+    # Original blocking implementation as fallback
     case Lasso.RPC.RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [],
            strategy: :priority,
-           provider_override: provider_id,
            failover_on_override: false
          ) do
       {:ok, "0x" <> _ = hex} ->

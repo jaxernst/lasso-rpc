@@ -502,7 +502,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
     case result do
       {:ok, result} ->
-        Logger.debug("✓ Request Success via #{Channel.to_string(channel)}", result: result)
+        Logger.debug("✓ Request Success via #{Channel.to_string(channel)}",
+          result: result,
+          chain: ctx.chain
+        )
 
         # Capture I/O latency from process dictionary (set by HTTP transport)
         ctx =
@@ -534,7 +537,8 @@ defmodule Lasso.RPC.RequestPipeline do
           channel: Channel.to_string(channel),
           error: inspect(reason),
           retriable: false,
-          remaining_channels: length(rest_channels)
+          remaining_channels: length(rest_channels),
+          chain: ctx.chain
         )
 
         # Check if error is retriable and we have more channels to try
@@ -548,7 +552,8 @@ defmodule Lasso.RPC.RequestPipeline do
           Logger.info("Retriable error on channel, failing over to next",
             channel: Channel.to_string(channel),
             error: inspect(reason),
-            remaining_channels: length(rest_channels)
+            remaining_channels: length(rest_channels),
+            chain: ctx.chain
           )
 
           # Increment retries and try next channel
@@ -559,7 +564,8 @@ defmodule Lasso.RPC.RequestPipeline do
             channel: Channel.to_string(channel),
             error: inspect(reason),
             retriable: should_retry,
-            remaining_channels: length(rest_channels)
+            remaining_channels: length(rest_channels),
+            chain: ctx.chain
           )
 
           {:error, reason, channel, ctx}

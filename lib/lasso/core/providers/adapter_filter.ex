@@ -93,7 +93,7 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   """
   @spec validate_params(Channel.t(), String.t(), term()) :: :ok | {:error, term()}
   def validate_params(%Channel{} = channel, method, params) do
-    safe_validate_params?(channel.provider_id, method, params, channel.transport)
+    safe_validate_params?(channel.provider_id, method, params, channel.transport, channel.chain)
   end
 
   # Private Implementation
@@ -109,9 +109,16 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   end
 
   # Crash-safe wrapper for validate_params (called during execution)
-  defp safe_validate_params?(provider_id, method, params, transport) do
+  defp safe_validate_params?(provider_id, method, params, transport, chain) do
     adapter = AdapterRegistry.adapter_for(provider_id)
-    ctx = %{provider_id: provider_id}
+
+    # Include chain in context when available
+    ctx =
+      if chain do
+        %{provider_id: provider_id, chain: chain}
+      else
+        %{provider_id: provider_id}
+      end
 
     try do
       adapter.validate_params(method, params, transport, ctx)

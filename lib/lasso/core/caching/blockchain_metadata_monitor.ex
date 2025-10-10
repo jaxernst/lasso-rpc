@@ -27,12 +27,14 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
   require Logger
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.RPC.{RequestPipeline, CircuitBreaker}
+  alias Lasso.RPC.RequestPipeline
   alias Lasso.RPC.Caching.BlockchainMetadataCache
 
   @default_refresh_interval_ms 10_000
   @default_probe_timeout_ms 2_000
   @default_providers_to_probe 3
+  @default_lag_threshold_blocks 10
+  @default_refresh_deadline_ms 30_000
 
   ## Client API
 
@@ -60,7 +62,7 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
 
   @impl true
   def init(chain) do
-    # Ensure ETS table exists
+    # Table is created by MetadataTableOwner, just verify it exists
     BlockchainMetadataCache.ensure_table()
 
     state = %{
@@ -68,6 +70,8 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
       refresh_interval_ms: refresh_interval_ms(),
       probe_timeout_ms: probe_timeout_ms(),
       providers_to_probe: providers_to_probe(),
+      lag_threshold_blocks: lag_threshold_blocks(),
+      refresh_deadline_ms: refresh_deadline_ms(),
       last_refresh: nil,
       refresh_in_progress: false
     }
@@ -77,7 +81,8 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
 
     Logger.info("BlockchainMetadataMonitor started",
       chain: chain,
-      refresh_interval_ms: state.refresh_interval_ms
+      refresh_interval_ms: state.refresh_interval_ms,
+      lag_threshold_blocks: state.lag_threshold_blocks
     )
 
     {:ok, state}
@@ -114,7 +119,7 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
     )
 
     # Recompute best known height and lag
-    update_best_known_height(state.chain)
+    update_best_known_height(state.chain, state.lag_threshold_blocks)
 
     {:noreply, state}
   end
@@ -135,7 +140,7 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
 
       %{state | refresh_in_progress: false, last_refresh: DateTime.utc_now()}
     else
-      # Probe providers concurrently
+      # Probe providers concurrently with deadline enforcement
       results =
         providers
         |> Task.async_stream(
@@ -147,20 +152,38 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
         )
         |> Enum.to_list()
 
-      # Process results
+      # Check if we exceeded refresh deadline
+      elapsed_ms = System.monotonic_time(:millisecond) - start_time
+
+      if elapsed_ms > state.refresh_deadline_ms do
+        Logger.warning("Refresh exceeded deadline",
+          chain: state.chain,
+          elapsed_ms: elapsed_ms,
+          deadline_ms: state.refresh_deadline_ms
+        )
+
+        telemetry_refresh_deadline_exceeded(state.chain, elapsed_ms, state.refresh_deadline_ms)
+      end
+
+      # Process block height results
       successful =
         results
         |> Enum.filter(fn
-          {:ok, {:ok, _provider_id, _height, _latency}} -> true
+          {:ok, {:ok, _provider_id, _height, _latency, _chain_id}} -> true
           _ -> false
         end)
-        |> Enum.map(fn {:ok, {:ok, provider_id, height, latency}} ->
+        |> Enum.map(fn {:ok, {:ok, provider_id, height, latency, chain_id}} ->
           BlockchainMetadataCache.put_provider_block_height(
             state.chain,
             provider_id,
             height,
             latency
           )
+
+          # Cache chain ID if returned (first provider wins for chain-level ID)
+          if chain_id do
+            BlockchainMetadataCache.put_chain_id(state.chain, chain_id)
+          end
 
           telemetry_provider_height_updated(state.chain, provider_id, height, latency)
 
@@ -169,7 +192,7 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
 
       # Update best known height and compute lag
       if successful != [] do
-        update_best_known_height(state.chain)
+        update_best_known_height(state.chain, state.lag_threshold_blocks)
       end
 
       duration_ms = System.monotonic_time(:millisecond) - start_time
@@ -195,24 +218,62 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
   defp probe_provider(chain, provider, timeout_ms) do
     start_time = System.monotonic_time(:millisecond)
 
-    # Use RequestPipeline to fetch block number
-    result =
-      RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        strategy: :priority,
-        provider_override: provider.id,
-        failover_on_override: false,
-        timeout: timeout_ms
+    # Probe both block number and chain ID
+    # Use Task.async_stream to run both in parallel
+    probes = [
+      {:block_number, "eth_blockNumber", []},
+      {:chain_id, "eth_chainId", []}
+    ]
+
+    results =
+      probes
+      |> Task.async_stream(
+        fn {key, method, params} ->
+          result =
+            RequestPipeline.execute_via_channels(
+              chain,
+              method,
+              params,
+              strategy: :priority,
+              provider_override: provider.id,
+              failover_on_override: false,
+              timeout: div(timeout_ms, 2)
+            )
+
+          {key, result}
+        end,
+        timeout: timeout_ms,
+        on_timeout: :kill_task
       )
+      |> Enum.to_list()
 
     latency_ms = System.monotonic_time(:millisecond) - start_time
 
-    case result do
+    # Extract results
+    block_number_result =
+      Enum.find_value(results, fn
+        {:ok, {:block_number, result}} -> result
+        _ -> nil
+      end)
+
+    chain_id_result =
+      Enum.find_value(results, fn
+        {:ok, {:chain_id, result}} -> result
+        _ -> nil
+      end)
+
+    case block_number_result do
       {:ok, "0x" <> hex} ->
         height = String.to_integer(hex, 16)
-        {:ok, provider.id, height, latency_ms}
+
+        # Extract chain ID if available
+        chain_id =
+          case chain_id_result do
+            {:ok, chain_id_hex} -> chain_id_hex
+            _ -> nil
+          end
+
+        {:ok, provider.id, height, latency_ms, chain_id}
 
       {:error, reason} ->
         Logger.debug("Metadata probe failed",
@@ -223,6 +284,15 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
 
         telemetry_probe_failed(chain, provider.id, reason)
         {:error, provider.id, reason}
+
+      nil ->
+        Logger.debug("Metadata probe timeout",
+          chain: chain,
+          provider_id: provider.id
+        )
+
+        telemetry_probe_failed(chain, provider.id, :timeout)
+        {:error, provider.id, :timeout}
     end
   rescue
     e ->
@@ -248,7 +318,7 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
     end
   end
 
-  defp update_best_known_height(chain) do
+  defp update_best_known_height(chain, lag_threshold_blocks) do
     # Get all provider heights from cache
     provider_heights =
       :ets.match(:blockchain_metadata, {{:provider, chain, :"$1", :block_height}, :"$2"})
@@ -268,13 +338,15 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
         lag = provider_height - best_height
         BlockchainMetadataCache.put_provider_lag(chain, provider_id, lag)
 
-        if lag < -10 do
+        # Use configurable threshold
+        if lag < -lag_threshold_blocks do
           telemetry_provider_lag_detected(chain, provider_id, lag)
 
           Logger.info("Provider lagging behind",
             chain: chain,
             provider_id: provider_id,
-            lag_blocks: lag
+            lag_blocks: lag,
+            threshold: lag_threshold_blocks
           )
         end
       end)
@@ -297,6 +369,14 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
 
   defp providers_to_probe do
     get_in(config(), [:providers_to_probe]) || @default_providers_to_probe
+  end
+
+  defp lag_threshold_blocks do
+    get_in(config(), [:lag_threshold_blocks]) || @default_lag_threshold_blocks
+  end
+
+  defp refresh_deadline_ms do
+    get_in(config(), [:refresh_deadline_ms]) || @default_refresh_deadline_ms
   end
 
   defp config do
@@ -342,6 +422,14 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
       [:lasso, :metadata, :provider, :lag_detected],
       %{lag_blocks: lag_blocks},
       %{chain: chain, provider_id: provider_id}
+    )
+  end
+
+  defp telemetry_refresh_deadline_exceeded(chain, elapsed_ms, deadline_ms) do
+    :telemetry.execute(
+      [:lasso, :metadata, :refresh, :deadline_exceeded],
+      %{elapsed_ms: elapsed_ms, deadline_ms: deadline_ms},
+      %{chain: chain}
     )
   end
 end

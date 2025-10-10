@@ -18,6 +18,7 @@ defmodule Lasso.RPC.Providers.Adapters.Merkle do
   @behaviour Lasso.RPC.ProviderAdapter
 
   alias Lasso.RPC.Providers.Generic
+  alias Lasso.RPC.Caching.BlockchainMetadataCache
 
   @doc """
   Block range limit for eth_getLogs based on production error logs.
@@ -30,8 +31,8 @@ defmodule Lasso.RPC.Providers.Adapters.Merkle do
   def supports_method?(_method, _t, _c), do: :ok
 
   @impl true
-  def validate_params("eth_getLogs", params, _transport, _c) do
-    with :ok <- validate_block_range(params) do
+  def validate_params("eth_getLogs", params, _transport, ctx) do
+    with :ok <- validate_block_range(params, ctx) do
       :ok
     else
       {:error, reason} = err ->
@@ -45,12 +46,12 @@ defmodule Lasso.RPC.Providers.Adapters.Merkle do
     end
   end
 
-  def validate_params(_method, _params, _t, _c), do: :ok
+  def validate_params(_method, _params, _t, _ctx), do: :ok
 
   # Private validation helpers
 
-  defp validate_block_range([%{"fromBlock" => from, "toBlock" => to}]) do
-    with {:ok, range} <- compute_block_range(from, to),
+  defp validate_block_range([%{"fromBlock" => from, "toBlock" => to}], ctx) do
+    with {:ok, range} <- compute_block_range(from, to, ctx),
          true <- range > @max_block_range do
       {:error, {:param_limit, "max #{@max_block_range} block range (got #{range})"}}
     else
@@ -58,37 +59,40 @@ defmodule Lasso.RPC.Providers.Adapters.Merkle do
     end
   end
 
-  defp validate_block_range(_), do: :ok
+  defp validate_block_range(_params, _ctx), do: :ok
 
-  defp compute_block_range(from_block, to_block) do
-    with {:ok, from_num} <- parse_block_number(from_block),
-         {:ok, to_num} <- parse_block_number(to_block) do
+  defp compute_block_range(from_block, to_block, ctx) do
+    with {:ok, from_num} <- parse_block_number(from_block, ctx),
+         {:ok, to_num} <- parse_block_number(to_block, ctx) do
       {:ok, abs(to_num - from_num)}
     else
       _ -> :error
     end
   end
 
-  defp parse_block_number("latest"), do: {:ok, estimate_current_block()}
-  defp parse_block_number("earliest"), do: {:ok, 0}
-  defp parse_block_number("pending"), do: {:ok, estimate_current_block()}
+  defp parse_block_number("latest", ctx), do: {:ok, estimate_current_block(ctx)}
+  defp parse_block_number("earliest", _ctx), do: {:ok, 0}
+  defp parse_block_number("pending", ctx), do: {:ok, estimate_current_block(ctx)}
 
-  defp parse_block_number("0x" <> hex) do
+  defp parse_block_number("0x" <> hex, _ctx) do
     case Integer.parse(hex, 16) do
       {num, ""} -> {:ok, num}
       _ -> :error
     end
   end
 
-  defp parse_block_number(num) when is_integer(num), do: {:ok, num}
-  defp parse_block_number(_), do: :error
+  defp parse_block_number(num, _ctx) when is_integer(num), do: {:ok, num}
+  defp parse_block_number(_value, _ctx), do: :error
 
-  # Rough estimate, doesn't need to be exact (used for filtering decisions)
-  # TODO: Pull from block height ets tables once implemented
-  defp estimate_current_block do
-    # Ethereum mainnet is ~21M blocks as of Jan 2025
-    # This is just for validation, doesn't need to be precise
-    21_000_000
+  # Estimates current block from cache, skipping validation if unavailable
+  # This allows requests to proceed when cache is unavailable (fail-open)
+  defp estimate_current_block(ctx) do
+    chain = Map.get(ctx, :chain, "ethereum")
+
+    case BlockchainMetadataCache.get_block_height(chain) do
+      {:ok, height} -> height
+      {:error, _} -> 0
+    end
   end
 
   # Normalization - delegate to Generic adapter

@@ -188,7 +188,7 @@ defmodule Lasso.RPC.Observability do
             ""
           end
 
-        "RPC #{ctx.method} → #{provider}#{latency_str}#{retry_str} ✓#{result_info}"
+        "RPC [#{ctx.chain}] #{ctx.method} → #{provider}#{latency_str}#{retry_str} ✓#{result_info}"
 
       :error ->
         error_msg =
@@ -197,10 +197,10 @@ defmodule Lasso.RPC.Observability do
             _ -> ""
           end
 
-        "RPC #{ctx.method} → #{provider}#{latency_str}#{retry_str} ✗#{error_msg}"
+        "RPC [#{ctx.chain}] #{ctx.method} → #{provider}#{latency_str}#{retry_str} ✗#{error_msg}"
 
       _ ->
-        "RPC #{ctx.method} → #{provider}#{retry_str}"
+        "RPC [#{ctx.chain}] #{ctx.method} → #{provider}#{retry_str}"
     end
   end
 
