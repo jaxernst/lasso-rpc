@@ -196,7 +196,8 @@ defmodule Lasso.RPC.WSConnection do
       {:error, :circuit_open} ->
         Logger.debug("Circuit breaker open for #{state.endpoint.id}, skipping connect attempt")
 
-        jerr = JError.new(-32000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)
+        jerr =
+          JError.new(-32000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)
 
         # Emit telemetry event
         :telemetry.execute(
@@ -351,9 +352,7 @@ defmodule Lasso.RPC.WSConnection do
 
   @impl true
   def handle_info({:ws_connected}, state) do
-    Logger.info(
-      "Connected to WebSocket: #{state.endpoint.name} (provider: #{state.endpoint.id})"
-    )
+    Logger.info("Connected to WebSocket: #{state.endpoint.name} (provider: #{state.endpoint.id})")
 
     # Report successful connection to circuit breaker
     CircuitBreaker.record_success({state.chain_name, state.endpoint.id, :ws})
@@ -412,7 +411,7 @@ defmodule Lasso.RPC.WSConnection do
 
             status = if match?({:ok, _}, reply), do: :success, else: :error
 
-            # Emit telemetry event
+            # Emit telemetry event for request completion
             :telemetry.execute(
               [:lasso, :websocket, :request, :completed],
               %{
@@ -425,6 +424,17 @@ defmodule Lasso.RPC.WSConnection do
                 status: status
               }
             )
+
+            # Emit I/O-specific telemetry (for comparison with HTTP I/O)
+            :telemetry.execute(
+              [:lasso, :ws, :request, :io],
+              %{io_ms: duration_ms},
+              %{provider_id: state.endpoint.id, method: method}
+            )
+
+            # Store I/O latency in caller's process dictionary for RequestContext to consume
+            # Note: This won't work directly because we're in the GenServer process, not the caller
+            # The caller needs to extract this from the reply or we need another mechanism
 
             GenServer.reply(from, reply)
 
@@ -844,7 +854,10 @@ defmodule Lasso.RPC.WSConnection do
   end
 
   defp handle_websocket_message(
-         %{"method" => "eth_subscription", "params" => %{"subscription" => sub_id, "result" => payload}},
+         %{
+           "method" => "eth_subscription",
+           "params" => %{"subscription" => sub_id, "result" => payload}
+         },
          state
        ) do
     received_at = System.monotonic_time(:millisecond)

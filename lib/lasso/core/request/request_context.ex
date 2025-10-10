@@ -38,8 +38,11 @@ defmodule Lasso.RPC.RequestContext do
           selection_end: integer() | nil,
           upstream_start: integer() | nil,
           upstream_end: integer() | nil,
+          # TRUE upstream provider I/O time (HTTP/WS send→receive at transport boundary)
           upstream_latency_ms: float() | nil,
           end_to_end_latency_ms: float() | nil,
+          # Computed: end_to_end - upstream = Lasso internal overhead
+          lasso_overhead_ms: float() | nil,
 
           # Response
           status: :success | :error | nil,
@@ -71,6 +74,7 @@ defmodule Lasso.RPC.RequestContext do
             upstream_end: nil,
             upstream_latency_ms: nil,
             end_to_end_latency_ms: nil,
+            lasso_overhead_ms: nil,
             status: nil,
             result_type: nil,
             result_size_bytes: nil,
@@ -138,22 +142,26 @@ defmodule Lasso.RPC.RequestContext do
 
   @doc """
   Records upstream request completion.
+
+  Note: This calculates timing from mark_upstream_start to now, but the actual
+  upstream_latency_ms should be set via set_upstream_latency/2 with the measured
+  I/O time from the transport layer for accuracy.
   """
   def mark_upstream_end(%__MODULE__{} = ctx) do
     now = System.monotonic_time(:microsecond)
-
-    upstream_latency_ms =
-      if ctx.upstream_start do
-        (now - ctx.upstream_start) / 1000.0
-      else
-        nil
-      end
-
-    %{ctx | upstream_end: now, upstream_latency_ms: upstream_latency_ms}
+    %{ctx | upstream_end: now}
   end
 
   @doc """
-  Records successful result shape.
+  Sets the upstream I/O latency measured at the transport boundary (HTTP/WS send→receive).
+  This is the TRUE provider response time.
+  """
+  def set_upstream_latency(%__MODULE__{} = ctx, io_ms) when is_number(io_ms) do
+    %{ctx | upstream_latency_ms: io_ms}
+  end
+
+  @doc """
+  Records successful result shape and calculates Lasso overhead.
   """
   def record_success(%__MODULE__{} = ctx, result) do
     now = System.monotonic_time(:microsecond)
@@ -161,17 +169,26 @@ defmodule Lasso.RPC.RequestContext do
 
     {result_type, result_size} = analyze_result(result)
 
+    # Calculate Lasso internal overhead (everything except upstream I/O)
+    lasso_overhead_ms =
+      if ctx.upstream_latency_ms do
+        end_to_end_ms - ctx.upstream_latency_ms
+      else
+        nil
+      end
+
     %{
       ctx
       | status: :success,
         result_type: result_type,
         result_size_bytes: result_size,
-        end_to_end_latency_ms: end_to_end_ms
+        end_to_end_latency_ms: end_to_end_ms,
+        lasso_overhead_ms: lasso_overhead_ms
     }
   end
 
   @doc """
-  Records error shape.
+  Records error shape and calculates Lasso overhead.
   """
   def record_error(%__MODULE__{} = ctx, error) do
     now = System.monotonic_time(:microsecond)
@@ -194,11 +211,20 @@ defmodule Lasso.RPC.RequestContext do
           }
       end
 
+    # Calculate Lasso internal overhead (everything except upstream I/O)
+    lasso_overhead_ms =
+      if ctx.upstream_latency_ms do
+        end_to_end_ms - ctx.upstream_latency_ms
+      else
+        nil
+      end
+
     %{
       ctx
       | status: :error,
         error: error_map,
-        end_to_end_latency_ms: end_to_end_ms
+        end_to_end_latency_ms: end_to_end_ms,
+        lasso_overhead_ms: lasso_overhead_ms
     }
   end
 

@@ -24,7 +24,11 @@ defmodule Lasso.RPC.CircuitBreaker do
     :failure_count,
     :last_failure_time,
     :success_count,
-    :config
+    :config,
+    # Number of in-flight attempts currently admitted while half-open
+    inflight_count: 0,
+    # Max parallel attempts allowed during half-open (conservative default: 1)
+    half_open_max_inflight: 1
   ]
 
   @type chain :: String.t()
@@ -54,12 +58,68 @@ defmodule Lasso.RPC.CircuitBreaker do
   end
 
   @doc """
-  Attempts to execute a function through the circuit breaker.
+  Attempts to execute a function guarded by the circuit breaker without
+  executing the function inside the GenServer.
+
+  Flow:
+  - Fast admission check (GenServer.call {:admit, now_ms})
+  - Execute fun in the caller process
+  - Report result asynchronously (GenServer.cast {:report, token, result})
   """
   @spec call(breaker_id, (-> any()), non_neg_integer()) ::
           {:ok, any()} | {:error, term()}
-  def call(id, fun, timeout \\ 30_000) do
-    GenServer.call(via_name(id), {:call, fun}, timeout)
+  def call({chain, provider_id, transport} = id, fun, _timeout \\ 30_000) do
+    now_ms = System.monotonic_time(:millisecond)
+    admit_start_us = System.monotonic_time(:microsecond)
+
+    decision = GenServer.call(via_name(id), {:admit, now_ms})
+    admit_call_ms = div(System.monotonic_time(:microsecond) - admit_start_us, 1000)
+
+    decision_tag =
+      case decision do
+        {:allow, _} -> :allow
+        {:deny, reason} -> reason
+        other -> other
+      end
+
+    :telemetry.execute(
+      [:lasso, :circuit_breaker, :admit],
+      %{admit_call_ms: admit_call_ms},
+      %{chain: chain, provider_id: provider_id, transport: transport, decision: decision_tag}
+    )
+
+    case decision do
+      {:allow, token} ->
+        result =
+          try do
+            fun.()
+          catch
+            kind, error -> {:__trap__, {kind, error}}
+          end
+
+        GenServer.cast(via_name(id), {:report, token, result})
+
+        case result do
+          {:__trap__, {kind, error}} ->
+            # Mirror previous semantics: treat as error; normalization happens in breaker
+            {:error, {kind, error}}
+
+          {:ok, _} ->
+            result
+
+          {:error, _} ->
+            result
+
+          other ->
+            {:ok, other}
+        end
+
+      {:deny, :open} ->
+        {:error, :circuit_open}
+
+      {:deny, :half_open_busy} ->
+        {:error, :circuit_open}
+    end
   end
 
   @doc """
@@ -116,29 +176,46 @@ defmodule Lasso.RPC.CircuitBreaker do
   end
 
   @impl true
-  def handle_call({:call, fun}, _from, state) do
+  def handle_call({:admit, now_ms}, _from, state) do
     case state.state do
       :closed ->
-        execute_call(fun, state)
+        {:reply, {:allow, :closed}, state}
 
       :open ->
         if should_attempt_recovery?(state) do
           Logger.info("Circuit breaker #{state.provider_id} attempting recovery")
-          new_state = %{state | state: :half_open}
 
           :telemetry.execute([:lasso, :circuit_breaker, :half_open], %{count: 1}, %{
             provider_id: state.provider_id
           })
 
-          publish_circuit_event(state.provider_id, :open, :half_open, :attempt_recovery, state.transport, state.chain)
+          publish_circuit_event(
+            state.provider_id,
+            :open,
+            :half_open,
+            :attempt_recovery,
+            state.transport,
+            state.chain
+          )
 
-          execute_call(fun, new_state)
+          new_state = %{
+            state
+            | state: :half_open,
+              last_failure_time: state.last_failure_time || now_ms,
+              inflight_count: 1
+          }
+
+          {:reply, {:allow, :half_open}, new_state}
         else
-          {:reply, {:error, :circuit_open}, state}
+          {:reply, {:deny, :open}, state}
         end
 
       :half_open ->
-        execute_call(fun, state)
+        if state.inflight_count < state.half_open_max_inflight do
+          {:reply, {:allow, :half_open}, %{state | inflight_count: state.inflight_count + 1}}
+        else
+          {:reply, {:deny, :half_open_busy}, state}
+        end
     end
   end
 
@@ -158,6 +235,27 @@ defmodule Lasso.RPC.CircuitBreaker do
   end
 
   @impl true
+  def handle_cast({:report, _token, result}, state) do
+    # Update state based on attempt result; do not block caller
+    new_state = classify_and_update_state_for_report(result, state)
+
+    # Decrement inflight counter if half-open
+    final_state =
+      case new_state.state do
+        :half_open -> %{new_state | inflight_count: max(new_state.inflight_count - 1, 0)}
+        _ -> new_state
+      end
+
+    {:noreply, final_state}
+  end
+
+  @impl true
+  def handle_cast({:report_external, outcome}, state) do
+    new_state = classify_and_update_state_for_report(outcome, state)
+    {:noreply, new_state}
+  end
+
+  @impl true
   def handle_cast(:open, state) do
     Logger.warning("Circuit breaker #{state.provider_id} (#{state.transport}) manually opened")
 
@@ -165,7 +263,14 @@ defmodule Lasso.RPC.CircuitBreaker do
       provider_id: state.provider_id
     })
 
-    publish_circuit_event(state.provider_id, state.state, :open, :manual_open, state.transport, state.chain)
+    publish_circuit_event(
+      state.provider_id,
+      state.state,
+      :open,
+      :manual_open,
+      state.transport,
+      state.chain
+    )
 
     new_state = %{state | state: :open, last_failure_time: System.monotonic_time(:millisecond)}
     {:noreply, new_state}
@@ -179,7 +284,14 @@ defmodule Lasso.RPC.CircuitBreaker do
       provider_id: state.provider_id
     })
 
-    publish_circuit_event(state.provider_id, state.state, :closed, :manual_close, state.transport, state.chain)
+    publish_circuit_event(
+      state.provider_id,
+      state.state,
+      :closed,
+      :manual_close,
+      state.transport,
+      state.chain
+    )
 
     new_state = %{
       state
@@ -193,16 +305,6 @@ defmodule Lasso.RPC.CircuitBreaker do
   end
 
   # Private functions
-
-  defp execute_call(fun, state) do
-    try do
-      result = fun.()
-      classify_and_handle_result(result, state)
-    catch
-      kind, error ->
-        handle_failure({kind, error}, state)
-    end
-  end
 
   defp classify_and_handle_result(result, state) do
     # Logger.debug("Classifying and handling result: #{inspect(result)}")
@@ -224,7 +326,11 @@ defmodule Lasso.RPC.CircuitBreaker do
 
       {:error, reason} ->
         # Normalize unknown error shapes to JError for consistent handling
-        jerr = ErrorNormalizer.normalize(reason, provider_id: state.provider_id, transport: state.transport)
+        jerr =
+          ErrorNormalizer.normalize(reason,
+            provider_id: state.provider_id,
+            transport: state.transport
+          )
 
         if jerr.retriable? and jerr.breaker_penalty? do
           handle_failure(jerr, state)
@@ -235,6 +341,12 @@ defmodule Lasso.RPC.CircuitBreaker do
       other ->
         # Any other return value is treated as success for backwards compatibility
         handle_success(other, state)
+    end
+  end
+
+  defp classify_and_update_state_for_report(result, state) do
+    case classify_and_handle_result(result, state) do
+      {:reply, _reply, new_state} -> new_state
     end
   end
 
@@ -274,7 +386,14 @@ defmodule Lasso.RPC.CircuitBreaker do
             provider_id: state.provider_id
           })
 
-          publish_circuit_event(state.provider_id, :half_open, :closed, :recovered, state.transport, state.chain)
+          publish_circuit_event(
+            state.provider_id,
+            :half_open,
+            :closed,
+            :recovered,
+            state.transport,
+            state.chain
+          )
 
           new_state = %{
             state
@@ -311,7 +430,14 @@ defmodule Lasso.RPC.CircuitBreaker do
             provider_id: state.provider_id
           })
 
-          publish_circuit_event(state.provider_id, :closed, :open, :failure_threshold_exceeded, state.transport, state.chain)
+          publish_circuit_event(
+            state.provider_id,
+            :closed,
+            :open,
+            :failure_threshold_exceeded,
+            state.transport,
+            state.chain
+          )
 
           new_state = %{
             state
@@ -336,7 +462,14 @@ defmodule Lasso.RPC.CircuitBreaker do
           provider_id: state.provider_id
         })
 
-        publish_circuit_event(state.provider_id, :half_open, :open, :reopen_due_to_failure, state.transport, state.chain)
+        publish_circuit_event(
+          state.provider_id,
+          :half_open,
+          :open,
+          :reopen_due_to_failure,
+          state.transport,
+          state.chain
+        )
 
         new_state = %{
           state
@@ -347,6 +480,17 @@ defmodule Lasso.RPC.CircuitBreaker do
         }
 
         {:reply, {:error, :circuit_reopening}, new_state}
+
+      :open ->
+        # Circuit already open, ignore additional failures
+        # Just update the failure time to keep the recovery timeout fresh
+        new_state = %{
+          state
+          | failure_count: new_failure_count,
+            last_failure_time: current_time
+        }
+
+        {:reply, {:error, :circuit_open}, new_state}
     end
   end
 
@@ -383,8 +527,12 @@ defmodule Lasso.RPC.CircuitBreaker do
   """
   def record_success(id) do
     case GenServer.whereis(via_name(id)) do
-      nil -> {:error, :not_found}
-      _pid -> GenServer.call(via_name(id), {:call, fn -> {:ok, :success} end})
+      nil ->
+        {:error, :not_found}
+
+      _pid ->
+        GenServer.cast(via_name(id), {:report_external, {:ok, :success}})
+        :ok
     end
   end
 
@@ -393,8 +541,12 @@ defmodule Lasso.RPC.CircuitBreaker do
   """
   def record_failure(id) do
     case GenServer.whereis(via_name(id)) do
-      nil -> {:error, :not_found}
-      _pid -> GenServer.call(via_name(id), {:call, fn -> {:error, :failure} end})
+      nil ->
+        {:error, :not_found}
+
+      _pid ->
+        GenServer.cast(via_name(id), {:report_external, {:error, :failure}})
+        :ok
     end
   end
 

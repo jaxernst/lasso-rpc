@@ -66,41 +66,57 @@ defmodule Lasso.RPC.Transports.HTTP do
 
     Logger.debug("HTTP request via channel", provider: provider_id, method: method, url: url)
 
-    case HttpClient.request(provider_config, method, params,
-           request_id: request_id,
-           timeout: timeout
-         ) do
-      {:ok, %{"error" => _error} = response} ->
-        jerr =
-          ErrorNormalizer.normalize(response,
-            provider_id: provider_id,
-            context: :jsonrpc,
-            transport: :http
-          )
+    io_start_us = System.monotonic_time(:microsecond)
 
-        {:error, jerr}
+    result =
+      case HttpClient.request(provider_config, method, params,
+             request_id: request_id,
+             timeout: timeout
+           ) do
+        {:ok, %{"error" => _error} = response} ->
+          jerr =
+            ErrorNormalizer.normalize(response,
+              provider_id: provider_id,
+              context: :jsonrpc,
+              transport: :http
+            )
 
-      {:ok, %{"result" => result}} ->
-        {:ok, result}
+          {:error, jerr}
 
-      {:ok, invalid_response} ->
-        {:error,
-         JError.new(-32700, "Invalid JSON-RPC response format",
-           data: invalid_response,
-           provider_id: provider_id,
-           source: :transport,
-           transport: :http,
-           retriable?: false
-         )}
+        {:ok, %{"result" => result}} ->
+          {:ok, result}
 
-      {:error, reason} ->
-        {:error,
-         ErrorNormalizer.normalize(reason,
-           provider_id: provider_id,
-           context: :transport,
-           transport: :http
-         )}
-    end
+        {:ok, invalid_response} ->
+          {:error,
+           JError.new(-32700, "Invalid JSON-RPC response format",
+             data: invalid_response,
+             provider_id: provider_id,
+             source: :transport,
+             transport: :http,
+             retriable?: false
+           )}
+
+        {:error, reason} ->
+          {:error,
+           ErrorNormalizer.normalize(reason,
+             provider_id: provider_id,
+             context: :transport,
+             transport: :http
+           )}
+      end
+
+    io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
+
+    :telemetry.execute(
+      [:lasso, :http, :request, :io],
+      %{io_ms: io_ms},
+      %{provider_id: provider_id, method: method}
+    )
+
+    # Store I/O latency in process dictionary for RequestContext to consume
+    Process.put(:last_io_latency_ms, io_ms)
+
+    result
   end
 
   @impl true

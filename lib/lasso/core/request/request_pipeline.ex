@@ -318,7 +318,7 @@ defmodule Lasso.RPC.RequestPipeline do
     channels =
       Selection.select_channels(chain, method,
         strategy: ctx.strategy,
-        transport: :http,
+        transport: transport_override || :both,
         limit: 10
       )
 
@@ -503,6 +503,14 @@ defmodule Lasso.RPC.RequestPipeline do
     case result do
       {:ok, result} ->
         Logger.debug("✓ Request Success via #{Channel.to_string(channel)}", result: result)
+
+        # Capture I/O latency from process dictionary (set by HTTP transport)
+        ctx =
+          case Process.get(:last_io_latency_ms) do
+            nil -> ctx
+            io_ms -> RequestContext.set_upstream_latency(ctx, io_ms)
+          end
+
         {:ok, result, channel, ctx}
 
       {:error, :unsupported_method} ->
@@ -515,6 +523,13 @@ defmodule Lasso.RPC.RequestPipeline do
         attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
 
       {:error, reason} ->
+        # Capture I/O latency even on errors (if the request made it to upstream)
+        ctx =
+          case Process.get(:last_io_latency_ms) do
+            nil -> ctx
+            io_ms -> RequestContext.set_upstream_latency(ctx, io_ms)
+          end
+
         Logger.warning("Channel request failed",
           channel: Channel.to_string(channel),
           error: inspect(reason),
