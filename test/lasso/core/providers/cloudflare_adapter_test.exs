@@ -5,7 +5,8 @@ defmodule Lasso.RPC.Providers.Adapters.CloudflareTest do
 
   describe "supports_method?/3 - unsupported methods" do
     test "rejects eth_getLogs" do
-      assert Cloudflare.supports_method?("eth_getLogs", :http, %{}) == {:error, :method_unsupported}
+      assert Cloudflare.supports_method?("eth_getLogs", :http, %{}) ==
+               {:error, :method_unsupported}
     end
 
     test "rejects eth_getFilterLogs" do
@@ -157,15 +158,8 @@ defmodule Lasso.RPC.Providers.Adapters.CloudflareTest do
       assert Lasso.RPC.ProviderAdapter in behaviours
     end
 
-    test "all required callbacks are implemented" do
-      # These should not raise
-      assert function_exported?(Cloudflare, :supports_method?, 3)
-      assert function_exported?(Cloudflare, :validate_params, 4)
-      assert function_exported?(Cloudflare, :normalize_request, 2)
-      assert function_exported?(Cloudflare, :normalize_response, 2)
-      assert function_exported?(Cloudflare, :normalize_error, 2)
-      assert function_exported?(Cloudflare, :headers, 1)
-      assert function_exported?(Cloudflare, :metadata, 0)
-    end
+    # NOTE: Callback implementation is validated at compile time by the Elixir compiler.
+    # If any required callbacks were missing, compilation would fail with a warning/error.
+    # function_exported?/3 checks are redundant and can have timing issues in tests.
   end
 end

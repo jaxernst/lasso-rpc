@@ -35,6 +35,13 @@ defmodule Lasso.RPC.ErrorClassification do
   @server_error_code -32002
 
   # ===========================================================================
+  # Provider-Specific Error Codes
+  # ===========================================================================
+
+  # PublicNode uses -32701 for capability violations (e.g., address requirements)
+  @publicnode_capability_violation -32701
+
+  # ===========================================================================
   # EIP-1193 Provider Error Codes
   # ===========================================================================
 
@@ -178,7 +185,6 @@ defmodule Lasso.RPC.ErrorClassification do
       :rate_limit -> true
       :auth_error -> true
       :capability_violation -> true
-      _ -> retriable_by_code?(code)
     end
   end
 
@@ -229,6 +235,8 @@ defmodule Lasso.RPC.ErrorClassification do
       code == @client_error_code -> :client_error
       code == @server_error_code -> :server_error
       code == @generic_server_error -> :server_error
+      # Provider-specific error codes (check before general server error range)
+      code == @publicnode_capability_violation -> :capability_violation
       # JSON-RPC server error range
       code >= -32099 and code <= -32000 -> :server_error
       # EIP-1193 provider errors
@@ -251,11 +259,11 @@ defmodule Lasso.RPC.ErrorClassification do
       # Non-retriable: client/user errors (bad input)
       code in [@invalid_request, @method_not_found, @invalid_params] -> false
       code in [@user_rejected, @unauthorized] -> false
-      # Retriable: capability violations (try different provider)
-      code == @publicnode_capability_violation -> true
       # Retriable: server/network/transient errors (check before 4xx range)
       code in [@parse_error, @internal_error, @rate_limit_error] -> true
       code in [@chain_disconnected, @network_error_code] -> true
+      # Retriable: provider-specific capability violations
+      code == @publicnode_capability_violation -> true
       code >= -32099 and code <= -32000 -> true
       code == 429 -> true
       code >= 500 -> true

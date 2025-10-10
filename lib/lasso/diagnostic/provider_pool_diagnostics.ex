@@ -190,7 +190,9 @@ defmodule Lasso.Diagnostic.ProviderPoolDiagnostics do
     requests_per_process = Keyword.get(opts, :requests_per_process, 10)
     filters = Keyword.get(opts, :filters, %{})
 
-    Logger.info("Starting load simulation: #{concurrency} concurrent, #{requests_per_process} requests each")
+    Logger.info(
+      "Starting load simulation: #{concurrency} concurrent, #{requests_per_process} requests each"
+    )
 
     start_time = System.monotonic_time(:millisecond)
 

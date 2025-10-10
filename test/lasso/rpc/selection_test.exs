@@ -51,5 +51,4 @@ defmodule Lasso.RPC.SelectionTest do
         :ok
     end
   end
-
 end

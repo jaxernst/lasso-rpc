@@ -17,7 +17,7 @@ defmodule Lasso.MixProject do
   def application do
     extra_apps =
       case Mix.env() do
-        :dev -> [:logger, :runtime_tools, :wx, :observer]
+        :dev -> [:logger, :runtime_tools, :wx, :observer, :tools]
         _ -> [:logger, :runtime_tools]
       end
 

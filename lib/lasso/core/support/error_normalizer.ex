@@ -484,10 +484,14 @@ defmodule Lasso.RPC.ErrorNormalizer do
   # ===========================================================================
 
   # Normalize HTTP status codes embedded in JSON-RPC responses to standard JSON-RPC codes
-  defp normalize_code(429), do: -32005  # Rate limit
-  defp normalize_code(code) when code >= 500 and code <= 599, do: -32000  # Server error
-  defp normalize_code(code) when code >= 400 and code <= 499, do: -32600  # Client error
-  defp normalize_code(code), do: code  # JSON-RPC codes pass through
+  # Rate limit
+  defp normalize_code(429), do: -32005
+  # Server error
+  defp normalize_code(code) when code >= 500 and code <= 599, do: -32000
+  # Client error
+  defp normalize_code(code) when code >= 400 and code <= 499, do: -32600
+  # JSON-RPC codes pass through
+  defp normalize_code(code), do: code
 
   defp maybe_add_provider_id(%JError{provider_id: nil} = jerr, provider_id)
        when is_binary(provider_id),

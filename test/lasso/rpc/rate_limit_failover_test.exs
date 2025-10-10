@@ -70,7 +70,8 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
     test "JSON-RPC error code -32429 is detected as rate limit", %{chain: _chain} do
       # Some providers use -32429 (HTTP 429 in JSON-RPC namespace)
-      rate_limit_error = JError.new(-32429, "Too many requests", category: :rate_limit, retriable?: true)
+      rate_limit_error =
+        JError.new(-32429, "Too many requests", category: :rate_limit, retriable?: true)
 
       # Verify error is retriable (should failover to next provider)
       assert rate_limit_error.retriable? == true
@@ -100,13 +101,14 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       for error_response <- test_cases do
         normalized = Lasso.RPC.ErrorNormalizer.normalize(error_response, provider_id: "test")
         assert normalized.category == :rate_limit, "Failed for: #{inspect(error_response)}"
-        assert normalized.retriable? == true, "Should be retriable for: #{inspect(error_response)}"
+
+        assert normalized.retriable? == true,
+               "Should be retriable for: #{inspect(error_response)}"
       end
     end
   end
 
   describe "rate limit detection and circuit breaker integration" do
-
     test "circuit breaker opens quickly on rate limit errors", %{chain: _chain} do
       provider_id = "fast_provider"
 
@@ -318,15 +320,13 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       provider_id = "recovering_provider"
 
       {:ok, _pid} =
-        CircuitBreaker.start_link(
-          {provider_id,
-           %{
-             failure_threshold: 2,
-             recovery_timeout: 100,
-             # Short timeout for test
-             success_threshold: 2
-           }}
-        )
+        CircuitBreaker.start_link({provider_id,
+         %{
+           failure_threshold: 2,
+           recovery_timeout: 100,
+           # Short timeout for test
+           success_threshold: 2
+         }})
 
       # Trigger rate limit failures to open circuit
       for _i <- 1..2 do
@@ -453,8 +453,15 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       Process.sleep(200)
 
       # Infura returns: {"error": {"code": -32005, "message": "daily request count exceeded, request rate limited"}}
-      infura_error = %{"error" => %{"code" => -32005, "message" => "daily request count exceeded, request rate limited"}}
-      normalized = Lasso.RPC.ErrorNormalizer.normalize(infura_error, provider_id: "infura_provider")
+      infura_error = %{
+        "error" => %{
+          "code" => -32005,
+          "message" => "daily request count exceeded, request rate limited"
+        }
+      }
+
+      normalized =
+        Lasso.RPC.ErrorNormalizer.normalize(infura_error, provider_id: "infura_provider")
 
       assert normalized.category == :rate_limit
       assert normalized.retriable? == true
@@ -479,8 +486,12 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       # Alchemy returns: {"error": {"code": -32016, "message": "Exceeded maximum requests per second"}}
       # Message contains rate limit keywords
-      alchemy_error = %{"error" => %{"code" => -32016, "message" => "Exceeded maximum requests per second"}}
-      normalized = Lasso.RPC.ErrorNormalizer.normalize(alchemy_error, provider_id: "alchemy_provider")
+      alchemy_error = %{
+        "error" => %{"code" => -32016, "message" => "Exceeded maximum requests per second"}
+      }
+
+      normalized =
+        Lasso.RPC.ErrorNormalizer.normalize(alchemy_error, provider_id: "alchemy_provider")
 
       # Should be detected by keyword matching even with non-standard code
       assert normalized.category == :rate_limit
@@ -497,8 +508,15 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       Process.sleep(200)
 
       # QuickNode style: generic server error with rate limit message
-      quicknode_error = %{"error" => %{"code" => -32603, "message" => "Credits quota exceeded. Please upgrade your plan"}}
-      normalized = Lasso.RPC.ErrorNormalizer.normalize(quicknode_error, provider_id: "quicknode_provider")
+      quicknode_error = %{
+        "error" => %{
+          "code" => -32603,
+          "message" => "Credits quota exceeded. Please upgrade your plan"
+        }
+      }
+
+      normalized =
+        Lasso.RPC.ErrorNormalizer.normalize(quicknode_error, provider_id: "quicknode_provider")
 
       assert normalized.category == :rate_limit
       assert normalized.retriable? == true
@@ -514,7 +532,10 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       Process.sleep(200)
 
       # Ankr style: throttled message
-      ankr_error = %{"error" => %{"code" => -32000, "message" => "Request throttled, please try again"}}
+      ankr_error = %{
+        "error" => %{"code" => -32000, "message" => "Request throttled, please try again"}
+      }
+
       normalized = Lasso.RPC.ErrorNormalizer.normalize(ankr_error, provider_id: "ankr_provider")
 
       assert normalized.category == :rate_limit
@@ -586,17 +607,27 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
         )
 
       # Rate limit errors increment failure count
-      CircuitBreaker.call({"test_chain", provider_id, :http}, fn -> {:error, JError.new(429, "Rate limited")} end)
+      CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
+        {:error, JError.new(429, "Rate limited")}
+      end)
+
       state1 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state1.failure_count == 1
 
       # User errors do NOT increment failure count
-      CircuitBreaker.call({"test_chain", provider_id, :http}, fn -> {:error, JError.new(-32602, "Invalid params")} end)
+      CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
+        {:error, JError.new(-32602, "Invalid params")}
+      end)
+
       state2 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
-      assert state2.failure_count == 1  # Still 1, user error didn't increment
+      # Still 1, user error didn't increment
+      assert state2.failure_count == 1
 
       # Another rate limit error increments
-      CircuitBreaker.call({"test_chain", provider_id, :http}, fn -> {:error, JError.new(-32005, "Rate limited")} end)
+      CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
+        {:error, JError.new(-32005, "Rate limited")}
+      end)
+
       state3 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
       assert state3.failure_count == 2
     end
@@ -723,8 +754,10 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
         {:rate_limit, %{}},
         {:rate_limit, %{status: 429}},
         {:rate_limit, nil},
-        %{"error" => %{"code" => -32005}},  # Missing message
-        %{"error" => %{"message" => "rate limited"}}  # Missing code
+        # Missing message
+        %{"error" => %{"code" => -32005}},
+        # Missing code
+        %{"error" => %{"message" => "rate limited"}}
       ]
 
       for error <- test_cases do

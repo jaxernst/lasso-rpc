@@ -109,15 +109,18 @@ defmodule Lasso.Battle.ProviderCapabilityTest do
               end
 
             # Count successes for this provider
-            successes = Enum.count(provider_results, fn
-              {:ok, _} -> true
-              _ -> false
-            end)
+            successes =
+              Enum.count(provider_results, fn
+                {:ok, _} -> true
+                _ -> false
+              end)
 
             total = length(provider_results)
             success_rate = if total > 0, do: successes / total, else: 0.0
 
-            Logger.info("Provider #{provider_id}: #{successes}/#{total} methods supported (#{Float.round(success_rate * 100, 1)}%)")
+            Logger.info(
+              "Provider #{provider_id}: #{successes}/#{total} methods supported (#{Float.round(success_rate * 100, 1)}%)"
+            )
 
             {provider_id, %{successes: successes, total: total, success_rate: success_rate}}
           end
@@ -193,7 +196,8 @@ defmodule Lasso.Battle.ProviderCapabilityTest do
 
               # Calculate standard deviation
               variance =
-                Enum.reduce(latencies, 0, fn x, acc -> acc + :math.pow(x - avg_latency, 2) end) / n
+                Enum.reduce(latencies, 0, fn x, acc -> acc + :math.pow(x - avg_latency, 2) end) /
+                  n
 
               std_dev = :math.sqrt(variance)
 
@@ -205,7 +209,11 @@ defmodule Lasso.Battle.ProviderCapabilityTest do
               Logger.info("Provider #{provider_id}:")
               Logger.info("  avg=#{Float.round(avg_latency, 2)}ms, p95=#{p95_latency}ms")
               Logger.info("  std_dev=#{Float.round(std_dev, 2)}ms")
-              Logger.info("  95% CI: [#{Float.round(ci_lower, 2)}ms, #{Float.round(ci_upper, 2)}ms]")
+
+              Logger.info(
+                "  95% CI: [#{Float.round(ci_lower, 2)}ms, #{Float.round(ci_upper, 2)}ms]"
+              )
+
               Logger.info("  samples: #{n}")
 
               {provider_id,
@@ -230,10 +238,12 @@ defmodule Lasso.Battle.ProviderCapabilityTest do
 
         if llamarpc && ankr do
           intervals_overlap =
-            (llamarpc.ci_lower <= ankr.ci_upper) and (ankr.ci_lower <= llamarpc.ci_upper)
+            llamarpc.ci_lower <= ankr.ci_upper and ankr.ci_lower <= llamarpc.ci_upper
 
           if intervals_overlap do
-            Logger.info("⚠️  Performance difference not statistically significant (overlapping CIs)")
+            Logger.info(
+              "⚠️  Performance difference not statistically significant (overlapping CIs)"
+            )
           else
             faster = if llamarpc.avg < ankr.avg, do: "llamarpc", else: "ankr"
 
@@ -252,7 +262,9 @@ defmodule Lasso.Battle.ProviderCapabilityTest do
       |> Scenario.run()
 
     assert result.analysis.requests.success_rate >= 0.95
-    assert result.analysis.requests.total >= 18, "Should test both providers with multiple iterations"
+
+    assert result.analysis.requests.total >= 18,
+           "Should test both providers with multiple iterations"
   end
 
   test "validate error handling for unsupported methods" do
@@ -285,6 +297,7 @@ defmodule Lasso.Battle.ProviderCapabilityTest do
             {:ok, _} -> Logger.warning("  Unexpected success for #{method}")
             {:error, reason} -> Logger.debug("  Expected error: #{inspect(reason)}")
           end
+
           # No artificial sleep - requests execute at natural rate
         end
 

@@ -54,10 +54,11 @@ defmodule Lasso.Testing.IntegrationHelper do
     # Start all provider mocks (HTTP or WS based on provider_type)
     provider_ids =
       Enum.map(providers, fn spec ->
-        result = case provider_type do
-          :http -> MockHTTPProvider.start_mock(chain, spec)
-          :ws -> MockWSProvider.start_mock(chain, spec)
-        end
+        result =
+          case provider_type do
+            :http -> MockHTTPProvider.start_mock(chain, spec)
+            :ws -> MockWSProvider.start_mock(chain, spec)
+          end
 
         case result do
           {:ok, provider_id} -> provider_id
@@ -98,12 +99,12 @@ defmodule Lasso.Testing.IntegrationHelper do
     wait_for_provider_registered(chain, provider_id, deadline)
 
     # Wait for circuit breakers (unless skipped)
-    unless skip_cb_check do
+    if !skip_cb_check do
       wait_for_circuit_breakers_ready(chain, provider_id, deadline)
     end
 
     # Wait for health status (unless skipped)
-    unless skip_health_check do
+    if !skip_health_check do
       wait_for_provider_health_available(chain, provider_id, deadline)
     end
 
@@ -215,7 +216,14 @@ defmodule Lasso.Testing.IntegrationHelper do
       {:ok, state}
     else
       Process.sleep(interval_ms)
-      wait_for_coordinator_state_recursive(coord_pid, condition_fn, max_attempts, interval_ms, attempts + 1)
+
+      wait_for_coordinator_state_recursive(
+        coord_pid,
+        condition_fn,
+        max_attempts,
+        interval_ms,
+        attempts + 1
+      )
     end
   end
 

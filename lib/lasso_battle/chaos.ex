@@ -47,7 +47,10 @@ defmodule Lasso.Battle.Chaos do
           :ok
 
         [] ->
-          Logger.warning("Chaos: WS connection for #{provider_id} not found in Registry, cannot kill")
+          Logger.warning(
+            "Chaos: WS connection for #{provider_id} not found in Registry, cannot kill"
+          )
+
           {:error, :not_found}
       end
     end)
@@ -358,7 +361,10 @@ defmodule Lasso.Battle.Chaos do
           # Schedule recovery
           Task.start(fn ->
             Process.sleep(recovery)
-            Logger.info("♻️  CHAOS: Random kill - provider #{target} should recover via supervisor")
+
+            Logger.info(
+              "♻️  CHAOS: Random kill - provider #{target} should recover via supervisor"
+            )
           end)
 
         [] ->

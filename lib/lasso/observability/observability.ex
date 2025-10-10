@@ -224,7 +224,7 @@ defmodule Lasso.RPC.Observability do
     Keyword.get(config, key, default)
   end
 
-  defp round_num(val, precision) when is_integer(val), do: val
+  defp round_num(val, _precision) when is_integer(val), do: val
   defp round_num(val, precision) when is_float(val), do: Float.round(val, precision)
   defp round_num(_, _), do: 0
 end

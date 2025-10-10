@@ -40,13 +40,14 @@ defmodule Lasso.Battle.FuzzRPCMethodsTest do
     {"eth_feeHistory", [4, "latest", [25, 75]]},
 
     # Contract calls (USDC balanceOf for zero address)
-    {"eth_call", [
-      %{
-        to: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-        data: "0x70a082310000000000000000000000000000000000000000000000000000000000000000"
-      },
-      "latest"
-    ]}
+    {"eth_call",
+     [
+       %{
+         to: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+         data: "0x70a082310000000000000000000000000000000000000000000000000000000000000000"
+       },
+       "latest"
+     ]}
   ]
 
   setup_all do
@@ -106,6 +107,7 @@ defmodule Lasso.Battle.FuzzRPCMethodsTest do
               {:ok, _result} -> :ok
               {:error, reason} -> Logger.warning("Method #{method} failed: #{inspect(reason)}")
             end
+
             # No artificial sleep - requests execute at natural rate
           end
         end

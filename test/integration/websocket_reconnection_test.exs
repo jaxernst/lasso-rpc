@@ -47,7 +47,9 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
   defp start_connection_with_cb(endpoint) do
     # Start circuit breaker for the endpoint
     circuit_breaker_config = %{failure_threshold: 5, recovery_timeout: 200, success_threshold: 1}
-    {:ok, _cb_pid} = CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
+
+    {:ok, _cb_pid} =
+      CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
 
     # Start connection
     {:ok, pid} = WSConnection.start_link(endpoint)
@@ -167,7 +169,8 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       TestSupport.MockWSClient.disconnect(ws_state.connection, :connection_lost)
       {:ok, _, _} = TelemetrySync.await_event(disconn_collector, timeout: 2_000)
       {:ok, _, sched_meta2} = TelemetrySync.await_event(sched_collector, timeout: 2_000)
-      assert sched_meta2.attempt == 1  # Reset after successful connection
+      # Reset after successful connection
+      assert sched_meta2.attempt == 1
 
       cleanup_connection(endpoint)
     end
@@ -233,8 +236,10 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       TestSupport.MockWSClient.disconnect(ws_state.connection, :connection_lost)
       {:ok, m1, meta1} = TelemetrySync.await_event(sched_collector, timeout: 2_000)
       assert meta1.attempt == 1
-      assert m1.delay_ms == 0  # First attempt is immediate
-      assert m1.jitter_ms == 0  # No jitter on first attempt
+      # First attempt is immediate
+      assert m1.delay_ms == 0
+      # No jitter on first attempt
+      assert m1.jitter_ms == 0
 
       cleanup_connection(endpoint)
     end
@@ -277,7 +282,8 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
 
       # Use 15s interval. Delay formula: min(interval * reconnect_attempts, 30_000)
       # At attempt 3, reconnect_attempts = 2, so delay = min(15_000 * 2, 30_000) = 30_000
-      endpoint = build_endpoint(chain, "cap", reconnect_interval: 15_000, max_reconnect_attempts: 5)
+      endpoint =
+        build_endpoint(chain, "cap", reconnect_interval: 15_000, max_reconnect_attempts: 5)
 
       {:ok, conn_collector} =
         TelemetrySync.attach_collector(
@@ -289,14 +295,16 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
         TelemetrySync.attach_collector(
           [:lasso, :websocket, :connection_failed],
           match: [provider_id: endpoint.id],
-          count: 3  # Need 3 failures to get to attempt 3
+          # Need 3 failures to get to attempt 3
+          count: 3
         )
 
       {:ok, sched_collector} =
         TelemetrySync.attach_collector(
           [:lasso, :websocket, :reconnect_scheduled],
           match: [provider_id: endpoint.id],
-          count: 3  # Need 3 schedules for attempts 1, 2, 3
+          # Need 3 schedules for attempts 1, 2, 3
+          count: 3
         )
 
       {pid, endpoint} = start_connection_with_cb(endpoint)
@@ -316,6 +324,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       # Attempt 1: immediate (0ms delay, reconnect_attempts = 0)
       {:ok, measurements1, metadata1} =
         TelemetrySync.await_event(sched_collector, timeout: 2_000)
+
       assert metadata1.attempt == 1
       assert measurements1.delay_ms == 0
       {:ok, _, _} = TelemetrySync.await_event(failed_collector, timeout: 2_000)
@@ -323,17 +332,23 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       # Attempt 2: 15s delay (reconnect_attempts = 1, so 15_000 * 1 = 15_000)
       {:ok, measurements2, metadata2} =
         TelemetrySync.await_event(sched_collector, timeout: 2_000)
+
       assert metadata2.attempt == 2
       assert measurements2.delay_ms >= 15_000
-      assert measurements2.delay_ms <= 16_000  # 15s + max 1s jitter
-      {:ok, _, _} = TelemetrySync.await_event(failed_collector, timeout: 18_000)  # Wait for 15s delay + buffer
+      # 15s + max 1s jitter
+      assert measurements2.delay_ms <= 16_000
+      # Wait for 15s delay + buffer
+      {:ok, _, _} = TelemetrySync.await_event(failed_collector, timeout: 18_000)
 
       # Attempt 3: 30s delay (reconnect_attempts = 2, so min(15_000 * 2, 30_000) = 30_000) - TESTS THE CAP
       {:ok, measurements3, metadata3} =
         TelemetrySync.await_event(sched_collector, timeout: 2_000)
+
       assert metadata3.attempt == 3
-      assert measurements3.delay_ms >= 30_000  # At the cap
-      assert measurements3.delay_ms <= 31_000  # 30s cap + max 1s jitter
+      # At the cap
+      assert measurements3.delay_ms >= 30_000
+      # 30s cap + max 1s jitter
+      assert measurements3.delay_ms <= 31_000
 
       cleanup_connection(endpoint)
     end
@@ -344,7 +359,8 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       # Start FailureInjector for this test
       {:ok, _} = start_supervised(TestSupport.FailureInjector)
 
-      endpoint = build_endpoint(chain, "max_stop", reconnect_interval: 50, max_reconnect_attempts: 2)
+      endpoint =
+        build_endpoint(chain, "max_stop", reconnect_interval: 50, max_reconnect_attempts: 2)
 
       {:ok, conn_collector} =
         TelemetrySync.attach_collector(
@@ -403,7 +419,11 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       # Start FailureInjector for this test
       {:ok, _} = start_supervised(TestSupport.FailureInjector)
 
-      endpoint = build_endpoint(chain, "exhausted_event", reconnect_interval: 50, max_reconnect_attempts: 1)
+      endpoint =
+        build_endpoint(chain, "exhausted_event",
+          reconnect_interval: 50,
+          max_reconnect_attempts: 1
+        )
 
       {:ok, conn_collector} =
         TelemetrySync.attach_collector(

@@ -236,8 +236,12 @@ defmodule Lasso.Battle.RealProviderFailoverTest do
            "Circuit breaker should have opened for failed provider"
 
     # Compare latencies (recovery P95 should be similar or slightly higher)
-    latency_increase = recovery_result.analysis.requests.p95_latency_ms - baseline_result.analysis.requests.p95_latency_ms
-    latency_increase_pct = latency_increase / baseline_result.analysis.requests.p95_latency_ms * 100
+    latency_increase =
+      recovery_result.analysis.requests.p95_latency_ms -
+        baseline_result.analysis.requests.p95_latency_ms
+
+    latency_increase_pct =
+      latency_increase / baseline_result.analysis.requests.p95_latency_ms * 100
 
     IO.puts("\n✅ Concurrent Load Failover Test Passed!")
     IO.puts("   Baseline (3 providers):")
@@ -246,8 +250,14 @@ defmodule Lasso.Battle.RealProviderFailoverTest do
     IO.puts("   Recovery (2 providers):")
     IO.puts("     - #{recovery_result.analysis.requests.total} requests")
     IO.puts("     - P95: #{recovery_result.analysis.requests.p95_latency_ms}ms")
-    IO.puts("   Latency impact: +#{Float.round(latency_increase, 1)}ms (#{Float.round(latency_increase_pct, 1)}%)")
-    IO.puts("   Success rate maintained: #{Float.round(recovery_result.analysis.requests.success_rate * 100, 2)}%")
+
+    IO.puts(
+      "   Latency impact: +#{Float.round(latency_increase, 1)}ms (#{Float.round(latency_increase_pct, 1)}%)"
+    )
+
+    IO.puts(
+      "   Success rate maintained: #{Float.round(recovery_result.analysis.requests.success_rate * 100, 2)}%"
+    )
   end
 
   test "fastest strategy routes to lowest latency provider" do

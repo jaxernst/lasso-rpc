@@ -21,7 +21,7 @@ defmodule LassoWeb.Components.DashboardComponents do
     <div class={["pointer-events-none absolute top-4 left-4 z-40 transition-all duration-300", if(@chain_config_open,
     do: if(@chain_config_collapsed, do: "h-12 w-80", else: "w-[28rem] h-[32rem]"),
     else: "pointer-events-none h-12 w-80 scale-90 opacity-0")]}>
-      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg", "transition-all duration-300", unless(@chain_config_open, do: "scale-90 opacity-0")]}>
+      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg", "transition-all duration-300", if(!@chain_config_open, do: "scale-90 opacity-0")]}>
         <!-- Header / Collapsed State -->
         <div class="border-gray-700/50 flex items-center justify-between border-b px-4 py-2">
           <div class="flex min-w-0 items-center gap-2">

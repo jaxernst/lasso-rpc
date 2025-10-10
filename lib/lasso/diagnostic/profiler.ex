@@ -67,7 +67,7 @@ defmodule Lasso.Diagnostic.Profiler do
       :fprof.trace([:stop])
 
       :fprof.profile()
-      :fprof.analyse([:totals, {:sort, :own}, {:dest, 'fprof_analysis.txt'}])
+      :fprof.analyse([:totals, {:sort, :own}, {:dest, ~c"fprof_analysis.txt"}])
 
       IO.puts("Profile written to fprof_analysis.txt")
       {:ok, "fprof_analysis.txt"}

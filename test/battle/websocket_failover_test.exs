@@ -82,6 +82,7 @@ defmodule Lasso.Battle.WebSocketFailoverTest do
           %{{:newHeads} => %{primary_provider_id: provider_id}} ->
             Logger.info("📡 Detected active provider: #{provider_id}")
             provider_id
+
           _ ->
             Logger.info("📡 No active subscription found, defaulting to ankr")
             "ankr"
@@ -196,6 +197,7 @@ defmodule Lasso.Battle.WebSocketFailoverTest do
         case pool_state.keys do
           %{{:newHeads} => %{primary_provider_id: provider_id}} ->
             provider_id
+
           _ ->
             "ankr"
         end

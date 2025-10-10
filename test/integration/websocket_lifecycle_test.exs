@@ -47,7 +47,9 @@ defmodule Lasso.Integration.WebSocketLifecycleTest do
   defp start_connection_with_cb(endpoint) do
     # Start circuit breaker for the endpoint
     circuit_breaker_config = %{failure_threshold: 3, recovery_timeout: 200, success_threshold: 1}
-    {:ok, _cb_pid} = CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
+
+    {:ok, _cb_pid} =
+      CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
 
     # Start connection
     {:ok, pid} = WSConnection.start_link(endpoint)
@@ -166,6 +168,7 @@ defmodule Lasso.Integration.WebSocketLifecycleTest do
       endpoint = build_endpoint(chain, "graceful")
 
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
+
       disconn_collector =
         TelemetrySync.start_collector(
           [:lasso, :websocket, :disconnected],
@@ -207,6 +210,7 @@ defmodule Lasso.Integration.WebSocketLifecycleTest do
       endpoint = build_endpoint(chain, "unexpected")
 
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
+
       disconn_collector =
         TelemetrySync.start_collector(
           [:lasso, :websocket, :disconnected],
@@ -223,7 +227,8 @@ defmodule Lasso.Integration.WebSocketLifecycleTest do
       TestSupport.MockWSClient.disconnect(mock_client, :connection_lost)
 
       # Wait for disconnect telemetry
-      {:ok, _measurements, metadata} = TelemetrySync.await_event(disconn_collector, timeout: 2_000)
+      {:ok, _measurements, metadata} =
+        TelemetrySync.await_event(disconn_collector, timeout: 2_000)
 
       assert metadata.provider_id == endpoint.id
       assert metadata.reason == :connection_lost
@@ -236,11 +241,21 @@ defmodule Lasso.Integration.WebSocketLifecycleTest do
       endpoint = build_endpoint(chain, "crash")
 
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
-      disconn_collector = TelemetrySync.start_collector([:lasso, :websocket, :reconnect_scheduled])
+
+      disconn_collector =
+        TelemetrySync.start_collector([:lasso, :websocket, :reconnect_scheduled])
 
       # Start with circuit breaker
-      circuit_breaker_config = %{failure_threshold: 3, recovery_timeout: 200, success_threshold: 1}
-      {:ok, cb_pid} = CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
+      circuit_breaker_config = %{
+        failure_threshold: 3,
+        recovery_timeout: 200,
+        success_threshold: 1
+      }
+
+      {:ok, cb_pid} =
+        CircuitBreaker.start_link(
+          {{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config}
+        )
 
       # Start connection
       {:ok, pid} = WSConnection.start_link(endpoint)

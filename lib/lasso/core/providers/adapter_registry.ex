@@ -22,7 +22,7 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
   # Provider ID → Adapter module mapping
   # This will be populated as we create each adapter
   @adapter_mapping %{
-    # "ethereum_cloudflare" => Adapters.Cloudflare,
+    "ethereum_cloudflare" => Adapters.Cloudflare,
     "ethereum_publicnode" => Adapters.PublicNode,
     "ethereum_llamarpc" => Adapters.LlamaRPC,
     "ethereum_merkle" => Adapters.Merkle,

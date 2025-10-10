@@ -86,5 +86,4 @@ defmodule Lasso.RPC.ProviderPoolTest do
     p1_status3 = Enum.find(status3.providers, &(&1.id == p1.id))
     assert p1_status3.consecutive_failures >= p1_status2.consecutive_failures
   end
-
 end

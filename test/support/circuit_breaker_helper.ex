@@ -275,6 +275,7 @@ defmodule Lasso.Test.CircuitBreakerHelper do
           {:ok, state} -> {transport, state}
           {:error, _} -> nil
         end
+
       {{_provider_id, transport}, _pid} ->
         case get_circuit_breaker_state({provider_id, transport}) do
           {:ok, state} -> {transport, state}
@@ -337,6 +338,7 @@ defmodule Lasso.Test.CircuitBreakerHelper do
 
   defp parse_breaker_key(key) when is_binary(key) do
     parts = String.split(key, ":")
+
     case parts do
       [chain, provider_id, transport] -> {chain, provider_id, String.to_atom(transport)}
       [provider_id, transport] -> {provider_id, String.to_atom(transport)}
@@ -354,8 +356,10 @@ defmodule Lasso.Test.CircuitBreakerHelper do
         cond do
           state.chain != nil and state.transport != :unknown ->
             {state.chain, state.provider_id, state.transport}
+
           state.transport != :unknown ->
             {state.provider_id, state.transport}
+
           true ->
             state.provider_id
         end

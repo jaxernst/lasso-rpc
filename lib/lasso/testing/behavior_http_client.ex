@@ -46,7 +46,9 @@ defmodule Lasso.Testing.BehaviorHttpClient do
     provider_id = Map.get(provider_config, :id)
     is_mock = Map.get(provider_config, :__mock__, false)
 
-    Logger.info("BehaviorHttpClient: provider_id=#{provider_id}, is_mock=#{is_mock}, config_keys=#{inspect(Map.keys(provider_config))}")
+    Logger.info(
+      "BehaviorHttpClient: provider_id=#{provider_id}, is_mock=#{is_mock}, config_keys=#{inspect(Map.keys(provider_config))}"
+    )
 
     if is_mock do
       # Route to mock provider
@@ -60,6 +62,7 @@ defmodule Lasso.Testing.BehaviorHttpClient do
             "id" => 1,
             "result" => result
           }
+
           {:ok, response}
 
         {:error, %Lasso.JSONRPC.Error{} = error} ->
@@ -99,12 +102,13 @@ defmodule Lasso.Testing.BehaviorHttpClient do
 
     if is_mock do
       # Execute each request individually through the mock
-      results = Enum.map(requests, fn %{method: method, params: params} ->
-        case request(provider_config, method, params, opts) do
-          {:ok, response} -> response
-          {:error, error} -> %{"error" => inspect(error)}
-        end
-      end)
+      results =
+        Enum.map(requests, fn %{method: method, params: params} ->
+          case request(provider_config, method, params, opts) do
+            {:ok, response} -> response
+            {:error, error} -> %{"error" => inspect(error)}
+          end
+        end)
 
       {:ok, results}
     else

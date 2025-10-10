@@ -289,7 +289,11 @@ defmodule Lasso.Test.TelemetrySync do
     else
       case wait_for_event(event_name, timeout: remaining_timeout) do
         {:ok, measurements, metadata} ->
-          wait_for_events_recursive(rest, [{event_name, measurements, metadata} | collected], deadline)
+          wait_for_events_recursive(
+            rest,
+            [{event_name, measurements, metadata} | collected],
+            deadline
+          )
 
         {:error, :timeout} ->
           {:error, :timeout, Enum.reverse(collected)}

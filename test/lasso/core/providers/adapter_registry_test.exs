@@ -18,8 +18,8 @@ defmodule Lasso.RPC.Providers.AdapterRegistryTest do
       assert AdapterRegistry.adapter_for("unknown_provider") == Generic
     end
 
-    test "returns Generic adapter for provider with no custom adapter" do
-      assert AdapterRegistry.adapter_for("ethereum_llamarpc") == Generic
+    test "returns LlamaRPC adapter for ethereum_llamarpc" do
+      assert AdapterRegistry.adapter_for("ethereum_llamarpc") == Adapters.LlamaRPC
     end
 
     test "handles empty string" do
@@ -46,11 +46,11 @@ defmodule Lasso.RPC.Providers.AdapterRegistryTest do
     test "returns true for provider with custom adapter" do
       assert AdapterRegistry.has_custom_adapter?("ethereum_cloudflare") == true
       assert AdapterRegistry.has_custom_adapter?("ethereum_publicnode") == true
+      assert AdapterRegistry.has_custom_adapter?("ethereum_llamarpc") == true
     end
 
     test "returns false for provider using Generic adapter" do
       assert AdapterRegistry.has_custom_adapter?("unknown_provider") == false
-      assert AdapterRegistry.has_custom_adapter?("ethereum_llamarpc") == false
     end
 
     test "returns false for empty string" do

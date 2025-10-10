@@ -49,6 +49,7 @@ defmodule Lasso.Test.LassoIntegrationCase do
       import Lasso.Testing.IntegrationHelper
 
       alias Lasso.Testing.{MockWSProvider, IntegrationHelper}
+
       alias Lasso.RPC.{
         CircuitBreaker,
         StreamCoordinator,
@@ -158,7 +159,11 @@ defmodule Lasso.Test.LassoIntegrationCase do
           end
       """
       defp wait_for_cb_open(provider_id, transport, timeout \\ 5_000) do
-        case Lasso.Test.TelemetrySync.wait_for_circuit_breaker_open(provider_id, transport, timeout) do
+        case Lasso.Test.TelemetrySync.wait_for_circuit_breaker_open(
+               provider_id,
+               transport,
+               timeout
+             ) do
           {:ok, _meta} -> :ok
           {:error, :timeout} -> flunk("Circuit breaker did not open within #{timeout}ms")
         end
@@ -168,7 +173,11 @@ defmodule Lasso.Test.LassoIntegrationCase do
       Waits for a circuit breaker to close.
       """
       defp wait_for_cb_close(provider_id, transport, timeout \\ 5_000) do
-        case Lasso.Test.TelemetrySync.wait_for_circuit_breaker_close(provider_id, transport, timeout) do
+        case Lasso.Test.TelemetrySync.wait_for_circuit_breaker_close(
+               provider_id,
+               transport,
+               timeout
+             ) do
           {:ok, _meta} -> :ok
           {:error, :timeout} -> flunk("Circuit breaker did not close within #{timeout}ms")
         end
