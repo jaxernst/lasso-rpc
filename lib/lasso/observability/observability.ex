@@ -67,6 +67,7 @@ defmodule Lasso.RPC.Observability do
       selection_latency_ms: ctx.selection_latency_ms,
       upstream_latency_ms: ctx.upstream_latency_ms,
       end_to_end_latency_ms: ctx.end_to_end_latency_ms,
+      lasso_overhead_ms: ctx.lasso_overhead_ms,
       retries: ctx.retries,
       circuit_breaker_state: to_string(ctx.circuit_breaker_state || :unknown)
     }
@@ -128,7 +129,9 @@ defmodule Lasso.RPC.Observability do
 
   defp build_timing_section(ctx) do
     %{
-      upstream_latency_ms: ctx.upstream_latency_ms
+      upstream_latency_ms: ctx.upstream_latency_ms,
+      end_to_end_latency_ms: ctx.end_to_end_latency_ms,
+      lasso_overhead_ms: ctx.lasso_overhead_ms
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()
@@ -160,10 +163,18 @@ defmodule Lasso.RPC.Observability do
       end
 
     latency_str =
-      if ctx.upstream_latency_ms do
-        " (upstream: #{Float.round(ctx.upstream_latency_ms, 1)}ms)"
-      else
-        ""
+      cond do
+        ctx.upstream_latency_ms && ctx.lasso_overhead_ms ->
+          " (upstream: #{round_num(ctx.upstream_latency_ms, 1)}ms, overhead: #{round_num(ctx.lasso_overhead_ms, 1)}ms)"
+
+        ctx.upstream_latency_ms ->
+          " (upstream: #{round_num(ctx.upstream_latency_ms, 1)}ms)"
+
+        ctx.end_to_end_latency_ms ->
+          " (e2e: #{round_num(ctx.end_to_end_latency_ms, 1)}ms)"
+
+        true ->
+          ""
       end
 
     retry_str = if ctx.retries > 0, do: " retries=#{ctx.retries}", else: ""
@@ -212,4 +223,8 @@ defmodule Lasso.RPC.Observability do
     config = Application.get_env(:lasso, :observability, @default_config)
     Keyword.get(config, key, default)
   end
+
+  defp round_num(val, precision) when is_integer(val), do: val
+  defp round_num(val, precision) when is_float(val), do: Float.round(val, precision)
+  defp round_num(_, _), do: 0
 end

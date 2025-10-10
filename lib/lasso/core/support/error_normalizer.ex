@@ -112,14 +112,23 @@ defmodule Lasso.RPC.ErrorNormalizer do
     context = Keyword.get(opts, :context, :transport)
     transport = Keyword.get(opts, :transport)
 
-    JError.new(-32002, "Server error",
+    # Try to extract nested JSON-RPC error from response body for better classification
+    {code, message} = extract_nested_error(payload, -32002, "Server error")
+
+    # Use centralized classification with the extracted message
+    category = ErrorClassification.categorize(code, message)
+    retriable? = ErrorClassification.retriable?(code, message)
+    breaker_penalty? = ErrorClassification.breaker_penalty?(category)
+
+    JError.new(code, message,
       data: payload,
       provider_id: provider_id,
       source: context,
       transport: transport,
-      category: :server_error,
-      retriable?: true,
-      breaker_penalty?: true
+      category: category,
+      retriable?: retriable?,
+      breaker_penalty?: breaker_penalty?,
+      original_code: code
     )
   end
 
@@ -129,14 +138,23 @@ defmodule Lasso.RPC.ErrorNormalizer do
     context = Keyword.get(opts, :context, :transport)
     transport = Keyword.get(opts, :transport)
 
-    JError.new(-32003, "Client error",
+    # Try to extract nested JSON-RPC error from response body for better classification
+    {code, message} = extract_nested_error(payload, -32003, "Client error")
+
+    # Use centralized classification with the extracted message
+    category = ErrorClassification.categorize(code, message)
+    retriable? = ErrorClassification.retriable?(code, message)
+    breaker_penalty? = ErrorClassification.breaker_penalty?(category)
+
+    JError.new(code, message,
       data: payload,
       provider_id: provider_id,
       source: context,
       transport: transport,
-      category: :client_error,
-      retriable?: false,
-      breaker_penalty?: true
+      category: category,
+      retriable?: retriable?,
+      breaker_penalty?: breaker_penalty?,
+      original_code: code
     )
   end
 
@@ -482,4 +500,26 @@ defmodule Lasso.RPC.ErrorNormalizer do
        do: %{jerr | transport: transport}
 
   defp maybe_add_transport(jerr, _transport), do: jerr
+
+  # Extract nested JSON-RPC error from HTTP error payload (e.g., 4xx/5xx with JSON body)
+  defp extract_nested_error(%{body: body} = _payload, fallback_code, fallback_message)
+       when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"error" => %{"code" => code, "message" => message}}} when is_integer(code) ->
+        {code, message}
+
+      {:ok, %{"error" => %{"message" => message}}} ->
+        # Error without code - use fallback code but preserve message
+        {fallback_code, message}
+
+      _ ->
+        # Not a JSON-RPC error or invalid JSON - use fallback
+        {fallback_code, fallback_message}
+    end
+  end
+
+  defp extract_nested_error(_payload, fallback_code, fallback_message) do
+    # No body or non-map payload - use fallback
+    {fallback_code, fallback_message}
+  end
 end
