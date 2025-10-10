@@ -423,7 +423,16 @@ For quick manual load testing:
 
 ```bash
 # Basic RPC method load test (curl)
-for i in {1..20}; do for method in eth_blockNumber eth_gasPrice eth_getBlockByNumber eth_chainId; do curl -s -X POST http://localhost:4000/rpc/round-robin/ethereum -H 'Content-Type: application/json' -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$(if [ \"$method\" = "eth_getBlockByNumber" ]; then echo '[\"latest\", false]'; else echo '[]'; fi),\"id\":$i}" & done; wait; done
+for i in {1..2000}; do for method in eth_blockNumber eth_gasPrice eth_getBlockByNumber eth_chainId; do curl -s -X POST http://localhost:4000/rpc/round-robin/ethereum -H 'Content-Type: application/json' -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$(if [ \"$method\" = "eth_getBlockByNumber" ]; then echo '[\"latest\", false]'; else echo '[]'; fi),\"id\":$i}" & done; wait; done
+```
+
+```bash
+# Comprehensive load test with realistic params, live RPS and latency summary (Node 18+)
+# Options: --url <endpoint> --concurrency <N> --duration <seconds> --timeout <ms> --methods <csv> --verbose
+node scripts/rpc_load_test.mjs --url http://localhost:4000/rpc/round-robin/ethereum --concurrency 32 --duration 60
+
+# Example: restrict to a subset of methods
+node scripts/rpc_load_test.mjs -m eth_blockNumber,eth_getBlockByNumber,eth_getLogs -c 24 -d 45
 ```
 
 See [project/battle-testing/BATTLE_TESTING_GUIDE.md](project/battle-testing/BATTLE_TESTING_GUIDE.md) for detailed documentation.

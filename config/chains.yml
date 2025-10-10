@@ -7,6 +7,13 @@ chains:
     name: "Ethereum Mainnet"
 
     providers:
+      - id: "alchemy_ethereum"
+        name: "Alchemy Ethereum"
+        priority: 1
+        type: "premium"
+        url: "https://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+        ws_url: "wss://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+        api_key_required: true
       - id: "ethereum_llamarpc"
         name: "LlamaRPC"
         priority: 2

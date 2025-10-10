@@ -49,19 +49,38 @@ echo "-----------------------------------------------------------"
 
 # Use Fly's remote builder to avoid cross-compilation issues
 # This builds on native amd64 infrastructure and pushes to registry
-flyctl deploy \
+flyctl -t "$FLY_API_TOKEN" deploy \
   --app "$FLY_APP_NAME" \
   --image-label "$TAG" \
+  --push \
+  --depot=false \
   --build-only \
-  --remote-only
+  --remote-only 2>&1 | tee /tmp/fly_build.log
 
 echo ""
 echo "✅ Image built and pushed: $IMAGE_REF"
 echo ""
+echo "🔎 Using tag reference for image pulls (auth-aligned)."
+echo ""
 echo "Step 2/3: Provisioning infrastructure via provision.mjs..."
 echo "-----------------------------------------------------------"
 
-# Run the infrastructure-as-code provisioning script
+# Attach the built image to the app as the current image (creates a proper release alias)
+echo "Linking image to app via release alias..."
+flyctl -t "$FLY_API_TOKEN" image update -a "$FLY_APP_NAME" --image "$IMAGE_REF" -y
+
+# Read back the latest release ImageRef and use that for provisioning (usually a deployment-* alias)
+set +e
+LATEST_REF=$(flyctl -t "$FLY_API_TOKEN" releases -a "$FLY_APP_NAME" --json | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const arr=JSON.parse(d);if(Array.isArray(arr)&&arr.length&&arr[0].ImageRef){console.log(arr[0].ImageRef)}else{process.exit(1)}}catch(e){process.exit(1)}})')
+set -e
+if [ -n "${LATEST_REF:-}" ]; then
+  export IMAGE_REF="$LATEST_REF"
+  echo "  Using release image ref: $IMAGE_REF"
+else
+  echo "  ⚠️ Could not determine release ImageRef; proceeding with $IMAGE_REF"
+fi
+
+# Run the infrastructure-as-code provisioning script with a known-good image reference
 node deployment/provision.mjs
 
 echo ""

@@ -125,6 +125,10 @@ function machineConfig(region, volumeName) {
   };
 }
 
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function launchMachines() {
   for (const region of REGIONS) {
     const volumeName = `data_${region}`;
@@ -132,12 +136,48 @@ async function launchMachines() {
     for (let i = 0; i < COUNT; i++) {
       const cfg = machineConfig(region, volumeName);
       const body = { region, config: cfg };
-      const r = await fetch(`${MACHINES}/apps/${APP}/machines`, {
-        method: "POST",
-        headers: headers(),
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) throw new Error(await r.text());
+
+      // Retry with exponential backoff for registry tag propagation, which can be slow
+      let lastError;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const r = await fetch(`${MACHINES}/apps/${APP}/machines`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify(body),
+        });
+
+        if (r.ok) {
+          const machine = await r.json();
+          console.log(`Created machine ${machine.id} in ${region}`);
+          break;
+        }
+
+        const errorText = await r.text();
+        lastError = errorText;
+
+        // Check if it's a manifest/registry error that might resolve with retry
+        if (
+          errorText.includes("MANIFEST_UNKNOWN") ||
+          errorText.includes("manifest unknown") ||
+          errorText.includes("unknown tag")
+        ) {
+          const delay = Math.min(Math.pow(2, attempt) * 1000, 30000); // cap at 30s
+          console.log(
+            `Manifest not ready, retrying in ${delay}ms (attempt ${
+              attempt + 1
+            }/10)...`
+          );
+          await sleep(delay);
+          continue;
+        }
+
+        // Other errors, fail immediately
+        throw new Error(errorText);
+      }
+
+      if (lastError) {
+        throw new Error(`Failed after 10 retries: ${lastError}`);
+      }
     }
   }
 }
