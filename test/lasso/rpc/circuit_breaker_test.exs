@@ -20,6 +20,8 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
     assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
 
+    # allow async state update to apply
+    Process.sleep(20)
     state = CircuitBreaker.get_state(id)
     assert state.state == :open
 
@@ -41,13 +43,15 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       )
 
     assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+    Process.sleep(20)
     assert CircuitBreaker.get_state(id).state == :open
 
     Process.sleep(60)
     # First success in half-open
     assert {:ok, :ok} = CircuitBreaker.call(id, fn -> :ok end)
-    # Failure should re-open
-    assert {:error, :circuit_reopening} = CircuitBreaker.call(id, fn -> raise "oops" end)
+    # Failure should re-open (caller receives raw error now)
+    assert {:error, _} = CircuitBreaker.call(id, fn -> raise "oops" end)
+    Process.sleep(20)
     assert CircuitBreaker.get_state(id).state == :open
   end
 
@@ -62,6 +66,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, {:server_error, "500"}} end)
     assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, {:server_error, "500"}} end)
 
+    Process.sleep(20)
     state = CircuitBreaker.get_state(id)
     assert state.state == :open
 
@@ -82,15 +87,18 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         {id, %{failure_threshold: 2, recovery_timeout: 50, success_threshold: 1}}
       )
 
-    assert {:error, _} = CircuitBreaker.record_failure(id)
+    assert :ok = CircuitBreaker.record_failure(id)
+    Process.sleep(20)
     assert CircuitBreaker.get_state(id).state == :closed
 
-    assert {:error, _} = CircuitBreaker.record_failure(id)
+    assert :ok = CircuitBreaker.record_failure(id)
+    Process.sleep(20)
     assert CircuitBreaker.get_state(id).state == :open
 
     # After recovery timeout, half-open then success should close
     Process.sleep(60)
-    assert {:ok, :success} = CircuitBreaker.record_success(id)
+    assert :ok = CircuitBreaker.record_success(id)
+    Process.sleep(20)
     assert CircuitBreaker.get_state(id).state == :closed
   end
 end

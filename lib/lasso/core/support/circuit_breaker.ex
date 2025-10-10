@@ -90,28 +90,26 @@ defmodule Lasso.RPC.CircuitBreaker do
 
     case decision do
       {:allow, token} ->
-        result =
+        raw_result =
           try do
             fun.()
           catch
             kind, error -> {:__trap__, {kind, error}}
           end
 
-        GenServer.cast(via_name(id), {:report, token, result})
+        report_result =
+          case raw_result do
+            {:__trap__, {kind, error}} -> {:error, {kind, error}}
+            other -> other
+          end
 
-        case result do
-          {:__trap__, {kind, error}} ->
-            # Mirror previous semantics: treat as error; normalization happens in breaker
-            {:error, {kind, error}}
+        GenServer.cast(via_name(id), {:report, token, report_result})
 
-          {:ok, _} ->
-            result
-
-          {:error, _} ->
-            result
-
-          other ->
-            {:ok, other}
+        case raw_result do
+          {:__trap__, {kind, error}} -> {:error, {kind, error}}
+          {:ok, _} -> raw_result
+          {:error, _} -> raw_result
+          other -> {:ok, other}
         end
 
       {:deny, :open} ->
@@ -372,6 +370,65 @@ defmodule Lasso.RPC.CircuitBreaker do
         # Reset failure count on success
         new_state = %{state | failure_count: 0}
         {:reply, {:ok, result}, new_state}
+
+      :open ->
+        # Received a success while open (e.g., external report). Transition to half_open
+        Logger.info(
+          "Circuit breaker #{state.provider_id} (#{state.transport}) attempting recovery from success report"
+        )
+
+        :telemetry.execute([:lasso, :circuit_breaker, :half_open], %{count: 1}, %{
+          provider_id: state.provider_id
+        })
+
+        publish_circuit_event(
+          state.provider_id,
+          :open,
+          :half_open,
+          :recovery_attempt,
+          state.transport,
+          state.chain
+        )
+
+        new_success_count = 1
+
+        if new_success_count >= state.success_threshold do
+          Logger.info(
+            "Circuit breaker #{state.provider_id} (#{state.transport}) recovered from success report, closing"
+          )
+
+          :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
+            provider_id: state.provider_id
+          })
+
+          publish_circuit_event(
+            state.provider_id,
+            :open,
+            :closed,
+            :recovered,
+            state.transport,
+            state.chain
+          )
+
+          new_state = %{
+            state
+            | state: :closed,
+              failure_count: 0,
+              success_count: 0,
+              last_failure_time: nil
+          }
+
+          {:reply, {:ok, result}, new_state}
+        else
+          new_state = %{
+            state
+            | state: :half_open,
+              success_count: new_success_count,
+              failure_count: 0
+          }
+
+          {:reply, {:ok, result}, new_state}
+        end
 
       :half_open ->
         # Increment success count
