@@ -19,6 +19,9 @@ defmodule Lasso.Application do
         # Start PubSub for real-time messaging
         {Phoenix.PubSub, name: Lasso.PubSub},
 
+        # Start Telemetry supervisor for metrics and monitoring
+        Lasso.Telemetry,
+
         # Start Finch HTTP client for RPC provider requests
         # High connection limit per pool to handle concurrent requests to same provider
         # Each unique provider URL gets its own pool, so size must be high enough

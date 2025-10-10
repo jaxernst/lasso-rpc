@@ -71,6 +71,7 @@ defmodule Lasso.RPC.ErrorClassification do
   ]
 
   @capability_violation_patterns [
+    "free tier",
     # Address/query limits
     "specify less number of addresses",
     "less number of addresses",
