@@ -83,3 +83,63 @@ chains:
       max_backfill_blocks: 100
       backfill_timeout: 30000
       enabled: true
+
+  base:
+    chain_id: 8453
+    name: "Base Mainnet"
+
+    providers:
+      - id: "alchemy_base"
+        name: "Alchemy Base"
+        priority: 1
+        type: "premium"
+        url: "https://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+        ws_url: "wss://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+        api_key_required: true
+
+      - id: "base_llamarpc"
+        name: "LlamaRPC Base"
+        priority: 2
+        type: "public"
+        url: "https://base.llamarpc.com"
+        ws_url: "wss://base.llamarpc.com"
+        api_key_required: false
+
+      - id: "base_official"
+        name: "Base Official"
+        priority: 3
+        type: "public"
+        url: "https://mainnet.base.org"
+        api_key_required: false
+
+      - id: "base_publicnode"
+        name: "PublicNode Base"
+        priority: 4
+        type: "public"
+        url: "https://base.publicnode.com"
+        ws_url: "wss://base.publicnode.com"
+        api_key_required: false
+
+      # - id: "base_ankr"
+      #   name: "Ankr Base"
+      #   priority: 5
+      #   type: "premium"
+      #   url: "https://rpc.ankr.com/base"
+      #   api_key_required: true
+
+      - id: "base_1rpc"
+        name: "1RPC Base"
+        priority: 6
+        type: "public"
+        url: "https://1rpc.io/base"
+        api_key_required: false
+
+    connection:
+      heartbeat_interval: 10000
+      reconnect_interval: 5000
+      max_reconnect_attempts: 10
+
+    failover:
+      max_backfill_blocks: 100
+      backfill_timeout: 30000
+      enabled: true

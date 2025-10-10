@@ -106,12 +106,12 @@ defmodule LassoWeb.RPCController do
   end
 
   def rpc_base(conn, params) do
-    Logger.debug("RPC_BASE called with params: #{inspect(Map.keys(params))}")
+    Logger.debug("RPC_BASE called with params: #{inspect(Map.keys(params))}", chain: "base")
     rpc_with_strategy(conn, params, :cheapest)
   end
 
   def rpc_fastest(conn, params) do
-    Logger.debug("RPC_FASTEST called with params: #{inspect(Map.keys(params))}")
+    Logger.debug("RPC_FASTEST called with params: #{inspect(Map.keys(params))}", chain: "fastest")
     rpc_with_strategy(conn, params, :fastest)
   end
 

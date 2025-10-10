@@ -9,7 +9,33 @@ config :lasso, LassoWeb.Endpoint,
   server: true
 
 # Print only warnings and errors during test
-config :logger, level: :info
+config :logger, :console,
+  format: {Lasso.Logger.ChainFormatter, :format},
+  level: :info,
+  metadata: [
+    :provider,
+    :provider_id,
+    :method,
+    :url,
+    :request_id,
+    :transport,
+    :context,
+    :timeout,
+    :retry_count,
+    :error,
+    :channel,
+    :result,
+    :chain,
+    :chain_id,
+    :key,
+    :id,
+    :connection,
+    :topic,
+    :params,
+    :remaining_channels,
+    :retriable,
+    :current_status
+  ]
 
 # Email configuration removed - not needed for this application
 

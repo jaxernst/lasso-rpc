@@ -7,20 +7,36 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataCache do
 
   ## Usage
 
-      # Get current block height
-      {:ok, height} = BlockchainMetadataCache.get_block_height("ethereum")
+      # Get current block height (explicit error handling)
+      case BlockchainMetadataCache.get_block_height("ethereum") do
+        {:ok, height} -> use_height(height)
+        {:error, :not_found} -> handle_missing_cache()
+        {:error, :stale} -> handle_stale_cache()
+      end
 
-      # Get with fallback estimate (never errors)
-      height = BlockchainMetadataCache.get_block_height_or_estimate("ethereum")
+      # Or raise on error
+      height = BlockchainMetadataCache.get_block_height!("ethereum")
 
       # Check provider lag
       {:ok, lag} = BlockchainMetadataCache.get_provider_lag("ethereum", "alchemy")
 
+  ## Design Philosophy
+
+  This module follows explicit error handling patterns. There are no silent
+  fallbacks to hardcoded estimates. Callers must handle cache unavailability
+  explicitly, which makes the failure modes visible and testable.
+
+  For adapters that need block height validation, they should:
+  1. Try to get cached height with `get_block_height/1`
+  2. If unavailable, decide whether to skip validation or reject the request
+  3. Make the decision explicit in their code
+
   ## Architecture
 
-  - ETS table `:blockchain_metadata` stores all cached values
+  - ETS table `:blockchain_metadata` owned by dedicated MetadataTableOwner process
   - `BlockchainMetadataMonitor` GenServers refresh data every 10s
-  - Graceful degradation when cache unavailable
+  - Table survives individual monitor crashes
+  - Explicit error propagation for observable failures
   """
 
   require Logger
@@ -74,26 +90,6 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataCache do
     case get_block_height(chain) do
       {:ok, height} -> height
       {:error, reason} -> raise ArgumentError, "Block height unavailable for #{chain}: #{reason}"
-    end
-  end
-
-  @doc """
-  Returns cached block height or falls back to conservative estimate.
-
-  This function never errors - it returns the cached value if available,
-  or a configured fallback estimate if not. Use for parameter validation
-  where graceful degradation is preferred.
-
-  ## Examples
-
-      21_234_567 = get_block_height_or_estimate("ethereum")  # Cache hit
-      21_000_000 = get_block_height_or_estimate("ethereum")  # Cache miss, uses estimate
-  """
-  @spec get_block_height_or_estimate(String.t()) :: non_neg_integer()
-  def get_block_height_or_estimate(chain) do
-    case get_block_height(chain) do
-      {:ok, height} -> height
-      {:error, _} -> fallback_estimate(chain)
     end
   end
 
@@ -235,11 +231,21 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataCache do
 
   @doc false
   def ensure_table do
+    # Table is now created by MetadataTableOwner during application startup
+    # This function just verifies it exists (useful for tests)
     case :ets.whereis(@table_name) do
       :undefined ->
-        :ets.new(@table_name, [:set, :public, :named_table, read_concurrency: true])
-        Logger.debug("Created ETS table :blockchain_metadata")
-        :ok
+        # Try to create it (race-safe with try/rescue)
+        # This only happens in test scenarios where MetadataTableOwner might not be running
+        try do
+          :ets.new(@table_name, [:set, :public, :named_table, read_concurrency: true])
+          Logger.debug("Created ETS table :blockchain_metadata (fallback mode)")
+          :ok
+        rescue
+          ArgumentError ->
+            # Another process created it between whereis and new
+            :ok
+        end
 
       _tid ->
         :ok
@@ -264,7 +270,18 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataCache do
   end
 
   defp write(key, value) do
-    :ets.insert(@table_name, {key, value})
+    try do
+      :ets.insert(@table_name, {key, value})
+    rescue
+      e in ArgumentError ->
+        Logger.error("ETS write failed",
+          key: inspect(key),
+          error: Exception.message(e)
+        )
+
+        telemetry_write_error(key, e)
+        false
+    end
   end
 
   defp fresh?(chain) do
@@ -281,21 +298,6 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataCache do
   defp get_all_provider_heights(chain) do
     :ets.match(@table_name, {{:provider, chain, :"$1", :block_height}, :"$2"})
   end
-
-  defp fallback_estimate(chain) do
-    config()
-    |> get_in([:fallback_estimates, chain])
-    |> case do
-      nil -> default_estimate(chain)
-      estimate -> estimate
-    end
-  end
-
-  defp default_estimate("ethereum"), do: 21_000_000
-  defp default_estimate("base"), do: 10_000_000
-  defp default_estimate("polygon"), do: 52_000_000
-  defp default_estimate("arbitrum"), do: 180_000_000
-  defp default_estimate(_), do: 10_000_000
 
   defp staleness_threshold do
     get_in(config(), [:staleness_threshold_ms]) || @default_staleness_threshold_ms
@@ -323,9 +325,23 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataCache do
   end
 
   defp telemetry_cache_stale(chain, key) do
-    :telemetry.execute([:lasso, :metadata, :cache, :stale], %{count: 1}, %{
+    # Calculate age for staleness events
+    age_ms =
+      case lookup({:chain, chain, :updated_at}) do
+        {:ok, timestamp} -> System.system_time(:millisecond) - timestamp
+        :error -> 0
+      end
+
+    :telemetry.execute([:lasso, :metadata, :cache, :stale], %{count: 1, age_ms: age_ms}, %{
       chain: chain,
       key: key
+    })
+  end
+
+  defp telemetry_write_error(key, error) do
+    :telemetry.execute([:lasso, :metadata, :cache, :write_error], %{count: 1}, %{
+      key: inspect(key),
+      error: Exception.message(error)
     })
   end
 end

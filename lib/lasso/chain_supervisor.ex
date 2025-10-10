@@ -23,6 +23,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   alias Lasso.RPC.ProviderSupervisor
   alias Lasso.RPC.ProviderHealthMonitor
   alias Lasso.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
+  alias Lasso.RPC.Caching.BlockchainMetadataMonitor
 
   @doc """
   Starts a ChainSupervisor for a specific blockchain.
@@ -152,6 +153,9 @@ defmodule Lasso.RPC.ChainSupervisor do
 
       # Start per-chain health monitor (HTTP checks + typed events)
       {ProviderHealthMonitor, chain_name},
+
+      # Start per-chain metadata cache monitor (block heights, chain IDs)
+      {BlockchainMetadataMonitor, chain_name},
 
       # Start per-chain subscription registry and pool
       {ClientSubscriptionRegistry, chain_name},
