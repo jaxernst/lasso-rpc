@@ -56,7 +56,8 @@ defmodule Lasso.Testing.MockHTTPProvider do
       id: provider_id,
       name: "Mock HTTP Provider #{provider_id}",
       url: "http://mock-#{provider_id}.test",
-      ws_url: "ws://mock-#{provider_id}.test/ws",  # Fake WS URL to pass protocol filter
+      # Fake WS URL to pass protocol filter
+      ws_url: "ws://mock-#{provider_id}.test/ws",
       type: "test",
       priority: Map.get(spec, :priority, 100),
       # Mark as mock for routing
@@ -69,7 +70,13 @@ defmodule Lasso.Testing.MockHTTPProvider do
          :ok <- Lasso.RPC.ProviderPool.register_provider(chain, provider_id, provider_config) do
       Logger.info("MockHTTPProvider: registered #{provider_id}, initializing channels...")
 
-      result = Lasso.RPC.TransportRegistry.initialize_provider_channels(chain, provider_id, provider_config)
+      result =
+        Lasso.RPC.TransportRegistry.initialize_provider_channels(
+          chain,
+          provider_id,
+          provider_config
+        )
+
       Logger.info("MockHTTPProvider: initialize_provider_channels returned: #{inspect(result)}")
 
       case result do
@@ -243,37 +250,42 @@ defmodule Lasso.Testing.MockHTTPProvider do
       start_time: state.start_time
     }
 
-    Logger.debug("MockHTTPProvider[#{state.provider_id}]: executing behavior #{inspect(state.behavior)} for #{method}")
-
-    result = MockProviderBehavior.execute_behavior(
-      state.behavior,
-      method,
-      params,
-      request_state
+    Logger.debug(
+      "MockHTTPProvider[#{state.provider_id}]: executing behavior #{inspect(state.behavior)} for #{method}"
     )
+
+    result =
+      MockProviderBehavior.execute_behavior(
+        state.behavior,
+        method,
+        params,
+        request_state
+      )
 
     Logger.debug("MockHTTPProvider[#{state.provider_id}]: behavior result: #{inspect(result)}")
 
     # Convert to JSONRPC response format
-    response = case result do
-      {:ok, unwrapped_result} ->
-        # MockProviderBehavior returns unwrapped values (e.g., "0x1", [], %{...})
-        # BehaviorHttpClient will wrap these in JSONRPC format
-        {:ok, unwrapped_result}
+    response =
+      case result do
+        {:ok, unwrapped_result} ->
+          # MockProviderBehavior returns unwrapped values (e.g., "0x1", [], %{...})
+          # BehaviorHttpClient will wrap these in JSONRPC format
+          {:ok, unwrapped_result}
 
-      {:error, %Lasso.JSONRPC.Error{} = error} ->
-        # Return as error tuple for the client to handle
-        {:error, error}
+        {:error, %Lasso.JSONRPC.Error{} = error} ->
+          # Return as error tuple for the client to handle
+          {:error, error}
 
-      {:error, other} ->
-        # Convert other errors to JSONRPC errors
-        {:error, %Lasso.JSONRPC.Error{
-          code: -32000,
-          message: "Mock provider error: #{inspect(other)}",
-          category: :provider_error,
-          retriable?: true
-        }}
-    end
+        {:error, other} ->
+          # Convert other errors to JSONRPC errors
+          {:error,
+           %Lasso.JSONRPC.Error{
+             code: -32000,
+             message: "Mock provider error: #{inspect(other)}",
+             category: :provider_error,
+             retriable?: true
+           }}
+      end
 
     {:reply, response, state}
   end

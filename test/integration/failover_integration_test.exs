@@ -151,6 +151,7 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
       # The failover:completed event means the coordinator switched state,
       # but the upstream subscription might not be fully established yet
       {:ok, _, resub_meta} = TelemetrySync.await_event(resubscribe_collector, timeout: 5000)
+
       assert resub_meta.provider_id == "ws_backup",
              "Resubscription should be to backup provider"
 
@@ -170,6 +171,7 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
 
       # 2. Verify we received exactly blocks 100-105
       block_nums = extract_block_numbers(all_blocks) |> Enum.sort() |> Enum.uniq()
+
       assert block_nums == [100, 101, 102, 103, 104, 105],
              "Expected blocks 100-105, got #{inspect(block_nums)}"
 
@@ -257,6 +259,7 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
       # Verify all blocks received - the critical guarantee
       all_blocks = blocks_before ++ blocks_after
       block_nums = extract_block_numbers(all_blocks) |> Enum.sort() |> Enum.uniq()
+
       assert block_nums == [200, 201, 202, 203, 204, 205],
              "Expected all blocks 200-205, got #{inspect(block_nums)}"
 
@@ -449,6 +452,7 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
       # Verify all blocks received - the critical guarantee
       all_blocks = blocks_before ++ blocks_after
       block_nums = extract_block_numbers(all_blocks) |> Enum.sort() |> Enum.uniq()
+
       assert block_nums == [1000, 1001, 1002, 1003, 1004, 1005],
              "Expected all blocks 1000-1005, got #{inspect(block_nums)}"
 
@@ -488,7 +492,8 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
 
       # Client1 should receive the event
       [block] = receive_blocks(1)
-      assert extract_block_numbers([block]) == [256]  # 0x100 = 256
+      # 0x100 = 256
+      assert extract_block_numbers([block]) == [256]
 
       # Verify both subscriptions still active
       assert ClientSubscriptionRegistry.list_by_key(chain, {:newHeads}) |> Enum.count() == 2

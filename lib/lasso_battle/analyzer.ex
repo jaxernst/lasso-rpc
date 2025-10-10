@@ -367,6 +367,7 @@ defmodule Lasso.Battle.Analyzer do
 
   defp standard_deviation(values, mean) do
     n = length(values)
+
     if n <= 1 do
       0.0
     else
@@ -479,7 +480,11 @@ defmodule Lasso.Battle.Analyzer do
       ranked = Enum.reverse(ranked)
 
       # Sum ranks for sample 1
-      r1 = ranked |> Enum.filter(fn {_, g, _} -> g == :sample1 end) |> Enum.map(fn {_, _, r} -> r end) |> Enum.sum()
+      r1 =
+        ranked
+        |> Enum.filter(fn {_, g, _} -> g == :sample1 end)
+        |> Enum.map(fn {_, _, r} -> r end)
+        |> Enum.sum()
 
       # Calculate U statistic
       u1 = r1 - n1 * (n1 + 1) / 2

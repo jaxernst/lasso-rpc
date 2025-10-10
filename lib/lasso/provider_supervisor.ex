@@ -38,7 +38,8 @@ defmodule Lasso.RPC.ProviderSupervisor do
 
       child = %{
         id: {:circuit_http, provider.id},
-        start: {CircuitBreaker, :start_link, [{{chain_name, provider.id, :http}, circuit_config}]},
+        start:
+          {CircuitBreaker, :start_link, [{{chain_name, provider.id, :http}, circuit_config}]},
         type: :worker,
         restart: :permanent,
         shutdown: 5_000

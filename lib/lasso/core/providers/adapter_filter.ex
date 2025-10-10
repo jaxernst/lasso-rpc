@@ -71,7 +71,6 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
         filtered_count:
           case result do
             {:ok, _capable, filtered} -> length(filtered)
-            _ -> 0
           end
       }
 
@@ -119,12 +118,16 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
       |> handle_validation_result(adapter, provider_id, method)
     rescue
       e ->
-        Logger.error("Adapter crash in validate_params: #{inspect(adapter)}, #{Exception.message(e)}")
+        Logger.error(
+          "Adapter crash in validate_params: #{inspect(adapter)}, #{Exception.message(e)}"
+        )
+
         :telemetry.execute([:lasso, :capabilities, :crash], %{count: 1}, %{
           adapter: adapter,
           provider_id: provider_id,
           phase: :param_validation
         })
+
         :ok
     end
   end
@@ -138,6 +141,7 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
       method: method,
       reason: reason
     })
+
     err
   end
 

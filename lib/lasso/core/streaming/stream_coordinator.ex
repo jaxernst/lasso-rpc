@@ -430,8 +430,7 @@ defmodule Lasso.RPC.StreamCoordinator do
             Enum.each(blocks, fn block ->
               GenServer.cast(
                 coordinator_pid,
-                {:upstream_event, http_provider, nil, block,
-                 System.monotonic_time(:millisecond)}
+                {:upstream_event, http_provider, nil, block, System.monotonic_time(:millisecond)}
               )
             end)
 

@@ -3,7 +3,10 @@ defmodule LassoWeb.HealthController do
 
   def health(conn, _params) do
     # Calculate uptime in seconds since application start
-    uptime_ms = System.monotonic_time(:millisecond) - Application.get_env(:lasso, :start_time, System.monotonic_time(:millisecond))
+    uptime_ms =
+      System.monotonic_time(:millisecond) -
+        Application.get_env(:lasso, :start_time, System.monotonic_time(:millisecond))
+
     uptime_seconds = div(uptime_ms, 1000)
 
     health_status = %{

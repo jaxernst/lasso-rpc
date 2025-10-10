@@ -783,7 +783,7 @@ defmodule Lasso.RPC.ProviderPool do
         updated_provider =
           provider
           |> Map.merge(%{
-            status: derive_aggregate_status(provider) || :healthy,
+            status: derive_aggregate_status(provider),
             consecutive_successes: provider.consecutive_successes + 1,
             consecutive_failures: 0,
             last_health_check: System.system_time(:millisecond),

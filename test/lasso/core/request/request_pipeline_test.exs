@@ -32,7 +32,9 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "uses provided RequestContext" do
       custom_ctx = RequestContext.new("ethereum", "eth_call", strategy: :fastest)
 
-      RequestPipeline.execute_via_channels("ethereum", "eth_call", [], request_context: custom_ctx)
+      RequestPipeline.execute_via_channels("ethereum", "eth_call", [],
+        request_context: custom_ctx
+      )
 
       # Should use the provided context
       stored_ctx = Process.get(:request_context)
@@ -90,22 +92,38 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   describe "execute_via_channels/4 - strategy support" do
     test "accepts :fastest strategy" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], strategy: :fastest)
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
+          strategy: :fastest
+        )
+
       assert {:error, _} = result
     end
 
     test "accepts :cheapest strategy" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], strategy: :cheapest)
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
+          strategy: :cheapest
+        )
+
       assert {:error, _} = result
     end
 
     test "accepts :priority strategy" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], strategy: :priority)
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
+          strategy: :priority
+        )
+
       assert {:error, _} = result
     end
 
     test "accepts :round_robin strategy (default)" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], strategy: :round_robin)
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
+          strategy: :round_robin
+        )
+
       assert {:error, _} = result
     end
 
@@ -119,12 +137,20 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   describe "execute_via_channels/4 - transport preferences" do
     test "accepts :http transport override" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], transport_override: :http)
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
+          transport_override: :http
+        )
+
       assert {:error, _} = result
     end
 
     test "accepts :ws transport override" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], transport_override: :ws)
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
+          transport_override: :ws
+        )
+
       assert {:error, _} = result
     end
 
@@ -138,7 +164,9 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   describe "execute_via_channels/4 - timeout handling" do
     test "accepts custom timeout" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], timeout: 5000)
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], timeout: 5000)
+
       assert {:error, _} = result
     end
 

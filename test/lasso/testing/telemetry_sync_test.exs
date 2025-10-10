@@ -78,10 +78,11 @@ defmodule Lasso.Testing.TelemetrySyncTest do
       event_name = [:test, :filtered, :event]
 
       # Only collect events with specific metadata
-      {:ok, collector} = TelemetrySync.attach_collector(
-        event_name,
-        match: [method: "eth_blockNumber"]
-      )
+      {:ok, collector} =
+        TelemetrySync.attach_collector(
+          event_name,
+          match: [method: "eth_blockNumber"]
+        )
 
       # Emit non-matching event (ignored)
       :telemetry.execute(event_name, %{duration: 50}, %{method: "eth_getBalance"})
@@ -97,12 +98,13 @@ defmodule Lasso.Testing.TelemetrySyncTest do
       event_name = [:test, :predicate, :event]
 
       # Custom predicate
-      {:ok, collector} = TelemetrySync.attach_collector(
-        event_name,
-        match: fn measurements, _metadata ->
-          measurements.duration > 50
-        end
-      )
+      {:ok, collector} =
+        TelemetrySync.attach_collector(
+          event_name,
+          match: fn measurements, _metadata ->
+            measurements.duration > 50
+          end
+        )
 
       # Below threshold (ignored)
       :telemetry.execute(event_name, %{duration: 40}, %{})
@@ -247,10 +249,11 @@ defmodule Lasso.Testing.TelemetrySyncTest do
     test "attach_request_collector can collect multiple retry attempts" do
       event_name = [:lasso, :request, :completed]
 
-      {:ok, collector} = TelemetrySync.attach_request_collector(
-        method: "eth_getBalance",
-        count: 3
-      )
+      {:ok, collector} =
+        TelemetrySync.attach_request_collector(
+          method: "eth_getBalance",
+          count: 3
+        )
 
       # Simulate 3 retry attempts
       for attempt <- 1..3 do
@@ -274,15 +277,17 @@ defmodule Lasso.Testing.TelemetrySyncTest do
       event_name = [:test, :concurrent, :collectors]
 
       # Create two collectors with different match criteria
-      {:ok, collector1} = TelemetrySync.attach_collector(
-        event_name,
-        match: [type: :fast]
-      )
+      {:ok, collector1} =
+        TelemetrySync.attach_collector(
+          event_name,
+          match: [type: :fast]
+        )
 
-      {:ok, collector2} = TelemetrySync.attach_collector(
-        event_name,
-        match: [type: :slow]
-      )
+      {:ok, collector2} =
+        TelemetrySync.attach_collector(
+          event_name,
+          match: [type: :slow]
+        )
 
       # Emit events
       :telemetry.execute(event_name, %{duration: 10}, %{type: :fast})
@@ -302,13 +307,14 @@ defmodule Lasso.Testing.TelemetrySyncTest do
       test_pid = self()
 
       # Spawn a task that creates its own collector
-      task = Task.async(fn ->
-        {:ok, collector} = TelemetrySync.attach_collector(event_name)
-        send(test_pid, :task_ready)
+      task =
+        Task.async(fn ->
+          {:ok, collector} = TelemetrySync.attach_collector(event_name)
+          send(test_pid, :task_ready)
 
-        # Wait for event
-        TelemetrySync.await_event(collector, timeout: 1000)
-      end)
+          # Wait for event
+          TelemetrySync.await_event(collector, timeout: 1000)
+        end)
 
       # Wait for task to attach
       assert_receive :task_ready, 100
@@ -346,10 +352,11 @@ defmodule Lasso.Testing.TelemetrySyncTest do
     test "handles events with missing metadata fields" do
       event_name = [:test, :missing, :fields]
 
-      {:ok, collector} = TelemetrySync.attach_collector(
-        event_name,
-        match: [optional_field: "value"]
-      )
+      {:ok, collector} =
+        TelemetrySync.attach_collector(
+          event_name,
+          match: [optional_field: "value"]
+        )
 
       # Emit event without the field (won't match)
       :telemetry.execute(event_name, %{}, %{})
@@ -365,13 +372,14 @@ defmodule Lasso.Testing.TelemetrySyncTest do
       event_name = [:test, :exception, :predicate]
 
       # Predicate that might raise
-      {:ok, collector} = TelemetrySync.attach_collector(
-        event_name,
-        match: fn _measurements, metadata ->
-          # This will raise if :nested is missing
-          metadata.nested.value == 42
-        end
-      )
+      {:ok, collector} =
+        TelemetrySync.attach_collector(
+          event_name,
+          match: fn _measurements, metadata ->
+            # This will raise if :nested is missing
+            metadata.nested.value == 42
+          end
+        )
 
       # This will cause predicate to raise, but shouldn't crash test
       :telemetry.execute(event_name, %{}, %{})

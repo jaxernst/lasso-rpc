@@ -540,7 +540,8 @@ defmodule Lasso.Config.ConfigStore do
       api_key_required:
         Map.get(attrs, :api_key_required) || Map.get(attrs, "api_key_required") || false,
       region: Map.get(attrs, :region) || Map.get(attrs, "region") || "global",
-      __mock__: Map.get(attrs, :__mock__)  # Preserve mock flag for test providers
+      # Preserve mock flag for test providers
+      __mock__: Map.get(attrs, :__mock__)
     }
   end
 end

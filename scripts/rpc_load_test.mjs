@@ -146,13 +146,11 @@ async function rpc(url, body, timeoutMs) {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-
     const json = await res
       .json()
       .catch(() => ({ error: { code: -32700, message: "Invalid JSON" } }));
     return { ok: res.ok && !json.error, status: res.status, json };
   } catch (err) {
-    console.log("RPC Error: ", err);
     return { ok: false, status: 0, error: String((err && err.message) || err) };
   } finally {
     clearTimeout(timer);
@@ -405,7 +403,6 @@ async function run() {
     };
     const t0 = nowNs();
     const res = await rpc(options.url, body, options.timeout);
-
     const dtMs = nsToMs(nowNs() - t0);
 
     windowReq++;

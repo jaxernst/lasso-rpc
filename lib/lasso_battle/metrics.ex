@@ -211,7 +211,7 @@ defmodule LassoBattle.Metrics do
 
   defp percentile(values, p) when p >= 0 and p <= 100 do
     sorted = Enum.sort(values)
-    index = trunc((p / 100) * length(sorted))
+    index = trunc(p / 100 * length(sorted))
     index = max(0, min(index, length(sorted) - 1))
     Enum.at(sorted, index, 0.0)
   end

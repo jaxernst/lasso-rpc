@@ -29,7 +29,8 @@ defmodule Lasso.Application do
         {Finch,
          name: Lasso.Finch,
          pools: %{
-           default: [
+           # Use :default atom with => syntax to apply to ALL unregistered hosts
+           :default => [
              size: 500,
              # Max connections per pool (per unique host)
              count: 10,

@@ -36,10 +36,10 @@ defmodule Lasso.Testing.TelemetrySync do
   @type match_spec :: keyword() | (measurements(), metadata() -> boolean())
 
   @type collector :: %{
-    ref: reference(),
-    handler_id: term(),
-    test_pid: pid()
-  }
+          ref: reference(),
+          handler_id: term(),
+          test_pid: pid()
+        }
 
   @default_timeout 5000
 
@@ -95,7 +95,10 @@ defmodule Lasso.Testing.TelemetrySync do
     :telemetry.attach(
       handler_id,
       event_name,
-      fn ^event_name, measurements, metadata, %{ref: ref, pid: pid, pred: pred, count_ref: count_ref} ->
+      fn ^event_name,
+         measurements,
+         metadata,
+         %{ref: ref, pid: pid, pred: pred, count_ref: count_ref} ->
         if pred.(measurements, metadata) do
           # Send event to test process
           send(pid, {ref, :telemetry_event, measurements, metadata})
@@ -140,9 +143,9 @@ defmodule Lasso.Testing.TelemetrySync do
   - `{:error, :timeout}` - No matching event within timeout
   """
   @spec await_event(collector(), keyword()) ::
-    {:ok, measurements(), metadata()} |
-    {:ok, [{measurements(), metadata()}]} |
-    {:error, :timeout}
+          {:ok, measurements(), metadata()}
+          | {:ok, [{measurements(), metadata()}]}
+          | {:error, :timeout}
   def await_event(collector, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
@@ -182,7 +185,7 @@ defmodule Lasso.Testing.TelemetrySync do
         )
   """
   @spec collect_event(event_name(), (-> any()), keyword()) ::
-    {:ok, measurements(), metadata()} | {:error, :timeout}
+          {:ok, measurements(), metadata()} | {:error, :timeout}
   def collect_event(event_name, action_fn, opts \\ []) when is_function(action_fn, 0) do
     {:ok, collector} = attach_collector(event_name, opts)
 

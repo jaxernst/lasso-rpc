@@ -47,7 +47,8 @@ defmodule Lasso.RPC.ProviderHealthMonitor do
     # Call circuit breaker only if it's running to avoid :noproc exits on boot
     result =
       case GenServer.whereis(
-             {:via, Registry, {Lasso.Registry, {:circuit_breaker, "#{chain}:#{provider.id}:http"}}}
+             {:via, Registry,
+              {Lasso.Registry, {:circuit_breaker, "#{chain}:#{provider.id}:http"}}}
            ) do
         nil ->
           # Fall back to direct request; breaker will be engaged on next tick once started

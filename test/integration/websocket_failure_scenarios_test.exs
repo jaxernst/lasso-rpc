@@ -51,7 +51,9 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
   defp start_connection_with_cb(endpoint) do
     # Start circuit breaker for the endpoint
     circuit_breaker_config = %{failure_threshold: 5, recovery_timeout: 200, success_threshold: 1}
-    {:ok, _cb_pid} = CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
+
+    {:ok, _cb_pid} =
+      CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
 
     # Start connection
     {:ok, pid} = WSConnection.start_link(endpoint)
@@ -99,7 +101,8 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
 
       # Should see connection failures
       {:ok, _, meta} = TelemetrySync.await_event(failed_collector, timeout: 2_000)
-      assert meta.error_code == -32_007 # Request timeout error code
+      # Request timeout error code
+      assert meta.error_code == -32_007
       assert meta.error_message =~ "timeout"
       assert meta.retriable == true
 
@@ -371,7 +374,8 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       # Should timeout - could be {:error, :timeout} or error tuple
       case result do
         {:error, :timeout} -> assert true
-        {:error, %{code: code}} when code in [-32_000, -32_007] -> assert true # Request timeout error codes
+        # Request timeout error codes
+        {:error, %{code: code}} when code in [-32_000, -32_007] -> assert true
         other -> flunk("Expected timeout error, got: #{inspect(other)}")
       end
 

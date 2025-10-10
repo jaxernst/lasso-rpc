@@ -29,15 +29,17 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       CircuitBreakerHelper.assert_circuit_breaker_state({chain, "primary", :http}, :open)
 
       # Execute request - should automatically use backup
-      {:ok, result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        []
-      )
+      {:ok, result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          []
+        )
 
       # Verify request succeeded (using backup)
       assert result != nil
-      assert is_binary(result)  # eth_blockNumber returns a hex string
+      # eth_blockNumber returns a hex string
+      assert is_binary(result)
     end
 
     test "opens circuit breaker after repeated failures", %{chain: chain} do
@@ -49,12 +51,13 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       # Execute multiple requests to trigger circuit breaker
       # Circuit breaker typically opens after 3-5 failures
       for _ <- 1..5 do
-        {:error, _reason} = RequestPipeline.execute_via_channels(
-          chain,
-          "eth_blockNumber",
-          [],
-          provider_override: "failing_provider"
-        )
+        {:error, _reason} =
+          RequestPipeline.execute_via_channels(
+            chain,
+            "eth_blockNumber",
+            [],
+            provider_override: "failing_provider"
+          )
 
         # Small delay between attempts
         Process.sleep(10)
@@ -70,12 +73,13 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       )
 
       # Next request should fail immediately with :circuit_open
-      {:error, error} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        provider_override: "failing_provider"
-      )
+      {:error, error} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          provider_override: "failing_provider"
+        )
 
       # Should get circuit breaker error, not the underlying error
       assert error != nil
@@ -88,50 +92,56 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Attach telemetry collector BEFORE forcing circuit breaker open
-      {:ok, open_collector} = Lasso.Testing.TelemetrySync.attach_collector(
-        [:lasso, :circuit_breaker, :open],
-        match: [provider_id: "flaky"]
-      )
+      {:ok, open_collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :circuit_breaker, :open],
+          match: [provider_id: "flaky"]
+        )
 
       # Force circuit breaker open
       CircuitBreakerHelper.force_open({chain, "flaky", :http})
 
       # Wait for telemetry event
-      {:ok, _measurements, _metadata} = Lasso.Testing.TelemetrySync.await_event(open_collector, timeout: 2000)
+      {:ok, _measurements, _metadata} =
+        Lasso.Testing.TelemetrySync.await_event(open_collector, timeout: 2000)
 
       # Immediate request should fail with circuit open
-      {:error, _} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        provider_override: "flaky",
-        failover_on_override: false
-      )
+      {:error, _} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          provider_override: "flaky",
+          failover_on_override: false
+        )
 
       # Wait for circuit breaker recovery timeout (typically 60s in tests)
       # For testing, we can manually close it
       Process.sleep(100)
 
       # Attach telemetry collector BEFORE forcing circuit breaker closed
-      {:ok, close_collector} = Lasso.Testing.TelemetrySync.attach_collector(
-        [:lasso, :circuit_breaker, :close],
-        match: [provider_id: "flaky"]
-      )
+      {:ok, close_collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :circuit_breaker, :close],
+          match: [provider_id: "flaky"]
+        )
 
       CircuitBreakerHelper.reset_to_closed({chain, "flaky", :http})
 
       # Wait for telemetry event
-      {:ok, _measurements, _metadata} = Lasso.Testing.TelemetrySync.await_event(close_collector, timeout: 2000)
+      {:ok, _measurements, _metadata} =
+        Lasso.Testing.TelemetrySync.await_event(close_collector, timeout: 2000)
 
       # Now requests should work again
       # (fails because behavior is 0% success, but circuit is closed)
-      result = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        provider_override: "flaky",
-        failover_on_override: false
-      )
+      result =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          provider_override: "flaky",
+          failover_on_override: false
+        )
 
       # Should get actual error, not circuit breaker error
       assert result != {:error, :circuit_open}
@@ -147,21 +157,24 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Attach telemetry collector BEFORE executing request
-      {:ok, collector} = Lasso.Testing.TelemetrySync.attach_collector(
-        [:lasso, :rpc, :request, :stop],
-        match: [method: "eth_blockNumber"]
-      )
+      {:ok, collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :rpc, :request, :stop],
+          match: [method: "eth_blockNumber"]
+        )
 
       # Execute request
-      {:ok, _result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        strategy: :priority
-      )
+      {:ok, _result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          strategy: :priority
+        )
 
       # Wait for telemetry event
-      {:ok, measurements, _metadata} = Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
+      {:ok, measurements, _metadata} =
+        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
 
       # Duration should be non-negative (can be 0 for very fast requests)
       assert measurements.duration >= 0
@@ -178,17 +191,19 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
       # Attach telemetry collector BEFORE executing request
       # We expect one start event for the entire request
-      {:ok, collector} = Lasso.Testing.TelemetrySync.attach_collector(
-        [:lasso, :rpc, :request, :start],
-        match: [method: "eth_blockNumber"]
-      )
+      {:ok, collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :rpc, :request, :start],
+          match: [method: "eth_blockNumber"]
+        )
 
       # Execute request - should failover to backup
-      {:ok, result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        []
-      )
+      {:ok, result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          []
+        )
 
       # Request should succeed via backup
       assert result != nil
@@ -196,7 +211,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       assert String.starts_with?(result, "0x")
 
       # Verify start event was captured
-      {:ok, _measurements, _metadata} = Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
+      {:ok, _measurements, _metadata} =
+        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
     end
 
     test "respects provider override without failover", %{chain: chain} do
@@ -207,13 +223,14 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute with override and no failover
-      {:ok, _result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        provider_override: "backup",
-        failover_on_override: false
-      )
+      {:ok, _result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          provider_override: "backup",
+          failover_on_override: false
+        )
 
       # Should succeed using backup
       # (If it failed, would not failover to primary)
@@ -227,13 +244,14 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute with override and failover enabled
-      {:ok, result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        provider_override: "preferred",
-        failover_on_override: true
-      )
+      {:ok, result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          provider_override: "preferred",
+          failover_on_override: true
+        )
 
       # Should succeed by failing over from preferred to fallback
       assert result != nil
@@ -252,11 +270,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute standard method - should work on any provider
-      {:ok, _result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        []
-      )
+      {:ok, _result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          []
+        )
 
       # In a real scenario with provider-specific adapter logic:
       # - Provider1 might reject "debug_traceTransaction"
@@ -270,18 +289,20 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute with empty params
-      {:ok, _result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        []
-      )
+      {:ok, _result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          []
+        )
 
       # Execute with nil params
-      {:ok, _result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        nil
-      )
+      {:ok, _result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          nil
+        )
 
       # Both should succeed
     end
@@ -291,17 +312,22 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     test "classifies errors correctly", %{chain: chain} do
       # Setup provider with specific error behavior
       setup_providers([
-        %{id: "provider", priority: 10, behavior: {:error, %{code: -32000, message: "Server error"}}}
+        %{
+          id: "provider",
+          priority: 10,
+          behavior: {:error, %{code: -32000, message: "Server error"}}
+        }
       ])
 
       # Execute request
-      {:error, error} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        provider_override: "provider",
-        failover_on_override: false
-      )
+      {:error, error} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          provider_override: "provider",
+          failover_on_override: false
+        )
 
       # Verify error is classified
       assert error != nil
@@ -317,14 +343,15 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       # Execute with short timeout
       start_time = System.monotonic_time(:millisecond)
 
-      {:error, _error} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        provider_override: "slow",
-        failover_on_override: false,
-        timeout: 100
-      )
+      {:error, _error} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          provider_override: "slow",
+          failover_on_override: false,
+          timeout: 100
+        )
 
       duration = System.monotonic_time(:millisecond) - start_time
 
@@ -336,13 +363,14 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       # Don't setup any providers
 
       # Execute request
-      {:error, error} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        provider_override: "nonexistent",
-        failover_on_override: false
-      )
+      {:error, error} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          provider_override: "nonexistent",
+          failover_on_override: false
+        )
 
       # Should get appropriate error
       assert error != nil
@@ -357,12 +385,13 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute with HTTP transport override
-      {:ok, _result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        transport_override: :http
-      )
+      {:ok, _result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          transport_override: :http
+        )
 
       # Execute with WS transport override (if supported)
       # {:ok, _result} = RequestPipeline.execute_via_channels(
@@ -381,37 +410,42 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Attach telemetry collectors BEFORE executing request
-      {:ok, start_collector} = Lasso.Testing.TelemetrySync.attach_collector(
-        [:lasso, :rpc, :request, :start],
-        match: [method: "eth_blockNumber"]
-      )
+      {:ok, start_collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :rpc, :request, :start],
+          match: [method: "eth_blockNumber"]
+        )
 
-      {:ok, stop_collector} = Lasso.Testing.TelemetrySync.attach_collector(
-        [:lasso, :rpc, :request, :stop],
-        match: [method: "eth_blockNumber"]
-      )
+      {:ok, stop_collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :rpc, :request, :stop],
+          match: [method: "eth_blockNumber"]
+        )
 
       # Execute request
-      {:ok, _result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        []
-      )
+      {:ok, _result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          []
+        )
 
       # Wait for start event
-      {:ok, _measurements, metadata} = Lasso.Testing.TelemetrySync.await_event(
-        start_collector,
-        timeout: 1000
-      )
+      {:ok, _measurements, metadata} =
+        Lasso.Testing.TelemetrySync.await_event(
+          start_collector,
+          timeout: 1000
+        )
 
       assert metadata.chain == chain
       assert metadata.method == "eth_blockNumber"
 
       # Wait for stop event
-      {:ok, measurements, _metadata} = Lasso.Testing.TelemetrySync.await_event(
-        stop_collector,
-        timeout: 2000
-      )
+      {:ok, measurements, _metadata} =
+        Lasso.Testing.TelemetrySync.await_event(
+          stop_collector,
+          timeout: 2000
+        )
 
       # Duration should be non-negative (can be 0 for very fast requests)
       assert measurements.duration >= 0
@@ -423,20 +457,23 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Attach telemetry collector BEFORE executing request
-      {:ok, collector} = Lasso.Testing.TelemetrySync.attach_collector(
-        [:lasso, :rpc, :request, :stop],
-        match: [method: "eth_blockNumber", status: :success]
-      )
+      {:ok, collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :rpc, :request, :stop],
+          match: [method: "eth_blockNumber", status: :success]
+        )
 
       # Execute request
-      {:ok, _result} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        []
-      )
+      {:ok, _result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          []
+        )
 
       # Verify telemetry shows success
-      {:ok, measurements, _metadata} = Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
+      {:ok, measurements, _metadata} =
+        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
 
       # Duration should be non-negative (can be 0 for very fast requests)
       assert measurements.duration >= 0
@@ -448,22 +485,25 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Attach telemetry collector BEFORE executing request
-      {:ok, collector} = Lasso.Testing.TelemetrySync.attach_collector(
-        [:lasso, :rpc, :request, :stop],
-        match: [method: "eth_blockNumber"]
-      )
+      {:ok, collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :rpc, :request, :stop],
+          match: [method: "eth_blockNumber"]
+        )
 
       # Execute request that will fail
-      {:error, _} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        [],
-        provider_override: "failing",
-        failover_on_override: false
-      )
+      {:error, _} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          provider_override: "failing",
+          failover_on_override: false
+        )
 
       # Should still emit stop event with error status
-      {:ok, measurements, _metadata} = Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
+      {:ok, measurements, _metadata} =
+        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
 
       # Duration should be non-negative (can be 0 for very fast requests)
       assert measurements.duration >= 0
@@ -488,10 +528,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         end
 
       # Count successes
-      successes = Enum.count(results, fn
-        {:ok, _} -> true
-        _ -> false
-      end)
+      successes =
+        Enum.count(results, fn
+          {:ok, _} -> true
+          _ -> false
+        end)
 
       # Should have some successes (not all failures)
       assert successes > 0
@@ -506,20 +547,23 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Attach telemetry collector BEFORE executing request
-      {:ok, collector} = Lasso.Testing.TelemetrySync.attach_collector(
-        [:lasso, :rpc, :request, :start],
-        match: [method: "eth_blockNumber"]
-      )
+      {:ok, collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :rpc, :request, :start],
+          match: [method: "eth_blockNumber"]
+        )
 
       # Execute request
-      {:error, _error} = RequestPipeline.execute_via_channels(
-        chain,
-        "eth_blockNumber",
-        []
-      )
+      {:error, _error} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          []
+        )
 
       # Should have emitted at least one start event
-      {:ok, _measurements, _metadata} = Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
+      {:ok, _measurements, _metadata} =
+        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
     end
   end
 

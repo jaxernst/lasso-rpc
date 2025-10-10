@@ -74,7 +74,10 @@ defmodule TestSupport.MockWSClient do
 
       {:hang} ->
         # Simulate hanging connection - start process but never complete connection
-        GenServer.start_link(__MODULE__, {url, handler_mod, state, Keyword.put(opts, :hang_mode, true)})
+        GenServer.start_link(
+          __MODULE__,
+          {url, handler_mod, state, Keyword.put(opts, :hang_mode, true)}
+        )
 
       :ok ->
         GenServer.start_link(__MODULE__, {url, handler_mod, state, opts})

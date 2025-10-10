@@ -411,44 +411,86 @@ defmodule Lasso.Battle.LassoOverheadBenchmarkTest do
     IO.puts("\n📋 Test Configuration:")
     IO.puts("   Provider: #{@test_provider}")
     IO.puts("   Method: #{@method}")
-    IO.puts("   Sample Size: #{http_direct_stats.count} direct, #{http_lasso_stats.total} Lasso per transport")
+
+    IO.puts(
+      "   Sample Size: #{http_direct_stats.count} direct, #{http_lasso_stats.total} Lasso per transport"
+    )
+
     IO.puts("   Duration: #{@test_duration / 1000}s @ #{@test_rate} req/s")
 
     IO.puts("\n🔴 HTTP Transport:")
     IO.puts("   Direct Path:")
-    IO.puts("     P50: #{http_direct_stats.p50}ms | P95: #{http_direct_stats.p95}ms | P99: #{http_direct_stats.p99}ms")
-    IO.puts("     Avg: #{Float.round(http_direct_stats.mean, 2)}ms ± #{Float.round(http_direct_stats.stddev, 2)}ms")
+
+    IO.puts(
+      "     P50: #{http_direct_stats.p50}ms | P95: #{http_direct_stats.p95}ms | P99: #{http_direct_stats.p99}ms"
+    )
+
+    IO.puts(
+      "     Avg: #{Float.round(http_direct_stats.mean, 2)}ms ± #{Float.round(http_direct_stats.stddev, 2)}ms"
+    )
+
     IO.puts("     Min: #{http_direct_stats.min}ms | Max: #{http_direct_stats.max}ms")
 
     IO.puts("   Lasso Path:")
-    IO.puts("     P50: #{http_lasso_stats.p50_latency_ms}ms | P95: #{http_lasso_stats.p95_latency_ms}ms | P99: #{http_lasso_stats.p99_latency_ms}ms")
-    IO.puts("     Avg: #{Float.round(http_lasso_stats.avg_latency_ms, 2)}ms ± #{Float.round(http_lasso_stats.stddev_latency_ms, 2)}ms")
+
+    IO.puts(
+      "     P50: #{http_lasso_stats.p50_latency_ms}ms | P95: #{http_lasso_stats.p95_latency_ms}ms | P99: #{http_lasso_stats.p99_latency_ms}ms"
+    )
+
+    IO.puts(
+      "     Avg: #{Float.round(http_lasso_stats.avg_latency_ms, 2)}ms ± #{Float.round(http_lasso_stats.stddev_latency_ms, 2)}ms"
+    )
 
     IO.puts("   Overhead:")
     IO.puts("     P50: +#{http_overhead.p50}ms (#{http_overhead.p50_pct}% increase)")
     IO.puts("     P95: +#{http_overhead.p95}ms (#{http_overhead.p95_pct}% increase)")
     IO.puts("     P99: +#{http_overhead.p99}ms (#{http_overhead.p99_pct}% increase)")
-    IO.puts("     Avg: +#{Float.round(http_overhead.mean, 2)}ms (#{Float.round(http_overhead.mean_pct, 1)}% increase)")
+
+    IO.puts(
+      "     Avg: +#{Float.round(http_overhead.mean, 2)}ms (#{Float.round(http_overhead.mean_pct, 1)}% increase)"
+    )
 
     IO.puts("\n🟢 WebSocket Transport:")
     IO.puts("   Direct Path:")
-    IO.puts("     P50: #{ws_direct_stats.p50}ms | P95: #{ws_direct_stats.p95}ms | P99: #{ws_direct_stats.p99}ms")
-    IO.puts("     Avg: #{Float.round(ws_direct_stats.mean, 2)}ms ± #{Float.round(ws_direct_stats.stddev, 2)}ms")
+
+    IO.puts(
+      "     P50: #{ws_direct_stats.p50}ms | P95: #{ws_direct_stats.p95}ms | P99: #{ws_direct_stats.p99}ms"
+    )
+
+    IO.puts(
+      "     Avg: #{Float.round(ws_direct_stats.mean, 2)}ms ± #{Float.round(ws_direct_stats.stddev, 2)}ms"
+    )
+
     IO.puts("     Min: #{ws_direct_stats.min}ms | Max: #{ws_direct_stats.max}ms")
 
     IO.puts("   Lasso Path:")
-    IO.puts("     P50: #{ws_lasso_stats.p50_latency_ms}ms | P95: #{ws_lasso_stats.p95_latency_ms}ms | P99: #{ws_lasso_stats.p99_latency_ms}ms")
-    IO.puts("     Avg: #{Float.round(ws_lasso_stats.avg_latency_ms, 2)}ms ± #{Float.round(ws_lasso_stats.stddev_latency_ms, 2)}ms")
+
+    IO.puts(
+      "     P50: #{ws_lasso_stats.p50_latency_ms}ms | P95: #{ws_lasso_stats.p95_latency_ms}ms | P99: #{ws_lasso_stats.p99_latency_ms}ms"
+    )
+
+    IO.puts(
+      "     Avg: #{Float.round(ws_lasso_stats.avg_latency_ms, 2)}ms ± #{Float.round(ws_lasso_stats.stddev_latency_ms, 2)}ms"
+    )
 
     IO.puts("   Overhead:")
     IO.puts("     P50: +#{ws_overhead.p50}ms (#{ws_overhead.p50_pct}% increase)")
     IO.puts("     P95: +#{ws_overhead.p95}ms (#{ws_overhead.p95_pct}% increase)")
     IO.puts("     P99: +#{ws_overhead.p99}ms (#{ws_overhead.p99_pct}% increase)")
-    IO.puts("     Avg: +#{Float.round(ws_overhead.mean, 2)}ms (#{Float.round(ws_overhead.mean_pct, 1)}% increase)")
+
+    IO.puts(
+      "     Avg: +#{Float.round(ws_overhead.mean, 2)}ms (#{Float.round(ws_overhead.mean_pct, 1)}% increase)"
+    )
 
     IO.puts("\n📊 Key Insights:")
-    IO.puts("   • HTTP overhead at P50: #{http_overhead.p50}ms (#{http_overhead.p50_pct}% of direct latency)")
-    IO.puts("   • WebSocket overhead at P50: #{ws_overhead.p50}ms (#{ws_overhead.p50_pct}% of direct latency)")
+
+    IO.puts(
+      "   • HTTP overhead at P50: #{http_overhead.p50}ms (#{http_overhead.p50_pct}% of direct latency)"
+    )
+
+    IO.puts(
+      "   • WebSocket overhead at P50: #{ws_overhead.p50}ms (#{ws_overhead.p50_pct}% of direct latency)"
+    )
 
     if http_overhead.p50 < 50 and ws_overhead.p50 < 50 do
       IO.puts("   ✅ Overhead is low (<50ms at P50) - Lasso adds minimal latency")
@@ -483,7 +525,10 @@ defmodule Lasso.Battle.LassoOverheadBenchmarkTest do
 
   defp calculate_stddev(values) do
     mean = Enum.sum(values) / length(values)
-    variance = Enum.reduce(values, 0, fn x, acc -> acc + :math.pow(x - mean, 2) end) / length(values)
+
+    variance =
+      Enum.reduce(values, 0, fn x, acc -> acc + :math.pow(x - mean, 2) end) / length(values)
+
     :math.sqrt(variance)
   end
 

@@ -120,7 +120,8 @@ defmodule TestSupport.FailureInjector do
       end
     end)
   rescue
-    ArgumentError -> :ok  # FailureInjector not started - production mode
+    # FailureInjector not started - production mode
+    ArgumentError -> :ok
   end
 
   @doc """
