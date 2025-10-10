@@ -25,8 +25,8 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
     # "ethereum_cloudflare" => Adapters.Cloudflare,
     "ethereum_publicnode" => Adapters.PublicNode,
     "ethereum_llamarpc" => Adapters.LlamaRPC,
-    "ethereum_merkle" => Adapters.Merkle
-    # "ethereum_alchemy" => Adapters.Alchemy,
+    "ethereum_merkle" => Adapters.Merkle,
+    "alchemy_ethereum" => Adapters.Alchemy
     # "ethereum_infura" => Adapters.Infura,
     # "ethereum_ankr" => Adapters.Ankr
   }
