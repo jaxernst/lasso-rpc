@@ -51,7 +51,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
     raw_code = Map.get(error, "code", -32000)
     message = Map.get(error, "message", "Unknown error")
-    data = Map.get(error, "data")
+    raw_data = Map.get(error, "data")
 
     # Normalize HTTP status codes to JSON-RPC error codes
     code = normalize_code(raw_code)
@@ -60,6 +60,14 @@ defmodule Lasso.RPC.ErrorNormalizer do
     category = ErrorClassification.categorize(code, message)
     retriable? = ErrorClassification.retriable?(code, message)
     breaker_penalty? = ErrorClassification.breaker_penalty?(category)
+
+    # Extract retry-after hint if this is a rate limit error
+    data =
+      if category == :rate_limit do
+        add_retry_after(raw_data, error)
+      else
+        raw_data
+      end
 
     JError.new(code, message,
       data: data,
@@ -79,8 +87,11 @@ defmodule Lasso.RPC.ErrorNormalizer do
     context = Keyword.get(opts, :context, :transport)
     transport = Keyword.get(opts, :transport)
 
+    # Extract retry-after hint from payload and add to data
+    data = add_retry_after(payload, payload)
+
     JError.new(-32005, "Rate limited by provider",
-      data: payload,
+      data: data,
       provider_id: provider_id,
       source: context,
       transport: transport,
@@ -120,8 +131,16 @@ defmodule Lasso.RPC.ErrorNormalizer do
     retriable? = ErrorClassification.retriable?(code, message)
     breaker_penalty? = ErrorClassification.breaker_penalty?(category)
 
+    # Extract retry-after hint if this is a rate limit error
+    data =
+      if category == :rate_limit do
+        add_retry_after(payload, payload)
+      else
+        payload
+      end
+
     JError.new(code, message,
-      data: payload,
+      data: data,
       provider_id: provider_id,
       source: context,
       transport: transport,
@@ -146,8 +165,16 @@ defmodule Lasso.RPC.ErrorNormalizer do
     retriable? = ErrorClassification.retriable?(code, message)
     breaker_penalty? = ErrorClassification.breaker_penalty?(category)
 
+    # Extract retry-after hint if this is a rate limit error (e.g., 429)
+    data =
+      if category == :rate_limit do
+        add_retry_after(payload, payload)
+      else
+        payload
+      end
+
     JError.new(code, message,
-      data: payload,
+      data: data,
       provider_id: provider_id,
       source: context,
       transport: transport,
@@ -482,6 +509,91 @@ defmodule Lasso.RPC.ErrorNormalizer do
   # ===========================================================================
   # Private Helpers
   # ===========================================================================
+
+  # Extract retry-after hint from provider error responses
+  # This handles both standard Retry-After headers and provider-specific message formats
+  defp extract_retry_after(error_data) when is_map(error_data) do
+    cond do
+      # Standard Retry-After header (atom key)
+      Map.has_key?(error_data, :retry_after) ->
+        parse_retry_after_value(error_data[:retry_after])
+
+      # Standard Retry-After header (string key)
+      Map.has_key?(error_data, "retry_after") ->
+        parse_retry_after_value(error_data["retry_after"])
+
+      # Provider-specific message parsing (e.g., "Try again in 60 seconds")
+      is_binary(Map.get(error_data, :body)) ->
+        parse_retry_from_message(error_data[:body])
+
+      is_binary(Map.get(error_data, "body")) ->
+        parse_retry_from_message(error_data["body"])
+
+      true ->
+        nil
+    end
+  end
+
+  defp extract_retry_after(_), do: nil
+
+  # Parse retry-after value from header (seconds → milliseconds)
+  defp parse_retry_after_value(value) when is_integer(value), do: value * 1000
+
+  defp parse_retry_after_value(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {seconds, _} -> seconds * 1000
+      :error -> nil
+    end
+  end
+
+  defp parse_retry_after_value(_), do: nil
+
+  # Extract retry-after from provider-specific error messages
+  # Examples: "Try again in 60 seconds", "Try again in 5 minutes"
+  defp parse_retry_from_message(message) when is_binary(message) do
+    cond do
+      # Match "X seconds" pattern (supports decimal seconds like "3.2 seconds")
+      match = Regex.run(~r/try again in (\d+(?:\.\d+)?) second/i, message) ->
+        case match do
+          [_, seconds_str] ->
+            case Float.parse(seconds_str) do
+              {seconds, _} -> trunc(seconds * 1000)
+              :error -> nil
+            end
+
+          _ ->
+            nil
+        end
+
+      # Match "X minutes" pattern
+      match = Regex.run(~r/try again in (\d+) minute/i, message) ->
+        case match do
+          [_, minutes_str] ->
+            case Integer.parse(minutes_str) do
+              {minutes, _} -> minutes * 60 * 1000
+              :error -> nil
+            end
+
+          _ ->
+            nil
+        end
+
+      true ->
+        nil
+    end
+  end
+
+  defp parse_retry_from_message(_), do: nil
+
+  # Add retry-after hint to data map if present
+  defp add_retry_after(data, payload) when is_map(data) do
+    case extract_retry_after(payload) do
+      nil -> data
+      retry_ms -> Map.put(data, :retry_after_ms, retry_ms)
+    end
+  end
+
+  defp add_retry_after(data, _payload), do: data
 
   # Normalize HTTP status codes embedded in JSON-RPC responses to standard JSON-RPC codes
   # Rate limit

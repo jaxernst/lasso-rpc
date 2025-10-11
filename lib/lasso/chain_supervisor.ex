@@ -43,6 +43,10 @@ defmodule Lasso.RPC.ChainSupervisor do
           ws_connections = collect_ws_connection_status(status.providers)
           Map.put(status, :ws_connections, ws_connections)
 
+        {:error, :not_found} ->
+          # ProviderPool process not found - chain not started
+          %{error: :chain_not_started}
+
         {:error, reason} ->
           Logger.error("Failed to get chain status for #{chain_name}: #{reason}")
           %{error: reason}

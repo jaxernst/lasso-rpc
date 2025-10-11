@@ -23,7 +23,10 @@ defmodule Lasso.RPC.ProviderPool do
     :active_providers,
     :stats,
     # Circuit breaker state per provider_id: :closed | :open | :half_open
-    circuit_states: %{}
+    circuit_states: %{},
+    # Cached recovery times per provider: %{provider_id => %{http: ms | nil, ws: ms | nil}}
+    # Updated when circuit states change to avoid N sequential GenServer calls
+    recovery_times: %{}
   ]
 
   defmodule ProviderState do
@@ -77,6 +80,10 @@ defmodule Lasso.RPC.ProviderPool do
           | :misconfigured
           | :degraded
 
+  # Default timeout for ProviderPool GenServer calls (5 seconds)
+  # ProviderPool operations are generally fast but can be delayed under high load
+  @call_timeout 5_000
+
   @doc """
   Starts the ProviderPool for a chain.
   """
@@ -115,17 +122,38 @@ defmodule Lasso.RPC.ProviderPool do
   """
   @spec get_status(chain_name) :: {:ok, map()} | {:error, term()}
   def get_status(chain_name) do
-    GenServer.call(via_name(chain_name), :get_status)
+    try do
+      GenServer.call(via_name(chain_name), :get_status, @call_timeout)
+    catch
+      :exit, {:timeout, _} ->
+        Logger.warning("Timeout getting status for chain #{chain_name}")
+        {:error, :timeout}
+
+      :exit, {:noproc, _} ->
+        {:error, :not_found}
+    end
   end
 
   @doc """
   Lists provider candidates enriched with policy-derived availability for selection.
 
-  Supported filters: %{protocol: :http | :ws | :both, exclude: [provider_id]}
+  Supported filters:
+  - protocol: :http | :ws | :both
+  - exclude: [provider_id]
+  - include_half_open: boolean (default false) - include providers with half-open circuits
   """
   @spec list_candidates(chain_name, map()) :: [map()]
   def list_candidates(chain_name, filters \\ %{}) when is_map(filters) do
-    GenServer.call(via_name(chain_name), {:list_candidates, filters})
+    try do
+      GenServer.call(via_name(chain_name), {:list_candidates, filters}, @call_timeout)
+    catch
+      :exit, {:timeout, _} ->
+        Logger.warning("Timeout listing candidates for chain #{chain_name}")
+        []  # Return empty list on timeout (fail closed)
+
+      :exit, {:noproc, _} ->
+        []
+    end
   end
 
   @doc """
@@ -172,6 +200,95 @@ defmodule Lasso.RPC.ProviderPool do
     GenServer.call(via_name(chain_name), {:get_provider_ws_pid, provider_id})
   end
 
+  @doc """
+  Gets recovery times for all open circuit breakers in the pool.
+
+  Returns a map of provider_id => %{http: ms | nil, ws: ms | nil} where:
+  - ms is milliseconds until circuit breaker will attempt recovery
+  - nil means circuit is not open or recovery time unavailable
+
+  This is cached in ProviderPool state and updated when circuit states change,
+  avoiding expensive GenServer calls to each CircuitBreaker.
+
+  ## Options
+  - `:transport` - Filter by :http, :ws, or :both (default: :both)
+  - `:only_open` - Only return entries for open circuits (default: true)
+
+  ## Examples
+
+      iex> ProviderPool.get_recovery_times("ethereum")
+      {:ok, %{
+        "alchemy_ethereum" => %{http: nil, ws: 30000},
+        "quicknode_ethereum" => %{http: 15000, ws: nil}
+      }}
+  """
+  @spec get_recovery_times(chain_name, keyword()) ::
+    {:ok, %{provider_id => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}}} |
+    {:error, term()}
+  def get_recovery_times(chain_name, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 5000)
+
+    try do
+      GenServer.call(via_name(chain_name), {:get_recovery_times, opts}, timeout)
+    catch
+      :exit, {:timeout, _} ->
+        Logger.warning("Timeout getting recovery times for chain #{chain_name}")
+        {:error, :timeout}
+
+      :exit, {:noproc, _} ->
+        Logger.warning("ProviderPool not found for chain #{chain_name}")
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Gets the minimum recovery time across all open circuits for a chain.
+
+  This is a convenience function that calls get_recovery_times/2 and returns
+  the minimum value, or nil if no recovery times available.
+
+  ## Options
+  - `:transport` - Filter by :http, :ws, or :both (default: :both)
+  - `:timeout` - GenServer call timeout in ms (default: 5000)
+
+  ## Examples
+
+      iex> ProviderPool.get_min_recovery_time("ethereum", transport: :http)
+      {:ok, 15000}
+
+      iex> ProviderPool.get_min_recovery_time("ethereum")
+      {:ok, nil}  # No open circuits
+  """
+  @spec get_min_recovery_time(chain_name, keyword()) ::
+    {:ok, non_neg_integer() | nil} | {:error, term()}
+  def get_min_recovery_time(chain_name, opts \\ []) do
+    transport_filter = Keyword.get(opts, :transport, :both)
+
+    case get_recovery_times(chain_name, opts) do
+      {:ok, times_map} ->
+        min_time =
+          times_map
+          |> Enum.flat_map(fn {_provider_id, transports} ->
+            case transport_filter do
+              :http -> [Map.get(transports, :http)]
+              :ws -> [Map.get(transports, :ws)]
+              :both -> [Map.get(transports, :http), Map.get(transports, :ws)]
+              _ -> [Map.get(transports, :http), Map.get(transports, :ws)]
+            end
+          end)
+          |> Enum.filter(&(is_integer(&1) and &1 > 0))
+          |> case do
+            [] -> nil
+            times -> Enum.min(times)
+          end
+
+        {:ok, min_time}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
   # GenServer callbacks
 
   @impl true
@@ -184,7 +301,8 @@ defmodule Lasso.RPC.ProviderPool do
       providers: %{},
       active_providers: [],
       stats: %PoolStats{},
-      circuit_states: %{}
+      circuit_states: %{},
+      recovery_times: %{}
     }
 
     {:ok, state}
@@ -381,6 +499,34 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   @impl true
+  def handle_call({:get_recovery_times, opts}, _from, state) do
+    transport_filter = Keyword.get(opts, :transport, :both)
+    only_open = Keyword.get(opts, :only_open, true)
+
+    result =
+      state.recovery_times
+      |> Enum.filter(fn {provider_id, _times} ->
+        if only_open do
+          # Only include if at least one circuit is open for the requested transport(s)
+          http_state = get_cb_state(state.circuit_states, provider_id, :http)
+          ws_state = get_cb_state(state.circuit_states, provider_id, :ws)
+
+          case transport_filter do
+            :http -> http_state == :open
+            :ws -> ws_state == :open
+            :both -> http_state == :open or ws_state == :open
+            _ -> http_state == :open or ws_state == :open
+          end
+        else
+          true
+        end
+      end)
+      |> Enum.into(%{})
+
+    {:reply, {:ok, result}, state}
+  end
+
+  @impl true
   def handle_cast({:report_success, provider_id}, state) do
     new_state = update_provider_success(state, provider_id)
     {:noreply, new_state}
@@ -490,16 +636,33 @@ defmodule Lasso.RPC.ProviderPool do
   @impl true
   def handle_info(
         {:circuit_breaker_event,
-         %{chain: event_chain, provider_id: provider_id, from: from, to: to}},
+         %{chain: event_chain, provider_id: provider_id, transport: transport, from: from, to: to}},
         state
       )
       when is_binary(provider_id) and from in [:closed, :open, :half_open] and
              to in [:closed, :open, :half_open] do
     # Only handle circuit breaker events for THIS chain
     if event_chain == state.chain_name or is_nil(event_chain) do
-      Logger.info("ProviderPool[#{state.chain_name}]: CB event #{provider_id} #{from} -> #{to}")
-      new_states = Map.put(state.circuit_states, provider_id, to)
-      {:noreply, %{state | circuit_states: new_states}}
+      Logger.info("ProviderPool[#{state.chain_name}]: CB event #{provider_id}:#{transport} #{from} -> #{to}")
+
+      # Update circuit states
+      new_circuit_states = update_circuit_state(state.circuit_states, provider_id, transport, to)
+
+      # Update recovery times cache when circuit opens or transitions
+      new_recovery_times =
+        if to in [:open, :half_open] do
+          update_recovery_time_for_circuit(
+            state.recovery_times,
+            provider_id,
+            transport,
+            state.chain_name
+          )
+        else
+          # Circuit closed, clear recovery time
+          clear_recovery_time(state.recovery_times, provider_id, transport)
+        end
+
+      {:noreply, %{state | circuit_states: new_circuit_states, recovery_times: new_recovery_times}}
     else
       # Ignore events from other chains
       {:noreply, state}
@@ -697,16 +860,36 @@ defmodule Lasso.RPC.ProviderPool do
       end
     end)
     |> Enum.filter(fn provider ->
+      include_half_open = Map.get(filters, :include_half_open, false)
+
       case Map.get(filters, :protocol) do
         :http ->
-          get_cb_state(state.circuit_states, provider.id, :http) != :open
+          cb_state = get_cb_state(state.circuit_states, provider.id, :http)
+          if include_half_open do
+            cb_state != :open
+          else
+            cb_state == :closed
+          end
 
         :ws ->
-          get_cb_state(state.circuit_states, provider.id, :ws) != :open
+          cb_state = get_cb_state(state.circuit_states, provider.id, :ws)
+          if include_half_open do
+            cb_state != :open
+          else
+            cb_state == :closed
+          end
 
         _ ->
-          not (get_cb_state(state.circuit_states, provider.id, :http) == :open and
-                 get_cb_state(state.circuit_states, provider.id, :ws) == :open)
+          http_state = get_cb_state(state.circuit_states, provider.id, :http)
+          ws_state = get_cb_state(state.circuit_states, provider.id, :ws)
+
+          if include_half_open do
+            # Include if at least one transport is not fully open
+            not (http_state == :open and ws_state == :open)
+          else
+            # Only include if at least one transport is closed
+            http_state == :closed or ws_state == :closed
+          end
       end
     end)
     |> Enum.filter(fn provider ->
@@ -1153,6 +1336,51 @@ defmodule Lasso.RPC.ProviderPool do
       end
 
     Phoenix.PubSub.broadcast(Lasso.PubSub, Provider.topic(chain_name), typed)
+  end
+
+  # Updates circuit state for a specific provider and transport
+  defp update_circuit_state(circuit_states, provider_id, transport, new_state) do
+    current_states = Map.get(circuit_states, provider_id, %{})
+
+    updated_states =
+      case current_states do
+        state when state in [:closed, :open, :half_open] ->
+          # Legacy format: single state for provider
+          # Upgrade to new format with per-transport states
+          %{http: state, ws: state}
+
+        %{} = states_map ->
+          states_map
+      end
+      |> Map.put(transport, new_state)
+
+    Map.put(circuit_states, provider_id, updated_states)
+  end
+
+  # Updates recovery time for a specific circuit by querying CircuitBreaker
+  defp update_recovery_time_for_circuit(recovery_times, provider_id, transport, chain) do
+    breaker_id = {chain, provider_id, transport}
+
+    recovery_time =
+      try do
+        case Lasso.RPC.CircuitBreaker.get_recovery_time_remaining(breaker_id) do
+          time when is_integer(time) and time > 0 -> time
+          _ -> nil
+        end
+      catch
+        :exit, _ -> nil
+      end
+
+    provider_times = Map.get(recovery_times, provider_id, %{http: nil, ws: nil})
+    updated_times = Map.put(provider_times, transport, recovery_time)
+    Map.put(recovery_times, provider_id, updated_times)
+  end
+
+  # Clears recovery time for a specific circuit (when it closes)
+  defp clear_recovery_time(recovery_times, provider_id, transport) do
+    provider_times = Map.get(recovery_times, provider_id, %{http: nil, ws: nil})
+    updated_times = Map.put(provider_times, transport, nil)
+    Map.put(recovery_times, provider_id, updated_times)
   end
 
   def via_name(chain_name) do

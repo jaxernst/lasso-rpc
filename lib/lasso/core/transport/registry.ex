@@ -179,14 +179,21 @@ defmodule Lasso.RPC.TransportRegistry do
             s
 
           {:error, reason} ->
-            Logger.warning(
-              "TransportRegistry: Failed to create HTTP channel for #{provider_id}: #{inspect(reason)}"
-            )
+            # Log actual failures as warnings, missing configs as debug
+            case reason do
+              :no_http_config ->
+                Logger.debug("TransportRegistry: No HTTP URL configured for #{provider_id}")
+
+              _ ->
+                Logger.warning(
+                  "TransportRegistry: Failed to create HTTP channel for #{provider_id}: #{inspect(reason)}"
+                )
+            end
 
             state
         end
       else
-        Logger.warning("TransportRegistry: No HTTP URL configured for #{provider_id}")
+        Logger.debug("TransportRegistry: No HTTP URL configured for #{provider_id}")
         state
       end
 
@@ -324,9 +331,23 @@ defmodule Lasso.RPC.TransportRegistry do
             {:ok, channel, final_state}
 
           {:error, reason} ->
-            Logger.warning(
-              "Failed to create #{transport} channel for provider #{provider_id}: #{inspect(reason)}"
-            )
+            # Don't spam logs for missing transport configs (expected for HTTP-only/WS-only providers)
+            case reason do
+              :no_ws_config ->
+                Logger.debug(
+                  "Provider #{provider_id} does not have WebSocket configured"
+                )
+
+              :no_http_config ->
+                Logger.debug(
+                  "Provider #{provider_id} does not have HTTP configured"
+                )
+
+              _ ->
+                Logger.warning(
+                  "Failed to create #{transport} channel for provider #{provider_id}: #{inspect(reason)}"
+                )
+            end
 
             {:error, reason}
         end

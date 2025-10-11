@@ -27,7 +27,8 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
   require Logger
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.RPC.RequestPipeline
+  alias Lasso.RPC.TransportRegistry
+  alias Lasso.RPC.Channel
   alias Lasso.RPC.Caching.BlockchainMetadataCache
 
   @default_refresh_interval_ms 10_000
@@ -218,49 +219,80 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
   defp probe_provider(chain, provider, timeout_ms) do
     start_time = System.monotonic_time(:millisecond)
 
-    # Probe both block number and chain ID
-    # Use Task.async_stream to run both in parallel
-    probes = [
-      {:block_number, "eth_blockNumber", []},
-      {:chain_id, "eth_chainId", []}
-    ]
+    # Health checks bypass circuit breakers by calling channels directly
+    # This prevents health check traffic from polluting circuit breaker state
+    case TransportRegistry.get_channel(chain, provider.id, :http) do
+      {:ok, channel} ->
+        # Probe both block number and chain ID in parallel
+        probes = [
+          {:block_number, "eth_blockNumber", []},
+          {:chain_id, "eth_chainId", []}
+        ]
 
-    results =
-      probes
-      |> Task.async_stream(
-        fn {key, method, params} ->
-          result =
-            RequestPipeline.execute_via_channels(
-              chain,
-              method,
-              params,
-              strategy: :priority,
-              provider_override: provider.id,
-              failover_on_override: false,
-              timeout: div(timeout_ms, 2)
-            )
+        results =
+          probes
+          |> Task.async_stream(
+            fn {key, method, params} ->
+              rpc_request = %{
+                "jsonrpc" => "2.0",
+                "method" => method,
+                "params" => params,
+                "id" => :rand.uniform(1_000_000)
+              }
 
-          {key, result}
-        end,
-        timeout: timeout_ms,
-        on_timeout: :kill_task
+              result = Channel.request(channel, rpc_request, div(timeout_ms, 2))
+              {key, result}
+            end,
+            timeout: timeout_ms,
+            on_timeout: :kill_task
+          )
+          |> Enum.to_list()
+
+        latency_ms = System.monotonic_time(:millisecond) - start_time
+
+        # Extract results
+        block_number_result =
+          Enum.find_value(results, fn
+            {:ok, {:block_number, result}} -> result
+            _ -> nil
+          end)
+
+        chain_id_result =
+          Enum.find_value(results, fn
+            {:ok, {:chain_id, result}} -> result
+            _ -> nil
+          end)
+
+        handle_probe_results(
+          chain,
+          provider,
+          block_number_result,
+          chain_id_result,
+          latency_ms
+        )
+
+      {:error, reason} ->
+        Logger.debug("Failed to get channel for metadata probe",
+          chain: chain,
+          provider_id: provider.id,
+          reason: inspect(reason)
+        )
+
+        telemetry_probe_failed(chain, provider.id, reason)
+        {:error, provider.id, reason}
+    end
+  rescue
+    e ->
+      Logger.warning("Metadata probe crashed",
+        chain: chain,
+        provider_id: provider.id,
+        error: Exception.format(:error, e, __STACKTRACE__)
       )
-      |> Enum.to_list()
 
-    latency_ms = System.monotonic_time(:millisecond) - start_time
+      {:error, provider.id, :crashed}
+  end
 
-    # Extract results
-    block_number_result =
-      Enum.find_value(results, fn
-        {:ok, {:block_number, result}} -> result
-        _ -> nil
-      end)
-
-    chain_id_result =
-      Enum.find_value(results, fn
-        {:ok, {:chain_id, result}} -> result
-        _ -> nil
-      end)
+  defp handle_probe_results(chain, provider, block_number_result, chain_id_result, latency_ms) do
 
     case block_number_result do
       {:ok, "0x" <> hex} ->
@@ -308,7 +340,7 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
   defp get_providers_to_probe(chain, max_count) do
     case ConfigStore.get_chain(chain) do
       {:ok, chain_config} ->
-        # Get all providers, prioritize by health/priority
+        # Health checks bypass circuit breakers, so we probe all providers to detect recovery
         chain_config.providers
         |> Enum.take(max_count)
 

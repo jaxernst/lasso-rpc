@@ -163,6 +163,7 @@ defmodule Lasso.RPC.Selection do
   - :transport => :http | :ws | :both (default :both)
   - :exclude => [provider_id]
   - :limit => integer (maximum channels to return)
+  - :include_half_open => boolean (default false) - include providers with half-open circuits for degraded mode
 
   Returns a list of Channel structs ordered by strategy preference.
   """
@@ -172,6 +173,7 @@ defmodule Lasso.RPC.Selection do
     transport = Keyword.get(opts, :transport, :both)
     exclude = Keyword.get(opts, :exclude, [])
     limit = Keyword.get(opts, :limit, 10)
+    include_half_open = Keyword.get(opts, :include_half_open, false)
 
     # Ask pool for provider candidates without over-constraining transport for unary.
     # For subscriptions, strictly require WS at the provider layer.
@@ -182,7 +184,7 @@ defmodule Lasso.RPC.Selection do
         _ -> nil
       end
 
-    pool_filters = %{protocol: pool_protocol, exclude: exclude}
+    pool_filters = %{protocol: pool_protocol, exclude: exclude, include_half_open: include_half_open}
     provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
 
     require Logger
