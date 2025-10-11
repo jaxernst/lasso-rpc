@@ -21,15 +21,19 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
 
   alias Lasso.RPC.Providers.Generic
 
+  import Lasso.RPC.Providers.AdapterHelpers
+
   @doc """
-  request params limits validated with an empircal test on 10/07/2025:
+  Default request params limits validated with an empircal test on 10/07/2025:
   http limit is 50, ws limit is 30
 
   Update 10/08/2025:
   This seems to be a dynamic limit that changes, so default to more conservative values.
+
+  Can be overridden per-provider via adapter_config.
   """
-  @max_addresses_http 25
-  @max_addresses_ws 20
+  @default_max_addresses_http 25
+  @default_max_addresses_ws 20
 
   # Capability Validation
 
@@ -37,9 +41,9 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   def supports_method?(_method, _t, _c), do: :ok
 
   @impl true
-  def validate_params("eth_getLogs", params, transport, _c) do
+  def validate_params("eth_getLogs", params, transport, ctx) do
     with :ok <- validate_address_inclusion(params),
-         :ok <- validate_address_count(params, transport) do
+         :ok <- validate_address_count(params, transport, ctx) do
       :ok
     else
       {:error, reason} = err ->
@@ -63,8 +67,8 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   defp validate_address_inclusion(_),
     do: {:error, {:param_limit, "address or addresses not found"}}
 
-  defp validate_address_count([%{"address" => addrs}], transport) when is_list(addrs) do
-    max_addresses = get_max_addresses(transport)
+  defp validate_address_count([%{"address" => addrs}], transport, ctx) when is_list(addrs) do
+    max_addresses = get_max_addresses(transport, ctx)
 
     # Early-exit counting for performance
     count =
@@ -77,11 +81,11 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
       else: {:error, {:param_limit, "max #{max_addresses} addresses (got #{count})"}}
   end
 
-  defp validate_address_count(_, _), do: :ok
+  defp validate_address_count(_, _, _), do: :ok
 
-  defp get_max_addresses(:ws), do: @max_addresses_ws
-  defp get_max_addresses(:http), do: @max_addresses_http
-  defp get_max_addresses(_), do: @max_addresses_http
+  defp get_max_addresses(:ws, ctx), do: get_adapter_config(ctx, :max_addresses_ws, @default_max_addresses_ws)
+  defp get_max_addresses(:http, ctx), do: get_adapter_config(ctx, :max_addresses_http, @default_max_addresses_http)
+  defp get_max_addresses(_, ctx), do: get_adapter_config(ctx, :max_addresses_http, @default_max_addresses_http)
 
   # Normalization - delegate to Generic adapter
 
@@ -105,10 +109,14 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
       type: :public,
       tier: :free,
       known_limitations: [
-        "eth_getLogs: max #{@max_addresses_http} addresses (HTTP), #{@max_addresses_ws} addresses (WS)"
+        "eth_getLogs: max #{@default_max_addresses_http} addresses (HTTP), #{@default_max_addresses_ws} addresses (WS) - default, configurable per-chain"
       ],
       sources: ["Production error logs", "Community documentation"],
-      last_verified: ~D[2025-01-05]
+      last_verified: ~D[2025-01-05],
+      configurable_limits: [
+        max_addresses_http: "Maximum addresses for eth_getLogs HTTP requests (default: #{@default_max_addresses_http})",
+        max_addresses_ws: "Maximum addresses for eth_getLogs WebSocket requests (default: #{@default_max_addresses_ws})"
+      ]
     }
   end
 end

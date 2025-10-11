@@ -109,16 +109,15 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   end
 
   # Crash-safe wrapper for validate_params (called during execution)
+  #
+  # IMPORTANT: Fails closed on adapter crashes. An adapter crash indicates a bug
+  # or unexpected input that should trigger failover to the next provider rather
+  # than allowing potentially malicious requests through.
   defp safe_validate_params?(provider_id, method, params, transport, chain) do
     adapter = AdapterRegistry.adapter_for(provider_id)
 
-    # Include chain in context when available
-    ctx =
-      if chain do
-        %{provider_id: provider_id, chain: chain}
-      else
-        %{provider_id: provider_id}
-      end
+    # Build comprehensive context including provider config
+    ctx = build_validation_context(provider_id, chain)
 
     try do
       adapter.validate_params(method, params, transport, ctx)
@@ -126,16 +125,50 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
     rescue
       e ->
         Logger.error(
-          "Adapter crash in validate_params: #{inspect(adapter)}, #{Exception.message(e)}"
+          "Adapter crash in validate_params: #{inspect(adapter)}, #{Exception.message(e)}, stacktrace: #{Exception.format_stacktrace(__STACKTRACE__)}"
         )
 
         :telemetry.execute([:lasso, :capabilities, :crash], %{count: 1}, %{
           adapter: adapter,
           provider_id: provider_id,
-          phase: :param_validation
+          phase: :param_validation,
+          exception: Exception.format(:error, e, __STACKTRACE__)
         })
 
-        :ok
+        # Fail closed - treat crash as validation failure to trigger failover
+        {:error, :adapter_crash}
+    end
+  end
+
+  # Builds validation context with provider config from ConfigStore.
+  #
+  # Returns base context with provider_config merged in if available.
+  # Falls back to base context (no provider_config) if ConfigStore lookup fails,
+  # allowing adapters to use their default configuration.
+  #
+  # This fail-open approach ensures requests can proceed even if ConfigStore
+  # is temporarily unavailable during startup or reload.
+  defp build_validation_context(provider_id, chain) do
+    base_ctx = %{provider_id: provider_id, chain: chain}
+
+    # Add provider config if available
+    case Lasso.Config.ConfigStore.get_provider(chain, provider_id) do
+      {:ok, provider_config} ->
+        Map.put(base_ctx, :provider_config, provider_config)
+
+      {:error, :not_found} ->
+        Logger.debug(
+          "Provider config not found for #{chain}/#{provider_id}, using adapter defaults"
+        )
+
+        base_ctx
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to load provider config for #{chain}/#{provider_id}: #{inspect(reason)}, using adapter defaults"
+        )
+
+        base_ctx
     end
   end
 

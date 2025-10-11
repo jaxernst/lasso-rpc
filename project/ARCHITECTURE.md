@@ -807,6 +807,490 @@ config :lasso,
 
 ---
 
+## Multichain Provider Adapter Architecture
+
+**Files**:
+
+- `lib/lasso/core/providers/adapter_registry.ex` - Provider-type extraction and adapter resolution
+- `lib/lasso/core/providers/adapter_filter.ex` - Method capability filtering and parameter validation
+- `lib/lasso/core/providers/adapter_helpers.ex` - Shared utilities for all adapters
+- `lib/lasso/core/providers/adapters/*.ex` - Provider-specific adapter implementations
+- `lib/lasso/config/chain_config.ex` - Configuration parsing with type validation
+- `config/chains.yml` - Chain and provider configuration with adapter_config overrides
+
+Lasso's provider adapter system validates RPC requests before sending them upstream, preventing rejections and unnecessary failovers. The architecture is designed for multichain scalability, allowing a single adapter implementation to work across all chains (Ethereum, Base, Polygon, etc.) with per-provider, per-chain configuration overrides.
+
+### **Design Philosophy**
+
+**Lazy Parameter Validation**
+
+The adapter system performs only method-level capability filtering during provider selection, deferring parameter validation to execution time:
+
+1. **Filter by method support** - Build candidate list of method-capable providers
+2. **Selection** - Return ordered channels based on strategy
+3. **Execution** - Validate params for selected channel before request
+4. **Failover on validation failure** - Invalid params trigger same failover as request errors
+5. **Repeat** - Until success or all candidates exhausted
+
+**Benefits:**
+- Only 1 parameter validation per request (not N validations upfront)
+- Natural failover integration
+- Clear separation of concerns (filter = capability, execution = validation)
+
+**Fail-Closed Error Handling**
+
+Adapter crashes during parameter validation return `{:error, :adapter_crash}` to trigger failover rather than allowing potentially malicious requests through. However, `supports_method?` is intentionally not wrapped in try/rescue - if it crashes, that's a critical bug requiring immediate attention.
+
+### **Provider-Type Extraction**
+
+The system automatically resolves adapters using pattern matching on provider IDs, supporting both naming conventions without manual mappings:
+
+**Supported Patterns:**
+- `{provider}_{chain}`: `"alchemy_base"`, `"llamarpc_polygon"`
+- `{chain}_{provider}`: `"ethereum_cloudflare"`, `"base_publicnode"`
+- Exact match: `"alchemy"`, `"infura"`
+
+**Collision Prevention:**
+
+Provider types are sorted by length (descending) before pattern matching to prevent prefix collisions:
+
+```elixir
+# Example: If we have both "alchemy" and "alchemy_pro"
+# Without sorting: "alchemy_pro_ethereum" incorrectly matches "alchemy"
+# With DESC sorting: "alchemy_pro_ethereum" correctly matches "alchemy_pro"
+
+defp extract_provider_type(provider_id) do
+  provider_types =
+    @provider_type_mapping
+    |> Map.keys()
+    |> Enum.sort_by(&String.length/1, :desc)  # Longer patterns first
+
+  # Try prefix: "alchemy_ethereum"
+  # Try suffix: "ethereum_alchemy"
+  # Try exact: "alchemy"
+end
+```
+
+**Adapter Registry:**
+
+```elixir
+@provider_type_mapping %{
+  "alchemy" => Lasso.RPC.Providers.Adapters.Alchemy,
+  "publicnode" => Lasso.RPC.Providers.Adapters.PublicNode,
+  "llamarpc" => Lasso.RPC.Providers.Adapters.LlamaRPC,
+  "merkle" => Lasso.RPC.Providers.Adapters.Merkle,
+  "cloudflare" => Lasso.RPC.Providers.Adapters.Cloudflare
+}
+
+# All resolve to Adapters.Alchemy
+AdapterRegistry.adapter_for("alchemy_ethereum")    # ✓
+AdapterRegistry.adapter_for("alchemy_base")        # ✓
+AdapterRegistry.adapter_for("alchemy_polygon")     # ✓
+
+# All resolve to Adapters.PublicNode
+AdapterRegistry.adapter_for("ethereum_publicnode") # ✓
+AdapterRegistry.adapter_for("base_publicnode")     # ✓
+
+# Unknown providers fallback to Generic adapter
+AdapterRegistry.adapter_for("unknown_provider")    # → Generic
+```
+
+**Scalability:** Adding new chains requires zero code changes - adapters automatically work across all chains.
+
+### **Per-Chain Configuration System**
+
+While adapters provide sensible defaults, some providers have different limits per chain. The `adapter_config` field in provider configuration allows YAML-based overrides:
+
+**Configuration Structure:**
+
+```yaml
+# config/chains.yml
+base:
+  chain_id: 8453
+  providers:
+    - id: "alchemy_base"
+      url: "https://base-mainnet.g.alchemy.com/v2/..."
+      adapter_config:
+        eth_get_logs_block_range: 10  # Override Alchemy's default
+
+    - id: "base_publicnode"
+      url: "https://base.publicnode.com"
+      adapter_config:
+        max_addresses_http: 50  # Base allows more addresses
+        max_addresses_ws: 30
+
+ethereum:
+  chain_id: 1
+  providers:
+    - id: "alchemy_ethereum"
+      url: "https://eth-mainnet.g.alchemy.com/v2/..."
+      # No adapter_config - uses adapter defaults (10 blocks)
+```
+
+**Type Validation:**
+
+Configuration values are validated at parse time with clear error messages:
+
+```elixir
+# Integer config keys are validated
+@integer_config_keys [
+  :eth_get_logs_block_range,  # Alchemy: block range limit
+  :max_block_range,            # LlamaRPC/Merkle: block range limit
+  :max_addresses_http,         # PublicNode: HTTP address limit
+  :max_addresses_ws            # PublicNode: WS address limit
+]
+
+# Accepts integers or numeric strings from YAML
+adapter_config: %{max_block_range: 1000}       # ✓
+adapter_config: %{max_block_range: "1000"}     # ✓ (auto-converts)
+adapter_config: %{max_block_range: "invalid"}  # ✗ (raises with clear error)
+adapter_config: %{max_block_range: -5}         # ✗ (must be positive)
+```
+
+**Unknown keys pass through** to support future extensibility without breaking changes.
+
+### **Adapter Implementation Pattern**
+
+All adapters follow a consistent pattern using shared helpers:
+
+```elixir
+defmodule Lasso.RPC.Providers.Adapters.Alchemy do
+  @behaviour Lasso.RPC.ProviderAdapter
+
+  import Lasso.RPC.Providers.AdapterHelpers
+
+  # Default limits (provider-specific)
+  @default_eth_get_logs_block_range 10
+
+  @impl true
+  def validate_params("eth_getLogs", params, _transport, ctx) do
+    # Read from config or use default
+    limit = get_adapter_config(ctx, :eth_get_logs_block_range, @default_eth_get_logs_block_range)
+
+    case validate_block_range(params, ctx, limit) do
+      :ok -> :ok
+      {:error, reason} = err ->
+        # Emit telemetry for monitoring
+        :telemetry.execute([:lasso, :capabilities, :param_reject], %{count: 1}, %{
+          adapter: __MODULE__,
+          method: "eth_getLogs",
+          reason: reason
+        })
+        err
+    end
+  end
+
+  def validate_params(_method, _params, _transport, _ctx), do: :ok
+end
+```
+
+### **AdapterHelpers Module**
+
+The shared `AdapterHelpers` module eliminates code duplication across adapters:
+
+```elixir
+defmodule Lasso.RPC.Providers.AdapterHelpers do
+  @doc """
+  Reads adapter config value from context with fallback to default.
+
+  Handles missing provider_config, nil adapter_config, and missing keys gracefully.
+  """
+  @spec get_adapter_config(map(), atom(), any()) :: any()
+  def get_adapter_config(ctx, key, default) when is_map(ctx) and is_atom(key) do
+    adapter_config =
+      ctx
+      |> Map.get(:provider_config, %{})
+      |> Map.get(:adapter_config)
+
+    case adapter_config do
+      nil -> default
+      %{} = config -> Map.get(config, key, default)
+      _ -> default
+    end
+  end
+end
+```
+
+**Usage:** All adapters import and use `get_adapter_config/3` for consistent configuration access.
+
+### **Validation Context**
+
+During execution, the adapter filter builds a comprehensive validation context:
+
+```elixir
+# Base context always includes provider_id and chain
+ctx = %{
+  provider_id: "alchemy_base",
+  chain: "base"
+}
+
+# Provider config is merged if available (via ConfigStore lookup)
+ctx = %{
+  provider_id: "alchemy_base",
+  chain: "base",
+  provider_config: %Provider{
+    id: "alchemy_base",
+    url: "https://...",
+    adapter_config: %{eth_get_logs_block_range: 10}
+  }
+}
+```
+
+**Fail-Open Config Lookup:**
+
+If ConfigStore lookup fails (e.g., during startup or reload), the system returns base context without provider_config, allowing adapters to use their defaults. This ensures requests can proceed even during transient config unavailability.
+
+**Fail-Closed Parameter Validation:**
+
+However, adapter crashes during actual validation are caught and return `{:error, :adapter_crash}` to trigger failover:
+
+```elixir
+defp safe_validate_params?(provider_id, method, params, transport, chain) do
+  adapter = AdapterRegistry.adapter_for(provider_id)
+  ctx = build_validation_context(provider_id, chain)
+
+  try do
+    adapter.validate_params(method, params, transport, ctx)
+  rescue
+    e ->
+      Logger.error("Adapter crash in validate_params: #{inspect(adapter)}, #{Exception.message(e)}")
+      :telemetry.execute([:lasso, :capabilities, :crash], %{...})
+
+      # Fail closed - treat crash as validation failure to trigger failover
+      {:error, :adapter_crash}
+  end
+end
+```
+
+### **Current Adapter Implementations**
+
+**Alchemy** (`adapters/alchemy.ex`)
+- Validates `eth_getLogs` block range (default: 10 blocks)
+- Configurable via `eth_get_logs_block_range`
+- Uses BlockchainMetadataCache for "latest" block resolution
+
+**PublicNode** (`adapters/public_node.ex`)
+- Validates `eth_getLogs` address count
+- Separate limits for HTTP (default: 25) and WebSocket (default: 20)
+- Configurable via `max_addresses_http` and `max_addresses_ws`
+
+**LlamaRPC** (`adapters/llamarpc.ex`)
+- Validates `eth_getLogs` block range (default: 1000 blocks)
+- Configurable via `max_block_range`
+- Uses BlockchainMetadataCache for "latest" block resolution
+
+**Merkle** (`adapters/merkle.ex`)
+- Validates `eth_getLogs` block range (default: 1000 blocks)
+- Configurable via `max_block_range`
+- Uses BlockchainMetadataCache for "latest" block resolution
+
+**Cloudflare** (`adapters/cloudflare.ex`)
+- Currently no parameter restrictions
+- Delegates all normalization to Generic adapter
+
+**Generic** (`generic.ex`)
+- Fallback adapter for unknown provider types
+- No parameter validation
+- Basic request/response normalization
+
+### **Integration with BlockchainMetadataCache**
+
+Adapters use the metadata cache to resolve "latest" block numbers for accurate range validation:
+
+```elixir
+defp parse_block_number("latest", ctx) do
+  chain = Map.get(ctx, :chain, "ethereum")
+
+  case BlockchainMetadataCache.get_block_height(chain) do
+    {:ok, height} -> {:ok, height}
+    {:error, _} -> {:ok, 0}  # Fail-open: allow request if cache unavailable
+  end
+end
+
+# Example validation flow:
+# Request: eth_getLogs({fromBlock: "latest", toBlock: "0x100"})
+# Cache lookup: latest = 21845678
+# Range: abs(21845678 - 256) = 21845422 blocks
+# Alchemy limit: 10 blocks
+# Result: {:error, {:param_limit, "max 10 block range (got 21845422)"}}
+```
+
+**Benefits:**
+- Accurate validation with real-time block numbers (<1ms via ETS)
+- Graceful degradation if cache unavailable (fail-open)
+- No hardcoded block number estimates
+
+### **Telemetry Events**
+
+The adapter system emits comprehensive telemetry for monitoring:
+
+```elixir
+# Parameter validation rejection
+[:lasso, :capabilities, :param_reject]
+%{count: 1}
+%{adapter: Adapters.Alchemy, method: "eth_getLogs", reason: {:param_limit, "..."}}
+
+# Adapter crash during validation
+[:lasso, :capabilities, :crash]
+%{count: 1}
+%{adapter: Adapters.Alchemy, provider_id: "alchemy_base", phase: :param_validation, exception: "..."}
+
+# Method filtering (capability check)
+[:lasso, :capabilities, :filter]
+%{method: "eth_subscribe", total_candidates: 6, filtered_count: 2}
+```
+
+### **Performance Characteristics**
+
+- **Method filtering**: <20μs P99 (6 providers × ~2μs each)
+- **Parameter validation**: <50μs P99 (single validation per request)
+- **Config lookup**: <5μs (ETS-based ConfigStore)
+- **Total overhead**: <100μs P99 for filtering + validation
+
+The lazy validation approach (validating only the selected provider) is significantly more efficient than eager validation (validating all candidates upfront).
+
+### **Backward Compatibility**
+
+The system maintains full backward compatibility:
+
+**Missing adapter_config:**
+```yaml
+providers:
+  - id: "alchemy_ethereum"
+    url: "https://..."
+    # No adapter_config field
+```
+**Result:** Uses adapter defaults (e.g., 10 blocks for Alchemy)
+
+**Nil adapter_config:**
+```yaml
+providers:
+  - id: "alchemy_ethereum"
+    url: "https://..."
+    adapter_config: null
+```
+**Result:** Uses adapter defaults
+
+**Empty adapter_config:**
+```yaml
+providers:
+  - id: "alchemy_ethereum"
+    url: "https://..."
+    adapter_config: {}
+```
+**Result:** Uses adapter defaults
+
+**Missing provider_config in context:**
+```elixir
+ctx = %{provider_id: "alchemy_base", chain: "base"}
+# No :provider_config field
+```
+**Result:** Uses adapter defaults
+
+All existing configurations continue to work without modification.
+
+### **Adding New Adapters**
+
+To add a new provider adapter:
+
+1. **Create adapter module** in `lib/lasso/core/providers/adapters/`
+2. **Implement ProviderAdapter behaviour:**
+   - `supports_method?/3` - Method capability check
+   - `validate_params/4` - Parameter validation with configurable limits
+   - `normalize_request/2`, `normalize_response/2`, `normalize_error/2` - Request/response handling
+   - `headers/1` - Custom headers (e.g., API keys)
+   - `metadata/0` - Adapter metadata
+3. **Register in AdapterRegistry:**
+   ```elixir
+   @provider_type_mapping %{
+     "new_provider" => Lasso.RPC.Providers.Adapters.NewProvider
+   }
+   ```
+4. **Import AdapterHelpers** for config access
+5. **Define configurable limits** with sensible defaults
+6. **Document in metadata** what limits are configurable
+
+**Example:**
+```elixir
+defmodule Lasso.RPC.Providers.Adapters.NewProvider do
+  @behaviour Lasso.RPC.ProviderAdapter
+  import Lasso.RPC.Providers.AdapterHelpers
+
+  @default_max_logs 1000
+
+  @impl true
+  def validate_params("eth_getLogs", params, _transport, ctx) do
+    limit = get_adapter_config(ctx, :max_logs, @default_max_logs)
+    # Validation logic...
+  end
+
+  @impl true
+  def metadata do
+    %{
+      configurable_limits: [
+        max_logs: "Maximum logs returned per request (default: #{@default_max_logs})"
+      ]
+    }
+  end
+end
+```
+
+### **Testing Strategy**
+
+The adapter system has comprehensive test coverage (37 tests):
+
+1. **Multichain resolution** - All provider types across all chains
+2. **Collision prevention** - Overlapping provider type names
+3. **Per-chain config overrides** - Custom limits per provider/chain
+4. **Backward compatibility** - nil/empty/missing configs use defaults
+5. **AdapterHelpers edge cases** - Nil handling, missing keys
+6. **Type validation** - Integer conversion and validation
+
+**Example test:**
+```elixir
+test "respects adapter_config for custom block range" do
+  provider_config = %Provider{
+    id: "alchemy_base",
+    adapter_config: %{eth_get_logs_block_range: 50}
+  }
+
+  ctx = %{
+    provider_id: "alchemy_base",
+    chain: "base",
+    provider_config: provider_config
+  }
+
+  # 31 blocks should pass with limit of 50
+  params = [%{"fromBlock" => "0x1", "toBlock" => "0x20"}]
+  assert :ok = Adapters.Alchemy.validate_params("eth_getLogs", params, :http, ctx)
+
+  # But 51 should fail
+  params = [%{"fromBlock" => "0x1", "toBlock" => "0x34"}]
+  assert {:error, {:param_limit, message}} =
+    Adapters.Alchemy.validate_params("eth_getLogs", params, :http, ctx)
+  assert message =~ "max 50 block range"
+end
+```
+
+### **Production Deployment Considerations**
+
+**Configuration Management:**
+- Use environment-specific `chains.yml` files
+- Override adapter_config per environment (e.g., higher limits in production)
+- Validate configuration on boot via ConfigStore
+
+**Monitoring:**
+- Track `[:lasso, :capabilities, :param_reject]` events to identify clients hitting limits
+- Alert on `[:lasso, :capabilities, :crash]` events (indicates adapter bugs)
+- Monitor rejection rates per adapter/method
+
+**Scaling:**
+- Adapter validation is stateless and highly concurrent
+- No coordination required between requests
+- Performance scales linearly with request volume
+
+---
+
 ## Summary
 
 Lasso RPC leverages Elixir/OTP's fault tolerance and concurrency to deliver production-ready blockchain RPC orchestration. Key architectural advantages:

@@ -112,7 +112,8 @@ defmodule Lasso.RPC.ProviderAdapter do
   @type context :: %{
           optional(:provider_id) => String.t(),
           optional(:method) => String.t(),
-          optional(:chain) => String.t()
+          optional(:chain) => String.t(),
+          optional(:provider_config) => Lasso.Config.ChainConfig.Provider.t()
         }
 
   # Capability Validation Callbacks (Required)

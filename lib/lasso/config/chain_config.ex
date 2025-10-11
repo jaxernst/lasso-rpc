@@ -45,7 +45,10 @@ defmodule Lasso.Config.ChainConfig do
             url: String.t(),
             ws_url: String.t() | nil,
             api_key_required: boolean(),
-            region: String.t() | nil
+            region: String.t() | nil,
+            # Per-provider adapter configuration overrides
+            # Maps to adapter-specific config keys (e.g., eth_get_logs_block_range: 10)
+            adapter_config: %{atom() => any()} | nil
           }
 
     defstruct [
@@ -57,6 +60,7 @@ defmodule Lasso.Config.ChainConfig do
       :ws_url,
       :api_key_required,
       :region,
+      :adapter_config,
       # For test mock providers
       :__mock__
     ]
@@ -234,10 +238,65 @@ defmodule Lasso.Config.ChainConfig do
         url: substitute_env_vars(provider_data["url"]),
         ws_url: substitute_env_vars(provider_data["ws_url"]),
         api_key_required: provider_data["api_key_required"],
-        region: provider_data["region"]
+        region: provider_data["region"],
+        adapter_config: parse_adapter_config(provider_data["adapter_config"])
       }
     end)
   end
+
+  # Parse adapter_config from YAML, converting string keys to atoms and validating types
+  defp parse_adapter_config(nil), do: nil
+
+  defp parse_adapter_config(config_map) when is_map(config_map) do
+    config_map
+    |> Enum.map(fn {key, value} ->
+      atom_key =
+        if is_binary(key) do
+          String.to_atom(key)
+        else
+          key
+        end
+
+      validated_value = validate_adapter_config_value(atom_key, value)
+      {atom_key, validated_value}
+    end)
+    |> Enum.into(%{})
+  end
+
+  defp parse_adapter_config(_), do: nil
+
+  # Validate known adapter config keys and their types
+  # Known integer configuration keys that must be positive integers
+  @integer_config_keys [
+    :eth_get_logs_block_range,
+    :max_block_range,
+    :max_addresses_http,
+    :max_addresses_ws
+  ]
+
+  defp validate_adapter_config_value(key, value) when key in @integer_config_keys do
+    case value do
+      v when is_integer(v) and v > 0 ->
+        v
+
+      v when is_binary(v) ->
+        case Integer.parse(v) do
+          {num, ""} when num > 0 ->
+            num
+
+          _ ->
+            raise ArgumentError,
+                  "Invalid adapter_config: #{key} must be a positive integer, got string: #{inspect(v)}"
+        end
+
+      _ ->
+        raise ArgumentError,
+              "Invalid adapter_config: #{key} must be a positive integer, got: #{inspect(value)}"
+    end
+  end
+
+  # Unknown keys pass through without validation (future extensibility)
+  defp validate_adapter_config_value(_key, value), do: value
 
   defp parse_connection(connection_data) do
     %Connection{

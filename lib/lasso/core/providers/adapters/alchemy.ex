@@ -12,10 +12,13 @@ defmodule Lasso.RPC.Providers.Adapters.Alchemy do
   alias Lasso.RPC.Providers.Generic
   alias Lasso.RPC.Caching.BlockchainMetadataCache
 
+  import Lasso.RPC.Providers.AdapterHelpers
+
   @doc """
-  Block range limit for eth_getLogs based on production error logs.
+  Default block range limit for eth_getLogs based on production error logs.
+  Can be overridden per-provider via adapter_config.
   """
-  @eth_get_logs_block_range 10
+  @default_eth_get_logs_block_range 10
 
   # Capability Validation
 
@@ -24,9 +27,14 @@ defmodule Lasso.RPC.Providers.Adapters.Alchemy do
 
   @impl true
   def validate_params("eth_getLogs", params, _transport, ctx) do
-    with :ok <- validate_logs_block_range(params, ctx) do
-      :ok
-    else
+    # Get block range limit from provider config or use default
+    block_range_limit =
+      get_adapter_config(ctx, :eth_get_logs_block_range, @default_eth_get_logs_block_range)
+
+    case validate_logs_block_range(params, ctx, block_range_limit) do
+      :ok ->
+        :ok
+
       {:error, reason} = err ->
         :telemetry.execute([:lasso, :capabilities, :param_reject], %{count: 1}, %{
           adapter: __MODULE__,
@@ -42,16 +50,16 @@ defmodule Lasso.RPC.Providers.Adapters.Alchemy do
 
   # Private validation helpers
 
-  defp validate_logs_block_range([%{"fromBlock" => from, "toBlock" => to}], ctx) do
+  defp validate_logs_block_range([%{"fromBlock" => from, "toBlock" => to}], ctx, limit) do
     with {:ok, range} <- compute_block_range(from, to, ctx),
-         true <- range > @eth_get_logs_block_range do
-      {:error, {:param_limit, "max #{@eth_get_logs_block_range} block range (got #{range})"}}
+         true <- range > limit do
+      {:error, {:param_limit, "max #{limit} block range (got #{range})"}}
     else
       _ -> :ok
     end
   end
 
-  defp validate_logs_block_range(_params, _ctx), do: :ok
+  defp validate_logs_block_range(_params, _ctx, _limit), do: :ok
 
   defp compute_block_range(from_block, to_block, ctx) do
     with {:ok, from_num} <- parse_block_number(from_block, ctx),
@@ -109,10 +117,14 @@ defmodule Lasso.RPC.Providers.Adapters.Alchemy do
       type: :public,
       tier: :free,
       known_limitations: [
-        "eth_getLogs: max #{@eth_get_logs_block_range} block range"
+        "eth_getLogs: max #{@default_eth_get_logs_block_range} block range (default, configurable per-chain)"
       ],
       sources: ["Production error logs"],
-      last_verified: ~D[2025-01-05]
+      last_verified: ~D[2025-01-05],
+      configurable_limits: [
+        eth_get_logs_block_range:
+          "Maximum block range for eth_getLogs queries (default: #{@default_eth_get_logs_block_range})"
+      ]
     }
   end
 end
