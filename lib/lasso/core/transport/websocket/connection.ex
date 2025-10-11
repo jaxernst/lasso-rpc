@@ -562,7 +562,20 @@ defmodule Lasso.RPC.WSConnection do
 
   def handle_info({:heartbeat}, state) do
     if state.connected do
-      case ws_client().send_frame(state.connection, :ping) do
+      # send_frame is a synchronous call that can timeout if the connection is hung
+      # Catch timeout exits and treat as connection health issue
+      result =
+        try do
+          ws_client().send_frame(state.connection, :ping)
+        catch
+          :exit, {:timeout, _} ->
+            {:error, :heartbeat_timeout}
+
+          :exit, reason ->
+            {:error, {:heartbeat_exit, reason}}
+        end
+
+      case result do
         :ok ->
           # Emit telemetry event
           :telemetry.execute(
@@ -576,11 +589,45 @@ defmodule Lasso.RPC.WSConnection do
           state = schedule_heartbeat(state)
           {:noreply, state}
 
+        {:error, :heartbeat_timeout} ->
+          Logger.warning(
+            "Heartbeat ping timeout for #{state.endpoint.id} - connection appears hung, reconnecting"
+          )
+
+          # Emit telemetry event
+          :telemetry.execute(
+            [:lasso, :websocket, :heartbeat, :failed],
+            %{},
+            %{
+              provider_id: state.endpoint.id,
+              reason: :timeout
+            }
+          )
+
+          # Connection is hung - treat as disconnect and reconnect
+          jerr =
+            JError.new(-32000, "Heartbeat timeout",
+              provider_id: state.endpoint.id,
+              retriable?: true
+            )
+
+          state = cleanup_pending_requests(state, jerr)
+          state = %{state | connected: false, connection: nil}
+
+          Phoenix.PubSub.broadcast(
+            Lasso.PubSub,
+            "ws:conn:#{state.chain_name}",
+            {:ws_disconnected, state.endpoint.id, jerr}
+          )
+
+          state = schedule_reconnect(state)
+          {:noreply, state}
+
         {:error, reason} ->
           jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
 
           Logger.debug(
-            "[Provider→] Heartbeat ping failed for upstream #{state.endpoint.id}: #{inspect(jerr)}"
+            "Heartbeat ping failed for #{state.endpoint.id}: #{inspect(jerr)}"
           )
 
           # Emit telemetry event
@@ -593,6 +640,7 @@ defmodule Lasso.RPC.WSConnection do
             }
           )
 
+          # For other errors, continue trying - schedule next heartbeat
           state = schedule_heartbeat(state)
           {:noreply, state}
       end
