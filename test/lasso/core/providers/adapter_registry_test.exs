@@ -28,12 +28,16 @@ defmodule Lasso.RPC.Providers.AdapterRegistryTest do
   end
 
   describe "all_adapters/0" do
-    test "returns list of all registered adapters" do
+    test "returns list of all registered provider types and adapters" do
       adapters = AdapterRegistry.all_adapters()
 
       assert is_list(adapters)
-      assert {"ethereum_cloudflare", Adapters.Cloudflare} in adapters
-      assert {"ethereum_publicnode", Adapters.PublicNode} in adapters
+      # Now returns provider types, not specific provider IDs
+      assert {"cloudflare", Adapters.Cloudflare} in adapters
+      assert {"publicnode", Adapters.PublicNode} in adapters
+      assert {"alchemy", Adapters.Alchemy} in adapters
+      assert {"llamarpc", Adapters.LlamaRPC} in adapters
+      assert {"merkle", Adapters.Merkle} in adapters
     end
 
     test "returns non-empty list" do

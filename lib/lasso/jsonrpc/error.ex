@@ -65,31 +65,47 @@ defmodule Lasso.JSONRPC.Error do
         }
 
   @doc """
-  Creates a new JSON-RPC error.
+  Creates a new JSON-RPC error with automatic classification.
 
-  This is a low-level constructor. Prefer using `ErrorNormalizer.normalize/2`
-  for automatic categorization and retriability assessment.
+  Automatically classifies errors using ErrorClassification unless explicit
+  category and retriable? values are provided.
 
   ## Examples
 
       iex> new(-32602, "Invalid params")
-      %Lasso.JSONRPC.Error{code: -32602, message: "Invalid params"}
+      %Lasso.JSONRPC.Error{code: -32602, message: "Invalid params", category: :invalid_params, retriable?: false}
+
+      iex> new(-32005, "Rate limit exceeded")
+      %Lasso.JSONRPC.Error{code: -32005, message: "Rate limit exceeded", category: :rate_limit, retriable?: true}
 
       iex> new(-32000, "Server error", category: :server_error, retriable?: true)
       %Lasso.JSONRPC.Error{code: -32000, message: "Server error", category: :server_error, retriable?: true}
   """
   @spec new(integer(), String.t(), keyword()) :: t()
   def new(code, message, opts \\ []) do
+    # Normalize HTTP 429 to JSON-RPC -32005 (rate limit code)
+    {normalized_code, original_code} =
+      if code == 429 do
+        {-32005, code}
+      else
+        {code, Keyword.get(opts, :original_code, code)}
+      end
+
+    # Auto-classify if not explicitly provided
+    category = Keyword.get(opts, :category) || Lasso.RPC.ErrorClassification.categorize(normalized_code, message)
+    retriable? = Keyword.get(opts, :retriable?) || Lasso.RPC.ErrorClassification.retriable?(normalized_code, message)
+    breaker_penalty? = Keyword.get(opts, :breaker_penalty?) || Lasso.RPC.ErrorClassification.breaker_penalty?(category)
+
     %__MODULE__{
-      code: code,
+      code: normalized_code,
       message: message,
       data: Keyword.get(opts, :data),
-      category: Keyword.get(opts, :category),
+      category: category,
       provider_id: Keyword.get(opts, :provider_id),
       http_status: Keyword.get(opts, :http_status),
-      retriable?: Keyword.get(opts, :retriable?),
-      breaker_penalty?: Keyword.get(opts, :breaker_penalty?, true),
-      original_code: Keyword.get(opts, :original_code, code),
+      retriable?: retriable?,
+      breaker_penalty?: breaker_penalty?,
+      original_code: original_code,
       source: Keyword.get(opts, :source),
       transport: Keyword.get(opts, :transport)
     }

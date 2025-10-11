@@ -1,5 +1,18 @@
 # Lasso Chain Configuration
 # Defines multiple RPC providers per blockchain for redundancy and speed optimization
+#
+# Adapter Configuration:
+# Providers can specify adapter-specific configuration via the `adapter_config` field.
+# This allows per-provider, per-chain customization of rate limits and capabilities.
+#
+# Common adapter_config options:
+#   Alchemy:
+#     - eth_get_logs_block_range: <number>  # Max block range for eth_getLogs (default: 10)
+#   PublicNode:
+#     - max_addresses_http: <number>        # Max addresses for eth_getLogs HTTP (default: 25)
+#     - max_addresses_ws: <number>          # Max addresses for eth_getLogs WS (default: 20)
+#   LlamaRPC / Merkle:
+#     - max_block_range: <number>           # Max block range for eth_getLogs (default: 1000)
 
 chains:
   ethereum:
@@ -96,6 +109,9 @@ chains:
         url: "https://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         ws_url: "wss://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         api_key_required: true
+        # Alchemy Base free tier has 10 block limit for eth_getLogs
+        adapter_config:
+          eth_get_logs_block_range: 10
 
       - id: "base_llamarpc"
         name: "LlamaRPC Base"

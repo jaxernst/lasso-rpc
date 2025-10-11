@@ -114,7 +114,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
-          {provider_id, %{failure_threshold: 3, recovery_timeout: 5_000, success_threshold: 2}}
+          {{"test_chain", provider_id, :http}, %{failure_threshold: 3, recovery_timeout: 5_000, success_threshold: 2}}
         )
 
       # Simulate rapid rate limit failures
@@ -142,7 +142,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
-          {provider_id, %{failure_threshold: 5, recovery_timeout: 5_000, success_threshold: 2}}
+          {{"test_chain", provider_id, :http}, %{failure_threshold: 5, recovery_timeout: 5_000, success_threshold: 2}}
         )
 
       # First rate limit error
@@ -204,7 +204,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       provider_id = "fast_primary"
 
       case CircuitBreaker.start_link(
-             {provider_id, %{failure_threshold: 2, recovery_timeout: 5_000, success_threshold: 2}}
+             {{"test_chain", provider_id, :http}, %{failure_threshold: 2, recovery_timeout: 5_000, success_threshold: 2}}
            ) do
         {:ok, _} -> :ok
         {:error, {:already_started, _}} -> :ok
@@ -277,7 +277,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       primary_id = "primary"
 
       case CircuitBreaker.start_link(
-             {primary_id, %{failure_threshold: 2, recovery_timeout: 10_000, success_threshold: 2}}
+             {{"test_chain", primary_id, :http}, %{failure_threshold: 2, recovery_timeout: 10_000, success_threshold: 2}}
            ) do
         {:ok, _} -> :ok
         {:error, {:already_started, _}} -> :ok
@@ -320,7 +320,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       provider_id = "recovering_provider"
 
       {:ok, _pid} =
-        CircuitBreaker.start_link({provider_id,
+        CircuitBreaker.start_link({{"test_chain", provider_id, :http},
          %{
            failure_threshold: 2,
            recovery_timeout: 100,
@@ -550,14 +550,19 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert rate_limit.category == :rate_limit
       assert rate_limit.retriable? == true
 
-      # Generic server error
-      server_error = JError.new(-32603, "Internal server error")
+      # Internal error (-32603 is JSON-RPC standard internal error)
+      internal_error = JError.new(-32603, "Internal server error")
+      assert internal_error.category == :internal_error
+      assert internal_error.retriable? == true
+
+      # Generic server error (use -32000)
+      server_error = JError.new(-32000, "Server error")
       assert server_error.category == :server_error
       assert server_error.retriable? == true
 
       # User error (should NOT trigger failover)
       user_error = JError.new(-32602, "Invalid params")
-      assert user_error.category == :client_error
+      assert user_error.category == :invalid_params
       assert user_error.retriable? == false
     end
 
@@ -603,7 +608,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
-          {provider_id, %{failure_threshold: 3, recovery_timeout: 5_000, success_threshold: 2}}
+          {{"test_chain", provider_id, :http}, %{failure_threshold: 3, recovery_timeout: 5_000, success_threshold: 2}}
         )
 
       # Rate limit errors increment failure count
@@ -639,7 +644,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
-          {provider_id, %{failure_threshold: 10, recovery_timeout: 5_000, success_threshold: 2}}
+          {{"test_chain", provider_id, :http}, %{failure_threshold: 10, recovery_timeout: 5_000, success_threshold: 2}}
         )
 
       # Send 100 concurrent rate limit errors
