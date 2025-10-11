@@ -331,10 +331,151 @@ defmodule Lasso.RPC.RequestPipeline do
 
     case channels do
       [] ->
-        updated_ctx =
-          RequestContext.record_error(ctx, JError.new(-32000, "No available channels"))
+        # No channels available with closed circuits - try degraded mode with half-open circuits
+        Logger.info("No closed circuit channels available, attempting degraded mode with half-open circuits",
+          chain: chain,
+          method: method
+        )
 
-        {:error, JError.new(-32000, "No available channels for method: #{method}"), updated_ctx}
+        :telemetry.execute([:lasso, :failover, :degraded_mode], %{count: 1}, %{
+          chain: chain,
+          method: method
+        })
+
+        degraded_channels =
+          Selection.select_channels(chain, method,
+            strategy: ctx.strategy,
+            transport: transport_override || :both,
+            limit: 10,
+            include_half_open: true
+          )
+
+        case degraded_channels do
+          [] ->
+            # Still no channels - all circuits are fully open
+            # Calculate retry-after hint from circuit breakers
+            retry_after_ms = calculate_min_recovery_time(chain, transport_override)
+
+            {error_message, error_data} =
+              case retry_after_ms do
+                nil ->
+                  # No recovery time available - circuits may be manually controlled
+                  message = "No available channels for method: #{method}. " <>
+                            "All circuit breakers are open."
+                  {message, %{}}
+
+                ms when is_integer(ms) and ms > 0 ->
+                  # Valid recovery time
+                  seconds = div(ms, 1000)
+                  message = "No available channels for method: #{method}. " <>
+                            "All circuits open, retry after #{seconds}s"
+                  {message, %{retry_after_ms: ms}}
+
+                _ ->
+                  # Invalid recovery time (should not happen, but be defensive)
+                  Logger.warning("Invalid recovery time returned: #{inspect(retry_after_ms)}",
+                    chain: chain,
+                    method: method
+                  )
+                  message = "No available channels for method: #{method}. " <>
+                            "All circuit breakers are open."
+                  {message, %{}}
+              end
+
+            jerr = JError.new(-32000, error_message,
+              category: :provider_error,
+              retriable?: true,
+              data: error_data
+            )
+
+            updated_ctx = RequestContext.record_error(ctx, jerr)
+
+            Logger.warning("Channel exhaustion: all circuits open",
+              chain: chain,
+              method: method,
+              retry_after_ms: retry_after_ms
+            )
+
+            :telemetry.execute([:lasso, :failover, :exhaustion], %{count: 1}, %{
+              chain: chain,
+              method: method,
+              retry_after_ms: retry_after_ms || 0
+            })
+
+            {:error, jerr, updated_ctx}
+
+          _ ->
+            # Found half-open channels - attempt with degraded mode
+            Logger.info("Degraded mode: attempting #{length(degraded_channels)} half-open channels",
+              chain: chain,
+              method: method,
+              channels: Enum.map(degraded_channels, &"#{&1.provider_id}:#{&1.transport}")
+            )
+
+            # Update context to reflect degraded mode selection
+            ctx =
+              RequestContext.mark_selection_end(ctx,
+                candidates: Enum.map(degraded_channels, &"#{&1.provider_id}:#{&1.transport}"),
+                selected: if(length(degraded_channels) > 0, do: List.first(degraded_channels), else: nil)
+              )
+
+            # Mark upstream start and attempt request
+            ctx = RequestContext.mark_upstream_start(ctx)
+
+            case attempt_request_on_channels(degraded_channels, rpc_request, timeout, ctx) do
+              {:ok, result, channel, updated_ctx} ->
+                updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
+                updated_ctx = RequestContext.record_success(updated_ctx, result)
+
+                record_channel_success_metrics(
+                  chain,
+                  channel,
+                  method,
+                  ctx.strategy,
+                  updated_ctx.upstream_latency_ms || 0
+                )
+
+                Logger.info("Degraded mode success via half-open channel",
+                  chain: chain,
+                  method: method,
+                  channel: "#{channel.provider_id}:#{channel.transport}"
+                )
+
+                :telemetry.execute([:lasso, :failover, :degraded_success], %{count: 1}, %{
+                  chain: chain,
+                  method: method,
+                  provider_id: channel.provider_id,
+                  transport: channel.transport
+                })
+
+                {:ok, result, updated_ctx}
+
+              {:error, reason, channel, _ctx1} ->
+                updated_ctx = RequestContext.mark_upstream_end(ctx)
+                final_ctx = RequestContext.record_error(updated_ctx, reason)
+                jerr = normalize_channel_error(reason, "no_channels")
+
+                duration = final_ctx.upstream_latency_ms || 0
+
+                record_channel_failure_metrics(
+                  chain,
+                  channel.provider_id,
+                  method,
+                  ctx.strategy,
+                  jerr,
+                  duration,
+                  channel.transport
+                )
+
+                {:error, jerr, final_ctx}
+
+              {:error, reason} ->
+                updated_ctx = RequestContext.mark_upstream_end(ctx)
+                final_ctx = RequestContext.record_error(updated_ctx, reason)
+                jerr = normalize_channel_error(reason, "no_channels")
+                {:error, jerr, final_ctx}
+            end
+        end
 
       _ ->
         # Mark upstream start and attempt request
@@ -533,37 +674,41 @@ defmodule Lasso.RPC.RequestPipeline do
             io_ms -> RequestContext.set_upstream_latency(ctx, io_ms)
           end
 
-        Logger.warning("Channel request failed",
-          channel: Channel.to_string(channel),
-          error: inspect(reason),
-          retriable: false,
-          remaining_channels: length(rest_channels),
-          chain: ctx.chain
-        )
+        # Determine if this error should trigger fast-fail (immediate failover)
+        # or if we've exhausted all channels
+        {should_failover, failover_reason} = should_fast_fail_error?(reason, rest_channels)
 
-        # Check if error is retriable and we have more channels to try
-        should_retry =
-          case reason do
-            %JError{retriable?: true} -> true
-            _ -> false
-          end
-
-        if should_retry and rest_channels != [] do
-          Logger.info("Retriable error on channel, failing over to next",
+        if should_failover do
+          # Fast-fail: skip to next channel immediately (< 10ms)
+          Logger.info("Fast-failing to next channel",
             channel: Channel.to_string(channel),
-            error: inspect(reason),
+            error_category: extract_error_category(reason),
+            reason: failover_reason,
             remaining_channels: length(rest_channels),
             chain: ctx.chain
+          )
+
+          # Emit telemetry for fast-fail events
+          :telemetry.execute(
+            [:lasso, :failover, :fast_fail],
+            %{count: 1},
+            %{
+              chain: ctx.chain,
+              provider_id: channel.provider_id,
+              transport: channel.transport,
+              error_category: extract_error_category(reason)
+            }
           )
 
           # Increment retries and try next channel
           ctx = RequestContext.increment_retries(ctx)
           attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
         else
+          # No more channels or non-retriable error
           Logger.warning("Channel request failed - no failover",
             channel: Channel.to_string(channel),
             error: inspect(reason),
-            retriable: should_retry,
+            reason: failover_reason,
             remaining_channels: length(rest_channels),
             chain: ctx.chain
           )
@@ -731,6 +876,113 @@ defmodule Lasso.RPC.RequestPipeline do
     case reason do
       %JError{} = jerr -> jerr
       other -> JError.from(other, provider_id: provider_id)
+    end
+  end
+
+  # ===========================================================================
+  # Fast-Fail Logic for Failover Optimization
+  # ===========================================================================
+
+  # Determines if an error should trigger immediate failover (fast-fail) to the next channel.
+  #
+  # Fast-fail categories eliminate timeout stacking by skipping to the next provider
+  # immediately (<10ms) instead of waiting for full timeout (1-2s).
+  #
+  # Fast-fail categories:
+  # - :rate_limit - Provider explicitly said quota exceeded
+  # - :circuit_open - Circuit already open, provider unavailable
+  # - :auth_error - Authentication failed, won't work on retry
+  # - :server_error - 5xx indicates provider issue (if retriable)
+  # - :network_error - Connection/timeout already occurred
+  # - :capability_violation - Provider doesn't support this request
+  # - :timeout - Already waited for timeout, no point waiting more
+  #
+  # Returns:
+  # - {true, reason} - Should fast-fail with reason
+  # - {false, reason} - Should not failover (no channels or non-retriable)
+  @spec should_fast_fail_error?(any(), list()) :: {boolean(), atom()}
+  defp should_fast_fail_error?(_reason, []) do
+    # No more channels to try
+    {false, :no_channels_remaining}
+  end
+
+  defp should_fast_fail_error?(%JError{} = error, _rest_channels) do
+    cond do
+      # Non-retriable errors should not trigger failover
+      not error.retriable? ->
+        {false, :non_retriable_error}
+
+      # Fast-fail categories - these errors indicate immediate provider unavailability
+      error.category == :rate_limit ->
+        {true, :rate_limit_detected}
+
+      error.category == :server_error ->
+        {true, :server_error_detected}
+
+      error.category == :network_error ->
+        {true, :network_error_detected}
+
+      error.category == :timeout ->
+        {true, :timeout_detected}
+
+      error.category == :auth_error ->
+        {true, :auth_error_detected}
+
+      error.category == :capability_violation ->
+        {true, :capability_violation_detected}
+
+      # Other retriable errors also fast-fail (conservative approach)
+      true ->
+        {true, :retriable_error}
+    end
+  end
+
+  defp should_fast_fail_error?(:circuit_open, _rest_channels) do
+    # Circuit already open - fast-fail to next provider
+    {true, :circuit_open}
+  end
+
+  defp should_fast_fail_error?(_reason, _rest_channels) do
+    # Unknown error format - don't failover (conservative)
+    {false, :unknown_error_format}
+  end
+
+  # Extracts error category for telemetry and logging.
+  @spec extract_error_category(any()) :: atom()
+  defp extract_error_category(%JError{category: category}), do: category || :unknown
+  defp extract_error_category(:circuit_open), do: :circuit_open
+  defp extract_error_category(_), do: :unknown
+
+  # Calculates the minimum recovery time across all circuit breakers for a chain.
+  # Returns the shortest time until any circuit breaker will attempt recovery,
+  # or nil if no recovery times are available.
+  #
+  # This now uses the cached recovery times in ProviderPool (single GenServer call)
+  # instead of making N sequential calls to each CircuitBreaker.
+  @spec calculate_min_recovery_time(String.t(), atom() | nil) :: non_neg_integer() | nil
+  defp calculate_min_recovery_time(chain, transport_filter) do
+    transport = case transport_filter do
+      nil -> :both
+      t -> t
+    end
+
+    case ProviderPool.get_min_recovery_time(chain, transport: transport, timeout: 2000) do
+      {:ok, min_time} ->
+        min_time
+
+      {:error, :timeout} ->
+        Logger.warning("Timeout calculating recovery time for chain #{chain}, using default",
+          chain: chain
+        )
+        # Default fallback: 60 second retry-after on timeout
+        60_000
+
+      {:error, reason} ->
+        Logger.warning("Failed to get recovery times for chain #{chain}",
+          chain: chain,
+          reason: inspect(reason)
+        )
+        nil
     end
   end
 end

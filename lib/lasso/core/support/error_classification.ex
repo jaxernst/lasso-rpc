@@ -64,7 +64,8 @@ defmodule Lasso.RPC.ErrorClassification do
     "request count exceeded",
     "maximum requests",
     "credits quota",
-    "requests per second"
+    "requests per second",
+    "cannot fulfill request"  # Cloudflare capacity/rate limiting (-32046)
   ]
 
   @auth_patterns [
