@@ -38,7 +38,9 @@ defmodule Lasso.Testing.TelemetrySync do
   @type collector :: %{
           ref: reference(),
           handler_id: term(),
-          test_pid: pid()
+          test_pid: pid(),
+          event_name: event_name(),
+          expected_count: pos_integer()
         }
 
   @default_timeout 5000
@@ -185,7 +187,7 @@ defmodule Lasso.Testing.TelemetrySync do
         )
   """
   @spec collect_event(event_name(), (-> any()), keyword()) ::
-          {:ok, measurements(), metadata()} | {:error, :timeout}
+          {:ok, measurements(), metadata()} | {:ok, [{measurements(), metadata()}]} | {:error, :timeout}
   def collect_event(event_name, action_fn, opts \\ []) when is_function(action_fn, 0) do
     {:ok, collector} = attach_collector(event_name, opts)
 

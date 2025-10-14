@@ -20,6 +20,11 @@ defmodule Lasso.RPC.RequestPipeline do
   @type method :: String.t()
   @type params :: list()
 
+  # Configuration constants
+  @max_channel_candidates 10
+  @circuit_breaker_timeout_buffer_ms 200
+  @max_failover_attempts 3
+
   @doc """
   Execute an RPC request with resilient behavior using transport-agnostic channels.
 
@@ -319,7 +324,7 @@ defmodule Lasso.RPC.RequestPipeline do
       Selection.select_channels(chain, method,
         strategy: ctx.strategy,
         transport: transport_override || :both,
-        limit: 10
+        limit: @max_channel_candidates
       )
 
     # Update context with selection metadata
@@ -346,7 +351,7 @@ defmodule Lasso.RPC.RequestPipeline do
           Selection.select_channels(chain, method,
             strategy: ctx.strategy,
             transport: transport_override || :both,
-            limit: 10,
+            limit: @max_channel_candidates,
             include_half_open: true
           )
 
@@ -469,10 +474,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
                 {:error, jerr, final_ctx}
 
-              {:error, reason} ->
+              {:error, :no_channels_available, _updated_ctx} ->
                 updated_ctx = RequestContext.mark_upstream_end(ctx)
-                final_ctx = RequestContext.record_error(updated_ctx, reason)
-                jerr = normalize_channel_error(reason, "no_channels")
+                final_ctx = RequestContext.record_error(updated_ctx, :no_channels_available)
+                jerr = normalize_channel_error(:no_channels_available, "no_channels")
                 {:error, jerr, final_ctx}
             end
         end
@@ -516,10 +521,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
             {:error, jerr, final_ctx}
 
-          {:error, reason} ->
+          {:error, :no_channels_available, _updated_ctx} ->
             updated_ctx = RequestContext.mark_upstream_end(ctx)
-            final_ctx = RequestContext.record_error(updated_ctx, reason)
-            jerr = normalize_channel_error(reason, "no_channels")
+            final_ctx = RequestContext.record_error(updated_ctx, :no_channels_available)
+            jerr = normalize_channel_error(:no_channels_available, "no_channels")
             {:error, jerr, final_ctx}
         end
     end
@@ -599,7 +604,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     # Add small buffer to circuit breaker timeout to allow for GenServer processing
     # while still respecting the overall timeout constraint
-    cb_timeout = timeout + 200
+    cb_timeout = timeout + @circuit_breaker_timeout_buffer_ms
 
     result =
       try do
@@ -719,10 +724,7 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp try_channel_failover(chain, rpc_request, strategy, excluded_providers, attempt, timeout) do
-    # Could be configurable
-    max_attempts = 3
-
-    if attempt > max_attempts do
+    if attempt > @max_failover_attempts do
       {:error, JError.new(-32000, "Failover limit reached")}
     else
       method = Map.get(rpc_request, "method")
@@ -732,7 +734,7 @@ defmodule Lasso.RPC.RequestPipeline do
           strategy: strategy,
           transport: :both,
           exclude: excluded_providers,
-          limit: 10
+          limit: @max_channel_candidates
         )
 
       case channels do
@@ -751,8 +753,19 @@ defmodule Lasso.RPC.RequestPipeline do
               # Consider logging or returning context for observability
               {:ok, result}
 
-            {:error, _reason} ->
-              # Conservative: keep exclusions unchanged and bump attempt
+            {:error, :no_channels_available, _ctx} ->
+              # No channels available, keep trying with new attempt
+              try_channel_failover(
+                chain,
+                rpc_request,
+                strategy,
+                excluded_providers,
+                attempt + 1,
+                timeout
+              )
+
+            {:error, _reason, _channel, _ctx} ->
+              # Channel-specific error, keep trying with new attempt
               try_channel_failover(
                 chain,
                 rpc_request,
@@ -838,7 +851,7 @@ defmodule Lasso.RPC.RequestPipeline do
         method: method,
         strategy: strategy,
         provider_id: provider_id,
-        transport: transport || :unknown,
+        transport: transport,
         result: :error,
         failovers: 0
       }

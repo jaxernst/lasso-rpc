@@ -112,19 +112,12 @@ defmodule Lasso.Application do
   end
 
   defp start_chain_supervisor(chain_name, chain_config) do
-    # Skip validation in test environment since providers are registered dynamically
-    case @env do
-      :test ->
+    case Lasso.Config.ChainConfig.validate_chain_config(chain_config) do
+      :ok ->
         :ok
 
-      _ ->
-        case Lasso.Config.ChainConfig.validate_chain_config(chain_config) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("Chain #{chain_name} validation failed: #{inspect(reason)}")
-        end
+      {:error, reason} ->
+        Logger.warning("Chain #{chain_name} validation failed: #{inspect(reason)}")
     end
 
     DynamicSupervisor.start_child(
