@@ -280,7 +280,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
           # Convert other errors to JSONRPC errors
           {:error,
            %Lasso.JSONRPC.Error{
-             code: -32000,
+             code: -32_000,
              message: "Mock provider error: #{inspect(other)}",
              category: :provider_error,
              retriable?: true

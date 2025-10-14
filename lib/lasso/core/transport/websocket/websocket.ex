@@ -32,7 +32,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
     case get_ws_url(provider_config) do
       nil ->
         {:error,
-         JError.new(-32000, "No WebSocket URL configured for provider",
+         JError.new(-32_000, "No WebSocket URL configured for provider",
            provider_id: provider_id,
            retriable?: false
          )}
@@ -43,7 +43,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
         case GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, provider_id}}}) do
           nil ->
             {:error,
-             JError.new(-32000, "WebSocket connection not available",
+             JError.new(-32_000, "WebSocket connection not available",
                provider_id: provider_id,
                retriable?: true
              )}
@@ -167,7 +167,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
     case get_ws_url(provider_config) do
       nil ->
         {:error,
-         JError.new(-32000, "No WebSocket URL configured for provider",
+         JError.new(-32_000, "No WebSocket URL configured for provider",
            provider_id: provider_id,
            retriable?: false
          )}

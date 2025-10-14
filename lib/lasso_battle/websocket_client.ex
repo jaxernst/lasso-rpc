@@ -153,7 +153,7 @@ defmodule Lasso.Battle.WebSocketClient do
   defp build_subscription_request("newHeads") do
     %{
       "jsonrpc" => "2.0",
-      "id" => :rand.uniform(10000),
+      "id" => :rand.uniform(10_000),
       "method" => "eth_subscribe",
       "params" => ["newHeads"]
     }
@@ -162,7 +162,7 @@ defmodule Lasso.Battle.WebSocketClient do
   defp build_subscription_request({"logs", filter}) do
     %{
       "jsonrpc" => "2.0",
-      "id" => :rand.uniform(10000),
+      "id" => :rand.uniform(10_000),
       "method" => "eth_subscribe",
       "params" => ["logs", filter]
     }

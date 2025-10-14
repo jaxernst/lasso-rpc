@@ -393,9 +393,8 @@ defmodule Lasso.Config.ChainConfig do
   Validates that a chain configuration has valid providers.
   """
   def validate_chain_config(%__MODULE__{} = chain_config) do
-    with :ok <- validate_providers(chain_config.providers),
-         :ok <- validate_connection(chain_config.connection) do
-      :ok
+    with :ok <- validate_providers(chain_config.providers) do
+      validate_connection(chain_config.connection)
     end
   end
 

@@ -212,17 +212,17 @@ defmodule Lasso.Diagnostic.Profiler do
   defp transport_available?(provider, :http, now_ms) do
     has_http = is_binary(Map.get(provider.config, :url))
 
-    if not has_http,
-      do: false,
-      else: not in_cooldown?(Map.get(provider, :http_policy), provider, now_ms)
+    if has_http,
+      do: not in_cooldown?(Map.get(provider, :http_policy), provider, now_ms),
+      else: false
   end
 
   defp transport_available?(provider, :ws, now_ms) do
     has_ws = is_binary(Map.get(provider.config, :ws_url))
 
-    if not has_ws,
-      do: false,
-      else: not in_cooldown?(Map.get(provider, :ws_policy), provider, now_ms)
+    if has_ws,
+      do: not in_cooldown?(Map.get(provider, :ws_policy), provider, now_ms),
+      else: false
   end
 
   defp in_cooldown?(%Lasso.RPC.HealthPolicy{} = pol, _provider, now_ms),

@@ -295,7 +295,7 @@ defmodule Lasso.Config.ChainConfigManager do
   defp parse_connection(conn) do
     %ChainConfig.Connection{
       heartbeat_interval:
-        Map.get(conn, "heartbeat_interval") || Map.get(conn, :heartbeat_interval) || 30000,
+        Map.get(conn, "heartbeat_interval") || Map.get(conn, :heartbeat_interval) || 30_000,
       reconnect_interval:
         Map.get(conn, "reconnect_interval") || Map.get(conn, :reconnect_interval) || 5000,
       max_reconnect_attempts:
@@ -310,14 +310,14 @@ defmodule Lasso.Config.ChainConfigManager do
       max_backfill_blocks:
         Map.get(failover, "max_backfill_blocks") || Map.get(failover, :max_backfill_blocks) || 100,
       backfill_timeout:
-        Map.get(failover, "backfill_timeout") || Map.get(failover, :backfill_timeout) || 30000,
+        Map.get(failover, "backfill_timeout") || Map.get(failover, :backfill_timeout) || 30_000,
       enabled: Map.get(failover, "enabled") || Map.get(failover, :enabled) || true
     }
   end
 
   defp default_connection do
     %ChainConfig.Connection{
-      heartbeat_interval: 30000,
+      heartbeat_interval: 30_000,
       reconnect_interval: 5000,
       max_reconnect_attempts: 10
     }
@@ -326,7 +326,7 @@ defmodule Lasso.Config.ChainConfigManager do
   defp default_failover do
     %ChainConfig.Failover{
       max_backfill_blocks: 100,
-      backfill_timeout: 30000,
+      backfill_timeout: 30_000,
       enabled: true
     }
   end

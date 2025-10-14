@@ -174,7 +174,7 @@ defmodule LassoBattle.Metrics do
         end
       end)
 
-    if length(violations) == 0 do
+    if violations == [] do
       {:ok, metrics}
     else
       {:error, violations}
@@ -312,7 +312,7 @@ defmodule LassoBattle.Metrics do
         req.latency_ms > avg_latency * 2
       end)
 
-    if length(failover_requests) == 0 do
+    if failover_requests == [] do
       0.0
     else
       successful = count_successful(failover_requests)

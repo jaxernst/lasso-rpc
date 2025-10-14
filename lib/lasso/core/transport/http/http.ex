@@ -26,7 +26,7 @@ defmodule Lasso.RPC.Transports.HTTP do
     case get_http_url(provider_config) do
       nil ->
         {:error,
-         JError.new(-32000, "No HTTP URL configured for provider",
+         JError.new(-32_000, "No HTTP URL configured for provider",
            provider_id: provider_id,
            retriable?: false
          )}
@@ -88,7 +88,7 @@ defmodule Lasso.RPC.Transports.HTTP do
 
         {:ok, invalid_response} ->
           {:error,
-           JError.new(-32700, "Invalid JSON-RPC response format",
+           JError.new(-32_700, "Invalid JSON-RPC response format",
              data: invalid_response,
              provider_id: provider_id,
              source: :transport,
@@ -145,7 +145,7 @@ defmodule Lasso.RPC.Transports.HTTP do
     case get_http_url(provider_config) do
       nil ->
         {:error,
-         JError.new(-32000, "No HTTP URL configured for provider",
+         JError.new(-32_000, "No HTTP URL configured for provider",
            provider_id: provider_id,
            retriable?: false
          )}
@@ -175,7 +175,7 @@ defmodule Lasso.RPC.Transports.HTTP do
 
           {:ok, invalid_response} ->
             {:error,
-             JError.new(-32700, "Invalid JSON-RPC response format",
+             JError.new(-32_700, "Invalid JSON-RPC response format",
                data: invalid_response,
                provider_id: provider_id,
                source: :transport,

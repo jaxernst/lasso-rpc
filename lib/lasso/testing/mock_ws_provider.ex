@@ -395,7 +395,7 @@ defmodule Lasso.Testing.MockWSProvider do
 
       _ ->
         send_error_response(state.chain, state.provider_id, request_id, %{
-          "code" => -32601,
+          "code" => -32_601,
           "message" => "Subscription type not supported"
         })
 

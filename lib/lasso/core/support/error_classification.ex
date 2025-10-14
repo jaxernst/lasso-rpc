@@ -16,30 +16,30 @@ defmodule Lasso.RPC.ErrorClassification do
   # JSON-RPC 2.0 Standard Error Codes
   # ===========================================================================
 
-  @parse_error -32700
-  @invalid_request -32600
-  @method_not_found -32601
-  @invalid_params -32602
-  @internal_error -32603
+  @parse_error -32_700
+  @invalid_request -32_600
+  @method_not_found -32_601
+  @invalid_params -32_602
+  @internal_error -32_603
 
-  # Server error range: -32000 to -32099 (reserved by spec)
+  # Server error range: -32_000 to -32_099 (reserved by spec)
 
   # ===========================================================================
   # Lasso Custom Error Codes (within server error range)
   # ===========================================================================
 
-  @generic_server_error -32000
-  @rate_limit_error -32005
-  @network_error_code -32004
-  @client_error_code -32003
-  @server_error_code -32002
+  @generic_server_error -32_000
+  @rate_limit_error -32_005
+  @network_error_code -32_004
+  @client_error_code -32_003
+  @server_error_code -32_002
 
   # ===========================================================================
   # Provider-Specific Error Codes
   # ===========================================================================
 
-  # PublicNode uses -32701 for capability violations (e.g., address requirements)
-  @publicnode_capability_violation -32701
+  # PublicNode uses -32_701 for capability violations (e.g., address requirements)
+  @publicnode_capability_violation -32_701
 
   # ===========================================================================
   # EIP-1193 Provider Error Codes
@@ -136,10 +136,10 @@ defmodule Lasso.RPC.ErrorClassification do
 
   ## Examples
 
-      iex> categorize(-32000, "block range too large")
+      iex> categorize(-32_000, "block range too large")
       :capability_violation
 
-      iex> categorize(-32602, nil)
+      iex> categorize(-32_602, nil)
       :invalid_params
 
       iex> categorize(429, "rate limit exceeded")
@@ -239,7 +239,7 @@ defmodule Lasso.RPC.ErrorClassification do
       # Provider-specific error codes (check before general server error range)
       code == @publicnode_capability_violation -> :capability_violation
       # JSON-RPC server error range
-      code >= -32099 and code <= -32000 -> :server_error
+      code >= -32_099 and code <= -32_000 -> :server_error
       # EIP-1193 provider errors
       code == @user_rejected -> :user_error
       code == @unauthorized -> :auth_error
@@ -265,7 +265,7 @@ defmodule Lasso.RPC.ErrorClassification do
       code in [@chain_disconnected, @network_error_code] -> true
       # Retriable: provider-specific capability violations
       code == @publicnode_capability_violation -> true
-      code >= -32099 and code <= -32000 -> true
+      code >= -32_099 and code <= -32_000 -> true
       code == 429 -> true
       code >= 500 -> true
       # Non-retriable 4xx range (after checking 429)

@@ -110,7 +110,7 @@ defmodule Lasso.RPC.Transport do
 
       other ->
         {:error,
-         JError.new(-32000, "Invalid protocol: #{inspect(other)}", provider_id: provider_id)}
+         JError.new(-32_000, "Invalid protocol: #{inspect(other)}", provider_id: provider_id)}
     end
   end
 

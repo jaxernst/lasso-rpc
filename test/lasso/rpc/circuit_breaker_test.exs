@@ -125,7 +125,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       )
 
     # Rate limit error should use threshold of 2, not 5
-    rate_limit_error = JError.new(-32005, "Rate limited", category: :rate_limit)
+    rate_limit_error = JError.new(-32_005, "Rate limited", category: :rate_limit)
 
     assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
     assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
@@ -144,7 +144,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         {id, %{failure_threshold: 5, recovery_timeout: 100, success_threshold: 2}}
       )
 
-    server_error = JError.new(-32000, "Server error", category: :server_error)
+    server_error = JError.new(-32_000, "Server error", category: :server_error)
 
     # Should not open after 2 server errors (needs 5)
     assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, server_error} end)
@@ -167,7 +167,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     # Rate limit error with retry-after in data (populated by ErrorNormalizer)
     # :retry_after_ms is in milliseconds
     rate_limit_error =
-      JError.new(-32005, "Rate limited",
+      JError.new(-32_005, "Rate limited",
         category: :rate_limit,
         data: %{retry_after_ms: 2000}
       )
@@ -202,7 +202,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
          }}
       )
 
-    rate_limit_error = JError.new(-32005, "Rate limited", category: :rate_limit)
+    rate_limit_error = JError.new(-32_005, "Rate limited", category: :rate_limit)
 
     # Should not open after 2 failures (needs 3 now)
     assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)

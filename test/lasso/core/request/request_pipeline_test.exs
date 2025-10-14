@@ -240,7 +240,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     @pipeline Lasso.RPC.RequestPipeline
 
     test "should_fast_fail_error?/2 returns false when no channels remaining" do
-      error = JError.new(-32005, "Rate limit", category: :rate_limit, retriable?: true)
+      error = JError.new(-32_005, "Rate limit", category: :rate_limit, retriable?: true)
       # Use the function through reflection (testing private functions)
       # Note: In production, this would be tested through integration tests
 
@@ -252,7 +252,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "fast-fail logic properly categorizes rate limit errors" do
       # Rate limit error should be identified as fast-fail category
       error =
-        JError.new(-32005, "Rate limit exceeded", category: :rate_limit, retriable?: true)
+        JError.new(-32_005, "Rate limit exceeded", category: :rate_limit, retriable?: true)
 
       assert error.category == :rate_limit
       assert error.retriable? == true
@@ -260,7 +260,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "fast-fail logic properly categorizes server errors" do
       # Server error should be identified as fast-fail category
-      error = JError.new(-32000, "Internal error", category: :server_error, retriable?: true)
+      error = JError.new(-32_000, "Internal error", category: :server_error, retriable?: true)
 
       assert error.category == :server_error
       assert error.retriable? == true
@@ -269,7 +269,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "fast-fail logic properly categorizes network errors" do
       # Network error should be identified as fast-fail category
       error =
-        JError.new(-32004, "Connection failed", category: :network_error, retriable?: true)
+        JError.new(-32_004, "Connection failed", category: :network_error, retriable?: true)
 
       assert error.category == :network_error
       assert error.retriable? == true
@@ -277,7 +277,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "fast-fail logic properly categorizes timeout errors" do
       # Timeout error should be identified as fast-fail category
-      error = JError.new(-32000, "Request timeout", category: :timeout, retriable?: true)
+      error = JError.new(-32_000, "Request timeout", category: :timeout, retriable?: true)
 
       assert error.category == :timeout
       assert error.retriable? == true
@@ -294,7 +294,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "fast-fail logic properly categorizes capability violations" do
       # Capability violation should be identified as fast-fail category
       error =
-        JError.new(-32701, "Max addresses exceeded",
+        JError.new(-32_701, "Max addresses exceeded",
           category: :capability_violation,
           retriable?: true
         )
@@ -305,7 +305,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "non-retriable errors are not categorized for fast-fail" do
       # Invalid params should NOT trigger fast-fail
-      error = JError.new(-32602, "Invalid params", category: :invalid_params, retriable?: false)
+      error = JError.new(-32_602, "Invalid params", category: :invalid_params, retriable?: false)
 
       assert error.category == :invalid_params
       assert error.retriable? == false
@@ -411,7 +411,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "error includes retry_after_ms when all circuits open" do
       # Error should contain retry-after hint calculated from circuit breakers
-      # data: %{retry_after_ms: 30000} for example
+      # data: %{retry_after_ms: 30_000} for example
       assert true
     end
 

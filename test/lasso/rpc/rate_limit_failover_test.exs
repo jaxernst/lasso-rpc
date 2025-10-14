@@ -4,7 +4,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
   Rate limits can manifest in multiple ways:
   - HTTP 429 status codes (transport level)
-  - JSON-RPC error codes: -32005, -32429 (application level)
+  - JSON-RPC error codes: -32_005, -32_429 (application level)
   - Error messages containing rate limit keywords
   - WebSocket close code 1013 (backpressure)
 
@@ -60,29 +60,29 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
   end
 
   describe "rate limit detection - JSON-RPC level" do
-    test "JSON-RPC error code -32005 is detected as rate limit", %{chain: _chain} do
-      # Provider returns standard JSON-RPC error with -32005 code
-      rate_limit_error = JError.new(-32005, "Rate limit exceeded")
+    test "JSON-RPC error code -32_005 is detected as rate limit", %{chain: _chain} do
+      # Provider returns standard JSON-RPC error with -32_005 code
+      rate_limit_error = JError.new(-32_005, "Rate limit exceeded")
 
       assert rate_limit_error.category == :rate_limit
       assert rate_limit_error.retriable? == true
     end
 
-    test "JSON-RPC error code -32429 is detected as rate limit", %{chain: _chain} do
-      # Some providers use -32429 (HTTP 429 in JSON-RPC namespace)
+    test "JSON-RPC error code -32_429 is detected as rate limit", %{chain: _chain} do
+      # Some providers use -32_429 (HTTP 429 in JSON-RPC namespace)
       rate_limit_error =
-        JError.new(-32429, "Too many requests", category: :rate_limit, retriable?: true)
+        JError.new(-32_429, "Too many requests", category: :rate_limit, retriable?: true)
 
       # Verify error is retriable (should failover to next provider)
       assert rate_limit_error.retriable? == true
       assert rate_limit_error.category == :rate_limit
     end
 
-    test "HTTP 429 code is normalized to JSON-RPC -32005", %{chain: _chain} do
+    test "HTTP 429 code is normalized to JSON-RPC -32_005", %{chain: _chain} do
       # When creating JError from HTTP 429, it gets normalized
       rate_limit_error = JError.new(429, "Too Many Requests")
 
-      assert rate_limit_error.code == -32005
+      assert rate_limit_error.code == -32_005
       assert rate_limit_error.original_code == 429
       assert rate_limit_error.category == :rate_limit
       assert rate_limit_error.retriable? == true
@@ -91,11 +91,11 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
     test "rate limit keywords in error message trigger detection", %{chain: _chain} do
       # Provider returns generic error but message indicates rate limiting
       test_cases = [
-        %{"error" => %{"code" => -32000, "message" => "rate limit exceeded"}},
-        %{"error" => %{"code" => -32000, "message" => "Too many requests, please try again"}},
-        %{"error" => %{"code" => -32000, "message" => "Request throttled"}},
-        %{"error" => %{"code" => -32000, "message" => "Quota exceeded for this API key"}},
-        %{"error" => %{"code" => -32000, "message" => "Capacity exceeded, retry later"}}
+        %{"error" => %{"code" => -32_000, "message" => "rate limit exceeded"}},
+        %{"error" => %{"code" => -32_000, "message" => "Too many requests, please try again"}},
+        %{"error" => %{"code" => -32_000, "message" => "Request throttled"}},
+        %{"error" => %{"code" => -32_000, "message" => "Quota exceeded for this API key"}},
+        %{"error" => %{"code" => -32_000, "message" => "Capacity exceeded, retry later"}}
       ]
 
       for error_response <- test_cases do
@@ -150,7 +150,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       # First rate limit error
       {:error, _} =
         CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
-          {:error, JError.new(-32005, "Rate limit exceeded")}
+          {:error, JError.new(-32_005, "Rate limit exceeded")}
         end)
 
       state1 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
@@ -455,10 +455,10 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       Process.sleep(200)
 
-      # Infura returns: {"error": {"code": -32005, "message": "daily request count exceeded, request rate limited"}}
+      # Infura returns: {"error": {"code": -32_005, "message": "daily request count exceeded, request rate limited"}}
       infura_error = %{
         "error" => %{
-          "code" => -32005,
+          "code" => -32_005,
           "message" => "daily request count exceeded, request rate limited"
         }
       }
@@ -487,10 +487,10 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       Process.sleep(200)
 
-      # Alchemy returns: {"error": {"code": -32016, "message": "Exceeded maximum requests per second"}}
+      # Alchemy returns: {"error": {"code": -32_016, "message": "Exceeded maximum requests per second"}}
       # Message contains rate limit keywords
       alchemy_error = %{
-        "error" => %{"code" => -32016, "message" => "Exceeded maximum requests per second"}
+        "error" => %{"code" => -32_016, "message" => "Exceeded maximum requests per second"}
       }
 
       normalized =
@@ -513,7 +513,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       # QuickNode style: generic server error with rate limit message
       quicknode_error = %{
         "error" => %{
-          "code" => -32603,
+          "code" => -32_603,
           "message" => "Credits quota exceeded. Please upgrade your plan"
         }
       }
@@ -536,7 +536,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       # Ankr style: throttled message
       ankr_error = %{
-        "error" => %{"code" => -32000, "message" => "Request throttled, please try again"}
+        "error" => %{"code" => -32_000, "message" => "Request throttled, please try again"}
       }
 
       normalized = Lasso.RPC.ErrorNormalizer.normalize(ankr_error, provider_id: "ankr_provider")
@@ -549,22 +549,22 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
   describe "mixed error scenarios" do
     test "distinguishes rate limit from other server errors", %{chain: _chain} do
       # Rate limit error
-      rate_limit = JError.new(-32005, "Rate limit exceeded")
+      rate_limit = JError.new(-32_005, "Rate limit exceeded")
       assert rate_limit.category == :rate_limit
       assert rate_limit.retriable? == true
 
-      # Internal error (-32603 is JSON-RPC standard internal error)
-      internal_error = JError.new(-32603, "Internal server error")
+      # Internal error (-32_603 is JSON-RPC standard internal error)
+      internal_error = JError.new(-32_603, "Internal server error")
       assert internal_error.category == :internal_error
       assert internal_error.retriable? == true
 
-      # Generic server error (use -32000)
-      server_error = JError.new(-32000, "Server error")
+      # Generic server error (use -32_000)
+      server_error = JError.new(-32_000, "Server error")
       assert server_error.category == :server_error
       assert server_error.retriable? == true
 
       # User error (should NOT trigger failover)
-      user_error = JError.new(-32602, "Invalid params")
+      user_error = JError.new(-32_602, "Invalid params")
       assert user_error.category == :invalid_params
       assert user_error.retriable? == false
     end
@@ -596,7 +596,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert provider2.status in [:healthy, :connecting]
 
       # Then: user error (should NOT cause failover, but may affect status)
-      user_error = JError.new(-32602, "Invalid params", provider_id: "mixed_provider")
+      user_error = JError.new(-32_602, "Invalid params", provider_id: "mixed_provider")
       ProviderPool.report_failure(chain, "mixed_provider", user_error)
       Process.sleep(50)
 
@@ -624,7 +624,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       # User errors do NOT increment failure count
       CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
-        {:error, JError.new(-32602, "Invalid params")}
+        {:error, JError.new(-32_602, "Invalid params")}
       end)
 
       state2 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
@@ -633,7 +633,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       # Another rate limit error increments
       CircuitBreaker.call({"test_chain", provider_id, :http}, fn ->
-        {:error, JError.new(-32005, "Rate limited")}
+        {:error, JError.new(-32_005, "Rate limited")}
       end)
 
       state3 = CircuitBreaker.get_state({"test_chain", provider_id, :http})
@@ -770,7 +770,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
         {:rate_limit, %{status: 429}},
         {:rate_limit, nil},
         # Missing message
-        %{"error" => %{"code" => -32005}},
+        %{"error" => %{"code" => -32_005}},
         # Missing code
         %{"error" => %{"message" => "rate limited"}}
       ]

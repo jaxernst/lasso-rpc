@@ -114,7 +114,7 @@ defmodule Lasso.Config.ChainConfigTest do
           }
         ],
         connection: %ChainConfig.Connection{
-          heartbeat_interval: 15000,
+          heartbeat_interval: 15_000,
           reconnect_interval: 2000,
           max_reconnect_attempts: 10
         }

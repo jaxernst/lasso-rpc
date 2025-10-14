@@ -322,7 +322,7 @@ defmodule Lasso.Testing.MockProvider do
       "jsonrpc" => "2.0",
       "id" => Map.get(request, "id"),
       "error" => %{
-        "code" => -32600,
+        "code" => -32_600,
         "message" => "Invalid Request"
       }
     }

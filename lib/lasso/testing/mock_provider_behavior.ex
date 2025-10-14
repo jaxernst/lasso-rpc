@@ -76,7 +76,7 @@ defmodule Lasso.Testing.MockProviderBehavior do
   def execute_behavior(:always_fail, _method, _params, _state) do
     {:error,
      %JError{
-       code: -32000,
+       code: -32_000,
        message: "Mock provider failure",
        category: :provider_error,
        retriable?: true
@@ -154,7 +154,7 @@ defmodule Lasso.Testing.MockProviderBehavior do
        else
          {:error,
           %JError{
-            code: -32603,
+            code: -32_603,
             message: "Intermittent provider failure",
             category: :provider_error,
             retriable?: true
@@ -185,7 +185,7 @@ defmodule Lasso.Testing.MockProviderBehavior do
        else
          {:error,
           %JError{
-            code: -32005,
+            code: -32_005,
             message: "Rate limit exceeded",
             category: :rate_limit,
             retriable?: true,
@@ -244,7 +244,7 @@ defmodule Lasso.Testing.MockProviderBehavior do
   ## Options
 
   - `:healthy_duration` - Initial healthy period (default: 5000ms)
-  - `:degraded_duration` - Degraded performance period (default: 10000ms)
+  - `:degraded_duration` - Degraded performance period (default: 10_000ms)
   - `:failed_duration` - Complete failure period (default: 5000ms)
   - `:recovery_duration` - Recovery period (default: 5000ms)
 
@@ -288,7 +288,7 @@ defmodule Lasso.Testing.MockProviderBehavior do
            else
              {:error,
               %JError{
-                code: -32603,
+                code: -32_603,
                 message: "Service degraded",
                 category: :provider_error,
                 retriable?: true
@@ -299,7 +299,7 @@ defmodule Lasso.Testing.MockProviderBehavior do
          elapsed < healthy_duration + degraded_duration + failed_duration ->
            {:error,
             %JError{
-              code: -32000,
+              code: -32_000,
               message: "Service unavailable",
               category: :provider_error,
               retriable?: false
@@ -317,7 +317,7 @@ defmodule Lasso.Testing.MockProviderBehavior do
            else
              {:error,
               %JError{
-                code: -32603,
+                code: -32_603,
                 message: "Still recovering",
                 category: :provider_error,
                 retriable?: true
@@ -364,7 +364,7 @@ defmodule Lasso.Testing.MockProviderBehavior do
       behavior = parameter_sensitive(fn _method, params, _state ->
         case params do
           [%{"address" => addresses}] when length(addresses) > 100 ->
-            {:error, %JError{code: -32005, message: "Too many addresses"}}
+            {:error, %JError{code: -32_005, message: "Too many addresses"}}
 
           _ ->
             {:ok, mock_response("eth_getLogs", params)}

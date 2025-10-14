@@ -27,7 +27,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
       iex> normalize({:rate_limit, %{}}, provider_id: "test", context: :transport)
       %JError{category: :rate_limit, retriable?: true, breaker_penalty?: true}
 
-      iex> normalize(%{"error" => %{"code" => -32000, "message" => "block range too large"}}, provider_id: "test")
+      iex> normalize(%{"error" => %{"code" => -32_000, "message" => "block range too large"}}, provider_id: "test")
       %JError{category: :capability_violation, retriable?: true, breaker_penalty?: false}
   """
   @spec normalize(any(), keyword()) :: JError.t()
@@ -49,7 +49,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
     context = Keyword.get(opts, :context, :jsonrpc)
     transport = Keyword.get(opts, :transport)
 
-    raw_code = Map.get(error, "code", -32000)
+    raw_code = Map.get(error, "code", -32_000)
     message = Map.get(error, "message", "Unknown error")
     raw_data = Map.get(error, "data")
 
@@ -90,7 +90,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
     # Extract retry-after hint from payload and add to data
     data = add_retry_after(payload, payload)
 
-    JError.new(-32005, "Rate limited by provider",
+    JError.new(-32_005, "Rate limited by provider",
       data: data,
       provider_id: provider_id,
       source: context,
@@ -107,7 +107,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
     context = Keyword.get(opts, :context, :transport)
     transport = Keyword.get(opts, :transport)
 
-    JError.new(-32004, "Network error: #{inspect(reason)}",
+    JError.new(-32_004, "Network error: #{inspect(reason)}",
       provider_id: provider_id,
       source: context,
       transport: transport,
@@ -124,7 +124,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
     transport = Keyword.get(opts, :transport)
 
     # Try to extract nested JSON-RPC error from response body for better classification
-    {code, message} = extract_nested_error(payload, -32002, "Server error")
+    {code, message} = extract_nested_error(payload, -32_002, "Server error")
 
     # Use centralized classification with the extracted message
     category = ErrorClassification.categorize(code, message)
@@ -158,7 +158,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
     transport = Keyword.get(opts, :transport)
 
     # Try to extract nested JSON-RPC error from response body for better classification
-    {code, message} = extract_nested_error(payload, -32003, "Client error")
+    {code, message} = extract_nested_error(payload, -32_003, "Client error")
 
     # Use centralized classification with the extracted message
     category = ErrorClassification.categorize(code, message)
@@ -191,7 +191,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
     context = Keyword.get(opts, :context, :transport)
     transport = Keyword.get(opts, :transport)
 
-    JError.new(-32007, "Request timeout",
+    JError.new(-32_007, "Request timeout",
       provider_id: provider_id,
       source: context,
       transport: transport,
@@ -205,7 +205,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
   def normalize(:not_connected, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(-32000, "WebSocket not connected",
+    JError.new(-32_000, "WebSocket not connected",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -218,7 +218,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
   def normalize(:connection_closed, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(-32005, "WebSocket connection closed",
+    JError.new(-32_005, "WebSocket connection closed",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -231,7 +231,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
   def normalize(:connection_failed, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(-32006, "WebSocket connection failed",
+    JError.new(-32_006, "WebSocket connection failed",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -258,7 +258,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
   def normalize(%WebSockex.RequestError{code: 408, message: msg} = _err, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(-32000, msg || "Upstream timeout",
+    JError.new(-32_000, msg || "Upstream timeout",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -307,7 +307,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
     case code do
       1000 ->
         # Normal closure
-        JError.new(-32000, "WebSocket normal closure",
+        JError.new(-32_000, "WebSocket normal closure",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -318,7 +318,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1001 ->
         # Going away
-        JError.new(-32000, "WebSocket going away",
+        JError.new(-32_000, "WebSocket going away",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -329,7 +329,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1002 ->
         # Protocol error
-        JError.new(-32000, "WebSocket protocol error",
+        JError.new(-32_000, "WebSocket protocol error",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -340,7 +340,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1003 ->
         # Unsupported data
-        JError.new(-32600, "WebSocket unsupported data",
+        JError.new(-32_600, "WebSocket unsupported data",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -351,7 +351,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1006 ->
         # Abnormal closure
-        JError.new(-32000, "WebSocket abnormal closure",
+        JError.new(-32_000, "WebSocket abnormal closure",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -362,7 +362,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1008 ->
         # Policy violation
-        JError.new(-32600, "WebSocket policy violation",
+        JError.new(-32_600, "WebSocket policy violation",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -373,7 +373,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1009 ->
         # Message too big
-        JError.new(-32602, "WebSocket message too big",
+        JError.new(-32_602, "WebSocket message too big",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -384,7 +384,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1011 ->
         # Internal server error
-        JError.new(-32000, "WebSocket server error",
+        JError.new(-32_000, "WebSocket server error",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -395,7 +395,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1012 ->
         # Service restart
-        JError.new(-32000, "WebSocket service restart",
+        JError.new(-32_000, "WebSocket service restart",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -417,7 +417,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1014 ->
         # Bad gateway
-        JError.new(-32000, "WebSocket bad gateway",
+        JError.new(-32_000, "WebSocket bad gateway",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -428,7 +428,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       1015 ->
         # TLS handshake failure
-        JError.new(-32000, "WebSocket TLS handshake failure",
+        JError.new(-32_000, "WebSocket TLS handshake failure",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -439,7 +439,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
       _ ->
         # Unknown/abnormal - treat as network/transient
-        JError.new(-32000, "WebSocket close (code #{code}): #{inspect(reason)}",
+        JError.new(-32_000, "WebSocket close (code #{code}): #{inspect(reason)}",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
@@ -473,7 +473,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
   def normalize({:ws_disconnect, reason}, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(-32000, "WebSocket disconnected: #{inspect(reason)}",
+    JError.new(-32_000, "WebSocket disconnected: #{inspect(reason)}",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -496,7 +496,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
     context = Keyword.get(opts, :context, :unknown)
     transport = Keyword.get(opts, :transport)
 
-    JError.new(-32000, "Unknown error: #{inspect(other)}",
+    JError.new(-32_000, "Unknown error: #{inspect(other)}",
       provider_id: provider_id,
       source: context,
       transport: transport,
@@ -597,11 +597,11 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
   # Normalize HTTP status codes embedded in JSON-RPC responses to standard JSON-RPC codes
   # Rate limit
-  defp normalize_code(429), do: -32005
+  defp normalize_code(429), do: -32_005
   # Server error
-  defp normalize_code(code) when code >= 500 and code <= 599, do: -32000
+  defp normalize_code(code) when code >= 500 and code <= 599, do: -32_000
   # Client error
-  defp normalize_code(code) when code >= 400 and code <= 499, do: -32600
+  defp normalize_code(code) when code >= 400 and code <= 499, do: -32_600
   # JSON-RPC codes pass through
   defp normalize_code(code), do: code
 

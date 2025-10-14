@@ -15,8 +15,10 @@ defmodule Lasso.RPC.ProviderPool do
   require Logger
 
   alias Lasso.Events.Provider
-  alias Lasso.RPC.HealthPolicy
+  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.Caching.BlockchainMetadataCache
+  alias Lasso.RPC.CircuitBreaker
+  alias Lasso.RPC.HealthPolicy
 
   defstruct [
     :chain_name,
@@ -221,8 +223,8 @@ defmodule Lasso.RPC.ProviderPool do
 
       iex> ProviderPool.get_recovery_times("ethereum")
       {:ok, %{
-        "alchemy_ethereum" => %{http: nil, ws: 30000},
-        "quicknode_ethereum" => %{http: 15000, ws: nil}
+        "alchemy_ethereum" => %{http: nil, ws: 30_000},
+        "quicknode_ethereum" => %{http: 15_000, ws: nil}
       }}
   """
   @spec get_recovery_times(chain_name, keyword()) ::
@@ -257,7 +259,7 @@ defmodule Lasso.RPC.ProviderPool do
   ## Examples
 
       iex> ProviderPool.get_min_recovery_time("ethereum", transport: :http)
-      {:ok, 15000}
+      {:ok, 15_000}
 
       iex> ProviderPool.get_min_recovery_time("ethereum")
       {:ok, nil}  # No open circuits
@@ -332,9 +334,9 @@ defmodule Lasso.RPC.ProviderPool do
             consecutive_successes: 0,
             last_error: nil,
             cooldown_until: nil,
-            policy: Lasso.RPC.HealthPolicy.new(),
-            http_policy: Lasso.RPC.HealthPolicy.new(),
-            ws_policy: Lasso.RPC.HealthPolicy.new()
+            policy: HealthPolicy.new(),
+            http_policy: HealthPolicy.new(),
+            ws_policy: HealthPolicy.new()
           }
 
         %ProviderState{} = prev ->
@@ -395,8 +397,8 @@ defmodule Lasso.RPC.ProviderPool do
 
         {cooldown_until, is_in_cooldown} =
           case Map.get(provider, :policy) do
-            %Lasso.RPC.HealthPolicy{} = pol ->
-              {pol.cooldown_until, Lasso.RPC.HealthPolicy.cooldown?(pol, current_time)}
+            %HealthPolicy{} = pol ->
+              {pol.cooldown_until, HealthPolicy.cooldown?(pol, current_time)}
 
             _ ->
               cuc = provider.cooldown_until
@@ -405,19 +407,19 @@ defmodule Lasso.RPC.ProviderPool do
 
         availability =
           case Map.get(provider, :policy) do
-            %Lasso.RPC.HealthPolicy{} = pol -> Lasso.RPC.HealthPolicy.availability(pol)
+            %HealthPolicy{} = pol -> HealthPolicy.availability(pol)
             _ -> Map.get(provider, :availability, :up)
           end
 
         http_availability =
           case Map.get(provider, :http_policy) do
-            %Lasso.RPC.HealthPolicy{} = pol -> Lasso.RPC.HealthPolicy.availability(pol)
+            %HealthPolicy{} = pol -> HealthPolicy.availability(pol)
             _ -> if(is_binary(Map.get(provider.config, :url)), do: :up, else: :misconfigured)
           end
 
         ws_availability =
           case Map.get(provider, :ws_policy) do
-            %Lasso.RPC.HealthPolicy{} = pol -> Lasso.RPC.HealthPolicy.availability(pol)
+            %HealthPolicy{} = pol -> HealthPolicy.availability(pol)
             _ -> if(is_binary(Map.get(provider.config, :ws_url)), do: :up, else: :misconfigured)
           end
 
@@ -468,7 +470,7 @@ defmodule Lasso.RPC.ProviderPool do
       |> Enum.map(fn p ->
         availability =
           case Map.get(p, :policy) do
-            %Lasso.RPC.HealthPolicy{} = pol -> Lasso.RPC.HealthPolicy.availability(pol)
+            %HealthPolicy{} = pol -> HealthPolicy.availability(pol)
             _ -> :up
           end
 
@@ -958,7 +960,7 @@ defmodule Lasso.RPC.ProviderPool do
       end)
 
     # Alert if ALL providers have missing lag data (lag filtering completely disabled)
-    if length(providers) > 0 and length(missing_lag_data) == length(providers) do
+    if providers != [] and length(missing_lag_data) == length(providers) do
       telemetry_lag_filtering_disabled(chain, length(providers))
 
       Logger.warning(
@@ -970,7 +972,7 @@ defmodule Lasso.RPC.ProviderPool do
     filtered = Enum.reverse(filtered)
 
     # Emit telemetry if ALL providers were excluded due to lag
-    if length(providers) > 0 and length(filtered) == 0 do
+    if providers != [] and filtered == [] do
       telemetry_all_providers_lagging(chain, length(providers), max_lag_blocks)
 
       Logger.warning(
@@ -984,21 +986,21 @@ defmodule Lasso.RPC.ProviderPool do
   defp transport_available?(provider, :http, now_ms) do
     has_http = is_binary(Map.get(provider.config, :url))
 
-    if not has_http,
-      do: false,
-      else: not in_cooldown?(Map.get(provider, :http_policy), provider, now_ms)
+    if has_http,
+      do: not in_cooldown?(Map.get(provider, :http_policy), provider, now_ms),
+      else: false
   end
 
   defp transport_available?(provider, :ws, now_ms) do
     has_ws = is_binary(Map.get(provider.config, :ws_url))
 
-    if not has_ws,
-      do: false,
-      else: not in_cooldown?(Map.get(provider, :ws_policy), provider, now_ms)
+    if has_ws,
+      do: not in_cooldown?(Map.get(provider, :ws_policy), provider, now_ms),
+      else: false
   end
 
-  defp in_cooldown?(%Lasso.RPC.HealthPolicy{} = pol, _provider, now_ms),
-    do: Lasso.RPC.HealthPolicy.cooldown?(pol, now_ms)
+  defp in_cooldown?(%HealthPolicy{} = pol, _provider, now_ms),
+    do: HealthPolicy.cooldown?(pol, now_ms)
 
   defp in_cooldown?(_other, provider, now_ms),
     do: not (is_nil(provider.cooldown_until) or provider.cooldown_until <= now_ms)
@@ -1028,8 +1030,8 @@ defmodule Lasso.RPC.ProviderPool do
         state
 
       provider ->
-        policy = provider.policy || Lasso.RPC.HealthPolicy.new()
-        new_policy = Lasso.RPC.HealthPolicy.apply_event(policy, {:success, 0, nil})
+        policy = provider.policy || HealthPolicy.new()
+        new_policy = HealthPolicy.apply_event(policy, {:success, 0, nil})
 
         updated_provider =
           provider
@@ -1058,8 +1060,8 @@ defmodule Lasso.RPC.ProviderPool do
         state
 
       provider ->
-        pol = provider.http_policy || Lasso.RPC.HealthPolicy.new()
-        new_pol = Lasso.RPC.HealthPolicy.apply_event(pol, {:success, 0, nil})
+        pol = provider.http_policy || HealthPolicy.new()
+        new_pol = HealthPolicy.apply_event(pol, {:success, 0, nil})
 
         updated =
           provider
@@ -1081,8 +1083,8 @@ defmodule Lasso.RPC.ProviderPool do
         state
 
       provider ->
-        pol = provider.ws_policy || Lasso.RPC.HealthPolicy.new()
-        new_pol = Lasso.RPC.HealthPolicy.apply_event(pol, {:success, 0, nil})
+        pol = provider.ws_policy || HealthPolicy.new()
+        new_pol = HealthPolicy.apply_event(pol, {:success, 0, nil})
 
         updated =
           provider
@@ -1117,11 +1119,11 @@ defmodule Lasso.RPC.ProviderPool do
 
         pol =
           case transport do
-            :http -> provider.http_policy || Lasso.RPC.HealthPolicy.new()
-            :ws -> provider.ws_policy || Lasso.RPC.HealthPolicy.new()
+            :http -> provider.http_policy || HealthPolicy.new()
+            :ws -> provider.ws_policy || HealthPolicy.new()
           end
 
-        new_pol = Lasso.RPC.HealthPolicy.apply_event(pol, {:failure, jerr, context, nil, now_ms})
+        new_pol = HealthPolicy.apply_event(pol, {:failure, jerr, context, nil, now_ms})
 
         cond do
           jerr.category == :rate_limit ->
@@ -1178,7 +1180,7 @@ defmodule Lasso.RPC.ProviderPool do
   defp maybe_emit_cooldown_end(state, provider_id, provider) do
     prev_cooldown =
       case provider.policy do
-        %Lasso.RPC.HealthPolicy{cooldown_until: cu} -> cu
+        %HealthPolicy{cooldown_until: cu} -> cu
         _ -> provider.cooldown_until
       end
 
@@ -1220,10 +1222,10 @@ defmodule Lasso.RPC.ProviderPool do
       provider ->
         {jerr, context} = normalize_error_for_pool(error, provider_id)
         now_ms = System.monotonic_time(:millisecond)
-        policy = provider.policy || Lasso.RPC.HealthPolicy.new()
+        policy = provider.policy || HealthPolicy.new()
 
         new_policy =
-          Lasso.RPC.HealthPolicy.apply_event(policy, {:failure, jerr, context, nil, now_ms})
+          HealthPolicy.apply_event(policy, {:failure, jerr, context, nil, now_ms})
 
         cond do
           jerr.category == :rate_limit ->
@@ -1315,17 +1317,17 @@ defmodule Lasso.RPC.ProviderPool do
     end
   end
 
-  defp normalize_error_for_pool({:health_check, %Lasso.JSONRPC.Error{} = jerr}, _provider_id),
+  defp normalize_error_for_pool({:health_check, %JError{} = jerr}, _provider_id),
     do: {jerr, :health_check}
 
   defp normalize_error_for_pool({:health_check, other}, provider_id),
-    do: {Lasso.JSONRPC.Error.from(other, provider_id: provider_id), :health_check}
+    do: {JError.from(other, provider_id: provider_id), :health_check}
 
-  defp normalize_error_for_pool(%Lasso.JSONRPC.Error{} = jerr, _provider_id),
+  defp normalize_error_for_pool(%JError{} = jerr, _provider_id),
     do: {jerr, :live_traffic}
 
   defp normalize_error_for_pool(other, provider_id),
-    do: {Lasso.JSONRPC.Error.from(other, provider_id: provider_id), :live_traffic}
+    do: {JError.from(other, provider_id: provider_id), :live_traffic}
 
   # defp start_rate_limit_cooldown/2: superseded by HealthPolicy cooldown handling
 
@@ -1431,7 +1433,7 @@ defmodule Lasso.RPC.ProviderPool do
 
     recovery_time =
       try do
-        case Lasso.RPC.CircuitBreaker.get_recovery_time_remaining(breaker_id) do
+        case CircuitBreaker.get_recovery_time_remaining(breaker_id) do
           time when is_integer(time) and time > 0 -> time
           _ -> nil
         end

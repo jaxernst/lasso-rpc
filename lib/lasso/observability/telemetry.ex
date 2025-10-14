@@ -80,7 +80,7 @@ defmodule Lasso.Telemetry do
         description: "End-to-end RPC request duration",
         tags: [:chain, :method, :provider_id, :transport, :status],
         reporter_options: [
-          buckets: [10, 25, 50, 100, 250, 500, 1000, 2000, 5000, 10000]
+          buckets: [10, 25, 50, 100, 250, 500, 1000, 2000, 5000, 10_000]
         ]
       ),
 

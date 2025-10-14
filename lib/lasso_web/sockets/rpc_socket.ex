@@ -84,12 +84,12 @@ defmodule LassoWeb.RPCSocket do
         handle_json_rpc(request, state)
 
       {:ok, invalid} ->
-        error = JError.new(-32600, "Invalid Request: missing jsonrpc field")
+        error = JError.new(-32_600, "Invalid Request: missing jsonrpc field")
         response = JError.to_response(error, Map.get(invalid, "id"))
         {:reply, :ok, {:text, Jason.encode!(response)}, state}
 
       {:error, _reason} ->
-        error = JError.new(-32700, "Parse error")
+        error = JError.new(-32_700, "Parse error")
         response = JError.to_response(error, nil)
         {:reply, :ok, {:text, Jason.encode!(response)}, state}
     end
@@ -271,7 +271,7 @@ defmodule LassoWeb.RPCSocket do
   end
 
   defp handle_json_rpc(invalid, state) do
-    error = JError.new(-32600, "Invalid Request: missing required fields")
+    error = JError.new(-32_600, "Invalid Request: missing required fields")
     response = JError.to_response(error, Map.get(invalid, "id"))
     {:reply, :ok, {:text, Jason.encode!(response)}, state}
   end

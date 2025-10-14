@@ -308,10 +308,10 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
             phx-change="update_field"
             phx-value-field="block_time"
             phx-target={@myself}
-            value={Map.get(@form_data, :block_time, 12000)}
+            value={Map.get(@form_data, :block_time, 12_000)}
             phx-debounce="300"
             class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-            placeholder="12000"
+            placeholder="12_000"
           />
         </div>
       </div>
@@ -533,7 +533,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
       |> assign(:config_form_data, %{
         name: "",
         chain_id: nil,
-        block_time: 12000,
+        block_time: 12_000,
         providers: []
       })
       |> assign(:config_validation_errors, [])
@@ -596,7 +596,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
         "block_time" ->
           case Integer.parse(value) do
             {v, _} -> v
-            _ -> 12000
+            _ -> 12_000
           end
 
         _ ->
@@ -737,7 +737,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
     chain_attrs = %{
       "name" => Map.get(form_data, :name, ""),
       "chain_id" => Map.get(form_data, :chain_id),
-      "block_time" => Map.get(form_data, :block_time, 12000),
+      "block_time" => Map.get(form_data, :block_time, 12_000),
       "providers" =>
         Enum.map(Map.get(form_data, :providers, []), fn provider ->
           %{
@@ -912,7 +912,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
             attrs = %{
               "name" => cfg.name,
               "chain_id" => cfg.chain_id,
-              "block_time" => cfg.block_time || 12000,
+              "block_time" => cfg.block_time || 12_000,
               "providers" =>
                 Enum.map(providers, fn p ->
                   %{
@@ -938,7 +938,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
         attrs = %{
           "name" => name,
           "chain_id" => chain_id,
-          "block_time" => 12000,
+          "block_time" => 12_000,
           "providers" => [provider]
         }
 
