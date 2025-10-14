@@ -73,7 +73,8 @@ export FLY_API_TOKEN="FlyV1 fm2_..."
 export FLY_APP_NAME="lasso-staging"
 export REGIONS="iad"              # Single region for staging
 export MACHINE_COUNT="2"
-export VOLUME_SIZE_GB="3"
+export VOLUME_SIZE_GB="3"         # used only if STATEFUL=true
+export STATEFUL="false"           # stateless by default (set to "true" to enable volumes)
 
 # Phoenix Secret (auto-generated if not set)
 # export SECRET_KEY_BASE="$(mix phx.gen.secret)"
@@ -81,6 +82,9 @@ export VOLUME_SIZE_GB="3"
 # Provider API Keys (optional - can be added later)
 # export INFURA_API_KEY=""
 # export ALCHEMY_API_KEY=""
+
+# Rollout tuning (optional)
+# export DRAIN_DELAY_SECS="15"     # grace delay between destroying blue machines
 ```
 
 ### Step 2: Load Environment and Deploy
@@ -94,6 +98,7 @@ source .env.deploy
 ```
 
 This script will:
+
 1. Build the Docker image on Fly's remote amd64 builder
 2. Push the image to Fly's registry
 3. Create the app and machines
@@ -380,8 +385,9 @@ node deployment/provision.mjs
 ```
 
 This creates:
+
 - App if it doesn't exist
-- Secrets (SECRET_KEY_BASE, provider keys, LASSO_* paths)
+- Secrets (SECRET*KEY_BASE, provider keys, LASSO*\* paths)
 - Volumes in each region (data_iad, data_sea, data_ams, data_cdg)
 - 2 machines per region with volume mounts
 - HTTP/HTTPS services with WebSocket support
@@ -544,6 +550,7 @@ done
 **Symptom**: App crashes with "Configuration file not found: /data/chains.yml"
 
 **Solution**: Either:
+
 1. Remove `LASSO_CHAINS_PATH` secret to use bundled config
 2. SSH in and manually seed the file
 

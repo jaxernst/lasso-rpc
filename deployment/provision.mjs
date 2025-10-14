@@ -8,6 +8,9 @@ const IMAGE = process.env.IMAGE_REF;
 const REGIONS = (process.env.REGIONS || "iad,sea,ams").split(",");
 const COUNT = parseInt(process.env.MACHINE_COUNT || "2", 10);
 const VOL_SIZE = parseInt(process.env.VOLUME_SIZE_GB || "3", 10);
+const STATEFUL = false;
+String(process.env.STATEFUL || "false").toLowerCase() === "true" ||
+  String(process.env.STATEFUL || "0") === "1";
 
 const GQL = "https://api.fly.io/graphql";
 const MACHINES = "https://api.machines.dev/v1";
@@ -55,14 +58,21 @@ async function setSecrets() {
   const secrets = {
     SECRET_KEY_BASE: process.env.SECRET_KEY_BASE || "",
     PHX_HOST: `${APP}.fly.dev`,
-    LASSO_CHAINS_PATH: "/data/chains.yml",
-    LASSO_SNAPSHOTS_DIR: "/data/benchmark_snapshots",
-    LASSO_BACKUP_DIR: "/data/config_backups",
     INFURA_API_KEY: process.env.INFURA_API_KEY || "",
     ALCHEMY_API_KEY: process.env.ALCHEMY_API_KEY || "",
   };
-  if (process.env.SECRETS_JSON)
+
+  if (STATEFUL) {
+    Object.assign(secrets, {
+      LASSO_CHAINS_PATH: "/data/chains.yml",
+      LASSO_SNAPSHOTS_DIR: "/data/benchmark_snapshots",
+      LASSO_BACKUP_DIR: "/data/config_backups",
+    });
+  }
+
+  if (process.env.SECRETS_JSON) {
     Object.assign(secrets, JSON.parse(process.env.SECRETS_JSON));
+  }
 
   const appId = (
     await gql(`query($name:String!){ app(name:$name){ id } }`, { name: APP })
@@ -90,40 +100,7 @@ async function ensureVolume(region, name) {
   }
 }
 
-function machineConfig(region, volumeName) {
-  return {
-    image: IMAGE,
-    platform: "linux/amd64",
-    restart: { policy: "always" },
-    auto_destroy: false,
-    stop: { signal: "SIGINT", timeout: "30s" },
-    guest: { cpu_kind: "shared", cpus: 1, memory_mb: 1024 },
-    mounts: [{ volume: volumeName, path: "/data" }],
-    env: { PORT: "4000", PHX_SERVER: "true" },
-    services: [
-      {
-        protocol: "tcp",
-        internal_port: 4000,
-        ports: [
-          { port: 80, handlers: ["http"] },
-          { port: 443, handlers: ["tls", "http"] },
-        ],
-        concurrency: { type: "connections", soft_limit: 500, hard_limit: 1000 },
-      },
-    ],
-    checks: {
-      http: {
-        type: "http",
-        port: 4000,
-        path: "/api/health",
-        interval: "10s",
-        timeout: "2s",
-        grace_period: "15s",
-        method: "GET",
-      },
-    },
-  };
-}
+import { buildMachineConfig } from "./config.mjs";
 
 async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -131,10 +108,16 @@ async function sleep(ms) {
 
 async function launchMachines() {
   for (const region of REGIONS) {
-    const volumeName = `data_${region}`;
-    await ensureVolume(region, volumeName);
     for (let i = 0; i < COUNT; i++) {
-      const cfg = machineConfig(region, volumeName);
+      const volumeName = STATEFUL ? `data_${region}_${i}` : undefined;
+      if (STATEFUL) {
+        await ensureVolume(region, volumeName);
+      }
+      const cfg = buildMachineConfig({
+        image: IMAGE,
+        stateful: STATEFUL,
+        volumeName,
+      });
       const body = { region, config: cfg };
 
       // Retry with exponential backoff for registry tag propagation, which can be slow
@@ -188,7 +171,9 @@ async function main() {
   await createAppIfNeeded();
   await setSecrets();
   await launchMachines();
-  console.log("Provisioned app, secrets, volumes, and machines.");
+  console.log(
+    `Provisioned app, secrets, ${STATEFUL ? "volumes and " : ""}machines.`
+  );
 }
 
 main().catch((e) => {

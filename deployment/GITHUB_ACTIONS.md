@@ -53,7 +53,8 @@ jobs:
           IMAGE_REF: ${{ env.IMAGE_REF }}
           REGIONS: iad
           MACHINE_COUNT: 2
-          VOLUME_SIZE_GB: 3
+          STATEFUL: "false" # default stateless
+          VOLUME_SIZE_GB: 3 # used only if STATEFUL=true
           SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE_STAGING }}
           INFURA_API_KEY: ${{ secrets.INFURA_API_KEY }}
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
@@ -64,6 +65,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_APP_NAME: ${{ secrets.FLY_STAGING_APP }}
           IMAGE_REF: ${{ env.IMAGE_REF }}
+          DRAIN_DELAY_SECS: 15
         run: |
           node deployment/roll.mjs
 ```
@@ -98,6 +100,7 @@ jobs:
 
 ### Notes
 
+- Stateless is the default. Set `STATEFUL=true` to provision per-machine volumes and `LASSO_*` path secrets.
 - Staging workflow also runs provisioning so it’s idempotent for first-time setup.
 - For multiple staging regions, set `REGIONS=iad,sea`.
 - If you want separate provision step only on first run, guard with `if: always()` and a label or use a separate workflow.

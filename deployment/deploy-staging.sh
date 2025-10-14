@@ -13,6 +13,7 @@ export FLY_APP_NAME="${FLY_APP_NAME:-lasso-staging}"
 export REGIONS="${REGIONS:-iad}"
 export MACHINE_COUNT="${MACHINE_COUNT:-2}"
 export VOLUME_SIZE_GB="${VOLUME_SIZE_GB:-3}"
+export STATEFUL="${STATEFUL:-false}"
 
 # Generate timestamp-based tag
 TAG="stg-$(date +%Y%m%d-%H%M%S)"
@@ -23,6 +24,7 @@ echo "  App: $FLY_APP_NAME"
 echo "  Regions: $REGIONS"
 echo "  Machines per region: $MACHINE_COUNT"
 echo "  Volume size: ${VOLUME_SIZE_GB}GB"
+echo "  Stateful: $STATEFUL"
 echo "  Image tag: $TAG"
 echo ""
 
@@ -49,6 +51,7 @@ echo "-----------------------------------------------------------"
 
 # Use Fly's remote builder to avoid cross-compilation issues
 # This builds on native amd64 infrastructure and pushes to registry
+# --no-cache ensures we don't use stale Docker layer cache for config files
 flyctl -t "$FLY_API_TOKEN" deploy \
   --app "$FLY_APP_NAME" \
   --image-label "$TAG" \
@@ -60,28 +63,22 @@ flyctl -t "$FLY_API_TOKEN" deploy \
 echo ""
 echo "✅ Image built and pushed: $IMAGE_REF"
 echo ""
-echo "🔎 Using tag reference for image pulls (auth-aligned)."
+echo "🔎 Using tag reference for image pulls."
 echo ""
-echo "Step 2/3: Provisioning infrastructure via provision.mjs..."
-echo "-----------------------------------------------------------"
+echo "Step 2/3: Deploying machines..."
+echo "--------------------------------"
 
-# Attach the built image to the app as the current image (creates a proper release alias)
-echo "Linking image to app via release alias..."
-flyctl -t "$FLY_API_TOKEN" image update -a "$FLY_APP_NAME" --image "$IMAGE_REF" -y
+echo "Using freshly built image: $IMAGE_REF"
 
-# Read back the latest release ImageRef and use that for provisioning (usually a deployment-* alias)
-set +e
-LATEST_REF=$(flyctl -t "$FLY_API_TOKEN" releases -a "$FLY_APP_NAME" --json | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const arr=JSON.parse(d);if(Array.isArray(arr)&&arr.length&&arr[0].ImageRef){console.log(arr[0].ImageRef)}else{process.exit(1)}}catch(e){process.exit(1)}})')
-set -e
-if [ -n "${LATEST_REF:-}" ]; then
-  export IMAGE_REF="$LATEST_REF"
-  echo "  Using release image ref: $IMAGE_REF"
+# Decide whether to roll existing machines or provision fresh
+EXISTING_COUNT=$(flyctl -t "$FLY_API_TOKEN" machines list -a "$FLY_APP_NAME" --json | jq 'length')
+if [ "${EXISTING_COUNT}" -gt 0 ]; then
+  echo "Existing machines detected (${EXISTING_COUNT}). Performing blue/green roll..."
+  node deployment/roll.mjs
 else
-  echo "  ⚠️ Could not determine release ImageRef; proceeding with $IMAGE_REF"
+  echo "No existing machines. Provisioning new machines..."
+  node deployment/provision.mjs
 fi
-
-# Run the infrastructure-as-code provisioning script with a known-good image reference
-node deployment/provision.mjs
 
 echo ""
 echo "Step 3/3: Verifying deployment..."
