@@ -16,6 +16,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   alias Lasso.Events.Provider
   alias Lasso.RPC.HealthPolicy
+  alias Lasso.RPC.Caching.BlockchainMetadataCache
 
   defstruct [
     :chain_name,
@@ -141,6 +142,7 @@ defmodule Lasso.RPC.ProviderPool do
   - protocol: :http | :ws | :both
   - exclude: [provider_id]
   - include_half_open: boolean (default false) - include providers with half-open circuits
+  - max_lag_blocks: integer (optional) - exclude providers lagging more than N blocks behind best known height
   """
   @spec list_candidates(chain_name, map()) :: [map()]
   def list_candidates(chain_name, filters \\ %{}) when is_map(filters) do
@@ -149,7 +151,8 @@ defmodule Lasso.RPC.ProviderPool do
     catch
       :exit, {:timeout, _} ->
         Logger.warning("Timeout listing candidates for chain #{chain_name}")
-        []  # Return empty list on timeout (fail closed)
+        # Return empty list on timeout (fail closed)
+        []
 
       :exit, {:noproc, _} ->
         []
@@ -223,8 +226,8 @@ defmodule Lasso.RPC.ProviderPool do
       }}
   """
   @spec get_recovery_times(chain_name, keyword()) ::
-    {:ok, %{provider_id => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}}} |
-    {:error, term()}
+          {:ok, %{provider_id => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}}}
+          | {:error, term()}
   def get_recovery_times(chain_name, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
@@ -260,7 +263,7 @@ defmodule Lasso.RPC.ProviderPool do
       {:ok, nil}  # No open circuits
   """
   @spec get_min_recovery_time(chain_name, keyword()) ::
-    {:ok, non_neg_integer() | nil} | {:error, term()}
+          {:ok, non_neg_integer() | nil} | {:error, term()}
   def get_min_recovery_time(chain_name, opts \\ []) do
     transport_filter = Keyword.get(opts, :transport, :both)
 
@@ -344,9 +347,7 @@ defmodule Lasso.RPC.ProviderPool do
       |> Map.update!(:providers, &Map.put(&1, provider_id, provider_state))
       |> update_active_providers()
 
-    Logger.info(
-      "Registered provider #{provider_id} for #{state.chain_name} (status: #{provider_state.status}, active_providers: #{inspect(new_state.active_providers)})"
-    )
+    Logger.info("Registered provider #{provider_id} for #{state.chain_name}")
 
     {:reply, :ok, new_state}
   end
@@ -643,7 +644,9 @@ defmodule Lasso.RPC.ProviderPool do
              to in [:closed, :open, :half_open] do
     # Only handle circuit breaker events for THIS chain
     if event_chain == state.chain_name or is_nil(event_chain) do
-      Logger.info("ProviderPool[#{state.chain_name}]: CB event #{provider_id}:#{transport} #{from} -> #{to}")
+      Logger.info(
+        "ProviderPool[#{state.chain_name}]: CB event #{provider_id}:#{transport} #{from} -> #{to}"
+      )
 
       # Update circuit states
       new_circuit_states = update_circuit_state(state.circuit_states, provider_id, transport, to)
@@ -662,7 +665,8 @@ defmodule Lasso.RPC.ProviderPool do
           clear_recovery_time(state.recovery_times, provider_id, transport)
         end
 
-      {:noreply, %{state | circuit_states: new_circuit_states, recovery_times: new_recovery_times}}
+      {:noreply,
+       %{state | circuit_states: new_circuit_states, recovery_times: new_recovery_times}}
     else
       # Ignore events from other chains
       {:noreply, state}
@@ -838,6 +842,7 @@ defmodule Lasso.RPC.ProviderPool do
   # NOTE: candidates_ready is used by list_candidates/2
   # Keep it a private helper for candidate construction.
   defp candidates_ready(state, filters) do
+    max_lag_blocks = Map.get(filters, :max_lag_blocks)
     current_time = System.monotonic_time(:millisecond)
 
     state.active_providers
@@ -865,6 +870,7 @@ defmodule Lasso.RPC.ProviderPool do
       case Map.get(filters, :protocol) do
         :http ->
           cb_state = get_cb_state(state.circuit_states, provider.id, :http)
+
           if include_half_open do
             cb_state != :open
           else
@@ -873,6 +879,7 @@ defmodule Lasso.RPC.ProviderPool do
 
         :ws ->
           cb_state = get_cb_state(state.circuit_states, provider.id, :ws)
+
           if include_half_open do
             cb_state != :open
           else
@@ -892,6 +899,7 @@ defmodule Lasso.RPC.ProviderPool do
           end
       end
     end)
+    |> filter_by_lag(state.chain_name, max_lag_blocks)
     |> Enum.filter(fn provider ->
       case Map.get(filters, :exclude) do
         nil -> true
@@ -911,6 +919,66 @@ defmodule Lasso.RPC.ProviderPool do
       other when other in [:open, :closed, :half_open] -> other
       _ -> :closed
     end
+  end
+
+  # Lag-based filtering: Excludes providers that are too far behind best known block height
+  # Implements fail-open behavior: if lag data unavailable, include the provider
+  defp filter_by_lag(providers, _chain, nil), do: providers
+
+  defp filter_by_lag(providers, chain, max_lag_blocks) when is_integer(max_lag_blocks) do
+    # Track providers with missing lag data to detect if filtering is completely broken
+    {filtered, missing_lag_data} =
+      Enum.reduce(providers, {[], []}, fn provider, {included, missing} ->
+        case BlockchainMetadataCache.get_provider_lag(chain, provider.id) do
+          {:ok, lag} when lag >= -max_lag_blocks ->
+            # Provider is within acceptable lag threshold (negative lag = blocks behind)
+            # lag >= -max_lag_blocks means provider is at most max_lag_blocks behind
+            {[provider | included], missing}
+
+          {:ok, lag} ->
+            # Provider is lagging beyond threshold - exclude it
+            telemetry_lag_excluded(chain, provider.id, lag, max_lag_blocks)
+
+            Logger.debug(
+              "Excluded provider #{provider.id} from selection: lag=#{lag} blocks (threshold: -#{max_lag_blocks})"
+            )
+
+            {included, missing}
+
+          {:error, reason} ->
+            # Lag data unavailable - fail open (include provider but track it)
+            telemetry_lag_data_unavailable(chain, provider.id, reason)
+
+            Logger.debug(
+              "Lag data unavailable for provider #{provider.id}, including in candidates (reason: #{inspect(reason)})"
+            )
+
+            {[provider | included], [provider.id | missing]}
+        end
+      end)
+
+    # Alert if ALL providers have missing lag data (lag filtering completely disabled)
+    if length(providers) > 0 and length(missing_lag_data) == length(providers) do
+      telemetry_lag_filtering_disabled(chain, length(providers))
+
+      Logger.warning(
+        "Lag filtering disabled for #{chain}: no lag data for any of #{length(providers)} providers. " <>
+          "Check BlockchainMetadataMonitor health."
+      )
+    end
+
+    filtered = Enum.reverse(filtered)
+
+    # Emit telemetry if ALL providers were excluded due to lag
+    if length(providers) > 0 and length(filtered) == 0 do
+      telemetry_all_providers_lagging(chain, length(providers), max_lag_blocks)
+
+      Logger.warning(
+        "All #{length(providers)} providers for #{chain} excluded due to lag (threshold: -#{max_lag_blocks} blocks)"
+      )
+    end
+
+    filtered
   end
 
   defp transport_available?(provider, :http, now_ms) do
@@ -1381,6 +1449,56 @@ defmodule Lasso.RPC.ProviderPool do
     provider_times = Map.get(recovery_times, provider_id, %{http: nil, ws: nil})
     updated_times = Map.put(provider_times, transport, nil)
     Map.put(recovery_times, provider_id, updated_times)
+  end
+
+  # Telemetry: emit event when provider excluded due to lag
+  defp telemetry_lag_excluded(chain, provider_id, lag, max_lag_blocks) do
+    :telemetry.execute(
+      [:lasso, :selection, :lag_excluded],
+      %{count: 1, lag_blocks: abs(lag)},
+      %{
+        chain: chain,
+        provider_id: provider_id,
+        lag: lag,
+        threshold: -max_lag_blocks
+      }
+    )
+  end
+
+  # Telemetry: emit event when ALL providers excluded due to lag
+  defp telemetry_all_providers_lagging(chain, provider_count, max_lag_blocks) do
+    :telemetry.execute(
+      [:lasso, :selection, :all_providers_lagging],
+      %{count: 1, provider_count: provider_count},
+      %{
+        chain: chain,
+        threshold: -max_lag_blocks
+      }
+    )
+  end
+
+  # Telemetry: emit event when individual provider has no lag data
+  defp telemetry_lag_data_unavailable(chain, provider_id, reason) do
+    :telemetry.execute(
+      [:lasso, :selection, :lag_data_unavailable],
+      %{count: 1},
+      %{
+        chain: chain,
+        provider_id: provider_id,
+        reason: reason
+      }
+    )
+  end
+
+  # Telemetry: emit event when lag filtering is completely disabled (all providers missing lag data)
+  defp telemetry_lag_filtering_disabled(chain, provider_count) do
+    :telemetry.execute(
+      [:lasso, :selection, :lag_filtering_disabled],
+      %{count: 1, provider_count: provider_count},
+      %{
+        chain: chain
+      }
+    )
   end
 
   def via_name(chain_name) do

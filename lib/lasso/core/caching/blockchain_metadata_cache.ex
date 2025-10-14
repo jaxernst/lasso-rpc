@@ -100,14 +100,20 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataCache do
 
       {:ok, 21_234_567} = get_provider_block_height("ethereum", "alchemy")
       {:error, :not_found} = get_provider_block_height("ethereum", "unknown")
+      {:error, :stale} = get_provider_block_height("ethereum", "alchemy")  # If data too old
   """
   @spec get_provider_block_height(String.t(), String.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def get_provider_block_height(chain, provider_id) do
-    case lookup({:provider, chain, provider_id, :block_height}) do
-      {:ok, height} ->
-        telemetry_cache_hit(chain, :provider_block_height)
-        {:ok, height}
+    with {:ok, height} <- lookup({:provider, chain, provider_id, :block_height}),
+         {:ok, timestamp} <- lookup({:provider, chain, provider_id, :updated_at}),
+         true <- fresh_timestamp?(timestamp) do
+      telemetry_cache_hit(chain, :provider_block_height)
+      {:ok, height}
+    else
+      false ->
+        telemetry_cache_stale(chain, :provider_block_height)
+        {:error, :stale}
 
       :error ->
         telemetry_cache_miss(chain, :provider_block_height, :not_found)
@@ -294,6 +300,13 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataCache do
         false
     end
   end
+
+  defp fresh_timestamp?(timestamp) when is_integer(timestamp) do
+    age_ms = System.system_time(:millisecond) - timestamp
+    age_ms < staleness_threshold()
+  end
+
+  defp fresh_timestamp?(_), do: false
 
   defp get_all_provider_heights(chain) do
     :ets.match(@table_name, {{:provider, chain, :"$1", :block_height}, :"$2"})

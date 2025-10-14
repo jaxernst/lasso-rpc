@@ -74,7 +74,8 @@ defmodule Lasso.RPC.Selection do
   # Private implementation
 
   defp do_select_provider(%SelectionContext{} = ctx) do
-    filters = %{exclude: ctx.exclude, protocol: ctx.protocol}
+    max_lag_blocks = get_max_lag_for_method(ctx.chain, ctx.method)
+    filters = %{exclude: ctx.exclude, protocol: ctx.protocol, max_lag_blocks: max_lag_blocks}
     candidates = ProviderPool.list_candidates(ctx.chain, filters)
 
     case candidates do
@@ -107,7 +108,8 @@ defmodule Lasso.RPC.Selection do
   end
 
   defp do_select_provider_with_metadata(%SelectionContext{} = ctx) do
-    filters = %{exclude: ctx.exclude, protocol: ctx.protocol}
+    max_lag_blocks = get_max_lag_for_method(ctx.chain, ctx.method)
+    filters = %{exclude: ctx.exclude, protocol: ctx.protocol, max_lag_blocks: max_lag_blocks}
     candidates = ProviderPool.list_candidates(ctx.chain, filters)
 
     case candidates do
@@ -184,7 +186,13 @@ defmodule Lasso.RPC.Selection do
         _ -> nil
       end
 
-    pool_filters = %{protocol: pool_protocol, exclude: exclude, include_half_open: include_half_open}
+    max_lag_blocks = get_max_lag_for_method(chain, method)
+    pool_filters = %{
+      protocol: pool_protocol,
+      exclude: exclude,
+      include_half_open: include_half_open,
+      max_lag_blocks: max_lag_blocks
+    }
     provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
 
     require Logger
@@ -372,5 +380,36 @@ defmodule Lasso.RPC.Selection do
       :exit, _ -> :error
       _ -> :error
     end
+  end
+
+  # Configuration helper: Get max lag threshold for a specific chain and method
+  # Returns nil if no lag filtering should be applied
+  # Configuration precedence (highest to lowest):
+  # 1. Per-method override in chain config
+  # 2. Per-chain default
+  # 3. Global application default
+  defp get_max_lag_for_method(chain, method) do
+    # Try to get chain-specific config
+    case Lasso.Config.ConfigStore.get_chain(chain) do
+      {:ok, %{selection: %{max_lag_per_method: method_overrides, max_lag_blocks: chain_default}}}
+      when is_map(method_overrides) ->
+        # Check for method-specific override first
+        Map.get(method_overrides, method) || chain_default || get_global_max_lag()
+
+      {:ok, %{selection: %{max_lag_blocks: chain_default}}} ->
+        # Use chain-level default
+        chain_default || get_global_max_lag()
+
+      _ ->
+        # No chain config or selection config, use global default
+        get_global_max_lag()
+    end
+  end
+
+  defp get_global_max_lag do
+    # Get global default from application config
+    # Returns nil if not configured (no lag filtering)
+    Application.get_env(:lasso, :selection, [])
+    |> Keyword.get(:max_lag_blocks)
   end
 end
