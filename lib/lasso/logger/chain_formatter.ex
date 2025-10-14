@@ -16,7 +16,7 @@ defmodule Lasso.Logger.ChainFormatter do
   Receives log level, message as iodata, timestamp, and a metadata keyword list.
   Returns an iodata line to be written to the console.
   """
-  @spec format(Logger.level(), IO.chardata(), Logger.Formatter.time(), keyword()) :: IO.chardata()
+  @spec format(Logger.level(), Logger.message(), Logger.metadata(), keyword()) :: IO.chardata()
   def format(level, message, _timestamp, metadata) do
     chain_prefix =
       case Keyword.get(metadata, :chain) do

@@ -162,13 +162,6 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
         )
 
         base_ctx
-
-      {:error, reason} ->
-        Logger.warning(
-          "Failed to load provider config for #{chain}/#{provider_id}: #{inspect(reason)}, using adapter defaults"
-        )
-
-        base_ctx
     end
   end
 
