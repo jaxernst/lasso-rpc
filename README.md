@@ -309,18 +309,6 @@ config :lasso, :observability,
 
 ## Integration
 
-### Using with Web3 Libraries
-
-**Viem/Wagmi:**
-
-```typescript
-import { createPublicClient, http } from "viem";
-
-const client = createPublicClient({
-  transport: http("http://localhost:4000/rpc/fastest/ethereum"),
-});
-```
-
 **WebSocket subscriptions:**
 
 ```bash
@@ -382,19 +370,6 @@ mix phx.server
 - `:slow` - Slow tests requiring real blockchain events (5+ min)
 - `:real_providers` - Uses external RPC providers (network-dependent)
 - `:diagnostic` - Framework validation tests
-
-### Development Mode
-
-```bash
-# Start with hot reloading
-mix phx.server
-
-# Visit dashboard
-open http://localhost:4000
-
-# Visit simulator
-open http://localhost:4000/simulator
-```
 
 ### Battle Testing & Load Testing
 
