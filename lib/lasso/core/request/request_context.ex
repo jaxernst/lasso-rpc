@@ -205,7 +205,7 @@ defmodule Lasso.RPC.RequestContext do
 
         _ ->
           %{
-            code: -32000,
+            code: -32_000,
             message: truncate_string(inspect(error), 256),
             data_present: false
           }

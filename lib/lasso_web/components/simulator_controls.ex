@@ -652,7 +652,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   defp get_default_run_config do
     %{
       type: "custom",
-      duration: 30000,
+      duration: 30_000,
       http: %{
         enabled: true,
         methods: ["eth_blockNumber", "eth_getBalance"],
@@ -672,7 +672,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
     %{
       type: "custom",
-      duration: 30000,
+      duration: 30_000,
       chains: get_selected_chains(socket),
       strategy: socket.assigns.selected_strategy,
       http: %{

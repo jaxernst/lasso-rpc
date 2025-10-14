@@ -93,16 +93,16 @@ defmodule TestSupport.MockWSClient do
   defp get_error_for_method(method, id) do
     case method do
       "nonexistent_method" ->
-        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32601,"message":"Method not found"}})
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32_601,"message":"Method not found"}})
 
       "eth_getBalance" ->
-        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32602,"message":"Invalid params"}})
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32_602,"message":"Invalid params"}})
 
       "eth_call" ->
-        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32603,"message":"Internal error"}})
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32_603,"message":"Internal error"}})
 
       "eth_blockNumber" ->
-        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32000,"message":"Server error"}})
+        ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32_000,"message":"Server error"}})
 
       "eth_getLogs" ->
         ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":429,"message":"Too Many Requests"}})
@@ -214,7 +214,7 @@ defmodule TestSupport.MockWSClient do
               ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"result":#{Jason.encode!(subscription_id)}})
 
             :error ->
-              ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32601,"message":"Subscription not supported"}})
+              ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32_601,"message":"Subscription not supported"}})
           end
 
         {:ok, %{"id" => id, "method" => method, "params" => params}} ->

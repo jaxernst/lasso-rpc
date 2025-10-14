@@ -15,7 +15,7 @@ defmodule Lasso.RPC.HttpInclusionWithWsDisconnectIntegrationTest do
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
       "ws:conn:#{chain}",
-      {:ws_closed, "dual", 1006, %Lasso.JSONRPC.Error{message: "test", code: -32000}}
+      {:ws_closed, "dual", 1006, %Lasso.JSONRPC.Error{message: "test", code: -32_000}}
     )
 
     Process.sleep(50)

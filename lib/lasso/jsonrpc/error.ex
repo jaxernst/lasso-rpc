@@ -72,21 +72,21 @@ defmodule Lasso.JSONRPC.Error do
 
   ## Examples
 
-      iex> new(-32602, "Invalid params")
-      %Lasso.JSONRPC.Error{code: -32602, message: "Invalid params", category: :invalid_params, retriable?: false}
+      iex> new(-32_602, "Invalid params")
+      %Lasso.JSONRPC.Error{code: -32_602, message: "Invalid params", category: :invalid_params, retriable?: false}
 
-      iex> new(-32005, "Rate limit exceeded")
-      %Lasso.JSONRPC.Error{code: -32005, message: "Rate limit exceeded", category: :rate_limit, retriable?: true}
+      iex> new(-32_005, "Rate limit exceeded")
+      %Lasso.JSONRPC.Error{code: -32_005, message: "Rate limit exceeded", category: :rate_limit, retriable?: true}
 
-      iex> new(-32000, "Server error", category: :server_error, retriable?: true)
-      %Lasso.JSONRPC.Error{code: -32000, message: "Server error", category: :server_error, retriable?: true}
+      iex> new(-32_000, "Server error", category: :server_error, retriable?: true)
+      %Lasso.JSONRPC.Error{code: -32_000, message: "Server error", category: :server_error, retriable?: true}
   """
   @spec new(integer(), String.t(), keyword()) :: t()
   def new(code, message, opts \\ []) do
-    # Normalize HTTP 429 to JSON-RPC -32005 (rate limit code)
+    # Normalize HTTP 429 to JSON-RPC -32_005 (rate limit code)
     {normalized_code, original_code} =
       if code == 429 do
-        {-32005, code}
+        {-32_005, code}
       else
         {code, Keyword.get(opts, :original_code, code)}
       end
@@ -116,9 +116,9 @@ defmodule Lasso.JSONRPC.Error do
 
   ## Examples
 
-      iex> error = new(-32602, "Invalid params", data: %{"details" => "missing field"})
+      iex> error = new(-32_602, "Invalid params", data: %{"details" => "missing field"})
       iex> to_map(error)
-      %{"code" => -32602, "message" => "Invalid params", "data" => %{"details" => "missing field"}}
+      %{"code" => -32_602, "message" => "Invalid params", "data" => %{"details" => "missing field"}}
   """
   @spec to_map(t()) :: map()
   def to_map(%__MODULE__{} = error) do
@@ -131,9 +131,9 @@ defmodule Lasso.JSONRPC.Error do
 
   ## Examples
 
-      iex> error = new(-32602, "Invalid params")
+      iex> error = new(-32_602, "Invalid params")
       iex> to_response(error, 1)
-      %{"jsonrpc" => "2.0", "error" => %{"code" => -32602, "message" => "Invalid params"}, "id" => 1}
+      %{"jsonrpc" => "2.0", "error" => %{"code" => -32_602, "message" => "Invalid params"}, "id" => 1}
   """
   @spec to_response(t(), any()) :: map()
   def to_response(%__MODULE__{} = error, id) do
@@ -151,8 +151,8 @@ defmodule Lasso.JSONRPC.Error do
       iex> from({:rate_limit, %{}}, provider_id: "test")
       %Lasso.JSONRPC.Error{category: :rate_limit, retriable?: true}
 
-      iex> from(%{"error" => %{"code" => -32602}}, provider_id: "test")
-      %Lasso.JSONRPC.Error{code: -32602, category: :invalid_params}
+      iex> from(%{"error" => %{"code" => -32_602}}, provider_id: "test")
+      %Lasso.JSONRPC.Error{code: -32_602, category: :invalid_params}
   """
   @spec from(any(), keyword()) :: t()
   def from(error, opts \\ [])

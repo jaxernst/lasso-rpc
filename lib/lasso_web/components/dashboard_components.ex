@@ -204,7 +204,7 @@ defmodule LassoWeb.Components.DashboardComponents do
           <input
             type="number"
             name="chain[block_time]"
-            value={Map.get(@form_data, :block_time, 12000)}
+            value={Map.get(@form_data, :block_time, 12_000)}
             phx-debounce="300"
             class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
             placeholder="12000"

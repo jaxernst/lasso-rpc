@@ -315,7 +315,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         %{
           id: "provider",
           priority: 10,
-          behavior: {:error, %{code: -32000, message: "Server error"}}
+          behavior: {:error, %{code: -32_000, message: "Server error"}}
         }
       ])
 

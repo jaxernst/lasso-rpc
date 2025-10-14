@@ -348,9 +348,8 @@ defmodule Lasso.Providers do
 
   defp maybe_validate(provider_config, true) do
     with :ok <- validate_required_fields(provider_config),
-         :ok <- ConfigValidator.validate_provider_url(provider_config.url),
-         :ok <- maybe_validate_ws_url(provider_config.ws_url) do
-      :ok
+         :ok <- ConfigValidator.validate_provider_url(provider_config.url) do
+      maybe_validate_ws_url(provider_config.ws_url)
     end
   end
 

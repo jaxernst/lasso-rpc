@@ -12,9 +12,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
   require Logger
 
+  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.{Selection, ProviderPool, Metrics, TransportRegistry, Channel}
   alias Lasso.RPC.{RequestContext, Observability, CircuitBreaker}
-  alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.Providers.AdapterFilter
 
   @type chain :: String.t()
   @type method :: String.t()
@@ -210,7 +211,7 @@ defmodule Lasso.RPC.RequestPipeline do
         duration_ms = System.monotonic_time(:millisecond) - start_time
 
         jerr =
-          JError.new(-32000, "Provider not found or no channels available",
+          JError.new(-32_000, "Provider not found or no channels available",
             category: :provider_error
           )
 
@@ -245,7 +246,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
         should_failover =
           case jerr do
-            %Lasso.JSONRPC.Error{retriable?: retriable?} -> retriable?
+            %JError{retriable?: retriable?} -> retriable?
             _ -> false
           end
 
@@ -387,7 +388,7 @@ defmodule Lasso.RPC.RequestPipeline do
                   {message, %{}}
               end
 
-            jerr = JError.new(-32000, error_message,
+            jerr = JError.new(-32_000, error_message,
               category: :provider_error,
               retriable?: true,
               data: error_data
@@ -566,7 +567,7 @@ defmodule Lasso.RPC.RequestPipeline do
     params = Map.get(rpc_request, "params")
 
     # Validate parameters for this specific channel before attempting request
-    case Lasso.RPC.Providers.AdapterFilter.validate_params(channel, method, params) do
+    case AdapterFilter.validate_params(channel, method, params) do
       :ok ->
         # Params valid, proceed with request
         execute_channel_request(channel, rpc_request, timeout, ctx, rest_channels)
@@ -617,7 +618,7 @@ defmodule Lasso.RPC.RequestPipeline do
             timeout: cb_timeout
           )
 
-          {:error, JError.new(-32000, "Request timeout", category: :timeout, retriable?: true)}
+          {:error, JError.new(-32_000, "Request timeout", category: :timeout, retriable?: true)}
 
         :exit, {:noproc, _} ->
           # Circuit breaker not started - log error and fail with non-retriable error
@@ -627,7 +628,7 @@ defmodule Lasso.RPC.RequestPipeline do
           )
 
           {:error,
-           JError.new(-32000, "Provider not available",
+           JError.new(-32_000, "Provider not available",
              category: :provider_error,
              retriable?: true
            )}
@@ -640,7 +641,7 @@ defmodule Lasso.RPC.RequestPipeline do
           )
 
           {:error,
-           JError.new(-32000, "Circuit breaker error",
+           JError.new(-32_000, "Circuit breaker error",
              category: :provider_error,
              retriable?: true
            )}
@@ -725,7 +726,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp try_channel_failover(chain, rpc_request, strategy, excluded_providers, attempt, timeout) do
     if attempt > @max_failover_attempts do
-      {:error, JError.new(-32000, "Failover limit reached")}
+      {:error, JError.new(-32_000, "Failover limit reached")}
     else
       method = Map.get(rpc_request, "method")
 
@@ -739,7 +740,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
       case channels do
         [] ->
-          {:error, JError.new(-32000, "No more channels available for failover")}
+          {:error, JError.new(-32_000, "No more channels available for failover")}
 
         _ ->
           ctx =

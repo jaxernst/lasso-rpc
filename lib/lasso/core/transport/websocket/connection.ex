@@ -197,7 +197,7 @@ defmodule Lasso.RPC.WSConnection do
         Logger.debug("Circuit breaker open for #{state.endpoint.id}, skipping connect attempt")
 
         jerr =
-          JError.new(-32000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)
+          JError.new(-32_000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)
 
         # Emit telemetry event
         :telemetry.execute(
@@ -406,7 +406,7 @@ defmodule Lasso.RPC.WSConnection do
 
                 _ ->
                   {:error,
-                   JError.new(-32700, "Invalid JSON-RPC response", provider_id: state.endpoint.id)}
+                   JError.new(-32_700, "Invalid JSON-RPC response", provider_id: state.endpoint.id)}
               end
 
             status = if match?({:ok, _}, reply), do: :success, else: :error
@@ -606,7 +606,7 @@ defmodule Lasso.RPC.WSConnection do
 
           # Connection is hung - treat as disconnect and reconnect
           jerr =
-            JError.new(-32000, "Heartbeat timeout",
+            JError.new(-32_000, "Heartbeat timeout",
               provider_id: state.endpoint.id,
               retriable?: true
             )
@@ -673,7 +673,7 @@ defmodule Lasso.RPC.WSConnection do
         GenServer.reply(
           from,
           {:error,
-           JError.new(-32000, "WebSocket request timeout", provider_id: state.endpoint.id)}
+           JError.new(-32_000, "WebSocket request timeout", provider_id: state.endpoint.id)}
         )
 
         {:noreply, %{state | pending_requests: new_pending}}
@@ -709,7 +709,7 @@ defmodule Lasso.RPC.WSConnection do
     end
 
     jerr =
-      JError.new(-32000, "Connection process died: #{inspect(reason)}",
+      JError.new(-32_000, "Connection process died: #{inspect(reason)}",
         provider_id: state.endpoint.id,
         retriable?: true
       )
@@ -749,7 +749,7 @@ defmodule Lasso.RPC.WSConnection do
       Lasso.PubSub,
       "ws:conn:#{state.chain_name}",
       {:ws_disconnected, state.endpoint.id,
-       JError.new(-32000, "terminated", provider_id: state.endpoint.id, retriable?: false)}
+       JError.new(-32_000, "terminated", provider_id: state.endpoint.id, retriable?: false)}
     )
 
     :ok
@@ -949,7 +949,7 @@ defmodule Lasso.RPC.WSConnection do
 
       # Proactively close on timeout-like provider errors to force clean reconnect
       try do
-        if (is_integer(code) and code == -32701) or
+        if (is_integer(code) and code == -32_701) or
              (is_binary(msg) and String.contains?(String.downcase(msg), "timeout")) do
           _ = ws_client().send_frame(state.connection, {:close, 1013, "connection timeout"})
         end

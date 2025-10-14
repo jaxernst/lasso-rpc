@@ -7,7 +7,7 @@ defmodule LassoWeb.ErrorJSON do
 
   # Handle parse errors with JSON-RPC format
   def render("400.json", _assigns) do
-    error_response = JError.new(-32700, "Parse error: Invalid JSON")
+    error_response = JError.new(-32_700, "Parse error: Invalid JSON")
     JError.to_response(error_response, nil)
   end
 

@@ -6,7 +6,7 @@ defmodule Lasso.RPC.ErrorClassificationTest do
   describe "categorize/2" do
     test "classifies LlamaRPC block range error as capability violation" do
       category =
-        ErrorClassification.categorize(-32603, "eth_getLogs range is too large, max is 1k blocks")
+        ErrorClassification.categorize(-32_603, "eth_getLogs range is too large, max is 1k blocks")
 
       assert category == :capability_violation
     end
@@ -15,17 +15,17 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       message =
         "Please specify an address in your request or, to remove restrictions, order a dedicated full node here: https://www.allnodes.com/eth/host"
 
-      category = ErrorClassification.categorize(-32701, message)
+      category = ErrorClassification.categorize(-32_701, message)
       assert category == :capability_violation
     end
 
-    test "classifies PublicNode error code -32701 as capability violation even without message" do
-      category = ErrorClassification.categorize(-32701, nil)
+    test "classifies PublicNode error code -32_701 as capability violation even without message" do
+      category = ErrorClassification.categorize(-32_701, nil)
       assert category == :capability_violation
     end
 
     test "classifies regular internal error as internal error" do
-      category = ErrorClassification.categorize(-32603, "Internal server error")
+      category = ErrorClassification.categorize(-32_603, "Internal server error")
       assert category == :internal_error
     end
 
@@ -38,7 +38,7 @@ defmodule Lasso.RPC.ErrorClassificationTest do
   describe "retriable?/2" do
     test "capability violations are retriable" do
       retriable =
-        ErrorClassification.retriable?(-32603, "eth_getLogs range is too large, max is 1k blocks")
+        ErrorClassification.retriable?(-32_603, "eth_getLogs range is too large, max is 1k blocks")
 
       assert retriable == true
     end
@@ -47,12 +47,12 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       message =
         "Please specify an address in your request or, to remove restrictions, order a dedicated full node here: https://www.allnodes.com/eth/host"
 
-      retriable = ErrorClassification.retriable?(-32701, message)
+      retriable = ErrorClassification.retriable?(-32_701, message)
       assert retriable == true
     end
 
-    test "PublicNode error code -32701 is retriable even without message" do
-      retriable = ErrorClassification.retriable?(-32701, nil)
+    test "PublicNode error code -32_701 is retriable even without message" do
+      retriable = ErrorClassification.retriable?(-32_701, nil)
       assert retriable == true
     end
 
@@ -62,7 +62,7 @@ defmodule Lasso.RPC.ErrorClassificationTest do
     end
 
     test "invalid params are not retriable" do
-      retriable = ErrorClassification.retriable?(-32602, "Invalid parameters")
+      retriable = ErrorClassification.retriable?(-32_602, "Invalid parameters")
       assert retriable == false
     end
   end
@@ -90,7 +90,7 @@ defmodule Lasso.RPC.ErrorClassificationTest do
     test "LlamaRPC error gets proper classification and no breaker penalty" do
       error_response = %{
         "error" => %{
-          "code" => -32603,
+          "code" => -32_603,
           "message" => "eth_getLogs range is too large, max is 1k blocks"
         }
       }
@@ -110,7 +110,7 @@ defmodule Lasso.RPC.ErrorClassificationTest do
     test "PublicNode error gets proper classification and no breaker penalty" do
       error_response = %{
         "error" => %{
-          "code" => -32701,
+          "code" => -32_701,
           "message" =>
             "Please specify an address in your request or, to remove restrictions, order a dedicated full node here: https://www.allnodes.com/eth/host"
         }

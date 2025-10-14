@@ -27,14 +27,14 @@ defmodule Lasso.RPC.ChainSupervisorTest do
       chain_id: 1,
       name: "ethereum",
       connection: %Connection{
-        heartbeat_interval: 30000,
+        heartbeat_interval: 30_000,
         reconnect_interval: 5000,
         max_reconnect_attempts: 3
       },
       failover: %Failover{
         enabled: true,
         max_backfill_blocks: 100,
-        backfill_timeout: 30000
+        backfill_timeout: 30_000
       },
       providers: [
         %Provider{
@@ -97,14 +97,14 @@ defmodule Lasso.RPC.ChainSupervisorTest do
         name: "",
         providers: [],
         connection: %Connection{
-          heartbeat_interval: 30000,
+          heartbeat_interval: 30_000,
           reconnect_interval: 5000,
           max_reconnect_attempts: 3
         },
         failover: %Failover{
           enabled: true,
           max_backfill_blocks: 100,
-          backfill_timeout: 30000
+          backfill_timeout: 30_000
         }
       }
 

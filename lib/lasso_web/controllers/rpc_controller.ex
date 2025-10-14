@@ -60,7 +60,7 @@ defmodule LassoWeb.RPCController do
       nil ->
         Logger.error("Missing chain_id parameter", params: inspect(params))
 
-        error = JError.new(-32602, "Missing chain_id parameter")
+        error = JError.new(-32_602, "Missing chain_id parameter")
 
         conn
         |> put_status(:bad_request)
@@ -96,7 +96,7 @@ defmodule LassoWeb.RPCController do
             handle_chain_rpc(conn, chain_name)
 
           {:error, reason} ->
-            error = JError.new(-32602, "Unsupported chain: #{reason}")
+            error = JError.new(-32_602, "Unsupported chain: #{reason}")
 
             conn
             |> put_status(:bad_request)
@@ -183,7 +183,7 @@ defmodule LassoWeb.RPCController do
         handle_json_rpc(conn, request, chain_name)
 
       _ ->
-        error = JError.new(-32600, "Invalid Request")
+        error = JError.new(-32_600, "Invalid Request")
         json(conn, JError.to_response(error, nil))
     end
   end
@@ -230,7 +230,7 @@ defmodule LassoWeb.RPCController do
 
   defp handle_json_rpc_batch(conn, requests, chain) do
     if length(requests) > @max_batch_requests do
-      error = JError.new(-32600, "Invalid Request: batch too large")
+      error = JError.new(-32_600, "Invalid Request: batch too large")
       json(conn, JError.to_response(error, nil))
     else
       results =
@@ -257,7 +257,7 @@ defmodule LassoWeb.RPCController do
   defp validate_json_rpc_request(%{"method" => method} = request) when is_binary(method) do
     cond do
       Map.has_key?(request, "jsonrpc") and request["jsonrpc"] != @jsonrpc_version ->
-        {:error, JError.new(-32600, "Invalid Request: jsonrpc must be \"2.0\"")}
+        {:error, JError.new(-32_600, "Invalid Request: jsonrpc must be \"2.0\"")}
 
       true ->
         normalized =
@@ -272,7 +272,7 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  defp validate_json_rpc_request(_), do: {:error, JError.new(-32600, "Invalid Request")}
+  defp validate_json_rpc_request(_), do: {:error, JError.new(-32_600, "Invalid Request")}
 
   # Block and transaction queries
   defp process_json_rpc_request(
@@ -399,7 +399,7 @@ defmodule LassoWeb.RPCController do
         {:ok, chain_id}
 
       {:error, reason} ->
-        {:error, JError.new(-32603, "Failed to get chain ID: #{reason}")}
+        {:error, JError.new(-32_603, "Failed to get chain ID: #{reason}")}
     end
   end
 
@@ -408,7 +408,7 @@ defmodule LassoWeb.RPCController do
        when method in @ws_only_methods do
     {:error,
      JError.new(
-       -32601,
+       -32_601,
        "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
        data: %{websocket_url: "/socket/websocket"}
      )}
@@ -417,7 +417,7 @@ defmodule LassoWeb.RPCController do
   # Reject stateful/account methods over HTTP
   defp process_json_rpc_request(%{"method" => method}, _chain, _conn)
        when method in @http_disallowed_methods do
-    {:error, JError.new(-32601, "Method not supported by proxy")}
+    {:error, JError.new(-32_601, "Method not supported by proxy")}
   end
 
   # Generic method handler: forward allowed methods
@@ -454,7 +454,7 @@ defmodule LassoWeb.RPCController do
       Lasso.RPC.RequestPipeline.execute_via_channels(chain, method, params, pipeline_opts)
     else
       {:error, reason} ->
-        {:error, JError.new(-32000, "Failed to extract request options: #{reason}")}
+        {:error, JError.new(-32_000, "Failed to extract request options: #{reason}")}
     end
   end
 

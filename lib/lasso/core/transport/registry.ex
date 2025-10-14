@@ -354,7 +354,7 @@ defmodule Lasso.RPC.TransportRegistry do
 
       {:error, reason} ->
         {:error,
-         JError.new(-32000, "Provider not found: #{inspect(reason)}", provider_id: provider_id)}
+         JError.new(-32_000, "Provider not found: #{inspect(reason)}", provider_id: provider_id)}
     end
   end
 

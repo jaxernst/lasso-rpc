@@ -60,7 +60,7 @@ defmodule Lasso.RPC.Providers.Generic do
   end
 
   def normalize_error(other, ctx) do
-    JError.new(-32603, "Internal error",
+    JError.new(-32_603, "Internal error",
       data: %{details: inspect(other)},
       provider_id: Map.get(ctx, :provider_id)
     )

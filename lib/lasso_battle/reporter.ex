@@ -333,10 +333,9 @@ defmodule Lasso.Battle.Reporter do
       provider_lines =
         by_provider
         |> Enum.sort_by(fn {_, %{count: c}} -> c end, :desc)
-        |> Enum.map(fn {provider, %{count: count, percentage: pct}} ->
+        |> Enum.map_join("\n", fn {provider, %{count: count, percentage: pct}} ->
           "  - #{provider}: #{count} (#{Float.round(pct, 1)}%)"
         end)
-        |> Enum.join("\n")
 
       balance_emoji =
         cond do
