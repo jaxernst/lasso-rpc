@@ -13,7 +13,8 @@ defmodule Lasso.Config.ChainConfig do
           name: String.t(),
           providers: [__MODULE__.Provider.t()],
           connection: __MODULE__.Connection.t(),
-          failover: __MODULE__.Failover.t()
+          failover: __MODULE__.Failover.t(),
+          selection: __MODULE__.Selection.t() | nil
         }
 
   defstruct [
@@ -21,7 +22,8 @@ defmodule Lasso.Config.ChainConfig do
     :name,
     :providers,
     :connection,
-    :failover
+    :failover,
+    :selection
   ]
 
   defmodule Config do
@@ -95,6 +97,27 @@ defmodule Lasso.Config.ChainConfig do
     defstruct max_backfill_blocks: 100,
               backfill_timeout: 30_000,
               enabled: true
+  end
+
+  defmodule Selection do
+    @moduledoc """
+    Provider selection configuration for lag-aware routing.
+
+    Controls how Lasso filters providers based on block height lag to ensure
+    consistent blockchain state when routing requests.
+    """
+
+    @type t :: %__MODULE__{
+            # Maximum acceptable lag in blocks (providers more than N blocks behind are excluded)
+            # nil means no lag filtering
+            max_lag_blocks: non_neg_integer() | nil,
+            # Per-method overrides for max_lag_blocks
+            # Example: %{"eth_getBalance" => 1, "eth_gasPrice" => 5}
+            max_lag_per_method: %{String.t() => non_neg_integer()} | nil
+          }
+
+    defstruct max_lag_blocks: nil,
+              max_lag_per_method: nil
   end
 
   @doc """
@@ -224,7 +247,8 @@ defmodule Lasso.Config.ChainConfig do
       name: chain_data["name"],
       providers: parse_providers(chain_data["providers"]),
       connection: parse_connection(chain_data["connection"]),
-      failover: parse_failover(chain_data["failover"])
+      failover: parse_failover(chain_data["failover"]),
+      selection: parse_selection(chain_data["selection"])
     }
   end
 
@@ -316,6 +340,37 @@ defmodule Lasso.Config.ChainConfig do
       max_backfill_blocks: Map.get(failover_data, "max_backfill_blocks", 100),
       backfill_timeout: Map.get(failover_data, "backfill_timeout", 30_000),
       enabled: Map.get(failover_data, "enabled", true)
+    }
+  end
+
+  defp parse_selection(nil), do: nil
+
+  defp parse_selection(selection_data) when is_map(selection_data) do
+    # Parse per-method overrides if present
+    max_lag_per_method =
+      case Map.get(selection_data, "max_lag_per_method") do
+        nil ->
+          nil
+
+        method_map when is_map(method_map) ->
+          # Convert all values to integers
+          Enum.into(method_map, %{}, fn {method, lag} ->
+            lag_int =
+              case lag do
+                i when is_integer(i) -> i
+                s when is_binary(s) -> String.to_integer(s)
+              end
+
+            {method, lag_int}
+          end)
+
+        _ ->
+          nil
+      end
+
+    %__MODULE__.Selection{
+      max_lag_blocks: Map.get(selection_data, "max_lag_blocks"),
+      max_lag_per_method: max_lag_per_method
     }
   end
 

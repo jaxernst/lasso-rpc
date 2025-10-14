@@ -496,6 +496,7 @@ defmodule Lasso.Config.ConfigStore do
     # Convert to ChainConfig struct with proper nested structs
     connection_attrs = Map.get(attrs, :connection) || Map.get(attrs, "connection") || %{}
     failover_attrs = Map.get(attrs, :failover) || Map.get(attrs, "failover") || %{}
+    selection_attrs = Map.get(attrs, :selection) || Map.get(attrs, "selection")
     providers_attrs = Map.get(attrs, :providers) || Map.get(attrs, "providers") || []
 
     %ChainConfig{
@@ -503,7 +504,8 @@ defmodule Lasso.Config.ConfigStore do
       name: Map.get(attrs, :name) || Map.get(attrs, "name") || chain_name,
       providers: Enum.map(providers_attrs, &normalize_provider_config/1),
       connection: normalize_connection_config(connection_attrs),
-      failover: normalize_failover_config(failover_attrs)
+      failover: normalize_failover_config(failover_attrs),
+      selection: normalize_selection_config(selection_attrs)
     }
   end
 
@@ -526,6 +528,76 @@ defmodule Lasso.Config.ConfigStore do
         Map.get(attrs, :backfill_timeout) || Map.get(attrs, "backfill_timeout") || 30_000,
       enabled: Map.get(attrs, :enabled) || Map.get(attrs, "enabled") || true
     }
+  end
+
+  defp normalize_selection_config(nil), do: nil
+
+  defp normalize_selection_config(attrs) when is_map(attrs) do
+    # Parse per-method overrides if present
+    max_lag_per_method =
+      case Map.get(attrs, :max_lag_per_method) || Map.get(attrs, "max_lag_per_method") do
+        nil -> nil
+        method_map when is_map(method_map) -> method_map
+        _ -> nil
+      end
+
+    max_lag_blocks = Map.get(attrs, :max_lag_blocks) || Map.get(attrs, "max_lag_blocks")
+
+    # Validate configuration values
+    validate_lag_config!(max_lag_blocks, max_lag_per_method)
+
+    %ChainConfig.Selection{
+      max_lag_blocks: max_lag_blocks,
+      max_lag_per_method: max_lag_per_method
+    }
+  end
+
+  # Validates lag configuration values, raising on invalid configuration
+  defp validate_lag_config!(max_lag_blocks, max_lag_per_method) do
+    # Validate max_lag_blocks
+    case max_lag_blocks do
+      nil ->
+        :ok
+
+      blocks when is_integer(blocks) and blocks >= 0 ->
+        :ok
+
+      blocks when is_integer(blocks) ->
+        raise ArgumentError,
+              "Invalid max_lag_blocks: #{blocks}. Must be a non-negative integer or nil."
+
+      other ->
+        raise ArgumentError,
+              "Invalid max_lag_blocks type: #{inspect(other)}. Must be an integer or nil."
+    end
+
+    # Validate max_lag_per_method map values
+    case max_lag_per_method do
+      nil ->
+        :ok
+
+      method_map when is_map(method_map) ->
+        Enum.each(method_map, fn {method, lag_value} ->
+          case lag_value do
+            blocks when is_integer(blocks) and blocks >= 0 ->
+              :ok
+
+            blocks when is_integer(blocks) ->
+              raise ArgumentError,
+                    "Invalid max_lag_per_method[#{method}]: #{blocks}. Must be a non-negative integer."
+
+            other ->
+              raise ArgumentError,
+                    "Invalid max_lag_per_method[#{method}] type: #{inspect(other)}. Must be an integer."
+          end
+        end)
+
+      other ->
+        raise ArgumentError,
+              "Invalid max_lag_per_method type: #{inspect(other)}. Must be a map or nil."
+    end
+
+    :ok
   end
 
   defp normalize_provider_config(attrs) when is_map(attrs) do

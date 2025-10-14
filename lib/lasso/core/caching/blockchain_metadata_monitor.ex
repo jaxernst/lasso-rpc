@@ -293,7 +293,6 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
   end
 
   defp handle_probe_results(chain, provider, block_number_result, chain_id_result, latency_ms) do
-
     case block_number_result do
       {:ok, "0x" <> hex} ->
         height = String.to_integer(hex, 16)
@@ -351,22 +350,45 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
   end
 
   defp update_best_known_height(chain, lag_threshold_blocks) do
-    # Get all provider heights from cache
+    # CRITICAL: Only use fresh provider heights to compute best height
+    # Prevents race condition where stale provider data inflates best height
+    # Match BlockchainMetadataCache staleness threshold
+    staleness_threshold_ms = 30_000
+    now = System.system_time(:millisecond)
+
+    # Get all provider heights WITH timestamps
     provider_heights =
       :ets.match(:blockchain_metadata, {{:provider, chain, :"$1", :block_height}, :"$2"})
 
-    if provider_heights != [] do
-      # Find best (highest) known height
+    provider_data =
+      provider_heights
+      |> Enum.map(fn [provider_id, height] ->
+        # Look up the timestamp for this provider height
+        timestamp =
+          case :ets.lookup(:blockchain_metadata, {:provider, chain, provider_id, :updated_at}) do
+            [{_, ts}] -> ts
+            [] -> 0
+          end
+
+        {provider_id, height, timestamp}
+      end)
+      |> Enum.filter(fn {_id, _height, timestamp} ->
+        # Only include fresh data (within staleness threshold)
+        now - timestamp < staleness_threshold_ms
+      end)
+
+    if provider_data != [] do
+      # Find best (highest) known height from FRESH data only
       best_height =
-        provider_heights
-        |> Enum.map(fn [_provider_id, height] -> height end)
+        provider_data
+        |> Enum.map(fn {_id, height, _ts} -> height end)
         |> Enum.max()
 
       # Update cache with best known height
       BlockchainMetadataCache.put_block_height(chain, best_height)
 
-      # Compute and store lag for each provider
-      Enum.each(provider_heights, fn [provider_id, provider_height] ->
+      # Compute and store lag for each provider (only for providers with fresh data)
+      Enum.each(provider_data, fn {provider_id, provider_height, _ts} ->
         lag = provider_height - best_height
         BlockchainMetadataCache.put_provider_lag(chain, provider_id, lag)
 
@@ -382,6 +404,12 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
           )
         end
       end)
+    else
+      # No fresh provider data available - log warning
+      Logger.debug("No fresh provider heights available for best height computation",
+        chain: chain,
+        staleness_threshold_ms: staleness_threshold_ms
+      )
     end
   end
 
