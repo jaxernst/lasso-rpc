@@ -615,52 +615,62 @@ defmodule LassoWeb.NetworkTopology do
   end
 
   defp extract_chain_from_connection_name(name) do
-    name_lower = String.downcase(name)
-
-    cond do
-      String.contains?(name_lower, "ethereum") -> "ethereum"
-      String.contains?(name_lower, "arbitrum") -> "arbitrum"
-      String.contains?(name_lower, "optimism") -> "optimism"
-      # Be more specific for base to avoid matching "blastapi"
-      name_lower =~ ~r/\bbase\b/ -> "base"
-      String.contains?(name_lower, "zksync") -> "zksync"
-      String.contains?(name_lower, "linea") -> "linea"
-      String.contains?(name_lower, "polygon") -> "polygon"
-      String.contains?(name_lower, "mantle") -> "mantle"
-      String.contains?(name_lower, "scroll") -> "scroll"
-      String.contains?(name_lower, "starknet") -> "starknet"
-      String.contains?(name_lower, "immutable") -> "immutable"
-      String.contains?(name_lower, "metis") -> "metis"
-      String.contains?(name_lower, "boba") -> "boba"
-      String.contains?(name_lower, "loopring") -> "loopring"
-      String.contains?(name_lower, "dydx") -> "dydx"
-      String.contains?(name_lower, "zora") -> "zora"
-      String.contains?(name_lower, "blast") -> "blast"
-      String.contains?(name_lower, "mode") -> "mode"
-      String.contains?(name_lower, "fraxtal") -> "fraxtal"
-      String.contains?(name_lower, "manta") -> "manta"
-      String.contains?(name_lower, "opbnb") -> "opbnb"
-      String.contains?(name_lower, "taiko") -> "taiko"
-      String.contains?(name_lower, "kroma") -> "kroma"
-      String.contains?(name_lower, "op_celestia") -> "op_celestia"
-      String.contains?(name_lower, "eclipse") -> "eclipse"
-      String.contains?(name_lower, "lumio") -> "lumio"
-      String.contains?(name_lower, "astria") -> "astria"
-      String.contains?(name_lower, "caldera") -> "caldera"
-      String.contains?(name_lower, "degen") -> "degen"
-      String.contains?(name_lower, "lyra") -> "lyra"
-      String.contains?(name_lower, "aevo") -> "aevo"
-      String.contains?(name_lower, "hyperliquid") -> "hyperliquid"
-      String.contains?(name_lower, "vertex") -> "vertex"
-      String.contains?(name_lower, "drift") -> "drift"
-      String.contains?(name_lower, "jupiter") -> "jupiter"
-      String.contains?(name_lower, "pyth") -> "pyth"
-      String.contains?(name_lower, "chainlink") -> "chainlink"
-      String.contains?(name_lower, "arbitrum_nova") -> "arbitrum_nova"
-      String.contains?(name_lower, "optimism_bedrock") -> "optimism_bedrock"
-      String.contains?(name_lower, "unichain") -> "unichain"
-      true -> "unknown"
+    # Use pattern matching lookup table (ordered by specificity)
+    # This reduces complexity from 42 to 3 and is more maintainable
+    case Enum.find(chain_patterns(), fn {_chain, pattern} -> name =~ pattern end) do
+      {chain, _pattern} -> chain
+      nil -> "unknown"
     end
+  end
+
+  # Chain name pattern matching lookup - ordered by specificity
+  # Must check specific patterns first to avoid false matches
+  defp chain_patterns do
+    [
+      {"arbitrum_nova", ~r/arbitrum[_\s-]?nova/i},
+      {"optimism_bedrock", ~r/optimism[_\s-]?bedrock/i},
+      {"op_celestia", ~r/op[_\s-]?celestia/i},
+      {"polygon_zkevm", ~r/polygon[_\s-]?zkevm/i},
+      # Base needs word boundary to avoid matching "blastapi"
+      {"base", ~r/\bbase\b/i},
+      # General patterns
+      {"ethereum", ~r/ethereum/i},
+      {"arbitrum", ~r/arbitrum/i},
+      {"optimism", ~r/optimism/i},
+      {"zksync", ~r/zksync/i},
+      {"linea", ~r/linea/i},
+      {"polygon", ~r/polygon/i},
+      {"mantle", ~r/mantle/i},
+      {"scroll", ~r/scroll/i},
+      {"starknet", ~r/starknet/i},
+      {"immutable", ~r/immutable/i},
+      {"metis", ~r/metis/i},
+      {"boba", ~r/boba/i},
+      {"loopring", ~r/loopring/i},
+      {"dydx", ~r/dydx/i},
+      {"zora", ~r/zora/i},
+      {"blast", ~r/blast/i},
+      {"mode", ~r/mode/i},
+      {"fraxtal", ~r/fraxtal/i},
+      {"manta", ~r/manta/i},
+      {"opbnb", ~r/opbnb/i},
+      {"taiko", ~r/taiko/i},
+      {"kroma", ~r/kroma/i},
+      {"eclipse", ~r/eclipse/i},
+      {"lumio", ~r/lumio/i},
+      {"astria", ~r/astria/i},
+      {"caldera", ~r/caldera/i},
+      {"degen", ~r/degen/i},
+      {"lyra", ~r/lyra/i},
+      {"aevo", ~r/aevo/i},
+      {"hyperliquid", ~r/hyperliquid/i},
+      {"vertex", ~r/vertex/i},
+      {"drift", ~r/drift/i},
+      {"jupiter", ~r/jupiter/i},
+      {"pyth", ~r/pyth/i},
+      {"chainlink", ~r/chainlink/i},
+      {"unichain", ~r/unichain/i}
+    ]
   end
 
   # Enhanced provider status classes using comprehensive status

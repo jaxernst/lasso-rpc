@@ -105,7 +105,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   @doc """
   Attaches a WebSocket connection pid to an already-registered provider.
-  The pid will be monitored; HTTP-only providers should never call this.
+  The pid will be monitored
   """
   @spec attach_ws_connection(chain_name, provider_id, pid()) :: :ok | {:error, term()}
   def attach_ws_connection(chain_name, provider_id, pid) do
@@ -850,56 +850,61 @@ defmodule Lasso.RPC.ProviderPool do
     state.active_providers
     |> Enum.map(&Map.get(state.providers, &1))
     |> Enum.filter(fn p ->
-      case Map.get(filters, :protocol) do
-        :http ->
-          transport_available?(p, :http, current_time)
+      # Check transport availability
+      transport_ok =
+        case Map.get(filters, :protocol) do
+          :http ->
+            transport_available?(p, :http, current_time)
 
-        :ws ->
-          transport_available?(p, :ws, current_time) and is_pid(ws_connection_pid(p.id))
+          :ws ->
+            transport_available?(p, :ws, current_time) and is_pid(ws_connection_pid(p.id))
 
-        :both ->
-          transport_available?(p, :http, current_time) and
-            transport_available?(p, :ws, current_time)
+          :both ->
+            transport_available?(p, :http, current_time) and
+              transport_available?(p, :ws, current_time)
 
-        _ ->
-          transport_available?(p, :http, current_time) or
-            transport_available?(p, :ws, current_time)
-      end
-    end)
-    |> Enum.filter(fn provider ->
+          _ ->
+            transport_available?(p, :http, current_time) or
+              transport_available?(p, :ws, current_time)
+        end
+
+      # Check circuit breaker state
       include_half_open = Map.get(filters, :include_half_open, false)
 
-      case Map.get(filters, :protocol) do
-        :http ->
-          cb_state = get_cb_state(state.circuit_states, provider.id, :http)
+      circuit_ok =
+        case Map.get(filters, :protocol) do
+          :http ->
+            cb_state = get_cb_state(state.circuit_states, p.id, :http)
 
-          if include_half_open do
-            cb_state != :open
-          else
-            cb_state == :closed
-          end
+            if include_half_open do
+              cb_state != :open
+            else
+              cb_state == :closed
+            end
 
-        :ws ->
-          cb_state = get_cb_state(state.circuit_states, provider.id, :ws)
+          :ws ->
+            cb_state = get_cb_state(state.circuit_states, p.id, :ws)
 
-          if include_half_open do
-            cb_state != :open
-          else
-            cb_state == :closed
-          end
+            if include_half_open do
+              cb_state != :open
+            else
+              cb_state == :closed
+            end
 
-        _ ->
-          http_state = get_cb_state(state.circuit_states, provider.id, :http)
-          ws_state = get_cb_state(state.circuit_states, provider.id, :ws)
+          _ ->
+            http_state = get_cb_state(state.circuit_states, p.id, :http)
+            ws_state = get_cb_state(state.circuit_states, p.id, :ws)
 
-          if include_half_open do
-            # Include if at least one transport is not fully open
-            not (http_state == :open and ws_state == :open)
-          else
-            # Only include if at least one transport is closed
-            http_state == :closed or ws_state == :closed
-          end
-      end
+            if include_half_open do
+              # Include if at least one transport is not fully open
+              not (http_state == :open and ws_state == :open)
+            else
+              # Only include if at least one transport is closed
+              http_state == :closed or ws_state == :closed
+            end
+        end
+
+      transport_ok and circuit_ok
     end)
     |> filter_by_lag(state.chain_name, max_lag_blocks)
     |> Enum.filter(fn provider ->

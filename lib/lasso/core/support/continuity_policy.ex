@@ -13,14 +13,12 @@ defmodule Lasso.RPC.ContinuityPolicy do
           | {:exceeded, pos_integer(), pos_integer()}
   def needed_block_range(last_seen, head, max_backfill_blocks, _policy)
       when is_integer(last_seen) do
-    cond do
-      head <= last_seen + 1 ->
-        {:none}
-
-      true ->
-        from_n = last_seen + 1
-        to_n = min(head, last_seen + max_backfill_blocks)
-        if to_n < head, do: {:exceeded, from_n, to_n}, else: {:range, from_n, to_n}
+    if head <= last_seen + 1 do
+      {:none}
+    else
+      from_n = last_seen + 1
+      to_n = min(head, last_seen + max_backfill_blocks)
+      if to_n < head, do: {:exceeded, from_n, to_n}, else: {:range, from_n, to_n}
     end
   end
 
