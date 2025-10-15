@@ -317,10 +317,9 @@ defmodule Lasso.RPC.RequestPipeline do
   defp execute_with_channel_selection(chain, rpc_request, ctx, transport_override, timeout) do
     method = Map.get(rpc_request, "method")
 
-    # Mark selection start
+    # Mark selection start and get candidate channels
     ctx = RequestContext.mark_selection_start(ctx)
 
-    # Get candidate channels from unified Selection
     channels =
       Selection.select_channels(chain, method,
         strategy: ctx.strategy,
@@ -337,198 +336,243 @@ defmodule Lasso.RPC.RequestPipeline do
 
     case channels do
       [] ->
-        # No channels available with closed circuits - try degraded mode with half-open circuits
-        Logger.info("No closed circuit channels available, attempting degraded mode with half-open circuits",
+        handle_no_channels_available(chain, rpc_request, method, ctx, transport_override, timeout)
+
+      _ ->
+        handle_normal_mode_request(chain, rpc_request, method, ctx, channels, timeout)
+    end
+  end
+
+  # Handles the case when no channels are available with closed circuits
+  defp handle_no_channels_available(chain, rpc_request, method, ctx, transport_override, timeout) do
+    Logger.info("No closed circuit channels available, attempting degraded mode with half-open circuits",
+      chain: chain,
+      method: method
+    )
+
+    :telemetry.execute([:lasso, :failover, :degraded_mode], %{count: 1}, %{
+      chain: chain,
+      method: method
+    })
+
+    degraded_channels =
+      Selection.select_channels(chain, method,
+        strategy: ctx.strategy,
+        transport: transport_override || :both,
+        limit: @max_channel_candidates,
+        include_half_open: true
+      )
+
+    case degraded_channels do
+      [] ->
+        handle_channel_exhaustion(chain, method, ctx, transport_override)
+
+      _ ->
+        handle_degraded_mode_request(
+          chain,
+          rpc_request,
+          method,
+          ctx,
+          degraded_channels,
+          timeout
+        )
+    end
+  end
+
+  # Handles request execution when all circuits are open
+  defp handle_channel_exhaustion(chain, method, ctx, transport_override) do
+    retry_after_ms = calculate_min_recovery_time(chain, transport_override)
+    {error_message, error_data} = build_exhaustion_error_message(method, retry_after_ms, chain)
+
+    jerr =
+      JError.new(-32_000, error_message,
+        category: :provider_error,
+        retriable?: true,
+        data: error_data
+      )
+
+    updated_ctx = RequestContext.record_error(ctx, jerr)
+
+    Logger.warning("Channel exhaustion: all circuits open",
+      chain: chain,
+      method: method,
+      retry_after_ms: retry_after_ms
+    )
+
+    :telemetry.execute([:lasso, :failover, :exhaustion], %{count: 1}, %{
+      chain: chain,
+      method: method,
+      retry_after_ms: retry_after_ms || 0
+    })
+
+    {:error, jerr, updated_ctx}
+  end
+
+  # Builds error message with retry-after hint for channel exhaustion
+  defp build_exhaustion_error_message(method, retry_after_ms, chain) do
+    case retry_after_ms do
+      nil ->
+        message = "No available channels for method: #{method}. All circuit breakers are open."
+        {message, %{}}
+
+      ms when is_integer(ms) and ms > 0 ->
+        seconds = div(ms, 1000)
+
+        message =
+          "No available channels for method: #{method}. " <>
+            "All circuits open, retry after #{seconds}s"
+
+        {message, %{retry_after_ms: ms}}
+
+      _ ->
+        Logger.warning("Invalid recovery time returned: #{inspect(retry_after_ms)}",
           chain: chain,
           method: method
         )
 
-        :telemetry.execute([:lasso, :failover, :degraded_mode], %{count: 1}, %{
-          chain: chain,
-          method: method
-        })
-
-        degraded_channels =
-          Selection.select_channels(chain, method,
-            strategy: ctx.strategy,
-            transport: transport_override || :both,
-            limit: @max_channel_candidates,
-            include_half_open: true
-          )
-
-        case degraded_channels do
-          [] ->
-            # Still no channels - all circuits are fully open
-            # Calculate retry-after hint from circuit breakers
-            retry_after_ms = calculate_min_recovery_time(chain, transport_override)
-
-            {error_message, error_data} =
-              case retry_after_ms do
-                nil ->
-                  # No recovery time available - circuits may be manually controlled
-                  message = "No available channels for method: #{method}. " <>
-                            "All circuit breakers are open."
-                  {message, %{}}
-
-                ms when is_integer(ms) and ms > 0 ->
-                  # Valid recovery time
-                  seconds = div(ms, 1000)
-                  message = "No available channels for method: #{method}. " <>
-                            "All circuits open, retry after #{seconds}s"
-                  {message, %{retry_after_ms: ms}}
-
-                _ ->
-                  # Invalid recovery time (should not happen, but be defensive)
-                  Logger.warning("Invalid recovery time returned: #{inspect(retry_after_ms)}",
-                    chain: chain,
-                    method: method
-                  )
-                  message = "No available channels for method: #{method}. " <>
-                            "All circuit breakers are open."
-                  {message, %{}}
-              end
-
-            jerr = JError.new(-32_000, error_message,
-              category: :provider_error,
-              retriable?: true,
-              data: error_data
-            )
-
-            updated_ctx = RequestContext.record_error(ctx, jerr)
-
-            Logger.warning("Channel exhaustion: all circuits open",
-              chain: chain,
-              method: method,
-              retry_after_ms: retry_after_ms
-            )
-
-            :telemetry.execute([:lasso, :failover, :exhaustion], %{count: 1}, %{
-              chain: chain,
-              method: method,
-              retry_after_ms: retry_after_ms || 0
-            })
-
-            {:error, jerr, updated_ctx}
-
-          _ ->
-            # Found half-open channels - attempt with degraded mode
-            Logger.info("Degraded mode: attempting #{length(degraded_channels)} half-open channels",
-              chain: chain,
-              method: method,
-              channels: Enum.map(degraded_channels, &"#{&1.provider_id}:#{&1.transport}")
-            )
-
-            # Update context to reflect degraded mode selection
-            ctx =
-              RequestContext.mark_selection_end(ctx,
-                candidates: Enum.map(degraded_channels, &"#{&1.provider_id}:#{&1.transport}"),
-                selected: if(length(degraded_channels) > 0, do: List.first(degraded_channels), else: nil)
-              )
-
-            # Mark upstream start and attempt request
-            ctx = RequestContext.mark_upstream_start(ctx)
-
-            case attempt_request_on_channels(degraded_channels, rpc_request, timeout, ctx) do
-              {:ok, result, channel, updated_ctx} ->
-                updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
-                updated_ctx = RequestContext.record_success(updated_ctx, result)
-
-                record_channel_success_metrics(
-                  chain,
-                  channel,
-                  method,
-                  ctx.strategy,
-                  updated_ctx.upstream_latency_ms || 0
-                )
-
-                Logger.info("Degraded mode success via half-open channel",
-                  chain: chain,
-                  method: method,
-                  channel: "#{channel.provider_id}:#{channel.transport}"
-                )
-
-                :telemetry.execute([:lasso, :failover, :degraded_success], %{count: 1}, %{
-                  chain: chain,
-                  method: method,
-                  provider_id: channel.provider_id,
-                  transport: channel.transport
-                })
-
-                {:ok, result, updated_ctx}
-
-              {:error, reason, channel, _ctx1} ->
-                updated_ctx = RequestContext.mark_upstream_end(ctx)
-                final_ctx = RequestContext.record_error(updated_ctx, reason)
-                jerr = normalize_channel_error(reason, "no_channels")
-
-                duration = final_ctx.upstream_latency_ms || 0
-
-                record_channel_failure_metrics(
-                  chain,
-                  channel.provider_id,
-                  method,
-                  ctx.strategy,
-                  jerr,
-                  duration,
-                  channel.transport
-                )
-
-                {:error, jerr, final_ctx}
-
-              {:error, :no_channels_available, _updated_ctx} ->
-                updated_ctx = RequestContext.mark_upstream_end(ctx)
-                final_ctx = RequestContext.record_error(updated_ctx, :no_channels_available)
-                jerr = normalize_channel_error(:no_channels_available, "no_channels")
-                {:error, jerr, final_ctx}
-            end
-        end
-
-      _ ->
-        # Mark upstream start and attempt request
-        ctx = RequestContext.mark_upstream_start(ctx)
-
-        case attempt_request_on_channels(channels, rpc_request, timeout, ctx) do
-          {:ok, result, channel, updated_ctx} ->
-            updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
-            updated_ctx = RequestContext.record_success(updated_ctx, result)
-
-            record_channel_success_metrics(
-              chain,
-              channel,
-              method,
-              ctx.strategy,
-              updated_ctx.upstream_latency_ms || 0
-            )
-
-            {:ok, result, updated_ctx}
-
-          {:error, reason, channel, _ctx1} ->
-            updated_ctx = RequestContext.mark_upstream_end(ctx)
-            final_ctx = RequestContext.record_error(updated_ctx, reason)
-            jerr = normalize_channel_error(reason, "no_channels")
-
-            # If we have upstream timing, report failure with transport
-            duration = final_ctx.upstream_latency_ms || 0
-
-            record_channel_failure_metrics(
-              chain,
-              channel.provider_id,
-              method,
-              ctx.strategy,
-              jerr,
-              duration,
-              channel.transport
-            )
-
-            {:error, jerr, final_ctx}
-
-          {:error, :no_channels_available, _updated_ctx} ->
-            updated_ctx = RequestContext.mark_upstream_end(ctx)
-            final_ctx = RequestContext.record_error(updated_ctx, :no_channels_available)
-            jerr = normalize_channel_error(:no_channels_available, "no_channels")
-            {:error, jerr, final_ctx}
-        end
+        message = "No available channels for method: #{method}. All circuit breakers are open."
+        {message, %{}}
     end
+  end
+
+  # Handles request execution in degraded mode (half-open circuits)
+  defp handle_degraded_mode_request(chain, rpc_request, method, ctx, degraded_channels, timeout) do
+    Logger.info("Degraded mode: attempting #{length(degraded_channels)} half-open channels",
+      chain: chain,
+      method: method,
+      channels: Enum.map(degraded_channels, &"#{&1.provider_id}:#{&1.transport}")
+    )
+
+    # Update context to reflect degraded mode selection
+    ctx =
+      RequestContext.mark_selection_end(ctx,
+        candidates: Enum.map(degraded_channels, &"#{&1.provider_id}:#{&1.transport}"),
+        selected: if(length(degraded_channels) > 0, do: List.first(degraded_channels), else: nil)
+      )
+
+    # Mark upstream start and attempt request
+    ctx = RequestContext.mark_upstream_start(ctx)
+
+    case attempt_request_on_channels(degraded_channels, rpc_request, timeout, ctx) do
+      {:ok, result, channel, updated_ctx} ->
+        handle_degraded_success(chain, method, ctx, result, channel, updated_ctx)
+
+      {:error, reason, channel, _ctx1} ->
+        handle_degraded_failure(chain, method, ctx, reason, channel)
+
+      {:error, :no_channels_available, _updated_ctx} ->
+        handle_request_failure(ctx, :no_channels_available)
+    end
+  end
+
+  # Handles successful request in degraded mode
+  defp handle_degraded_success(chain, method, ctx, result, channel, updated_ctx) do
+    updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
+    updated_ctx = RequestContext.record_success(updated_ctx, result)
+
+    record_channel_success_metrics(
+      chain,
+      channel,
+      method,
+      ctx.strategy,
+      updated_ctx.upstream_latency_ms || 0
+    )
+
+    Logger.info("Degraded mode success via half-open channel",
+      chain: chain,
+      method: method,
+      channel: "#{channel.provider_id}:#{channel.transport}"
+    )
+
+    :telemetry.execute([:lasso, :failover, :degraded_success], %{count: 1}, %{
+      chain: chain,
+      method: method,
+      provider_id: channel.provider_id,
+      transport: channel.transport
+    })
+
+    {:ok, result, updated_ctx}
+  end
+
+  # Handles failed request in degraded mode
+  defp handle_degraded_failure(chain, method, ctx, reason, channel) do
+    updated_ctx = RequestContext.mark_upstream_end(ctx)
+    final_ctx = RequestContext.record_error(updated_ctx, reason)
+    jerr = normalize_channel_error(reason, "no_channels")
+    duration = final_ctx.upstream_latency_ms || 0
+
+    record_channel_failure_metrics(
+      chain,
+      channel.provider_id,
+      method,
+      ctx.strategy,
+      jerr,
+      duration,
+      channel.transport
+    )
+
+    {:error, jerr, final_ctx}
+  end
+
+  # Handles normal mode request execution (with closed circuits)
+  defp handle_normal_mode_request(chain, rpc_request, method, ctx, channels, timeout) do
+    # Mark upstream start and attempt request
+    ctx = RequestContext.mark_upstream_start(ctx)
+
+    case attempt_request_on_channels(channels, rpc_request, timeout, ctx) do
+      {:ok, result, channel, updated_ctx} ->
+        handle_normal_success(chain, method, ctx, result, channel, updated_ctx)
+
+      {:error, reason, channel, _ctx1} ->
+        handle_normal_failure(chain, method, ctx, reason, channel)
+
+      {:error, :no_channels_available, _updated_ctx} ->
+        handle_request_failure(ctx, :no_channels_available)
+    end
+  end
+
+  # Handles successful request in normal mode
+  defp handle_normal_success(chain, method, ctx, result, channel, updated_ctx) do
+    updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
+    updated_ctx = RequestContext.record_success(updated_ctx, result)
+
+    record_channel_success_metrics(
+      chain,
+      channel,
+      method,
+      ctx.strategy,
+      updated_ctx.upstream_latency_ms || 0
+    )
+
+    {:ok, result, updated_ctx}
+  end
+
+  # Handles failed request in normal mode
+  defp handle_normal_failure(chain, method, ctx, reason, channel) do
+    updated_ctx = RequestContext.mark_upstream_end(ctx)
+    final_ctx = RequestContext.record_error(updated_ctx, reason)
+    jerr = normalize_channel_error(reason, "no_channels")
+    duration = final_ctx.upstream_latency_ms || 0
+
+    record_channel_failure_metrics(
+      chain,
+      channel.provider_id,
+      method,
+      ctx.strategy,
+      jerr,
+      duration,
+      channel.transport
+    )
+
+    {:error, jerr, final_ctx}
+  end
+
+  # Handles generic request failures (no channels available)
+  defp handle_request_failure(ctx, reason) do
+    updated_ctx = RequestContext.mark_upstream_end(ctx)
+    final_ctx = RequestContext.record_error(updated_ctx, reason)
+    jerr = normalize_channel_error(reason, "no_channels")
+    {:error, jerr, final_ctx}
   end
 
   defp get_provider_channels(chain, provider_id, transport_override) do

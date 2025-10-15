@@ -63,8 +63,7 @@ defmodule Lasso.RPC.ProviderDirectory do
 
     providers
     |> Enum.reject(&(&1.id in exclude))
-    |> Enum.filter(&supports_protocol?(&1, protocol))
-    |> Enum.filter(&available?(&1))
+    |> Enum.filter(&(supports_protocol?(&1, protocol) and available?(&1)))
   end
 
   defp supports_protocol?(p, :http), do: p.protocols.http

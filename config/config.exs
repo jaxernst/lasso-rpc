@@ -72,7 +72,29 @@ config :tailwind,
   ]
 
 # Logger configuration
-config :logger, :console, format: "$time $metadata[$level] $message\n"
+config :logger, :console,
+  format: "$time $metadata[$level] $message\n",
+  metadata: [
+    :request_id,
+    :chain,
+    :provider_id,
+    :circuit_breaker_id,
+    :reason,
+    :error_category,
+    :channels,
+    :retry_after_ms,
+    :height,
+    :staleness_threshold_ms,
+    :lag_blocks,
+    :threshold,
+    :duration_ms,
+    :providers_probed,
+    :successful,
+    :elapsed_ms,
+    :deadline_ms,
+    :refresh_interval_ms,
+    :lag_threshold_blocks
+  ]
 
 # Environment specific configs
 import_config "#{config_env()}.exs"
