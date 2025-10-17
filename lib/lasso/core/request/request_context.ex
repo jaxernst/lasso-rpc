@@ -81,10 +81,13 @@ defmodule Lasso.RPC.RequestContext do
             error: nil
 
   @doc """
-  Creates a new request context with generated request_id and start_time.
+  Creates a new request context with request_id and start_time.
+
+  If :request_id is provided in opts, it will be used (typically from Phoenix's Plug.RequestId).
+  Otherwise, a new request_id will be generated.
   """
   def new(chain, method, opts \\ []) do
-    request_id = generate_request_id()
+    request_id = Keyword.get(opts, :request_id) || generate_request_id()
     start_time = System.monotonic_time(:microsecond)
 
     %__MODULE__{

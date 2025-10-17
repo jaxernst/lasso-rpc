@@ -2,7 +2,14 @@ import Config
 
 # For development, we configure the endpoint to listen on all interfaces
 config :lasso, LassoWeb.Endpoint,
-  http: [ip: {127, 0, 0, 1}, port: 4000],
+  http: [
+    ip: {127, 0, 0, 1},
+    port: 4000,
+    protocol_options: [
+      max_connections: 1000,
+      idle_timeout: 60_000
+    ]
+  ],
   check_origin: false,
   code_reloader: true,
   debug_errors: false,

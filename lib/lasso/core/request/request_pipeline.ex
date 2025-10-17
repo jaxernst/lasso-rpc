@@ -23,8 +23,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # Configuration constants
   @max_channel_candidates 10
-  @circuit_breaker_timeout_buffer_ms 200
-  @max_failover_attempts 3
+  @max_failover_attempts 4
 
   @doc """
   Execute an RPC request with resilient behavior using transport-agnostic channels.
@@ -63,11 +62,15 @@ defmodule Lasso.RPC.RequestPipeline do
               nil
             end
 
+          # Use Phoenix request_id if provided for consistent tracing
+          request_id = Keyword.get(opts, :request_id)
+
           RequestContext.new(chain, method,
             params_present: params != [] and not is_nil(params),
             params_digest: params_digest,
             transport: transport_override || :http,
-            strategy: strategy
+            strategy: strategy,
+            request_id: request_id
           )
       end
 
@@ -93,6 +96,15 @@ defmodule Lasso.RPC.RequestPipeline do
 
       _ ->
         start_time = System.monotonic_time(:millisecond)
+
+        # Log request start for traceability
+        Logger.info("RPC request started",
+          request_id: ctx.request_id,
+          chain: chain,
+          method: method,
+          timeout_ms: timeout,
+          strategy: strategy
+        )
 
         # Emit telemetry start event
         :telemetry.execute([:lasso, :rpc, :request, :start], %{count: 1}, %{
@@ -345,7 +357,8 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # Handles the case when no channels are available with closed circuits
   defp handle_no_channels_available(chain, rpc_request, method, ctx, transport_override, timeout) do
-    Logger.info("No closed circuit channels available, attempting degraded mode with half-open circuits",
+    Logger.info(
+      "No closed circuit channels available, attempting degraded mode with half-open circuits",
       chain: chain,
       method: method
     )
@@ -516,7 +529,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # Handles normal mode request execution (with closed circuits)
   defp handle_normal_mode_request(chain, rpc_request, method, ctx, channels, timeout) do
-    # Mark upstream start and attempt request
+    # Mark upstream start
     ctx = RequestContext.mark_upstream_start(ctx)
 
     case attempt_request_on_channels(channels, rpc_request, timeout, ctx) do
@@ -647,19 +660,26 @@ defmodule Lasso.RPC.RequestPipeline do
         circuit_breaker_state: :unknown
     }
 
-    # Add small buffer to circuit breaker timeout to allow for GenServer processing
-    # while still respecting the overall timeout constraint
-    cb_timeout = timeout + @circuit_breaker_timeout_buffer_ms
+    # Log provider attempt
+    Logger.debug("Attempting provider",
+      request_id: ctx.request_id,
+      channel: Channel.to_string(channel),
+      method: Map.get(rpc_request, "method"),
+      attempt: ctx.retries + 1,
+      timeout_ms: timeout
+    )
 
     result =
       try do
-        CircuitBreaker.call(cb_id, attempt_fun, cb_timeout)
+        CircuitBreaker.call(cb_id, attempt_fun, timeout)
       catch
         :exit, {:timeout, _} ->
           # GenServer.call timeout - convert to JSONRPC timeout error
-          Logger.warning("Request timeout on channel",
+          Logger.error("Request timeout on channel (GenServer.call)",
+            request_id: ctx.request_id,
             channel: Channel.to_string(channel),
-            timeout: cb_timeout
+            method: Map.get(rpc_request, "method"),
+            timeout: timeout
           )
 
           {:error, JError.new(-32_000, "Request timeout", category: :timeout, retriable?: true)}
@@ -701,8 +721,19 @@ defmodule Lasso.RPC.RequestPipeline do
         # Capture I/O latency from process dictionary (set by HTTP transport)
         ctx =
           case Process.get(:last_io_latency_ms) do
-            nil -> ctx
-            io_ms -> RequestContext.set_upstream_latency(ctx, io_ms)
+            nil ->
+              ctx
+
+            io_ms ->
+              # Log slow requests for diagnostic purposes
+              log_slow_request_if_needed(
+                io_ms,
+                Map.get(rpc_request, "method"),
+                channel,
+                ctx
+              )
+
+              RequestContext.set_upstream_latency(ctx, io_ms)
           end
 
         {:ok, result, channel, ctx}
@@ -1011,6 +1042,72 @@ defmodule Lasso.RPC.RequestPipeline do
   defp extract_error_category(:circuit_open), do: :circuit_open
   defp extract_error_category(_), do: :unknown
 
+  # Logs slow requests based on configured thresholds.
+  # Thresholds:
+  # - ERROR: > 4000ms (4 seconds) - May cause client timeouts
+  # - WARN:  > 2000ms (2 seconds)
+  # - INFO:  > 1000ms (1 second)
+  defp log_slow_request_if_needed(latency_ms, method, channel, ctx) do
+    cond do
+      latency_ms > 4000 ->
+        Logger.error("VERY SLOW request detected (may timeout clients)",
+          request_id: ctx.request_id,
+          method: method,
+          provider: channel.provider_id,
+          transport: channel.transport,
+          chain: ctx.chain,
+          latency_ms: latency_ms,
+          threshold: "4s"
+        )
+
+        :telemetry.execute(
+          [:lasso, :request, :very_slow],
+          %{latency_ms: latency_ms},
+          %{
+            chain: ctx.chain,
+            method: method,
+            provider: channel.provider_id,
+            transport: channel.transport
+          }
+        )
+
+      latency_ms > 2000 ->
+        Logger.warning("Slow request detected",
+          request_id: ctx.request_id,
+          method: method,
+          provider: channel.provider_id,
+          transport: channel.transport,
+          chain: ctx.chain,
+          latency_ms: latency_ms,
+          threshold: "2s"
+        )
+
+        :telemetry.execute(
+          [:lasso, :request, :slow],
+          %{latency_ms: latency_ms},
+          %{
+            chain: ctx.chain,
+            method: method,
+            provider: channel.provider_id,
+            transport: channel.transport
+          }
+        )
+
+      latency_ms > 1000 ->
+        Logger.info("Elevated latency detected",
+          request_id: ctx.request_id,
+          method: method,
+          provider: channel.provider_id,
+          transport: channel.transport,
+          chain: ctx.chain,
+          latency_ms: latency_ms
+        )
+
+      true ->
+        :ok
+    end
+  end
+
   # Calculates the minimum recovery time across all circuit breakers for a chain.
   # Returns the shortest time until any circuit breaker will attempt recovery,
   # or nil if no recovery times are available.
@@ -1019,10 +1116,11 @@ defmodule Lasso.RPC.RequestPipeline do
   # instead of making N sequential calls to each CircuitBreaker.
   @spec calculate_min_recovery_time(String.t(), atom() | nil) :: non_neg_integer() | nil
   defp calculate_min_recovery_time(chain, transport_filter) do
-    transport = case transport_filter do
-      nil -> :both
-      t -> t
-    end
+    transport =
+      case transport_filter do
+        nil -> :both
+        t -> t
+      end
 
     case ProviderPool.get_min_recovery_time(chain, transport: transport, timeout: 2000) do
       {:ok, min_time} ->
@@ -1032,6 +1130,7 @@ defmodule Lasso.RPC.RequestPipeline do
         Logger.warning("Timeout calculating recovery time for chain #{chain}, using default",
           chain: chain
         )
+
         # Default fallback: 60 second retry-after on timeout
         60_000
 
@@ -1040,6 +1139,7 @@ defmodule Lasso.RPC.RequestPipeline do
           chain: chain,
           reason: inspect(reason)
         )
+
         nil
     end
   end

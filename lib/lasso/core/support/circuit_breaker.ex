@@ -74,7 +74,7 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   @spec call(breaker_id, (-> any()), non_neg_integer()) ::
           {:ok, any()} | {:error, term()}
-  def call({chain, provider_id, transport} = id, fun, _timeout \\ 30_000) do
+  def call({chain, provider_id, transport} = id, fun, timeout \\ 30_000) do
     now_ms = System.monotonic_time(:millisecond)
     admit_start_us = System.monotonic_time(:microsecond)
 
@@ -116,11 +116,44 @@ defmodule Lasso.RPC.CircuitBreaker do
 
     case decision do
       {:allow, token} ->
-        raw_result =
+        # Execute function with timeout enforcement
+        task = Task.async(fn ->
           try do
             fun.()
           catch
             kind, error -> {:__trap__, {kind, error}}
+          end
+        end)
+
+        raw_result =
+          case Task.yield(task, timeout) do
+            {:ok, result} ->
+              # Task completed within timeout
+              result
+
+            nil ->
+              # Timeout occurred - kill the task and return timeout error
+              Task.shutdown(task, :brutal_kill)
+
+              Logger.error("Request timeout in circuit breaker",
+                chain: chain,
+                provider_id: provider_id,
+                transport: transport,
+                timeout_ms: timeout
+              )
+
+              :telemetry.execute(
+                [:lasso, :circuit_breaker, :timeout],
+                %{timeout_ms: timeout},
+                %{chain: chain, provider_id: provider_id, transport: transport}
+              )
+
+              {:error,
+               JError.new(-32_000, "Request timeout after #{timeout}ms",
+                 category: :timeout,
+                 retriable?: true,
+                 breaker_penalty?: true
+               )}
           end
 
         report_result =
