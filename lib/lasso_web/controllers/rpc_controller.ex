@@ -29,6 +29,7 @@ defmodule LassoWeb.RPCController do
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Config.ConfigStore
   alias LassoWeb.Plugs.ObservabilityPlug
+  alias Lasso.Config.MethodPolicy
 
   @jsonrpc_version "2.0"
 
@@ -172,7 +173,6 @@ defmodule LassoWeb.RPCController do
   end
 
   defp handle_chain_rpc(conn, chain_name) do
-    # Phoenix has already parsed the JSON body into conn.params
     body = Map.get(conn.params, "_json", conn.params)
 
     case body do
@@ -433,25 +433,34 @@ defmodule LassoWeb.RPCController do
   # Unified forwarding: extracts strategy and optional provider override, delegates to RequestPipeline
   defp forward_rpc_request(chain, method, params, opts) when is_list(opts) do
     with {:ok, strategy} <- extract_strategy(opts) do
+      conn = Keyword.get(opts, :conn)
+
       provider_override =
         case Keyword.get(opts, :provider_override) do
           pid when is_binary(pid) ->
             pid
 
           _ ->
-            case Keyword.get(opts, :conn) do
+            case conn do
               %Plug.Conn{params: %{"provider_override" => pid}} when is_binary(pid) -> pid
               _ -> nil
             end
         end
 
-      pipeline_opts = [
+      # Extract Phoenix request_id to ensure consistent tracing throughout the request lifecycle
+      request_id =
+        case conn do
+          %Plug.Conn{assigns: %{request_id: rid}} when is_binary(rid) -> rid
+          _ -> nil
+        end
+
+      Lasso.RPC.RequestPipeline.execute_via_channels(chain, method, params,
         strategy: strategy,
         provider_override: provider_override,
-        failover_on_override: false
-      ]
-
-      Lasso.RPC.RequestPipeline.execute_via_channels(chain, method, params, pipeline_opts)
+        failover_on_override: false,
+        timeout: MethodPolicy.timeout_for(method),
+        request_id: request_id
+      )
     else
       {:error, reason} ->
         {:error, JError.new(-32_000, "Failed to extract request options: #{reason}")}

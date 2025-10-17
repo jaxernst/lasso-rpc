@@ -31,12 +31,11 @@ defmodule Lasso.Application do
          pools: %{
            # Use :default atom with => syntax to apply to ALL unregistered hosts
            :default => [
-             size: 500,
+             size: 1000,
              # Max connections per pool (per unique host)
              count: 10,
-             # Number of pools for load distribution
              pool_max_idle_time: :timer.seconds(30),
-             conn_opts: [timeout: 30_000]
+             conn_opts: [timeout: 30_000],
            ]
          }},
 
