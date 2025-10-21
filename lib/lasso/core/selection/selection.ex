@@ -85,10 +85,33 @@ defmodule Lasso.RPC.Selection do
       _ ->
         strategy_mod = resolve_strategy_module(ctx.strategy)
         prepared_ctx = strategy_mod.prepare_context(ctx)
-        selected_candidate = strategy_mod.choose(candidates, ctx.method, prepared_ctx)
 
-        case selected_candidate do
-          pid when is_binary(pid) ->
+        channels =
+          candidates
+          |> Enum.flat_map(fn %{id: provider_id, config: provider_config} ->
+            transports =
+              case ctx.protocol do
+                :http -> [:http]
+                :ws -> [:ws]
+                :both -> [:http, :ws]
+              end
+
+            Enum.flat_map(transports, fn t ->
+              case TransportRegistry.get_channel(ctx.chain, provider_id, t,
+                     method: ctx.method,
+                     provider_config: provider_config
+                   ) do
+                {:ok, ch} -> [ch]
+                _ -> []
+              end
+            end)
+          end)
+
+        ordered =
+          apply(strategy_mod, :rank_channels, [channels, ctx.method, prepared_ctx, ctx.chain])
+
+        case List.first(ordered) do
+          %Channel{provider_id: pid} ->
             Logger.debug("Selected provider: #{pid} for #{ctx.chain}.#{ctx.method}")
 
             :telemetry.execute([:lasso, :selection, :success], %{count: 1}, %{
@@ -120,16 +143,38 @@ defmodule Lasso.RPC.Selection do
         candidate_ids = Enum.map(candidates, & &1.id)
         strategy_mod = resolve_strategy_module(ctx.strategy)
         prepared_ctx = strategy_mod.prepare_context(ctx)
-        selected_provider_id = strategy_mod.choose(candidates, ctx.method, prepared_ctx)
 
-        case selected_provider_id do
-          pid when is_binary(pid) ->
+        channels =
+          candidates
+          |> Enum.flat_map(fn %{id: provider_id, config: provider_config} ->
+            transports =
+              case ctx.protocol do
+                :http -> [:http]
+                :ws -> [:ws]
+                :both -> [:http, :ws]
+              end
+
+            Enum.flat_map(transports, fn t ->
+              case TransportRegistry.get_channel(ctx.chain, provider_id, t,
+                     method: ctx.method,
+                     provider_config: provider_config
+                   ) do
+                {:ok, ch} -> [ch]
+                _ -> []
+              end
+            end)
+          end)
+
+        ordered =
+          apply(strategy_mod, :rank_channels, [channels, ctx.method, prepared_ctx, ctx.chain])
+
+        case List.first(ordered) do
+          %Channel{provider_id: pid, transport: transport} ->
             Logger.debug("Selected provider: #{pid} for #{ctx.chain}.#{ctx.method}")
 
-            # Build selection metadata (minimal, no external dependencies)
             metadata = %{
               candidates: candidate_ids,
-              selected: %{id: pid, protocol: ctx.protocol},
+              selected: %{id: pid, protocol: transport},
               reason: build_selection_reason(ctx.strategy)
             }
 
@@ -137,7 +182,7 @@ defmodule Lasso.RPC.Selection do
               chain: ctx.chain,
               method: ctx.method,
               strategy: ctx.strategy,
-              protocol: ctx.protocol,
+              protocol: transport,
               provider_id: pid
             })
 
@@ -153,6 +198,9 @@ defmodule Lasso.RPC.Selection do
   defp resolve_strategy_module(:round_robin), do: Lasso.RPC.Strategies.RoundRobin
   defp resolve_strategy_module(:cheapest), do: Lasso.RPC.Strategies.Cheapest
   defp resolve_strategy_module(:fastest), do: Lasso.RPC.Strategies.Fastest
+
+  defp resolve_strategy_module(:latency_weighted),
+    do: Lasso.RPC.Strategies.LatencyWeighted
 
   @doc """
   Selects the best channels for a method across all available transports.
@@ -187,12 +235,14 @@ defmodule Lasso.RPC.Selection do
       end
 
     max_lag_blocks = get_max_lag_for_method(chain, method)
+
     pool_filters = %{
       protocol: pool_protocol,
       exclude: exclude,
       include_half_open: include_half_open,
       max_lag_blocks: max_lag_blocks
     }
+
     provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
 
     require Logger
@@ -283,9 +333,15 @@ defmodule Lasso.RPC.Selection do
           channels
       end
 
-    capable_channels
-    |> apply_channel_strategy(strategy, method, chain)
-    |> Enum.take(limit)
+    # Strategy delegation: allow strategy modules to rank channels when available.
+    selection_ctx = SelectionContext.new(chain, method, strategy: strategy, protocol: transport)
+    strategy_mod = resolve_strategy_module(strategy)
+    prepared_ctx = strategy_mod.prepare_context(selection_ctx)
+
+    ordered_channels =
+      apply(strategy_mod, :rank_channels, [capable_channels, method, prepared_ctx, chain])
+
+    ordered_channels |> Enum.take(limit)
   end
 
   @doc """
@@ -301,65 +357,8 @@ defmodule Lasso.RPC.Selection do
 
   ## Private Functions
 
-  # Channel-specific strategy application
-
-  defp apply_channel_strategy(channels, :priority, _method, _chain) do
-    # Sort by provider priority (would need to fetch provider configs)
-    # For now, preserve order and prefer HTTP over WebSocket
-    Enum.sort_by(channels, fn channel ->
-      transport_priority =
-        case channel.transport do
-          :http -> 0
-          :ws -> 1
-        end
-
-      # {provider_priority, transport_priority}
-      {0, transport_priority}
-    end)
-  end
-
-  defp apply_channel_strategy(channels, :round_robin, _method, _chain) do
-    # Simple shuffle for round-robin (could be improved with state tracking)
-    Enum.shuffle(channels)
-  end
-
-  defp apply_channel_strategy(channels, :fastest, method, chain) do
-    Enum.sort_by(channels, fn channel ->
-      # Lower score is better
-      perf =
-        Lasso.RPC.Metrics.get_provider_transport_performance(
-          chain,
-          channel.provider_id,
-          method,
-          channel.transport
-        )
-
-      latency_score =
-        case perf do
-          %{latency_ms: ms} when is_number(ms) and ms > 0 -> ms
-          _ -> 10_000
-        end
-
-      # Prefer known performance; unknown gets penalized
-      latency_score
-    end)
-  end
-
-  defp apply_channel_strategy(channels, :cheapest, _method, _chain) do
-    # Sort by cost (would need provider cost configuration)
-    # For now, treat all as equal cost and prefer HTTP
-    Enum.sort_by(channels, fn channel ->
-      case channel.transport do
-        :http -> 0
-        :ws -> 1
-      end
-    end)
-  end
-
-  defp apply_channel_strategy(channels, _strategy, _method, _chain) do
-    # Default: preserve original order
-    channels
-  end
+  # Channel-specific strategy application has been superseded by strategy-provided
+  # rank_channels/4. Legacy branches removed.
 
   # Selection metadata helpers
 
@@ -369,6 +368,7 @@ defmodule Lasso.RPC.Selection do
       :cheapest -> "cost_optimized"
       :priority -> "static_priority"
       :round_robin -> "round_robin_rotation"
+      :latency_weighted -> "latency_weighted_balancing"
     end
   end
 

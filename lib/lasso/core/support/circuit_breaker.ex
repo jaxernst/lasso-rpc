@@ -69,8 +69,10 @@ defmodule Lasso.RPC.CircuitBreaker do
   - Execute fun in the caller process
   - Report result asynchronously (GenServer.cast {:report, token, result})
   """
-  # Timeout for admission check (fast operation, should be <10ms)
-  @admit_timeout 2_000
+  # Timeout for admission check (reduced from 2000ms to 500ms to fail faster under load)
+  # Under normal conditions admission is <10ms, but during GenServer queue backlog this limits
+  # worst-case blocking per channel attempt to 500ms instead of 2 seconds.
+  @admit_timeout 500
 
   @spec call(breaker_id, (-> any()), non_neg_integer()) ::
           {:ok, any()} | {:error, term()}

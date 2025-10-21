@@ -105,18 +105,21 @@ defmodule Lasso.RPC.Transports.HTTP do
            )}
       end
 
+    # Calculate I/O latency
     io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
 
+    # Emit telemetry
     :telemetry.execute(
       [:lasso, :http, :request, :io],
       %{io_ms: io_ms},
       %{provider_id: provider_id, method: method}
     )
 
-    # Store I/O latency in process dictionary for RequestContext to consume
-    Process.put(:last_io_latency_ms, io_ms)
-
-    result
+    # Return latency as third tuple element for both success and error
+    case result do
+      {:ok, response} -> {:ok, response, io_ms}
+      {:error, reason} -> {:error, reason, io_ms}
+    end
   end
 
   @impl true

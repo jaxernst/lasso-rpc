@@ -712,34 +712,28 @@ defmodule Lasso.RPC.RequestPipeline do
       end
 
     case result do
-      {:ok, result} ->
+      # Circuit breaker wraps transport result: {:ok, {:ok, result, io_ms}}
+      {:ok, {:ok, result, io_ms}} ->
         Logger.debug("✓ Request Success via #{Channel.to_string(channel)}",
-          result: result,
-          chain: ctx.chain
+          chain: ctx.chain,
+          io_latency_ms: io_ms
         )
 
-        # Capture I/O latency from process dictionary (set by HTTP transport)
-        ctx =
-          case Process.get(:last_io_latency_ms) do
-            nil ->
-              ctx
+        log_slow_request_if_needed(
+          io_ms,
+          Map.get(rpc_request, "method"),
+          channel,
+          ctx
+        )
 
-            io_ms ->
-              # Log slow requests for diagnostic purposes
-              log_slow_request_if_needed(
-                io_ms,
-                Map.get(rpc_request, "method"),
-                channel,
-                ctx
-              )
-
-              RequestContext.set_upstream_latency(ctx, io_ms)
-          end
+        # Update context with explicit I/O latency from transport
+        ctx = RequestContext.set_upstream_latency(ctx, io_ms)
 
         {:ok, result, channel, ctx}
 
-      {:error, :unsupported_method} ->
-        # Fast fallthrough - try next channel immediately
+      # Circuit breaker wraps transport error: {:ok, {:error, reason, io_ms}}
+      {:ok, {:error, :unsupported_method, _io_ms}} ->
+        # Fast fallthrough - try next channel immediately (no I/O was performed)
         Logger.debug("Method not supported on channel, trying next",
           channel: Channel.to_string(channel),
           method: Map.get(rpc_request, "method")
@@ -747,13 +741,14 @@ defmodule Lasso.RPC.RequestPipeline do
 
         attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
 
-      {:error, reason} ->
-        # Capture I/O latency even on errors (if the request made it to upstream)
-        ctx =
-          case Process.get(:last_io_latency_ms) do
-            nil -> ctx
-            io_ms -> RequestContext.set_upstream_latency(ctx, io_ms)
-          end
+      {:ok, {:error, reason, io_ms}} ->
+        Logger.debug("Request error via #{Channel.to_string(channel)}",
+          reason: inspect(reason),
+          chain: ctx.chain,
+          io_latency_ms: io_ms
+        )
+
+        ctx = RequestContext.set_upstream_latency(ctx, io_ms)
 
         # Determine if this error should trigger fast-fail (immediate failover)
         # or if we've exhausted all channels
@@ -796,6 +791,75 @@ defmodule Lasso.RPC.RequestPipeline do
 
           {:error, reason, channel, ctx}
         end
+
+      # Direct errors from circuit breaker (not from transport)
+      # These include :circuit_open and errors from catch blocks
+      {:error, reason} ->
+        Logger.debug("Circuit breaker error via #{Channel.to_string(channel)}",
+          reason: inspect(reason),
+          chain: ctx.chain
+        )
+
+        # No I/O latency since we never reached the transport
+        ctx = RequestContext.set_upstream_latency(ctx, 0)
+
+        {should_failover, failover_reason} = should_fast_fail_error?(reason, rest_channels)
+
+        if should_failover do
+          Logger.info("Fast-failing to next channel (circuit breaker error)",
+            channel: Channel.to_string(channel),
+            error_category: extract_error_category(reason),
+            reason: failover_reason,
+            remaining_channels: length(rest_channels),
+            chain: ctx.chain
+          )
+
+          :telemetry.execute(
+            [:lasso, :failover, :fast_fail],
+            %{count: 1},
+            %{
+              chain: ctx.chain,
+              provider_id: channel.provider_id,
+              transport: channel.transport,
+              error_category: extract_error_category(reason)
+            }
+          )
+
+          ctx = RequestContext.increment_retries(ctx)
+          attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
+        else
+          Logger.warning("Channel request failed - no failover (circuit breaker)",
+            channel: Channel.to_string(channel),
+            error: inspect(reason),
+            reason: failover_reason,
+            remaining_channels: length(rest_channels),
+            chain: ctx.chain
+          )
+
+          {:error, reason, channel, ctx}
+        end
+
+      :circuit_open ->
+        # Circuit breaker is open - fast fail to next provider
+        Logger.info("Circuit breaker open, fast-failing to next channel",
+          channel: Channel.to_string(channel),
+          chain: ctx.chain
+        )
+
+        ctx = RequestContext.set_upstream_latency(ctx, 0)
+        ctx = RequestContext.increment_retries(ctx)
+
+        :telemetry.execute(
+          [:lasso, :failover, :circuit_open],
+          %{count: 1},
+          %{
+            chain: ctx.chain,
+            provider_id: channel.provider_id,
+            transport: channel.transport
+          }
+        )
+
+        attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
     end
   end
 

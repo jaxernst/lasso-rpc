@@ -265,49 +265,51 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       nil ->
         _ = start_coordinator_for_key(state, key)
 
-        with {:ok, provider_id} <-
-               Selection.select_provider(
-                 SelectionContext.new(state.chain, "eth_subscribe",
-                   strategy: :priority,
-                   protocol: :ws
-                 )
-               ) do
-          case send_upstream_subscribe(state.chain, provider_id, key) do
-            {:ok, upstream_id} ->
-              telemetry_upstream(:subscribe, state.chain, provider_id, key)
+        channels =
+          Selection.select_channels(state.chain, "eth_subscribe",
+            strategy: :priority,
+            transport: :ws,
+            limit: 1
+          )
 
-              entry = %{
-                refcount: 1,
-                primary_provider_id: provider_id,
-                upstream: %{provider_id => upstream_id},
-                markers: %{},
-                dedupe: nil
-              }
+        case List.first(channels) do
+          %Channel{provider_id: provider_id} ->
+            case send_upstream_subscribe(state.chain, provider_id, key) do
+              {:ok, upstream_id} ->
+                telemetry_upstream(:subscribe, state.chain, provider_id, key)
 
-              upstream_index =
-                Map.update(state.upstream_index, provider_id, %{upstream_id => key}, fn m ->
-                  Map.put(m, upstream_id, key)
-                end)
+                entry = %{
+                  refcount: 1,
+                  primary_provider_id: provider_id,
+                  upstream: %{provider_id => upstream_id},
+                  markers: %{},
+                  dedupe: nil
+                }
 
-              new_state = %{
-                state
-                | keys: Map.put(state.keys, key, entry),
-                  upstream_index: upstream_index
-              }
+                upstream_index =
+                  Map.update(state.upstream_index, provider_id, %{upstream_id => key}, fn m ->
+                    Map.put(m, upstream_id, key)
+                  end)
 
-              {new_state, provider_id}
+                new_state = %{
+                  state
+                  | keys: Map.put(state.keys, key, entry),
+                    upstream_index: upstream_index
+                }
 
-            {:error, jerr} ->
-              # Try select next provider; for simplicity, return original state and nil
-              Logger.warning(
-                "Initial upstream subscribe failed for #{inspect(key)} on #{provider_id}: #{inspect(jerr)}"
-              )
+                {new_state, provider_id}
 
-              {state, nil}
-          end
-        else
-          {:error, reason} ->
-            Logger.error("Failed to select provider for #{inspect(key)}: #{inspect(reason)}")
+              {:error, jerr} ->
+                # Try select next provider; for simplicity, return original state and nil
+                Logger.warning(
+                  "Initial upstream subscribe failed for #{inspect(key)} on #{provider_id}: #{inspect(jerr)}"
+                )
+
+                {state, nil}
+            end
+
+          _ ->
+            Logger.error("Failed to select WS channel for #{inspect(key)}")
             {state, nil}
         end
 
@@ -409,10 +411,18 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     Logger.info("Sending upstream eth_subscribe to #{provider_id} with request id #{id}")
 
     with {:ok, channel} <- TransportRegistry.get_channel(chain, provider_id, :ws),
-         {:ok, upstream_id} <- Channel.request(channel, message, 10_000) do
+         {:ok, upstream_id, _io_ms} <- Channel.request(channel, message, 10_000) do
       {:ok, upstream_id}
     else
       {:error, reason} ->
+        {:error,
+         ErrorNormalizer.normalize(reason,
+           provider_id: provider_id,
+           context: :transport,
+           transport: :ws
+         )}
+
+      {:error, reason, _io_ms} ->
         {:error,
          ErrorNormalizer.normalize(reason,
            provider_id: provider_id,
@@ -436,10 +446,18 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     Logger.debug("Sending upstream eth_subscribe (logs) to #{provider_id} with id #{id}")
 
     with {:ok, channel} <- TransportRegistry.get_channel(chain, provider_id, :ws),
-         {:ok, upstream_id} <- Channel.request(channel, message, 10_000) do
+         {:ok, upstream_id, _io_ms} <- Channel.request(channel, message, 10_000) do
       {:ok, upstream_id}
     else
       {:error, reason} ->
+        {:error,
+         ErrorNormalizer.normalize(reason,
+           provider_id: provider_id,
+           context: :transport,
+           transport: :ws
+         )}
+
+      {:error, reason, _io_ms} ->
         {:error,
          ErrorNormalizer.normalize(reason,
            provider_id: provider_id,

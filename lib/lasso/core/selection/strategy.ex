@@ -1,12 +1,16 @@
 defmodule Lasso.RPC.Strategy do
   @moduledoc """
-  Behaviour for provider selection strategies.
+  Behaviour for routing strategies.
 
-  Strategies receive a list of provider candidate structs (as produced by the
-  ProviderPool) and return the selected provider id or nil if no candidates.
+  Strategies provide two things:
+  - A prepared context via `prepare_context/1` for shared knobs and thresholds
+  - A channel ranking via `rank_channels/4`, which orders eligible channels
+
+  Provider selection is derived from channel ranking, so no separate provider
+  `choose/3` is required in the unified API.
   """
 
-  alias Lasso.RPC.{SelectionContext, StrategyContext}
+  alias Lasso.RPC.{SelectionContext, StrategyContext, Channel}
 
   @type candidate :: %{
           required(:id) => String.t(),
@@ -26,6 +30,14 @@ defmodule Lasso.RPC.Strategy do
   """
   @callback prepare_context(selection :: SelectionContext.t()) :: StrategyContext.t()
 
-  @callback choose(candidates :: [candidate], method :: String.t() | nil, ctx :: context()) ::
-              String.t() | nil
+  @doc """
+  Rank eligible channels for a request. Returns the channels ordered from most
+  preferred to least preferred.
+  """
+  @callback rank_channels(
+              channels :: [Channel.t()],
+              method :: String.t(),
+              ctx :: context(),
+              chain :: String.t()
+            ) :: [Channel.t()]
 end

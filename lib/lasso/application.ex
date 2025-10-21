@@ -34,8 +34,11 @@ defmodule Lasso.Application do
              size: 1000,
              # Max connections per pool (per unique host)
              count: 10,
-             pool_max_idle_time: :timer.seconds(30),
-             conn_opts: [timeout: 30_000],
+             pool_max_idle_time: :timer.seconds(60),
+             conn_opts: [
+               timeout: 30_000,
+               idle_timeout: 60_000
+             ]
            ]
          }},
 

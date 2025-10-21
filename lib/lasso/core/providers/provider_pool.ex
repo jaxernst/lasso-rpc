@@ -32,7 +32,9 @@ defmodule Lasso.RPC.ProviderPool do
 
   @type circuit_states :: %{provider_id() => %{http: circuit_state(), ws: circuit_state()}}
   @type circuit_state :: :closed | :open | :half_open
-  @type recovery_times :: %{provider_id() => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}}
+  @type recovery_times :: %{
+          provider_id() => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}
+        }
 
   defstruct [
     :chain_name,
@@ -71,7 +73,14 @@ defmodule Lasso.RPC.ProviderPool do
             ws_policy: Lasso.RPC.HealthPolicy.t()
           }
 
-    @type health_status :: :healthy | :unhealthy | :connecting | :disconnected | :rate_limited | :misconfigured | :degraded
+    @type health_status ::
+            :healthy
+            | :unhealthy
+            | :connecting
+            | :disconnected
+            | :rate_limited
+            | :misconfigured
+            | :degraded
 
     @derive Jason.Encoder
     defstruct [
@@ -321,19 +330,49 @@ defmodule Lasso.RPC.ProviderPool do
   # GenServer callbacks
 
   @impl true
-  def init({chain_name, _chain_config}) do
+  def init({chain_name, chain_config}) do
     Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
 
+    # Pre-populate providers from chain_config to survive restarts
+    # This ensures providers are immediately available even if async Task fails
+    initial_providers =
+      (chain_config.providers || [])
+      |> Enum.map(fn provider ->
+        {provider.id,
+         %ProviderState{
+           id: provider.id,
+           config: provider,
+           pid: nil,
+           status: :connecting,
+           http_status: if(is_binary(Map.get(provider, :url)), do: :connecting, else: nil),
+           ws_status: if(is_binary(Map.get(provider, :ws_url)), do: :connecting, else: nil),
+           last_health_check: System.system_time(:millisecond),
+           consecutive_failures: 0,
+           consecutive_successes: 0,
+           last_error: nil,
+           policy: HealthPolicy.new(),
+           http_policy: HealthPolicy.new(),
+           ws_policy: HealthPolicy.new()
+         }}
+      end)
+      |> Enum.into(%{})
+
     state = %__MODULE__{
       chain_name: chain_name,
-      providers: %{},
-      active_providers: [],
+      providers: initial_providers,
+      active_providers: Map.keys(initial_providers),
       total_requests: 0,
       failed_requests: 0,
       circuit_states: %{},
       recovery_times: %{}
     }
+
+    if map_size(initial_providers) > 0 do
+      Logger.info(
+        "ProviderPool initialized for #{chain_name} with #{map_size(initial_providers)} providers"
+      )
+    end
 
     {:ok, state}
   end
@@ -416,7 +455,9 @@ defmodule Lasso.RPC.ProviderPool do
     providers =
       Enum.map(state.providers, fn {id, provider} ->
         # Normalize circuit_state format - ensure map structure
-        circuit_state_normalized = normalize_circuit_state(Map.get(state.circuit_states, id, :closed))
+        circuit_state_normalized =
+          normalize_circuit_state(Map.get(state.circuit_states, id, :closed))
+
         http_cb_state = get_cb_state(state.circuit_states, id, :http)
         ws_cb_state = get_cb_state(state.circuit_states, id, :ws)
 
@@ -574,6 +615,25 @@ defmodule Lasso.RPC.ProviderPool do
   def handle_cast({:report_failure, provider_id, error, nil}, state),
     do: {:noreply, update_provider_failure(state, provider_id, error)}
 
+  # Async recovery time update from background Task (spawned in update_recovery_time_for_circuit)
+  @impl true
+  def handle_cast({:update_recovery_time_async, provider_id, transport, recovery_time}, state) do
+    # Only update if circuit is still open (avoid stale data from async race)
+    circuit_state = get_cb_state(state.circuit_states, provider_id, transport)
+
+    new_state =
+      if circuit_state in [:open, :half_open] do
+        provider_times = Map.get(state.recovery_times, provider_id, %{http: nil, ws: nil})
+        updated_times = Map.put(provider_times, transport, recovery_time)
+        new_recovery_times = Map.put(state.recovery_times, provider_id, updated_times)
+        %{state | recovery_times: new_recovery_times}
+      else
+        state
+      end
+
+    {:noreply, new_state}
+  end
+
   # Typed WS connection events
   @impl true
   def handle_info({:ws_connected, provider_id}, state) do
@@ -659,6 +719,8 @@ defmodule Lasso.RPC.ProviderPool do
              to in [:closed, :open, :half_open] do
     # Only handle circuit breaker events for THIS chain
     if event_chain == state.chain_name or is_nil(event_chain) do
+      start_time = System.monotonic_time(:millisecond)
+
       Logger.info(
         "ProviderPool[#{state.chain_name}]: CB event #{provider_id}:#{transport} #{from} -> #{to}"
       )
@@ -679,6 +741,19 @@ defmodule Lasso.RPC.ProviderPool do
           # Circuit closed, clear recovery time
           clear_recovery_time(state.recovery_times, provider_id, transport)
         end
+
+      # Instrumentation: log slow circuit event processing (>100ms indicates blocking)
+      duration_ms = System.monotonic_time(:millisecond) - start_time
+
+      if duration_ms > 100 do
+        Logger.warning("SLOW circuit event processing",
+          duration_ms: duration_ms,
+          provider: provider_id,
+          transport: transport,
+          chain: state.chain_name,
+          transition: "#{from} -> #{to}"
+        )
+      end
 
       {:noreply,
        %{state | circuit_states: new_circuit_states, recovery_times: new_recovery_times}}
@@ -1443,23 +1518,35 @@ defmodule Lasso.RPC.ProviderPool do
     Map.put(circuit_states, provider_id, updated_states)
   end
 
-  # Updates recovery time for a specific circuit by querying CircuitBreaker
+  # Updates recovery time for a specific circuit by querying CircuitBreaker asynchronously.
+  # This spawns a Task to avoid blocking the ProviderPool GenServer on CircuitBreaker calls,
+  # which was causing GenServer call cascades and 2+ second delays during circuit thrashing.
   defp update_recovery_time_for_circuit(recovery_times, provider_id, transport, chain) do
     breaker_id = {chain, provider_id, transport}
 
-    recovery_time =
-      try do
-        case CircuitBreaker.get_recovery_time_remaining(breaker_id) do
-          time when is_integer(time) and time > 0 -> time
-          _ -> nil
+    # Spawn async task to query recovery time - don't block ProviderPool
+    Task.start(fn ->
+      recovery_time =
+        try do
+          case CircuitBreaker.get_recovery_time_remaining(breaker_id) do
+            time when is_integer(time) and time > 0 -> time
+            _ -> nil
+          end
+        catch
+          :exit, _ -> nil
         end
-      catch
-        :exit, _ -> nil
-      end
 
-    provider_times = Map.get(recovery_times, provider_id, %{http: nil, ws: nil})
-    updated_times = Map.put(provider_times, transport, recovery_time)
-    Map.put(recovery_times, provider_id, updated_times)
+      # Send result back to ProviderPool as cast (non-blocking)
+      if recovery_time do
+        GenServer.cast(
+          via_name(chain),
+          {:update_recovery_time_async, provider_id, transport, recovery_time}
+        )
+      end
+    end)
+
+    # Return existing recovery times immediately without blocking
+    recovery_times
   end
 
   # Clears recovery time for a specific circuit (when it closes)

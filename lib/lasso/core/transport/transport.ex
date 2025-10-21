@@ -51,12 +51,16 @@ defmodule Lasso.RPC.Transport do
   @doc """
   Performs a single JSON-RPC request over the channel.
 
-  Returns {:ok, response} for successful requests,
-  {:error, :unsupported_method} if the method isn't supported,
-  {:error, reason} for other failures.
+  Always returns a 3-tuple with io_latency_ms as the third element:
+  - {:ok, response, io_latency_ms} for successful requests
+  - {:error, reason, io_latency_ms} for failures
+
+  The io_latency_ms is the actual I/O time spent communicating with the upstream provider,
+  or 0 for pre-flight failures that never reached the provider (like :unsupported_method).
   """
   @callback request(channel, rpc_request, timeout()) ::
-              {:ok, rpc_response} | {:error, :unsupported_method | :timeout | term()}
+              {:ok, rpc_response, non_neg_integer()}
+              | {:error, term(), non_neg_integer()}
 
   @doc """
   Starts a streaming subscription (WebSocket only).

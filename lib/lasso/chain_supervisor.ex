@@ -175,14 +175,12 @@ defmodule Lasso.RPC.ChainSupervisor do
     Supervisor.init(children, strategy: :rest_for_one)
   end
 
-  # Start provider connections after dependencies are ready
   defp start_provider_connections_async(chain_name, chain_config) do
     Enum.each(chain_config.providers, fn provider ->
-      ProviderPool.register_provider(chain_name, provider.id, provider)
       _ = start_provider_supervisor(chain_name, chain_config, provider, [])
     end)
 
-    Logger.info("Initialized #{length(chain_config.providers)} providers for #{chain_name}")
+    Logger.info("Started supervisors for #{length(chain_config.providers)} providers in #{chain_name}")
   end
 
   # Private functions
