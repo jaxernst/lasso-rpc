@@ -240,7 +240,12 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
                 "id" => :rand.uniform(1_000_000)
               }
 
-              result = Channel.request(channel, rpc_request, div(timeout_ms, 2))
+              result =
+                case Channel.request(channel, rpc_request, div(timeout_ms, 2)) do
+                  {:ok, value, _io_ms} -> {:ok, value}
+                  {:error, reason, _io_ms} -> {:error, reason}
+                end
+
               {key, result}
             end,
             timeout: timeout_ms,

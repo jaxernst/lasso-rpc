@@ -119,6 +119,7 @@ defmodule LassoWeb.RPCController do
   def rpc_cheapest(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
   def rpc_priority(conn, params), do: rpc_with_strategy(conn, params, :priority)
   def rpc_round_robin(conn, params), do: rpc_with_strategy(conn, params, :round_robin)
+  def rpc_latency_weighted(conn, params), do: rpc_with_strategy(conn, params, :latency_weighted)
 
   defp rpc_with_strategy(conn, params, strategy_atom) do
     conn

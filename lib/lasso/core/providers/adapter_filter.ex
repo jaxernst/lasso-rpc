@@ -195,13 +195,7 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
     {:ok, all_channels, []}
   end
 
-  defp apply_safety_check(capable, filtered, _all, method) do
-    if filtered != [], do: log_filtered(filtered, method)
+  defp apply_safety_check(capable, filtered, _all, _method) do
     {:ok, capable, filtered}
-  end
-
-  defp log_filtered(filtered, method) do
-    providers = Enum.map_join(filtered, ", ", & &1.provider_id)
-    Logger.info("Filtered #{length(filtered)} providers for #{method}: #{providers}")
   end
 end

@@ -4,6 +4,7 @@ defmodule Lasso.RPC.HttpClient.Finch do
   """
 
   @behaviour Lasso.RPC.HttpClient
+  require Logger
 
   @impl true
   def request(%{url: url} = provider, method, params, opts) do
@@ -28,7 +29,46 @@ defmodule Lasso.RPC.HttpClient.Finch do
       {:error, %Mint.TransportError{reason: :timeout}} ->
         {:error, {:network_error, "Connection timeout"}}
 
+      # Handle NimblePool checkout errors specifically
+      {:error, {:exit, {{:shutdown, :idle_timeout}, {NimblePool, :checkout, _}}}} ->
+        Logger.warning("Finch connection pool idle timeout",
+          provider_url: url,
+          request_id: request_id
+        )
+
+        # Emit telemetry for monitoring
+        :telemetry.execute(
+          [:lasso, :finch, :pool_idle_timeout],
+          %{count: 1},
+          %{provider_url: url, request_id: request_id}
+        )
+
+        {:error, {:network_error, "Connection pool idle timeout"}}
+
+      # Handle other NimblePool errors
+      {:error, {:exit, {{:shutdown, reason}, {NimblePool, :checkout, _}}}} ->
+        Logger.warning("Finch connection pool checkout failed",
+          provider_url: url,
+          request_id: request_id,
+          shutdown_reason: reason
+        )
+
+        # Emit telemetry for monitoring
+        :telemetry.execute(
+          [:lasso, :finch, :pool_checkout_failed],
+          %{count: 1},
+          %{provider_url: url, request_id: request_id, reason: reason}
+        )
+
+        {:error, {:network_error, "Connection pool checkout failed: #{reason}"}}
+
       {:error, reason} ->
+        Logger.debug("Finch request failed",
+          provider_url: url,
+          request_id: request_id,
+          error: inspect(reason)
+        )
+
         {:error, {:network_error, "Request failed: #{inspect(reason)}"}}
     end
   end

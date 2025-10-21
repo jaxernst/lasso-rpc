@@ -20,19 +20,35 @@ chains:
     name: "Ethereum Mainnet"
 
     providers:
-      - id: "alchemy_ethereum"
-        name: "Alchemy Ethereum"
+      # - id: "alchemy_ethereum"
+      #   name: "Alchemy Ethereum"
+      #   priority: 1
+      #   type: "premium"
+      #   url: "https://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   ws_url: "wss://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   api_key_required: true
+      # - id: "ethereum_llamarpc"
+      #   name: "LlamaRPC"
+      #   priority: 2
+      #   type: "public"
+      #   url: "https://eth.llamarpc.com"
+      #   ws_url: "wss://eth.llamarpc.com"
+      #   api_key_required: false
+
+      - id: "ethereum_drpc"
+        name: "DRPC Ethereum"
         priority: 1
-        type: "premium"
-        url: "https://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        ws_url: "wss://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        api_key_required: true
-      - id: "ethereum_llamarpc"
-        name: "LlamaRPC"
+        type: "public"
+        url: "https://lb.drpc.live/ethereum/AsX7SwWUH0vGkFOHPHzUyaGtM9G3rgMR8LnWQrxF2MGT"
+        ws_url: "wss://lb.drpc.live/ethereum/AsX7SwWUH0vGkFOHPHzUyaGtM9G3rgMR8LnWQrxF2MGT"
+        api_key_required: false
+
+      - id: "ethereum_chainstack"
+        name: "Chainstack Ethereum"
         priority: 2
         type: "public"
-        url: "https://eth.llamarpc.com"
-        ws_url: "wss://eth.llamarpc.com"
+        url: "https://ethereum-mainnet.core.chainstack.com/d0c303d34e6d9d682d453f2b0d64b8af"
+        ws_url: "wss://ethereum-mainnet.core.chainstack.com/d0c303d34e6d9d682d453f2b0d64b8af"
         api_key_required: false
 
       - id: "ethereum_cloudflare"
@@ -102,16 +118,16 @@ chains:
     name: "Base Mainnet"
 
     providers:
-      - id: "alchemy_base"
-        name: "Alchemy Base"
-        priority: 1
-        type: "premium"
-        url: "https://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        ws_url: "wss://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        api_key_required: true
-        # Alchemy Base free tier has 10 block limit for eth_getLogs
-        adapter_config:
-          eth_get_logs_block_range: 10
+      # - id: "alchemy_base"
+      #   name: "Alchemy Base"
+      #   priority: 1
+      #   type: "premium"
+      #   url: "https://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   ws_url: "wss://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   api_key_required: true
+      #   # Alchemy Base free tier has 10 block limit for eth_getLogs
+      #   adapter_config:
+      #     eth_get_logs_block_range: 10
 
       - id: "base_llamarpc"
         name: "LlamaRPC Base"

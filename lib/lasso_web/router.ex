@@ -68,6 +68,8 @@ defmodule LassoWeb.Router do
     # Strategy-specific endpoints for different routing approaches
     # Use fastest provider based on latency
     post("/fastest/:chain_id", RPCController, :rpc_fastest)
+    # Latency-weighted randomized balancer
+    post("/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
     # Use cheapest provider (round-robin between free providers)
     post("/cheapest/:chain_id", RPCController, :rpc_cheapest)
     # Use priority-ordered providers

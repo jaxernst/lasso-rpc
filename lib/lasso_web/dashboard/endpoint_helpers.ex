@@ -20,6 +20,11 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
           description: "Routes to fastest provider based on real-time latency"
         },
         %{
+          name: "Latency-Weighted (Throughput)",
+          url: "#{base_url}/rpc/latency-weighted/#{chain_id}",
+          description: "Weighted random across providers favoring low latency/high success"
+        },
+        %{
           name: "Leaderboard (Performance-Based)",
           url: "#{base_url}/rpc/leaderboard/#{chain_id}",
           description: "Routes using racing-based performance scores"

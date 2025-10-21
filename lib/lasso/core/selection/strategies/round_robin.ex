@@ -12,23 +12,20 @@ defmodule Lasso.RPC.Strategies.RoundRobin do
 
     total_requests =
       case ProviderPool.get_status(chain) do
-        {:ok, %{stats: %{total_requests: tr}}} -> tr
+        {:ok, %{total_requests: tr}} when is_integer(tr) -> tr
+        {:ok, status} when is_map(status) -> Map.get(status, :total_requests, 0)
         _ -> base_ctx.total_requests || 0
       end
 
     %{base_ctx | total_requests: total_requests}
   end
 
+  @doc """
+  Strategy-provided channel ranking: random shuffle per call (legacy behavior).
+  """
   @impl true
-  def choose(candidates, _method, ctx) do
-    total_requests = ctx.total_requests || 0
-
-    candidates
-    |> Enum.sort_by(& &1.id)
-    |> Enum.at(rem(total_requests, max(length(candidates), 1)))
-    |> case do
-      nil -> nil
-      provider -> provider.id
-    end
+  def rank_channels(channels, _method, ctx, _chain) do
+    _ = ctx
+    Enum.shuffle(channels)
   end
 end

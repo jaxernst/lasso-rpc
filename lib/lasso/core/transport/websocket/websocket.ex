@@ -92,20 +92,37 @@ defmodule Lasso.RPC.Transports.WebSocket do
       request_id: request_id
     )
 
-    case WSConnection.request(provider_id, method, params, timeout, request_id) do
-      {:ok, result} ->
-        {:ok, result}
+    # Start timing for I/O latency measurement
+    io_start_us = System.monotonic_time(:microsecond)
 
-      {:error, %JError{} = jerr} ->
-        {:error, jerr}
+    result =
+      case WSConnection.request(provider_id, method, params, timeout, request_id) do
+        {:ok, result} ->
+          {:ok, result}
 
-      {:error, other} ->
-        {:error,
-         ErrorNormalizer.normalize(other,
-           provider_id: provider_id,
-           context: :transport,
-           transport: :ws
-         )}
+        {:error, %JError{} = jerr} ->
+          {:error, jerr}
+
+        {:error, other} ->
+          {:error,
+           ErrorNormalizer.normalize(other,
+             provider_id: provider_id,
+             context: :transport,
+             transport: :ws
+           )}
+      end
+
+    io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
+
+    :telemetry.execute(
+      [:lasso, :websocket, :request, :io],
+      %{io_ms: io_ms},
+      %{provider_id: provider_id, method: method}
+    )
+
+    case result do
+      {:ok, response} -> {:ok, response, io_ms}
+      {:error, reason} -> {:error, reason, io_ms}
     end
   end
 
