@@ -6,6 +6,18 @@ Living backlog of high-impact improvements. Active features are prioritized at t
 
 ## Triage + Backlog
 
+@STATE_CONSISTENCY_MONITORING.md
+
+Provider health and performance gossiping
+
+- Use BEAM clustering to communicate node to node about provider health issues
+  - Can communicate to the Lasso network when providers appear unhealthy
+  - Cluster-level circuit breakers
+  - Need to be careful about
+
+Periodic and randomly selected 'racing' requests sent to a 2/3 upstream providers to check consensus (state, gossip, or history). Client can either get back from the first result or
+wait for 2/3 consensus before returning the result (will return an error if consensus fails). Would have to figure out how to deal with to failover in these situations. Consensus checks can collect valuable provider health feedback with very little overhead. This could be useful for critcial state or gossip and could yield some valuable selection/routing strategies
+
 - Transport channels should use 'lazy' creation, and should be created at startup and actively monitored
   - Mostly due to the concern of channels being slo to open or failing to open
   - (Bug) When channels get created, it will try to create with both http and ws even if there is no ws_url configured, resulting in a warning:
