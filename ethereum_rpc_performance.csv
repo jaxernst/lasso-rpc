@@ -1,0 +1,202 @@
+method,provider_id,provider_name,transport_type,success_rate,p50_latency_ms,p90_latency_ms,p95_latency_ms,p99_latency_ms,avg_latency_ms,total_calls,last_updated
+eth_blockNumber,0xrpc_ethereum,0xRPC Ethereum,ws,1,190,295,295,321,217.09,11,-576459014942
+eth_blockNumber,alchemy_ethereum,Alchemy Ethereum,ws,1,50,74,74,81,55.23,13,-576458998247
+eth_blockNumber,ethereum_chainstack,Chainstack Ethereum,ws,1,114,132,305,305,132.1,10,-576458964711
+eth_blockNumber,ethereum_drpc,DRPC Ethereum,ws,1,31,42,42,57,35.18,11,-576459013693
+eth_blockNumber,ethereum_llamarpc,LlamaRPC,ws,1,109,162,318,338,134.74,19,-576458961590
+eth_blockNumber,ethereum_publicnode,PublicNode Ethereum,ws,1,109,117,123,123,112.83,6,-576458990209
+eth_blockNumber,0xrpc_ethereum,0xRPC Ethereum,http,1,570,585,685,685,449.75,8,-576459407540
+eth_blockNumber,alchemy_ethereum,Alchemy Ethereum,http,1,85,167,212,212,108.7,10,-576459632644
+eth_blockNumber,ethereum_chainstack,Chainstack Ethereum,http,1,145,232,232,248,162.73,11,-576458968508
+eth_blockNumber,ethereum_drpc,DRPC Ethereum,http,1,44,65,116,116,52.89,9,-576459390556
+eth_blockNumber,flashbots_ethereum,Flashbots Ethereum,http,1,102,194,209,295,132.94,16,-576458968123
+eth_blockNumber,ethereum_llamarpc,LlamaRPC,http,1,104,130,130,161,111.85,13,-576459401884
+eth_blockNumber,ethereum_merkle,Merkle Ethereum,http,1,104,251,251,254,128.67,12,-576458983027
+eth_blockNumber,ethereum_publicnode,PublicNode Ethereum,http,1,111,262,262,351,136.47,15,-576458961305
+eth_call,0xrpc_ethereum,0xRPC Ethereum,ws,1,194,237,242,242,208.2,10,-576458986090
+eth_call,alchemy_ethereum,Alchemy Ethereum,ws,1,54,110,110,134,65.21,14,-576458978854
+eth_call,ethereum_chainstack,Chainstack Ethereum,ws,1,125,182,200,200,143.14,7,-576459376785
+eth_call,ethereum_drpc,DRPC Ethereum,ws,1,40,202,202,207,75.67,12,-576458985880
+eth_call,ethereum_llamarpc,LlamaRPC,ws,1,107,130,130,142,111.64,11,-576458975814
+eth_call,ethereum_publicnode,PublicNode Ethereum,ws,1,113,206,206,206,143.67,3,-576458981207
+eth_call,0xrpc_ethereum,0xRPC Ethereum,http,1,194,574,593,595,272.5,22,-576458960732
+eth_call,alchemy_ethereum,Alchemy Ethereum,http,1,101,164,164,210,116.77,13,-576458982967
+eth_call,ethereum_chainstack,Chainstack Ethereum,http,1,130,164,208,208,142.8,10,-576458971986
+eth_call,ethereum_drpc,DRPC Ethereum,http,1,45,221,224,224,84.2,10,-576458976800
+eth_call,flashbots_ethereum,Flashbots Ethereum,http,1,119,206,206,218,147.86,14,-576458994829
+eth_call,ethereum_llamarpc,LlamaRPC,http,1,103,111,111,115,103.29,21,-576458967222
+eth_call,ethereum_merkle,Merkle Ethereum,http,1,120,166,231,231,137.25,8,-576459393707
+eth_call,ethereum_publicnode,PublicNode Ethereum,http,1,205,337,337,394,242.25,12,-576458963514
+eth_estimateGas,0xrpc_ethereum,0xRPC Ethereum,ws,1,192,266,330,330,222,7,-576458990305
+eth_estimateGas,alchemy_ethereum,Alchemy Ethereum,ws,1,61,116,131,133,74,16,-576458961173
+eth_estimateGas,ethereum_chainstack,Chainstack Ethereum,ws,1,123,145,147,254,129.76,21,-576459410793
+eth_estimateGas,ethereum_drpc,DRPC Ethereum,ws,1,78,81,92,106,67.69,16,-576458978677
+eth_estimateGas,ethereum_llamarpc,LlamaRPC,ws,1,104,131,131,152,109.57,14,-576458981513
+eth_estimateGas,ethereum_publicnode,PublicNode Ethereum,ws,1,195,195,195,195,195,1,-576459434312
+eth_estimateGas,0xrpc_ethereum,0xRPC Ethereum,http,1,198,203,609,719,250.59,17,-576458969230
+eth_estimateGas,alchemy_ethereum,Alchemy Ethereum,http,1,102,192,192,243,117.43,14,-576458960290
+eth_estimateGas,ethereum_chainstack,Chainstack Ethereum,http,1,139,162,192,192,149,8,-576458990858
+eth_estimateGas,ethereum_cloudflare,Cloudflare Ethereum,http,1,195,321,321,363,205,13,-576458971604
+eth_estimateGas,ethereum_drpc,DRPC Ethereum,http,1,56,130,218,342,85.81,21,-576458979669
+eth_estimateGas,flashbots_ethereum,Flashbots Ethereum,http,1,123,224,263,263,154.7,10,-576458963698
+eth_estimateGas,ethereum_llamarpc,LlamaRPC,http,1,106,147,147,266,119,14,-576458976616
+eth_estimateGas,ethereum_merkle,Merkle Ethereum,http,1,114,273,273,474,171.08,12,-576458991308
+eth_estimateGas,ethereum_publicnode,PublicNode Ethereum,http,1,198,328,328,333,245.31,13,-576459000731
+eth_feeHistory,0xrpc_ethereum,0xRPC Ethereum,ws,1,190,226,242,242,204.63,8,-576458983295
+eth_feeHistory,alchemy_ethereum,Alchemy Ethereum,ws,1,59,125,150,150,73.7,10,-576458997075
+eth_feeHistory,ethereum_chainstack,Chainstack Ethereum,ws,1,127,157,168,338,140.69,16,-576458967411
+eth_feeHistory,ethereum_drpc,DRPC Ethereum,ws,1,201,224,224,226,156.14,14,-576459002841
+eth_feeHistory,ethereum_llamarpc,LlamaRPC,ws,1,107,124,124,127,110.07,14,-576458990305
+eth_feeHistory,0xrpc_ethereum,0xRPC Ethereum,http,1,209,579,657,703,315.63,16,-576458964701
+eth_feeHistory,alchemy_ethereum,Alchemy Ethereum,http,1,93,115,115,190,101.36,11,-576459004412
+eth_feeHistory,ethereum_chainstack,Chainstack Ethereum,http,1,140,200,200,266,153.33,15,-576459002983
+eth_feeHistory,ethereum_drpc,DRPC Ethereum,http,1,79,214,294,548,125.53,17,-576458979580
+eth_feeHistory,flashbots_ethereum,Flashbots Ethereum,http,1,123,206,226,892,171.8,20,-576458965313
+eth_feeHistory,ethereum_llamarpc,LlamaRPC,http,1,107,156,156,233,121.79,14,-576458980905
+eth_feeHistory,ethereum_merkle,Merkle Ethereum,http,1,104,226,226,335,132.79,14,-576458972625
+eth_feeHistory,ethereum_publicnode,PublicNode Ethereum,http,1,221,322,322,323,239,14,-576458972138
+eth_gasPrice,0xrpc_ethereum,0xRPC Ethereum,ws,1,188,289,342,342,223.38,8,-576458984580
+eth_gasPrice,alchemy_ethereum,Alchemy Ethereum,ws,1,57,89,102,221,72.44,18,-576458995881
+eth_gasPrice,ethereum_chainstack,Chainstack Ethereum,ws,1,121,148,162,279,134.19,16,-576458978506
+eth_gasPrice,ethereum_drpc,DRPC Ethereum,ws,1,41,46,46,58,42.45,11,-576458985678
+eth_gasPrice,ethereum_llamarpc,LlamaRPC,ws,1,110,133,133,190,117.87,15,-576458961013
+eth_gasPrice,ethereum_publicnode,PublicNode Ethereum,ws,1,219,232,232,232,214.33,3,-576459019727
+eth_gasPrice,0xrpc_ethereum,0xRPC Ethereum,http,1,200,589,596,607,314.76,17,-576458959332
+eth_gasPrice,alchemy_ethereum,Alchemy Ethereum,http,1,86,151,287,287,120.1,10,-576458969835
+eth_gasPrice,ethereum_chainstack,Chainstack Ethereum,http,1,166,179,191,191,159.17,6,-576458980325
+eth_gasPrice,ethereum_drpc,DRPC Ethereum,http,1,47,85,85,472,81.36,14,-576458975555
+eth_gasPrice,flashbots_ethereum,Flashbots Ethereum,http,1,98,106,106,229,107.31,13,-576458988923
+eth_gasPrice,ethereum_llamarpc,LlamaRPC,http,1,106,188,194,195,126.89,18,-576458982760
+eth_gasPrice,ethereum_merkle,Merkle Ethereum,http,1,105,119,135,135,109.43,7,-576458980820
+eth_gasPrice,ethereum_publicnode,PublicNode Ethereum,http,1,191,206,267,267,201.75,8,-576458981222
+eth_getBalance,0xrpc_ethereum,0xRPC Ethereum,ws,1,187,238,238,422,205.57,21,-576458986475
+eth_getBalance,alchemy_ethereum,Alchemy Ethereum,ws,1,56,69,69,240,67.47,15,-576458961867
+eth_getBalance,ethereum_chainstack,Chainstack Ethereum,ws,1,122,166,166,282,140.21,14,-576458964981
+eth_getBalance,ethereum_drpc,DRPC Ethereum,ws,1,67,216,219,326,102.56,16,-576458970274
+eth_getBalance,ethereum_llamarpc,LlamaRPC,ws,1,109,122,131,131,111,9,-576458960613
+eth_getBalance,ethereum_publicnode,PublicNode Ethereum,ws,1,146,215,215,215,180.5,2,-576459012209
+eth_getBalance,0xrpc_ethereum,0xRPC Ethereum,http,1,194,577,577,610,317.38,13,-576458962325
+eth_getBalance,alchemy_ethereum,Alchemy Ethereum,http,1,91,129,197,257,106.35,20,-576458960298
+eth_getBalance,ethereum_chainstack,Chainstack Ethereum,http,1,150,190,190,242,154.73,15,-576458975701
+eth_getBalance,ethereum_drpc,DRPC Ethereum,http,1,51,315,315,329,98.86,14,-576458977162
+eth_getBalance,flashbots_ethereum,Flashbots Ethereum,http,1,121,219,219,261,140.71,14,-576458960298
+eth_getBalance,ethereum_llamarpc,LlamaRPC,http,1,103,117,117,132,105,14,-576458981615
+eth_getBalance,ethereum_merkle,Merkle Ethereum,http,1,111,232,233,251,141.47,17,-576458982706
+eth_getBalance,ethereum_publicnode,PublicNode Ethereum,http,1,197,285,286,366,210,16,-576458962833
+eth_getBlockByHash,0xrpc_ethereum,0xRPC Ethereum,ws,1,478,544,3407,3407,870.14,7,-576458996913
+eth_getBlockByHash,alchemy_ethereum,Alchemy Ethereum,ws,1,70,113,122,125,79.44,16,-576458960953
+eth_getBlockByHash,ethereum_chainstack,Chainstack Ethereum,ws,1,193,216,216,222,196.83,12,-576458975522
+eth_getBlockByHash,ethereum_drpc,DRPC Ethereum,ws,1,50,52,104,104,55,10,-576458963080
+eth_getBlockByHash,ethereum_llamarpc,LlamaRPC,ws,1,116,163,163,288,134.38,13,-576458962209
+eth_getBlockByHash,ethereum_publicnode,PublicNode Ethereum,ws,1,154,313,313,313,194.33,3,-576459016509
+eth_getBlockByHash,0xrpc_ethereum,0xRPC Ethereum,http,1,383,386,412,412,383.33,9,-576459376603
+eth_getBlockByHash,alchemy_ethereum,Alchemy Ethereum,http,1,103,154,211,211,119.4,10,-576458981008
+eth_getBlockByHash,ethereum_chainstack,Chainstack Ethereum,http,1,154,255,268,268,173,10,-576458965170
+eth_getBlockByHash,ethereum_cloudflare,Cloudflare Ethereum,http,1,183,254,372,372,211.38,8,-576458969083
+eth_getBlockByHash,ethereum_drpc,DRPC Ethereum,http,1,93,216,227,227,121.4,10,-576458968115
+eth_getBlockByHash,flashbots_ethereum,Flashbots Ethereum,http,1,127,197,197,226,144.92,13,-576458995496
+eth_getBlockByHash,ethereum_llamarpc,LlamaRPC,http,1,113,146,181,188,121.26,19,-576458964617
+eth_getBlockByHash,ethereum_merkle,Merkle Ethereum,http,1,122,154,259,259,139.11,9,-576458974103
+eth_getBlockByHash,ethereum_publicnode,PublicNode Ethereum,http,1,285,302,364,431,243.32,22,-576458996435
+eth_getBlockByNumber,0xrpc_ethereum,0xRPC Ethereum,ws,1,371,398,2840,2840,577.67,9,-576458978047
+eth_getBlockByNumber,alchemy_ethereum,Alchemy Ethereum,ws,1,79,102,133,139,85.25,16,-576458974393
+eth_getBlockByNumber,ethereum_chainstack,Chainstack Ethereum,ws,1,188,210,221,276,178.1,21,-576458962794
+eth_getBlockByNumber,ethereum_drpc,DRPC Ethereum,ws,1,57,88,88,197,69.36,14,-576458963463
+eth_getBlockByNumber,ethereum_llamarpc,LlamaRPC,ws,1,121,169,169,174,127.75,12,-576458971797
+eth_getBlockByNumber,ethereum_publicnode,PublicNode Ethereum,ws,1,337,337,337,337,337,1,-576460744553
+eth_getBlockByNumber,0xrpc_ethereum,0xRPC Ethereum,http,1,400,788,863,953,504.65,17,-576458991444
+eth_getBlockByNumber,alchemy_ethereum,Alchemy Ethereum,http,1,95,168,200,237,118.38,16,-576458966545
+eth_getBlockByNumber,ethereum_chainstack,Chainstack Ethereum,http,1,143,245,245,277,163.85,13,-576458960691
+eth_getBlockByNumber,ethereum_drpc,DRPC Ethereum,http,1,95,119,119,150,94.75,12,-576458971263
+eth_getBlockByNumber,flashbots_ethereum,Flashbots Ethereum,http,1,125,170,171,171,131.56,9,-576459001981
+eth_getBlockByNumber,ethereum_llamarpc,LlamaRPC,http,1,112,124,182,226,121.39,18,-576458968408
+eth_getBlockByNumber,ethereum_merkle,Merkle Ethereum,http,1,124,267,278,298,157.82,17,-576458974603
+eth_getBlockByNumber,ethereum_publicnode,PublicNode Ethereum,http,1,282,426,469,469,285.5,10,-576458960109
+eth_getCode,0xrpc_ethereum,0xRPC Ethereum,ws,1,190,275,275,289,207.5,14,-576458980227
+eth_getCode,alchemy_ethereum,Alchemy Ethereum,ws,1,53,116,116,118,69.42,12,-576458972473
+eth_getCode,ethereum_chainstack,Chainstack Ethereum,ws,1,125,146,154,154,128.38,8,-576458967097
+eth_getCode,ethereum_drpc,DRPC Ethereum,ws,1,52,102,208,214,73.59,22,-576458958565
+eth_getCode,ethereum_llamarpc,LlamaRPC,ws,1,110,179,195,236,127.21,19,-576458985341
+eth_getCode,ethereum_publicnode,PublicNode Ethereum,ws,1,214,263,323,323,240.67,6,-576459015427
+eth_getCode,0xrpc_ethereum,0xRPC Ethereum,http,1,204,574,588,654,330.56,18,-576458964826
+eth_getCode,alchemy_ethereum,Alchemy Ethereum,http,1,93,140,163,216,107.88,16,-576458966126
+eth_getCode,ethereum_chainstack,Chainstack Ethereum,http,1,142,162,172,172,144.33,9,-576458971000
+eth_getCode,ethereum_drpc,DRPC Ethereum,http,1,81,114,192,192,85.8,10,-576458967507
+eth_getCode,flashbots_ethereum,Flashbots Ethereum,http,1,126,142,214,214,140.5,6,-576458978893
+eth_getCode,ethereum_llamarpc,LlamaRPC,http,1,109,134,157,170,116,20,-576458962246
+eth_getCode,ethereum_merkle,Merkle Ethereum,http,1,110,233,252,383,138.94,17,-576458963698
+eth_getCode,ethereum_publicnode,PublicNode Ethereum,http,1,214,339,339,348,245,12,-576459390090
+eth_getLogs,ethereum_chainstack,Chainstack Ethereum,http,0,0,0,0,0,0,91,-576458955859
+eth_getLogs,ethereum_drpc,DRPC Ethereum,http,0,0,0,0,0,0,3,-576460711754
+eth_getStorageAt,0xrpc_ethereum,0xRPC Ethereum,ws,1,185,2945,2945,4628,847.73,11,-576458997093
+eth_getStorageAt,alchemy_ethereum,Alchemy Ethereum,ws,1,65,97,97,113,70.83,12,-576458962765
+eth_getStorageAt,ethereum_chainstack,Chainstack Ethereum,ws,1,120,147,384,384,147.4,10,-576458997307
+eth_getStorageAt,ethereum_drpc,DRPC Ethereum,ws,1,39,43,338,338,69,10,-576459379986
+eth_getStorageAt,ethereum_llamarpc,LlamaRPC,ws,1,103,118,118,119,104.42,12,-576458992714
+eth_getStorageAt,ethereum_publicnode,PublicNode Ethereum,ws,1,146,171,171,171,143.67,3,-576460720450
+eth_getStorageAt,0xrpc_ethereum,0xRPC Ethereum,http,1,192,616,616,669,343.64,14,-576459004736
+eth_getStorageAt,alchemy_ethereum,Alchemy Ethereum,http,1,84,110,116,241,99.31,16,-576458966347
+eth_getStorageAt,ethereum_chainstack,Chainstack Ethereum,http,1,148,192,198,198,155.14,7,-576458960269
+eth_getStorageAt,ethereum_drpc,DRPC Ethereum,http,1,76,206,219,219,116,10,-576459011228
+eth_getStorageAt,flashbots_ethereum,Flashbots Ethereum,http,1,118,214,256,256,151.11,9,-576458968702
+eth_getStorageAt,ethereum_llamarpc,LlamaRPC,http,1,98,139,158,215,114.19,16,-576458969681
+eth_getStorageAt,ethereum_merkle,Merkle Ethereum,http,1,108,229,282,308,139.32,19,-576458968319
+eth_getStorageAt,ethereum_publicnode,PublicNode Ethereum,http,1,199,230,287,388,212.53,17,-576458983430
+eth_getTransactionByHash,0xrpc_ethereum,0xRPC Ethereum,ws,1,197,374,4763,4763,676.7,10,-576458982521
+eth_getTransactionByHash,alchemy_ethereum,Alchemy Ethereum,ws,1,51,106,106,108,63.92,12,-576458991157
+eth_getTransactionByHash,ethereum_chainstack,Chainstack Ethereum,ws,1,122,145,234,234,137.38,8,-576458989405
+eth_getTransactionByHash,ethereum_drpc,DRPC Ethereum,ws,1,80,85,85,91,81.17,12,-576458992844
+eth_getTransactionByHash,ethereum_llamarpc,LlamaRPC,ws,1,100,116,119,119,104.11,9,-576458960274
+eth_getTransactionByHash,0xrpc_ethereum,0xRPC Ethereum,http,1,191,209,210,575,216.5,18,-576458961824
+eth_getTransactionByHash,alchemy_ethereum,Alchemy Ethereum,http,1,87,149,153,153,101.4,10,-576459393123
+eth_getTransactionByHash,ethereum_chainstack,Chainstack Ethereum,http,1,164,279,294,298,181.47,17,-576458969557
+eth_getTransactionByHash,ethereum_cloudflare,Cloudflare Ethereum,http,1,276,454,454,457,289.54,13,-576458983561
+eth_getTransactionByHash,ethereum_drpc,DRPC Ethereum,http,1,81,92,127,158,82.38,16,-576458970589
+eth_getTransactionByHash,flashbots_ethereum,Flashbots Ethereum,http,1,126,218,218,279,143.36,14,-576458988598
+eth_getTransactionByHash,ethereum_llamarpc,LlamaRPC,http,1,114,287,287,413,158.27,11,-576459006906
+eth_getTransactionByHash,ethereum_merkle,Merkle Ethereum,http,1,127,235,235,245,147.45,11,-576458960265
+eth_getTransactionByHash,ethereum_publicnode,PublicNode Ethereum,http,1,144,164,190,190,148.33,9,-576458977880
+eth_getTransactionCount,0xrpc_ethereum,0xRPC Ethereum,ws,1,190,202,202,202,190.8,5,-576459417829
+eth_getTransactionCount,alchemy_ethereum,Alchemy Ethereum,ws,1,136,171,171,173,142.55,11,-576458997094
+eth_getTransactionCount,ethereum_chainstack,Chainstack Ethereum,ws,1,136,162,210,287,149.27,22,-576458965104
+eth_getTransactionCount,ethereum_drpc,DRPC Ethereum,ws,1,54,82,84,85,59.84,19,-576458963578
+eth_getTransactionCount,ethereum_llamarpc,LlamaRPC,ws,1,106,137,141,169,112.83,18,-576458979826
+eth_getTransactionCount,ethereum_publicnode,PublicNode Ethereum,ws,1,185,185,185,185,185,1,-576459019235
+eth_getTransactionCount,0xrpc_ethereum,0xRPC Ethereum,http,1,200,233,233,584,235.91,11,-576458960030
+eth_getTransactionCount,alchemy_ethereum,Alchemy Ethereum,http,1,164,207,207,248,180.83,12,-576459400428
+eth_getTransactionCount,ethereum_chainstack,Chainstack Ethereum,http,1,163,313,313,354,206.91,11,-576458965458
+eth_getTransactionCount,ethereum_drpc,DRPC Ethereum,http,1,82,115,115,165,89.42,12,-576458982229
+eth_getTransactionCount,flashbots_ethereum,Flashbots Ethereum,http,1,120,191,191,193,137.92,12,-576458974503
+eth_getTransactionCount,ethereum_llamarpc,LlamaRPC,http,1,115,271,272,272,156.89,9,-576458974507
+eth_getTransactionCount,ethereum_merkle,Merkle Ethereum,http,1,116,248,248,283,144.27,11,-576458966700
+eth_getTransactionCount,ethereum_publicnode,PublicNode Ethereum,http,1,264,450,450,611,276.62,13,-576458964336
+eth_getTransactionReceipt,0xrpc_ethereum,0xRPC Ethereum,ws,1,227,344,369,369,256.2,10,-576459013830
+eth_getTransactionReceipt,alchemy_ethereum,Alchemy Ethereum,ws,1,50,61,61,82,53.69,13,-576459383660
+eth_getTransactionReceipt,ethereum_chainstack,Chainstack Ethereum,ws,1,128,154,154,162,130,11,-576458968613
+eth_getTransactionReceipt,ethereum_drpc,DRPC Ethereum,ws,1,47,70,70,82,51.73,11,-576458973766
+eth_getTransactionReceipt,ethereum_llamarpc,LlamaRPC,ws,1,103,123,123,229,114.75,12,-576458964525
+eth_getTransactionReceipt,ethereum_publicnode,PublicNode Ethereum,ws,1,220,342,342,342,281,2,-576459007299
+eth_getTransactionReceipt,0xrpc_ethereum,0xRPC Ethereum,http,1,216,591,591,636,265.6,15,-576458973326
+eth_getTransactionReceipt,alchemy_ethereum,Alchemy Ethereum,http,1,96,164,168,229,111.81,16,-576458983154
+eth_getTransactionReceipt,ethereum_chainstack,Chainstack Ethereum,http,1,148,232,232,261,169.5,12,-576458973759
+eth_getTransactionReceipt,ethereum_cloudflare,Cloudflare Ethereum,http,1,273,512,512,607,298.83,12,-576458988666
+eth_getTransactionReceipt,ethereum_drpc,DRPC Ethereum,http,1,71,90,130,130,73.22,9,-576458980227
+eth_getTransactionReceipt,flashbots_ethereum,Flashbots Ethereum,http,1,123,202,202,336,154.75,12,-576458963290
+eth_getTransactionReceipt,ethereum_llamarpc,LlamaRPC,http,1,110,171,250,250,131.1,10,-576459387366
+eth_getTransactionReceipt,ethereum_merkle,Merkle Ethereum,http,1,106,219,219,352,132.79,14,-576458965772
+eth_getTransactionReceipt,ethereum_publicnode,PublicNode Ethereum,http,1,159,194,232,232,158.78,9,-576458976388
+eth_maxPriorityFeePerGas,0xrpc_ethereum,0xRPC Ethereum,ws,1,191,359,359,359,231.77,13,-576458976628
+eth_maxPriorityFeePerGas,alchemy_ethereum,Alchemy Ethereum,ws,1,84,130,130,187,85.47,15,-576458971682
+eth_maxPriorityFeePerGas,ethereum_chainstack,Chainstack Ethereum,ws,1,116,148,148,153,120.18,11,-576458972916
+eth_maxPriorityFeePerGas,ethereum_drpc,DRPC Ethereum,ws,1,44,99,99,208,62.25,12,-576458967272
+eth_maxPriorityFeePerGas,ethereum_llamarpc,LlamaRPC,ws,1,108,135,135,156,113.27,11,-576458965320
+eth_maxPriorityFeePerGas,ethereum_publicnode,PublicNode Ethereum,ws,1,113,135,272,272,139.5,6,-576459012209
+eth_maxPriorityFeePerGas,0xrpc_ethereum,0xRPC Ethereum,http,1,210,624,624,628,345.73,11,-576459399421
+eth_maxPriorityFeePerGas,alchemy_ethereum,Alchemy Ethereum,http,1,91,107,317,317,123.57,7,-576458961612
+eth_maxPriorityFeePerGas,ethereum_chainstack,Chainstack Ethereum,http,1,144,184,184,195,148.23,13,-576459020312
+eth_maxPriorityFeePerGas,ethereum_cloudflare,Cloudflare Ethereum,http,0,0,0,0,0,0,14,-576458967762
+eth_maxPriorityFeePerGas,ethereum_drpc,DRPC Ethereum,http,1,80,244,244,419,135.91,11,-576458963902
+eth_maxPriorityFeePerGas,flashbots_ethereum,Flashbots Ethereum,http,1,119,194,194,252,138.55,11,-576458969410
+eth_maxPriorityFeePerGas,ethereum_llamarpc,LlamaRPC,http,1,106,149,149,156,113.62,13,-576458965920
+eth_maxPriorityFeePerGas,ethereum_merkle,Merkle Ethereum,http,1,142,245,271,376,175.88,16,-576458984063
+eth_maxPriorityFeePerGas,ethereum_publicnode,PublicNode Ethereum,http,1,118,224,263,281,159.44,16,-576458967842

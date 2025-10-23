@@ -96,6 +96,26 @@ defmodule LassoWeb.MetricsController do
         }
       end)
 
+    # Get detailed per-method RPC performance metrics
+    rpc_methods = Map.get(realtime_stats, :rpc_methods, [])
+    provider_ids = Enum.map(provider_configs, & &1.id)
+
+    # Collect detailed performance data organized by provider
+    rpc_performance_by_provider = collect_rpc_performance_by_provider(
+      chain_name,
+      provider_ids,
+      rpc_methods,
+      provider_configs
+    )
+
+    # Collect detailed performance data organized by method
+    rpc_performance_by_method = collect_rpc_performance_by_method(
+      chain_name,
+      provider_ids,
+      rpc_methods,
+      provider_configs
+    )
+
     # Build comprehensive response
     %{
       chain: chain_name,
@@ -109,7 +129,9 @@ defmodule LassoWeb.MetricsController do
       },
       chain_performance: chain_performance,
       providers: provider_metrics,
-      rpc_methods: Map.get(realtime_stats, :rpc_methods, []),
+      rpc_methods: rpc_methods,
+      rpc_performance_by_provider: rpc_performance_by_provider,
+      rpc_performance_by_method: rpc_performance_by_method,
       last_updated: Map.get(realtime_stats, :last_updated, System.system_time(:millisecond))
     }
   end
@@ -128,4 +150,77 @@ defmodule LassoWeb.MetricsController do
       provider -> Map.get(provider, :name, provider_id)
     end
   end
+
+  defp collect_rpc_performance_by_provider(chain_name, provider_ids, rpc_methods, provider_configs) do
+    Enum.map(provider_ids, fn provider_id ->
+      method_metrics =
+        rpc_methods
+        |> Enum.map(fn method ->
+          collect_method_performance(chain_name, provider_id, method)
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      %{
+        provider_id: provider_id,
+        provider_name: get_provider_name(provider_id, provider_configs),
+        methods: method_metrics
+      }
+    end)
+    |> Enum.reject(fn provider -> Enum.empty?(provider.methods) end)
+  end
+
+  defp collect_rpc_performance_by_method(chain_name, provider_ids, rpc_methods, provider_configs) do
+    rpc_methods
+    |> Enum.map(fn method ->
+      provider_metrics =
+        provider_ids
+        |> Enum.map(fn provider_id ->
+          case collect_method_performance(chain_name, provider_id, method) do
+            nil -> nil
+            metrics ->
+              Map.merge(metrics, %{
+                provider_id: provider_id,
+                provider_name: get_provider_name(provider_id, provider_configs)
+              })
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      if Enum.empty?(provider_metrics) do
+        nil
+      else
+        %{
+          method: method,
+          providers: provider_metrics
+        }
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp collect_method_performance(chain_name, provider_id, method) do
+    case BenchmarkStore.get_rpc_method_performance_with_percentiles(chain_name, provider_id, method) do
+      nil ->
+        nil
+
+      metrics ->
+        %{
+          method: method,
+          avg_latency_ms: round_float(metrics.avg_duration_ms, 2),
+          p50_latency_ms: metrics.percentiles.p50,
+          p90_latency_ms: metrics.percentiles.p90,
+          p95_latency_ms: metrics.percentiles.p95,
+          p99_latency_ms: metrics.percentiles.p99,
+          success_rate: round_float(metrics.success_rate, 4),
+          total_calls: metrics.total_calls,
+          last_updated: metrics.last_updated
+        }
+    end
+  end
+
+  defp round_float(nil, _precision), do: nil
+  defp round_float(value, precision) when is_float(value) or is_integer(value) do
+    Float.round(value / 1, precision)
+  end
+  defp round_float(value, _precision), do: value
 end
