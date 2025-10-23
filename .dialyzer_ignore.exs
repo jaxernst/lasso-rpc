@@ -7,7 +7,6 @@
   # MockProvider is test-only utility with intentional type flexibility
   ~r"lib/lasso_battle/mock_provider.ex:91.*call",
   ~r"lib/lasso_battle/mock_provider.ex:78.*no_return",
-  ~r"lib/lasso_battle/mock_provider.ex:195.*unused_fun",
 
   # BenchmarkStore function handles all cases correctly despite warning
   ~r"lib/lasso/core/benchmarking/benchmark_store_adapter.ex:117.*no_return"

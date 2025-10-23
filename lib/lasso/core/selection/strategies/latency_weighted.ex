@@ -27,19 +27,16 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
   def prepare_context(selection) do
     base = StrategyContext.new(selection)
 
+    # Return base StrategyContext with populated optional fields
+    # Strategy-specific params (beta, ms_floor, explore_floor) are fetched
+    # directly in rank_channels to maintain type safety
     %{
       base
-      | # Numeric parameters for weight shaping
-        min_calls:
+      | min_calls:
           base.min_calls || Application.get_env(:lasso, :lw_min_calls, @default_min_calls),
         min_success_rate:
           base.min_success_rate || Application.get_env(:lasso, :lw_min_sr, @default_min_sr)
     }
-    |> Map.merge(%{
-      beta: Application.get_env(:lasso, :lw_beta, @default_beta),
-      ms_floor: Application.get_env(:lasso, :lw_ms_floor, @default_ms_floor),
-      explore_floor: Application.get_env(:lasso, :lw_explore_floor, @default_explore_floor)
-    })
   end
 
   @doc """
@@ -47,11 +44,14 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
   """
   @impl true
   def rank_channels(channels, method, ctx, chain) do
-    beta = Map.get(ctx, :beta, 1.0)
-    ms_floor = Map.get(ctx, :ms_floor, 50.0)
-    min_calls = Map.get(ctx, :min_calls, 3)
-    min_sr = Map.get(ctx, :min_success_rate, 0.85)
-    explore_floor = Map.get(ctx, :explore_floor, 0.05)
+    # Fetch strategy-specific tuning params from app config
+    beta = Application.get_env(:lasso, :lw_beta, @default_beta)
+    ms_floor = Application.get_env(:lasso, :lw_ms_floor, @default_ms_floor)
+    explore_floor = Application.get_env(:lasso, :lw_explore_floor, @default_explore_floor)
+
+    # Use context fields populated in prepare_context
+    min_calls = ctx.min_calls || @default_min_calls
+    min_sr = ctx.min_success_rate || @default_min_sr
 
     weight_fn = fn ch ->
       case Lasso.RPC.Metrics.get_provider_transport_performance(

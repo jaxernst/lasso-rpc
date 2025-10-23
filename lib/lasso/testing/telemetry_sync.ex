@@ -17,13 +17,13 @@ defmodule Lasso.Testing.TelemetrySync do
       {:ok, collector} = TelemetrySync.attach_collector([:lasso, :request, :completed])
 
       # Now execute the action that generates telemetry
-      {:ok, result} = RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [])
+      {:ok, result} = RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [], %Lasso.RPC.RequestOptions{strategy: :round_robin, timeout_ms: 30_000})
 
       # Wait for the event we collected
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1000)
 
       # INCORRECT: Execute first, attach second
-      {:ok, result} = RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [])
+      {:ok, result} = RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [], %Lasso.RPC.RequestOptions{strategy: :round_robin, timeout_ms: 30_000})
       {:ok, collector} = TelemetrySync.attach_collector([:lasso, :request, :completed])
       TelemetrySync.await_event(collector, timeout: 1000)  # Always times out!
   """
@@ -181,13 +181,22 @@ defmodule Lasso.Testing.TelemetrySync do
       {:ok, measurements, metadata} =
         TelemetrySync.collect_event(
           [:lasso, :request, :completed],
-          fn -> RequestPipeline.execute_via_channels(chain, "eth_blockNumber", []) end,
+          fn ->
+            RequestPipeline.execute_via_channels(
+              chain,
+              "eth_blockNumber",
+              [],
+              %Lasso.RPC.RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+            )
+          end,
           match: [method: "eth_blockNumber"],
           timeout: 1000
         )
   """
   @spec collect_event(event_name(), (-> any()), keyword()) ::
-          {:ok, measurements(), metadata()} | {:ok, [{measurements(), metadata()}]} | {:error, :timeout}
+          {:ok, measurements(), metadata()}
+          | {:ok, [{measurements(), metadata()}]}
+          | {:error, :timeout}
   def collect_event(event_name, action_fn, opts \\ []) when is_function(action_fn, 0) do
     {:ok, collector} = attach_collector(event_name, opts)
 
@@ -213,7 +222,15 @@ defmodule Lasso.Testing.TelemetrySync do
 
       # Must be called AFTER attaching collector but BEFORE request
       {:ok, collector} = TelemetrySync.attach_request_collector(method: "eth_blockNumber")
-      {:ok, result} = RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [])
+
+      {:ok, result} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          %Lasso.RPC.RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+        )
+
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector)
   """
   def attach_request_collector(opts \\ []) do

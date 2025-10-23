@@ -55,7 +55,8 @@ defmodule Lasso.Test.LassoIntegrationCase do
         StreamCoordinator,
         UpstreamSubscriptionPool,
         ClientSubscriptionRegistry,
-        RequestPipeline
+        RequestPipeline,
+        RequestOptions
       }
 
       # Mark as async: false by default for integration tests
@@ -309,7 +310,16 @@ defmodule Lasso.Test.LassoIntegrationCase do
       """
       defp execute_rpc(method, params, opts \\ []) do
         chain = Keyword.get(opts, :chain, get_test_chain())
-        RequestPipeline.execute_via_channels(chain, method, params, opts)
+
+        request_opts = %RequestOptions{
+          transport: Keyword.get(opts, :transport),
+          strategy: Keyword.get(opts, :strategy, :round_robin),
+          provider_override: Keyword.get(opts, :provider_override),
+          failover_on_override: Keyword.get(opts, :failover_on_override, false),
+          timeout_ms: Keyword.get(opts, :timeout, 30_000)
+        }
+
+        RequestPipeline.execute_via_channels(chain, method, params, request_opts)
       end
 
       @doc """

@@ -192,6 +192,7 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       test_id: test_id
     } do
       alias Lasso.RPC.RequestPipeline
+      alias Lasso.RPC.RequestOptions
 
       # Use mock provider for deterministic testing
       assert {:ok, ^test_id} =
@@ -215,9 +216,7 @@ defmodule Lasso.Integration.DynamicProvidersTest do
           @test_chain,
           "eth_blockNumber",
           [],
-          provider_override: test_id,
-          strategy: :priority,
-          timeout: 5_000
+          %RequestOptions{provider_override: test_id, strategy: :priority, timeout_ms: 5_000}
         )
 
       # Assert happy path - mock should succeed
@@ -234,6 +233,7 @@ defmodule Lasso.Integration.DynamicProvidersTest do
 
     test "can route requests without provider override (mock)", %{test_id: test_id} do
       alias Lasso.RPC.RequestPipeline
+      alias Lasso.RPC.RequestOptions
 
       # Add mock provider that will be selected by strategy
       assert {:ok, ^test_id} =
@@ -259,8 +259,7 @@ defmodule Lasso.Integration.DynamicProvidersTest do
           @test_chain,
           "eth_blockNumber",
           [],
-          strategy: :priority,
-          timeout: 5_000
+          %RequestOptions{strategy: :priority, timeout_ms: 5_000}
         )
 
       assert {:ok, block_number} = result

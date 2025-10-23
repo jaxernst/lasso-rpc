@@ -18,7 +18,7 @@ defmodule Lasso.RPC.SelectionContext do
     :timeout
   ]
 
-  @type strategy :: :fastest | :cheapest | :priority | :round_robin
+  @type strategy :: :fastest | :cheapest | :priority | :round_robin | :latency_weighted
   @type protocol :: :http | :ws | :both
 
   @type t :: %__MODULE__{
@@ -57,27 +57,34 @@ defmodule Lasso.RPC.SelectionContext do
   """
   @spec validate(t()) :: {:ok, t()} | {:error, String.t()}
   def validate(%__MODULE__{} = ctx) do
-    cond do
-      is_nil(ctx.chain) or ctx.chain == "" ->
-        {:error, "Chain name is required"}
-
-      is_nil(ctx.method) or ctx.method == "" ->
-        {:error, "Method name is required"}
-
-      ctx.strategy not in [:fastest, :cheapest, :priority, :round_robin] ->
-        {:error, "Invalid strategy: #{inspect(ctx.strategy)}"}
-
-      ctx.protocol not in [:http, :ws, :both] ->
-        {:error, "Invalid protocol: #{inspect(ctx.protocol)}"}
-
-      not is_list(ctx.exclude) ->
-        {:error, "Exclude must be a list of provider IDs"}
-
-      ctx.timeout <= 0 ->
-        {:error, "Timeout must be positive"}
-
-      true ->
-        {:ok, ctx}
+    with :ok <- validate_chain(ctx.chain),
+         :ok <- validate_method(ctx.method),
+         :ok <- validate_strategy(ctx.strategy),
+         :ok <- validate_protocol(ctx.protocol),
+         :ok <- validate_exclude(ctx.exclude),
+         :ok <- validate_timeout(ctx.timeout) do
+      {:ok, ctx}
     end
   end
+
+  defp validate_chain(chain) when is_binary(chain) and chain != "", do: :ok
+  defp validate_chain(_), do: {:error, "Chain name is required"}
+
+  defp validate_method(method) when is_binary(method) and method != "", do: :ok
+  defp validate_method(_), do: {:error, "Method name is required"}
+
+  defp validate_strategy(strategy)
+       when strategy in [:fastest, :cheapest, :priority, :round_robin, :latency_weighted],
+       do: :ok
+
+  defp validate_strategy(strategy), do: {:error, "Invalid strategy: #{inspect(strategy)}"}
+
+  defp validate_protocol(protocol) when protocol in [:http, :ws, :both], do: :ok
+  defp validate_protocol(protocol), do: {:error, "Invalid protocol: #{inspect(protocol)}"}
+
+  defp validate_exclude(exclude) when is_list(exclude), do: :ok
+  defp validate_exclude(_), do: {:error, "Exclude must be a list of provider IDs"}
+
+  defp validate_timeout(timeout) when is_integer(timeout) and timeout > 0, do: :ok
+  defp validate_timeout(_), do: {:error, "Timeout must be positive"}
 end

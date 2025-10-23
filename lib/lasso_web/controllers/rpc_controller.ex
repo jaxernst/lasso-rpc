@@ -30,26 +30,12 @@ defmodule LassoWeb.RPCController do
   alias Lasso.Config.ConfigStore
   alias LassoWeb.Plugs.ObservabilityPlug
   alias Lasso.Config.MethodPolicy
+  alias Lasso.Config.MethodConstraints
+  alias Lasso.RPC.RequestOptions.Builder, as: RequestOptionsBuilder
 
   @jsonrpc_version "2.0"
 
-  @ws_only_methods [
-    "eth_subscribe",
-    "eth_unsubscribe"
-  ]
-
-  # Additional HTTP disallowed methods (stateful or account management)
-  @http_disallowed_methods [
-    "eth_sendRawTransaction",
-    "eth_sendTransaction",
-    "personal_sign",
-    "eth_sign",
-    "eth_signTransaction",
-    "eth_accounts",
-    "txpool_content",
-    "txpool_inspect",
-    "txpool_status"
-  ]
+  @type transport :: :http | :ws | :both
 
   @max_batch_requests Application.compile_env(:lasso, :max_batch_requests, 50)
 
@@ -70,29 +56,10 @@ defmodule LassoWeb.RPCController do
       chain_id ->
         case resolve_chain_name(chain_id) do
           {:ok, chain_name} ->
-            # Check if strategy was already assigned by strategy-specific endpoint
-            strategy_atom =
-              case conn.assigns[:provider_strategy] do
-                nil ->
-                  # No strategy assigned yet, check URL params (for backward compatibility)
-                  strategy_str = params["strategy"]
+            strategy = strategy_from(conn, params)
+            conn = assign(conn, :provider_strategy, strategy)
 
-                  case strategy_str do
-                    "priority" -> :priority
-                    "round_robin" -> :round_robin
-                    "fastest" -> :fastest
-                    "cheapest" -> :cheapest
-                    _ -> default_provider_strategy()
-                  end
-
-                existing_strategy ->
-                  # Strategy already assigned by endpoint-specific handler
-                  existing_strategy
-              end
-
-            conn = assign(conn, :provider_strategy, strategy_atom)
-
-            maybe_publish_strategy_event(chain_name, strategy_atom)
+            maybe_publish_strategy_event(chain_name, strategy)
 
             handle_chain_rpc(conn, chain_name)
 
@@ -275,121 +242,7 @@ defmodule LassoWeb.RPCController do
 
   defp validate_json_rpc_request(_), do: {:error, JError.new(-32_600, "Invalid Request")}
 
-  # Block and transaction queries
-  defp process_json_rpc_request(
-         %{"method" => "eth_getLogs", "params" => [filter]},
-         chain,
-         conn
-       ) do
-    Logger.debug("Getting logs", chain: chain)
-    forward_rpc_request(chain, "eth_getLogs", [filter], conn: conn)
-  end
-
-  defp process_json_rpc_request(
-         %{"method" => "eth_getBlockByNumber", "params" => [block_number, include_transactions]},
-         chain,
-         conn
-       ) do
-    Logger.debug("Getting block by number", chain: chain)
-
-    forward_rpc_request(chain, "eth_getBlockByNumber", [block_number, include_transactions],
-      conn: conn
-    )
-  end
-
-  defp process_json_rpc_request(
-         %{"method" => "eth_getBlockByHash", "params" => [block_hash, include_transactions]},
-         chain,
-         conn
-       ) do
-    Logger.debug("Getting block by hash", chain: chain)
-
-    forward_rpc_request(chain, "eth_getBlockByHash", [block_hash, include_transactions],
-      conn: conn
-    )
-  end
-
-  defp process_json_rpc_request(%{"method" => "eth_blockNumber", "params" => []}, chain, conn) do
-    Logger.debug("Getting block number", chain: chain)
-    forward_rpc_request(chain, "eth_blockNumber", [], conn: conn)
-  end
-
-  # Account and contract queries
-  defp process_json_rpc_request(
-         %{"method" => "eth_getBalance", "params" => [address, block]},
-         chain,
-         conn
-       ) do
-    Logger.debug("Getting balance", chain: chain)
-    forward_rpc_request(chain, "eth_getBalance", [address, block], conn: conn)
-  end
-
-  defp process_json_rpc_request(
-         %{"method" => "eth_getTransactionCount", "params" => [address, block]},
-         chain,
-         conn
-       ) do
-    Logger.debug("Getting transaction count", chain: chain)
-    forward_rpc_request(chain, "eth_getTransactionCount", [address, block], conn: conn)
-  end
-
-  defp process_json_rpc_request(
-         %{"method" => "eth_getCode", "params" => [address, block]},
-         chain,
-         conn
-       ) do
-    Logger.debug("Getting contract code", chain: chain)
-    forward_rpc_request(chain, "eth_getCode", [address, block], conn: conn)
-  end
-
-  # Contract interaction queries
-  defp process_json_rpc_request(
-         %{"method" => "eth_call", "params" => [call_object, block]},
-         chain,
-         conn
-       ) do
-    Logger.debug("Making contract call", chain: chain)
-    forward_rpc_request(chain, "eth_call", [call_object, block], conn: conn)
-  end
-
-  defp process_json_rpc_request(
-         %{"method" => "eth_estimateGas", "params" => [call_object, block]},
-         chain,
-         conn
-       ) do
-    Logger.debug("Estimating gas", chain: chain)
-    forward_rpc_request(chain, "eth_estimateGas", [call_object, block], conn: conn)
-  end
-
-  # Gas and fee queries
-  defp process_json_rpc_request(%{"method" => "eth_gasPrice", "params" => []}, chain, conn) do
-    Logger.debug("Getting gas price", chain: chain)
-    forward_rpc_request(chain, "eth_gasPrice", [], conn: conn)
-  end
-
-  defp process_json_rpc_request(
-         %{"method" => "eth_maxPriorityFeePerGas", "params" => []},
-         chain,
-         conn
-       ) do
-    Logger.debug("Getting max priority fee", chain: chain)
-    forward_rpc_request(chain, "eth_maxPriorityFeePerGas", [], conn: conn)
-  end
-
-  defp process_json_rpc_request(
-         %{
-           "method" => "eth_feeHistory",
-           "params" => [block_count, newest_block, reward_percentiles]
-         },
-         chain,
-         conn
-       ) do
-    Logger.debug("Getting fee history", chain: chain)
-
-    forward_rpc_request(chain, "eth_feeHistory", [block_count, newest_block, reward_percentiles],
-      conn: conn
-    )
-  end
+  # Simplified: generic forwarding handles most methods; see special-case below for chainId
 
   # Chain info
   defp process_json_rpc_request(%{"method" => "eth_chainId", "params" => []}, chain, _conn) do
@@ -405,30 +258,25 @@ defmodule LassoWeb.RPCController do
   end
 
   # Reject WS-only methods over HTTP
-  defp process_json_rpc_request(%{"method" => method}, _chain, _conn)
-       when method in @ws_only_methods do
-    {:error,
-     JError.new(
-       -32_601,
-       "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
-       data: %{websocket_url: "/socket/websocket"}
-     )}
-  end
+  defp process_json_rpc_request(%{"method" => method} = req, chain, conn) do
+    params = Map.get(req, "params", []) || []
 
-  # Reject stateful/account methods over HTTP
-  defp process_json_rpc_request(%{"method" => method}, _chain, _conn)
-       when method in @http_disallowed_methods do
-    {:error, JError.new(-32_601, "Method not supported by proxy")}
-  end
+    cond do
+      MethodConstraints.ws_only?(method) ->
+        {:error,
+         JError.new(
+           -32_601,
+           "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
+           data: %{websocket_url: "/socket/websocket"}
+         )}
 
-  # Generic method handler: forward allowed methods
-  defp process_json_rpc_request(%{"method" => method, "params" => params}, chain, conn) do
-    Logger.debug("Forwarding RPC method", method: method, chain: chain)
-    forward_rpc_request(chain, method, params || [], conn: conn)
-  end
+      MethodConstraints.disallowed?(method) ->
+        {:error, JError.new(-32_601, "Method not supported by proxy")}
 
-  defp process_json_rpc_request(%{"method" => method}, chain, conn) do
-    process_json_rpc_request(%{"method" => method, "params" => []}, chain, conn)
+      true ->
+        Logger.debug("Forwarding RPC method", method: method, chain: chain)
+        forward_rpc_request(chain, method, params, conn: conn)
+    end
   end
 
   # Unified forwarding: extracts strategy and optional provider override, delegates to RequestPipeline
@@ -436,17 +284,7 @@ defmodule LassoWeb.RPCController do
     with {:ok, strategy} <- extract_strategy(opts) do
       conn = Keyword.get(opts, :conn)
 
-      provider_override =
-        case Keyword.get(opts, :provider_override) do
-          pid when is_binary(pid) ->
-            pid
-
-          _ ->
-            case conn do
-              %Plug.Conn{params: %{"provider_override" => pid}} when is_binary(pid) -> pid
-              _ -> nil
-            end
-        end
+      provider_override = extract_provider_override(conn, opts)
 
       # Extract Phoenix request_id to ensure consistent tracing throughout the request lifecycle
       request_id =
@@ -455,13 +293,22 @@ defmodule LassoWeb.RPCController do
           _ -> nil
         end
 
-      Lasso.RPC.RequestPipeline.execute_via_channels(chain, method, params,
-        strategy: strategy,
-        provider_override: provider_override,
-        failover_on_override: false,
-        timeout: MethodPolicy.timeout_for(method),
-        request_id: request_id
-      )
+      transport_override =
+        case conn do
+          %Plug.Conn{} -> extract_transport_override(conn, method)
+          _ -> nil
+        end
+
+      opts =
+        RequestOptionsBuilder.from_conn(conn, method,
+          strategy: strategy,
+          provider_override: provider_override,
+          transport: transport_override,
+          timeout_ms: MethodPolicy.timeout_for(method),
+          request_id: request_id
+        )
+
+      Lasso.RPC.RequestPipeline.execute_via_channels(chain, method, params, opts)
     else
       {:error, reason} ->
         {:error, JError.new(-32_000, "Failed to extract request options: #{reason}")}
@@ -486,6 +333,70 @@ defmodule LassoWeb.RPCController do
 
   defp default_provider_strategy do
     Application.get_env(:lasso, :provider_selection_strategy, :cheapest)
+  end
+
+  defp strategy_from(conn, params) do
+    case conn.assigns[:provider_strategy] do
+      nil ->
+        case params["strategy"] do
+          "priority" -> :priority
+          "round_robin" -> :round_robin
+          "fastest" -> :fastest
+          "cheapest" -> :cheapest
+          _ -> default_provider_strategy()
+        end
+
+      existing_strategy ->
+        existing_strategy
+    end
+  end
+
+  # Determine provider override from opts, params, or header.
+  defp extract_provider_override(%Plug.Conn{} = conn, opts) do
+    with_opt =
+      case Keyword.get(opts, :provider_override) do
+        pid when is_binary(pid) -> pid
+        _ -> nil
+      end
+
+    with_param =
+      case conn.params do
+        %{"provider_override" => pid} when is_binary(pid) -> pid
+        %{"provider_id" => pid} when is_binary(pid) -> pid
+        _ -> nil
+      end
+
+    with_header =
+      conn
+      |> get_req_header("x-lasso-provider")
+      |> List.first()
+
+    with_opt || with_param || with_header
+  end
+
+  # Determine transport override from request preferences while respecting policy.
+  defp extract_transport_override(%Plug.Conn{} = conn, method) do
+    case MethodConstraints.required_transport_for(method) do
+      :ws ->
+        :ws
+
+      nil ->
+        param_pref =
+          case conn.params do
+            %{"transport" => "http"} -> :http
+            %{"transport" => "ws"} -> :ws
+            _ -> nil
+          end
+
+        header_pref =
+          case get_req_header(conn, "x-lasso-transport") do
+            ["http" | _] -> :http
+            ["ws" | _] -> :ws
+            _ -> nil
+          end
+
+        param_pref || header_pref
+    end
   end
 
   defp resolve_chain_name(chain_identifier) do

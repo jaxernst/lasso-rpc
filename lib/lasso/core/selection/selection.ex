@@ -18,6 +18,9 @@ defmodule Lasso.RPC.Selection do
   require Logger
 
   alias Lasso.RPC.{ProviderPool, SelectionContext, TransportRegistry, Channel}
+  alias Lasso.RPC.Strategies.Registry, as: StrategyRegistry
+  # Selection should be transport-policy agnostic. Transport constraints
+  # should be provided by the caller via opts.
 
   @doc """
   Picks the best provider using simple parameters.
@@ -83,7 +86,7 @@ defmodule Lasso.RPC.Selection do
         {:error, :no_providers_available}
 
       _ ->
-        strategy_mod = resolve_strategy_module(ctx.strategy)
+        strategy_mod = StrategyRegistry.resolve(ctx.strategy)
         prepared_ctx = strategy_mod.prepare_context(ctx)
 
         channels =
@@ -107,8 +110,7 @@ defmodule Lasso.RPC.Selection do
             end)
           end)
 
-        ordered =
-          apply(strategy_mod, :rank_channels, [channels, ctx.method, prepared_ctx, ctx.chain])
+        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.chain)
 
         case List.first(ordered) do
           %Channel{provider_id: pid} ->
@@ -141,7 +143,7 @@ defmodule Lasso.RPC.Selection do
 
       _ ->
         candidate_ids = Enum.map(candidates, & &1.id)
-        strategy_mod = resolve_strategy_module(ctx.strategy)
+        strategy_mod = StrategyRegistry.resolve(ctx.strategy)
         prepared_ctx = strategy_mod.prepare_context(ctx)
 
         channels =
@@ -165,8 +167,7 @@ defmodule Lasso.RPC.Selection do
             end)
           end)
 
-        ordered =
-          apply(strategy_mod, :rank_channels, [channels, ctx.method, prepared_ctx, ctx.chain])
+        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.chain)
 
         case List.first(ordered) do
           %Channel{provider_id: pid, transport: transport} ->
@@ -194,18 +195,12 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  defp resolve_strategy_module(:priority), do: Lasso.RPC.Strategies.Priority
-  defp resolve_strategy_module(:round_robin), do: Lasso.RPC.Strategies.RoundRobin
-  defp resolve_strategy_module(:cheapest), do: Lasso.RPC.Strategies.Cheapest
-  defp resolve_strategy_module(:fastest), do: Lasso.RPC.Strategies.Fastest
-
-  defp resolve_strategy_module(:latency_weighted),
-    do: Lasso.RPC.Strategies.LatencyWeighted
+  # Strategy resolution moved to StrategyRegistry for DRY pluggability.
 
   @doc """
   Selects the best channels for a method across all available transports.
 
-  This is the new channel-based selection API that considers transport capabilities,
+  onsiders provider capabilities,
   health, and performance metrics to return ordered candidate channels.
 
   Options:
@@ -225,12 +220,11 @@ defmodule Lasso.RPC.Selection do
     limit = Keyword.get(opts, :limit, 10)
     include_half_open = Keyword.get(opts, :include_half_open, false)
 
-    # Ask pool for provider candidates without over-constraining transport for unary.
-    # For subscriptions, strictly require WS at the provider layer.
+    # Caller is responsible for policy. Do not force WS here; rely on opts.transport.
     pool_protocol =
-      case method do
-        "eth_subscribe" -> :ws
-        "eth_unsubscribe" -> :ws
+      case transport do
+        :http -> :http
+        :ws -> :ws
         _ -> nil
       end
 
@@ -257,19 +251,10 @@ defmodule Lasso.RPC.Selection do
       provider_candidates
       |> Enum.flat_map(fn %{id: provider_id, config: provider_config} ->
         transports =
-          case method do
-            "eth_subscribe" ->
-              [:ws]
-
-            "eth_unsubscribe" ->
-              [:ws]
-
-            _ ->
-              case transport do
-                :both -> [:http, :ws]
-                :http -> [:http]
-                :ws -> [:ws]
-              end
+          case transport do
+            :http -> [:http]
+            :ws -> [:ws]
+            _ -> [:http, :ws]
           end
 
         transports
@@ -335,11 +320,11 @@ defmodule Lasso.RPC.Selection do
 
     # Strategy delegation: allow strategy modules to rank channels when available.
     selection_ctx = SelectionContext.new(chain, method, strategy: strategy, protocol: transport)
-    strategy_mod = resolve_strategy_module(strategy)
+    strategy_mod = StrategyRegistry.resolve(strategy)
     prepared_ctx = strategy_mod.prepare_context(selection_ctx)
 
     ordered_channels =
-      apply(strategy_mod, :rank_channels, [capable_channels, method, prepared_ctx, chain])
+      strategy_mod.rank_channels(capable_channels, method, prepared_ctx, chain)
 
     ordered_channels |> Enum.take(limit)
   end

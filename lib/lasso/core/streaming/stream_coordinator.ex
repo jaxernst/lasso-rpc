@@ -20,6 +20,7 @@ defmodule Lasso.RPC.StreamCoordinator do
   }
 
   alias Lasso.RPC.Caching.BlockchainMetadataCache
+  alias Lasso.RPC.RequestOptions
 
   @type key :: {:newHeads} | {:logs, map()}
 
@@ -752,9 +753,15 @@ defmodule Lasso.RPC.StreamCoordinator do
 
   defp fetch_head_blocking(chain) do
     # Original blocking implementation as fallback
-    case Lasso.RPC.RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [],
-           strategy: :priority,
-           failover_on_override: false
+    case Lasso.RPC.RequestPipeline.execute_via_channels(
+           chain,
+           "eth_blockNumber",
+           [],
+           %RequestOptions{
+             strategy: :priority,
+             failover_on_override: false,
+             timeout_ms: 3_000
+           }
          ) do
       {:ok, "0x" <> _ = hex} ->
         String.to_integer(String.trim_leading(hex, "0x"), 16)

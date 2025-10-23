@@ -6,9 +6,6 @@ defmodule Lasso.Application do
   use Application
   require Logger
 
-  # Compile-time environment check
-  @env Mix.env()
-
   @impl true
   def start(_type, _args) do
     # Store application start time for uptime calculation

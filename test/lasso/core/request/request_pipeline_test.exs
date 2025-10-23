@@ -10,7 +10,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   use ExUnit.Case, async: false
 
-  alias Lasso.RPC.{RequestPipeline, RequestContext}
+  alias Lasso.RPC.{RequestPipeline, RequestContext, RequestOptions}
 
   setup do
     Application.ensure_all_started(:lasso)
@@ -20,7 +20,10 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "execute_via_channels/4 - parameter validation" do
     test "creates RequestContext when not provided" do
       # Use ethereum chain which is initialized in test env
-      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], [])
+      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        strategy: :round_robin,
+        timeout_ms: 30_000
+      })
 
       # Should have stored context even on error
       ctx = Process.get(:request_context)
@@ -32,9 +35,11 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "uses provided RequestContext" do
       custom_ctx = RequestContext.new("ethereum", "eth_call", strategy: :fastest)
 
-      RequestPipeline.execute_via_channels("ethereum", "eth_call", [],
+      RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
+        strategy: :fastest,
+        timeout_ms: 30_000,
         request_context: custom_ctx
-      )
+      })
 
       # Should use the provided context
       stored_ctx = Process.get(:request_context)
@@ -43,18 +48,18 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "handles empty params" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], [])
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       # Should handle gracefully (will error due to no providers, but shouldn't crash)
       assert {:error, _} = result
     end
 
     test "accepts standard options" do
-      opts = [
-        strategy: :fastest,
-        timeout: 5000,
-        transport_override: :http
-      ]
+      opts = %RequestOptions{strategy: :fastest, timeout_ms: 5000, transport: :http}
 
       result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], opts)
 
@@ -65,7 +70,10 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   describe "execute_via_channels/4 - observability" do
     test "marks selection start" do
-      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [])
+      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        strategy: :round_robin,
+        timeout_ms: 30_000
+      })
 
       ctx = Process.get(:request_context)
       # Selection should have been attempted
@@ -73,7 +81,10 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "tracks retry count" do
-      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [])
+      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        strategy: :round_robin,
+        timeout_ms: 30_000
+      })
 
       ctx = Process.get(:request_context)
       assert is_integer(ctx.retries)
@@ -81,7 +92,12 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "stores request metadata in context" do
-      RequestPipeline.execute_via_channels("ethereum", "eth_getBalance", ["0x123", "latest"])
+      RequestPipeline.execute_via_channels(
+        "ethereum",
+        "eth_getBalance",
+        ["0x123", "latest"],
+        %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+      )
 
       ctx = Process.get(:request_context)
       assert ctx.chain == "ethereum"
@@ -93,42 +109,49 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "execute_via_channels/4 - strategy support" do
     test "accepts :fastest strategy" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
-          strategy: :fastest
-        )
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          strategy: :fastest,
+          timeout_ms: 30_000
+        })
 
       assert {:error, _} = result
     end
 
     test "accepts :cheapest strategy" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
-          strategy: :cheapest
-        )
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          strategy: :cheapest,
+          timeout_ms: 30_000
+        })
 
       assert {:error, _} = result
     end
 
     test "accepts :priority strategy" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
-          strategy: :priority
-        )
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          strategy: :priority,
+          timeout_ms: 30_000
+        })
 
       assert {:error, _} = result
     end
 
-    test "accepts :round_robin strategy (default)" do
+    test ":round_robin strategy" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
-          strategy: :round_robin
-        )
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       assert {:error, _} = result
     end
 
     test "stores strategy in context" do
-      RequestPipeline.execute_via_channels("ethereum", "eth_call", [], strategy: :fastest)
+      RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
+        strategy: :fastest,
+        timeout_ms: 30_000
+      })
 
       ctx = Process.get(:request_context)
       assert ctx.strategy == :fastest
@@ -138,24 +161,31 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "execute_via_channels/4 - transport preferences" do
     test "accepts :http transport override" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
-          transport_override: :http
-        )
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          transport: :http,
+          timeout_ms: 30_000,
+          strategy: :round_robin
+        })
 
       assert {:error, _} = result
     end
 
     test "accepts :ws transport override" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [],
-          transport_override: :ws
-        )
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          transport: :ws,
+          timeout_ms: 30_000,
+          strategy: :round_robin
+        })
 
       assert {:error, _} = result
     end
 
     test "defaults to :http when no transport specified" do
-      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [])
+      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        strategy: :round_robin,
+        timeout_ms: 30_000
+      })
 
       ctx = Process.get(:request_context)
       assert ctx.transport == :http
@@ -165,14 +195,22 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "execute_via_channels/4 - timeout handling" do
     test "accepts custom timeout" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], timeout: 5000)
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          timeout_ms: 5000,
+          strategy: :round_robin
+        })
 
       assert {:error, _} = result
     end
 
     test "uses default timeout when not specified" do
       # Should not crash without timeout
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [])
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
+
       assert {:error, _} = result
     end
   end
@@ -183,7 +221,13 @@ defmodule Lasso.RPC.RequestPipelineTest do
       # the pipeline accepts standard JSON-RPC params
       params = ["0xabcd", "latest"]
 
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_getBalance", params)
+      result =
+        RequestPipeline.execute_via_channels(
+          "ethereum",
+          "eth_getBalance",
+          params,
+          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+        )
 
       # Should handle params correctly (will fail due to no providers)
       assert {:error, _} = result
@@ -193,7 +237,12 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "handles nil params" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", nil)
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", nil, %RequestOptions{
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
+
       assert {:error, _} = result
 
       ctx = Process.get(:request_context)
@@ -203,14 +252,20 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   describe "RequestContext lifecycle" do
     test "context is always stored in process dictionary" do
-      RequestPipeline.execute_via_channels("ethereum", "eth_test", [])
+      RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
+        strategy: :round_robin,
+        timeout_ms: 30_000
+      })
 
       ctx = Process.get(:request_context)
       assert %RequestContext{} = ctx
     end
 
     test "context tracks timing information" do
-      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [])
+      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        strategy: :round_robin,
+        timeout_ms: 30_000
+      })
 
       ctx = Process.get(:request_context)
       assert ctx.start_time != nil
@@ -218,7 +273,10 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "context includes unique request ID" do
-      RequestPipeline.execute_via_channels("ethereum", "eth_test", [])
+      RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
+        strategy: :round_robin,
+        timeout_ms: 30_000
+      })
 
       ctx = Process.get(:request_context)
       assert is_binary(ctx.request_id)
@@ -320,7 +378,10 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "execute_via_channels increments retry count on failover" do
       # When failover occurs, retry count should increment
       # This is tested through the RequestContext
-      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [])
+      RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        strategy: :round_robin,
+        timeout_ms: 30_000
+      })
 
       ctx = Process.get(:request_context)
       # Retries will be >= 0 (may be > 0 if failover occurred)

@@ -106,7 +106,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   @type chain_name :: String.t()
   @type provider_id :: String.t()
-  @type strategy :: :priority | :round_robin | :fastest | :cheapest
+  @type strategy :: :priority | :round_robin | :fastest | :cheapest | :latency_weighted
   @type health_status ::
           :healthy
           | :unhealthy
