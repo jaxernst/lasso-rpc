@@ -15,6 +15,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
 
   alias Lasso.Battle.SetupHelper
   alias Lasso.RPC.RequestPipeline
+  alias Lasso.RPC.RequestOptions
 
   @moduletag :battle
   @moduletag :real_providers
@@ -58,8 +59,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           "ethereum",
           "eth_blockNumber",
           [],
-          transport_override: :http,
-          timeout: 10_000
+          %RequestOptions{transport: :http, timeout_ms: 10_000, strategy: :round_robin}
         )
 
       assert {:ok, block_number} = result
@@ -80,8 +80,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           "ethereum",
           "eth_blockNumber",
           [],
-          transport_override: :ws,
-          timeout: 10_000
+          %RequestOptions{transport: :ws, timeout_ms: 10_000, strategy: :round_robin}
         )
 
       assert {:ok, block_number} = result
@@ -102,8 +101,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           "ethereum",
           "eth_blockNumber",
           [],
-          strategy: :round_robin,
-          timeout: 10_000
+          %RequestOptions{strategy: :round_robin, timeout_ms: 10_000}
         )
 
       assert {:ok, block_number} = result
@@ -135,8 +133,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
               "ethereum",
               method,
               params,
-              strategy: :round_robin,
-              timeout: 10_000
+              %RequestOptions{strategy: :round_robin, timeout_ms: 10_000}
             )
 
           {method, result}
@@ -171,8 +168,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           "ethereum",
           "eth_blockNumber",
           [],
-          strategy: :fastest,
-          timeout: 10_000
+          %RequestOptions{strategy: :fastest, timeout_ms: 10_000}
         )
 
       assert {:ok, _block1} = result1
@@ -184,8 +180,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           "ethereum",
           "eth_blockNumber",
           [],
-          provider_override: "ankr",
-          timeout: 10_000
+          %RequestOptions{provider_override: "ankr", timeout_ms: 10_000, strategy: :round_robin}
         )
 
       assert {:ok, _block2} = result2
@@ -208,8 +203,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
             "ethereum",
             "eth_blockNumber",
             [],
-            strategy: :round_robin,
-            timeout: 10_000
+            %RequestOptions{strategy: :round_robin, timeout_ms: 10_000}
           )
         end)
 
@@ -241,8 +235,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
             "ethereum",
             "eth_blockNumber",
             [],
-            strategy: :fastest,
-            timeout: 10_000
+            %RequestOptions{strategy: :fastest, timeout_ms: 10_000}
           )
         end)
 
@@ -274,8 +267,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           "ethereum",
           "eth_blockNumber",
           [],
-          transport_override: :http,
-          timeout: 10_000
+          %RequestOptions{transport: :http, timeout_ms: 10_000, strategy: :round_robin}
         )
 
       assert {:ok, _block1} = http_result
@@ -286,8 +278,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           "ethereum",
           "eth_blockNumber",
           [],
-          transport_override: :ws,
-          timeout: 10_000
+          %RequestOptions{transport: :ws, timeout_ms: 10_000, strategy: :round_robin}
         )
 
       assert {:ok, _block2} = ws_result

@@ -4,7 +4,7 @@ defmodule Lasso.RPC.HttpInclusionWithWsDisconnectIntegrationTest do
   @moduletag :integration
   @moduletag timeout: 10_000
 
-  alias Lasso.RPC.{RequestPipeline, ProviderPool}
+  alias Lasso.RPC.{RequestPipeline, ProviderPool, RequestOptions}
 
   test "WS disconnect does not exclude provider from HTTP selection", %{chain: chain} do
     setup_providers([
@@ -26,7 +26,7 @@ defmodule Lasso.RPC.HttpInclusionWithWsDisconnectIntegrationTest do
         chain,
         "eth_blockNumber",
         [],
-        transport_override: :http
+        %RequestOptions{transport: :http, strategy: :round_robin, timeout_ms: 30_000}
       )
 
     # HTTP candidates should include the provider

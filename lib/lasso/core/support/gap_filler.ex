@@ -4,6 +4,7 @@ defmodule Lasso.RPC.GapFiller do
   """
 
   alias Lasso.RPC.RequestPipeline
+  alias Lasso.RPC.RequestOptions
 
   @type backfill_opts :: [timeout_ms: non_neg_integer()]
 
@@ -21,9 +22,12 @@ defmodule Lasso.RPC.GapFiller do
                  "0x" <> Integer.to_string(n, 16),
                  false
                ],
-               strategy: :priority,
-               provider_override: provider_id,
-               failover_on_override: false
+               %RequestOptions{
+                 strategy: :priority,
+                 provider_override: provider_id,
+                 failover_on_override: false,
+                 timeout_ms: 10_000
+               }
              ) do
           {:ok, %{"number" => _} = block} -> acc ++ [block]
           _ -> acc
@@ -54,10 +58,16 @@ defmodule Lasso.RPC.GapFiller do
 
     full_filter = Map.merge(filter, base_filter)
 
-    case RequestPipeline.execute_via_channels(chain, "eth_getLogs", [full_filter],
-           strategy: :priority,
-           provider_override: provider_id,
-           failover_on_override: false
+    case RequestPipeline.execute_via_channels(
+           chain,
+           "eth_getLogs",
+           [full_filter],
+           %RequestOptions{
+             strategy: :priority,
+             provider_override: provider_id,
+             failover_on_override: false,
+             timeout_ms: 30_000
+           }
          ) do
       {:ok, logs} when is_list(logs) ->
         ordered =

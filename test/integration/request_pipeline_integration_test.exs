@@ -4,7 +4,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag :integration
   @moduletag timeout: 10_000
 
-  alias Lasso.RPC.{RequestPipeline, CircuitBreaker}
+  alias Lasso.RPC.{RequestPipeline, CircuitBreaker, RequestOptions}
   alias Lasso.Test.{TelemetrySync, CircuitBreakerHelper}
   alias Lasso.Testing.MockProviderBehavior
 
@@ -33,7 +33,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
-          []
+          [],
+          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
         )
 
       # Verify request succeeded (using backup)
@@ -56,7 +57,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             chain,
             "eth_blockNumber",
             [],
-            provider_override: "failing_provider"
+            %RequestOptions{
+              strategy: :round_robin,
+              timeout_ms: 30_000,
+              provider_override: "failing_provider"
+            }
           )
 
         # Small delay between attempts
@@ -111,8 +116,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          provider_override: "flaky",
-          failover_on_override: false
+          %RequestOptions{
+            provider_override: "flaky",
+            failover_on_override: false,
+            timeout_ms: 30_000,
+            strategy: :round_robin
+          }
         )
 
       # Wait for circuit breaker recovery timeout (typically 60s in tests)
@@ -139,8 +148,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          provider_override: "flaky",
-          failover_on_override: false
+          %RequestOptions{
+            provider_override: "flaky",
+            failover_on_override: false,
+            timeout_ms: 30_000,
+            strategy: :round_robin
+          }
         )
 
       # Should get actual error, not circuit breaker error
@@ -169,7 +182,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          strategy: :priority
+          %RequestOptions{strategy: :priority, timeout_ms: 30_000}
         )
 
       # Wait for telemetry event
@@ -202,7 +215,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
-          []
+          [],
+          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
         )
 
       # Request should succeed via backup
@@ -228,8 +242,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          provider_override: "backup",
-          failover_on_override: false
+          %RequestOptions{
+            provider_override: "backup",
+            failover_on_override: false,
+            timeout_ms: 30_000,
+            strategy: :round_robin
+          }
         )
 
       # Should succeed using backup
@@ -249,8 +267,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          provider_override: "preferred",
-          failover_on_override: true
+          %RequestOptions{
+            provider_override: "preferred",
+            failover_on_override: true,
+            timeout_ms: 30_000,
+            strategy: :round_robin
+          }
         )
 
       # Should succeed by failing over from preferred to fallback
@@ -274,7 +296,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
-          []
+          [],
+          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
         )
 
       # In a real scenario with provider-specific adapter logic:
@@ -325,8 +348,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          provider_override: "provider",
-          failover_on_override: false
+          %RequestOptions{
+            provider_override: "provider",
+            failover_on_override: false,
+            timeout_ms: 30_000,
+            strategy: :round_robin
+          }
         )
 
       # Verify error is classified
@@ -348,9 +375,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          provider_override: "slow",
-          failover_on_override: false,
-          timeout: 100
+          %RequestOptions{
+            provider_override: "slow",
+            failover_on_override: false,
+            timeout_ms: 100,
+            strategy: :round_robin
+          }
         )
 
       duration = System.monotonic_time(:millisecond) - start_time
@@ -368,8 +398,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          provider_override: "nonexistent",
-          failover_on_override: false
+          %RequestOptions{
+            provider_override: "nonexistent",
+            failover_on_override: false,
+            timeout_ms: 30_000,
+            strategy: :round_robin
+          }
         )
 
       # Should get appropriate error
@@ -390,7 +424,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          transport_override: :http
+          %RequestOptions{transport: :http, timeout_ms: 30_000, strategy: :round_robin}
         )
 
       # Execute with WS transport override (if supported)
@@ -427,7 +461,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
-          []
+          [],
+          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
         )
 
       # Wait for start event
@@ -497,8 +532,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          provider_override: "failing",
-          failover_on_override: false
+          %RequestOptions{
+            provider_override: "failing",
+            failover_on_override: false,
+            timeout_ms: 30_000,
+            strategy: :round_robin
+          }
         )
 
       # Should still emit stop event with error status
@@ -523,7 +562,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           RequestPipeline.execute_via_channels(
             chain,
             "eth_blockNumber",
-            []
+            [],
+            %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
           )
         end
 
@@ -558,7 +598,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
-          []
+          [],
+          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
         )
 
       # Should have emitted at least one start event

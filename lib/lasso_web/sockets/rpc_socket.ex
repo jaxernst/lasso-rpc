@@ -22,6 +22,7 @@ defmodule LassoWeb.RPCSocket do
   alias Lasso.RPC.{SubscriptionRouter, RequestPipeline, RequestContext, Observability}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Config.ConfigStore
+  alias Lasso.RPC.RequestOptions
 
   # Heartbeat configuration (aggressive keepalive for subscription connections)
   # Send ping every 30 seconds
@@ -350,8 +351,7 @@ defmodule LassoWeb.RPCSocket do
            state.chain,
            method,
            params,
-           strategy: strategy,
-           request_context: ctx
+           %RequestOptions{strategy: strategy, timeout_ms: 10_000, request_context: ctx}
          ) do
       {:ok, result} ->
         # Retrieve updated context from Process dictionary

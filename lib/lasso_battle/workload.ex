@@ -52,6 +52,7 @@ defmodule Lasso.Battle.Workload do
 
   require Logger
   alias Lasso.Battle.WebSocketClient
+  alias Lasso.RPC.RequestOptions
 
   ## ============================================================================
   ## Layer 1: Request Primitives (What to execute)
@@ -141,15 +142,15 @@ defmodule Lasso.Battle.Workload do
     failover_on_override = Keyword.get(opts, :failover_on_override, false)
     timeout = Keyword.get(opts, :timeout, 30_000)
 
-    pipeline_opts = [
-      transport_override: transport,
+    request_opts = %RequestOptions{
+      transport: transport,
       strategy: strategy,
       provider_override: provider_override,
       failover_on_override: failover_on_override,
-      timeout: timeout
-    ]
+      timeout_ms: timeout
+    }
 
-    Lasso.RPC.RequestPipeline.execute_via_channels(chain, method, params, pipeline_opts)
+    Lasso.RPC.RequestPipeline.execute_via_channels(chain, method, params, request_opts)
   end
 
   @doc """
@@ -410,9 +411,7 @@ defmodule Lasso.Battle.Workload do
            chain,
            method,
            params,
-           transport_override: :ws,
-           strategy: strategy,
-           timeout: timeout
+           %RequestOptions{transport: :ws, strategy: strategy, timeout_ms: timeout}
          ) do
       {:ok, _result} ->
         Logger.debug("WS Response ##{request_id}: success")

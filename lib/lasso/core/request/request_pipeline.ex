@@ -15,6 +15,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.{Selection, ProviderPool, Metrics, TransportRegistry, Channel}
   alias Lasso.RPC.{RequestContext, Observability, CircuitBreaker}
+  alias Lasso.RPC.RequestOptions
   alias Lasso.RPC.Providers.AdapterFilter
 
   @type chain :: String.t()
@@ -26,53 +27,34 @@ defmodule Lasso.RPC.RequestPipeline do
   @max_failover_attempts 4
 
   @doc """
-  Execute an RPC request with resilient behavior using transport-agnostic channels.
+  Execute an RPC request using transport-agnostic channels.
 
   This is a channel-based API that supports mixed HTTP and WebSocket routing.
   It automatically selects the best channels across different transports based on
   strategy, health, and capabilities.
 
-  Options:
-  - :strategy => :fastest | :cheapest | :priority | :round_robin
-  - :provider_override => provider_id (optional)
-  - :transport_override => :http | :ws (optional, force specific transport)
-  - :failover_on_override => boolean (default: false)
-  - :timeout => ms (per-attempt timeout)
-  - :request_context => RequestContext.t() (optional, for observability)
+  Takes a `RequestOptions` struct containing all execution parameters:
+  - `strategy` - Routing strategy (:fastest, :cheapest, etc.)
+  - `provider_override` - Force specific provider (optional)
+  - `transport` - Transport preference (:http, :ws, :both)
+  - `failover_on_override` - Retry on other providers if override fails
+  - `timeout_ms` - Per-attempt timeout in milliseconds
+  - `request_id` - Request tracing ID (optional)
+  - `request_context` - Pre-created RequestContext for observability (optional)
   """
-  @spec execute_via_channels(chain, method, params, keyword()) :: {:ok, any()} | {:error, any()}
-  def execute_via_channels(chain, method, params, opts \\ []) do
-    strategy = Keyword.get(opts, :strategy, :round_robin)
-    provider_override = Keyword.get(opts, :provider_override)
-    transport_override = Keyword.get(opts, :transport_override)
-    failover_on_override = Keyword.get(opts, :failover_on_override, false)
-    timeout = Keyword.get(opts, :timeout, 30_000)
-
-    # Get or create request context for observability
+  @spec execute_via_channels(chain, method, params, RequestOptions.t()) ::
+          {:ok, any()} | {:error, any()}
+  def execute_via_channels(chain, method, params, %RequestOptions{} = opts) do
+    # Get or create request context
     ctx =
-      case Keyword.get(opts, :request_context) do
-        %RequestContext{} = existing_ctx ->
-          existing_ctx
-
-        _ ->
-          params_digest =
-            if params != [] and not is_nil(params) do
-              RequestContext.compute_params_digest(params)
-            else
-              nil
-            end
-
-          # Use Phoenix request_id if provided for consistent tracing
-          request_id = Keyword.get(opts, :request_id)
-
-          RequestContext.new(chain, method,
-            params_present: params != [] and not is_nil(params),
-            params_digest: params_digest,
-            transport: transport_override || :http,
-            strategy: strategy,
-            request_id: request_id
-          )
-      end
+      opts.request_context ||
+        RequestContext.new(chain, method,
+          params_present: params != [] and not is_nil(params),
+          params_digest: compute_params_digest(params),
+          transport: opts.transport || :http,
+          strategy: opts.strategy,
+          request_id: opts.request_id
+        )
 
     # Build JSON-RPC request
     rpc_request = %{
@@ -82,80 +64,48 @@ defmodule Lasso.RPC.RequestPipeline do
       "id" => ctx.request_id
     }
 
-    case provider_override do
+    # Route based on provider override
+    case opts.provider_override do
       provider_id when is_binary(provider_id) ->
-        execute_with_provider_override(
-          chain,
-          rpc_request,
-          strategy,
-          provider_id,
-          transport_override,
-          failover_on_override: failover_on_override,
-          timeout: timeout
-        )
+        execute_with_provider_override(chain, rpc_request, opts, ctx)
 
-      _ ->
-        start_time = System.monotonic_time(:millisecond)
-
-        # Log request start for traceability
-        Logger.info("RPC request started",
-          request_id: ctx.request_id,
-          chain: chain,
-          method: method,
-          timeout_ms: timeout,
-          strategy: strategy
-        )
-
-        # Emit telemetry start event
-        :telemetry.execute([:lasso, :rpc, :request, :start], %{count: 1}, %{
-          chain: chain,
-          method: method,
-          strategy: strategy
-        })
-
-        case execute_with_channel_selection(chain, rpc_request, ctx, transport_override, timeout) do
-          {:ok, result, updated_ctx} ->
-            duration_ms = System.monotonic_time(:millisecond) - start_time
-
-            # Emit observability log
-            Observability.log_request_completed(updated_ctx)
-
-            # Emit telemetry stop event for success
-            :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
-              chain: chain,
-              method: method,
-              provider_id: updated_ctx.selected_provider,
-              transport: updated_ctx.transport,
-              status: :success,
-              retry_count: updated_ctx.retries
-            })
-
-            # Store context for controller access (if needed for response metadata)
-            Process.put(:request_context, updated_ctx)
-            {:ok, result}
-
-          {:error, reason, updated_ctx} ->
-            duration_ms = System.monotonic_time(:millisecond) - start_time
-
-            # Emit observability log for errors too
-            Observability.log_request_completed(updated_ctx)
-
-            # Emit telemetry stop event for error
-            :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
-              chain: chain,
-              method: method,
-              provider_id: updated_ctx.selected_provider,
-              transport: updated_ctx.transport,
-              status: :error,
-              error: reason,
-              retry_count: updated_ctx.retries
-            })
-
-            # Store context for controller access
-            Process.put(:request_context, updated_ctx)
-            {:error, reason}
-        end
+      nil ->
+        execute_with_channel_selection(chain, rpc_request, opts, ctx)
     end
+  end
+
+  defp compute_params_digest(params) when params == [] or is_nil(params), do: nil
+
+  defp compute_params_digest(params) do
+    params
+    |> Jason.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  rescue
+    _ -> nil
+  end
+
+  # Completes a request with logging, telemetry, and context storage
+  defp complete_request(status, ctx, duration_ms, chain, method, opts) do
+    Observability.log_request_completed(ctx)
+    Process.put(:request_context, ctx)
+
+    telemetry_metadata = %{
+      chain: chain,
+      method: method,
+      provider_id: ctx.selected_provider,
+      transport: ctx.transport,
+      status: status,
+      retry_count: ctx.retries
+    }
+
+    telemetry_metadata =
+      case status do
+        :success -> Map.put(telemetry_metadata, :result, opts[:result])
+        :error -> Map.put(telemetry_metadata, :error, opts[:error])
+      end
+
+    :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, telemetry_metadata)
   end
 
   defp record_rpc_failure(chain, provider_id, method, reason, duration_ms, transport \\ nil) do
@@ -167,59 +117,40 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  # New channel-based implementation functions
+  # Provider override execution path
 
-  defp execute_with_provider_override(
-         chain,
-         rpc_request,
-         strategy,
-         provider_id,
-         transport_override,
-         opts
-       ) do
-    failover_on_override = Keyword.get(opts, :failover_on_override, false)
-    timeout = Keyword.get(opts, :timeout, 30_000)
+  defp execute_with_provider_override(chain, rpc_request, %RequestOptions{} = opts, ctx) do
+    provider_id = opts.provider_override
     method = Map.get(rpc_request, "method")
-
     start_time = System.monotonic_time(:millisecond)
+
+    Logger.info("RPC request started (provider override)",
+      request_id: ctx.request_id,
+      chain: chain,
+      method: method,
+      provider_id: provider_id,
+      timeout_ms: opts.timeout_ms,
+      strategy: opts.strategy
+    )
 
     :telemetry.execute([:lasso, :rpc, :request, :start], %{count: 1}, %{
       chain: chain,
       method: method,
-      strategy: strategy,
+      strategy: opts.strategy,
       provider_id: provider_id
     })
 
     # Get channels for the specific provider
-    channels = get_provider_channels(chain, provider_id, transport_override)
+    channels = get_provider_channels(chain, provider_id, opts.transport)
 
-    # Create minimal context for provider override path
-    ctx =
-      RequestContext.new(chain, method,
-        transport: transport_override || :http,
-        strategy: strategy
-      )
-
-    case attempt_request_on_channels(channels, rpc_request, timeout, ctx) do
+    case attempt_request_on_channels(channels, rpc_request, opts.timeout_ms, ctx) do
       {:ok, result, channel, updated_ctx} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
-        record_channel_success_metrics(chain, channel, method, strategy, duration_ms)
-        Observability.log_request_completed(updated_ctx)
-        Process.put(:request_context, updated_ctx)
-
-        # Emit telemetry stop event for success
-        :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
-          chain: chain,
-          method: method,
-          provider_id: provider_id,
-          transport: transport_override || :http,
-          status: :success,
-          retry_count: 0
-        })
-
+        record_channel_success_metrics(chain, channel, method, opts.strategy, duration_ms)
+        complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
         {:ok, result}
 
-      {:error, :no_channels_available, _updated_ctx} ->
+      {:error, :no_channels_available, updated_ctx} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
 
         jerr =
@@ -227,22 +158,11 @@ defmodule Lasso.RPC.RequestPipeline do
             category: :provider_error
           )
 
-        record_channel_failure_metrics(chain, provider_id, method, strategy, jerr, duration_ms)
-
-        # Emit telemetry stop event for no channels
-        :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
-          chain: chain,
-          method: method,
-          provider_id: provider_id,
-          transport: transport_override || :http,
-          status: :error,
-          error: jerr,
-          retry_count: 0
-        })
-
+        record_channel_failure_metrics(chain, provider_id, method, opts.strategy, jerr, duration_ms)
+        complete_request(:error, updated_ctx, duration_ms, chain, method, error: jerr)
         {:error, jerr}
 
-      {:error, reason, channel, _ctx1} ->
+      {:error, reason, channel, ctx1} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
         jerr = normalize_channel_error(reason, provider_id)
 
@@ -250,27 +170,28 @@ defmodule Lasso.RPC.RequestPipeline do
           chain,
           provider_id,
           method,
-          strategy,
+          opts.strategy,
           jerr,
           duration_ms,
           channel.transport
         )
 
         should_failover =
-          case jerr do
-            %JError{retriable?: retriable?} -> retriable?
-            _ -> false
-          end
+          opts.failover_on_override and
+            case jerr do
+              %JError{retriable?: retriable?} -> retriable?
+              _ -> false
+            end
 
-        if failover_on_override and should_failover do
-          # Attempt failover and emit telemetry for final result
+        if should_failover do
+          # Attempt failover with remaining providers
           case try_channel_failover(
                  chain,
                  rpc_request,
-                 strategy,
+                 opts.strategy,
                  [provider_id],
                  1,
-                 timeout
+                 opts.timeout_ms
                ) do
             {:ok, _result} = success ->
               final_duration_ms = System.monotonic_time(:millisecond) - start_time
@@ -282,7 +203,7 @@ defmodule Lasso.RPC.RequestPipeline do
                   chain: chain,
                   method: method,
                   provider_id: provider_id,
-                  transport: transport_override || :http,
+                  transport: opts.transport || :http,
                   status: :success,
                   retry_count: 1
                 }
@@ -290,52 +211,45 @@ defmodule Lasso.RPC.RequestPipeline do
 
               success
 
-            {:error, failover_err} = failure ->
+            {:error, _failover_err} = failure ->
               final_duration_ms = System.monotonic_time(:millisecond) - start_time
-
-              :telemetry.execute(
-                [:lasso, :rpc, :request, :stop],
-                %{duration: final_duration_ms},
-                %{
-                  chain: chain,
-                  method: method,
-                  provider_id: provider_id,
-                  transport: transport_override || :http,
-                  status: :error,
-                  error: failover_err,
-                  retry_count: 1
-                }
-              )
-
+              complete_request(:error, ctx1, final_duration_ms, chain, method, error: jerr)
               failure
           end
         else
-          # Emit telemetry stop event for failure (no failover)
-          :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, %{
-            chain: chain,
-            method: method,
-            provider_id: provider_id,
-            transport: transport_override || :http,
-            status: :error,
-            error: jerr,
-            retry_count: 0
-          })
-
+          complete_request(:error, ctx1, duration_ms, chain, method, error: jerr)
           {:error, jerr}
         end
     end
   end
 
-  defp execute_with_channel_selection(chain, rpc_request, ctx, transport_override, timeout) do
+  # Normal selection execution path
+
+  defp execute_with_channel_selection(chain, rpc_request, %RequestOptions{} = opts, ctx) do
     method = Map.get(rpc_request, "method")
+    start_time = System.monotonic_time(:millisecond)
+
+    Logger.info("RPC request started",
+      request_id: ctx.request_id,
+      chain: chain,
+      method: method,
+      timeout_ms: opts.timeout_ms,
+      strategy: opts.strategy
+    )
+
+    :telemetry.execute([:lasso, :rpc, :request, :start], %{count: 1}, %{
+      chain: chain,
+      method: method,
+      strategy: opts.strategy
+    })
 
     # Mark selection start and get candidate channels
     ctx = RequestContext.mark_selection_start(ctx)
 
     channels =
       Selection.select_channels(chain, method,
-        strategy: ctx.strategy,
-        transport: transport_override || :both,
+        strategy: opts.strategy,
+        transport: opts.transport || :both,
         limit: @max_channel_candidates
       )
 
@@ -348,15 +262,15 @@ defmodule Lasso.RPC.RequestPipeline do
 
     case channels do
       [] ->
-        handle_no_channels_available(chain, rpc_request, method, ctx, transport_override, timeout)
+        handle_no_channels_available(chain, rpc_request, method, opts, ctx, start_time)
 
       _ ->
-        handle_normal_mode_request(chain, rpc_request, method, ctx, channels, timeout)
+        handle_normal_mode_request(chain, rpc_request, method, opts, ctx, channels, start_time)
     end
   end
 
   # Handles the case when no channels are available with closed circuits
-  defp handle_no_channels_available(chain, rpc_request, method, ctx, transport_override, timeout) do
+  defp handle_no_channels_available(chain, rpc_request, method, %RequestOptions{} = opts, ctx, start_time) do
     Logger.info(
       "No closed circuit channels available, attempting degraded mode with half-open circuits",
       chain: chain,
@@ -370,31 +284,25 @@ defmodule Lasso.RPC.RequestPipeline do
 
     degraded_channels =
       Selection.select_channels(chain, method,
-        strategy: ctx.strategy,
-        transport: transport_override || :both,
+        strategy: opts.strategy,
+        transport: opts.transport || :both,
         limit: @max_channel_candidates,
         include_half_open: true
       )
 
     case degraded_channels do
       [] ->
-        handle_channel_exhaustion(chain, method, ctx, transport_override)
+        handle_channel_exhaustion(chain, method, opts, ctx, start_time)
 
       _ ->
-        handle_degraded_mode_request(
-          chain,
-          rpc_request,
-          method,
-          ctx,
-          degraded_channels,
-          timeout
-        )
+        handle_degraded_mode_request(chain, rpc_request, method, opts, ctx, degraded_channels, start_time)
     end
   end
 
   # Handles request execution when all circuits are open
-  defp handle_channel_exhaustion(chain, method, ctx, transport_override) do
-    retry_after_ms = calculate_min_recovery_time(chain, transport_override)
+  defp handle_channel_exhaustion(chain, method, %RequestOptions{} = opts, ctx, start_time) do
+    duration_ms = System.monotonic_time(:millisecond) - start_time
+    retry_after_ms = calculate_min_recovery_time(chain, opts.transport)
     {error_message, error_data} = build_exhaustion_error_message(method, retry_after_ms, chain)
 
     jerr =
@@ -418,7 +326,8 @@ defmodule Lasso.RPC.RequestPipeline do
       retry_after_ms: retry_after_ms || 0
     })
 
-    {:error, jerr, updated_ctx}
+    complete_request(:error, updated_ctx, duration_ms, chain, method, error: jerr)
+    {:error, jerr}
   end
 
   # Builds error message with retry-after hint for channel exhaustion
@@ -449,7 +358,7 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   # Handles request execution in degraded mode (half-open circuits)
-  defp handle_degraded_mode_request(chain, rpc_request, method, ctx, degraded_channels, timeout) do
+  defp handle_degraded_mode_request(chain, rpc_request, method, %RequestOptions{} = opts, ctx, degraded_channels, start_time) do
     Logger.info("Degraded mode: attempting #{length(degraded_channels)} half-open channels",
       chain: chain,
       method: method,
@@ -466,30 +375,25 @@ defmodule Lasso.RPC.RequestPipeline do
     # Mark upstream start and attempt request
     ctx = RequestContext.mark_upstream_start(ctx)
 
-    case attempt_request_on_channels(degraded_channels, rpc_request, timeout, ctx) do
+    case attempt_request_on_channels(degraded_channels, rpc_request, opts.timeout_ms, ctx) do
       {:ok, result, channel, updated_ctx} ->
-        handle_degraded_success(chain, method, ctx, result, channel, updated_ctx)
+        handle_degraded_success(chain, method, opts, ctx, result, channel, updated_ctx, start_time)
 
       {:error, reason, channel, _ctx1} ->
-        handle_degraded_failure(chain, method, ctx, reason, channel)
+        handle_degraded_failure(chain, method, opts, ctx, reason, channel, start_time)
 
       {:error, :no_channels_available, _updated_ctx} ->
-        handle_request_failure(ctx, :no_channels_available)
+        handle_request_failure(ctx, :no_channels_available, start_time)
     end
   end
 
   # Handles successful request in degraded mode
-  defp handle_degraded_success(chain, method, ctx, result, channel, updated_ctx) do
+  defp handle_degraded_success(chain, method, %RequestOptions{} = opts, _original_ctx, result, channel, updated_ctx, start_time) do
+    duration_ms = System.monotonic_time(:millisecond) - start_time
     updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
     updated_ctx = RequestContext.record_success(updated_ctx, result)
 
-    record_channel_success_metrics(
-      chain,
-      channel,
-      method,
-      ctx.strategy,
-      updated_ctx.upstream_latency_ms || 0
-    )
+    record_channel_success_metrics(chain, channel, method, opts.strategy, updated_ctx.upstream_latency_ms || 0)
 
     Logger.info("Degraded mode success via half-open channel",
       chain: chain,
@@ -504,11 +408,13 @@ defmodule Lasso.RPC.RequestPipeline do
       transport: channel.transport
     })
 
-    {:ok, result, updated_ctx}
+    complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
+    {:ok, result}
   end
 
   # Handles failed request in degraded mode
-  defp handle_degraded_failure(chain, method, ctx, reason, channel) do
+  defp handle_degraded_failure(chain, method, %RequestOptions{} = opts, ctx, reason, channel, start_time) do
+    duration_ms = System.monotonic_time(:millisecond) - start_time
     updated_ctx = RequestContext.mark_upstream_end(ctx)
     final_ctx = RequestContext.record_error(updated_ctx, reason)
     jerr = normalize_channel_error(reason, "no_channels")
@@ -518,50 +424,47 @@ defmodule Lasso.RPC.RequestPipeline do
       chain,
       channel.provider_id,
       method,
-      ctx.strategy,
+      opts.strategy,
       jerr,
       duration,
       channel.transport
     )
 
-    {:error, jerr, final_ctx}
+    complete_request(:error, final_ctx, duration_ms, chain, method, error: jerr)
+    {:error, jerr}
   end
 
   # Handles normal mode request execution (with closed circuits)
-  defp handle_normal_mode_request(chain, rpc_request, method, ctx, channels, timeout) do
+  defp handle_normal_mode_request(chain, rpc_request, method, %RequestOptions{} = opts, ctx, channels, start_time) do
     # Mark upstream start
     ctx = RequestContext.mark_upstream_start(ctx)
 
-    case attempt_request_on_channels(channels, rpc_request, timeout, ctx) do
+    case attempt_request_on_channels(channels, rpc_request, opts.timeout_ms, ctx) do
       {:ok, result, channel, updated_ctx} ->
-        handle_normal_success(chain, method, ctx, result, channel, updated_ctx)
+        handle_normal_success(chain, method, opts, ctx, result, channel, updated_ctx, start_time)
 
       {:error, reason, channel, _ctx1} ->
-        handle_normal_failure(chain, method, ctx, reason, channel)
+        handle_normal_failure(chain, method, opts, ctx, reason, channel, start_time)
 
       {:error, :no_channels_available, _updated_ctx} ->
-        handle_request_failure(ctx, :no_channels_available)
+        handle_request_failure(ctx, :no_channels_available, start_time)
     end
   end
 
   # Handles successful request in normal mode
-  defp handle_normal_success(chain, method, ctx, result, channel, updated_ctx) do
+  defp handle_normal_success(chain, method, %RequestOptions{} = opts, _original_ctx, result, channel, updated_ctx, start_time) do
+    duration_ms = System.monotonic_time(:millisecond) - start_time
     updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
     updated_ctx = RequestContext.record_success(updated_ctx, result)
 
-    record_channel_success_metrics(
-      chain,
-      channel,
-      method,
-      ctx.strategy,
-      updated_ctx.upstream_latency_ms || 0
-    )
-
-    {:ok, result, updated_ctx}
+    record_channel_success_metrics(chain, channel, method, opts.strategy, updated_ctx.upstream_latency_ms || 0)
+    complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
+    {:ok, result}
   end
 
   # Handles failed request in normal mode
-  defp handle_normal_failure(chain, method, ctx, reason, channel) do
+  defp handle_normal_failure(chain, method, %RequestOptions{} = opts, ctx, reason, channel, start_time) do
+    duration_ms = System.monotonic_time(:millisecond) - start_time
     updated_ctx = RequestContext.mark_upstream_end(ctx)
     final_ctx = RequestContext.record_error(updated_ctx, reason)
     jerr = normalize_channel_error(reason, "no_channels")
@@ -571,21 +474,24 @@ defmodule Lasso.RPC.RequestPipeline do
       chain,
       channel.provider_id,
       method,
-      ctx.strategy,
+      opts.strategy,
       jerr,
       duration,
       channel.transport
     )
 
-    {:error, jerr, final_ctx}
+    complete_request(:error, final_ctx, duration_ms, chain, method, error: jerr)
+    {:error, jerr}
   end
 
   # Handles generic request failures (no channels available)
-  defp handle_request_failure(ctx, reason) do
+  defp handle_request_failure(ctx, reason, start_time) do
+    duration_ms = System.monotonic_time(:millisecond) - start_time
     updated_ctx = RequestContext.mark_upstream_end(ctx)
     final_ctx = RequestContext.record_error(updated_ctx, reason)
     jerr = normalize_channel_error(reason, "no_channels")
-    {:error, jerr, final_ctx}
+    complete_request(:error, final_ctx, duration_ms, ctx.chain, ctx.method, error: jerr)
+    {:error, jerr}
   end
 
   defp get_provider_channels(chain, provider_id, transport_override) do
