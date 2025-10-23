@@ -406,7 +406,9 @@ defmodule Lasso.RPC.WSConnection do
 
                 _ ->
                   {:error,
-                   JError.new(-32_700, "Invalid JSON-RPC response", provider_id: state.endpoint.id)}
+                   JError.new(-32_700, "Invalid JSON-RPC response",
+                     provider_id: state.endpoint.id
+                   )}
               end
 
             status = if match?({:ok, _}, reply), do: :success, else: :error
@@ -429,7 +431,7 @@ defmodule Lasso.RPC.WSConnection do
             :telemetry.execute(
               [:lasso, :ws, :request, :io],
               %{io_ms: duration_ms},
-              %{provider_id: state.endpoint.id, method: method}
+              %{provider_id: state.endpoint.id, method: method, request_id: id}
             )
 
             # Store I/O latency in caller's process dictionary for RequestContext to consume
@@ -626,9 +628,7 @@ defmodule Lasso.RPC.WSConnection do
         {:error, reason} ->
           jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
 
-          Logger.debug(
-            "Heartbeat ping failed for #{state.endpoint.id}: #{inspect(jerr)}"
-          )
+          Logger.debug("Heartbeat ping failed for #{state.endpoint.id}: #{inspect(jerr)}")
 
           # Emit telemetry event
           :telemetry.execute(
@@ -890,8 +890,15 @@ defmodule Lasso.RPC.WSConnection do
         "Cleaning up #{map_size(state.pending_requests)} pending requests due to disconnect"
       )
 
-      Enum.each(state.pending_requests, fn {_id, req_info} ->
+      Enum.each(state.pending_requests, fn {id, req_info} ->
         Process.cancel_timer(req_info.timer)
+
+        Logger.debug("Failing pending WS request due to disconnect",
+          provider: state.endpoint.id,
+          method: req_info.method,
+          request_id: id
+        )
+
         GenServer.reply(req_info.from, {:error, error})
       end)
 

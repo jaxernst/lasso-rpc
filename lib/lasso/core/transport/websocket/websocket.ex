@@ -117,7 +117,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
     :telemetry.execute(
       [:lasso, :websocket, :request, :io],
       %{io_ms: io_ms},
-      %{provider_id: provider_id, method: method}
+      %{provider_id: provider_id, method: method, request_id: request_id}
     )
 
     case result do

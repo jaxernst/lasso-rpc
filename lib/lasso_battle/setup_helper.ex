@@ -164,7 +164,8 @@ defmodule Lasso.Battle.SetupHelper do
 
   defp register_mock_provider(chain_name, provider_id, opts) do
     # Start mock provider HTTP server
-    [{^provider_id, port}] = MockProvider.start_providers([{String.to_atom(provider_id), opts}])
+    provider_id_atom = String.to_atom(provider_id)
+    [{^provider_id_atom, port}] = MockProvider.start_providers([{provider_id_atom, opts}])
 
     config = %{
       id: provider_id,
