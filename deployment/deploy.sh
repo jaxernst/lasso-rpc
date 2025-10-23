@@ -92,7 +92,38 @@ echo ""
 echo "✅ Image built and pushed: $IMAGE_REF"
 echo ""
 
-echo "Step 2/3: Deploying machines..."
+echo "Step 2/4: Setting up multi-region..."
+echo "------------------------------------"
+
+# Parse regions from environment variable
+IFS=',' read -ra REGION_ARRAY <<< "$REGIONS"
+PRIMARY_REGION="${REGION_ARRAY[0]}"
+
+# Add additional regions (skip primary)
+for region in "${REGION_ARRAY[@]}"; do
+  if [ "$region" != "$PRIMARY_REGION" ]; then
+    echo "  Adding region: $region"
+    if [ -n "${FLY_API_TOKEN:-}" ]; then
+      fly -t "$FLY_API_TOKEN" regions add "$region" -a "$FLY_APP_NAME" 2>/dev/null || true
+    else
+      fly regions add "$region" -a "$FLY_APP_NAME" 2>/dev/null || true
+    fi
+  fi
+done
+
+# Note: Machine scaling should be done manually to avoid duplicates
+# Run these commands after first deployment:
+# for region in ${REGIONS//,/ }; do
+#   fly scale count $MACHINE_COUNT -a $FLY_APP_NAME --region $region
+# done
+
+echo "  ℹ️  To scale machines, run manually after first deployment:"
+for region in "${REGION_ARRAY[@]}"; do
+  echo "     fly scale count $MACHINE_COUNT -a $FLY_APP_NAME --region $region"
+done
+
+echo ""
+echo "Step 3/3: Deploying machines..."
 echo "-------------------------------"
 
 # Use fly.io's built-in deployment with WebSocket-friendly strategy
@@ -129,8 +160,8 @@ else
 fi
 
 echo ""
-echo "Step 3/3: Verifying deployment..."
-echo "---------------------------------"
+echo "Verifying deployment..."
+echo "-----------------------"
 
 # Wait for deployment to complete
 sleep 10
