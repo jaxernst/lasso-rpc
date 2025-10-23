@@ -20,20 +20,20 @@ chains:
     name: "Ethereum Mainnet"
 
     providers:
-      # - id: "alchemy_ethereum"
-      #   name: "Alchemy Ethereum"
-      #   priority: 1
-      #   type: "premium"
-      #   url: "https://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-      #   ws_url: "wss://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-      #   api_key_required: true
-      # - id: "ethereum_llamarpc"
-      #   name: "LlamaRPC"
-      #   priority: 2
-      #   type: "public"
-      #   url: "https://eth.llamarpc.com"
-      #   ws_url: "wss://eth.llamarpc.com"
-      #   api_key_required: false
+      - id: "alchemy_ethereum"
+        name: "Alchemy Ethereum"
+        priority: 1
+        type: "premium"
+        url: "https://eth-mainnet.g.alchemy.com/v2/anmzB-zgYNuUVePd-IJ4C"
+        ws_url: "wss://eth-mainnet.g.alchemy.com/v2/anmzB-zgYNuUVePd-IJ4C"
+        api_key_required: true
+      - id: "ethereum_llamarpc"
+        name: "LlamaRPC"
+        priority: 2
+        type: "public"
+        url: "https://eth.llamarpc.com"
+        ws_url: "wss://eth.llamarpc.com"
+        api_key_required: false
 
       - id: "ethereum_drpc"
         name: "DRPC Ethereum"
@@ -73,20 +73,20 @@ chains:
         url: "https://eth.merkle.io"
         api_key_required: false
 
-      - id: "0xrpc_ethereum"
-        name: "0xRPC Ethereum"
-        priority: 6
-        type: "public"
-        url: "https://0xrpc.io/eth"
-        ws_url: "wss://0xrpc.io/eth"
-        api_key_required: false
+      # - id: "0xrpc_ethereum"
+      #   name: "0xRPC Ethereum"
+      #   priority: 6
+      #   type: "public"
+      #   url: "https://0xrpc.io/eth"
+      #   ws_url: "wss://0xrpc.io/eth"
+      #   api_key_required: false
 
-      - id: "flashbots_ethereum"
-        name: "Flashbots Ethereum"
-        priority: 7
-        type: "public"
-        url: "https://rpc.flashbots.net/fast"
-        api_key_required: false
+      # - id: "flashbots_ethereum"
+      #   name: "Flashbots Ethereum"
+      #   priority: 7
+      #   type: "public"
+      #   url: "https://rpc.flashbots.net/fast"
+      #   api_key_required: false
 
       # - id: "ethereum_1rpc"
       #   name: "1RPC Ethereum"
