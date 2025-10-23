@@ -90,13 +90,7 @@ defmodule Lasso.Battle.MockProvider do
       {:ok, _pid} =
         Plug.Cowboy.http(__MODULE__, config,
           port: port,
-          ref: provider_id,
-          dispatch: [
-            {:_,
-             [
-               {"/", __MODULE__, config}
-             ]}
-          ]
+          ref: provider_id
         )
 
       url = "http://localhost:#{port}"
@@ -205,11 +199,11 @@ defmodule Lasso.Battle.MockProvider do
     {opts[:chain] || "mockchain", nil}
   end
 
-  # Plug.Cowboy callback
-  def init(options, config) do
+  # Plug callbacks
+  def init(opts) do
     # Store config in process dictionary for this worker
-    Process.put(:mock_provider_config, config)
-    {:ok, options}
+    Process.put(:mock_provider_config, opts)
+    opts
   end
 
   def call(conn, opts) do
