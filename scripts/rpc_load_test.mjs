@@ -24,6 +24,7 @@ function parseArgs(argv) {
     timeout: Number(process.env.TIMEOUT) || 10000, // ms
     verbose: Boolean(process.env.VERBOSE) || false,
     methods: null, // comma-separated names
+    rpsLimit: Number(process.env.RPS_LIMIT) || null, // requests per second limit
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -55,6 +56,11 @@ function parseArgs(argv) {
         opts.methods = String(next());
         i++;
         break;
+      case "--rps-limit":
+      case "-r":
+        opts.rpsLimit = Number(next());
+        i++;
+        break;
       case "--verbose":
       case "-v":
         opts.verbose = true;
@@ -81,6 +87,7 @@ function printHelpAndExit() {
       `  -d, --duration <sec>      Test duration seconds (default: 30)\n` +
       `  -t, --timeout <ms>        Per-request timeout ms (default: 10000)\n` +
       `  -m, --methods <list>      Comma-separated method names to include\n` +
+      `  -r, --rps-limit <n>       Maximum requests per second (default: unlimited)\n` +
       `  -v, --verbose             Log each request timing\n`
   );
   process.exit(0);
@@ -336,6 +343,7 @@ async function run() {
   console.log(`  duration=${options.duration}s`);
   console.log(`  timeout=${options.timeout}ms`);
   if (options.methods) console.log(`  methods=${options.methods}`);
+  if (options.rpsLimit) console.log(`  rps limit=${options.rpsLimit}`);
   if (options.verbose) console.log(`  verbose logging enabled`);
 
   const ctx = await bootstrapContext(options.url, options.timeout);
@@ -364,6 +372,36 @@ async function run() {
   const allDurations = [];
   const perMethod = new Map(); // name -> { count, errors, durations[] }
   const inFlight = new Set();
+
+  // Rate limiting setup
+  let rateLimiter = null;
+  if (options.rpsLimit && options.rpsLimit > 0) {
+    const tokensPerMs = options.rpsLimit / 1000;
+    let tokens = options.rpsLimit; // Start with full bucket
+    let lastRefill = Date.now();
+
+    rateLimiter = {
+      async acquire() {
+        while (!stop) {
+          const now = Date.now();
+          const elapsed = now - lastRefill;
+
+          // Refill tokens based on elapsed time
+          tokens = Math.min(options.rpsLimit, tokens + elapsed * tokensPerMs);
+          lastRefill = now;
+
+          if (tokens >= 1) {
+            tokens -= 1;
+            return; // Token acquired
+          }
+
+          // Wait for next token to be available
+          const waitMs = (1 - tokens) / tokensPerMs;
+          await sleep(Math.ceil(waitMs));
+        }
+      },
+    };
+  }
 
   let windowReq = 0;
   let windowErr = 0;
@@ -430,6 +468,11 @@ async function run() {
 
   async function worker() {
     while (!stop) {
+      // Acquire rate limit token if rate limiting is enabled
+      if (rateLimiter) {
+        await rateLimiter.acquire();
+      }
+
       const m = methodPool[Math.floor(Math.random() * methodPool.length)];
       const p = doRequest(m);
       inFlight.add(p);
