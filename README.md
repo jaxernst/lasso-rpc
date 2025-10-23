@@ -394,12 +394,7 @@ mix test test/battle/websocket_subscription_test.exs
 - Telemetry collection and percentile analysis (P50, P95, P99)
 - Automatic SLO verification and detailed reporting
 
-For quick manual load testing:
-
-```bash
-# Basic RPC method load test (curl)
-for i in {1..2000}; do for method in eth_blockNumber eth_gasPrice eth_getBlockByNumber eth_chainId; do curl -s -X POST http://localhost:4000/rpc/round-robin/ethereum -H 'Content-Type: application/json' -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$(if [ \"$method\" = "eth_getBlockByNumber" ]; then echo '[\"latest\", false]'; else echo '[]'; fi),\"id\":$i}" & done; wait; done
-```
+Load test scripts:
 
 ```bash
 # Comprehensive load test with realistic params, live RPS and latency summary (Node 18+)
