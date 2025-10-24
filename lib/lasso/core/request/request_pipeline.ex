@@ -350,7 +350,8 @@ defmodule Lasso.RPC.RequestPipeline do
     :telemetry.execute([:lasso, :failover, :exhaustion], %{count: 1}, %{
       chain: chain,
       method: method,
-      retry_after_ms: retry_after_ms || 0
+      retry_after_ms: retry_after_ms || 0,
+      transport: opts.transport || :both
     })
 
     complete_request(:error, updated_ctx, duration_ms, chain, method, error: jerr)
@@ -621,6 +622,13 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp attempt_request_on_channels([], _rpc_request, _timeout, ctx) do
+    Logger.warning("No channels available for request",
+      chain: ctx.chain,
+      method: ctx.method,
+      request_id: ctx.request_id,
+      transport: ctx.transport
+    )
+
     {:error, :no_channels_available, ctx}
   end
 
