@@ -14,18 +14,18 @@ defmodule Lasso.Config.MethodPolicy do
 
   @default_timeouts %{
     # Heavy
-    "eth_getLogs" => 6_000,
-    "eth_getFilterLogs" => 6_000,
-    "eth_newFilter" => 6_000,
-    "debug_traceTransaction" => 6_000,
-    "debug_traceBlock" => 6_000,
+    "eth_getLogs" => 3_000,
+    "eth_getFilterLogs" => 3_000,
+    "eth_newFilter" => 3_000,
+    "debug_traceTransaction" => 3_000,
+    "debug_traceBlock" => 3_000,
     # Medium
-    "eth_getBlockByNumber" => 10_000,
-    "eth_getBlockByHash" => 10_000,
-    "eth_getTransactionByHash" => 20_000,
-    "eth_getTransactionReceipt" => 10_000,
-    "eth_call" => 10_000,
-    "eth_estimateGas" => 30_000,
+    "eth_getBlockByNumber" => 3_000,
+    "eth_getBlockByHash" => 3_000,
+    "eth_getTransactionByHash" => 3_000,
+    "eth_getTransactionReceipt" => 3_000,
+    "eth_call" => 3_000,
+    "eth_estimateGas" => 3_000,
     # Quick
     "eth_blockNumber" => 1_000,
     "eth_chainId" => 1_000,
