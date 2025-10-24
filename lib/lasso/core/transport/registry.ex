@@ -327,21 +327,16 @@ defmodule Lasso.RPC.TransportRegistry do
             new_capabilities = Map.put(state.capabilities, cap_key, capabilities)
             final_state = %{new_state | capabilities: new_capabilities}
 
-            Logger.debug("Created #{transport} channel for provider #{provider_id}")
             {:ok, channel, final_state}
 
           {:error, reason} ->
             # Don't spam logs for missing transport configs (expected for HTTP-only/WS-only providers)
             case reason do
               :no_ws_config ->
-                Logger.debug(
-                  "Provider #{provider_id} does not have WebSocket configured"
-                )
+                Logger.debug("Provider #{provider_id} does not have WebSocket configured")
 
               :no_http_config ->
-                Logger.debug(
-                  "Provider #{provider_id} does not have HTTP configured"
-                )
+                Logger.debug("Provider #{provider_id} does not have HTTP configured")
 
               _ ->
                 Logger.warning(

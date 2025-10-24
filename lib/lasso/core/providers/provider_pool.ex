@@ -514,10 +514,6 @@ defmodule Lasso.RPC.ProviderPool do
 
   @impl true
   def handle_call({:list_candidates, filters}, _from, state) do
-    Logger.debug(
-      "ProviderPool.list_candidates for #{state.chain_name}: active_providers=#{inspect(state.active_providers)}, circuit_states=#{inspect(state.circuit_states)}, filters=#{inspect(filters)}"
-    )
-
     candidates =
       state
       |> candidates_ready(filters)

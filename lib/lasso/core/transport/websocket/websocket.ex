@@ -86,12 +86,6 @@ defmodule Lasso.RPC.Transports.WebSocket do
     params = Map.get(rpc_request, "params", [])
     request_id = Map.get(rpc_request, "id")
 
-    Logger.debug("WebSocket unary request via channel",
-      provider: provider_id,
-      method: method,
-      request_id: request_id
-    )
-
     # Start timing for I/O latency measurement
     io_start_us = System.monotonic_time(:microsecond)
 

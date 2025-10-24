@@ -39,10 +39,12 @@ defmodule Lasso.Logger.ChainFormatter do
 
   # Render metadata as " => key=value key2=value2" if any keys remain
   defp format_metadata(metadata) when is_list(metadata) do
-    # Filter out noisy or internal keys if present
+    # Filter out noisy metadata that clutters logs:
+    # - Internal Elixir/Erlang metadata (time, gl, mfa, module, function, file, line)
+    # - Process metadata (pid, domain, application)
     filtered =
       Enum.reject(metadata, fn {key, _val} ->
-        key in [:time, :gl, :mfa, :module, :function, :file, :line]
+        key in [:time, :gl, :mfa, :module, :function, :file, :line, :pid, :domain, :application]
       end)
 
     if filtered == [] do

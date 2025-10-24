@@ -23,34 +23,11 @@ config :lasso, LassoWeb.Endpoint,
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
   level: :debug,
-  metadata: [
-    :provider,
-    :provider_id,
-    :method,
-    :url,
-    :request_id,
-    :rpc_id,
-    :transport,
-    :context,
-    :timeout,
-    :retry_count,
-    :error,
-    :channel,
-    :result,
-    :chain,
-    :chain_id,
-    :key,
-    :id,
-    :connection,
-    :topic,
-    :params,
-    :remaining_channels,
-    :retriable,
-    :current_status
-  ]
+  metadata: :all
 
-# Enable detailed Phoenix logging
-config :phoenix, :logger, true
+# Reduce Phoenix debug log spam (only log at info level)
+# This removes "Processing with", "Parameters:", "Pipelines:" debug logs
+config :phoenix, :logger, false
 config :phoenix, :serve_endpoints, true
 
 # Set a higher stacktrace during development. Avoid configuring such

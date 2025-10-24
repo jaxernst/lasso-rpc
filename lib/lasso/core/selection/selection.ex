@@ -114,8 +114,6 @@ defmodule Lasso.RPC.Selection do
 
         case List.first(ordered) do
           %Channel{provider_id: pid} ->
-            Logger.debug("Selected provider: #{pid} for #{ctx.chain}.#{ctx.method}")
-
             :telemetry.execute([:lasso, :selection, :success], %{count: 1}, %{
               chain: ctx.chain,
               method: ctx.method,
@@ -171,8 +169,6 @@ defmodule Lasso.RPC.Selection do
 
         case List.first(ordered) do
           %Channel{provider_id: pid, transport: transport} ->
-            Logger.debug("Selected provider: #{pid} for #{ctx.chain}.#{ctx.method}")
-
             metadata = %{
               candidates: candidate_ids,
               selected: %{id: pid, protocol: transport},
@@ -240,10 +236,6 @@ defmodule Lasso.RPC.Selection do
     provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
 
     require Logger
-
-    Logger.debug(
-      "Selection.select_channels for #{chain}/#{method}: found #{length(provider_candidates)} provider candidates: #{inspect(Enum.map(provider_candidates, & &1.id))}"
-    )
 
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
     # Map provider list into channels, lazily opening as needed
