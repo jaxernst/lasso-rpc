@@ -62,6 +62,25 @@ defmodule Lasso.RPC.HttpClient.Finch do
 
         {:error, {:network_error, "Connection pool checkout failed: #{reason}"}}
 
+      {:error, %Mint.TransportError{reason: reason}} ->
+        Logger.debug("Finch request failed - Mint transport error",
+          provider_url: url,
+          request_id: request_id,
+          reason: reason
+        )
+
+        message =
+          case reason do
+            :timeout -> "Connection timeout"
+            :closed -> "Connection closed"
+            :econnrefused -> "Connection refused"
+            {:error, :nxdomain} -> "DNS resolution failed"
+            {:error, reason} when is_atom(reason) -> "Connection error: #{reason}"
+            _ -> "Connection error"
+          end
+
+        {:error, {:network_error, message}}
+
       {:error, reason} ->
         Logger.debug("Finch request failed",
           provider_url: url,

@@ -490,6 +490,22 @@ defmodule Lasso.RPC.ErrorNormalizer do
     |> then(&normalize(error, &1))
   end
 
+  # No channels available - all providers unavailable or filtered out
+  def normalize(:no_channels_available, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+    context = Keyword.get(opts, :context, :infrastructure)
+    transport = Keyword.get(opts, :transport)
+
+    JError.new(-32_603, "Service temporarily unavailable - no providers available",
+      provider_id: provider_id,
+      source: context,
+      transport: transport,
+      category: :provider_error,
+      retriable?: true,
+      breaker_penalty?: false
+    )
+  end
+
   # Generic fallback
   def normalize(other, opts) do
     provider_id = Keyword.get(opts, :provider_id)
