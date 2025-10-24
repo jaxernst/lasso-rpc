@@ -105,7 +105,11 @@ defmodule Lasso.RPC.RequestPipeline do
         :error -> Map.put(telemetry_metadata, :error, opts[:error])
       end
 
-    :telemetry.execute([:lasso, :rpc, :request, :stop], %{duration: duration_ms}, telemetry_metadata)
+    :telemetry.execute(
+      [:lasso, :rpc, :request, :stop],
+      %{duration: duration_ms},
+      telemetry_metadata
+    )
   end
 
   defp record_rpc_failure(chain, provider_id, method, reason, duration_ms, transport \\ nil) do
@@ -158,7 +162,15 @@ defmodule Lasso.RPC.RequestPipeline do
             category: :provider_error
           )
 
-        record_channel_failure_metrics(chain, provider_id, method, opts.strategy, jerr, duration_ms)
+        record_channel_failure_metrics(
+          chain,
+          provider_id,
+          method,
+          opts.strategy,
+          jerr,
+          duration_ms
+        )
+
         complete_request(:error, updated_ctx, duration_ms, chain, method, error: jerr)
         {:error, jerr}
 
@@ -270,7 +282,14 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   # Handles the case when no channels are available with closed circuits
-  defp handle_no_channels_available(chain, rpc_request, method, %RequestOptions{} = opts, ctx, start_time) do
+  defp handle_no_channels_available(
+         chain,
+         rpc_request,
+         method,
+         %RequestOptions{} = opts,
+         ctx,
+         start_time
+       ) do
     Logger.info(
       "No closed circuit channels available, attempting degraded mode with half-open circuits",
       chain: chain,
@@ -295,7 +314,15 @@ defmodule Lasso.RPC.RequestPipeline do
         handle_channel_exhaustion(chain, method, opts, ctx, start_time)
 
       _ ->
-        handle_degraded_mode_request(chain, rpc_request, method, opts, ctx, degraded_channels, start_time)
+        handle_degraded_mode_request(
+          chain,
+          rpc_request,
+          method,
+          opts,
+          ctx,
+          degraded_channels,
+          start_time
+        )
     end
   end
 
@@ -358,7 +385,15 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   # Handles request execution in degraded mode (half-open circuits)
-  defp handle_degraded_mode_request(chain, rpc_request, method, %RequestOptions{} = opts, ctx, degraded_channels, start_time) do
+  defp handle_degraded_mode_request(
+         chain,
+         rpc_request,
+         method,
+         %RequestOptions{} = opts,
+         ctx,
+         degraded_channels,
+         start_time
+       ) do
     Logger.info("Degraded mode: attempting #{length(degraded_channels)} half-open channels",
       chain: chain,
       method: method,
@@ -377,7 +412,16 @@ defmodule Lasso.RPC.RequestPipeline do
 
     case attempt_request_on_channels(degraded_channels, rpc_request, opts.timeout_ms, ctx) do
       {:ok, result, channel, updated_ctx} ->
-        handle_degraded_success(chain, method, opts, ctx, result, channel, updated_ctx, start_time)
+        handle_degraded_success(
+          chain,
+          method,
+          opts,
+          ctx,
+          result,
+          channel,
+          updated_ctx,
+          start_time
+        )
 
       {:error, reason, channel, _ctx1} ->
         handle_degraded_failure(chain, method, opts, ctx, reason, channel, start_time)
@@ -388,12 +432,27 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   # Handles successful request in degraded mode
-  defp handle_degraded_success(chain, method, %RequestOptions{} = opts, _original_ctx, result, channel, updated_ctx, start_time) do
+  defp handle_degraded_success(
+         chain,
+         method,
+         %RequestOptions{} = opts,
+         _original_ctx,
+         result,
+         channel,
+         updated_ctx,
+         start_time
+       ) do
     duration_ms = System.monotonic_time(:millisecond) - start_time
     updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
     updated_ctx = RequestContext.record_success(updated_ctx, result)
 
-    record_channel_success_metrics(chain, channel, method, opts.strategy, updated_ctx.upstream_latency_ms || 0)
+    record_channel_success_metrics(
+      chain,
+      channel,
+      method,
+      opts.strategy,
+      updated_ctx.upstream_latency_ms || 0
+    )
 
     Logger.info("Degraded mode success via half-open channel",
       chain: chain,
@@ -413,7 +472,15 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   # Handles failed request in degraded mode
-  defp handle_degraded_failure(chain, method, %RequestOptions{} = opts, ctx, reason, channel, start_time) do
+  defp handle_degraded_failure(
+         chain,
+         method,
+         %RequestOptions{} = opts,
+         ctx,
+         reason,
+         channel,
+         start_time
+       ) do
     duration_ms = System.monotonic_time(:millisecond) - start_time
     updated_ctx = RequestContext.mark_upstream_end(ctx)
     final_ctx = RequestContext.record_error(updated_ctx, reason)
@@ -435,7 +502,15 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   # Handles normal mode request execution (with closed circuits)
-  defp handle_normal_mode_request(chain, rpc_request, method, %RequestOptions{} = opts, ctx, channels, start_time) do
+  defp handle_normal_mode_request(
+         chain,
+         rpc_request,
+         method,
+         %RequestOptions{} = opts,
+         ctx,
+         channels,
+         start_time
+       ) do
     # Mark upstream start
     ctx = RequestContext.mark_upstream_start(ctx)
 
@@ -452,18 +527,42 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   # Handles successful request in normal mode
-  defp handle_normal_success(chain, method, %RequestOptions{} = opts, _original_ctx, result, channel, updated_ctx, start_time) do
+  defp handle_normal_success(
+         chain,
+         method,
+         %RequestOptions{} = opts,
+         _original_ctx,
+         result,
+         channel,
+         updated_ctx,
+         start_time
+       ) do
     duration_ms = System.monotonic_time(:millisecond) - start_time
     updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
     updated_ctx = RequestContext.record_success(updated_ctx, result)
 
-    record_channel_success_metrics(chain, channel, method, opts.strategy, updated_ctx.upstream_latency_ms || 0)
+    record_channel_success_metrics(
+      chain,
+      channel,
+      method,
+      opts.strategy,
+      updated_ctx.upstream_latency_ms || 0
+    )
+
     complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
     {:ok, result}
   end
 
   # Handles failed request in normal mode
-  defp handle_normal_failure(chain, method, %RequestOptions{} = opts, ctx, reason, channel, start_time) do
+  defp handle_normal_failure(
+         chain,
+         method,
+         %RequestOptions{} = opts,
+         ctx,
+         reason,
+         channel,
+         start_time
+       ) do
     duration_ms = System.monotonic_time(:millisecond) - start_time
     updated_ctx = RequestContext.mark_upstream_end(ctx)
     final_ctx = RequestContext.record_error(updated_ctx, reason)
@@ -617,11 +716,26 @@ defmodule Lasso.RPC.RequestPipeline do
            )}
       end
 
+    cb_result =
+      case result do
+        {:ok, {:ok, _res, _io}} -> :ok
+        {:ok, {:error, _reason, _io}} -> :error
+        {:error, _} -> :cb_error
+        _ -> :other
+      end
+
+    Logger.debug("CB result",
+      request_id: ctx.request_id,
+      channel: Channel.to_string(channel),
+      result: cb_result
+    )
+
     case result do
       # Circuit breaker wraps transport result: {:ok, {:ok, result, io_ms}}
       {:ok, {:ok, result, io_ms}} ->
         Logger.debug("✓ Request Success via #{Channel.to_string(channel)}",
           chain: ctx.chain,
+          request_id: ctx.request_id,
           io_latency_ms: io_ms
         )
 
@@ -651,6 +765,7 @@ defmodule Lasso.RPC.RequestPipeline do
         Logger.debug("Request error via #{Channel.to_string(channel)}",
           reason: inspect(reason),
           chain: ctx.chain,
+          request_id: ctx.request_id,
           io_latency_ms: io_ms
         )
 
@@ -703,7 +818,8 @@ defmodule Lasso.RPC.RequestPipeline do
       {:error, reason} ->
         Logger.debug("Circuit breaker error via #{Channel.to_string(channel)}",
           reason: inspect(reason),
-          chain: ctx.chain
+          chain: ctx.chain,
+          request_id: ctx.request_id
         )
 
         # No I/O latency since we never reached the transport

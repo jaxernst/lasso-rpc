@@ -64,7 +64,12 @@ defmodule Lasso.RPC.Transports.HTTP do
     params = Map.get(rpc_request, "params", [])
     request_id = Map.get(rpc_request, "id")
 
-    Logger.debug("HTTP request via channel", provider: provider_id, method: method, url: url)
+    Logger.debug("HTTP request via channel",
+      provider: provider_id,
+      method: method,
+      url: url,
+      rpc_id: request_id
+    )
 
     io_start_us = System.monotonic_time(:microsecond)
 
@@ -117,8 +122,27 @@ defmodule Lasso.RPC.Transports.HTTP do
 
     # Return latency as third tuple element for both success and error
     case result do
-      {:ok, response} -> {:ok, response, io_ms}
-      {:error, reason} -> {:error, reason, io_ms}
+      {:ok, response} ->
+        Logger.debug("HTTP adapter returned",
+          provider: provider_id,
+          method: method,
+          rpc_id: request_id,
+          outcome: :ok,
+          io_latency_ms: io_ms
+        )
+
+        {:ok, response, io_ms}
+
+      {:error, reason} ->
+        Logger.debug("HTTP adapter returned",
+          provider: provider_id,
+          method: method,
+          rpc_id: request_id,
+          outcome: :error,
+          io_latency_ms: io_ms
+        )
+
+        {:error, reason, io_ms}
     end
   end
 
