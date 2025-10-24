@@ -673,15 +673,6 @@ defmodule Lasso.RPC.RequestPipeline do
         circuit_breaker_state: :unknown
     }
 
-    # Log provider attempt
-    Logger.debug("Attempting provider",
-      request_id: ctx.request_id,
-      channel: Channel.to_string(channel),
-      method: Map.get(rpc_request, "method"),
-      attempt: ctx.retries + 1,
-      timeout_ms: timeout
-    )
-
     result =
       try do
         CircuitBreaker.call(cb_id, attempt_fun, timeout)
@@ -724,20 +715,6 @@ defmodule Lasso.RPC.RequestPipeline do
            )}
       end
 
-    cb_result =
-      case result do
-        {:ok, {:ok, _res, _io}} -> :ok
-        {:ok, {:error, _reason, _io}} -> :error
-        {:error, _} -> :cb_error
-        _ -> :other
-      end
-
-    Logger.debug("CB result",
-      request_id: ctx.request_id,
-      channel: Channel.to_string(channel),
-      result: cb_result
-    )
-
     case result do
       # Circuit breaker wraps transport result: {:ok, {:ok, result, io_ms}}
       {:ok, {:ok, result, io_ms}} ->
@@ -770,13 +747,6 @@ defmodule Lasso.RPC.RequestPipeline do
         attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
 
       {:ok, {:error, reason, io_ms}} ->
-        Logger.debug("Request error via #{Channel.to_string(channel)}",
-          reason: inspect(reason),
-          chain: ctx.chain,
-          request_id: ctx.request_id,
-          io_latency_ms: io_ms
-        )
-
         ctx = RequestContext.set_upstream_latency(ctx, io_ms)
 
         # Determine if this error should trigger fast-fail (immediate failover)
@@ -824,13 +794,6 @@ defmodule Lasso.RPC.RequestPipeline do
       # Direct errors from circuit breaker (not from transport)
       # These include :circuit_open and errors from catch blocks
       {:error, reason} ->
-        Logger.debug("Circuit breaker error via #{Channel.to_string(channel)}",
-          reason: inspect(reason),
-          chain: ctx.chain,
-          request_id: ctx.request_id
-        )
-
-        # No I/O latency since we never reached the transport
         ctx = RequestContext.set_upstream_latency(ctx, 0)
 
         {should_failover, failover_reason} = should_fast_fail_error?(reason, rest_channels)

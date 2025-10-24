@@ -205,12 +205,15 @@ defmodule Lasso.RPC.Caching.BlockchainMetadataMonitor do
         length(successful)
       )
 
-      Logger.debug("Metadata refresh completed",
-        chain: state.chain,
-        duration_ms: duration_ms,
-        providers_probed: length(providers),
-        successful: length(successful)
-      )
+      if length(successful) < length(providers) do
+        Logger.warning("Metadata refresh had failures",
+          chain: state.chain,
+          duration_ms: duration_ms,
+          providers_probed: length(providers),
+          successful: length(successful),
+          failed: length(providers) - length(successful)
+        )
+      end
 
       %{state | refresh_in_progress: false, last_refresh: DateTime.utc_now()}
     end
