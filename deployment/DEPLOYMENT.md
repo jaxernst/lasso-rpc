@@ -1,13 +1,13 @@
 # Lasso RPC Deployment Guide
 
-Simple, scalable deployments to Fly.io with staging and production environments.
+Production-grade, WebSocket-optimized deployments to Fly.io with staging and production environments.
 
 ## 🚀 Quick Start
 
 ### 1. Set Up Authentication
 
 ```bash
-# Option A: Create a deploy token
+# Option A: Create a deploy token (recommended for CI/CD)
 fly tokens create deploy
 # Copy the token (starts with "FlyV1 fm2_...") and set it:
 export FLY_API_TOKEN="FlyV1 fm2_your_token_here"
@@ -16,13 +16,25 @@ export FLY_API_TOKEN="FlyV1 fm2_your_token_here"
 fly auth login
 ```
 
-### 2. Run Deployment Script:
+### 2. Configure Secrets (Production Only)
 
 ```bash
-# Deploy staging
+# Generate and set SECRET_KEY_BASE for production
+mix phx.gen.secret
+fly secrets set SECRET_KEY_BASE=<generated-secret> --app lasso-rpc
+
+# Set any additional API keys
+fly secrets set INFURA_API_KEY=<your-key> --app lasso-rpc
+fly secrets set ALCHEMY_API_KEY=<your-key> --app lasso-rpc
+```
+
+### 3. Run Deployment Script
+
+```bash
+# Deploy staging (auto-generates secrets)
 ./deployment/deploy.sh staging
 
-# Deploy production
+# Deploy production (validates secrets first)
 ./deployment/deploy.sh prod
 ```
 
@@ -44,6 +56,9 @@ fly scale count 2 -a lasso-rpc --region iad
 ```bash
 # Just deploy - no scaling needed
 ./deployment/deploy.sh prod
+
+# Rollback if issues occur
+./deployment/rollback.sh prod
 ```
 
 ## 📋 Configuration
@@ -74,6 +89,46 @@ Both define:
 - HTTP service configuration
 - Health checks
 - WebSocket support
+
+## Deployment Features
+
+1. **Secrets Validation**: Verifies all required secrets exist on Fly.io before deploying
+2. **Pre-deployment Checks**: Validates machine status, volumes, and current deployment state
+3. **Rollback Capability**: Automatically saves previous image for easy rollback
+4. **Health Verification**: Tests both HTTP and WebSocket endpoints after deployment
+5. **Machine Status Monitoring**: Verifies healthy machine count post-deployment
+
+### WebSocket-Optimized Deployments
+
+- **Staging**: Rolling strategy for fast iteration
+- **Production**: Canary strategy for zero-downtime deployments
+  - Gradually shifts traffic to new machines
+  - Allows WebSocket connections to drain naturally
+  - Maintains availability throughout deployment
+
+### Deployment Stages
+
+Each deployment runs through 5 stages:
+
+1. **Pre-deployment Validation**: Checks secrets, machine status, volumes
+2. **Image Building**: Builds and pushes Docker image to Fly.io registry
+3. **Multi-region Setup**: Configures regions for deployment
+4. **Machine Deployment**: Deploys using appropriate strategy
+5. **Verification**: Tests endpoints and confirms healthy machines
+
+## 🔄 Rollback
+
+If issues occur after deployment, use the rollback script:
+
+```bash
+# Rollback to previous deployment
+./deployment/rollback.sh prod
+
+# Rollback to specific image
+./deployment/rollback.sh prod registry.fly.io/lasso-rpc:prod-20250127-120000
+```
+
+The deployment script automatically saves the previous image for easy rollback.
 
 ## 🔧 Multi-Region Setup
 
@@ -148,7 +203,8 @@ cat /tmp/fly_build.log
 
 ```
 deployment/
-├── deploy.sh              # Main deployment script
+├── deploy.sh              # Main deployment script (5-stage process)
+├── rollback.sh            # Rollback to previous deployment
 ├── scale-regions.sh       # One-time scaling helper
 ├── env.staging            # Staging environment config
 ├── env.prod               # Production environment config

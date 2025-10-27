@@ -83,9 +83,6 @@ defmodule LassoWeb.RPCSocket do
 
   @impl true
   def init(state) do
-    # Subscribe to receive subscription events
-    Process.flag(:trap_exit, true)
-
     # Start heartbeat timer
     heartbeat_ref = Process.send_after(self(), :send_heartbeat, @heartbeat_interval)
 
@@ -193,12 +190,6 @@ defmodule LassoWeb.RPCSocket do
       heartbeat_ref = Process.send_after(self(), :send_heartbeat, @heartbeat_interval)
       {:ok, %{state | missed_heartbeats: missed, heartbeat_ref: heartbeat_ref}}
     end
-  end
-
-  @impl true
-  def handle_info({:EXIT, _pid, reason}, state) do
-    Logger.debug("WebSocket process exiting: #{inspect(reason)}")
-    {:stop, reason, state}
   end
 
   @impl true
