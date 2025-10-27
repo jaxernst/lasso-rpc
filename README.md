@@ -1,408 +1,297 @@
 # Lasso RPC
 
-**A smart blockchain RPC aggregator for building bulletproof onchain applications.**
+A smart blockchain RPC aggregator for building reliable and performant onchain apps.
 
-<img width="1466" height="1034" alt="Screenshot 2025-09-02 at 5 13 21 PM" src="https://github.com/user-attachments/assets/0fdd37bb-e4c2-4ae0-b3c8-3cb3f4ba04d6" />
+- Multi-provider orchestration across HTTP and WebSocket
+- Intelligent routing (latency + health based routing strategies)
+- Per-method benchmarking and circuit-breaking failover
+- WebSocket subscriptions with multiplexing and failover gap-filling
+- Structured observability with optional client-visible metadata
 
-#### [watch the demo](https://www.youtube.com/watch?v=ZhCqh001zNE)
+Production demo: http://lasso-rpc.fly.dev
 
 ---
 
-Building reliable blockchain applications is challenging, largely due to the complexity of choosing and managing RPC providers. With dozens of providers offering different performance, pricing models, and reliability guarantees, developers face an opaque decision that directly impacts their application's user experience.
+## Why Lasso
 
-Lasso solves this by acting as an intelligent proxy that sits between your application and multiple RPC providers. While it provides the same JSON-RPC endpoints for WebSocket and HTTP that you'd expect from any provider, Lasso orchestrates **all** your providers across **all** your chains. It automatically routes requests to the best-performing provider, handles failures gracefully, and gives you improved reliability gurantees to build consumer-grade onchain applications.
+Choosing a single RPC provider has real UX and reliability consequences, yet the tradeoffs (latency, uptime, quotas, features, cost) are often opaque and shift over time. Performance varies by region, method, and hour; free tiers and API inconsistencies make a “one URL” setup brittle.
 
-Want to bypass rate limits? Configure Lasso to target multiple free providers and load balance between them:
+Lasso makes the RPC layer programmable and resilient. Its a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that chain, method, and transport. You get redundancy without rewrites, and you can scale throughput by adding providers instead of replatforming.
 
+Designed for production workloads: from hot reads to archival queries and subscriptions, different providers excel at different tasks. Lasso lets you express those preferences and enforces them automatically.
+
+Key benefits:
+
+- Faster responses: method-aware, real-latency routing
+- Higher reliability: circuit breakers, retries, graceful failover
+- Horizontal scale: add providers to raise throughput and headroom
+- Transport-agnostic: HTTP and WebSocket with route parity
+- Clear visibility: structured logs and opt-in client metadata
+- Transparent benchmarking: per-provider method/transport metrics
+
+---
+
+## Built on Elixir/OTP (BEAM)
+
+Lasso is built with Elixir on the Erlang VM (BEAM). This runtime was designed for fault-tolerant, real-time systems and powers telecom and web-scale platforms (Discord, WhatsApp, Supabase). It is a strong fit for an RPC aggregator with several key unlocks:
+
+- Massive concurrency with lightweight processes
+- Fault isolation via OTP supervision trees
+- Self-healing restarts; components can crash without taking the system down
+- Low-latency networking and long-lived WebSocket handling with minimal overhead
+- Simple distribution primitives for multi-region deployments
+- First-class telemetry and observability
+
+This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with predictable latency and strong resilience.
+
+---
+
+## JSON-RPC Compatibility
+
+Lasso follows the standard Ethereum JSON-RPC API for read-only methods. It works as a drop-in replacement for existing RPC URLs in client libraries and apps (e.g., Viem, Ethers, Wagmi) for non-mutating calls and subscriptions. Write methods (e.g., eth_sendRawTransaction) are not supported yet. See Limitations below for details on write support and batching.
+
+Drop-in usage:
+
+```ts
+// Viem
+import { createPublicClient, http, webSocket } from "viem";
+
+const client = createPublicClient({
+  transport: http(`${HOST}/rpc/ethereum`),
+});
+
+// Optional WS client (route parity)
+const wsClient = createPublicClient({
+  transport: webSocket(`${WS_HOST}/ws/rpc/ethereum`),
+});
 ```
-POST /rpc/base # Automatically load balances across available providers
+
+```ts
+// Ethers v6
+import { JsonRpcProvider } from "ethers";
+
+const provider = new JsonRpcProvider(`${HOST}/rpc/ethereum`);
 ```
 
-Want the fastest possible responses? Lasso routes to your best-performing provider using real-world RPC latency benchmarks:
+---
 
+## RPC Endpoints
+
+HTTP (POST):
+
+- `/rpc/:chain` (default round-robin)
+- `/rpc/fastest/:chain`
+- `/rpc/round-robin/:chain`
+- `/rpc/latency-weighted/:chain`
+- `/rpc/provider/:provider_id/:chain`
+
+WebSocket (route parity):
+
+- `ws://host/ws/rpc/:chain`
+- `ws://host/ws/rpc/fastest/:chain`
+- `ws://host/ws/rpc/round-robin/:chain`
+- `ws://host/ws/rpc/latency-weighted/:chain`
+- `ws://host/ws/rpc/provider/:provider_id/:chain`
+
+Metrics API:
+
+- `GET /api/metrics/:chain`
+
+---
+
+## Try It (Live or Local)
+
+Set convenience variables first:
+
+```bash
+export HOST=http://lasso-rpc.fly.dev
+export WS_HOST=ws://lasso-rpc.fly.dev
+# or for local
+# export HOST=http://localhost:4000
+# export WS_HOST=ws://localhost:4000
 ```
-POST /rpc/fastest/ethereum # Automatic routing based on passive performance measurement
+
+HTTP examples:
+
+```bash
+# Round-robin
+curl -s -X POST "$HOST/rpc/ethereum" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result'
+
+# Fastest per current metrics
+curl -s -X POST "$HOST/rpc/fastest/ethereum" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":1}' | jq
+
+# Provider override (example id)
+curl -s -X POST "$HOST/rpc/provider/ethereum_llamarpc/ethereum" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq
+
+# Include routing metadata in response body
+curl -s -X POST "$HOST/rpc/ethereum?include_meta=body" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq
 ```
 
-Want much better reliability? Lasso will quietly retry your failed request with circuit breakers and intelligent failover—your application stays resilient when providers don't.
+WebSocket examples (wscat or websocat):
 
-Want to build your own blockchain node infrastructure? Start with Lasso as your orchestration layer.
+```bash
+# Default strategy
+wscat -c "$WS_HOST/ws/rpc/ethereum"
+> {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}
 
-## Built on Elixir/OTP: Fault-Tolerance by Design
+# Strategy-specific
+wscat -c "$WS_HOST/ws/rpc/fastest/ethereum"
+```
 
-Lasso runs on the Erlang BEAM VM, a battle-tested platform that powers highly scalable platforms like WhatsApp, Discord, Supabase, and telecom infrastructure serving billions of users. This gives us superpowers:
+Subscriptions:
 
-- **Massive concurrency**: Handle thousands of concurrent connections with minimal overhead
-- **Fault isolation**: Provider failures don't cascade—each connection runs in its own lightweight process
-- **Self-healing**: Crashed processes automatically restart without affecting others
-- **Hot code updates**: Deploy fixes without downtime
-- **Distributed by default**: Simple and high level primitives to coordinate across multiple nodes and regions
+```bash
+wscat -c "$WS_HOST/ws/rpc/ethereum"
+> {"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
+< {"jsonrpc":"2.0","id":1,"result":"0x..."}
+< {"jsonrpc":"2.0","method":"eth_subscription","params":{...}}
+```
 
-## Core Features
-
-- **Multi-provider orchestration** with pluggable routing strategies (fastest, cheapest, priority, round-robin)
-- **Transport-agnostic routing** - single requests automatically route across both HTTP and WebSocket providers based on performance
-- **Full JSON-RPC compatibility** via HTTP and WebSocket proxies for all standard read-only methods
-- **WebSocket subscription management** - intelligent multiplexing, automatic failover with gap-filling during provider switches
-- **RPC Method failover** with per-provider circuit breakers and health monitoring
-- **Method-specific benchmarking** using real RPC call latencies to measure provider performance per-chain and per-method
-- **Intelligent routing** - automatically selects providers based on actual latency measurements for each RPC method
-- **Request observability** - structured logs and optional client-visible metadata for routing decisions, latencies, and retries
-- **Battle testing framework** - sophisticated load testing with chaos engineering capabilities for validating reliability
-- **Live dashboard** with real-time insights, provider leaderboards, and performance metrics
-- **Globally distributable** with BEAM's built-in clustering and fault-tolerance
-
-## Global Distribution Potential
-
-BEAM's distributed capabilities unlock powerful possibilities for smart routing:
-
-- **Regional nodes**: Deploy Lasso instances globally, each maintaining region-local performance benchmarks
-- **Latency-aware routing**: Clients connect to the nearest Lasso node, which routes to the fastest upstream provider for that region
-- **Cross-region coordination**: Nodes can share performance data to optimize routing decisions globally
-- **Edge deployment**: Run Lasso close to your users for minimal added latency
-
-This architecture scales from a single self-hosted instance to a global network of coordinated nodes.
-
-## Usage
-
-### HTTP vs WebSocket
-
-- WebSocket (WS): Subscriptions (e.g., `eth_subscribe`, `eth_unsubscribe`) and read-only methods.
-- HTTP (POST /rpc/:chain): Read-only methods proxied to upstream providers.
+---
 
 ## Quick Start
 
-**🎯 For Hackathon Judges:** See [HACKATHON_SETUP.md](HACKATHON_SETUP.md) for the fastest setup guide
-
-Choose your preferred setup method:
-
-### 🚀 Option 1: Docker (Production Optimized Build)
-
-**Fastest way to get started - no Elixir installation required:**
+Docker:
 
 ```bash
-git clone <repository-url>
+git clone <repo-url>
 cd lasso-rpc
 ./run-docker.sh
-
-# Windows Command Prompt
-git clone <repository-url>
-cd lasso-rpc
-run-docker.bat
+# or
+docker build -t lasso-rpc . && docker run --rm -p 4000:4000 lasso-rpc
 ```
 
-**Or manually:**
+Local (Elixir 1.15+/OTP 26+):
 
 ```bash
-docker build -t lasso-rpc .
-docker run --rm -p 4000:4000 lasso-rpc
-```
-
-**🎯 Access at:** http://localhost:4000
-
-### 🚀 Option 2: Local Production Build
-
-**Build and run a production release locally:**
-
-```bash
-MIX_ENV=prod PORT=4000 PHX_HOST=localhost SECRET_KEY_BASE=$(mix phx.gen.secret) mix phx.server
-```
-
-**🎯 Access at:** http://localhost:4000
-
-### 🚀 Option 3: Local Development
-
-**Prerequisites:** [Elixir/OTP 26+](https://elixir-lang.org/install.html)
-
-```bash
-# Development mode (hot reloading, faster builds)
 mix deps.get
 mix phx.server
 ```
 
-**🎯 Access at:** http://localhost:4000
+Access: http://localhost:4000
 
-## ⚡ Test the RPC Endpoints
-
-Once running, test all 4 routing strategies:
-
-```bash
-# 💰 CHEAPEST - Prefers free providers
-curl -X POST http://localhost:4000/rpc/cheapest/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# ⚡ FASTEST - Performance-based routing
-curl -X POST http://localhost:4000/rpc/fastest/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# 🎯 PRIORITY - Static configuration priorities
-curl -X POST http://localhost:4000/rpc/priority/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# 🔄 ROUND_ROBIN - Load balances across providers
-curl -X POST http://localhost:4000/rpc/round-robin/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-```
-
-**📊 Live Dashboard:** http://localhost:4000
-
-## Configuration
-
-### Provider Setup
-
-Edit `config/chains.yml` to add your RPC providers:
+Configuration lives in `config/chains.yml`. Minimal example:
 
 ```yaml
 chains:
   ethereum:
     chain_id: 1
-    name: "Ethereum Mainnet"
     providers:
-      - id: "ankr_eth"
-        name: "Ankr Public"
-        url: "https://rpc.ankr.com/eth"
-        ws_url: "wss://rpc.ankr.com/eth/ws"
+      - id: "ethereum_llamarpc"
+        name: "LlamaRPC"
+        url: "https://eth.llamarpc.com"
+        ws_url: "wss://eth.llamarpc.com"
         type: "public"
-      - id: "alchemy_eth"
-        name: "Alchemy"
-        url: "https://eth-mainnet.g.alchemy.com/v2/YOUR-API-KEY"
-        ws_url: "wss://eth-mainnet.g.alchemy.com/v2/YOUR-API-KEY"
-        type: "premium"
 ```
 
-### Provider Selection Strategy
-
-Routing strategies are determined by the endpoint you use:
-
-- `/rpc/fastest/:chain` - Routes to the fastest provider based on performance metrics
-- `/rpc/cheapest/:chain` - Prefers free/public providers
-- `/rpc/priority/:chain` - Uses static priority order from configuration
-- `/rpc/round-robin/:chain` - Load balances across all available providers
-- `/rpc/:chain` - Uses the default strategy (configured below)
-
-**Default strategy for base `/rpc/:chain` endpoint:**
+Default strategy can be changed:
 
 ```elixir
 # config/config.exs
-config :lasso, :provider_selection_strategy, :cheapest
-# Options: :fastest, :cheapest, :priority, :round_robin
+config :lasso, :provider_selection_strategy, :round_robin
+# options: :fastest | :round_robin | :latency_weighted
 ```
 
-### Circuit Breaker Settings
+WebSocket subscriptions use a stable, priority-based provider chosen from `chains.yml` to maintain continuity; unary WS calls still follow the selected strategy.
 
-```elixir
-config :lasso, :circuit_breaker,
-  failure_threshold: 5,      # failures before opening
-  recovery_timeout: 60_000,  # ms before retry
-  success_threshold: 2       # successes before closing
-```
+---
 
-## Observability & Request Metadata
+## Metrics and Reporting
 
-Lasso provides comprehensive request observability with optional client-visible metadata to help you understand routing decisions and performance characteristics.
-
-### Structured Server Logs
-
-Every RPC request emits a structured `rpc.request.completed` event to server logs (`:info` level by default):
-
-```json
-{
-  "event": "rpc.request.completed",
-  "request_id": "21027f767548a9b6ddff97c860e7e58c",
-  "strategy": "cheapest",
-  "chain": "ethereum",
-  "transport": "http",
-  "jsonrpc_method": "eth_blockNumber",
-  "params_present": false,
-  "routing": {
-    "candidate_providers": [
-      "ethereum_cloudflare:http",
-      "ethereum_llamarpc:http"
-    ],
-    "selected_provider": { "id": "ethereum_llamarpc", "protocol": "http" },
-    "selection_latency_ms": 0,
-    "retries": 2,
-    "circuit_breaker_state": "unknown"
-  },
-  "timing": {
-    "upstream_latency_ms": 592,
-    "end_to_end_latency_ms": 592
-  },
-  "response": {
-    "status": "success",
-    "result_type": "string"
-  }
-}
-```
-
-### Client-Visible Metadata (Opt-in)
-
-Clients can request routing and performance metadata by adding `include_meta` to requests:
-
-**Via HTTP Headers:**
+Fetch runtime performance metrics and export a report:
 
 ```bash
-# Request metadata in response headers
-curl -X POST "http://localhost:4000/rpc/ethereum?include_meta=headers" \
+# CSV (default)
+node scripts/export_metrics_csv.mjs --url "$HOST/api/metrics" --chain ethereum --output ethereum_rpc_performance.csv
+
+# JSON
+node scripts/export_metrics_csv.mjs -u "$HOST/api/metrics" -c base -f json -o base_metrics.json
+```
+
+From the live demo:
+
+```bash
+HOST=http://lasso-rpc.fly.dev node scripts/export_metrics_csv.mjs -u "$HOST/api/metrics" -c ethereum
+```
+
+You can also generate load locally to populate metrics:
+
+```bash
+node scripts/rpc_load_test.mjs --url "$HOST/rpc/round-robin/ethereum" --concurrency 24 --duration 45
+```
+
+---
+
+## Observability (Optional Client Metadata)
+
+Add `include_meta=headers|body` to get routing details back:
+
+```bash
+curl -s -X POST "$HOST/rpc/ethereum?include_meta=headers" \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-
-# Response includes:
-# X-Lasso-Request-ID: d12fd341cc14fc97ce9f09876fffa7a3
-# X-Lasso-Meta: <base64url-encoded JSON with routing details>
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' -i | sed -n '1,10p'
 ```
 
-**Via JSON-RPC Response Body:**
+This returns `X-Lasso-Request-ID` and a base64url `X-Lasso-Meta` header. Use `include_meta=body` to embed metadata in the JSON-RPC response instead.
+
+---
+
+## Limitations
+
+- Read-only only: write methods (for example, `eth_sendRawTransaction`) are not supported.
+- Batching: HTTP JSON-RPC batch requests are supported (default maximum 50 items per batch, configurable). WebSocket batching is not supported.
+- Subscriptions: must use WebSocket (`eth_subscribe`, `eth_unsubscribe`).
+- Compatibility: some provider-specific quirks are normalized, but method availability and timeouts may vary per provider.
+
+---
+
+## Architecture
+
+Core components (see full document for details):
+
+- Provider pool and per-transport circuit breakers
+- Unified request pipeline selecting across HTTP and WS channels
+- Per-method benchmarking feeding the fastest strategy
+- Subscription multiplexing with gap-filling on failover
+
+Read more:
+
+- `project/ARCHITECTURE.md`
+- `project/OBSERVABILITY.md`
+
+---
+
+## Development
+
+Tests and basic dev workflow:
 
 ```bash
-# Request metadata inline in response
-curl -X POST "http://localhost:4000/rpc/ethereum?include_meta=body" \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":1}'
-
-# Response includes lasso_meta field:
-{
-  "id": 1,
-  "result": "0x8471c9a",
-  "jsonrpc": "2.0",
-  "lasso_meta": {
-    "version": "1.0",
-    "request_id": "2306632247e756bfbf451c23c9041644",
-    "strategy": "cheapest",
-    "chain": "ethereum",
-    "transport": "http",
-    "selected_provider": {"id": "ethereum_llamarpc", "protocol": "http"},
-    "candidate_providers": ["ethereum_cloudflare:http", "ethereum_llamarpc:http"],
-    "upstream_latency_ms": 525,
-    "retries": 1,
-    "circuit_breaker_state": "unknown",
-    "selection_latency_ms": 0,
-    "end_to_end_latency_ms": 525
-  }
-}
-```
-
-**Alternative: Use request header instead of query param**
-
-```bash
-curl -X POST "http://localhost:4000/rpc/ethereum" \
-  -H 'Content-Type: application/json' \
-  -H 'X-Lasso-Include-Meta: body' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-```
-
-### Observability Configuration
-
-```elixir
-# config/config.exs
-config :lasso, :observability,
-  log_level: :info,                    # Log level for request completed events
-  include_params_digest: true,         # Include SHA-256 digest of params in logs
-  max_error_message_chars: 256,        # Truncate error messages for logs
-  max_meta_header_bytes: 4096,         # Max size for X-Lasso-Meta header
-  sampling: [rate: 1.0]                # Sample rate (0.0-1.0) for high-volume scenarios
-```
-
-## Integration
-
-**WebSocket subscriptions:**
-
-```bash
-wscat -c ws://localhost:4000/ws/rpc/ethereum
-{"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
-```
-
-```bash
-wscat -c ws://localhost:4000/ws/rpc/ethereum
-{"jsonrpc":"2.0","method":"eth_subscribe","params":["logs",{"address":"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48","topics":["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"]}],"id":1}
-```
-
-## Live Dashboard
-
-Access the real-time dashboard at http://localhost:4000:
-
-- **Provider leaderboards** with success rates and RPC method latencies
-- **Performance matrix** showing RPC call latencies by provider and method
-- **Circuit breaker status** and provider health monitoring
-- **Chain selection** to switch between networks
-- **System simulator** for load testing
-
-## API Reference
-
-### System Health & Metrics
-
-```bash
-# Health check
-GET /api/health
-
-# Detailed system status
-GET /api/status
-
-# Provider performance metrics
-GET /api/metrics/:chain
-```
-
-## Development & Testing
-
-### Running Tests
-
-Lasso has three types of tests organized for different purposes:
-
-```bash
-# Unit tests (fast, run on every PR)
-# 165 tests covering core RPC functionality, transport abstraction, and observability
 mix test --exclude battle --exclude real_providers
-
-# Start the dev server
 mix phx.server
 ```
 
-**For local development:** Run unit tests frequently. Run integration tests before pushing.
+Load testing and metrics export are in `scripts/`.
 
-### Test Tags
+---
 
-- `:battle` - Battle testing framework (integration & e2e tests)
-- `:fast` - Fast tests suitable for CI (<30s)
-- `:slow` - Slow tests requiring real blockchain events (5+ min)
-- `:real_providers` - Uses external RPC providers (network-dependent)
-- `:diagnostic` - Framework validation tests
+## Future Work
 
-### Battle Testing & Load Testing
+Lasso’s roadmap and ideas for where this can go next (advanced routing strategies, hedged requests, caching, geo-aware routing, multi-tenancy, and more) are tracked here:
 
-Lasso includes a sophisticated battle testing framework for validating reliability under load and chaos conditions:
+- `project/FUTURE_FEATURES.md`
 
-```bash
-# Run battle testing scenarios with the DSL
-mix test test/battle/
+---
 
-# Example: HTTP failover with provider chaos
-mix test test/battle/chaos_test.exs
+## Status
 
-# Example: WebSocket subscription continuity
-mix test test/battle/websocket_subscription_test.exs
-```
-
-**Framework capabilities:**
-
-- Fluent scenario DSL for orchestrating complex test flows
-- Workload generation with configurable concurrency and duration
-- Chaos engineering: kill providers, inject latency, flap connections
-- Telemetry collection and percentile analysis (P50, P95, P99)
-- Automatic SLO verification and detailed reporting
-
-Load test scripts:
-
-```bash
-# Comprehensive load test with realistic params, live RPS and latency summary (Node 18+)
-# Options: --url <endpoint> --concurrency <N> --duration <seconds> --timeout <ms> --methods <csv> --verbose
-node scripts/rpc_load_test.mjs --url http://localhost:4000/rpc/round-robin/ethereum --concurrency 32 --duration 60
-
-# Example: restrict to a subset of methods
-node scripts/rpc_load_test.mjs -m eth_blockNumber,eth_getBlockByNumber,eth_getLogs -c 24 -d 45
-```
-
-See [project/battle-testing/BATTLE_TESTING_GUIDE.md](project/battle-testing/BATTLE_TESTING_GUIDE.md) for detailed documentation.
+- Multi-region capable via BEAM clustering and regional deployments
+- Provider adapters with per-chain capabilities and validation
+- Focus: read-only JSON-RPC and subscription reliability; writes are out of scope for now
