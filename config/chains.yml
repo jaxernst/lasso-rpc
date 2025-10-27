@@ -43,13 +43,14 @@ chains:
         ws_url: "wss://lb.drpc.live/ethereum/AsX7SwWUH0vGkFOHPHzUyaGtM9G3rgMR8LnWQrxF2MGT"
         api_key_required: false
 
-      - id: "ethereum_chainstack"
-        name: "Chainstack Ethereum"
-        priority: 2
-        type: "public"
-        url: "https://ethereum-mainnet.core.chainstack.com/d0c303d34e6d9d682d453f2b0d64b8af"
-        ws_url: "wss://ethereum-mainnet.core.chainstack.com/d0c303d34e6d9d682d453f2b0d64b8af"
-        api_key_required: false
+      # Needs adapter for block range limits
+      # - id: "ethereum_chainstack"
+      #   name: "Chainstack Ethereum"
+      #   priority: 2
+      #   type: "public"
+      #   url: "https://ethereum-mainnet.core.chainstack.com/d0c303d34e6d9d682d453f2b0d64b8af"
+      #   ws_url: "wss://ethereum-mainnet.core.chainstack.com/d0c303d34e6d9d682d453f2b0d64b8af"
+      #   api_key_required: false
 
       - id: "ethereum_cloudflare"
         name: "Cloudflare Ethereum"
@@ -95,13 +96,14 @@ chains:
         url: "https://1rpc.io/eth"
         api_key_required: false
 
-      - id: "ethereum_blastapi"
-        name: "BlastAPI Ethereum"
-        priority: 6
-        type: "public"
-        url: "https://ethereum.publicnode.com"
-        ws_url: "wss://ethereum.publicnode.com"
-        api_key_required: false
+      # Needs adapter for eth_getLogs params
+      # - id: "ethereum_blastapi"
+      #   name: "BlastAPI Ethereum"
+      #   priority: 6
+      #   type: "public"
+      #   url: "https://ethereum.publicnode.com"
+      #   ws_url: "wss://ethereum.publicnode.com"
+      #   api_key_required: false
 
     connection:
       heartbeat_interval: 10000
