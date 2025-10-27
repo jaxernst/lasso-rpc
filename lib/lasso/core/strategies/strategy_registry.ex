@@ -6,7 +6,7 @@ defmodule Lasso.RPC.Strategies.Registry do
   scattering case statements across the codebase.
   """
 
-  @type strategy :: :fastest | :cheapest | :priority | :round_robin | :latency_weighted
+  @type strategy :: :fastest | :round_robin | :latency_weighted
 
   @doc """
   Resolve a strategy atom to its implementation module.
@@ -38,9 +38,7 @@ defmodule Lasso.RPC.Strategies.Registry do
   @spec default_registry() :: %{strategy => module()}
   defp default_registry do
     %{
-      priority: Lasso.RPC.Strategies.Priority,
       round_robin: Lasso.RPC.Strategies.RoundRobin,
-      cheapest: Lasso.RPC.Strategies.Cheapest,
       fastest: Lasso.RPC.Strategies.Fastest,
       latency_weighted: Lasso.RPC.Strategies.LatencyWeighted
     }

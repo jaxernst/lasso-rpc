@@ -17,17 +17,44 @@ defmodule LassoWeb.Endpoint do
     longpoll: [connect_info: [session: @session_options]]
   )
 
-  # JSON-RPC WebSocket endpoints with route parameters
-  # Using /ws/rpc/:chain_id path to avoid conflicts with HTTP /rpc/:chain_id
-  socket("/ws/rpc/:chain_id", LassoWeb.RPCSocket,
+  # JSON-RPC WebSocket endpoints with full route parity to HTTP endpoints
+  # Using /ws/rpc/* paths to avoid conflicts with HTTP /rpc/* routes
+  # Phoenix's WebSocket transport only accepts GET requests, so we cannot share
+  # the exact same path with HTTP POST endpoints (would return 400 errors)
+  # Each socket definition provides compile-time route verification and introspection
+  #
+  # IMPORTANT: Phoenix processes socket declarations in REVERSE order (LIFO),
+  # so generic routes (with only variables) must be defined FIRST, and specific
+  # routes (with literal segments) must be defined LAST
+
+  # Supported routing strategies for provider selection
+  @rpc_strategies ~w(fastest round-robin latency-weighted)
+
+  # Socket configuration shared across all endpoints
+  @socket_config [
     websocket: [
       path: "",
-      # 2 hours for subscription connections (standard for persistent WebSocket connections)
+      connect_info: [:peer_data, :x_headers, :uri],
+      # 2 hours timeout for persistent subscription connections
       timeout: 7_200_000,
       compress: false
     ],
     longpoll: false
-  )
+  ]
+
+  # Alternative provider override format (least specific - two variables) - defined first!
+  socket("/ws/rpc/:chain_id/:provider_id", LassoWeb.RPCSocket, @socket_config)
+
+  # Base WebSocket endpoint (less specific - single variable)
+  socket("/ws/rpc/:chain_id", LassoWeb.RPCSocket, @socket_config)
+
+  # Strategy-specific WebSocket endpoints (compile-time generation - has strategy literals)
+  for strategy <- @rpc_strategies do
+    socket("/ws/rpc/#{strategy}/:chain_id", LassoWeb.RPCSocket, @socket_config)
+  end
+
+  # Provider override WebSocket endpoint (most specific - has "provider" literal) - defined last!
+  socket("/ws/rpc/provider/:provider_id/:chain_id", LassoWeb.RPCSocket, @socket_config)
 
   # Serve at "/" the static files from "priv/static" directory.
   plug(Plug.Static,
