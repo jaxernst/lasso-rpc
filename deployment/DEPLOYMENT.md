@@ -16,7 +16,7 @@ export FLY_API_TOKEN="FlyV1 fm2_your_token_here"
 fly auth login
 ```
 
-### 2. First-Time Deployment
+### 2. Run Deployment Script:
 
 ```bash
 # Deploy staging

@@ -48,7 +48,7 @@ This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with 
 
 ## JSON-RPC Compatibility
 
-Lasso follows the standard Ethereum JSON-RPC API for read-only methods. It works as a drop-in replacement for existing RPC URLs in client libraries and apps (e.g., Viem, Ethers, Wagmi) for non-mutating calls and subscriptions. Write methods (e.g., eth_sendRawTransaction) are not supported yet. See Limitations below for details on future write support and batching.
+Lasso follows the standard Ethereum JSON-RPC API for read-only methods. It works as a drop-in replacement for existing RPC URLs in client libraries and apps (e.g., Viem, Ethers, Wagmi) for non-mutating calls and subscriptions. Write methods (e.g., eth_sendRawTransaction) are not supported yet. See Limitations below for details on future write and batching support
 
 Drop-in usage:
 
@@ -104,8 +104,8 @@ Metrics API:
 Set convenience variables first:
 
 ```bash
-export HOST=http://lasso-rpc.fly.dev
-export WS_HOST=ws://lasso-rpc.fly.dev
+export HOST=https://lasso-rpc.fly.dev
+export WS_HOST=wss://lasso-rpc.fly.dev
 # or for local
 # export HOST=http://localhost:4000
 # export WS_HOST=ws://localhost:4000
@@ -133,6 +133,14 @@ curl -s -X POST "$HOST/rpc/provider/ethereum_llamarpc/ethereum" \
 curl -s -X POST "$HOST/rpc/ethereum?include_meta=body" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq
+
+# HTTP batching (array of requests)
+curl -s -X POST "$HOST/rpc/ethereum" \
+  -H 'Content-Type: application/json' \
+  -d '[
+    {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1},
+    {"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":2}
+  ]' | jq .
 ```
 
 WebSocket examples (wscat or websocat):
@@ -247,7 +255,8 @@ This returns `X-Lasso-Request-ID` and a base64url `X-Lasso-Meta` header. Use `in
 ## Limitations
 
 - Read-only only: write methods (for example, `eth_sendRawTransaction`) are not supported.
-- Batching: HTTP JSON-RPC batch requests are supported (default maximum 50 items per batch, configurable). WebSocket batching is not supported.
+- HTTP batching: JSON-RPC batch requests are supported via HTTP (default maximum 50 items per batch, configurable).
+- WebSocket: individual messages only; do not send batch arrays over WebSocket (will crash the connection). Send each request as a separate JSON object.
 - Compatibility: provider-specific api inconsistencies are normalized, but method availability and proivder-specific adapters and error parsing likely have coverage gaps that will improve over time
 
 ---
