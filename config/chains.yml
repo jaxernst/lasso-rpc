@@ -73,35 +73,35 @@ chains:
         url: "https://eth.merkle.io"
         api_key_required: false
 
-      # - id: "0xrpc_ethereum"
-      #   name: "0xRPC Ethereum"
-      #   priority: 6
-      #   type: "public"
-      #   url: "https://0xrpc.io/eth"
-      #   ws_url: "wss://0xrpc.io/eth"
-      #   api_key_required: false
+      - id: "0xrpc_ethereum"
+        name: "0xRPC Ethereum"
+        priority: 6
+        type: "public"
+        url: "https://0xrpc.io/eth"
+        ws_url: "wss://0xrpc.io/eth"
+        api_key_required: false
 
-      # - id: "flashbots_ethereum"
-      #   name: "Flashbots Ethereum"
-      #   priority: 7
-      #   type: "public"
-      #   url: "https://rpc.flashbots.net/fast"
-      #   api_key_required: false
+      - id: "flashbots_ethereum"
+        name: "Flashbots Ethereum"
+        priority: 7
+        type: "public"
+        url: "https://rpc.flashbots.net/fast"
+        api_key_required: false
 
-      # - id: "ethereum_1rpc"
-      #   name: "1RPC Ethereum"
-      #   priority: 5
-      #   type: "public"
-      #   url: "https://1rpc.io/eth"
-      #   api_key_required: false
+      - id: "ethereum_1rpc"
+        name: "1RPC Ethereum"
+        priority: 5
+        type: "public"
+        url: "https://1rpc.io/eth"
+        api_key_required: false
 
-      # - id: "ethereum_blastapi"
-      #   name: "BlastAPI Ethereum"
-      #   priority: 6
-      #   type: "public"
-      #   url: "https://ethereum.publicnode.com"
-      #   ws_url: "wss://ethereum.publicnode.com"
-      #   api_key_required: false
+      - id: "ethereum_blastapi"
+        name: "BlastAPI Ethereum"
+        priority: 6
+        type: "public"
+        url: "https://ethereum.publicnode.com"
+        ws_url: "wss://ethereum.publicnode.com"
+        api_key_required: false
 
     connection:
       heartbeat_interval: 10000

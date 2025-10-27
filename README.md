@@ -48,7 +48,7 @@ This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with 
 
 ## JSON-RPC Compatibility
 
-Lasso follows the standard Ethereum JSON-RPC API for read-only methods. It works as a drop-in replacement for existing RPC URLs in client libraries and apps (e.g., Viem, Ethers, Wagmi) for non-mutating calls and subscriptions. Write methods (e.g., eth_sendRawTransaction) are not supported yet. See Limitations below for details on write support and batching.
+Lasso follows the standard Ethereum JSON-RPC API for read-only methods. It works as a drop-in replacement for existing RPC URLs in client libraries and apps (e.g., Viem, Ethers, Wagmi) for non-mutating calls and subscriptions. Write methods (e.g., eth_sendRawTransaction) are not supported yet. See Limitations below for details on future write support and batching.
 
 Drop-in usage:
 
@@ -248,8 +248,7 @@ This returns `X-Lasso-Request-ID` and a base64url `X-Lasso-Meta` header. Use `in
 
 - Read-only only: write methods (for example, `eth_sendRawTransaction`) are not supported.
 - Batching: HTTP JSON-RPC batch requests are supported (default maximum 50 items per batch, configurable). WebSocket batching is not supported.
-- Subscriptions: must use WebSocket (`eth_subscribe`, `eth_unsubscribe`).
-- Compatibility: some provider-specific quirks are normalized, but method availability and timeouts may vary per provider.
+- Compatibility: provider-specific api inconsistencies are normalized, but method availability and proivder-specific adapters and error parsing likely have coverage gaps that will improve over time
 
 ---
 
