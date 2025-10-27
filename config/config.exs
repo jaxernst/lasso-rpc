@@ -13,7 +13,8 @@ config :lasso, LassoWeb.Endpoint,
   secret_key_base: "YourSecretKeyBaseHere" <> String.duplicate("a", 32)
 
 # Default provider selection strategy
-config :lasso, :provider_selection_strategy, :cheapest
+# Options: :fastest, :round_robin, :latency_weighted
+config :lasso, :provider_selection_strategy, :round_robin
 
 # Default HTTP client adapter
 config :lasso, :http_client, Lasso.RPC.HttpClient.Finch

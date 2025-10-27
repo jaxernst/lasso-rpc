@@ -68,14 +68,10 @@ defmodule LassoWeb.Router do
     # Strategy-specific endpoints for different routing approaches
     # Use fastest provider based on latency
     post("/fastest/:chain_id", RPCController, :rpc_fastest)
+    # Round-robin provider selection (default strategy)
+    post("/round-robin/:chain_id", RPCController, :rpc_round_robin)
     # Latency-weighted randomized balancer
     post("/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
-    # Use cheapest provider (round-robin between free providers)
-    post("/cheapest/:chain_id", RPCController, :rpc_cheapest)
-    # Use priority-ordered providers
-    post("/priority/:chain_id", RPCController, :rpc_priority)
-    # Round-robin provider selection
-    post("/round-robin/:chain_id", RPCController, :rpc_round_robin)
 
     # Provider override endpoints - directly target specific providers
     post("/provider/:provider_id/:chain_id", RPCController, :rpc_provider_override)

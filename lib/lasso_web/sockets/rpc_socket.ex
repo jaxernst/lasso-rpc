@@ -46,11 +46,23 @@ defmodule LassoWeb.RPCSocket do
     client_ip = extract_client_ip(transport_info)
     connection_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
-    # Extract chain from path parameters
-    chain = get_in(transport_info, [:params, "chain_id"]) || "ethereum"
+    # Extract routing parameters from path
+    # Paths can be:
+    #   /ws/rpc/:chain_id                           -> base endpoint with default strategy
+    #   /ws/rpc/:strategy/:chain_id                 -> strategy-specific endpoint
+    #   /ws/rpc/provider/:provider_id/:chain_id     -> provider override
+    #   /ws/rpc/:chain_id/:provider_id              -> alternative provider override
+    params = transport_info[:params] || %{}
+    uri = transport_info[:connect_info][:uri]
+    chain = params["chain_id"] || "ethereum"
+
+    # Determine if a strategy or provider override is specified by parsing the URI
+    {strategy, provider_id} = extract_routing_params(uri, params)
 
     socket_state = %{
       chain: chain,
+      strategy: strategy,
+      provider_id: provider_id,
       subscriptions: %{},
       client_pid: self(),
       heartbeat_ref: nil,
@@ -60,8 +72,10 @@ defmodule LassoWeb.RPCSocket do
       client_ip: client_ip
     }
 
+    routing_info = build_routing_info(strategy, provider_id)
+
     Logger.info(
-      "JSON-RPC WebSocket client connected: #{chain} (id: #{connection_id}, ip: #{client_ip})"
+      "JSON-RPC WebSocket client connected: #{chain}#{routing_info} (id: #{connection_id}, ip: #{client_ip})"
     )
 
     {:ok, socket_state}
@@ -224,7 +238,6 @@ defmodule LassoWeb.RPCSocket do
 
     case handle_rpc_method(method, params || [], state, ctx) do
       {:ok, result, new_state, updated_ctx} ->
-        # Emit structured log
         Observability.log_request_completed(updated_ctx)
 
         # Build base response
@@ -257,7 +270,6 @@ defmodule LassoWeb.RPCSocket do
         end
 
       {:error, reason, new_state, updated_ctx} ->
-        # Emit structured log even for errors
         Observability.log_request_completed(updated_ctx)
 
         error = JError.from(reason)
@@ -344,14 +356,21 @@ defmodule LassoWeb.RPCSocket do
 
   # Generic read-only method forwarding
   defp handle_rpc_method(method, params, state, ctx) do
-    strategy = default_provider_strategy()
+    strategy = state[:strategy] || default_provider_strategy()
+
+    request_opts = %RequestOptions{
+      strategy: strategy,
+      timeout_ms: 10_000,
+      request_context: ctx,
+      provider_override: state[:provider_id]
+    }
 
     # Pass context to RequestPipeline
     case RequestPipeline.execute_via_channels(
            state.chain,
            method,
            params,
-           %RequestOptions{strategy: strategy, timeout_ms: 10_000, request_context: ctx}
+           request_opts
          ) do
       {:ok, result} ->
         # Retrieve updated context from Process dictionary
@@ -383,7 +402,7 @@ defmodule LassoWeb.RPCSocket do
   end
 
   defp default_provider_strategy do
-    Application.get_env(:lasso, :provider_selection_strategy, :cheapest)
+    Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
   end
 
   ## Observability helpers
@@ -421,6 +440,55 @@ defmodule LassoWeb.RPCSocket do
     }
   end
 
+  ## Routing parameter extraction
+
+  # Valid strategies that can appear in the path
+  @valid_strategies ~w(fastest round-robin latency-weighted)
+
+  defp extract_routing_params(nil, _params), do: {nil, nil}
+
+  defp extract_routing_params(uri, _params) when is_binary(uri) do
+    # Parse the URI path: /ws/rpc/[strategy|provider|chain_id]/[chain_id|provider_id]
+    path_segments =
+      uri
+      |> String.split("?")
+      |> List.first()
+      |> String.split("/", trim: true)
+
+    case path_segments do
+      # Pattern: ["ws", "rpc", "provider", provider_id, _chain_id]
+      ["ws", "rpc", "provider", provider_id | _] ->
+        {nil, provider_id}
+
+      # Pattern: ["ws", "rpc", strategy, _chain_id] where strategy is valid
+      ["ws", "rpc", strategy, _chain_id] when strategy in @valid_strategies ->
+        # Convert hyphenated URL strategy (round-robin) to underscored atom (:round_robin)
+        strategy_atom = strategy |> String.replace("-", "_") |> String.to_atom()
+        {strategy_atom, nil}
+
+      # Pattern: ["ws", "rpc", _chain_id, provider_id] - alternative provider override
+      ["ws", "rpc", _chain_id, provider_id] ->
+        {nil, provider_id}
+
+      # Pattern: ["ws", "rpc", _chain_id] - base endpoint
+      ["ws", "rpc" | _] ->
+        {nil, nil}
+
+      _ ->
+        {nil, nil}
+    end
+  end
+
+  defp extract_routing_params(%URI{} = uri, params) do
+    extract_routing_params(uri.path, params)
+  end
+
+  defp build_routing_info(nil, nil), do: ""
+  defp build_routing_info(strategy, nil) when is_atom(strategy), do: " [strategy: #{strategy}]"
+
+  defp build_routing_info(nil, provider_id) when is_binary(provider_id),
+    do: " [provider: #{provider_id}]"
+
   ## Connection tracking helpers
 
   defp extract_client_ip(transport_info) do
@@ -429,9 +497,20 @@ defmodule LassoWeb.RPCSocket do
 
     cond do
       # Check for x-forwarded-for header (when behind proxy/load balancer)
-      x_forwarded_for = get_in(transport_info, [:connect_info, :x_headers, "x-forwarded-for"]) ->
-        # Take the first IP if multiple are present
-        String.split(x_forwarded_for, ",") |> List.first() |> String.trim()
+      # x_headers is a list of tuples like [{"x-forwarded-for", "value"}]
+      x_headers = get_in(transport_info, [:connect_info, :x_headers]) ->
+        case List.keyfind(x_headers, "x-forwarded-for", 0) do
+          {"x-forwarded-for", value} ->
+            # Take the first IP if multiple are present
+            String.split(value, ",") |> List.first() |> String.trim()
+
+          nil ->
+            # No x-forwarded-for header, check peer data
+            case get_in(transport_info, [:connect_info, :peer]) do
+              nil -> "unknown"
+              peer -> format_ip(peer)
+            end
+        end
 
       # Check for peer data
       peer = get_in(transport_info, [:connect_info, :peer]) ->

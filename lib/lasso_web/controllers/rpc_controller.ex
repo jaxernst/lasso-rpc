@@ -74,17 +74,13 @@ defmodule LassoWeb.RPCController do
   end
 
   def rpc_base(conn, params) do
-    Logger.debug("RPC_BASE called with params: #{inspect(Map.keys(params))}", chain: "base")
-    rpc_with_strategy(conn, params, :cheapest)
+    rpc_with_strategy(conn, params, default_provider_strategy())
   end
 
   def rpc_fastest(conn, params) do
-    Logger.debug("RPC_FASTEST called with params: #{inspect(Map.keys(params))}", chain: "fastest")
     rpc_with_strategy(conn, params, :fastest)
   end
 
-  def rpc_cheapest(conn, params), do: rpc_with_strategy(conn, params, :cheapest)
-  def rpc_priority(conn, params), do: rpc_with_strategy(conn, params, :priority)
   def rpc_round_robin(conn, params), do: rpc_with_strategy(conn, params, :round_robin)
   def rpc_latency_weighted(conn, params), do: rpc_with_strategy(conn, params, :latency_weighted)
 
@@ -121,7 +117,7 @@ defmodule LassoWeb.RPCController do
   defp maybe_publish_strategy_event(_chain, nil), do: :ok
 
   defp maybe_publish_strategy_event(chain, strategy) do
-    default = Application.get_env(:lasso, :provider_selection_strategy, :cheapest)
+    default = Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
 
     if strategy != default do
       Phoenix.PubSub.broadcast(
@@ -332,17 +328,16 @@ defmodule LassoWeb.RPCController do
   end
 
   defp default_provider_strategy do
-    Application.get_env(:lasso, :provider_selection_strategy, :cheapest)
+    Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
   end
 
   defp strategy_from(conn, params) do
     case conn.assigns[:provider_strategy] do
       nil ->
         case params["strategy"] do
-          "priority" -> :priority
           "round_robin" -> :round_robin
           "fastest" -> :fastest
-          "cheapest" -> :cheapest
+          "latency_weighted" -> :latency_weighted
           _ -> default_provider_strategy()
         end
 
