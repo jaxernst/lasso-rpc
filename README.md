@@ -1,14 +1,27 @@
 # Lasso RPC
 
-A smart blockchain RPC aggregator for building reliable and performant onchain apps.
+A smart blockchain node RPC aggregator for building reliable and performant onchain apps.
 
-- Multi-provider orchestration across HTTP and WebSocket
-- Intelligent routing (latency + health based routing strategies)
-- Per-method benchmarking and circuit-breaking failover
+- Multi-provider and multi-chain orchestration across HTTP and WebSocket
+- Intelligent and configurable request routing (latency + health based routing strategies)
+- Per-method request benchmarking and circuit-breaking failover
 - WebSocket subscriptions with multiplexing and failover gap-filling
 - Structured observability with optional client-visible metadata
 
-Production demo: http://lasso-rpc.fly.dev
+Multi-region production RPC endpoints (base, ethereum currently supported):
+
+```
+https://lasso-rpc.fly.dev/rpc/ethereum
+https://lasso-rpc.fly.dev/rpc/base
+
+wss://lasso-rpc.fly.dev/ws/rpc/ethereum
+wss://lasso-rpc.fly.dev/ws/rpc/base
+
+(additional strategy-specific endpoints below)
+```
+
+Provider Metrics dashboard (wip): https://lasso-rpc.fly.dev/metrics/ethereum  
+Full dashboard (wip - mostly placeholder): https://lasso-rpc.fly.dev
 
 ---
 
@@ -31,7 +44,7 @@ Key benefits:
 
 ---
 
-## Built on Elixir/OTP (BEAM)
+## Built w/ Elixir/OTP (BEAM)
 
 Lasso is built with Elixir on the Erlang VM (BEAM). This runtime was designed for fault-tolerant, real-time systems and powers telecom and web-scale platforms (Discord, WhatsApp, Supabase). It is a strong fit for an RPC aggregator with several key unlocks:
 
@@ -42,7 +55,7 @@ Lasso is built with Elixir on the Erlang VM (BEAM). This runtime was designed fo
 - Simple distribution primitives for multi-region deployments
 - First-class telemetry and observability
 
-This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with predictable latency and strong resilience.
+This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with predictable latency and strong resilience. Oh, and Elixir is also incredibly fun to write and work with.
 
 ---
 
@@ -75,15 +88,17 @@ const wsClient = createPublicClient({
 
 ## RPC Endpoints
 
+Routing strategies are defined with url slug parameters
+
 HTTP (POST):
 
-- `/rpc/:chain` (default round-robin)
+- `/rpc/:chain` (configurable default strategy with round-robin as the preset default)
 - `/rpc/fastest/:chain`
 - `/rpc/round-robin/:chain`
 - `/rpc/latency-weighted/:chain`
 - `/rpc/provider/:provider_id/:chain`
 
-WebSocket (route parity):
+WebSocket (same routes with /ws/ prefix):
 
 - `ws://host/ws/rpc/:chain`
 - `ws://host/ws/rpc/fastest/:chain`
@@ -91,7 +106,7 @@ WebSocket (route parity):
 - `ws://host/ws/rpc/latency-weighted/:chain`
 - `ws://host/ws/rpc/provider/:provider_id/:chain`
 
-Metrics:
+Metrics API (provider performance):
 
 - `GET /api/metrics/:chain` (JSON)
 - `GET /metrics/:chain` (HTML page)
@@ -281,7 +296,7 @@ Read more:
 Tests and basic dev workflow:
 
 ```bash
-mix test --exclude battle --exclude real_providers
+mix test --exclude battle --include integration
 mix phx.server
 ```
 
@@ -289,16 +304,16 @@ Load testing and metrics export are in `scripts/`.
 
 ---
 
-## Future Work
+## Future Features
 
-Lasso’s roadmap and ideas for where this can go next (advanced routing strategies, hedged requests, caching, geo-aware routing, multi-tenancy, and more) are tracked here:
+- Caching strategies
+- Request racing strategies
+- Provider method support superset (partial implementation done with adapters - need method support tracking)
+
+Additional roadmap items and ideas tracked here:
 
 - `project/FUTURE_FEATURES.md`
 
 ---
 
-## Status
-
-- Multi-region capable via BEAM clustering and regional deployments
-- Provider adapters with per-chain capabilities and validation
-- Focus: read-only JSON-RPC and subscription reliability; writes are out of scope for now
+### Additional docs and project tracking available in `/project`
