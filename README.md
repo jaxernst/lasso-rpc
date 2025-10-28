@@ -8,7 +8,19 @@ A smart blockchain node RPC aggregator for building reliable and performant onch
 - WebSocket subscriptions with multiplexing and failover gap-filling
 - Structured observability with optional client-visible metadata
 
-Production demo: http://lasso-rpc.fly.dev
+Multi-region production RPC endpoints (base, ethereum currently supported):
+  ```
+  https://lasso-rpc.fly.dev/rpc/ethereum
+  https://lasso-rpc.fly.dev/rpc/base
+
+  wss://lasso-rpc.fly.dev/ws/rpc/ethereum
+  wss://lasso-rpc.fly.dev/ws/rpc/base
+
+  (see below for strategy-specific endpoints)
+  ```
+
+Provider Metrics dashboard (wip): `https://lasso-rpc.fly.dev/metrics`  
+Full dashboard (wip - mostly placeholder): `https://lasso-rpc.fly.dev/dashboard`  
 
 ---
 
@@ -292,16 +304,16 @@ Load testing and metrics export are in `scripts/`.
 
 ---
 
-## Future Work
+## Future Features
 
-Lasso’s roadmap and ideas for where this can go next (advanced routing strategies, hedged requests, caching, geo-aware routing, multi-tenancy, and more) are tracked here:
+- Caching strategies
+- Request racing strategies
+- Provider method support superset (partial implementation done with adapters - need method support tracking)
+
+Additional roadmap items and ideas tracked here:
 
 - `project/FUTURE_FEATURES.md`
 
 ---
 
-## Status
-
-- Multi-region capable via BEAM clustering and regional deployments
-- Provider adapters with per-chain capabilities and validation
-- Focus: read-only JSON-RPC and subscription reliability; writes are out of scope for now
+### Additional docs and project tracking available in `/project`
