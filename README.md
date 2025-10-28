@@ -56,21 +56,19 @@ Drop-in usage:
 // Viem
 import { createPublicClient, http, webSocket } from "viem";
 
-const client = createPublicClient({
-  transport: http(`${HOST}/rpc/ethereum`),
+// Default strategy: load balanced requests
+const loadBalancedClient = createPublicClient({
+  transport: http(`${HOST}/rpc/ethereum/round-robin`),
+});
+
+const fastClient = createPublicClient({
+  transport: http(`${HOST}/rpc/fastest/ethereum`),
 });
 
 // Optional WS client (route parity)
 const wsClient = createPublicClient({
   transport: webSocket(`${WS_HOST}/ws/rpc/ethereum`),
 });
-```
-
-```ts
-// Ethers v6
-import { JsonRpcProvider } from "ethers";
-
-const provider = new JsonRpcProvider(`${HOST}/rpc/ethereum`);
 ```
 
 ---
