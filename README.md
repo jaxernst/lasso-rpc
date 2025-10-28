@@ -19,8 +19,8 @@ Multi-region production RPC endpoints (base, ethereum currently supported):
   (additional strategy-specific endpoints below)
   ```
 
-Provider Metrics dashboard (wip): `https://lasso-rpc.fly.dev/metrics`  
-Full dashboard (wip - mostly placeholder): `https://lasso-rpc.fly.dev/dashboard`  
+Provider Metrics dashboard (wip): https://lasso-rpc.fly.dev/metrics/ethereum  
+Full dashboard (wip - mostly placeholder): https://lasso-rpc.fly.dev/dashboard  
 
 ---
 
