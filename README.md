@@ -91,9 +91,10 @@ WebSocket (route parity):
 - `ws://host/ws/rpc/latency-weighted/:chain`
 - `ws://host/ws/rpc/provider/:provider_id/:chain`
 
-Metrics API:
+Metrics:
 
-- `GET /api/metrics/:chain`
+- `GET /api/metrics/:chain` (JSON)
+- `GET /metrics/:chain` (HTML page)
 
 ---
 

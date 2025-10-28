@@ -15,12 +15,18 @@ defmodule LassoWeb.Dashboard do
     socket = assign(socket, :active_tab, "overview")
 
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws_connections")
+      # Global subscriptions
       Phoenix.PubSub.subscribe(Lasso.PubSub, "routing:decisions")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "clients:events")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_changes")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_updates")
+
+      # Per-chain provider event subscriptions
+      Lasso.Config.ConfigStore.list_chains()
+      |> Enum.each(fn chain ->
+        Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{chain}")
+      end)
 
       # Enable scheduler wall time if supported (for utilization metrics)
       try do
@@ -51,7 +57,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:latest_blocks, [])
       |> assign(:events, [])
       |> assign(:vm_metrics, %{})
-      |> assign(:available_chains, Helpers.get_available_chains())
+      |> assign(:available_chains, Lasso.Config.ConfigStore.list_chains())
       |> assign(:details_collapsed, true)
       |> assign(:events_collapsed, true)
       |> assign(:latency_leaders, %{})
@@ -313,31 +319,42 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Circuit breaker events
+  # Circuit breaker events - updated to match tuple format
   @impl true
-  def handle_info(%{ts: _t, provider_id: pid, from: from, to: to, reason: reason} = _evt, socket) do
+  def handle_info({:circuit_breaker_event, event_data}, socket) do
+    %{
+      chain: chain,
+      provider_id: provider_id,
+      transport: transport,
+      from: from_state,
+      to: to_state,
+      reason: reason
+    } = event_data
+
     entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
       ts_ms: System.system_time(:millisecond),
-      chain: "n/a",
-      provider_id: pid,
-      event: "circuit: #{from} -> #{to} (#{reason})"
+      chain: chain,
+      provider_id: provider_id,
+      event: "circuit [#{transport}]: #{from_state} -> #{to_state} (#{reason})"
     }
 
     socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, 99)] end)
 
     uev =
       Helpers.as_event(:circuit,
-        provider_id: pid,
+        chain: chain,
+        provider_id: provider_id,
         severity: :warn,
         message: entry.event,
-        meta: Map.drop(entry, [:ts, :ts_ms])
+        meta: Map.merge(Map.drop(entry, [:ts, :ts_ms]), %{transport: transport, from: from_state, to: to_state})
       )
 
     socket =
       socket
       |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
       |> push_event("events_batch", %{items: [uev]})
+      |> fetch_connections()  # Refresh provider data to show updated circuit state
 
     {:noreply, socket}
   end
@@ -1434,8 +1451,88 @@ defmodule LassoWeb.Dashboard do
   end
 
   defp fetch_connections(socket) do
-    # Use list_all_providers_comprehensive to show ALL providers regardless of connection type
-    connections = [] # Lasso.RPC.ChainRegistry.list_all_providers_comprehensive()
+    alias Lasso.Config.ConfigStore
+    alias Lasso.RPC.ProviderPool
+
+    # Get all configured chains
+    chains = ConfigStore.list_chains()
+
+    # Fetch provider status from ProviderPool for each chain
+    connections =
+      chains
+      |> Enum.flat_map(fn chain_name ->
+        case ProviderPool.get_status(chain_name) do
+          {:ok, pool_status} ->
+            # pool_status.providers is a list of provider maps
+            pool_status.providers
+            |> Enum.map(fn provider_map ->
+              # Determine overall circuit state (if either transport is open, show open)
+              overall_circuit_state =
+                cond do
+                  provider_map.http_cb_state == :open or provider_map.ws_cb_state == :open -> :open
+                  provider_map.http_cb_state == :half_open or provider_map.ws_cb_state == :half_open -> :half_open
+                  true -> :closed
+                end
+
+              # Determine provider type based on configuration
+              provider_type =
+                cond do
+                  provider_map.config.url && provider_map.config.ws_url -> :both
+                  provider_map.config.ws_url -> :websocket
+                  true -> :http
+                end
+
+              # Check if WebSocket is connected (if provider supports WS)
+              ws_connected =
+                case provider_type do
+                  :websocket -> provider_map.ws_status == :healthy
+                  :both -> provider_map.ws_status == :healthy
+                  _ -> false
+                end
+
+              # Map HealthPolicy availability to dashboard health_status
+              # HealthPolicy uses: :up, :down, :limited, :misconfigured
+              # StatusHelpers expects: :healthy, :unhealthy, :rate_limited, :connecting, etc.
+              health_status =
+                case provider_map.availability do
+                  :up -> :healthy
+                  :down -> :unhealthy
+                  :limited -> :rate_limited
+                  :misconfigured -> :misconfigured
+                  other -> other  # Fallback for any new states
+                end
+
+              # Map to dashboard connection format
+              %{
+                id: provider_map.id,
+                chain: chain_name,
+                name: provider_map.name,
+                status: provider_map.status,  # For legacy compatibility
+                health_status: health_status,
+                type: provider_type,
+                circuit_state: overall_circuit_state,
+                http_circuit_state: provider_map.http_cb_state,
+                ws_circuit_state: provider_map.ws_cb_state,
+                consecutive_failures: provider_map.consecutive_failures,
+                consecutive_successes: provider_map.consecutive_successes,
+                last_error: provider_map.last_error,
+                is_in_cooldown: provider_map.is_in_cooldown,
+                cooldown_until: provider_map.cooldown_until,
+                reconnect_attempts: 0,  # Not tracked currently
+                ws_connected: ws_connected,
+                subscriptions: 0,  # Would need to query UpstreamSubscriptionPool
+                url: provider_map.config.url,
+                ws_url: provider_map.config.ws_url
+              }
+            end)
+
+          {:error, reason} ->
+            require Logger
+            Logger.warning("Failed to get provider status for chain #{chain_name}: #{inspect(reason)}")
+            []
+        end
+      end)
+
     latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
 
     socket
