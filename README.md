@@ -296,7 +296,7 @@ Read more:
 Tests and basic dev workflow:
 
 ```bash
-mix test --exclude battle --exclude real_providers
+mix test --exclude battle --include integration
 mix phx.server
 ```
 
