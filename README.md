@@ -1,10 +1,10 @@
 # Lasso RPC
 
-A smart blockchain RPC aggregator for building reliable and performant onchain apps.
+A smart blockchain node RPC aggregator for building reliable and performant onchain apps.
 
-- Multi-provider orchestration across HTTP and WebSocket
-- Intelligent routing (latency + health based routing strategies)
-- Per-method benchmarking and circuit-breaking failover
+- Multi-provider and multi-chain orchestration across HTTP and WebSocket
+- Intelligent and configurable request routing (latency + health based routing strategies)
+- Per-method request benchmarking and circuit-breaking failover
 - WebSocket subscriptions with multiplexing and failover gap-filling
 - Structured observability with optional client-visible metadata
 
