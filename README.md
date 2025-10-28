@@ -31,7 +31,7 @@ Key benefits:
 
 ---
 
-## Built on Elixir/OTP (BEAM)
+## Built w/ Elixir/OTP (BEAM)
 
 Lasso is built with Elixir on the Erlang VM (BEAM). This runtime was designed for fault-tolerant, real-time systems and powers telecom and web-scale platforms (Discord, WhatsApp, Supabase). It is a strong fit for an RPC aggregator with several key unlocks:
 
@@ -42,7 +42,7 @@ Lasso is built with Elixir on the Erlang VM (BEAM). This runtime was designed fo
 - Simple distribution primitives for multi-region deployments
 - First-class telemetry and observability
 
-This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with predictable latency and strong resilience.
+This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with predictable latency and strong resilience. Oh, and Elixir is also incredibly fun to write and work with.
 
 ---
 
