@@ -77,15 +77,17 @@ const provider = new JsonRpcProvider(`${HOST}/rpc/ethereum`);
 
 ## RPC Endpoints
 
+Routing strategies are defined with url slug parameters
+
 HTTP (POST):
 
-- `/rpc/:chain` (default round-robin)
+- `/rpc/:chain` (configurable default strategy with round-robin as the preset default)
 - `/rpc/fastest/:chain`
 - `/rpc/round-robin/:chain`
 - `/rpc/latency-weighted/:chain`
 - `/rpc/provider/:provider_id/:chain`
 
-WebSocket (route parity):
+WebSocket (same routes with /ws/ prefix):
 
 - `ws://host/ws/rpc/:chain`
 - `ws://host/ws/rpc/fastest/:chain`
@@ -93,7 +95,7 @@ WebSocket (route parity):
 - `ws://host/ws/rpc/latency-weighted/:chain`
 - `ws://host/ws/rpc/provider/:provider_id/:chain`
 
-Metrics API:
+Metrics API (provider performance):
 
 - `GET /api/metrics/:chain`
 
