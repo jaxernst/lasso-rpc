@@ -277,12 +277,19 @@ This returns `X-Lasso-Request-ID` and a base64url `X-Lasso-Meta` header. Use `in
 
 ## Architecture
 
-Core components (see full document for details):
+Architecture brief (see full document for details):
 
 - Provider pool and per-transport circuit breakers
 - Unified request pipeline selecting across HTTP and WS channels
 - Per-method benchmarking feeding the fastest strategy
 - Subscription multiplexing with gap-filling on failover
+- Transport-agnostic architecture - HTTP and WebSocket treated as first-class routing options
+- Per-transport circuit breakers - {chain, provider_id, :http} and {chain, provider_id, :ws} independently managed
+- Per-method, per-transport metrics - Selection strategies can make transport-aware decisions
+- Sophisticated error classification - Message-pattern-first classification handles provider inconsistencies
+- Adapter-based capability validation - Method-level (supports_method?/3) and parameter-level (validate_params/4)
+- Two-phase validation - Fast method filtering, then lazy param validation on finalists
+- Category-specific circuit breaker thresholds - Rate limits, capability violations, server errors have different thresholds
 
 Read more:
 
