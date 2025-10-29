@@ -5,6 +5,7 @@ A smart blockchain node RPC aggregator for building reliable and performant onch
 - Multi-provider and multi-chain orchestration across HTTP and WebSocket
 - Intelligent and configurable request routing (latency + health based routing strategies)
 - Per-method request benchmarking and circuit-breaking failover
+- Automatic discovery of provider capabilities w/ method parameter level granularity
 - WebSocket subscriptions with multiplexing and failover gap-filling
 - Structured observability with optional client-visible metadata
 
@@ -31,31 +32,33 @@ Choosing a single RPC provider has real UX and reliability consequences, yet the
 
 Lasso makes the RPC layer programmable and resilient. Its a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that chain, method, and transport. You get redundancy without rewrites, and you can scale throughput by adding providers instead of replatforming.
 
-Designed for production workloads: from hot reads to archival queries and subscriptions, different providers excel at different tasks. Lasso lets you express those preferences and enforces them automatically.
+Designed for production workloads: from hot reads to archival queries and subscriptions, different providers excel at different tasks. Lasso lets you express those preferences and enforce them automatically.
 
 Key benefits:
 
 - Faster responses: method-aware, real-latency routing
 - Higher reliability: circuit breakers, retries, graceful failover
-- Horizontal scale: add providers to raise throughput and headroom
-- Transport-agnostic: HTTP and WebSocket with route parity
-- Clear visibility: structured logs and opt-in client metadata
+- Horizontal scale: add nodes/providers to raise throughput and headroom
+- Transport-agnostic: HTTP and WebSocket channels support, extendable for other protocols (i.e. grpc)
+- Clear visibility: real-time Lasso node dashboards, deep telemetry + observability, opt-in client metadata
 - Transparent benchmarking: per-provider method/transport metrics
 
 ---
 
 ## Built w/ Elixir/OTP (BEAM)
 
-Lasso is built with Elixir on the Erlang VM (BEAM). This runtime was designed for fault-tolerant, real-time systems and powers telecom and web-scale platforms (Discord, WhatsApp, Supabase). It is a strong fit for an RPC aggregator with several key unlocks:
+Lasso is built with Elixir on the Erlang VM (BEAM). This runtime was designed for fault-tolerant, real-time systems and powers major telecom systems + web-scale platforms (Discord, WhatsApp, Supabase). It’s a strong fit for an RPC aggregator/proxy/routing layer, with some key unlocks:
 
-- Massive concurrency with lightweight processes
+- Massive concurrency via lightweight processes (100k+ processes per VM)
 - Fault isolation via OTP supervision trees
-- Self-healing restarts; components can crash without taking the system down
-- Low-latency networking and long-lived WebSocket handling with minimal overhead
-- Simple distribution primitives for multi-region deployments
-- First-class telemetry and observability
+- Low-latency networking with efficient websocket and http transport perf
+- Shared, concurrent in‑memory tables (ETS) for fast lookups, lock‑free reads, and cross‑process caching; optional snapshot/restore for warm starts
+- Simple distribution primitives and VM clustering + orchestration for easy distribution + decentralization
+- First‑class telemetry and observability (OpenTelemetry)
 
-This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with predictable latency and strong resilience. Oh, and Elixir is also incredibly fun to write and work with.
+This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with predictable latency and strong resilience.
+
+Elixir is also very fun + nice to work with.
 
 ---
 
@@ -290,6 +293,8 @@ Architecture brief (see full document for details):
 - Adapter-based capability validation - Method-level (supports_method?/3) and parameter-level (validate_params/4)
 - Two-phase validation - Fast method filtering, then lazy param validation on finalists
 - Category-specific circuit breaker thresholds - Rate limits, capability violations, server errors have different thresholds
+- Adaptive capability discovery - Learns provider constraints in real-time and prevents requests that would fail
+- Intelligent provider filtering - Avoids archival queries on non-archive providers, respects block range limits, and tracks per-proivder RPC method support
 
 Read more:
 
