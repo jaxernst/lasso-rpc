@@ -468,7 +468,7 @@ defmodule LassoWeb.MetricsLive do
   defp format_number(number), do: to_string(number)
 
   # Safe rounding that handles both integers and floats
-  defp safe_round(value, precision) when is_integer(value), do: value
+  defp safe_round(value, _precision) when is_integer(value), do: value
   defp safe_round(value, precision) when is_float(value), do: Float.round(value, precision)
   defp safe_round(nil, _precision), do: nil
 end
