@@ -321,6 +321,7 @@ Load testing and metrics export are in `scripts/`.
 - Caching strategies
 - Request racing strategies
 - Provider method support superset (partial implementation done with adapters - need method support tracking)
+- Integrate block height/sync state into provider selection
 
 Additional roadmap items and ideas tracked here:
 
