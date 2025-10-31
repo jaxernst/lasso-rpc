@@ -583,22 +583,20 @@ defmodule LassoWeb.NetworkTopology do
   # Enhanced provider line colors using comprehensive connection data
   defp provider_line_color(connection) when is_map(connection) do
     case StatusHelpers.determine_provider_status(connection) do
-      # Dark red - circuit open
-      :circuit_open -> "#dc2626"
-      # Red - failed
-      :failed -> "#ef4444"
-      # Orange - unhealthy
-      :unhealthy -> "#f97316"
-      # Yellow - unstable
-      :unstable -> "#eab308"
-      # Purple - rate limited
+      # Purple - rate limited (highest priority)
       :rate_limited -> "#8b5cf6"
-      # Amber - connecting
-      :connecting -> "#f59e0b"
-      # Blue - recovering
-      :recovering -> "#3b82f6"
+      # Dark red - circuit open (complete failure)
+      :circuit_open -> "#dc2626"
+      # Blue - testing recovery
+      :testing_recovery -> "#3b82f6"
+      # Amber - reconnecting
+      :reconnecting -> "#f59e0b"
+      # Orange - degraded
+      :degraded -> "#f97316"
+      # Sky blue - syncing (lagging blocks)
+      :syncing -> "#38bdf8"
       # Green - healthy
-      :connected -> "#10b981"
+      :healthy -> "#10b981"
       # Gray - unknown
       :unknown -> "#6b7280"
     end
@@ -688,20 +686,18 @@ defmodule LassoWeb.NetworkTopology do
     case StatusHelpers.determine_provider_status(connection) do
       # Dark red - circuit open
       :circuit_open -> "bg-red-900/40 border-red-500"
-      # Red - failed
-      :failed -> "bg-red-900/30 border-red-600"
-      # Orange - unhealthy
-      :unhealthy -> "bg-orange-900/30 border-orange-600"
-      # Yellow - unstable
-      :unstable -> "bg-yellow-900/30 border-yellow-600"
+      # Blue - testing recovery
+      :testing_recovery -> "bg-blue-900/30 border-blue-600"
       # Purple - rate limited
       :rate_limited -> "bg-purple-900/30 border-purple-600"
-      # Amber - connecting
-      :connecting -> "bg-amber-900/30 border-amber-600"
-      # Blue - recovering
-      :recovering -> "bg-blue-900/30 border-blue-600"
+      # Amber - reconnecting
+      :reconnecting -> "bg-amber-900/30 border-amber-600"
+      # Orange - degraded
+      :degraded -> "bg-orange-900/30 border-orange-600"
+      # Sky blue - syncing
+      :syncing -> "bg-sky-900/30 border-sky-600"
       # Green - healthy
-      :connected -> "bg-emerald-900/30 border-emerald-600"
+      :healthy -> "bg-emerald-900/30 border-emerald-600"
       # Gray - unknown
       :unknown -> "bg-gray-900/30 border-gray-600"
     end
@@ -721,20 +717,18 @@ defmodule LassoWeb.NetworkTopology do
     case StatusHelpers.determine_provider_status(connection) do
       # Dark red - circuit open
       :circuit_open -> "bg-red-500"
-      # Red - failed
-      :failed -> "bg-red-400"
-      # Orange - unhealthy
-      :unhealthy -> "bg-orange-400"
-      # Yellow - unstable
-      :unstable -> "bg-yellow-400"
+      # Blue - testing recovery
+      :testing_recovery -> "bg-blue-400"
       # Purple - rate limited
       :rate_limited -> "bg-purple-400"
-      # Amber - connecting
-      :connecting -> "bg-amber-400"
-      # Blue - recovering
-      :recovering -> "bg-blue-400"
+      # Amber - reconnecting
+      :reconnecting -> "bg-amber-400"
+      # Orange - degraded
+      :degraded -> "bg-orange-400"
+      # Sky blue - syncing
+      :syncing -> "bg-sky-400"
       # Green - healthy
-      :connected -> "bg-emerald-400"
+      :healthy -> "bg-emerald-400"
       # Gray - unknown
       :unknown -> "bg-gray-400"
     end

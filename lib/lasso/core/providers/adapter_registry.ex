@@ -26,7 +26,9 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
     "publicnode" => Adapters.PublicNode,
     "llamarpc" => Adapters.LlamaRPC,
     "merkle" => Adapters.Merkle,
-    "cloudflare" => Adapters.Cloudflare
+    "cloudflare" => Adapters.Cloudflare,
+    "drpc" => Adapters.DRPC,
+    "1rpc" => Adapters.OneRPC
     # "infura" => Adapters.Infura,
     # "ankr" => Adapters.Ankr,
   }

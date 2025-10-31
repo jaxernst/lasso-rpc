@@ -49,6 +49,7 @@ defmodule LassoWeb.Dashboard do
 
       Process.send_after(self(), :vm_metrics_tick, 1_000)
       Process.send_after(self(), :latency_leaders_refresh, 30_000)
+      Process.send_after(self(), :metrics_refresh, 1_000)
 
       # Start event buffer flush timer
       Process.send_after(self(), :flush_event_buffer, @default_batch_interval)
@@ -71,7 +72,6 @@ defmodule LassoWeb.Dashboard do
       |> assign(:batch_interval, @default_batch_interval)
       |> assign(:event_mode, :normal)
       |> assign(:dropped_event_count, 0)
-      |> assign(:metrics_last_update, 0)
       |> assign(:connections, [])
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
       |> assign(:selected_chain, nil)
@@ -92,6 +92,15 @@ defmodule LassoWeb.Dashboard do
       |> assign(:selected_chain_events, [])
       |> assign(:selected_chain_unified_events, [])
       |> assign(:selected_chain_endpoints, %{})
+      |> assign(:selected_chain_provider_events, [])
+      |> assign(:selected_provider_events, [])
+      |> assign(:selected_provider_unified_events, [])
+      |> assign(:selected_provider_metrics, %{})
+      |> assign(:metrics_selected_chain, "ethereum")
+      |> assign(:provider_metrics, [])
+      |> assign(:method_metrics, [])
+      |> assign(:metrics_loading, true)
+      |> assign(:metrics_last_updated, nil)
       |> fetch_connections()
 
     {:ok, initial_state}
@@ -236,9 +245,12 @@ defmodule LassoWeb.Dashboard do
       socket
     end
 
-    # Trigger connection refresh to update provider metrics in floating details window
-    # This ensures real-time reactivity for both simulator and regular traffic
-    socket = schedule_connection_refresh(socket)
+    # Update provider-specific metrics if this event is for the currently selected provider
+    socket = if socket.assigns[:selected_provider] == pid do
+      update_selected_provider_data(socket)
+    else
+      socket
+    end
 
     {:noreply, socket}
   end
@@ -410,6 +422,14 @@ defmodule LassoWeb.Dashboard do
     {:noreply, assign(socket, :latency_leaders, latency_leaders)}
   end
 
+  # Provider metrics refresh
+  @impl true
+  def handle_info(:metrics_refresh, socket) do
+    socket = load_provider_metrics(socket)
+    Process.send_after(self(), :metrics_refresh, 30_000)
+    {:noreply, socket}
+  end
+
   @impl true
   def handle_info(:flush_connections, socket) do
     Process.delete(:pending_connection_update)
@@ -526,6 +546,15 @@ defmodule LassoWeb.Dashboard do
               selected_chain_endpoints={@selected_chain_endpoints}
               latency_leaders={@latency_leaders}
             />
+          <% "metrics" -> %>
+            <.metrics_tab_content
+              available_chains={@available_chains}
+              metrics_selected_chain={@metrics_selected_chain}
+              provider_metrics={@provider_metrics}
+              method_metrics={@method_metrics}
+              metrics_loading={@metrics_loading}
+              metrics_last_updated={@metrics_last_updated}
+            />
           <% "benchmarks" -> %>
             <DashboardComponents.benchmarks_tab_content />
           <% "system" -> %>
@@ -609,6 +638,10 @@ defmodule LassoWeb.Dashboard do
         selected_chain_events={@selected_chain_events}
         selected_chain_unified_events={@selected_chain_unified_events}
         selected_chain_endpoints={@selected_chain_endpoints}
+        selected_chain_provider_events={assigns[:selected_chain_provider_events] || []}
+        selected_provider_events={assigns[:selected_provider_events] || []}
+        selected_provider_unified_events={assigns[:selected_provider_unified_events] || []}
+        selected_provider_metrics={assigns[:selected_provider_metrics] || %{}}
       />
 
     </div>
@@ -626,31 +659,35 @@ defmodule LassoWeb.Dashboard do
   attr :selected_chain_events, :list, required: true
   attr :selected_chain_unified_events, :list, required: true
   attr :selected_chain_endpoints, :map, required: true
+  attr :selected_chain_provider_events, :list, default: []
 
   def chain_details_panel(assigns) do
     chain_connections = Enum.filter(assigns.connections, &(&1.chain == assigns.chain))
 
+    # Use cached chain data from socket assigns (updated by update_selected_chain_metrics/1)
     assigns = assigns
     |> assign(:chain_connections, chain_connections)
-    |> assign(:chain_events, assigns.selected_chain_events)
-    |> assign(:chain_provider_events, Enum.filter(assigns.provider_events, &(&1.chain == assigns.chain)))
-    |> assign(:chain_unified_events, assigns.selected_chain_unified_events)
-    |> assign(:chain_endpoints, assigns.selected_chain_endpoints)
-    |> assign(:chain_performance, assigns.selected_chain_metrics)
-    |> assign(:last_decision, Helpers.get_last_decision(assigns.selected_chain_events, assigns.chain))
+    |> assign(:chain_events, Map.get(assigns, :selected_chain_events, []))
+    |> assign(:chain_provider_events, Map.get(assigns, :selected_chain_provider_events, []))
+    |> assign(:chain_unified_events, Map.get(assigns, :selected_chain_unified_events, []))
+    |> assign(:chain_endpoints, Map.get(assigns, :selected_chain_endpoints, %{}))
+    |> assign(:chain_performance, Map.get(assigns, :selected_chain_metrics, %{}))
+    |> assign(:last_decision, Helpers.get_last_decision(Map.get(assigns, :selected_chain_events, []), assigns.chain))
 
 
     ~H"""
     <div class="flex h-full flex-col" id={"chain-details-" <> @chain}>
       <!-- Header -->
       <div class="border-gray-700/50 border-b p-4">
+        <% connected = Map.get(@chain_performance, :connected_providers, 0) %>
+        <% total = Map.get(@chain_performance, :total_providers, 0) %>
         <div class="flex items-center justify-between">
           <div class="flex items-center space-x-3">
             <div class={[
               "h-3 w-3 rounded-full",
-              if(@chain_performance.connected_providers == @chain_performance.total_providers && @chain_performance.connected_providers > 0,
+              if(connected == total && connected > 0,
                 do: "bg-emerald-400",
-                else: if(@chain_performance.connected_providers == 0, do: "bg-red-400", else: "bg-yellow-400")
+                else: if(connected == 0, do: "bg-red-400", else: "bg-yellow-400")
               )
             ]}>
             </div>
@@ -659,7 +696,7 @@ defmodule LassoWeb.Dashboard do
               <div class="text-xs text-gray-400 flex items-center gap-2">
                 <span>{Helpers.get_chain_id(@chain)}</span>
                 <span>•</span>
-                <span><span class="text-emerald-400">{@chain_performance.connected_providers}</span>/<span class="text-gray-500">{@chain_performance.total_providers}</span> providers</span>
+                <span><span class="text-emerald-400">{connected}</span>/<span class="text-gray-500">{total}</span> providers</span>
               </div>
             </div>
           </div>
@@ -677,25 +714,27 @@ defmodule LassoWeb.Dashboard do
           <div class="bg-gray-800/50 rounded-lg p-3 text-center overflow-hidden">
             <div class="text-[11px] leading-tight text-gray-400 truncate">Latency p50 (5m)</div>
             <div class="h-6 flex items-center justify-center">
-              <div class="text-lg font-bold text-sky-400">{if @chain_performance.p50_latency, do: "#{@chain_performance.p50_latency}ms", else: "—"}</div>
+              <div class="text-lg font-bold text-sky-400">{if Map.get(@chain_performance, :p50_latency), do: "#{Map.get(@chain_performance, :p50_latency)}ms", else: "—"}</div>
             </div>
           </div>
           <div class="bg-gray-800/50 rounded-lg p-3 text-center overflow-hidden">
             <div class="text-[11px] leading-tight text-gray-400 truncate">Latency p95 (5m)</div>
             <div class="h-6 flex items-center justify-center">
-              <div class="text-lg font-bold text-sky-400">{if @chain_performance.p95_latency, do: "#{@chain_performance.p95_latency}ms", else: "—"}</div>
+              <div class="text-lg font-bold text-sky-400">{if Map.get(@chain_performance, :p95_latency), do: "#{Map.get(@chain_performance, :p95_latency)}ms", else: "—"}</div>
             </div>
           </div>
           <div class="bg-gray-800/50 rounded-lg p-3 text-center overflow-hidden">
             <div class="text-[11px] leading-tight text-gray-400 truncate">Success (5m)</div>
             <div class="h-6 flex items-center justify-center">
-              <div class={["text-lg font-bold", if((@chain_performance.success_rate || 0.0) >= 95.0, do: "text-emerald-400", else: if((@chain_performance.success_rate || 0.0) >= 80.0, do: "text-yellow-400", else: "text-red-400"))]}> {if @chain_performance.success_rate, do: "#{@chain_performance.success_rate}%", else: "—"}</div>
+              <% success_rate = Map.get(@chain_performance, :success_rate, 0.0) %>
+              <div class={["text-lg font-bold", if(success_rate >= 95.0, do: "text-emerald-400", else: if(success_rate >= 80.0, do: "text-yellow-400", else: "text-red-400"))]}> {if success_rate > 0, do: "#{success_rate}%", else: "—"}</div>
             </div>
           </div>
           <div class="bg-gray-800/50 rounded-lg p-3 text-center overflow-hidden">
-            <div class="text-[11px] leading-tight text-gray-400 truncate">Connected</div>
+            <div class="text-[11px] leading-tight text-gray-400 truncate">RPS</div>
             <div class="h-6 flex items-center justify-center">
-              <div class="text-lg font-bold text-white"><span class="text-emerald-400">{@chain_performance.connected_providers}</span><span class="text-gray-500">/{@chain_performance.total_providers}</span></div>
+              <% rps = Map.get(@chain_performance, :rps, 0.0) %>
+              <div class="text-lg font-bold text-purple-400">{if rps > 0, do: "#{rps}", else: "0"}</div>
             </div>
           </div>
         </div>
@@ -708,8 +747,9 @@ defmodule LassoWeb.Dashboard do
           <.last_decision_card last_decision={@last_decision} connections={@connections} />
           <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-2">
             <div class="text-[11px] text-gray-400 mb-1">Decision breakdown (5m)</div>
+            <% decision_share = Map.get(@chain_performance, :decision_share, []) %>
             <div class="space-y-1">
-              <%= for {pid, pct} <- @chain_performance.decision_share do %>
+              <%= for {pid, pct} <- decision_share do %>
                 <div class="flex items-center gap-2 text-[11px] text-gray-300">
                   <div class="w-28 truncate text-emerald-300">{pid}</div>
                   <div class="flex-1 bg-gray-900/60 rounded h-2">
@@ -718,7 +758,7 @@ defmodule LassoWeb.Dashboard do
                   <div class="w-12 text-right text-gray-400">{Helpers.to_float(pct) |> Float.round(1)}%</div>
                 </div>
               <% end %>
-              <%= if Enum.empty?(@chain_performance.decision_share) do %>
+              <%= if Enum.empty?(decision_share) do %>
                 <div class="text-xs text-gray-500">No decisions in the last 5 minutes</div>
               <% end %>
             </div>
@@ -870,12 +910,13 @@ defmodule LassoWeb.Dashboard do
   end
 
   def provider_details_panel(assigns) do
+    # Use cached provider data from socket assigns (updated by update_selected_provider_data/1)
     assigns = assigns
       |> assign(:provider_connection, Enum.find(assigns.connections, &(&1.id == assigns.provider)))
-      |> assign(:provider_events, Enum.filter(assigns.routing_events, &(&1.provider_id == assigns.provider)))
-      |> assign(:provider_unified_events, Enum.filter(Map.get(assigns, :events, []), fn e -> e[:provider_id] == assigns.provider end))
-      |> assign(:performance_metrics, MetricsHelpers.get_provider_performance_metrics(assigns.provider, assigns.connections, assigns.routing_events))
-      |> assign(:last_decision, Helpers.get_last_decision(assigns.routing_events, nil, assigns.provider))
+      |> assign(:provider_events, Map.get(assigns, :selected_provider_events, []))
+      |> assign(:provider_unified_events, Map.get(assigns, :selected_provider_unified_events, []))
+      |> assign(:performance_metrics, Map.get(assigns, :selected_provider_metrics, %{}))
+      |> assign(:last_decision, Helpers.get_last_decision(Map.get(assigns, :selected_provider_events, []), nil, assigns.provider))
 
 
     ~H"""
@@ -918,25 +959,26 @@ defmodule LassoWeb.Dashboard do
           <div class="text-center bg-gray-800/40 rounded-lg p-3 overflow-hidden">
             <div class="text-[11px] leading-tight text-gray-400 truncate">p50 (5m)</div>
             <div class="h-7 flex items-center justify-center">
-              <div class="text-xl font-bold text-sky-400">{if @performance_metrics.p50_latency, do: "#{@performance_metrics.p50_latency}ms", else: "—"}</div>
+              <div class="text-xl font-bold text-sky-400">{if Map.get(@performance_metrics, :p50_latency), do: "#{Map.get(@performance_metrics, :p50_latency)}ms", else: "—"}</div>
             </div>
           </div>
           <div class="text-center bg-gray-800/40 rounded-lg p-3 overflow-hidden">
             <div class="text-[11px] leading-tight text-gray-400 truncate">p95 (5m)</div>
             <div class="h-7 flex items-center justify-center">
-              <div class="text-xl font-bold text-sky-400">{if @performance_metrics.p95_latency, do: "#{@performance_metrics.p95_latency}ms", else: "—"}</div>
+              <div class="text-xl font-bold text-sky-400">{if Map.get(@performance_metrics, :p95_latency), do: "#{Map.get(@performance_metrics, :p95_latency)}ms", else: "—"}</div>
             </div>
           </div>
           <div class="text-center bg-gray-800/40 rounded-lg p-3 overflow-hidden">
             <div class="text-[11px] leading-tight text-gray-400 truncate">Success (5m)</div>
             <div class="h-7 flex items-center justify-center">
-              <div class={["text-xl font-bold", if((@performance_metrics.success_rate || 0.0) >= 95.0, do: "text-emerald-400", else: if((@performance_metrics.success_rate || 0.0) >= 80.0, do: "text-yellow-400", else: "text-red-400"))]}> {if @performance_metrics.success_rate, do: "#{@performance_metrics.success_rate}%", else: "—"}</div>
+              <% success_rate = Map.get(@performance_metrics, :success_rate, 0.0) %>
+              <div class={["text-xl font-bold", if(success_rate >= 95.0, do: "text-emerald-400", else: if(success_rate >= 80.0, do: "text-yellow-400", else: "text-red-400"))]}> {if success_rate > 0, do: "#{success_rate}%", else: "—"}</div>
             </div>
           </div>
           <div class="text-center bg-gray-800/40 rounded-lg p-3 overflow-hidden">
             <div class="text-[11px] leading-tight text-gray-400 truncate">Calls (1h)</div>
             <div class="h-7 flex items-center justify-center">
-              <div class="text-xl font-bold text-purple-400">{@performance_metrics.calls_last_hour}</div>
+              <div class="text-xl font-bold text-purple-400">{Map.get(@performance_metrics, :calls_last_hour, 0)}</div>
             </div>
           </div>
         </div>
@@ -1067,11 +1109,11 @@ defmodule LassoWeb.Dashboard do
               </div>
               <div>
                 <span class="text-gray-400">Pick share (5m):</span>
-                <span class="text-white ml-2">{(@performance_metrics.pick_share_5m || 0.0) |> Helpers.to_float() |> Float.round(1)}%</span>
+                <span class="text-white ml-2">{(Map.get(@performance_metrics, :pick_share_5m, 0.0) || 0.0) |> Helpers.to_float() |> Float.round(1)}%</span>
               </div>
               <div>
                 <span class="text-gray-400">Subscriptions:</span>
-                <span class="text-white ml-2">{@provider_connection.subscriptions}</span>
+                <span class="text-white ml-2">{Map.get(@provider_connection, :subscriptions, 0)}</span>
               </div>
               <%= if Map.get(@provider_connection, :pending_messages, 0) > 0 do %>
                 <div>
@@ -1099,8 +1141,9 @@ defmodule LassoWeb.Dashboard do
           <.last_decision_card last_decision={@last_decision} connections={@connections} />
           <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-2">
             <div class="text-[11px] text-gray-400 mb-1">Top methods (5m)</div>
+            <% rpc_stats = Map.get(@performance_metrics, :rpc_stats, []) %>
             <div class="space-y-1 max-h-32 overflow-y-auto">
-              <%= for stat <- Enum.take(@performance_metrics.rpc_stats, 5) do %>
+              <%= for stat <- Enum.take(rpc_stats, 5) do %>
                 <div class="flex items-center justify-between text-[11px] text-gray-300">
                   <div class="text-sky-300 truncate">{stat.method}</div>
                   <div class="flex items-center gap-3">
@@ -1110,7 +1153,7 @@ defmodule LassoWeb.Dashboard do
                   </div>
                 </div>
               <% end %>
-              <%= if length(@performance_metrics.rpc_stats) == 0 do %>
+              <%= if length(rpc_stats) == 0 do %>
                 <div class="text-xs text-gray-500">No recent method stats</div>
               <% end %>
             </div>
@@ -1158,6 +1201,10 @@ defmodule LassoWeb.Dashboard do
   attr :selected_chain_events, :list
   attr :selected_chain_unified_events, :list
   attr :selected_chain_endpoints, :map
+  attr :selected_chain_provider_events, :list, default: []
+  attr :selected_provider_events, :list, default: []
+  attr :selected_provider_unified_events, :list, default: []
+  attr :selected_provider_metrics, :map, default: %{}
 
   def floating_details_window(assigns) do
     assigns =
@@ -1233,7 +1280,7 @@ defmodule LassoWeb.Dashboard do
                   </div>
                 </div>
                 <div class=" py-1.5">
-                  <div class="text-[10px] text-gray-400">Failovers</div>
+                  <div class="text-[10px] text-gray-400">Failovers (1m)</div>
                   <div class="text-xs font-medium text-yellow-300">
                     {MetricsHelpers.failovers_last_minute(@routing_events)}
                   </div>
@@ -1242,16 +1289,29 @@ defmodule LassoWeb.Dashboard do
 
                <!-- Recent Activity in collapsed state -->
               <div class="px-2 pb-2">
-                <div class="text-[10px] text-gray-400 mb-1.5">Recent Activity</div>
-                <div class="max-h-20 space-y-1 overflow-y-auto">
-                  <%= for e <- Enum.take(@routing_events, 4) do %>
-                    <div class="text-[9px] text-gray-300">
+                <div class="text-[10px] text-gray-400 mb-1.5">
+                  Recent Activity
+                  <span class="text-gray-500">(scroll down to pause)</span>
+                </div>
+                <div
+                  id="recent-activity-feed"
+                  phx-hook="ActivityFeed"
+                  class="flex max-h-32 flex-col gap-1 overflow-y-auto"
+                  style="overflow-anchor: none;"
+                >
+                  <%= for e <- Enum.take(@routing_events, 100) do %>
+                    <div data-event-id={e[:ts_ms]} class="text-[9px] text-gray-300 flex items-center gap-1 shrink-0">
                       <span class="text-purple-300">{e.chain}</span>
-                      <span class="text-sky-300"> {e.method}</span>
-                      → <span class="text-emerald-300">{String.slice(e.provider_id, 0, 8)}…</span>
-                      <span class={["ml-1", if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")]}>
+                      <span class="text-sky-300">{e.method}</span>
+                      → <span class="text-emerald-300">{String.slice(e.provider_id, 0, 14)}…</span>
+                      <span class={["", if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")]}>
                         ({e[:duration_ms] || 0}ms)
                       </span>
+                      <%= if (e[:failovers] || 0) > 0 do %>
+                        <span class="inline-flex items-center px-1 py-0.5 rounded text-[8px] text-orange-300 font-bold bg-orange-900/50" title={"#{e[:failovers]} failover(s)"}>
+                          ↻{e[:failovers]}
+                        </span>
+                      <% end %>
                     </div>
                   <% end %>
                   <%= if length(@routing_events) == 0 do %>
@@ -1272,6 +1332,9 @@ defmodule LassoWeb.Dashboard do
                 provider_events={@provider_events}
                 events={@events}
                 selected_chain={@selected_chain}
+                selected_provider_events={assigns[:selected_provider_events] || []}
+                selected_provider_unified_events={assigns[:selected_provider_unified_events] || []}
+                selected_provider_metrics={assigns[:selected_provider_metrics] || %{}}
               />
             <% else %>
               <%= if @selected_chain do %>
@@ -1285,6 +1348,7 @@ defmodule LassoWeb.Dashboard do
                   selected_chain_events={@selected_chain_events}
                   selected_chain_unified_events={@selected_chain_unified_events}
                   selected_chain_endpoints={@selected_chain_endpoints}
+                  selected_chain_provider_events={assigns[:selected_chain_provider_events] || []}
                 />
               <% end %>
             <% end %>
@@ -1333,7 +1397,13 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_event("select_provider", %{"provider" => ""}, socket) do
-    {:noreply, socket |> assign(:selected_provider, nil) |> assign(:details_collapsed, true)}
+    socket =
+      socket
+      |> assign(:selected_provider, nil)
+      |> assign(:details_collapsed, true)
+      |> update_selected_provider_data()
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -1343,12 +1413,8 @@ defmodule LassoWeb.Dashboard do
       |> assign(:selected_provider, provider)
       |> assign(:selected_chain, nil)
       |> assign(:details_collapsed, false)
-
-    # Re-enable auto-centering to animate pan to the selected provider
-    socket =
-      socket
+      |> update_selected_provider_data()
       |> push_event("center_on_provider", %{provider: provider})
-
 
     {:noreply, socket}
   end
@@ -1382,8 +1448,15 @@ defmodule LassoWeb.Dashboard do
     {:noreply, fetch_connections(socket)}
   end
 
+  @impl true
+  def handle_event("select_metrics_chain", %{"chain" => chain}, socket) do
+    socket =
+      socket
+      |> assign(:metrics_selected_chain, chain)
+      |> load_provider_metrics()
 
-
+    {:noreply, socket}
+  end
 
   # Simulator Event Forwarding (only forwards when simulator is active)
   @impl true
@@ -1559,48 +1632,66 @@ defmodule LassoWeb.Dashboard do
     end
   end
 
-  @metrics_debounce Keyword.get(@dashboard_config, :metrics_debounce, 2_000)
+  defp update_selected_chain_metrics(socket) do
+    case socket.assigns[:selected_chain] do
+      nil ->
+        # Clear all chain-specific data when no chain is selected
+        socket
+        |> assign(:selected_chain_metrics, %{})
+        |> assign(:selected_chain_events, [])
+        |> assign(:selected_chain_unified_events, [])
+        |> assign(:selected_chain_endpoints, %{})
+        |> assign(:selected_chain_provider_events, [])
 
-  defp should_update_metrics?(socket) do
-    last_update = socket.assigns[:metrics_last_update] || 0
-    now = System.system_time(:millisecond)
-    now - last_update >= @metrics_debounce
+      chain ->
+        # Calculate chain-specific metrics (lightweight in-memory operations)
+        chain_metrics = MetricsHelpers.get_chain_performance_metrics(socket.assigns, chain)
+
+        # Get chain-specific endpoints
+        chain_endpoints = EndpointHelpers.get_chain_endpoints(socket.assigns, chain)
+
+        # Filter events for selected chain
+        chain_events = Enum.filter(socket.assigns.routing_events, &(&1.chain == chain))
+        chain_unified_events = Enum.filter(socket.assigns.events, fn e -> e[:chain] == chain end)
+        chain_provider_events = Enum.filter(socket.assigns.provider_events, &(&1.chain == chain))
+
+        # Update all chain-specific assigns at once to ensure consistency
+        socket
+        |> assign(:selected_chain_metrics, chain_metrics)
+        |> assign(:selected_chain_events, chain_events)
+        |> assign(:selected_chain_unified_events, chain_unified_events)
+        |> assign(:selected_chain_endpoints, chain_endpoints)
+        |> assign(:selected_chain_provider_events, chain_provider_events)
+    end
   end
 
-  defp update_selected_chain_metrics(socket) do
-    # Check if we should update (debouncing)
-    if not should_update_metrics?(socket) do
-      socket
-    else
-      case socket.assigns[:selected_chain] do
-        nil ->
-          # Clear all chain-specific data when no chain is selected
-          socket
-          |> assign(:selected_chain_metrics, %{})
-          |> assign(:selected_chain_events, [])
-          |> assign(:selected_chain_unified_events, [])
-          |> assign(:selected_chain_endpoints, %{})
-          |> assign(:metrics_last_update, System.system_time(:millisecond))
+  defp update_selected_provider_data(socket) do
+    case socket.assigns[:selected_provider] do
+      nil ->
+        # Clear all provider-specific data when no provider is selected
+        socket
+        |> assign(:selected_provider_events, [])
+        |> assign(:selected_provider_unified_events, [])
+        |> assign(:selected_provider_metrics, %{})
 
-        chain ->
-          # Calculate chain-specific metrics
-          chain_metrics = MetricsHelpers.get_chain_performance_metrics(socket.assigns, chain)
+      provider_id ->
+        # Filter events for selected provider (lightweight in-memory operations)
+        provider_events = Enum.filter(socket.assigns.routing_events, &(&1.provider_id == provider_id))
+        provider_unified_events = Enum.filter(socket.assigns.events, fn e -> e[:provider_id] == provider_id end)
 
-          # Get chain-specific endpoints
-          chain_endpoints = EndpointHelpers.get_chain_endpoints(socket.assigns, chain)
+        # Calculate provider-specific metrics
+        provider_metrics =
+          MetricsHelpers.get_provider_performance_metrics(
+            provider_id,
+            socket.assigns.connections,
+            socket.assigns.routing_events
+          )
 
-          # Filter events for selected chain
-          chain_events = Enum.filter(socket.assigns.routing_events, &(&1.chain == chain))
-          chain_unified_events = Enum.filter(socket.assigns.events, fn e -> e[:chain] == chain end)
-
-          # Update all chain-specific assigns at once to ensure consistency
-          socket
-          |> assign(:selected_chain_metrics, chain_metrics)
-          |> assign(:selected_chain_events, chain_events)
-          |> assign(:selected_chain_unified_events, chain_unified_events)
-          |> assign(:selected_chain_endpoints, chain_endpoints)
-          |> assign(:metrics_last_update, System.system_time(:millisecond))
-      end
+        # Update all provider-specific assigns at once
+        socket
+        |> assign(:selected_provider_events, provider_events)
+        |> assign(:selected_provider_unified_events, provider_unified_events)
+        |> assign(:selected_provider_metrics, provider_metrics)
     end
   end
 
@@ -1695,6 +1786,481 @@ defmodule LassoWeb.Dashboard do
     |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
   end
 
+  defp load_provider_metrics(socket) do
+    chain_name = socket.assigns.metrics_selected_chain
 
+    try do
+      alias Lasso.Config.ConfigStore
+      alias Lasso.Benchmarking.BenchmarkStore
+
+      {:ok, provider_configs} = ConfigStore.get_providers(chain_name)
+      provider_leaderboard = BenchmarkStore.get_provider_leaderboard(chain_name)
+      realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
+
+      # Get all RPC methods we have data for
+      rpc_methods = Map.get(realtime_stats, :rpc_methods, [])
+      provider_ids = Enum.map(provider_configs, & &1.id)
+
+      # Collect detailed metrics by provider
+      provider_metrics = collect_provider_metrics(
+        chain_name,
+        provider_ids,
+        provider_configs,
+        provider_leaderboard,
+        rpc_methods
+      )
+
+      # Collect method-level metrics for comparison
+      method_metrics = collect_method_metrics(
+        chain_name,
+        provider_ids,
+        provider_configs,
+        rpc_methods
+      )
+
+      socket
+      |> assign(:metrics_loading, false)
+      |> assign(:provider_metrics, provider_metrics)
+      |> assign(:method_metrics, method_metrics)
+      |> assign(:metrics_last_updated, DateTime.utc_now())
+    rescue
+      error ->
+        require Logger
+        Logger.error("Failed to load provider metrics: #{inspect(error)}")
+        assign(socket, :metrics_loading, false)
+    end
+  end
+
+  defp collect_provider_metrics(chain_name, provider_ids, provider_configs, leaderboard, rpc_methods) do
+    alias Lasso.Benchmarking.BenchmarkStore
+
+    provider_ids
+    |> Enum.map(fn provider_id ->
+      config = Enum.find(provider_configs, &(&1.id == provider_id))
+      leaderboard_entry = Enum.find(leaderboard, &(&1.provider_id == provider_id))
+
+      # Get aggregate stats across all methods
+      method_stats = rpc_methods
+        |> Enum.map(fn method ->
+          BenchmarkStore.get_rpc_method_performance_with_percentiles(chain_name, provider_id, method)
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      # Calculate aggregates
+      total_calls = Enum.reduce(method_stats, 0, fn stat, acc -> acc + stat.total_calls end)
+
+      avg_latency = if total_calls > 0 do
+        weighted_sum = Enum.reduce(method_stats, 0, fn stat, acc ->
+          acc + (stat.avg_duration_ms * stat.total_calls)
+        end)
+        weighted_sum / total_calls
+      else
+        nil
+      end
+
+      p50_latency = if length(method_stats) > 0 do
+        method_stats
+        |> Enum.map(& &1.percentiles.p50)
+        |> Enum.sum()
+        |> Kernel./(length(method_stats))
+      else
+        nil
+      end
+
+      p95_latency = if length(method_stats) > 0 do
+        method_stats
+        |> Enum.map(& &1.percentiles.p95)
+        |> Enum.sum()
+        |> Kernel./(length(method_stats))
+      else
+        nil
+      end
+
+      p99_latency = if length(method_stats) > 0 do
+        method_stats
+        |> Enum.map(& &1.percentiles.p99)
+        |> Enum.sum()
+        |> Kernel./(length(method_stats))
+      else
+        nil
+      end
+
+      success_rate = if length(method_stats) > 0 do
+        method_stats
+        |> Enum.map(& &1.success_rate)
+        |> Enum.sum()
+        |> Kernel./(length(method_stats))
+      else
+        nil
+      end
+
+      # Calculate variance/consistency (P99/P50 ratio)
+      consistency_ratio = if p50_latency && p99_latency && p50_latency > 0 do
+        p99_latency / p50_latency
+      else
+        nil
+      end
+
+      %{
+        id: provider_id,
+        name: if(config, do: config.name, else: provider_id),
+        avg_latency: avg_latency,
+        p50_latency: p50_latency,
+        p95_latency: p95_latency,
+        p99_latency: p99_latency,
+        success_rate: success_rate,
+        total_calls: total_calls,
+        consistency_ratio: consistency_ratio,
+        score: if(leaderboard_entry, do: leaderboard_entry.score, else: nil),
+        win_rate: if(leaderboard_entry, do: leaderboard_entry.win_rate, else: nil),
+        method_count: length(method_stats)
+      }
+    end)
+    |> Enum.reject(&(&1.total_calls == 0))
+    |> Enum.sort_by(& &1.avg_latency || 999_999)
+  end
+
+  defp collect_method_metrics(chain_name, provider_ids, provider_configs, rpc_methods) do
+    alias Lasso.Benchmarking.BenchmarkStore
+
+    rpc_methods
+    |> Enum.map(fn method ->
+      provider_stats = provider_ids
+        |> Enum.map(fn provider_id ->
+          config = Enum.find(provider_configs, &(&1.id == provider_id))
+
+          case BenchmarkStore.get_rpc_method_performance_with_percentiles(chain_name, provider_id, method) do
+            nil -> nil
+            stats ->
+              %{
+                provider_id: provider_id,
+                provider_name: if(config, do: config.name, else: provider_id),
+                avg_latency: stats.avg_duration_ms,
+                p50_latency: stats.percentiles.p50,
+                p95_latency: stats.percentiles.p95,
+                p99_latency: stats.percentiles.p99,
+                success_rate: stats.success_rate,
+                total_calls: stats.total_calls
+              }
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.sort_by(& &1.avg_latency)
+
+      if Enum.empty?(provider_stats) do
+        nil
+      else
+        %{
+          method: method,
+          providers: provider_stats,
+          total_calls: Enum.reduce(provider_stats, 0, fn stat, acc -> acc + stat.total_calls end)
+        }
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.sort_by(& &1.total_calls, :desc)
+  end
+
+  # Metrics tab component
+  attr :available_chains, :list, required: true
+  attr :metrics_selected_chain, :string, required: true
+  attr :provider_metrics, :list, required: true
+  attr :method_metrics, :list, required: true
+  attr :metrics_loading, :boolean, required: true
+  attr :metrics_last_updated, :any, default: nil
+
+  defp metrics_tab_content(assigns) do
+    # Get chain config for the selected chain
+    chain_config = case Lasso.Config.ConfigStore.get_chain(assigns.metrics_selected_chain) do
+      {:ok, config} -> config
+      {:error, _} -> %{chain_id: "Unknown"}
+    end
+
+    assigns = assign(assigns, :chain_config, chain_config)
+
+    ~H"""
+    <div class="h-full overflow-y-auto">
+     <div class="mx-auto max-w-7xl px-4 pb-4">
+      <div class="flex items-center justify-between mb-2 py-4">
+          <div class="flex gap-2 ">
+            <%= for chain <- @available_chains do %>
+              <button
+                phx-click="select_metrics_chain"
+                phx-value-chain={chain.name}
+                class={[
+                  "px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                  if chain.name == @metrics_selected_chain do
+                    "bg-sky-500/20 text-sky-300 border border-sky-500/50 shadow-md shadow-sky-500/10"
+                  else
+                    "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/50 hover:text-sky-300 hover:bg-gray-800/80"
+                  end
+                ]}
+              >
+                <div class="flex items-center gap-2">
+                  <span>{chain.display_name}</span>
+                  <%= if chain.name == @metrics_selected_chain do %>
+                    <span class="text-xs text-gray-500">ID: {@chain_config.chain_id}</span>
+                  <% end %>
+                </div>
+              </button>
+            <% end %>
+          </div>
+
+
+        </div>
+
+
+        <!-- Clean chain selector with integrated metadata -->
+
+        <%= if @metrics_loading do %>
+          <!-- Loading State -->
+          <div class="py-12">
+            <div class="rounded-lg border border-gray-800 bg-gray-900/30 p-6 text-center">
+              <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-sky-500 border-r-transparent"></div>
+              <p class="mt-4 text-gray-400">Loading metrics...</p>
+            </div>
+          </div>
+        <% else %>
+          <!-- Main Content -->
+          <div class="space-y-6">
+          <!-- Provider Comparison Table -->
+          <section>
+            <div class="flex items-center justify-between mb-3 ">
+            <h2 class="text-lg font-semibold flex items-center gap-2 text-white">
+              <span>Provider Performance</span>
+              <span class="text-xs text-gray-500 font-normal">({length(@provider_metrics)} providers)</span>
+            </h2>
+             <%= if @metrics_last_updated do %>
+            <div class="flex items-center gap-2 text-xs text-gray-500">
+              <div class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
+              <span class="font-mono text-gray-400">
+                {Calendar.strftime(@metrics_last_updated, "%H:%M:%S")}
+              </span>
+            </div>
+          <% end %>
+          </div>
+
+            <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-2xl overflow-hidden">
+              <div class="overflow-x-auto">
+                <table class="w-full">
+                  <thead class="bg-gray-800/50 border-b border-gray-700/50">
+                    <tr class="text-left text-xs text-gray-400 uppercase tracking-wider">
+                      <th class="px-4 py-3">Rank</th>
+                      <th class="px-4 py-3">Provider</th>
+                      <th class="px-4 py-3 text-right">Avg Latency</th>
+                      <th class="px-4 py-3 text-right">P50</th>
+                      <th class="px-4 py-3 text-right">P95</th>
+                      <th class="px-4 py-3 text-right">P99</th>
+                      <th class="px-4 py-3 text-right">P99/P50</th>
+                      <th class="px-4 py-3 text-right">Success Rate</th>
+                      <th class="px-4 py-3 text-right">Total Calls</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-gray-700/30">
+                  <%= for {provider, index} <- Enum.with_index(@provider_metrics, 1) do %>
+                    <tr class="hover:bg-gray-900/30 transition-colors">
+                      <td class="px-4 py-3">
+                        <span class={[
+                          "inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold",
+                          case index do
+                            1 -> "bg-yellow-500/20 text-yellow-400"
+                            2 -> "bg-gray-400/20 text-gray-300"
+                            3 -> "bg-orange-600/20 text-orange-400"
+                            _ -> "bg-gray-800 text-gray-500"
+                          end
+                        ]}>
+                          {index}
+                        </span>
+                      </td>
+                      <td class="px-4 py-3 font-medium text-white">{provider.name}</td>
+                      <td class="px-4 py-3 text-right">
+                        <%= if provider.avg_latency do %>
+                          <div class="flex items-center justify-end gap-2">
+                            <div class="flex-1 max-w-[100px] h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                              <div
+                                class="h-full bg-sky-500 rounded-full transition-all"
+                                style={"width: #{calculate_bar_width(provider.avg_latency, @provider_metrics, :avg_latency)}%"}
+                              >
+                              </div>
+                            </div>
+                            <span class="text-sky-400 font-mono text-sm w-16">
+                              {safe_round(provider.avg_latency, 0)}ms
+                            </span>
+                          </div>
+                        <% else %>
+                          <span class="text-gray-600">—</span>
+                        <% end %>
+                      </td>
+                      <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
+                        <%= if provider.p50_latency, do: "#{safe_round(provider.p50_latency, 0)}ms", else: "—" %>
+                      </td>
+                      <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
+                        <%= if provider.p95_latency, do: "#{safe_round(provider.p95_latency, 0)}ms", else: "—" %>
+                      </td>
+                      <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
+                        <%= if provider.p99_latency, do: "#{safe_round(provider.p99_latency, 0)}ms", else: "—" %>
+                      </td>
+                      <td class="px-4 py-3 text-right">
+                        <%= if provider.consistency_ratio do %>
+                          <span class={[
+                            "font-mono text-sm",
+                            cond do
+                              provider.consistency_ratio < 2.0 -> "text-emerald-400"
+                              provider.consistency_ratio < 5.0 -> "text-yellow-400"
+                              true -> "text-red-400"
+                            end
+                          ]}>
+                            {safe_round(provider.consistency_ratio, 1)}x
+                          </span>
+                        <% else %>
+                          <span class="text-gray-600">—</span>
+                        <% end %>
+                      </td>
+                      <td class="px-4 py-3 text-right">
+                        <%= if provider.success_rate do %>
+                          <span class={[
+                            "font-mono text-sm",
+                            cond do
+                              provider.success_rate >= 0.99 -> "text-emerald-400"
+                              provider.success_rate >= 0.95 -> "text-yellow-400"
+                              true -> "text-red-400"
+                            end
+                          ]}>
+                            {safe_round(provider.success_rate * 100, 1)}%
+                          </span>
+                        <% else %>
+                          <span class="text-gray-600">—</span>
+                        <% end %>
+                      </td>
+                      <td class="px-4 py-3 text-right font-mono text-sm text-gray-400">
+                        {format_number(provider.total_calls)}
+                      </td>
+                    </tr>
+                  <% end %>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Method Breakdown -->
+          <section>
+            <h2 class="text-lg font-semibold mb-3 text-white">Method Performance Breakdown</h2>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <%= for method_data <- @method_metrics do %>
+                <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-2xl p-4">
+                  <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-700/50">
+                    <h3 class="font-mono text-sm text-sky-400">{method_data.method}</h3>
+                    <span class="text-xs text-gray-500">
+                      {format_number(method_data.total_calls)} calls
+                    </span>
+                  </div>
+
+                  <div class="space-y-2">
+                    <%= for {provider_stat, idx} <- Enum.with_index(method_data.providers, 1) do %>
+                      <div class="flex items-center gap-2">
+                        <!-- Rank Badge -->
+                        <div class="flex-none">
+                          <span class={[
+                            "inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-semibold",
+                            case idx do
+                              1 -> "bg-yellow-500/20 text-yellow-400"
+                              2 -> "bg-gray-400/20 text-gray-300"
+                              3 -> "bg-orange-600/20 text-orange-400"
+                              _ -> "bg-gray-800 text-gray-500"
+                            end
+                          ]}>
+                            {idx}
+                          </span>
+                        </div>
+
+                        <!-- Provider Name -->
+                        <div class="flex-none w-28 truncate text-xs text-gray-300">
+                          {provider_stat.provider_name}
+                        </div>
+
+                        <!-- Latency Bar -->
+                        <div class="flex-1 flex items-center gap-1.5">
+                          <div class="flex-1 h-4 bg-gray-800/50 rounded overflow-hidden">
+                            <div
+                              class="h-full bg-gradient-to-r from-emerald-500 to-sky-500 flex items-center justify-end px-1.5"
+                              style={"width: #{calculate_method_bar_width(provider_stat.avg_latency, method_data.providers)}%"}
+                            >
+                              <span class="text-[10px] font-mono text-white font-semibold">
+                                {safe_round(provider_stat.avg_latency, 0)}ms
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <!-- Success Rate & Call Count -->
+                        <div class="flex-none flex items-center gap-2 text-[10px]">
+                          <span class={[
+                            "font-mono",
+                            if(provider_stat.success_rate >= 0.99, do: "text-emerald-400", else: "text-yellow-400")
+                          ]}>
+                            {safe_round(provider_stat.success_rate * 100, 0)}%
+                          </span>
+                          <span class="text-gray-500">
+                            {format_number(provider_stat.total_calls)}
+                          </span>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+          </section>
+          </div>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  # Helper to calculate bar width for comparison visualization
+  defp calculate_bar_width(value, all_providers, field) do
+    max_value = all_providers
+      |> Enum.map(&Map.get(&1, field))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.max(fn -> 1 end)
+
+    if max_value > 0 do
+      min(100, (value / max_value) * 100)
+    else
+      0
+    end
+  end
+
+  defp calculate_method_bar_width(value, provider_stats) do
+    max_value = provider_stats
+      |> Enum.map(& &1.avg_latency)
+      |> Enum.max(fn -> 1 end)
+
+    if max_value > 0 do
+      min(100, (value / max_value) * 100)
+    else
+      0
+    end
+  end
+
+  # Simple number formatting helper
+  defp format_number(number) when is_integer(number) do
+    number
+    |> Integer.to_string()
+    |> String.graphemes()
+    |> Enum.reverse()
+    |> Enum.chunk_every(3)
+    |> Enum.join(",")
+    |> String.reverse()
+  end
+  defp format_number(number), do: to_string(number)
+
+  # Safe rounding that handles both integers and floats
+  defp safe_round(value, _precision) when is_integer(value), do: value
+  defp safe_round(value, precision) when is_float(value), do: Float.round(value, precision)
+  defp safe_round(nil, _precision), do: nil
 
  end
