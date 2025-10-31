@@ -590,6 +590,7 @@ const EndpointSelector = {
   },
 
   readChainFromDataset() {
+    // Use chain name (string like "ethereum", "base") not chain_id (numeric)
     this.chain = this.el.getAttribute("data-chain") || this.chain || "ethereum";
     this.chainId = this.el.getAttribute("data-chain-id") || this.chainId || "1";
   },
@@ -605,13 +606,13 @@ const EndpointSelector = {
     this.selectedProvider = provider;
     this.selectedStrategy = null; // clear strategy selection
     this.mode = "provider";
-    
+
     // Get provider capabilities from the button data attributes
     const providerButton = this.el.querySelector(`[data-provider="${provider}"]`);
-    this.selectedProviderSupportsWs = providerButton 
-      ? providerButton.dataset.providerSupportsWs === 'true' 
+    this.selectedProviderSupportsWs = providerButton
+      ? providerButton.dataset.providerSupportsWs === 'true'
       : false;
-      
+
     this.updateUI();
   },
 
@@ -629,44 +630,12 @@ const EndpointSelector = {
       );
 
       if (isActive) {
-        // Set active color based on strategy
-        switch (strategy) {
-          case "fastest":
-            btn.className += " border-sky-500 bg-sky-500/20 text-sky-300";
-            break;
-          case "cheapest":
-            btn.className +=
-              " border-emerald-500 bg-emerald-500/20 text-emerald-300";
-            break;
-          case "priority":
-            btn.className +=
-              " border-purple-500 bg-purple-500/20 text-purple-300";
-            break;
-          case "round-robin":
-            btn.className +=
-              " border-orange-500 bg-orange-500/20 text-orange-300";
-            break;
-        }
+        // Active: sky blue for all strategies
+        btn.className += " border-sky-500 bg-sky-500/20 text-sky-300";
       } else {
-        // Inactive state with hover colors
-        switch (strategy) {
-          case "fastest":
-            btn.className +=
-              " border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300";
-            break;
-          case "cheapest":
-            btn.className +=
-              " border-gray-600 text-gray-300 hover:border-emerald-400 hover:text-emerald-300";
-            break;
-          case "priority":
-            btn.className +=
-              " border-gray-600 text-gray-300 hover:border-purple-400 hover:text-purple-300";
-            break;
-          case "round-robin":
-            btn.className +=
-              " border-gray-600 text-gray-300 hover:border-orange-400 hover:text-orange-300";
-            break;
-        }
+        // Inactive: gray with sky hover
+        btn.className +=
+          " border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300";
       }
     });
 
@@ -698,33 +667,36 @@ const EndpointSelector = {
     const wsUrl = this.el.querySelector("#ws-endpoint-url");
     const httpCopyBtns = this.el.querySelectorAll("[data-copy-text]");
 
-    if (httpUrl && wsUrl) {
+    if (httpUrl) {
       const baseUrl = window.location.origin;
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = window.location.host;
-      const chain = this.chainId || this.chain || "1";
+      const chain = this.chain; // Use chain name, not chain_id
 
       let newHttpUrl, newWsUrl;
 
       if (this.mode === "strategy" && this.selectedStrategy) {
+        // Strategy mode: /rpc/{strategy}/{chain}
         newHttpUrl = `${baseUrl}/rpc/${this.selectedStrategy}/${chain}`;
-        newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
+        newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/${this.selectedStrategy}/${chain}`;
       } else if (this.mode === "provider" && this.selectedProvider) {
-        // For provider overrides, use the provider ID directly
+        // Provider mode: /rpc/provider/{provider_id}/{chain}
         newHttpUrl = `${baseUrl}/rpc/provider/${this.selectedProvider}/${chain}`;
-        // Only show WebSocket URL if provider supports it
         if (this.selectedProviderSupportsWs) {
-          newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
+          newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/provider/${this.selectedProvider}/${chain}`;
         } else {
           newWsUrl = "WebSocket not supported by this provider";
         }
       } else {
         // Default fallback
         newHttpUrl = `${baseUrl}/rpc/fastest/${chain}`;
-        newWsUrl = `ws://${wsHost}/ws/rpc/${chain}`;
+        newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/fastest/${chain}`;
       }
 
       httpUrl.textContent = newHttpUrl;
-      wsUrl.textContent = newWsUrl;
+      if (wsUrl) {
+        wsUrl.textContent = newWsUrl;
+      }
 
       // Update copy button data attributes
       httpCopyBtns.forEach((btn) => {
@@ -732,7 +704,7 @@ const EndpointSelector = {
           btn.dataset.copyText = newHttpUrl;
         } else if (
           btn.dataset.copyText &&
-          btn.dataset.copyText.includes("ws")
+          (btn.dataset.copyText.includes("ws://") || btn.dataset.copyText.includes("wss://"))
         ) {
           // Only allow copying if it's a valid WebSocket URL
           if (this.selectedProviderSupportsWs || this.mode === "strategy") {
@@ -754,20 +726,17 @@ const EndpointSelector = {
 
     if (this.mode === "strategy" && this.selectedStrategy) {
       const descriptions = {
-        fastest: "Using fastest provider based on latency benchmarks",
-        cheapest:
-          "Using provider with lowest cost per request or free tier availability",
-        priority: "Using providers in configured priority order with failover",
-        "round-robin":
-          "Distributing requests evenly across all available providers",
+        fastest: "Routes to the fastest provider based on real-time latency benchmarks",
+        "round-robin": "Distributes requests evenly across all available providers",
+        "latency-weighted": "Weighted random selection favoring providers with low latency and high success rates"
       };
       descriptionEl.textContent =
         descriptions[this.selectedStrategy] || "Strategy-based routing";
     } else if (this.mode === "provider" && this.selectedProvider) {
-      descriptionEl.textContent = `Direct connection to ${this.selectedProvider} provider (bypasses routing)`;
+      descriptionEl.textContent = `Direct connection to ${this.selectedProvider} (bypasses routing strategies)`;
     } else {
       descriptionEl.textContent =
-        "Using fastest provider based on latency benchmarks";
+        "Routes to the fastest provider based on real-time latency benchmarks";
     }
   },
 };

@@ -5,7 +5,6 @@ A smart blockchain node RPC aggregator for building reliable and performant onch
 - Multi-provider and multi-chain orchestration across HTTP and WebSocket
 - Intelligent and configurable request routing (latency + health based routing strategies)
 - Per-method request benchmarking and circuit-breaking failover
-- Automatic discovery of provider capabilities w/ method parameter level granularity
 - WebSocket subscriptions with multiplexing and failover gap-filling
 - Structured observability with optional client-visible metadata
 

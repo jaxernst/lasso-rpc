@@ -10,6 +10,12 @@ defmodule LassoWeb.Dashboard do
   alias LassoWeb.Components.DashboardComponents
   alias Lasso.Events.Provider
 
+  # Dashboard configuration
+  @dashboard_config Application.compile_env(:lasso, :dashboard, [])
+  @default_batch_interval Keyword.get(@dashboard_config, :batch_interval, 100)
+  @max_buffer_size Keyword.get(@dashboard_config, :max_buffer_size, 50)
+  @mailbox_thresholds Keyword.get(@dashboard_config, :mailbox_thresholds, %{throttle: 500, drop: 1000})
+
   @impl true
   def mount(_params, _session, socket) do
     socket = assign(socket, :active_tab, "overview")
@@ -43,10 +49,29 @@ defmodule LassoWeb.Dashboard do
 
       Process.send_after(self(), :vm_metrics_tick, 1_000)
       Process.send_after(self(), :latency_leaders_refresh, 30_000)
+
+      # Start event buffer flush timer
+      Process.send_after(self(), :flush_event_buffer, @default_batch_interval)
     end
+
+    # Transform chain names into map structures for the UI
+    available_chains =
+      Lasso.Config.ConfigStore.list_chains()
+      |> Enum.map(fn chain_name ->
+        %{
+          name: chain_name,
+          display_name: chain_name |> String.capitalize()
+        }
+      end)
 
     initial_state =
       socket
+      |> assign(:event_buffer, [])
+      |> assign(:event_buffer_count, 0)
+      |> assign(:batch_interval, @default_batch_interval)
+      |> assign(:event_mode, :normal)
+      |> assign(:dropped_event_count, 0)
+      |> assign(:metrics_last_update, 0)
       |> assign(:connections, [])
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
       |> assign(:selected_chain, nil)
@@ -57,7 +82,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:latest_blocks, [])
       |> assign(:events, [])
       |> assign(:vm_metrics, %{})
-      |> assign(:available_chains, Lasso.Config.ConfigStore.list_chains())
+      |> assign(:available_chains, available_chains)
       |> assign(:details_collapsed, true)
       |> assign(:events_collapsed, true)
       |> assign(:latency_leaders, %{})
@@ -136,41 +161,25 @@ defmodule LassoWeb.Dashboard do
       socket
       |> assign(:connections, connections)
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
-      |> (fn s ->
-            if length(batch) > 0 do
-              s
-              |> update(:events, fn list ->
-                Enum.reverse(batch) ++ Enum.take(list, 199 - length(batch))
-              end)
-              |> push_event("events_batch", %{items: batch})
-            else
-              s
-            end
-          end).()
+
+    # Buffer all events from the batch
+    socket = Enum.reduce(batch, socket, fn event, sock ->
+      buffer_event(sock, event)
+    end)
 
     {:noreply, socket}
   end
 
   @impl true
   def handle_info({:connection_event, _event_type, _connection_id, _data}, socket) do
-    if Process.get(:pending_connection_update) do
-      {:noreply, socket}
-    else
-      Process.put(:pending_connection_update, true)
-      Process.send_after(self(), :flush_connections, 500)
-      {:noreply, fetch_connections(socket)}
-    end
+    socket = schedule_connection_refresh(socket)
+    {:noreply, socket}
   end
 
   @impl true
   def handle_info({:connection_status_changed, _connection_id, _connection_data}, socket) do
-    if Process.get(:pending_connection_update) do
-      {:noreply, socket}
-    else
-      Process.put(:pending_connection_update, true)
-      Process.send_after(self(), :flush_connections, 500)
-      {:noreply, fetch_connections(socket)}
-    end
+    socket = schedule_connection_refresh(socket)
+    {:noreply, socket}
   end
 
   # Routing decision feed (real or synthetic)
@@ -217,8 +226,7 @@ defmodule LassoWeb.Dashboard do
 
     socket =
       socket
-      |> update(:events, fn list -> [ev | Enum.take(list, 199)] end)
-      |> push_event("events_batch", %{items: [ev]})
+      |> buffer_event(ev)
       |> push_event("provider_request", %{provider_id: pid})
 
     # Update chain-specific metrics if this event is for the currently selected chain
@@ -230,14 +238,7 @@ defmodule LassoWeb.Dashboard do
 
     # Trigger connection refresh to update provider metrics in floating details window
     # This ensures real-time reactivity for both simulator and regular traffic
-    socket = case Process.get(:pending_connection_update) do
-      nil ->
-        Process.put(:pending_connection_update, true)
-        Process.send_after(self(), :flush_connections, 100)
-        fetch_connections(socket)
-      _ ->
-        socket
-    end
+    socket = schedule_connection_refresh(socket)
 
     {:noreply, socket}
   end
@@ -248,7 +249,9 @@ defmodule LassoWeb.Dashboard do
              is_struct(evt, Provider.Unhealthy) or
              is_struct(evt, Provider.CooldownStart) or
              is_struct(evt, Provider.CooldownEnd) or
-             is_struct(evt, Provider.HealthCheckFailed) do
+             is_struct(evt, Provider.HealthCheckFailed) or
+             is_struct(evt, Provider.WSConnected) or
+             is_struct(evt, Provider.WSClosed) do
     {chain, pid, event, details, ts} =
       case evt do
         %Provider.Healthy{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :healthy, nil, ts}
@@ -258,6 +261,9 @@ defmodule LassoWeb.Dashboard do
         %Provider.CooldownEnd{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :cooldown_end, nil, ts}
         %Provider.HealthCheckFailed{chain: chain, provider_id: pid, reason: reason, ts: ts} ->
           {chain, pid, :health_check_failed, %{reason: reason}, ts}
+        %Provider.WSConnected{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :ws_connected, nil, ts}
+        %Provider.WSClosed{chain: chain, provider_id: pid, code: code, reason: reason, ts: ts} ->
+          {chain, pid, :ws_closed, %{code: code, reason: reason}, ts}
       end
 
     entry = %{
@@ -280,10 +286,7 @@ defmodule LassoWeb.Dashboard do
         meta: Map.drop(entry, [:ts, :ts_ms])
       )
 
-    socket =
-      socket
-      |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
-      |> push_event("events_batch", %{items: [uev]})
+    socket = buffer_event(socket, uev)
 
     {:noreply, socket}
   end
@@ -311,10 +314,7 @@ defmodule LassoWeb.Dashboard do
         meta: Map.drop(entry, [:ts, :ts_ms])
       )
 
-    socket =
-      socket
-      |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
-      |> push_event("events_batch", %{items: [uev]})
+    socket = buffer_event(socket, uev)
 
     {:noreply, socket}
   end
@@ -352,8 +352,7 @@ defmodule LassoWeb.Dashboard do
 
     socket =
       socket
-      |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
-      |> push_event("events_batch", %{items: [uev]})
+      |> buffer_event(uev)
       |> fetch_connections()  # Refresh provider data to show updated circuit state
 
     {:noreply, socket}
@@ -382,10 +381,7 @@ defmodule LassoWeb.Dashboard do
         meta: Map.drop(entry, [:ts, :ts_ms])
       )
 
-    socket =
-      socket
-      |> update(:events, fn list -> [uev | Enum.take(list, 199)] end)
-      |> push_event("events_batch", %{items: [uev]})
+    socket = buffer_event(socket, uev)
 
     # Update chain-specific metrics if this event is for the currently selected chain
     socket = if socket.assigns[:selected_chain] == chain do
@@ -420,6 +416,16 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_info(:flush_event_buffer, socket) do
+    socket = flush_event_buffer(socket)
+
+    # Use dynamic interval from assigns
+    interval = socket.assigns[:batch_interval] || @default_batch_interval
+    Process.send_after(self(), :flush_event_buffer, interval)
+
+    {:noreply, socket}
+  end
 
   @impl true
   def handle_info({:chain_config_deleted, message}, socket) do
@@ -445,25 +451,37 @@ defmodule LassoWeb.Dashboard do
   # Chain configuration change notifications (still needed for updating available chains)
   @impl true
   def handle_info({:chain_created, _chain_name, _chain_config}, socket) do
-    socket = fetch_connections(socket)
+    socket =
+      socket
+      |> refresh_available_chains()
+      |> fetch_connections()
     {:noreply, socket}
   end
 
   @impl true
   def handle_info({:chain_updated, _chain_name, _chain_config}, socket) do
-    socket = fetch_connections(socket)
+    socket =
+      socket
+      |> refresh_available_chains()
+      |> fetch_connections()
     {:noreply, socket}
   end
 
   @impl true
   def handle_info({:chain_deleted, _chain_name, _chain_config}, socket) do
-    socket = fetch_connections(socket)
+    socket =
+      socket
+      |> refresh_available_chains()
+      |> fetch_connections()
     {:noreply, socket}
   end
 
   @impl true
   def handle_info({:config_restored, _backup_path, _}, socket) do
-    socket = fetch_connections(socket)
+    socket =
+      socket
+      |> refresh_available_chains()
+      |> fetch_connections()
     {:noreply, socket}
   end
 
@@ -713,23 +731,39 @@ defmodule LassoWeb.Dashboard do
         <h4 class="mb-3 text-sm font-semibold text-gray-300">RPC Endpoints</h4>
 
         <div class="mb-4">
-          <div class="text-xs text-gray-400 mb-2">Strategy</div>
+          <div class="text-xs text-gray-400 mb-2">Routing Strategy</div>
           <div class="flex flex-wrap gap-2">
-            <button data-strategy="fastest" class="px-3 py-1 rounded-full text-xs transition-all border border-sky-500 bg-sky-500/20 text-sky-300">⚡ Fastest</button>
-            <button data-strategy="cheapest" class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-emerald-400 hover:text-emerald-300">💰 Cheapest</button>
-            <button data-strategy="priority" class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-purple-400 hover:text-purple-300">🎯 Priority</button>
-            <button data-strategy="round-robin" class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-orange-400 hover:text-orange-300">🔄 Round Robin</button>
+            <%= for strategy <- EndpointHelpers.available_strategies() do %>
+              <button
+                data-strategy={strategy}
+                class={[
+                  "px-3 py-1 rounded-full text-xs transition-all border",
+                  if strategy == "fastest" do
+                    "border-sky-500 bg-sky-500/20 text-sky-300"
+                  else
+                    "border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300"
+                  end
+                ]}
+              >
+                <%= case strategy do %>
+                  <% "fastest" -> %>⚡ Fastest
+                  <% "round-robin" -> %>🔄 Round Robin
+                  <% "latency-weighted" -> %>⚖️ Latency Weighted
+                  <% other -> %>{other}
+                <% end %>
+              </button>
+            <% end %>
           </div>
         </div>
 
-        <div class="mb-2 text-xs text-gray-400">Direct (connected providers)</div>
+        <div class="mb-2 text-xs text-gray-400">Provider Override (bypass routing)</div>
         <div class="mb-4 flex flex-wrap gap-2">
           <%= for provider <- @chain_connections do %>
             <%= if provider.status == :connected do %>
               <button
                 data-provider={provider.id}
                 data-provider-type={provider.type}
-                data-provider-supports-ws={provider.type in [:websocket, :both]}
+                data-provider-supports-ws={EndpointHelpers.provider_supports_websocket(provider)}
                 class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-indigo-400 hover:text-indigo-300 flex items-center space-x-1"
               >
                 <div class="h-1.5 w-1.5 rounded-full bg-emerald-400"></div>
@@ -761,9 +795,7 @@ defmodule LassoWeb.Dashboard do
           </div>
 
           <!-- WebSocket Endpoint (only show if chain has providers that support WebSocket) -->
-          <%= if Enum.any?(@chain_connections, fn provider ->
-                provider.type in [:websocket, :both] or (!is_nil(Map.get(provider, :ws_url)) and String.length(Map.get(provider, :ws_url, "")) > 0)
-              end) do %>
+          <%= if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do %>
             <div class="mb-3">
               <div class="flex items-center justify-between mb-1">
                 <div class="text-xs font-medium text-gray-300">WebSocket</div>
@@ -788,7 +820,7 @@ defmodule LassoWeb.Dashboard do
           <% end %>
 
           <div class="text-xs text-gray-400" id="mode-description">
-            Using fastest provider based on latency benchmarks
+            Routes to fastest provider based on real-time latency benchmarks
           </div>
         </div>
       </div>
@@ -1421,32 +1453,154 @@ defmodule LassoWeb.Dashboard do
 
   # Helper functions
 
-  defp update_selected_chain_metrics(socket) do
-    case socket.assigns[:selected_chain] do
+  defp refresh_available_chains(socket) do
+    available_chains =
+      Lasso.Config.ConfigStore.list_chains()
+      |> Enum.map(fn chain_name ->
+        %{
+          name: chain_name,
+          display_name: chain_name |> String.capitalize()
+        }
+      end)
+
+    assign(socket, :available_chains, available_chains)
+  end
+
+  defp flush_event_buffer(socket) do
+    buffer = socket.assigns.event_buffer
+    count = socket.assigns.event_buffer_count
+
+    if count > 0 do
+      :telemetry.execute(
+        [:lasso_web, :dashboard, :event_buffer_flush],
+        %{buffer_size: count},
+        %{}
+      )
+
+      socket
+      |> assign(:event_buffer, [])
+      |> assign(:event_buffer_count, 0)
+      |> push_event("events_batch", %{items: Enum.reverse(buffer)})
+    else
+      socket
+    end
+  end
+
+  defp check_mailbox_pressure(socket) do
+    {:message_queue_len, queue_len} = Process.info(self(), :message_queue_len)
+    current_mode = socket.assigns[:event_mode] || :normal
+
+    {new_mode, new_interval} =
+      cond do
+        queue_len > @mailbox_thresholds.drop ->
+          require Logger
+          Logger.warning("Dashboard mailbox critical: #{queue_len} messages, dropping events")
+          {:summary, 500}
+
+        queue_len > @mailbox_thresholds.throttle ->
+          require Logger
+          Logger.info("Dashboard mailbox elevated: #{queue_len} messages, throttling")
+          {:throttled, 200}
+
+        true ->
+          {:normal, @default_batch_interval}
+      end
+
+    socket =
+      socket
+      |> assign(:event_mode, new_mode)
+      |> assign(:batch_interval, new_interval)
+
+    # Only notify when transitioning states (not on every event)
+    if current_mode != new_mode and new_mode != :normal do
+      push_event(socket, "show_notification", %{
+        message: "High event rate detected - adjusting update frequency",
+        type: "warning"
+      })
+    else
+      socket
+    end
+  end
+
+  defp buffer_event(socket, event) do
+    socket = check_mailbox_pressure(socket)
+
+    case socket.assigns.event_mode do
+      :summary ->
+        # Drop individual events in summary mode, just count them
+        update(socket, :dropped_event_count, &(&1 + 1))
+
+      _ ->
+        # Buffer the event
+        socket =
+          socket
+          |> update(:events, fn list -> [event | Enum.take(list, 199)] end)
+          |> update(:event_buffer, fn buffer -> [event | buffer] end)
+          |> update(:event_buffer_count, &(&1 + 1))
+
+        # Early flush if buffer exceeds threshold
+        if socket.assigns.event_buffer_count >= @max_buffer_size do
+          flush_event_buffer(socket)
+        else
+          socket
+        end
+    end
+  end
+
+  defp schedule_connection_refresh(socket, delay \\ 100) do
+    case Process.get(:pending_connection_update) do
       nil ->
-        # Clear all chain-specific data when no chain is selected
+        Process.put(:pending_connection_update, true)
+        Process.send_after(self(), :flush_connections, delay)
+        fetch_connections(socket)
+
+      _ ->
         socket
-        |> assign(:selected_chain_metrics, %{})
-        |> assign(:selected_chain_events, [])
-        |> assign(:selected_chain_unified_events, [])
-        |> assign(:selected_chain_endpoints, %{})
-      chain ->
-        # Calculate chain-specific metrics
-        chain_metrics = MetricsHelpers.get_chain_performance_metrics(socket.assigns, chain)
+    end
+  end
 
-        # Get chain-specific endpoints
-        chain_endpoints = EndpointHelpers.get_chain_endpoints(socket.assigns, chain)
+  @metrics_debounce Keyword.get(@dashboard_config, :metrics_debounce, 2_000)
 
-        # Filter events for selected chain
-        chain_events = Enum.filter(socket.assigns.routing_events, &(&1.chain == chain))
-        chain_unified_events = Enum.filter(socket.assigns.events, fn e -> e[:chain] == chain end)
+  defp should_update_metrics?(socket) do
+    last_update = socket.assigns[:metrics_last_update] || 0
+    now = System.system_time(:millisecond)
+    now - last_update >= @metrics_debounce
+  end
 
-        # Update all chain-specific assigns at once to ensure consistency
-        socket
-        |> assign(:selected_chain_metrics, chain_metrics)
-        |> assign(:selected_chain_events, chain_events)
-        |> assign(:selected_chain_unified_events, chain_unified_events)
-        |> assign(:selected_chain_endpoints, chain_endpoints)
+  defp update_selected_chain_metrics(socket) do
+    # Check if we should update (debouncing)
+    if not should_update_metrics?(socket) do
+      socket
+    else
+      case socket.assigns[:selected_chain] do
+        nil ->
+          # Clear all chain-specific data when no chain is selected
+          socket
+          |> assign(:selected_chain_metrics, %{})
+          |> assign(:selected_chain_events, [])
+          |> assign(:selected_chain_unified_events, [])
+          |> assign(:selected_chain_endpoints, %{})
+          |> assign(:metrics_last_update, System.system_time(:millisecond))
+
+        chain ->
+          # Calculate chain-specific metrics
+          chain_metrics = MetricsHelpers.get_chain_performance_metrics(socket.assigns, chain)
+
+          # Get chain-specific endpoints
+          chain_endpoints = EndpointHelpers.get_chain_endpoints(socket.assigns, chain)
+
+          # Filter events for selected chain
+          chain_events = Enum.filter(socket.assigns.routing_events, &(&1.chain == chain))
+          chain_unified_events = Enum.filter(socket.assigns.events, fn e -> e[:chain] == chain end)
+
+          # Update all chain-specific assigns at once to ensure consistency
+          socket
+          |> assign(:selected_chain_metrics, chain_metrics)
+          |> assign(:selected_chain_events, chain_events)
+          |> assign(:selected_chain_unified_events, chain_unified_events)
+          |> assign(:selected_chain_endpoints, chain_endpoints)
+          |> assign(:metrics_last_update, System.system_time(:millisecond))
+      end
     end
   end
 
