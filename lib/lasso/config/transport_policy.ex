@@ -17,7 +17,6 @@ defmodule Lasso.Config.TransportPolicy do
 
   # Globally disallowed methods (stateful/account management)
   @disallowed_methods [
-    "eth_sendRawTransaction",
     "eth_sendTransaction",
     "personal_sign",
     "eth_sign",
