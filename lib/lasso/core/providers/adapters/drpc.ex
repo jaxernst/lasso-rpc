@@ -4,6 +4,10 @@ defmodule Lasso.RPC.Providers.Adapters.DRPC do
 
   ## Error Messages Observed
 
+  - "Request timeout on the free tier, please upgrade your tier to the paid one" (code: 30)
+    Status: 408, Category: rate_limit
+    Note: This is a rate limit timeout, not a capability violation
+
   - "ranges over 10000 blocks are not supported on freetier" (code: 35)
     Status: 400, Category: capability_violation
 

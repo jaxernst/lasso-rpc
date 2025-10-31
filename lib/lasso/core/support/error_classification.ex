@@ -41,6 +41,9 @@ defmodule Lasso.RPC.ErrorClassification do
   # PublicNode uses -32_701 for capability violations (e.g., address requirements)
   @publicnode_capability_violation -32_701
 
+  # DRPC uses code 30 for rate limit timeouts on free tier
+  @drpc_rate_limit_timeout 30
+
   # ===========================================================================
   # EIP-1193 Provider Error Codes
   # ===========================================================================
@@ -66,7 +69,10 @@ defmodule Lasso.RPC.ErrorClassification do
     "credits quota",
     "requests per second",
     # Cloudflare capacity/rate limiting (-32046)
-    "cannot fulfill request"
+    "cannot fulfill request",
+    # DRPC free tier rate limit timeouts
+    "timeout on the free tier",
+    "request timeout on the free tier"
   ]
 
   @auth_patterns [
@@ -241,6 +247,7 @@ defmodule Lasso.RPC.ErrorClassification do
       code == @server_error_code -> :server_error
       code == @generic_server_error -> :server_error
       # Provider-specific error codes (check before general server error range)
+      code == @drpc_rate_limit_timeout -> :rate_limit
       code == @publicnode_capability_violation -> :capability_violation
       # JSON-RPC server error range
       code >= -32_099 and code <= -32_000 -> :server_error
@@ -267,7 +274,8 @@ defmodule Lasso.RPC.ErrorClassification do
       # Retriable: server/network/transient errors (check before 4xx range)
       code in [@parse_error, @internal_error, @rate_limit_error] -> true
       code in [@chain_disconnected, @network_error_code] -> true
-      # Retriable: provider-specific capability violations
+      # Retriable: provider-specific errors
+      code == @drpc_rate_limit_timeout -> true
       code == @publicnode_capability_violation -> true
       code >= -32_099 and code <= -32_000 -> true
       code == 429 -> true

@@ -351,12 +351,19 @@ const SimulatorControl = {
 const DraggableNetworkViewport = {
   mounted() {
     this.isDragging = false;
+    this.hasDragged = false; // Track if user actually dragged (moved mouse significantly)
+    this.dragThreshold = 5; // Pixels of movement to consider it a drag
     this.startX = 0;
     this.startY = 0;
+    this.startClientX = 0; // Track initial mouse position
+    this.startClientY = 0;
     this.translateX = 0;
     this.translateY = 0;
     this.scale = 1;
     this.animationId = null;
+
+    // Store bound handler functions for proper event listener cleanup
+    this.boundHandleCanvasClick = this.handleCanvasClick.bind(this);
 
     // Find the network container (the draggable content)
     this.networkContainer = this.el.querySelector("[data-draggable-content]");
@@ -388,6 +395,11 @@ const DraggableNetworkViewport = {
     this.el.addEventListener("mousemove", this.handleMouseMove.bind(this));
     this.el.addEventListener("mouseup", this.handleMouseUp.bind(this));
     this.el.addEventListener("mouseleave", this.handleMouseUp.bind(this));
+
+    // Intercept click events on the canvas to prevent deselect when dragging
+    if (this.canvasEl) {
+      this.canvasEl.addEventListener("click", this.boundHandleCanvasClick, true);
+    }
 
     // Touch events for mobile
     this.el.addEventListener("touchstart", this.handleTouchStart.bind(this), {
@@ -425,10 +437,25 @@ const DraggableNetworkViewport = {
     this.networkContainer =
       this.el.querySelector("[data-draggable-content]") ||
       this.networkContainer;
-    this.canvasEl =
-      (this.networkContainer &&
-        this.networkContainer.querySelector("[data-network-canvas]")) ||
-      this.canvasEl;
+
+    const newCanvasEl =
+      this.networkContainer &&
+      this.networkContainer.querySelector("[data-network-canvas]");
+
+    // If canvas element changed, reattach click handler
+    if (newCanvasEl && newCanvasEl !== this.canvasEl) {
+      // Remove old listener if it exists
+      if (this.canvasEl) {
+        this.canvasEl.removeEventListener("click", this.boundHandleCanvasClick, true);
+      }
+      // Attach to new element
+      this.canvasEl = newCanvasEl;
+      this.canvasEl.addEventListener("click", this.boundHandleCanvasClick, true);
+    } else if (!this.canvasEl && newCanvasEl) {
+      this.canvasEl = newCanvasEl;
+      this.canvasEl.addEventListener("click", this.boundHandleCanvasClick, true);
+    }
+
     this.updateTransform();
   },
 
@@ -437,8 +464,11 @@ const DraggableNetworkViewport = {
     if (e.button !== 0) return;
 
     this.isDragging = true;
+    this.hasDragged = false; // Reset drag flag
     this.startX = e.clientX - this.translateX;
     this.startY = e.clientY - this.translateY;
+    this.startClientX = e.clientX; // Store initial mouse position
+    this.startClientY = e.clientY;
     this.el.style.cursor = "grabbing";
     e.preventDefault();
   },
@@ -448,6 +478,14 @@ const DraggableNetworkViewport = {
 
     this.translateX = e.clientX - this.startX;
     this.translateY = e.clientY - this.startY;
+
+    // Check if we've moved beyond the drag threshold
+    const deltaX = Math.abs(e.clientX - this.startClientX);
+    const deltaY = Math.abs(e.clientY - this.startClientY);
+    if (deltaX > this.dragThreshold || deltaY > this.dragThreshold) {
+      this.hasDragged = true;
+    }
+
     this.updateTransform();
     e.preventDefault();
   },
@@ -455,14 +493,30 @@ const DraggableNetworkViewport = {
   handleMouseUp() {
     this.isDragging = false;
     this.el.style.cursor = "grab";
+    // Note: hasDragged flag is intentionally NOT reset here
+    // It's checked in handleCanvasClick and reset there
+  },
+
+  handleCanvasClick(e) {
+    // If we dragged, prevent the click event from reaching LiveView
+    // This prevents "deselect_all" from firing when panning the canvas
+    if (this.hasDragged) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    // Reset the flag for the next interaction
+    this.hasDragged = false;
   },
 
   handleTouchStart(e) {
     if (e.touches.length === 1) {
       this.isDragging = true;
+      this.hasDragged = false; // Reset drag flag
       const touch = e.touches[0];
       this.startX = touch.clientX - this.translateX;
       this.startY = touch.clientY - this.translateY;
+      this.startClientX = touch.clientX; // Store initial touch position
+      this.startClientY = touch.clientY;
       e.preventDefault();
     }
   },
@@ -473,12 +527,21 @@ const DraggableNetworkViewport = {
     const touch = e.touches[0];
     this.translateX = touch.clientX - this.startX;
     this.translateY = touch.clientY - this.startY;
+
+    // Check if we've moved beyond the drag threshold
+    const deltaX = Math.abs(touch.clientX - this.startClientX);
+    const deltaY = Math.abs(touch.clientY - this.startClientY);
+    if (deltaX > this.dragThreshold || deltaY > this.dragThreshold) {
+      this.hasDragged = true;
+    }
+
     this.updateTransform();
     e.preventDefault();
   },
 
   handleTouchEnd() {
     this.isDragging = false;
+    // Note: hasDragged flag will be checked and reset in handleCanvasClick
   },
 
   updateTransform() {
@@ -625,6 +688,10 @@ const DraggableNetworkViewport = {
     if (this.animationId) {
       cancelAnimationFrame(this.animationId);
     }
+    // Clean up click event listener
+    if (this.canvasEl && this.boundHandleCanvasClick) {
+      this.canvasEl.removeEventListener("click", this.boundHandleCanvasClick, true);
+    }
   },
 };
 
@@ -634,9 +701,13 @@ const EndpointSelector = {
     this.selectedStrategy = "fastest"; // default strategy
     this.selectedProvider = null; // no provider selected by default
     this.mode = "strategy"; // 'strategy' or 'provider'
+    this.selectedProviderSupportsWs = false; // default to false
 
     // Read chain info from server-provided data attributes
     this.readChainFromDataset();
+
+    // Detect any pre-selected buttons from the server state
+    this.detectActiveSelection();
 
     // Set up click handlers
     this.el.addEventListener("click", (e) => {
@@ -664,6 +735,10 @@ const EndpointSelector = {
   updated() {
     // When LiveView updates the DOM, refresh chain context from data attributes
     this.readChainFromDataset();
+
+    // Detect which button is currently active (if any) to sync state after LiveView updates
+    this.detectActiveSelection();
+
     this.updateUI();
   },
 
@@ -671,6 +746,36 @@ const EndpointSelector = {
     // Use chain name (string like "ethereum", "base") not chain_id (numeric)
     this.chain = this.el.getAttribute("data-chain") || this.chain || "ethereum";
     this.chainId = this.el.getAttribute("data-chain-id") || this.chainId || "1";
+  },
+
+  detectActiveSelection() {
+    // Try to detect which button is currently selected based on CSS classes
+    // This helps sync state after LiveView updates
+
+    // Check for active strategy button
+    const activeStrategy = this.el.querySelector("[data-strategy].border-sky-500");
+    if (activeStrategy && activeStrategy.dataset.strategy) {
+      this.selectedStrategy = activeStrategy.dataset.strategy;
+      this.selectedProvider = null;
+      this.mode = "strategy";
+      this.selectedProviderSupportsWs = false;
+      return;
+    }
+
+    // Check for active provider button
+    const activeProvider = this.el.querySelector("[data-provider].border-indigo-500");
+    if (activeProvider && activeProvider.dataset.provider) {
+      const providerId = activeProvider.dataset.provider;
+      this.selectedProvider = providerId;
+      this.selectedStrategy = null;
+      this.mode = "provider";
+
+      // Read WebSocket support from the button
+      const supportsWsAttr = activeProvider.dataset.providerSupportsWs ||
+                             activeProvider.getAttribute('data-provider-supports-ws');
+      this.selectedProviderSupportsWs = supportsWsAttr === 'true' || supportsWsAttr === true;
+      return;
+    }
   },
 
   selectStrategy(strategy) {
@@ -687,14 +792,31 @@ const EndpointSelector = {
 
     // Get provider capabilities from the button data attributes
     const providerButton = this.el.querySelector(`[data-provider="${provider}"]`);
-    this.selectedProviderSupportsWs = providerButton
-      ? providerButton.dataset.providerSupportsWs === 'true'
-      : false;
+
+    if (providerButton) {
+      // Read the WebSocket support attribute - handle both dataset and getAttribute for robustness
+      const supportsWsAttr = providerButton.dataset.providerSupportsWs ||
+                             providerButton.getAttribute('data-provider-supports-ws');
+      // Convert to boolean - handle "true", "false", empty string, undefined, and actual booleans
+      this.selectedProviderSupportsWs = supportsWsAttr === 'true' || supportsWsAttr === true;
+    } else {
+      this.selectedProviderSupportsWs = false;
+    }
 
     this.updateUI();
   },
 
   updateUI() {
+    // If we're in provider mode, make sure we have the latest WebSocket support info
+    if (this.mode === "provider" && this.selectedProvider) {
+      const providerButton = this.el.querySelector(`[data-provider="${this.selectedProvider}"]`);
+      if (providerButton) {
+        const supportsWsAttr = providerButton.dataset.providerSupportsWs ||
+                               providerButton.getAttribute('data-provider-supports-ws');
+        this.selectedProviderSupportsWs = supportsWsAttr === 'true' || supportsWsAttr === true;
+      }
+    }
+
     // Update strategy pills with specific colors
     this.el.querySelectorAll("[data-strategy]").forEach((btn) => {
       const strategy = btn.dataset.strategy;
@@ -760,6 +882,7 @@ const EndpointSelector = {
       } else if (this.mode === "provider" && this.selectedProvider) {
         // Provider mode: /rpc/provider/{provider_id}/{chain}
         newHttpUrl = `${baseUrl}/rpc/provider/${this.selectedProvider}/${chain}`;
+
         if (this.selectedProviderSupportsWs) {
           newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/provider/${this.selectedProvider}/${chain}`;
         } else {

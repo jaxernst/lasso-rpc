@@ -799,20 +799,24 @@ defmodule LassoWeb.Dashboard do
         <div class="mb-2 text-xs text-gray-400">Provider Override (bypass routing)</div>
         <div class="mb-4 flex flex-wrap gap-2">
           <%= for provider <- @chain_connections do %>
-            <%= if provider.status == :connected do %>
+            <% provider_status = StatusHelpers.determine_provider_status(provider) %>
+            <%= if provider_status in [:healthy, :syncing, :reconnecting, :degraded] do %>
               <button
                 data-provider={provider.id}
                 data-provider-type={provider.type}
-                data-provider-supports-ws={EndpointHelpers.provider_supports_websocket(provider)}
+                data-provider-supports-ws={to_string(EndpointHelpers.provider_supports_websocket(provider))}
                 class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-indigo-400 hover:text-indigo-300 flex items-center space-x-1"
               >
-                <div class="h-1.5 w-1.5 rounded-full bg-emerald-400"></div>
+                <div class={["h-1.5 w-1.5 rounded-full", StatusHelpers.provider_status_indicator_class(provider)]}></div>
                 <span>{provider.name}</span>
               </button>
             <% end %>
           <% end %>
-          <%= if Enum.count(@chain_connections, &(&1.status == :connected)) == 0 do %>
-            <span class="text-xs text-gray-500">No connected providers</span>
+          <% available_count = Enum.count(@chain_connections, fn p ->
+            StatusHelpers.determine_provider_status(p) in [:healthy, :syncing, :reconnecting, :degraded]
+          end) %>
+          <%= if available_count == 0 do %>
+            <span class="text-xs text-gray-500">No available providers</span>
           <% end %>
         </div>
 
@@ -820,44 +824,45 @@ defmodule LassoWeb.Dashboard do
         <div class="bg-gray-800/30 rounded-lg p-3">
           <!-- HTTP Endpoint -->
           <div class="mb-3">
-            <div class="flex items-center justify-between mb-1">
-              <div class="text-xs font-medium text-gray-300">HTTP</div>
-              <button
+              <div class="mb-1 text-xs font-medium text-gray-300">HTTP</div>
+            <div class="flex gap-1 items-center">
+            <div class="flex-grow text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="endpoint-url">
+              {EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
+            </div>
+            <button
                 data-copy-text={EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
-                class="bg-gray-700 hover:bg-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
+                class="border border-gray-700 hover:border-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
               >
                 Copy
               </button>
             </div>
-            <div class="text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="endpoint-url">
-              {EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
-            </div>
           </div>
 
-          <!-- WebSocket Endpoint (only show if chain has providers that support WebSocket) -->
-          <%= if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do %>
-            <div class="mb-3">
-              <div class="flex items-center justify-between mb-1">
-                <div class="text-xs font-medium text-gray-300">WebSocket</div>
-                <button
-                  data-copy-text={EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
-                  class="bg-gray-700 hover:bg-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
-                >
-                  Copy
-                </button>
+          <!-- WebSocket Endpoint -->
+          <div class="mb-3">
+            <div class="mb-1 text-xs font-medium text-gray-300">WebSocket</div>
+            <div class="flex gap-1 items-center">
+              <div class="flex-grow text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="ws-endpoint-url">
+                <%= if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do %>
+                  {EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
+                <% else %>
+                  No WebSocket providers available for this chain
+                <% end %>
               </div>
-              <div class="text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="ws-endpoint-url">
-                {EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
-              </div>
+              <button
+                data-copy-text={
+                  if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do
+                    EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")
+                  else
+                    ""
+                  end
+                }
+                class="border border-gray-700 hover:border-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
+              >
+                Copy
+              </button>
             </div>
-          <% else %>
-            <div class="mb-3">
-              <div class="text-xs font-medium text-gray-400">WebSocket</div>
-              <div class="text-xs text-gray-500 bg-gray-900/50 rounded px-2 py-1">
-                No WebSocket providers available for this chain
-              </div>
-            </div>
-          <% end %>
+          </div>
 
           <div class="text-xs text-gray-400" id="mode-description">
             Routes to fastest provider based on real-time latency benchmarks
@@ -1034,18 +1039,24 @@ defmodule LassoWeb.Dashboard do
 
             <!-- Failure Information -->
             <%
-              # Only show issues if there are actual current problems
-              has_current_issues = (Map.get(@provider_connection, :consecutive_failures, 0) > 0) or
+              # Only show issues if there are actual current problems (exclude rate limiting - it has its own section)
+              is_rate_limited = Map.get(@provider_connection, :is_in_cooldown, false) or Map.get(@provider_connection, :health_status) == :rate_limited
+              has_current_issues = ((Map.get(@provider_connection, :consecutive_failures, 0) > 0) or
                                    (Map.get(@provider_connection, :reconnect_attempts, 0) > 0) or
-                                   (Map.get(@provider_connection, :is_in_cooldown, false) == true) or
                                    (Map.get(@provider_connection, :circuit_state) == :open) or
-                                   (Map.get(@provider_connection, :health_status) in [:unhealthy, :rate_limited])
+                                   (Map.get(@provider_connection, :health_status) == :unhealthy)) and not is_rate_limited
             %>
             <%= if has_current_issues do %>
               <div class="bg-red-900/20 border border-red-600/30 rounded-lg p-3">
                 <div class="flex items-center gap-2 mb-2">
                   <div class="w-2 h-2 rounded-full bg-red-400"></div>
-                  <span class="text-red-300 text-sm font-medium">Issues Detected</span>
+                  <span class="text-red-300 text-sm font-medium">
+                    <%= if Map.get(@provider_connection, :circuit_state) == :open do %>
+                      Circuit Breaker Open
+                    <% else %>
+                      Issues Detected
+                    <% end %>
+                  </span>
                 </div>
 
                 <div class="grid grid-cols-2 gap-3 text-xs">
@@ -1086,13 +1097,13 @@ defmodule LassoWeb.Dashboard do
                 <div class="text-xs">
                   <div class="grid grid-cols-2 gap-3">
                     <div>
-                      <span class="text-gray-400">Cooldown count:</span>
-                      <span class="text-purple-300 ml-2">{Map.get(@provider_connection, :cooldown_count, 0)}</span>
+                      <span class="text-gray-400">Consecutive failures:</span>
+                      <span class="text-purple-300 ml-2">{Map.get(@provider_connection, :consecutive_failures, 0)}</span>
                     </div>
                     <%= if Map.get(@provider_connection, :cooldown_until) do %>
                       <% time_remaining = max(0, Map.get(@provider_connection, :cooldown_until, 0) - System.monotonic_time(:millisecond)) %>
                       <div>
-                        <span class="text-gray-400">Time remaining:</span>
+                        <span class="text-gray-400">Cooldown ends in:</span>
                         <span class="text-purple-300 ml-2">{div(time_remaining, 1000)}s</span>
                       </div>
                     <% end %>

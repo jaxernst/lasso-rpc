@@ -68,7 +68,8 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   def get_provider_http_url(endpoints, provider) do
     chain = extract_chain_name(endpoints)
     base_url = Map.get(endpoints, :base_url, LassoWeb.Endpoint.url())
-    "#{base_url}/rpc/provider/#{provider.id}/#{chain}"
+    provider_id = Map.get(provider, :id)
+    "#{base_url}/rpc/provider/#{provider_id}/#{chain}"
   end
 
   @doc "Get WebSocket URL for specific provider"
@@ -76,19 +77,23 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
     chain = extract_chain_name(endpoints)
     ws_base_url = Map.get(endpoints, :ws_base_url) ||
                   String.replace(LassoWeb.Endpoint.url(), ~r/^http/, "ws")
-    "#{ws_base_url}/ws/rpc/provider/#{provider.id}/#{chain}"
+    provider_id = Map.get(provider, :id)
+    "#{ws_base_url}/ws/rpc/provider/#{provider_id}/#{chain}"
   end
 
   @doc "Get provider name or fallback to ID"
   def get_provider_name(provider) do
-    provider.name || provider.id
+    Map.get(provider, :name) || Map.get(provider, :id)
   end
 
   @doc "Check if provider supports WebSocket"
   def provider_supports_websocket(provider) do
     # Check if provider has WebSocket support based on type or ws_url
-    provider.type in [:websocket, :both] or
-      (Map.has_key?(provider, :ws_url) and not is_nil(provider.ws_url) and provider.ws_url != "")
+    provider_type = Map.get(provider, :type)
+    ws_url = Map.get(provider, :ws_url)
+
+    provider_type in [:websocket, :both] or
+      (not is_nil(ws_url) and ws_url != "")
   end
 
   # Extract chain name from endpoints map
