@@ -8,7 +8,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   Determine the comprehensive status of a provider based on multiple factors:
   - Circuit breaker state
   - Health check status
-  - Connection status  
+  - Connection status
   - Rate limiting
   - Failure patterns
   """
@@ -23,10 +23,6 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     # Debug log status determination for troubleshooting
     require Logger
     provider_id = Map.get(provider, :id, "unknown")
-
-    Logger.debug(
-      "StatusHelpers: Status determination for #{provider_id}: circuit_state=#{circuit_state}, health_status=#{health_status}, connection_status=#{connection_status}, consecutive_failures=#{consecutive_failures}, is_in_cooldown=#{is_in_cooldown}"
-    )
 
     cond do
       # Circuit breaker is open - provider is effectively failed (highest priority)

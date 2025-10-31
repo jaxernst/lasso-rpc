@@ -104,7 +104,15 @@ class SimulatorRun {
     const methods = httpConfig.methods || ['eth_blockNumber'];
     const rps = httpConfig.rps || 5;
     const concurrency = httpConfig.concurrency || 4;
-    const strategy = this.config.strategy;
+
+    // Robust strategy normalization: convert undefined, null, empty string, or string "undefined"/"null" to null
+    const rawStrategy = this.config.strategy;
+    const strategy = (rawStrategy &&
+                     typeof rawStrategy === 'string' &&
+                     rawStrategy.length > 0 &&
+                     rawStrategy !== 'undefined' &&
+                     rawStrategy !== 'null' &&
+                     rawStrategy.trim() !== '') ? rawStrategy : null;
     
     this.stats.http = { success: 0, error: 0, avgLatencyMs: 0, inflight: 0 };
     
@@ -128,7 +136,8 @@ class SimulatorRun {
       };
 
       // Use strategy-specific endpoints as defined in the router
-      const url = strategy 
+      // strategy is already normalized to null if invalid at the top of _startHttpLoad
+      const url = strategy
         ? `/rpc/${encodeURIComponent(strategy)}/${encodeURIComponent(chain)}`
         : `/rpc/${encodeURIComponent(chain)}`;
 
@@ -412,10 +421,15 @@ export function setActivityCallback(callback) {
 export function startHttpLoad(opts = {}) {
   // Stop any existing runs first to maintain old behavior
   simulator.stopAllRuns();
-  
+
+  // Normalize strategy: ensure undefined/null/empty becomes a valid strategy or omitted
+  let strategy = opts.strategy;
+  if (!strategy || strategy === 'undefined' || strategy === 'null' || typeof strategy !== 'string') {
+    strategy = null; // Will use default routing on backend
+  }
+
   const config = {
     chains: opts.chains || getDefaultChains(),
-    strategy: opts.strategy,
     duration: opts.durationMs || 30000,
     http: {
       enabled: true,
@@ -427,7 +441,12 @@ export function startHttpLoad(opts = {}) {
       enabled: false
     }
   };
-  
+
+  // Only include strategy if it's valid
+  if (strategy) {
+    config.strategy = strategy;
+  }
+
   return simulator.startRun(config);
 }
 

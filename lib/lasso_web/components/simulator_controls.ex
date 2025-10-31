@@ -167,14 +167,22 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         Enum.map(socket.assigns.available_chains, & &1.name)
       end
 
+    strategy = socket.assigns.selected_strategy
+
     opts = %{
       chains: chains,
       methods: ["eth_blockNumber", "eth_getBalance", "eth_getTransactionCount"],
       rps: socket.assigns.request_rate,
       concurrency: 4,
-      strategy: socket.assigns.selected_strategy,
       durationMs: 60_000
     }
+
+    # Only include strategy if it's a valid non-empty string
+    opts = if is_binary(strategy) and String.length(strategy) > 0 do
+      Map.put(opts, :strategy, strategy)
+    else
+      opts
+    end
 
     socket =
       socket
@@ -487,8 +495,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <%= for {strategy, label, icon} <- [
             {"round-robin", "Round Robin", "🔄"},
             {"fastest", "Fastest", "⚡"},
-            {"cheapest", "Cheapest", "💰"},
-            {"priority", "Priority", "⭐"}
+            {"latency-weighted", "Latency Weighted", "⚖️"}
           ] do %>
             <button
               phx-click="select_strategy"
@@ -653,6 +660,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     %{
       type: "custom",
       duration: 30_000,
+      strategy: "round-robin",  # Default strategy to avoid undefined routes
       http: %{
         enabled: true,
         methods: ["eth_blockNumber", "eth_getBalance"],
@@ -669,12 +677,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
   defp build_run_config(socket) do
     load_types = socket.assigns.load_types
+    # Ensure strategy is valid or omit it to use default route
+    strategy = socket.assigns.selected_strategy
 
-    %{
+    config = %{
       type: "custom",
       duration: 30_000,
       chains: get_selected_chains(socket),
-      strategy: socket.assigns.selected_strategy,
       http: %{
         enabled: load_types.http,
         methods: ["eth_blockNumber", "eth_getBalance"],
@@ -687,6 +696,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         topics: ["newHeads"]
       }
     }
+
+    # Only include strategy if it's a valid non-empty string
+    if is_binary(strategy) and String.length(strategy) > 0 do
+      Map.put(config, :strategy, strategy)
+    else
+      config
+    end
   end
 
   defp get_selected_chains(socket) do
@@ -708,8 +724,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       case strategy do
         "round-robin" -> "Round Robin"
         "fastest" -> "Fastest"
-        "cheapest" -> "Cheapest"
-        "priority" -> "Priority"
+        "latency-weighted" -> "Latency Weighted"
         _ -> "Round Robin"
       end
 

@@ -47,6 +47,20 @@ config :lasso, :observability,
   max_meta_header_bytes: 4096,
   sampling: [rate: 1.0]
 
+# Dashboard LiveView event buffering configuration
+config :lasso, :dashboard,
+  # Event batch flush interval in milliseconds
+  batch_interval: 100,
+  # Maximum events in buffer before early flush
+  max_buffer_size: 50,
+  # Mailbox backpressure thresholds
+  mailbox_thresholds: %{
+    throttle: 500,
+    drop: 1000
+  },
+  # Metrics recalculation debounce interval in milliseconds
+  metrics_debounce: 2_000
+
 # Configure JSON library
 config :phoenix, :json_library, Jason
 
