@@ -96,6 +96,9 @@ defmodule Lasso.RPC.ErrorClassification do
     "invalid block range",
     "max is 1k blocks",
     "range is too large",
+    "ranges over",
+    "is limited to",
+    "blocks are not supported",
     # Archival/historical data
     "archive node required",
     "requires archival",

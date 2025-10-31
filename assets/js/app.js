@@ -94,6 +94,84 @@ const TerminalFeed = {
   },
 };
 
+// Activity Feed Hook with scroll-to-pause auto-scroll
+// Handles prepended content (newest events at top of list in DOM)
+// Uses simple scroll compensation to preserve position during updates
+const ActivityFeed = {
+  mounted() {
+    this.autoScroll = true;
+    this.userHasScrolled = false;
+
+    // Listen for scroll events to detect manual scrolling
+    this.el.addEventListener('scroll', () => {
+      // Check if user is near the top (within 10px) - newest events are at top!
+      const isNearTop = this.el.scrollTop < 10;
+
+      if (!isNearTop) {
+        // User scrolled down (to see older events), pause auto-scroll
+        this.autoScroll = false;
+        this.userHasScrolled = true;
+      } else if (isNearTop && this.userHasScrolled) {
+        // User scrolled back to top, resume auto-scroll
+        this.autoScroll = true;
+      }
+    });
+
+    // Initial scroll to top (newest events are at top of DOM)
+    this.scrollToTop();
+  },
+
+  updated() {
+    if (this.autoScroll) {
+      // User is at top - scroll to show newest content
+      this.scrollToTop();
+    } else {
+      // User is scrolled down reading older events
+      // Maintain scroll position by tracking a specific element
+
+      if (this.anchorElementId !== undefined) {
+        // We saved an anchor element from the previous render
+        // Find it in the current DOM
+        const anchorElement = this.el.querySelector(`[data-event-id="${this.anchorElementId}"]`);
+
+        if (anchorElement && this.anchorOffsetTop !== undefined) {
+          // Calculate how much the anchor element has moved
+          const currentOffsetTop = anchorElement.offsetTop;
+          const movement = currentOffsetTop - this.anchorOffsetTop;
+
+          if (movement !== 0) {
+            // Adjust scroll to keep the anchor element at the same viewport position
+            this.el.scrollTop = this.savedScrollTop + movement;
+          }
+        }
+      }
+
+      // Save the current anchor element for the NEXT update
+      // Find the first visible element in the viewport
+      const children = Array.from(this.el.children);
+      const containerRect = this.el.getBoundingClientRect();
+      const anchorElement = children.find(child => {
+        const rect = child.getBoundingClientRect();
+        // Element is visible if its top is at or below the container's top
+        return rect.top >= containerRect.top - 5 && rect.top <= containerRect.bottom;
+      });
+
+      if (anchorElement) {
+        this.anchorElementId = anchorElement.getAttribute('data-event-id');
+        this.anchorOffsetTop = anchorElement.offsetTop;
+        this.savedScrollTop = this.el.scrollTop;
+      }
+    }
+  },
+
+  scrollToTop() {
+    try {
+      // Scroll to top (newest events are at top of DOM)
+      this.el.scrollTop = 0;
+    } catch (_) {}
+  },
+};
+
 const SimulatorControl = {
   mounted() {
     this.httpTimer = null;
@@ -761,6 +839,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     DraggableNetworkViewport,
     EventsFeed,
     TerminalFeed,
+    ActivityFeed,
     ProviderRequestAnimator,
     TabSwitcher: EndpointSelector,
   },

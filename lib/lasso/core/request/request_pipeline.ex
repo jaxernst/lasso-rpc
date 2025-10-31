@@ -150,7 +150,7 @@ defmodule Lasso.RPC.RequestPipeline do
     case attempt_request_on_channels(channels, rpc_request, opts.timeout_ms, ctx) do
       {:ok, result, channel, updated_ctx} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
-        record_channel_success_metrics(chain, channel, method, opts.strategy, duration_ms)
+        record_channel_success_metrics(chain, channel, method, opts.strategy, duration_ms, updated_ctx)
         complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
         {:ok, result}
 
@@ -168,7 +168,8 @@ defmodule Lasso.RPC.RequestPipeline do
           method,
           opts.strategy,
           jerr,
-          duration_ms
+          duration_ms,
+          updated_ctx
         )
 
         complete_request(:error, updated_ctx, duration_ms, chain, method, error: jerr)
@@ -185,7 +186,8 @@ defmodule Lasso.RPC.RequestPipeline do
           opts.strategy,
           jerr,
           duration_ms,
-          channel.transport
+          channel.transport,
+          ctx1
         )
 
         should_failover =
@@ -452,7 +454,8 @@ defmodule Lasso.RPC.RequestPipeline do
       channel,
       method,
       opts.strategy,
-      updated_ctx.upstream_latency_ms || 0
+      updated_ctx.upstream_latency_ms || 0,
+      updated_ctx
     )
 
     Logger.info("Degraded mode success via half-open channel",
@@ -495,7 +498,8 @@ defmodule Lasso.RPC.RequestPipeline do
       opts.strategy,
       jerr,
       duration,
-      channel.transport
+      channel.transport,
+      final_ctx
     )
 
     complete_request(:error, final_ctx, duration_ms, chain, method, error: jerr)
@@ -547,7 +551,8 @@ defmodule Lasso.RPC.RequestPipeline do
       channel,
       method,
       opts.strategy,
-      updated_ctx.upstream_latency_ms || 0
+      updated_ctx.upstream_latency_ms || 0,
+      updated_ctx
     )
 
     complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
@@ -577,7 +582,8 @@ defmodule Lasso.RPC.RequestPipeline do
       opts.strategy,
       jerr,
       duration,
-      channel.transport
+      channel.transport,
+      final_ctx
     )
 
     complete_request(:error, final_ctx, duration_ms, chain, method, error: jerr)
@@ -912,7 +918,7 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp record_channel_success_metrics(chain, channel, method, strategy, duration_ms) do
+  defp record_channel_success_metrics(chain, channel, method, strategy, duration_ms, ctx) do
     provider_id = channel.provider_id
     transport = channel.transport
 
@@ -928,7 +934,7 @@ defmodule Lasso.RPC.RequestPipeline do
       transport,
       duration_ms,
       :success,
-      0
+      ctx.retries
     )
 
     :telemetry.execute(
@@ -941,12 +947,12 @@ defmodule Lasso.RPC.RequestPipeline do
         provider_id: provider_id,
         transport: transport,
         result: :success,
-        failovers: 0
+        failovers: ctx.retries
       }
     )
   end
 
-  defp record_channel_failure_metrics(chain, provider_id, method, strategy, reason, duration_ms) do
+  defp record_channel_failure_metrics(chain, provider_id, method, strategy, reason, duration_ms, ctx) do
     # We may not always know the transport here; leave as legacy for now
     record_rpc_failure(chain, provider_id, method, reason, duration_ms)
 
@@ -960,7 +966,7 @@ defmodule Lasso.RPC.RequestPipeline do
         provider_id: provider_id,
         transport: :unknown,
         result: :error,
-        failovers: 0
+        failovers: ctx.retries
       }
     )
   end
@@ -972,9 +978,21 @@ defmodule Lasso.RPC.RequestPipeline do
          strategy,
          reason,
          duration_ms,
-         transport
+         transport,
+         ctx
        ) do
     record_rpc_failure(chain, provider_id, method, reason, duration_ms, transport)
+
+    publish_channel_routing_decision(
+      chain,
+      method,
+      strategy,
+      provider_id,
+      transport,
+      duration_ms,
+      :error,
+      ctx.retries
+    )
 
     :telemetry.execute(
       [:lasso, :rpc, :request, :stop],
@@ -986,7 +1004,7 @@ defmodule Lasso.RPC.RequestPipeline do
         provider_id: provider_id,
         transport: transport,
         result: :error,
-        failovers: 0
+        failovers: ctx.retries
       }
     )
   end

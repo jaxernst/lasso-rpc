@@ -56,6 +56,15 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         socket
       end
 
+    # Recalculate simulator_running based on active_runs when it changes
+    socket =
+      if Map.has_key?(assigns, :active_runs) do
+        is_running = length(assigns.active_runs) > 0
+        assign(socket, :simulator_running, is_running)
+      else
+        socket
+      end
+
     {:ok, socket}
   end
 

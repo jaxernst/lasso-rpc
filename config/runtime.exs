@@ -30,7 +30,7 @@ if config_env() == :prod do
   host = System.get_env("PHX_HOST") || "localhost"
 
   config :lasso, LassoWeb.Endpoint,
-    http: [ip: {0, 0, 0, 0, 0, 0, 0, 0}, port: port],
+    http: [ip: {0, 0, 0, 0}, port: port],
     url: [host: host, port: port, scheme: "http"],
     secret_key_base:
       System.get_env("SECRET_KEY_BASE") || "YourSecretKeyBaseHere" <> String.duplicate("a", 64)

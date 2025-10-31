@@ -1,16 +1,36 @@
 defmodule LassoWeb.Dashboard.StatusHelpers do
   @moduledoc """
   Status-related helper functions for providers and events.
-  Enhanced with comprehensive status classification logic.
+  Enhanced with comprehensive status classification logic including block sync validation.
   """
+
+  alias Lasso.RPC.Caching.BlockchainMetadataCache
+
+  # Configuration: maximum blocks a provider can lag behind before showing as "syncing"
+  # Read from application config at runtime
+  defp lag_threshold_blocks do
+    Application.get_env(:lasso, :dashboard_status, [])
+    |> Keyword.get(:lag_threshold_blocks, 10)
+  end
 
   @doc """
   Determine the comprehensive status of a provider based on multiple factors:
+  - Rate limiting (highest priority - even if circuit open)
   - Circuit breaker state
+  - Block sync status (for healthy providers)
+  - WebSocket reconnection attempts
   - Health check status
-  - Connection status
-  - Rate limiting
   - Failure patterns
+
+  Returns one of:
+  - :healthy - All systems operational, synced
+  - :syncing - Responsive but lagging blocks
+  - :reconnecting - WebSocket reconnecting
+  - :degraded - Has issues but still trying
+  - :rate_limited - In cooldown (takes priority even over circuit open)
+  - :circuit_open - Complete failure
+  - :testing_recovery - Circuit testing recovery
+  - :unknown - Cannot determine (rare)
   """
   def determine_provider_status(provider) do
     circuit_state = Map.get(provider, :circuit_state, :closed)
@@ -19,68 +39,110 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     consecutive_failures = Map.get(provider, :consecutive_failures, 0)
     reconnect_attempts = Map.get(provider, :reconnect_attempts, 0)
     is_in_cooldown = Map.get(provider, :is_in_cooldown, false)
-
-    # Debug log status determination for troubleshooting
-    require Logger
-    provider_id = Map.get(provider, :id, "unknown")
+    ws_status = Map.get(provider, :ws_status)
+    chain = Map.get(provider, :chain)
+    provider_id = Map.get(provider, :id)
 
     cond do
-      # Circuit breaker is open - provider is effectively failed (highest priority)
-      circuit_state == :open ->
-        :circuit_open
-
-      # Use health_status from ProviderPool as primary indicator
-      health_status == :healthy ->
-        :connected
-
-      health_status == :unhealthy ->
-        :unhealthy
-
+      # 1. Rate limited or in cooldown - highest priority (even if circuit open)
       health_status == :rate_limited or is_in_cooldown ->
         :rate_limited
 
-      health_status == :connecting ->
-        :connecting
+      # 2. Circuit breaker is open - complete failure
+      circuit_state == :open ->
+        :circuit_open
 
-      # Circuit breaker in recovery mode
+      # 3. Circuit breaker testing recovery
       circuit_state == :half_open ->
-        :recovering
+        :testing_recovery
 
-      # Provider has failed too many times (fallback for old data)
-      consecutive_failures >= 10 ->
-        :failed
+      # 4. WebSocket actively reconnecting
+      reconnect_attempts > 0 and ws_status in [:disconnected, :connecting] ->
+        :reconnecting
 
-      # Connection issues with frequent reconnects (fallback for old data)
-      reconnect_attempts >= 5 ->
-        :unstable
+      # 5. Healthy - check block sync status
+      health_status == :healthy ->
+        case check_block_lag(chain, provider_id) do
+          :synced -> :healthy
+          :lagging -> :syncing
+          # Fail-open: if no lag data, show as healthy
+          :unavailable -> :healthy
+        end
 
-      # Fallback to connection_status for compatibility
+      # 6. Degraded states (consolidated from unhealthy, unstable, misconfigured)
+      health_status in [:unhealthy, :misconfigured, :degraded] ->
+        :degraded
+
+      # Provider has significant failures but circuit not yet open
+      consecutive_failures >= 3 and consecutive_failures < 10 ->
+        :degraded
+
+      # 7. Initial connection states (only during startup)
+      health_status == :connecting or connection_status == :connecting ->
+        :reconnecting
+
+      # 8. Fallback to connection_status for compatibility
       connection_status == :connected ->
-        :connected
+        # Double-check block lag even for legacy status
+        case check_block_lag(chain, provider_id) do
+          :synced -> :healthy
+          :lagging -> :syncing
+          :unavailable -> :healthy
+        end
 
-      connection_status == :connecting ->
-        :connecting
+      connection_status in [:disconnected, :rate_limited] ->
+        :degraded
 
-      connection_status == :rate_limited ->
-        :rate_limited
-
-      # Default fallback
+      # 9. Default fallback
       true ->
         :unknown
     end
   end
 
+  @doc """
+  Check if a provider is lagging behind the best known block height.
+
+  Returns:
+  - :synced - Within acceptable lag threshold
+  - :lagging - Beyond lag threshold
+  - :unavailable - No lag data available (fail-open)
+  """
+  def check_block_lag(chain, provider_id) when is_binary(chain) and is_binary(provider_id) do
+    threshold = lag_threshold_blocks()
+
+    # If threshold is 0, disable lag checking (always return :synced)
+    if threshold == 0 do
+      :synced
+    else
+      case BlockchainMetadataCache.get_provider_lag(chain, provider_id) do
+        {:ok, lag} when lag >= -threshold ->
+          # Lag is within threshold (negative lag = blocks behind)
+          # lag >= -10 means provider is at most 10 blocks behind
+          :synced
+
+        {:ok, _lag} ->
+          # Provider is lagging beyond threshold
+          :lagging
+
+        {:error, _reason} ->
+          # Lag data unavailable - fail open (don't penalize provider)
+          :unavailable
+      end
+    end
+  end
+
+  def check_block_lag(_chain, _provider_id), do: :unavailable
+
   @doc "Get provider status label with enhanced classifications"
   def provider_status_label(provider) do
     case determine_provider_status(provider) do
       :circuit_open -> "CIRCUIT OPEN"
+      :testing_recovery -> "TESTING RECOVERY"
       :rate_limited -> "RATE LIMITED"
-      :failed -> "FAILED"
-      :unhealthy -> "UNHEALTHY"
-      :unstable -> "UNSTABLE"
-      :connecting -> "CONNECTING"
-      :connected -> "HEALTHY"
-      :recovering -> "RECOVERING"
+      :reconnecting -> "RECONNECTING"
+      :degraded -> "DEGRADED"
+      :syncing -> "SYNCING"
+      :healthy -> "HEALTHY"
       :unknown -> "UNKNOWN"
     end
   end
@@ -90,20 +152,18 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     case determine_provider_status(provider) do
       # 🔴 Critical failure
       :circuit_open -> "text-red-500"
-      # 🔴 Failed
-      :failed -> "text-red-400"
-      # 🟠 Unhealthy
-      :unhealthy -> "text-orange-400"
-      # 🟡 Unstable
-      :unstable -> "text-yellow-400"
+      # 🔵 Testing recovery
+      :testing_recovery -> "text-blue-400"
       # 🟣 Rate limited
       :rate_limited -> "text-purple-300"
-      # ⚪ Connecting
-      :connecting -> "text-gray-300"
-      # 🔵 Recovering
-      :recovering -> "text-blue-400"
+      # 🟡 Reconnecting
+      :reconnecting -> "text-amber-400"
+      # 🟠 Degraded
+      :degraded -> "text-orange-400"
+      # 🔵 Syncing
+      :syncing -> "text-sky-400"
       # 🟢 Healthy
-      :connected -> "text-emerald-400"
+      :healthy -> "text-emerald-400"
       # ⚫ Unknown
       :unknown -> "text-gray-400"
     end
@@ -113,54 +173,84 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   def provider_status_indicator_class(provider) do
     case determine_provider_status(provider) do
       :circuit_open -> "bg-red-500"
-      :failed -> "bg-red-400"
-      :unhealthy -> "bg-orange-400"
-      :unstable -> "bg-yellow-400"
+      :testing_recovery -> "bg-blue-400"
       :rate_limited -> "bg-purple-400"
-      :connecting -> "bg-gray-300"
-      :recovering -> "bg-blue-400"
-      :connected -> "bg-emerald-400"
+      :reconnecting -> "bg-amber-400"
+      :degraded -> "bg-orange-400"
+      :syncing -> "bg-sky-400"
+      :healthy -> "bg-emerald-400"
       :unknown -> "bg-gray-400"
     end
   end
 
   @doc "Check if provider status is considered critical"
   def is_critical_status?(provider) do
-    determine_provider_status(provider) in [:circuit_open, :failed]
+    determine_provider_status(provider) == :circuit_open
   end
 
   @doc "Check if provider status needs attention"
   def needs_attention?(provider) do
-    determine_provider_status(provider) in [:circuit_open, :failed, :unhealthy, :unstable]
+    determine_provider_status(provider) in [:circuit_open, :degraded, :rate_limited]
   end
 
   @doc "Get status priority for sorting (lower = more critical)"
   def status_priority(provider) do
     case determine_provider_status(provider) do
-      :circuit_open -> 1
-      :failed -> 2
-      :unhealthy -> 3
-      :unstable -> 4
-      :rate_limited -> 5
-      :recovering -> 6
-      :connecting -> 7
-      :connected -> 8
-      :unknown -> 9
+      :rate_limited -> 1
+      :circuit_open -> 2
+      :degraded -> 3
+      :testing_recovery -> 4
+      :reconnecting -> 5
+      :syncing -> 6
+      :healthy -> 7
+      :unknown -> 8
     end
   end
 
   @doc "Get human-readable status explanation"
   def status_explanation(provider) do
+    chain = Map.get(provider, :chain)
+    provider_id = Map.get(provider, :id)
+
     case determine_provider_status(provider) do
-      :circuit_open -> "Circuit breaker is open due to repeated failures"
-      :failed -> "Provider has failed too many consecutive requests"
-      :unhealthy -> "Health checks are failing"
-      :unstable -> "Frequent connection issues and reconnects"
-      :rate_limited -> "Provider is rate limited or in cooldown"
-      :connecting -> "Establishing initial connection"
-      :recovering -> "Circuit breaker is testing recovery"
-      :connected -> "All systems operational"
-      :unknown -> "Status cannot be determined"
+      :circuit_open ->
+        "Circuit breaker is open due to repeated failures. Provider is not accepting requests."
+
+      :testing_recovery ->
+        "Circuit breaker is in half-open state, testing if provider has recovered."
+
+      :rate_limited ->
+        cooldown_until = Map.get(provider, :cooldown_until)
+        if cooldown_until do
+          remaining_ms = max(0, cooldown_until - System.monotonic_time(:millisecond))
+          remaining_sec = div(remaining_ms, 1000)
+          "Provider is rate limited and in cooldown for #{remaining_sec}s."
+        else
+          "Provider is rate limited or in cooldown."
+        end
+
+      :reconnecting ->
+        attempts = Map.get(provider, :reconnect_attempts, 0)
+        "WebSocket connection lost. Reconnecting (attempt #{attempts})..."
+
+      :degraded ->
+        failures = Map.get(provider, :consecutive_failures, 0)
+        "Provider is experiencing issues (#{failures} consecutive failures). Still attempting requests."
+
+      :syncing ->
+        case BlockchainMetadataCache.get_provider_lag(chain, provider_id) do
+          {:ok, lag} when lag < 0 ->
+            blocks_behind = abs(lag)
+            "Provider is responsive but lagging #{blocks_behind} blocks behind the network head."
+          _ ->
+            "Provider is responsive but not fully synced with the network."
+        end
+
+      :healthy ->
+        "All systems operational. Provider is healthy and synced."
+
+      :unknown ->
+        "Status cannot be determined. Check provider configuration and connectivity."
     end
   end
 

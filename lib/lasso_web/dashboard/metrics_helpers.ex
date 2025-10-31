@@ -295,6 +295,9 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
     total_providers = Enum.count(assigns.connections, &(&1.chain == chain_name))
 
+    # Calculate RPS for the chain
+    rps = rpc_calls_per_second(chain_events)
+
     %{
       total_calls: length(chain_events),
       success_rate: success_rate,
@@ -307,7 +310,8 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       providers_list: [],
       rpc_methods: [],
       last_updated: 0,
-      decision_share: decision_share
+      decision_share: decision_share,
+      rps: rps
     }
   end
 

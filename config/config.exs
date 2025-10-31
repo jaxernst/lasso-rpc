@@ -61,6 +61,12 @@ config :lasso, :dashboard,
   # Metrics recalculation debounce interval in milliseconds
   metrics_debounce: 2_000
 
+# Dashboard status configuration
+config :lasso, :dashboard_status,
+  # Maximum blocks a provider can lag behind before showing as "syncing"
+  # instead of "healthy". Set to 0 to disable lag-based status.
+  lag_threshold_blocks: 2
+
 # Configure JSON library
 config :phoenix, :json_library, Jason
 
