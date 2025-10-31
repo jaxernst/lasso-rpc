@@ -68,6 +68,8 @@ defmodule Lasso.RPC.ProviderPool do
             consecutive_failures: non_neg_integer(),
             consecutive_successes: non_neg_integer(),
             last_error: term() | nil,
+            reconnect_attempts: non_neg_integer(),
+            reconnect_grace_until: integer() | nil,
             policy: Lasso.RPC.HealthPolicy.t(),
             http_policy: Lasso.RPC.HealthPolicy.t(),
             ws_policy: Lasso.RPC.HealthPolicy.t()
@@ -100,7 +102,10 @@ defmodule Lasso.RPC.ProviderPool do
       :policy,
       # Transport-specific health policies
       :http_policy,
-      :ws_policy
+      :ws_policy,
+      # WebSocket reconnection tracking
+      reconnect_attempts: 0,
+      reconnect_grace_until: nil
     ]
   end
 
@@ -638,6 +643,11 @@ defmodule Lasso.RPC.ProviderPool do
         {:noreply, state}
 
       provider ->
+        # Set grace period: keep reconnect_attempts for 30s after reconnection
+        # This allows dashboard to show "Reconnecting" status while provider stabilizes
+        grace_period_ms = 30_000
+        grace_until = System.monotonic_time(:millisecond) + grace_period_ms
+
         updated =
           provider
           |> Map.put(:ws_status, :healthy)
@@ -645,6 +655,10 @@ defmodule Lasso.RPC.ProviderPool do
           |> Map.put(:consecutive_successes, provider.consecutive_successes + 1)
           |> Map.put(:consecutive_failures, 0)
           |> Map.put(:last_health_check, System.system_time(:millisecond))
+          |> Map.put(:reconnect_grace_until, grace_until)
+
+        # Schedule grace period cleanup
+        Process.send_after(self(), {:clear_reconnect_grace, provider_id}, grace_period_ms)
 
         publish_provider_event(state.chain_name, provider_id, :ws_connected, %{})
         new_state = put_provider_and_refresh(state, provider_id, updated)
@@ -695,6 +709,50 @@ defmodule Lasso.RPC.ProviderPool do
 
         new_state = put_provider_and_refresh(state, provider_id, updated)
         {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info({:ws_reconnecting, provider_id, attempt}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        updated =
+          provider
+          |> Map.put(:reconnect_attempts, attempt)
+          |> Map.put(:ws_status, :connecting)
+          |> Map.put(:status, derive_aggregate_status(provider))
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info({:clear_reconnect_grace, provider_id}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        # Only clear if grace period has actually expired
+        now = System.monotonic_time(:millisecond)
+        grace_until = provider.reconnect_grace_until
+
+        if grace_until && now >= grace_until do
+          updated =
+            provider
+            |> Map.put(:reconnect_attempts, 0)
+            |> Map.put(:reconnect_grace_until, nil)
+            |> Map.put(:status, derive_aggregate_status(provider))
+
+          new_state = put_provider_and_refresh(state, provider_id, updated)
+          {:noreply, new_state}
+        else
+          {:noreply, state}
+        end
     end
   end
 

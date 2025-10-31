@@ -42,6 +42,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     ws_status = Map.get(provider, :ws_status)
     chain = Map.get(provider, :chain)
     provider_id = Map.get(provider, :id)
+    reconnect_grace_until = Map.get(provider, :reconnect_grace_until)
 
     cond do
       # 1. Rate limited or in cooldown - highest priority (even if circuit open)
@@ -56,8 +57,9 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
       circuit_state == :half_open ->
         :testing_recovery
 
-      # 4. WebSocket actively reconnecting
-      reconnect_attempts > 0 and ws_status in [:disconnected, :connecting] ->
+      # 4. WebSocket actively reconnecting or in grace period after reconnection
+      reconnect_attempts > 0 and
+          (ws_status in [:disconnected, :connecting] or in_reconnect_grace?(reconnect_grace_until)) ->
         :reconnecting
 
       # 5. Healthy - check block sync status
@@ -132,6 +134,15 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   end
 
   def check_block_lag(_chain, _provider_id), do: :unavailable
+
+  # Check if the provider is still in reconnection grace period.
+  # During this period, we show "Reconnecting" status even if reconnected successfully,
+  # giving the provider time to stabilize.
+  defp in_reconnect_grace?(nil), do: false
+
+  defp in_reconnect_grace?(grace_until) when is_integer(grace_until) do
+    System.monotonic_time(:millisecond) < grace_until
+  end
 
   @doc "Get provider status label with enhanced classifications"
   def provider_status_label(provider) do
@@ -211,22 +222,38 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   def status_explanation(provider) do
     chain = Map.get(provider, :chain)
     provider_id = Map.get(provider, :id)
+    circuit_state = Map.get(provider, :circuit_state, :closed)
+    is_in_cooldown = Map.get(provider, :is_in_cooldown, false)
 
     case determine_provider_status(provider) do
       :circuit_open ->
-        "Circuit breaker is open due to repeated failures. Provider is not accepting requests."
+        # Check if circuit open is related to rate limiting
+        if is_in_cooldown do
+          "Circuit breaker is open due to rate limiting. Provider is in cooldown and not accepting requests."
+        else
+          "Circuit breaker is open due to repeated failures. Provider is not accepting requests."
+        end
 
       :testing_recovery ->
         "Circuit breaker is in half-open state, testing if provider has recovered."
 
       :rate_limited ->
         cooldown_until = Map.get(provider, :cooldown_until)
-        if cooldown_until do
+        circuit_also_open = circuit_state == :open
+
+        base_msg = if cooldown_until do
           remaining_ms = max(0, cooldown_until - System.monotonic_time(:millisecond))
           remaining_sec = div(remaining_ms, 1000)
           "Provider is rate limited and in cooldown for #{remaining_sec}s."
         else
           "Provider is rate limited or in cooldown."
+        end
+
+        # Note if circuit is also open
+        if circuit_also_open do
+          base_msg <> " Circuit breaker is also open."
+        else
+          base_msg
         end
 
       :reconnecting ->

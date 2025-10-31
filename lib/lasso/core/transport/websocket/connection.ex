@@ -831,6 +831,13 @@ defmodule Lasso.RPC.WSConnection do
           }
         )
 
+        # Broadcast reconnection attempt to ProviderPool
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.chain_name}",
+          {:ws_reconnecting, state.endpoint.id, state.reconnect_attempts + 1}
+        )
+
         ref = Process.send_after(self(), {:reconnect}, delay + jitter)
         %{state | reconnect_attempts: state.reconnect_attempts + 1, reconnect_ref: ref}
 
@@ -861,6 +868,13 @@ defmodule Lasso.RPC.WSConnection do
             attempt: state.reconnect_attempts + 1,
             max_attempts: max_attempts
           }
+        )
+
+        # Broadcast reconnection attempt to ProviderPool
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.chain_name}",
+          {:ws_reconnecting, state.endpoint.id, state.reconnect_attempts + 1}
         )
 
         ref = Process.send_after(self(), {:reconnect}, delay + jitter)
