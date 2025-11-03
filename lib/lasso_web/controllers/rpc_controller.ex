@@ -59,8 +59,6 @@ defmodule LassoWeb.RPCController do
             strategy = strategy_from(conn, params)
             conn = assign(conn, :provider_strategy, strategy)
 
-            maybe_publish_strategy_event(chain_name, strategy)
-
             handle_chain_rpc(conn, chain_name)
 
           {:error, reason} ->
@@ -98,13 +96,6 @@ defmodule LassoWeb.RPCController do
   end
 
   defp handle_provider_override_rpc(conn, params, chain_id, provider_id) do
-    Logger.info("Provider override RPC request",
-      provider_id: provider_id,
-      chain_id: chain_id,
-      method: params["method"]
-    )
-
-    # Add provider override to params and delegate to main rpc function
     params_with_override =
       Map.merge(params, %{
         "chain_id" => chain_id,
@@ -112,28 +103,6 @@ defmodule LassoWeb.RPCController do
       })
 
     rpc(conn, params_with_override)
-  end
-
-  defp maybe_publish_strategy_event(_chain, nil), do: :ok
-
-  defp maybe_publish_strategy_event(chain, strategy) do
-    default = Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
-
-    if strategy != default do
-      Phoenix.PubSub.broadcast(
-        Lasso.PubSub,
-        "strategy:events",
-        %{
-          ts: System.system_time(:millisecond),
-          scope: {:chain, chain},
-          from: default,
-          to: strategy,
-          reason: :request_override
-        }
-      )
-    else
-      :ok
-    end
   end
 
   defp handle_chain_rpc(conn, chain_name) do
@@ -238,9 +207,6 @@ defmodule LassoWeb.RPCController do
 
   defp validate_json_rpc_request(_), do: {:error, JError.new(-32_600, "Invalid Request")}
 
-  # Simplified: generic forwarding handles most methods; see special-case below for chainId
-
-  # Chain info
   defp process_json_rpc_request(%{"method" => "eth_chainId", "params" => []}, chain, _conn) do
     Logger.debug("Getting chain ID", chain: chain)
 
@@ -275,7 +241,6 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  # Unified forwarding: extracts strategy and optional provider override, delegates to RequestPipeline
   defp forward_rpc_request(chain, method, params, opts) when is_list(opts) do
     with {:ok, strategy} <- extract_strategy(opts) do
       conn = Keyword.get(opts, :conn)
