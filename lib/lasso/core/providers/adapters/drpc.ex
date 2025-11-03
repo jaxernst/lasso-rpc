@@ -121,6 +121,36 @@ defmodule Lasso.RPC.Providers.Adapters.DRPC do
   @impl true
   defdelegate headers(ctx), to: Generic
 
+  # Error Classification
+
+  @impl true
+  def classify_error(30, message) when is_binary(message) do
+    # Code 30 with "free tier timeout" is rate limit (not capability violation)
+    if String.contains?(String.downcase(message), "timeout on the free tier") do
+      {:ok, :rate_limit}
+    else
+      :default
+    end
+  end
+
+  # Code 30 without message defaults to rate limit based on observed behavior
+  def classify_error(30, nil), do: {:ok, :rate_limit}
+
+  # Code 35 is capability violation (block range limit)
+  def classify_error(35, _message), do: {:ok, :capability_violation}
+
+  # Message pattern: "ranges over X blocks" indicates block range limit
+  def classify_error(_code, message) when is_binary(message) do
+    if String.contains?(String.downcase(message), "ranges over") do
+      {:ok, :capability_violation}
+    else
+      :default
+    end
+  end
+
+  # All other errors: defer to centralized classification
+  def classify_error(_code, _message), do: :default
+
   # Metadata
 
   @impl true

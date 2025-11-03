@@ -195,13 +195,59 @@ defmodule Lasso.RPC.ProviderAdapter do
   """
   @callback metadata() :: map()
 
-  # Note: normalize_* and headers callbacks are optional.
-  # Most adapters delegate these to Generic using defdelegate.
+  @doc """
+  Classifies a provider error into a semantic category.
+
+  This callback allows providers to override the centralized error classification
+  for provider-specific error codes and message patterns. Provider classification
+  takes priority over generic classification.
+
+  Returns:
+  - `{:ok, category}` - Use this category (e.g., :rate_limit, :capability_violation, :auth_error)
+  - `:default` - Delegate to centralized ErrorClassification module
+
+  ## Examples
+
+      # DRPC adapter overrides code 30 classification
+      def classify_error(30, message) when is_binary(message) do
+        if String.contains?(String.downcase(message), "timeout on the free tier") do
+          {:ok, :rate_limit}
+        else
+          :default
+        end
+      end
+
+      # PublicNode adapter handles provider-specific error code
+      def classify_error(-32_701, _message), do: {:ok, :capability_violation}
+
+      # Delegate all other errors to central classification
+      def classify_error(_code, _message), do: :default
+
+  ## Valid Categories
+
+  - `:rate_limit` - Rate limiting or quota exceeded
+  - `:capability_violation` - Provider doesn't support this operation (e.g., block range limit)
+  - `:auth_error` - Authentication or authorization failure
+  - `:network_error` - Network or connectivity issue
+  - `:server_error` - Provider server error
+  - `:client_error` - Client/request error
+  - `:invalid_params` - Invalid parameters
+  - `:method_not_found` - Method not found
+  - `:parse_error` - JSON parsing error
+  - `:internal_error` - Internal server error
+  - `:unknown_error` - Unknown or unclassified error
+  """
+  @callback classify_error(code :: integer(), message :: String.t() | nil) ::
+              {:ok, atom()} | :default
+
+  # Note: normalize_*, headers, metadata, and classify_error callbacks are optional.
+  # Most adapters delegate these to Generic using defdelegate or return :default.
   @optional_callbacks [
     normalize_request: 2,
     normalize_response: 2,
     normalize_error: 2,
     headers: 1,
-    metadata: 0
+    metadata: 0,
+    classify_error: 2
   ]
 end

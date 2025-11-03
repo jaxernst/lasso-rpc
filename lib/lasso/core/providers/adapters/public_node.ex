@@ -101,6 +101,31 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   @impl true
   defdelegate headers(ctx), to: Generic
 
+  # Error Classification
+
+  @impl true
+  # PublicNode uses -32701 for capability violations (address requirements)
+  def classify_error(-32_701, _message), do: {:ok, :capability_violation}
+
+  # Message pattern: "specify less number of addresses" or "specify an address"
+  def classify_error(_code, message) when is_binary(message) do
+    message_lower = String.downcase(message)
+
+    cond do
+      String.contains?(message_lower, "specify less number of addresses") ->
+        {:ok, :capability_violation}
+
+      String.contains?(message_lower, "specify an address") ->
+        {:ok, :capability_violation}
+
+      true ->
+        :default
+    end
+  end
+
+  # All other errors: defer to centralized classification
+  def classify_error(_code, _message), do: :default
+
   # Metadata
 
   @impl true

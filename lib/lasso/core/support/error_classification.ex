@@ -10,6 +10,38 @@ defmodule Lasso.RPC.ErrorClassification do
 
   1. Message-based patterns (highest priority) - detects rate limits, auth, capabilities
   2. Code-based classification (fallback) - standard JSON-RPC, HTTP, EIP-1193 codes
+
+  ## Error Categories
+
+  The following categories are used throughout the system. Each category determines
+  both retriability (failover behavior) and circuit breaker penalty semantics.
+
+  **Retriable categories** (trigger failover to another provider):
+  - `:rate_limit` - Provider rate limiting / quota exceeded (temporary backpressure)
+  - `:network_error` - Network/connectivity issues (transient failures)
+  - `:server_error` - Provider-side server errors (5xx, provider crashes)
+  - `:capability_violation` - Provider lacks capability for this request (try different provider)
+  - `:method_not_found` - Method not supported by this provider (try different provider)
+  - `:method_error` - Method-level error that another provider might handle
+  - `:auth_error` - Authentication/authorization failure (credentials may work on different provider)
+  - `:internal_error` - Provider internal error (JSON-RPC -32603)
+  - `:chain_error` - Chain-level error (e.g., unsupported chain)
+
+  **Non-retriable categories** (user/client errors, no failover):
+  - `:invalid_request` - Malformed JSON-RPC request
+  - `:invalid_params` - Invalid method parameters
+  - `:parse_error` - JSON parsing failure
+  - `:user_error` - User rejected transaction (EIP-1193)
+  - `:client_error` - Generic client error (4xx)
+
+  **Special categories**:
+  - `:provider_error` - Infrastructure-level provider unavailability (no channels, pool errors)
+  - `:timeout` - Request timeout
+  - `:unknown_error` - Unclassified error (fallback category)
+
+  **Circuit breaker penalty**:
+  - All categories count against circuit breaker EXCEPT `:capability_violation`
+  - Capability violations represent permanent constraints, not transient failures
   """
 
   # ===========================================================================
@@ -35,16 +67,6 @@ defmodule Lasso.RPC.ErrorClassification do
   @server_error_code -32_002
 
   # ===========================================================================
-  # Provider-Specific Error Codes
-  # ===========================================================================
-
-  # PublicNode uses -32_701 for capability violations (e.g., address requirements)
-  @publicnode_capability_violation -32_701
-
-  # DRPC uses code 30 for rate limit timeouts on free tier
-  @drpc_rate_limit_timeout 30
-
-  # ===========================================================================
   # EIP-1193 Provider Error Codes
   # ===========================================================================
 
@@ -67,12 +89,7 @@ defmodule Lasso.RPC.ErrorClassification do
     "request count exceeded",
     "maximum requests",
     "credits quota",
-    "requests per second",
-    # Cloudflare capacity/rate limiting (-32046)
-    "cannot fulfill request",
-    # DRPC free tier rate limit timeouts
-    "timeout on the free tier",
-    "request timeout on the free tier"
+    "requests per second"
   ]
 
   @auth_patterns [
@@ -88,12 +105,9 @@ defmodule Lasso.RPC.ErrorClassification do
   @capability_violation_patterns [
     "free tier",
     # Address/query limits
-    "specify less number of addresses",
-    "less number of addresses",
     "maximum number of addresses",
     "max addresses",
     "too many addresses",
-    "specify an address",
     # Block range constraints
     "max block range",
     "block range too large",
@@ -102,8 +116,6 @@ defmodule Lasso.RPC.ErrorClassification do
     "invalid block range",
     "max is 1k blocks",
     "range is too large",
-    "ranges over",
-    "is limited to",
     "blocks are not supported",
     # Archival/historical data
     "archive node required",
@@ -211,6 +223,53 @@ defmodule Lasso.RPC.ErrorClassification do
   def breaker_penalty?(:capability_violation), do: false
   def breaker_penalty?(_category), do: true
 
+  @doc """
+  Determines if an error category should trigger failover to another provider.
+
+  Retriable errors include:
+  - Rate limits (temporary backpressure)
+  - Network errors (transient connectivity)
+  - Server errors (provider-side issues)
+  - Capability violations (try a provider with different capabilities)
+  - Method not found (try a provider that supports the method)
+  - Auth errors (this provider's credentials failed, another might work)
+  - Internal errors (provider-side crashes)
+
+  Non-retriable errors include:
+  - Invalid requests (bad client input)
+  - Invalid params (malformed parameters)
+  - Parse errors (malformed JSON)
+  - User errors (user rejected transaction in wallet)
+  - Client errors (generic 4xx errors indicating client fault)
+
+  ## Examples
+
+      iex> retriable_for_category?(:rate_limit)
+      true
+
+      iex> retriable_for_category?(:invalid_params)
+      false
+
+      iex> retriable_for_category?(:method_not_found)
+      true  # Another provider might support this method
+  """
+  @spec retriable_for_category?(atom()) :: boolean()
+  def retriable_for_category?(:rate_limit), do: true
+  def retriable_for_category?(:network_error), do: true
+  def retriable_for_category?(:server_error), do: true
+  def retriable_for_category?(:auth_error), do: true
+  def retriable_for_category?(:capability_violation), do: true
+  def retriable_for_category?(:method_not_found), do: true
+  def retriable_for_category?(:method_error), do: true
+  def retriable_for_category?(:internal_error), do: true
+  def retriable_for_category?(:chain_error), do: true
+  def retriable_for_category?(:invalid_request), do: false
+  def retriable_for_category?(:invalid_params), do: false
+  def retriable_for_category?(:parse_error), do: false
+  def retriable_for_category?(:user_error), do: false
+  def retriable_for_category?(:client_error), do: false
+  def retriable_for_category?(_category), do: false
+
   # ===========================================================================
   # Private: Message-Based Classification
   # ===========================================================================
@@ -246,9 +305,6 @@ defmodule Lasso.RPC.ErrorClassification do
       code == @client_error_code -> :client_error
       code == @server_error_code -> :server_error
       code == @generic_server_error -> :server_error
-      # Provider-specific error codes (check before general server error range)
-      code == @drpc_rate_limit_timeout -> :rate_limit
-      code == @publicnode_capability_violation -> :capability_violation
       # JSON-RPC server error range
       code >= -32_099 and code <= -32_000 -> :server_error
       # EIP-1193 provider errors
@@ -274,9 +330,6 @@ defmodule Lasso.RPC.ErrorClassification do
       # Retriable: server/network/transient errors (check before 4xx range)
       code in [@parse_error, @internal_error, @rate_limit_error] -> true
       code in [@chain_disconnected, @network_error_code] -> true
-      # Retriable: provider-specific errors
-      code == @drpc_rate_limit_timeout -> true
-      code == @publicnode_capability_violation -> true
       code >= -32_099 and code <= -32_000 -> true
       code == 429 -> true
       code >= 500 -> true

@@ -82,54 +82,6 @@ defmodule Lasso.RPC.Transport do
   @callback close(channel) :: :ok
 
   @doc """
-  Forwards a request via the specified protocol.
-
-  This is the primary, explicit API. The transport module mapping is direct:
-  - :http → Lasso.RPC.Transports.HTTP
-  - :ws   → Lasso.RPC.Transports.WebSocket
-
-  URL presence and protocol support are validated inside each transport.
-  """
-  @spec forward_request(String.t(), provider_config, :http | :ws, method, params, opts) ::
-          {:ok, any()} | {:error, JError.t()}
-  def forward_request(provider_id, provider_config, protocol, method, params, opts) do
-    opts_with_pid = Keyword.put(opts, :provider_id, provider_id)
-
-    case protocol do
-      :http ->
-        HTTP.forward_request(
-          provider_config,
-          method,
-          params,
-          opts_with_pid
-        )
-
-      :ws ->
-        WebSocket.forward_request(
-          provider_config,
-          method,
-          params,
-          opts_with_pid
-        )
-
-      other ->
-        {:error,
-         JError.new(-32_000, "Invalid protocol: #{inspect(other)}", provider_id: provider_id)}
-    end
-  end
-
-  @doc """
-  Backward-compatible API that reads :protocol from opts.
-  Defaults to :http if not provided.
-  """
-  @spec forward_request(String.t(), provider_config, method, params, opts) ::
-          {:ok, any()} | {:error, JError.t()}
-  def forward_request(provider_id, provider_config, method, params, opts) do
-    protocol = Keyword.get(opts, :protocol, :http)
-    forward_request(provider_id, provider_config, protocol, method, params, opts)
-  end
-
-  @doc """
   Checks if a provider supports the specified protocol.
   """
   @spec supports_protocol?(provider_config, :http | :ws | :both) :: boolean()

@@ -117,6 +117,30 @@ defmodule Lasso.RPC.Providers.Adapters.OneRPC do
   @impl true
   defdelegate headers(ctx), to: Generic
 
+  # Error Classification
+
+  @impl true
+  # 1RPC uses -32602 (Invalid params) for block range capability violations
+  def classify_error(-32_602, message) when is_binary(message) do
+    if String.contains?(String.downcase(message), "is limited to") do
+      {:ok, :capability_violation}
+    else
+      :default
+    end
+  end
+
+  # Message pattern: "is limited to X blocks" indicates block range limit
+  def classify_error(_code, message) when is_binary(message) do
+    if String.contains?(String.downcase(message), "is limited to") do
+      {:ok, :capability_violation}
+    else
+      :default
+    end
+  end
+
+  # All other errors: defer to centralized classification
+  def classify_error(_code, _message), do: :default
+
   # Metadata
 
   @impl true
