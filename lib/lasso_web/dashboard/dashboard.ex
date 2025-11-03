@@ -1302,7 +1302,6 @@ defmodule LassoWeb.Dashboard do
               <div class="px-2 pb-2">
                 <div class="text-[10px] text-gray-400 mb-1.5">
                   Recent Activity
-                  <span class="text-gray-500">(scroll down to pause)</span>
                 </div>
                 <div
                   id="recent-activity-feed"
