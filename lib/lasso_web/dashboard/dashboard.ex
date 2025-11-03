@@ -218,8 +218,6 @@ defmodule LassoWeb.Dashboard do
     }
 
     socket = update(socket, :routing_events, fn list ->
-      require Logger
-      Logger.info("Adding routing event to list: #{method} -> #{pid} (#{dur}ms, type: #{inspect(dur)}), current list size: #{length(list)}")
       [entry | Enum.take(list, 99)]
     end)
 

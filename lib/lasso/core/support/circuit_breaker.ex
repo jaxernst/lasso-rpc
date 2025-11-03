@@ -90,6 +90,7 @@ defmodule Lasso.RPC.CircuitBreaker do
             provider_id: provider_id,
             transport: transport
           )
+
           # Conservative: deny on timeout to avoid overwhelming provider
           {:deny, :timeout}
 
@@ -99,8 +100,10 @@ defmodule Lasso.RPC.CircuitBreaker do
             provider_id: provider_id,
             transport: transport
           )
+
           {:deny, :not_found}
       end
+
     admit_call_ms = div(System.monotonic_time(:microsecond) - admit_start_us, 1000)
 
     decision_tag =
@@ -119,13 +122,14 @@ defmodule Lasso.RPC.CircuitBreaker do
     case decision do
       {:allow, token} ->
         # Execute function with timeout enforcement
-        task = Task.async(fn ->
-          try do
-            fun.()
-          catch
-            kind, error -> {:__trap__, {kind, error}}
-          end
-        end)
+        task =
+          Task.async(fn ->
+            try do
+              fun.()
+            catch
+              kind, error -> {:__trap__, {kind, error}}
+            end
+          end)
 
         raw_result =
           case Task.yield(task, timeout) do
@@ -193,15 +197,17 @@ defmodule Lasso.RPC.CircuitBreaker do
   @doc """
   Gets the current state of the circuit breaker.
   """
-  @spec get_state(breaker_id) :: %{
-          chain: chain | nil,
-          provider_id: provider_id,
-          transport: transport,
-          state: breaker_state,
-          failure_count: non_neg_integer(),
-          success_count: non_neg_integer(),
-          last_failure_time: integer() | nil
-        } | {:error, term()}
+  @spec get_state(breaker_id) ::
+          %{
+            chain: chain | nil,
+            provider_id: provider_id,
+            transport: transport,
+            state: breaker_state,
+            failure_count: non_neg_integer(),
+            success_count: non_neg_integer(),
+            last_failure_time: integer() | nil
+          }
+          | {:error, term()}
   def get_state(id) do
     try do
       GenServer.call(via_name(id), :get_state, @state_timeout)
@@ -248,6 +254,7 @@ defmodule Lasso.RPC.CircuitBreaker do
               current_time = System.monotonic_time(:millisecond)
               time_remaining = last_failure + recovery_timeout - current_time
               max(0, time_remaining)
+
             _ ->
               nil
           end
@@ -274,7 +281,7 @@ defmodule Lasso.RPC.CircuitBreaker do
       rate_limit: 2,
       server_error: 5,
       network_error: 3,
-      timeout: 3,
+      timeout: 2,
       auth_error: 2
     }
 
@@ -639,7 +646,9 @@ defmodule Lasso.RPC.CircuitBreaker do
         if new_failure_count >= threshold do
           Logger.error(
             "Circuit breaker #{state.provider_id} (#{state.transport}) opening after #{new_failure_count} failures" <>
-              if(error_category == :rate_limit and adjusted_recovery_timeout != state.recovery_timeout,
+              if(
+                error_category == :rate_limit and
+                  adjusted_recovery_timeout != state.recovery_timeout,
                 do: " (recovery timeout adjusted to #{div(adjusted_recovery_timeout, 1000)}s)",
                 else: ""
               )
@@ -773,7 +782,7 @@ defmodule Lasso.RPC.CircuitBreaker do
   # Extract retry-after hint from normalized JError (populated by ErrorNormalizer)
   # Circuit breaker only reads structured data, no message parsing
   defp extract_retry_after(%JError{data: data}) when is_map(data) do
-    Map.get(data, :retry_after_ms)
+    Map.get(data, :retry_after_ms) || Map.get(data, "retry_after_ms")
   end
 
   defp extract_retry_after(_), do: nil
