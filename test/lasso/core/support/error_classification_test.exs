@@ -2,6 +2,7 @@ defmodule Lasso.RPC.ErrorClassificationTest do
   use ExUnit.Case, async: true
 
   alias Lasso.RPC.ErrorClassification
+  alias Lasso.RPC.ErrorClassifier
 
   describe "categorize/2" do
     test "classifies LlamaRPC block range error as capability violation" do
@@ -20,7 +21,8 @@ defmodule Lasso.RPC.ErrorClassificationTest do
     end
 
     test "classifies PublicNode error code -32_701 as capability violation even without message" do
-      category = ErrorClassification.categorize(-32_701, nil)
+      # Provider-specific code requires ErrorClassifier with provider_id
+      %{category: category} = ErrorClassifier.classify(-32_701, nil, provider_id: "ethereum_publicnode")
       assert category == :capability_violation
     end
 
@@ -52,8 +54,9 @@ defmodule Lasso.RPC.ErrorClassificationTest do
     end
 
     test "PublicNode error code -32_701 is retriable even without message" do
-      retriable = ErrorClassification.retriable?(-32_701, nil)
-      assert retriable == true
+      # Provider-specific code requires ErrorClassifier with provider_id
+      %{retriable?: retriable?} = ErrorClassifier.classify(-32_701, nil, provider_id: "ethereum_publicnode")
+      assert retriable? == true
     end
 
     test "rate limits are retriable" do

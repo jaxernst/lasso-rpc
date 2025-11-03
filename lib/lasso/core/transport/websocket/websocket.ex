@@ -170,48 +170,6 @@ defmodule Lasso.RPC.Transports.WebSocket do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
 
-  def forward_request(provider_config, method, params, opts) do
-    provider_id = Keyword.get(opts, :provider_id, "unknown")
-    request_id = Keyword.get(opts, :request_id) || generate_request_id()
-    _chain_name = Map.get(provider_config, :chain)
-
-    case get_ws_url(provider_config) do
-      nil ->
-        {:error,
-         JError.new(-32_000, "No WebSocket URL configured for provider",
-           provider_id: provider_id,
-           retriable?: false
-         )}
-
-      _ws_url ->
-        message = %{
-          "jsonrpc" => "2.0",
-          "method" => method,
-          "params" => params,
-          "id" => request_id
-        }
-
-        Logger.debug("Forwarding WebSocket request",
-          provider: provider_id,
-          method: method,
-          id: request_id
-        )
-
-        case WSConnection.send_message(provider_id, message) do
-          :ok ->
-            {:ok, :sent}
-
-          other ->
-            {:error,
-             ErrorNormalizer.normalize(other,
-               provider_id: provider_id,
-               context: :transport,
-               transport: :ws
-             )}
-        end
-    end
-  end
-
   # Private functions
 
   defp get_ws_url(provider_config) do

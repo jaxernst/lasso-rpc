@@ -91,18 +91,6 @@ defmodule Lasso.RPC.WSConnection do
   end
 
   @doc """
-  Sends a message to the WebSocket connection.
-
-  ## Examples
-
-      iex> Lasso.RPC.WSConnection.send_message("ethereum_ws", %{method: "eth_blockNumber"})
-      :ok
-  """
-  def send_message(connection_id, message) do
-    GenServer.call(via_name(connection_id), {:send_message, message})
-  end
-
-  @doc """
   Gets the current connection status.
 
   ## Examples
@@ -261,24 +249,6 @@ defmodule Lasso.RPC.WSConnection do
 
   @impl true
   def handle_call(
-        {:send_message, message},
-        _from,
-        %{connected: true, connection: connection} = state
-      ) do
-    ws_client().send_frame(connection, {:text, Jason.encode!(message)})
-    {:reply, :ok, state}
-  end
-
-  @impl true
-  def handle_call({:send_message, _message}, _from, %{connected: false} = state) do
-    error =
-      ErrorNormalizer.normalize(:not_connected, provider_id: state.endpoint.id, transport: :ws)
-
-    {:reply, {:error, error}, state}
-  end
-
-  @impl true
-  def handle_call(
         {:request, method, params, timeout_ms, provided_id},
         from,
         %{connected: true} = state
@@ -295,7 +265,7 @@ defmodule Lasso.RPC.WSConnection do
 
     sent_at = System.monotonic_time(:microsecond)
 
-    case ws_client().send_frame(state.connection, {:text, Jason.encode!(message)}) do
+    case send_frame(state.connection, {:text, Jason.encode!(message)}) do
       :ok ->
         # Emit telemetry event
         :telemetry.execute(
@@ -434,10 +404,6 @@ defmodule Lasso.RPC.WSConnection do
               %{provider_id: state.endpoint.id, method: method, request_id: id}
             )
 
-            # Store I/O latency in caller's process dictionary for RequestContext to consume
-            # Note: This won't work directly because we're in the GenServer process, not the caller
-            # The caller needs to extract this from the reply or we need another mechanism
-
             GenServer.reply(from, reply)
 
             {:noreply, %{state | pending_requests: new_pending}}
@@ -522,21 +488,9 @@ defmodule Lasso.RPC.WSConnection do
         transport: :ws
       )
 
-    if jerr.retriable? do
-      Logger.warning(
-        "WebSocket disconnected: #{inspect(reason)} (provider: #{state.endpoint.id}), reconnecting immediately"
-      )
-    else
-      Logger.warning(
-        "WebSocket disconnected: #{inspect(reason)} (provider: #{state.endpoint.id}), not retriable"
-      )
-    end
-
     # Clean up any pending requests
     state = cleanup_pending_requests(state, jerr)
-
     pending_count = map_size(state.pending_requests)
-
     state = %{state | connected: false, connection: nil}
 
     # Emit telemetry event
@@ -558,95 +512,71 @@ defmodule Lasso.RPC.WSConnection do
       {:ws_disconnected, state.endpoint.id, jerr}
     )
 
-    state = if jerr.retriable?, do: schedule_reconnect(state), else: state
+    state = schedule_reconnect(state)
     {:noreply, state}
   end
 
-  def handle_info({:heartbeat}, state) do
-    if state.connected do
-      # send_frame is a synchronous call that can timeout if the connection is hung
-      # Catch timeout exits and treat as connection health issue
-      result =
-        try do
-          ws_client().send_frame(state.connection, :ping)
-        catch
-          :exit, {:timeout, _} ->
-            {:error, :heartbeat_timeout}
+  def handle_info(
+        {:heartbeat},
+        state = %{connected: true, connection: connection, endpoint: endpoint}
+      ) do
+    case send_frame(connection, :ping) do
+      :ok ->
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :heartbeat, :sent],
+          %{},
+          %{
+            provider_id: endpoint.id
+          }
+        )
 
-          :exit, reason ->
-            {:error, {:heartbeat_exit, reason}}
-        end
+        state = schedule_heartbeat(state)
+        {:noreply, state}
 
-      case result do
-        :ok ->
-          # Emit telemetry event
-          :telemetry.execute(
-            [:lasso, :websocket, :heartbeat, :sent],
-            %{},
-            %{
-              provider_id: state.endpoint.id
-            }
+      {:error, :timeout} ->
+        Logger.warning(
+          "Heartbeat ping timeout for #{endpoint.id} - connection appears hung, reconnecting"
+        )
+
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :heartbeat, :failed],
+          %{},
+          %{
+            provider_id: endpoint.id,
+            reason: :timeout
+          }
+        )
+
+        # Connection is hung - treat as disconnect and reconnect
+        jerr =
+          JError.new(-32_000, "Heartbeat timeout",
+            provider_id: endpoint.id,
+            retriable?: true
           )
 
-          state = schedule_heartbeat(state)
-          {:noreply, state}
+        state = cleanup_pending_requests(state, jerr)
+        state = %{state | connected: false, connection: nil}
 
-        {:error, :heartbeat_timeout} ->
-          Logger.warning(
-            "Heartbeat ping timeout for #{state.endpoint.id} - connection appears hung, reconnecting"
-          )
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.chain_name}",
+          {:ws_disconnected, endpoint.id, jerr}
+        )
 
-          # Emit telemetry event
-          :telemetry.execute(
-            [:lasso, :websocket, :heartbeat, :failed],
-            %{},
-            %{
-              provider_id: state.endpoint.id,
-              reason: :timeout
-            }
-          )
+        state = schedule_reconnect(state)
+        {:noreply, state}
 
-          # Connection is hung - treat as disconnect and reconnect
-          jerr =
-            JError.new(-32_000, "Heartbeat timeout",
-              provider_id: state.endpoint.id,
-              retriable?: true
-            )
+      {:error, reason} ->
+        Logger.debug("Heartbeat ping failed for #{endpoint.id}: #{inspect(reason)}")
 
-          state = cleanup_pending_requests(state, jerr)
-          state = %{state | connected: false, connection: nil}
-
-          Phoenix.PubSub.broadcast(
-            Lasso.PubSub,
-            "ws:conn:#{state.chain_name}",
-            {:ws_disconnected, state.endpoint.id, jerr}
-          )
-
-          state = schedule_reconnect(state)
-          {:noreply, state}
-
-        {:error, reason} ->
-          jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
-
-          Logger.debug("Heartbeat ping failed for #{state.endpoint.id}: #{inspect(jerr)}")
-
-          # Emit telemetry event
-          :telemetry.execute(
-            [:lasso, :websocket, :heartbeat, :failed],
-            %{},
-            %{
-              provider_id: state.endpoint.id,
-              reason: reason
-            }
-          )
-
-          # For other errors, continue trying - schedule next heartbeat
-          state = schedule_heartbeat(state)
-          {:noreply, state}
-      end
-    else
-      {:noreply, state}
+        {:noreply, state}
     end
+  end
+
+  def handle_info({:heartbeat}, state = %{connected: false}) do
+    {:noreply, state}
   end
 
   def handle_info({:request_timeout, request_id}, state) do
@@ -969,13 +899,10 @@ defmodule Lasso.RPC.WSConnection do
       )
 
       # Proactively close on timeout-like provider errors to force clean reconnect
-      try do
-        if (is_integer(code) and code == -32_701) or
-             (is_binary(msg) and String.contains?(String.downcase(msg), "timeout")) do
-          _ = ws_client().send_frame(state.connection, {:close, 1013, "connection timeout"})
-        end
-      rescue
-        _ -> :ok
+      if (is_integer(code) and code == -32_701) or
+           (is_binary(msg) and String.contains?(String.downcase(msg), "timeout")) do
+        # Ignore result - best effort close
+        _ = send_frame(state.connection, {:close, 1013, "connection timeout"})
       end
 
       {:ok, state}
@@ -1008,5 +935,36 @@ defmodule Lasso.RPC.WSConnection do
 
   defp ws_client do
     Application.get_env(:lasso, :ws_client_module, WebSockex)
+  end
+
+  # Wrapper around ws_client().send_frame that converts exits to error tuples
+  #
+  # WebSockex.send_frame normally returns:
+  #   :ok | {:error, %WebSockex.FrameEncodeError{} | %WebSockex.ConnError{} |
+  #                   %WebSockex.NotConnectedError{} | %WebSockex.InvalidFrameError{}}
+  #
+  # But it uses :gen.call internally (with 5s timeout), which can exit if:
+  #   - Process is hung/unresponsive (timeout)
+  #   - Process died (noproc)
+  #   - Process crashed
+  #
+  # This wrapper catches those exits and converts them to {:error, reason} tuples
+  # for consistent error handling.
+  defp send_frame(connection, frame) do
+    try do
+      ws_client().send_frame(connection, frame)
+    catch
+      # Process is hung/unresponsive - :gen.call timed out (default 5s)
+      :exit, {:timeout, _call_info} ->
+        {:error, :timeout}
+
+      # Process died or noproc
+      :exit, {:noproc, _call_info} ->
+        {:error, :noproc}
+
+      # Other exit reasons (process crash, etc.)
+      :exit, {reason, _call_info} ->
+        {:error, {:exit, reason}}
+    end
   end
 end

@@ -149,61 +149,6 @@ defmodule Lasso.RPC.Transports.HTTP do
     :ok
   end
 
-  def forward_request(provider_config, method, params, opts) do
-    provider_id = Keyword.get(opts, :provider_id, "unknown")
-    timeout_ms = Keyword.get(opts, :timeout, 30_000)
-    request_id = Keyword.get(opts, :request_id)
-
-    case get_http_url(provider_config) do
-      nil ->
-        {:error,
-         JError.new(-32_000, "No HTTP URL configured for provider",
-           provider_id: provider_id,
-           retriable?: false
-         )}
-
-      url ->
-        http_config = Map.put(provider_config, :url, url)
-
-        case HttpClient.request(http_config, method, params,
-               request_id: request_id,
-               timeout: timeout_ms
-             ) do
-          {:ok, %{"error" => _error} = response} ->
-            # JSON-RPC error response - normalize using centralized logic
-            jerr =
-              ErrorNormalizer.normalize(response,
-                provider_id: provider_id,
-                context: :jsonrpc,
-                transport: :http
-              )
-
-            {:error, jerr}
-
-          {:ok, %{"result" => result}} ->
-            {:ok, result}
-
-          {:ok, invalid_response} ->
-            {:error,
-             JError.new(-32_700, "Invalid JSON-RPC response format",
-               data: invalid_response,
-               provider_id: provider_id,
-               source: :transport,
-               transport: :http,
-               retriable?: false
-             )}
-
-          {:error, reason} ->
-            {:error,
-             ErrorNormalizer.normalize(reason,
-               provider_id: provider_id,
-               context: :transport,
-               transport: :http
-             )}
-        end
-    end
-  end
-
   # Private functions
 
   defp get_http_url(provider_config) do

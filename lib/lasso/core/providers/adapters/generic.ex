@@ -76,4 +76,7 @@ defmodule Lasso.RPC.Providers.Generic do
       description: "Standard JSON-RPC 2.0 adapter (assumes all methods supported)"
     }
   end
+
+  @impl true
+  def classify_error(_code, _message), do: :default
 end

@@ -10,7 +10,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
   """
 
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.ErrorClassification
+  alias Lasso.RPC.ErrorClassifier
 
   @type context :: :health_check | :live_traffic | :transport | :jsonrpc
   @type transport :: :http | :ws | nil
@@ -56,10 +56,9 @@ defmodule Lasso.RPC.ErrorNormalizer do
     # Normalize HTTP status codes to JSON-RPC error codes
     code = normalize_code(raw_code)
 
-    # Use centralized classification
-    category = ErrorClassification.categorize(code, message)
-    retriable? = ErrorClassification.retriable?(code, message)
-    breaker_penalty? = ErrorClassification.breaker_penalty?(category)
+    # Unified classification with adapter priority
+    %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+      ErrorClassifier.classify(code, message, provider_id: provider_id)
 
     # Extract retry-after hint if this is a rate limit error
     data =
@@ -126,10 +125,9 @@ defmodule Lasso.RPC.ErrorNormalizer do
     # Try to extract nested JSON-RPC error from response body for better classification
     {code, message} = extract_nested_error(payload, -32_002, "Server error")
 
-    # Use centralized classification with the extracted message
-    category = ErrorClassification.categorize(code, message)
-    retriable? = ErrorClassification.retriable?(code, message)
-    breaker_penalty? = ErrorClassification.breaker_penalty?(category)
+    # Unified classification with adapter priority
+    %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+      ErrorClassifier.classify(code, message, provider_id: provider_id)
 
     # Extract retry-after hint if this is a rate limit error
     data =
@@ -160,10 +158,9 @@ defmodule Lasso.RPC.ErrorNormalizer do
     # Try to extract nested JSON-RPC error from response body for better classification
     {code, message} = extract_nested_error(payload, -32_003, "Client error")
 
-    # Use centralized classification with the extracted message
-    category = ErrorClassification.categorize(code, message)
-    retriable? = ErrorClassification.retriable?(code, message)
-    breaker_penalty? = ErrorClassification.breaker_penalty?(category)
+    # Unified classification with adapter priority
+    %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+      ErrorClassifier.classify(code, message, provider_id: provider_id)
 
     # Extract retry-after hint if this is a rate limit error (e.g., 429)
     data =
@@ -298,6 +295,20 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
   def normalize(%WebSockex.RequestError{} = err, opts) do
     normalize({:network_error, {:request_error, err}}, Keyword.put(opts, :transport, :ws))
+  end
+
+  def normalize(%WebSockex.NotConnectedError{connection_state: state}, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+    context = Keyword.get(opts, :context, :transport)
+
+    JError.new(-32_000, "WebSocket not connected (state: #{state})",
+      provider_id: provider_id,
+      source: context,
+      transport: :ws,
+      category: :network_error,
+      retriable?: true,
+      breaker_penalty?: true
+    )
   end
 
   # WebSocket close codes (RFC 6455)
@@ -456,7 +467,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
     if code == 1013 do
       provider_id = Keyword.get(opts, :provider_id)
 
-      JError.new(429, msg || "WebSocket backpressure",
+      JError.new(1013, msg || "WebSocket backpressure",
         provider_id: provider_id,
         source: :transport,
         transport: :ws,
@@ -602,14 +613,16 @@ defmodule Lasso.RPC.ErrorNormalizer do
   defp parse_retry_from_message(_), do: nil
 
   # Add retry-after hint to data map if present
-  defp add_retry_after(data, payload) when is_map(data) do
+  defp add_retry_after(data, payload) do
     case extract_retry_after(payload) do
-      nil -> data
-      retry_ms -> Map.put(data, :retry_after_ms, retry_ms)
+      nil ->
+        data
+
+      retry_ms ->
+        base = if is_map(data), do: data, else: %{}
+        Map.put(base, :retry_after_ms, retry_ms)
     end
   end
-
-  defp add_retry_after(data, _payload), do: data
 
   # Normalize HTTP status codes embedded in JSON-RPC responses to standard JSON-RPC codes
   # Rate limit

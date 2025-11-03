@@ -69,6 +69,24 @@ defmodule Lasso.RPC.Providers.Adapters.Cloudflare do
   @impl true
   defdelegate headers(ctx), to: Generic
 
+  # Error Classification
+
+  @impl true
+  # Cloudflare capacity/rate limiting with code -32046
+  def classify_error(-32_046, _message), do: {:ok, :rate_limit}
+
+  # Message pattern: "cannot fulfill request" indicates capacity/rate limiting
+  def classify_error(_code, message) when is_binary(message) do
+    if String.contains?(String.downcase(message), "cannot fulfill request") do
+      {:ok, :rate_limit}
+    else
+      :default
+    end
+  end
+
+  # All other errors: defer to centralized classification
+  def classify_error(_code, _message), do: :default
+
   # Metadata
 
   @impl true

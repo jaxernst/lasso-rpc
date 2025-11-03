@@ -833,6 +833,7 @@ The adapter system performs only method-level capability filtering during provid
 5. **Repeat** - Until success or all candidates exhausted
 
 **Benefits:**
+
 - Only 1 parameter validation per request (not N validations upfront)
 - Natural failover integration
 - Clear separation of concerns (filter = capability, execution = validation)
@@ -846,6 +847,7 @@ Adapter crashes during parameter validation return `{:error, :adapter_crash}` to
 The system automatically resolves adapters using pattern matching on provider IDs, supporting both naming conventions without manual mappings:
 
 **Supported Patterns:**
+
 - `{provider}_{chain}`: `"alchemy_base"`, `"llamarpc_polygon"`
 - `{chain}_{provider}`: `"ethereum_cloudflare"`, `"base_publicnode"`
 - Exact match: `"alchemy"`, `"infura"`
@@ -911,12 +913,12 @@ base:
     - id: "alchemy_base"
       url: "https://base-mainnet.g.alchemy.com/v2/..."
       adapter_config:
-        eth_get_logs_block_range: 10  # Override Alchemy's default
+        eth_get_logs_block_range: 10 # Override Alchemy's default
 
     - id: "base_publicnode"
       url: "https://base.publicnode.com"
       adapter_config:
-        max_addresses_http: 50  # Base allows more addresses
+        max_addresses_http: 50 # Base allows more addresses
         max_addresses_ws: 30
 
 ethereum:
@@ -1065,30 +1067,36 @@ end
 ### **Current Adapter Implementations**
 
 **Alchemy** (`adapters/alchemy.ex`)
+
 - Validates `eth_getLogs` block range (default: 10 blocks)
 - Configurable via `eth_get_logs_block_range`
 - Uses BlockchainMetadataCache for "latest" block resolution
 
 **PublicNode** (`adapters/public_node.ex`)
+
 - Validates `eth_getLogs` address count
 - Separate limits for HTTP (default: 25) and WebSocket (default: 20)
 - Configurable via `max_addresses_http` and `max_addresses_ws`
 
 **LlamaRPC** (`adapters/llamarpc.ex`)
+
 - Validates `eth_getLogs` block range (default: 1000 blocks)
 - Configurable via `max_block_range`
 - Uses BlockchainMetadataCache for "latest" block resolution
 
 **Merkle** (`adapters/merkle.ex`)
+
 - Validates `eth_getLogs` block range (default: 1000 blocks)
 - Configurable via `max_block_range`
 - Uses BlockchainMetadataCache for "latest" block resolution
 
 **Cloudflare** (`adapters/cloudflare.ex`)
+
 - Currently no parameter restrictions
 - Delegates all normalization to Generic adapter
 
 **Generic** (`generic.ex`)
+
 - Fallback adapter for unknown provider types
 - No parameter validation
 - Basic request/response normalization
@@ -1116,6 +1124,7 @@ end
 ```
 
 **Benefits:**
+
 - Accurate validation with real-time block numbers (<1ms via ETS)
 - Graceful degradation if cache unavailable (fail-open)
 - No hardcoded block number estimates
@@ -1154,37 +1163,45 @@ The lazy validation approach (validating only the selected provider) is signific
 The system maintains full backward compatibility:
 
 **Missing adapter_config:**
+
 ```yaml
 providers:
   - id: "alchemy_ethereum"
     url: "https://..."
     # No adapter_config field
 ```
+
 **Result:** Uses adapter defaults (e.g., 10 blocks for Alchemy)
 
 **Nil adapter_config:**
+
 ```yaml
 providers:
   - id: "alchemy_ethereum"
     url: "https://..."
     adapter_config: null
 ```
+
 **Result:** Uses adapter defaults
 
 **Empty adapter_config:**
+
 ```yaml
 providers:
   - id: "alchemy_ethereum"
     url: "https://..."
     adapter_config: {}
 ```
+
 **Result:** Uses adapter defaults
 
 **Missing provider_config in context:**
+
 ```elixir
 ctx = %{provider_id: "alchemy_base", chain: "base"}
 # No :provider_config field
 ```
+
 **Result:** Uses adapter defaults
 
 All existing configurations continue to work without modification.
@@ -1211,6 +1228,7 @@ To add a new provider adapter:
 6. **Document in metadata** what limits are configurable
 
 **Example:**
+
 ```elixir
 defmodule Lasso.RPC.Providers.Adapters.NewProvider do
   @behaviour Lasso.RPC.ProviderAdapter
@@ -1247,6 +1265,7 @@ The adapter system has comprehensive test coverage (37 tests):
 6. **Type validation** - Integer conversion and validation
 
 **Example test:**
+
 ```elixir
 test "respects adapter_config for custom block range" do
   provider_config = %Provider{
@@ -1275,19 +1294,86 @@ end
 ### **Production Deployment Considerations**
 
 **Configuration Management:**
+
 - Use environment-specific `chains.yml` files
 - Override adapter_config per environment (e.g., higher limits in production)
 - Validate configuration on boot via ConfigStore
 
 **Monitoring:**
+
 - Track `[:lasso, :capabilities, :param_reject]` events to identify clients hitting limits
 - Alert on `[:lasso, :capabilities, :crash]` events (indicates adapter bugs)
 - Monitor rejection rates per adapter/method
 
 **Scaling:**
+
 - Adapter validation is stateless and highly concurrent
 - No coordination required between requests
 - Performance scales linearly with request volume
+
+---
+
+## Error Classification Architecture
+
+**Files**: `error_classifier.ex`, `error_classification.ex`, `error_normalizer.ex`, `adapters/*.ex`
+
+Lasso implements a composable error classification system where provider adapters can override error categorization for provider-specific codes while ensuring consistent failover and circuit breaker behavior.
+
+### **Design: Classify Once, Derive Everything**
+
+The system classifies errors once, then derives all properties from the final category to ensure adapter overrides propagate correctly:
+
+```elixir
+# Single call returns complete classification
+%{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+  ErrorClassifier.classify(code, message, provider_id: provider_id)
+
+# Flow:
+# 1. Try adapter.classify_error(code, message) → {:ok, category} or :default
+# 2. Fallback to ErrorClassification.categorize(code, message) if :default
+# 3. Derive retriable? from category (not from code/message re-classification)
+# 4. Derive breaker_penalty? from category
+```
+
+**Why this matters:** Without deriving from the final category, adapter overrides wouldn't affect failover behavior. For example, DRPC code 30 ("timeout on free tier") is classified as `:rate_limit` by the adapter, which makes it retriable and penalizes the circuit breaker—both derived from the `:rate_limit` category.
+
+### **Provider Adapter Classification**
+
+Adapters can optionally override classification via `classify_error/2` callback:
+
+```elixir
+@impl true
+def classify_error(30, message) when is_binary(message) do
+  if String.contains?(String.downcase(message), "timeout on the free tier") do
+    {:ok, :rate_limit}  # Override
+  else
+    :default  # Defer to central classification
+  end
+end
+
+def classify_error(_code, _message), do: :default
+```
+
+**Current adapter overrides:**
+
+- **DRPC**: Code 30/35, "timeout on free tier", "ranges over"
+- **PublicNode**: Code -32701, "specify less/an address"
+- **1RPC**: Code -32602 + "is limited to" (overrides standard invalid_params)
+- **Cloudflare**: Code -32046, "cannot fulfill request"
+
+### **Category-Based Behavior**
+
+All error behavior is derived from the final category:
+
+**Retriability** (triggers failover):
+
+- Retriable: `:rate_limit`, `:network_error`, `:server_error`, `:capability_violation`, `:method_not_found`, `:auth_error`
+- Non-retriable: `:invalid_params`, `:user_error`, `:client_error`
+
+**Circuit Breaker Penalty**:
+
+- No penalty: `:capability_violation` (permanent constraint, not transient failure)
+- Penalty: All other categories
 
 ---
 

@@ -150,7 +150,16 @@ defmodule Lasso.RPC.RequestPipeline do
     case attempt_request_on_channels(channels, rpc_request, opts.timeout_ms, ctx) do
       {:ok, result, channel, updated_ctx} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
-        record_channel_success_metrics(chain, channel, method, opts.strategy, duration_ms, updated_ctx)
+
+        record_channel_success_metrics(
+          chain,
+          channel,
+          method,
+          opts.strategy,
+          duration_ms,
+          updated_ctx
+        )
+
         complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
         {:ok, result}
 
@@ -952,7 +961,15 @@ defmodule Lasso.RPC.RequestPipeline do
     )
   end
 
-  defp record_channel_failure_metrics(chain, provider_id, method, strategy, reason, duration_ms, ctx) do
+  defp record_channel_failure_metrics(
+         chain,
+         provider_id,
+         method,
+         strategy,
+         reason,
+         duration_ms,
+         ctx
+       ) do
     # We may not always know the transport here; leave as legacy for now
     record_rpc_failure(chain, provider_id, method, reason, duration_ms)
 
@@ -1059,7 +1076,7 @@ defmodule Lasso.RPC.RequestPipeline do
   # - :server_error - 5xx indicates provider issue (if retriable)
   # - :network_error - Connection/timeout already occurred
   # - :capability_violation - Provider doesn't support this request
-  # - :timeout - Already waited for timeout, no point waiting more
+  # (Timeouts are classified under :network_error)
   #
   # Returns:
   # - {true, reason} - Should fast-fail with reason
@@ -1085,9 +1102,6 @@ defmodule Lasso.RPC.RequestPipeline do
 
       error.category == :network_error ->
         {true, :network_error_detected}
-
-      error.category == :timeout ->
-        {true, :timeout_detected}
 
       error.category == :auth_error ->
         {true, :auth_error_detected}
