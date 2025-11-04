@@ -22,7 +22,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   @type t :: %__MODULE__{
           chain_name: chain_name(),
-          providers: %{provider_id() => ProviderState.t()},
+          providers: %{provider_id() => __MODULE__.ProviderState.t()},
           active_providers: [provider_id()],
           total_requests: non_neg_integer(),
           failed_requests: non_neg_integer(),

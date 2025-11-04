@@ -71,9 +71,11 @@ defmodule Lasso.RPC.Channel do
 
   @doc """
   Performs a single JSON-RPC request over the channel.
+
+  Returns a 3-tuple with the result/error, and the I/O latency in milliseconds.
   """
   @spec request(t(), map(), timeout()) ::
-          {:ok, term()} | {:error, :unsupported_method | :timeout | term()}
+          {:ok, term(), non_neg_integer()} | {:error, :unsupported_method | :timeout | term(), non_neg_integer()}
   def request(%__MODULE__{} = channel, rpc_request, timeout \\ 30_000) do
     channel.transport_module.request(channel.raw_channel, rpc_request, timeout)
   end
