@@ -315,6 +315,45 @@ Load testing and metrics export are in `scripts/`.
 
 ---
 
+## Development Automation (Claude Code)
+
+Lasso includes comprehensive Claude Code automation to accelerate development workflows:
+
+**Slash Commands** (use immediately):
+
+- `/health-check` - Run compile + test + credo + dialyzer in one command
+- `/smoke-test [target]` - Validate local/staging/prod endpoints with performance regression detection
+- `/test-audit` - test quality review with improvement and coverage expansion recommendations
+- `/code-cleanup` - Fix compilation warnings, remove dead code, update deprecations
+- `/add-provider` - Complete guided workflow for integrating new RPC providers
+- `/review-changes` - Pre-commit review with automated quality checks
+- `/docs-sync` - Quick check for documentation drift (provider lists, broken refs, TODOs)
+
+**Agent Skills** (auto-invoke):
+
+- `elixir-quality` - Automatically detects and fixes compilation warnings and code quality issues
+- `smoke-test-runner` - Automated endpoint validation with baseline comparison
+- `provider-integration` - End-to-end provider addition with templates and testing
+
+**Quick examples:**
+
+```bash
+# Check codebase health before committing
+/health-check
+
+# Validate production endpoint after deployment
+/smoke-test prod
+
+# Auto-fix compilation warnings
+"Fix the compilation warnings"  # elixir-quality skill auto-invokes
+```
+
+**Full documentation:** See `project/CLAUDE_CODE_IMPLEMENTATION_GUIDE.md` for complete reference, customization guide, and implementation details.
+
+All features are ready to use immediately - just type the command or ask naturally.
+
+---
+
 ## Future Features
 
 - Caching strategies
