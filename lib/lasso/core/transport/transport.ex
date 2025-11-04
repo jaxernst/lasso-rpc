@@ -6,8 +6,6 @@ defmodule Lasso.RPC.Transport do
   to enable transport-agnostic request routing and capability-aware selection.
   """
 
-  alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.Transports.{HTTP, WebSocket}
 
   @type channel :: term()
   @type rpc_request :: map()

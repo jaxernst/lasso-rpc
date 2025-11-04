@@ -165,11 +165,6 @@ defmodule Lasso.RPC.Transports.WebSocket do
     :ok
   end
 
-  # Helper function
-  defp generate_request_id do
-    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-  end
-
   # Private functions
 
   defp get_ws_url(provider_config) do

@@ -60,15 +60,17 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
              method,
              ch.transport
            ) do
-        %{latency_ms: ms, success_rate: sr, total_calls: n, confidence_score: conf} ->
+        %{latency_ms: ms, success_rate: sr, total_calls: n, confidence_score: conf}
+        when is_number(ms) and is_number(sr) and is_number(conf) ->
           calls_scale = if n >= min_calls, do: 1.0, else: n / max(min_calls, 1)
-          denom = :erlang.max(ms || 0.0, ms_floor)
+          denom = :erlang.max(ms, ms_floor)
           latency_term = 1.0 / :math.pow(denom, beta)
-          sr_term = max(sr || 0.0, min_sr)
-          conf_term = conf || 1.0
+          sr_term = max(sr, min_sr)
+          conf_term = conf
           max(explore_floor, latency_term * sr_term * conf_term * calls_scale)
 
         _ ->
+          # Handle nil values or missing data by using explore_floor
           explore_floor
       end
     end
