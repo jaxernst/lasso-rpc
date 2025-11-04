@@ -28,8 +28,10 @@ defmodule Lasso.RPC.ProviderSupervisor do
       |> maybe_add_ws_circuit(chain_name, provider)
       |> maybe_add_ws_connection(chain_name, chain_config, provider)
 
-    # Start breakers first, then WS (reverse stop order on shutdown)
-    Supervisor.init(children, strategy: :rest_for_one)
+    # Use one_for_one to prevent linked restarts
+    # Circuit breakers and WSConnection are independent - a circuit breaker restart
+    # should not trigger WSConnection restart (which would cause duplicate reconnection attempts).
+    Supervisor.init(children, strategy: :one_for_one)
   end
 
   defp maybe_add_http_circuit(children, chain_name, provider) do

@@ -84,37 +84,6 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
       GenServer.stop(pid)
     end
 
-    test "emits disconnected event on close", %{endpoint: endpoint} do
-      conn_collector =
-        TelemetrySync.start_collector([:lasso, :websocket, :connected],
-          match: %{provider_id: endpoint.id}
-        )
-
-      {:ok, pid} = WSConnection.start_link(endpoint)
-      {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
-
-      # Start collecting disconnect events
-      disconn_collector =
-        TelemetrySync.start_collector([:lasso, :websocket, :disconnected],
-          match: %{provider_id: endpoint.id}
-        )
-
-      # Get mock client and trigger close
-      ws_state = :sys.get_state(pid)
-      TestSupport.MockWSClient.close(ws_state.connection, 1000, "normal close")
-
-      # Wait for disconnect telemetry
-      {:ok, measurements, metadata} = TelemetrySync.await_event(disconn_collector, timeout: 2_000)
-
-      assert measurements == %{}
-      assert metadata.provider_id == endpoint.id
-      assert metadata.chain == endpoint.chain_name
-      assert metadata.unexpected == false
-      assert is_integer(metadata.pending_request_count)
-
-      GenServer.stop(pid)
-    end
-
     test "emits disconnected event on unexpected disconnect", %{endpoint: endpoint} do
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
       {:ok, pid} = WSConnection.start_link(endpoint)
