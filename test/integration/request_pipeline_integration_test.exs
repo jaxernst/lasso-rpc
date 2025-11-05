@@ -29,7 +29,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       CircuitBreakerHelper.assert_circuit_breaker_state({chain, "primary", :http}, :open)
 
       # Execute request - should automatically use backup
-      {:ok, result} =
+      {:ok, result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -52,7 +52,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       # Execute multiple requests to trigger circuit breaker
       # Circuit breaker typically opens after 3-5 failures
       for _ <- 1..5 do
-        {:error, _reason} =
+        {:error, _reason, _ctx} =
           RequestPipeline.execute_via_channels(
             chain,
             "eth_blockNumber",
@@ -78,12 +78,17 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       )
 
       # Next request should fail immediately with :circuit_open
-      {:error, error} =
+      {:error, error, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
           [],
-          provider_override: "failing_provider"
+          %RequestOptions{
+            provider_override: "failing_provider",
+            failover_on_override: false,
+            timeout_ms: 30_000,
+            strategy: :round_robin
+          }
         )
 
       # Should get circuit breaker error, not the underlying error
@@ -111,7 +116,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         Lasso.Testing.TelemetrySync.await_event(open_collector, timeout: 2000)
 
       # Immediate request should fail with circuit open
-      {:error, _} =
+      {:error, _, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -177,7 +182,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         )
 
       # Execute request
-      {:ok, _result} =
+      {:ok, _result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -211,7 +216,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         )
 
       # Execute request - should failover to backup
-      {:ok, result} =
+      {:ok, result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -237,7 +242,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute with override and no failover
-      {:ok, _result} =
+      {:ok, _result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -262,7 +267,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute with override and failover enabled
-      {:ok, result} =
+      {:ok, result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -292,7 +297,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute standard method - should work on any provider
-      {:ok, _result} =
+      {:ok, _result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -312,19 +317,21 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute with empty params
-      {:ok, _result} =
+      {:ok, _result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
-          []
+          [],
+          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
         )
 
       # Execute with nil params
-      {:ok, _result} =
+      {:ok, _result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
-          nil
+          nil,
+          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
         )
 
       # Both should succeed
@@ -343,7 +350,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute request
-      {:error, error} =
+      {:error, error, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -370,7 +377,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       # Execute with short timeout
       start_time = System.monotonic_time(:millisecond)
 
-      {:error, _error} =
+      {:error, _error, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -393,7 +400,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       # Don't setup any providers
 
       # Execute request
-      {:error, error} =
+      {:error, error, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -419,7 +426,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Execute with HTTP transport override
-      {:ok, _result} =
+      {:ok, _result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -457,7 +464,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         )
 
       # Execute request
-      {:ok, _result} =
+      {:ok, _result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -499,11 +506,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         )
 
       # Execute request
-      {:ok, _result} =
+      {:ok, _result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
-          []
+          [],
+          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
         )
 
       # Verify telemetry shows success
@@ -527,7 +535,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         )
 
       # Execute request that will fail
-      {:error, _} =
+      {:error, _, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -570,7 +578,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       # Count successes
       successes =
         Enum.count(results, fn
-          {:ok, _} -> true
+          {:ok, _, _} -> true
           _ -> false
         end)
 
@@ -594,7 +602,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         )
 
       # Execute request
-      {:error, _error} =
+      {:error, _error, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",

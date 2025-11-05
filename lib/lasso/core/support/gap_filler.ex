@@ -29,7 +29,7 @@ defmodule Lasso.RPC.GapFiller do
                  timeout_ms: 10_000
                }
              ) do
-          {:ok, %{"number" => _} = block} -> acc ++ [block]
+          {:ok, %{"number" => _} = block, _ctx} -> acc ++ [block]
           _ -> acc
         end
       end)
@@ -69,7 +69,7 @@ defmodule Lasso.RPC.GapFiller do
              timeout_ms: 30_000
            }
          ) do
-      {:ok, logs} when is_list(logs) ->
+      {:ok, logs, _ctx} when is_list(logs) ->
         ordered =
           Enum.sort_by(logs, fn log ->
             {decode_hex(Map.get(log, "blockNumber")), decode_hex(Map.get(log, "logIndex"))}

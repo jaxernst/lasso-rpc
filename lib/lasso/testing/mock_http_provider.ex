@@ -21,7 +21,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
         ])
 
         # Requests are routed to mock providers based on behavior
-        {:ok, result} = RequestPipeline.execute_via_channels(
+        {:ok, result, _ctx} = RequestPipeline.execute_via_channels(
           chain, "eth_blockNumber", []
         )
       end

@@ -1,14 +1,12 @@
 defmodule Lasso.RPC.RequestContext do
   @moduledoc """
-  Tracks request lifecycle data for observability and client-visible metadata.
+  Tracks request lifecycle data for rpc request pipeline observability and client-visible metadata.
 
-  This struct threads through the entire request pipeline to collect:
+  This struct threads through the request pipeline to collect:
   - Request identification and timing
   - Provider selection details
   - Routing decisions and circuit breaker states
   - Result or error shapes
-
-  Used by both server-side logging and optional client-side metadata.
   """
 
   @type t :: %__MODULE__{
@@ -34,6 +32,7 @@ defmodule Lasso.RPC.RequestContext do
 
           # Timing
           start_time: integer(),
+          request_start_ms: integer() | nil,
           selection_start: integer() | nil,
           selection_end: integer() | nil,
           upstream_start: integer() | nil,
@@ -68,6 +67,7 @@ defmodule Lasso.RPC.RequestContext do
             retries: 0,
             circuit_breaker_state: nil,
             start_time: nil,
+            request_start_ms: nil,
             selection_start: nil,
             selection_end: nil,
             upstream_start: nil,
@@ -161,6 +161,24 @@ defmodule Lasso.RPC.RequestContext do
   """
   def set_upstream_latency(%__MODULE__{} = ctx, io_ms) when is_number(io_ms) do
     %{ctx | upstream_latency_ms: io_ms}
+  end
+
+  @doc """
+  Marks the start of request execution for duration tracking.
+  Stores current monotonic time in milliseconds for later duration calculation.
+  """
+  def mark_request_start(%__MODULE__{} = ctx) do
+    %{ctx | request_start_ms: System.monotonic_time(:millisecond)}
+  end
+
+  @doc """
+  Calculates request duration from marked start time.
+  Returns duration in milliseconds, or 0 if start was never marked.
+  """
+  def get_duration(%__MODULE__{request_start_ms: nil}), do: 0
+
+  def get_duration(%__MODULE__{request_start_ms: start_ms}) do
+    System.monotonic_time(:millisecond) - start_ms
   end
 
   @doc """

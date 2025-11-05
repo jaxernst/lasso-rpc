@@ -763,7 +763,7 @@ defmodule Lasso.RPC.StreamCoordinator do
              timeout_ms: 3_000
            }
          ) do
-      {:ok, "0x" <> _ = hex} ->
+      {:ok, "0x" <> _ = hex, _ctx} ->
         String.to_integer(String.trim_leading(hex, "0x"), 16)
 
       _ ->

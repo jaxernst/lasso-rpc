@@ -363,14 +363,10 @@ defmodule LassoWeb.RPCSocket do
            params,
            request_opts
          ) do
-      {:ok, result} ->
-        # Retrieve updated context from Process dictionary
-        updated_ctx = Process.get(:request_context, ctx)
+      {:ok, result, updated_ctx} ->
         {:ok, result, state, updated_ctx}
 
-      {:error, reason} ->
-        # Retrieve updated context even on error
-        updated_ctx = Process.get(:request_context, ctx)
+      {:error, reason, updated_ctx} ->
         {:error, reason, state, updated_ctx}
     end
   end

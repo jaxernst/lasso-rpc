@@ -413,11 +413,11 @@ defmodule Lasso.Battle.Workload do
            params,
            %RequestOptions{transport: :ws, strategy: strategy, timeout_ms: timeout}
          ) do
-      {:ok, _result} ->
+      {:ok, _result, _ctx} ->
         Logger.debug("WS Response ##{request_id}: success")
         :success
 
-      {:error, reason} ->
+      {:error, reason, _ctx} ->
         Logger.warning("WS Error ##{request_id}: #{inspect(reason)}")
         {:error, reason}
     end
