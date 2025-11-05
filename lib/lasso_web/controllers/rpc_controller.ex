@@ -123,7 +123,7 @@ defmodule LassoWeb.RPCController do
 
   defp handle_json_rpc(conn, params, chain) do
     with {:ok, request} <- validate_json_rpc_request(params),
-         {:ok, result} <- process_json_rpc_request(request, chain, conn) do
+         {:ok, result, ctx} <- process_json_rpc_request(request, chain, conn) do
       response = %{
         jsonrpc: @jsonrpc_version,
         result: result,
@@ -131,16 +131,13 @@ defmodule LassoWeb.RPCController do
       }
 
       # Inject observability metadata if requested
-      conn = maybe_inject_observability_metadata(conn)
+      conn = maybe_inject_observability_metadata(conn, ctx)
 
       # Enrich response body if include_meta=body
       response =
         case conn.assigns[:include_meta] do
           :body ->
-            case Process.get(:request_context) do
-              nil -> response
-              ctx -> ObservabilityPlug.enrich_response_body(response, ctx)
-            end
+            ObservabilityPlug.enrich_response_body(response, ctx)
 
           _ ->
             response
@@ -149,8 +146,8 @@ defmodule LassoWeb.RPCController do
       json(conn, response)
     else
       {:error, error} ->
-        # Inject observability metadata even for errors
-        conn = maybe_inject_observability_metadata(conn)
+        # Inject observability metadata even for errors (no context available)
+        conn = maybe_inject_observability_metadata(conn, nil)
 
         json(
           conn,
@@ -212,7 +209,8 @@ defmodule LassoWeb.RPCController do
 
     case get_chain_id(chain) do
       {:ok, chain_id} ->
-        {:ok, chain_id}
+        # eth_chainId doesn't go through RequestPipeline, so no context
+        {:ok, chain_id, nil}
 
       {:error, reason} ->
         {:error, JError.new(-32_603, "Failed to get chain ID: #{reason}")}
@@ -382,13 +380,10 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  defp maybe_inject_observability_metadata(conn) do
+  defp maybe_inject_observability_metadata(conn, ctx) do
     case conn.assigns[:include_meta] do
-      :headers ->
-        case Process.get(:request_context) do
-          nil -> conn
-          ctx -> ObservabilityPlug.inject_metadata(conn, ctx)
-        end
+      :headers when not is_nil(ctx) ->
+        ObservabilityPlug.inject_metadata(conn, ctx)
 
       _ ->
         conn

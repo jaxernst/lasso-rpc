@@ -220,7 +220,7 @@ defmodule Lasso.Integration.DynamicProvidersTest do
         )
 
       # Assert happy path - mock should succeed
-      assert {:ok, block_number} = result
+      assert {:ok, block_number, _ctx} = result
       assert is_binary(block_number)
       assert block_number == "0x2000"
 
@@ -262,7 +262,7 @@ defmodule Lasso.Integration.DynamicProvidersTest do
           %RequestOptions{strategy: :priority, timeout_ms: 5_000}
         )
 
-      assert {:ok, block_number} = result
+      assert {:ok, block_number, _ctx} = result
       assert is_binary(block_number)
       assert String.starts_with?(block_number, "0x")
     end

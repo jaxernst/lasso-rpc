@@ -24,7 +24,7 @@ defmodule Lasso.Testing.BehaviorHttpClient do
         ])
 
         # Requests automatically routed to mock providers
-        {:ok, result} = RequestPipeline.execute_via_channels(
+        {:ok, result, _ctx} = RequestPipeline.execute_via_channels(
           chain, "eth_blockNumber", []
         )
       end

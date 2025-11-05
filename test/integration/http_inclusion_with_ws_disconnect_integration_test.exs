@@ -21,7 +21,7 @@ defmodule Lasso.RPC.HttpInclusionWithWsDisconnectIntegrationTest do
     Process.sleep(50)
 
     # Should still be able to make unary HTTP request
-    {:ok, _result} =
+    {:ok, _result, _ctx} =
       RequestPipeline.execute_via_channels(
         chain,
         "eth_blockNumber",

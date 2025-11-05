@@ -22,6 +22,8 @@ defmodule LassoWeb.Plugs.ObservabilityPlug do
 
   import Plug.Conn
 
+  alias Lasso.RPC.RequestContext
+
   def init(opts), do: opts
 
   def call(conn, _opts) do
@@ -57,7 +59,9 @@ defmodule LassoWeb.Plugs.ObservabilityPlug do
 
   Used when include_meta=body is requested.
   """
-  def enrich_response_body(response_map, request_context) when is_map(response_map) do
+  def enrich_response_body(response_map, nil), do: response_map
+
+  def enrich_response_body(response_map, %RequestContext{} = request_context) do
     metadata = build_metadata(request_context)
     Map.put(response_map, "lasso_meta", metadata)
   end

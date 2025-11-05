@@ -303,10 +303,13 @@ defmodule Lasso.Test.LassoIntegrationCase do
 
       Convenience wrapper for testing request execution.
 
+      Returns a 3-tuple with the result, error, and request context for observability.
+
       ## Example
 
-          result = execute_rpc("eth_blockNumber", [])
-          assert {:ok, _block_num} = result
+          {:ok, block_num, ctx} = execute_rpc("eth_blockNumber", [])
+          assert is_binary(block_num)
+          assert ctx.selected_provider != nil
       """
       defp execute_rpc(method, params, opts \\ []) do
         chain = Keyword.get(opts, :chain, get_test_chain())

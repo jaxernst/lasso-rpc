@@ -62,7 +62,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           %RequestOptions{transport: :http, timeout_ms: 10_000, strategy: :round_robin}
         )
 
-      assert {:ok, block_number} = result
+      assert {:ok, block_number, _ctx} = result
       assert is_binary(block_number)
       assert String.starts_with?(block_number, "0x")
 
@@ -83,7 +83,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           %RequestOptions{transport: :ws, timeout_ms: 10_000, strategy: :round_robin}
         )
 
-      assert {:ok, block_number} = result
+      assert {:ok, block_number, _ctx} = result
       assert is_binary(block_number)
       assert String.starts_with?(block_number, "0x")
 
@@ -104,7 +104,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           %RequestOptions{strategy: :round_robin, timeout_ms: 10_000}
         )
 
-      assert {:ok, block_number} = result
+      assert {:ok, block_number, _ctx} = result
       assert is_binary(block_number)
       assert String.starts_with?(block_number, "0x")
 
@@ -141,7 +141,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
 
       # All should succeed
       Enum.each(results, fn {method, result} ->
-        assert {:ok, _value} = result, "Method #{method} should succeed"
+        assert {:ok, _value, _ctx} = result, "Method #{method} should succeed"
       end)
 
       IO.puts("\n✅ Unary Methods Routing Test Passed!")
@@ -171,7 +171,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           %RequestOptions{strategy: :fastest, timeout_ms: 10_000}
         )
 
-      assert {:ok, _block1} = result1
+      assert {:ok, _block1, _ctx} = result1
 
       # Even if one provider goes down, system should failover to another provider
       # (We can't easily kill real providers, but we can verify multiple providers work)
@@ -183,7 +183,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           %RequestOptions{provider_override: "ankr", timeout_ms: 10_000, strategy: :round_robin}
         )
 
-      assert {:ok, _block2} = result2
+      assert {:ok, _block2, _ctx} = result2
 
       IO.puts("\n✅ Multi-Provider Transport Test Passed!")
       IO.puts("   Both providers accessible across transports")
@@ -209,7 +209,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
 
       # All should succeed
       Enum.each(results, fn result ->
-        assert {:ok, _block} = result
+        assert {:ok, _block, _ctx} = result
       end)
 
       IO.puts("\n✅ Round-Robin Strategy Test Passed!")
@@ -243,7 +243,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
       successful_count =
         results
         |> Enum.filter(fn
-          {:ok, _} -> true
+          {:ok, _, _} -> true
           _ -> false
         end)
         |> length()
@@ -270,7 +270,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           %RequestOptions{transport: :http, timeout_ms: 10_000, strategy: :round_robin}
         )
 
-      assert {:ok, _block1} = http_result
+      assert {:ok, _block1, _ctx} = http_result
 
       # Test WebSocket transport
       ws_result =
@@ -281,7 +281,7 @@ defmodule Lasso.Battle.TransportRoutingTest do
           %RequestOptions{transport: :ws, timeout_ms: 10_000, strategy: :round_robin}
         )
 
-      assert {:ok, _block2} = ws_result
+      assert {:ok, _block2, _ctx} = ws_result
 
       IO.puts("\n✅ Dual Transport Provider Test Passed!")
       IO.puts("   Provider supports both HTTP and WebSocket transports")
