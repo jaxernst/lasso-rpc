@@ -19,10 +19,10 @@ defmodule LassoWeb.RPCSocket do
   @behaviour Phoenix.Socket.Transport
   require Logger
 
-  alias Lasso.RPC.{SubscriptionRouter, RequestPipeline, RequestContext, Observability}
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Config.ConfigStore
   alias Lasso.RPC.RequestOptions
+  alias Lasso.RPC.{Observability, RequestContext, RequestPipeline, SubscriptionRouter}
+  alias LassoWeb.RPC.Helpers
 
   # Heartbeat configuration (aggressive keepalive for subscription connections)
   # Send ping every 30 seconds
@@ -379,17 +379,11 @@ defmodule LassoWeb.RPCSocket do
   end
 
   defp get_chain_id(chain_name) do
-    case ConfigStore.get_chain(chain_name) do
-      {:ok, %{chain_id: chain_id}} ->
-        {:ok, "0x" <> Integer.to_string(chain_id, 16)}
-
-      {:error, :not_found} ->
-        {:error, "Chain not configured: #{chain_name}"}
-    end
+    Helpers.get_chain_id(chain_name)
   end
 
   defp default_provider_strategy do
-    Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
+    Helpers.default_provider_strategy()
   end
 
   ## Observability helpers
@@ -486,18 +480,7 @@ defmodule LassoWeb.RPCSocket do
       # Check for x-forwarded-for header (when behind proxy/load balancer)
       # x_headers is a list of tuples like [{"x-forwarded-for", "value"}]
       x_headers = get_in(transport_info, [:connect_info, :x_headers]) ->
-        case List.keyfind(x_headers, "x-forwarded-for", 0) do
-          {"x-forwarded-for", value} ->
-            # Take the first IP if multiple are present
-            String.split(value, ",") |> List.first() |> String.trim()
-
-          nil ->
-            # No x-forwarded-for header, check peer data
-            case get_in(transport_info, [:connect_info, :peer]) do
-              nil -> "unknown"
-              peer -> format_ip(peer)
-            end
-        end
+        extract_ip_from_headers(x_headers, transport_info)
 
       # Check for peer data
       peer = get_in(transport_info, [:connect_info, :peer]) ->
@@ -506,6 +489,31 @@ defmodule LassoWeb.RPCSocket do
       # Fallback to unknown
       true ->
         "unknown"
+    end
+  end
+
+  defp extract_ip_from_headers(x_headers, transport_info) do
+    case List.keyfind(x_headers, "x-forwarded-for", 0) do
+      {"x-forwarded-for", value} ->
+        parse_forwarded_for(value)
+
+      nil ->
+        extract_ip_from_peer(transport_info)
+    end
+  end
+
+  defp parse_forwarded_for(value) do
+    # Take the first IP if multiple are present
+    value
+    |> String.split(",")
+    |> List.first()
+    |> String.trim()
+  end
+
+  defp extract_ip_from_peer(transport_info) do
+    case get_in(transport_info, [:connect_info, :peer]) do
+      nil -> "unknown"
+      peer -> format_ip(peer)
     end
   end
 

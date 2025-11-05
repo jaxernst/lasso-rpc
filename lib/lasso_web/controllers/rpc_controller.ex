@@ -26,12 +26,14 @@ defmodule LassoWeb.RPCController do
   use LassoWeb, :controller
   require Logger
 
-  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Config.ConfigStore
-  alias LassoWeb.Plugs.ObservabilityPlug
-  alias Lasso.Config.MethodPolicy
   alias Lasso.Config.MethodConstraints
+  alias Lasso.Config.MethodPolicy
+  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.RequestOptions.Builder, as: RequestOptionsBuilder
+  alias Lasso.RPC.RequestPipeline
+  alias LassoWeb.Plugs.ObservabilityPlug
+  alias LassoWeb.RPC.Helpers
 
   @jsonrpc_version "2.0"
 
@@ -163,42 +165,52 @@ defmodule LassoWeb.RPCController do
       error = JError.new(-32_600, "Invalid Request: batch too large")
       json(conn, JError.to_response(error, nil))
     else
-      results =
-        Enum.map(requests, fn req ->
-          case validate_json_rpc_request(req) do
-            {:ok, request} ->
-              case process_json_rpc_request(request, chain, conn) do
-                {:ok, result} ->
-                  %{jsonrpc: @jsonrpc_version, result: result, id: request["id"]}
+      # Process all requests and collect results with contexts
+      {results, contexts} =
+        requests
+        |> Enum.map(&process_batch_request(&1, chain, conn))
+        |> Enum.unzip()
 
-                {:error, error} ->
-                  JError.to_response(JError.from(error), request["id"])
-              end
-
-            {:error, error} ->
-              JError.to_response(JError.from(error), Map.get(req, "id"))
-          end
-        end)
+      # Inject observability metadata headers (uses first non-nil context if available)
+      conn = maybe_inject_observability_metadata(conn, Enum.find(contexts, & &1))
 
       json(conn, results)
     end
   end
 
+  defp process_batch_request(req, chain, conn) do
+    with {:ok, request} <- validate_json_rpc_request(req),
+         {:ok, result, ctx} <- process_json_rpc_request(request, chain, conn) do
+      response = %{jsonrpc: @jsonrpc_version, result: result, id: request["id"]}
+
+      # Enrich response body if include_meta=body
+      response =
+        case conn.assigns[:include_meta] do
+          :body -> ObservabilityPlug.enrich_response_body(response, ctx)
+          _ -> response
+        end
+
+      {response, ctx}
+    else
+      {:error, error} ->
+        request_id = Map.get(req, "id")
+        {JError.to_response(JError.from(error), request_id), nil}
+    end
+  end
+
   defp validate_json_rpc_request(%{"method" => method} = request) when is_binary(method) do
-    cond do
-      Map.has_key?(request, "jsonrpc") and request["jsonrpc"] != @jsonrpc_version ->
-        {:error, JError.new(-32_600, "Invalid Request: jsonrpc must be \"2.0\"")}
+    if Map.has_key?(request, "jsonrpc") and request["jsonrpc"] != @jsonrpc_version do
+      {:error, JError.new(-32_600, "Invalid Request: jsonrpc must be \"2.0\"")}
+    else
+      normalized =
+        Map.update(request, "params", [], fn
+          nil -> []
+          list when is_list(list) -> list
+          map when is_map(map) -> [map]
+          other -> [other]
+        end)
 
-      true ->
-        normalized =
-          Map.update(request, "params", [], fn
-            nil -> []
-            list when is_list(list) -> list
-            map when is_map(map) -> [map]
-            other -> [other]
-          end)
-
-        {:ok, normalized}
+      {:ok, normalized}
     end
   end
 
@@ -240,58 +252,51 @@ defmodule LassoWeb.RPCController do
   end
 
   defp forward_rpc_request(chain, method, params, opts) when is_list(opts) do
-    with {:ok, strategy} <- extract_strategy(opts) do
-      conn = Keyword.get(opts, :conn)
+    strategy = extract_strategy(opts)
+    conn = Keyword.get(opts, :conn)
 
-      provider_override = extract_provider_override(conn, opts)
+    provider_override = extract_provider_override(conn, opts)
 
-      # Extract Phoenix request_id to ensure consistent tracing throughout the request lifecycle
-      request_id =
-        case conn do
-          %Plug.Conn{assigns: %{request_id: rid}} when is_binary(rid) -> rid
-          _ -> nil
-        end
+    # Extract Phoenix request_id to ensure consistent tracing throughout the request lifecycle
+    request_id =
+      case conn do
+        %Plug.Conn{assigns: %{request_id: rid}} when is_binary(rid) -> rid
+        _ -> nil
+      end
 
-      transport_override =
-        case conn do
-          %Plug.Conn{} -> extract_transport_override(conn, method)
-          _ -> nil
-        end
+    transport_override =
+      case conn do
+        %Plug.Conn{} -> extract_transport_override(conn, method)
+        _ -> nil
+      end
 
-      opts =
-        RequestOptionsBuilder.from_conn(conn, method,
-          strategy: strategy,
-          provider_override: provider_override,
-          transport: transport_override,
-          timeout_ms: MethodPolicy.timeout_for(method),
-          request_id: request_id
-        )
+    opts =
+      RequestOptionsBuilder.from_conn(conn, method,
+        strategy: strategy,
+        provider_override: provider_override,
+        transport: transport_override,
+        timeout_ms: MethodPolicy.timeout_for(method),
+        request_id: request_id
+      )
 
-      Lasso.RPC.RequestPipeline.execute_via_channels(chain, method, params, opts)
-    else
-      {:error, reason} ->
-        {:error, JError.new(-32_000, "Failed to extract request options: #{reason}")}
-    end
+    RequestPipeline.execute_via_channels(chain, method, params, opts)
   end
 
   defp extract_strategy(opts) do
-    strategy =
-      case Keyword.get(opts, :strategy) do
-        nil ->
-          case Keyword.get(opts, :conn) do
-            %Plug.Conn{assigns: %{provider_strategy: s}} when not is_nil(s) -> s
-            _ -> default_provider_strategy()
-          end
+    case Keyword.get(opts, :strategy) do
+      nil ->
+        case Keyword.get(opts, :conn) do
+          %Plug.Conn{assigns: %{provider_strategy: s}} when not is_nil(s) -> s
+          _ -> default_provider_strategy()
+        end
 
-        s ->
-          s
-      end
-
-    {:ok, strategy}
+      s ->
+        s
+    end
   end
 
   defp default_provider_strategy do
-    Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
+    Helpers.default_provider_strategy()
   end
 
   defp strategy_from(conn, params) do
@@ -335,25 +340,24 @@ defmodule LassoWeb.RPCController do
   # Determine transport override from request preferences while respecting policy.
   defp extract_transport_override(%Plug.Conn{} = conn, method) do
     case MethodConstraints.required_transport_for(method) do
-      :ws ->
-        :ws
+      :ws -> :ws
+      nil -> resolve_transport_preference(conn)
+    end
+  end
 
-      nil ->
-        param_pref =
-          case conn.params do
-            %{"transport" => "http"} -> :http
-            %{"transport" => "ws"} -> :ws
-            _ -> nil
-          end
+  defp resolve_transport_preference(conn) do
+    preference_from_params(conn) || preference_from_headers(conn)
+  end
 
-        header_pref =
-          case get_req_header(conn, "x-lasso-transport") do
-            ["http" | _] -> :http
-            ["ws" | _] -> :ws
-            _ -> nil
-          end
+  defp preference_from_params(%{params: %{"transport" => "http"}}), do: :http
+  defp preference_from_params(%{params: %{"transport" => "ws"}}), do: :ws
+  defp preference_from_params(_), do: nil
 
-        param_pref || header_pref
+  defp preference_from_headers(conn) do
+    case get_req_header(conn, "x-lasso-transport") do
+      ["http" | _] -> :http
+      ["ws" | _] -> :ws
+      _ -> nil
     end
   end
 
@@ -371,13 +375,7 @@ defmodule LassoWeb.RPCController do
   end
 
   defp get_chain_id(chain_name) do
-    case ConfigStore.get_chain(chain_name) do
-      {:ok, %{chain_id: chain_id}} when is_integer(chain_id) ->
-        {:ok, "0x" <> Integer.to_string(chain_id, 16)}
-
-      {:error, :not_found} ->
-        {:error, "Chain not configured: #{chain_name}"}
-    end
+    Helpers.get_chain_id(chain_name)
   end
 
   defp maybe_inject_observability_metadata(conn, ctx) do
