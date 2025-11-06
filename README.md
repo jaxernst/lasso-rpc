@@ -3,10 +3,11 @@
 A smart blockchain node RPC aggregator for building reliable and performant onchain apps.
 
 - Multi-provider and multi-chain orchestration across HTTP and WebSocket
-- Intelligent and configurable request routing (latency + health based routing strategies)
+- Intelligent and expressive request routing
 - Per-method request benchmarking and circuit-breaking failover
 - WebSocket subscriptions with multiplexing and failover gap-filling
 - Structured observability with optional client-visible metadata
+- Realtime live dashboard
 
 Multi-region production RPC endpoints (base, ethereum currently supported):
 
@@ -21,7 +22,7 @@ wss://lasso-rpc.fly.dev/ws/rpc/base
 ```
 
 Provider Metrics dashboard (wip): https://lasso-rpc.fly.dev/metrics/ethereum  
-Full dashboard (wip - mostly placeholder): https://lasso-rpc.fly.dev
+Full dashboard: https://lasso-rpc.fly.dev
 
 ---
 
