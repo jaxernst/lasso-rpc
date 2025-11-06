@@ -8,10 +8,16 @@ defmodule Lasso.MixProject do
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       listeners: [Phoenix.CodeReloader],
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
       dialyzer: dialyzer()
     ]
   end
+
+  # Compile paths based on environment
+  # Test support modules are only compiled in test environment
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do
