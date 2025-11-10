@@ -166,7 +166,8 @@ defmodule Lasso.Config.ConfigStore do
 
   ## Returns
 
-  `:ok` on success, `{:error, :already_exists}` if chain already exists.
+  - `:ok` on success
+  - `{:error, :already_exists}` if chain name or chain_id already exists
   """
   @spec register_chain_runtime(String.t(), map()) :: :ok | {:error, term()}
   def register_chain_runtime(chain_name, chain_attrs) do
@@ -273,140 +274,62 @@ defmodule Lasso.Config.ConfigStore do
 
   @impl true
   def handle_call({:register_chain_runtime, chain_name, chain_attrs}, _from, state) do
-    case get_chain(chain_name) do
-      {:ok, _existing_chain} ->
-        {:reply, {:error, :already_exists}, state}
-
-      {:error, :not_found} ->
-        # Create ChainConfig struct from attributes
-        chain_config = normalize_chain_config(chain_name, chain_attrs)
-
-        # Update ETS with new chain (safely handle missing key)
-        chains =
-          case :ets.lookup(@config_table, @chains_key) do
-            [{@chains_key, existing_chains}] -> existing_chains
-            [] -> %{}
-          end
-
-        updated_chains = Map.put(chains, chain_name, chain_config)
-        :ets.insert(@config_table, {@chains_key, updated_chains})
-
-        # Update chain ID index if chain_id is present (safely handle missing key)
-        if not is_nil(chain_config.chain_id) do
-          id_index =
-            case :ets.lookup(@config_table, @chain_ids_key) do
-              [{@chain_ids_key, existing_index}] -> existing_index
-              [] -> %{}
-            end
-
-          updated_index = Map.put(id_index, chain_config.chain_id, chain_name)
-          :ets.insert(@config_table, {@chain_ids_key, updated_index})
-        end
-
-        Logger.debug("Registered chain #{chain_name} in ConfigStore (runtime)")
-        {:reply, :ok, state}
+    with {:error, :not_found} <- get_chain(chain_name),
+         chain_config <- normalize_chain_config(chain_name, chain_attrs),
+         :ok <- validate_chain_id_available(chain_config.chain_id) do
+      store_chain(chain_name, chain_config)
+      Logger.debug("Registered chain #{chain_name} in ConfigStore (runtime)")
+      {:reply, :ok, state}
+    else
+      {:ok, _existing} -> {:reply, {:error, :already_exists}, state}
+      {:error, _} -> {:reply, {:error, :already_exists}, state}
     end
   end
 
   @impl true
   def handle_call({:unregister_chain_runtime, chain_name}, _from, state) do
-    case get_chain(chain_name) do
-      {:ok, chain_config} ->
-        # Remove from chains map (safely handle missing key)
-        chains =
-          case :ets.lookup(@config_table, @chains_key) do
-            [{@chains_key, existing_chains}] -> existing_chains
-            [] -> %{}
-          end
-
-        updated_chains = Map.delete(chains, chain_name)
-        :ets.insert(@config_table, {@chains_key, updated_chains})
-
-        # Remove from chain ID index
-        id_index =
-          case :ets.lookup(@config_table, @chain_ids_key) do
-            [{@chain_ids_key, existing_index}] -> existing_index
-            [] -> %{}
-          end
-
-        updated_index = Map.delete(id_index, chain_config.chain_id)
-        :ets.insert(@config_table, {@chain_ids_key, updated_index})
-
-        Logger.debug("Unregistered chain #{chain_name} from ConfigStore (runtime)")
-        {:reply, :ok, state}
-
-      {:error, :not_found} ->
-        {:reply, {:error, :chain_not_found}, state}
+    with {:ok, chain_config} <- get_chain(chain_name) do
+      remove_chain(chain_name, chain_config)
+      Logger.debug("Unregistered chain #{chain_name} from ConfigStore (runtime)")
+      {:reply, :ok, state}
+    else
+      {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
     end
   end
 
   @impl true
   def handle_call({:register_provider_runtime, chain_name, provider_attrs}, _from, state) do
-    case get_chain(chain_name) do
-      {:ok, chain_config} ->
-        provider_config = normalize_provider_config(provider_attrs)
-        provider_id = Map.get(provider_config, :id)
+    with {:ok, chain_config} <- get_chain(chain_name),
+         provider_config <- normalize_provider_config(provider_attrs),
+         :ok <- validate_provider_not_exists(chain_config, provider_config.id) do
+      updated_chain = add_provider_to_chain(chain_config, provider_config)
+      update_chain_in_ets(chain_name, updated_chain)
 
-        # Check if provider already exists
-        if Enum.any?(chain_config.providers, &(&1.id == provider_id)) do
-          {:reply, {:error, {:already_exists, provider_id}}, state}
-        else
-          # Add provider to chain config
-          updated_providers = chain_config.providers ++ [provider_config]
-          updated_chain = %{chain_config | providers: updated_providers}
+      Logger.debug(
+        "Registered provider #{provider_config.id} for #{chain_name} in ConfigStore (runtime)"
+      )
 
-          # Update ETS (safely handle missing key)
-          chains =
-            case :ets.lookup(@config_table, @chains_key) do
-              [{@chains_key, existing_chains}] -> existing_chains
-              [] -> %{}
-            end
-
-          updated_chains = Map.put(chains, chain_name, updated_chain)
-          :ets.insert(@config_table, {@chains_key, updated_chains})
-
-          Logger.debug(
-            "Registered provider #{provider_id} for #{chain_name} in ConfigStore (runtime)"
-          )
-
-          {:reply, :ok, state}
-        end
-
-      {:error, :not_found} ->
-        {:reply, {:error, :chain_not_found}, state}
+      {:reply, :ok, state}
+    else
+      {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
+      {:error, :already_exists} -> {:reply, {:error, :already_exists}, state}
     end
   end
 
   @impl true
   def handle_call({:unregister_provider_runtime, chain_name, provider_id}, _from, state) do
-    case get_chain(chain_name) do
-      {:ok, chain_config} ->
-        updated_providers = Enum.reject(chain_config.providers, &(&1.id == provider_id))
+    with {:ok, chain_config} <- get_chain(chain_name),
+         {:ok, updated_chain} <- remove_provider_from_chain(chain_config, provider_id) do
+      update_chain_in_ets(chain_name, updated_chain)
 
-        if length(updated_providers) == length(chain_config.providers) do
-          {:reply, {:error, :provider_not_found}, state}
-        else
-          updated_chain = %{chain_config | providers: updated_providers}
+      Logger.debug(
+        "Unregistered provider #{provider_id} from #{chain_name} in ConfigStore (runtime)"
+      )
 
-          # Update ETS (safely handle missing key)
-          chains =
-            case :ets.lookup(@config_table, @chains_key) do
-              [{@chains_key, existing_chains}] -> existing_chains
-              [] -> %{}
-            end
-
-          updated_chains = Map.put(chains, chain_name, updated_chain)
-          :ets.insert(@config_table, {@chains_key, updated_chains})
-
-          Logger.debug(
-            "Unregistered provider #{provider_id} from #{chain_name} in ConfigStore (runtime)"
-          )
-
-          {:reply, :ok, state}
-        end
-
-      {:error, :not_found} ->
-        {:reply, {:error, :chain_not_found}, state}
+      {:reply, :ok, state}
+    else
+      {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
+      {:error, :provider_not_found} -> {:reply, {:error, :provider_not_found}, state}
     end
   end
 
@@ -616,5 +539,83 @@ defmodule Lasso.Config.ConfigStore do
       # Preserve mock flag for test providers
       __mock__: Map.get(attrs, :__mock__)
     }
+  end
+
+  # Validation helpers
+
+  defp validate_chain_id_available(nil), do: :ok
+
+  defp validate_chain_id_available(chain_id) do
+    id_index = lookup_ets(@chain_ids_key, %{})
+
+    case Map.get(id_index, chain_id) do
+      nil -> :ok
+      _existing_chain_name -> {:error, :already_exists}
+    end
+  end
+
+  defp validate_provider_not_exists(chain_config, provider_id) do
+    if Enum.any?(chain_config.providers, &(&1.id == provider_id)) do
+      {:error, :already_exists}
+    else
+      :ok
+    end
+  end
+
+  # Chain manipulation helpers
+
+  defp store_chain(chain_name, chain_config) do
+    chains = lookup_ets(@chains_key, %{})
+    updated_chains = Map.put(chains, chain_name, chain_config)
+    :ets.insert(@config_table, {@chains_key, updated_chains})
+
+    if chain_config.chain_id do
+      id_index = lookup_ets(@chain_ids_key, %{})
+      updated_index = Map.put(id_index, chain_config.chain_id, chain_name)
+      :ets.insert(@config_table, {@chain_ids_key, updated_index})
+    end
+  end
+
+  defp remove_chain(chain_name, chain_config) do
+    chains = lookup_ets(@chains_key, %{})
+    updated_chains = Map.delete(chains, chain_name)
+    :ets.insert(@config_table, {@chains_key, updated_chains})
+
+    if chain_config.chain_id do
+      id_index = lookup_ets(@chain_ids_key, %{})
+      updated_index = Map.delete(id_index, chain_config.chain_id)
+      :ets.insert(@config_table, {@chain_ids_key, updated_index})
+    end
+  end
+
+  # Provider manipulation helpers
+
+  defp add_provider_to_chain(chain_config, provider_config) do
+    %{chain_config | providers: chain_config.providers ++ [provider_config]}
+  end
+
+  defp remove_provider_from_chain(chain_config, provider_id) do
+    updated_providers = Enum.reject(chain_config.providers, &(&1.id == provider_id))
+
+    if length(updated_providers) == length(chain_config.providers) do
+      {:error, :provider_not_found}
+    else
+      {:ok, %{chain_config | providers: updated_providers}}
+    end
+  end
+
+  defp update_chain_in_ets(chain_name, chain_config) do
+    chains = lookup_ets(@chains_key, %{})
+    updated_chains = Map.put(chains, chain_name, chain_config)
+    :ets.insert(@config_table, {@chains_key, updated_chains})
+  end
+
+  # ETS helpers
+
+  defp lookup_ets(key, default) do
+    case :ets.lookup(@config_table, key) do
+      [{^key, value}] -> value
+      [] -> default
+    end
   end
 end
