@@ -3,6 +3,8 @@ defmodule LassoWeb.Dashboard.Helpers do
   General utility functions for the Dashboard LiveView.
   """
 
+  alias Lasso.Config.ConfigStore
+
   @doc "Convert various number types to float"
   def to_float(value) when is_integer(value), do: value * 1.0
   def to_float(value) when is_float(value), do: value
@@ -87,12 +89,9 @@ defmodule LassoWeb.Dashboard.Helpers do
 
   @doc "Get chain ID from chain name using config"
   def get_chain_id(chain_name) do
-    case Lasso.Config.ChainConfig.load_config() do
-      {:ok, config} ->
-        case Map.get(config.chains, chain_name) do
-          %{chain_id: chain_id} -> to_string(chain_id)
-          _ -> chain_name
-        end
+    case Lasso.Config.ConfigStore.get_chain(chain_name) do
+      {:ok, %{chain_id: chain_id}} when is_integer(chain_id) ->
+        to_string(chain_id)
 
       _ ->
         chain_name
@@ -101,23 +100,14 @@ defmodule LassoWeb.Dashboard.Helpers do
 
   @doc "Get available chains from configuration"
   def get_available_chains do
-    case Lasso.Config.ChainConfig.load_config() do
-      {:ok, config} ->
-        config.chains
-        |> Enum.map(fn {chain_name, chain_config} ->
-          %{
-            id: to_string(chain_config.chain_id),
-            name: chain_name,
-            display_name: chain_config.name
-          }
-        end)
-
-      {:error, _} ->
-        # Fallback to hardcoded values if config loading fails
-        [
-          %{id: "1", name: "ethereum", display_name: "Ethereum Mainnet"}
-        ]
-    end
+    ConfigStore.get_all_chains()
+    |> Enum.map(fn {chain_name, chain_config} ->
+      %{
+        id: to_string(chain_config.chain_id),
+        name: chain_name,
+        display_name: chain_config.name
+      }
+    end)
   end
 
   @doc "Create a unified event structure"
