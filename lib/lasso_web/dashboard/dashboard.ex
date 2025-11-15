@@ -1213,154 +1213,158 @@ defmodule LassoWeb.Dashboard do
   attr :selected_provider_metrics, :map, default: %{}
 
   def floating_details_window(assigns) do
+    import LassoWeb.Components.FloatingWindow
+
+    # Calculate system metrics
+    total_connections = length(assigns.connections)
+    connected_providers = Enum.count(assigns.connections, &(&1.status == :connected))
+    total_chains = assigns.connections |> Enum.map(& &1.chain) |> Enum.uniq() |> length()
+
+    # Determine status indicator
+    status = if connected_providers == total_connections && total_connections > 0 do
+      :healthy
+    else
+      :degraded
+    end
+
+    # Determine title based on selection
+    title = cond do
+      assigns.details_collapsed ->
+        "System Overview"
+      assigns.selected_provider ->
+        case Enum.find(assigns.connections, &(&1.id == assigns.selected_provider)) do
+          %{name: name} -> name
+          _ -> assigns.selected_provider
+        end
+      assigns.selected_chain ->
+        String.capitalize(assigns.selected_chain)
+      true ->
+        "System Overview"
+    end
+
+    # Determine if toggle should be enabled (only when chain or provider is selected)
+    on_toggle = if assigns.selected_chain || assigns.selected_provider do
+      "toggle_details_panel"
+    else
+      nil
+    end
+
     assigns =
       assigns
-      |> assign(:total_connections, length(assigns.connections))
-      |> assign(:connected_providers, Enum.count(assigns.connections, &(&1.status == :connected)))
-      |> assign(
-        :total_chains,
-        assigns.connections |> Enum.map(& &1.chain) |> Enum.uniq() |> length()
-      )
+      |> assign(:total_connections, total_connections)
+      |> assign(:connected_providers, connected_providers)
+      |> assign(:total_chains, total_chains)
+      |> assign(:status, status)
+      |> assign(:title, title)
+      |> assign(:on_toggle, on_toggle)
 
     ~H"""
-    <div class="pointer-events-none absolute top-4 right-4 z-30">
-      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@details_collapsed, do: "w-96", else: "w-[36rem] max-h-[80vh]")]}>
-        <!-- Header / Collapsed preview bar -->
-        <div class="border-gray-700/50 flex items-center justify-between border-b px-3 py-2">
-          <div class="flex min-w-0 items-center gap-2">
-            <div class={["h-2 w-2 rounded-full", if(@connected_providers == @total_connections,
-    do: "bg-emerald-400",
-    else: "bg-yellow-400")]}>
-            </div>
+    <.floating_window
+      id="details-window"
+      position={:top_right}
+      collapsed={@details_collapsed}
+      on_toggle={@on_toggle}
+      size={%{collapsed: "w-96", expanded: "w-[36rem] max-h-[80vh]"}}
+    >
+      <:header>
+        <.status_indicator status={@status} />
+        <div class="truncate text-xs text-gray-300"><%= @title %></div>
+      </:header>
 
-            <div class="truncate text-xs text-gray-300">
-              <%= cond do %>
-                <% @details_collapsed -> %>
-                  System Overview
-                <% @selected_provider -> %>
-                  {
-                    case Enum.find(assigns.connections, &(&1.id == @selected_provider)) do
-                      %{name: name} -> name
-                      _ -> @selected_provider
-                    end
-                  }
-                <% @selected_chain -> %>
-                  {@selected_chain |> String.capitalize()}
-                <% true -> %>
-                  System Overview
-              <% end %>
+      <:collapsed_preview>
+        <div class="space-y-3 p-3">
+          <!-- System metrics grid -->
+          <div class="grid grid-cols-4 gap-3 bg-gray-800/40 rounded-md p-3">
+            <div>
+              <div class="text-[10px] tracking-wide text-gray-400">Providers</div>
+              <div class="text-sm font-semibold text-white">
+                <span class="text-emerald-300">{@total_connections}</span>
+              </div>
+            </div>
+            <div>
+              <div class="text-[10px] uppercase tracking-wide text-gray-400">Chains</div>
+              <div class="text-sm font-semibold text-purple-300">{@total_chains}</div>
+            </div>
+            <div>
+              <div class="text-[10px] text-gray-400">RPC/s</div>
+              <div class="text-xs font-medium text-sky-300">
+                {MetricsHelpers.rpc_calls_per_second(@routing_events)}
+              </div>
+            </div>
+            <div>
+              <div class="text-[10px] text-gray-400">Failovers (1m)</div>
+              <div class="text-xs font-medium text-yellow-300">
+                {MetricsHelpers.failovers_last_minute(@routing_events)}
+              </div>
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
-
-           <%= if @selected_chain || @selected_provider do %>
-            <button
-              phx-click="toggle_details_panel"
-              class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-colors hover:bg-gray-700/60"
+          <!-- Recent Activity feed -->
+          <div>
+            <div class="text-[10px] text-gray-400 mb-1.5">
+              Recent Activity
+            </div>
+            <div
+              id="recent-activity-feed"
+              phx-hook="ActivityFeed"
+              class="flex max-h-32 flex-col gap-1 overflow-y-auto"
+              style="overflow-anchor: none;"
             >
-              {if @details_collapsed, do: "↙", else: "↗"}
-            </button>
-            <% end %>
+              <%= for e <- Enum.take(@routing_events, 100) do %>
+                <div data-event-id={e[:ts_ms]} class="text-[9px] text-gray-300 flex items-center gap-1 shrink-0">
+                  <span class="text-purple-300">{e.chain}</span>
+                  <span class="text-sky-300">{e.method}</span>
+                  → <span class="text-emerald-300">{String.slice(e.provider_id, 0, 14)}…</span>
+                  <span class={["", if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")]}>
+                    ({e[:duration_ms] || 0}ms)
+                  </span>
+                  <%= if (e[:failovers] || 0) > 0 do %>
+                    <span class="inline-flex items-center px-1 py-0.5 rounded text-[8px] text-orange-300 font-bold bg-orange-900/50" title={"#{e[:failovers]} failover(s)"}>
+                      ↻{e[:failovers]}
+                    </span>
+                  <% end %>
+                </div>
+              <% end %>
+              <%= if length(@routing_events) == 0 do %>
+                <div class="text-[9px] text-gray-500">No recent activity</div>
+              <% end %>
+            </div>
           </div>
         </div>
+      </:collapsed_preview>
 
-        <%= if @details_collapsed do %>
-          <div class="space-y-2 px-3 py-2">
-              <!-- Chain/Provider specific collapsed view -->
-              <div class="grid grid-cols-4 gap-3 bg-gray-800/40 rounded-md pl-3">
-                <div class="py-1.5">
-                  <div class="text-[10px] tracking-wide text-gray-400">Providers</div>
-                  <div class="text-sm font-semibold text-white">
-                    <span class="text-emerald-300">{@total_connections}</span>
-                  </div>
-                </div>
-                <div class=" py-1.5">
-                  <div class="text-[10px] uppercase tracking-wide text-gray-400">Chains</div>
-                  <div class="text-sm font-semibold text-purple-300">{@total_chains}</div>
-                </div>
-                <div class=" py-1.5">
-                  <div class="text-[10px] text-gray-400">RPC/s</div>
-                  <div class="text-xs font-medium text-sky-300">
-                    {MetricsHelpers.rpc_calls_per_second(@routing_events)}
-                  </div>
-                </div>
-                <div class=" py-1.5">
-                  <div class="text-[10px] text-gray-400">Failovers (1m)</div>
-                  <div class="text-xs font-medium text-yellow-300">
-                    {MetricsHelpers.failovers_last_minute(@routing_events)}
-                  </div>
-                </div>
-              </div>
-
-               <!-- Recent Activity in collapsed state -->
-              <div class="px-2 pb-2">
-                <div class="text-[10px] text-gray-400 mb-1.5">
-                  Recent Activity
-                </div>
-                <div
-                  id="recent-activity-feed"
-                  phx-hook="ActivityFeed"
-                  class="flex max-h-32 flex-col gap-1 overflow-y-auto"
-                  style="overflow-anchor: none;"
-                >
-                  <%= for e <- Enum.take(@routing_events, 100) do %>
-                    <div data-event-id={e[:ts_ms]} class="text-[9px] text-gray-300 flex items-center gap-1 shrink-0">
-                      <span class="text-purple-300">{e.chain}</span>
-                      <span class="text-sky-300">{e.method}</span>
-                      → <span class="text-emerald-300">{String.slice(e.provider_id, 0, 14)}…</span>
-                      <span class={["", if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")]}>
-                        ({e[:duration_ms] || 0}ms)
-                      </span>
-                      <%= if (e[:failovers] || 0) > 0 do %>
-                        <span class="inline-flex items-center px-1 py-0.5 rounded text-[8px] text-orange-300 font-bold bg-orange-900/50" title={"#{e[:failovers]} failover(s)"}>
-                          ↻{e[:failovers]}
-                        </span>
-                      <% end %>
-                    </div>
-                  <% end %>
-                  <%= if length(@routing_events) == 0 do %>
-                    <div class="text-[9px] text-gray-500">No recent activity</div>
-                  <% end %>
-                </div>
-              </div>
-          </div>
+      <:body>
+        <%= if @selected_provider do %>
+          <.provider_details_panel
+            id={"provider-details-#{@selected_provider}"}
+            provider={@selected_provider}
+            connections={@connections}
+            routing_events={@routing_events}
+            provider_events={@provider_events}
+            events={@events}
+            selected_chain={@selected_chain}
+            selected_provider_events={assigns[:selected_provider_events] || []}
+            selected_provider_unified_events={assigns[:selected_provider_unified_events] || []}
+            selected_provider_metrics={assigns[:selected_provider_metrics] || %{}}
+          />
         <% else %>
-          <!-- Body (only when expanded) -->
-          <div class="max-h-[70vh] overflow-auto">
-            <%= if @selected_provider do %>
-              <.provider_details_panel
-                id={"provider-details-#{@selected_provider}"}
-                provider={@selected_provider}
-                connections={@connections}
-                routing_events={@routing_events}
-                provider_events={@provider_events}
-                events={@events}
-                selected_chain={@selected_chain}
-                selected_provider_events={assigns[:selected_provider_events] || []}
-                selected_provider_unified_events={assigns[:selected_provider_unified_events] || []}
-                selected_provider_metrics={assigns[:selected_provider_metrics] || %{}}
-              />
-            <% else %>
-              <%= if @selected_chain do %>
-                <.chain_details_panel
-                  chain={@selected_chain}
-                  connections={@connections}
-                  routing_events={@routing_events}
-                  provider_events={@provider_events}
-                  events={@events}
-                  selected_chain_metrics={@selected_chain_metrics}
-                  selected_chain_events={@selected_chain_events}
-                  selected_chain_unified_events={@selected_chain_unified_events}
-                  selected_chain_endpoints={@selected_chain_endpoints}
-                  selected_chain_provider_events={assigns[:selected_chain_provider_events] || []}
-                />
-              <% end %>
-            <% end %>
-          </div>
+          <%= if @selected_chain do %>
+            <.chain_details_panel
+              chain={@selected_chain}
+              connections={@connections}
+              routing_events={@routing_events}
+              provider_events={@provider_events}
+              events={@events}
+              selected_chain_metrics={@selected_chain_metrics}
+              selected_chain_events={@selected_chain_events}
+              selected_chain_unified_events={@selected_chain_unified_events}
+              selected_chain_endpoints={@selected_chain_endpoints}
+              selected_chain_provider_events={assigns[:selected_chain_provider_events] || []}
+            />
+          <% end %>
         <% end %>
-      </div>
-    </div>
+      </:body>
+    </.floating_window>
     """
   end
 
