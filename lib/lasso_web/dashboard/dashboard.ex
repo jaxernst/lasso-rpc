@@ -3,18 +3,12 @@ defmodule LassoWeb.Dashboard do
   require Logger
 
   alias LassoWeb.NetworkTopology
-  alias LassoWeb.Dashboard.{Helpers, MetricsHelpers, StatusHelpers, EndpointHelpers}
+  alias LassoWeb.Dashboard.{Helpers, MetricsHelpers, StatusHelpers, EndpointHelpers, Constants, Status, EventBuffer, Formatting}
   alias LassoWeb.Dashboard.Components
   alias LassoWeb.Components.DashboardHeader
   alias LassoWeb.Components.NetworkStatusLegend
   alias LassoWeb.Components.DashboardComponents
   alias Lasso.Events.Provider
-
-  # Dashboard configuration
-  @dashboard_config Application.compile_env(:lasso, :dashboard, [])
-  @default_batch_interval Keyword.get(@dashboard_config, :batch_interval, 100)
-  @max_buffer_size Keyword.get(@dashboard_config, :max_buffer_size, 50)
-  @mailbox_thresholds Keyword.get(@dashboard_config, :mailbox_thresholds, %{throttle: 500, drop: 1000})
 
   @impl true
   def mount(_params, _session, socket) do
@@ -27,6 +21,7 @@ defmodule LassoWeb.Dashboard do
       Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_changes")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_updates")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "dashboard:event_buffer")
 
       # Per-chain provider event subscriptions
       Lasso.Config.ConfigStore.list_chains()
@@ -47,12 +42,9 @@ defmodule LassoWeb.Dashboard do
       _ = :erlang.statistics(:reductions)
       _ = :erlang.statistics(:io)
 
-      Process.send_after(self(), :vm_metrics_tick, 1_000)
-      Process.send_after(self(), :latency_leaders_refresh, 30_000)
-      Process.send_after(self(), :metrics_refresh, 1_000)
-
-      # Start event buffer flush timer
-      Process.send_after(self(), :flush_event_buffer, @default_batch_interval)
+      Process.send_after(self(), :vm_metrics_tick, Constants.vm_metrics_interval())
+      Process.send_after(self(), :latency_leaders_refresh, Constants.latency_refresh_interval())
+      Process.send_after(self(), :metrics_refresh, Constants.vm_metrics_interval())
     end
 
     # Transform chain names into map structures for the UI
@@ -67,11 +59,6 @@ defmodule LassoWeb.Dashboard do
 
     initial_state =
       socket
-      |> assign(:event_buffer, [])
-      |> assign(:event_buffer_count, 0)
-      |> assign(:batch_interval, @default_batch_interval)
-      |> assign(:event_mode, :normal)
-      |> assign(:dropped_event_count, 0)
       |> assign(:connections, [])
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
       |> assign(:selected_chain, nil)
@@ -218,7 +205,7 @@ defmodule LassoWeb.Dashboard do
     }
 
     socket = update(socket, :routing_events, fn list ->
-      [entry | Enum.take(list, 99)]
+      [entry | Enum.take(list, Constants.routing_events_limit() - 1)]
     end)
 
     # Unified events + client-side push
@@ -285,7 +272,7 @@ defmodule LassoWeb.Dashboard do
       details: details
     }
 
-    socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, 99)] end)
+    socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, Constants.provider_events_limit() - 1)] end)
 
     uev =
       Helpers.as_event(:provider,
@@ -314,7 +301,7 @@ defmodule LassoWeb.Dashboard do
       ip: Map.get(msg, :remote_ip) || Map.get(msg, "remote_ip")
     }
 
-    socket = update(socket, :client_events, fn list -> [entry | Enum.take(list, 99)] end)
+    socket = update(socket, :client_events, fn list -> [entry | Enum.take(list, Constants.client_events_limit() - 1)] end)
 
     uev =
       Helpers.as_event(:client,
@@ -349,7 +336,7 @@ defmodule LassoWeb.Dashboard do
       event: "circuit [#{transport}]: #{from_state} -> #{to_state} (#{reason})"
     }
 
-    socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, 99)] end)
+    socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, Constants.provider_events_limit() - 1)] end)
 
     uev =
       Helpers.as_event(:circuit,
@@ -380,7 +367,7 @@ defmodule LassoWeb.Dashboard do
       margin_ms: Map.get(blk, :margin_ms) || Map.get(blk, "margin_ms")
     }
 
-    socket = update(socket, :latest_blocks, fn list -> [entry | Enum.take(list, 19)] end)
+    socket = update(socket, :latest_blocks, fn list -> [entry | Enum.take(list, Constants.recent_blocks_limit() - 1)] end)
 
     uev =
       Helpers.as_event(:block,
@@ -435,13 +422,23 @@ defmodule LassoWeb.Dashboard do
   end
 
   @impl true
-  def handle_info(:flush_event_buffer, socket) do
-    socket = flush_event_buffer(socket)
+  def handle_info({:events_batch, events}, socket) do
+    # Receive batched events from EventBuffer GenServer
+    socket = push_event(socket, "events_batch", %{items: events})
+    {:noreply, socket}
+  end
 
-    # Use dynamic interval from assigns
-    interval = socket.assigns[:batch_interval] || @default_batch_interval
-    Process.send_after(self(), :flush_event_buffer, interval)
+  @impl true
+  def handle_info({:mode_change, mode}, socket) do
+    # EventBuffer notifies of pressure mode changes
+    message =
+      case mode do
+        :throttled -> "High event rate detected - adjusting update frequency"
+        :summary -> "Critical event rate - dropping some events"
+        _ -> "Event rate normalized"
+      end
 
+    socket = push_event(socket, "show_notification", %{message: message, type: "warning"})
     {:noreply, socket}
   end
 
@@ -1547,85 +1544,14 @@ defmodule LassoWeb.Dashboard do
     assign(socket, :available_chains, available_chains)
   end
 
-  defp flush_event_buffer(socket) do
-    buffer = socket.assigns.event_buffer
-    count = socket.assigns.event_buffer_count
-
-    if count > 0 do
-      :telemetry.execute(
-        [:lasso_web, :dashboard, :event_buffer_flush],
-        %{buffer_size: count},
-        %{}
-      )
-
-      socket
-      |> assign(:event_buffer, [])
-      |> assign(:event_buffer_count, 0)
-      |> push_event("events_batch", %{items: Enum.reverse(buffer)})
-    else
-      socket
-    end
-  end
-
-  defp check_mailbox_pressure(socket) do
-    {:message_queue_len, queue_len} = Process.info(self(), :message_queue_len)
-    current_mode = socket.assigns[:event_mode] || :normal
-
-    {new_mode, new_interval} =
-      cond do
-        queue_len > @mailbox_thresholds.drop ->
-          require Logger
-          Logger.warning("Dashboard mailbox critical: #{queue_len} messages, dropping events")
-          {:summary, 500}
-
-        queue_len > @mailbox_thresholds.throttle ->
-          require Logger
-          Logger.info("Dashboard mailbox elevated: #{queue_len} messages, throttling")
-          {:throttled, 200}
-
-        true ->
-          {:normal, @default_batch_interval}
-      end
-
-    socket =
-      socket
-      |> assign(:event_mode, new_mode)
-      |> assign(:batch_interval, new_interval)
-
-    # Only notify when transitioning states (not on every event)
-    if current_mode != new_mode and new_mode != :normal do
-      push_event(socket, "show_notification", %{
-        message: "High event rate detected - adjusting update frequency",
-        type: "warning"
-      })
-    else
-      socket
-    end
-  end
-
   defp buffer_event(socket, event) do
-    socket = check_mailbox_pressure(socket)
+    # Push event to EventBuffer GenServer
+    EventBuffer.push(event)
 
-    case socket.assigns.event_mode do
-      :summary ->
-        # Drop individual events in summary mode, just count them
-        update(socket, :dropped_event_count, &(&1 + 1))
-
-      _ ->
-        # Buffer the event
-        socket =
-          socket
-          |> update(:events, fn list -> [event | Enum.take(list, 199)] end)
-          |> update(:event_buffer, fn buffer -> [event | buffer] end)
-          |> update(:event_buffer_count, &(&1 + 1))
-
-        # Early flush if buffer exceeds threshold
-        if socket.assigns.event_buffer_count >= @max_buffer_size do
-          flush_event_buffer(socket)
-        else
-          socket
-        end
-    end
+    # Update local event history for display
+    update(socket, :events, fn list ->
+      [event | Enum.take(list, Constants.event_history_size() - 1)]
+    end)
   end
 
   defp schedule_connection_refresh(socket, delay \\ 100) do
@@ -2013,15 +1939,9 @@ defmodule LassoWeb.Dashboard do
               </button>
             <% end %>
           </div>
-
-
         </div>
 
-
-        <!-- Clean chain selector with integrated metadata -->
-
         <%= if @metrics_loading do %>
-          <!-- Loading State -->
           <div class="py-12">
             <div class="rounded-lg border border-gray-800 bg-gray-900/30 p-6 text-center">
               <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-sky-500 border-r-transparent"></div>
@@ -2029,198 +1949,12 @@ defmodule LassoWeb.Dashboard do
             </div>
           </div>
         <% else %>
-          <!-- Main Content -->
           <div class="space-y-6">
-          <!-- Provider Comparison Table -->
-          <section>
-            <div class="flex items-center justify-between mb-3 ">
-            <h2 class="text-lg font-semibold flex items-center gap-2 text-white">
-              <span>Provider Performance</span>
-              <span class="text-xs text-gray-500 font-normal">({length(@provider_metrics)} providers)</span>
-            </h2>
-             <%= if @metrics_last_updated do %>
-            <div class="flex items-center gap-2 text-xs text-gray-500">
-              <div class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
-              <span class="font-mono text-gray-400">
-                {Calendar.strftime(@metrics_last_updated, "%H:%M:%S")}
-              </span>
-            </div>
-          <% end %>
-          </div>
-
-            <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-2xl overflow-hidden">
-              <div class="overflow-x-auto">
-                <table class="w-full">
-                  <thead class="bg-gray-800/50 border-b border-gray-700/50">
-                    <tr class="text-left text-xs text-gray-400 uppercase tracking-wider">
-                      <th class="px-4 py-3">Rank</th>
-                      <th class="px-4 py-3">Provider</th>
-                      <th class="px-4 py-3 text-right">Avg Latency</th>
-                      <th class="px-4 py-3 text-right">P50</th>
-                      <th class="px-4 py-3 text-right">P95</th>
-                      <th class="px-4 py-3 text-right">P99</th>
-                      <th class="px-4 py-3 text-right">P99/P50</th>
-                      <th class="px-4 py-3 text-right">Success Rate</th>
-                      <th class="px-4 py-3 text-right">Total Calls</th>
-                    </tr>
-                  </thead>
-                  <tbody class="divide-y divide-gray-700/30">
-                  <%= for {provider, index} <- Enum.with_index(@provider_metrics, 1) do %>
-                    <tr class="hover:bg-gray-900/30 transition-colors">
-                      <td class="px-4 py-3">
-                        <span class={[
-                          "inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold",
-                          case index do
-                            1 -> "bg-yellow-500/20 text-yellow-400"
-                            2 -> "bg-gray-400/20 text-gray-300"
-                            3 -> "bg-orange-600/20 text-orange-400"
-                            _ -> "bg-gray-800 text-gray-500"
-                          end
-                        ]}>
-                          {index}
-                        </span>
-                      </td>
-                      <td class="px-4 py-3 font-medium text-white">{provider.name}</td>
-                      <td class="px-4 py-3 text-right">
-                        <%= if provider.avg_latency do %>
-                          <div class="flex items-center justify-end gap-2">
-                            <div class="flex-1 max-w-[100px] h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                              <div
-                                class="h-full bg-sky-500 rounded-full transition-all"
-                                style={"width: #{calculate_bar_width(provider.avg_latency, @provider_metrics, :avg_latency)}%"}
-                              >
-                              </div>
-                            </div>
-                            <span class="text-sky-400 font-mono text-sm w-16">
-                              {safe_round(provider.avg_latency, 0)}ms
-                            </span>
-                          </div>
-                        <% else %>
-                          <span class="text-gray-600">—</span>
-                        <% end %>
-                      </td>
-                      <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
-                        <%= if provider.p50_latency, do: "#{safe_round(provider.p50_latency, 0)}ms", else: "—" %>
-                      </td>
-                      <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
-                        <%= if provider.p95_latency, do: "#{safe_round(provider.p95_latency, 0)}ms", else: "—" %>
-                      </td>
-                      <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
-                        <%= if provider.p99_latency, do: "#{safe_round(provider.p99_latency, 0)}ms", else: "—" %>
-                      </td>
-                      <td class="px-4 py-3 text-right">
-                        <%= if provider.consistency_ratio do %>
-                          <span class={[
-                            "font-mono text-sm",
-                            cond do
-                              provider.consistency_ratio < 2.0 -> "text-emerald-400"
-                              provider.consistency_ratio < 5.0 -> "text-yellow-400"
-                              true -> "text-red-400"
-                            end
-                          ]}>
-                            {safe_round(provider.consistency_ratio, 1)}x
-                          </span>
-                        <% else %>
-                          <span class="text-gray-600">—</span>
-                        <% end %>
-                      </td>
-                      <td class="px-4 py-3 text-right">
-                        <%= if provider.success_rate do %>
-                          <span class={[
-                            "font-mono text-sm",
-                            cond do
-                              provider.success_rate >= 0.99 -> "text-emerald-400"
-                              provider.success_rate >= 0.95 -> "text-yellow-400"
-                              true -> "text-red-400"
-                            end
-                          ]}>
-                            {safe_round(provider.success_rate * 100, 1)}%
-                          </span>
-                        <% else %>
-                          <span class="text-gray-600">—</span>
-                        <% end %>
-                      </td>
-                      <td class="px-4 py-3 text-right font-mono text-sm text-gray-400">
-                        {format_number(provider.total_calls)}
-                      </td>
-                    </tr>
-                  <% end %>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </section>
-
-          <!-- Method Breakdown -->
-          <section>
-            <h2 class="text-lg font-semibold mb-3 text-white">Method Performance Breakdown</h2>
-
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <%= for method_data <- @method_metrics do %>
-                <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-2xl p-4">
-                  <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-700/50">
-                    <h3 class="font-mono text-sm text-sky-400">{method_data.method}</h3>
-                    <span class="text-xs text-gray-500">
-                      {format_number(method_data.total_calls)} calls
-                    </span>
-                  </div>
-
-                  <div class="space-y-2">
-                    <%= for {provider_stat, idx} <- Enum.with_index(method_data.providers, 1) do %>
-                      <div class="flex items-center gap-2">
-                        <!-- Rank Badge -->
-                        <div class="flex-none">
-                          <span class={[
-                            "inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-semibold",
-                            case idx do
-                              1 -> "bg-yellow-500/20 text-yellow-400"
-                              2 -> "bg-gray-400/20 text-gray-300"
-                              3 -> "bg-orange-600/20 text-orange-400"
-                              _ -> "bg-gray-800 text-gray-500"
-                            end
-                          ]}>
-                            {idx}
-                          </span>
-                        </div>
-
-                        <!-- Provider Name -->
-                        <div class="flex-none w-28 truncate text-xs text-gray-300">
-                          {provider_stat.provider_name}
-                        </div>
-
-                        <!-- Latency Bar -->
-                        <div class="flex-1 flex items-center gap-1.5">
-                          <div class="flex-1 h-4 bg-gray-800/50 rounded overflow-hidden">
-                            <div
-                              class="h-full bg-gradient-to-r from-emerald-500 to-sky-500 flex items-center justify-end px-1.5"
-                              style={"width: #{calculate_method_bar_width(provider_stat.avg_latency, method_data.providers)}%"}
-                            >
-                              <span class="text-[10px] font-mono text-white font-semibold">
-                                {safe_round(provider_stat.avg_latency, 0)}ms
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <!-- Success Rate & Call Count -->
-                        <div class="flex-none flex items-center gap-2 text-[10px]">
-                          <span class={[
-                            "font-mono",
-                            if(provider_stat.success_rate >= 0.99, do: "text-emerald-400", else: "text-yellow-400")
-                          ]}>
-                            {safe_round(provider_stat.success_rate * 100, 0)}%
-                          </span>
-                          <span class="text-gray-500">
-                            {format_number(provider_stat.total_calls)}
-                          </span>
-                        </div>
-                      </div>
-                    <% end %>
-                  </div>
-                </div>
-              <% end %>
-            </div>
-          </section>
+            <.render_provider_performance_table
+              provider_metrics={@provider_metrics}
+              metrics_last_updated={@metrics_last_updated}
+            />
+            <.render_method_performance_breakdown method_metrics={@method_metrics} />
           </div>
         <% end %>
       </div>
@@ -2228,47 +1962,193 @@ defmodule LassoWeb.Dashboard do
     """
   end
 
-  # Helper to calculate bar width for comparison visualization
-  defp calculate_bar_width(value, all_providers, field) do
-    max_value = all_providers
-      |> Enum.map(&Map.get(&1, field))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.max(fn -> 1 end)
+  defp render_provider_performance_table(assigns) do
+    ~H"""
+    <section>
+      <div class="flex items-center justify-between mb-3 ">
+        <h2 class="text-lg font-semibold flex items-center gap-2 text-white">
+          <span>Provider Performance</span>
+          <span class="text-xs text-gray-500 font-normal">({length(@provider_metrics)} providers)</span>
+        </h2>
+        <%= if @metrics_last_updated do %>
+          <div class="flex items-center gap-2 text-xs text-gray-500">
+            <div class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
+            <span class="font-mono text-gray-400">
+              {Calendar.strftime(@metrics_last_updated, "%H:%M:%S")}
+            </span>
+          </div>
+        <% end %>
+      </div>
 
-    if max_value > 0 do
-      min(100, (value / max_value) * 100)
-    else
-      0
-    end
+      <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-2xl overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full">
+            <thead class="bg-gray-800/50 border-b border-gray-700/50">
+              <tr class="text-left text-xs text-gray-400 uppercase tracking-wider">
+                <th class="px-4 py-3">Rank</th>
+                <th class="px-4 py-3">Provider</th>
+                <th class="px-4 py-3 text-right">Avg Latency</th>
+                <th class="px-4 py-3 text-right">P50</th>
+                <th class="px-4 py-3 text-right">P95</th>
+                <th class="px-4 py-3 text-right">P99</th>
+                <th class="px-4 py-3 text-right">P99/P50</th>
+                <th class="px-4 py-3 text-right">Success Rate</th>
+                <th class="px-4 py-3 text-right">Total Calls</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-700/30">
+              <%= for {provider, index} <- Enum.with_index(@provider_metrics, 1) do %>
+                <tr class="hover:bg-gray-900/30 transition-colors">
+                  <td class="px-4 py-3">
+                    <span class={[
+                      "inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold",
+                      case index do
+                        1 -> "bg-yellow-500/20 text-yellow-400"
+                        2 -> "bg-gray-400/20 text-gray-300"
+                        3 -> "bg-orange-600/20 text-orange-400"
+                        _ -> "bg-gray-800 text-gray-500"
+                      end
+                    ]}>
+                      {index}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3 font-medium text-white">{provider.name}</td>
+                  <td class="px-4 py-3 text-right">
+                    <%= if provider.avg_latency do %>
+                      <div class="flex items-center justify-end gap-2">
+                        <div class="flex-1 max-w-[100px] h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                          <div
+                            class="h-full bg-sky-500 rounded-full transition-all"
+                            style={"width: #{Formatting.calculate_bar_width(provider.avg_latency, @provider_metrics, :avg_latency)}%"}
+                          >
+                          </div>
+                        </div>
+                        <span class="text-sky-400 font-mono text-sm w-16">
+                          {Formatting.safe_round(provider.avg_latency, 0)}ms
+                        </span>
+                      </div>
+                    <% else %>
+                      <span class="text-gray-600">—</span>
+                    <% end %>
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
+                    <%= if provider.p50_latency, do: "#{Formatting.safe_round(provider.p50_latency, 0)}ms", else: "—" %>
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
+                    <%= if provider.p95_latency, do: "#{Formatting.safe_round(provider.p95_latency, 0)}ms", else: "—" %>
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
+                    <%= if provider.p99_latency, do: "#{Formatting.safe_round(provider.p99_latency, 0)}ms", else: "—" %>
+                  </td>
+                  <td class="px-4 py-3 text-right">
+                    <%= if provider.consistency_ratio do %>
+                      <span class={[
+                        "font-mono text-sm",
+                        Status.consistency_color(provider.consistency_ratio)
+                      ]}>
+                        {Formatting.safe_round(provider.consistency_ratio, 1)}x
+                      </span>
+                    <% else %>
+                      <span class="text-gray-600">—</span>
+                    <% end %>
+                  </td>
+                  <td class="px-4 py-3 text-right">
+                    <%= if provider.success_rate do %>
+                      <span class={[
+                        "font-mono text-sm",
+                        cond do
+                          provider.success_rate >= 0.99 -> "text-emerald-400"
+                          provider.success_rate >= 0.95 -> "text-yellow-400"
+                          true -> "text-red-400"
+                        end
+                      ]}>
+                        {Formatting.safe_round(provider.success_rate * 100, 1)}%
+                      </span>
+                    <% else %>
+                      <span class="text-gray-600">—</span>
+                    <% end %>
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono text-sm text-gray-400">
+                    {Formatting.format_number(provider.total_calls)}
+                  </td>
+                </tr>
+              <% end %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    """
   end
 
-  defp calculate_method_bar_width(value, provider_stats) do
-    max_value = provider_stats
-      |> Enum.map(& &1.avg_latency)
-      |> Enum.max(fn -> 1 end)
+  defp render_method_performance_breakdown(assigns) do
+    ~H"""
+    <section>
+      <h2 class="text-lg font-semibold mb-3 text-white">Method Performance Breakdown</h2>
 
-    if max_value > 0 do
-      min(100, (value / max_value) * 100)
-    else
-      0
-    end
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <%= for method_data <- @method_metrics do %>
+          <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-2xl p-4">
+            <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-700/50">
+              <h3 class="font-mono text-sm text-sky-400">{method_data.method}</h3>
+              <span class="text-xs text-gray-500">
+                {Formatting.format_number(method_data.total_calls)} calls
+              </span>
+            </div>
+
+            <div class="space-y-2">
+              <%= for {provider_stat, idx} <- Enum.with_index(method_data.providers, 1) do %>
+                <div class="flex items-center gap-2">
+                  <div class="flex-none">
+                    <span class={[
+                      "inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-semibold",
+                      case idx do
+                        1 -> "bg-yellow-500/20 text-yellow-400"
+                        2 -> "bg-gray-400/20 text-gray-300"
+                        3 -> "bg-orange-600/20 text-orange-400"
+                        _ -> "bg-gray-800 text-gray-500"
+                      end
+                    ]}>
+                      {idx}
+                    </span>
+                  </div>
+
+                  <div class="flex-none w-28 truncate text-xs text-gray-300">
+                    {provider_stat.provider_name}
+                  </div>
+
+                  <div class="flex-1 flex items-center gap-1.5">
+                    <div class="flex-1 h-4 bg-gray-800/50 rounded overflow-hidden">
+                      <div
+                        class="h-full bg-gradient-to-r from-emerald-500 to-sky-500 flex items-center justify-end px-1.5"
+                        style={"width: #{Formatting.calculate_method_bar_width(provider_stat.avg_latency, method_data.providers)}%"}
+                      >
+                        <span class="text-[10px] font-mono text-white font-semibold">
+                          {Formatting.safe_round(provider_stat.avg_latency, 0)}ms
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="flex-none flex items-center gap-2 text-[10px]">
+                    <span class={[
+                      "font-mono",
+                      if(provider_stat.success_rate >= 0.99, do: "text-emerald-400", else: "text-yellow-400")
+                    ]}>
+                      {Formatting.safe_round(provider_stat.success_rate * 100, 0)}%
+                    </span>
+                    <span class="text-gray-500">
+                      {Formatting.format_number(provider_stat.total_calls)}
+                    </span>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    </section>
+    """
   end
-
-  # Simple number formatting helper
-  defp format_number(number) when is_integer(number) do
-    number
-    |> Integer.to_string()
-    |> String.graphemes()
-    |> Enum.reverse()
-    |> Enum.chunk_every(3)
-    |> Enum.join(",")
-    |> String.reverse()
-  end
-  defp format_number(number), do: to_string(number)
-
-  # Safe rounding that handles both integers and floats
-  defp safe_round(value, _precision) when is_integer(value), do: value
-  defp safe_round(value, precision) when is_float(value), do: Float.round(value, precision)
-  defp safe_round(nil, _precision), do: nil
 
  end
