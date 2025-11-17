@@ -54,9 +54,8 @@ defmodule Lasso.Application do
         # Add a local Registry for dynamic process names (high-cardinality)
         {Registry, keys: :unique, name: Lasso.Registry, partitions: System.schedulers_online()},
 
-        # Start ETS table owner for blockchain metadata cache
-        # MUST start before chain supervisors to ensure table exists
-        Lasso.RPC.Caching.MetadataTableOwner,
+        # Start Task.Supervisor for async probe execution in ProviderProbe
+        {Task.Supervisor, name: Lasso.TaskSupervisor},
 
         # Start dynamic supervisor for chain supervisors
         {DynamicSupervisor, name: Lasso.RPC.Supervisor, strategy: :one_for_one},
