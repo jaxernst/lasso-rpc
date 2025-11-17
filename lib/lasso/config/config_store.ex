@@ -420,6 +420,7 @@ defmodule Lasso.Config.ConfigStore do
     connection_attrs = Map.get(attrs, :connection) || Map.get(attrs, "connection") || %{}
     failover_attrs = Map.get(attrs, :failover) || Map.get(attrs, "failover") || %{}
     selection_attrs = Map.get(attrs, :selection) || Map.get(attrs, "selection")
+    monitoring_attrs = Map.get(attrs, :monitoring) || Map.get(attrs, "monitoring") || %{}
     providers_attrs = Map.get(attrs, :providers) || Map.get(attrs, "providers") || []
 
     %ChainConfig{
@@ -428,7 +429,8 @@ defmodule Lasso.Config.ConfigStore do
       providers: Enum.map(providers_attrs, &normalize_provider_config/1),
       connection: normalize_connection_config(connection_attrs),
       failover: normalize_failover_config(failover_attrs),
-      selection: normalize_selection_config(selection_attrs)
+      selection: normalize_selection_config(selection_attrs),
+      monitoring: normalize_monitoring_config(monitoring_attrs)
     }
   end
 
@@ -472,6 +474,15 @@ defmodule Lasso.Config.ConfigStore do
     %ChainConfig.Selection{
       max_lag_blocks: max_lag_blocks,
       max_lag_per_method: max_lag_per_method
+    }
+  end
+
+  defp normalize_monitoring_config(attrs) when is_map(attrs) do
+    %ChainConfig.Monitoring{
+      probe_interval_ms:
+        Map.get(attrs, :probe_interval_ms) || Map.get(attrs, "probe_interval_ms") || 12_000,
+      lag_threshold_blocks:
+        Map.get(attrs, :lag_threshold_blocks) || Map.get(attrs, "lag_threshold_blocks") || 3
     }
   end
 

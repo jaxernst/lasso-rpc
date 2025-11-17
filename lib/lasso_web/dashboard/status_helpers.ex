@@ -4,7 +4,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   Enhanced with comprehensive status classification logic including block sync validation.
   """
 
-  alias Lasso.RPC.Caching.BlockchainMetadataCache
+  alias Lasso.RPC.ChainState
 
   # Configuration: maximum blocks a provider can lag behind before showing as "syncing"
   # Read from application config at runtime
@@ -116,7 +116,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     if threshold == 0 do
       :synced
     else
-      case BlockchainMetadataCache.get_provider_lag(chain, provider_id) do
+      case ChainState.provider_lag(chain, provider_id) do
         {:ok, lag} when lag >= -threshold ->
           # Lag is within threshold (negative lag = blocks behind)
           # lag >= -10 means provider is at most 10 blocks behind
@@ -265,7 +265,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
         "Provider is experiencing issues (#{failures} consecutive failures). Still attempting requests."
 
       :syncing ->
-        case BlockchainMetadataCache.get_provider_lag(chain, provider_id) do
+        case ChainState.provider_lag(chain, provider_id) do
           {:ok, lag} when lag < 0 ->
             blocks_behind = abs(lag)
             "Provider is responsive but lagging #{blocks_behind} blocks behind the network head."

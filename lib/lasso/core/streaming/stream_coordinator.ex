@@ -19,7 +19,7 @@ defmodule Lasso.RPC.StreamCoordinator do
     SelectionContext
   }
 
-  alias Lasso.RPC.Caching.BlockchainMetadataCache
+  alias Lasso.RPC.ChainState
   alias Lasso.RPC.RequestOptions
 
   @type key :: {:newHeads} | {:logs, map()}
@@ -730,10 +730,18 @@ defmodule Lasso.RPC.StreamCoordinator do
   end
 
   defp fetch_head(chain, _provider_id) do
-    # Use cached block height for fast failover (<1ms vs 200-500ms)
-    case BlockchainMetadataCache.get_block_height(chain) do
+    # Use consensus height for fast failover (<1ms vs 200-500ms)
+    case ChainState.consensus_height(chain, allow_stale: true) do
       {:ok, height} ->
-        Logger.debug("Using cached block height for failover gap calculation",
+        Logger.debug("Using consensus height for failover gap calculation",
+          chain: chain,
+          height: height
+        )
+
+        height
+
+      {:ok, height, :stale} ->
+        Logger.debug("Using stale consensus height for failover gap calculation",
           chain: chain,
           height: height
         )
@@ -741,12 +749,12 @@ defmodule Lasso.RPC.StreamCoordinator do
         height
 
       {:error, reason} ->
-        Logger.warning("Cache miss during failover, using blocking request",
+        Logger.warning("Consensus unavailable during failover, using blocking request",
           chain: chain,
           reason: reason
         )
 
-        # Fallback to blocking HTTP request if cache unavailable
+        # Fallback to blocking HTTP request if consensus unavailable
         fetch_head_blocking(chain)
     end
   end

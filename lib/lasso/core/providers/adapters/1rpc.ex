@@ -19,7 +19,7 @@ defmodule Lasso.RPC.Providers.Adapters.OneRPC do
   @behaviour Lasso.RPC.ProviderAdapter
 
   alias Lasso.RPC.Providers.Generic
-  alias Lasso.RPC.Caching.BlockchainMetadataCache
+  alias Lasso.RPC.ChainState
 
   import Lasso.RPC.Providers.AdapterHelpers
 
@@ -93,12 +93,13 @@ defmodule Lasso.RPC.Providers.Adapters.OneRPC do
   defp parse_block_number(_value, _ctx), do: :error
 
   # Estimates current block from cache, skipping validation if unavailable
-  # This allows requests to proceed when cache is unavailable (fail-open)
+  # This allows requests to proceed when consensus is unavailable (fail-open)
   defp estimate_current_block(ctx) do
     chain = Map.get(ctx, :chain, "ethereum")
 
-    case BlockchainMetadataCache.get_block_height(chain) do
+    case ChainState.consensus_height(chain, allow_stale: true) do
       {:ok, height} -> height
+      {:ok, height, :stale} -> height
       {:error, _} -> 0
     end
   end
