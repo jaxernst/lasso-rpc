@@ -21,9 +21,8 @@ defmodule Lasso.RPC.ChainSupervisor do
   # alias Lasso.Config.ChainConfig
   alias Lasso.RPC.{WSConnection, ProviderPool, TransportRegistry}
   alias Lasso.RPC.ProviderSupervisor
-  alias Lasso.RPC.ProviderHealthMonitor
   alias Lasso.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
-  alias Lasso.RPC.Caching.BlockchainMetadataMonitor
+  alias Lasso.RPC.ProviderProbe
 
   @doc """
   Starts a ChainSupervisor for a specific blockchain.
@@ -155,11 +154,8 @@ defmodule Lasso.RPC.ChainSupervisor do
       # Per-provider supervisor manager
       {DynamicSupervisor, strategy: :one_for_one, name: provider_supervisors_name(chain_name)},
 
-      # Start per-chain health monitor (HTTP checks + typed events)
-      {ProviderHealthMonitor, chain_name},
-
-      # Start per-chain metadata cache monitor (block heights, chain IDs)
-      {BlockchainMetadataMonitor, chain_name},
+      # Integrated probe system for provider health and sync monitoring
+      {ProviderProbe, chain_name},
 
       # Start per-chain subscription registry and pool
       {ClientSubscriptionRegistry, chain_name},
@@ -168,11 +164,18 @@ defmodule Lasso.RPC.ChainSupervisor do
       # StreamSupervisor for per-key coordinators
       {Lasso.RPC.StreamSupervisor, chain_name},
 
-      # Start connection manager after dependencies
-      {Task, fn -> start_provider_connections_async(chain_name, chain_config) end}
+      # Start provider connections after all other children are initialized
+      # This Task runs once and completes (restart: :transient)
+      %{
+        id: :provider_connection_starter,
+        start:
+          {Task, :start_link,
+           [fn -> start_provider_connections_async(chain_name, chain_config) end]},
+        restart: :transient
+      }
     ]
 
-    Supervisor.init(children, strategy: :rest_for_one)
+    Supervisor.init(children, strategy: :one_for_one)
   end
 
   defp start_provider_connections_async(chain_name, chain_config) do
@@ -180,7 +183,9 @@ defmodule Lasso.RPC.ChainSupervisor do
       _ = start_provider_supervisor(chain_name, chain_config, provider, [])
     end)
 
-    Logger.info("Started supervisors for #{length(chain_config.providers)} providers in #{chain_name}")
+    Logger.info(
+      "Started supervisors for #{length(chain_config.providers)} providers in #{chain_name}"
+    )
   end
 
   # Private functions

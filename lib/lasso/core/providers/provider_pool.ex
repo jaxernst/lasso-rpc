@@ -16,9 +16,9 @@ defmodule Lasso.RPC.ProviderPool do
 
   alias Lasso.Events.Provider
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.Caching.BlockchainMetadataCache
   alias Lasso.RPC.CircuitBreaker
   alias Lasso.RPC.HealthPolicy
+  alias Lasso.RPC.ChainState
 
   @type t :: %__MODULE__{
           chain_name: chain_name(),
@@ -40,6 +40,8 @@ defmodule Lasso.RPC.ProviderPool do
     :chain_name,
     :providers,
     :active_providers,
+    # ETS table for sync state and lag tracking
+    :table,
     total_requests: 0,
     failed_requests: 0,
     # Circuit breaker state per provider and transport: %{provider_id => %{http: state, ws: state}}
@@ -332,12 +334,45 @@ defmodule Lasso.RPC.ProviderPool do
     end
   end
 
+  @doc """
+  Reports probe results from ProviderProbe (called by ProviderProbe).
+  Results are processed in batch to maintain consistency.
+  """
+  @spec report_probe_results(chain_name, [map()]) :: :ok
+  def report_probe_results(chain_name, results) when is_list(results) do
+    GenServer.cast(via_name(chain_name), {:probe_results, results})
+  end
+
+  @doc """
+  Reports a newHeads update from WebSocket subscription (future use).
+  """
+  @spec report_newheads(chain_name, provider_id, non_neg_integer()) :: :ok
+  def report_newheads(chain_name, provider_id, block_height) do
+    GenServer.cast(via_name(chain_name), {:newheads, provider_id, block_height})
+  end
+
+  @doc """
+  Gets the ETS table name for a chain.
+  Used by ChainState for consensus calculations.
+  """
+  @spec table_name(chain_name) :: atom()
+  def table_name(chain_name), do: :"provider_pool_#{chain_name}"
+
   # GenServer callbacks
 
   @impl true
   def init({chain_name, chain_config}) do
     Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
+
+    # Create ETS table for sync state and lag tracking
+    table =
+      :ets.new(table_name(chain_name), [
+        :set,
+        :public,
+        :named_table,
+        read_concurrency: true
+      ])
 
     # Pre-populate providers from chain_config to survive restarts
     # This ensures providers are immediately available even if async Task fails
@@ -365,6 +400,7 @@ defmodule Lasso.RPC.ProviderPool do
 
     state = %__MODULE__{
       chain_name: chain_name,
+      table: table,
       providers: initial_providers,
       active_providers: Map.keys(initial_providers),
       total_requests: 0,
@@ -605,6 +641,28 @@ defmodule Lasso.RPC.ProviderPool do
 
   def handle_cast({:report_success, provider_id, nil}, state),
     do: {:noreply, update_provider_success(state, provider_id)}
+
+  @impl true
+  def handle_cast({:probe_results, results}, state) do
+    # Process ALL results in batch (avoid race conditions)
+    state = apply_probe_batch(state, results)
+    {:noreply, state}
+  end
+
+  # NEW: Handle newHeads update (future)
+  @impl true
+  def handle_cast({:newheads, provider_id, block_height}, state) do
+    timestamp = System.system_time(:millisecond)
+    sequence = get_current_sequence(state)
+
+    # Store sync state (same format as probe results)
+    :ets.insert(
+      state.table,
+      {{:provider_sync, state.chain_name, provider_id}, {block_height, timestamp, sequence}}
+    )
+
+    {:noreply, state}
+  end
 
   @impl true
   def handle_cast({:report_failure, provider_id, error, :http}, state),
@@ -1089,7 +1147,7 @@ defmodule Lasso.RPC.ProviderPool do
     # Track providers with missing lag data to detect if filtering is completely broken
     {filtered, missing_lag_data} =
       Enum.reduce(providers, {[], []}, fn provider, {included, missing} ->
-        case BlockchainMetadataCache.get_provider_lag(chain, provider.id) do
+        case ChainState.provider_lag(chain, provider.id) do
           {:ok, lag} when lag >= -max_lag_blocks ->
             # Provider is within acceptable lag threshold (negative lag = blocks behind)
             # lag >= -max_lag_blocks means provider is at most max_lag_blocks behind
@@ -1123,7 +1181,7 @@ defmodule Lasso.RPC.ProviderPool do
 
       Logger.warning(
         "Lag filtering disabled for #{chain}: no lag data for any of #{length(providers)} providers. " <>
-          "Check BlockchainMetadataMonitor health."
+          "Check ProviderProbe/ProviderPool health."
       )
     end
 
@@ -1657,6 +1715,110 @@ defmodule Lasso.RPC.ProviderPool do
       %{
         chain: chain
       }
+    )
+  end
+
+  # Processes a batch of probe results
+  defp apply_probe_batch(state, results) do
+    # First pass: Update sync state for all successful probes
+    state =
+      Enum.reduce(results, state, fn result, acc_state ->
+        if result.success? do
+          # Store: height, timestamp, sequence number
+          :ets.insert(
+            acc_state.table,
+            {{:provider_sync, acc_state.chain_name, result.provider_id},
+             {result.block_height, result.timestamp, result.sequence}}
+          )
+
+          # Update HTTP transport availability for health policy (probe uses HTTP)
+          update_provider_success_http(acc_state, result.provider_id)
+        else
+          # Tag failures as coming from health_check context for policy handling
+          update_provider_failure_http(
+            acc_state,
+            result.provider_id,
+            {:health_check, result.error}
+          )
+        end
+      end)
+
+    # Second pass: Calculate lag for successful providers only
+    # NOTE: Consensus is calculated lazily by ChainState
+    update_provider_lags(state, results)
+
+    state
+  end
+
+  defp update_provider_lags(state, probe_results) do
+    # Get consensus height (lazy calculation from ChainState)
+    case ChainState.consensus_height(state.chain_name) do
+      {:ok, consensus_height} ->
+        # Calculate lag only for successful probes
+        Enum.each(probe_results, fn result ->
+          if result.success? do
+            lag = result.block_height - consensus_height
+
+            # Store lag
+            :ets.insert(
+              state.table,
+              {{:provider_lag, state.chain_name, result.provider_id}, lag}
+            )
+
+            # Log if exceeds threshold
+            threshold = get_lag_threshold_for_chain(state.chain_name)
+
+            if lag < -threshold do
+              Logger.info("Provider lagging behind",
+                chain: state.chain_name,
+                provider_id: result.provider_id,
+                lag_blocks: lag,
+                threshold: threshold,
+                consensus_height: consensus_height,
+                provider_height: result.block_height
+              )
+
+              emit_lag_telemetry(state.chain_name, result.provider_id, lag)
+            end
+          end
+        end)
+
+      {:error, _reason} ->
+        # No consensus available - don't calculate lag
+        :ok
+    end
+  end
+
+  defp get_current_sequence(_state) do
+    # For newHeads, use timestamp-based pseudo-sequence
+    # In the future, could maintain a sequence counter
+    div(System.system_time(:millisecond), 1000)
+  end
+
+  defp get_lag_threshold_for_chain(chain) do
+    # Get lag threshold from chain configuration (chains.yml)
+    # Falls back to application config if chain not found
+    case Lasso.Config.ConfigStore.get_chain(chain) do
+      {:ok, chain_config} ->
+        chain_config.monitoring.lag_threshold_blocks
+
+      {:error, _} ->
+        # Fallback to application config for backwards compatibility
+        thresholds =
+          Application.get_env(:lasso, :provider_probe, [])
+          |> Keyword.get(:lag_threshold_by_chain, %{})
+
+        Map.get(thresholds, chain) ||
+          Application.get_env(:lasso, :provider_probe, [])
+          |> Keyword.get(:default_lag_threshold, 10)
+    end
+  end
+
+  defp emit_lag_telemetry(chain, provider_id, lag) do
+    :telemetry.execute(
+      [:lasso, :provider_probe, :lag_detected],
+      %{lag_blocks: lag},
+      %{chain: chain, provider_id: provider_id}
     )
   end
 
