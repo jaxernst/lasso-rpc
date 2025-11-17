@@ -1,5 +1,6 @@
 defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   use LassoWeb, :live_component
+  import LassoWeb.Components.FloatingWindow
   alias LassoWeb.Dashboard.Helpers
 
   @impl true
@@ -336,55 +337,57 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
   @impl true
   def render(assigns) do
+    # Determine status indicator state
+    status = if is_simulator_active(assigns.sim_stats, assigns.simulator_running) do
+      :healthy
+    else
+      :info
+    end
+
+    assigns = assign(assigns, :status, status)
+
     ~H"""
-    <div class="pointer-events-none absolute top-4 left-4 z-30">
-      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@sim_collapsed, do: "w-64", else: "max-h-[80vh] w-80")]}>
-        <!-- Header -->
-        <div class="border-gray-700/50 flex items-center justify-between border-b px-3 py-2">
-          <div class="flex min-w-0 items-center gap-2">
-            <div class={["h-2 w-2 rounded-full", if(is_simulator_active(@sim_stats, @simulator_running),
-    do: "animate-pulse bg-emerald-400",
-    else: "bg-gray-500")]}>
-            </div>
-            <div class="truncate text-xs font-medium text-white">
-              RPC Load Simulator
-            </div>
+    <div>
+      <.floating_window
+        id="simulator-controls"
+        position={:top_left}
+        collapsed={@sim_collapsed}
+        on_toggle="toggle_collapsed"
+        on_toggle_target={@myself}
+        size={%{collapsed: "w-64 h-auto", expanded: "w-80 max-h-[80vh]"}}
+      >
+        <:header>
+          <.status_indicator
+            status={@status}
+            animated={is_simulator_active(@sim_stats, @simulator_running)}
+          />
+          <div class="truncate text-xs font-medium text-white">
+            RPC Load Simulator
           </div>
-          <div class="flex items-center gap-2">
-            <button
-              phx-click="toggle_collapsed"
-              phx-target={@myself}
-              class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-all duration-200 hover:bg-gray-700/60"
-            >
-              {if @sim_collapsed, do: "↘", else: "↖"}
-            </button>
-          </div>
-        </div>
-        
-    <!-- Collapsed content - minimal stats -->
-        <%= if @sim_collapsed do %>
+        </:header>
+
+        <:collapsed_preview>
           <.collapsed_content
             sim_stats={@sim_stats}
             simulator_running={@simulator_running}
             preview_text={@preview_text}
             myself={@myself}
           />
-        <% else %>
-          <!-- Expanded content - full control panel -->
-          <div class="overflow-y-auto">
-            <.expanded_content
-              sim_stats={@sim_stats}
-              available_chains={@available_chains}
-              selected_chains={@selected_chains}
-              selected_strategy={@selected_strategy}
-              request_rate={@request_rate}
-              load_types={@load_types}
-              simulator_running={@simulator_running}
-              myself={@myself}
-            />
-          </div>
-        <% end %>
-      </div>
+        </:collapsed_preview>
+
+        <:body>
+          <.expanded_content
+            sim_stats={@sim_stats}
+            available_chains={@available_chains}
+            selected_chains={@selected_chains}
+            selected_strategy={@selected_strategy}
+            request_rate={@request_rate}
+            load_types={@load_types}
+            simulator_running={@simulator_running}
+            myself={@myself}
+          />
+        </:body>
+      </.floating_window>
     </div>
     """
   end
@@ -459,13 +462,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         <h3 class="text-xs font-semibold text-white">Configure Test Run</h3>
         <%= if @simulator_running do %>
           <div class="flex items-center gap-1">
-            <div class="h-2 w-2 animate-pulse rounded-full bg-emerald-400"></div>
+            <.status_indicator status={:healthy} animated={true} size="h-2 w-2" />
             <span class="text-[10px] text-emerald-300">Running</span>
           </div>
         <% end %>
       </div>
-      
-    <!-- Chain Selection -->
+
+      <!-- Chain Selection -->
       <div class="space-y-2">
         <div class="flex items-center justify-between">
           <label class="text-[10px] font-medium text-gray-400">Target Chains</label>
@@ -484,9 +487,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
                 phx-click="toggle_chain_selection"
                 phx-value-chain={chain.name}
                 phx-target={@myself}
-                class={["text-[9px] rounded px-2 py-1 font-medium transition-all duration-200", if(chain.name in (@selected_chains || []),
-    do: "bg-sky-500/20 border border-sky-500 text-sky-300",
-    else: "border border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300")]}
+                class={[
+                  "text-[9px] rounded px-2 py-1 font-medium transition-all duration-200",
+                  if(chain.name in (@selected_chains || []),
+                    do: "bg-sky-500/20 border border-sky-500 text-sky-300",
+                    else: "border border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300"
+                  )
+                ]}
               >
                 {chain.display_name}
               </button>
@@ -496,8 +503,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <% end %>
         </div>
       </div>
-      
-    <!-- Routing Strategy -->
+
+      <!-- Routing Strategy -->
       <div class="space-y-2">
         <label class="text-[10px] font-medium text-gray-400">Routing Strategy</label>
         <div class="grid grid-cols-2 gap-1">
@@ -510,9 +517,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
               phx-click="select_strategy"
               phx-value-strategy={strategy}
               phx-target={@myself}
-              class={["text-[10px] rounded-lg p-2 text-left transition-all duration-200", if(@selected_strategy == strategy,
-    do: "bg-purple-500/20 border border-purple-500 text-purple-300",
-    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50")]}
+              class={[
+                "text-[10px] rounded-lg p-2 text-left transition-all duration-200",
+                if(@selected_strategy == strategy,
+                  do: "bg-purple-500/20 border border-purple-500 text-purple-300",
+                  else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50"
+                )
+              ]}
             >
               <div class="font-medium">{icon} {label}</div>
             </button>
@@ -565,35 +576,36 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <% end %>
         </div>
       </div>
-      
-    <!-- Live Statistics -->
-      <div class="bg-gray-800/40 space-y-2 rounded-lg p-3">
-        <div class="flex items-center justify-between">
-          <div class="text-xs font-medium text-gray-300">Live Statistics</div>
-        </div>
 
-        <div class="grid grid-cols-3 gap-2">
-          <div class="text-center">
-            <div class="font-mono text-lg text-emerald-400">
-              {get_stat(@sim_stats, :http, "success", 0)}
-            </div>
-            <div class="text-[9px] text-gray-400">Success</div>
-          </div>
-          <div class="text-center">
-            <div class="font-mono text-lg text-red-400">
-              {get_stat(@sim_stats, :http, "error", 0)}
-            </div>
-            <div class="text-[9px] text-gray-400">Errors</div>
-          </div>
-          <div class="text-center">
-            <div class="font-mono text-lg text-yellow-400">
-              {get_stat(@sim_stats, :http, "avgLatencyMs", 0.0)
+
+      <!-- Live Statistics -->
+      <div class="bg-gray-800/40 space-y-3 rounded-lg p-3">
+        <div class="text-xs font-medium text-gray-300">Live Statistics</div>
+
+        <.metrics_grid cols={3} class="gap-2">
+          <.metric_card
+            label="Success"
+            value={to_string(get_stat(@sim_stats, :http, "success", 0))}
+            value_class="text-emerald-400 text-lg"
+            class="p-2"
+          />
+          <.metric_card
+            label="Errors"
+            value={to_string(get_stat(@sim_stats, :http, "error", 0))}
+            value_class="text-red-400 text-lg"
+            class="p-2"
+          />
+          <.metric_card
+            label="Avg ms"
+            value={
+              "#{get_stat(@sim_stats, :http, "avgLatencyMs", 0.0)
               |> Helpers.to_float()
-              |> Float.round(0)}
-            </div>
-            <div class="text-[9px] text-gray-400">Avg ms</div>
-          </div>
-        </div>
+              |> Float.round(0)}"
+            }
+            value_class="text-yellow-400 text-lg"
+            class="p-2"
+          />
+        </.metrics_grid>
 
         <div class="text-[10px] border-gray-700/40 flex justify-between border-t pt-2">
           <div>
