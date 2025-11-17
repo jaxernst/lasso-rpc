@@ -67,6 +67,12 @@ config :lasso, :dashboard_status,
   # instead of "healthy". Set to 0 to disable lag-based status.
   lag_threshold_blocks: 2
 
+# Provider probe configuration (integrated health & block height monitoring)
+# These are fallback defaults for dynamic/test chains not defined in chains.yml
+config :lasso, :provider_probe,
+  default_probe_interval_ms: 12_000,
+  default_lag_threshold: 3
+
 # Configure JSON library
 config :phoenix, :json_library, Jason
 

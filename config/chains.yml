@@ -19,6 +19,20 @@ chains:
     chain_id: 1
     name: "Ethereum Mainnet"
 
+    # Provider health monitoring configuration
+    monitoring:
+      probe_interval_ms: 12000 # 12s - Ethereum's block time
+      lag_threshold_blocks: 3 # Exclude if provider is 3+ blocks behind (~36s)
+
+    # Per-method lag overrides for selection (higher tolerance for historical queries)
+    selection:
+      max_lag_blocks: 3 # Default: strict for state queries
+      max_lag_per_method:
+        eth_getBalance: 1 # Strictest - recent balance critical
+        eth_getTransactionCount: 1 # Strict - nonce must be current
+        eth_call: 1 # Strict - state queries
+        eth_getBlockByNumber: 50 # Most relaxed - historical blocks
+
     providers:
       - id: "alchemy_ethereum"
         name: "Alchemy Ethereum"
@@ -118,6 +132,19 @@ chains:
   base:
     chain_id: 8453
     name: "Base Mainnet"
+
+    # Provider health monitoring configuration
+    monitoring:
+      probe_interval_ms: 6000 # 6s - probe every 3 blocks (2s block time)
+      lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~10s)
+
+    # Per-method lag overrides for selection
+    selection:
+      max_lag_blocks: 5 # Default: stricter for L2 (faster blocks)
+      max_lag_per_method:
+        eth_getBalance: 2
+        eth_getTransactionCount: 2
+        eth_call: 3
 
     providers:
       # - id: "alchemy_base"

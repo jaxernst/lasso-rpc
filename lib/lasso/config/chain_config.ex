@@ -14,7 +14,8 @@ defmodule Lasso.Config.ChainConfig do
           providers: [__MODULE__.Provider.t()],
           connection: __MODULE__.Connection.t(),
           failover: __MODULE__.Failover.t(),
-          selection: __MODULE__.Selection.t() | nil
+          selection: __MODULE__.Selection.t() | nil,
+          monitoring: __MODULE__.Monitoring.t()
         }
 
   defstruct [
@@ -23,7 +24,8 @@ defmodule Lasso.Config.ChainConfig do
     :providers,
     :connection,
     :failover,
-    :selection
+    :selection,
+    :monitoring
   ]
 
   defmodule Config do
@@ -118,6 +120,30 @@ defmodule Lasso.Config.ChainConfig do
 
     defstruct max_lag_blocks: nil,
               max_lag_per_method: nil
+  end
+
+  defmodule Monitoring do
+    @moduledoc """
+    Provider health monitoring and probing configuration.
+
+    Controls the behavior of the integrated ProviderProbe system:
+    - Probe frequency (how often to query eth_blockNumber)
+    - Lag detection thresholds (when to warn about providers falling behind)
+    - Monotonicity violation thresholds (detect unstable provider backends)
+
+    These settings are chain-specific because chains have different:
+    - Block times (Ethereum: 12s, Base: 2s, Polygon: 2s)
+    - Reorg depths (Polygon is notorious for deep reorgs)
+    - Operational requirements
+    """
+
+    @type t :: %__MODULE__{
+            probe_interval_ms: non_neg_integer(),
+            lag_threshold_blocks: non_neg_integer()
+          }
+
+    defstruct probe_interval_ms: 12_000,
+              lag_threshold_blocks: 3
   end
 
   @doc """
@@ -248,7 +274,8 @@ defmodule Lasso.Config.ChainConfig do
       providers: parse_providers(chain_data["providers"]),
       connection: parse_connection(chain_data["connection"]),
       failover: parse_failover(chain_data["failover"]),
-      selection: parse_selection(chain_data["selection"])
+      selection: parse_selection(chain_data["selection"]),
+      monitoring: parse_monitoring(chain_data["monitoring"])
     }
   end
 
@@ -371,6 +398,18 @@ defmodule Lasso.Config.ChainConfig do
     %__MODULE__.Selection{
       max_lag_blocks: Map.get(selection_data, "max_lag_blocks"),
       max_lag_per_method: max_lag_per_method
+    }
+  end
+
+  defp parse_monitoring(nil) do
+    # Use default values if no monitoring config provided
+    %__MODULE__.Monitoring{}
+  end
+
+  defp parse_monitoring(monitoring_data) when is_map(monitoring_data) do
+    %__MODULE__.Monitoring{
+      probe_interval_ms: Map.get(monitoring_data, "probe_interval_ms", 12_000),
+      lag_threshold_blocks: Map.get(monitoring_data, "lag_threshold_blocks", 3)
     }
   end
 
