@@ -16,6 +16,9 @@ defmodule Lasso.Application do
         # Start PubSub for real-time messaging
         {Phoenix.PubSub, name: Lasso.PubSub},
 
+        # Start event buffer for dashboard event batching
+        LassoWeb.Dashboard.EventBuffer,
+
         # Start Telemetry supervisor for metrics and monitoring
         Lasso.Telemetry,
 

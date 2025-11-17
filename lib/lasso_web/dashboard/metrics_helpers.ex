@@ -4,7 +4,8 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   """
 
   alias Lasso.Benchmarking.BenchmarkStore
-  alias LassoWeb.Dashboard.Helpers
+  alias LassoWeb.Dashboard.{Helpers, Constants}
+  alias LassoWeb.Dashboard.Metrics.Calculations
 
   @doc "Assign chain performance metrics to assigns"
   def assign_chain_performance_metrics(assigns, chain_name) do
@@ -14,7 +15,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
     # Calculate aggregate performance metrics over 5 minutes
     now_ms = System.system_time(:millisecond)
-    window_ms = 300_000
+    window_ms = Constants.metrics_window_5min()
 
     recent_events =
       Enum.filter(assigns.routing_events, fn e ->
@@ -26,15 +27,9 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       |> Enum.map(&(&1[:duration_ms] || 0))
       |> Enum.filter(&(&1 > 0))
 
-    {p50, p95} = Helpers.percentile_pair(latencies)
+    {p50, p95} = Calculations.percentile_pair(latencies)
 
-    success_rate =
-      if length(recent_events) > 0 do
-        successes = Enum.count(recent_events, fn e -> e[:result] == :success end)
-        Float.round(successes * 100.0 / length(recent_events), 1)
-      else
-        nil
-      end
+    success_rate = Calculations.success_rate(recent_events)
 
     failovers_5m = Enum.count(recent_events, fn e -> (e[:failovers] || 0) > 0 end)
 
@@ -74,92 +69,18 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
         _ -> nil
       end
 
-    if chain do
-      provider_score = BenchmarkStore.get_provider_score(chain, provider_id)
-      real_time_stats = BenchmarkStore.get_real_time_stats(chain, provider_id)
-      anomalies = BenchmarkStore.detect_performance_anomalies(chain, provider_id)
+    metrics =
+      if chain do
+        calculate_provider_metrics(chain, provider_id, assigns.routing_events)
+      else
+        empty_provider_metrics()
+      end
 
-      now_ms = System.system_time(:millisecond)
-      five_min_ms = 300_000
-      hour_ms = 3_600_000
-
-      events_5m =
-        Enum.filter(assigns.routing_events, fn e ->
-          e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-        end)
-
-      latencies_5m =
-        events_5m
-        |> Enum.map(&(&1[:duration_ms] || 0))
-        |> Enum.filter(&(&1 > 0))
-
-      {p50, p95} = Helpers.percentile_pair(latencies_5m)
-
-      success_rate =
-        if length(events_5m) > 0 do
-          successes = Enum.count(events_5m, fn e -> e[:result] == :success end)
-          Float.round(successes * 100.0 / length(events_5m), 1)
-        else
-          nil
-        end
-
-      calls_last_minute = Map.get(real_time_stats, :calls_last_minute, 0)
-
-      calls_last_hour =
-        assigns.routing_events
-        |> Enum.count(fn e ->
-          e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - hour_ms
-        end)
-
-      # Provider pick share among chain decisions in 5m
-      chain_events_5m =
-        Enum.filter(assigns.routing_events, fn e ->
-          e[:chain] == chain and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-        end)
-
-      pick_share_5m =
-        if length(chain_events_5m) > 0 do
-          100.0 * Enum.count(chain_events_5m, fn e -> e[:provider_id] == provider_id end) /
-            length(chain_events_5m)
-        else
-          0.0
-        end
-
-      Map.put(assigns, :performance_metrics, %{
-        provider_score: Float.round(provider_score || 0.0, 2),
-        p50_latency: p50,
-        p95_latency: p95,
-        success_rate: success_rate,
-        calls_last_minute: calls_last_minute,
-        calls_last_5m: length(events_5m),
-        calls_last_hour: calls_last_hour,
-        racing_stats: Map.get(real_time_stats, :racing_stats, []),
-        rpc_stats: Map.get(real_time_stats, :rpc_stats, []),
-        anomalies: anomalies || [],
-        recent_activity_count: length(events_5m),
-        pick_share_5m: pick_share_5m
-      })
-    else
-      Map.put(assigns, :performance_metrics, %{
-        provider_score: 0.0,
-        p50_latency: nil,
-        p95_latency: nil,
-        success_rate: nil,
-        calls_last_minute: 0,
-        calls_last_5m: 0,
-        calls_last_hour: 0,
-        racing_stats: [],
-        rpc_stats: [],
-        anomalies: [],
-        recent_activity_count: 0,
-        pick_share_5m: 0.0
-      })
-    end
+    Map.put(assigns, :performance_metrics, metrics)
   end
 
   @doc "Get provider performance metrics (non-socket version)"
   def get_provider_performance_metrics(provider_id, connections \\ [], routing_events \\ []) do
-    require Logger
     # Get the chain for this provider
     chain =
       case Enum.find(connections, &(&1.id == provider_id)) do
@@ -168,86 +89,88 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       end
 
     if chain do
-      provider_score = BenchmarkStore.get_provider_score(chain, provider_id)
-      real_time_stats = BenchmarkStore.get_real_time_stats(chain, provider_id)
-      anomalies = BenchmarkStore.detect_performance_anomalies(chain, provider_id)
-
-      now_ms = System.system_time(:millisecond)
-      five_min_ms = 300_000
-      hour_ms = 3_600_000
-
-      events_5m =
-        Enum.filter(routing_events, fn e ->
-          e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-        end)
-
-      latencies_5m =
-        events_5m
-        |> Enum.map(&(&1[:duration_ms] || 0))
-        |> Enum.filter(&(&1 > 0))
-
-      {p50, p95} = Helpers.percentile_pair(latencies_5m)
-
-      success_rate =
-        if length(events_5m) > 0 do
-          successes = Enum.count(events_5m, fn e -> e[:result] == :success end)
-          Float.round(successes * 100.0 / length(events_5m), 1)
-        else
-          nil
-        end
-
-      calls_last_minute = Map.get(real_time_stats, :calls_last_minute, 0)
-
-      calls_last_hour =
-        routing_events
-        |> Enum.count(fn e ->
-          e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - hour_ms
-        end)
-
-      # Provider pick share among chain decisions in 5m
-      chain_events_5m =
-        Enum.filter(routing_events, fn e ->
-          e[:chain] == chain and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-        end)
-
-      pick_share_5m =
-        if length(chain_events_5m) > 0 do
-          100.0 * Enum.count(chain_events_5m, fn e -> e[:provider_id] == provider_id end) /
-            length(chain_events_5m)
-        else
-          0.0
-        end
-
-      %{
-        provider_score: Float.round(provider_score || 0.0, 2),
-        p50_latency: p50,
-        p95_latency: p95,
-        success_rate: success_rate,
-        calls_last_minute: calls_last_minute,
-        calls_last_5m: length(events_5m),
-        calls_last_hour: calls_last_hour,
-        racing_stats: Map.get(real_time_stats, :racing_stats, []),
-        rpc_stats: Map.get(real_time_stats, :rpc_stats, []),
-        anomalies: anomalies || [],
-        recent_activity_count: length(events_5m),
-        pick_share_5m: pick_share_5m
-      }
+      calculate_provider_metrics(chain, provider_id, routing_events)
     else
-      %{
-        provider_score: 0.0,
-        p50_latency: nil,
-        p95_latency: nil,
-        success_rate: nil,
-        calls_last_minute: 0,
-        calls_last_5m: 0,
-        calls_last_hour: 0,
-        racing_stats: [],
-        rpc_stats: [],
-        anomalies: [],
-        recent_activity_count: 0,
-        pick_share_5m: 0.0
-      }
+      empty_provider_metrics()
     end
+  end
+
+  # Private: Calculate provider metrics (shared logic)
+  defp calculate_provider_metrics(chain, provider_id, routing_events) do
+    provider_score = BenchmarkStore.get_provider_score(chain, provider_id)
+    real_time_stats = BenchmarkStore.get_real_time_stats(chain, provider_id)
+    anomalies = BenchmarkStore.detect_performance_anomalies(chain, provider_id)
+
+    now_ms = System.system_time(:millisecond)
+    five_min_ms = Constants.metrics_window_5min()
+    hour_ms = Constants.metrics_window_1hour()
+
+    events_5m =
+      Enum.filter(routing_events, fn e ->
+        e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - five_min_ms
+      end)
+
+    latencies_5m =
+      events_5m
+      |> Enum.map(&(&1[:duration_ms] || 0))
+      |> Enum.filter(&(&1 > 0))
+
+    {p50, p95} = Calculations.percentile_pair(latencies_5m)
+    success_rate = Calculations.success_rate(events_5m)
+
+    calls_last_minute = Map.get(real_time_stats, :calls_last_minute, 0)
+
+    calls_last_hour =
+      routing_events
+      |> Enum.count(fn e ->
+        e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - hour_ms
+      end)
+
+    # Provider pick share among chain decisions in 5m
+    chain_events_5m =
+      Enum.filter(routing_events, fn e ->
+        e[:chain] == chain and (e[:ts_ms] || 0) >= now_ms - five_min_ms
+      end)
+
+    pick_share_5m =
+      if length(chain_events_5m) > 0 do
+        100.0 * Enum.count(chain_events_5m, fn e -> e[:provider_id] == provider_id end) /
+          length(chain_events_5m)
+      else
+        0.0
+      end
+
+    %{
+      provider_score: Float.round(provider_score || 0.0, 2),
+      p50_latency: p50,
+      p95_latency: p95,
+      success_rate: success_rate,
+      calls_last_minute: calls_last_minute,
+      calls_last_5m: length(events_5m),
+      calls_last_hour: calls_last_hour,
+      racing_stats: Map.get(real_time_stats, :racing_stats, []),
+      rpc_stats: Map.get(real_time_stats, :rpc_stats, []),
+      anomalies: anomalies || [],
+      recent_activity_count: length(events_5m),
+      pick_share_5m: pick_share_5m
+    }
+  end
+
+  defp empty_provider_metrics do
+    %{
+      provider_score: 0.0,
+      p50_latency: nil,
+      p95_latency: nil,
+      success_rate: nil,
+      calls_last_minute: 0,
+      calls_last_5m: 0,
+      calls_last_hour: 0,
+      racing_stats: [],
+      rpc_stats: [],
+      anomalies: [],
+      recent_activity_count: 0,
+      pick_share_5m: 0.0
+    }
   end
 
   @doc "Get chain performance metrics (non-socket version)"
@@ -278,7 +201,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       |> Enum.map(&(&1[:duration_ms] || 0))
       |> Enum.filter(&(&1 > 0))
 
-    {p50, p95} = Helpers.percentile_pair(latencies)
+    {p50, p95} = Calculations.percentile_pair(latencies)
 
     # Calculate failovers in the last 5 minutes
     failovers_5m = Enum.count(recent_events, &((&1[:failover_count] || 0) > 0))

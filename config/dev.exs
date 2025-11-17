@@ -22,7 +22,7 @@ config :lasso, LassoWeb.Endpoint,
 # Enhanced logging for development debugging
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
-  level: :debug,
+  level: :info,
   metadata: :all
 
 # Reduce Phoenix debug log spam (only log at info level)

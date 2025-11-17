@@ -4,6 +4,7 @@ defmodule LassoWeb.Components.DashboardComponents do
   """
 
   use Phoenix.Component
+  import LassoWeb.UI.FormComponents
 
   # Floating Chain Configuration Window (top-left)
   def floating_chain_config_window(assigns) do
@@ -178,36 +179,30 @@ defmodule LassoWeb.Components.DashboardComponents do
     <!-- Basic Chain Information -->
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2">
-          <label class="text-[11px] mb-1 block font-medium text-gray-400">Chain Name</label>
-          <input
-            type="text"
+          <.form_field
+            label="Chain Name"
             name="chain[name]"
             value={Map.get(@form_data, :name, String.capitalize(@selected_chain))}
-            phx-debounce="300"
-            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
             placeholder="e.g., Ethereum Mainnet"
+            phx-debounce="300"
           />
         </div>
         <div>
-          <label class="text-[11px] mb-1 block font-medium text-gray-400">Chain ID</label>
-          <input
-            type="number"
+          <.number_field
+            label="Chain ID"
             name="chain[chain_id]"
             value={Map.get(@form_data, :chain_id, "")}
-            phx-debounce="300"
-            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
             placeholder="1"
+            phx-debounce="300"
           />
         </div>
         <div>
-          <label class="text-[11px] mb-1 block font-medium text-gray-400">Block Time (ms)</label>
-          <input
-            type="number"
+          <.number_field
+            label="Block Time (ms)"
             name="chain[block_time]"
             value={Map.get(@form_data, :block_time, 12_000)}
-            phx-debounce="300"
-            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
             placeholder="12000"
+            phx-debounce="300"
           />
         </div>
       </div>
@@ -318,47 +313,39 @@ defmodule LassoWeb.Components.DashboardComponents do
       <div class="text-sm font-semibold text-gray-300">Add Provider</div>
       <div class="grid grid-cols-2 gap-2">
         <div>
-          <label class="text-[11px] mb-1 block text-gray-400">Chain Name</label>
-          <input
-            type="text"
+          <.form_field
+            label="Chain Name"
             name="qa[name]"
             value={Map.get(@quick_add_data, :name, "")}
             placeholder="e.g., Arbitrum"
             phx-debounce="300"
-            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
           />
         </div>
         <div>
-          <label class="text-[11px] mb-1 block text-gray-400">Chain ID</label>
-          <input
-            type="number"
+          <.number_field
+            label="Chain ID"
             name="qa[chain_id]"
             value={Map.get(@quick_add_data, :chain_id, "")}
             placeholder="42161"
             phx-debounce="300"
-            class="bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
           />
         </div>
         <div class="col-span-2">
-          <label class="text-[11px] mb-1 block text-gray-400">HTTP URL</label>
-          <input
-            type="url"
+          <.url_field
+            label="HTTP URL"
             name="qa[url]"
             value={Map.get(@quick_add_data, :url, "")}
             placeholder="https://rpc.example.com"
             phx-debounce="300"
-            class="bg-gray-900/60 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
           />
         </div>
         <div class="col-span-2">
-          <label class="text-[11px] mb-1 block text-gray-400">WS URL (optional)</label>
-          <input
-            type="url"
+          <.url_field
+            label="WS URL (optional)"
             name="qa[ws_url]"
             value={Map.get(@quick_add_data, :ws_url, "")}
             placeholder="wss://ws.example.com"
             phx-debounce="300"
-            class="bg-gray-900/60 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
           />
         </div>
       </div>
