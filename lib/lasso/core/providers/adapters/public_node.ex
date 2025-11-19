@@ -2,90 +2,132 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   @moduledoc """
   PublicNode Ethereum adapter.
 
-
+  PublicNode is a free public RPC provider with significant limitations:
+  - No eth_getLogs or filter methods
+  - No debug/trace methods
+  - Limited archive depth (~1000 blocks)
+  - Aggressive rate limiting
 
   ## Error Messages Observed
 
   - "Please, specify less number of addresses" (Production logs 2025-01-05)
+  - "This range of parameters is not supported"
 
   ## Implementation Strategy
 
-  - Phase 1: Only `eth_getLogs` needs validation, all others skip params
-  - Phase 2: Efficient early-exit counting to avoid full list traversal
-  - Fail open: If we can't parse block numbers, allow the request
+  - Phase 1: Block entire unsupported categories and specific methods
+  - Phase 2: Validate archive depth for state methods
+  - Fail safe: Conservative limits to avoid rejection
 
   Delegates normalization to Generic adapter using `defdelegate` for clarity and simplicity.
   """
 
   @behaviour Lasso.RPC.ProviderAdapter
 
-  alias Lasso.RPC.Providers.Generic
+  alias Lasso.RPC.{MethodRegistry, Providers.Generic}
 
-  import Lasso.RPC.Providers.AdapterHelpers
+  @max_archive_depth 1000
 
-  @doc """
-  Default request params limits validated with an empircal test on 10/07/2025:
-  http limit is 50, ws limit is 30
-
-  Update 10/08/2025:
-  This seems to be a dynamic limit that changes, so default to more conservative values.
-
-  Can be overridden per-provider via adapter_config.
-  """
-  @default_max_addresses_http 25
-  @default_max_addresses_ws 20
-
-  # Capability Validation
+  # ============================================
+  # Phase 1: Method-Level Filtering (Fast)
+  # ============================================
 
   @impl true
-  def supports_method?(_method, _t, _c), do: :ok
+  def supports_method?(method, _transport, _context) do
+    category = MethodRegistry.method_category(method)
 
-  @impl true
-  def validate_params("eth_getLogs", params, transport, ctx) do
-    with :ok <- validate_address_inclusion(params),
-         :ok <- validate_address_count(params, transport, ctx) do
-      :ok
-    else
-      {:error, reason} = err ->
-        :telemetry.execute([:lasso, :capabilities, :param_reject], %{count: 1}, %{
-          adapter: __MODULE__,
-          method: "eth_getLogs",
-          reason: reason
-        })
+    cond do
+      # Unsupported categories
+      category in [:debug, :trace, :txpool, :local_only] ->
+        {:error, :method_unsupported}
 
-        err
+      # Specific unsupported methods (filters)
+      method in ["eth_getLogs", "eth_newFilter", "eth_getFilterChanges",
+                 "eth_getFilterLogs", "eth_uninstallFilter"] ->
+        {:error, :method_unsupported}
+
+      # Subscriptions require WebSocket (handled by TransportPolicy)
+      category == :subscriptions ->
+        :ok
+
+      # All other standard methods supported
+      true ->
+        :ok
     end
   end
 
-  def validate_params(_method, _params, _t, _c), do: :ok
+  # ============================================
+  # Phase 2: Parameter Validation (Slow)
+  # ============================================
 
-  # Private validation helpers
-
-  # Requires address param to be included in requests
-  defp validate_address_inclusion([%{"address" => _}]), do: :ok
-
-  defp validate_address_inclusion(_),
-    do: {:error, {:param_limit, "address or addresses not found"}}
-
-  defp validate_address_count([%{"address" => addrs}], transport, ctx) when is_list(addrs) do
-    max_addresses = get_max_addresses(transport, ctx)
-
-    # Early-exit counting for performance
-    count =
-      Enum.reduce_while(addrs, 0, fn _, acc ->
-        if acc + 1 > max_addresses, do: {:halt, acc + 1}, else: {:cont, acc + 1}
-      end)
-
-    if count <= max_addresses,
-      do: :ok,
-      else: {:error, {:param_limit, "max #{max_addresses} addresses (got #{count})"}}
+  @impl true
+  def validate_params("eth_call", params, _transport, context) do
+    # PublicNode has limited archive depth
+    validate_archive_depth(params, context)
   end
 
-  defp validate_address_count(_, _, _), do: :ok
+  def validate_params("eth_getBalance", params, _transport, context) do
+    validate_archive_depth(params, context)
+  end
 
-  defp get_max_addresses(:ws, ctx), do: get_adapter_config(ctx, :max_addresses_ws, @default_max_addresses_ws)
-  defp get_max_addresses(:http, ctx), do: get_adapter_config(ctx, :max_addresses_http, @default_max_addresses_http)
-  defp get_max_addresses(_, ctx), do: get_adapter_config(ctx, :max_addresses_http, @default_max_addresses_http)
+  def validate_params("eth_getCode", params, _transport, context) do
+    validate_archive_depth(params, context)
+  end
+
+  def validate_params("eth_getStorageAt", params, _transport, context) do
+    validate_archive_depth(params, context)
+  end
+
+  def validate_params("eth_getTransactionCount", params, _transport, context) do
+    validate_archive_depth(params, context)
+  end
+
+  def validate_params(_method, _params, _transport, _context), do: :ok
+
+  # ============================================
+  # Private Helpers
+  # ============================================
+
+  defp validate_archive_depth(params, context) do
+    block_param = List.last(params)
+
+    case parse_block_param(block_param) do
+      {:ok, :latest} ->
+        :ok
+
+      {:ok, block_num} when is_integer(block_num) ->
+        current_block = Map.get(context, :current_block, :latest)
+
+        if current_block == :latest do
+          :ok  # Can't validate without current block
+        else
+          age = current_block - block_num
+
+          if age <= @max_archive_depth do
+            :ok
+          else
+            {:error, {:requires_archival,
+              "Block is #{age} blocks old, PublicNode max: #{@max_archive_depth}"}}
+          end
+        end
+
+      _ ->
+        :ok  # Can't parse, let provider decide
+    end
+  end
+
+  defp parse_block_param("latest"), do: {:ok, :latest}
+  defp parse_block_param("earliest"), do: {:ok, 0}
+  defp parse_block_param("pending"), do: {:ok, :latest}
+
+  defp parse_block_param("0x" <> hex) do
+    case Integer.parse(hex, 16) do
+      {num, ""} -> {:ok, num}
+      _ -> {:error, :invalid_hex}
+    end
+  end
+
+  defp parse_block_param(_), do: {:error, :invalid_format}
 
   # Normalization - delegate to Generic adapter
 
@@ -101,32 +143,38 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
   @impl true
   defdelegate headers(ctx), to: Generic
 
+  # ============================================
   # Error Classification
+  # ============================================
 
   @impl true
-  # PublicNode uses -32701 for capability violations (address requirements)
+  # PublicNode uses -32701 for capability violations (address requirements, parameter ranges)
   def classify_error(-32_701, _message), do: {:ok, :capability_violation}
 
-  # Message pattern: "specify less number of addresses" or "specify an address"
   def classify_error(_code, message) when is_binary(message) do
-    message_lower = String.downcase(message)
-
     cond do
-      String.contains?(message_lower, "specify less number of addresses") ->
+      String.contains?(message, "This range of parameters is not supported") ->
         {:ok, :capability_violation}
 
-      String.contains?(message_lower, "specify an address") ->
+      String.contains?(message, "specify less number of addresses") ->
         {:ok, :capability_violation}
+
+      String.contains?(message, "specify an address") ->
+        {:ok, :capability_violation}
+
+      String.contains?(message, "pruned") ->
+        {:ok, :requires_archival}
 
       true ->
         :default
     end
   end
 
-  # All other errors: defer to centralized classification
   def classify_error(_code, _message), do: :default
 
+  # ============================================
   # Metadata
+  # ============================================
 
   @impl true
   def metadata do
@@ -134,14 +182,23 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
       type: :public,
       tier: :free,
       known_limitations: [
-        "eth_getLogs: max #{@default_max_addresses_http} addresses (HTTP), #{@default_max_addresses_ws} addresses (WS) - default, configurable per-chain"
+        "No eth_getLogs support",
+        "No filter methods (eth_newFilter, etc.)",
+        "Limited archive depth (~#{@max_archive_depth} blocks)",
+        "No debug/trace methods",
+        "Aggressive rate limiting"
       ],
-      sources: ["Production error logs", "Community documentation"],
-      last_verified: ~D[2025-01-05],
-      configurable_limits: [
-        max_addresses_http: "Maximum addresses for eth_getLogs HTTP requests (default: #{@default_max_addresses_http})",
-        max_addresses_ws: "Maximum addresses for eth_getLogs WebSocket requests (default: #{@default_max_addresses_ws})"
-      ]
+      unsupported_categories: [:debug, :trace, :filters, :txpool, :local_only],
+      unsupported_methods: ["eth_getLogs", "eth_newFilter", "eth_getFilterChanges",
+                            "eth_getFilterLogs", "eth_uninstallFilter"],
+      conditional_support: %{
+        "eth_call" => "Recent blocks only (~#{@max_archive_depth} block depth)",
+        "eth_getBalance" => "Recent blocks only (~#{@max_archive_depth} block depth)",
+        "eth_getCode" => "Recent blocks only (~#{@max_archive_depth} block depth)",
+        "eth_getStorageAt" => "Recent blocks only (~#{@max_archive_depth} block depth)",
+        "eth_getTransactionCount" => "Recent blocks only (~#{@max_archive_depth} block depth)"
+      },
+      last_verified: ~D[2025-01-17]
     }
   end
 end

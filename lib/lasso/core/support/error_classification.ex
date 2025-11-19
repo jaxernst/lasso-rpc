@@ -108,41 +108,64 @@ defmodule Lasso.RPC.ErrorClassification do
     "maximum number of addresses",
     "max addresses",
     "too many addresses",
+    "specify less number of addresses",  # PublicNode
+    "specify an address",  # PublicNode
     # Block range constraints
+    "block range exceeded",
     "max block range",
     "block range too large",
     "range too large",
+    "range not supported",
+    "this range of parameters is not supported",  # PublicNode
     "exceeds maximum block range",
     "invalid block range",
     "max is 1k blocks",
     "range is too large",
     "blocks are not supported",
+    "ranges over",  # DRPC
+    "is limited to",  # 1RPC
     # Archival/historical data
     "archive node required",
     "requires archival",
     "archival data not available",
+    "archival not available",
     "historical data not supported",
+    "pruned",
+    "missing trie node",  # Geth pruned data
     # Feature availability
     "tracing not enabled",
     "debug not available",
     "trace not supported",
     "method not available",
+    "method unavailable",
+    "not supported",
+    "not available",
+    "not enabled",
+    "does not support",
     # Result size limits
     "unsupported parameter range",
     "unsupported param range",
     "limit exceeded for this method",
     "result set too large",
+    "result limit exceeded",
     "query returned more than",
     "too many results",
+    "too many logs",
     "exceeds limit",
+    "exceeds maximum",
     "limit reached",
-    # Provider-specific limitations
+    # Tier/plan restrictions
     "dedicated full node",
     "remove restrictions",
     "order a dedicated",
     "upgrade",
+    "upgrade your plan",
+    "upgrade your tier",
     "premium plan",
-    "paid plan"
+    "paid plan",
+    "paid tier",
+    "timeout on the free tier",  # DRPC
+    "feature not enabled"
   ]
 
   # ===========================================================================

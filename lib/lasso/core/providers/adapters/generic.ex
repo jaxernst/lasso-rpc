@@ -73,7 +73,12 @@ defmodule Lasso.RPC.Providers.Generic do
   def metadata do
     %{
       type: :default,
-      description: "Standard JSON-RPC 2.0 adapter (assumes all methods supported)"
+      tier: :unknown,
+      known_limitations: [],
+      unsupported_categories: [],
+      unsupported_methods: [],
+      conditional_support: %{},
+      last_verified: ~D[2025-01-17]
     }
   end
 

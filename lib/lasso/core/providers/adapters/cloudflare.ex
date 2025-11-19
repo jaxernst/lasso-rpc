@@ -2,6 +2,12 @@ defmodule Lasso.RPC.Providers.Adapters.Cloudflare do
   @moduledoc """
   Cloudflare Ethereum Gateway adapter.
 
+  Cloudflare provides a free public RPC gateway with significant restrictions:
+  - No eth_getLogs or filter methods
+  - No debug/trace methods
+  - No mempool methods (eth_sendRawTransaction)
+  - Read-only methods only
+
   ## Known Limitations (as of 2025-01-06)
 
   - No `eth_getLogs` support
@@ -15,42 +21,34 @@ defmodule Lasso.RPC.Providers.Adapters.Cloudflare do
 
   ## Implementation Strategy
 
-  Uses compile-time function clause generation for O(1) pattern matching on unsupported methods.
-  This is more efficient than runtime list membership checks.
+  Uses MethodRegistry for category-based filtering with compile-time function clauses
+  for O(1) pattern matching on unsupported methods.
 
   Delegates normalization to Generic adapter using `defdelegate` for clarity and simplicity.
   """
 
   @behaviour Lasso.RPC.ProviderAdapter
 
-  alias Lasso.RPC.Providers.Generic
+  alias Lasso.RPC.{MethodRegistry, Providers.Generic}
 
-  # Methods explicitly unsupported by Cloudflare
-  @unsupported_methods [
-    "eth_getLogs",
-    "eth_getFilterLogs",
-    "eth_newFilter",
-    "eth_newBlockFilter",
-    "eth_getFilterChanges",
-    "eth_uninstallFilter"
-  ]
+  # ============================================
+  # Phase 1: Method-Level Filtering (Fast)
+  # ============================================
 
-  # Capability Validation
+  @impl true
+  def supports_method?(method, _transport, _context) do
+    category = MethodRegistry.method_category(method)
 
-  # Compile-time function clauses for unsupported methods (O(1) pattern matching)
-  for method <- @unsupported_methods do
-    @impl true
-    def supports_method?(unquote(method), _t, _c), do: {:error, :method_unsupported}
+    cond do
+      # Unsupported categories
+      category in [:debug, :trace, :filters, :txpool, :local_only, :mempool] ->
+        {:error, :method_unsupported}
+
+      # All other standard methods supported
+      true ->
+        :ok
+    end
   end
-
-  @impl true
-  def supports_method?("debug_" <> _, _t, _c), do: {:error, :method_unsupported}
-
-  @impl true
-  def supports_method?("trace_" <> _, _t, _c), do: {:error, :method_unsupported}
-
-  @impl true
-  def supports_method?(_method, _t, _c), do: :ok
 
   @impl true
   def validate_params(_method, _params, _t, _c), do: :ok
@@ -87,21 +85,26 @@ defmodule Lasso.RPC.Providers.Adapters.Cloudflare do
   # All other errors: defer to centralized classification
   def classify_error(_code, _message), do: :default
 
+  # ============================================
   # Metadata
+  # ============================================
 
   @impl true
   def metadata do
     %{
       type: :public,
       tier: :free,
-      documentation: "https://developers.cloudflare.com/web3/ethereum-gateway/",
       known_limitations: [
         "No eth_getLogs support",
         "No filter methods (eth_getFilterLogs, eth_newFilter, etc.)",
         "No debug/trace methods",
-        "Rate limits apply"
+        "No mempool methods (eth_sendRawTransaction)",
+        "Read-only methods only"
       ],
-      last_verified: ~D[2025-01-06]
+      unsupported_categories: [:debug, :trace, :filters, :txpool, :local_only, :mempool],
+      unsupported_methods: [],
+      conditional_support: %{},
+      last_verified: ~D[2025-01-17]
     }
   end
 end
