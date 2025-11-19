@@ -7,7 +7,7 @@ defmodule LassoWeb.Components.DashboardHeader do
   def header(assigns) do
     ~H"""
     <!-- Header -->
-    <div class="border-gray-700/50 relative flex-shrink-0 border-b">
+    <div class={["relative flex-shrink-0", if(@active_tab == "docs", do: "", else: "border-gray-700/50 border-b")]}>
       <div class="relative flex items-center justify-between px-6 py-4">
         <!-- Title Section -->
         <div class="flex items-center space-x-4">
@@ -47,39 +47,21 @@ defmodule LassoWeb.Components.DashboardHeader do
             </div>
           </div>
         </div>
-
-        <!-- Navigation and Actions -->
+        
+    <!-- Navigation and Actions -->
         <div class="flex items-center gap-4">
-          <!-- Home Button -->
+          <!-- Home / Landing -->
           <a
             href="/docs"
-            class={[
-              "group relative flex h-10 w-10 items-center justify-center rounded-lg border backdrop-blur-sm transition-all",
-              if(@active_tab == "docs",
-                do:
-                  "border-purple-500/50 bg-purple-500/10 shadow-lg shadow-purple-500/25",
-                else:
-                  "border-gray-700/50 bg-gray-900/50 hover:border-purple-500/50 hover:bg-purple-500/10"
-              )
-            ]}
+            class={["group bg-gray-900/50 border-gray-700/50 relative flex h-10 w-10 items-center justify-center rounded-lg border backdrop-blur-sm transition-all hover:border-purple-500/60 hover:bg-purple-500/10", if(@active_tab == "docs",
+    do: "border-purple-500/80 bg-purple-500/10 shadow-[0_0_20px_rgba(168,85,247,0.35)]",
+    else: "")]}
             title="Home"
           >
-            <div class={[
-              "absolute inset-0 rounded-lg bg-gradient-to-br transition-opacity",
-              if(@active_tab == "docs",
-                do: "from-purple-500/10 to-purple-500/5 opacity-100",
-                else: "from-purple-500/0 to-purple-500/0 opacity-0 group-hover:from-purple-500/10 group-hover:to-purple-500/5 group-hover:opacity-100"
-              )
-            ]}>
+            <div class="from-purple-500/0 to-purple-500/0 absolute inset-0 rounded-lg bg-gradient-to-br opacity-0 transition-opacity group-hover:from-purple-500/10 group-hover:to-purple-500/5 group-hover:opacity-100">
             </div>
             <svg
-              class={[
-                "relative z-10 h-5 w-5 transition-colors",
-                if(@active_tab == "docs",
-                  do: "text-purple-400",
-                  else: "text-gray-400 group-hover:text-purple-400"
-                )
-              ]}
+              class="relative z-10 h-5 w-5 text-gray-400 transition-colors group-hover:text-purple-400"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -88,12 +70,12 @@ defmodule LassoWeb.Components.DashboardHeader do
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 stroke-width="2"
-                d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+                d="M3 9.75L12 3l9 6.75V20a1 1 0 01-1 1h-5.25a.75.75 0 01-.75-.75V15a1 1 0 00-1-1H11a1 1 0 00-1 1v5.25A.75.75 0 019.25 21H4a1 1 0 01-1-1V9.75z"
               />
             </svg>
           </a>
-
-          <!-- Navigation Tabs -->
+          
+    <!-- Navigation Tabs -->
           <.tab_switcher
             id="main-tabs"
             tabs={[
