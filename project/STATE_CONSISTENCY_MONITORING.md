@@ -1,7 +1,24 @@
 # State Consistency & Hidden Issues Analysis
 
-**Date:** 2025-01-10
+**Date:** 2025-01-10 (Updated: 2025-01-18)
 **Scope:** Deep dive into blockchain state consistency, reorgs, and other critical infrastructure issues for Lasso RPC proxy
+**Status:** Design document - basic probing implemented, advanced features pending
+
+---
+
+## Implementation Status
+
+**Implemented (Jan 2025):**
+- ✅ Provider probing via `ProviderProbe` (periodic `eth_blockNumber` checks)
+- ✅ Consensus height calculation via `ChainState` (lazy on-demand calculation)
+- ✅ Provider lag tracking in ProviderPool ETS
+- ✅ Basic telemetry for probe cycles
+
+**Pending Implementation:**
+- ❌ Lag-aware provider selection (filtering providers >N blocks behind)
+- ❌ Reorg detection and handling
+- ❌ Finality-aware routing ("safe" vs "finalized" blocks)
+- ❌ Chain ID validation in selection logic
 
 ---
 
@@ -10,10 +27,10 @@
 **Your concern is valid and represents a real production risk.** The issue of routing requests to nodes with inconsistent state is a well-documented problem in blockchain RPC infrastructure. However, you're **well-positioned to solve this** with your current architecture - you already have most of the primitives needed.
 
 **Good News:**
-- You're already tracking provider block heights and lag via `BlockchainMetadataMonitor`
+- You're already tracking provider block heights and lag via `ProviderProbe` + `ChainState`
 - Your architecture has the foundation for solving this (see "Best Sync Strategy" in your roadmap)
 - You have WebSocket gap-filling during failover, which handles some consistency issues
-- Provider lag detection is already implemented (`lag_threshold_blocks`)
+- Provider lag detection is already implemented and stored in ProviderPool
 
 **Bad News:**
 - This system is not currently integrated into provider selection
@@ -111,39 +128,43 @@ Currently, Lasso has **no reorg detection**. If you failover from Provider A to 
 
 ### 2.1 What You Have (Good Foundation)
 
-#### BlockchainMetadataMonitor ✅
-**File:** `lib/lasso/core/caching/blockchain_metadata_monitor.ex`
+#### ProviderProbe + ChainState ✅ (Implemented Jan 2025)
+**Files:**
+- `lib/lasso/core/providers/provider_probe.ex` - Probe execution
+- `lib/lasso/core/chain_state.ex` - Consensus calculation
+- `lib/lasso/core/providers/provider_pool.ex` - State storage
 
 ```elixir
-# Probes providers every 10s for block heights
-def probe_provider(chain, provider, timeout_ms) do
-  # Fetches eth_blockNumber and eth_chainId
-  # Caches results in ETS
-  # Computes lag: provider_height - best_height
-end
+# ProviderProbe: Executes periodic probes (every 12s default)
+# - Probes all providers concurrently via eth_blockNumber
+# - Reports results to ProviderPool (fire-and-forget)
+# - Tracks latency and errors
 
-# Detects lagging providers
-if lag < -lag_threshold_blocks do  # Default: -10 blocks
-  telemetry_provider_lag_detected(chain, provider_id, lag)
-  Logger.info("Provider lagging behind", lag_blocks: lag)
-end
+# ChainState: On-demand consensus calculation
+{:ok, consensus_height} = ChainState.consensus_height("ethereum")
+# => {:ok, 21_845_678}  # Max height from recent probes (<1ms)
+
+# Provider lag lookup
+{:ok, lag} = ChainState.provider_lag("ethereum", "alchemy")
+# => {:ok, -5}  # 5 blocks behind consensus
 ```
 
 **What this gives you:**
 - Real-time block height tracking per provider
-- Lag detection (providers behind by N blocks)
-- Fast cache lookups (<5μs) for current best height
+- Lazy consensus calculation (no stale cache issues)
+- Provider lag detection relative to consensus
+- Fast lookups (<1ms consensus, <5μs lag)
 
 **What it DOESN'T give you:**
 - Integration with provider selection (lag data not used in routing)
 - Reorg detection (height alone doesn't detect chain forks)
-- Chain ID validation (cached but not enforced during selection)
+- Chain ID validation (not enforced during selection)
 - Finality awareness (no concept of "safe" vs "finalized" blocks)
 
-#### Provider Lag Telemetry ✅
+#### Provider Lag Data ✅
 ```elixir
-BlockchainMetadataCache.get_provider_lag("ethereum", "alchemy")
-# => {:ok, -5}  (5 blocks behind)
+ChainState.provider_lag("ethereum", "alchemy")
+# => {:ok, -5}  (5 blocks behind consensus)
 ```
 
 This exists but is **not used in selection logic** (Selection.ex doesn't check lag).
@@ -387,10 +408,10 @@ defmodule Lasso.RPC.BlockHashTracker do
 end
 ```
 
-#### B. Integrate with BlockchainMetadataMonitor
+#### B. Integrate with ProviderProbe
 ```elixir
-# In blockchain_metadata_monitor.ex probe_provider/3
-defp probe_provider(chain, provider, timeout_ms) do
+# In provider_probe.ex probe_provider/3
+defp probe_provider(chain, provider, sequence) do
   # ... existing eth_blockNumber probe
 
   # Add block hash tracking
@@ -423,8 +444,8 @@ defp handle_reorg_detected(chain, provider_id, details) do
     provider_id: provider_id
   })
 
-  # 2. Invalidate affected cached data
-  BlockchainMetadataCache.invalidate_recent_blocks(chain, details.depth)
+  # 2. Trigger consensus recalculation
+  # ChainState automatically recalculates on next call (no caching)
 
   # 3. Trigger consistency check across providers
   # (ensure all providers see same chain)
@@ -438,10 +459,10 @@ end
 ### 4.3 Phase 3: Finality Awareness (P1 - 6 weeks)
 
 #### A. Track Safe & Finalized Heads
-**Extend BlockchainMetadataMonitor:**
+**Extend ProviderProbe:**
 
 ```elixir
-defp probe_provider(chain, provider, timeout_ms) do
+defp probe_provider(chain, provider, sequence) do
   # Existing: eth_blockNumber (latest)
 
   # Add:
