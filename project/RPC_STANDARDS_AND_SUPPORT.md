@@ -300,15 +300,44 @@ Lasso multiplexes client subscriptions to minimize upstream connections:
 
 ---
 
+## Implementation Details
+
+### MethodRegistry
+
+**Location:** `lib/lasso/rpc/method_registry.ex`
+
+The MethodRegistry provides a canonical categorization of 100+ Ethereum JSON-RPC methods based on real-world provider support patterns:
+
+```elixir
+Lasso.RPC.MethodRegistry.category_methods(:core)
+# => ["eth_blockNumber", "eth_chainId", "eth_getBalance", ...]
+
+Lasso.RPC.MethodRegistry.method_category("eth_getLogs")
+# => :filters
+
+Lasso.RPC.MethodRegistry.default_support_assumption("debug_traceTransaction")
+# => false (conservative for debug methods)
+```
+
+**Categories:**
+
+- `:core` - Universal support (99%+ providers): `eth_blockNumber`, `eth_getBalance`, etc.
+- `:state` - Common support (90%+ providers): `eth_call`, `eth_estimateGas`, etc.
+- `:filters` - Restricted support (~60% providers): `eth_getLogs`, `eth_newFilter`, etc.
+- `:debug/:trace` - Rare support (<10% providers): `debug_traceTransaction`, `trace_block`, etc.
+- `:local_only` - Never supported on hosted providers: `eth_accounts`, `eth_sign`, etc.
+- `:subscriptions` - WebSocket-only: `eth_subscribe`, `eth_unsubscribe`
+- `:eip1559`, `:eip4844`, `:batch`, `:mempool`, `:network`, `:txpool` - Specialized categories
+
+**Usage in adapters:**
+
+Provider adapters use the MethodRegistry to make intelligent routing decisions and set conservative default assumptions for method support validation.
+
+---
+
 ## Roadmap
 
 ### Near-Term (P0)
-
-**MethodRegistry Implementation**
-
-- Central registry with method metadata (`statefulness`, `protocols`, `failover_policy`, `cost_weight`)
-- Auto-generate controller guards, docs, and tests
-- Runtime validation with precise error messages
 
 **Enhanced Subscription Policies**
 
