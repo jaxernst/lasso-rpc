@@ -185,13 +185,35 @@ defmodule Lasso.RPC.ProviderAdapter do
   @callback headers(context()) :: [{binary(), binary()}]
 
   @doc """
-  Returns metadata about the adapter for observability.
+  Returns metadata about the provider adapter.
 
-  Should include:
-  - type: :public | :commercial | :default
-  - documentation: URL
-  - known_limitations: list of strings
-  - last_verified: Date
+  ## Fields:
+  - `:type` - Provider type (:paid | :public | :dedicated)
+  - `:tier` - Service tier (:free | :paid | :enterprise)
+  - `:known_limitations` - List of human-readable limitations
+  - `:unsupported_categories` - Method categories not supported
+  - `:unsupported_methods` - Specific methods not supported
+  - `:conditional_support` - Methods with parameter restrictions
+  - `:last_verified` - Date capabilities were last verified
+
+  ## Example:
+      def metadata do
+        %{
+          type: :public,
+          tier: :free,
+          known_limitations: [
+            "eth_getLogs limited to 128 blocks",
+            "No archive data (recent blocks only)",
+            "Aggressive rate limiting on free tier"
+          ],
+          unsupported_categories: [:debug, :trace, :txpool],
+          unsupported_methods: ["eth_getLogs", "eth_newFilter"],
+          conditional_support: %{
+            "eth_call" => "Recent blocks only (no deep archive)"
+          },
+          last_verified: ~D[2025-01-17]
+        }
+      end
   """
   @callback metadata() :: map()
 

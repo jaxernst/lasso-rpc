@@ -17,8 +17,7 @@ defmodule Lasso.RPC.Providers.Adapters.LlamaRPC do
 
   @behaviour Lasso.RPC.ProviderAdapter
 
-  alias Lasso.RPC.Providers.Generic
-  alias Lasso.RPC.ChainState
+  alias Lasso.RPC.{MethodRegistry, Providers.Generic, ChainState}
 
   import Lasso.RPC.Providers.AdapterHelpers
 
@@ -28,10 +27,19 @@ defmodule Lasso.RPC.Providers.Adapters.LlamaRPC do
   """
   @default_max_block_range 1_000
 
-  # Capability Validation
+  # ============================================
+  # Phase 1: Method-Level Filtering (Fast)
+  # ============================================
 
   @impl true
-  def supports_method?(_method, _t, _c), do: :ok
+  def supports_method?(method, _transport, _context) do
+    category = MethodRegistry.method_category(method)
+
+    case category do
+      :local_only -> {:error, :method_unsupported}
+      _ -> :ok
+    end
+  end
 
   @impl true
   def validate_params("eth_getLogs", params, _transport, ctx) do
@@ -117,7 +125,24 @@ defmodule Lasso.RPC.Providers.Adapters.LlamaRPC do
   @impl true
   defdelegate headers(ctx), to: Generic
 
+  # ============================================
+  # Error Classification
+  # ============================================
+
+  @impl true
+  def classify_error(_code, message) when is_binary(message) do
+    if String.contains?(message, "range is too large") do
+      {:ok, :capability_violation}
+    else
+      :default
+    end
+  end
+
+  def classify_error(_code, _message), do: :default
+
+  # ============================================
   # Metadata
+  # ============================================
 
   @impl true
   def metadata do
@@ -125,14 +150,14 @@ defmodule Lasso.RPC.Providers.Adapters.LlamaRPC do
       type: :public,
       tier: :free,
       known_limitations: [
-        "eth_getLogs: max #{@default_max_block_range} block range (default, configurable per-chain)"
+        "eth_getLogs: max #{@default_max_block_range} block range (configurable)"
       ],
-      sources: ["Production error logs"],
-      last_verified: ~D[2025-01-05],
-      configurable_limits: [
-        max_block_range:
-          "Maximum block range for eth_getLogs queries (default: #{@default_max_block_range})"
-      ]
+      unsupported_categories: [:local_only],
+      unsupported_methods: [],
+      conditional_support: %{
+        "eth_getLogs" => "Max #{@default_max_block_range} block range"
+      },
+      last_verified: ~D[2025-01-17]
     }
   end
 end
