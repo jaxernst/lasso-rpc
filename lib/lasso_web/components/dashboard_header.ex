@@ -47,27 +47,73 @@ defmodule LassoWeb.Components.DashboardHeader do
             </div>
           </div>
         </div>
-        
-    <!-- Navigation Tabs -->
-        <.tab_switcher
-          id="main-tabs"
-          tabs={[
-            %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
-            %{
-              id: "metrics",
-              label: "Provider Metrics",
-              icon:
-                "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-            },
-            %{
-              id: "system",
-              label: "System Metrics",
-              icon:
-                "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"
-            }
-          ]}
-          active_tab={@active_tab}
-        />
+
+        <!-- Navigation and Actions -->
+        <div class="flex items-center gap-4">
+          <!-- Home Button -->
+          <a
+            href="/docs"
+            class={[
+              "group relative flex h-10 w-10 items-center justify-center rounded-lg border backdrop-blur-sm transition-all",
+              if(@active_tab == "docs",
+                do:
+                  "border-purple-500/50 bg-purple-500/10 shadow-lg shadow-purple-500/25",
+                else:
+                  "border-gray-700/50 bg-gray-900/50 hover:border-purple-500/50 hover:bg-purple-500/10"
+              )
+            ]}
+            title="Home"
+          >
+            <div class={[
+              "absolute inset-0 rounded-lg bg-gradient-to-br transition-opacity",
+              if(@active_tab == "docs",
+                do: "from-purple-500/10 to-purple-500/5 opacity-100",
+                else: "from-purple-500/0 to-purple-500/0 opacity-0 group-hover:from-purple-500/10 group-hover:to-purple-500/5 group-hover:opacity-100"
+              )
+            ]}>
+            </div>
+            <svg
+              class={[
+                "relative z-10 h-5 w-5 transition-colors",
+                if(@active_tab == "docs",
+                  do: "text-purple-400",
+                  else: "text-gray-400 group-hover:text-purple-400"
+                )
+              ]}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+              />
+            </svg>
+          </a>
+
+          <!-- Navigation Tabs -->
+          <.tab_switcher
+            id="main-tabs"
+            tabs={[
+              %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
+              %{
+                id: "metrics",
+                label: "Provider Metrics",
+                icon:
+                  "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+              },
+              %{
+                id: "system",
+                label: "System Metrics",
+                icon:
+                  "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"
+              }
+            ]}
+            active_tab={@active_tab}
+          />
+        </div>
       </div>
     </div>
     """
