@@ -951,7 +951,7 @@ defmodule Mix.Tasks.Lasso.ProbeProvider do
     Mix.shell().info(skeleton)
 
     # Write to file suggestion
-    filename = "lib/lasso/rpc/providers/adapters/#{Macro.underscore(provider_name)}.ex"
+    filename = "lib/lasso/core/providers/adapters/#{Macro.underscore(provider_name)}.ex"
     Mix.shell().info("\n💾 Save to: #{filename}")
   end
 end

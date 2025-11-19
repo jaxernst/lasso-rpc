@@ -38,7 +38,7 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
 
     cond do
       # Unsupported categories
-      category in [:debug, :trace, :txpool, :local_only] ->
+      category in [:debug, :trace, :txpool, :local_only, :eip4844] ->
         {:error, :method_unsupported}
 
       # Specific unsupported methods (filters)
@@ -188,7 +188,7 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
         "No debug/trace methods",
         "Aggressive rate limiting"
       ],
-      unsupported_categories: [:debug, :trace, :filters, :txpool, :local_only],
+      unsupported_categories: [:debug, :trace, :filters, :txpool, :local_only, :eip4844],
       unsupported_methods: ["eth_getLogs", "eth_newFilter", "eth_getFilterChanges",
                             "eth_getFilterLogs", "eth_uninstallFilter"],
       conditional_support: %{

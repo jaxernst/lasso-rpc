@@ -1,0 +1,753 @@
+defmodule LassoWeb.HomeLive do
+  use LassoWeb, :live_view
+  alias LassoWeb.Components.DashboardHeader
+
+  @impl true
+  def mount(_params, _session, socket) do
+    if connected?(socket) do
+      Process.send_after(self(), :tick, 1000)
+    end
+
+    socket =
+      socket
+      |> assign(:active_tab, "docs")
+      |> assign(:routing_decisions, initial_decisions())
+      |> assign(:provider_health, initial_health())
+      |> assign(:metrics, %{latency: 42, success_rate: 99.9})
+
+    {:ok, socket}
+  end
+
+  @impl true
+  def handle_info(:tick, socket) do
+    Process.send_after(self(), :tick, 2000)
+
+    {:noreply,
+     socket
+     |> assign(:routing_decisions, rotate_decisions(socket.assigns.routing_decisions))
+     |> assign(:metrics, fluctuate_metrics(socket.assigns.metrics))}
+  end
+
+  defp initial_decisions do
+    [
+      %{
+        method: "eth_blockNumber",
+        provider: "ethereum_llamarpc",
+        latency: 31,
+        color: "text-emerald-300"
+      },
+      %{
+        method: "eth_getLogs",
+        provider: "ethereum_merkle",
+        latency: 72,
+        color: "text-yellow-300"
+      },
+      %{method: "eth_call", provider: "base_llamarpc", latency: 45, color: "text-emerald-300"}
+    ]
+  end
+
+  defp initial_health do
+    [
+      %{
+        name: "Primary Node A",
+        status: "ACTIVE",
+        latency: "45ms",
+        color: "bg-emerald-400",
+        text: "text-emerald-400",
+        subtext: "text-gray-500"
+      },
+      %{
+        name: "Backup Node B",
+        status: "COOLDOWN (4s)",
+        latency: "Rate Limit (429)",
+        color: "bg-yellow-400",
+        text: "text-yellow-400",
+        subtext: "text-yellow-500/80",
+        animate: true
+      },
+      %{
+        name: "Public Node C",
+        status: "OFFLINE",
+        latency: "Circuit Breaker Open",
+        color: "bg-red-400",
+        text: "text-red-400",
+        subtext: "text-red-400/80"
+      }
+    ]
+  end
+
+  defp rotate_decisions([_first | rest]) do
+    new_decision = generate_random_decision()
+    rest ++ [new_decision]
+  end
+
+  defp generate_random_decision do
+    methods = ["eth_getBalance", "eth_call", "eth_estimateGas", "eth_chainId"]
+    providers = ["alchemy_eth", "infura_eth", "quicknode_eth", "blast_api"]
+    latency = Enum.random(15..150)
+
+    color =
+      cond do
+        latency < 50 -> "text-emerald-300"
+        latency < 100 -> "text-yellow-300"
+        true -> "text-red-300"
+      end
+
+    %{
+      method: Enum.random(methods),
+      provider: Enum.random(providers),
+      latency: latency,
+      color: color
+    }
+  end
+
+  defp fluctuate_metrics(metrics) do
+    new_latency = max(10, min(100, metrics.latency + Enum.random(-5..5)))
+    new_success = max(98.0, min(100.0, metrics.success_rate + Enum.random(-10..10) / 100))
+
+    %{latency: new_latency, success_rate: Float.round(new_success, 2)}
+  end
+
+  @impl true
+  def handle_event("switch_tab", %{"tab" => _tab}, socket) do
+    # Navigate back to dashboard when switching to other tabs
+    {:noreply, push_navigate(socket, to: "/")}
+  end
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <div class="relative h-full w-full overflow-y-auto scroll-smooth">
+      <!-- Background Effects -->
+      <div class="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+        <div class="-left-[10%] -top-[10%] h-[500px] w-[500px] bg-purple-500/10 blur-[100px] absolute rounded-full">
+        </div>
+        <div class="-right-[10%] top-[20%] h-[600px] w-[600px] bg-blue-500/10 blur-[120px] absolute rounded-full">
+        </div>
+      </div>
+
+      <div class="relative z-10 flex min-h-full flex-col">
+        <DashboardHeader.header active_tab={@active_tab} />
+
+        <div class="flex-1">
+          <div class="max-w-[min(83%,110rem)] relative mx-auto flex flex-col gap-20 py-10 lg:py-20">
+            <!-- Hero / Overview -->
+            <section class="grid items-center gap-10 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.15fr)]">
+              <div class="animate-fade-in-up space-y-8">
+                <div class="border-purple-500/30 bg-purple-500/5 text-purple-200/90 inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-medium backdrop-blur-sm">
+                  <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                  </span>
+                  Live multi-provider RPC routing · Ethereum &amp; Base
+                </div>
+
+                <div class="space-y-6">
+                  <h1 class="text-balance leading-[1.1] text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
+                    Programmable RPC routing for
+                    <span class="bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
+                      production-grade
+                    </span>
+                    onchain apps.
+                  </h1>
+                  <p class="max-w-xl text-base leading-relaxed text-gray-300 sm:text-lg">
+                    Lasso sits in front of your existing RPC providers and turns them into a
+                    <span class="border-purple-500/50 border-b font-medium text-gray-100">
+                      fault-tolerant, latency-aware, observable
+                    </span>
+                    RPC layer. No SDKs, no client rewrites—just smarter URLs.
+                  </p>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-4">
+                  <a
+                    href="/"
+                    class="group shadow-purple-500/20 relative inline-flex items-center gap-2 rounded-lg bg-purple-600 px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all hover:shadow-purple-500/40 hover:scale-105 hover:bg-purple-500"
+                  >
+                    <span class="relative z-10 flex items-center gap-2">
+                      Open live dashboard
+                      <svg
+                        class="h-4 w-4 transition-transform group-hover:translate-x-1"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M13 7l5 5m0 0-5 5m5-5H6"
+                        />
+                      </svg>
+                    </span>
+                  </a>
+                  <a
+                    href="https://github.com/LazerTechnologies/lasso-rpc"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="group border-gray-700/70 bg-gray-900/60 inline-flex items-center gap-2 rounded-lg border px-6 py-3 text-sm font-semibold text-gray-200 transition-all hover:border-gray-500 hover:bg-gray-800 hover:text-white"
+                  >
+                    <svg
+                      class="h-5 w-5 transition-transform group-hover:rotate-12"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        fill-rule="evenodd"
+                        clip-rule="evenodd"
+                        d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"
+                      />
+                    </svg>
+                    View on GitHub
+                  </a>
+                </div>
+
+                <div class="flex items-center gap-4 pt-2 text-xs text-gray-500">
+                  <span class="flex items-center gap-1.5">
+                    <svg
+                      class="h-4 w-4 text-emerald-500"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M5 13l4 4L19 7"
+                      >
+                      </path>
+                    </svg>
+                    HTTP + WebSocket
+                  </span>
+                  <span class="h-1 w-1 rounded-full bg-gray-700"></span>
+                  <span class="flex items-center gap-1.5">
+                    <svg
+                      class="h-4 w-4 text-emerald-500"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M5 13l4 4L19 7"
+                      >
+                      </path>
+                    </svg>
+                    JSON-RPC compatible
+                  </span>
+                  <span class="h-1 w-1 rounded-full bg-gray-700"></span>
+                  <span class="flex items-center gap-1.5">
+                    <svg
+                      class="h-4 w-4 text-emerald-500"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M5 13l4 4L19 7"
+                      >
+                      </path>
+                    </svg>
+                    Read-only methods
+                  </span>
+                </div>
+              </div>
+              
+    <!-- Dashboard-style callout -->
+              <div class="animate-float relative z-10">
+                <div class="animate-pulse-glow absolute -inset-1 rounded-2xl bg-gradient-to-r from-purple-600 to-blue-600 opacity-30 blur">
+                </div>
+                <div class="border-purple-500/25 from-purple-500/10 via-slate-950/90 to-black/90 shadow-[0_20px_45px_rgba(15,23,42,0.75)] relative rounded-2xl border bg-gradient-to-br p-6 backdrop-blur-xl">
+                  <div class="mb-6 flex items-start gap-4">
+                    <div class="bg-purple-500/20 border-purple-500/30 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border">
+                      <svg
+                        class="h-6 w-6 text-purple-200"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M9 19V9a2 2 0 012-2h2a2 2 0 012 2v10M5 19h14M5 13h2a2 2 0 002-2V7a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 002 2h2"
+                        />
+                      </svg>
+                    </div>
+                    <div class="space-y-1">
+                      <h2 class="text-base font-semibold text-white">
+                        Live provider leaderboard &amp; routing decisions
+                      </h2>
+                      <p class="text-purple-100/70 text-xs leading-relaxed">
+                        See every provider, chain, and strategy in real time: latency percentiles, success rates,
+                        circuit breaker status, and exactly which upstream handled each JSON-RPC call.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div class="border-purple-500/20 bg-black/40 space-y-3 rounded-xl border p-4">
+                    <div class="text-[11px] flex items-center justify-between font-medium uppercase tracking-wider text-gray-400">
+                      <span>Recent routing decisions</span>
+                      <span class="bg-emerald-500/10 text-[10px] border-emerald-500/20 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-bold text-emerald-400">
+                        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400"></span>
+                        streaming
+                      </span>
+                    </div>
+                    <div class="font-mono text-[11px] space-y-2 text-gray-200">
+                      <%= for decision <- @routing_decisions do %>
+                        <div class="bg-gray-900/60 border-gray-800/50 flex items-center justify-between gap-2 rounded-lg border px-3 py-2 transition-all hover:bg-gray-800/60">
+                          <span class="truncate font-medium text-sky-300">{decision.method}</span>
+                          <span class="text-gray-600">→</span>
+                          <span class="truncate text-gray-300">{decision.provider}</span>
+                          <span class={"#{decision.color} font-bold"}>{decision.latency}ms</span>
+                        </div>
+                      <% end %>
+                    </div>
+
+                    <a
+                      href="/"
+                      class="group bg-purple-500/10 border-purple-500/20 mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-semibold text-purple-200 transition-all hover:bg-purple-500 hover:text-white"
+                    >
+                      Inspect live traffic
+                      <svg
+                        class="h-3.5 w-3.5 transition-transform group-hover:translate-x-1"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M13 7l5 5m0 0-5 5m5-5H6"
+                        />
+                      </svg>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </section>
+            
+    <!-- Feature 1: Intelligent Routing -->
+            <section class="grid items-start gap-12 lg:grid-cols-2">
+              <div class="space-y-8">
+                <div class="space-y-4">
+                  <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-purple-400">
+                    <span class="h-[1px] w-8 bg-purple-400"></span> Intelligent Routing
+                  </div>
+                  <h2 class="text-3xl font-bold text-white sm:text-4xl">
+                    Route smarter, not harder.
+                  </h2>
+                  <p class="text-base leading-relaxed text-gray-400">
+                    Lasso continuously benchmarks every provider for every method. Swap a single slug in your URL to change how requests are routed—no code changes required.
+                  </p>
+                </div>
+
+                <div class="space-y-6">
+                  <div class="group flex gap-5 rounded-xl p-4 transition-colors hover:bg-gray-900/30">
+                    <div class="flex-none pt-1">
+                      <div class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-800 text-sm font-bold text-gray-400 transition-colors group-hover:bg-purple-500 group-hover:text-white">
+                        1
+                      </div>
+                    </div>
+                    <div>
+                      <h3 class="text-base font-semibold text-white transition-colors group-hover:text-purple-300">
+                        Fastest (Recommended)
+                      </h3>
+                      <p class="mt-2 text-sm leading-relaxed text-gray-400">
+                        Routes to the provider with the lowest p50 latency for that specific method over the last 5 minutes.
+                      </p>
+                    </div>
+                  </div>
+                  <div class="group flex gap-5 rounded-xl p-4 transition-colors hover:bg-gray-900/30">
+                    <div class="flex-none pt-1">
+                      <div class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-800 text-sm font-bold text-gray-400 transition-colors group-hover:bg-purple-500 group-hover:text-white">
+                        2
+                      </div>
+                    </div>
+                    <div>
+                      <h3 class="text-base font-semibold text-white transition-colors group-hover:text-purple-300">
+                        Round Robin
+                      </h3>
+                      <p class="mt-2 text-sm leading-relaxed text-gray-400">
+                        Distributes traffic evenly across all healthy providers. Good for bulk data extraction.
+                      </p>
+                    </div>
+                  </div>
+                  <div class="group flex gap-5 rounded-xl p-4 transition-colors hover:bg-gray-900/30">
+                    <div class="flex-none pt-1">
+                      <div class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-800 text-sm font-bold text-gray-400 transition-colors group-hover:bg-purple-500 group-hover:text-white">
+                        3
+                      </div>
+                    </div>
+                    <div>
+                      <h3 class="text-base font-semibold text-white transition-colors group-hover:text-purple-300">
+                        Latency Weighted
+                      </h3>
+                      <p class="mt-2 text-sm leading-relaxed text-gray-400">
+                        Probabilistic routing where faster providers get a larger share of the traffic.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-gray-950/50 relative transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 hover:scale-[1.01]">
+                <div class="from-purple-500/10 absolute -inset-px rounded-2xl bg-gradient-to-b to-transparent opacity-50">
+                </div>
+                <div class="bg-gray-900/90 font-mono relative rounded-xl p-6 text-xs">
+                  <div class="mb-6 flex items-center gap-2 border-b border-gray-800 pb-4 text-gray-500">
+                    <div class="flex gap-2">
+                      <div class="bg-red-500/20 h-3 w-3 rounded-full"></div>
+                      <div class="bg-yellow-500/20 h-3 w-3 rounded-full"></div>
+                      <div class="bg-emerald-500/20 h-3 w-3 rounded-full"></div>
+                    </div>
+                    <span class="ml-3 font-medium">config/config.exs</span>
+                  </div>
+                  <div class="space-y-2 text-sm text-gray-300">
+                    <div class="italic text-gray-500"># Change strategy globally or per-request</div>
+                    <div>
+                      <span class="text-purple-400">config</span> <span class="text-emerald-300">:lasso</span>,
+                    </div>
+                    <div class="pl-6">
+                      <span class="text-sky-300">:provider_selection_strategy</span>,
+                      <span class="text-yellow-300">:fastest</span>
+                    </div>
+                  </div>
+
+                  <div class="my-6 border-t border-gray-800"></div>
+
+                  <div class="mb-3 italic text-gray-500"># Client Usage (Viem/Ethers)</div>
+                  <div class="space-y-2 text-sm text-gray-300">
+                    <div>
+                      <span class="text-purple-400">const</span> client = createPublicClient(&#123;
+                    </div>
+                    <div class="pl-6">
+                      transport: http(<span class="text-emerald-300">"https://lasso.rpc/rpc/fastest/eth"</span>)
+                    </div>
+                    <div>&#125;);</div>
+                  </div>
+
+                  <div class="bg-black/50 mt-6 rounded-lg border border-gray-800 p-4 text-gray-400">
+                    <div class="mb-2 flex items-center gap-2">
+                      <span class="text-green-400">➜</span>
+                      <span>curl -X POST .../rpc/fastest/eth</span>
+                    </div>
+                    <div class="space-y-1 font-medium text-emerald-300">
+                      <div class="flex gap-2">
+                        <span class="w-32 text-gray-500">X-Lasso-Provider:</span> alchemy_eth
+                      </div>
+                      <div class="flex gap-2">
+                        <span class="w-32 text-gray-500">X-Lasso-Strategy:</span> fastest
+                      </div>
+                      <div class="flex gap-2">
+                        <span class="w-32 text-gray-500">X-Lasso-Latency:</span> 12ms
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            
+    <!-- Feature 2: Resilience -->
+            <section class="grid items-center gap-12 lg:grid-cols-2">
+              <div class="bg-gray-950/50 relative order-2 transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 hover:scale-[1.01] lg:order-1">
+                <div class="from-emerald-500/10 absolute -inset-px rounded-2xl bg-gradient-to-b to-transparent opacity-50">
+                </div>
+                <div class="bg-gray-900/90 relative rounded-xl p-6">
+                  <!-- Mock System Status UI -->
+                  <div class="space-y-4">
+                    <div class="flex items-center justify-between border-b border-gray-800 pb-4">
+                      <span class="text-sm font-semibold text-gray-300">Provider Health Pool</span>
+                      <span class="flex items-center gap-2 text-xs font-bold text-emerald-400">
+                        <span class="relative flex h-2.5 w-2.5">
+                          <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75">
+                          </span>
+                          <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500">
+                          </span>
+                        </span>
+                        System Operational
+                      </span>
+                    </div>
+
+                    <%= for provider <- @provider_health do %>
+                      <div class={"#{if Map.get(provider, :animate), do: "animate-pulse", else: ""} bg-gray-800/40 border-gray-700/30 flex items-center justify-between rounded-lg border p-3 transition-colors hover:bg-gray-800/60"}>
+                        <div class="flex items-center gap-4">
+                          <div class={"#{provider.color} shadow-[0_0_8px_currentColor] h-2.5 w-2.5 rounded-full"}>
+                          </div>
+                          <div>
+                            <div class="text-sm font-medium text-gray-200">{provider.name}</div>
+                            <div class={"#{provider.subtext} text-xs"}>{provider.latency}</div>
+                          </div>
+                        </div>
+                        <div class={"#{provider.text} text-[10px] rounded bg-gray-900 px-2 py-1 font-bold"}>
+                          {provider.status}
+                        </div>
+                      </div>
+                    <% end %>
+
+                    <div class="bg-black/30 font-mono border-gray-800/50 mt-4 flex items-center gap-3 rounded-lg border p-3 text-xs text-gray-400">
+                      <span class="font-bold text-purple-400">event</span>
+                      <span>[failover] Node B -> Node A (0ms downtime)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="order-1 space-y-8 lg:order-2">
+                <div class="space-y-4">
+                  <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-emerald-400">
+                    <span class="h-[1px] w-8 bg-emerald-400"></span> Resilience & Scale
+                  </div>
+                  <h2 class="text-3xl font-bold text-white sm:text-4xl">
+                    Failures shouldn't wake you up.
+                  </h2>
+                  <p class="text-base leading-relaxed text-gray-400">
+                    Lasso handles the chaos of public and private RPCs so your app doesn't have to.
+                  </p>
+                </div>
+
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
+                    <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
+                      Circuit Breakers
+                    </h3>
+                    <p class="mt-2 text-xs leading-relaxed text-gray-400">
+                      Automatically isolates failing providers. Probes half-open connections before full recovery.
+                    </p>
+                  </div>
+                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
+                    <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
+                      Rate Limit Aware
+                    </h3>
+                    <p class="mt-2 text-xs leading-relaxed text-gray-400">
+                      Detects 429s and applies smart backoff cooldowns per provider, preventing bans.
+                    </p>
+                  </div>
+                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
+                    <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
+                      WS Multiplexing
+                    </h3>
+                    <p class="mt-2 text-xs leading-relaxed text-gray-400">
+                      Thousands of client subscriptions mapped to a single upstream connection.
+                    </p>
+                  </div>
+                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
+                    <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
+                      Gap Filling
+                    </h3>
+                    <p class="mt-2 text-xs leading-relaxed text-gray-400">
+                      Automatically backfills missed events via HTTP if a WebSocket connection drops.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+            
+    <!-- Feature 3: Observability -->
+            <section class="grid items-start gap-12 lg:grid-cols-2">
+              <div class="space-y-8">
+                <div class="space-y-4">
+                  <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
+                    <span class="h-[1px] w-8 bg-sky-400"></span> Deep Observability
+                  </div>
+                  <h2 class="text-3xl font-bold text-white sm:text-4xl">
+                    Stop guessing why requests are slow.
+                  </h2>
+                  <p class="text-base leading-relaxed text-gray-400">
+                    Get a unified view of your entire RPC layer. See exactly which providers are winning, which are failing, and where your latency is coming from.
+                  </p>
+                </div>
+
+                <ul class="space-y-4 text-sm text-gray-300">
+                  <li class="bg-gray-900/20 flex items-center gap-4 rounded-lg border border-transparent p-3 transition-colors hover:border-sky-500/20">
+                    <div class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-sky-400"></div>
+                    Real-time latency percentiles (p50, p95, p99)
+                  </li>
+                  <li class="bg-gray-900/20 flex items-center gap-4 rounded-lg border border-transparent p-3 transition-colors hover:border-sky-500/20">
+                    <div class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-sky-400"></div>
+                    Live routing decision stream
+                  </li>
+                  <li class="bg-gray-900/20 flex items-center gap-4 rounded-lg border border-transparent p-3 transition-colors hover:border-sky-500/20">
+                    <div class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-sky-400"></div>
+                    Exportable metrics for external analysis
+                  </li>
+                  <li class="bg-gray-900/20 flex items-center gap-4 rounded-lg border border-transparent p-3 transition-colors hover:border-sky-500/20">
+                    <div class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-sky-400"></div>
+                    Client-visible metadata headers
+                  </li>
+                </ul>
+
+                <div class="pt-4">
+                  <a
+                    href="/"
+                    class="group inline-flex items-center gap-2 text-sm font-bold text-sky-400 transition-colors hover:text-sky-300"
+                  >
+                    Explore the dashboard
+                    <span aria-hidden="true" class="transition-transform group-hover:translate-x-1">
+                      →
+                    </span>
+                  </a>
+                </div>
+              </div>
+
+              <div class="bg-gray-950/50 relative transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 hover:scale-[1.01]">
+                <div class="from-sky-500/10 absolute -inset-px rounded-2xl bg-gradient-to-b to-transparent opacity-50">
+                </div>
+                <div class="bg-gray-900/90 relative rounded-xl p-6">
+                  <!-- Mock Metrics UI -->
+                  <div class="mb-6 grid grid-cols-2 gap-4">
+                    <div class="bg-gray-800/40 border-gray-700/30 rounded-xl border p-4">
+                      <div class="text-[10px] font-bold uppercase tracking-wider text-gray-500">
+                        Avg Latency
+                      </div>
+                      <div class="mt-1 text-2xl font-bold text-white">
+                        {@metrics.latency}<span class="ml-1 text-sm font-normal text-gray-500">ms</span>
+                      </div>
+                      <div class="bg-gray-700/50 mt-3 h-1.5 w-full overflow-hidden rounded-full">
+                        <div
+                          class="h-full bg-sky-500 transition-all duration-1000 ease-out"
+                          style={"width: #{@metrics.latency}%"}
+                        >
+                        </div>
+                      </div>
+                    </div>
+                    <div class="bg-gray-800/40 border-gray-700/30 rounded-xl border p-4">
+                      <div class="text-[10px] font-bold uppercase tracking-wider text-gray-500">
+                        Success Rate
+                      </div>
+                      <div class="mt-1 text-2xl font-bold text-emerald-400">
+                        {@metrics.success_rate}<span class="ml-1 text-sm font-normal text-gray-500">%</span>
+                      </div>
+                      <div class="bg-gray-700/50 mt-3 h-1.5 w-full overflow-hidden rounded-full">
+                        <div class="h-full w-full bg-emerald-500"></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="space-y-4">
+                    <div class="text-[10px] flex items-center justify-between font-bold uppercase tracking-wider text-gray-500">
+                      <span>Provider</span>
+                      <span>Win Rate</span>
+                    </div>
+                    <div class="space-y-3">
+                      <div class="group flex items-center gap-3 text-xs">
+                        <span class="w-24 truncate font-medium text-gray-300">alchemy_eth</span>
+                        <div class="h-2.5 flex-1 overflow-hidden rounded-full bg-gray-800">
+                          <div
+                            class="h-full bg-purple-500 transition-colors group-hover:bg-purple-400"
+                            style="width: 65%"
+                          >
+                          </div>
+                        </div>
+                        <span class="font-mono text-gray-400">65%</span>
+                      </div>
+                      <div class="group flex items-center gap-3 text-xs">
+                        <span class="w-24 truncate font-medium text-gray-300">infura_eth</span>
+                        <div class="h-2.5 flex-1 overflow-hidden rounded-full bg-gray-800">
+                          <div
+                            class="bg-purple-500/60 h-full transition-colors group-hover:bg-purple-400/60"
+                            style="width: 25%"
+                          >
+                          </div>
+                        </div>
+                        <span class="font-mono text-gray-400">25%</span>
+                      </div>
+                      <div class="group flex items-center gap-3 text-xs">
+                        <span class="w-24 truncate font-medium text-gray-300">public_node</span>
+                        <div class="h-2.5 flex-1 overflow-hidden rounded-full bg-gray-800">
+                          <div
+                            class="bg-purple-500/30 h-full transition-colors group-hover:bg-purple-400/30"
+                            style="width: 10%"
+                          >
+                          </div>
+                        </div>
+                        <span class="font-mono text-gray-400">10%</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            
+    <!-- Footer / Closing -->
+            <section class="border-gray-800/50 mt-12 border-t pt-16 pb-8">
+              <div class="grid gap-12 md:grid-cols-2 lg:grid-cols-4">
+                <div class="col-span-2 space-y-6">
+                  <h3 class="text-xl font-bold text-white">Ready for production</h3>
+                  <p class="max-w-md text-sm leading-relaxed text-gray-400">
+                    Lasso is built on Elixir/OTP for massive concurrency and fault tolerance. It's designed to sit in your infrastructure as a stateless, scalable layer.
+                  </p>
+                  <div class="flex gap-6">
+                    <a
+                      href="https://github.com/LazerTechnologies/lasso-rpc"
+                      class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
+                    >
+                      GitHub
+                    </a>
+                    <a
+                      href="/docs"
+                      class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
+                    >
+                      Documentation
+                    </a>
+                    <a
+                      href="/"
+                      class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
+                    >
+                      Dashboard
+                    </a>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 class="text-sm font-bold uppercase tracking-wide text-white">
+                    Supported Networks
+                  </h4>
+                  <ul class="mt-4 space-y-3 text-sm text-gray-400">
+                    <li class="flex items-center gap-3">
+                      <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-emerald-500">
+                      </span>
+                      Ethereum Mainnet
+                    </li>
+                    <li class="flex items-center gap-3">
+                      <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-blue-500">
+                      </span>
+                      Base
+                    </li>
+                    <li class="flex items-center gap-3">
+                      <span class="h-2 w-2 rounded-full bg-gray-600"></span> + Any EVM Chain
+                    </li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h4 class="text-sm font-bold uppercase tracking-wide text-white">Roadmap</h4>
+                  <ul class="mt-4 space-y-3 text-sm text-gray-400">
+                    <li class="flex items-center gap-2">
+                      <span class="text-purple-500">›</span> Hedged Requests
+                    </li>
+                    <li class="flex items-center gap-2">
+                      <span class="text-purple-500">›</span> Result Caching
+                    </li>
+                    <li class="flex items-center gap-2">
+                      <span class="text-purple-500">›</span> Best-Sync Routing
+                    </li>
+                    <li class="flex items-center gap-2">
+                      <span class="text-purple-500">›</span> Multi-tenant Quotas
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+end
