@@ -12,12 +12,12 @@ defmodule LassoWeb.Components.DashboardHeader do
         <!-- Title Section -->
         <div class="flex items-center space-x-4">
           <div class="relative">
-            <div class="absolute inset-0 rounded-2xl bg-gradient-to-r from-purple-600 to-purple-400 opacity-10 blur-xl">
+            <div class="absolute inset-0 rounded-2xl bg-gradient-to-r from-purple-600 to-purple-400 opacity-5 blur-lg">
             </div>
             <div class="relative rounded-2xl ">
-              <div class="flex items-center space-x-3">
+              <div class="group flex cursor-default items-center space-x-3">
                 <div class="relative">
-                  <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-purple-400 to-purple-600 shadow-lg">
+                  <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 shadow-md transition-transform group-hover:rotate-3 group-hover:scale-110">
                     <svg
                       class="h-5 w-5 text-white"
                       fill="none"
@@ -32,14 +32,17 @@ defmodule LassoWeb.Components.DashboardHeader do
                       />
                     </svg>
                   </div>
-                  <div class="absolute inset-0 animate-ping rounded-lg bg-gradient-to-br from-purple-400 to-purple-600 opacity-20">
-                  </div>
                 </div>
                 <div>
                   <div class="flex gap-1 text-lg font-bold text-white">
                     Lasso RPC
-                    <div class="text-[9px] ml-.5 -translate-y-1.5 align-super text-emerald-400">
-                      ● LIVE
+                    <div class="ml-.5 text-[9px] text-emerald-400/90 flex -translate-y-1.5 items-center gap-1 align-super">
+                      <span class="relative flex h-2 w-2">
+                        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75">
+                        </span>
+                        <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+                      </span>
+                      live
                     </div>
                   </div>
                 </div>
@@ -53,8 +56,8 @@ defmodule LassoWeb.Components.DashboardHeader do
           <!-- Home / Landing -->
           <a
             href="/docs"
-            class={["group bg-gray-900/50 border-gray-700/50 relative flex h-10 w-10 items-center justify-center rounded-lg border backdrop-blur-sm transition-all hover:border-purple-500/60 hover:bg-purple-500/10", if(@active_tab == "docs",
-    do: "border-purple-500/80 bg-purple-500/10 shadow-[0_0_20px_rgba(168,85,247,0.35)]",
+            class={["group bg-gray-900/60 border-gray-700/60 relative flex h-10 w-10 items-center justify-center rounded-lg border backdrop-blur-sm transition-colors hover:border-purple-500/60 hover:bg-purple-500/10", if(@active_tab == "docs",
+    do: "border-purple-500/80 bg-purple-500/10",
     else: "")]}
             title="Home"
           >
