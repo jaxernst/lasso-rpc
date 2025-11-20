@@ -16,6 +16,7 @@ defmodule Lasso.Config.ConfigStore do
 
   alias Lasso.Config.ChainConfig
   alias Lasso.Config.ChainConfig.Provider
+  alias Lasso.RPC.Strategies.Registry, as: StrategyRegistry
 
   @config_table :lasso_config_store
   @chains_key :chains
@@ -243,6 +244,8 @@ defmodule Lasso.Config.ConfigStore do
   @spec status() :: %{
           chains_loaded: non_neg_integer(),
           total_providers: non_neg_integer(),
+          total_strategies: non_neg_integer(),
+          total_endpoints: non_neg_integer(),
           last_loaded: DateTime.t() | nil
         }
   def status do
@@ -376,9 +379,19 @@ defmodule Lasso.Config.ConfigStore do
       |> Enum.map(&length(&1.providers))
       |> Enum.sum()
 
+    # Strategies from Lasso.RPC.Strategies.Registry
+    total_strategies = StrategyRegistry.strategy_atoms() |> length()
+
+    # Calculate total endpoints:
+    # 1. Provider-specific endpoints: (total_providers)
+    # 2. Strategy endpoints: (chains_count * total_strategies)
+    total_endpoints = total_providers + map_size(chains) * total_strategies
+
     status = %{
       chains_loaded: map_size(chains),
       total_providers: total_providers,
+      total_endpoints: total_endpoints,
+      total_strategies: total_strategies,
       last_loaded: state.last_loaded
     }
 

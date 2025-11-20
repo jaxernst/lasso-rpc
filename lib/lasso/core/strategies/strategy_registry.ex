@@ -35,8 +35,14 @@ defmodule Lasso.RPC.Strategies.Registry do
     Map.get(registry, strategy, Lasso.RPC.Strategies.RoundRobin)
   end
 
+  @spec strategy_atoms() :: [atom()]
+  def strategy_atoms() do
+    Application.get_env(:lasso, :strategy_registry, default_registry())
+    |> Map.keys()
+  end
+
   @spec default_registry() :: %{strategy => module()}
-  defp default_registry do
+  def default_registry do
     %{
       round_robin: Lasso.RPC.Strategies.RoundRobin,
       fastest: Lasso.RPC.Strategies.Fastest,

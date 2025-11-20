@@ -25,9 +25,9 @@ defmodule LassoWeb.Router do
   scope "/", LassoWeb do
     pipe_through(:browser)
 
-    live("/", Dashboard)
+    live("/", HomeLive)
+    live("/dashboard", Dashboard)
     live("/metrics/:chain", MetricsLive)
-    live("/docs", HomeLive)
   end
 
   scope "/api", LassoWeb do

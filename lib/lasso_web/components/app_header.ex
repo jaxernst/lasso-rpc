@@ -34,15 +34,15 @@ defmodule LassoWeb.Components.DashboardHeader do
                   </div>
                 </div>
                 <div>
-                  <div class="flex gap-1 text-lg font-bold text-white">
-                    Lasso RPC
+                  <div class="flex gap-1 text-2xl font-bold text-white">
+                    Lasso
                     <div class="ml-.5 text-[9px] text-emerald-400/90 flex -translate-y-1.5 items-center gap-1 align-super">
                       <span class="relative flex h-2 w-2">
                         <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75">
                         </span>
                         <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
                       </span>
-                      live
+                      RPC
                     </div>
                   </div>
                 </div>
@@ -55,7 +55,7 @@ defmodule LassoWeb.Components.DashboardHeader do
         <div class="flex items-center gap-4">
           <!-- Home / Landing -->
           <a
-            href="/docs"
+            href="/"
             class={["group bg-gray-900/60 border-gray-700/60 relative flex h-10 w-10 items-center justify-center rounded-lg border backdrop-blur-sm transition-colors hover:border-purple-500/60 hover:bg-purple-500/10", if(@active_tab == "docs",
     do: "border-purple-500/80 bg-purple-500/10",
     else: "")]}

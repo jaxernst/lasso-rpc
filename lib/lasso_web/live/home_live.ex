@@ -8,12 +8,17 @@ defmodule LassoWeb.HomeLive do
       Process.send_after(self(), :tick, 1000)
     end
 
+    config_status = Lasso.Config.ConfigStore.status()
+
     socket =
       socket
       |> assign(:active_tab, "docs")
       |> assign(:routing_decisions, initial_decisions())
       |> assign(:provider_health, initial_health())
       |> assign(:metrics, %{latency: 42, success_rate: 99.9})
+      |> assign(:total_endpoints, config_status.total_endpoints)
+      |> assign(:total_providers, config_status.total_providers)
+      |> assign(:total_strategies, config_status.total_strategies)
 
     {:ok, socket}
   end
@@ -109,9 +114,9 @@ defmodule LassoWeb.HomeLive do
   end
 
   @impl true
-  def handle_event("switch_tab", %{"tab" => _tab}, socket) do
-    # Navigate back to dashboard when switching to other tabs
-    {:noreply, push_navigate(socket, to: "/")}
+  def handle_event("switch_tab", %{"tab" => tab}, socket) do
+    # Navigate to dashboard with selected tab
+    {:noreply, push_navigate(socket, to: "/dashboard?tab=#{tab}")}
   end
 
   @impl true
@@ -133,31 +138,46 @@ defmodule LassoWeb.HomeLive do
           <div class="max-w-[min(83%,110rem)] relative mx-auto flex flex-col gap-20 py-10 lg:py-20">
             <!-- Hero / Overview -->
             <section class="grid items-center gap-10 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.15fr)]">
-              <div class="animate-fade-in-up space-y-8">
-                <div class="border-purple-500/30 bg-purple-500/5 text-purple-200/90 inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-medium backdrop-blur-sm">
-                  <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
-                  </span>
-                  Live multi-provider RPC routing · Ethereum &amp; Base
-                </div>
-
+              <div class="animate-fade-in-up space-y-6">
                 <div class="space-y-6">
                   <h1 class="text-balance leading-[1.1] text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
-                    Programmable RPC routing for
+                    Smart RPC aggregation for
                     <span class="bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
-                      production-grade
+                      consumer grade
                     </span>
-                    onchain apps.
+                    blockchain apps.
                   </h1>
+
+                  <div class="flex flex-wrap gap-4">
+                    <div class="border-purple-500/30 bg-blue-400/10 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                      <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                      </span>
+                      {@total_endpoints} live public RPC endpoints
+                    </div>
+
+                    <div class="border-purple-500/30 bg-blue-400/10 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                      <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                      </span>
+                      {@total_providers} node providers
+                    </div>
+
+                    <div class="border-purple-500/30 bg-blue-400/10 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                      <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                      </span>
+                      {@total_strategies} configurable routing strategies
+                    </div>
+                  </div>
+
                   <p class="max-w-xl text-base leading-relaxed text-gray-300 sm:text-lg">
                     Lasso sits in front of your existing RPC providers and turns them into a
                     <span class="border-purple-500/50 border-b font-medium text-gray-100">
-                      fault-tolerant, latency-aware, observable
+                      fault-tolerant, latency-aware, observable, and configurable
                     </span>
-                    RPC layer. No SDKs, no client rewrites—just smarter URLs.
+                    RPC layer. No SDKs, no downtime, just better RPC endpoints.
                   </p>
                 </div>
 
-                <div class="flex flex-wrap items-center gap-4">
+                <div class="flex flex-wrap items-center gap-4 pt-8">
                   <a
                     href="/"
                     class="group shadow-purple-500/20 relative inline-flex items-center gap-2 rounded-lg bg-purple-600 px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all hover:shadow-purple-500/40 hover:scale-105 hover:bg-purple-500"
@@ -200,7 +220,7 @@ defmodule LassoWeb.HomeLive do
                   </a>
                 </div>
 
-                <div class="flex items-center gap-4 pt-2 text-xs text-gray-500">
+                <div class="flex items-center gap-4 pt-2 text-sm font-medium text-gray-400">
                   <span class="flex items-center gap-1.5">
                     <svg
                       class="h-4 w-4 text-emerald-500"
@@ -216,7 +236,7 @@ defmodule LassoWeb.HomeLive do
                       >
                       </path>
                     </svg>
-                    HTTP + WebSocket
+                    HTTP + WebSocket endpoints
                   </span>
                   <span class="h-1 w-1 rounded-full bg-gray-700"></span>
                   <span class="flex items-center gap-1.5">
@@ -234,7 +254,7 @@ defmodule LassoWeb.HomeLive do
                       >
                       </path>
                     </svg>
-                    JSON-RPC compatible
+                    Ethereum JSON-RPC superset
                   </span>
                   <span class="h-1 w-1 rounded-full bg-gray-700"></span>
                   <span class="flex items-center gap-1.5">
@@ -252,7 +272,7 @@ defmodule LassoWeb.HomeLive do
                       >
                       </path>
                     </svg>
-                    Read-only methods
+                    Automatic failover + redundancy
                   </span>
                 </div>
               </div>
@@ -340,10 +360,11 @@ defmodule LassoWeb.HomeLive do
                     <span class="h-[1px] w-8 bg-purple-400"></span> Intelligent Routing
                   </div>
                   <h2 class="text-3xl font-bold text-white sm:text-4xl">
-                    Route smarter, not harder.
+                    Tune your RPC infra for your application's needs
                   </h2>
                   <p class="text-base leading-relaxed text-gray-400">
-                    Lasso continuously benchmarks every provider for every method. Swap a single slug in your URL to change how requests are routed—no code changes required.
+                    Different apps require different performance characteristics from their RPC endpoints. Optimize for speed, cost, sync, throughput, or whatever matters most to you.
+                    Express those preferences through RPC endpoint slugs.
                   </p>
                 </div>
 
@@ -690,7 +711,7 @@ defmodule LassoWeb.HomeLive do
                       GitHub
                     </a>
                     <a
-                      href="/docs"
+                      href="/"
                       class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
                     >
                       Documentation
