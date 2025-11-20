@@ -169,9 +169,9 @@ defmodule LassoWeb.HomeLive do
                   </div>
 
                   <p class="max-w-xl text-base leading-relaxed text-gray-300 sm:text-lg">
-                    Lasso sits in front of your existing RPC providers and turns them into a
+                    Lasso wrangles your node infrastructure and turns it into a
                     <span class="border-purple-500/50 border-b font-medium text-gray-100">
-                      fault-tolerant, latency-aware, observable, and configurable
+                      fast, performant, reliable, and deeply configurable
                     </span>
                     RPC layer. No SDKs, no downtime, just better RPC endpoints.
                   </p>
@@ -179,7 +179,7 @@ defmodule LassoWeb.HomeLive do
 
                 <div class="flex flex-wrap items-center gap-4 pt-8">
                   <a
-                    href="/"
+                    href="/dasboard"
                     class="group shadow-purple-500/20 relative inline-flex items-center gap-2 rounded-lg bg-purple-600 px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all hover:shadow-purple-500/40 hover:scale-105 hover:bg-purple-500"
                   >
                     <span class="relative z-10 flex items-center gap-2">
@@ -220,7 +220,7 @@ defmodule LassoWeb.HomeLive do
                   </a>
                 </div>
 
-                <div class="flex items-center gap-4 pt-2 text-sm font-medium text-gray-400">
+                <div class="flex flex-wrap items-center gap-3 pt-2 text-sm font-medium tracking-tight text-gray-400">
                   <span class="flex items-center gap-1.5">
                     <svg
                       class="h-4 w-4 text-emerald-500"
@@ -329,7 +329,7 @@ defmodule LassoWeb.HomeLive do
                     </div>
 
                     <a
-                      href="/"
+                      href="/dashboard"
                       class="group bg-purple-500/10 border-purple-500/20 mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-semibold text-purple-200 transition-all hover:bg-purple-500 hover:text-white"
                     >
                       Inspect live traffic
@@ -605,7 +605,7 @@ defmodule LassoWeb.HomeLive do
 
                 <div class="pt-4">
                   <a
-                    href="/"
+                    href="/dashboard"
                     class="group inline-flex items-center gap-2 text-sm font-bold text-sky-400 transition-colors hover:text-sky-300"
                   >
                     Explore the dashboard
@@ -711,13 +711,15 @@ defmodule LassoWeb.HomeLive do
                       GitHub
                     </a>
                     <a
-                      href="/"
+                      href="/https://github.com/LazerTechnologies/lasso-rpc"
+                      target="_blank"
+                      rel="noopener noreferrer"
                       class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
                     >
                       Documentation
                     </a>
                     <a
-                      href="/"
+                      href="/dashboard"
                       class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
                     >
                       Dashboard

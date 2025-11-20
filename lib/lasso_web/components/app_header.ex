@@ -34,7 +34,7 @@ defmodule LassoWeb.Components.DashboardHeader do
                   </div>
                 </div>
                 <div>
-                  <div class="flex gap-1 text-2xl font-bold text-white">
+                  <div class="flex gap-1 text-3xl font-bold text-white">
                     Lasso
                     <div class="ml-.5 text-[9px] text-emerald-400/90 flex -translate-y-1.5 items-center gap-1 align-super">
                       <span class="relative flex h-2 w-2">
@@ -51,34 +51,8 @@ defmodule LassoWeb.Components.DashboardHeader do
           </div>
         </div>
         
-    <!-- Navigation and Actions -->
-        <div class="flex items-center gap-4">
-          <!-- Home / Landing -->
-          <a
-            href="/"
-            class={["group bg-gray-900/60 border-gray-700/60 relative flex h-10 w-10 items-center justify-center rounded-lg border backdrop-blur-sm transition-colors hover:border-purple-500/60 hover:bg-purple-500/10", if(@active_tab == "docs",
-    do: "border-purple-500/80 bg-purple-500/10",
-    else: "")]}
-            title="Home"
-          >
-            <div class="from-purple-500/0 to-purple-500/0 absolute inset-0 rounded-lg bg-gradient-to-br opacity-0 transition-opacity group-hover:from-purple-500/10 group-hover:to-purple-500/5 group-hover:opacity-100">
-            </div>
-            <svg
-              class="relative z-10 h-5 w-5 text-gray-400 transition-colors group-hover:text-purple-400"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M3 9.75L12 3l9 6.75V20a1 1 0 01-1 1h-5.25a.75.75 0 01-.75-.75V15a1 1 0 00-1-1H11a1 1 0 00-1 1v5.25A.75.75 0 019.25 21H4a1 1 0 01-1-1V9.75z"
-              />
-            </svg>
-          </a>
-          
     <!-- Navigation Tabs -->
+        <div class="flex items-center gap-4">
           <.tab_switcher
             id="main-tabs"
             tabs={[
@@ -98,6 +72,34 @@ defmodule LassoWeb.Components.DashboardHeader do
             ]}
             active_tab={@active_tab}
           />
+          
+    <!-- Navigation and Actions -->
+          <div class="flex items-center gap-4">
+            <!-- Home / Landing -->
+            <a
+              href="/"
+              class={["group bg-gray-900/60 border-gray-700/60 relative flex h-10 w-10 items-center justify-center rounded-lg border backdrop-blur-sm transition-colors hover:border-purple-500/60 hover:bg-purple-500/10", if(@active_tab == "docs",
+    do: "border-purple-500/80 bg-purple-500/10",
+    else: "")]}
+              title="Home"
+            >
+              <div class="from-purple-500/0 to-purple-500/0 absolute inset-0 rounded-lg bg-gradient-to-br opacity-0 transition-opacity group-hover:from-purple-500/10 group-hover:to-purple-500/5 group-hover:opacity-100">
+              </div>
+              <svg
+                class="relative z-10 h-5 w-5 text-gray-400 transition-colors group-hover:text-purple-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M3 9.75L12 3l9 6.75V20a1 1 0 01-1 1h-5.25a.75.75 0 01-.75-.75V15a1 1 0 00-1-1H11a1 1 0 00-1 1v5.25A.75.75 0 019.25 21H4a1 1 0 01-1-1V9.75z"
+                />
+              </svg>
+            </a>
+          </div>
         </div>
       </div>
     </div>
