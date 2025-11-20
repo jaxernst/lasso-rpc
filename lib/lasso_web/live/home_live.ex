@@ -135,12 +135,12 @@ defmodule LassoWeb.HomeLive do
         <DashboardHeader.header active_tab={@active_tab} />
 
         <div class="flex-1">
-          <div class="max-w-[min(83%,110rem)] relative mx-auto flex flex-col gap-20 py-10 lg:py-20">
+          <div class="max-w-[min(90%,110rem)] relative mx-auto flex flex-col gap-12 py-6 lg:max-w-[min(83%,110rem)] lg:gap-20 lg:py-20">
             <!-- Hero / Overview -->
-            <section class="grid items-center gap-10 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.15fr)]">
+            <section class="grid items-center gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.15fr)] lg:gap-10">
               <div class="animate-fade-in-up space-y-6">
-                <div class="space-y-6">
-                  <h1 class="text-balance leading-[1.1] text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
+                <div class="space-y-4 lg:space-y-6">
+                  <h1 class="text-balance leading-[1.1] text-3xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
                     Smart RPC aggregation for
                     <span class="bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
                       consumer grade
@@ -179,7 +179,7 @@ defmodule LassoWeb.HomeLive do
 
                 <div class="flex flex-wrap items-center gap-4 pt-8">
                   <a
-                    href="/dasboard"
+                    href="/dashboard"
                     class="group shadow-purple-500/20 relative inline-flex items-center gap-2 rounded-lg bg-purple-600 px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all hover:shadow-purple-500/40 hover:scale-105 hover:bg-purple-500"
                   >
                     <span class="relative z-10 flex items-center gap-2">
@@ -353,7 +353,7 @@ defmodule LassoWeb.HomeLive do
             </section>
             
     <!-- Feature 1: Intelligent Routing -->
-            <section class="grid items-start gap-12 lg:grid-cols-2">
+            <section class="grid items-start gap-8 lg:grid-cols-2 lg:gap-12">
               <div class="space-y-8">
                 <div class="space-y-4">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-purple-400">
@@ -475,7 +475,7 @@ defmodule LassoWeb.HomeLive do
             </section>
             
     <!-- Feature 2: Resilience -->
-            <section class="grid items-center gap-12 lg:grid-cols-2">
+            <section class="grid items-center gap-8 lg:grid-cols-2 lg:gap-12">
               <div class="bg-gray-950/50 relative order-2 transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 hover:scale-[1.01] lg:order-1">
                 <div class="from-emerald-500/10 absolute -inset-px rounded-2xl bg-gradient-to-b to-transparent opacity-50">
                 </div>
@@ -570,7 +570,7 @@ defmodule LassoWeb.HomeLive do
             </section>
             
     <!-- Feature 3: Observability -->
-            <section class="grid items-start gap-12 lg:grid-cols-2">
+            <section class="grid items-start gap-8 lg:grid-cols-2 lg:gap-12">
               <div class="space-y-8">
                 <div class="space-y-4">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
@@ -696,8 +696,8 @@ defmodule LassoWeb.HomeLive do
             </section>
             
     <!-- Footer / Closing -->
-            <section class="border-gray-800/50 mt-12 border-t pt-16 pb-8">
-              <div class="grid gap-12 md:grid-cols-2 lg:grid-cols-4">
+            <section class="border-gray-800/50 mt-8 border-t pt-8 pb-8 lg:mt-12 lg:pt-16">
+              <div class="grid gap-8 md:grid-cols-2 lg:grid-cols-4 lg:gap-12">
                 <div class="col-span-2 space-y-6">
                   <h3 class="text-xl font-bold text-white">Ready for production</h3>
                   <p class="max-w-md text-sm leading-relaxed text-gray-400">

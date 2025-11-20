@@ -386,7 +386,7 @@ defmodule LassoWeb.CoreComponents do
         <button
           phx-click="switch_tab"
           phx-value-tab={tab.id}
-          class={["relative flex items-center gap-2 overflow-hidden rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200", if(@active_tab == tab.id,
+          class={["relative flex items-center gap-2 overflow-hidden rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 sm:px-4", if(@active_tab == tab.id,
     do: "shadow-purple-500/25 bg-gradient-to-r from-purple-600 to-purple-500 text-white shadow-lg",
     else: "text-gray-300 hover:bg-gray-800/50 hover:text-white")]}
         >
@@ -402,7 +402,7 @@ defmodule LassoWeb.CoreComponents do
           >
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={tab.icon} />
           </svg>
-          <span class="relative z-10">{tab.label}</span>
+          <span class="relative z-10 hidden sm:inline">{tab.label}</span>
         </button>
       <% end %>
     </div>

@@ -7,7 +7,7 @@ defmodule LassoWeb.Components.DashboardHeader do
   def header(assigns) do
     ~H"""
     <!-- Header -->
-    <div class={["relative flex-shrink-0", if(@active_tab == "docs", do: "", else: "border-gray-700/50 border-b")]}>
+    <div class={["relative flex-shrink-0 transition-all duration-500 ease-in-out", if(@active_tab == "docs", do: "", else: "animate-fade-in-border border-b border-gray-700/50")]}>
       <div class="relative flex items-center justify-between px-6 py-4">
         <!-- Title Section -->
         <div class="flex items-center space-x-4">
@@ -17,9 +17,9 @@ defmodule LassoWeb.Components.DashboardHeader do
             <div class="relative rounded-2xl ">
               <div class="group flex cursor-default items-center space-x-3">
                 <div class="relative">
-                  <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 shadow-md transition-transform group-hover:rotate-3 group-hover:scale-110">
+                  <div class="flex h-6 w-6 sm:h-8 sm:w-8 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 shadow-md transition-transform group-hover:rotate-3 group-hover:scale-110">
                     <svg
-                      class="h-5 w-5 text-white"
+                      class="h-4 w-4 sm:h-5 sm:w-5 text-white"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -34,7 +34,7 @@ defmodule LassoWeb.Components.DashboardHeader do
                   </div>
                 </div>
                 <div>
-                  <div class="flex gap-1 text-3xl font-bold text-white">
+                  <div class="flex gap-1 text-2xl sm:text-3xl font-bold text-white">
                     Lasso
                     <div class="ml-.5 text-[9px] text-emerald-400/90 flex -translate-y-1.5 items-center gap-1 align-super">
                       <span class="relative flex h-2 w-2">
@@ -50,7 +50,7 @@ defmodule LassoWeb.Components.DashboardHeader do
             </div>
           </div>
         </div>
-        
+
     <!-- Navigation Tabs -->
         <div class="flex items-center gap-4">
           <.tab_switcher
@@ -72,7 +72,7 @@ defmodule LassoWeb.Components.DashboardHeader do
             ]}
             active_tab={@active_tab}
           />
-          
+
     <!-- Navigation and Actions -->
           <div class="flex items-center gap-4">
             <!-- Home / Landing -->
