@@ -518,7 +518,7 @@ defmodule LassoWeb.Dashboard do
       <DashboardHeader.header active_tab={@active_tab} />
 
     <!-- Content Section -->
-      <div class="grid-pattern relative flex-1 overflow-hidden">
+      <div class="grid-pattern animate-fade-in relative flex-1 overflow-hidden">
         <%= case @active_tab do %>
           <% "overview" -> %>
             <.dashboard_tab_content
