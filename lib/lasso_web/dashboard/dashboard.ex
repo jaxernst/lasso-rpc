@@ -11,8 +11,8 @@ defmodule LassoWeb.Dashboard do
   alias Lasso.Events.Provider
 
   @impl true
-  def mount(_params, _session, socket) do
-    socket = assign(socket, :active_tab, "overview")
+  def mount(params, _session, socket) do
+    socket = assign(socket, :active_tab, Map.get(params, "tab", "overview"))
 
     if connected?(socket) do
       # Global subscriptions
@@ -1372,8 +1372,13 @@ defmodule LassoWeb.Dashboard do
 
 
   @impl true
+  def handle_params(params, _url, socket) do
+    {:noreply, assign(socket, :active_tab, Map.get(params, "tab", "overview"))}
+  end
+
+  @impl true
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
-    {:noreply, assign(socket, :active_tab, tab)}
+    {:noreply, push_patch(socket, to: "/dashboard?tab=#{tab}")}
   end
 
   @impl true
