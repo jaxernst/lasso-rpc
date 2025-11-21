@@ -515,11 +515,15 @@ defmodule Lasso.Providers.Adapters.PublicNode do
 
   defp parse_block_number(_), do: :error
 
-  # Rough estimate, doesn't need to be exact (used for filtering decisions)
+  # Get current block height from chain state for accurate validation
   defp estimate_current_block do
-    # TODO: Pull from chain state or config
-    # Ethereum mainnet is ~21M blocks as of Jan 2025
-    21_000_000
+    # Use ChainState for real-time consensus height
+    # Fallback to conservative estimate if unavailable (fail-open)
+    case Lasso.RPC.ChainState.consensus_height("ethereum", allow_stale: true) do
+      {:ok, height} -> height
+      {:ok, height, :stale} -> height
+      {:error, _} -> 21_000_000  # Conservative fallback for Ethereum
+    end
   end
 
   @impl true
@@ -1118,8 +1122,13 @@ defmodule Lasso.Providers.AdapterMonitor do
 
     # In #{adapter_module_path(provider_id)}
     def validate_params(#{inspect(method)}, params, transport, ctx) do
-      # TODO: Add validation logic based on error pattern
+      # Add validation logic based on error pattern below
       # Error pattern: #{inspect(error_message)}
+      #
+      # Example validations:
+      # - Block range limits: check param[0].toBlock - param[0].fromBlock
+      # - Address limits: check length(param[0].address)
+      # - Archive data: use ChainState.consensus_height/1 to validate block age
       with :ok <- validate_xyz(params) do
         :ok
       end

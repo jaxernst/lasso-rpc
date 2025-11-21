@@ -314,6 +314,27 @@ mix phx.server
 
 Load testing and metrics export are in `scripts/`.
 
+**Provider probing and testing:**
+
+Test individual provider method support and performance:
+
+```bash
+# Test all methods for a provider
+mix lasso.probe_provider ethereum ethereum_alchemy
+
+# Test specific method
+mix lasso.probe_provider ethereum ethereum_alchemy eth_getLogs
+
+# Test with custom parameters
+mix lasso.probe_provider ethereum ethereum_alchemy eth_call --params '[{"to":"0x...","data":"0x..."}, "latest"]'
+```
+
+The probe task validates method support, measures latency, and verifies response correctness. Use it when:
+- Adding new providers
+- Debugging provider issues
+- Validating adapter implementations
+- Benchmarking provider capabilities
+
 ---
 
 ## Development Automation (Claude Code)
