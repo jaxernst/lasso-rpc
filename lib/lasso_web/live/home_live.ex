@@ -637,34 +637,36 @@ defmodule LassoWeb.HomeLive do
                 <div class="grid gap-4 sm:grid-cols-2">
                   <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
                     <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
-                      Circuit Breakers
+                      Zero-Downtime Failover
                     </h3>
                     <p class="mt-2 text-xs leading-relaxed text-gray-400">
-                      Automatically isolates failing providers. Probes half-open connections before full recovery.
+                      Intelligent routing automatically switches between providers and protocols (HTTP/WS) to bypass outages and latency spikes.
                     </p>
                   </div>
                   <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
                     <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
-                      Rate Limit Aware
+                      Fault Isolated
                     </h3>
                     <p class="mt-2 text-xs leading-relaxed text-gray-400">
-                      Detects 429s and applies smart backoff cooldowns per provider, preventing bans.
+                      Chains and providers run in isolated supervision trees. Failures are contained and never cascade.
                     </p>
                   </div>
+
                   <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
                     <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
-                      WS Multiplexing
+                      Massive Concurrency
                     </h3>
                     <p class="mt-2 text-xs leading-relaxed text-gray-400">
-                      Thousands of client subscriptions mapped to a single upstream connection.
+                      100k+ parallel routing connections enabled by the BEAM VM
                     </p>
                   </div>
+
                   <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
                     <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
-                      Gap Filling
+                      Real-time Health Monitoring
                     </h3>
                     <p class="mt-2 text-xs leading-relaxed text-gray-400">
-                      Automatically backfills missed events via HTTP if a WebSocket connection drops.
+                      Continuously tracks latency, errors, and sync status per provider, view live status in the dashboard.
                     </p>
                   </div>
                 </div>
@@ -678,9 +680,7 @@ defmodule LassoWeb.HomeLive do
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
                     <span class="h-[1px] w-8 bg-sky-400"></span> Deep Observability
                   </div>
-                  <h2 class="text-3xl font-bold text-white sm:text-4xl">
-                    Stop guessing why requests are slow.
-                  </h2>
+                  <h2 class="text-3xl font-bold text-white sm:text-4xl"></h2>
                   <p class="text-base leading-relaxed text-gray-400">
                     Get a unified view of your entire RPC layer. See exactly which providers are winning, which are failing, and where your latency is coming from.
                   </p>
@@ -701,7 +701,7 @@ defmodule LassoWeb.HomeLive do
                   </li>
                   <li class="bg-gray-900/20 flex items-center gap-4 rounded-lg border border-transparent p-3 transition-colors hover:border-sky-500/20">
                     <div class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-sky-400"></div>
-                    Client-visible metadata headers
+                    Transparent Request Tracing
                   </li>
                 </ul>
 
@@ -816,7 +816,7 @@ defmodule LassoWeb.HomeLive do
                     GitHub
                   </a>
                   <a
-                    href="https://github.com/LazerTechnologies/lasso-rpc"
+                    href="https://github.com/LazerTechnologies/lasso-rpc/tree/main/project"
                     target="_blank"
                     rel="noopener noreferrer"
                     class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
