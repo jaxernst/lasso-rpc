@@ -13,41 +13,70 @@ defmodule LassoWeb.HomeLive do
     socket =
       socket
       |> assign(:active_tab, "docs")
+      |> assign(:active_strategy, "fastest")
       |> assign(:routing_decisions, initial_decisions())
       |> assign(:provider_health, initial_health())
       |> assign(:metrics, %{latency: 42, success_rate: 99.9})
       |> assign(:total_endpoints, config_status.total_endpoints)
       |> assign(:total_providers, config_status.total_providers)
       |> assign(:total_strategies, config_status.total_strategies)
+      |> assign(:is_live, false)
 
     {:ok, socket}
   end
 
   @impl true
   def handle_info(:tick, socket) do
-    Process.send_after(self(), :tick, 2000)
+    Process.send_after(self(), :tick, 1000)
+
+    # Try to get real data
+    real_calls = Lasso.Benchmarking.BenchmarkStore.get_recent_calls("ethereum", 4)
+
+    {new_decisions, is_live} =
+      if length(real_calls) > 0 do
+        {real_calls, true}
+      else
+        # Fallback to simulation
+        {rotate_decisions(socket.assigns.routing_decisions), false}
+      end
 
     {:noreply,
      socket
-     |> assign(:routing_decisions, rotate_decisions(socket.assigns.routing_decisions))
+     |> assign(:routing_decisions, new_decisions)
+     |> assign(:is_live, is_live)
      |> assign(:metrics, fluctuate_metrics(socket.assigns.metrics))}
   end
 
   defp initial_decisions do
     [
       %{
-        method: "eth_blockNumber",
+        method: "eth_sendRawTransaction",
         provider: "ethereum_llamarpc",
-        latency: 31,
-        color: "text-emerald-300"
+        latency: 180,
+        color: "text-purple-300",
+        strategy: "fastest"
       },
       %{
         method: "eth_getLogs",
         provider: "ethereum_merkle",
         latency: 72,
-        color: "text-yellow-300"
+        color: "text-yellow-300",
+        strategy: "best_sync"
       },
-      %{method: "eth_call", provider: "base_llamarpc", latency: 45, color: "text-emerald-300"}
+      %{
+        method: "debug_traceCall",
+        provider: "alchemy_eth",
+        latency: 245,
+        color: "text-purple-300",
+        strategy: "throughput"
+      },
+      %{
+        method: "eth_call",
+        provider: "base_llamarpc",
+        latency: 45,
+        color: "text-emerald-300",
+        strategy: "fastest"
+      }
     ]
   end
 
@@ -87,22 +116,36 @@ defmodule LassoWeb.HomeLive do
   end
 
   defp generate_random_decision do
-    methods = ["eth_getBalance", "eth_call", "eth_estimateGas", "eth_chainId"]
-    providers = ["alchemy_eth", "infura_eth", "quicknode_eth", "blast_api"]
-    latency = Enum.random(15..150)
+    methods = [
+      "eth_getBalance",
+      "eth_call",
+      "eth_estimateGas",
+      "eth_chainId",
+      "eth_sendRawTransaction",
+      "eth_getStorageAt",
+      "debug_traceTransaction",
+      "eth_getTransactionReceipt",
+      "trace_block"
+    ]
+
+    providers = ["alchemy_eth", "infura_eth", "quicknode_eth", "blast_api", "ankr", "drpc"]
+    strategies = ["fastest", "best_sync", "throughput", "round_robin"]
+
+    latency = Enum.random(15..450)
 
     color =
       cond do
         latency < 50 -> "text-emerald-300"
-        latency < 100 -> "text-yellow-300"
-        true -> "text-red-300"
+        latency < 150 -> "text-yellow-300"
+        true -> "text-purple-300"
       end
 
     %{
       method: Enum.random(methods),
       provider: Enum.random(providers),
       latency: latency,
-      color: color
+      color: color,
+      strategy: Enum.random(strategies)
     }
   end
 
@@ -120,7 +163,42 @@ defmodule LassoWeb.HomeLive do
   end
 
   @impl true
+  def handle_event("select_strategy", %{"strategy" => strategy}, socket) do
+    {:noreply, assign(socket, :active_strategy, strategy)}
+  end
+
+  defp get_strategy_details(strategy) do
+    case strategy do
+      "fastest" ->
+        %{
+          url: "fastest",
+          name: "Fastest",
+          var_name: "clientFast",
+          comment: "Route to the lowest latency provider for the given RPC method"
+        }
+
+      "throughput" ->
+        %{
+          url: "throughput",
+          name: "Throughput",
+          var_name: "clientBatch",
+          comment: "Load balanced across providers based on capacity"
+        }
+
+      "best_sync" ->
+        %{
+          url: "best-sync",
+          name: "Best Sync",
+          var_name: "clientSync",
+          comment: "Always read from the canonical chain tip"
+        }
+    end
+  end
+
+  @impl true
   def render(assigns) do
+    assigns = assign(assigns, :strategy_details, get_strategy_details(assigns.active_strategy))
+
     ~H"""
     <div class="relative h-full w-full overflow-y-auto scroll-smooth">
       <!-- Background Effects -->
@@ -294,13 +372,13 @@ defmodule LassoWeb.HomeLive do
                           stroke-linecap="round"
                           stroke-linejoin="round"
                           stroke-width="2"
-                          d="M9 19V9a2 2 0 012-2h2a2 2 0 012 2v10M5 19h14M5 13h2a2 2 0 002-2V7a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 002 2h2"
+                          d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
                         />
                       </svg>
                     </div>
                     <div class="space-y-1">
                       <h2 class="text-base font-semibold text-white">
-                        Live provider leaderboard &amp; routing decisions
+                        Smart, Observable RPC Request Routing
                       </h2>
                       <p class="text-purple-100/70 text-xs leading-relaxed">
                         See every provider, chain, and strategy in real time: latency percentiles, success rates,
@@ -314,16 +392,30 @@ defmodule LassoWeb.HomeLive do
                       <span>Recent routing decisions</span>
                       <span class="bg-emerald-500/10 text-[10px] border-emerald-500/20 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-bold text-emerald-400">
                         <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400"></span>
-                        streaming
+                        {if @is_live, do: "live", else: "simulated"}
                       </span>
                     </div>
                     <div class="font-mono text-[11px] space-y-2 text-gray-200">
                       <%= for decision <- @routing_decisions do %>
                         <div class="bg-gray-900/60 border-gray-800/50 flex items-center justify-between gap-2 rounded-lg border px-3 py-2 transition-all hover:bg-gray-800/60">
-                          <span class="truncate font-medium text-sky-300">{decision.method}</span>
-                          <span class="text-gray-600">→</span>
-                          <span class="truncate text-gray-300">{decision.provider}</span>
-                          <span class={"#{decision.color} font-bold"}>{decision.latency}ms</span>
+                          <div class="flex items-center gap-2 overflow-hidden">
+                            <%= if Map.get(decision, :strategy) do %>
+                              <span class="text-[9px] hidden rounded bg-gray-800 px-1.5 py-0.5 font-bold uppercase tracking-wider text-gray-400 lg:inline-flex">
+                                {decision.strategy}
+                              </span>
+                            <% end %>
+                            <span class="truncate font-medium text-sky-300">{decision.method}</span>
+                          </div>
+
+                          <div class="flex flex-shrink-0 items-center gap-2">
+                            <span class="text-gray-600">→</span>
+                            <span class="max-w-[80px] truncate text-right text-gray-300 lg:max-w-[100px]">
+                              {decision.provider}
+                            </span>
+                            <span class={"#{decision.color} min-w-[40px] text-right font-bold"}>
+                              {decision.latency}ms
+                            </span>
+                          </div>
                         </div>
                       <% end %>
                     </div>
@@ -353,7 +445,7 @@ defmodule LassoWeb.HomeLive do
             </section>
             
     <!-- Feature 1: Intelligent Routing -->
-            <section class="grid items-start gap-8 lg:grid-cols-2 lg:gap-12">
+            <section class="grid items-center gap-14 lg:grid-cols-2 lg:gap-20">
               <div class="space-y-8">
                 <div class="space-y-4">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-purple-400">
@@ -368,52 +460,66 @@ defmodule LassoWeb.HomeLive do
                   </p>
                 </div>
 
-                <div class="space-y-6">
-                  <div class="group flex gap-5 rounded-xl p-4 transition-colors hover:bg-gray-900/30">
+                <div class="space-y-4">
+                  <button
+                    phx-click="select_strategy"
+                    phx-value-strategy="fastest"
+                    class={"#{if @active_strategy == "fastest", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-4 text-left transition-all duration-200"}
+                  >
                     <div class="flex-none pt-1">
-                      <div class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-800 text-sm font-bold text-gray-400 transition-colors group-hover:bg-purple-500 group-hover:text-white">
+                      <div class={"#{if @active_strategy == "fastest", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
                         1
                       </div>
                     </div>
                     <div>
-                      <h3 class="text-base font-semibold text-white transition-colors group-hover:text-purple-300">
-                        Fastest (Recommended)
+                      <h3 class={"#{if @active_strategy == "fastest", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
+                        Fastest
                       </h3>
                       <p class="mt-2 text-sm leading-relaxed text-gray-400">
                         Routes to the provider with the lowest p50 latency for that specific method over the last 5 minutes.
                       </p>
                     </div>
-                  </div>
-                  <div class="group flex gap-5 rounded-xl p-4 transition-colors hover:bg-gray-900/30">
+                  </button>
+
+                  <button
+                    phx-click="select_strategy"
+                    phx-value-strategy="throughput"
+                    class={"#{if @active_strategy == "throughput", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-4 text-left transition-all duration-200"}
+                  >
                     <div class="flex-none pt-1">
-                      <div class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-800 text-sm font-bold text-gray-400 transition-colors group-hover:bg-purple-500 group-hover:text-white">
+                      <div class={"#{if @active_strategy == "throughput", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
                         2
                       </div>
                     </div>
                     <div>
-                      <h3 class="text-base font-semibold text-white transition-colors group-hover:text-purple-300">
-                        Round Robin
+                      <h3 class={"#{if @active_strategy == "throughput", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
+                        Throughput (Weighted)
                       </h3>
                       <p class="mt-2 text-sm leading-relaxed text-gray-400">
-                        Distributes traffic evenly across all healthy providers. Good for bulk data extraction.
+                        Probabilistic routing where faster providers get a larger share of the traffic. Maximizes total system throughput.
                       </p>
                     </div>
-                  </div>
-                  <div class="group flex gap-5 rounded-xl p-4 transition-colors hover:bg-gray-900/30">
+                  </button>
+
+                  <button
+                    phx-click="select_strategy"
+                    phx-value-strategy="best_sync"
+                    class={"#{if @active_strategy == "best_sync", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-4 text-left transition-all duration-200"}
+                  >
                     <div class="flex-none pt-1">
-                      <div class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-800 text-sm font-bold text-gray-400 transition-colors group-hover:bg-purple-500 group-hover:text-white">
+                      <div class={"#{if @active_strategy == "best_sync", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
                         3
                       </div>
                     </div>
                     <div>
-                      <h3 class="text-base font-semibold text-white transition-colors group-hover:text-purple-300">
-                        Latency Weighted
+                      <h3 class={"#{if @active_strategy == "best_sync", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
+                        Best Sync
                       </h3>
                       <p class="mt-2 text-sm leading-relaxed text-gray-400">
-                        Probabilistic routing where faster providers get a larger share of the traffic.
+                        Ensures you're always reading from the tip of the chain. Routes to providers with the highest block height.
                       </p>
                     </div>
-                  </div>
+                  </button>
                 </div>
               </div>
 
@@ -427,48 +533,44 @@ defmodule LassoWeb.HomeLive do
                       <div class="bg-yellow-500/20 h-3 w-3 rounded-full"></div>
                       <div class="bg-emerald-500/20 h-3 w-3 rounded-full"></div>
                     </div>
-                    <span class="ml-3 font-medium">config/config.exs</span>
-                  </div>
-                  <div class="space-y-2 text-sm text-gray-300">
-                    <div class="italic text-gray-500"># Change strategy globally or per-request</div>
-                    <div>
-                      <span class="text-purple-400">config</span> <span class="text-emerald-300">:lasso</span>,
-                    </div>
-                    <div class="pl-6">
-                      <span class="text-sky-300">:provider_selection_strategy</span>,
-                      <span class="text-yellow-300">:fastest</span>
-                    </div>
+                    <span class="ml-3 font-medium">client_setup.ts</span>
                   </div>
 
-                  <div class="my-6 border-t border-gray-800"></div>
-
-                  <div class="mb-3 italic text-gray-500"># Client Usage (Viem/Ethers)</div>
-                  <div class="space-y-2 text-sm text-gray-300">
-                    <div>
-                      <span class="text-purple-400">const</span> client = createPublicClient(&#123;
+                  <div class="space-y-1 text-sm text-gray-300">
+                    <div class="mb-6 text-gray-400">
+                      <span class="text-purple-400">import</span>
+                      &#123; createPublicClient, http, webSocket &#125;
+                      <span class="text-purple-400">from</span> <span class="text-emerald-300">'viem'</span>;
                     </div>
-                    <div class="pl-6">
-                      transport: http(<span class="text-emerald-300">"https://lasso.rpc/rpc/fastest/eth"</span>)
+
+                    <div class="mb-2 italic text-gray-500">// {@strategy_details.comment}</div>
+                    <div>
+                      <span class="text-purple-400">const</span> {@strategy_details.var_name} = createPublicClient(&#123;
+                    </div>
+                    <div class="pl-4">
+                      chain: mainnet,
+                    </div>
+                    <div class="pl-4">
+                      transport: http(<span class="text-emerald-300">"https://lasso.rpc/rpc/<span class="font-bold text-yellow-300">{@strategy_details.url}</span>/eth"</span>)
                     </div>
                     <div>&#125;);</div>
-                  </div>
 
-                  <div class="bg-black/50 mt-6 rounded-lg border border-gray-800 p-4 text-gray-400">
-                    <div class="mb-2 flex items-center gap-2">
-                      <span class="text-green-400">➜</span>
-                      <span>curl -X POST .../rpc/fastest/eth</span>
+                    <div class="mt-8"></div>
+
+                    <div class="mb-2 italic text-gray-500">
+                      // Prioritize best sync for real-time block updates
                     </div>
-                    <div class="space-y-1 font-medium text-emerald-300">
-                      <div class="flex gap-2">
-                        <span class="w-32 text-gray-500">X-Lasso-Provider:</span> alchemy_eth
-                      </div>
-                      <div class="flex gap-2">
-                        <span class="w-32 text-gray-500">X-Lasso-Strategy:</span> fastest
-                      </div>
-                      <div class="flex gap-2">
-                        <span class="w-32 text-gray-500">X-Lasso-Latency:</span> 12ms
-                      </div>
+                    <div>
+                      <span class="text-purple-400">const</span>
+                      clientRealtime = createPublicClient(&#123;
                     </div>
+                    <div class="pl-4">
+                      chain: mainnet,
+                    </div>
+                    <div class="pl-4">
+                      transport: webSocket(<span class="text-emerald-300">"wss://lasso.rpc/ws/rpc/<span class="font-bold text-yellow-300">best-sync</span>/eth"</span>)
+                    </div>
+                    <div>&#125;);</div>
                   </div>
                 </div>
               </div>
@@ -570,7 +672,7 @@ defmodule LassoWeb.HomeLive do
             </section>
             
     <!-- Feature 3: Observability -->
-            <section class="grid items-start gap-8 lg:grid-cols-2 lg:gap-12">
+            <section class="grid items-center gap-8 lg:grid-cols-2 lg:gap-12">
               <div class="space-y-8">
                 <div class="space-y-4">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
@@ -694,81 +796,83 @@ defmodule LassoWeb.HomeLive do
                 </div>
               </div>
             </section>
-            
-    <!-- Footer / Closing -->
-            <section class="border-gray-800/50 mt-8 border-t pt-8 pb-8 lg:mt-12 lg:pt-16">
-              <div class="grid gap-8 md:grid-cols-2 lg:grid-cols-4 lg:gap-12">
-                <div class="col-span-2 space-y-6">
-                  <h3 class="text-xl font-bold text-white">Ready for production</h3>
-                  <p class="max-w-md text-sm leading-relaxed text-gray-400">
-                    Lasso is built on Elixir/OTP for massive concurrency and fault tolerance. It's designed to sit in your infrastructure as a stateless, scalable layer.
-                  </p>
-                  <div class="flex gap-6">
-                    <a
-                      href="https://github.com/LazerTechnologies/lasso-rpc"
-                      class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
-                    >
-                      GitHub
-                    </a>
-                    <a
-                      href="/https://github.com/LazerTechnologies/lasso-rpc"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
-                    >
-                      Documentation
-                    </a>
-                    <a
-                      href="/dashboard"
-                      class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
-                    >
-                      Dashboard
-                    </a>
-                  </div>
-                </div>
-
-                <div>
-                  <h4 class="text-sm font-bold uppercase tracking-wide text-white">
-                    Supported Networks
-                  </h4>
-                  <ul class="mt-4 space-y-3 text-sm text-gray-400">
-                    <li class="flex items-center gap-3">
-                      <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-emerald-500">
-                      </span>
-                      Ethereum Mainnet
-                    </li>
-                    <li class="flex items-center gap-3">
-                      <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-blue-500">
-                      </span>
-                      Base
-                    </li>
-                    <li class="flex items-center gap-3">
-                      <span class="h-2 w-2 rounded-full bg-gray-600"></span> + Any EVM Chain
-                    </li>
-                  </ul>
-                </div>
-
-                <div>
-                  <h4 class="text-sm font-bold uppercase tracking-wide text-white">Roadmap</h4>
-                  <ul class="mt-4 space-y-3 text-sm text-gray-400">
-                    <li class="flex items-center gap-2">
-                      <span class="text-purple-500">›</span> Hedged Requests
-                    </li>
-                    <li class="flex items-center gap-2">
-                      <span class="text-purple-500">›</span> Result Caching
-                    </li>
-                    <li class="flex items-center gap-2">
-                      <span class="text-purple-500">›</span> Best-Sync Routing
-                    </li>
-                    <li class="flex items-center gap-2">
-                      <span class="text-purple-500">›</span> Multi-tenant Quotas
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </section>
           </div>
         </div>
+        
+    <!-- Footer / Closing -->
+        <footer class="border-gray-800/50 bg-gray-900/30 mt-auto border-t backdrop-blur-sm">
+          <div class="max-w-[min(90%,110rem)] mx-auto px-6 py-12 lg:max-w-[min(83%,110rem)] lg:py-16">
+            <div class="grid gap-8 md:grid-cols-2 lg:grid-cols-4 lg:gap-12">
+              <div class="col-span-2 space-y-6">
+                <h3 class="text-xl font-bold text-white">Ready for production</h3>
+                <p class="max-w-md text-sm leading-relaxed text-gray-400">
+                  Lasso is built on Elixir/OTP for massive concurrency and fault tolerance. It's designed to sit in your infrastructure as a stateless, scalable layer.
+                </p>
+                <div class="flex gap-6">
+                  <a
+                    href="https://github.com/LazerTechnologies/lasso-rpc"
+                    class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
+                  >
+                    GitHub
+                  </a>
+                  <a
+                    href="https://github.com/LazerTechnologies/lasso-rpc"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
+                  >
+                    Documentation
+                  </a>
+                  <a
+                    href="/dashboard"
+                    class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
+                  >
+                    Dashboard
+                  </a>
+                </div>
+              </div>
+
+              <div>
+                <h4 class="text-sm font-bold uppercase tracking-wide text-white">
+                  Supported Networks
+                </h4>
+                <ul class="mt-4 space-y-3 text-sm text-gray-400">
+                  <li class="flex items-center gap-3">
+                    <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-emerald-500">
+                    </span>
+                    Ethereum Mainnet
+                  </li>
+                  <li class="flex items-center gap-3">
+                    <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-blue-500">
+                    </span>
+                    Base
+                  </li>
+                  <li class="flex items-center gap-3">
+                    <span class="h-2 w-2 rounded-full bg-gray-600"></span> + Any EVM Chain
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <h4 class="text-sm font-bold uppercase tracking-wide text-white">Roadmap</h4>
+                <ul class="mt-4 space-y-3 text-sm text-gray-400">
+                  <li class="flex items-center gap-2">
+                    <span class="text-purple-500">›</span> Hedged Requests
+                  </li>
+                  <li class="flex items-center gap-2">
+                    <span class="text-purple-500">›</span> Result Caching
+                  </li>
+                  <li class="flex items-center gap-2">
+                    <span class="text-purple-500">›</span> Best-Sync Routing
+                  </li>
+                  <li class="flex items-center gap-2">
+                    <span class="text-purple-500">›</span> Multi-tenant Quotas
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </footer>
       </div>
     </div>
     """
