@@ -103,7 +103,7 @@ const ActivityFeed = {
     this.userHasScrolled = false;
 
     // Listen for scroll events to detect manual scrolling
-    this.el.addEventListener('scroll', () => {
+    this.el.addEventListener("scroll", () => {
       // Check if user is near the top (within 10px) - newest events are at top!
       const isNearTop = this.el.scrollTop < 10;
 
@@ -132,7 +132,9 @@ const ActivityFeed = {
       if (this.anchorElementId !== undefined) {
         // We saved an anchor element from the previous render
         // Find it in the current DOM
-        const anchorElement = this.el.querySelector(`[data-event-id="${this.anchorElementId}"]`);
+        const anchorElement = this.el.querySelector(
+          `[data-event-id="${this.anchorElementId}"]`
+        );
 
         if (anchorElement && this.anchorOffsetTop !== undefined) {
           // Calculate how much the anchor element has moved
@@ -150,14 +152,16 @@ const ActivityFeed = {
       // Find the first visible element in the viewport
       const children = Array.from(this.el.children);
       const containerRect = this.el.getBoundingClientRect();
-      const anchorElement = children.find(child => {
+      const anchorElement = children.find((child) => {
         const rect = child.getBoundingClientRect();
         // Element is visible if its top is at or below the container's top
-        return rect.top >= containerRect.top - 5 && rect.top <= containerRect.bottom;
+        return (
+          rect.top >= containerRect.top - 5 && rect.top <= containerRect.bottom
+        );
       });
 
       if (anchorElement) {
-        this.anchorElementId = anchorElement.getAttribute('data-event-id');
+        this.anchorElementId = anchorElement.getAttribute("data-event-id");
         this.anchorOffsetTop = anchorElement.offsetTop;
         this.savedScrollTop = this.el.scrollTop;
       }
@@ -398,7 +402,11 @@ const DraggableNetworkViewport = {
 
     // Intercept click events on the canvas to prevent deselect when dragging
     if (this.canvasEl) {
-      this.canvasEl.addEventListener("click", this.boundHandleCanvasClick, true);
+      this.canvasEl.addEventListener(
+        "click",
+        this.boundHandleCanvasClick,
+        true
+      );
     }
 
     // Touch events for mobile
@@ -446,14 +454,26 @@ const DraggableNetworkViewport = {
     if (newCanvasEl && newCanvasEl !== this.canvasEl) {
       // Remove old listener if it exists
       if (this.canvasEl) {
-        this.canvasEl.removeEventListener("click", this.boundHandleCanvasClick, true);
+        this.canvasEl.removeEventListener(
+          "click",
+          this.boundHandleCanvasClick,
+          true
+        );
       }
       // Attach to new element
       this.canvasEl = newCanvasEl;
-      this.canvasEl.addEventListener("click", this.boundHandleCanvasClick, true);
+      this.canvasEl.addEventListener(
+        "click",
+        this.boundHandleCanvasClick,
+        true
+      );
     } else if (!this.canvasEl && newCanvasEl) {
       this.canvasEl = newCanvasEl;
-      this.canvasEl.addEventListener("click", this.boundHandleCanvasClick, true);
+      this.canvasEl.addEventListener(
+        "click",
+        this.boundHandleCanvasClick,
+        true
+      );
     }
 
     this.updateTransform();
@@ -690,7 +710,11 @@ const DraggableNetworkViewport = {
     }
     // Clean up click event listener
     if (this.canvasEl && this.boundHandleCanvasClick) {
-      this.canvasEl.removeEventListener("click", this.boundHandleCanvasClick, true);
+      this.canvasEl.removeEventListener(
+        "click",
+        this.boundHandleCanvasClick,
+        true
+      );
     }
   },
 };
@@ -753,7 +777,9 @@ const EndpointSelector = {
     // This helps sync state after LiveView updates
 
     // Check for active strategy button
-    const activeStrategy = this.el.querySelector("[data-strategy].border-sky-500");
+    const activeStrategy = this.el.querySelector(
+      "[data-strategy].border-sky-500"
+    );
     if (activeStrategy && activeStrategy.dataset.strategy) {
       this.selectedStrategy = activeStrategy.dataset.strategy;
       this.selectedProvider = null;
@@ -763,7 +789,9 @@ const EndpointSelector = {
     }
 
     // Check for active provider button
-    const activeProvider = this.el.querySelector("[data-provider].border-indigo-500");
+    const activeProvider = this.el.querySelector(
+      "[data-provider].border-indigo-500"
+    );
     if (activeProvider && activeProvider.dataset.provider) {
       const providerId = activeProvider.dataset.provider;
       this.selectedProvider = providerId;
@@ -771,9 +799,11 @@ const EndpointSelector = {
       this.mode = "provider";
 
       // Read WebSocket support from the button
-      const supportsWsAttr = activeProvider.dataset.providerSupportsWs ||
-                             activeProvider.getAttribute('data-provider-supports-ws');
-      this.selectedProviderSupportsWs = supportsWsAttr === 'true' || supportsWsAttr === true;
+      const supportsWsAttr =
+        activeProvider.dataset.providerSupportsWs ||
+        activeProvider.getAttribute("data-provider-supports-ws");
+      this.selectedProviderSupportsWs =
+        supportsWsAttr === "true" || supportsWsAttr === true;
       return;
     }
   },
@@ -791,14 +821,18 @@ const EndpointSelector = {
     this.mode = "provider";
 
     // Get provider capabilities from the button data attributes
-    const providerButton = this.el.querySelector(`[data-provider="${provider}"]`);
+    const providerButton = this.el.querySelector(
+      `[data-provider="${provider}"]`
+    );
 
     if (providerButton) {
       // Read the WebSocket support attribute - handle both dataset and getAttribute for robustness
-      const supportsWsAttr = providerButton.dataset.providerSupportsWs ||
-                             providerButton.getAttribute('data-provider-supports-ws');
+      const supportsWsAttr =
+        providerButton.dataset.providerSupportsWs ||
+        providerButton.getAttribute("data-provider-supports-ws");
       // Convert to boolean - handle "true", "false", empty string, undefined, and actual booleans
-      this.selectedProviderSupportsWs = supportsWsAttr === 'true' || supportsWsAttr === true;
+      this.selectedProviderSupportsWs =
+        supportsWsAttr === "true" || supportsWsAttr === true;
     } else {
       this.selectedProviderSupportsWs = false;
     }
@@ -809,11 +843,15 @@ const EndpointSelector = {
   updateUI() {
     // If we're in provider mode, make sure we have the latest WebSocket support info
     if (this.mode === "provider" && this.selectedProvider) {
-      const providerButton = this.el.querySelector(`[data-provider="${this.selectedProvider}"]`);
+      const providerButton = this.el.querySelector(
+        `[data-provider="${this.selectedProvider}"]`
+      );
       if (providerButton) {
-        const supportsWsAttr = providerButton.dataset.providerSupportsWs ||
-                               providerButton.getAttribute('data-provider-supports-ws');
-        this.selectedProviderSupportsWs = supportsWsAttr === 'true' || supportsWsAttr === true;
+        const supportsWsAttr =
+          providerButton.dataset.providerSupportsWs ||
+          providerButton.getAttribute("data-provider-supports-ws");
+        this.selectedProviderSupportsWs =
+          supportsWsAttr === "true" || supportsWsAttr === true;
       }
     }
 
@@ -869,7 +907,7 @@ const EndpointSelector = {
 
     if (httpUrl) {
       const baseUrl = window.location.origin;
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsHost = window.location.host;
       const chain = this.chain; // Use chain name, not chain_id
 
@@ -905,7 +943,8 @@ const EndpointSelector = {
           btn.dataset.copyText = newHttpUrl;
         } else if (
           btn.dataset.copyText &&
-          (btn.dataset.copyText.includes("ws://") || btn.dataset.copyText.includes("wss://"))
+          (btn.dataset.copyText.includes("ws://") ||
+            btn.dataset.copyText.includes("wss://"))
         ) {
           // Only allow copying if it's a valid WebSocket URL
           if (this.selectedProviderSupportsWs || this.mode === "strategy") {
@@ -927,9 +966,12 @@ const EndpointSelector = {
 
     if (this.mode === "strategy" && this.selectedStrategy) {
       const descriptions = {
-        fastest: "Routes to the fastest provider based on real-time latency benchmarks",
-        "round-robin": "Distributes requests evenly across all available providers",
-        "latency-weighted": "Weighted random selection favoring providers with low latency and high success rates"
+        fastest:
+          "Routes to the fastest provider based on real-time latency benchmarks",
+        "round-robin":
+          "Distributes requests evenly across all available providers",
+        "latency-weighted":
+          "Weighted random selection favoring providers with low latency and high success rates",
       };
       descriptionEl.textContent =
         descriptions[this.selectedStrategy] || "Strategy-based routing";

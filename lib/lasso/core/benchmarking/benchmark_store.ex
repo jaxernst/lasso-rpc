@@ -126,6 +126,13 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @doc """
+  Gets recent RPC calls for display.
+  """
+  def get_recent_calls(chain_name, limit \\ 10) do
+    GenServer.call(__MODULE__, {:get_recent_calls, chain_name, limit})
+  end
+
+  @doc """
   Cleans up old metrics across all chains.
   """
   def cleanup_old_metrics do
@@ -554,6 +561,47 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         end
       else
         %{total_calls: 0, success_rate: 0.0, avg_latency: 0, hour_start: 0, hour_end: 0}
+      end
+
+    {:reply, result, state}
+  end
+
+  @impl true
+  def handle_call({:get_recent_calls, chain_name, limit}, _from, state) do
+    result =
+      if Map.has_key?(state.rpc_tables, chain_name) do
+        rpc_table = rpc_table_name(chain_name)
+        current_time = System.monotonic_time(:millisecond)
+        # Look back 30 seconds to find recent activity
+        lookback = current_time - 30_000
+
+        # Select entries newer than lookback
+        match_spec = [{{:"$1", :"$2", :"$3", :"$4", :"$5"}, [{:>, :"$1", lookback}], [:"$_"]}]
+
+        try do
+          :ets.select(rpc_table, match_spec)
+          |> Enum.sort_by(fn {ts, _, _, _, _} -> ts end, :desc)
+          |> Enum.take(limit)
+          |> Enum.map(fn {_, pid, method, latency, _} ->
+            color =
+              cond do
+                latency < 50 -> "text-emerald-300"
+                latency < 100 -> "text-yellow-300"
+                true -> "text-red-300"
+              end
+
+            %{
+              method: method,
+              provider: pid,
+              latency: latency,
+              color: color
+            }
+          end)
+        rescue
+          _ -> []
+        end
+      else
+        []
       end
 
     {:reply, result, state}
