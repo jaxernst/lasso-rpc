@@ -57,8 +57,7 @@ Lasso.Application (Supervisor)
 │   │   │   └── WSConnection (if WS configured)
 │   │   ├── ProviderSupervisor (other public/private rpc providers)
 │   │   ├── ProviderPool (metrics, health, connection tracking)
-│   │   ├── ProviderHealthMonitor (monitor and probe health metrics)
-│   │   ├── BlockchainMetadataMonitor (block height & chain ID caching)
+│   │   ├── ProviderProbe (periodic provider health probing)
 │   │   ├── TransportRegistry (request channel discovery)
 │   │   ├── UpstreamSubscriptionPool (WS multiplexing)
 │   │   └── ClientSubscriptionRegistry (client fan-out)
@@ -75,8 +74,9 @@ Lasso.Application (Supervisor)
 - **ProviderSupervisor**: Per-provider supervisor managing circuit breakers and WebSocket connections
 - **CircuitBreaker**: GenServer tracking failures per provider+transport, implementing open/half-open/closed states
 - **WSConnection**: GenServer managing persistent WebSocket connection to a single provider
-- **ProviderPool**: GenServer tracking provider health, availability, and capabilities
-- **BlockchainMetadataMonitor**: Per-chain GenServer probing providers for block heights and chain IDs, refreshing cache every 10s
+- **ProviderPool**: GenServer tracking provider health, availability, and capabilities; stores provider sync state in ETS
+- **ProviderProbe**: Per-chain GenServer executing periodic `eth_blockNumber` probes across all providers, reporting results to ProviderPool
+- **ChainState**: Stateless module for on-demand consensus height calculation from ProviderPool ETS data (not a process)
 - **TransportRegistry**: Registry for discovering available HTTP/WS channels per provider
 - **UpstreamSubscriptionPool**: GenServer multiplexing client subscriptions to minimal upstream connections
 - **StreamCoordinator**: GenServer managing subscription continuity, backfilling, and failover (spawned per subscription key)
@@ -462,61 +462,75 @@ Chain supervisors boot from the static config in `config/chains.yml`, but chains
 - **Status tracking**: Per-chain health and provider status available via `ChainSupervisor.get_chain_status/1`
 - **Provider/chain registration**: Lasso.RPC.Provider exposes CRUD operations for chains/providers that orchestrate Chain/Provider supervisors
 
-### **Blockchain Metadata Caching**
+### **Provider Probing and Chain State**
 
 **Files**:
 
-- `lib/lasso/core/caching/metadata_table_owner.ex` - ETS table owner GenServer
-- `lib/lasso/core/caching/blockchain_metadata_cache.ex` - Public API for cache access
-- `lib/lasso/core/caching/blockchain_metadata_monitor.ex` - Per-chain metadata refresh GenServer
+- `lib/lasso/core/providers/provider_probe.ex` - Per-chain probe execution GenServer
+- `lib/lasso/core/chain_state.ex` - Stateless consensus height calculation API
+- `lib/lasso/core/providers/provider_pool.ex` - Provider state storage in ETS
 
-Lasso maintains a real-time cache of blockchain state information (block heights, chain IDs) to optimize critical hot paths:
+Lasso maintains real-time blockchain state information through periodic probing and on-demand consensus calculation:
 
 #### **Architecture**
 
-- **MetadataTableOwner**: Dedicated GenServer that owns the `:blockchain_metadata` ETS table
-  - Starts before chain supervisors in application tree
-  - Table persists across individual monitor crashes
-  - Only destroyed on application restart
-- **BlockchainMetadataMonitor**: Per-chain GenServer (one per chain)
-  - Probes providers every 10s for `eth_blockNumber` and `eth_chainId`
-  - Runs probes in parallel using `Task.async_stream`
-  - Computes best known height across all providers
-  - Tracks per-provider lag (blocks behind best known height)
-  - Emits comprehensive telemetry events
-- **BlockchainMetadataCache**: Public API module with ETS-backed lookups
-  - Sub-millisecond read performance (<5μs P99)
-  - Explicit error handling (no silent fallbacks)
-  - Staleness detection (configurable threshold)
+**Separation of Concerns:**
+
+- **ProviderProbe**: Execution-only (probing logic, scheduling, HTTP requests)
+- **ProviderPool**: State-only (health status, sync state, ETS storage)
+- **ChainState**: Read-only API (lazy consensus calculation from fresh data)
+
+**Components:**
+
+- **ProviderProbe**: Per-chain GenServer executing probes
+  - Probes all providers via `eth_blockNumber` at configurable intervals (default: 12s)
+  - Runs probes concurrently using `Task.Supervisor.async_stream`
+  - Reports results to ProviderPool (fire-and-forget)
+  - Tracks latency and errors for each probe
+  - Emits telemetry events per probe cycle
+
+- **ProviderPool**: Stores provider sync state in ETS
+  - Receives probe results via `report_probe_results/2`
+  - Updates per-provider sync state: `{block_height, timestamp, sequence}`
+  - Calculates and stores per-provider lag relative to consensus
+  - ETS table per chain with public read access
+
+- **ChainState**: Stateless lazy evaluation API
+  - `consensus_height/1` - Calculates max height from recent provider data
+  - `provider_lag/2` - Returns blocks behind consensus for a provider
+  - `consensus_fresh?/1` - Checks if consensus data is within probe window
+  - No caching: recalculates on every call from fresh ETS data
+  - Sub-millisecond performance (<1ms for 3-10 providers)
 
 #### **Use Cases**
 
 **1. Adapter Parameter Validation** (`merkle.ex`, `llamarpc.ex`, `alchemy.ex`)
 
-Provider adapters use cached block heights to validate `eth_getLogs` block ranges:
+Provider adapters use consensus height to validate `eth_getLogs` block ranges:
 
 ```elixir
 # Validates that range doesn't exceed provider limits
 def validate_params("eth_getLogs", params, _transport, ctx) do
   chain = Map.get(ctx, :chain, "ethereum")
 
-  case BlockchainMetadataCache.get_block_height(chain) do
+  case ChainState.consensus_height(chain, allow_stale: true) do
     {:ok, height} -> validate_range(params, height)
-    {:error, _} -> :ok  # Skip validation if cache unavailable (fail-open)
+    {:ok, height, :stale} -> validate_range(params, height)
+    {:error, _} -> :ok  # Skip validation if unavailable (fail-open)
   end
 end
 ```
 
-**Benefits**: Accurate validation with real-time block numbers
+**Benefits**: Real-time validation with accurate block heights, graceful degradation
 
-**2. StreamCoordinator Failover Optimization** (`stream_coordinator.ex:731`)
+**2. StreamCoordinator Failover Optimization** (`stream_coordinator.ex`)
 
-Gap calculation during WebSocket subscription failover uses cached heights:
+Gap calculation during WebSocket subscription failover uses consensus height:
 
 ```elixir
 defp fetch_head(chain, _provider_id) do
-  case BlockchainMetadataCache.get_block_height(chain) do
-    {:ok, height} -> height  # <1ms cache lookup
+  case ChainState.consensus_height(chain) do
+    {:ok, height} -> height  # <1ms calculation
     {:error, _} -> fetch_head_blocking(chain)  # Fallback to HTTP (200-500ms)
   end
 end
@@ -524,75 +538,80 @@ end
 
 **Benefits**: Failover performance improved from 200-500ms to <1ms P99
 
-**3. Provider Lag Detection** (Future: routing decisions)
+**3. Provider Lag Detection** (routing decisions)
 
 ```elixir
-# Filter out providers >10 blocks behind
-{:ok, lag} = BlockchainMetadataCache.get_provider_lag(chain, provider_id)
+# Filter out providers >10 blocks behind consensus
+{:ok, lag} = ChainState.provider_lag(chain, provider_id)
 if lag < -10, do: :reject, else: :accept
 ```
 
 #### **Configuration**
 
+Probe intervals are configured per-chain in `config/chains.yml`:
+
+```yaml
+chains:
+  ethereum:
+    monitoring:
+      probe_interval_ms: 12000  # Default: 12s (one per block on mainnet)
+  base:
+    monitoring:
+      probe_interval_ms: 2000   # Default: 2s (faster L2 blocks)
+```
+
+Application-level defaults:
+
 ```elixir
 # config/config.exs
-config :lasso, :metadata_cache,
-  # Probe interval
-  refresh_interval_ms: 10_000,
-
-  # Single probe timeout
-  probe_timeout_ms: 2_000,
-
-  # Total refresh deadline (circuit breaker)
-  refresh_deadline_ms: 30_000,
-
-  # How many providers to probe per refresh
-  providers_to_probe: 3,
-
-  # Cache staleness threshold
-  staleness_threshold_ms: 30_000,
-
-  # Provider lag alert threshold
-  lag_threshold_blocks: 10
+config :lasso, :provider_probe,
+  default_probe_interval_ms: 12_000,
+  probe_interval_by_chain: %{
+    "ethereum" => 12_000,
+    "base" => 2_000
+  }
 ```
+
+**Key differences from old system:**
+- Probes ALL providers every cycle (not just top N)
+- No caching: ChainState calculates consensus on-demand
+- Configurable per-chain via YAML
+- Fire-and-forget reporting (no blocking)
 
 #### **Telemetry Events**
 
 ```elixir
-# Cache operations
-[:lasso, :metadata, :cache, :hit]           # Successful cache read
-[:lasso, :metadata, :cache, :miss]          # Cache not found
-[:lasso, :metadata, :cache, :stale]         # Data too old
-[:lasso, :metadata, :cache, :write_error]   # ETS write failed
-
-# Monitor operations
-[:lasso, :metadata, :refresh, :started]              # Refresh cycle began
-[:lasso, :metadata, :refresh, :completed]            # Refresh finished
-[:lasso, :metadata, :refresh, :deadline_exceeded]    # Took too long
-[:lasso, :metadata, :provider, :height_updated]      # Provider height cached
-[:lasso, :metadata, :provider, :lag_detected]        # Provider falling behind
-[:lasso, :metadata, :probe, :failed]                 # Provider probe failed
+# Probe cycle events
+[:lasso, :provider_probe, :cycle_completed]
+# Measurements: %{successful: count, failed: count, duration_ms: ms}
+# Metadata: %{chain: chain_name}
 ```
 
 #### **Design Philosophy**
 
-The metadata cache follows **explicit error handling** patterns:
+The probe system follows **separation of concerns**:
 
-- No silent fallbacks to hardcoded estimates
-- Callers handle cache unavailability explicitly
-- Fail-open behavior where appropriate (adapters skip validation)
-- Fail-fast behavior where needed (raising on `get_block_height!/1`)
-- All failures observable through telemetry and logs
+- **ProviderProbe**: Only executes probes and reports results (no state)
+- **ProviderPool**: Only stores state and calculates lag (no execution)
+- **ChainState**: Only reads and calculates consensus (no storage, no caching)
 
-This makes cache misses visible and testable, rather than hiding degraded performance behind silent fallbacks.
+This architecture provides:
+
+- **No stale data**: Consensus calculated on-demand from fresh provider data
+- **Explicit error handling**: Callers handle unavailable data with `allow_stale` option
+- **Fail-open by default**: Adapters skip validation if consensus unavailable
+- **Observable failures**: All probe failures tracked via telemetry and logs
+- **Easy testing**: Each component testable independently
+
+**Key insight**: ETS scans are fast enough (<1ms) that on-demand calculation outperforms caching with staleness tracking.
 
 #### **Performance Characteristics**
 
-- **Cache reads**: <5μs P99 (ETS lookup)
-- **Cache writes**: <10μs P99 (ETS insert)
-- **Refresh cycle**: <2s P95 (3 concurrent probes @ 500ms each)
-- **Memory overhead**: <20KB per chain
-- **Failover optimization**: 200-500ms → <1ms (200-500x improvement)
+- **Consensus calculation**: <1ms P99 (ETS scan of 3-10 providers)
+- **Provider lag lookup**: <5μs P99 (single ETS read)
+- **Probe cycle**: <500ms P95 (concurrent probes via Task.Supervisor)
+- **Memory overhead**: <10KB per chain (ETS table)
+- **Failover optimization**: 200-500ms → <1ms (200-500x improvement vs blocking HTTP)
 
 ### **Unified Provider Selection**
 

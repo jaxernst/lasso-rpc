@@ -147,6 +147,17 @@ defmodule LassoWeb.RPCController do
 
       json(conn, response)
     else
+      {:error, error, ctx} ->
+        # Inject observability metadata for errors with context
+        conn = maybe_inject_observability_metadata(conn, ctx)
+
+        json(
+          conn,
+          error
+          |> JError.from()
+          |> JError.to_response(Map.get(params, "id"))
+        )
+
       {:error, error} ->
         # Inject observability metadata even for errors (no context available)
         conn = maybe_inject_observability_metadata(conn, nil)
