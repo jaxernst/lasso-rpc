@@ -9,9 +9,16 @@ defmodule LassoWeb.HomeLive do
     end
 
     config_status = Lasso.Config.ConfigStore.status()
+    base_url = URI.parse(LassoWeb.Endpoint.url()).authority
 
     socket =
       socket
+      |> assign(:page_title, "Lasso RPC")
+      |> assign(
+        :page_description,
+        "Smart RPC aggregation for consumer grade blockchain apps"
+      )
+      |> assign(:base_url, base_url)
       |> assign(:active_tab, "docs")
       |> assign(:active_strategy, "fastest")
       |> assign(:routing_decisions, initial_decisions())
@@ -200,12 +207,22 @@ defmodule LassoWeb.HomeLive do
     assigns = assign(assigns, :strategy_details, get_strategy_details(assigns.active_strategy))
 
     ~H"""
-    <div class="relative h-full w-full overflow-y-auto scroll-smooth">
+    <div
+      id="main-scroll-container"
+      phx-hook="ParallaxBackground"
+      class="relative h-full w-full overflow-y-auto scroll-smooth"
+    >
       <!-- Background Effects -->
       <div class="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-        <div class="-left-[10%] -top-[10%] h-[500px] w-[500px] bg-purple-500/10 blur-[100px] absolute rounded-full">
+        <div
+          data-parallax-speed="0.05"
+          class="-left-[10%] -top-[10%] h-[300px] w-[300px] bg-purple-500/10 blur-[100px] absolute rounded-full transition-transform will-change-transform sm:h-[500px] sm:w-[500px]"
+        >
         </div>
-        <div class="-right-[10%] top-[20%] h-[600px] w-[600px] bg-blue-500/10 blur-[120px] absolute rounded-full">
+        <div
+          data-parallax-speed="0.1"
+          class="-right-[10%] top-[20%] h-[400px] w-[400px] bg-blue-500/10 blur-[120px] absolute rounded-full transition-transform will-change-transform sm:h-[600px] sm:w-[600px]"
+        >
         </div>
       </div>
 
@@ -215,7 +232,11 @@ defmodule LassoWeb.HomeLive do
         <div class="flex-1">
           <div class="max-w-[min(90%,110rem)] relative mx-auto flex flex-col gap-12 py-6 lg:max-w-[min(83%,110rem)] lg:gap-20 lg:py-20">
             <!-- Hero / Overview -->
-            <section class="grid items-center gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.15fr)] lg:gap-10">
+            <section
+              id="hero-section"
+              phx-hook="ScrollReveal"
+              class="grid translate-y-8 items-center gap-8 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.15fr)] lg:gap-10"
+            >
               <div class="animate-fade-in-up space-y-6">
                 <div class="space-y-4 lg:space-y-6">
                   <h1 class="text-balance leading-[1.1] text-3xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
@@ -359,7 +380,7 @@ defmodule LassoWeb.HomeLive do
               <div class="animate-float relative z-10">
                 <div class="animate-pulse-glow absolute -inset-1 rounded-2xl bg-gradient-to-r from-purple-600 to-blue-600 opacity-30 blur">
                 </div>
-                <div class="border-purple-500/25 from-purple-500/10 via-slate-950/90 to-black/90 shadow-[0_20px_45px_rgba(15,23,42,0.75)] relative rounded-2xl border bg-gradient-to-br p-6 backdrop-blur-xl">
+                <div class="border-purple-500/25 from-purple-500/10 via-slate-950/90 to-black/90 shadow-[0_20px_45px_rgba(15,23,42,0.75)] relative rounded-2xl border bg-gradient-to-br p-4 backdrop-blur-xl sm:p-6">
                   <div class="mb-6 flex items-start gap-4">
                     <div class="bg-purple-500/20 border-purple-500/30 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border">
                       <svg
@@ -387,7 +408,7 @@ defmodule LassoWeb.HomeLive do
                     </div>
                   </div>
 
-                  <div class="border-purple-500/20 bg-black/40 space-y-3 rounded-xl border p-4">
+                  <div class="border-purple-500/20 bg-black/40 space-y-3 rounded-xl border p-3 sm:p-4">
                     <div class="text-[11px] flex items-center justify-between font-medium uppercase tracking-wider text-gray-400">
                       <span>Recent routing decisions</span>
                       <span class="bg-emerald-500/10 text-[10px] border-emerald-500/20 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-bold text-emerald-400">
@@ -445,7 +466,11 @@ defmodule LassoWeb.HomeLive do
             </section>
             
     <!-- Feature 1: Intelligent Routing -->
-            <section class="grid items-center gap-14 lg:grid-cols-2 lg:gap-20">
+            <section
+              id="feature-routing"
+              phx-hook="ScrollReveal"
+              class="grid translate-y-8 items-center gap-8 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-2 lg:gap-20"
+            >
               <div class="space-y-8">
                 <div class="space-y-4">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-purple-400">
@@ -464,14 +489,14 @@ defmodule LassoWeb.HomeLive do
                   <button
                     phx-click="select_strategy"
                     phx-value-strategy="fastest"
-                    class={"#{if @active_strategy == "fastest", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-4 text-left transition-all duration-200"}
+                    class={"#{if @active_strategy == "fastest", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-3 text-left transition-all duration-200 sm:p-4"}
                   >
                     <div class="flex-none pt-1">
                       <div class={"#{if @active_strategy == "fastest", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
                         1
                       </div>
                     </div>
-                    <div>
+                    <div class="min-w-0 flex-1">
                       <h3 class={"#{if @active_strategy == "fastest", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
                         Fastest
                       </h3>
@@ -484,14 +509,14 @@ defmodule LassoWeb.HomeLive do
                   <button
                     phx-click="select_strategy"
                     phx-value-strategy="throughput"
-                    class={"#{if @active_strategy == "throughput", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-4 text-left transition-all duration-200"}
+                    class={"#{if @active_strategy == "throughput", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-3 text-left transition-all duration-200 sm:p-4"}
                   >
                     <div class="flex-none pt-1">
                       <div class={"#{if @active_strategy == "throughput", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
                         2
                       </div>
                     </div>
-                    <div>
+                    <div class="min-w-0 flex-1">
                       <h3 class={"#{if @active_strategy == "throughput", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
                         Throughput (Weighted)
                       </h3>
@@ -504,14 +529,14 @@ defmodule LassoWeb.HomeLive do
                   <button
                     phx-click="select_strategy"
                     phx-value-strategy="best_sync"
-                    class={"#{if @active_strategy == "best_sync", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-4 text-left transition-all duration-200"}
+                    class={"#{if @active_strategy == "best_sync", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-3 text-left transition-all duration-200 sm:p-4"}
                   >
                     <div class="flex-none pt-1">
                       <div class={"#{if @active_strategy == "best_sync", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
                         3
                       </div>
                     </div>
-                    <div>
+                    <div class="min-w-0 flex-1">
                       <h3 class={"#{if @active_strategy == "best_sync", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
                         Best Sync
                       </h3>
@@ -523,10 +548,10 @@ defmodule LassoWeb.HomeLive do
                 </div>
               </div>
 
-              <div class="bg-gray-950/50 relative transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 hover:scale-[1.01]">
+              <div class="bg-gray-950/50 relative w-full min-w-0 max-w-full transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 sm:hover:scale-[1.01]">
                 <div class="from-purple-500/10 absolute -inset-px rounded-2xl bg-gradient-to-b to-transparent opacity-50">
                 </div>
-                <div class="bg-gray-900/90 font-mono relative rounded-xl p-6 text-xs">
+                <div class="bg-gray-900/90 font-mono relative rounded-xl p-4 text-xs sm:p-6">
                   <div class="mb-6 flex items-center gap-2 border-b border-gray-800 pb-4 text-gray-500">
                     <div class="flex gap-2">
                       <div class="bg-red-500/20 h-3 w-3 rounded-full"></div>
@@ -536,7 +561,7 @@ defmodule LassoWeb.HomeLive do
                     <span class="ml-3 font-medium">client_setup.ts</span>
                   </div>
 
-                  <div class="space-y-1 text-sm text-gray-300">
+                  <div class="min-w-0 space-y-1 overflow-x-auto pb-2 text-sm text-gray-300">
                     <div class="mb-6 text-gray-400">
                       <span class="text-purple-400">import</span>
                       &#123; createPublicClient, http, webSocket &#125;
@@ -551,7 +576,7 @@ defmodule LassoWeb.HomeLive do
                       chain: mainnet,
                     </div>
                     <div class="pl-4">
-                      transport: http(<span class="text-emerald-300">"https://lasso.rpc/rpc/<span class="font-bold text-yellow-300">{@strategy_details.url}</span>/eth"</span>)
+                      transport: http(<span class="text-emerald-300">"https://{@base_url}/rpc/<span class="font-bold text-yellow-300">{@strategy_details.url}</span>/eth"</span>)
                     </div>
                     <div>&#125;);</div>
 
@@ -568,7 +593,7 @@ defmodule LassoWeb.HomeLive do
                       chain: mainnet,
                     </div>
                     <div class="pl-4">
-                      transport: webSocket(<span class="text-emerald-300">"wss://lasso.rpc/ws/rpc/<span class="font-bold text-yellow-300">best-sync</span>/eth"</span>)
+                      transport: webSocket(<span class="text-emerald-300">"wss://{@base_url}/ws/rpc/<span class="font-bold text-yellow-300">best-sync</span>/eth"</span>)
                     </div>
                     <div>&#125;);</div>
                   </div>
@@ -577,11 +602,15 @@ defmodule LassoWeb.HomeLive do
             </section>
             
     <!-- Feature 2: Resilience -->
-            <section class="grid items-center gap-8 lg:grid-cols-2 lg:gap-12">
+            <section
+              id="feature-resilience"
+              phx-hook="ScrollReveal"
+              class="grid translate-y-8 items-center gap-8 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-2 lg:gap-12"
+            >
               <div class="bg-gray-950/50 relative order-2 transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 hover:scale-[1.01] lg:order-1">
                 <div class="from-emerald-500/10 absolute -inset-px rounded-2xl bg-gradient-to-b to-transparent opacity-50">
                 </div>
-                <div class="bg-gray-900/90 relative rounded-xl p-6">
+                <div class="bg-gray-900/90 relative rounded-xl p-4 sm:p-6">
                   <!-- Mock System Status UI -->
                   <div class="space-y-4">
                     <div class="flex items-center justify-between border-b border-gray-800 pb-4">
@@ -674,7 +703,11 @@ defmodule LassoWeb.HomeLive do
             </section>
             
     <!-- Feature 3: Observability -->
-            <section class="grid items-center gap-8 lg:grid-cols-2 lg:gap-12">
+            <section
+              id="feature-observability"
+              phx-hook="ScrollReveal"
+              class="grid translate-y-8 items-center gap-8 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-2 lg:gap-12"
+            >
               <div class="space-y-8">
                 <div class="space-y-4">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
@@ -721,9 +754,9 @@ defmodule LassoWeb.HomeLive do
               <div class="bg-gray-950/50 relative transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 hover:scale-[1.01]">
                 <div class="from-sky-500/10 absolute -inset-px rounded-2xl bg-gradient-to-b to-transparent opacity-50">
                 </div>
-                <div class="bg-gray-900/90 relative rounded-xl p-6">
+                <div class="bg-gray-900/90 relative rounded-xl p-4 sm:p-6">
                   <!-- Mock Metrics UI -->
-                  <div class="mb-6 grid grid-cols-2 gap-4">
+                  <div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div class="bg-gray-800/40 border-gray-700/30 rounded-xl border p-4">
                       <div class="text-[10px] font-bold uppercase tracking-wider text-gray-500">
                         Avg Latency

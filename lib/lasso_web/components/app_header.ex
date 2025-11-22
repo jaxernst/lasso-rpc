@@ -7,7 +7,7 @@ defmodule LassoWeb.Components.DashboardHeader do
   def header(assigns) do
     ~H"""
     <!-- Header -->
-    <div class={["relative flex-shrink-0 transition-all duration-500 ease-in-out", if(@active_tab == "docs", do: "", else: "animate-fade-in-border border-b border-gray-700/50")]}>
+    <div class={["relative flex-shrink-0 transition-all duration-500 ease-in-out", if(@active_tab == "docs", do: "", else: "animate-fade-in-border border-gray-700/50 border-b")]}>
       <div class="relative flex items-center justify-between px-6 py-4">
         <!-- Title Section -->
         <div class="flex items-center space-x-4">
@@ -17,9 +17,9 @@ defmodule LassoWeb.Components.DashboardHeader do
             <div class="relative rounded-2xl ">
               <div class="group flex cursor-default items-center space-x-3">
                 <div class="relative">
-                  <div class="flex h-6 w-6 sm:h-8 sm:w-8 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 shadow-md transition-transform group-hover:rotate-3 group-hover:scale-110">
+                  <div class="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 shadow-md transition-transform group-hover:rotate-3 group-hover:scale-110 sm:h-8 sm:w-8">
                     <svg
-                      class="h-4 w-4 sm:h-5 sm:w-5 text-white"
+                      class="h-4 w-4 text-white sm:h-5 sm:w-5"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -34,7 +34,7 @@ defmodule LassoWeb.Components.DashboardHeader do
                   </div>
                 </div>
                 <div>
-                  <div class="flex gap-1 text-2xl sm:text-3xl font-bold text-white">
+                  <div class="flex gap-1 text-2xl font-bold text-white sm:text-3xl">
                     Lasso
                     <div class="ml-.5 text-[9px] text-emerald-400/90 flex -translate-y-1.5 items-center gap-1 align-super">
                       <span class="relative flex h-2 w-2">
@@ -50,29 +50,31 @@ defmodule LassoWeb.Components.DashboardHeader do
             </div>
           </div>
         </div>
-
+        
     <!-- Navigation Tabs -->
         <div class="flex items-center gap-4">
-          <.tab_switcher
-            id="main-tabs"
-            tabs={[
-              %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
-              %{
-                id: "metrics",
-                label: "Provider Metrics",
-                icon:
-                  "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-              },
-              %{
-                id: "system",
-                label: "System Metrics",
-                icon:
-                  "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"
-              }
-            ]}
-            active_tab={@active_tab}
-          />
-
+          <div class="hidden md:block">
+            <.tab_switcher
+              id="main-tabs"
+              tabs={[
+                %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
+                %{
+                  id: "metrics",
+                  label: "Provider Metrics",
+                  icon:
+                    "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                },
+                %{
+                  id: "system",
+                  label: "System Metrics",
+                  icon:
+                    "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"
+                }
+              ]}
+              active_tab={@active_tab}
+            />
+          </div>
+          
     <!-- Navigation and Actions -->
           <div class="flex items-center gap-4">
             <!-- Home / Landing -->
