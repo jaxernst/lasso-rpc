@@ -15,7 +15,7 @@ defmodule LassoWeb.Components.DashboardHeader do
             <div class="absolute inset-0 rounded-2xl bg-gradient-to-r from-purple-600 to-purple-400 opacity-5 blur-lg">
             </div>
             <div class="relative rounded-2xl ">
-              <div class="group flex cursor-default items-center space-x-3">
+              <a href="/" class="group flex cursor-pointer items-center space-x-3">
                 <div class="relative">
                   <div class="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 shadow-md transition-transform group-hover:rotate-3 group-hover:scale-110 sm:h-8 sm:w-8">
                     <svg
@@ -46,7 +46,7 @@ defmodule LassoWeb.Components.DashboardHeader do
                     </div>
                   </div>
                 </div>
-              </div>
+              </a>
             </div>
           </div>
         </div>
