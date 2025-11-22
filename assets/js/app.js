@@ -992,6 +992,95 @@ const ProviderRequestAnimator = {
   },
 };
 
+// Scroll Reveal Hook
+const ScrollReveal = {
+  mounted() {
+    this.revealed = false;
+    
+    // Check if we should reveal immediately (if already visible or near top)
+    // But usually we trust the observer. 
+    
+    this.observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            this.reveal();
+            this.observer.unobserve(this.el);
+          }
+        });
+      },
+      {
+        root: null,
+        threshold: 0.1,
+        rootMargin: "0px 0px -50px 0px",
+      }
+    );
+    this.observer.observe(this.el);
+  },
+  
+  updated() {
+    // LiveView might have reset the classes to the server-side state (hidden).
+    // If we have already revealed this element, we must force it back to visible.
+    if (this.revealed) {
+      this.el.classList.remove("opacity-0", "translate-y-8");
+      this.el.classList.add("opacity-100", "translate-y-0");
+    }
+  },
+
+  reveal() {
+    this.revealed = true;
+    this.el.classList.remove("opacity-0", "translate-y-8");
+    this.el.classList.add("opacity-100", "translate-y-0");
+  },
+
+  destroyed() {
+    if (this.observer) {
+      this.observer.disconnect();
+    }
+  },
+};
+
+// Parallax Background Hook
+const ParallaxBackground = {
+  mounted() {
+    this.ticking = false;
+    
+    this.handleScroll = () => {
+      if (!this.ticking) {
+        window.requestAnimationFrame(() => {
+          const scrolled = this.el.scrollTop;
+          const blobs = this.el.querySelectorAll("[data-parallax-speed]");
+          
+          blobs.forEach(blob => {
+            const speed = parseFloat(blob.dataset.parallaxSpeed);
+            // Move UP as we scroll down to create depth (background moves slower than foreground)
+            // Since foreground moves at 1px/px, background should move at (1-speed)px/px or similar.
+            // But these are fixed elements. They don't move at all by default.
+            // To make them look like they are "far away", they should move slightly opposite to scroll direction
+            // or slightly WITH scroll direction?
+            // If they are "background", they should move upwards but slower than the content.
+            // Content moves up at speed equal to scroll.
+            // If we want them to appear "behind", they should move up slower.
+            // Since they are FIXED, they effectively move with the camera (0 movement relative to viewport).
+            // To make them look like background, we need to push them UP as we scroll down.
+            const yPos = -(scrolled * speed); 
+            blob.style.transform = `translate3d(0, ${yPos}px, 0)`;
+          });
+          
+          this.ticking = false;
+        });
+        
+        this.ticking = true;
+      }
+    };
+
+    this.el.addEventListener("scroll", this.handleScroll);
+  },
+  destroyed() {
+    this.el.removeEventListener("scroll", this.handleScroll);
+  }
+};
+
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");
@@ -1007,6 +1096,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     ActivityFeed,
     ProviderRequestAnimator,
     TabSwitcher: EndpointSelector,
+    ScrollReveal,
+    ParallaxBackground
   },
 });
 
