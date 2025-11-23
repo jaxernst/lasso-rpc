@@ -153,12 +153,30 @@ async function rpc(url, body, timeoutMs) {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    const json = await res
-      .json()
-      .catch(() => ({ error: { code: -32700, message: "Invalid JSON" } }));
-    return { ok: res.ok && !json.error, status: res.status, json };
+    // Capture raw response text before parsing
+    const rawText = await res.text().catch(() => "");
+    let json;
+    try {
+      json = rawText
+        ? JSON.parse(rawText)
+        : { error: { code: -32700, message: "Empty response" } };
+    } catch (parseErr) {
+      json = { error: { code: -32700, message: "Invalid JSON", raw: rawText } };
+    }
+    return {
+      ok: res.ok && !json.error,
+      status: res.status,
+      json,
+      rawResponse: rawText,
+      requestPayload: body,
+    };
   } catch (err) {
-    return { ok: false, status: 0, error: String((err && err.message) || err) };
+    return {
+      ok: false,
+      status: 0,
+      error: String((err && err.message) || err),
+      requestPayload: body,
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -458,11 +476,42 @@ async function run() {
       windowErr++;
     }
     perMethod.set(methodDef.name, stats);
-    if (options.verbose) {
-      const status = res.ok ? "OK" : "ERR";
-      process.stdout.write(
-        `${methodDef.name} ${status} ${dtMs.toFixed(1)}ms\n`
-      );
+
+    // Always log errors in verbose mode, even if they're not in the main flow
+    if (options.verbose && !res.ok) {
+      const status = "ERR";
+      let output = `${methodDef.name} ${status} ${dtMs.toFixed(1)}ms`;
+
+      // Print error summary
+      if (res.error) {
+        output += ` - ${res.error}`;
+      } else if (res.json && res.json.error) {
+        const err = res.json.error;
+        output += ` - ${err.message || err.code || JSON.stringify(err)}`;
+      } else if (res.status && res.status !== 200) {
+        output += ` - HTTP ${res.status}`;
+      } else {
+        output += ` - Unknown error`;
+      }
+      process.stdout.write(output + "\n");
+
+      // Always log full request/response details for errors in verbose mode
+      if (res.requestPayload) {
+        process.stdout.write(
+          `  Request Payload:\n${JSON.stringify(res.requestPayload, null, 2)}\n`
+        );
+      }
+      if (res.rawResponse) {
+        process.stdout.write(`  Raw HTTP Response:\n${res.rawResponse}\n`);
+      } else if (res.error) {
+        process.stdout.write(`  Error Details: ${res.error}\n`);
+      }
+      if (res.status) {
+        process.stdout.write(`  HTTP Status: ${res.status}\n`);
+      }
+    } else if (options.verbose && res.ok) {
+      // Log successful requests too
+      process.stdout.write(`${methodDef.name} OK ${dtMs.toFixed(1)}ms\n`);
     }
   }
 
