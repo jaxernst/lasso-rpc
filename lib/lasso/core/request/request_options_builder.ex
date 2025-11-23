@@ -85,7 +85,9 @@ defmodule Lasso.RPC.RequestOptions.Builder do
       end
 
     timeout_ms = overrides[:timeout_ms] || MethodPolicy.timeout_for(method)
-    request_id = overrides[:request_id] || conn.assigns[:request_id]
+
+    # Get request_id from override, or fall back to Logger.metadata (set by Plug.RequestId)
+    request_id = overrides[:request_id] || Logger.metadata()[:request_id]
     request_context = overrides[:request_context]
 
     opts = %RequestOptions{

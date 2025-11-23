@@ -121,7 +121,9 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
 
     # Log fast-fail event
     Logger.info("Fast-failing to next channel",
+      request_id: ctx.request_id,
       channel: Channel.to_string(channel),
+      method: ctx.method,
       error_category: error_category,
       reason: failover_reason,
       remaining_channels: length(rest_channels),
@@ -154,7 +156,9 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
         ) :: {:error, term(), Channel.t(), RequestContext.t()}
   def handle_terminal_error(ctx, channel, error, reason, remaining_channels) do
     Logger.warning("Channel request failed - no failover",
+      request_id: ctx.request_id,
       channel: Channel.to_string(channel),
+      method: ctx.method,
       error: inspect(error),
       reason: reason,
       remaining_channels: remaining_channels,
@@ -188,11 +192,12 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
 
     if repeated_count >= @repeated_capability_violation_threshold do
       Logger.warning("Repeated capability violation detected - assuming universal limitation",
+        request_id: ctx.request_id,
         error_message: error.message,
+        method: ctx.method,
         repeated_count: repeated_count,
         threshold: @repeated_capability_violation_threshold,
-        chain: ctx.chain,
-        request_id: ctx.request_id
+        chain: ctx.chain
       )
 
       {false, :universal_capability_violation}
