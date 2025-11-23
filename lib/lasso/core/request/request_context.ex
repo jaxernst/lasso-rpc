@@ -29,6 +29,8 @@ defmodule Lasso.RPC.RequestContext do
           selection_latency_ms: float() | nil,
           retries: non_neg_integer(),
           circuit_breaker_state: :open | :half_open | :closed | nil,
+          # Track repeated error categories to detect universal failures
+          repeated_error_categories: %{atom() => non_neg_integer()},
 
           # Timing
           start_time: integer(),
@@ -66,6 +68,7 @@ defmodule Lasso.RPC.RequestContext do
             selection_latency_ms: nil,
             retries: 0,
             circuit_breaker_state: nil,
+            repeated_error_categories: %{},
             start_time: nil,
             request_start_ms: nil,
             selection_start: nil,
@@ -254,6 +257,25 @@ defmodule Lasso.RPC.RequestContext do
   """
   def increment_retries(%__MODULE__{} = ctx) do
     %{ctx | retries: ctx.retries + 1}
+  end
+
+  @doc """
+  Track an error category to detect repeated failures across providers.
+
+  Used for detecting when the same error (e.g., result size violation) occurs
+  across multiple providers, indicating a universal limitation rather than
+  provider-specific issue.
+  """
+  def track_error_category(%__MODULE__{} = ctx, category) when is_atom(category) do
+    count = Map.get(ctx.repeated_error_categories, category, 0) + 1
+    %{ctx | repeated_error_categories: Map.put(ctx.repeated_error_categories, category, count)}
+  end
+
+  @doc """
+  Get the count for a specific error category.
+  """
+  def get_error_category_count(%__MODULE__{} = ctx, category) when is_atom(category) do
+    Map.get(ctx.repeated_error_categories, category, 0)
   end
 
   @doc """

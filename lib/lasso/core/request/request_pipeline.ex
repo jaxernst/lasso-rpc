@@ -13,7 +13,16 @@ defmodule Lasso.RPC.RequestPipeline do
   require Logger
 
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{Channel, CircuitBreaker, ProviderPool, RequestContext, Selection, TransportRegistry}
+
+  alias Lasso.RPC.{
+    Channel,
+    CircuitBreaker,
+    ProviderPool,
+    RequestContext,
+    Selection,
+    TransportRegistry
+  }
+
   alias Lasso.RPC.Providers.AdapterFilter
   alias Lasso.RPC.RequestOptions
   alias Lasso.RPC.RequestPipeline.{FailoverStrategy, Observability}
@@ -162,7 +171,9 @@ defmodule Lasso.RPC.RequestPipeline do
 
     Observability.record_success(updated_ctx, channel, method, opts.strategy, duration_ms)
 
-    final_ctx = complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
+    final_ctx =
+      complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
+
     {:ok, result, final_ctx}
   end
 
@@ -263,19 +274,28 @@ defmodule Lasso.RPC.RequestPipeline do
             # Failover succeeded
             duration_ms = RequestContext.get_duration(updated_ctx)
             Observability.record_success(updated_ctx, channel, method, opts.strategy, duration_ms)
-            final_ctx = complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
+
+            final_ctx =
+              complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
+
             {:ok, result, final_ctx}
 
           {:error, _reason, _channel, failed_ctx} ->
             # Failover failed - return original error
             final_duration_ms = RequestContext.get_duration(failed_ctx)
-            final_ctx = complete_request(:error, failed_ctx, final_duration_ms, chain, method, error: jerr)
+
+            final_ctx =
+              complete_request(:error, failed_ctx, final_duration_ms, chain, method, error: jerr)
+
             {:error, jerr, final_ctx}
 
           {:error, :no_channels_available, failed_ctx} ->
             # All failover channels exhausted - return original error
             final_duration_ms = RequestContext.get_duration(failed_ctx)
-            final_ctx = complete_request(:error, failed_ctx, final_duration_ms, chain, method, error: jerr)
+
+            final_ctx =
+              complete_request(:error, failed_ctx, final_duration_ms, chain, method, error: jerr)
+
             {:error, jerr, final_ctx}
         end
     end
@@ -364,7 +384,15 @@ defmodule Lasso.RPC.RequestPipeline do
         handle_channel_exhaustion(chain, method, opts, ctx)
 
       _ ->
-        execute_request_with_channels(chain, rpc_request, method, opts, ctx, degraded_channels, :degraded)
+        execute_request_with_channels(
+          chain,
+          rpc_request,
+          method,
+          opts,
+          ctx,
+          degraded_channels,
+          :degraded
+        )
     end
   end
 
@@ -479,7 +507,10 @@ defmodule Lasso.RPC.RequestPipeline do
         updated_ctx = RequestContext.mark_upstream_end(ctx)
         final_ctx = RequestContext.record_error(updated_ctx, :no_channels_available)
         jerr = normalize_channel_error(:no_channels_available, "no_channels")
-        final_ctx = complete_request(:error, final_ctx, duration_ms, ctx.chain, ctx.method, error: jerr)
+
+        final_ctx =
+          complete_request(:error, final_ctx, duration_ms, ctx.chain, ctx.method, error: jerr)
+
         {:error, jerr, final_ctx}
     end
   end
@@ -522,7 +553,9 @@ defmodule Lasso.RPC.RequestPipeline do
       Observability.record_degraded_success(chain, method, channel)
     end
 
-    final_ctx = complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
+    final_ctx =
+      complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
+
     {:ok, result, final_ctx}
   end
 
@@ -697,7 +730,7 @@ defmodule Lasso.RPC.RequestPipeline do
   defp handle_channel_error(reason, io_ms, channel, rpc_request, timeout, ctx, rest_channels) do
     ctx = RequestContext.set_upstream_latency(ctx, io_ms || 0)
 
-    case FailoverStrategy.decide(reason, rest_channels) do
+    case FailoverStrategy.decide(reason, rest_channels, ctx) do
       {:failover, failover_reason} ->
         FailoverStrategy.execute_failover(
           ctx,
@@ -875,6 +908,8 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # Helper to check if an error is retriable (defaults to false)
   @spec retriable_error?(any()) :: boolean()
-  defp retriable_error?(%JError{retriable?: retriable?}) when is_boolean(retriable?), do: retriable?
+  defp retriable_error?(%JError{retriable?: retriable?}) when is_boolean(retriable?),
+    do: retriable?
+
   defp retriable_error?(_), do: false
 end
