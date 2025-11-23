@@ -35,6 +35,26 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       category = ErrorClassification.categorize(429, "Rate limit exceeded")
       assert category == :rate_limit
     end
+
+    test "classifies result size violation as capability violation (provider-specific limit)" do
+      category = ErrorClassification.categorize(-32_005, "query returned more than 10000 results")
+      assert category == :capability_violation
+    end
+
+    test "classifies 'too many results' as capability violation" do
+      category = ErrorClassification.categorize(-32_000, "too many results")
+      assert category == :capability_violation
+    end
+
+    test "classifies 'result set too large' as capability violation" do
+      category = ErrorClassification.categorize(-32_000, "result set too large")
+      assert category == :capability_violation
+    end
+
+    test "classifies 'too many logs' as capability violation" do
+      category = ErrorClassification.categorize(-32_000, "too many logs returned")
+      assert category == :capability_violation
+    end
   end
 
   describe "retriable?/2" do
@@ -67,6 +87,21 @@ defmodule Lasso.RPC.ErrorClassificationTest do
     test "invalid params are not retriable" do
       retriable = ErrorClassification.retriable?(-32_602, "Invalid parameters")
       assert retriable == false
+    end
+
+    test "result size violations ARE retriable (provider-specific limits, smart detection prevents exhaustion)" do
+      retriable = ErrorClassification.retriable?(-32_005, "query returned more than 10000 results")
+      assert retriable == true
+    end
+
+    test "'too many results' errors ARE retriable (premium providers may handle)" do
+      retriable = ErrorClassification.retriable?(-32_000, "too many results")
+      assert retriable == true
+    end
+
+    test "'result set too large' errors ARE retriable (provider capabilities vary)" do
+      retriable = ErrorClassification.retriable?(-32_000, "result set too large")
+      assert retriable == true
     end
   end
 

@@ -1091,15 +1091,21 @@ defmodule Lasso.RPC.ProviderPool do
             end
 
           _ ->
+            # For :both or nil protocol, include provider if it has at least one viable transport
+            # A transport is viable if: 1) it's configured, 2) CB is not open (or half-open allowed)
             http_state = get_cb_state(state.circuit_states, p.id, :http)
             ws_state = get_cb_state(state.circuit_states, p.id, :ws)
 
+            # Check which transports are actually configured
+            has_http = is_binary(Map.get(p.config, :url))
+            has_ws = is_binary(Map.get(p.config, :ws_url))
+
             if include_half_open do
-              # Include if at least one transport is not fully open
-              not (http_state == :open and ws_state == :open)
+              # Include if at least one configured transport is not fully open
+              (has_http and http_state != :open) or (has_ws and ws_state != :open)
             else
-              # Only include if at least one transport is closed
-              http_state == :closed or ws_state == :closed
+              # Include if at least one configured transport has closed CB
+              (has_http and http_state == :closed) or (has_ws and ws_state == :closed)
             end
         end
 

@@ -102,6 +102,15 @@ defmodule Lasso.RPC.ErrorClassification do
     "permission denied"
   ]
 
+  @result_size_violation_patterns [
+    # Provider-specific result size limits (retriable on premium providers)
+    "query returned more than",
+    "result set too large",
+    "result limit exceeded",
+    "too many results",
+    "too many logs"
+  ]
+
   @capability_violation_patterns [
     "free tier",
     # Address/query limits
@@ -142,15 +151,10 @@ defmodule Lasso.RPC.ErrorClassification do
     "not available",
     "not enabled",
     "does not support",
-    # Result size limits
+    # Parameter range limits (provider-specific)
     "unsupported parameter range",
     "unsupported param range",
     "limit exceeded for this method",
-    "result set too large",
-    "result limit exceeded",
-    "query returned more than",
-    "too many results",
-    "too many logs",
     "exceeds limit",
     "exceeds maximum",
     "limit reached",
@@ -228,9 +232,7 @@ defmodule Lasso.RPC.ErrorClassification do
     |> classify_by_message()
     |> case do
       nil -> retriable_by_code?(code)
-      :rate_limit -> true
-      :auth_error -> true
-      :capability_violation -> true
+      category -> retriable_for_category?(category)
     end
   end
 
@@ -299,8 +301,14 @@ defmodule Lasso.RPC.ErrorClassification do
 
   defp classify_by_message(message_lower) do
     cond do
+      # Rate limits checked first (highest priority)
       contains_any?(message_lower, @rate_limit_patterns) -> :rate_limit
+      # Auth errors
       contains_any?(message_lower, @auth_patterns) -> :auth_error
+      # Result size violations are provider-specific capabilities, not client errors
+      # Different providers have different limits (10k free tier, 100k+ premium)
+      contains_any?(message_lower, @result_size_violation_patterns) -> :capability_violation
+      # Other capability constraints
       contains_any?(message_lower, @capability_violation_patterns) -> :capability_violation
       true -> nil
     end
