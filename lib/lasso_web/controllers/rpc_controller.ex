@@ -268,26 +268,19 @@ defmodule LassoWeb.RPCController do
 
     provider_override = extract_provider_override(conn, opts)
 
-    # Extract Phoenix request_id to ensure consistent tracing throughout the request lifecycle
-    request_id =
-      case conn do
-        %Plug.Conn{assigns: %{request_id: rid}} when is_binary(rid) -> rid
-        _ -> nil
-      end
-
     transport_override =
       case conn do
         %Plug.Conn{} -> extract_transport_override(conn, method)
         _ -> nil
       end
 
+    # RequestOptionsBuilder.from_conn now handles request_id extraction from conn.private[:plug_request_id]
     opts =
       RequestOptionsBuilder.from_conn(conn, method,
         strategy: strategy,
         provider_override: provider_override,
         transport: transport_override,
-        timeout_ms: MethodPolicy.timeout_for(method),
-        request_id: request_id
+        timeout_ms: MethodPolicy.timeout_for(method)
       )
 
     RequestPipeline.execute_via_channels(chain, method, params, opts)

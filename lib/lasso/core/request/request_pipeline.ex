@@ -674,7 +674,9 @@ defmodule Lasso.RPC.RequestPipeline do
 
       :exit, {:noproc, _} ->
         Logger.error("Circuit breaker not found for channel - provider may not be initialized",
+          request_id: ctx.request_id,
           channel: Channel.to_string(channel),
+          method: Map.get(rpc_request, "method"),
           circuit_breaker_id: inspect(cb_id)
         )
 
@@ -686,7 +688,9 @@ defmodule Lasso.RPC.RequestPipeline do
 
       :exit, reason ->
         Logger.error("Circuit breaker unexpected exit",
+          request_id: ctx.request_id,
           channel: Channel.to_string(channel),
+          method: Map.get(rpc_request, "method"),
           reason: inspect(reason)
         )
 
@@ -789,8 +793,10 @@ defmodule Lasso.RPC.RequestPipeline do
       # Circuit breaker open: fast fail to next provider
       {:error, :circuit_open} ->
         Logger.info("Circuit breaker open, fast-failing to next channel",
+          request_id: ctx.request_id,
           channel: Channel.to_string(channel),
-          chain: ctx.chain
+          chain: ctx.chain,
+          method: Map.get(rpc_request, "method")
         )
 
         ctx = RequestContext.set_upstream_latency(ctx, 0)
