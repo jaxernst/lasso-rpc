@@ -69,11 +69,58 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
   @impl true
   def handle_call({:subscribe, client_pid, key}, _from, state) do
-    # Allocate subscription id and register client
+    # Allocate subscription id and register client immediately (non-blocking)
     subscription_id = generate_id()
     :ok = ClientSubscriptionRegistry.add_client(state.chain, subscription_id, client_pid, key)
 
-    {new_state, _} = ensure_upstream_for_key(state, key)
+    # Start coordinator for this key (idempotent, safe to call multiple times)
+    _ = start_coordinator_for_key(state, key)
+
+    # Handle subscription based on current key state
+    new_state =
+      case Map.get(state.keys, key) do
+        nil ->
+          # First subscriber - trigger async upstream establishment
+          GenServer.cast(self(), {:establish_upstream, key, []})
+
+          # Create entry to track the in-progress subscription
+          entry = %{
+            refcount: 1,
+            status: :establishing,
+            primary_provider_id: nil,
+            upstream: %{},
+            markers: %{},
+            dedupe: nil
+          }
+
+          telemetry_subscription_status(:establishing, state.chain, key, 1)
+          %{state | keys: Map.put(state.keys, key, entry)}
+
+        entry when entry.status == :establishing ->
+          # Additional subscriber while still establishing - just increment refcount
+          updated = %{entry | refcount: entry.refcount + 1}
+          telemetry_subscription_status(:establishing, state.chain, key, updated.refcount)
+          %{state | keys: Map.put(state.keys, key, updated)}
+
+        entry when entry.status == :active ->
+          # Subsequent subscriber - upstream already active, instant response
+          updated = %{entry | refcount: entry.refcount + 1}
+          telemetry_subscription_status(:active, state.chain, key, updated.refcount)
+          %{state | keys: Map.put(state.keys, key, updated)}
+
+        entry when entry.status == :failed ->
+          # Previous establishment failed, retry
+          GenServer.cast(self(), {:establish_upstream, key, []})
+
+          updated = %{
+            entry
+            | refcount: entry.refcount + 1,
+              status: :establishing
+          }
+
+          telemetry_subscription_status(:retry, state.chain, key, updated.refcount)
+          %{state | keys: Map.put(state.keys, key, updated)}
+      end
 
     {:reply, {:ok, subscription_id}, new_state}
   end
@@ -182,6 +229,126 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   end
 
   @impl true
+  def handle_cast({:establish_upstream, key, excluded_providers}, state) do
+    with {:ok, entry} <- validate_entry_for_establishment(state.keys[key]),
+         {:ok, provider_id} <- select_available_provider(state.chain, excluded_providers),
+         {:ok, upstream_id} <- attempt_upstream_subscribe(state.chain, provider_id, key) do
+      # Happy path: subscription established successfully
+      new_state = activate_subscription(state, key, entry, provider_id, upstream_id)
+
+      Logger.info("Upstream subscription established for key #{inspect(key)} on provider #{provider_id}")
+      telemetry_upstream(:subscribe, state.chain, provider_id, key)
+      telemetry_subscription_status(:active, state.chain, key, entry.refcount)
+
+      {:noreply, new_state}
+    else
+      {:error, :entry_invalid} ->
+        # Entry cleaned up, wrong status, or no clients - skip silently
+        {:noreply, state}
+
+      {:error, :no_providers} ->
+        # No providers available after exclusions
+        new_state = mark_subscription_failed(state, key, "No available providers")
+        {:noreply, new_state}
+
+      {:error, {:subscribe_failed, provider_id, _reason}} ->
+        # Subscription attempt failed - retry or fail
+        new_excluded = [provider_id | excluded_providers]
+        handle_subscription_failure(state, key, new_excluded)
+    end
+  end
+
+  # Validate that entry exists and is ready for establishment
+  defp validate_entry_for_establishment(nil), do: {:error, :entry_invalid}
+
+  defp validate_entry_for_establishment(entry) when entry.status != :establishing,
+    do: {:error, :entry_invalid}
+
+  defp validate_entry_for_establishment(entry) when entry.refcount < 1,
+    do: {:error, :entry_invalid}
+
+  defp validate_entry_for_establishment(entry), do: {:ok, entry}
+
+  # Select an available provider, excluding failed attempts
+  defp select_available_provider(chain, excluded_providers) do
+    channels =
+      Selection.select_channels(chain, "eth_subscribe",
+        strategy: :priority,
+        transport: :ws,
+        limit: 1
+      )
+
+    case Enum.find(channels, fn ch -> ch.provider_id not in excluded_providers end) do
+      %Channel{provider_id: provider_id} ->
+        {:ok, provider_id}
+
+      nil ->
+        Logger.error("No available WS channels (excluded: #{inspect(excluded_providers)})")
+        {:error, :no_providers}
+    end
+  end
+
+  # Attempt upstream subscription, wrapping result consistently
+  defp attempt_upstream_subscribe(chain, provider_id, key) do
+    Logger.debug("Attempting upstream subscribe to #{provider_id} for key #{inspect(key)}")
+
+    case send_upstream_subscribe(chain, provider_id, key) do
+      {:ok, upstream_id} ->
+        {:ok, upstream_id}
+
+      {:error, reason} ->
+        Logger.warning("Upstream subscribe failed on #{provider_id}: #{inspect(reason)}")
+        {:error, {:subscribe_failed, provider_id, reason}}
+    end
+  end
+
+  # Activate subscription after successful establishment
+  defp activate_subscription(state, key, entry, provider_id, upstream_id) do
+    updated_entry = %{
+      entry
+      | status: :active,
+        primary_provider_id: provider_id,
+        upstream: %{provider_id => upstream_id}
+    }
+
+    upstream_index =
+      Map.update(state.upstream_index, provider_id, %{upstream_id => key}, fn m ->
+        Map.put(m, upstream_id, key)
+      end)
+
+    %{state | keys: Map.put(state.keys, key, updated_entry), upstream_index: upstream_index}
+  end
+
+  # Handle subscription failure with retry logic
+  defp handle_subscription_failure(state, key, excluded_providers) do
+    max_attempts = 3
+
+    if length(excluded_providers) < max_attempts do
+      Logger.info("Retrying upstream establishment for #{inspect(key)} (attempt #{length(excluded_providers) + 1}/#{max_attempts})")
+      GenServer.cast(self(), {:establish_upstream, key, excluded_providers})
+      {:noreply, state}
+    else
+      Logger.error("Failed to establish upstream for #{inspect(key)} after #{max_attempts} attempts")
+      new_state = mark_subscription_failed(state, key, "Max retries exceeded")
+      {:noreply, new_state}
+    end
+  end
+
+  # Mark subscription as failed
+  defp mark_subscription_failed(state, key, reason) do
+    case state.keys[key] do
+      nil ->
+        state
+
+      entry ->
+        updated_entry = %{entry | status: :failed}
+        telemetry_subscription_status(:failed, state.chain, key, entry.refcount)
+        Logger.error("Subscription failed for #{inspect(key)}: #{reason}")
+        %{state | keys: Map.put(state.keys, key, updated_entry)}
+    end
+  end
+
+  @impl true
   # Handle typed subscription events from WSConnection
   def handle_info(
         {:subscription_event, provider_id, upstream_id, payload, received_at},
@@ -261,65 +428,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   def handle_info(_, state), do: {:noreply, state}
 
   # Internal helpers
-
-  defp ensure_upstream_for_key(state, key) do
-    case Map.get(state.keys, key) do
-      nil ->
-        _ = start_coordinator_for_key(state, key)
-
-        channels =
-          Selection.select_channels(state.chain, "eth_subscribe",
-            strategy: :priority,
-            transport: :ws,
-            limit: 1
-          )
-
-        case List.first(channels) do
-          %Channel{provider_id: provider_id} ->
-            case send_upstream_subscribe(state.chain, provider_id, key) do
-              {:ok, upstream_id} ->
-                telemetry_upstream(:subscribe, state.chain, provider_id, key)
-
-                entry = %{
-                  refcount: 1,
-                  primary_provider_id: provider_id,
-                  upstream: %{provider_id => upstream_id},
-                  markers: %{},
-                  dedupe: nil
-                }
-
-                upstream_index =
-                  Map.update(state.upstream_index, provider_id, %{upstream_id => key}, fn m ->
-                    Map.put(m, upstream_id, key)
-                  end)
-
-                new_state = %{
-                  state
-                  | keys: Map.put(state.keys, key, entry),
-                    upstream_index: upstream_index
-                }
-
-                {new_state, provider_id}
-
-              {:error, jerr} ->
-                # Try select next provider; for simplicity, return original state and nil
-                Logger.warning(
-                  "Initial upstream subscribe failed for #{inspect(key)} on #{provider_id}: #{inspect(jerr)}"
-                )
-
-                {state, nil}
-            end
-
-          _ ->
-            Logger.error("Failed to select WS channel for #{inspect(key)}")
-            {state, nil}
-        end
-
-      entry ->
-        updated = %{entry | refcount: entry.refcount + 1}
-        {%{state | keys: Map.put(state.keys, key, updated)}, entry.primary_provider_id}
-    end
-  end
 
   defp start_coordinator_for_key(state, key) do
     opts = [
@@ -533,6 +641,14 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       key: inspect(key),
       provider_id: provider_id,
       reason: inspect(reason)
+    })
+  end
+
+  defp telemetry_subscription_status(status, chain, key, refcount) do
+    :telemetry.execute([:lasso, :subs, :status], %{refcount: refcount}, %{
+      chain: chain,
+      key: inspect(key),
+      status: status
     })
   end
 

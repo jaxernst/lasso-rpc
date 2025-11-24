@@ -109,82 +109,9 @@ defmodule Lasso.RPC.Providers.MultichainAdapterTest do
     end
   end
 
-  describe "PublicNode adapter with per-chain config" do
-    test "uses default address limits when no adapter_config provided" do
-      ctx = %{
-        provider_id: "base_publicnode",
-        chain: "base"
-      }
-
-      # Generate 26 addresses (default HTTP limit is 25)
-      addresses = Enum.map(1..26, fn i -> "0x#{Integer.to_string(i, 16)}" end)
-      params = [%{"address" => addresses}]
-
-      assert {:error, {:param_limit, message}} =
-               Adapters.PublicNode.validate_params("eth_getLogs", params, :http, ctx)
-
-      assert message =~ "max 25 addresses"
-    end
-
-    test "respects adapter_config for custom address limits" do
-      provider_config = %Lasso.Config.ChainConfig.Provider{
-        id: "base_publicnode",
-        name: "PublicNode Base",
-        url: "https://base.publicnode.com",
-        adapter_config: %{
-          max_addresses_http: 50,
-          max_addresses_ws: 30
-        }
-      }
-
-      ctx = %{
-        provider_id: "base_publicnode",
-        chain: "base",
-        provider_config: provider_config
-      }
-
-      # 40 addresses should pass with HTTP limit of 50
-      addresses = Enum.map(1..40, fn i -> "0x#{Integer.to_string(i, 16)}" end)
-      params = [%{"address" => addresses}]
-      assert :ok = Adapters.PublicNode.validate_params("eth_getLogs", params, :http, ctx)
-
-      # But 51 should fail
-      addresses = Enum.map(1..51, fn i -> "0x#{Integer.to_string(i, 16)}" end)
-      params = [%{"address" => addresses}]
-
-      assert {:error, {:param_limit, message}} =
-               Adapters.PublicNode.validate_params("eth_getLogs", params, :http, ctx)
-
-      assert message =~ "max 50 addresses"
-    end
-
-    test "uses different limits for WS transport" do
-      provider_config = %Lasso.Config.ChainConfig.Provider{
-        id: "base_publicnode",
-        name: "PublicNode Base",
-        url: "https://base.publicnode.com",
-        adapter_config: %{
-          max_addresses_http: 50,
-          max_addresses_ws: 15
-        }
-      }
-
-      ctx = %{
-        provider_id: "base_publicnode",
-        chain: "base",
-        provider_config: provider_config
-      }
-
-      # 20 addresses should fail on WS (limit 15)
-      addresses = Enum.map(1..20, fn i -> "0x#{Integer.to_string(i, 16)}" end)
-      params = [%{"address" => addresses}]
-
-      assert {:error, {:param_limit, message}} =
-               Adapters.PublicNode.validate_params("eth_getLogs", params, :ws, ctx)
-
-      assert message =~ "max 15 addresses"
-    end
-  end
+  # NOTE: PublicNode does not support eth_getLogs at all (method_unsupported),
+  # so address limit validation tests are not applicable for this adapter.
+  # See supports_method?/3 in lib/lasso/core/providers/adapters/public_node.ex
 
   describe "LlamaRPC adapter with per-chain config" do
     test "uses default block range when no adapter_config provided" do
