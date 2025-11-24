@@ -55,7 +55,8 @@ defmodule Lasso.MixProject do
       {:tailwind_formatter, "~> 0.4.2", only: :dev},
       {:telemetry_metrics, "~> 0.6"},
       {:telemetry_poller, "~> 1.0"},
-      {:mox, "~> 1.0", only: :test}
+      {:mox, "~> 1.0", only: :test},
+      {:cors_plug, "~> 3.0"}
     ]
   end
 

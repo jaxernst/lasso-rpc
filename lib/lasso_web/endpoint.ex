@@ -92,5 +92,19 @@ defmodule LassoWeb.Endpoint do
   plug(Plug.MethodOverride)
   plug(Plug.Head)
   plug(Plug.Session, @session_options)
+
+  plug(CORSPlug,
+    origin: "*",
+    max_age: 86400,
+    methods: ["GET", "POST", "OPTIONS"],
+    headers: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "X-Lasso-Provider",
+      "X-Lasso-Transport"
+    ]
+  )
+
   plug(LassoWeb.Router)
 end
