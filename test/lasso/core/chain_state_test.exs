@@ -5,9 +5,8 @@ defmodule Lasso.RPC.ChainStateTest do
   alias Lasso.RPC.ProviderPool
 
   setup do
-    # Start necessary dependencies
-    start_supervised!({Registry, keys: :unique, name: Lasso.Registry})
-    start_supervised!({Phoenix.PubSub, name: Lasso.PubSub})
+    # Generate unique chain name for each test to avoid conflicts
+    chain = "test_chain_#{System.unique_integer([:positive])}"
 
     # Configure test chain
     chain_config = %{
@@ -20,9 +19,11 @@ defmodule Lasso.RPC.ChainStateTest do
     }
 
     # Start ProviderPool (creates ETS table)
-    start_supervised!({ProviderPool, {"test_chain", chain_config}})
+    # Registry and PubSub are already started by the application
+    # Use explicit ID to avoid ExUnit supervision tree conflicts
+    start_supervised!({ProviderPool, {chain, chain_config}}, id: {:provider_pool, chain})
 
-    {:ok, chain: "test_chain"}
+    {:ok, chain: chain}
   end
 
   describe "consensus_height/2" do
@@ -198,10 +199,11 @@ defmodule Lasso.RPC.ChainStateTest do
       )
 
       # Consensus window should be 18s (1.5x 12s)
-      chain = "unconfigured_chain"
+      # Generate unique chain name to avoid conflicts
+      chain = "unconfigured_chain_#{System.unique_integer([:positive])}"
 
-      # Start pool for unconfigured chain
-      start_supervised!({ProviderPool, {chain, %{chain_id: 2, providers: []}}})
+      # Start pool for unconfigured chain with explicit ID
+      start_supervised!({ProviderPool, {chain, %{chain_id: 2, providers: []}}}, id: {:provider_pool, chain})
 
       table = ProviderPool.table_name(chain)
       now = System.system_time(:millisecond)

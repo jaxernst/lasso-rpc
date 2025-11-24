@@ -154,6 +154,150 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
     end
   end
 
+  describe "async subscription behavior" do
+    test "first subscriber gets immediate response while upstream establishes", %{chain: chain} do
+      client = spawn(fn -> Process.sleep(:infinity) end)
+      key = {:newHeads}
+
+      # Subscribe should return immediately (< 100ms), not wait for upstream
+      start_time = System.monotonic_time(:millisecond)
+      {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+      elapsed = System.monotonic_time(:millisecond) - start_time
+
+      # Should be instant (< 100ms), not waiting for upstream
+      assert elapsed < 100
+      assert is_binary(sub_id)
+
+      # State should show establishing or active (depending on how fast mock responds)
+      state = get_pool_state(chain)
+      assert state.keys[key].status in [:establishing, :active]
+      assert state.keys[key].refcount == 1
+
+      # Wait for async establishment to complete if not already
+      Process.sleep(200)
+
+      # Should be active
+      state = get_pool_state(chain)
+      assert state.keys[key].status == :active
+      assert state.keys[key].primary_provider_id != nil
+
+      Process.exit(client, :kill)
+    end
+
+    test "multiple subscribers during establishment all get immediate response", %{chain: chain} do
+      key = {:newHeads}
+
+      # Create 5 clients that subscribe rapidly
+      clients =
+        for _ <- 1..5 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
+
+      # All should subscribe instantly
+      sub_ids =
+        Enum.map(clients, fn client ->
+          {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+          sub_id
+        end)
+
+      # All should have unique subscription IDs
+      assert length(Enum.uniq(sub_ids)) == 5
+
+      # State should show establishing with refcount 5
+      state = get_pool_state(chain)
+      assert state.keys[key].status in [:establishing, :active]
+      assert state.keys[key].refcount == 5
+
+      # Wait for establishment
+      Process.sleep(200)
+
+      # Should be active
+      state = get_pool_state(chain)
+      assert state.keys[key].status == :active
+
+      Enum.each(clients, fn client -> Process.exit(client, :kill) end)
+    end
+
+    test "client unsubscribes during or after establishment", %{chain: chain} do
+      client = spawn(fn -> Process.sleep(:infinity) end)
+      key = {:newHeads}
+
+      # Subscribe
+      {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+
+      # Verify entry exists (status can be establishing or active depending on timing)
+      state = get_pool_state(chain)
+      assert state.keys[key] != nil
+      assert state.keys[key].status in [:establishing, :active]
+
+      # Unsubscribe immediately
+      :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub_id)
+      Process.sleep(50)
+
+      # Entry should be cleaned up (refcount was 1)
+      state = get_pool_state(chain)
+      assert state.keys == %{}
+
+      # Even if upstream establishment completes, it should not create orphaned state
+      Process.sleep(200)
+      state = get_pool_state(chain)
+      assert state.keys == %{}
+      assert state.upstream_index == %{}
+
+      Process.exit(client, :kill)
+    end
+
+    test "rapid subscribe/unsubscribe cycles maintain consistency", %{chain: chain} do
+      key = {:newHeads}
+
+      # Rapid subscribe/unsubscribe cycles
+      for _ <- 1..10 do
+        client = spawn(fn -> Process.sleep(:infinity) end)
+        {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+        Process.sleep(5)
+        :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub_id)
+        Process.exit(client, :kill)
+      end
+
+      # Wait for any pending operations
+      Process.sleep(300)
+
+      # State should be clean (no leaks)
+      state = get_pool_state(chain)
+      assert state.keys == %{}
+      assert state.upstream_index == %{}
+    end
+
+    test "subsequent subscribers after activation are instant", %{chain: chain} do
+      key = {:newHeads}
+
+      # First subscriber triggers establishment
+      client1 = spawn(fn -> Process.sleep(:infinity) end)
+      {:ok, _sub1} = UpstreamSubscriptionPool.subscribe_client(chain, client1, key)
+
+      # Wait for establishment to complete
+      Process.sleep(200)
+      state = get_pool_state(chain)
+      assert state.keys[key].status == :active
+
+      # Subsequent subscribers should be instant
+      client2 = spawn(fn -> Process.sleep(:infinity) end)
+      start_time = System.monotonic_time(:millisecond)
+      {:ok, _sub2} = UpstreamSubscriptionPool.subscribe_client(chain, client2, key)
+      elapsed = System.monotonic_time(:millisecond) - start_time
+
+      # Should be fast (< 50ms) - accounting for test infrastructure overhead
+      assert elapsed < 50
+
+      # Refcount should be 2
+      state = get_pool_state(chain)
+      assert state.keys[key].refcount == 2
+
+      Process.exit(client1, :kill)
+      Process.exit(client2, :kill)
+    end
+  end
+
   # Helper functions
 
   defp get_pool_state(chain) do

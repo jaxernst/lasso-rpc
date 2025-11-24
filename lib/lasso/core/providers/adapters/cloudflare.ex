@@ -94,6 +94,7 @@ defmodule Lasso.RPC.Providers.Adapters.Cloudflare do
     %{
       type: :public,
       tier: :free,
+      documentation: "https://developers.cloudflare.com/web3/ethereum-gateway/",
       known_limitations: [
         "No eth_getLogs support",
         "No filter methods (eth_getFilterLogs, eth_newFilter, etc.)",
