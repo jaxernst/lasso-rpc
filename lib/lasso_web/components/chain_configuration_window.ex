@@ -9,6 +9,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
 
   alias Lasso.Config.ChainConfigManager
   alias Lasso.Config.ConfigValidator
+  alias LassoWeb.Dashboard.Helpers
 
   @impl true
   def mount(socket) do
@@ -173,7 +174,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
     else: "bg-gray-800/40 text-gray-300 hover:bg-gray-700/60")]}
                   >
                     <div>
-                      <div class="font-medium">{String.capitalize(chain.name)}</div>
+                      <div class="font-medium">{Helpers.get_chain_display_name(chain.name)}</div>
                       <div class="text-gray-400">Chain ID: {chain.chain_id || "—"}</div>
                     </div>
                     <div class="text-xs text-gray-400">{length(chain.providers || [])} providers</div>
@@ -269,7 +270,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
         <%= if @selected_chain == "new_chain" do %>
           Create New Chain
         <% else %>
-          Configure: <span class="text-purple-300">{String.capitalize(@selected_chain)}</span>
+          Configure: <span class="text-purple-300">{Helpers.get_chain_display_name(@selected_chain)}</span>
         <% end %>
       </div>
       

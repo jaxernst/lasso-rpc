@@ -53,7 +53,7 @@ defmodule LassoWeb.Dashboard do
       |> Enum.map(fn chain_name ->
         %{
           name: chain_name,
-          display_name: chain_name |> String.capitalize()
+          display_name: Helpers.get_chain_display_name(chain_name)
         }
       end)
 
@@ -900,7 +900,7 @@ defmodule LassoWeb.Dashboard do
               </div>
             <% end %>
             <%= if Enum.empty?(@chain_unified_events) do %>
-              <div class="text-center text-gray-500 text-xs py-4">No recent events for {String.capitalize(@chain)}</div>
+              <div class="text-center text-gray-500 text-xs py-4">No recent events for {Helpers.get_chain_display_name(@chain)}</div>
             <% end %>
           </div>
         </div>
@@ -935,7 +935,7 @@ defmodule LassoWeb.Dashboard do
                 {if @provider_connection, do: @provider_connection.name, else: @provider}
               </h3>
               <div class="text-xs text-gray-400">
-                {if @provider_connection, do: String.capitalize(@provider_connection.chain || "unknown"), else: "Provider"} • {StatusHelpers.provider_status_label(@provider_connection || %{})}
+                {if @provider_connection, do: Helpers.get_chain_display_name(@provider_connection.chain || "unknown"), else: "Provider"} • {StatusHelpers.provider_status_label(@provider_connection || %{})}
               </div>
             </div>
           </div>
@@ -1237,7 +1237,7 @@ defmodule LassoWeb.Dashboard do
           _ -> assigns.selected_provider
         end
       assigns.selected_chain ->
-        String.capitalize(assigns.selected_chain)
+        Helpers.get_chain_display_name(assigns.selected_chain)
       true ->
         "System Overview"
     end

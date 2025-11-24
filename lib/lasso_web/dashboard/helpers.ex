@@ -110,6 +110,18 @@ defmodule LassoWeb.Dashboard.Helpers do
     end)
   end
 
+  @doc "Get human-readable display name for a chain from config"
+  def get_chain_display_name(chain_name) do
+    case ConfigStore.get_chain(chain_name) do
+      {:ok, %{name: display_name}} when is_binary(display_name) ->
+        display_name
+
+      _ ->
+        # Fallback to capitalized chain name if not found in config
+        chain_name |> String.capitalize()
+    end
+  end
+
   @doc "Create a unified event structure"
   def as_event(kind, opts) when is_list(opts) do
     now_ms = System.system_time(:millisecond)
