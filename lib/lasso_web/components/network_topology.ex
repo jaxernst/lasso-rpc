@@ -114,7 +114,7 @@ defmodule LassoWeb.NetworkTopology do
           >
             <div class="px-2 py-1 text-center text-white">
               <div class={"#{if radius < 50, do: "text-xs", else: "text-sm"} mb-1 font-bold text-white"}>
-                {String.upcase(chain_name)}
+                {Helpers.get_chain_display_name(chain_name)}
               </div>
               <div class={"#{if radius < 50, do: "text-xs", else: "text-sm"} text-gray-300"}>
                 {Helpers.get_chain_id(chain_name)}
