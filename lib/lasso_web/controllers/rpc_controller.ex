@@ -274,7 +274,6 @@ defmodule LassoWeb.RPCController do
         _ -> nil
       end
 
-    # RequestOptionsBuilder.from_conn now handles request_id extraction from conn.private[:plug_request_id]
     opts =
       RequestOptionsBuilder.from_conn(conn, method,
         strategy: strategy,
