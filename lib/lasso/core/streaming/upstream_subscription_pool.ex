@@ -239,6 +239,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
              is_struct(evt, Provider.WSDisconnected) do
     provider_id = Map.get(evt, :provider_id)
 
+    new_upstream_index = Map.delete(state.upstream_index, provider_id)
+
     keys_to_failover =
       state.keys
       |> Enum.filter(fn {_key, entry} -> entry.primary_provider_id == provider_id end)
@@ -253,7 +255,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       )
     end)
 
-    {:noreply, state}
+    {:noreply, %{state | upstream_index: new_upstream_index}}
   end
 
   def handle_info(_, state), do: {:noreply, state}

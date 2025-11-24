@@ -218,7 +218,8 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
   defp should_fast_fail_error?(%JError{category: :auth_error}, _rest, _ctx),
     do: {true, :auth_error_detected}
 
-  defp should_fast_fail_error?(%JError{retriable?: true}, _rest, _ctx), do: {true, :retriable_error}
+  defp should_fast_fail_error?(%JError{retriable?: true}, _rest, _ctx),
+    do: {true, :retriable_error}
 
   defp should_fast_fail_error?(:circuit_open, _rest, _ctx), do: {true, :circuit_open}
 
