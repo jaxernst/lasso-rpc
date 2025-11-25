@@ -314,26 +314,40 @@ mix phx.server
 
 Load testing and metrics export are in `scripts/`.
 
-**Provider probing and testing:**
+**Provider Discovery and Probing:**
 
-Test individual provider method support and performance:
+Probe RPC providers to discover supported methods, limits, and WebSocket capabilities:
 
 ```bash
-# Test all methods for a provider
-mix lasso.probe_provider ethereum ethereum_alchemy
+# Full probe (methods + limits + websocket)
+mix lasso.probe https://eth.llamarpc.com
 
-# Test specific method
-mix lasso.probe_provider ethereum ethereum_alchemy eth_getLogs
+# Probe specific capabilities only
+mix lasso.probe https://eth.llamarpc.com --probes methods,limits
 
-# Test with custom parameters
-mix lasso.probe_provider ethereum ethereum_alchemy eth_call --params '[{"to":"0x...","data":"0x..."}, "latest"]'
+# WebSocket-only probe
+mix lasso.probe wss://eth.llamarpc.com --probes websocket
+
+# Full method probe with JSON output
+mix lasso.probe https://eth.llamarpc.com --level full --output json
 ```
 
-The probe task validates method support, measures latency, and verifies response correctness. Use it when:
-- Adding new providers
-- Debugging provider issues
-- Validating adapter implementations
-- Benchmarking provider capabilities
+**Probe Options:**
+
+- `--probes <list>` - Comma-separated: methods, limits, websocket (default: all)
+- `--level <level>` - Method probe depth: critical, standard, full (default: standard)
+- `--timeout <ms>` - Request timeout (default: 10000)
+- `--output <format>` - Output: table, json (default: table)
+- `--chain <name>` - Chain context for test contracts (default: ethereum)
+- `--subscription-wait <ms>` - WebSocket event wait time (default: 15000)
+
+**What it discovers:**
+
+- **Methods**: Which JSON-RPC methods the provider supports
+- **Limits**: Block range limits, address count limits, batch request support, archive node support, rate limiting
+- **WebSocket**: Connection capability, subscription support (newHeads, logs, newPendingTransactions)
+
+Use the probe task when adding new providers or debugging provider issues
 
 ---
 
@@ -369,10 +383,6 @@ Lasso includes comprehensive Claude Code automation to accelerate development wo
 # Auto-fix compilation warnings
 "Fix the compilation warnings"  # elixir-quality skill auto-invokes
 ```
-
-**Full documentation:** See `project/CLAUDE_CODE_IMPLEMENTATION_GUIDE.md` for complete reference, customization guide, and implementation details.
-
-All features are ready to use immediately - just type the command or ask naturally.
 
 ---
 
