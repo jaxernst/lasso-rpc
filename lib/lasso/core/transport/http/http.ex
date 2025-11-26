@@ -10,9 +10,8 @@ defmodule Lasso.RPC.Transports.HTTP do
   @behaviour Lasso.RPC.Transport
 
   require Logger
-  alias Lasso.RPC.HttpClient
-  alias Lasso.RPC.ErrorNormalizer
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.{ErrorNormalizer, HttpClient}
 
   # Channel is the provider configuration for HTTP (stateless)
   @type channel :: %{url: String.t(), provider_id: String.t(), config: map()}

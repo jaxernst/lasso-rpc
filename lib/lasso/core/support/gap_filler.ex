@@ -3,8 +3,7 @@ defmodule Lasso.RPC.GapFiller do
   HTTP backfill utilities. Pure API with no GenServer; run in Task from callers.
   """
 
-  alias Lasso.RPC.RequestPipeline
-  alias Lasso.RPC.RequestOptions
+  alias Lasso.RPC.{RequestOptions, RequestPipeline}
 
   @type backfill_opts :: [timeout_ms: non_neg_integer()]
 

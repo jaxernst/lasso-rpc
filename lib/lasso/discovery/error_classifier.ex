@@ -35,13 +35,13 @@ defmodule Lasso.Discovery.ErrorClassifier do
   @spec classify(map()) :: {error_type(), map()}
   def classify(%{"code" => code, "message" => message}) when is_binary(message) do
     cond do
-      code == -32601 ->
+      code == -32_601 ->
         {:method_not_found, %{code: code}}
 
-      code == -32602 ->
+      code == -32_602 ->
         {:invalid_params, %{code: code}}
 
-      code in [429, -32005] or rate_limit_error?(message) ->
+      code in [429, -32_005] or rate_limit_error?(message) ->
         {:rate_limit, %{code: code}}
 
       block_range_error?(message) ->
@@ -59,7 +59,7 @@ defmodule Lasso.Discovery.ErrorClassifier do
       invalid_param_error?(message) ->
         {:invalid_params, %{code: code}}
 
-      code >= -32099 and code <= -32000 ->
+      code >= -32_099 and code <= -32_000 ->
         {:server_error, %{code: code}}
 
       true ->
@@ -69,10 +69,10 @@ defmodule Lasso.Discovery.ErrorClassifier do
 
   def classify(%{"code" => code}) when is_integer(code) do
     cond do
-      code == -32601 -> {:method_not_found, %{code: code}}
-      code == -32602 -> {:invalid_params, %{code: code}}
-      code in [429, -32005] -> {:rate_limit, %{code: code}}
-      code >= -32099 and code <= -32000 -> {:server_error, %{code: code}}
+      code == -32_601 -> {:method_not_found, %{code: code}}
+      code == -32_602 -> {:invalid_params, %{code: code}}
+      code in [429, -32_005] -> {:rate_limit, %{code: code}}
+      code >= -32_099 and code <= -32_000 -> {:server_error, %{code: code}}
       true -> {:unknown, %{code: code}}
     end
   end
@@ -103,7 +103,7 @@ defmodule Lasso.Discovery.ErrorClassifier do
   Checks if an error indicates a rate limit was hit.
   """
   @spec rate_limit_error?(map() | String.t()) :: boolean()
-  def rate_limit_error?(%{"code" => code}) when code in [429, -32005], do: true
+  def rate_limit_error?(%{"code" => code}) when code in [429, -32_005], do: true
 
   def rate_limit_error?(%{"message" => message}) when is_binary(message) do
     rate_limit_error?(message)
@@ -182,7 +182,7 @@ defmodule Lasso.Discovery.ErrorClassifier do
   Checks if an error indicates invalid parameters.
   """
   @spec invalid_param_error?(map() | String.t()) :: boolean()
-  def invalid_param_error?(%{"code" => -32602}), do: true
+  def invalid_param_error?(%{"code" => -32_602}), do: true
 
   def invalid_param_error?(%{"message" => message}) when is_binary(message) do
     invalid_param_error?(message)

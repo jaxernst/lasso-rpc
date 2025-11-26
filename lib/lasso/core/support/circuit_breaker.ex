@@ -9,8 +9,8 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   use GenServer
   require Logger
-  alias Lasso.RPC.ErrorNormalizer
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.ErrorNormalizer
 
   defstruct [
     :chain,

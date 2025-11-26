@@ -11,16 +11,15 @@ defmodule Lasso.RPC.StreamCoordinator do
   require Logger
 
   alias Lasso.RPC.{
-    StreamState,
-    GapFiller,
-    ContinuityPolicy,
+    ChainState,
     ClientSubscriptionRegistry,
+    ContinuityPolicy,
+    GapFiller,
+    RequestOptions,
     Selection,
-    SelectionContext
+    SelectionContext,
+    StreamState
   }
-
-  alias Lasso.RPC.ChainState
-  alias Lasso.RPC.RequestOptions
 
   @type key :: {:newHeads} | {:logs, map()}
 
@@ -254,7 +253,13 @@ defmodule Lasso.RPC.StreamCoordinator do
     end
   end
 
+  # Standard failover initiation with empty buffer
   defp initiate_failover(state, old_provider_id, new_provider_id) do
+    initiate_failover_with_buffer(state, old_provider_id, new_provider_id, [])
+  end
+
+  # Failover initiation with preserved buffer (used during cascade)
+  defp initiate_failover_with_buffer(state, old_provider_id, new_provider_id, initial_buffer) do
     Logger.info("Initiating failover: #{old_provider_id} -> #{new_provider_id}",
       chain: state.chain,
       key: inspect(state.key)
@@ -301,7 +306,8 @@ defmodule Lasso.RPC.StreamCoordinator do
         new_provider_id: new_provider_id,
         backfill_task_ref: task.ref,
         started_at: System.monotonic_time(:millisecond),
-        event_buffer: [],
+        # Preserve events from previous cascade attempt
+        event_buffer: initial_buffer,
         attempt_count: recent_failures + 1
       }
 
@@ -651,9 +657,19 @@ defmodule Lasso.RPC.StreamCoordinator do
             key: inspect(state.key)
           )
 
-          # Reset to active and re-initiate
+          # Preserve event buffer from failed attempt when cascading
+          # This prevents losing buffered events during multi-provider failover
+          preserved_buffer = state.failover_context.event_buffer
+
+          # Reset to active and re-initiate, but pass preserved buffer
           reset_state = %{state | failover_status: :active, failover_context: nil}
-          initiate_failover(reset_state, state.failover_context.new_provider_id, next_provider_id)
+
+          initiate_failover_with_buffer(
+            reset_state,
+            state.failover_context.new_provider_id,
+            next_provider_id,
+            preserved_buffer
+          )
 
         {:error, :no_providers} ->
           Logger.error("No more providers available",

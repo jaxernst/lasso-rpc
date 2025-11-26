@@ -36,7 +36,7 @@ defmodule Lasso.RPC.Strategies.Registry do
   end
 
   @spec strategy_atoms() :: [atom()]
-  def strategy_atoms() do
+  def strategy_atoms do
     Application.get_env(:lasso, :strategy_registry, default_registry())
     |> Map.keys()
   end
