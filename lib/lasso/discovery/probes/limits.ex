@@ -10,7 +10,7 @@ defmodule Lasso.Discovery.Probes.Limits do
   - Rate limiting behavior
   """
 
-  alias Lasso.Discovery.{TestParams, ErrorClassifier}
+  alias Lasso.Discovery.{ErrorClassifier, TestParams}
 
   @available_tests [
     :block_range,
@@ -95,7 +95,7 @@ defmodule Lasso.Discovery.Probes.Limits do
 
   # Block range limit test using binary search
   defp test_block_range(url, current_block, timeout) do
-    test_ranges = [100, 500, 1000, 2000, 5000, 10000]
+    test_ranges = [100, 500, 1000, 2000, 5000, 10_000]
 
     # Find first failure
     first_failure =

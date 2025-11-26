@@ -103,7 +103,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
   describe "subscription confirmation" do
     test "processes successful confirmation and updates state", %{
       chain: chain,
-      provider: provider
+      provider: _provider
     } do
       client_pid = self()
       key = {:newHeads}
@@ -113,11 +113,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
       # Wait for auto-confirmation from MockWSProvider
       Process.sleep(100)
 
-      # Verify state updates - no more pending_subscribe since confirmations are synchronous
+      # Verify state updates - Pool now tracks keys with primary_provider_id
+      # (upstream tracking is delegated to UpstreamSubscriptionManager)
       state = get_pool_state(chain)
       refute Map.has_key?(state, :pending_subscribe)
-      assert state.keys[key].upstream[provider] != nil
-      assert state.upstream_index[provider] != %{}
+      assert state.keys[key] != nil
+      assert state.keys[key].status == :active
+      assert state.keys[key].primary_provider_id != nil
     end
   end
 
@@ -168,10 +170,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
       :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub_id)
       Process.sleep(50)
 
-      # Verify cleanup
       state_after = get_pool_state(chain)
       assert state_after.keys == %{}
-      assert state_after.upstream_index == %{}
     end
 
     test "maintains subscription when refcount > 1", %{chain: chain} do

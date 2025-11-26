@@ -1611,3 +1611,133 @@ The mix of PubSub, GenServer calls, and telemetry is **not a code smell** but ra
 **End of Analysis**
 
 *This document represents a snapshot of the Lasso RPC architecture as of 2025-10-15. The system is well-designed with minor areas for improvement. The current architecture supports the stated goals of flexibility, extensibility, and clear contracts, with opportunities to enhance documentation and formalize communication patterns.*
+
+---
+
+## Addendum: WebSocket Subscription Event Flow (2025-11 Update)
+
+### Overview
+
+The upstream subscription management was refactored to use a centralized `UpstreamSubscriptionManager` that owns all upstream subscriptions and multiplexes events to consumers via `UpstreamSubscriptionRegistry`.
+
+### Subscription Event Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│               WEBSOCKET SUBSCRIPTION EVENT FLOW                          │
+└─────────────────────────────────────────────────────────────────────────┘
+
+WSConnection                PubSub                  Manager              Registry           Consumers
+    │                          │                       │                    │                  │
+    │ {:subscription_event,    │                       │                    │                  │
+    │   provider_id,           │                       │                    │                  │
+    │   upstream_id,           │                       │                    │                  │
+    │   payload,               │                       │                    │                  │
+    │   received_at}           │                       │                    │                  │
+    ├──────────────────────────►                       │                    │                  │
+    │                          │ "ws:subs:{chain}"     │                    │                  │
+    │                          ├───────────────────────►                    │                  │
+    │                          │                       │                    │                  │
+    │                          │                       │ lookup key from    │                  │
+    │                          │                       │ upstream_index     │                  │
+    │                          │                       │                    │                  │
+    │                          │                       │ dispatch(chain,    │                  │
+    │                          │                       │   provider_id,     │                  │
+    │                          │                       │   sub_key,         │                  │
+    │                          │                       │   message)         │                  │
+    │                          │                       ├────────────────────►                  │
+    │                          │                       │                    │                  │
+    │                          │                       │                    │ send to Pool     │
+    │                          │                       │                    ├──────────────────►
+    │                          │                       │                    │                  │
+    │                          │                       │                    │ send to Monitor  │
+    │                          │                       │                    ├──────────────────►
+    │                          │                       │                    │                  │
+```
+
+### Consumer Registration Flow
+
+```
+Consumer              UpstreamSubscriptionRegistry       UpstreamSubscriptionManager        WSConnection
+    │                           │                                  │                            │
+    │ ensure_subscription()     │                                  │                            │
+    ├───────────────────────────┼──────────────────────────────────►                            │
+    │                           │                                  │                            │
+    │                           │◄─────register_consumer───────────┤                            │
+    │                           │  (Registry.register)             │                            │
+    │                           │                                  │                            │
+    │                           │                                  │ (if first consumer)        │
+    │                           │                                  │                            │
+    │                           │                                  │ eth_subscribe via          │
+    │                           │                                  │ RequestPipeline            │
+    │                           │                                  ├────────────────────────────►
+    │                           │                                  │                            │
+    │                           │                                  │◄───{:ok, upstream_id}──────┤
+    │                           │                                  │                            │
+    │◄───────────────{:ok, :new}───────────────────────────────────┤                            │
+    │                           │                                  │                            │
+    │ (subsequent consumer)     │                                  │                            │
+    ├───────────────────────────┼──────────────────────────────────►                            │
+    │                           │                                  │                            │
+    │                           │◄─────register_consumer───────────┤                            │
+    │                           │                                  │                            │
+    │◄─────────────{:ok, :existing}────────────────────────────────┤                            │
+    │                           │                                  │                            │
+```
+
+### Manager Restart Recovery Flow
+
+```
+Manager (crashed)       Supervisor           Manager (new)          PubSub              Consumers
+      │                     │                     │                    │                    │
+      │ CRASH               │                     │                    │                    │
+      X                     │                     │                    │                    │
+                            │                     │                    │                    │
+                            │ restart             │                    │                    │
+                            ├─────────────────────►                    │                    │
+                            │                     │                    │                    │
+                            │                     │ init()             │                    │
+                            │                     │ broadcast restart  │                    │
+                            │                     ├────────────────────►                    │
+                            │                     │                    │                    │
+                            │                     │                    │ {:upstream_sub_   │
+                            │                     │                    │   manager_        │
+                            │                     │                    │   restarted}      │
+                            │                     │                    ├────────────────────►
+                            │                     │                    │                    │
+                            │                     │                    │ Pool re-registers │
+                            │                     │◄───ensure_subscription─────────────────┤
+                            │                     │                    │                    │
+                            │                     │                    │ Monitor re-regs   │
+                            │                     │◄───ensure_subscription─────────────────┤
+                            │                     │                    │                    │
+```
+
+### Key Components
+
+| Component | Role | Communication Pattern |
+|-----------|------|----------------------|
+| `UpstreamSubscriptionRegistry` | Tracks consumers per `{chain, provider_id, sub_key}` | Registry (automatic cleanup on process death) |
+| `UpstreamSubscriptionManager` | Owns upstream subscriptions, dispatches events | PubSub subscriber, Registry dispatcher |
+| `UpstreamSubscriptionPool` | Client subscription management, failover | Consumer of Manager events |
+| `BlockHeightMonitor` | Block height tracking from all WS providers | Consumer of Manager events |
+
+### PubSub Topics for Subscriptions
+
+| Topic | Direction | Message |
+|-------|-----------|---------|
+| `ws:subs:{chain}` | WSConnection → Manager | `{:subscription_event, provider_id, upstream_id, payload, received_at}` |
+| `upstream_sub_manager:{chain}` | Manager → Consumers | `{:upstream_sub_manager_restarted, chain}` |
+
+### Benefits of New Architecture
+
+1. **No duplicate subscriptions**: Manager ensures single upstream subscription per `{provider_id, sub_key}`
+2. **Automatic cleanup**: Registry removes registrations when consumer processes die
+3. **Crash recovery**: Manager broadcasts restart event, consumers automatically re-register
+4. **Efficient dispatch**: Registry.dispatch sends to all consumers in single operation
+5. **Grace period teardown**: Unused subscriptions wait 60s before teardown to prevent thrashing
+
+### Related Documentation
+
+- [SUBSCRIPTION_MANAGEMENT_ARCHITECTURE.md](./specs/SUBSCRIPTION_MANAGEMENT_ARCHITECTURE.md) - Detailed architecture specification
+- [websocket_failover_spec.md](./specs/websocket_failover_spec.md) - Failover behavior specification

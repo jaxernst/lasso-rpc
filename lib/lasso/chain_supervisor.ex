@@ -157,12 +157,16 @@ defmodule Lasso.RPC.ChainSupervisor do
       # Integrated probe system for provider health and sync monitoring
       {ProviderProbe, chain_name},
 
-      # Start per-chain subscription registry and pool
+      # Start per-chain subscription registry, manager, and pool
       {ClientSubscriptionRegistry, chain_name},
+      {Lasso.RPC.UpstreamSubscriptionManager, chain_name},
       {UpstreamSubscriptionPool, chain_name},
 
       # StreamSupervisor for per-key coordinators
       {Lasso.RPC.StreamSupervisor, chain_name},
+
+      # BlockHeightMonitor for real-time block tracking via WebSocket newHeads
+      {Lasso.RPC.BlockHeightMonitor, chain_name},
 
       # Start provider connections after all other children are initialized
       # This Task runs once and completes (restart: :transient)

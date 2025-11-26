@@ -1,16 +1,26 @@
 [
-  # Opaque type internals - MapSet internal representation
-  # This is a false positive from Dialyzer's strict checking of opaque types
-  ~r"lib/lasso/core/support/dedupe_cache.ex:30.*contract_with_opaque",
-  ~r"lib/lasso/core/streaming/stream_state.ex:22.*contract_with_opaque",
+  # =============================================================================
+  # Battle Testing Utilities - Exclude all warnings from test utilities
+  # =============================================================================
+  # These are test-only utilities with intentional type flexibility
+  ~r"lib/lasso_battle/.*",
 
-  # MockProvider is test-only utility with intentional type flexibility
-  ~r"lib/lasso_battle/mock_provider.ex:91.*call",
-  ~r"lib/lasso_battle/mock_provider.ex:78.*no_return",
+  # =============================================================================
+  # Mix Tasks - Known false positives
+  # =============================================================================
+  # Mix.shell/0 is available at runtime but Dialyzer doesn't see it
+  ~r"lib/mix/tasks/.*",
 
+  # =============================================================================
+  # Opaque Type Internals
+  # =============================================================================
+  # MapSet internal representation - false positive from strict opaque checking
+  ~r"lib/lasso/core/support/dedupe_cache.ex.*contract_with_opaque",
+  ~r"lib/lasso/core/streaming/stream_state.ex.*contract_with_opaque",
+
+  # =============================================================================
+  # Known False Positives
+  # =============================================================================
   # BenchmarkStore function handles all cases correctly despite warning
-  ~r"lib/lasso/core/benchmarking/benchmark_store_adapter.ex:117.*no_return"
-
-  # Compile-time environment check - pattern matching is intentional
-  # When compiled in dev/prod, :test pattern can never match (by design)
+  ~r"lib/lasso/core/benchmarking/benchmark_store_adapter.ex.*no_return"
 ]

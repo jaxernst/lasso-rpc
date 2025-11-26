@@ -23,6 +23,7 @@ defmodule Lasso.RPC.ChainState do
   require Logger
 
   alias Lasso.RPC.ProviderPool
+  alias Lasso.Core.BlockCache
 
   # 1.5x probe interval
   @consensus_window_multiplier 1.5
@@ -82,11 +83,19 @@ defmodule Lasso.RPC.ChainState do
 
   @spec provider_lag(String.t(), String.t()) :: {:ok, integer()} | {:error, term()}
   def provider_lag(chain, provider_id) do
-    with {:ok, table} <- get_table(chain) do
-      case :ets.lookup(table, {:provider_lag, chain, provider_id}) do
-        [{{:provider_lag, ^chain, ^provider_id}, lag}] -> {:ok, lag}
-        [] -> {:error, :not_found}
-      end
+    # Try real-time BlockCache data first (from WebSocket newHeads)
+    case BlockCache.get_provider_lag(chain, provider_id) do
+      {:ok, lag} ->
+        {:ok, lag}
+
+      {:error, _} ->
+        # Fall back to probe-based lag data
+        with {:ok, table} <- get_table(chain) do
+          case :ets.lookup(table, {:provider_lag, chain, provider_id}) do
+            [{{:provider_lag, ^chain, ^provider_id}, lag}] -> {:ok, lag}
+            [] -> {:error, :not_found}
+          end
+        end
     end
   rescue
     ArgumentError -> {:error, :table_not_found}
@@ -118,6 +127,77 @@ defmodule Lasso.RPC.ChainState do
           {:ok, max_seq}
       end
     end
+  end
+
+  ## Rich Block Data (via BlockCache)
+
+  @doc """
+  Get the latest block for a chain with full block data.
+
+  Returns rich block data including hash, timestamp, gas, parent_hash, etc.
+  Data comes from WebSocket newHeads subscriptions for real-time updates.
+
+  ## Example
+
+      {:ok, block} = ChainState.get_latest_block("ethereum")
+      block.number  # 18500000
+      block.hash    # "0xabc..."
+      block.timestamp # 1699876543
+  """
+  @spec get_latest_block(String.t()) :: {:ok, map()} | {:error, term()}
+  def get_latest_block(chain) do
+    BlockCache.get_latest_block(chain)
+  end
+
+  @doc """
+  Get a provider's current block height with timestamp.
+
+  Tries real-time WebSocket data first, falls back to probe data.
+  Returns {height, received_at_ms}.
+
+  ## Example
+
+      {:ok, height, received_at} = ChainState.provider_height("ethereum", "alchemy")
+  """
+  @spec provider_height(String.t(), String.t()) ::
+          {:ok, non_neg_integer(), non_neg_integer()} | {:error, term()}
+  def provider_height(chain, provider_id) do
+    # Try real-time data first
+    case BlockCache.get_provider_height(chain, provider_id) do
+      {:ok, height, received_at} -> {:ok, height, received_at}
+      {:error, _} -> get_probe_height(chain, provider_id)
+    end
+  end
+
+  @doc """
+  Get all provider heights for a chain.
+
+  Returns list of {provider_id, height, received_at_ms} tuples.
+  Uses real-time WebSocket data when available.
+
+  ## Options
+
+    * `:only_fresh` - Only return providers with data within freshness window (default: false)
+  """
+  @spec all_provider_heights(String.t(), keyword()) :: [
+          {String.t(), non_neg_integer(), non_neg_integer()}
+        ]
+  def all_provider_heights(chain, opts \\ []) do
+    BlockCache.get_all_provider_heights(chain, opts)
+  end
+
+  defp get_probe_height(chain, provider_id) do
+    with {:ok, table} <- get_table(chain) do
+      case :ets.lookup(table, {:provider_sync, chain, provider_id}) do
+        [{{:provider_sync, ^chain, ^provider_id}, {height, timestamp, _seq}}] ->
+          {:ok, height, timestamp}
+
+        [] ->
+          {:error, :not_found}
+      end
+    end
+  rescue
+    ArgumentError -> {:error, :table_not_found}
   end
 
   ## Private: Lazy Consensus Calculation

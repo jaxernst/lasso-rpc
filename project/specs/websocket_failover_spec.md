@@ -1,5 +1,11 @@
 # WebSocket Subscription Failover - Production Design Specification
 
+> **Note (2025-11):** The upstream subscription management has been refactored to use a centralized
+> `UpstreamSubscriptionManager` that owns all upstream subscriptions and multiplexes to consumers.
+> See [SUBSCRIPTION_MANAGEMENT_ARCHITECTURE.md](./SUBSCRIPTION_MANAGEMENT_ARCHITECTURE.md) for details
+> on the new architecture. The failover logic described below remains valid, but the Pool now delegates
+> upstream subscription lifecycle to the Manager rather than calling `send_upstream_subscribe` directly.
+
 ## Executive Summary
 
 This specification defines a production-ready failover system for blockchain WebSocket subscriptions that guarantees gap-free continuity, duplicate-free delivery (by content identity), and preserved ordering across provider failures. The design addresses four critical flaws in the current implementation: incomplete message chains, dead confirmation mechanisms, async backfill race conditions, and provider selection mismatches. Reorg policy is explicit: the system does not perform rewinds; it deduplicates by block hash for blocks and by (blockHash, transactionHash, logIndex) for logs, and allows block-number replays.

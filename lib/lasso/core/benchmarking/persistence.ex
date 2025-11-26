@@ -59,7 +59,7 @@ defmodule Lasso.Benchmarking.Persistence do
   @doc """
   Gets a summary of available snapshot data.
   """
-  def get_snapshot_summary() do
+  def get_snapshot_summary do
     GenServer.call(__MODULE__, :get_summary)
   end
 
@@ -273,7 +273,7 @@ defmodule Lasso.Benchmarking.Persistence do
     end
   end
 
-  defp schedule_cleanup() do
+  defp schedule_cleanup do
     # Clean up every 6 hours
     Process.send_after(__MODULE__, :periodic_cleanup, 6 * 60 * 60 * 1000)
   end

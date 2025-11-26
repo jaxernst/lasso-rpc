@@ -709,6 +709,7 @@ defmodule Lasso.RPC.RequestPipeline do
     Logger.debug("✓ Request Success via #{Channel.to_string(channel)}",
       chain: ctx.chain,
       request_id: ctx.request_id,
+      provider_id: channel.provider_id,
       io_latency_ms: io_ms
     )
 
@@ -781,6 +782,7 @@ defmodule Lasso.RPC.RequestPipeline do
       {:ok, {:error, :unsupported_method, _io_ms}} ->
         Logger.debug("Method not supported on channel, trying next",
           channel: Channel.to_string(channel),
+          provider_id: channel.provider_id,
           method: Map.get(rpc_request, "method")
         )
 
@@ -795,6 +797,7 @@ defmodule Lasso.RPC.RequestPipeline do
         Logger.info("Circuit breaker open, fast-failing to next channel",
           request_id: ctx.request_id,
           channel: Channel.to_string(channel),
+          provider_id: channel.provider_id,
           chain: ctx.chain,
           method: Map.get(rpc_request, "method")
         )

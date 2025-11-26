@@ -57,6 +57,12 @@ defmodule Lasso.Application do
         # Start Task.Supervisor for async probe execution in ProviderProbe
         {Task.Supervisor, name: Lasso.TaskSupervisor},
 
+        # Start block cache for real-time block data from WebSocket subscriptions
+        Lasso.Core.BlockCache,
+
+        # Start upstream subscription registry for tracking subscription consumers
+        Lasso.Core.Streaming.UpstreamSubscriptionRegistry,
+
         # Start dynamic supervisor for chain supervisors
         {DynamicSupervisor, name: Lasso.RPC.Supervisor, strategy: :one_for_one},
 

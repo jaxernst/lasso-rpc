@@ -95,7 +95,7 @@ defmodule LassoWeb.Endpoint do
 
   plug(CORSPlug,
     origin: "*",
-    max_age: 86400,
+    max_age: 86_400,
     methods: ["GET", "POST", "OPTIONS"],
     headers: [
       "Content-Type",

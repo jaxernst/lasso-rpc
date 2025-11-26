@@ -11,9 +11,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
   @behaviour Lasso.RPC.Transport
 
   require Logger
-  alias Lasso.RPC.WSConnection
-  alias Lasso.RPC.ErrorNormalizer
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.{ErrorNormalizer, WSConnection}
 
   # Channel represents a WebSocket connection
   @type channel :: %{

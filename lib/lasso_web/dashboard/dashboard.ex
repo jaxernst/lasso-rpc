@@ -22,6 +22,8 @@ defmodule LassoWeb.Dashboard do
       Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_changes")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_updates")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "dashboard:event_buffer")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates")
 
       # Per-chain provider event subscriptions
       Lasso.Config.ConfigStore.list_chains()
@@ -285,6 +287,22 @@ defmodule LassoWeb.Dashboard do
 
     socket = buffer_event(socket, uev)
 
+    # Update provider panel if this event is for the currently selected provider
+    socket = if socket.assigns[:selected_provider] == pid do
+      socket
+      |> fetch_connections()
+      |> update_selected_provider_data()
+    else
+      socket
+    end
+
+    # Update chain panel if this event is for the currently selected chain
+    socket = if socket.assigns[:selected_chain] == chain do
+      update_selected_chain_metrics(socket)
+    else
+      socket
+    end
+
     {:noreply, socket}
   end
 
@@ -352,6 +370,20 @@ defmodule LassoWeb.Dashboard do
       |> buffer_event(uev)
       |> fetch_connections()  # Refresh provider data to show updated circuit state
 
+    # Update provider panel if this event is for the currently selected provider
+    socket = if socket.assigns[:selected_provider] == provider_id do
+      update_selected_provider_data(socket)
+    else
+      socket
+    end
+
+    # Update chain panel if this event is for the currently selected chain
+    socket = if socket.assigns[:selected_chain] == chain do
+      update_selected_chain_metrics(socket)
+    else
+      socket
+    end
+
     {:noreply, socket}
   end
 
@@ -412,6 +444,60 @@ defmodule LassoWeb.Dashboard do
   def handle_info(:metrics_refresh, socket) do
     socket = load_provider_metrics(socket)
     Process.send_after(self(), :metrics_refresh, 30_000)
+    {:noreply, socket}
+  end
+
+  # Provider panel periodic refresh (when provider is selected)
+  @impl true
+  def handle_info(:provider_panel_refresh, socket) do
+    if socket.assigns[:selected_provider] do
+      # Re-schedule next refresh
+      Process.send_after(self(), :provider_panel_refresh, 3_000)
+
+      socket =
+        socket
+        |> fetch_connections()
+        |> update_selected_provider_data()
+
+      {:noreply, socket}
+    else
+      # Provider no longer selected, don't reschedule
+      {:noreply, socket}
+    end
+  end
+
+  # Live sync/block height updates from ProviderPool probes
+  @impl true
+  def handle_info(%{chain: _chain, provider_id: pid, block_height: _height} = _sync_update, socket) do
+    # Update provider panel if this sync update is for the currently selected provider
+    socket =
+      if socket.assigns[:selected_provider] == pid do
+        socket
+        |> fetch_connections()
+        |> update_selected_provider_data()
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
+  # Real-time block updates from BlockCache (WebSocket newHeads)
+  @impl true
+  def handle_info(
+        %{type: :block_update, provider_id: pid} = _block_update,
+        socket
+      ) do
+    # Update provider panel if this block update is for the currently selected provider
+    socket =
+      if socket.assigns[:selected_provider] == pid do
+        socket
+        |> fetch_connections()
+        |> update_selected_provider_data()
+      else
+        socket
+      end
+
     {:noreply, socket}
   end
 
@@ -539,6 +625,10 @@ defmodule LassoWeb.Dashboard do
               selected_chain_events={@selected_chain_events}
               selected_chain_unified_events={@selected_chain_unified_events}
               selected_chain_endpoints={@selected_chain_endpoints}
+              selected_chain_provider_events={@selected_chain_provider_events}
+              selected_provider_events={@selected_provider_events}
+              selected_provider_unified_events={@selected_provider_unified_events}
+              selected_provider_metrics={@selected_provider_metrics}
               latency_leaders={@latency_leaders}
             />
           <% "metrics" -> %>
@@ -585,6 +675,10 @@ defmodule LassoWeb.Dashboard do
   attr :selected_chain_events, :list, default: []
   attr :selected_chain_unified_events, :list, default: []
   attr :selected_chain_endpoints, :map, default: %{}
+  attr :selected_chain_provider_events, :list, default: []
+  attr :selected_provider_events, :list, default: []
+  attr :selected_provider_unified_events, :list, default: []
+  attr :selected_provider_metrics, :map, default: %{}
 
   def dashboard_tab_content(assigns) do
     ~H"""
@@ -633,10 +727,10 @@ defmodule LassoWeb.Dashboard do
         selected_chain_events={@selected_chain_events}
         selected_chain_unified_events={@selected_chain_unified_events}
         selected_chain_endpoints={@selected_chain_endpoints}
-        selected_chain_provider_events={assigns[:selected_chain_provider_events] || []}
-        selected_provider_events={assigns[:selected_provider_events] || []}
-        selected_provider_unified_events={assigns[:selected_provider_unified_events] || []}
-        selected_provider_metrics={assigns[:selected_provider_metrics] || %{}}
+        selected_chain_provider_events={@selected_chain_provider_events}
+        selected_provider_events={@selected_provider_events}
+        selected_provider_unified_events={@selected_provider_unified_events}
+        selected_provider_metrics={@selected_provider_metrics}
       />
 
     </div>
@@ -916,12 +1010,12 @@ defmodule LassoWeb.Dashboard do
       |> assign(:provider_events, Map.get(assigns, :selected_provider_events, []))
       |> assign(:provider_unified_events, Map.get(assigns, :selected_provider_unified_events, []))
       |> assign(:performance_metrics, Map.get(assigns, :selected_provider_metrics, %{}))
-      |> assign(:last_decision, Helpers.get_last_decision(Map.get(assigns, :selected_provider_events, []), nil, assigns.provider))
+
 
 
     ~H"""
-    <div class="flex h-full flex-col" data-provider-id={@provider}>
-      <!-- Header -->
+    <div class="flex h-full flex-col overflow-y-auto" data-provider-id={@provider}>
+      <!-- HEADER -->
       <div class="border-gray-700/50 border-b p-4">
         <div class="flex items-center justify-between">
           <div class="flex items-center space-x-3">
@@ -935,259 +1029,345 @@ defmodule LassoWeb.Dashboard do
                 {if @provider_connection, do: @provider_connection.name, else: @provider}
               </h3>
               <div class="text-xs text-gray-400">
-                {if @provider_connection, do: Helpers.get_chain_display_name(@provider_connection.chain || "unknown"), else: "Provider"} • {StatusHelpers.provider_status_label(@provider_connection || %{})}
+                {if @provider_connection, do: Helpers.get_chain_display_name(@provider_connection.chain || "unknown"), else: "Provider"} • <span class={StatusHelpers.provider_status_class_text(@provider_connection || %{})}>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
               </div>
             </div>
           </div>
-          <div class="flex items-center space-x-2">
-            <%= if assigns[:selected_chain] do %>
-              <button
-                phx-click="select_provider"
-                phx-value-provider=""
-                class="rounded border border-gray-600 px-2 py-1 text-sm text-gray-400 transition-colors hover:border-gray-400 hover:text-white"
-              >
-                Back to Chain
-              </button>
-            <% end %>
-          </div>
-        </div>
-      </div>
-
-      <!-- Primary metrics -->
-      <div class="border-gray-700/50 p-4">
-        <div class="mb-2 grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div class="text-center bg-gray-800/40 rounded-lg p-3 overflow-hidden">
-            <div class="text-[11px] leading-tight text-gray-400 truncate">p50 (5m)</div>
-            <div class="h-7 flex items-center justify-center">
-              <div class="text-xl font-bold text-sky-400">{if Map.get(@performance_metrics, :p50_latency), do: "#{Map.get(@performance_metrics, :p50_latency)}ms", else: "—"}</div>
-            </div>
-          </div>
-          <div class="text-center bg-gray-800/40 rounded-lg p-3 overflow-hidden">
-            <div class="text-[11px] leading-tight text-gray-400 truncate">p95 (5m)</div>
-            <div class="h-7 flex items-center justify-center">
-              <div class="text-xl font-bold text-sky-400">{if Map.get(@performance_metrics, :p95_latency), do: "#{Map.get(@performance_metrics, :p95_latency)}ms", else: "—"}</div>
-            </div>
-          </div>
-          <div class="text-center bg-gray-800/40 rounded-lg p-3 overflow-hidden">
-            <div class="text-[11px] leading-tight text-gray-400 truncate">Success (5m)</div>
-            <div class="h-7 flex items-center justify-center">
-              <% success_rate = Map.get(@performance_metrics, :success_rate, 0.0) %>
-              <div class={["text-xl font-bold", if(success_rate >= 95.0, do: "text-emerald-400", else: if(success_rate >= 80.0, do: "text-yellow-400", else: "text-red-400"))]}> {if success_rate > 0, do: "#{success_rate}%", else: "—"}</div>
-            </div>
-          </div>
-          <div class="text-center bg-gray-800/40 rounded-lg p-3 overflow-hidden">
-            <div class="text-[11px] leading-tight text-gray-400 truncate">Calls (1h)</div>
-            <div class="h-7 flex items-center justify-center">
-              <div class="text-xl font-bold text-purple-400">{Map.get(@performance_metrics, :calls_last_hour, 0)}</div>
-            </div>
-          </div>
-        </div>
-        <%= if @provider_connection do %>
-          <div class="space-y-3 pt-3  p-3">
-            <!-- Enhanced Status Information -->
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-              <div class="flex flex-col">
-                <span class="text-gray-400 text-xs">Status</span>
-                <span class={StatusHelpers.provider_status_class_text(@provider_connection)}>
-                  {StatusHelpers.provider_status_label(@provider_connection)}
-                </span>
-              </div>
-
-              <div class="flex flex-col">
-                <span class="text-gray-400 text-xs">Health</span>
-                <span class={StatusHelpers.provider_status_class_text(%{health_status: Map.get(@provider_connection, :health_status, :unknown)})}>
-                  {Map.get(@provider_connection, :health_status, :unknown) |> to_string() |> String.upcase()}
-                </span>
-              </div>
-
-              <div class="flex flex-col">
-                <span class="text-gray-400 text-xs">Circuit</span>
-                <span class={case Map.get(@provider_connection, :circuit_state, :closed) do
-                  :open -> "text-red-400"
-                  :half_open -> "text-yellow-400"
-                  :closed -> "text-emerald-400"
-                end}>
-                  {Map.get(@provider_connection, :circuit_state, :closed) |> to_string() |> String.upcase()}
-                </span>
-              </div>
-
-              <div class="flex flex-col">
-                <span class="text-gray-400 text-xs">WebSocket</span>
-                <% has_ws_support = Map.get(@provider_connection, :type) in [:websocket, :both] %>
-                <span class={
-                  cond do
-                    not has_ws_support -> "text-gray-400"
-                    Map.get(@provider_connection, :ws_connected, false) -> "text-emerald-400"
-                    true -> "text-red-400"
-                  end
-                }>
-                  {
-                    cond do
-                      not has_ws_support -> "NOT SUPPORTED"
-                      Map.get(@provider_connection, :ws_connected, false) -> "CONNECTED"
-                      true -> "DISCONNECTED"
-                    end
-                  }
-                </span>
-              </div>
-            </div>
-
-            <!-- Failure Information -->
-            <%
-              # Only show issues if there are actual current problems (exclude rate limiting - it has its own section)
-              is_rate_limited = Map.get(@provider_connection, :is_in_cooldown, false) or Map.get(@provider_connection, :health_status) == :rate_limited
-              has_current_issues = ((Map.get(@provider_connection, :consecutive_failures, 0) > 0) or
-                                   (Map.get(@provider_connection, :reconnect_attempts, 0) > 0) or
-                                   (Map.get(@provider_connection, :circuit_state) == :open) or
-                                   (Map.get(@provider_connection, :health_status) == :unhealthy)) and not is_rate_limited
-            %>
-            <%= if has_current_issues do %>
-              <div class="bg-red-900/20 border border-red-600/30 rounded-lg p-3">
-                <div class="flex items-center gap-2 mb-2">
-                  <div class="w-2 h-2 rounded-full bg-red-400"></div>
-                  <span class="text-red-300 text-sm font-medium">
-                    <%= if Map.get(@provider_connection, :circuit_state) == :open do %>
-                      Circuit Breaker Open
-                    <% else %>
-                      Issues Detected
-                    <% end %>
-                  </span>
-                </div>
-
-                <div class="grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <span class="text-gray-400">Consecutive failures:</span>
-                    <span class="text-red-300 ml-2">{Map.get(@provider_connection, :consecutive_failures, 0)}</span>
-                  </div>
-                  <div>
-                    <span class="text-gray-400">Reconnect attempts:</span>
-                    <span class="text-yellow-300 ml-2">{@provider_connection.reconnect_attempts}</span>
-                  </div>
-                </div>
-
-                <%= if @provider_connection && Map.get(@provider_connection, :last_error) do %>
-                  <% last_error = Map.get(@provider_connection, :last_error) %>
-                  <div class="mt-2 pt-2 border-t border-red-600/20">
-                    <span class="text-gray-400 text-xs">Last error:</span>
-                    <div class="text-red-300 text-xs mt-1 font-mono bg-gray-900/50 rounded px-2 py-1 break-words">
-                      {inspect(last_error, pretty: true, limit: :infinity)}
-                    </div>
-                    <!-- Debug: Show provider ID to confirm panel is updating -->
-                    <div class="text-gray-500 text-[10px] mt-1">
-                      Provider: {@provider} | Updated: {DateTime.utc_now() |> DateTime.to_time() |> to_string()}
-                    </div>
-                  </div>
-                <% end %>
-              </div>
-            <% end %>
-
-            <!-- Rate Limiting Information -->
-            <%= if Map.get(@provider_connection, :is_in_cooldown, false) do %>
-              <div class="bg-purple-900/20 border border-purple-600/30 rounded-lg p-3">
-                <div class="flex items-center gap-2 mb-2">
-                  <div class="w-2 h-2 rounded-full bg-purple-400"></div>
-                  <span class="text-purple-300 text-sm font-medium">Rate Limited</span>
-                </div>
-
-                <div class="text-xs">
-                  <div class="grid grid-cols-2 gap-3">
-                    <div>
-                      <span class="text-gray-400">Consecutive failures:</span>
-                      <span class="text-purple-300 ml-2">{Map.get(@provider_connection, :consecutive_failures, 0)}</span>
-                    </div>
-                    <%= if Map.get(@provider_connection, :cooldown_until) do %>
-                      <% time_remaining = max(0, Map.get(@provider_connection, :cooldown_until, 0) - System.monotonic_time(:millisecond)) %>
-                      <div>
-                        <span class="text-gray-400">Cooldown ends in:</span>
-                        <span class="text-purple-300 ml-2">{div(time_remaining, 1000)}s</span>
-                      </div>
-                    <% end %>
-                  </div>
-                </div>
-              </div>
-            <% end %>
-
-            <!-- Performance Information -->
-            <div class="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <span class="text-gray-400">Consecutive successes:</span>
-                <span class="text-emerald-300 ml-2">{Map.get(@provider_connection, :consecutive_successes, 0)}</span>
-              </div>
-              <div>
-                <span class="text-gray-400">Pick share (5m):</span>
-                <span class="text-white ml-2">{(Map.get(@performance_metrics, :pick_share_5m, 0.0) || 0.0) |> Helpers.to_float() |> Float.round(1)}%</span>
-              </div>
-              <div>
-                <span class="text-gray-400">Subscriptions:</span>
-                <span class="text-white ml-2">{Map.get(@provider_connection, :subscriptions, 0)}</span>
-              </div>
-              <%= if Map.get(@provider_connection, :pending_messages, 0) > 0 do %>
-                <div>
-                  <span class="text-gray-400">Pending messages:</span>
-                  <span class="text-yellow-300 ml-2">{Map.get(@provider_connection, :pending_messages, 0)}</span>
-                </div>
-              <% end %>
-            </div>
-
-            <!-- Status Explanation -->
-            <div class="bg-gray-800/30 rounded-lg p-2">
-              <div class="text-xs text-gray-300">
-                <span class="text-gray-400">Status explanation:</span>
-                <div class="mt-1">{StatusHelpers.status_explanation(@provider_connection)}</div>
-              </div>
-            </div>
-          </div>
-        <% end %>
-      </div>
-
-      <!-- Routing context -->
-      <div class="border-gray-700/50 border-t p-4">
-        <h4 class="mb-2 text-sm font-semibold text-gray-300">Routing decisions</h4>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <.last_decision_card last_decision={@last_decision} connections={@connections} />
-          <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-2">
-            <div class="text-[11px] text-gray-400 mb-1">Top methods (5m)</div>
-            <% rpc_stats = Map.get(@performance_metrics, :rpc_stats, []) %>
-            <div class="space-y-1 max-h-32 overflow-y-auto">
-              <%= for stat <- Enum.take(rpc_stats, 5) do %>
-                <div class="flex items-center justify-between text-[11px] text-gray-300">
-                  <div class="text-sky-300 truncate">{stat.method}</div>
-                  <div class="flex items-center gap-3">
-                    <span class="text-gray-400">p50 {Helpers.to_float(stat.avg_duration_ms) |> Float.round(1)}ms</span>
-                    <span class={["", if(stat.success_rate >= 0.95, do: "text-emerald-400", else: if(stat.success_rate >= 0.8, do: "text-yellow-400", else: "text-red-400"))]}> {(Helpers.to_float(stat.success_rate) * 100) |> Float.round(1)}%</span>
-                    <span class="text-gray-500">{stat.total_calls} calls</span>
-                  </div>
-                </div>
-              <% end %>
-              <%= if length(rpc_stats) == 0 do %>
-                <div class="text-xs text-gray-500">No recent method stats</div>
-              <% end %>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Activity -->
-      <div class="flex-1 overflow-hidden p-4">
-        <h4 class="mb-3 text-sm font-semibold text-gray-300">Activity</h4>
-        <div class="h-full overflow-auto">
-          <div
-            id="provider-unified-activity"
-            class="flex max-h-80 flex-col-reverse gap-1 overflow-y-auto"
-            phx-hook="TerminalFeed"
+          <button
+            phx-click="select_provider"
+            phx-value-provider=""
+            class="rounded border border-gray-600 px-2 py-1 text-xs text-gray-400 transition-colors hover:border-gray-400 hover:text-white"
           >
-            <%= for e <- Enum.take(@provider_unified_events, 60) do %>
-              <div class="bg-gray-800/30 rounded-lg p-2">
-                <div class="text-[11px] text-gray-400">
-                  <span class="text-gray-500">[{e.ts}]</span>
-                  <span class="ml-1 text-emerald-300">{@provider}</span>
-                  <span class="ml-1">{e.message}</span>
-                </div>
-              </div>
-            <% end %>
-          </div>
+            Close
+          </button>
         </div>
       </div>
+
+      <%= if @provider_connection do %>
+        <!-- SYNC STATUS -->
+        <div class="border-gray-700/50 border-b p-4">
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Sync Status</h4>
+          <% block_height = Map.get(@provider_connection, :block_height) %>
+          <% consensus_height = Map.get(@provider_connection, :consensus_height) %>
+          <% blocks_behind = Map.get(@provider_connection, :blocks_behind, 0) || 0 %>
+          <%= if block_height && consensus_height do %>
+            <div class="flex items-center justify-between text-sm mb-2">
+              <span class="text-gray-400">Block Height: <span class="text-white font-mono">{Formatting.format_number(block_height)}</span></span>
+              <span class="text-gray-400">Consensus: <span class="text-white font-mono">{Formatting.format_number(consensus_height)}</span></span>
+              <span class={[
+                "font-mono font-bold",
+                cond do
+                  blocks_behind <= 2 -> "text-emerald-400"
+                  blocks_behind <= 10 -> "text-yellow-400"
+                  true -> "text-red-400"
+                end
+              ]}>
+                {cond do
+                  blocks_behind == 0 -> "Synced"
+                  blocks_behind > 0 -> "-#{blocks_behind}"
+                  blocks_behind < 0 -> "+#{abs(blocks_behind)}"
+                end}
+              </span>
+            </div>
+            <!-- Progress bar visualization -->
+            <div class="h-2 bg-gray-800 rounded-full overflow-hidden mb-2">
+              <% bar_width = if consensus_height > 0, do: min(100, (block_height / consensus_height) * 100), else: 100 %>
+              <div
+                class={[
+                  "h-full rounded-full transition-all",
+                  cond do
+                    blocks_behind <= 2 -> "bg-emerald-500"
+                    blocks_behind <= 10 -> "bg-yellow-500"
+                    true -> "bg-red-500"
+                  end
+                ]}
+                style={"width: #{bar_width}%"}
+              />
+            </div>
+            <div class="text-xs text-gray-500 text-right">
+              {cond do
+                blocks_behind <= 2 -> "(within range)"
+                blocks_behind <= 10 -> "(slightly behind)"
+                true -> "(significantly behind)"
+              end}
+            </div>
+          <% else %>
+            <div class="text-sm text-gray-500">Block height data unavailable</div>
+          <% end %>
+        </div>
+
+        <!-- PERFORMANCE (5 minute window) -->
+        <div class="border-gray-700/50 border-b p-4">
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Performance (5 minute window)</h4>
+          <div class="grid grid-cols-4 gap-3">
+            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-700/50">
+              <div class="text-[10px] text-gray-500 mb-1">p50</div>
+              <div class="text-lg font-bold text-white">{if Map.get(@performance_metrics, :p50_latency), do: "#{Map.get(@performance_metrics, :p50_latency)}ms", else: "—"}</div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-700/50">
+              <div class="text-[10px] text-gray-500 mb-1">p95</div>
+              <div class="text-lg font-bold text-white">{if Map.get(@performance_metrics, :p95_latency), do: "#{Map.get(@performance_metrics, :p95_latency)}ms", else: "—"}</div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-700/50">
+              <div class="text-[10px] text-gray-500 mb-1">Success</div>
+              <% success_rate = Map.get(@performance_metrics, :success_rate, 0.0) %>
+              <div class={[
+                "text-lg font-bold",
+                cond do
+                  success_rate >= 99.0 -> "text-emerald-400"
+                  success_rate >= 95.0 -> "text-yellow-400"
+                  true -> "text-red-400"
+                end
+              ]}>{if success_rate > 0, do: "#{success_rate}%", else: "—"}</div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-700/50">
+              <div class="text-[10px] text-gray-500 mb-1">Traffic</div>
+              <div class="text-lg font-bold text-white">{(Map.get(@performance_metrics, :pick_share_5m, 0.0) || 0.0) |> Helpers.to_float() |> Float.round(1)}%</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CONNECTION -->
+        <div class="border-gray-700/50 border-b p-4">
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Connection</h4>
+          <div class="space-y-4">
+            <!-- HTTP Circuit Breaker -->
+            <% has_http = Map.get(@provider_connection, :url) != nil %>
+            <%= if has_http do %>
+              <div class="flex items-center gap-3">
+                <span class="w-10 text-xs text-gray-400">HTTP</span>
+                <div class="flex-1 flex items-center gap-1">
+                  <% http_state = Map.get(@provider_connection, :http_circuit_state, :closed) %>
+                  <div class={["w-3 h-3 rounded-full border-2", if(http_state == :closed, do: "bg-emerald-500 border-emerald-400", else: "border-gray-600")]}></div>
+                  <div class="flex-1 h-0.5 bg-gray-700"></div>
+                  <div class={["w-3 h-3 rounded-full border-2", if(http_state == :half_open, do: "bg-yellow-500 border-yellow-400", else: "border-gray-600")]}></div>
+                  <div class="flex-1 h-0.5 bg-gray-700"></div>
+                  <div class={["w-3 h-3 rounded-full border-2", if(http_state == :open, do: "bg-red-500 border-red-400", else: "border-gray-600")]}></div>
+                </div>
+                <span class={[
+                  "w-20 text-xs text-right",
+                  case http_state do
+                    :closed -> "text-emerald-400"
+                    :half_open -> "text-yellow-400"
+                    :open -> "text-red-400"
+                  end
+                ]}>{http_state |> to_string() |> String.replace("_", "-") |> String.capitalize()}</span>
+              </div>
+              <div class="flex justify-between text-[10px] text-gray-600 px-11">
+                <span>closed</span>
+                <span>half-open</span>
+                <span>open</span>
+              </div>
+            <% end %>
+
+            <!-- WS Circuit Breaker -->
+            <% has_ws = Map.get(@provider_connection, :ws_url) != nil %>
+            <%= if has_ws do %>
+              <div class="flex items-center gap-3 mt-3">
+                <span class="w-10 text-xs text-gray-400">WS</span>
+                <div class="flex-1 flex items-center gap-1">
+                  <% ws_state = Map.get(@provider_connection, :ws_circuit_state, :closed) %>
+                  <% ws_connected = Map.get(@provider_connection, :ws_connected, false) %>
+                  <div class={["w-3 h-3 rounded-full border-2", if(ws_state == :closed, do: "bg-emerald-500 border-emerald-400", else: "border-gray-600")]}></div>
+                  <div class="flex-1 h-0.5 bg-gray-700"></div>
+                  <div class={["w-3 h-3 rounded-full border-2", if(ws_state == :half_open, do: "bg-yellow-500 border-yellow-400", else: "border-gray-600")]}></div>
+                  <div class="flex-1 h-0.5 bg-gray-700"></div>
+                  <div class={["w-3 h-3 rounded-full border-2", if(ws_state == :open, do: "bg-red-500 border-red-400", else: "border-gray-600")]}></div>
+                </div>
+                <span class={[
+                  "w-20 text-xs text-right",
+                  cond do
+                    ws_state == :open -> "text-red-400"
+                    ws_state == :half_open -> "text-yellow-400"
+                    ws_connected -> "text-emerald-400"
+                    true -> "text-gray-400"
+                  end
+                ]}>
+                  {cond do
+                    ws_state == :open -> "Open"
+                    ws_state == :half_open -> "Half-open"
+                    ws_connected -> "Connected"
+                    true -> "Disconnected"
+                  end}
+                </span>
+              </div>
+              <div class="flex justify-between text-[10px] text-gray-600 px-11">
+                <span>closed</span>
+                <span>half-open</span>
+                <span>open</span>
+              </div>
+            <% end %>
+
+            <!-- Failure/Success Counters -->
+            <div class="flex justify-between text-xs text-gray-400 pt-2 border-t border-gray-800">
+              <span>Failures: <span class={if Map.get(@provider_connection, :consecutive_failures, 0) > 0, do: "text-red-400", else: "text-gray-300"}>{Map.get(@provider_connection, :consecutive_failures, 0)}/5</span> threshold</span>
+              <span>Successes: <span class="text-emerald-400">{Map.get(@provider_connection, :consecutive_successes, 0)}</span> consecutive</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ISSUES (infrastructure only) -->
+        <div class="border-gray-700/50 border-b p-4">
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Issues</h4>
+          <%
+            # Build current state issues from provider connection
+            current_issues = []
+
+            # Circuit breaker issues
+            current_issues = if Map.get(@provider_connection, :http_circuit_state) == :open do
+              [%{kind: :circuit, severity: :error, message: "HTTP circuit breaker OPEN", ts: "now", meta: %{transport: :http}} | current_issues]
+            else
+              current_issues
+            end
+
+            current_issues = if Map.get(@provider_connection, :ws_circuit_state) == :open do
+              [%{kind: :circuit, severity: :error, message: "WebSocket circuit breaker OPEN", ts: "now", meta: %{transport: :ws}} | current_issues]
+            else
+              current_issues
+            end
+
+            current_issues = if Map.get(@provider_connection, :http_circuit_state) == :half_open do
+              [%{kind: :circuit, severity: :warn, message: "HTTP circuit breaker testing recovery", ts: "now", meta: %{transport: :http}} | current_issues]
+            else
+              current_issues
+            end
+
+            current_issues = if Map.get(@provider_connection, :ws_circuit_state) == :half_open do
+              [%{kind: :circuit, severity: :warn, message: "WebSocket circuit breaker testing recovery", ts: "now", meta: %{transport: :ws}} | current_issues]
+            else
+              current_issues
+            end
+
+            # Cooldown/rate limit issue
+            current_issues = if Map.get(@provider_connection, :is_in_cooldown, false) do
+              [%{kind: :provider, severity: :warn, message: "Provider in rate limit cooldown", ts: "now", meta: %{}} | current_issues]
+            else
+              current_issues
+            end
+
+            # Consecutive failures
+            failures = Map.get(@provider_connection, :consecutive_failures, 0)
+            current_issues = if failures > 0 do
+              [%{kind: :provider, severity: (if failures >= 3, do: :error, else: :warn), message: "#{failures} consecutive failures", ts: "now", meta: %{}} | current_issues]
+            else
+              current_issues
+            end
+
+            # WS disconnected (when WS is supported)
+            has_ws = Map.get(@provider_connection, :ws_url) != nil
+            ws_connected = Map.get(@provider_connection, :ws_connected, false)
+            ws_circuit_ok = Map.get(@provider_connection, :ws_circuit_state) != :open
+            current_issues = if has_ws and not ws_connected and ws_circuit_ok do
+              [%{kind: :provider, severity: :warn, message: "WebSocket disconnected", ts: "now", meta: %{transport: :ws}} | current_issues]
+            else
+              current_issues
+            end
+
+            # Last error if present
+            current_issues = case Map.get(@provider_connection, :last_error) do
+              nil -> current_issues
+              error ->
+                error_msg = case error do
+                  msg when is_binary(msg) -> String.slice(msg, 0, 80)
+                  {:error, reason} -> "Error: #{inspect(reason) |> String.slice(0, 60)}"
+                  other -> inspect(other) |> String.slice(0, 80)
+                end
+                [%{kind: :error, severity: :error, message: error_msg, ts: "recent", meta: %{}} | current_issues]
+            end
+
+            # Also include recent events from event history
+            historical_issues = @provider_unified_events
+              |> Enum.filter(fn e ->
+                kind = e[:kind]
+                severity = e[:severity]
+                # Include non-RPC events or events with warn/error severity
+                kind != :rpc or severity in [:warn, :error]
+              end)
+              |> Enum.take(3)
+
+            # Combine current state issues with historical events
+            all_issues = current_issues ++ historical_issues
+          %>
+          <%= if length(all_issues) > 0 do %>
+            <div class="space-y-2">
+              <%= for issue <- all_issues do %>
+                <%
+                  severity_color = case issue[:severity] do
+                    :error -> "bg-red-500"
+                    :warn -> "bg-yellow-500"
+                    _ -> "bg-blue-500"
+                  end
+                  time_ago = if issue[:ts_ms] do
+                    diff_ms = System.system_time(:millisecond) - issue[:ts_ms]
+                    cond do
+                      diff_ms < 60_000 -> "#{div(diff_ms, 1000)}s ago"
+                      diff_ms < 3_600_000 -> "#{div(diff_ms, 60_000)}m ago"
+                      true -> "#{div(diff_ms, 3_600_000)}h ago"
+                    end
+                  else
+                    issue[:ts] || "—"
+                  end
+                %>
+                <div class="bg-gray-800/30 rounded-lg p-2 border-l-2 border-l-gray-700">
+                  <div class="flex items-start justify-between">
+                    <div class="flex items-center gap-2">
+                      <div class={["w-2 h-2 rounded-full", severity_color]}></div>
+                      <span class="text-xs text-gray-200">{issue[:message] || "Unknown issue"}</span>
+                    </div>
+                    <span class="text-[10px] text-gray-500 shrink-0 ml-2">{time_ago}</span>
+                  </div>
+                  <%= if issue[:kind] do %>
+                    <div class="text-[10px] text-gray-500 ml-4 mt-1">
+                      {issue[:kind] |> to_string() |> String.capitalize()}
+                      <%= if get_in(issue, [:meta, :transport]) do %>
+                        • {get_in(issue, [:meta, :transport])}
+                      <% end %>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
+            </div>
+            <div class="flex items-center justify-between mt-3 text-xs text-gray-500">
+              <span>{length(all_issues)} issues</span>
+            </div>
+          <% else %>
+            <div class="text-xs text-gray-500 text-center py-2">No issues detected</div>
+          <% end %>
+        </div>
+
+        <!-- METHOD PERFORMANCE -->
+        <div class="p-4">
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Method Performance</h4>
+          <% rpc_stats = Map.get(@performance_metrics, :rpc_stats, []) %>
+          <% max_calls = rpc_stats |> Enum.map(& &1.total_calls) |> Enum.max(fn -> 1 end) %>
+          <%= if length(rpc_stats) > 0 do %>
+            <div class="space-y-2">
+              <%= for stat <- Enum.take(rpc_stats, 6) do %>
+                <% bar_width = if max_calls > 0, do: (stat.total_calls / max_calls) * 100, else: 0 %>
+                <div class="flex items-center gap-2 text-xs">
+                  <span class="w-28 text-gray-300 truncate font-mono" title={stat.method}>{stat.method}</span>
+                  <span class="w-16 text-gray-400">avg: {Helpers.to_float(stat.avg_duration_ms) |> Float.round(0)}ms</span>
+                  <span class={[
+                    "w-12",
+                    if(stat.success_rate >= 0.99, do: "text-emerald-400", else: if(stat.success_rate >= 0.95, do: "text-yellow-400", else: "text-red-400"))
+                  ]}>{(Helpers.to_float(stat.success_rate) * 100) |> Float.round(1)}%</span>
+                  <div class="flex-1 bg-gray-800 rounded h-2">
+                    <div class="bg-gray-600 h-2 rounded" style={"width: #{bar_width}%"}></div>
+                  </div>
+                  <span class="w-14 text-right text-gray-500">{stat.total_calls}</span>
+                </div>
+              <% end %>
+            </div>
+            <div class="text-[10px] text-gray-600 text-right mt-2">(calls)</div>
+          <% else %>
+            <div class="text-xs text-gray-500 text-center py-2">No recent method data</div>
+          <% end %>
+        </div>
+      <% else %>
+        <div class="flex-1 flex items-center justify-center">
+          <div class="text-gray-500">Provider data not available</div>
+        </div>
+      <% end %>
     </div>
     """
   end
@@ -1343,9 +1523,9 @@ defmodule LassoWeb.Dashboard do
             provider_events={@provider_events}
             events={@events}
             selected_chain={@selected_chain}
-            selected_provider_events={assigns[:selected_provider_events] || []}
-            selected_provider_unified_events={assigns[:selected_provider_unified_events] || []}
-            selected_provider_metrics={assigns[:selected_provider_metrics] || %{}}
+            selected_provider_events={@selected_provider_events}
+            selected_provider_unified_events={@selected_provider_unified_events}
+            selected_provider_metrics={@selected_provider_metrics}
           />
         <% else %>
           <%= if @selected_chain do %>
@@ -1422,11 +1602,15 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_event("select_provider", %{"provider" => provider}, socket) do
+    # Schedule periodic refresh for provider panel
+    Process.send_after(self(), :provider_panel_refresh, 3_000)
+
     socket =
       socket
       |> assign(:selected_provider, provider)
       |> assign(:selected_chain, nil)
       |> assign(:details_collapsed, false)
+      |> fetch_connections()
       |> update_selected_provider_data()
       |> push_event("center_on_provider", %{provider: provider})
 
@@ -1630,6 +1814,7 @@ defmodule LassoWeb.Dashboard do
             socket.assigns.routing_events
           )
 
+
         # Update all provider-specific assigns at once
         socket
         |> assign(:selected_provider_events, provider_events)
@@ -1641,14 +1826,30 @@ defmodule LassoWeb.Dashboard do
   defp fetch_connections(socket) do
     alias Lasso.Config.ConfigStore
     alias Lasso.RPC.ProviderPool
+    alias Lasso.RPC.ChainState
 
     # Get all configured chains
     chains = ConfigStore.list_chains()
+
+    # Get consensus heights for all chains upfront
+    consensus_by_chain =
+      chains
+      |> Enum.map(fn chain_name ->
+        consensus = case ChainState.consensus_height(chain_name, allow_stale: true) do
+          {:ok, height} -> height
+          {:ok, height, :stale} -> height
+          {:error, _} -> nil
+        end
+        {chain_name, consensus}
+      end)
+      |> Enum.into(%{})
 
     # Fetch provider status from ProviderPool for each chain
     connections =
       chains
       |> Enum.flat_map(fn chain_name ->
+        consensus_height = Map.get(consensus_by_chain, chain_name)
+
         case ProviderPool.get_status(chain_name) do
           {:ok, pool_status} ->
             # pool_status.providers is a list of provider maps
@@ -1690,6 +1891,19 @@ defmodule LassoWeb.Dashboard do
                   other -> other  # Fallback for any new states
                 end
 
+              # Get provider block height and lag from ChainState
+              {block_height, blocks_behind} =
+                case ChainState.provider_lag(chain_name, provider_map.id) do
+                  {:ok, lag} when is_integer(lag) and not is_nil(consensus_height) ->
+                    # lag is negative when behind (e.g., -5 means 5 blocks behind)
+                    # Convert to block_height and blocks_behind
+                    height = consensus_height + lag
+                    {height, -lag}  # blocks_behind is positive when behind
+
+                  _ ->
+                    {nil, nil}
+                end
+
               # Map to dashboard connection format
               %{
                 id: provider_map.id,
@@ -1710,7 +1924,11 @@ defmodule LassoWeb.Dashboard do
                 ws_connected: ws_connected,
                 subscriptions: 0,  # Would need to query UpstreamSubscriptionPool
                 url: provider_map.config.url,
-                ws_url: provider_map.config.ws_url
+                ws_url: provider_map.config.ws_url,
+                # Block sync data
+                block_height: block_height,
+                consensus_height: consensus_height,
+                blocks_behind: blocks_behind
               }
             end)
 

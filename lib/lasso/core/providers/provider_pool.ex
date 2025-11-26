@@ -16,9 +16,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   alias Lasso.Events.Provider
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.CircuitBreaker
-  alias Lasso.RPC.HealthPolicy
-  alias Lasso.RPC.ChainState
+  alias Lasso.RPC.{ChainState, CircuitBreaker, HealthPolicy}
 
   @type t :: %__MODULE__{
           chain_name: chain_name(),
@@ -1770,6 +1768,15 @@ defmodule Lasso.RPC.ProviderPool do
               state.table,
               {{:provider_lag, state.chain_name, result.provider_id}, lag}
             )
+
+            # Broadcast sync update for dashboard live updates
+            Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates", %{
+              chain: state.chain_name,
+              provider_id: result.provider_id,
+              block_height: result.block_height,
+              consensus_height: consensus_height,
+              lag: lag
+            })
 
             # Log if exceeds threshold
             threshold = get_lag_threshold_for_chain(state.chain_name)

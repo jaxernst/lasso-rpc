@@ -3,22 +3,32 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   Per-chain pool that multiplexes client subscriptions onto minimal upstream
   subscriptions. MVP supports single-provider policy with priority selection,
   failover on disconnect/close, bounded backfill, and simple dedupe.
+
+  ## Architecture
+
+  Uses UpstreamSubscriptionManager for upstream subscription lifecycle:
+  - Registers as consumer via Manager for each {provider, key} pair
+  - Receives events via Registry dispatch (no PubSub filtering needed)
+  - Manages failover by releasing old subscription and ensuring new one
   """
 
   use GenServer
   require Logger
 
-  alias Lasso.RPC.{Selection, SelectionContext, ClientSubscriptionRegistry}
-  alias Lasso.RPC.StreamSupervisor
-  alias Lasso.RPC.StreamCoordinator
-  alias Lasso.RPC.{TransportRegistry, Channel}
-  alias Lasso.RPC.{FilterNormalizer, ErrorNormalizer}
   alias Lasso.Config.ConfigStore
   alias Lasso.Events.Provider
+  alias Lasso.RPC.{
+    Channel,
+    ClientSubscriptionRegistry,
+    Selection,
+    SelectionContext,
+    StreamCoordinator,
+    StreamSupervisor,
+    UpstreamSubscriptionManager
+  }
 
   @type chain :: String.t()
   @type provider_id :: String.t()
-  @type upstream_id :: String.t()
   @type key :: {:newHeads} | {:logs, map()}
 
   def start_link(chain) when is_binary(chain) do
@@ -41,8 +51,11 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
   @impl true
   def init(chain) do
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:#{chain}")
+    # Subscribe to provider pool events for health/availability changes
     Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{chain}")
+
+    # Subscribe to Manager restart events to re-establish subscriptions
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "upstream_sub_manager:#{chain}")
 
     # Load dedupe config
     dedupe_cfg =
@@ -53,10 +66,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
     state = %{
       chain: chain,
-      # key => %{refcount, primary_provider_id, upstream: %{provider_id => upstream_id | nil}, markers, dedupe}
+      # key => %{refcount, primary_provider_id, status, markers, dedupe}
       keys: %{},
-      # provider_id => %{upstream_id => key}
-      upstream_index: %{},
       # config
       dedupe_max_items: Map.get(dedupe_cfg, :max_items, 256),
       dedupe_max_age_ms: Map.get(dedupe_cfg, :max_age_ms, 30_000),
@@ -88,7 +99,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
             refcount: 1,
             status: :establishing,
             primary_provider_id: nil,
-            upstream: %{},
             markers: %{},
             dedupe: nil
           }
@@ -145,66 +155,34 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     entry = Map.get(state.keys, key)
 
     if entry do
-      # Get old provider info for cleanup
-      {old_provider_id, old_upstream_id} =
-        case Map.get(entry.upstream, entry.primary_provider_id) do
-          nil -> {entry.primary_provider_id, nil}
-          up_id -> {entry.primary_provider_id, up_id}
-        end
+      old_provider_id = entry.primary_provider_id
 
-      # Execute new subscription
-      case send_upstream_subscribe(state.chain, new_provider_id, key) do
-        {:ok, upstream_id} ->
-          # Unsubscribe old upstream if present to avoid stragglers and leaks
-          if old_upstream_id do
-            Task.start(fn ->
-              send_upstream_unsubscribe(state.chain, old_provider_id, key, old_upstream_id)
-            end)
-          end
-
-          # Update entry with new provider
+      # Register with new provider via Manager FIRST (before releasing old)
+      # This ensures we receive events from both during transition - StreamCoordinator dedupes
+      case UpstreamSubscriptionManager.ensure_subscription(state.chain, new_provider_id, key) do
+        {:ok, _status} ->
+          # Update entry with new provider, but track old for cleanup
+          # We stay registered for old provider until coordinator confirms
           updated_entry = %{
             entry
             | primary_provider_id: new_provider_id,
-              upstream: Map.put(entry.upstream, new_provider_id, upstream_id)
+              status: :active,
+              # Track old provider for deferred cleanup
+              transitioning_from: old_provider_id
           }
 
-          # Clean old upstream from index
-          new_upstream_index =
-            if old_upstream_id do
-              case Map.get(state.upstream_index, old_provider_id) do
-                nil ->
-                  state.upstream_index
-
-                provider_map ->
-                  updated_map = Map.delete(provider_map, old_upstream_id)
-
-                  if map_size(updated_map) == 0 do
-                    Map.delete(state.upstream_index, old_provider_id)
-                  else
-                    Map.put(state.upstream_index, old_provider_id, updated_map)
-                  end
-              end
-            else
-              state.upstream_index
-            end
-
-          # Add new upstream to index
-          new_upstream_index =
-            Map.update(new_upstream_index, new_provider_id, %{upstream_id => key}, fn m ->
-              Map.put(m, upstream_id, key)
-            end)
-
-          new_state = %{
-            state
-            | keys: Map.put(state.keys, key, updated_entry),
-              upstream_index: new_upstream_index
-          }
+          new_state = %{state | keys: Map.put(state.keys, key, updated_entry)}
 
           # Confirm to coordinator
-          send(coordinator_pid, {:subscription_confirmed, new_provider_id, upstream_id})
+          send(coordinator_pid, {:subscription_confirmed, new_provider_id, nil})
 
           telemetry_resubscribe_success(state.chain, key, new_provider_id)
+
+          # Schedule deferred release of old subscription after StreamCoordinator has drained buffer
+          # This gives time for in-flight events to arrive and be forwarded
+          if old_provider_id do
+            Process.send_after(self(), {:deferred_release, key, old_provider_id}, 5_000)
+          end
 
           {:noreply, new_state}
 
@@ -232,11 +210,14 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   def handle_cast({:establish_upstream, key, excluded_providers}, state) do
     with {:ok, entry} <- validate_entry_for_establishment(state.keys[key]),
          {:ok, provider_id} <- select_available_provider(state.chain, excluded_providers),
-         {:ok, upstream_id} <- attempt_upstream_subscribe(state.chain, provider_id, key) do
+         {:ok, _status} <- attempt_upstream_subscribe(state.chain, provider_id, key) do
       # Happy path: subscription established successfully
-      new_state = activate_subscription(state, key, entry, provider_id, upstream_id)
+      new_state = activate_subscription(state, key, entry, provider_id)
 
-      Logger.info("Upstream subscription established for key #{inspect(key)} on provider #{provider_id}")
+      Logger.info(
+        "Upstream subscription established for key #{inspect(key)} on provider #{provider_id}"
+      )
+
       telemetry_upstream(:subscribe, state.chain, provider_id, key)
       telemetry_subscription_status(:active, state.chain, key, entry.refcount)
 
@@ -288,13 +269,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     end
   end
 
-  # Attempt upstream subscription, wrapping result consistently
+  # Attempt upstream subscription via Manager
   defp attempt_upstream_subscribe(chain, provider_id, key) do
     Logger.debug("Attempting upstream subscribe to #{provider_id} for key #{inspect(key)}")
 
-    case send_upstream_subscribe(chain, provider_id, key) do
-      {:ok, upstream_id} ->
-        {:ok, upstream_id}
+    case UpstreamSubscriptionManager.ensure_subscription(chain, provider_id, key) do
+      {:ok, status} ->
+        {:ok, status}
 
       {:error, reason} ->
         Logger.warning("Upstream subscribe failed on #{provider_id}: #{inspect(reason)}")
@@ -303,20 +284,14 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   end
 
   # Activate subscription after successful establishment
-  defp activate_subscription(state, key, entry, provider_id, upstream_id) do
+  defp activate_subscription(state, key, entry, provider_id) do
     updated_entry = %{
       entry
       | status: :active,
-        primary_provider_id: provider_id,
-        upstream: %{provider_id => upstream_id}
+        primary_provider_id: provider_id
     }
 
-    upstream_index =
-      Map.update(state.upstream_index, provider_id, %{upstream_id => key}, fn m ->
-        Map.put(m, upstream_id, key)
-      end)
-
-    %{state | keys: Map.put(state.keys, key, updated_entry), upstream_index: upstream_index}
+    %{state | keys: Map.put(state.keys, key, updated_entry)}
   end
 
   # Handle subscription failure with retry logic
@@ -324,7 +299,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     max_attempts = 3
 
     if length(excluded_providers) < max_attempts do
-      Logger.info("Retrying upstream establishment for #{inspect(key)} (attempt #{length(excluded_providers) + 1}/#{max_attempts})")
+      Logger.info(
+        "Retrying upstream establishment for #{inspect(key)} (attempt #{length(excluded_providers) + 1}/#{max_attempts})"
+      )
+
       GenServer.cast(self(), {:establish_upstream, key, excluded_providers})
       {:noreply, state}
     else
@@ -349,51 +327,50 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   end
 
   @impl true
-  # Handle typed subscription events from WSConnection
+  # Handle subscription events from UpstreamSubscriptionManager via Registry.dispatch
+  # Format: {:upstream_subscription_event, provider_id, sub_key, payload, received_at}
   def handle_info(
-        {:subscription_event, provider_id, upstream_id, payload, received_at},
+        {:upstream_subscription_event, provider_id, key, payload, received_at},
         state
       )
-      when is_binary(upstream_id) do
-    case get_in(state.upstream_index, [provider_id, upstream_id]) do
-      nil ->
-        Logger.warning(
-          "No key found for subscription event: provider=#{provider_id}, upstream_id=#{upstream_id}, full_index=#{inspect(state.upstream_index)}"
-        )
-
+      when is_map(payload) do
+    # Forward events from active subscription or from old provider during transition
+    # StreamCoordinator handles buffering and deduplication
+    case Map.get(state.keys, key) do
+      %{primary_provider_id: ^provider_id, status: :active} ->
+        # Event from current primary provider
+        StreamCoordinator.upstream_event(state.chain, key, provider_id, nil, payload, received_at)
         {:noreply, state}
 
-      key ->
-        StreamCoordinator.upstream_event(
-          state.chain,
-          key,
-          provider_id,
-          upstream_id,
-          payload,
-          received_at
-        )
+      %{transitioning_from: ^provider_id, status: :active} ->
+        # Event from old provider during transition - forward for deduplication
+        # StreamCoordinator will buffer or dedupe as appropriate
+        StreamCoordinator.upstream_event(state.chain, key, provider_id, nil, payload, received_at)
+        {:noreply, state}
 
+      _ ->
+        # Not our active subscription (stale event or key doesn't exist)
         {:noreply, state}
     end
   end
 
-  # Fallback handler for subscription events WITHOUT subscription ID (still supported if needed)
-  def handle_info({:subscription_event, _provider_id, nil, payload, received_at}, state) do
-    # Determine key for routing and update markers/dedupe
-    case detect_key_from_payload(payload) do
-      {:ok, key} ->
-        StreamCoordinator.upstream_event(
-          state.chain,
-          key,
-          _provider_id = nil,
-          _upstream_id = nil,
-          payload,
-          received_at
-        )
+  # Handle deferred release timer
+  def handle_info({:deferred_release, key, old_provider_id}, state) do
+    case Map.get(state.keys, key) do
+      %{transitioning_from: ^old_provider_id} = entry ->
+        # Release old subscription now that transition is complete
+        UpstreamSubscriptionManager.release_subscription(state.chain, old_provider_id, key)
 
-        {:noreply, state}
+        # Clear the transitioning_from field
+        updated_entry = Map.delete(entry, :transitioning_from)
+        new_state = %{state | keys: Map.put(state.keys, key, updated_entry)}
 
-      :unknown ->
+        Logger.debug("Deferred release of old provider #{old_provider_id} for key #{inspect(key)}")
+
+        {:noreply, new_state}
+
+      _ ->
+        # Key doesn't exist or already transitioned elsewhere
         {:noreply, state}
     end
   end
@@ -405,8 +382,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
              is_struct(evt, Provider.WSClosed) or
              is_struct(evt, Provider.WSDisconnected) do
     provider_id = Map.get(evt, :provider_id)
-
-    new_upstream_index = Map.delete(state.upstream_index, provider_id)
 
     keys_to_failover =
       state.keys
@@ -422,7 +397,54 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       )
     end)
 
-    {:noreply, %{state | upstream_index: new_upstream_index}}
+    {:noreply, state}
+  end
+
+  # Handle Manager restart - re-establish all active subscriptions
+  def handle_info({:upstream_sub_manager_restarted, _chain}, state) do
+    active_keys =
+      state.keys
+      |> Enum.filter(fn {_key, entry} ->
+        entry.status == :active and entry.primary_provider_id != nil
+      end)
+      |> Enum.map(fn {key, entry} -> {key, entry.primary_provider_id} end)
+
+    if active_keys != [] do
+      Logger.info("Manager restarted, re-establishing #{length(active_keys)} active subscriptions",
+        chain: state.chain
+      )
+
+      # Re-register each active subscription with the Manager
+      Enum.each(active_keys, fn {key, provider_id} ->
+        case UpstreamSubscriptionManager.ensure_subscription(state.chain, provider_id, key) do
+          {:ok, _status} ->
+            Logger.debug("Re-established subscription after Manager restart",
+              chain: state.chain,
+              key: inspect(key),
+              provider_id: provider_id
+            )
+
+          {:error, reason} ->
+            # If re-establishment fails, trigger failover
+            Logger.warning("Failed to re-establish subscription after Manager restart",
+              chain: state.chain,
+              key: inspect(key),
+              provider_id: provider_id,
+              reason: inspect(reason)
+            )
+
+            # Trigger failover to another provider
+            StreamCoordinator.provider_unhealthy(
+              state.chain,
+              key,
+              provider_id,
+              pick_next_provider(state, provider_id)
+            )
+        end
+      end)
+    end
+
+    {:noreply, state}
   end
 
   def handle_info(_, state), do: {:noreply, state}
@@ -460,164 +482,27 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       nil ->
         state
 
-      %{refcount: 1, upstream: upstream, primary_provider_id: provider_id} ->
-        # Best-effort unsubscribe on current provider (async to avoid blocking)
-        upstream_id = Map.get(upstream, provider_id)
-
-        Task.start(fn ->
-          send_upstream_unsubscribe(state.chain, provider_id, key, upstream_id)
-        end)
+      %{refcount: 1, primary_provider_id: provider_id} when not is_nil(provider_id) ->
+        # Release subscription from Manager
+        UpstreamSubscriptionManager.release_subscription(state.chain, provider_id, key)
 
         telemetry_upstream(:unsubscribe, state.chain, provider_id, key)
-
-        # Clean up upstream_index for all providers in the upstream map
-        new_upstream_index =
-          Enum.reduce(upstream, state.upstream_index, fn {prov_id, up_id}, acc ->
-            case up_id do
-              nil ->
-                # No upstream_id was assigned yet, nothing to clean
-                acc
-
-              _ ->
-                # Remove this upstream_id from the provider's map
-                case Map.get(acc, prov_id) do
-                  nil ->
-                    acc
-
-                  provider_map ->
-                    updated_map = Map.delete(provider_map, up_id)
-
-                    if map_size(updated_map) == 0 do
-                      # Provider has no more subscriptions, remove it entirely
-                      Map.delete(acc, prov_id)
-                    else
-                      Map.put(acc, prov_id, updated_map)
-                    end
-                end
-            end
-          end)
 
         # Stop the StreamCoordinator for this key (async to avoid blocking)
         Task.start(fn -> StreamSupervisor.stop_coordinator(state.chain, key) end)
 
-        %{state | keys: Map.delete(state.keys, key), upstream_index: new_upstream_index}
+        %{state | keys: Map.delete(state.keys, key)}
+
+      %{refcount: 1} ->
+        # No provider assigned yet, just clean up
+        Task.start(fn -> StreamSupervisor.stop_coordinator(state.chain, key) end)
+        %{state | keys: Map.delete(state.keys, key)}
 
       entry ->
         updated = %{entry | refcount: entry.refcount - 1}
         %{state | keys: Map.put(state.keys, key, updated)}
     end
   end
-
-  defp send_upstream_subscribe(chain, provider_id, {:newHeads}) do
-    id = generate_id()
-
-    message = %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "method" => "eth_subscribe",
-      "params" => ["newHeads"]
-    }
-
-    Logger.info("Sending upstream eth_subscribe to #{provider_id} with request id #{id}")
-
-    with {:ok, channel} <- TransportRegistry.get_channel(chain, provider_id, :ws),
-         {:ok, upstream_id, _io_ms} <- Channel.request(channel, message, 10_000) do
-      {:ok, upstream_id}
-    else
-      {:error, reason} ->
-        {:error,
-         ErrorNormalizer.normalize(reason,
-           provider_id: provider_id,
-           context: :transport,
-           transport: :ws
-         )}
-
-      {:error, reason, _io_ms} ->
-        {:error,
-         ErrorNormalizer.normalize(reason,
-           provider_id: provider_id,
-           context: :transport,
-           transport: :ws
-         )}
-    end
-  end
-
-  defp send_upstream_subscribe(chain, provider_id, {:logs, filter}) do
-    id = generate_id()
-    normalized = FilterNormalizer.normalize(filter)
-
-    message = %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "method" => "eth_subscribe",
-      "params" => ["logs", normalized]
-    }
-
-    Logger.debug("Sending upstream eth_subscribe (logs) to #{provider_id} with id #{id}")
-
-    with {:ok, channel} <- TransportRegistry.get_channel(chain, provider_id, :ws),
-         {:ok, upstream_id, _io_ms} <- Channel.request(channel, message, 10_000) do
-      {:ok, upstream_id}
-    else
-      {:error, reason} ->
-        {:error,
-         ErrorNormalizer.normalize(reason,
-           provider_id: provider_id,
-           context: :transport,
-           transport: :ws
-         )}
-
-      {:error, reason, _io_ms} ->
-        {:error,
-         ErrorNormalizer.normalize(reason,
-           provider_id: provider_id,
-           context: :transport,
-           transport: :ws
-         )}
-    end
-  end
-
-  defp send_upstream_unsubscribe(chain, provider_id, _key, upstream_id)
-       when is_binary(upstream_id) do
-    message = %{
-      "jsonrpc" => "2.0",
-      "id" => generate_id(),
-      "method" => "eth_unsubscribe",
-      "params" => [upstream_id]
-    }
-
-    Logger.debug("Sending upstream eth_unsubscribe to #{provider_id} for #{upstream_id}")
-
-    case TransportRegistry.get_channel(chain, provider_id, :ws) do
-      {:ok, channel} ->
-        _ = Channel.request(channel, message, 5_000)
-        :ok
-
-      {:error, _} ->
-        :ok
-    end
-
-    :ok
-  end
-
-  defp send_upstream_unsubscribe(_chain, _provider_id, _key, _upstream_id) do
-    # No upstream_id available, nothing to unsubscribe
-    :ok
-  end
-
-  defp detect_key_from_payload(%{"blockHash" => _} = header) when is_map(header),
-    do: {:ok, {:newHeads}}
-
-  defp detect_key_from_payload(%{"topics" => _} = log) do
-    {:ok,
-     {:logs,
-      FilterNormalizer.normalize(%{
-        "address" => Map.get(log, "address"),
-        "topics" => Map.get(log, "topics")
-      })}}
-  end
-
-  defp detect_key_from_payload(_), do: :unknown
 
   defp telemetry_upstream(action, chain, provider_id, key) do
     :telemetry.execute([:lasso, :subs, :upstream, action], %{count: 1}, %{

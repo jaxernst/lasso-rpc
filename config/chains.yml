@@ -234,6 +234,14 @@ chains:
         ws_url: "wss://g.w.lavanet.xyz:443/gateway/bases/rpc/c8ce92e7c11c66d297bddc4c7315d677"
         api_key_required: false
 
+      - id: "base_official_sepolia"
+        name: "Base Official Sepolia"
+        priority: 2
+        type: "public"
+        url: "https://sepolia.base.org"
+        ws_url: "wss://sepolia.base.org"
+        api_key_required: false
+
     connection:
       heartbeat_interval: 10000
       reconnect_interval: 5000

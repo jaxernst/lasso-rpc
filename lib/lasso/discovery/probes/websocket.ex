@@ -115,7 +115,7 @@ defmodule Lasso.Discovery.Probes.WebSocket do
             {:ok, _} ->
               %{status: :supported, latency_ms: System.monotonic_time(:millisecond) - start}
 
-            {:error, %{"code" => -32601}} ->
+            {:error, %{"code" => -32_601}} ->
               %{status: :unsupported, latency_ms: System.monotonic_time(:millisecond) - start}
 
             {:error, reason} ->
@@ -145,7 +145,7 @@ defmodule Lasso.Discovery.Probes.WebSocket do
             {:ok, %{subscription_id: sub_id, received_event: false}} ->
               %{status: :supported, subscription_id: sub_id, received_event: false, note: "No event received within timeout"}
 
-            {:error, %{"code" => -32601}} ->
+            {:error, %{"code" => -32_601}} ->
               %{status: :unsupported, error: "Method not found"}
 
             {:error, reason} ->

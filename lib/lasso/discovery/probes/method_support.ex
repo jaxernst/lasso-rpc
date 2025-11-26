@@ -6,8 +6,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
   minimal requests and analyzing the responses.
   """
 
-  alias Lasso.Discovery.{ProbeEngine, TestParams, ErrorClassifier}
-  alias Lasso.RPC.{MethodRegistry, HttpClient}
+  alias Lasso.Discovery.{ErrorClassifier, ProbeEngine, TestParams}
+  alias Lasso.RPC.{HttpClient, MethodRegistry}
 
   @levels %{
     critical: [:core],
@@ -197,21 +197,21 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
       {:ok, %{"result" => _result}} ->
         %{status: :supported, duration_ms: duration, error: nil, error_code: nil}
 
-      {:ok, %{"error" => %{"code" => -32601} = error}} ->
+      {:ok, %{"error" => %{"code" => -32_601} = error}} ->
         %{
           status: :unsupported,
           duration_ms: duration,
           error: Map.get(error, "message", "Method not found"),
-          error_code: -32601
+          error_code: -32_601
         }
 
-      {:ok, %{"error" => %{"code" => -32602} = error}} ->
+      {:ok, %{"error" => %{"code" => -32_602} = error}} ->
         # Invalid params means method exists
         %{
           status: :supported,
           duration_ms: duration,
           error: Map.get(error, "message"),
-          error_code: -32602
+          error_code: -32_602
         }
 
       {:ok, %{"error" => error}} when is_map(error) ->
