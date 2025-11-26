@@ -112,14 +112,10 @@ defmodule Lasso.Config.ChainConfig do
     @type t :: %__MODULE__{
             # Maximum acceptable lag in blocks (providers more than N blocks behind are excluded)
             # nil means no lag filtering
-            max_lag_blocks: non_neg_integer() | nil,
-            # Per-method overrides for max_lag_blocks
-            # Example: %{"eth_getBalance" => 1, "eth_gasPrice" => 5}
-            max_lag_per_method: %{String.t() => non_neg_integer()} | nil
+            max_lag_blocks: non_neg_integer() | nil
           }
 
-    defstruct max_lag_blocks: nil,
-              max_lag_per_method: nil
+    defstruct max_lag_blocks: nil
   end
 
   defmodule Monitoring do
@@ -373,31 +369,8 @@ defmodule Lasso.Config.ChainConfig do
   defp parse_selection(nil), do: nil
 
   defp parse_selection(selection_data) when is_map(selection_data) do
-    # Parse per-method overrides if present
-    max_lag_per_method =
-      case Map.get(selection_data, "max_lag_per_method") do
-        nil ->
-          nil
-
-        method_map when is_map(method_map) ->
-          # Convert all values to integers
-          Enum.into(method_map, %{}, fn {method, lag} ->
-            lag_int =
-              case lag do
-                i when is_integer(i) -> i
-                s when is_binary(s) -> String.to_integer(s)
-              end
-
-            {method, lag_int}
-          end)
-
-        _ ->
-          nil
-      end
-
     %__MODULE__.Selection{
-      max_lag_blocks: Map.get(selection_data, "max_lag_blocks"),
-      max_lag_per_method: max_lag_per_method
+      max_lag_blocks: Map.get(selection_data, "max_lag_blocks")
     }
   end
 

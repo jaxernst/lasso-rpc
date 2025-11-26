@@ -471,22 +471,13 @@ defmodule Lasso.Config.ConfigStore do
   defp normalize_selection_config(nil), do: nil
 
   defp normalize_selection_config(attrs) when is_map(attrs) do
-    # Parse per-method overrides if present
-    max_lag_per_method =
-      case Map.get(attrs, :max_lag_per_method) || Map.get(attrs, "max_lag_per_method") do
-        nil -> nil
-        method_map when is_map(method_map) -> method_map
-        _ -> nil
-      end
-
     max_lag_blocks = Map.get(attrs, :max_lag_blocks) || Map.get(attrs, "max_lag_blocks")
 
     # Validate configuration values
-    validate_lag_config!(max_lag_blocks, max_lag_per_method)
+    validate_lag_config!(max_lag_blocks)
 
     %ChainConfig.Selection{
-      max_lag_blocks: max_lag_blocks,
-      max_lag_per_method: max_lag_per_method
+      max_lag_blocks: max_lag_blocks
     }
   end
 
@@ -500,7 +491,7 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   # Validates lag configuration values, raising on invalid configuration
-  defp validate_lag_config!(max_lag_blocks, max_lag_per_method) do
+  defp validate_lag_config!(max_lag_blocks) do
     # Validate max_lag_blocks
     case max_lag_blocks do
       nil ->
@@ -516,32 +507,6 @@ defmodule Lasso.Config.ConfigStore do
       other ->
         raise ArgumentError,
               "Invalid max_lag_blocks type: #{inspect(other)}. Must be an integer or nil."
-    end
-
-    # Validate max_lag_per_method map values
-    case max_lag_per_method do
-      nil ->
-        :ok
-
-      method_map when is_map(method_map) ->
-        Enum.each(method_map, fn {method, lag_value} ->
-          case lag_value do
-            blocks when is_integer(blocks) and blocks >= 0 ->
-              :ok
-
-            blocks when is_integer(blocks) ->
-              raise ArgumentError,
-                    "Invalid max_lag_per_method[#{method}]: #{blocks}. Must be a non-negative integer."
-
-            other ->
-              raise ArgumentError,
-                    "Invalid max_lag_per_method[#{method}] type: #{inspect(other)}. Must be an integer."
-          end
-        end)
-
-      other ->
-        raise ArgumentError,
-              "Invalid max_lag_per_method type: #{inspect(other)}. Must be a map or nil."
     end
 
     :ok
