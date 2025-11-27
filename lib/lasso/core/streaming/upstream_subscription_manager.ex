@@ -93,8 +93,9 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
     # Register as consumer first (idempotent per-process)
     case UpstreamSubscriptionRegistry.register_consumer(chain, provider_id, sub_key) do
       :ok ->
-        # Then ensure upstream subscription exists
-        GenServer.call(via(chain), {:ensure_subscription, provider_id, sub_key})
+        # Use :infinity - the inner Channel.request has its own bounded timeout (10s)
+        # and will return {:error, :timeout} which propagates up cleanly
+        GenServer.call(via(chain), {:ensure_subscription, provider_id, sub_key}, :infinity)
 
       {:error, reason} ->
         {:error, {:registry_error, reason}}

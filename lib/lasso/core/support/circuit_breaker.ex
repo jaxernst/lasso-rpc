@@ -379,8 +379,12 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   @impl true
   def handle_cast({:report, _token, result}, state) do
+    # Normalize transport 3-tuples to 2-tuples at the boundary
+    # Circuit breaker only needs success/failure, not I/O timing
+    normalized = normalize_transport_result(result)
+
     # Update state based on attempt result; do not block caller
-    new_state = classify_and_update_state_for_report(result, state)
+    new_state = classify_and_update_state_for_report(normalized, state)
 
     # Decrement inflight counter if half-open
     final_state =
@@ -449,9 +453,24 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   # Private functions
 
-  defp classify_and_handle_result(result, state) do
-    # Logger.debug("Classifying and handling result: #{inspect(result)}")
+  # Normalizes results to 2-tuples at the boundary.
+  # Circuit breaker only cares about success/failure for state management.
+  #
+  # Handles:
+  # - Transport 3-tuples: {:ok, value, io_ms} -> {:ok, value}
+  # - Transport 3-tuples: {:error, reason, io_ms} -> {:error, reason}
+  # - Standard 2-tuples: pass through unchanged
+  # - Plain :ok atom: common GenServer/simple success -> {:ok, :ok}
+  # - Other values: pass through (will hit defensive catch-all)
+  defp normalize_transport_result({:ok, value, _io_ms}), do: {:ok, value}
+  defp normalize_transport_result({:error, reason, _io_ms}), do: {:error, reason}
+  defp normalize_transport_result({:ok, _value} = ok_tuple), do: ok_tuple
+  defp normalize_transport_result({:error, _reason} = error_tuple), do: error_tuple
+  defp normalize_transport_result(:ok), do: {:ok, :ok}
+  defp normalize_transport_result(other), do: other
 
+  defp classify_and_handle_result(result, state) do
+    # Expects 2-tuples only (normalized at boundary)
     case result do
       {:ok, value} ->
         handle_success(value, state)
@@ -463,9 +482,9 @@ defmodule Lasso.RPC.CircuitBreaker do
       {:error, %JError{retriable?: true, breaker_penalty?: false} = reason} ->
         handle_non_breaker_error({:error, reason}, state)
 
-      {:error, %JError{retriable?: false}} ->
+      {:error, %JError{retriable?: false} = reason} ->
         # User/client errors don't affect circuit breaker state
-        handle_non_breaker_error(result, state)
+        handle_non_breaker_error({:error, reason}, state)
 
       {:error, reason} ->
         # Normalize unknown error shapes to JError for consistent handling
@@ -482,8 +501,22 @@ defmodule Lasso.RPC.CircuitBreaker do
         end
 
       other ->
-        # Any other return value is treated as success for backwards compatibility
-        handle_success(other, state)
+        # DEFENSIVE: Unknown shapes should not happen after normalization
+        # Log as error and treat conservatively (as failure, not success)
+        Logger.error("Circuit breaker received unexpected result shape after normalization",
+          shape: inspect(other),
+          provider_id: state.provider_id,
+          transport: state.transport,
+          chain: state.chain
+        )
+
+        jerr =
+          JError.new(-32_000, "Internal error: unexpected circuit breaker result shape",
+            category: :internal_error,
+            retriable?: false
+          )
+
+        handle_failure(jerr, state)
     end
   end
 

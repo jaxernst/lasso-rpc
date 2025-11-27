@@ -1879,16 +1879,15 @@ defmodule LassoWeb.Dashboard do
                   _ -> false
                 end
 
-              # Map HealthPolicy availability to dashboard health_status
-              # HealthPolicy uses: :up, :down, :limited, :misconfigured
+              # Map provider availability to dashboard health_status
+              # Availability uses: :up, :down, :limited (derived from status in ProviderPool)
               # StatusHelpers expects: :healthy, :unhealthy, :rate_limited, :connecting, etc.
               health_status =
                 case provider_map.availability do
                   :up -> :healthy
                   :down -> :unhealthy
                   :limited -> :rate_limited
-                  :misconfigured -> :misconfigured
-                  other -> other  # Fallback for any new states
+                  other -> other
                 end
 
               # Get provider block height and lag from ChainState

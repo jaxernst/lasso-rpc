@@ -656,7 +656,7 @@ defmodule LassoWeb.HomeLive do
                     <span class="h-[1px] w-8 bg-emerald-400"></span> Resilience & Scale
                   </div>
                   <h2 class="text-3xl font-bold text-white sm:text-4xl">
-                    Infrastructure failures should never impact the end user.
+                    Don't let infrastructure failures impact your users.
                   </h2>
                   <p class="text-base leading-relaxed text-gray-400">
                     Lasso gives you layers of infra backups and intelligently manages them so your app doesn't have to.
