@@ -301,14 +301,24 @@ defmodule Lasso.RPC.BlockHeightMonitor do
         %{state | subscriptions: Map.put(state.subscriptions, provider_id, updated_sub)}
 
       {:error, reason} ->
-        Logger.warning("BlockHeightMonitor subscription failed",
-          chain: state.chain,
-          provider_id: provider_id,
-          reason: inspect(reason)
-        )
-
         # Schedule retry with exponential backoff
         retry_count = sub.retry_count + 1
+
+        # Only log warning on first failure, demote retries to debug
+        if retry_count == 1 do
+          Logger.warning("BlockHeightMonitor subscription failed",
+            chain: state.chain,
+            provider_id: provider_id,
+            reason: inspect(reason)
+          )
+        else
+          Logger.debug("BlockHeightMonitor subscription retry failed",
+            chain: state.chain,
+            provider_id: provider_id,
+            retry_count: retry_count,
+            reason: inspect(reason)
+          )
+        end
         delay = min(@reconnect_delay_ms * :math.pow(2, retry_count - 1), 60_000) |> trunc()
         Process.send_after(self(), {:reconnect_provider, provider_id}, delay)
 

@@ -13,18 +13,33 @@
 #     - max_addresses_ws: <number>          # Max addresses for eth_getLogs WS (default: 20)
 #   LlamaRPC / Merkle:
 #     - max_block_range: <number>           # Max block range for eth_getLogs (default: 1000)
+#
+# Topology Configuration:
+# Each chain can have topology metadata for dashboard visualization:
+#   topology:
+#     category: l1 | l2_optimistic | l2_zk | sidechain | other
+#     parent: <chain_key>     # For L2s, which L1 they connect to (e.g., "ethereum")
+#     network: mainnet | sepolia | goerli | holesky
+#     color: "#HEXCODE"       # Brand color for UI
+#     size: sm | md | lg | xl # Display size in topology view
 
 chains:
   ethereum:
     chain_id: 1
     name: "Ethereum Mainnet"
 
+    topology:
+      category: l1
+      network: mainnet
+      color: "#627EEA"
+      size: xl
+
     # Provider health monitoring configuration
     monitoring:
       probe_interval_ms: 12000 # 12s - Ethereum's block time
       lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~60s)
 
-    # Per-method lag overrides for selection (higher tolerance for historical queries)
+    # Selection lag tolerance
     selection:
       max_lag_blocks: 1
 
@@ -116,9 +131,77 @@ chains:
       backfill_timeout: 30000
       enabled: true
 
+  ethereum_sepolia:
+    chain_id: 11155111
+    name: "Ethereum Sepolia"
+
+    topology:
+      category: l1
+      network: sepolia
+      color: "#526ED390"
+      size: md
+
+    # Provider health monitoring configuration
+    monitoring:
+      probe_interval_ms: 12000 # 12s - Ethereum's block time
+      lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~60s)
+
+    # Per-method lag overrides for selection
+    selection:
+      max_lag_blocks: 1
+
+    providers:
+      - id: "lava_ethereum_sepolia"
+        name: "Lava Ethereum Sepolia"
+        priority: 1
+        type: "public"
+        url: "https://g.w.lavanet.xyz:443/gateway/ethsep/rpc-http/c8ce92e7c11c66d297bddc4c7315d677"
+        ws_url: "wss://g.w.lavanet.xyz:443/gateway/ethsep/rpc/c8ce92e7c11c66d297bddc4c7315d677"
+        api_key_required: false
+
+      - id: "ethereum_sepolia_publicnode"
+        name: "PublicNode Ethereum Sepolia"
+        priority: 2
+        type: "public"
+        url: "https://ethereum-sepolia-rpc.publicnode.com"
+        ws_url: "wss://ethereum-sepolia-rpc.publicnode.com"
+        api_key_required: false
+
+      - id: "ethereum_sepolia_1rpc"
+        name: "1RPC Ethereum Sepolia"
+        priority: 3
+        type: "public"
+        url: "https://1rpc.io/sepolia"
+        api_key_required: false
+
+      - id: "ethereum_sepolia_drpc"
+        name: "DRPC Ethereum Sepolia"
+        priority: 4
+        type: "public"
+        url: "https://lb.drpc.live/ethereum-sepolia/AsX7SwWUH0vGkFOHPHzUyaGtM9G3rgMR8LnWQrxF2MGT"
+        ws_url: "wss://lb.drpc.live/ethereum-sepolia/AsX7SwWUH0vGkFOHPHzUyaGtM9G3rgMR8LnWQrxF2MGT"
+        api_key_required: false
+
+    connection:
+      heartbeat_interval: 10000
+      reconnect_interval: 5000
+      max_reconnect_attempts: 10
+
+    failover:
+      max_backfill_blocks: 100
+      backfill_timeout: 30000
+      enabled: true
+
   base:
     chain_id: 8453
     name: "Base Mainnet"
+
+    topology:
+      category: l2_optimistic
+      parent: ethereum
+      network: mainnet
+      color: "#0052FF"
+      size: md
 
     # Provider health monitoring configuration
     monitoring:
@@ -216,6 +299,13 @@ chains:
     chain_id: 84532
     name: "Base Sepolia"
 
+    topology:
+      category: l2_optimistic
+      parent: ethereum_sepolia # Connects to Sepolia testnet, floats if not present
+      network: sepolia
+      color: "#0052FF90"
+      size: sm
+
     # Provider health monitoring configuration
     monitoring:
       probe_interval_ms: 6000 # 6s - probe every 3 blocks (2s block time)
@@ -239,7 +329,14 @@ chains:
         priority: 2
         type: "public"
         url: "https://sepolia.base.org"
-        ws_url: "wss://sepolia.base.org"
+        api_key_required: false
+
+      - id: "base_sepolia_publicnode"
+        name: "Base Sepolia PublicNode"
+        priority: 3
+        type: "public"
+        url: "https://base-sepolia-rpc.publicnode.com"
+        ws_url: "wss://base-sepolia-rpc.publicnode.com"
         api_key_required: false
 
     connection:

@@ -1076,9 +1076,9 @@ defmodule LassoWeb.Dashboard do
                 class={[
                   "h-full rounded-full transition-all",
                   cond do
-                    blocks_behind <= 2 -> "bg-emerald-500"
-                    blocks_behind <= 10 -> "bg-yellow-500"
-                    true -> "bg-red-500"
+                    blocks_behind <= 2 -> "bg-emerald-500/60"
+                    blocks_behind <= 10 -> "bg-yellow-500/60"
+                    true -> "bg-red-500/60"
                   end
                 ]}
                 style={"width: #{bar_width}%"}
@@ -1346,7 +1346,7 @@ defmodule LassoWeb.Dashboard do
                 <% bar_width = if max_calls > 0, do: (stat.total_calls / max_calls) * 100, else: 0 %>
                 <div class="flex items-center gap-2 text-xs">
                   <span class="w-28 text-gray-300 truncate font-mono" title={stat.method}>{stat.method}</span>
-                  <span class="w-16 text-gray-400">avg: {Helpers.to_float(stat.avg_duration_ms) |> Float.round(0)}ms</span>
+                  <span class="w-16 text-gray-400">p50: {Helpers.to_float(stat.avg_duration_ms) |> Float.round(0)}ms</span>
                   <span class={[
                     "w-12",
                     if(stat.success_rate >= 0.99, do: "text-emerald-400", else: if(stat.success_rate >= 0.95, do: "text-yellow-400", else: "text-red-400"))
@@ -1879,15 +1879,16 @@ defmodule LassoWeb.Dashboard do
                   _ -> false
                 end
 
-              # Map provider availability to dashboard health_status
-              # Availability uses: :up, :down, :limited (derived from status in ProviderPool)
+              # Map HealthPolicy availability to dashboard health_status
+              # HealthPolicy uses: :up, :down, :limited, :misconfigured
               # StatusHelpers expects: :healthy, :unhealthy, :rate_limited, :connecting, etc.
               health_status =
                 case provider_map.availability do
                   :up -> :healthy
                   :down -> :unhealthy
                   :limited -> :rate_limited
-                  other -> other
+                  :misconfigured -> :misconfigured
+                  other -> other  # Fallback for any new states
                 end
 
               # Get provider block height and lag from ChainState
