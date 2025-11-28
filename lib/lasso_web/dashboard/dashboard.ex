@@ -1267,12 +1267,12 @@ defmodule LassoWeb.Dashboard do
             current_issues = case Map.get(@provider_connection, :last_error) do
               nil -> current_issues
               error ->
-                error_msg = case error do
-                  msg when is_binary(msg) -> String.slice(msg, 0, 80)
-                  {:error, reason} -> "Error: #{inspect(reason) |> String.slice(0, 60)}"
-                  other -> inspect(other) |> String.slice(0, 80)
+                full_msg = case error do
+                  msg when is_binary(msg) -> msg
+                  {:error, reason} -> "Error: #{inspect(reason)}"
+                  other -> inspect(other)
                 end
-                [%{kind: :error, severity: :error, message: error_msg, ts: "recent", meta: %{}} | current_issues]
+                [%{kind: :error, severity: :error, message: full_msg, ts: "recent", meta: %{}} | current_issues]
             end
 
             # Also include recent events from event history
@@ -1308,27 +1308,55 @@ defmodule LassoWeb.Dashboard do
                     issue[:ts] || "—"
                   end
                 %>
-                <div class="bg-gray-800/30 rounded-lg p-2 border-l-2 border-l-gray-700">
-                  <div class="flex items-start justify-between">
-                    <div class="flex items-center gap-2">
-                      <div class={["w-2 h-2 rounded-full", severity_color]}></div>
-                      <span class="text-xs text-gray-200">{issue[:message] || "Unknown issue"}</span>
+                <%
+                  full_message = issue[:message] || "Unknown issue"
+                  is_long = String.length(full_message) > 60
+                  preview_message = if is_long, do: String.slice(full_message, 0, 57) <> "...", else: full_message
+                  # Generate stable ID based on message hash to preserve open state across re-renders
+                  issue_id = "issue-#{:erlang.phash2({issue[:kind], issue[:message], issue[:ts_ms] || issue[:ts]})}"
+                %>
+                <details id={issue_id} phx-hook="ExpandableDetails" class="group bg-gray-800/30 rounded-lg border-l-2 border-l-transparent hover:border-l-gray-600 transition-colors">
+                  <summary class="p-2 cursor-pointer list-none">
+                    <div class="flex items-start justify-between">
+                      <div class="flex items-start gap-2 min-w-0 flex-1">
+                        <div class={["w-2 h-2 rounded-full mt-1 shrink-0", severity_color]}></div>
+                        <div class="min-w-0 flex-1">
+                          <span class="text-xs text-gray-200 group-open:hidden block break-words select-none">{preview_message}</span>
+                          <span class="text-xs text-gray-200 hidden group-open:block break-words whitespace-pre-wrap select-text">{full_message}</span>
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-1 shrink-0 ml-2">
+                        <%= if is_long do %>
+                          <svg class="w-3 h-3 text-gray-500 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                          </svg>
+                        <% end %>
+                        <span class="text-[10px] text-gray-500">{time_ago}</span>
+                      </div>
                     </div>
-                    <span class="text-[10px] text-gray-500 shrink-0 ml-2">{time_ago}</span>
-                  </div>
-                  <%= if issue[:kind] do %>
-                    <div class="text-[10px] text-gray-500 ml-4 mt-1">
-                      {issue[:kind] |> to_string() |> String.capitalize()}
-                      <%= if get_in(issue, [:meta, :transport]) do %>
-                        • {get_in(issue, [:meta, :transport])}
-                      <% end %>
+                  </summary>
+                  <%= if issue[:kind] || get_in(issue, [:meta, :transport]) do %>
+                    <div class="border-t border-gray-700/50 mx-2 mt-1"></div>
+                    <div class="px-2 pb-2 pt-2">
+                      <div class="flex flex-wrap gap-1.5 ml-4">
+                        <%= if issue[:kind] do %>
+                          <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400">
+                            {issue[:kind] |> to_string() |> String.capitalize()}
+                          </span>
+                        <% end %>
+                        <%= if get_in(issue, [:meta, :transport]) do %>
+                          <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400">
+                            {get_in(issue, [:meta, :transport])}
+                          </span>
+                        <% end %>
+                      </div>
                     </div>
                   <% end %>
-                </div>
+                </details>
               <% end %>
             </div>
-            <div class="flex items-center justify-between mt-3 text-xs text-gray-500">
-              <span>{length(all_issues)} issues</span>
+            <div class="mt-4 pt-3 border-t border-gray-700/30">
+              <span class="text-[11px] text-gray-500">{length(all_issues)} {if length(all_issues) == 1, do: "issue", else: "issues"}</span>
             </div>
           <% else %>
             <div class="text-xs text-gray-500 text-center py-2">No issues detected</div>
