@@ -59,7 +59,7 @@ defmodule LassoWeb.TopologyConfig do
   Controls how multiple L1 chains are spread around the canvas center.
   """
   # Distance from center for spreading multiple L1s
-  def l1_spread_distance, do: -400
+  def l1_spread_distance, do: -350
 
   # Base angular offset for L2 chains (radians, ~-30 degrees from vertical)
   # This prevents single L2s from always pointing straight up

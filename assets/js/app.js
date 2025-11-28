@@ -996,10 +996,10 @@ const ProviderRequestAnimator = {
 const ScrollReveal = {
   mounted() {
     this.revealed = false;
-    
+
     // Check if we should reveal immediately (if already visible or near top)
-    // But usually we trust the observer. 
-    
+    // But usually we trust the observer.
+
     this.observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -1017,7 +1017,7 @@ const ScrollReveal = {
     );
     this.observer.observe(this.el);
   },
-  
+
   updated() {
     // LiveView might have reset the classes to the server-side state (hidden).
     // If we have already revealed this element, we must force it back to visible.
@@ -1040,18 +1040,50 @@ const ScrollReveal = {
   },
 };
 
+// Expandable Details Hook - preserves open state across LiveView updates
+const ExpandableDetails = {
+  mounted() {
+    // Store a reference to this hook's element ID for storage key
+    this.storageKey = `details-open-${this.el.id}`;
+
+    // Restore state from sessionStorage (survives LiveView updates)
+    const wasOpen = sessionStorage.getItem(this.storageKey) === "true";
+    if (wasOpen) {
+      this.el.open = true;
+    }
+
+    // Listen for toggle events and persist state
+    this.el.addEventListener("toggle", () => {
+      sessionStorage.setItem(this.storageKey, this.el.open ? "true" : "false");
+    });
+  },
+
+  updated() {
+    // After LiveView update, restore the open state from sessionStorage
+    const wasOpen = sessionStorage.getItem(this.storageKey) === "true";
+    if (wasOpen && !this.el.open) {
+      this.el.open = true;
+    }
+  },
+
+  destroyed() {
+    // Clean up sessionStorage when element is removed
+    sessionStorage.removeItem(this.storageKey);
+  },
+};
+
 // Parallax Background Hook
 const ParallaxBackground = {
   mounted() {
     this.ticking = false;
-    
+
     this.handleScroll = () => {
       if (!this.ticking) {
         window.requestAnimationFrame(() => {
           const scrolled = this.el.scrollTop;
           const blobs = this.el.querySelectorAll("[data-parallax-speed]");
-          
-          blobs.forEach(blob => {
+
+          blobs.forEach((blob) => {
             const speed = parseFloat(blob.dataset.parallaxSpeed);
             // Move UP as we scroll down to create depth (background moves slower than foreground)
             // Since foreground moves at 1px/px, background should move at (1-speed)px/px or similar.
@@ -1063,13 +1095,13 @@ const ParallaxBackground = {
             // If we want them to appear "behind", they should move up slower.
             // Since they are FIXED, they effectively move with the camera (0 movement relative to viewport).
             // To make them look like background, we need to push them UP as we scroll down.
-            const yPos = -(scrolled * speed); 
+            const yPos = -(scrolled * speed);
             blob.style.transform = `translate3d(0, ${yPos}px, 0)`;
           });
-          
+
           this.ticking = false;
         });
-        
+
         this.ticking = true;
       }
     };
@@ -1078,7 +1110,7 @@ const ParallaxBackground = {
   },
   destroyed() {
     this.el.removeEventListener("scroll", this.handleScroll);
-  }
+  },
 };
 
 let csrfToken = document
@@ -1097,7 +1129,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     ProviderRequestAnimator,
     TabSwitcher: EndpointSelector,
     ScrollReveal,
-    ParallaxBackground
+    ParallaxBackground,
+    ExpandableDetails,
   },
 });
 
