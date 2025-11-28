@@ -15,7 +15,8 @@ defmodule Lasso.Config.ChainConfig do
           connection: __MODULE__.Connection.t(),
           failover: __MODULE__.Failover.t(),
           selection: __MODULE__.Selection.t() | nil,
-          monitoring: __MODULE__.Monitoring.t()
+          monitoring: __MODULE__.Monitoring.t(),
+          topology: __MODULE__.Topology.t() | nil
         }
 
   defstruct [
@@ -25,7 +26,8 @@ defmodule Lasso.Config.ChainConfig do
     :connection,
     :failover,
     :selection,
-    :monitoring
+    :monitoring,
+    :topology
   ]
 
   defmodule Config do
@@ -140,6 +142,45 @@ defmodule Lasso.Config.ChainConfig do
 
     defstruct probe_interval_ms: 12_000,
               lag_threshold_blocks: 3
+  end
+
+  defmodule Topology do
+    @moduledoc """
+    Chain topology metadata for dashboard visualization.
+
+    Used by the network topology component to:
+    - Categorize chains (L1, L2 optimistic, L2 ZK, sidechain)
+    - Establish parent-child relationships for connection lines
+    - Determine display size and color
+    - Group by network (mainnet vs testnets)
+    """
+
+    @type category :: :l1 | :l2_optimistic | :l2_zk | :sidechain | :other
+    @type network :: :mainnet | :sepolia | :goerli | :holesky
+    @type size :: :sm | :md | :lg | :xl
+
+    @type t :: %__MODULE__{
+            category: category(),
+            parent: String.t() | nil,
+            network: network(),
+            color: String.t(),
+            size: size()
+          }
+
+    defstruct category: :other,
+              parent: nil,
+              network: :mainnet,
+              color: "#6B7280",
+              size: :md
+
+    @doc "Check if this chain is an L2 (optimistic or ZK rollup)"
+    def l2?(%__MODULE__{category: category}), do: category in [:l2_optimistic, :l2_zk]
+
+    @doc "Check if this chain is a mainnet chain"
+    def mainnet?(%__MODULE__{network: network}), do: network == :mainnet
+
+    @doc "Check if this chain is a testnet"
+    def testnet?(%__MODULE__{network: network}), do: network in [:sepolia, :goerli, :holesky]
   end
 
   @doc """
@@ -271,7 +312,8 @@ defmodule Lasso.Config.ChainConfig do
       connection: parse_connection(chain_data["connection"]),
       failover: parse_failover(chain_data["failover"]),
       selection: parse_selection(chain_data["selection"]),
-      monitoring: parse_monitoring(chain_data["monitoring"])
+      monitoring: parse_monitoring(chain_data["monitoring"]),
+      topology: parse_topology(chain_data["topology"])
     }
   end
 
@@ -385,6 +427,39 @@ defmodule Lasso.Config.ChainConfig do
       lag_threshold_blocks: Map.get(monitoring_data, "lag_threshold_blocks", 3)
     }
   end
+
+  defp parse_topology(nil) do
+    # Use default values if no topology config provided
+    %__MODULE__.Topology{}
+  end
+
+  defp parse_topology(topology_data) when is_map(topology_data) do
+    %__MODULE__.Topology{
+      category: parse_topology_category(Map.get(topology_data, "category")),
+      parent: Map.get(topology_data, "parent"),
+      network: parse_topology_network(Map.get(topology_data, "network")),
+      color: Map.get(topology_data, "color", "#6B7280"),
+      size: parse_topology_size(Map.get(topology_data, "size"))
+    }
+  end
+
+  defp parse_topology_category("l1"), do: :l1
+  defp parse_topology_category("l2_optimistic"), do: :l2_optimistic
+  defp parse_topology_category("l2_zk"), do: :l2_zk
+  defp parse_topology_category("sidechain"), do: :sidechain
+  defp parse_topology_category(_), do: :other
+
+  defp parse_topology_network("mainnet"), do: :mainnet
+  defp parse_topology_network("sepolia"), do: :sepolia
+  defp parse_topology_network("goerli"), do: :goerli
+  defp parse_topology_network("holesky"), do: :holesky
+  defp parse_topology_network(_), do: :mainnet
+
+  defp parse_topology_size("sm"), do: :sm
+  defp parse_topology_size("md"), do: :md
+  defp parse_topology_size("lg"), do: :lg
+  defp parse_topology_size("xl"), do: :xl
+  defp parse_topology_size(_), do: :md
 
   @doc """
   Substitutes environment variables in configuration strings.

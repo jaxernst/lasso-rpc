@@ -2,6 +2,8 @@ defmodule LassoWeb.NetworkTopology do
   use Phoenix.Component
 
   alias LassoWeb.Dashboard.Helpers
+  alias LassoWeb.TopologyConfig
+  alias Lasso.Config.ConfigStore
 
   attr(:id, :string, required: true, doc: "unique identifier for the topology component")
   attr(:connections, :list, required: true, doc: "list of connection maps")
@@ -33,19 +35,17 @@ defmodule LassoWeb.NetworkTopology do
         style="width: 4000px; height: 3000px;"
         phx-click="deselect_all"
       >
-        <!-- L1 -> L2 Connection lines -->
-        <%= if Map.has_key?(@spiral_layout.chains, "ethereum") do %>
-          <% ethereum_pos = @spiral_layout.chains["ethereum"].position %>
-          <% ethereum_radius = @spiral_layout.chains["ethereum"].radius %>
-          <%= for {l2_name, l2_data} <- @spiral_layout.chains do %>
-            <%= if is_l2_chain?(l2_name) do %>
+        <!-- Parent -> Child Connection lines (L1 to L2s) -->
+        <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
+          <%= if parent_name = Map.get(chain_data, :parent) do %>
+            <%= if parent_data = Map.get(@spiral_layout.chains, parent_name) do %>
               <% {line_start_x, line_start_y, line_end_x, line_end_y} =
                 calculate_connection_line_with_variance(
-                  ethereum_pos,
-                  l2_data.position,
-                  ethereum_radius,
-                  l2_data.radius,
-                  l2_name
+                  parent_data.position,
+                  chain_data.position,
+                  parent_data.radius,
+                  chain_data.radius,
+                  chain_name
                 ) %>
               <svg
                 class="pointer-events-none absolute z-0"
@@ -56,10 +56,10 @@ defmodule LassoWeb.NetworkTopology do
                   y1={line_start_y}
                   x2={line_end_x}
                   y2={line_end_y}
-                  stroke="#8B5CF6"
-                  stroke-width="1"
-                  opacity="0.3"
-                  stroke-dasharray="2,2"
+                  stroke={TopologyConfig.l1_l2_line_color()}
+                  stroke-width={TopologyConfig.l1_l2_line_width()}
+                  opacity={TopologyConfig.l1_l2_line_opacity()}
+                  stroke-dasharray={TopologyConfig.l1_l2_line_dash()}
                 />
               </svg>
             <% end %>
@@ -201,191 +201,155 @@ defmodule LassoWeb.NetworkTopology do
 
   defp calculate_spiral_layout(connections) do
     chains = group_connections_by_chain(connections)
-    center_x = 2000
-    center_y = 1500
+    {center_x, center_y} = TopologyConfig.canvas_center()
 
-    # Hierarchical orbital layout configuration
+    # Layout configuration from centralized TopologyConfig
     config = %{
-      l1_radius: 67,
-      l2_orbit_min: 240,
-      l2_orbit_max: 400,
-      provider_orbit: 75,
-      # Provider node size
-      provider_radius: 10,
-      # Full circle for L2 distribution
-      angle_spread: 2 * :math.pi(),
-      # Distance for non-Ethereum chains
-      other_chain_orbit: 600
+      l2_orbit_min: TopologyConfig.l2_orbit_min(),
+      l2_orbit_max: TopologyConfig.l2_orbit_max(),
+      provider_radius: TopologyConfig.provider_node_radius(),
+      angle_spread: TopologyConfig.angle_spread(),
+      other_chain_orbit: TopologyConfig.other_chain_orbit(),
+      chain_angle_variance: TopologyConfig.chain_angle_variance(),
+      chain_distance_variance: TopologyConfig.chain_distance_variance()
     }
 
-    # Separate Ethereum L1 from major chains and others
-    {ethereum_l1, major_chains, other_chains} = categorize_chains(chains)
+    # Categorize chains using topology config from chains.yml
+    {l1_chains, l2_chains, other_chains} = categorize_chains_by_config(chains)
 
-    # Build hierarchical structure
+    # Build hierarchical structure with parent-child relationships
     positioned_chains =
-      build_orbital_structure(ethereum_l1, major_chains, other_chains, center_x, center_y, config)
+      build_orbital_structure(l1_chains, l2_chains, other_chains, center_x, center_y, config)
 
     %{chains: positioned_chains}
   end
 
-  # Categorize chains into L1 Ethereum, L2s/rollups, and others
-  defp categorize_chains(chains) do
-    ethereum_l1 = Map.get(chains, "ethereum", [])
+  # Categorize chains using topology config from chains.yml
+  # Returns {l1_chains, l2_chains, other_chains} where each is a map of chain_name => connections
+  #
+  # Key design decisions:
+  # - L2s are only placed in l2_chains if their parent chain EXISTS in the active chains
+  # - This ensures testnets (e.g., base_sepolia) don't connect to mainnet (ethereum)
+  # - L2s with missing parents float independently in other_chains
+  defp categorize_chains_by_config(chains) do
+    # Get all chain configs from ConfigStore
+    all_chain_configs = ConfigStore.get_all_chains()
+    active_chain_names = Map.keys(chains)
 
-    # Ethereum L2s and rollups that should orbit around Ethereum
-    l2_chain_names = [
-      # Optimistic Rollups
-      # Arbitrum One - optimistic rollup
-      "arbitrum",
-      # Optimism - optimistic rollup
-      "optimism",
-      # Base - optimistic rollup
-      "base",
-      # Arbitrum Nova - optimistic rollup
-      "arbitrum_nova",
-      # Optimism Bedrock - optimistic rollup
-      "optimism_bedrock",
-      # Boba Network - optimistic rollup
-      "boba",
-      # Metis - optimistic rollup
-      "metis",
-      # Loopring - optimistic rollup
-      "loopring",
-      # Zora - optimistic rollup
-      "zora",
-      # Blast - optimistic rollup
-      "blast",
-      # Mode - optimistic rollup
-      "mode",
-      # Fraxtal - optimistic rollup
-      "fraxtal",
-      # opBNB - optimistic rollup
-      "opbnb",
-      # Polygon zkEVM - zk rollup
-      "polygon_zkevm",
+    # Categorize based on topology config
+    {l1_chains, l2_chains, other_chains} =
+      Enum.reduce(chains, {%{}, %{}, %{}}, fn {chain_name, connections},
+                                              {l1_acc, l2_acc, other_acc} ->
+        topology = get_chain_topology(chain_name, all_chain_configs)
 
-      # Zero-Knowledge Rollups
-      # zkSync Era - zk rollup
-      "zksync",
-      # Linea - zk rollup
-      "linea",
-      # Scroll - zk rollup
-      "scroll",
-      # StarkNet - zk rollup
-      "starknet",
-      # Polygon - zk rollup (Polygon zkEVM)
-      "polygon",
-      # Mantle - zk rollup
-      "mantle",
-      # Taiko - zk rollup
-      "taiko",
-      # Kroma - zk rollup
-      "kroma",
-      # OP Celestia - zk rollup
-      "op_celestia",
-      # Eclipse - zk rollup
-      "eclipse",
-      # Lumio - zk rollup
-      "lumio",
-      # Astria - zk rollup
-      "astria",
-      # Caldera - zk rollup
-      "caldera",
-      # Degen - zk rollup
-      "degen",
-      # Lyra - zk rollup
-      "lyra",
-      # Aevo - zk rollup
-      "aevo",
-      # Hyperliquid - zk rollup
-      "hyperliquid",
-      # Vertex - zk rollup
-      "vertex",
-      # Drift - zk rollup
-      "drift",
-      # Jupiter - zk rollup
-      "jupiter",
-      # Pyth - zk rollup
-      "pyth",
-      # Chainlink - zk rollup
-      "chainlink",
-      # Unichain - zk rollup
-      "unichain",
-      # Manta - zk rollup
-      "manta",
-      # Immutable - zk rollup
-      "immutable"
-    ]
+        cond do
+          # L1 chains - check topology or fallback to known L1 patterns
+          is_l1_chain?(topology, chain_name) ->
+            {Map.put(l1_acc, chain_name, connections), l2_acc, other_acc}
 
-    # Other chains for outer orbit
-    {l2_chains, other_chains} =
-      chains
-      |> Map.drop(["ethereum"])
-      |> Map.split(l2_chain_names)
+          # L2 chains - ONLY if parent chain exists in active chains
+          is_l2_with_active_parent?(topology, chain_name, active_chain_names) ->
+            {l1_acc, Map.put(l2_acc, chain_name, connections), other_acc}
 
-    {ethereum_l1, l2_chains, other_chains}
+          # Everything else (including L2s with missing parents) floats independently
+          true ->
+            {l1_acc, l2_acc, Map.put(other_acc, chain_name, connections)}
+        end
+      end)
+
+    {l1_chains, l2_chains, other_chains}
   end
 
-  # Build the orbital structure with Ethereum at center
+  # Check if chain is an L1 (either by topology config or known L1 names)
+  defp is_l1_chain?(%{category: :l1}, _chain_name), do: true
+
+  defp is_l1_chain?(nil, chain_name),
+    do: chain_name in ~w(ethereum ethereum_sepolia ethereum_goerli)
+
+  defp is_l1_chain?(_, _), do: false
+
+  # Check if chain is an L2 with an active parent chain
+  # Parent must exist in the current set of active chains for connection to render
+  defp is_l2_with_active_parent?(
+         %{category: category, parent: parent},
+         _chain_name,
+         active_chain_names
+       )
+       when category in [:l2_optimistic, :l2_zk] and is_binary(parent) do
+    parent in active_chain_names
+  end
+
+  # Fallback for chains without topology - check if known L2 AND parent exists
+  defp is_l2_with_active_parent?(nil, chain_name, active_chain_names) do
+    case fallback_l2_parent(chain_name) do
+      nil -> false
+      parent -> parent in active_chain_names
+    end
+  end
+
+  defp is_l2_with_active_parent?(_, _, _), do: false
+
+  # Fallback parent mapping for known L2s without topology config
+  # Maps L2 chain names to their expected parent chains
+  defp fallback_l2_parent(chain_name) do
+    mainnet_l2s =
+      ~w(base arbitrum optimism zksync linea polygon scroll starknet mantle blast mode zora unichain manta taiko)
+
+    sepolia_l2s = ~w(base_sepolia arbitrum_sepolia optimism_sepolia)
+
+    cond do
+      chain_name in mainnet_l2s -> "ethereum"
+      chain_name in sepolia_l2s -> "ethereum_sepolia"
+      true -> nil
+    end
+  end
+
+  # Get the parent chain for an L2 (from topology or fallback)
+  defp get_l2_parent(%{parent: parent}, _chain_name) when is_binary(parent), do: parent
+  defp get_l2_parent(nil, chain_name), do: fallback_l2_parent(chain_name)
+  defp get_l2_parent(_, _), do: nil
+
+  # Get topology config for a chain, returns nil if not configured
+  defp get_chain_topology(chain_name, all_chain_configs) do
+    case Map.get(all_chain_configs, chain_name) do
+      %{topology: topology} when not is_nil(topology) -> topology
+      _ -> nil
+    end
+  end
+
+  # Build the orbital structure with L1 chains at center, L2s orbiting their parents
   defp build_orbital_structure(
-         ethereum_l1,
+         l1_chains,
          l2_chains,
          other_chains,
          center_x,
          center_y,
          config
        ) do
+    all_chain_configs = ConfigStore.get_all_chains()
     positioned = %{}
 
-    # 1. Position Ethereum L1 at center if it exists
+    # 1. Position L1 chains (spread around center if multiple)
     positioned =
-      if length(ethereum_l1) > 0 do
-        # Use the standard chain radius calculation for Ethereum too, not fixed l1_radius
-        ethereum_radius = calculate_chain_radius(length(ethereum_l1), "ethereum")
-
-        ethereum_data =
-          build_chain_node(
-            "ethereum",
-            ethereum_l1,
-            center_x,
-            center_y,
-            ethereum_radius,
-            config.provider_orbit,
-            config.provider_radius
-          )
-
-        Map.put(positioned, "ethereum", ethereum_data)
-      else
-        positioned
-      end
-
-    # 2. Position L2 chains in orbital pattern around Ethereum
-    positioned =
-      l2_chains
+      l1_chains
       |> Map.to_list()
       |> Enum.with_index()
       |> Enum.reduce(positioned, fn {{chain_name, chain_connections}, idx}, acc ->
-        total_l2s = map_size(l2_chains)
+        total_l1s = map_size(l1_chains)
 
-        # Calculate orbital position with slight randomness
-        base_angle = idx * config.angle_spread / max(1, total_l2s)
-        seed = :erlang.phash2(chain_name, 1000)
-        # ±45 degrees
-        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 4
-        # ±25px
-        distance_variance = (seed / 1000 - 0.5) * 50
+        # If single L1, place at center. If multiple, spread them out
+        {chain_x, chain_y} =
+          if total_l1s == 1 do
+            {center_x, center_y}
+          else
+            # Spread L1s in a circle around center using configurable distance
+            angle = idx * config.angle_spread / total_l1s
+            l1_spread = TopologyConfig.l1_spread_distance()
+            {center_x + l1_spread * :math.cos(angle), center_y + l1_spread * :math.sin(angle)}
+          end
 
-        final_angle = base_angle + angle_variance
-
-        orbit_distance =
-          config.l2_orbit_min +
-            (config.l2_orbit_max - config.l2_orbit_min) * (seed / 1000) +
-            distance_variance
-
-        chain_x = center_x + orbit_distance * :math.cos(final_angle)
-        chain_y = center_y + orbit_distance * :math.sin(final_angle)
-
-        chain_radius = calculate_chain_radius(length(chain_connections), chain_name)
+        topology = get_chain_topology(chain_name, all_chain_configs)
+        chain_radius = calculate_chain_radius_from_config(topology, length(chain_connections))
 
         chain_data =
           build_chain_node(
@@ -394,11 +358,86 @@ defmodule LassoWeb.NetworkTopology do
             chain_x,
             chain_y,
             chain_radius,
-            config.provider_orbit,
+            TopologyConfig.provider_orbit_for_radius(chain_radius),
             config.provider_radius
           )
 
         Map.put(acc, chain_name, chain_data)
+      end)
+
+    # 2. Position L2 chains in orbital pattern around their parent L1
+    # First, group L2s by their parent to assign per-parent indices
+    # Note: All L2s in l2_chains are guaranteed to have an existing parent (checked in categorization)
+    l2s_by_parent =
+      l2_chains
+      |> Map.to_list()
+      |> Enum.group_by(fn {chain_name, _conns} ->
+        topology = get_chain_topology(chain_name, all_chain_configs)
+        get_l2_parent(topology, chain_name)
+      end)
+
+    positioned =
+      Enum.reduce(l2s_by_parent, positioned, fn {parent_name, sibling_chains}, acc ->
+        # Get parent position (default to center if parent not found)
+        {parent_x, parent_y} =
+          case Map.get(acc, parent_name) do
+            %{position: pos} -> pos
+            _ -> {center_x, center_y}
+          end
+
+        sibling_count = length(sibling_chains)
+
+        # Position each sibling with its index within this parent's orbit
+        sibling_chains
+        |> Enum.with_index()
+        |> Enum.reduce(acc, fn {{chain_name, chain_connections}, sibling_idx}, inner_acc ->
+          topology = get_chain_topology(chain_name, all_chain_configs)
+
+          # Calculate orbital position using sibling index for even distribution
+          # Use seed-based offset to add variety when there's only 1 sibling
+          seed = :erlang.phash2(chain_name, 1000)
+
+          # Base angle includes configurable offset plus seed-based variance
+          # This prevents single L2s from always pointing straight up
+          # ±90° based on chain name
+          seed_angle_offset = (seed / 1000 - 0.5) * :math.pi()
+
+          base_angle =
+            TopologyConfig.l2_base_angle_offset() +
+              seed_angle_offset +
+              sibling_idx * config.angle_spread / max(1, sibling_count)
+
+          angle_variance = (seed / 1000 - 0.5) * config.chain_angle_variance
+          distance_variance = (seed / 1000 - 0.5) * config.chain_distance_variance
+
+          final_angle = base_angle + angle_variance
+
+          orbit_distance =
+            config.l2_orbit_min +
+              (config.l2_orbit_max - config.l2_orbit_min) * (seed / 1000) +
+              distance_variance
+
+          chain_x = parent_x + orbit_distance * :math.cos(final_angle)
+          chain_y = parent_y + orbit_distance * :math.sin(final_angle)
+
+          chain_radius = calculate_chain_radius_from_config(topology, length(chain_connections))
+
+          chain_data =
+            build_chain_node(
+              chain_name,
+              chain_connections,
+              chain_x,
+              chain_y,
+              chain_radius,
+              TopologyConfig.provider_orbit_for_radius(chain_radius),
+              config.provider_radius
+            )
+
+          # Store parent info for connection line drawing
+          chain_data = Map.put(chain_data, :parent, parent_name)
+
+          Map.put(inner_acc, chain_name, chain_data)
+        end)
       end)
 
     # 3. Position other chains in outer orbital ring
@@ -420,7 +459,8 @@ defmodule LassoWeb.NetworkTopology do
         chain_x = center_x + orbit_distance * :math.cos(final_angle)
         chain_y = center_y + orbit_distance * :math.sin(final_angle)
 
-        chain_radius = calculate_chain_radius(length(chain_connections), chain_name)
+        topology = get_chain_topology(chain_name, all_chain_configs)
+        chain_radius = calculate_chain_radius_from_config(topology, length(chain_connections))
 
         chain_data =
           build_chain_node(
@@ -429,7 +469,7 @@ defmodule LassoWeb.NetworkTopology do
             chain_x,
             chain_y,
             chain_radius,
-            config.provider_orbit,
+            TopologyConfig.provider_orbit_for_radius(chain_radius),
             config.provider_radius
           )
 
@@ -439,9 +479,18 @@ defmodule LassoWeb.NetworkTopology do
     positioned
   end
 
+  # Calculate chain radius from topology config, with fallback to provider count
+  defp calculate_chain_radius_from_config(nil, provider_count) do
+    TopologyConfig.chain_radius(nil, provider_count)
+  end
+
+  defp calculate_chain_radius_from_config(%{size: size}, provider_count) do
+    TopologyConfig.chain_radius(size, provider_count)
+  end
+
   # Build a chain node with its orbiting providers
   defp build_chain_node(
-         chain_name,
+         _chain_name,
          chain_connections,
          x,
          y,
@@ -451,13 +500,8 @@ defmodule LassoWeb.NetworkTopology do
        ) do
     provider_count = length(chain_connections)
 
-    # Use larger orbit distance for Ethereum to accommodate its bigger size
-    adjusted_provider_orbit =
-      case chain_name do
-        # Add 30px for Ethereum's larger size
-        "ethereum" -> provider_orbit + 30
-        _ -> provider_orbit
-      end
+    # Provider orbit is already adjusted for size via TopologyConfig.provider_orbit_for_size
+    adjusted_provider_orbit = provider_orbit
 
     providers =
       chain_connections
@@ -512,20 +556,6 @@ defmodule LassoWeb.NetworkTopology do
       radius: chain_radius,
       providers: providers
     }
-  end
-
-  defp calculate_chain_radius(provider_count, chain_name) do
-    # Cap the base radius calculation to prevent oversized nodes
-    # Use a logarithmic scale for provider count to reduce size growth
-    provider_factor = min(20, :math.log(provider_count + 1) * 8)
-    base_radius = max(45, min(75, 40 + provider_factor))
-
-    # Make Ethereum the biggest node
-    case chain_name do
-      # Add 20px to make it significantly larger but not too large
-      "ethereum" -> base_radius + 20
-      _ -> base_radius
-    end
   end
 
   # Calculate connection line with pseudo-random length variance
@@ -754,82 +784,19 @@ defmodule LassoWeb.NetworkTopology do
     end
   end
 
-  defp chain_color("ethereum"), do: "#627EEA"
-  defp chain_color("arbitrum"), do: "#28A0F0"
-  defp chain_color("optimism"), do: "#FF0420"
-  defp chain_color("base"), do: "#0052FF"
-  defp chain_color("zksync"), do: "#4E529A"
-  defp chain_color("linea"), do: "#61DFFF"
-  defp chain_color("polygon"), do: "#8247E5"
-  defp chain_color("mantle"), do: "#000000"
-  defp chain_color("scroll"), do: "#FEF201"
-  defp chain_color("starknet"), do: "#00FFC2"
-  defp chain_color("immutable"), do: "#F7931E"
-  defp chain_color("metis"), do: "#00DACC"
-  defp chain_color("boba"), do: "#FF6B6B"
-  defp chain_color("loopring"), do: "#1C42FF"
-  defp chain_color("dydx"), do: "#000000"
-  defp chain_color("zora"), do: "#000000"
-  defp chain_color("blast"), do: "#F7931E"
-  defp chain_color("mode"), do: "#000000"
-  defp chain_color("fraxtal"), do: "#000000"
-  defp chain_color("manta"), do: "#000000"
-  defp chain_color("opbnb"), do: "#F7931E"
-  defp chain_color("taiko"), do: "#000000"
-  defp chain_color("kroma"), do: "#000000"
-  defp chain_color("op_celestia"), do: "#000000"
-  defp chain_color("eclipse"), do: "#000000"
-  defp chain_color("lumio"), do: "#000000"
-  defp chain_color("astria"), do: "#000000"
-  defp chain_color("caldera"), do: "#000000"
-  defp chain_color("degen"), do: "#000000"
-  defp chain_color("lyra"), do: "#000000"
-  defp chain_color("aevo"), do: "#000000"
-  defp chain_color("hyperliquid"), do: "#000000"
-  defp chain_color("vertex"), do: "#000000"
-  defp chain_color("drift"), do: "#000000"
-  defp chain_color("jupiter"), do: "#000000"
-  defp chain_color("pyth"), do: "#000000"
-  defp chain_color("chainlink"), do: "#000000"
-  defp chain_color("arbitrum_nova"), do: "#28A0F0"
-  defp chain_color("optimism_bedrock"), do: "#FF0420"
-  defp chain_color("unichain"), do: "#FF007A"
-  defp chain_color(_), do: "#6B7280"
+  # Get chain color from topology config, with fallback to defaults
+  defp chain_color(chain_name) do
+    topology = get_chain_topology_cached(chain_name)
+    TopologyConfig.chain_color(topology, chain_name)
+  end
+
+  # Cache chain topology lookups for rendering performance
+  defp get_chain_topology_cached(chain_name) do
+    all_chain_configs = ConfigStore.get_all_chains()
+    get_chain_topology(chain_name, all_chain_configs)
+  end
 
   defp fastest_provider?(_connection, _chain_name, _latency_leaders) do
     false
-  end
-
-  # Helper to identify Ethereum L2s and rollups that orbit around Ethereum
-  defp is_l2_chain?(chain_name) do
-    l2_chains = [
-      "arbitrum",
-      "optimism",
-      "base",
-      "arbitrum_nova",
-      "optimism_bedrock",
-      "boba",
-      "metis",
-      "metis",
-      "loopring",
-      "zora",
-      "zora",
-      "blast",
-      "mode",
-      "mode",
-      "fraxtal",
-      "polygon_zkevm",
-      "zksync",
-      "linea",
-      "scroll",
-      "starknet",
-      "mantle",
-      "taiko",
-      "kroma",
-      "unichain",
-      "manta"
-    ]
-
-    chain_name in l2_chains
   end
 end

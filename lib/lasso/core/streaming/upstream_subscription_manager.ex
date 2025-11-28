@@ -180,7 +180,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
              %{state | active_subscriptions: new_subs, upstream_index: new_index}}
 
           {:error, reason} ->
-            Logger.warning("Failed to create upstream subscription",
+            # Demote to debug - callers handle their own logging with retry context
+            Logger.debug("Failed to create upstream subscription",
               chain: state.chain,
               provider_id: provider_id,
               sub_key: inspect(sub_key),

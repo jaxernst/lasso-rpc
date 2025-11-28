@@ -1713,20 +1713,44 @@ defmodule Lasso.RPC.ProviderPool do
               lag: lag
             })
 
-            # Log if exceeds threshold
+            # Log only on state transitions (not every poll cycle)
             threshold = get_lag_threshold_for_chain(state.chain_name)
+            lag_key = {:provider_lagging_logged, state.chain_name, result.provider_id}
+            was_lagging = :ets.lookup(state.table, lag_key) != []
 
-            if lag < -threshold do
-              Logger.info("Provider lagging behind",
-                chain: state.chain_name,
-                provider_id: result.provider_id,
-                lag_blocks: lag,
-                threshold: threshold,
-                consensus_height: consensus_height,
-                provider_height: result.block_height
-              )
+            cond do
+              lag < -threshold and not was_lagging ->
+                # Just became lagging - log and remember
+                Logger.info("Provider lagging behind",
+                  chain: state.chain_name,
+                  provider_id: result.provider_id,
+                  lag_blocks: lag,
+                  threshold: threshold,
+                  consensus_height: consensus_height,
+                  provider_height: result.block_height
+                )
 
-              emit_lag_telemetry(state.chain_name, result.provider_id, lag)
+                :ets.insert(state.table, {lag_key, lag})
+                emit_lag_telemetry(state.chain_name, result.provider_id, lag)
+
+              lag < -threshold and was_lagging ->
+                # Still lagging - update stored lag but don't log
+                :ets.insert(state.table, {lag_key, lag})
+
+              lag >= -threshold and was_lagging ->
+                # Recovered - log recovery and clear flag
+                Logger.info("Provider recovered from lag",
+                  chain: state.chain_name,
+                  provider_id: result.provider_id,
+                  current_lag: lag,
+                  threshold: threshold
+                )
+
+                :ets.delete(state.table, lag_key)
+
+              true ->
+                # Not lagging and wasn't lagging - nothing to do
+                :ok
             end
           end
         end)

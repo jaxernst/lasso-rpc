@@ -118,7 +118,7 @@ defmodule Lasso.RPC.Transports.HTTP do
         {:ok, response, io_ms}
 
       {:error, reason} ->
-        Logger.warning("HTTP request failed",
+        Logger.debug("HTTP request failed",
           provider: provider_id,
           method: method,
           rpc_id: request_id,
