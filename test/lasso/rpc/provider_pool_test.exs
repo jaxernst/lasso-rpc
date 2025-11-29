@@ -79,7 +79,10 @@ defmodule Lasso.RPC.ProviderPoolTest do
     ProviderPool.report_failure("testnet", p1.id, {:rate_limit, "HTTP 429"})
     {:ok, status2} = ProviderPool.get_status("testnet")
     p1_status2 = Enum.find(status2.providers, &(&1.id == p1.id))
-    assert p1_status2.status == :rate_limited
+    # Rate limits don't change health status - check rate limit state via RateLimitState fields
+    assert p1_status2.http_rate_limited == true or p1_status2.is_in_cooldown == true
+    # Health status should remain unchanged (healthy or connecting)
+    assert p1_status2.status in [:healthy, :connecting]
 
     ProviderPool.report_failure("testnet", p1.id, {:server_error, "500"})
     {:ok, status3} = ProviderPool.get_status("testnet")
@@ -276,5 +279,146 @@ defmodule Lasso.RPC.ProviderPoolTest do
          to: to
        }}
     )
+  end
+
+  describe "circuit breaker recovery clears rate_limited status" do
+    setup do
+      provider =
+        provider_struct(%{
+          id: "rate_limit_test_provider",
+          name: "Rate Limit Test Provider",
+          url: "http://example.com",
+          ws_url: "ws://example.com",
+          priority: 1
+        })
+
+      chain_config = base_chain_config([provider])
+      {:ok, _pid} = ProviderPool.start_link({"rate_limit_chain", chain_config})
+      :ok = ProviderPool.register_provider("rate_limit_chain", provider.id, provider)
+      Process.sleep(50)
+
+      %{provider: provider, chain: "rate_limit_chain"}
+    end
+
+    test "rate limit records to RateLimitState without changing health status", %{
+      provider: provider,
+      chain: chain
+    } do
+      # Get initial status - should be healthy/connecting
+      {:ok, status_before} = ProviderPool.get_status(chain)
+      provider_before = Enum.find(status_before.providers, &(&1.id == provider.id))
+      initial_http_status = provider_before.http_status
+
+      # Report rate limit - should NOT change health status
+      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
+      Process.sleep(10)
+
+      {:ok, status} = ProviderPool.get_status(chain)
+      provider_status = Enum.find(status.providers, &(&1.id == provider.id))
+
+      # Health status should NOT change - rate limits are backpressure, not failures
+      assert provider_status.http_status == initial_http_status,
+             "HTTP health status should not change on rate limit"
+
+      # Rate limit state should be recorded via RateLimitState
+      assert provider_status.http_rate_limited == true,
+             "http_rate_limited should be true from RateLimitState"
+      assert provider_status.is_in_cooldown == true,
+             "is_in_cooldown should be true"
+    end
+
+    test "rate limit on WS records to RateLimitState without changing health status", %{
+      provider: provider,
+      chain: chain
+    } do
+      # Get initial status
+      {:ok, status_before} = ProviderPool.get_status(chain)
+      provider_before = Enum.find(status_before.providers, &(&1.id == provider.id))
+      initial_ws_status = provider_before.ws_status
+
+      # Report rate limit - should NOT change health status
+      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "WS 429"}, :ws)
+      Process.sleep(10)
+
+      {:ok, status} = ProviderPool.get_status(chain)
+      provider_status = Enum.find(status.providers, &(&1.id == provider.id))
+
+      # Health status should NOT change
+      assert provider_status.ws_status == initial_ws_status,
+             "WS health status should not change on rate limit"
+
+      # Rate limit state should be recorded via RateLimitState
+      assert provider_status.ws_rate_limited == true,
+             "ws_rate_limited should be true from RateLimitState"
+    end
+
+    test "rate limits are independent of circuit breaker state", %{
+      provider: provider,
+      chain: chain
+    } do
+      # Report rate limit
+      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
+      Process.sleep(10)
+
+      # Circuit breaker should NOT open from rate limits (breaker_penalty?: false)
+      {:ok, status} = ProviderPool.get_status(chain)
+      provider_status = Enum.find(status.providers, &(&1.id == provider.id))
+
+      # Rate limit should be recorded
+      assert provider_status.http_rate_limited == true
+
+      # Circuit should still be closed (rate limits don't trigger circuit breaker)
+      assert provider_status.http_cb_state == :closed,
+             "Circuit should remain closed - rate limits don't trip circuit breaker"
+    end
+
+    test "success clears rate limit state", %{
+      provider: provider,
+      chain: chain
+    } do
+      # Report rate limit
+      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
+      Process.sleep(10)
+
+      {:ok, status} = ProviderPool.get_status(chain)
+      provider_status = Enum.find(status.providers, &(&1.id == provider.id))
+      assert provider_status.http_rate_limited == true
+
+      # Report success - should clear rate limit
+      ProviderPool.report_success(chain, provider.id, :http)
+      Process.sleep(10)
+
+      {:ok, status_after} = ProviderPool.get_status(chain)
+      provider_after = Enum.find(status_after.providers, &(&1.id == provider.id))
+      assert provider_after.http_rate_limited == false,
+             "Success should clear rate limit state"
+    end
+
+    test "aggregate status reflects health not rate limits", %{
+      provider: provider,
+      chain: chain
+    } do
+      # Get initial health status
+      {:ok, status_before} = ProviderPool.get_status(chain)
+      provider_before = Enum.find(status_before.providers, &(&1.id == provider.id))
+      initial_status = provider_before.status
+
+      # Rate limit both transports - health status should NOT change
+      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
+      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "WS 429"}, :ws)
+      Process.sleep(10)
+
+      {:ok, status} = ProviderPool.get_status(chain)
+      provider_status = Enum.find(status.providers, &(&1.id == provider.id))
+
+      # Health status should remain unchanged - rate limits don't affect it
+      assert provider_status.status == initial_status,
+             "Aggregate health status should not change on rate limit"
+
+      # But rate limit state should be recorded
+      assert provider_status.http_rate_limited == true
+      assert provider_status.ws_rate_limited == true
+      assert provider_status.is_in_cooldown == true
+    end
   end
 end

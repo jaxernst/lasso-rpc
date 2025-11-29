@@ -48,33 +48,6 @@ defmodule Lasso.Events.Provider do
           }
   end
 
-  defmodule CooldownStart do
-    @derive Jason.Encoder
-    @enforce_keys [:ts, :chain, :provider_id, :until]
-    defstruct v: 1, ts: nil, chain: nil, provider_id: nil, until: nil
-
-    @type t :: %__MODULE__{
-            v: pos_integer(),
-            ts: non_neg_integer(),
-            chain: String.t(),
-            provider_id: String.t(),
-            until: non_neg_integer()
-          }
-  end
-
-  defmodule CooldownEnd do
-    @derive Jason.Encoder
-    @enforce_keys [:ts, :chain, :provider_id]
-    defstruct v: 1, ts: nil, chain: nil, provider_id: nil
-
-    @type t :: %__MODULE__{
-            v: pos_integer(),
-            ts: non_neg_integer(),
-            chain: String.t(),
-            provider_id: String.t()
-          }
-  end
-
   defmodule HealthCheckFailed do
     @derive Jason.Encoder
     @enforce_keys [:ts, :chain, :provider_id]
@@ -101,8 +74,6 @@ defmodule Lasso.Events.Provider do
   @spec kind(struct()) :: atom()
   def kind(%Healthy{}), do: :healthy
   def kind(%Unhealthy{}), do: :unhealthy
-  def kind(%CooldownStart{}), do: :cooldown_start
-  def kind(%CooldownEnd{}), do: :cooldown_end
   def kind(%HealthCheckFailed{}), do: :health_check_failed
 
   defmodule WSDisconnected do

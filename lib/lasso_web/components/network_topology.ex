@@ -617,14 +617,14 @@ defmodule LassoWeb.NetworkTopology do
       :rate_limited -> "#8b5cf6"
       # Dark red - circuit open (complete failure)
       :circuit_open -> "#dc2626"
-      # Blue - testing recovery
-      :testing_recovery -> "#3b82f6"
-      # Amber - reconnecting
-      :reconnecting -> "#f59e0b"
+      # Amber - testing recovery (same as recovering)
+      :testing_recovery -> "#f59e0b"
+      # Amber - recovering
+      :recovering -> "#f59e0b"
       # Orange - degraded
       :degraded -> "#f97316"
-      # Sky blue - syncing (lagging blocks)
-      :syncing -> "#38bdf8"
+      # Sky blue - lagging (lagging blocks)
+      :lagging -> "#38bdf8"
       # Green - healthy
       :healthy -> "#10b981"
       # Gray - unknown
@@ -716,16 +716,16 @@ defmodule LassoWeb.NetworkTopology do
     case StatusHelpers.determine_provider_status(connection) do
       # Dark red - circuit open
       :circuit_open -> "bg-red-900/40 border-red-500"
-      # Blue - testing recovery
-      :testing_recovery -> "bg-blue-900/30 border-blue-600"
+      # Amber - testing recovery (same as recovering)
+      :testing_recovery -> "bg-amber-900/30 border-amber-600"
       # Purple - rate limited
       :rate_limited -> "bg-purple-900/30 border-purple-600"
-      # Amber - reconnecting
-      :reconnecting -> "bg-amber-900/30 border-amber-600"
+      # Amber - recovering
+      :recovering -> "bg-amber-900/30 border-amber-600"
       # Orange - degraded
       :degraded -> "bg-orange-900/30 border-orange-600"
-      # Sky blue - syncing
-      :syncing -> "bg-sky-900/30 border-sky-600"
+      # Sky blue - lagging
+      :lagging -> "bg-sky-900/30 border-sky-600"
       # Green - healthy
       :healthy -> "bg-emerald-900/30 border-emerald-600"
       # Gray - unknown
@@ -747,16 +747,16 @@ defmodule LassoWeb.NetworkTopology do
     case StatusHelpers.determine_provider_status(connection) do
       # Dark red - circuit open
       :circuit_open -> "bg-red-500"
-      # Blue - testing recovery
-      :testing_recovery -> "bg-blue-400"
+      # Amber - testing recovery (same as recovering)
+      :testing_recovery -> "bg-amber-400"
       # Purple - rate limited
       :rate_limited -> "bg-purple-400"
-      # Amber - reconnecting
-      :reconnecting -> "bg-amber-400"
+      # Amber - recovering
+      :recovering -> "bg-amber-400"
       # Orange - degraded
       :degraded -> "bg-orange-400"
-      # Sky blue - syncing
-      :syncing -> "bg-sky-400"
+      # Sky blue - lagging
+      :lagging -> "bg-sky-400"
       # Green - healthy
       :healthy -> "bg-emerald-400"
       # Gray - unknown
