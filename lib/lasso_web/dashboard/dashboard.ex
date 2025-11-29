@@ -246,8 +246,6 @@ defmodule LassoWeb.Dashboard do
   def handle_info(evt, socket)
       when is_struct(evt, Provider.Healthy) or
              is_struct(evt, Provider.Unhealthy) or
-             is_struct(evt, Provider.CooldownStart) or
-             is_struct(evt, Provider.CooldownEnd) or
              is_struct(evt, Provider.HealthCheckFailed) or
              is_struct(evt, Provider.WSConnected) or
              is_struct(evt, Provider.WSClosed) do
@@ -255,9 +253,6 @@ defmodule LassoWeb.Dashboard do
       case evt do
         %Provider.Healthy{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :healthy, nil, ts}
         %Provider.Unhealthy{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :unhealthy, nil, ts}
-        %Provider.CooldownStart{chain: chain, provider_id: pid, until: until, ts: ts} ->
-          {chain, pid, :cooldown_start, %{until: until}, ts}
-        %Provider.CooldownEnd{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :cooldown_end, nil, ts}
         %Provider.HealthCheckFailed{chain: chain, provider_id: pid, reason: reason, ts: ts} ->
           {chain, pid, :health_check_failed, %{reason: reason}, ts}
         %Provider.WSConnected{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :ws_connected, nil, ts}
@@ -346,23 +341,63 @@ defmodule LassoWeb.Dashboard do
       reason: reason
     } = event_data
 
+    # Extract error details if present (new format includes error info)
+    error_info = Map.get(event_data, :error)
+
+    # Build message with error details when available
+    base_message = "circuit [#{transport}]: #{from_state} -> #{to_state}"
+
+    message =
+      case {reason, error_info} do
+        {:failure_threshold_exceeded, %{error_code: code, error_category: cat}} ->
+          "#{base_message} — #{format_error_code(code)} (#{cat})"
+
+        {:reopen_due_to_failure, %{error_code: code, error_category: cat}} ->
+          "#{base_message} — #{format_error_code(code)} (#{cat})"
+
+        {reason, _} ->
+          "#{base_message} (#{format_reason(reason)})"
+      end
+
+    # Determine severity based on state transition
+    severity =
+      case to_state do
+        :open -> :error
+        :half_open -> :warn
+        :closed -> :info
+      end
+
     entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
       ts_ms: System.system_time(:millisecond),
       chain: chain,
       provider_id: provider_id,
-      event: "circuit [#{transport}]: #{from_state} -> #{to_state} (#{reason})"
+      event: message
     }
 
     socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, Constants.provider_events_limit() - 1)] end)
+
+    # Include error details in meta for expanded view
+    meta_base = %{transport: transport, from: from_state, to: to_state, reason: reason}
+
+    meta =
+      if error_info do
+        Map.merge(meta_base, %{
+          error_code: error_info[:error_code],
+          error_category: error_info[:error_category],
+          error_message: error_info[:error_message]
+        })
+      else
+        meta_base
+      end
 
     uev =
       Helpers.as_event(:circuit,
         chain: chain,
         provider_id: provider_id,
-        severity: :warn,
-        message: entry.event,
-        meta: Map.merge(Map.drop(entry, [:ts, :ts_ms]), %{transport: transport, from: from_state, to: to_state})
+        severity: severity,
+        message: message,
+        meta: meta
       )
 
     socket =
@@ -451,18 +486,18 @@ defmodule LassoWeb.Dashboard do
   @impl true
   def handle_info(:provider_panel_refresh, socket) do
     if socket.assigns[:selected_provider] do
-      # Re-schedule next refresh
-      Process.send_after(self(), :provider_panel_refresh, 3_000)
-
+      # Do the work first
       socket =
         socket
         |> fetch_connections()
         |> update_selected_provider_data()
 
-      {:noreply, socket}
+      # Schedule next refresh AFTER work completes and store timer ref
+      timer_ref = Process.send_after(self(), :provider_panel_refresh, 3_000)
+      {:noreply, assign(socket, :provider_refresh_timer, timer_ref)}
     else
-      # Provider no longer selected, don't reschedule
-      {:noreply, socket}
+      # Provider no longer selected, clear timer ref and don't reschedule
+      {:noreply, assign(socket, :provider_refresh_timer, nil)}
     end
   end
 
@@ -889,7 +924,7 @@ defmodule LassoWeb.Dashboard do
         <div class="mb-4 flex flex-wrap gap-2">
           <%= for provider <- @chain_connections do %>
             <% provider_status = StatusHelpers.determine_provider_status(provider) %>
-            <%= if provider_status in [:healthy, :syncing, :reconnecting, :degraded] do %>
+            <%= if provider_status in [:healthy, :lagging, :recovering, :degraded] do %>
               <button
                 data-provider={provider.id}
                 data-provider-type={provider.type}
@@ -902,7 +937,7 @@ defmodule LassoWeb.Dashboard do
             <% end %>
           <% end %>
           <% available_count = Enum.count(@chain_connections, fn p ->
-            StatusHelpers.determine_provider_status(p) in [:healthy, :syncing, :reconnecting, :degraded]
+            StatusHelpers.determine_provider_status(p) in [:healthy, :lagging, :recovering, :degraded]
           end) %>
           <%= if available_count == 0 do %>
             <span class="text-xs text-gray-500">No available providers</span>
@@ -1063,8 +1098,8 @@ defmodule LassoWeb.Dashboard do
                 end
               ]}>
                 {cond do
-                  blocks_behind == 0 -> "Synced"
-                  blocks_behind > 0 -> "-#{blocks_behind}"
+                  blocks_behind >= 0 and blocks_behind <= 2 -> "Synced"
+                  blocks_behind > 2 -> "-#{blocks_behind}"
                   blocks_behind < 0 -> "+#{abs(blocks_behind)}"
                 end}
               </span>
@@ -1210,156 +1245,246 @@ defmodule LassoWeb.Dashboard do
         <div class="border-gray-700/50 border-b p-4">
           <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Issues</h4>
           <%
-            # Build current state issues from provider connection
-            current_issues = []
+            # Build active alerts from current state (compact status indicators)
+            active_alerts = []
 
-            # Circuit breaker issues
-            current_issues = if Map.get(@provider_connection, :http_circuit_state) == :open do
-              [%{kind: :circuit, severity: :error, message: "HTTP circuit breaker OPEN", ts: "now", meta: %{transport: :http}} | current_issues]
+            # Circuit breaker alerts (most critical - show first)
+            http_cb = Map.get(@provider_connection, :http_circuit_state)
+            ws_cb = Map.get(@provider_connection, :ws_circuit_state)
+            http_cb_error = Map.get(@provider_connection, :http_cb_error)
+            ws_cb_error = Map.get(@provider_connection, :ws_cb_error)
+
+            active_alerts = if http_cb == :open do
+              error_detail = format_cb_error(http_cb_error)
+              [{:error, "HTTP circuit OPEN", error_detail} | active_alerts]
             else
-              current_issues
+              active_alerts
             end
 
-            current_issues = if Map.get(@provider_connection, :ws_circuit_state) == :open do
-              [%{kind: :circuit, severity: :error, message: "WebSocket circuit breaker OPEN", ts: "now", meta: %{transport: :ws}} | current_issues]
+            active_alerts = if ws_cb == :open do
+              error_detail = format_cb_error(ws_cb_error)
+              [{:error, "WS circuit OPEN", error_detail} | active_alerts]
             else
-              current_issues
+              active_alerts
             end
 
-            current_issues = if Map.get(@provider_connection, :http_circuit_state) == :half_open do
-              [%{kind: :circuit, severity: :warn, message: "HTTP circuit breaker testing recovery", ts: "now", meta: %{transport: :http}} | current_issues]
+            active_alerts = if http_cb == :half_open do
+              [{:warn, "HTTP circuit recovering", nil} | active_alerts]
             else
-              current_issues
+              active_alerts
             end
 
-            current_issues = if Map.get(@provider_connection, :ws_circuit_state) == :half_open do
-              [%{kind: :circuit, severity: :warn, message: "WebSocket circuit breaker testing recovery", ts: "now", meta: %{transport: :ws}} | current_issues]
+            active_alerts = if ws_cb == :half_open do
+              [{:warn, "WS circuit recovering", nil} | active_alerts]
             else
-              current_issues
+              active_alerts
             end
 
-            # Cooldown/rate limit issue
-            current_issues = if Map.get(@provider_connection, :is_in_cooldown, false) do
-              [%{kind: :provider, severity: :warn, message: "Provider in rate limit cooldown", ts: "now", meta: %{}} | current_issues]
-            else
-              current_issues
-            end
+            # Rate limit alerts
+            http_rate_limited = Map.get(@provider_connection, :http_rate_limited, false)
+            ws_rate_limited = Map.get(@provider_connection, :ws_rate_limited, false)
+            rate_limit_remaining = Map.get(@provider_connection, :rate_limit_remaining, %{})
 
-            # Consecutive failures
+            active_alerts =
+              cond do
+                http_rate_limited and ws_rate_limited ->
+                  http_sec = div(Map.get(rate_limit_remaining, :http, 0), 1000)
+                  ws_sec = div(Map.get(rate_limit_remaining, :ws, 0), 1000)
+                  [{:warn, "Rate limited (HTTP: #{http_sec}s, WS: #{ws_sec}s)", nil} | active_alerts]
+                http_rate_limited ->
+                  sec = div(Map.get(rate_limit_remaining, :http, 0), 1000)
+                  [{:warn, "HTTP rate limited (#{sec}s)", nil} | active_alerts]
+                ws_rate_limited ->
+                  sec = div(Map.get(rate_limit_remaining, :ws, 0), 1000)
+                  [{:warn, "WS rate limited (#{sec}s)", nil} | active_alerts]
+                true ->
+                  active_alerts
+              end
+
+            # Consecutive failures alert
             failures = Map.get(@provider_connection, :consecutive_failures, 0)
-            current_issues = if failures > 0 do
-              [%{kind: :provider, severity: (if failures >= 3, do: :error, else: :warn), message: "#{failures} consecutive failures", ts: "now", meta: %{}} | current_issues]
+            active_alerts = if failures > 0 do
+              severity = if failures >= 3, do: :error, else: :warn
+              [{severity, "#{failures} consecutive failures", nil} | active_alerts]
             else
-              current_issues
+              active_alerts
             end
 
-            # WS disconnected (when WS is supported)
+            # WS disconnected alert (when WS is supported but not connected and circuit isn't open)
             has_ws = Map.get(@provider_connection, :ws_url) != nil
             ws_connected = Map.get(@provider_connection, :ws_connected, false)
             ws_circuit_ok = Map.get(@provider_connection, :ws_circuit_state) != :open
-            current_issues = if has_ws and not ws_connected and ws_circuit_ok do
-              [%{kind: :provider, severity: :warn, message: "WebSocket disconnected", ts: "now", meta: %{transport: :ws}} | current_issues]
+            active_alerts = if has_ws and not ws_connected and ws_circuit_ok do
+              [{:warn, "WebSocket disconnected", nil} | active_alerts]
             else
-              current_issues
+              active_alerts
             end
 
-            # Last error if present
-            current_issues = case Map.get(@provider_connection, :last_error) do
-              nil -> current_issues
-              error ->
-                full_msg = case error do
-                  msg when is_binary(msg) -> msg
-                  {:error, reason} -> "Error: #{inspect(reason)}"
-                  other -> inspect(other)
-                end
-                [%{kind: :error, severity: :error, message: full_msg, ts: "recent", meta: %{}} | current_issues]
-            end
-
-            # Also include recent events from event history
-            historical_issues = @provider_unified_events
+            # Get event feed - filter for issues/events, not RPC successes
+            event_feed = @provider_unified_events
               |> Enum.filter(fn e ->
                 kind = e[:kind]
                 severity = e[:severity]
-                # Include non-RPC events or events with warn/error severity
-                kind != :rpc or severity in [:warn, :error]
+                # Include circuit events, provider events, and warn/error RPC events
+                kind in [:circuit, :provider, :error] or severity in [:warn, :error]
               end)
-              |> Enum.take(3)
-
-            # Combine current state issues with historical events
-            all_issues = current_issues ++ historical_issues
+              |> Enum.take(15)
           %>
-          <%= if length(all_issues) > 0 do %>
-            <div class="space-y-2">
-              <%= for issue <- all_issues do %>
+
+          <!-- Active Alerts (with error details for circuit breakers) -->
+          <%= if length(active_alerts) > 0 do %>
+            <div class="space-y-2 mb-3">
+              <%= for alert <- active_alerts do %>
                 <%
-                  severity_color = case issue[:severity] do
+                  {severity, message, error_detail} = alert
+                  border_class = case severity do
+                    :error -> "border-l-red-500"
+                    :warn -> "border-l-yellow-500"
+                    _ -> "border-l-blue-500"
+                  end
+                  dot_class = case severity do
                     :error -> "bg-red-500"
                     :warn -> "bg-yellow-500"
                     _ -> "bg-blue-500"
                   end
-                  time_ago = if issue[:ts_ms] do
-                    diff_ms = System.system_time(:millisecond) - issue[:ts_ms]
-                    cond do
-                      diff_ms < 60_000 -> "#{div(diff_ms, 1000)}s ago"
-                      diff_ms < 3_600_000 -> "#{div(diff_ms, 60_000)}m ago"
-                      true -> "#{div(diff_ms, 3_600_000)}h ago"
-                    end
-                  else
-                    issue[:ts] || "—"
-                  end
                 %>
-                <%
-                  full_message = issue[:message] || "Unknown issue"
-                  is_long = String.length(full_message) > 60
-                  preview_message = if is_long, do: String.slice(full_message, 0, 57) <> "...", else: full_message
-                  # Generate stable ID based on message hash to preserve open state across re-renders
-                  issue_id = "issue-#{:erlang.phash2({issue[:kind], issue[:message], issue[:ts_ms] || issue[:ts]})}"
-                %>
-                <details id={issue_id} phx-hook="ExpandableDetails" class="group bg-gray-800/30 rounded-lg border-l-2 border-l-transparent hover:border-l-gray-600 transition-colors">
-                  <summary class="p-2 cursor-pointer list-none">
-                    <div class="flex items-start justify-between">
-                      <div class="flex items-start gap-2 min-w-0 flex-1">
-                        <div class={["w-2 h-2 rounded-full mt-1 shrink-0", severity_color]}></div>
-                        <div class="min-w-0 flex-1">
-                          <span class="text-xs text-gray-200 group-open:hidden block break-words select-none">{preview_message}</span>
-                          <span class="text-xs text-gray-200 hidden group-open:block break-words whitespace-pre-wrap select-text">{full_message}</span>
-                        </div>
-                      </div>
-                      <div class="flex items-center gap-1 shrink-0 ml-2">
-                        <%= if is_long do %>
-                          <svg class="w-3 h-3 text-gray-500 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                          </svg>
-                        <% end %>
-                        <span class="text-[10px] text-gray-500">{time_ago}</span>
-                      </div>
-                    </div>
-                  </summary>
-                  <%= if issue[:kind] || get_in(issue, [:meta, :transport]) do %>
-                    <div class="border-t border-gray-700/50 mx-2 mt-1"></div>
-                    <div class="px-2 pb-2 pt-2">
-                      <div class="flex flex-wrap gap-1.5 ml-4">
-                        <%= if issue[:kind] do %>
-                          <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400">
-                            {issue[:kind] |> to_string() |> String.capitalize()}
+                <div class={["bg-gray-800/40 rounded-lg border-l-2 p-2", border_class]}>
+                  <div class="flex items-center gap-2">
+                    <div class={["w-2 h-2 rounded-full shrink-0", dot_class]}></div>
+                    <span class="text-xs text-gray-200 font-medium">{message}</span>
+                  </div>
+                  <%= if error_detail do %>
+                    <div class="mt-1.5 ml-4 text-[11px] text-gray-400">
+                      <%= if error_detail[:message] do %>
+                        <div class="text-gray-300 mb-1">{error_detail[:message]}</div>
+                      <% end %>
+                      <div class="flex flex-wrap gap-1.5">
+                        <%= if error_detail[:code] do %>
+                          <span class="px-1.5 py-0.5 rounded bg-red-900/30 text-red-400 font-mono">
+                            ERR {error_detail[:code]}
                           </span>
                         <% end %>
-                        <%= if get_in(issue, [:meta, :transport]) do %>
-                          <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400">
-                            {get_in(issue, [:meta, :transport])}
+                        <%= if error_detail[:category] do %>
+                          <span class="px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-400">
+                            {error_detail[:category]}
                           </span>
                         <% end %>
                       </div>
                     </div>
                   <% end %>
-                </details>
+                </div>
               <% end %>
             </div>
-            <div class="mt-4 pt-1 border-gray-700/30">
-              <span class="text-[11px] text-gray-500">{length(all_issues)} {if length(all_issues) == 1, do: "event", else: "events"}</span>
+          <% end %>
+
+          <!-- Event Feed -->
+          <%= if length(event_feed) > 0 do %>
+            <div class="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+              <%= for event <- event_feed do %>
+                <%
+                  severity_color = case event[:severity] do
+                    :error -> "bg-red-500"
+                    :warn -> "bg-yellow-500"
+                    _ -> "bg-blue-500"
+                  end
+                  time_ago = if event[:ts_ms] do
+                    diff_ms = System.system_time(:millisecond) - event[:ts_ms]
+                    cond do
+                      diff_ms < 60_000 -> "now"
+                      diff_ms < 3_600_000 -> "#{div(diff_ms, 60_000)}m ago"
+                      true -> "#{div(diff_ms, 3_600_000)}h ago"
+                    end
+                  else
+                    "—"
+                  end
+
+                  # Format the message nicely
+                  raw_message = event[:message] || "Unknown event"
+                  display_message = format_event_message(raw_message)
+                  is_expandable = String.length(display_message) > 80 or has_event_details?(event)
+                  preview_message = if String.length(display_message) > 80 do
+                    String.slice(display_message, 0, 77) <> "..."
+                  else
+                    display_message
+                  end
+                  event_id = "event-#{:erlang.phash2({event[:kind], event[:message], event[:ts_ms]})}"
+                %>
+                <%= if is_expandable do %>
+                  <details id={event_id} phx-hook="ExpandableDetails" class="group bg-gray-800/30 rounded-lg hover:bg-gray-800/50 transition-colors">
+                    <summary class="p-2 cursor-pointer list-none">
+                      <div class="flex items-start justify-between gap-2">
+                        <div class="flex items-start gap-2 min-w-0 flex-1">
+                          <div class={["w-1.5 h-1.5 rounded-full mt-1.5 shrink-0", severity_color]}></div>
+                          <span class="text-xs text-gray-300 break-words">{preview_message}</span>
+                        </div>
+                        <div class="flex items-center gap-1 shrink-0">
+                          <svg class="w-3 h-3 text-gray-500 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                          </svg>
+                          <span class="text-[10px] text-gray-500">{time_ago}</span>
+                        </div>
+                      </div>
+                    </summary>
+                    <div class="px-2 pb-2 pt-1 ml-3.5 space-y-2">
+                      <!-- Full message if truncated -->
+                      <%= if String.length(display_message) > 80 do %>
+                        <div class="text-xs text-gray-300 break-words whitespace-pre-wrap">{display_message}</div>
+                      <% end %>
+                      <!-- Error details -->
+                      <%= if get_in(event, [:meta, :error_code]) || get_in(event, [:meta, :error_message]) do %>
+                        <div class="space-y-1.5">
+                          <%= if get_in(event, [:meta, :error_message]) do %>
+                            <div class="text-[11px] text-red-400 break-words">{get_in(event, [:meta, :error_message])}</div>
+                          <% end %>
+                          <div class="flex flex-wrap gap-1.5">
+                            <%= if get_in(event, [:meta, :error_code]) do %>
+                              <span class="px-1.5 py-0.5 rounded bg-red-900/30 text-red-400 text-[10px] font-mono">
+                                ERR {get_in(event, [:meta, :error_code])}
+                              </span>
+                            <% end %>
+                            <%= if get_in(event, [:meta, :error_category]) do %>
+                              <span class="px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-400 text-[10px]">
+                                {get_in(event, [:meta, :error_category])}
+                              </span>
+                            <% end %>
+                          </div>
+                        </div>
+                      <% end %>
+                      <!-- Event metadata tags -->
+                      <div class="flex flex-wrap gap-1">
+                        <%= if event[:kind] do %>
+                          <span class="px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400">
+                            {event[:kind] |> to_string() |> String.capitalize()}
+                          </span>
+                        <% end %>
+                        <%= if get_in(event, [:meta, :transport]) do %>
+                          <span class="px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400">
+                            {get_in(event, [:meta, :transport])}
+                          </span>
+                        <% end %>
+                      </div>
+                    </div>
+                  </details>
+                <% else %>
+                  <div class="bg-gray-800/30 rounded-lg p-2 hover:bg-gray-800/50 transition-colors">
+                    <div class="flex items-start justify-between gap-2">
+                      <div class="flex items-start gap-2 min-w-0 flex-1">
+                        <div class={["w-1.5 h-1.5 rounded-full mt-1.5 shrink-0", severity_color]}></div>
+                        <span class="text-xs text-gray-300">{display_message}</span>
+                      </div>
+                      <span class="text-[10px] text-gray-500 shrink-0">{time_ago}</span>
+                    </div>
+                  </div>
+                <% end %>
+              <% end %>
+            </div>
+            <div class="mt-2 pt-1 text-center">
+              <span class="text-[10px] text-gray-500">{length(event_feed)} events</span>
             </div>
           <% else %>
-            <div class="text-xs text-gray-500 text-center py-2">No issues detected</div>
+            <%= if length(active_alerts) == 0 do %>
+              <div class="text-xs text-gray-500 text-center py-3">No issues detected</div>
+            <% end %>
           <% end %>
         </div>
 
@@ -1619,6 +1744,9 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_event("select_provider", %{"provider" => ""}, socket) do
+    # Cancel any existing refresh timer when deselecting provider
+    socket = cancel_provider_refresh_timer(socket)
+
     socket =
       socket
       |> assign(:selected_provider, nil)
@@ -1630,21 +1758,24 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_event("select_provider", %{"provider" => provider}, socket) do
-    # Schedule periodic refresh for provider panel
-    Process.send_after(self(), :provider_panel_refresh, 3_000)
+    # Cancel any existing refresh timer before starting a new one
+    socket = cancel_provider_refresh_timer(socket)
+
+    # Schedule periodic refresh for provider panel and store timer ref
+    timer_ref = Process.send_after(self(), :provider_panel_refresh, 3_000)
 
     socket =
       socket
       |> assign(:selected_provider, provider)
       |> assign(:selected_chain, nil)
       |> assign(:details_collapsed, false)
+      |> assign(:provider_refresh_timer, timer_ref)
       |> fetch_connections()
       |> update_selected_provider_data()
       |> push_event("center_on_provider", %{provider: provider})
 
     {:noreply, socket}
   end
-
 
   # Collapsible windows toggles
   @impl true
@@ -1704,6 +1835,95 @@ defmodule LassoWeb.Dashboard do
     # Forward to SimulatorControls component
     send_update(Components.SimulatorControls, id: "simulator-controls", active_runs: runs)
     {:noreply, socket}
+  end
+
+  # Private helper for timer management
+  defp cancel_provider_refresh_timer(socket) do
+    case socket.assigns[:provider_refresh_timer] do
+      nil -> socket
+      timer_ref ->
+        Process.cancel_timer(timer_ref)
+        assign(socket, :provider_refresh_timer, nil)
+    end
+  end
+
+  # Format error code for display (e.g., -32000 -> "ERR -32000")
+  defp format_error_code(code) when is_integer(code), do: "ERR #{code}"
+  defp format_error_code(code), do: inspect(code)
+
+  # Format circuit breaker reason for display
+  defp format_reason(:failure_threshold_exceeded), do: "failures exceeded"
+  defp format_reason(:reopen_due_to_failure), do: "recovery failed"
+  defp format_reason(:recovery_attempt), do: "attempting recovery"
+  defp format_reason(:attempt_recovery), do: "attempting recovery"
+  defp format_reason(:proactive_recovery), do: "auto recovery"
+  defp format_reason(:recovered), do: "recovered"
+  defp format_reason(:manual_open), do: "manually opened"
+  defp format_reason(:manual_close), do: "manually closed"
+  defp format_reason(reason), do: to_string(reason)
+
+  # Format event messages for display (handles Lasso.JSONRPC.Error structs, etc.)
+  defp format_event_message(message) when is_binary(message) do
+    # Check if this looks like an inspected struct and try to clean it up
+    cond do
+      String.starts_with?(message, "%Lasso.JSONRPC.Error{") ->
+        # Parse out key fields from the struct string representation
+        code = extract_field(message, "code:")
+        msg = extract_field(message, "message:")
+        category = extract_field(message, "category:")
+
+        parts = []
+        parts = if msg && msg != "nil", do: [clean_string_value(msg) | parts], else: parts
+        parts = if code && code != "nil", do: ["ERR #{code}" | parts], else: parts
+        parts = if category && category != "nil", do: ["(#{category})" | parts], else: parts
+
+        case parts do
+          [] -> message
+          _ -> Enum.reverse(parts) |> Enum.join(" ")
+        end
+
+      true ->
+        message
+    end
+  end
+
+  defp format_event_message(other), do: inspect(other)
+
+  # Extract a field value from an inspect string like "code: -32000"
+  defp extract_field(str, field) do
+    case Regex.run(~r/#{Regex.escape(field)}\s*([^,}]+)/, str) do
+      [_, value] -> String.trim(value)
+      _ -> nil
+    end
+  end
+
+  # Clean up quoted string values
+  defp clean_string_value(str) do
+    str
+    |> String.trim()
+    |> String.trim_leading("\"")
+    |> String.trim_trailing("\"")
+    |> String.replace(~r/\\\"/, "\"")
+  end
+
+  # Check if an event has expandable details
+  defp has_event_details?(event) do
+    get_in(event, [:meta, :error_code]) != nil or
+      get_in(event, [:meta, :error_message]) != nil or
+      get_in(event, [:meta, :error_category]) != nil
+  end
+
+  # Format circuit breaker error for display in active alerts
+  # Returns a map with :code, :category, :message keys or nil
+  defp format_cb_error(nil), do: nil
+  defp format_cb_error(%{} = error) do
+    # The error map from ProviderPool has :error_code, :error_category, :error_message keys
+    # But the circuit breaker stores it as :code, :category, :message
+    %{
+      code: error[:code] || error[:error_code],
+      category: error[:category] || error[:error_category],
+      message: error[:message] || error[:error_message]
+    }
   end
 
   # Shared components
@@ -1943,9 +2163,17 @@ defmodule LassoWeb.Dashboard do
                 circuit_state: overall_circuit_state,
                 http_circuit_state: provider_map.http_cb_state,
                 ws_circuit_state: provider_map.ws_cb_state,
+                # Circuit breaker errors (what caused the circuit to open)
+                http_cb_error: Map.get(provider_map, :http_cb_error),
+                ws_cb_error: Map.get(provider_map, :ws_cb_error),
                 consecutive_failures: provider_map.consecutive_failures,
                 consecutive_successes: provider_map.consecutive_successes,
                 last_error: provider_map.last_error,
+                # Rate limit state (from RateLimitState, auto-expires)
+                http_rate_limited: Map.get(provider_map, :http_rate_limited, false),
+                ws_rate_limited: Map.get(provider_map, :ws_rate_limited, false),
+                rate_limit_remaining: Map.get(provider_map, :rate_limit_remaining, %{http: nil, ws: nil}),
+                # Legacy cooldown fields for backwards compatibility
                 is_in_cooldown: provider_map.is_in_cooldown,
                 cooldown_until: provider_map.cooldown_until,
                 reconnect_attempts: 0,  # Not tracked currently

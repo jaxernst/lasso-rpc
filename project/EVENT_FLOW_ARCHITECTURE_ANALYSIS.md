@@ -180,8 +180,8 @@ end
 
 # Provider health
 [:lasso, :provider, :status]
-[:lasso, :provider, :cooldown, :start]
-[:lasso, :provider, :cooldown, :end]
+# Note: Rate limits are tracked via RateLimitState (not telemetry events)
+# Rate limit state auto-expires based on Retry-After timing
 
 # Selection and failover
 [:lasso, :selection, :success]
@@ -390,16 +390,16 @@ Success/Failure
      │ (Rate limit detected)
      ▼
 ┌────────────────┐
-│ Cooldown Start │ ──┐
-│                │   │ (3) Broadcast provider event (PubSub)
+│ RateLimitState │ ──┐  (3) Record rate limit with Retry-After
+│ (time-based)   │   │      Auto-expires, no events needed
 └────────────────┘   │
                      │
      ┌───────────────┘
      │
      ▼
 ┌────────────────┐
-│ Observers      │ ◄─── (4) Dashboard, monitors listen
-│ (Dashboard)    │      Subscribe to "provider_pool:events:{chain}"
+│ Observers      │ ◄─── (4) Dashboard polls rate limit state
+│ (Dashboard)    │      via get_status (http_rate_limited, ws_rate_limited)
 └────────────────┘
 ```
 
@@ -1025,22 +1025,32 @@ end
          │              ┌─────────────┐
          └──────────────┤ :unhealthy  │
                         └─────────────┘
-                               │
-                          Rate limit
-                               │
-                               ▼
-                        ┌─────────────┐
-                        │ :rate_limited│
-                        │ (cooldown)   │
-                        └──────┬──────┘
-                               │
-                          Cooldown
-                           expires
-                               │
-                               ▼
-                        ┌─────────────┐
-                        │  :healthy   │
-                        └─────────────┘
+
+Note: Rate limits are handled SEPARATELY from health status.
+Rate limits are tracked via RateLimitState with time-based auto-expiry.
+A provider can be :healthy while also being rate-limited.
+
+┌─────────────────────────────────────────────────────────┐
+│          RATE LIMIT STATE (independent)                  │
+└─────────────────────────────────────────────────────────┘
+
+                   Rate limit (429)
+                        │
+                        ▼
+              ┌─────────────────┐
+              │ RateLimitState  │
+              │ (time-based)    │
+              └────────┬────────┘
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+     Retry-After   Success      Auto-expiry
+      recorded     received     (time elapses)
+          │            │            │
+          │            ▼            │
+          │      ┌──────────┐       │
+          └─────►│ Cleared  │◄──────┘
+                 └──────────┘
 ```
 
 **State Update Flow:**

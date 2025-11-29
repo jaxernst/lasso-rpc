@@ -6,9 +6,9 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
   1. Rate Limited (🟣) - In cooldown (highest priority)
   2. Circuit Open (🔴) - Complete failure
   3. Degraded (🟠) - Has issues but trying
-  4. Testing Recovery (🔵) - Circuit testing
-  5. Reconnecting (🟡) - WS reconnecting
-  6. Syncing (🔵) - Lagging blocks
+  4. Testing Recovery (🟡) - Circuit testing recovery
+  5. Recovering (🟡) - WS recovering
+  6. Lagging (🔵) - Lagging blocks
   7. Healthy (🟢) - Fully operational
   """
   use Phoenix.Component
@@ -25,25 +25,25 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-emerald-400"></div>
           <span>Healthy</span>
         </div>
-        
-    <!-- Syncing Status -->
+
+    <!-- Lagging Status -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"
-          title="Responsive but lagging blocks"
+          title="Responsive but lagging blocks behind network"
         >
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-sky-400"></div>
-          <span>Syncing</span>
+          <span>Lagging</span>
         </div>
-        
-    <!-- Reconnecting Status -->
+
+    <!-- Recovering Status (covers both WS recovery and circuit half-open) -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"
-          title="WebSocket connection lost, reconnecting"
+          title="Connection recovering or circuit testing recovery"
         >
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-amber-400"></div>
-          <span>Reconnecting</span>
+          <span>Recovering</span>
         </div>
-        
+
     <!-- Degraded Status -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"
@@ -52,7 +52,7 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-orange-400"></div>
           <span>Degraded</span>
         </div>
-        
+
     <!-- Rate Limited Status -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"
@@ -61,7 +61,7 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-purple-400"></div>
           <span>Rate Limited</span>
         </div>
-        
+
     <!-- Circuit Open Status -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"

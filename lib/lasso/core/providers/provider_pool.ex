@@ -16,7 +16,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   alias Lasso.Events.Provider
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{ChainState, CircuitBreaker}
+  alias Lasso.RPC.{ChainState, CircuitBreaker, RateLimitState}
 
   @type t :: %__MODULE__{
           chain_name: chain_name(),
@@ -25,7 +25,8 @@ defmodule Lasso.RPC.ProviderPool do
           total_requests: non_neg_integer(),
           failed_requests: non_neg_integer(),
           circuit_states: circuit_states(),
-          recovery_times: recovery_times()
+          recovery_times: recovery_times(),
+          rate_limit_states: rate_limit_states()
         }
 
   @type circuit_states :: %{provider_id() => %{http: circuit_state(), ws: circuit_state()}}
@@ -33,6 +34,10 @@ defmodule Lasso.RPC.ProviderPool do
   @type recovery_times :: %{
           provider_id() => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}
         }
+  @type circuit_errors :: %{
+          provider_id() => %{http: map() | nil, ws: map() | nil}
+        }
+  @type rate_limit_states :: %{provider_id() => RateLimitState.t()}
 
   defstruct [
     :chain_name,
@@ -46,7 +51,12 @@ defmodule Lasso.RPC.ProviderPool do
     circuit_states: %{},
     # Cached recovery times per provider: %{provider_id => %{http: ms | nil, ws: ms | nil}}
     # Updated when circuit states change to avoid N sequential GenServer calls
-    recovery_times: %{}
+    recovery_times: %{},
+    # Errors that caused circuits to open: %{provider_id => %{http: error_map | nil, ws: error_map | nil}}
+    # Cleared when circuit closes, used for dashboard display
+    circuit_errors: %{},
+    # Rate limit state per provider (time-based, independent of circuit breaker)
+    rate_limit_states: %{}
   ]
 
   defmodule ProviderState do
@@ -72,12 +82,12 @@ defmodule Lasso.RPC.ProviderPool do
             reconnect_grace_until: integer() | nil
           }
 
+    # Note: :rate_limited is NOT a health status - rate limits are tracked via RateLimitState
     @type health_status ::
             :healthy
             | :unhealthy
             | :connecting
             | :disconnected
-            | :rate_limited
             | :degraded
 
     @derive Jason.Encoder
@@ -103,12 +113,12 @@ defmodule Lasso.RPC.ProviderPool do
   @type chain_name :: String.t()
   @type provider_id :: String.t()
   @type strategy :: :priority | :round_robin | :fastest | :cheapest | :latency_weighted
+  # Note: :rate_limited is NOT a health status - rate limits are tracked via RateLimitState
   @type health_status ::
           :healthy
           | :unhealthy
           | :connecting
           | :disconnected
-          | :rate_limited
           | :degraded
 
   # Default timeout for ProviderPool GenServer calls (5 seconds)
@@ -485,30 +495,47 @@ defmodule Lasso.RPC.ProviderPool do
         http_cb_state = get_cb_state(state.circuit_states, id, :http)
         ws_cb_state = get_cb_state(state.circuit_states, id, :ws)
 
+        # Get circuit errors (error that caused circuit to open)
+        circuit_errors = Map.get(state.circuit_errors, id, %{http: nil, ws: nil})
+        http_cb_error = Map.get(circuit_errors, :http)
+        ws_cb_error = Map.get(circuit_errors, :ws)
+
         # Get recovery times from cached state (avoids GenServer call cascade)
         recovery_times = Map.get(state.recovery_times, id, %{http: nil, ws: nil})
         http_recovery = Map.get(recovery_times, :http)
         ws_recovery = Map.get(recovery_times, :ws)
 
-        # Derive rate limit cooldown state
-        # is_in_cooldown is specifically for rate limits (not general circuit open)
-        # A provider is "in rate limit cooldown" if status is rate_limited AND circuit is open
-        is_rate_limited = provider.status == :rate_limited or
-                          provider.http_status == :rate_limited or
-                          provider.ws_status == :rate_limited
-        is_in_cooldown = is_rate_limited and (http_cb_state == :open or ws_cb_state == :open)
+        # Get rate limit state from RateLimitState (independent of circuit breaker)
+        rate_limit_state = Map.get(state.rate_limit_states, id)
+        now_ms = System.monotonic_time(:millisecond)
 
-        # Cooldown until is the recovery time (only meaningful when in cooldown)
-        cooldown_until =
-          if is_in_cooldown do
-            case {http_recovery, ws_recovery} do
-              {nil, nil} -> nil
-              {http, nil} -> http
-              {nil, ws} -> ws
-              {http, ws} -> max(http, ws)
-            end
+        http_rate_limited =
+          rate_limit_state != nil and
+            RateLimitState.rate_limited?(rate_limit_state, :http, now_ms)
+
+        ws_rate_limited =
+          rate_limit_state != nil and RateLimitState.rate_limited?(rate_limit_state, :ws, now_ms)
+
+        # Rate limit time remaining (for dashboard display)
+        rate_limit_remaining =
+          if rate_limit_state do
+            http_remaining = RateLimitState.time_remaining(rate_limit_state, :http, now_ms)
+            ws_remaining = RateLimitState.time_remaining(rate_limit_state, :ws, now_ms)
+            %{http: http_remaining, ws: ws_remaining}
           else
-            nil
+            %{http: nil, ws: nil}
+          end
+
+        # For backwards compatibility, is_in_cooldown is true if any transport is rate limited
+        is_in_cooldown = http_rate_limited or ws_rate_limited
+
+        # Cooldown until is the max rate limit expiry time
+        cooldown_until =
+          case {rate_limit_remaining.http, rate_limit_remaining.ws} do
+            {nil, nil} -> nil
+            {http, nil} -> now_ms + http
+            {nil, ws} -> now_ms + ws
+            {http, ws} -> now_ms + max(http, ws)
           end
 
         # Derive availability from status (single source of truth)
@@ -527,13 +554,23 @@ defmodule Lasso.RPC.ProviderPool do
           availability: availability,
           http_availability: http_availability,
           ws_availability: ws_availability,
-          # Cooldown state (derived from circuit breaker)
+          # Rate limit state (from RateLimitState, independent of circuit breaker)
+          http_rate_limited: http_rate_limited,
+          ws_rate_limited: ws_rate_limited,
+          rate_limit_remaining: rate_limit_remaining,
+          # Legacy cooldown fields (for backwards compatibility)
           is_in_cooldown: is_in_cooldown,
           cooldown_until: cooldown_until,
           # Circuit breaker state (normalized to map format)
           circuit_state: circuit_state_normalized,
           http_cb_state: http_cb_state,
           ws_cb_state: ws_cb_state,
+          # Circuit breaker errors (error that caused circuit to open)
+          http_cb_error: http_cb_error,
+          ws_cb_error: ws_cb_error,
+          # Circuit breaker recovery times
+          http_recovery: http_recovery,
+          ws_recovery: ws_recovery,
           # Provider metrics
           consecutive_failures: provider.consecutive_failures,
           consecutive_successes: provider.consecutive_successes,
@@ -572,7 +609,9 @@ defmodule Lasso.RPC.ProviderPool do
           circuit_state: %{
             http: get_cb_state(state.circuit_states, p.id, :http),
             ws: get_cb_state(state.circuit_states, p.id, :ws)
-          }
+          },
+          # Include rate limit state per transport (independent of circuit breaker)
+          rate_limited: get_rate_limit_state(state, p.id)
         }
       end)
 
@@ -869,7 +908,8 @@ defmodule Lasso.RPC.ProviderPool do
   @impl true
   def handle_info(
         {:circuit_breaker_event,
-         %{chain: event_chain, provider_id: provider_id, transport: transport, from: from, to: to}},
+         %{chain: event_chain, provider_id: provider_id, transport: transport, from: from, to: to} =
+           event_data},
         state
       )
       when is_binary(provider_id) and from in [:closed, :open, :half_open] and
@@ -899,6 +939,25 @@ defmodule Lasso.RPC.ProviderPool do
           clear_recovery_time(state.recovery_times, provider_id, transport)
         end
 
+      # Update circuit errors - store error when opening, clear when closing
+      new_circuit_errors =
+        if to == :open do
+          # Extract error from event (added by circuit breaker when opening)
+          error_info = Map.get(event_data, :error)
+          update_circuit_error(state.circuit_errors, provider_id, transport, error_info)
+        else
+          if to == :closed do
+            # Clear error when circuit closes
+            clear_circuit_error(state.circuit_errors, provider_id, transport)
+          else
+            # half_open: keep existing error
+            state.circuit_errors
+          end
+        end
+
+      # Note: Rate limits are now managed independently via RateLimitState
+      # They auto-expire based on Retry-After timing, not circuit breaker state
+
       # Instrumentation: log slow circuit event processing (>100ms indicates blocking)
       duration_ms = System.monotonic_time(:millisecond) - start_time
 
@@ -913,7 +972,12 @@ defmodule Lasso.RPC.ProviderPool do
       end
 
       {:noreply,
-       %{state | circuit_states: new_circuit_states, recovery_times: new_recovery_times}}
+       %{
+         state
+         | circuit_states: new_circuit_states,
+           recovery_times: new_recovery_times,
+           circuit_errors: new_circuit_errors
+       }}
     else
       # Ignore events from other chains
       {:noreply, state}
@@ -955,36 +1019,6 @@ defmodule Lasso.RPC.ProviderPool do
             last_health_check: ts
         }
 
-        new_state = put_provider_and_refresh(state, provider_id, updated)
-        {:noreply, new_state}
-    end
-  end
-
-  @impl true
-  def handle_info(%Provider.CooldownStart{provider_id: provider_id, until: _until_ts}, state) do
-    case Map.get(state.providers, provider_id) do
-      nil ->
-        {:noreply, state}
-
-      provider ->
-        updated = %{
-          provider
-          | status: :rate_limited
-        }
-
-        new_state = put_provider_and_refresh(state, provider_id, updated)
-        {:noreply, new_state}
-    end
-  end
-
-  @impl true
-  def handle_info(%Provider.CooldownEnd{provider_id: provider_id}, state) do
-    case Map.get(state.providers, provider_id) do
-      nil ->
-        {:noreply, state}
-
-      provider ->
-        updated = provider
         new_state = put_provider_and_refresh(state, provider_id, updated)
         {:noreply, new_state}
     end
@@ -1154,7 +1188,34 @@ defmodule Lasso.RPC.ProviderPool do
             end
         end
 
-      transport_ok and circuit_ok
+      # Check rate limit state (independent of circuit breaker)
+      # Rate limits auto-expire, so only exclude if exclude_rate_limited filter is set
+      exclude_rate_limited = Map.get(filters, :exclude_rate_limited, false)
+
+      rate_limit_ok =
+        if exclude_rate_limited do
+          case Map.get(filters, :protocol) do
+            :http ->
+              not transport_rate_limited?(state, p.id, :http, current_time)
+
+            :ws ->
+              not transport_rate_limited?(state, p.id, :ws, current_time)
+
+            :both ->
+              not transport_rate_limited?(state, p.id, :http, current_time) and
+                not transport_rate_limited?(state, p.id, :ws, current_time)
+
+            _ ->
+              # For nil protocol, include if at least one transport is not rate limited
+              not transport_rate_limited?(state, p.id, :http, current_time) or
+                not transport_rate_limited?(state, p.id, :ws, current_time)
+          end
+        else
+          # By default, include rate-limited providers (selection tiering handles preference)
+          true
+        end
+
+      transport_ok and circuit_ok and rate_limit_ok
     end)
     |> filter_by_lag(state.chain_name, max_lag_blocks)
     |> Enum.filter(fn provider ->
@@ -1259,6 +1320,30 @@ defmodule Lasso.RPC.ProviderPool do
     is_binary(Map.get(provider.config, :ws_url))
   end
 
+  # Check if a provider's transport is currently rate limited
+  defp transport_rate_limited?(state, provider_id, transport, now_ms) do
+    case Map.get(state.rate_limit_states, provider_id) do
+      nil -> false
+      rate_limit_state -> RateLimitState.rate_limited?(rate_limit_state, transport, now_ms)
+    end
+  end
+
+  # Get rate limit state for a provider (for candidate response)
+  defp get_rate_limit_state(state, provider_id) do
+    case Map.get(state.rate_limit_states, provider_id) do
+      nil ->
+        %{http: false, ws: false}
+
+      rate_limit_state ->
+        now = System.monotonic_time(:millisecond)
+
+        %{
+          http: RateLimitState.rate_limited?(rate_limit_state, :http, now),
+          ws: RateLimitState.rate_limited?(rate_limit_state, :ws, now)
+        }
+    end
+  end
+
   defp put_provider_and_refresh(state, provider_id, updated) do
     new_providers = Map.put(state.providers, provider_id, updated)
     new_state = %{state | providers: new_providers}
@@ -1297,6 +1382,8 @@ defmodule Lasso.RPC.ProviderPool do
 
         state
         |> put_provider_and_refresh(provider_id, updated_provider)
+        |> clear_rate_limit_for_provider(provider_id, :http)
+        |> clear_rate_limit_for_provider(provider_id, :ws)
         |> Map.update!(:total_requests, &(&1 + 1))
     end
   end
@@ -1317,6 +1404,7 @@ defmodule Lasso.RPC.ProviderPool do
 
         state
         |> put_provider_and_refresh(provider_id, updated)
+        |> clear_rate_limit_for_provider(provider_id, :http)
     end
   end
 
@@ -1336,6 +1424,7 @@ defmodule Lasso.RPC.ProviderPool do
 
         state
         |> put_provider_and_refresh(provider_id, updated)
+        |> clear_rate_limit_for_provider(provider_id, :ws)
     end
   end
 
@@ -1358,17 +1447,19 @@ defmodule Lasso.RPC.ProviderPool do
 
         cond do
           jerr.category == :rate_limit ->
-            # Update status for dashboard visibility (circuit breaker handles routing)
+            # Rate limits are temporary backpressure, not provider health issues
+            # Provider stays healthy - RateLimitState is the authoritative source for rate limit status
+            retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
+
+            # Only update last_error for debugging - don't change health status
             updated =
               provider
-              |> Map.put(status_field, :rate_limited)
-              |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
               |> Map.put(:last_error, jerr)
               |> Map.put(:last_health_check, System.system_time(:millisecond))
 
             state
             |> put_provider_and_refresh(provider_id, updated)
-            |> increment_failure_stats()
+            |> record_rate_limit_for_provider(provider_id, transport, retry_after_ms)
 
           jerr.category == :client_error ->
             # Client errors don't affect provider health status
@@ -1425,20 +1516,24 @@ defmodule Lasso.RPC.ProviderPool do
 
         cond do
           jerr.category == :rate_limit ->
-            # Update status for dashboard visibility (circuit breaker handles routing)
-            Logger.warning("Provider #{provider_id} rate limited")
+            # Rate limits are temporary backpressure, not provider health issues
+            # Provider stays healthy - RateLimitState is the authoritative source for rate limit status
+            retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
+            transport = jerr.transport || :http
 
+            Logger.debug("Provider #{provider_id} rate limited for #{retry_after_ms || 30_000}ms")
+
+            # Only update last_error for debugging - don't change health status
             updated_provider =
               provider
               |> Map.merge(%{
-                status: :rate_limited,
                 last_error: jerr,
                 last_health_check: System.system_time(:millisecond)
               })
 
             state
             |> put_provider_and_refresh(provider_id, updated_provider)
-            |> increment_failure_stats()
+            |> record_rate_limit_for_provider(provider_id, transport, retry_after_ms)
 
           jerr.category == :client_error and context == :live_traffic ->
             # Client errors from live traffic don't affect provider health status
@@ -1509,12 +1604,12 @@ defmodule Lasso.RPC.ProviderPool do
     if consecutive_failures >= @failure_threshold, do: :unhealthy, else: :degraded
   end
 
-  # Maps provider status to availability for dashboard/API compatibility
+  # Maps provider health status to availability for dashboard/API compatibility
+  # Note: rate limits are tracked separately via RateLimitState, not health status
   defp status_to_availability(nil), do: :up
   defp status_to_availability(:healthy), do: :up
   defp status_to_availability(:connecting), do: :up
   defp status_to_availability(:degraded), do: :limited
-  defp status_to_availability(:rate_limited), do: :limited
   defp status_to_availability(:unhealthy), do: :down
   defp status_to_availability(:disconnected), do: :down
   defp status_to_availability(_), do: :up
@@ -1525,6 +1620,8 @@ defmodule Lasso.RPC.ProviderPool do
     |> Map.update!(:failed_requests, &(&1 + 1))
   end
 
+  # Derives aggregate health status from transport statuses
+  # Note: rate limits are tracked via RateLimitState, not health status
   defp derive_aggregate_status(provider) do
     http = Map.get(provider, :http_status)
     ws = Map.get(provider, :ws_status)
@@ -1538,10 +1635,6 @@ defmodule Lasso.RPC.ProviderPool do
       http == :connecting or ws == :connecting ->
         :connecting
 
-      # Rate limited on any transport = provider rate limited
-      http == :rate_limited or ws == :rate_limited ->
-        :rate_limited
-
       # All transports unhealthy/disconnected = provider unhealthy
       (http in [:unhealthy, :disconnected] or is_nil(http)) and
           (ws in [:unhealthy, :disconnected] or is_nil(ws)) ->
@@ -1549,6 +1642,32 @@ defmodule Lasso.RPC.ProviderPool do
 
       true ->
         :degraded
+    end
+  end
+
+  # Record rate limit to RateLimitState (time-based, independent of circuit breaker)
+  defp record_rate_limit_for_provider(state, provider_id, transport, retry_after_ms) do
+    current_rate_limit_state =
+      Map.get(state.rate_limit_states, provider_id) || RateLimitState.new()
+
+    updated_rate_limit_state =
+      RateLimitState.record_rate_limit(current_rate_limit_state, transport, retry_after_ms)
+
+    %{
+      state
+      | rate_limit_states: Map.put(state.rate_limit_states, provider_id, updated_rate_limit_state)
+    }
+  end
+
+  # Clear rate limit for a specific transport (called on success)
+  defp clear_rate_limit_for_provider(state, provider_id, transport) do
+    case Map.get(state.rate_limit_states, provider_id) do
+      nil ->
+        state
+
+      rate_limit_state ->
+        updated = RateLimitState.clear_rate_limit(rate_limit_state, transport)
+        %{state | rate_limit_states: Map.put(state.rate_limit_states, provider_id, updated)}
     end
   end
 
@@ -1567,19 +1686,6 @@ defmodule Lasso.RPC.ProviderPool do
             provider_id: provider_id,
             reason: Map.get(details, :reason) || Map.get(details, "reason")
           }
-
-        :cooldown_start ->
-          %Provider.CooldownStart{
-            ts: ts,
-            chain: chain_name,
-            provider_id: provider_id,
-            until:
-              Map.get(details, :until) || Map.get(details, "until") ||
-                System.monotonic_time(:millisecond)
-          }
-
-        :cooldown_end ->
-          %Provider.CooldownEnd{ts: ts, chain: chain_name, provider_id: provider_id}
 
         :ws_connected ->
           %Provider.WSConnected{ts: ts, chain: chain_name, provider_id: provider_id}
@@ -1652,6 +1758,20 @@ defmodule Lasso.RPC.ProviderPool do
     provider_times = Map.get(recovery_times, provider_id, %{http: nil, ws: nil})
     updated_times = Map.put(provider_times, transport, nil)
     Map.put(recovery_times, provider_id, updated_times)
+  end
+
+  # Updates circuit error for a specific provider and transport (when circuit opens)
+  defp update_circuit_error(circuit_errors, provider_id, transport, error_info) do
+    provider_errors = Map.get(circuit_errors, provider_id, %{http: nil, ws: nil})
+    updated_errors = Map.put(provider_errors, transport, error_info)
+    Map.put(circuit_errors, provider_id, updated_errors)
+  end
+
+  # Clears circuit error for a specific circuit (when it closes)
+  defp clear_circuit_error(circuit_errors, provider_id, transport) do
+    provider_errors = Map.get(circuit_errors, provider_id, %{http: nil, ws: nil})
+    updated_errors = Map.put(provider_errors, transport, nil)
+    Map.put(circuit_errors, provider_id, updated_errors)
   end
 
   # Telemetry: emit event when provider excluded due to lag

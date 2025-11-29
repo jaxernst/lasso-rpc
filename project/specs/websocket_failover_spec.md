@@ -1080,10 +1080,12 @@ Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{chain}")
 
 # Events received:
 # - %Provider.Unhealthy{provider_id: "alchemy", ...}
-# - %Provider.CooldownStart{provider_id: "infura", ...}
 # - %Provider.HealthCheckFailed{provider_id: "quicknode", ...}
 # - %Provider.WSClosed{provider_id: "alchemy", ...}
 # - %Provider.WSDisconnected{provider_id: "infura", ...}
+#
+# Note: Rate limits are tracked separately via RateLimitState with time-based
+# auto-expiry. They do not affect provider health status or trigger circuit breakers.
 ```
 
 ### Telemetry Events (New)
