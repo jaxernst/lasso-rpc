@@ -31,7 +31,10 @@ defmodule Lasso.RPC.CircuitBreaker do
     inflight_count: 0,
     # Max parallel attempts allowed during half-open (default: 3)
     # This prevents thundering herd while allowing reasonable probe traffic
-    half_open_max_inflight: 3
+    half_open_max_inflight: 3,
+    # Error category that caused circuit to open (for category-specific recovery)
+    # Rate limits have known recovery times, so 1 success is sufficient
+    opened_by_category: nil
   ]
 
   @type chain :: String.t()
@@ -445,7 +448,8 @@ defmodule Lasso.RPC.CircuitBreaker do
       | state: :closed,
         failure_count: 0,
         success_count: 0,
-        last_failure_time: nil
+        last_failure_time: nil,
+        opened_by_category: nil
     }
 
     {:noreply, new_state}
@@ -543,6 +547,10 @@ defmodule Lasso.RPC.CircuitBreaker do
   end
 
   defp handle_success(result, state) do
+    # Use category-specific success threshold for recovery
+    # Rate limits have known recovery times, so 1 success is sufficient
+    effective_threshold = effective_success_threshold(state)
+
     case state.state do
       :closed ->
         # Reset failure count on success
@@ -570,7 +578,7 @@ defmodule Lasso.RPC.CircuitBreaker do
 
         new_success_count = 1
 
-        if new_success_count >= state.success_threshold do
+        if new_success_count >= effective_threshold do
           Logger.info(
             "Circuit breaker #{state.provider_id} (#{state.transport}) recovered from success report, closing"
           )
@@ -593,7 +601,8 @@ defmodule Lasso.RPC.CircuitBreaker do
             | state: :closed,
               failure_count: 0,
               success_count: 0,
-              last_failure_time: nil
+              last_failure_time: nil,
+              opened_by_category: nil
           }
 
           {:reply, {:ok, result}, new_state}
@@ -612,7 +621,7 @@ defmodule Lasso.RPC.CircuitBreaker do
         # Increment success count
         new_success_count = state.success_count + 1
 
-        if new_success_count >= state.success_threshold do
+        if new_success_count >= effective_threshold do
           Logger.info(
             "Circuit breaker #{state.provider_id} (#{state.transport}) recovered, closing"
           )
@@ -635,7 +644,8 @@ defmodule Lasso.RPC.CircuitBreaker do
             | state: :closed,
               failure_count: 0,
               success_count: 0,
-              last_failure_time: nil
+              last_failure_time: nil,
+              opened_by_category: nil
           }
 
           {:reply, {:ok, result}, new_state}
@@ -645,6 +655,11 @@ defmodule Lasso.RPC.CircuitBreaker do
         end
     end
   end
+
+  # Rate limits have known recovery times (retry-after), so 1 success is sufficient
+  # Other errors need more confidence before closing (default success_threshold)
+  defp effective_success_threshold(%{opened_by_category: :rate_limit}), do: 1
+  defp effective_success_threshold(state), do: state.success_threshold
 
   defp handle_failure(error, state) do
     new_failure_count = state.failure_count + 1
@@ -705,7 +720,8 @@ defmodule Lasso.RPC.CircuitBreaker do
             | state: :open,
               failure_count: new_failure_count,
               last_failure_time: current_time,
-              recovery_timeout: adjusted_recovery_timeout
+              recovery_timeout: adjusted_recovery_timeout,
+              opened_by_category: error_category
           }
 
           {:reply, {:error, :circuit_opening}, new_state}

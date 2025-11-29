@@ -1,11 +1,154 @@
 defmodule LassoWeb.Dashboard.MetricsHelpers do
   @moduledoc """
   Performance metrics and statistics calculations for the Dashboard LiveView.
+
+  ## Time-Windowed Metrics
+
+  Metrics labeled with time windows (e.g., "5m") are calculated from the BenchmarkStore
+  ETS tables, which maintain proper time-based data. This ensures accurate statistical
+  aggregations regardless of request rate.
+
+  Metrics that benefit from "live feel" (decision breakdown, failovers, activity feed)
+  continue to use the in-memory routing_events buffer for instant updates.
   """
+
+  require Logger
 
   alias Lasso.Benchmarking.BenchmarkStore
   alias LassoWeb.Dashboard.{Helpers, Constants}
   alias LassoWeb.Dashboard.Metrics.Calculations
+
+  # ETS table name helpers (must match BenchmarkStore)
+  defp score_table_name(chain_name), do: :"provider_scores_#{chain_name}"
+
+  # ---------------------------------------------------------------------------
+  # ETS-Based Time-Windowed Metrics
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Get latency percentiles from ETS provider_scores table within a time window.
+
+  Queries the pre-aggregated `recent_latencies` field from provider_scores,
+  filtered by `last_updated` timestamp. This provides accurate time-windowed
+  percentiles without expensive full table scans.
+
+  Uses monotonic time for consistency with BenchmarkStore timestamps.
+  """
+  def get_windowed_percentiles_from_ets(chain_name, window_ms \\ 300_000) do
+    score_table = score_table_name(chain_name)
+    cutoff = System.monotonic_time(:millisecond) - window_ms
+
+    # Select recent_latencies from all RPC entries updated within the window
+    # Schema: {{provider_id, method, :rpc}, successes, total, avg_duration, recent_latencies, last_updated}
+    latencies =
+      :ets.select(score_table, [
+        {{{:_, :_, :rpc}, :_, :_, :_, :"$1", :"$2"},
+         [{:>=, :"$2", cutoff}, {:is_list, :"$1"}],
+         [:"$1"]}
+      ])
+      |> List.flatten()
+
+    Calculations.percentile_pair(latencies)
+  rescue
+    ArgumentError ->
+      # Table doesn't exist yet
+      {nil, nil}
+  catch
+    :error, :badarg ->
+      {nil, nil}
+  end
+
+  @doc """
+  Get success rate from ETS provider_scores table within a time window.
+
+  Aggregates successes and totals from all provider/method pairs that have
+  been updated within the specified window.
+  """
+  def get_windowed_success_rate_from_ets(chain_name, window_ms \\ 300_000) do
+    score_table = score_table_name(chain_name)
+    cutoff = System.monotonic_time(:millisecond) - window_ms
+
+    # Select {successes, total} from all RPC entries updated within the window
+    stats =
+      :ets.select(score_table, [
+        {{{:_, :_, :rpc}, :"$1", :"$2", :_, :_, :"$3"},
+         [{:>=, :"$3", cutoff}],
+         [{{:"$1", :"$2"}}]}
+      ])
+
+    {total_successes, total_calls} =
+      Enum.reduce(stats, {0, 0}, fn {s, t}, {acc_s, acc_t} ->
+        {acc_s + s, acc_t + t}
+      end)
+
+    if total_calls > 0 do
+      Float.round(total_successes * 100.0 / total_calls, 1)
+    else
+      nil
+    end
+  rescue
+    ArgumentError -> nil
+  catch
+    :error, :badarg -> nil
+  end
+
+  @doc """
+  Get latency percentiles for a specific provider from ETS within a time window.
+  """
+  def get_provider_windowed_percentiles_from_ets(chain_name, provider_id, window_ms \\ 300_000) do
+    score_table = score_table_name(chain_name)
+    cutoff = System.monotonic_time(:millisecond) - window_ms
+
+    # Select recent_latencies for this specific provider
+    latencies =
+      :ets.select(score_table, [
+        {{{:"$1", :_, :rpc}, :_, :_, :_, :"$2", :"$3"},
+         [{:==, :"$1", provider_id}, {:>=, :"$3", cutoff}, {:is_list, :"$2"}],
+         [:"$2"]}
+      ])
+      |> List.flatten()
+
+    Calculations.percentile_pair(latencies)
+  rescue
+    ArgumentError -> {nil, nil}
+  catch
+    :error, :badarg -> {nil, nil}
+  end
+
+  @doc """
+  Get success rate for a specific provider from ETS within a time window.
+  """
+  def get_provider_windowed_success_rate_from_ets(chain_name, provider_id, window_ms \\ 300_000) do
+    score_table = score_table_name(chain_name)
+    cutoff = System.monotonic_time(:millisecond) - window_ms
+
+    # Select {successes, total} for this specific provider
+    stats =
+      :ets.select(score_table, [
+        {{{:"$1", :_, :rpc}, :"$2", :"$3", :_, :_, :"$4"},
+         [{:==, :"$1", provider_id}, {:>=, :"$4", cutoff}],
+         [{{:"$2", :"$3"}}]}
+      ])
+
+    {total_successes, total_calls} =
+      Enum.reduce(stats, {0, 0}, fn {s, t}, {acc_s, acc_t} ->
+        {acc_s + s, acc_t + t}
+      end)
+
+    if total_calls > 0 do
+      Float.round(total_successes * 100.0 / total_calls, 1)
+    else
+      nil
+    end
+  rescue
+    ArgumentError -> nil
+  catch
+    :error, :badarg -> nil
+  end
+
+  # ---------------------------------------------------------------------------
+  # Public API
+  # ---------------------------------------------------------------------------
 
   @doc "Assign chain performance metrics to assigns"
   def assign_chain_performance_metrics(assigns, chain_name) do
@@ -13,30 +156,22 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     chain_stats = BenchmarkStore.get_chain_wide_stats(chain_name)
     realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
 
-    # Calculate aggregate performance metrics over 5 minutes
-    now_ms = System.system_time(:millisecond)
+    # Time window for ETS queries
     window_ms = Constants.metrics_window_5min()
 
-    recent_events =
-      Enum.filter(assigns.routing_events, fn e ->
-        e[:chain] == chain_name and (e[:ts_ms] || 0) >= now_ms - window_ms
-      end)
+    # Get time-windowed metrics from ETS (accurate 5-minute aggregations)
+    {p50, p95} = get_windowed_percentiles_from_ets(chain_name, window_ms)
+    success_rate = get_windowed_success_rate_from_ets(chain_name, window_ms)
 
-    latencies =
-      recent_events
-      |> Enum.map(&(&1[:duration_ms] || 0))
-      |> Enum.filter(&(&1 > 0))
+    # "Live feel" metrics from routing_events buffer
+    chain_events = Enum.filter(assigns.routing_events, &(&1[:chain] == chain_name))
+    failovers_recent = Enum.count(chain_events, fn e -> (e[:failovers] || 0) > 0 end)
 
-    {p50, p95} = Calculations.percentile_pair(latencies)
-
-    success_rate = Calculations.success_rate(recent_events)
-
-    failovers_5m = Enum.count(recent_events, fn e -> (e[:failovers] || 0) > 0 end)
-
+    # Decision share from buffer (real-time routing patterns)
     decision_share =
-      recent_events
+      chain_events
       |> Enum.group_by(& &1.provider_id)
-      |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(recent_events), 1)} end)
+      |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(chain_events), 1)} end)
       |> Enum.sort_by(fn {_pid, pct} -> -pct end)
 
     connected_providers =
@@ -49,10 +184,10 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       success_rate: success_rate,
       p50_latency: p50,
       p95_latency: p95,
-      failovers_5m: failovers_5m,
+      failovers_5m: failovers_recent,
       connected_providers: connected_providers,
       total_providers: total_providers,
-      recent_activity: length(recent_events),
+      recent_activity: length(chain_events),
       providers_list: Map.get(realtime_stats, :providers, []),
       rpc_methods: Map.get(realtime_stats, :rpc_methods, []),
       last_updated: Map.get(realtime_stats, :last_updated, 0),
@@ -101,41 +236,24 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     real_time_stats = BenchmarkStore.get_real_time_stats(chain, provider_id)
     anomalies = BenchmarkStore.detect_performance_anomalies(chain, provider_id)
 
-    now_ms = System.system_time(:millisecond)
+    # Time window for ETS queries
     five_min_ms = Constants.metrics_window_5min()
-    hour_ms = Constants.metrics_window_1hour()
 
-    events_5m =
-      Enum.filter(routing_events, fn e ->
-        e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-      end)
+    # Get time-windowed metrics from ETS (accurate 5-minute aggregations)
+    {p50, p95} = get_provider_windowed_percentiles_from_ets(chain, provider_id, five_min_ms)
+    success_rate = get_provider_windowed_success_rate_from_ets(chain, provider_id, five_min_ms)
 
-    latencies_5m =
-      events_5m
-      |> Enum.map(&(&1[:duration_ms] || 0))
-      |> Enum.filter(&(&1 > 0))
-
-    {p50, p95} = Calculations.percentile_pair(latencies_5m)
-    success_rate = Calculations.success_rate(events_5m)
-
+    # Get call counts from BenchmarkStore real-time stats
     calls_last_minute = Map.get(real_time_stats, :calls_last_minute, 0)
 
-    calls_last_hour =
-      routing_events
-      |> Enum.count(fn e ->
-        e[:provider_id] == provider_id and (e[:ts_ms] || 0) >= now_ms - hour_ms
-      end)
+    # Provider events from buffer (for live feel metrics)
+    provider_events = Enum.filter(routing_events, &(&1[:provider_id] == provider_id))
+    chain_events = Enum.filter(routing_events, &(&1[:chain] == chain))
 
-    # Provider pick share among chain decisions in 5m
-    chain_events_5m =
-      Enum.filter(routing_events, fn e ->
-        e[:chain] == chain and (e[:ts_ms] || 0) >= now_ms - five_min_ms
-      end)
-
-    pick_share_5m =
-      if length(chain_events_5m) > 0 do
-        100.0 * Enum.count(chain_events_5m, fn e -> e[:provider_id] == provider_id end) /
-          length(chain_events_5m)
+    # Provider pick share from buffer (shows real-time routing patterns)
+    pick_share =
+      if length(chain_events) > 0 do
+        100.0 * length(provider_events) / length(chain_events)
       else
         0.0
       end
@@ -146,13 +264,13 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       p95_latency: p95,
       success_rate: success_rate,
       calls_last_minute: calls_last_minute,
-      calls_last_5m: length(events_5m),
-      calls_last_hour: calls_last_hour,
+      calls_last_5m: length(provider_events),
+      calls_last_hour: length(provider_events),
       racing_stats: Map.get(real_time_stats, :racing_stats, []),
       rpc_stats: Map.get(real_time_stats, :rpc_stats, []),
       anomalies: anomalies || [],
-      recent_activity_count: length(events_5m),
-      pick_share_5m: pick_share_5m
+      recent_activity_count: length(provider_events),
+      pick_share_5m: pick_share
     }
   end
 
@@ -175,42 +293,25 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
   @doc "Get chain performance metrics (non-socket version)"
   def get_chain_performance_metrics(assigns, chain_name) do
-    # Chain-specific routing events
+    # Chain-specific routing events (from 100-item buffer - used for "live feel" metrics)
     chain_events = Enum.filter(assigns.routing_events, &(&1.chain == chain_name))
 
-    # Calculate metrics based on chain_events
-    now_ms = System.system_time(:millisecond)
-    five_min_ms = 300_000
-    _hour_ms = 3_600_000
+    # Time window for ETS queries
+    window_ms = Constants.metrics_window_5min()
 
-    recent_events =
-      Enum.filter(chain_events, fn e -> (e[:ts_ms] || 0) >= now_ms - five_min_ms end)
+    # Get time-windowed metrics from ETS (accurate 5-minute aggregations)
+    {p50, p95} = get_windowed_percentiles_from_ets(chain_name, window_ms)
+    success_rate = get_windowed_success_rate_from_ets(chain_name, window_ms)
 
-    # Calculate success rate
-    success_rate =
-      if length(recent_events) > 0 do
-        successful = Enum.count(recent_events, fn e -> e[:result] == :success end)
-        Float.round(successful * 100.0 / length(recent_events), 1)
-      else
-        nil
-      end
+    # "Live feel" metrics from routing_events buffer (instant updates)
+    # These don't need strict time windows - they show recent activity patterns
+    failovers_recent = Enum.count(chain_events, &((&1[:failovers] || &1[:failover_count] || 0) > 0))
 
-    # Calculate latency percentiles
-    latencies =
-      recent_events
-      |> Enum.map(&(&1[:duration_ms] || 0))
-      |> Enum.filter(&(&1 > 0))
-
-    {p50, p95} = Calculations.percentile_pair(latencies)
-
-    # Calculate failovers in the last 5 minutes
-    failovers_5m = Enum.count(recent_events, &((&1[:failover_count] || 0) > 0))
-
-    # Provider decision share
+    # Provider decision share from buffer (shows real-time routing patterns)
     decision_share =
-      recent_events
+      chain_events
       |> Enum.group_by(& &1.provider_id)
-      |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(recent_events), 1)} end)
+      |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(chain_events), 1)} end)
       |> Enum.sort_by(fn {_pid, pct} -> -pct end)
 
     connected_providers =
@@ -226,10 +327,10 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       success_rate: success_rate,
       p50_latency: p50,
       p95_latency: p95,
-      failovers_5m: failovers_5m,
+      failovers_5m: failovers_recent,
       connected_providers: connected_providers,
       total_providers: total_providers,
-      recent_activity: length(recent_events),
+      recent_activity: length(chain_events),
       providers_list: [],
       rpc_methods: [],
       last_updated: 0,

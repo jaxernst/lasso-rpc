@@ -25,7 +25,7 @@ defmodule Lasso.RPC.ProviderProbe do
   use GenServer
   require Logger
 
-  alias Lasso.RPC.{ProviderPool, TransportRegistry, Channel}
+  alias Lasso.RPC.{CircuitBreaker, ProviderPool, TransportRegistry, Channel}
   alias Lasso.Config.ConfigStore
 
   # Minimal state - only probing concerns
@@ -151,7 +151,6 @@ defmodule Lasso.RPC.ProviderProbe do
   defp probe_provider(chain, provider, sequence) do
     start_time = System.monotonic_time(:millisecond)
 
-    # Use HTTP channel (bypass circuit breakers for health checks)
     case TransportRegistry.get_channel(chain, provider.id, :http) do
       {:ok, channel} ->
         rpc_request = %{
@@ -166,6 +165,10 @@ defmodule Lasso.RPC.ProviderProbe do
             latency_ms = System.monotonic_time(:millisecond) - start_time
             height = String.to_integer(hex, 16)
 
+            # Report success to circuit breaker for recovery
+            # This triggers: open → half_open → closed transitions
+            CircuitBreaker.record_success({chain, provider.id, :http})
+
             %{
               provider_id: provider.id,
               timestamp: System.system_time(:millisecond),
@@ -178,6 +181,8 @@ defmodule Lasso.RPC.ProviderProbe do
 
           {:error, reason, _io_ms} ->
             latency_ms = System.monotonic_time(:millisecond) - start_time
+            # Don't report failures to circuit breaker - probes only help recovery
+            # Failed probes shouldn't extend open circuit duration
 
             %{
               provider_id: provider.id,

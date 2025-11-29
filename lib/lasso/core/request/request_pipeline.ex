@@ -341,58 +341,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
     case channels do
       [] ->
-        handle_no_channels_available(chain, rpc_request, method, opts, ctx)
-
-      _ ->
-        execute_request_with_channels(chain, rpc_request, method, opts, ctx, channels, :normal)
-    end
-  end
-
-  # Handles the case when no channels are available with closed circuits
-  @spec handle_no_channels_available(
-          chain(),
-          map(),
-          String.t(),
-          RequestOptions.t(),
-          RequestContext.t()
-        ) :: {:ok, any(), RequestContext.t()} | {:error, any(), RequestContext.t()}
-  defp handle_no_channels_available(
-         chain,
-         rpc_request,
-         method,
-         %RequestOptions{} = opts,
-         ctx
-       ) do
-    Logger.info(
-      "No closed circuit channels available, attempting degraded mode with half-open circuits",
-      chain: chain,
-      method: method
-    )
-
-    Observability.record_degraded_mode(chain, method)
-
-    degraded_channels =
-      Selection.select_channels(chain, method,
-        strategy: opts.strategy,
-        transport: opts.transport || :both,
-        limit: @max_channel_candidates,
-        include_half_open: true
-      )
-
-    case degraded_channels do
-      [] ->
         handle_channel_exhaustion(chain, method, opts, ctx)
 
       _ ->
-        execute_request_with_channels(
-          chain,
-          rpc_request,
-          method,
-          opts,
-          ctx,
-          degraded_channels,
-          :degraded
-        )
+        execute_request_with_channels(chain, rpc_request, method, opts, ctx, channels, :normal)
     end
   end
 
