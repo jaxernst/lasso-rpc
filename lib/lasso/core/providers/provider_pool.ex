@@ -567,7 +567,12 @@ defmodule Lasso.RPC.ProviderPool do
         %{
           id: p.id,
           config: p.config,
-          availability: status_to_availability(p.status)
+          availability: status_to_availability(p.status),
+          # Include circuit state per transport for selection tiering
+          circuit_state: %{
+            http: get_cb_state(state.circuit_states, p.id, :http),
+            ws: get_cb_state(state.circuit_states, p.id, :ws)
+          }
         }
       end)
 
@@ -647,7 +652,7 @@ defmodule Lasso.RPC.ProviderPool do
     {:noreply, state}
   end
 
-  # NEW: Handle newHeads update (future)
+  # Handle newHeads update from WebSocket subscriptions (via BlockHeightMonitor)
   @impl true
   def handle_cast({:newheads, provider_id, block_height}, state) do
     timestamp = System.system_time(:millisecond)
@@ -658,6 +663,48 @@ defmodule Lasso.RPC.ProviderPool do
       state.table,
       {{:provider_sync, state.chain_name, provider_id}, {block_height, timestamp, sequence}}
     )
+
+    # Calculate and store lag, broadcast update (mirrors HTTP probe behavior)
+    case ChainState.consensus_height(state.chain_name) do
+      {:ok, consensus_height} ->
+        lag = block_height - consensus_height
+
+        # Store lag for fallback path in ChainState.provider_lag
+        :ets.insert(
+          state.table,
+          {{:provider_lag, state.chain_name, provider_id}, lag}
+        )
+
+        # Broadcast sync update for dashboard live updates
+        Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates", %{
+          chain: state.chain_name,
+          provider_id: provider_id,
+          block_height: block_height,
+          consensus_height: consensus_height,
+          lag: lag
+        })
+
+      {:ok, consensus_height, :stale} ->
+        # Use stale consensus if that's all we have
+        lag = block_height - consensus_height
+
+        :ets.insert(
+          state.table,
+          {{:provider_lag, state.chain_name, provider_id}, lag}
+        )
+
+        Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates", %{
+          chain: state.chain_name,
+          provider_id: provider_id,
+          block_height: block_height,
+          consensus_height: consensus_height,
+          lag: lag
+        })
+
+      {:error, _reason} ->
+        # No consensus available - can't calculate lag yet
+        :ok
+    end
 
     {:noreply, state}
   end

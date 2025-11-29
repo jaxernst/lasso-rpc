@@ -204,7 +204,7 @@ defmodule Lasso.RPC.Selection do
   - :transport => :http | :ws | :both (default :both)
   - :exclude => [provider_id]
   - :limit => integer (maximum channels to return)
-  - :include_half_open => boolean (default false) - include providers with half-open circuits for degraded mode
+  - :include_half_open => boolean (default true) - include providers with half-open circuits (deprioritized after closed)
 
   Returns a list of Channel structs ordered by strategy preference.
   """
@@ -214,7 +214,11 @@ defmodule Lasso.RPC.Selection do
     transport = Keyword.get(opts, :transport, :both)
     exclude = Keyword.get(opts, :exclude, [])
     limit = Keyword.get(opts, :limit, 10)
-    include_half_open = Keyword.get(opts, :include_half_open, false)
+
+    # Always include half-open providers for recovery opportunities.
+    # Half-open channels are deprioritized (ranked after closed) but not excluded.
+    # This allows half-open circuits to recover when closed-circuit channels fail.
+    include_half_open = Keyword.get(opts, :include_half_open, true)
 
     # Caller is responsible for policy. Do not force WS here; rely on opts.transport.
     pool_protocol =
@@ -236,6 +240,17 @@ defmodule Lasso.RPC.Selection do
     provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
 
     require Logger
+
+    # Build circuit state lookup map: {provider_id, transport} => :closed | :half_open
+    circuit_state_map =
+      provider_candidates
+      |> Enum.flat_map(fn %{id: provider_id, circuit_state: cs} ->
+        [
+          {{provider_id, :http}, Map.get(cs, :http, :closed)},
+          {{provider_id, :ws}, Map.get(cs, :ws, :closed)}
+        ]
+      end)
+      |> Map.new()
 
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
     # Map provider list into channels, lazily opening as needed
@@ -318,7 +333,18 @@ defmodule Lasso.RPC.Selection do
     ordered_channels =
       strategy_mod.rank_channels(capable_channels, method, prepared_ctx, chain)
 
-    ordered_channels |> Enum.take(limit)
+    # Tiered selection: partition by circuit state to deprioritize half-open channels.
+    # Closed-circuit channels come first (healthy), half-open channels come last (recovering).
+    # Within each tier, the strategy's ranking is preserved (maintains randomization for round-robin).
+    {closed_channels, half_open_channels} =
+      Enum.split_with(ordered_channels, fn channel ->
+        cb_state = Map.get(circuit_state_map, {channel.provider_id, channel.transport}, :closed)
+        cb_state == :closed
+      end)
+
+    tiered_channels = closed_channels ++ half_open_channels
+
+    tiered_channels |> Enum.take(limit)
   end
 
   @doc """

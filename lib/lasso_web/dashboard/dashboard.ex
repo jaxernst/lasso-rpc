@@ -835,7 +835,7 @@ defmodule LassoWeb.Dashboard do
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
           <.last_decision_card last_decision={@last_decision} connections={@connections} />
           <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-2">
-            <div class="text-[11px] text-gray-400 mb-1">Decision breakdown (5m)</div>
+            <div class="text-[11px] text-gray-400 mb-1">Decision breakdown (recent)</div>
             <% decision_share = Map.get(@chain_performance, :decision_share, []) %>
             <div class="space-y-1">
               <%= for {pid, pct} <- decision_share do %>
@@ -1096,9 +1096,9 @@ defmodule LassoWeb.Dashboard do
           <% end %>
         </div>
 
-        <!-- PERFORMANCE (5 minute window) -->
+        <!-- PERFORMANCE -->
         <div class="border-gray-700/50 border-b p-4">
-          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Performance (5 minute window)</h4>
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Performance</h4>
           <div class="grid grid-cols-4 gap-3">
             <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-700/50">
               <div class="text-[10px] text-gray-500 mb-1">p50</div>
@@ -1199,7 +1199,7 @@ defmodule LassoWeb.Dashboard do
             <% end %>
 
             <!-- Failure/Success Counters -->
-            <div class="flex justify-between text-xs text-gray-400 pt-2 border-t border-gray-800">
+            <div class="flex justify-between text-xs text-gray-400 pt-2 border-gray-800">
               <span>Failures: <span class={if Map.get(@provider_connection, :consecutive_failures, 0) > 0, do: "text-red-400", else: "text-gray-300"}>{Map.get(@provider_connection, :consecutive_failures, 0)}/5</span> threshold</span>
               <span>Successes: <span class="text-emerald-400">{Map.get(@provider_connection, :consecutive_successes, 0)}</span> consecutive</span>
             </div>
@@ -1355,8 +1355,8 @@ defmodule LassoWeb.Dashboard do
                 </details>
               <% end %>
             </div>
-            <div class="mt-4 pt-3 border-t border-gray-700/30">
-              <span class="text-[11px] text-gray-500">{length(all_issues)} {if length(all_issues) == 1, do: "issue", else: "issues"}</span>
+            <div class="mt-4 pt-1 border-gray-700/30">
+              <span class="text-[11px] text-gray-500">{length(all_issues)} {if length(all_issues) == 1, do: "event", else: "events"}</span>
             </div>
           <% else %>
             <div class="text-xs text-gray-500 text-center py-2">No issues detected</div>
