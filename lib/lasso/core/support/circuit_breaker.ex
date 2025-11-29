@@ -34,7 +34,13 @@ defmodule Lasso.RPC.CircuitBreaker do
     half_open_max_inflight: 3,
     # Error category that caused circuit to open (for category-specific recovery)
     # Rate limits have known recovery times, so 1 success is sufficient
-    opened_by_category: nil
+    opened_by_category: nil,
+    # Timer reference for proactive recovery (automatically transitions open -> half_open)
+    # Ensures circuits don't stay open forever when excluded from selection
+    recovery_timer_ref: nil,
+    # The error that caused the circuit to open (for dashboard display)
+    # Stored as a map with :code, :category, :message keys
+    last_open_error: nil
   ]
 
   @type chain :: String.t()
@@ -326,6 +332,9 @@ defmodule Lasso.RPC.CircuitBreaker do
         if should_attempt_recovery?(state) do
           Logger.info("Circuit breaker #{state.provider_id} attempting recovery")
 
+          # Cancel proactive recovery timer since we're transitioning via traffic
+          cancel_recovery_timer(state.recovery_timer_ref)
+
           :telemetry.execute([:lasso, :circuit_breaker, :half_open], %{count: 1}, %{
             provider_id: state.provider_id
           })
@@ -343,7 +352,8 @@ defmodule Lasso.RPC.CircuitBreaker do
             state
             | state: :half_open,
               last_failure_time: state.last_failure_time || now_ms,
-              inflight_count: 1
+              inflight_count: 1,
+              recovery_timer_ref: nil
           }
 
           {:reply, {:allow, :half_open}, new_state}
@@ -369,7 +379,8 @@ defmodule Lasso.RPC.CircuitBreaker do
       state: state.state,
       failure_count: state.failure_count,
       success_count: state.success_count,
-      last_failure_time: state.last_failure_time
+      last_failure_time: state.last_failure_time,
+      last_open_error: state.last_open_error
     }
 
     {:reply, status, state}
@@ -422,7 +433,17 @@ defmodule Lasso.RPC.CircuitBreaker do
       state.chain
     )
 
-    new_state = %{state | state: :open, last_failure_time: System.monotonic_time(:millisecond)}
+    # Cancel any existing timer and schedule new one
+    cancel_recovery_timer(state.recovery_timer_ref)
+    timer_ref = schedule_recovery_timer(state.recovery_timeout)
+
+    new_state = %{
+      state
+      | state: :open,
+        last_failure_time: System.monotonic_time(:millisecond),
+        recovery_timer_ref: timer_ref
+    }
+
     {:noreply, new_state}
   end
 
@@ -443,16 +464,67 @@ defmodule Lasso.RPC.CircuitBreaker do
       state.chain
     )
 
+    # Cancel any pending recovery timer
+    cancel_recovery_timer(state.recovery_timer_ref)
+
     new_state = %{
       state
       | state: :closed,
         failure_count: 0,
         success_count: 0,
         last_failure_time: nil,
-        opened_by_category: nil
+        opened_by_category: nil,
+        recovery_timer_ref: nil,
+        last_open_error: nil
     }
 
     {:noreply, new_state}
+  end
+
+  # Proactive recovery: automatically transition open -> half_open after recovery_timeout
+  # This ensures circuits don't stay open forever when excluded from selection
+  @impl true
+  def handle_info(:attempt_proactive_recovery, state) do
+    case state.state do
+      :open ->
+        Logger.info(
+          "Circuit breaker #{state.provider_id} (#{state.transport}) proactive recovery attempt"
+        )
+
+        :telemetry.execute([:lasso, :circuit_breaker, :proactive_recovery], %{count: 1}, %{
+          provider_id: state.provider_id,
+          transport: state.transport,
+          chain: state.chain
+        })
+
+        publish_circuit_event(
+          state.provider_id,
+          :open,
+          :half_open,
+          :proactive_recovery,
+          state.transport,
+          state.chain
+        )
+
+        new_state = %{
+          state
+          | state: :half_open,
+            success_count: 0,
+            inflight_count: 0,
+            recovery_timer_ref: nil
+        }
+
+        {:noreply, new_state}
+
+      other_state ->
+        # Circuit already recovered or closed (e.g., via probe success or manual intervention)
+        Logger.debug(
+          "Circuit breaker #{state.provider_id} (#{state.transport}) proactive recovery skipped, " <>
+            "already in #{other_state} state"
+        )
+
+        {:noreply, %{state | recovery_timer_ref: nil}}
+    end
   end
 
   # Private functions
@@ -563,6 +635,9 @@ defmodule Lasso.RPC.CircuitBreaker do
           "Circuit breaker #{state.provider_id} (#{state.transport}) attempting recovery from success report"
         )
 
+        # Cancel proactive recovery timer since we're transitioning out of open
+        cancel_recovery_timer(state.recovery_timer_ref)
+
         :telemetry.execute([:lasso, :circuit_breaker, :half_open], %{count: 1}, %{
           provider_id: state.provider_id
         })
@@ -602,7 +677,9 @@ defmodule Lasso.RPC.CircuitBreaker do
               failure_count: 0,
               success_count: 0,
               last_failure_time: nil,
-              opened_by_category: nil
+              opened_by_category: nil,
+              recovery_timer_ref: nil,
+              last_open_error: nil
           }
 
           {:reply, {:ok, result}, new_state}
@@ -611,7 +688,8 @@ defmodule Lasso.RPC.CircuitBreaker do
             state
             | state: :half_open,
               success_count: new_success_count,
-              failure_count: 0
+              failure_count: 0,
+              recovery_timer_ref: nil
           }
 
           {:reply, {:ok, result}, new_state}
@@ -645,7 +723,8 @@ defmodule Lasso.RPC.CircuitBreaker do
               failure_count: 0,
               success_count: 0,
               last_failure_time: nil,
-              opened_by_category: nil
+              opened_by_category: nil,
+              last_open_error: nil
           }
 
           {:reply, {:ok, result}, new_state}
@@ -712,8 +791,12 @@ defmodule Lasso.RPC.CircuitBreaker do
             :open,
             :failure_threshold_exceeded,
             state.transport,
-            state.chain
+            state.chain,
+            error
           )
+
+          # Schedule proactive recovery timer
+          timer_ref = schedule_recovery_timer(adjusted_recovery_timeout)
 
           new_state = %{
             state
@@ -721,7 +804,9 @@ defmodule Lasso.RPC.CircuitBreaker do
               failure_count: new_failure_count,
               last_failure_time: current_time,
               recovery_timeout: adjusted_recovery_timeout,
-              opened_by_category: error_category
+              opened_by_category: error_category,
+              recovery_timer_ref: timer_ref,
+              last_open_error: extract_error_info(error)
           }
 
           {:reply, {:error, :circuit_opening}, new_state}
@@ -746,15 +831,21 @@ defmodule Lasso.RPC.CircuitBreaker do
           :open,
           :reopen_due_to_failure,
           state.transport,
-          state.chain
+          state.chain,
+          error
         )
+
+        # Schedule proactive recovery timer for the re-opened circuit
+        timer_ref = schedule_recovery_timer(state.recovery_timeout)
 
         new_state = %{
           state
           | state: :open,
             failure_count: new_failure_count,
             last_failure_time: current_time,
-            success_count: 0
+            success_count: 0,
+            recovery_timer_ref: timer_ref,
+            last_open_error: extract_error_info(error)
         }
 
         {:reply, {:error, :circuit_reopening}, new_state}
@@ -783,7 +874,38 @@ defmodule Lasso.RPC.CircuitBreaker do
     end
   end
 
-  defp publish_circuit_event(provider_id, from, to, reason, transport, chain) do
+  # Schedule proactive recovery timer with jitter to prevent thundering herd
+  # Returns the timer reference for later cancellation
+  defp schedule_recovery_timer(recovery_timeout) do
+    # Add 5% jitter to prevent synchronized recovery attempts across multiple circuits
+    jitter_ms = :rand.uniform(max(1, div(recovery_timeout, 20)))
+    delay_ms = recovery_timeout + jitter_ms
+    Process.send_after(self(), :attempt_proactive_recovery, delay_ms)
+  end
+
+  # Cancel an existing recovery timer (safe to call with nil)
+  defp cancel_recovery_timer(nil), do: :ok
+
+  defp cancel_recovery_timer(timer_ref) do
+    Process.cancel_timer(timer_ref)
+    :ok
+  end
+
+  defp publish_circuit_event(provider_id, from, to, reason, transport, chain, error \\ nil) do
+    # Extract error details for dashboard display
+    error_info =
+      case error do
+        %JError{code: code, category: category, message: msg} ->
+          %{
+            error_code: code,
+            error_category: category,
+            error_message: truncate_error_message(msg)
+          }
+
+        _ ->
+          nil
+      end
+
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
       "circuit:events",
@@ -795,10 +917,22 @@ defmodule Lasso.RPC.CircuitBreaker do
          transport: transport,
          from: from,
          to: to,
-         reason: reason
+         reason: reason,
+         error: error_info
        }}
     )
   end
+
+  # Truncate long error messages for dashboard display
+  defp truncate_error_message(msg) when is_binary(msg) do
+    if String.length(msg) > 100 do
+      String.slice(msg, 0, 97) <> "..."
+    else
+      msg
+    end
+  end
+
+  defp truncate_error_message(other), do: inspect(other) |> truncate_error_message()
 
   @doc """
   Record a successful operation for the circuit breaker.
@@ -835,6 +969,17 @@ defmodule Lasso.RPC.CircuitBreaker do
   end
 
   defp extract_retry_after(_), do: nil
+
+  # Extract error info for storage in state (for dashboard display)
+  defp extract_error_info(%JError{code: code, category: category, message: msg}) do
+    %{
+      code: code,
+      category: category,
+      message: truncate_error_message(msg)
+    }
+  end
+
+  defp extract_error_info(_), do: nil
 
   defp via_name({chain, provider_id, transport}) do
     key = "#{chain}:#{provider_id}:#{transport}"

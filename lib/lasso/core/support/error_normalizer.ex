@@ -25,7 +25,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
   ## Examples
 
       iex> normalize({:rate_limit, %{}}, provider_id: "test", context: :transport)
-      %JError{category: :rate_limit, retriable?: true, breaker_penalty?: true}
+      %JError{category: :rate_limit, retriable?: true, breaker_penalty?: false}
 
       iex> normalize(%{"error" => %{"code" => -32_000, "message" => "block range too large"}}, provider_id: "test")
       %JError{category: :capability_violation, retriable?: true, breaker_penalty?: false}
@@ -96,7 +96,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       transport: transport,
       category: :rate_limit,
       retriable?: true,
-      breaker_penalty?: true
+      # Rate limits are temporary backpressure, not failures - don't trip circuit breaker
+      breaker_penalty?: false
     )
   end
 
@@ -215,7 +216,9 @@ defmodule Lasso.RPC.ErrorNormalizer do
   def normalize(:connection_closed, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(-32_005, "WebSocket connection closed",
+    # Use -32_004 (network error code) to match the :network_error category
+    # Previously used -32_005 (rate limit code) which was inconsistent
+    JError.new(-32_004, "WebSocket connection closed",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -248,7 +251,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
       transport: :ws,
       category: :rate_limit,
       retriable?: true,
-      breaker_penalty?: true
+      # Rate limits are temporary backpressure, not failures - don't trip circuit breaker
+      breaker_penalty?: false
     )
   end
 
@@ -416,12 +420,11 @@ defmodule Lasso.RPC.ErrorNormalizer do
         )
 
       1013 ->
-        # Try again later / overload - treat as rate limit
-        JError.new(429, "WebSocket try again later",
+        JError.new(-32_000, "WebSocket try again later",
           provider_id: provider_id,
           source: :transport,
           transport: :ws,
-          category: :rate_limit,
+          category: :server_error,
           retriable?: true,
           breaker_penalty?: true
         )
@@ -463,21 +466,8 @@ defmodule Lasso.RPC.ErrorNormalizer do
 
   # WebSocket disconnect with remote close code
   def normalize({:ws_disconnect, {:remote, code, msg}}, opts) when is_integer(code) do
-    # Handle close code 1013 specially (backpressure/rate limit)
-    if code == 1013 do
-      provider_id = Keyword.get(opts, :provider_id)
-
-      JError.new(1013, msg || "WebSocket backpressure",
-        provider_id: provider_id,
-        source: :transport,
-        transport: :ws,
-        category: :rate_limit,
-        retriable?: true,
-        breaker_penalty?: true
-      )
-    else
-      normalize({:ws_close, code, msg}, opts)
-    end
+    # Delegate to ws_close handler which has proper categorization for all codes
+    normalize({:ws_close, code, msg}, opts)
   end
 
   # Generic WebSocket disconnect

@@ -1043,6 +1043,12 @@ const ScrollReveal = {
 // Expandable Details Hook - preserves open state across LiveView updates
 const ExpandableDetails = {
   mounted() {
+    // Validate element has an ID for unique storage key
+    if (!this.el.id) {
+      console.warn("ExpandableDetails: element must have an id attribute for state persistence");
+      return;
+    }
+
     // Store a reference to this hook's element ID for storage key
     this.storageKey = `details-open-${this.el.id}`;
 
@@ -1052,13 +1058,17 @@ const ExpandableDetails = {
       this.el.open = true;
     }
 
-    // Listen for toggle events and persist state
-    this.el.addEventListener("toggle", () => {
+    // Store handler reference for cleanup in destroyed()
+    this.handleToggle = () => {
       sessionStorage.setItem(this.storageKey, this.el.open ? "true" : "false");
-    });
+    };
+    this.el.addEventListener("toggle", this.handleToggle);
   },
 
   updated() {
+    // Skip if hook wasn't properly initialized (missing ID)
+    if (!this.storageKey) return;
+
     // After LiveView update, restore the open state from sessionStorage
     const wasOpen = sessionStorage.getItem(this.storageKey) === "true";
     if (wasOpen && !this.el.open) {
@@ -1067,8 +1077,14 @@ const ExpandableDetails = {
   },
 
   destroyed() {
+    // Remove event listener to prevent memory leak
+    if (this.handleToggle) {
+      this.el.removeEventListener("toggle", this.handleToggle);
+    }
     // Clean up sessionStorage when element is removed
-    sessionStorage.removeItem(this.storageKey);
+    if (this.storageKey) {
+      sessionStorage.removeItem(this.storageKey);
+    }
   },
 };
 

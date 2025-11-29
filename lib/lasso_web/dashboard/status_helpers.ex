@@ -24,8 +24,8 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
 
   Returns one of:
   - :healthy - All systems operational, synced
-  - :syncing - Responsive but lagging blocks
-  - :reconnecting - WebSocket reconnecting
+  - :lagging - Responsive but lagging blocks
+  - :recovering - WebSocket recovering connection
   - :degraded - Has issues but still trying
   - :rate_limited - In cooldown (takes priority even over circuit open)
   - :circuit_open - Complete failure
@@ -38,15 +38,22 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     connection_status = Map.get(provider, :status, :unknown)
     consecutive_failures = Map.get(provider, :consecutive_failures, 0)
     reconnect_attempts = Map.get(provider, :reconnect_attempts, 0)
-    is_in_cooldown = Map.get(provider, :is_in_cooldown, false)
     ws_status = Map.get(provider, :ws_status)
     chain = Map.get(provider, :chain)
     provider_id = Map.get(provider, :id)
     reconnect_grace_until = Map.get(provider, :reconnect_grace_until)
 
+    # Check rate limit state from RateLimitState (primary source, auto-expires)
+    http_rate_limited = Map.get(provider, :http_rate_limited, false)
+    ws_rate_limited = Map.get(provider, :ws_rate_limited, false)
+    is_rate_limited = http_rate_limited or ws_rate_limited
+
+    # Fallback to legacy is_in_cooldown for backwards compatibility
+    is_in_cooldown = Map.get(provider, :is_in_cooldown, false)
+
     cond do
-      # 1. Rate limited or in cooldown - highest priority (even if circuit open)
-      health_status == :rate_limited or is_in_cooldown ->
+      # 1. Rate limited (from RateLimitState) - highest priority, auto-expires
+      is_rate_limited or health_status == :rate_limited or is_in_cooldown ->
         :rate_limited
 
       # 2. Circuit breaker is open - complete failure
@@ -57,16 +64,16 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
       circuit_state == :half_open ->
         :testing_recovery
 
-      # 4. WebSocket actively reconnecting or in grace period after reconnection
+      # 4. WebSocket actively recovering or in grace period after reconnection
       reconnect_attempts > 0 and
           (ws_status in [:disconnected, :connecting] or in_reconnect_grace?(reconnect_grace_until)) ->
-        :reconnecting
+        :recovering
 
       # 5. Healthy - check block sync status
       health_status == :healthy ->
         case check_block_lag(chain, provider_id) do
           :synced -> :healthy
-          :lagging -> :syncing
+          :lagging -> :lagging
           # Fail-open: if no lag data, show as healthy
           :unavailable -> :healthy
         end
@@ -81,14 +88,14 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
 
       # 7. Initial connection states (only during startup)
       health_status == :connecting or connection_status == :connecting ->
-        :reconnecting
+        :recovering
 
       # 8. Fallback to connection_status for compatibility
       connection_status == :connected ->
         # Double-check block lag even for legacy status
         case check_block_lag(chain, provider_id) do
           :synced -> :healthy
-          :lagging -> :syncing
+          :lagging -> :lagging
           :unavailable -> :healthy
         end
 
@@ -150,9 +157,9 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
       :circuit_open -> "CIRCUIT OPEN"
       :testing_recovery -> "TESTING RECOVERY"
       :rate_limited -> "RATE LIMITED"
-      :reconnecting -> "RECONNECTING"
+      :recovering -> "RECOVERING"
       :degraded -> "DEGRADED"
-      :syncing -> "SYNCING"
+      :lagging -> "LAGGING"
       :healthy -> "HEALTHY"
       :unknown -> "UNKNOWN"
     end
@@ -163,16 +170,16 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     case determine_provider_status(provider) do
       # 🔴 Critical failure
       :circuit_open -> "text-red-500"
-      # 🔵 Testing recovery
-      :testing_recovery -> "text-blue-400"
+      # 🟡 Testing recovery (amber - same as recovering)
+      :testing_recovery -> "text-amber-400"
       # 🟣 Rate limited
       :rate_limited -> "text-purple-300"
-      # 🟡 Reconnecting
-      :reconnecting -> "text-amber-400"
+      # 🟡 Recovering
+      :recovering -> "text-amber-400"
       # 🟠 Degraded
       :degraded -> "text-orange-400"
-      # 🔵 Syncing
-      :syncing -> "text-sky-400"
+      # 🔵 Lagging
+      :lagging -> "text-sky-400"
       # 🟢 Healthy
       :healthy -> "text-emerald-400"
       # ⚫ Unknown
@@ -184,11 +191,11 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   def provider_status_indicator_class(provider) do
     case determine_provider_status(provider) do
       :circuit_open -> "bg-red-500"
-      :testing_recovery -> "bg-blue-400"
+      :testing_recovery -> "bg-amber-400"
       :rate_limited -> "bg-purple-400"
-      :reconnecting -> "bg-amber-400"
+      :recovering -> "bg-amber-400"
       :degraded -> "bg-orange-400"
-      :syncing -> "bg-sky-400"
+      :lagging -> "bg-sky-400"
       :healthy -> "bg-emerald-400"
       :unknown -> "bg-gray-400"
     end
@@ -211,8 +218,8 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
       :circuit_open -> 2
       :degraded -> 3
       :testing_recovery -> 4
-      :reconnecting -> 5
-      :syncing -> 6
+      :recovering -> 5
+      :lagging -> 6
       :healthy -> 7
       :unknown -> 8
     end
@@ -223,12 +230,16 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     chain = Map.get(provider, :chain)
     provider_id = Map.get(provider, :id)
     circuit_state = Map.get(provider, :circuit_state, :closed)
-    is_in_cooldown = Map.get(provider, :is_in_cooldown, false)
+
+    # Get rate limit info from new RateLimitState fields
+    http_rate_limited = Map.get(provider, :http_rate_limited, false)
+    ws_rate_limited = Map.get(provider, :ws_rate_limited, false)
+    rate_limit_remaining = Map.get(provider, :rate_limit_remaining, %{})
 
     case determine_provider_status(provider) do
       :circuit_open ->
-        # Check if circuit open is related to rate limiting
-        if is_in_cooldown do
+        # Check if also rate limited
+        if http_rate_limited or ws_rate_limited do
           "Circuit breaker is open due to rate limiting. Provider is in cooldown and not accepting requests."
         else
           "Circuit breaker is open due to repeated failures. Provider is not accepting requests."
@@ -238,16 +249,30 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
         "Circuit breaker is in half-open state, testing if provider has recovered."
 
       :rate_limited ->
-        cooldown_until = Map.get(provider, :cooldown_until)
         circuit_also_open = circuit_state == :open
 
-        base_msg = if cooldown_until do
-          remaining_ms = max(0, cooldown_until - System.monotonic_time(:millisecond))
-          remaining_sec = div(remaining_ms, 1000)
-          "Provider is rate limited and in cooldown for #{remaining_sec}s."
-        else
-          "Provider is rate limited or in cooldown."
-        end
+        # Build message from rate limit remaining times
+        http_remaining_ms = Map.get(rate_limit_remaining, :http)
+        ws_remaining_ms = Map.get(rate_limit_remaining, :ws)
+
+        base_msg =
+          cond do
+            http_remaining_ms && ws_remaining_ms ->
+              http_sec = div(http_remaining_ms, 1000)
+              ws_sec = div(ws_remaining_ms, 1000)
+              "Provider is rate limited (HTTP: #{http_sec}s, WS: #{ws_sec}s remaining)."
+
+            http_remaining_ms ->
+              remaining_sec = div(http_remaining_ms, 1000)
+              "Provider HTTP is rate limited for #{remaining_sec}s."
+
+            ws_remaining_ms ->
+              remaining_sec = div(ws_remaining_ms, 1000)
+              "Provider WebSocket is rate limited for #{remaining_sec}s."
+
+            true ->
+              "Provider is rate limited."
+          end
 
         # Note if circuit is also open
         if circuit_also_open do
@@ -256,21 +281,21 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
           base_msg
         end
 
-      :reconnecting ->
+      :recovering ->
         attempts = Map.get(provider, :reconnect_attempts, 0)
-        "WebSocket connection lost. Reconnecting (attempt #{attempts})..."
+        "WebSocket connection lost. Recovering (attempt #{attempts})..."
 
       :degraded ->
         failures = Map.get(provider, :consecutive_failures, 0)
         "Provider is experiencing issues (#{failures} consecutive failures). Still attempting requests."
 
-      :syncing ->
+      :lagging ->
         case ChainState.provider_lag(chain, provider_id) do
           {:ok, lag} when lag < 0 ->
             blocks_behind = abs(lag)
             "Provider is responsive but lagging #{blocks_behind} blocks behind the network head."
           _ ->
-            "Provider is responsive but not fully synced with the network."
+            "Provider is responsive but lagging behind the network."
         end
 
       :healthy ->

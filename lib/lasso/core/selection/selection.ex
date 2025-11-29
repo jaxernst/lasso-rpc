@@ -242,9 +242,11 @@ defmodule Lasso.RPC.Selection do
     require Logger
 
     # Build circuit state lookup map: {provider_id, transport} => :closed | :half_open
+    # Use defensive access in case circuit_state field is missing or nil
     circuit_state_map =
       provider_candidates
-      |> Enum.flat_map(fn %{id: provider_id, circuit_state: cs} ->
+      |> Enum.flat_map(fn %{id: provider_id} = candidate ->
+        cs = Map.get(candidate, :circuit_state, %{})
         [
           {{provider_id, :http}, Map.get(cs, :http, :closed)},
           {{provider_id, :ws}, Map.get(cs, :ws, :closed)}

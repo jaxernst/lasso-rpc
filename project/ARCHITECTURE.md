@@ -1354,7 +1354,7 @@ The system classifies errors once, then derives all properties from the final ca
 # 4. Derive breaker_penalty? from category
 ```
 
-**Why this matters:** Without deriving from the final category, adapter overrides wouldn't affect failover behavior. For example, DRPC code 30 ("timeout on free tier") is classified as `:rate_limit` by the adapter, which makes it retriable and penalizes the circuit breaker—both derived from the `:rate_limit` category.
+**Why this matters:** Without deriving from the final category, adapter overrides wouldn't affect failover behavior. For example, DRPC code 30 ("timeout on free tier") is classified as `:rate_limit` by the adapter, which makes it retriable—derived from the `:rate_limit` category. Note that rate limits do NOT penalize the circuit breaker (see Rate Limit Handling below).
 
 ### **Provider Adapter Classification**
 
@@ -1391,8 +1391,21 @@ All error behavior is derived from the final category:
 
 **Circuit Breaker Penalty**:
 
-- No penalty: `:capability_violation` (permanent constraint, not transient failure)
-- Penalty: All other categories
+- No penalty: `:capability_violation` (permanent constraint, not transient failure), `:rate_limit` (temporary backpressure with known recovery time)
+- Penalty: All other categories (`:network_error`, `:server_error`, `:timeout`, `:auth_error`, etc.)
+
+### **Rate Limit Handling**
+
+Rate limits are handled independently from circuit breakers via `RateLimitState`:
+
+- **Time-based recovery**: Rate limits use `Retry-After` headers for automatic expiry, not count-based circuit breaker recovery
+- **No circuit breaker penalty**: Rate limits (`breaker_penalty?: false`) don't increment failure counts or trip circuit breakers
+- **Independent tracking**: `RateLimitState` tracks per-transport rate limit expiry separately from provider health status
+- **Health status preserved**: Provider health remains unchanged during rate limits (stays `:healthy` or `:connecting`)
+- **Auto-expiry**: Rate limit state automatically clears when `Retry-After` time elapses
+- **Dashboard visibility**: `http_rate_limited`/`ws_rate_limited` fields indicate current rate limit state
+
+This separation ensures rate-limited providers recover as soon as the provider allows, rather than waiting for circuit breaker recovery timeouts.
 
 ---
 

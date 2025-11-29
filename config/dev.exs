@@ -25,6 +25,12 @@ config :logger, :console,
   level: :debug,
   metadata: :all
 
+# Filter out Phoenix LiveView "HANDLE EVENT" debug logs
+config :logger,
+  compile_time_purge_matching: [
+    [module: Phoenix.LiveView, level_lower_than: :info]
+  ]
+
 # Reduce Phoenix debug log spam (only log at info level)
 # This removes "Processing with", "Parameters:", "Pipelines:" debug logs
 config :phoenix, :logger, false
