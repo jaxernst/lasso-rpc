@@ -377,7 +377,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
   def handle_info(evt, state)
       when is_struct(evt, Provider.Unhealthy) or
-             is_struct(evt, Provider.CooldownStart) or
              is_struct(evt, Provider.HealthCheckFailed) or
              is_struct(evt, Provider.WSClosed) or
              is_struct(evt, Provider.WSDisconnected) do

@@ -332,6 +332,17 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
         affected_count: length(affected)
       )
 
+      # Notify consumers that their subscriptions have been invalidated
+      # This prevents consumers from being left in a zombie state
+      Enum.each(affected, fn {{prov_id, sub_key}, _info} ->
+        UpstreamSubscriptionRegistry.dispatch(
+          state.chain,
+          prov_id,
+          sub_key,
+          {:upstream_subscription_invalidated, prov_id, sub_key, :provider_disconnected}
+        )
+      end)
+
       # Remove subscriptions and index entries for this provider
       new_subs =
         Enum.reduce(affected, state.active_subscriptions, fn {key, _}, acc ->

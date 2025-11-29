@@ -48,22 +48,27 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionRegistry do
   @spec register_consumer(String.t(), String.t(), term()) :: :ok | {:error, term()}
   def register_consumer(chain, provider_id, sub_key) do
     key = {chain, provider_id, sub_key}
-    caller_pid = self()
+    pd_key = {:upstream_sub_registered, key}
 
-    # Check if already registered (avoids duplicate registrations from same process)
-    already_registered =
-      __MODULE__
-      |> Registry.lookup(key)
-      |> Enum.any?(fn {pid, _meta} -> pid == caller_pid end)
-
-    if already_registered do
+    # Use process dictionary for per-process idempotency (avoids TOCTOU race)
+    # This ensures concurrent calls from the same process don't create duplicates
+    if Process.get(pd_key) do
       :ok
     else
       case Registry.register(__MODULE__, key, %{
              subscribed_at: System.monotonic_time(:millisecond)
            }) do
-        {:ok, _} -> :ok
-        {:error, reason} -> {:error, reason}
+        {:ok, _} ->
+          Process.put(pd_key, true)
+          :ok
+
+        {:error, {:already_registered, _}} ->
+          # Another concurrent call won the race, mark as registered
+          Process.put(pd_key, true)
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -75,7 +80,10 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionRegistry do
   """
   @spec unregister_consumer(String.t(), String.t(), term()) :: :ok
   def unregister_consumer(chain, provider_id, sub_key) do
-    Registry.unregister(__MODULE__, {chain, provider_id, sub_key})
+    key = {chain, provider_id, sub_key}
+    # Clear process dictionary flag so re-registration works
+    Process.delete({:upstream_sub_registered, key})
+    Registry.unregister(__MODULE__, key)
   end
 
   @doc """

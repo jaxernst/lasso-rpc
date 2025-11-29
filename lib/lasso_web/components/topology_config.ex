@@ -43,7 +43,7 @@ defmodule LassoWeb.TopologyConfig do
   def l2_orbit_min, do: 290
 
   # Maximum orbit distance for L2 chains from parent
-  def l2_orbit_max, do: 410
+  def l2_orbit_max, do: 340
 
   # Orbit distance for non-connected chains (other L1s, sidechains)
   def other_chain_orbit, do: 280
@@ -59,7 +59,7 @@ defmodule LassoWeb.TopologyConfig do
   Controls how multiple L1 chains are spread around the canvas center.
   """
   # Distance from center for spreading multiple L1s
-  def l1_spread_distance, do: -350
+  def l1_spread_distance, do: -280
 
   # Base angular offset for L2 chains (radians, ~-30 degrees from vertical)
   # This prevents single L2s from always pointing straight up
@@ -85,7 +85,9 @@ defmodule LassoWeb.TopologyConfig do
 
   def chain_radius(nil, provider_count) do
     # Legacy fallback: calculate based on provider count
-    provider_factor = min(15, :math.log(provider_count + 1) * 6)
+    # Guard against nil or negative values to prevent :math.log errors
+    safe_count = max(0, provider_count || 0)
+    provider_factor = min(15, :math.log(safe_count + 1) * 6)
     max(38, min(55, 35 + provider_factor)) |> round()
   end
 

@@ -165,9 +165,19 @@ defmodule Lasso.RPC.ProviderProbe do
             latency_ms = System.monotonic_time(:millisecond) - start_time
             height = String.to_integer(hex, 16)
 
-            # Report success to circuit breaker for recovery
+            # Report success to circuit breaker for recovery (best-effort)
             # This triggers: open → half_open → closed transitions
-            CircuitBreaker.record_success({chain, provider.id, :http})
+            # Wrapped in try/rescue so CB errors don't mark successful probe as failed
+            try do
+              CircuitBreaker.record_success({chain, provider.id, :http})
+            rescue
+              e ->
+                Logger.warning("Circuit breaker reporting failed",
+                  error: Exception.message(e),
+                  provider_id: provider.id,
+                  chain: chain
+                )
+            end
 
             %{
               provider_id: provider.id,

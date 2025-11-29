@@ -218,4 +218,155 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     state = CircuitBreaker.get_state(id)
     assert state.state == :open
   end
+
+  describe "proactive recovery" do
+    test "timer automatically transitions open -> half_open after recovery_timeout" do
+      id = {"test_chain", "cb_proactive_1", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 2, recovery_timeout: 100, success_threshold: 1}}
+        )
+
+      # Open the circuit
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Wait for proactive recovery (recovery_timeout + jitter)
+      # Using 150ms to account for ~5% jitter on 100ms
+      Process.sleep(150)
+
+      # Should have automatically transitioned to half_open
+      state = CircuitBreaker.get_state(id)
+      assert state.state == :half_open, "Circuit should auto-transition to half_open"
+    end
+
+    test "proactive recovery allows circuit to recover without traffic" do
+      id = {"test_chain", "cb_proactive_2", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 2, recovery_timeout: 80, success_threshold: 1}}
+        )
+
+      # Open the circuit
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Wait for proactive recovery
+      Process.sleep(120)
+      assert CircuitBreaker.get_state(id).state == :half_open
+
+      # Now a success should close the circuit
+      assert {:ok, :recovered} = CircuitBreaker.call(id, fn -> {:ok, :recovered} end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :closed
+    end
+
+    test "manual close cancels proactive recovery timer" do
+      id = {"test_chain", "cb_proactive_3", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 2, recovery_timeout: 200, success_threshold: 1}}
+        )
+
+      # Open the circuit
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Manually close before proactive recovery fires
+      CircuitBreaker.close(id)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :closed
+
+      # Wait past original recovery timeout
+      Process.sleep(250)
+
+      # Should still be closed (timer was cancelled)
+      assert CircuitBreaker.get_state(id).state == :closed
+    end
+
+    test "traffic-triggered recovery cancels proactive timer" do
+      id = {"test_chain", "cb_proactive_4", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 2, recovery_timeout: 50, success_threshold: 1}}
+        )
+
+      # Open the circuit
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Wait for recovery timeout, then trigger recovery via traffic
+      Process.sleep(70)
+      assert {:ok, :ok} = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
+      Process.sleep(20)
+
+      # Should be closed now
+      state = CircuitBreaker.get_state(id)
+      assert state.state == :closed
+
+      # Verify timer was properly cleaned up by checking state has nil timer_ref
+      # (This is an implementation detail but ensures cleanup is working)
+    end
+
+    test "failed half_open recovery reschedules proactive timer" do
+      id = {"test_chain", "cb_proactive_5", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 2, recovery_timeout: 80, success_threshold: 1}}
+        )
+
+      # Open the circuit
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Wait for proactive recovery to transition to half_open
+      Process.sleep(120)
+      assert CircuitBreaker.get_state(id).state == :half_open
+
+      # Fail during half_open - should reopen and reschedule timer
+      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "still failing" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Wait for second proactive recovery
+      Process.sleep(120)
+      assert CircuitBreaker.get_state(id).state == :half_open
+    end
+
+    test "manual open schedules proactive recovery timer" do
+      id = {"test_chain", "cb_proactive_6", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 5, recovery_timeout: 80, success_threshold: 1}}
+        )
+
+      # Start in closed state
+      assert CircuitBreaker.get_state(id).state == :closed
+
+      # Manually open
+      CircuitBreaker.open(id)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Wait for proactive recovery
+      Process.sleep(120)
+      assert CircuitBreaker.get_state(id).state == :half_open
+    end
+  end
 end

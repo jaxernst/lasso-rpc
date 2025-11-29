@@ -226,28 +226,37 @@ defmodule Lasso.Core.BlockCache do
 
   @impl true
   def handle_cast({:put_block, chain, provider_id, raw_block}, state) do
-    block = normalize_block(raw_block, provider_id)
+    case normalize_block(raw_block, provider_id) do
+      {:ok, block} ->
+        # Store provider-specific data
+        :ets.insert(@table_name, {{:provider, chain, provider_id}, {block.number, block.received_at}})
+        :ets.insert(@table_name, {{:provider_block, chain, provider_id}, block})
 
-    # Store provider-specific data
-    :ets.insert(@table_name, {{:provider, chain, provider_id}, {block.number, block.received_at}})
-    :ets.insert(@table_name, {{:provider_block, chain, provider_id}, block})
+        # Update latest block if this is newer
+        update_latest = should_update_latest?(chain, block)
 
-    # Update latest block if this is newer
-    update_latest = should_update_latest?(chain, block)
+        if update_latest do
+          :ets.insert(@table_name, {{:latest, chain}, block})
+        end
 
-    if update_latest do
-      :ets.insert(@table_name, {{:latest, chain}, block})
+        # Broadcast update
+        Phoenix.PubSub.broadcast(Lasso.PubSub, @pubsub_topic, %{
+          type: :block_update,
+          chain: chain,
+          provider_id: provider_id,
+          block_number: block.number,
+          block_hash: block.hash,
+          is_new_latest: update_latest
+        })
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.warning("BlockCache: invalid block data from #{provider_id} on #{chain}",
+          reason: reason,
+          raw_block: inspect(raw_block, limit: 200)
+        )
     end
-
-    # Broadcast update
-    Phoenix.PubSub.broadcast(Lasso.PubSub, @pubsub_topic, %{
-      type: :block_update,
-      chain: chain,
-      provider_id: provider_id,
-      block_number: block.number,
-      block_hash: block.hash,
-      is_new_latest: update_latest
-    })
 
     {:noreply, state}
   end
@@ -264,17 +273,25 @@ defmodule Lasso.Core.BlockCache do
   ## Private Functions
 
   defp normalize_block(raw_block, provider_id) do
-    %{
-      number: decode_hex(Map.get(raw_block, "number")),
-      hash: Map.get(raw_block, "hash"),
-      parent_hash: Map.get(raw_block, "parentHash"),
-      timestamp: decode_hex(Map.get(raw_block, "timestamp")),
-      gas_limit: decode_hex(Map.get(raw_block, "gasLimit")),
-      gas_used: decode_hex(Map.get(raw_block, "gasUsed")),
-      base_fee_per_gas: decode_hex(Map.get(raw_block, "baseFeePerGas")),
-      received_at: System.system_time(:millisecond),
-      provider_id: provider_id
-    }
+    # Validate required fields - number is required for block comparisons
+    number = decode_hex(Map.get(raw_block, "number"))
+
+    if is_nil(number) do
+      {:error, :missing_block_number}
+    else
+      {:ok,
+       %{
+         number: number,
+         hash: Map.get(raw_block, "hash"),
+         parent_hash: Map.get(raw_block, "parentHash"),
+         timestamp: decode_hex(Map.get(raw_block, "timestamp")),
+         gas_limit: decode_hex(Map.get(raw_block, "gasLimit")),
+         gas_used: decode_hex(Map.get(raw_block, "gasUsed")),
+         base_fee_per_gas: decode_hex(Map.get(raw_block, "baseFeePerGas")),
+         received_at: System.system_time(:millisecond),
+         provider_id: provider_id
+       }}
+    end
   end
 
   defp should_update_latest?(chain, new_block) do
