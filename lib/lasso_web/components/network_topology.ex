@@ -129,10 +129,11 @@ defmodule LassoWeb.NetworkTopology do
             <% {x, y} = provider_data.position %>
             <% radius = provider_data.radius %>
             <div
-              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
-    do: "ring-purple-400/30 !border-purple-400 border-purple-400 ring-2",
-    else: "border-gray-600"), if(@selected_provider != connection.id,
-    do: provider_status_class(connection))]}
+              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125",
+    provider_status_class(connection),
+    if(@selected_provider == connection.id,
+      do: "ring-purple-400/30 !border-purple-400 ring-2",
+      else: "")]}
               style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
                 if(@selected_provider == connection.id,
                   do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
