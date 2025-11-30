@@ -129,11 +129,10 @@ defmodule LassoWeb.NetworkTopology do
             <% {x, y} = provider_data.position %>
             <% radius = provider_data.radius %>
             <div
-              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125",
-    provider_status_class(connection),
-    if(@selected_provider == connection.id,
-      do: "ring-purple-400/30 !border-purple-400 ring-2",
-      else: "")]}
+              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
+    do: "ring-purple-400/30 !border-purple-400 ring-2",
+    else: "border-gray-600"), if(@selected_provider != connection.id,
+    do: provider_status_bg_class(connection))]}
               style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
                 if(@selected_provider == connection.id,
                   do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
@@ -731,6 +730,28 @@ defmodule LassoWeb.NetworkTopology do
       :healthy -> "bg-emerald-900/30 border-emerald-600"
       # Gray - unknown
       :unknown -> "bg-gray-900/30 border-gray-600"
+    end
+  end
+
+  # Background-only version for provider rings (no border, border is always gray)
+  defp provider_status_bg_class(connection) when is_map(connection) do
+    case StatusHelpers.determine_provider_status(connection) do
+      # Dark red - circuit open
+      :circuit_open -> "bg-red-900/40"
+      # Amber - testing recovery (same as recovering)
+      :testing_recovery -> "bg-amber-900/30"
+      # Purple - rate limited
+      :rate_limited -> "bg-purple-900/30"
+      # Amber - recovering
+      :recovering -> "bg-amber-900/30"
+      # Orange - degraded
+      :degraded -> "bg-orange-900/30"
+      # Sky blue - lagging
+      :lagging -> "bg-sky-900/30"
+      # Green - healthy
+      :healthy -> "bg-emerald-900/30"
+      # Gray - unknown
+      :unknown -> "bg-gray-900/30"
     end
   end
 
