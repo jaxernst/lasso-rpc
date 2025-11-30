@@ -250,8 +250,20 @@ HOST=http://lasso-rpc.fly.dev node scripts/export_metrics_csv.mjs -u "$HOST/api/
 You can also generate load locally to populate metrics:
 
 ```bash
+# Single chain
 node scripts/rpc_load_test.mjs --url "$HOST/rpc/round-robin/ethereum" --concurrency 24 --duration 45
+
+# Multiple chains in parallel
+node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --concurrency 16 --duration 30
+
+# Multiple chains with per-chain rate limits
+node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --chain-rates "ethereum:100,base:50" --duration 30
+
+# All chains with fastest strategy and custom ramp-up
+node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --strategy fastest --rps-limit 50 --ramp-up 15
 ```
+
+**Ramp-up period**: Default 5 seconds
 
 ---
 

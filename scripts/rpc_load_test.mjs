@@ -19,12 +19,17 @@ function parseArgs(argv) {
   const opts = {
     url:
       process.env.RPC_URL || "http://localhost:4000/rpc/round-robin/ethereum",
+    host: process.env.HOST || null, // base host URL
+    chains: process.env.CHAINS || null, // comma-separated chain names
+    strategy: process.env.STRATEGY || "round-robin", // routing strategy
     concurrency: Number(process.env.CONCURRENCY) || 16,
     duration: Number(process.env.DURATION) || 30, // seconds
+    rampUpDuration: Number(process.env.RAMP_UP_DURATION) || null, // seconds (defaults to 10s or 20% of duration, whichever is smaller)
     timeout: Number(process.env.TIMEOUT) || 10000, // ms
     verbose: Boolean(process.env.VERBOSE) || false,
     methods: null, // comma-separated names
-    rpsLimit: Number(process.env.RPS_LIMIT) || null, // requests per second limit
+    rpsLimit: Number(process.env.RPS_LIMIT) || null, // requests per second limit (global or per-chain)
+    chainRates: process.env.CHAIN_RATES || null, // comma-separated "chain:rate" pairs
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -36,6 +41,19 @@ function parseArgs(argv) {
         opts.url = next();
         i++;
         break;
+      case "--host":
+        opts.host = next();
+        i++;
+        break;
+      case "--chains":
+        opts.chains = String(next());
+        i++;
+        break;
+      case "--strategy":
+      case "-s":
+        opts.strategy = String(next());
+        i++;
+        break;
       case "--concurrency":
       case "-c":
         opts.concurrency = Number(next());
@@ -44,6 +62,11 @@ function parseArgs(argv) {
       case "--duration":
       case "-d":
         opts.duration = Number(next());
+        i++;
+        break;
+      case "--ramp-up":
+      case "--ramp-up-duration":
+        opts.rampUpDuration = Number(next());
         i++;
         break;
       case "--timeout":
@@ -59,6 +82,10 @@ function parseArgs(argv) {
       case "--rps-limit":
       case "-r":
         opts.rpsLimit = Number(next());
+        i++;
+        break;
+      case "--chain-rates":
+        opts.chainRates = String(next());
         i++;
         break;
       case "--verbose":
@@ -83,12 +110,37 @@ function printHelpAndExit() {
     `Usage: node scripts/rpc_load_test.mjs [options]\n\n` +
       `Options:\n` +
       `  -u, --url <url>           RPC endpoint (default: http://localhost:4000/rpc/round-robin/ethereum)\n` +
-      `  -c, --concurrency <n>     Concurrent workers (default: 16)\n` +
+      `                             (ignored if --chains is used)\n` +
+      `  --host <url>              Base host URL (default: http://localhost:4000)\n` +
+      `                             (used with --chains)\n` +
+      `  --chains <list>           Comma-separated chain names (e.g., "ethereum,base")\n` +
+      `                             If specified, tests all chains in parallel\n` +
+      `  -s, --strategy <name>     Routing strategy: round-robin, fastest, latency-weighted\n` +
+      `                             (default: round-robin, used with --chains)\n` +
+      `  -c, --concurrency <n>     Concurrent workers per chain (default: 16)\n` +
       `  -d, --duration <sec>      Test duration seconds (default: 30)\n` +
+      `  --ramp-up <sec>           Ramp-up duration seconds (default: 10s or 20% of duration, whichever is smaller)\n` +
+      `                             Gradually increases RPS from 0 to target during this period\n` +
       `  -t, --timeout <ms>        Per-request timeout ms (default: 10000)\n` +
       `  -m, --methods <list>      Comma-separated method names to include\n` +
       `  -r, --rps-limit <n>       Maximum requests per second (default: unlimited)\n` +
-      `  -v, --verbose             Log each request timing\n`
+      `                             If --chains is used, applies to each chain\n` +
+      `  --chain-rates <list>      Per-chain rate limits: "chain1:rate1,chain2:rate2"\n` +
+      `                             (e.g., "ethereum:100,base:50")\n` +
+      `  -v, --verbose             Log each request timing\n` +
+      `\n` +
+      `Examples:\n` +
+      `  # Single chain (existing behavior)\n` +
+      `  node scripts/rpc_load_test.mjs --url http://localhost:4000/rpc/ethereum\n` +
+      `\n` +
+      `  # Multiple chains with default rate\n` +
+      `  node scripts/rpc_load_test.mjs --chains ethereum,base --rps-limit 50\n` +
+      `\n` +
+      `  # Multiple chains with per-chain rates\n` +
+      `  node scripts/rpc_load_test.mjs --chains ethereum,base --chain-rates "ethereum:100,base:50"\n` +
+      `\n` +
+      `  # All chains with fastest strategy and 15s ramp-up\n` +
+      `  node scripts/rpc_load_test.mjs --chains ethereum,base --strategy fastest --ramp-up 15\n`
   );
   process.exit(0);
 }
@@ -323,7 +375,7 @@ function makeMethodPool(ctxRef) {
       name: "eth_getLogs",
       params: () => {
         const latest = ctxRef.latestNumber || 0;
-        const span = 5000;
+        const span = 500;
         const from = latest > 0 ? Math.max(0, latest - span) : 0;
         return [
           {
@@ -352,51 +404,100 @@ function filterMethods(methods, allowListCsv) {
 }
 
 // -----------------------------
-// Load generation
+// Multi-chain support
 // -----------------------------
-async function run() {
-  console.log(`RPC load test starting...`);
-  console.log(`  url=${options.url}`);
-  console.log(`  concurrency=${options.concurrency}`);
-  console.log(`  duration=${options.duration}s`);
-  console.log(`  timeout=${options.timeout}ms`);
-  if (options.methods) console.log(`  methods=${options.methods}`);
-  if (options.rpsLimit) console.log(`  rps limit=${options.rpsLimit}`);
-  if (options.verbose) console.log(`  verbose logging enabled`);
+function parseChainRates(chainRatesCsv) {
+  if (!chainRatesCsv) return new Map();
+  const rates = new Map();
+  const pairs = String(chainRatesCsv)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const pair of pairs) {
+    const [chain, rate] = pair.split(":").map((s) => s.trim());
+    if (chain && rate) {
+      const rateNum = Number(rate);
+      if (Number.isFinite(rateNum) && rateNum > 0) {
+        rates.set(chain, rateNum);
+      }
+    }
+  }
+  return rates;
+}
 
-  const ctx = await bootstrapContext(options.url, options.timeout);
+function buildChainUrl(host, strategy, chain) {
+  // Remove trailing slash from host
+  const base = host.replace(/\/$/, "");
+  // Strategy can be empty for default, or a specific strategy
+  if (strategy && strategy !== "default") {
+    return `${base}/rpc/${strategy}/${chain}`;
+  }
+  return `${base}/rpc/${chain}`;
+}
+
+function parseChains(chainsCsv) {
+  if (!chainsCsv) return [];
+  return String(chainsCsv)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// -----------------------------
+// Load generation (single chain)
+// -----------------------------
+async function runSingleChain(url, chainName, rpsLimit) {
+  const prefix = chainName ? `[${chainName}] ` : "";
+  const ctx = await bootstrapContext(url, options.timeout);
   const ctxRef = {
     latestNumber: ctx.latestNumber,
     txHash: ctx.txHash,
     blockHash: ctx.blockHash,
   };
-  console.log(`Bootstrap:`);
-  console.log(`  latest block number: ${ctxRef.latestNumber}`);
-  console.log(`  sample block hash:   ${ctxRef.blockHash || "(not found)"}`);
-  console.log(`  sample tx hash:      ${ctxRef.txHash || "(not found)"}`);
+
+  if (options.verbose) {
+    console.log(`${prefix}Bootstrap:`);
+    console.log(`${prefix}  latest block number: ${ctxRef.latestNumber}`);
+    console.log(
+      `${prefix}  sample block hash:   ${ctxRef.blockHash || "(not found)"}`
+    );
+    console.log(
+      `${prefix}  sample tx hash:      ${ctxRef.txHash || "(not found)"}`
+    );
+  }
 
   const methodPool = filterMethods(
     makeMethodPool(ctxRef).filter((m) => !m.enabled || m.enabled()),
     options.methods
   );
   if (methodPool.length === 0) {
-    console.error("No methods to test (after filtering).");
-    process.exit(1);
+    throw new Error(`${prefix}No methods to test (after filtering).`);
   }
 
   let nextId = 1;
   let stop = false;
-  const endAt = Date.now() + options.duration * 1000;
+  const startedAt = Date.now();
+  const endAt = startedAt + options.duration * 1000;
   const allDurations = [];
   const perMethod = new Map(); // name -> { count, errors, durations[] }
   const inFlight = new Set();
 
-  // Rate limiting setup
+  // Calculate ramp-up duration (default: 10s or 20% of duration, whichever is smaller)
+  const defaultRampUp = Math.min(
+    5,
+    Math.max(1, Math.floor(options.duration * 0.2))
+  );
+  const rampUpDuration =
+    options.rampUpDuration !== null && options.rampUpDuration !== undefined
+      ? options.rampUpDuration
+      : defaultRampUp;
+  const rampUpEndMs = startedAt + rampUpDuration * 1000;
+
+  // Rate limiting setup with ramp-up support
   let rateLimiter = null;
-  if (options.rpsLimit && options.rpsLimit > 0) {
-    const tokensPerMs = options.rpsLimit / 1000;
-    let tokens = options.rpsLimit; // Start with full bucket
-    let lastRefill = Date.now();
+  if (rpsLimit && rpsLimit > 0) {
+    let tokens = 0; // Start with empty bucket during ramp-up
+    let lastRefill = startedAt;
 
     rateLimiter = {
       async acquire() {
@@ -404,8 +505,21 @@ async function run() {
           const now = Date.now();
           const elapsed = now - lastRefill;
 
-          // Refill tokens based on elapsed time
-          tokens = Math.min(options.rpsLimit, tokens + elapsed * tokensPerMs);
+          // Calculate current effective RPS limit (ramp-up or full)
+          let currentLimit = rpsLimit;
+          if (now < rampUpEndMs) {
+            // During ramp-up: linearly increase from 0 to target RPS
+            const rampUpElapsed = now - startedAt;
+            const rampUpProgress = Math.min(
+              1,
+              rampUpElapsed / (rampUpDuration * 1000)
+            );
+            currentLimit = rpsLimit * rampUpProgress;
+          }
+
+          // Refill tokens based on elapsed time and current limit
+          const tokensPerMs = currentLimit / 1000;
+          tokens = Math.min(currentLimit, tokens + elapsed * tokensPerMs);
           lastRefill = now;
 
           if (tokens >= 1) {
@@ -424,11 +538,8 @@ async function run() {
   let windowReq = 0;
   let windowErr = 0;
   let windowDur = [];
-  const startedAt = Date.now();
-  let tickCount = 0;
 
   const ticker = setInterval(() => {
-    tickCount++;
     const rps = windowReq;
     const err = windowErr;
     const avg = windowDur.length
@@ -439,7 +550,7 @@ async function run() {
     const p99 = percentile(windowDur, 99);
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
     process.stdout.write(
-      `t=${elapsed}s rps=${rps} err=${err} lat(ms) avg=${avg.toFixed(
+      `${prefix}t=${elapsed}s rps=${rps} err=${err} lat(ms) avg=${avg.toFixed(
         1
       )} p95=${p95.toFixed(1)} p99=${p99.toFixed(1)}\n`
     );
@@ -458,7 +569,7 @@ async function run() {
       params: methodDef.params(),
     };
     const t0 = nowNs();
-    const res = await rpc(options.url, body, options.timeout);
+    const res = await rpc(url, body, options.timeout);
     const dtMs = nsToMs(nowNs() - t0);
 
     windowReq++;
@@ -480,7 +591,7 @@ async function run() {
     // Always log errors in verbose mode, even if they're not in the main flow
     if (options.verbose && !res.ok) {
       const status = "ERR";
-      let output = `${methodDef.name} ${status} ${dtMs.toFixed(1)}ms`;
+      let output = `${prefix}${methodDef.name} ${status} ${dtMs.toFixed(1)}ms`;
 
       // Print error summary
       if (res.error) {
@@ -498,20 +609,28 @@ async function run() {
       // Always log full request/response details for errors in verbose mode
       if (res.requestPayload) {
         process.stdout.write(
-          `  Request Payload:\n${JSON.stringify(res.requestPayload, null, 2)}\n`
+          `${prefix}  Request Payload:\n${JSON.stringify(
+            res.requestPayload,
+            null,
+            2
+          )}\n`
         );
       }
       if (res.rawResponse) {
-        process.stdout.write(`  Raw HTTP Response:\n${res.rawResponse}\n`);
+        process.stdout.write(
+          `${prefix}  Raw HTTP Response:\n${res.rawResponse}\n`
+        );
       } else if (res.error) {
-        process.stdout.write(`  Error Details: ${res.error}\n`);
+        process.stdout.write(`${prefix}  Error Details: ${res.error}\n`);
       }
       if (res.status) {
-        process.stdout.write(`  HTTP Status: ${res.status}\n`);
+        process.stdout.write(`${prefix}  HTTP Status: ${res.status}\n`);
       }
     } else if (options.verbose && res.ok) {
       // Log successful requests too
-      process.stdout.write(`${methodDef.name} OK ${dtMs.toFixed(1)}ms\n`);
+      process.stdout.write(
+        `${prefix}${methodDef.name} OK ${dtMs.toFixed(1)}ms\n`
+      );
     }
   }
 
@@ -564,33 +683,194 @@ async function run() {
   const overallP95 = percentile(allDurations, 95);
   const overallP99 = percentile(allDurations, 99);
 
-  console.log("\n=== Summary ===");
-  console.log(
-    `Requests: ${totalCount}  Errors: ${totalErrors}  Duration: ${totalSec}s  RPS: ${(
-      totalCount / totalSec
-    ).toFixed(1)}`
-  );
-  console.log(
-    `Latency ms: avg=${overallAvg.toFixed(1)} p50=${overallP50.toFixed(
-      1
-    )} p95=${overallP95.toFixed(1)} p99=${overallP99.toFixed(1)}`
-  );
-  console.log("\nPer-method:");
-  const byName = Array.from(perMethod.entries()).sort(
-    (a, b) => b[1].count - a[1].count
-  );
-  for (const [name, s] of byName) {
-    const p50 = percentile(s.durations, 50).toFixed(1);
-    const p95 = percentile(s.durations, 95).toFixed(1);
-    const p99 = percentile(s.durations, 99).toFixed(1);
-    const avg = (
-      s.durations.reduce((a, b) => a + b, 0) / s.durations.length
-    ).toFixed(1);
-    console.log(
-      `- ${name}: count=${s.count} errors=${
-        s.errors || 0
-      } lat(ms) avg=${avg} p50=${p50} p95=${p95} p99=${p99}`
+  return {
+    chainName,
+    url,
+    totalCount,
+    totalErrors,
+    totalSec,
+    overallAvg,
+    overallP50,
+    overallP95,
+    overallP99,
+    perMethod,
+  };
+}
+
+// -----------------------------
+// Main entry point
+// -----------------------------
+async function run() {
+  const chains = parseChains(options.chains);
+  const chainRates = parseChainRates(options.chainRates);
+
+  // Determine if we're in multi-chain mode
+  const isMultiChain = chains.length > 0;
+
+  if (isMultiChain) {
+    // Multi-chain mode
+    const host = options.host || "http://localhost:4000";
+    // Calculate default ramp-up if not specified
+    const defaultRampUp = Math.min(
+      10,
+      Math.max(1, Math.floor(options.duration * 0.2))
     );
+    const rampUpDuration =
+      options.rampUpDuration !== null && options.rampUpDuration !== undefined
+        ? options.rampUpDuration
+        : defaultRampUp;
+
+    console.log(`RPC load test starting (multi-chain mode)...`);
+    console.log(`  host=${host}`);
+    console.log(`  chains=${chains.join(", ")}`);
+    console.log(`  strategy=${options.strategy}`);
+    console.log(`  concurrency=${options.concurrency} per chain`);
+    console.log(`  duration=${options.duration}s`);
+    console.log(`  ramp-up=${rampUpDuration}s`);
+    console.log(`  timeout=${options.timeout}ms`);
+    if (options.methods) console.log(`  methods=${options.methods}`);
+    if (options.rpsLimit)
+      console.log(`  rps limit=${options.rpsLimit} per chain`);
+    if (chainRates.size > 0) {
+      console.log(
+        `  per-chain rates: ${Array.from(chainRates.entries())
+          .map(([c, r]) => `${c}:${r}`)
+          .join(", ")}`
+      );
+    }
+    if (options.verbose) console.log(`  verbose logging enabled`);
+
+    // Run tests for all chains in parallel
+    const chainTests = chains.map(async (chain) => {
+      const url = buildChainUrl(host, options.strategy, chain);
+      const rpsLimit = chainRates.get(chain) || options.rpsLimit || null;
+      try {
+        return await runSingleChain(url, chain, rpsLimit);
+      } catch (err) {
+        console.error(`[${chain}] Fatal error:`, err.message);
+        return {
+          chainName: chain,
+          url,
+          totalCount: 0,
+          totalErrors: 1,
+          totalSec: 0,
+          overallAvg: 0,
+          overallP50: 0,
+          overallP95: 0,
+          overallP99: 0,
+          perMethod: new Map(),
+          error: err.message,
+        };
+      }
+    });
+
+    const results = await Promise.all(chainTests);
+
+    // Aggregate summary
+    console.log("\n" + "=".repeat(60));
+    console.log("=== Multi-Chain Summary ===");
+    console.log("=".repeat(60));
+
+    let grandTotalCount = 0;
+    let grandTotalErrors = 0;
+    const allDurations = [];
+
+    for (const result of results) {
+      if (result.error) {
+        console.log(`\n[${result.chainName}] ERROR: ${result.error}`);
+        continue;
+      }
+
+      console.log(`\n[${result.chainName}]`);
+      console.log(
+        `  Requests: ${result.totalCount}  Errors: ${
+          result.totalErrors
+        }  Duration: ${result.totalSec}s  RPS: ${(
+          result.totalCount / result.totalSec
+        ).toFixed(1)}`
+      );
+      console.log(
+        `  Latency ms: avg=${result.overallAvg.toFixed(
+          1
+        )} p50=${result.overallP50.toFixed(1)} p95=${result.overallP95.toFixed(
+          1
+        )} p99=${result.overallP99.toFixed(1)}`
+      );
+
+      grandTotalCount += result.totalCount;
+      grandTotalErrors += result.totalErrors;
+    }
+
+    console.log(`\n=== Overall Totals ===`);
+    console.log(
+      `Total Requests: ${grandTotalCount}  Total Errors: ${grandTotalErrors}  Duration: ${options.duration}s`
+    );
+    console.log(
+      `Aggregate RPS: ${(grandTotalCount / options.duration).toFixed(1)}`
+    );
+  } else {
+    // Single-chain mode (original behavior)
+    // Calculate default ramp-up if not specified
+    const defaultRampUp = Math.min(
+      10,
+      Math.max(1, Math.floor(options.duration * 0.2))
+    );
+    const rampUpDuration =
+      options.rampUpDuration !== null && options.rampUpDuration !== undefined
+        ? options.rampUpDuration
+        : defaultRampUp;
+
+    console.log(`RPC load test starting...`);
+    console.log(`  url=${options.url}`);
+    console.log(`  concurrency=${options.concurrency}`);
+    console.log(`  duration=${options.duration}s`);
+    console.log(`  ramp-up=${rampUpDuration}s`);
+    console.log(`  timeout=${options.timeout}ms`);
+    if (options.methods) console.log(`  methods=${options.methods}`);
+    if (options.rpsLimit) console.log(`  rps limit=${options.rpsLimit}`);
+    if (options.verbose) console.log(`  verbose logging enabled`);
+
+    // Extract chain name from URL for single-chain mode, or use empty string
+    const urlMatch = options.url.match(/\/rpc\/(?:[^\/]+\/)?([^\/\?]+)/);
+    const chainName = urlMatch ? urlMatch[1] : "";
+    const result = await runSingleChain(
+      options.url,
+      chainName,
+      options.rpsLimit
+    );
+
+    console.log("\n=== Summary ===");
+    console.log(
+      `Requests: ${result.totalCount}  Errors: ${
+        result.totalErrors
+      }  Duration: ${result.totalSec}s  RPS: ${(
+        result.totalCount / result.totalSec
+      ).toFixed(1)}`
+    );
+    console.log(
+      `Latency ms: avg=${result.overallAvg.toFixed(
+        1
+      )} p50=${result.overallP50.toFixed(1)} p95=${result.overallP95.toFixed(
+        1
+      )} p99=${result.overallP99.toFixed(1)}`
+    );
+    console.log("\nPer-method:");
+    const byName = Array.from(result.perMethod.entries()).sort(
+      (a, b) => b[1].count - a[1].count
+    );
+    for (const [name, s] of byName) {
+      const p50 = percentile(s.durations, 50).toFixed(1);
+      const p95 = percentile(s.durations, 95).toFixed(1);
+      const p99 = percentile(s.durations, 99).toFixed(1);
+      const avg = (
+        s.durations.reduce((a, b) => a + b, 0) / s.durations.length
+      ).toFixed(1);
+      console.log(
+        `- ${name}: count=${s.count} errors=${
+          s.errors || 0
+        } lat(ms) avg=${avg} p50=${p50} p95=${p95} p99=${p99}`
+      );
+    }
   }
 }
 
