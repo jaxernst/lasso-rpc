@@ -13,31 +13,33 @@ defmodule Lasso.Config.MethodPolicy do
   @type method :: String.t()
 
   @default_timeouts %{
-    # Heavy
-    "eth_getLogs" => 3_000,
-    "eth_getFilterLogs" => 3_000,
-    "eth_newFilter" => 3_000,
-    "debug_traceTransaction" => 3_000,
-    "debug_traceBlock" => 3_000,
-    # Medium
-    "eth_getBlockByNumber" => 3_000,
-    "eth_getBlockByHash" => 3_000,
-    "eth_getTransactionByHash" => 3_000,
-    "eth_getTransactionReceipt" => 3_000,
-    "eth_call" => 3_000,
-    "eth_estimateGas" => 3_000,
-    # Quick
+    # Ultra-fast (p99 < 500ms)
     "eth_blockNumber" => 1_000,
     "eth_chainId" => 1_000,
-    "eth_gasPrice" => 2_000,
-    "eth_getBalance" => 3_000,
-    "eth_getTransactionCount" => 3_000,
-    "eth_getCode" => 3_000,
     "net_version" => 1_000,
-    "web3_clientVersion" => 1_000
+    "web3_clientVersion" => 1_000,
+    # Fast state reads (p99 < 1.5s)
+    "eth_gasPrice" => 2_000,
+    "eth_getBalance" => 2_000,
+    "eth_getTransactionCount" => 2_000,
+    "eth_getCode" => 2_000,
+    "eth_getTransactionByHash" => 2_000,
+    "eth_getBlockByNumber" => 2_000,
+    "eth_getBlockByHash" => 2_000,
+    "eth_getTransactionReceipt" => 3_000,
+    # Computational (p99 < 4s)
+    "eth_call" => 5_000,
+    "eth_estimateGas" => 5_000,
+    # Log queries (p99 < 6s for reasonable queries)
+    "eth_getLogs" => 5_000,
+    "eth_getFilterLogs" => 5_000,
+    "eth_newFilter" => 2_000,
+    # Debug/trace (legitimately slow - full EVM replay)
+    "debug_traceTransaction" => 30_000,
+    "debug_traceBlock" => 45_000
   }
 
-  @default_fallback 30_000
+  @default_fallback 10_000
   @default_max_failovers 3
 
   @spec timeout_for(method) :: non_neg_integer()
