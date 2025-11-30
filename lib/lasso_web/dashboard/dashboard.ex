@@ -891,7 +891,7 @@ defmodule LassoWeb.Dashboard do
       </div>
 
       <!-- Endpoint Configuration -->
-      <div id={"endpoint-config-#{@chain}"} class="border-gray-700/50 border-b p-4" phx-hook="TabSwitcher" data-chain={@chain} data-chain-id={Helpers.get_chain_id(@chain)}>
+      <div id={"endpoint-config-#{@chain}"} class="border-gray-700/50 border-b p-4" phx-hook="TabSwitcher" phx-update="ignore" data-chain={@chain} data-chain-id={Helpers.get_chain_id(@chain)}>
         <h4 class="mb-3 text-sm font-semibold text-gray-300">RPC Endpoints</h4>
 
         <div class="mb-4">
@@ -993,48 +993,7 @@ defmodule LassoWeb.Dashboard do
           </div>
         </div>
       </div>
-
-      <!-- Chain Events Stream -->
-      <div class="flex-1 overflow-hidden p-4">
-        <h4 class="mb-3 text-sm font-semibold text-gray-300">📡 Chain Events</h4>
-        <div class="flex flex-col h-full">
-          <div class="flex-1 overflow-y-auto space-y-1">
-            <%= for event <- Enum.take(@chain_unified_events, 50) do %>
-              <div class="bg-gray-800/30 rounded-lg p-2">
-                <div class="flex items-center justify-between text-xs">
-                  <div class="flex items-center space-x-2">
-                    <div class={[
-                      "w-2 h-2 rounded-full",
-                      case event[:kind] do
-                        :routing -> "bg-blue-400"
-                        :provider -> "bg-emerald-400"
-                        :error -> "bg-red-400"
-                        :benchmark -> "bg-purple-400"
-                        _ -> "bg-gray-400"
-                      end
-                    ]}></div>
-                    <span class="font-mono text-gray-300">{to_string(event[:kind])}</span>
-                    <%= if event[:method] do %>
-                      <span class="text-sky-400">{event[:method]}</span>
-                    <% end %>
-                  </div>
-                  <span class="text-gray-500">{Helpers.format_timestamp(event[:ts_ms])}</span>
-                </div>
-                <%= if event[:message] do %>
-                  <div class="text-xs text-gray-400 mt-1 font-mono">{event[:message]}</div>
-                <% end %>
-                <%= if get_in(event, [:meta, :latency]) do %>
-                  <div class="text-xs text-yellow-400 mt-1">{get_in(event, [:meta, :latency])}ms</div>
-                <% end %>
-              </div>
-            <% end %>
-            <%= if Enum.empty?(@chain_unified_events) do %>
-              <div class="text-center text-gray-500 text-xs py-4">No recent events for {Helpers.get_chain_display_name(@chain)}</div>
-            <% end %>
-          </div>
-        </div>
-      </div>
-    </div>
+         </div>
     """
   end
 
