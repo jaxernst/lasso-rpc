@@ -29,7 +29,7 @@ defmodule Lasso.RPC.BlockHeightMonitor do
   require Logger
 
   alias Lasso.Core.BlockCache
-  alias Lasso.RPC.{Selection, UpstreamSubscriptionManager}
+  alias Lasso.RPC.{CircuitBreaker, Selection, UpstreamSubscriptionManager}
 
   @type chain :: String.t()
   @type provider_id :: String.t()
@@ -373,6 +373,10 @@ defmodule Lasso.RPC.BlockHeightMonitor do
   defp process_new_head(chain, provider_id, payload) do
     # Update BlockCache with the new block data
     BlockCache.put_block(chain, provider_id, payload)
+
+    # Record circuit breaker success for WS transport recovery
+    # Each newHeads event proves the WS connection is healthy
+    CircuitBreaker.record_success({chain, provider_id, :ws})
 
     # Also update ProviderPool sync state for compatibility with existing lag calculation
     # This bridges the WS data into the probe-based consensus system
