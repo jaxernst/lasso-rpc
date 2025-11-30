@@ -748,8 +748,17 @@ const EndpointSelector = {
 
     // Set up copy to clipboard handlers
     this.el.addEventListener("click", (e) => {
-      if (e.target.dataset.copyText) {
-        navigator.clipboard.writeText(e.target.dataset.copyText);
+      const btn = e.target.closest("[data-copy-text]");
+      if (btn && btn.dataset.copyText) {
+        navigator.clipboard.writeText(btn.dataset.copyText).then(() => {
+          const originalText = btn.textContent;
+          btn.textContent = "Copied!";
+          btn.classList.add("text-emerald-400", "border-emerald-500");
+          setTimeout(() => {
+            btn.textContent = originalText;
+            btn.classList.remove("text-emerald-400", "border-emerald-500");
+          }, 1500);
+        });
       }
     });
 
