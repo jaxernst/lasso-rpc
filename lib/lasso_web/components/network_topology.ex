@@ -102,7 +102,7 @@ defmodule LassoWeb.NetworkTopology do
             class={["absolute z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl shadow-inner transition-all duration-300 hover:scale-110", if(@selected_chain == chain_name,
     do: "ring-purple-400/30 border-purple-400 ring-4",
     else: "border-gray-500 hover:border-gray-400"), "from-gray-800 to-gray-900"]}
-            style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name)} 0%, #111827 100%); " <>
+            style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name)} 0%, #11182780 100%); " <>
               if(@selected_chain == chain_name,
                 do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
                 else: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.2), inset 0 0 15px rgba(0, 0, 0, 0.3);")}
@@ -131,7 +131,7 @@ defmodule LassoWeb.NetworkTopology do
             <div
               class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
     do: "ring-purple-400/30 !border-purple-400 ring-2",
-    else: "border-gray-600"), if(@selected_provider != connection.id,
+    else: provider_border_class(connection)), if(@selected_provider != connection.id,
     do: provider_status_bg_class(connection))]}
               style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
                 if(@selected_provider == connection.id,
@@ -701,39 +701,7 @@ defmodule LassoWeb.NetworkTopology do
     ]
   end
 
-  # Enhanced provider status classes using comprehensive status
-  defp provider_status_class(connection_status) when is_atom(connection_status) do
-    case connection_status do
-      :connected -> "bg-emerald-900/30 border-emerald-600"
-      :disconnected -> "bg-red-900/30 border-red-600"
-      :connecting -> "bg-yellow-900/30 border-yellow-600"
-      :rate_limited -> "bg-purple-900/30 border-purple-600"
-      _ -> "bg-gray-900/30 border-gray-600"
-    end
-  end
-
-  defp provider_status_class(connection) when is_map(connection) do
-    case StatusHelpers.determine_provider_status(connection) do
-      # Dark red - circuit open
-      :circuit_open -> "bg-red-900/40 border-red-500"
-      # Amber - testing recovery (same as recovering)
-      :testing_recovery -> "bg-amber-900/30 border-amber-600"
-      # Purple - rate limited
-      :rate_limited -> "bg-purple-900/30 border-purple-600"
-      # Amber - recovering
-      :recovering -> "bg-amber-900/30 border-amber-600"
-      # Orange - degraded
-      :degraded -> "bg-orange-900/30 border-orange-600"
-      # Sky blue - lagging
-      :lagging -> "bg-sky-900/30 border-sky-600"
-      # Green - healthy
-      :healthy -> "bg-emerald-900/30 border-emerald-600"
-      # Gray - unknown
-      :unknown -> "bg-gray-900/30 border-gray-600"
-    end
-  end
-
-  # Background-only version for provider rings (no border, border is always gray)
+  # Background-only version for provider rings
   defp provider_status_bg_class(connection) when is_map(connection) do
     case StatusHelpers.determine_provider_status(connection) do
       # Dark red - circuit open
@@ -752,6 +720,26 @@ defmodule LassoWeb.NetworkTopology do
       :healthy -> "bg-emerald-900/30"
       # Gray - unknown
       :unknown -> "bg-gray-900/30"
+    end
+  end
+
+  # Get border class for provider ring based on status
+  # Gray by default (healthy/unknown/recovering), colored for problematic states
+  defp provider_border_class(connection) do
+    case StatusHelpers.determine_provider_status(connection) do
+      # Dark red - circuit open
+      :circuit_open -> "border-red-500"
+      # Purple - rate limited
+      :rate_limited -> "border-purple-500"
+      # Sky blue - lagging
+      :lagging -> "border-sky-500"
+      # Orange - degraded
+      :degraded -> "border-orange-500"
+      # Gray - healthy, unknown, or recovering (default)
+      :healthy -> "border-gray-600"
+      :unknown -> "border-gray-600"
+      :testing_recovery -> "border-gray-600"
+      :recovering -> "border-gray-600"
     end
   end
 
