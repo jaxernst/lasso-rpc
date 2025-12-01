@@ -123,11 +123,11 @@ defmodule LassoWeb.Components.LatencyHeatmap do
         <div class="flex w-full flex-col items-start overflow-x-auto pb-6 lg:items-center lg:overflow-visible lg:pb-0">
           <div class="inline-flex origin-top-left scale-90 flex-col lg:origin-center xl:scale-100">
             <!-- Method headers (top, rotated) -->
-            <div class="flex">
+            <div class="flex pb-1">
               <!-- Spacer for provider label column -->
-              <div class="w-32 flex-shrink-0"></div>
+              <div class=" w-36 flex-shrink-0"></div>
               <!-- Method labels - rotated -->
-              <div class="gap-[9px] flex">
+              <div class="gap-[8px] flex">
                 <%= for {method, idx} <- Enum.with_index(@display_methods) do %>
                   <div
                     class="animate-[fadeIn_0.3s_ease-out_forwards] relative h-24 w-16 flex-shrink-0 opacity-0"
@@ -148,7 +148,7 @@ defmodule LassoWeb.Components.LatencyHeatmap do
     <!-- Grid rows (providers) -->
             <div class="flex">
               <!-- Provider labels (left) -->
-              <div class="flex w-32 flex-shrink-0 flex-col gap-2 pt-5">
+              <div class="flex flex-shrink-0 flex-col gap-2 pt-6">
                 <%= for {provider, idx} <- Enum.with_index(@display_providers) do %>
                   <div
                     class="animate-[fadeIn_0.3s_ease-out_forwards] flex h-10 items-center justify-end pr-3 opacity-0"
@@ -363,6 +363,5 @@ defmodule LassoWeb.Components.LatencyHeatmap do
   # Format method name for display (full name, just remove eth_ prefix)
   defp format_method_display(method) do
     method
-    |> String.replace("eth_", "")
   end
 end
