@@ -125,7 +125,7 @@ defmodule LassoWeb.Components.LatencyHeatmap do
             <!-- Method headers (top, rotated) -->
             <div class="flex pb-1">
               <!-- Spacer for provider label column -->
-              <div class=" w-36 flex-shrink-0"></div>
+              <div class=" w-28 flex-shrink-0"></div>
               <!-- Method labels - rotated -->
               <div class="gap-[8px] flex">
                 <%= for {method, idx} <- Enum.with_index(@display_methods) do %>
