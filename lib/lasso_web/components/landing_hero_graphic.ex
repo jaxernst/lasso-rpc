@@ -89,7 +89,7 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
 
     ~H"""
     <div
-      class="absolute right-0 top-1/2 w-[120%] max-w-none transform -translate-y-1/2 translate-x-[10%] md:w-[100%] lg:w-[110%] lg:translate-x-[5%]"
+      class="w-[120%] translate-x-[10%] absolute top-1/2 right-0 max-w-none -translate-y-1/2 transform md:w-[100%] lg:w-[110%] lg:translate-x-[5%]"
       style="mask-image: radial-gradient(circle at 50% 50%, black 40%, transparent 85%); -webkit-mask-image: radial-gradient(circle at 50% 50%, black 40%, transparent 85%);"
     >
       <svg
@@ -111,12 +111,28 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
             <feGaussianBlur stdDeviation="2" />
           </filter>
         </defs>
-
-        <!-- Orbit Rings -->
-        <circle cx={@cx} cy={@cy} r={@chain_radius} stroke="#334155" stroke-width="1" stroke-dasharray="8 8" opacity="0.15" />
-        <circle cx={@cx} cy={@cy} r={@provider_radius} stroke="#334155" stroke-width="1" stroke-dasharray="8 8" opacity="0.1" />
-
-        <!-- Hub Mesh Connections (Geometric Triangle) -->
+        
+    <!-- Orbit Rings -->
+        <circle
+          cx={@cx}
+          cy={@cy}
+          r={@chain_radius}
+          stroke="#334155"
+          stroke-width="1"
+          stroke-dasharray="8 8"
+          opacity="0.15"
+        />
+        <circle
+          cx={@cx}
+          cy={@cy}
+          r={@provider_radius}
+          stroke="#334155"
+          stroke-width="1"
+          stroke-dasharray="8 8"
+          opacity="0.1"
+        />
+        
+    <!-- Hub Mesh Connections (Geometric Triangle) -->
         <path
           d={"M #{Enum.at(@hubs, 0).x} #{Enum.at(@hubs, 0).y} L #{Enum.at(@hubs, 1).x} #{Enum.at(@hubs, 1).y} L #{Enum.at(@hubs, 2).x} #{Enum.at(@hubs, 2).y} Z"}
           stroke="#7c3aed"
@@ -125,8 +141,8 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
           fill-opacity="0.05"
           opacity="0.4"
         />
-
-        <!-- Connections: Hubs -> Chains -->
+        
+    <!-- Connections: Hubs -> Chains -->
         <%= for chain <- @chains do %>
           <path
             d={"M #{chain.hub_x} #{chain.hub_y} L #{chain.x} #{chain.y}"}
@@ -135,8 +151,8 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
             opacity="0.2"
           />
         <% end %>
-
-        <!-- Connections: Chains -> Providers -->
+        
+    <!-- Connections: Chains -> Providers -->
         <%= for provider <- @providers do %>
           <path
             d={"M #{provider.parent_x} #{provider.parent_y} L #{provider.x} #{provider.y}"}
@@ -145,8 +161,8 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
             opacity="0.15"
           />
         <% end %>
-
-        <!-- Traffic: Hubs -> Chains -->
+        
+    <!-- Traffic: Hubs -> Chains -->
         <%= for chain <- @chains do %>
           <circle r="4" fill="#a78bfa" opacity="0">
             <animateMotion
@@ -168,8 +184,8 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
             />
           </circle>
         <% end %>
-
-        <!-- Traffic: Chains -> Providers -->
+        
+    <!-- Traffic: Chains -> Providers -->
         <%= for provider <- @providers do %>
           <circle r="3" fill="#818cf8" opacity="0">
             <animateMotion
@@ -191,8 +207,8 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
             />
           </circle>
         <% end %>
-
-        <!-- Chain Nodes -->
+        
+    <!-- Chain Nodes -->
         <%= for chain <- @chains do %>
           <circle
             cx={chain.x}
@@ -210,8 +226,8 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
             opacity="0.05"
           />
         <% end %>
-
-        <!-- Provider Nodes -->
+        
+    <!-- Provider Nodes -->
         <%= for provider <- @providers do %>
           <circle
             cx={provider.x}
@@ -223,8 +239,8 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
             opacity="0.8"
           />
         <% end %>
-
-        <!-- Lasso Hub Cluster -->
+        
+    <!-- Lasso Hub Cluster -->
         <%= for hub <- @hubs do %>
           <g transform={"translate(#{hub.x}, #{hub.y})"}>
             <circle r={hub.size + 10} fill="#8b5cf6" opacity="0.1" filter="url(#blur-sm)" />
