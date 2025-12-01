@@ -121,7 +121,7 @@ defmodule LassoWeb.Components.LatencyHeatmap do
       <% else %>
         <!-- Centered container -->
         <div class="flex w-full flex-col items-start overflow-x-auto pb-6 lg:items-center lg:overflow-visible lg:pb-0">
-          <div class="inline-flex origin-top-left scale-75 flex-col lg:origin-center xl:scale-100">
+          <div class="inline-flex origin-top-left scale-90 flex-col lg:origin-center xl:scale-100">
             <!-- Method headers (top, rotated) -->
             <div class="flex">
               <!-- Spacer for provider label column -->
