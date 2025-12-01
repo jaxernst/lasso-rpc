@@ -169,7 +169,7 @@ defmodule LassoWeb.Components.LatencyHeatmap do
                 </div>
 
                 <div class="bg-gray-950/50 flex gap-3 rounded-xl p-4">
-                  <div class="relative flex flex-col gap-2">
+                  <div class="relative flex flex-grow flex-col gap-2">
                     <%= for {provider, row_idx} <- Enum.with_index(@display_providers) do %>
                       <div class="flex gap-2">
                         <%= for {method, col_idx} <- Enum.with_index(@display_methods) do %>
@@ -219,7 +219,7 @@ defmodule LassoWeb.Components.LatencyHeatmap do
                     <div class="shadow-[0_0_8px_rgba(16,185,129,0.6)] h-2 w-2 animate-pulse rounded-full bg-emerald-500">
                     </div>
                     <h3 class="text-sm font-semibold uppercase tracking-wider text-gray-300">
-                      Live Method-Level Latency Benchmarks (ms)
+                      Live Latency Benchmarks (ms)
                     </h3>
                     <span class="text-sm text-gray-400">&bull;</span>
                     <span class="text-sm text-gray-400">

@@ -6,8 +6,7 @@ defmodule LassoWeb.Components.DashboardHeader do
 
   def header(assigns) do
     ~H"""
-    <!-- Header -->
-    <div class={["relative flex-shrink-0 transition-all duration-500 ease-in-out", if(@active_tab == "docs", do: "", else: "animate-fade-in-border border-gray-700/50 border-b")]}>
+    <div class={["relative z-20 flex-shrink-0 transition-all duration-500 ease-in-out", if(@active_tab == "docs", do: "", else: "animate-fade-in-border border-gray-700/50 border-b")]}>
       <div class="relative flex items-center justify-between px-6 py-4">
         <!-- Title Section -->
         <div class="flex items-center space-x-4">
