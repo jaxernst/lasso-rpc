@@ -2,6 +2,7 @@ defmodule LassoWeb.HomeLive do
   use LassoWeb, :live_view
   alias LassoWeb.Components.DashboardHeader
   alias LassoWeb.Components.LatencyHeatmap
+  alias LassoWeb.Components.LandingHeroGraphic
   alias Lasso.Config.ConfigStore
   alias Lasso.Benchmarking.BenchmarkStore
 
@@ -305,15 +306,15 @@ defmodule LassoWeb.HomeLive do
         <DashboardHeader.header active_tab={@active_tab} />
 
         <div class="flex-1">
-          <div class="max-w-[min(90%,110rem)] relative mx-auto flex flex-col gap-12 py-6 lg:max-w-[min(83%,110rem)] lg:gap-20 lg:py-20">
+          <div class="max-w-[min(90%,110rem)] relative mx-auto flex flex-col gap-20 py-10 lg:max-w-[min(83%,110rem)] lg:gap-32 lg:py-28">
             <!-- Hero / Overview -->
             <section
               id="hero-section"
               phx-hook="ScrollReveal"
-              class="grid translate-y-8 items-center gap-8 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.15fr)] lg:gap-10"
+              class="grid translate-y-8 items-center gap-10 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.15fr)] lg:gap-16"
             >
-              <div class="animate-fade-in-up space-y-6">
-                <div class="space-y-4 lg:space-y-6">
+              <div class="animate-fade-in-up space-y-8">
+                <div class="space-y-5 lg:space-y-8">
                   <h1 class="text-balance leading-[1.1] text-3xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
                     Smart RPC aggregation for
                     <span class="bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
@@ -322,7 +323,7 @@ defmodule LassoWeb.HomeLive do
                     blockchain apps.
                   </h1>
 
-                  <div class="flex flex-wrap gap-4">
+                  <div class="flex flex-wrap gap-3">
                     <div class="border-purple-500/30 bg-blue-400/10 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
                       <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
                       </span>
@@ -351,7 +352,7 @@ defmodule LassoWeb.HomeLive do
                   </p>
                 </div>
 
-                <div class="flex flex-wrap items-center gap-4 pt-8">
+                <div class="flex flex-wrap items-center gap-4 pt-4">
                   <a
                     href="/dashboard"
                     class="group shadow-purple-500/20 relative inline-flex items-center gap-2 rounded-lg bg-purple-600 px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all hover:shadow-purple-500/40 hover:scale-105 hover:bg-purple-500"
@@ -453,90 +454,10 @@ defmodule LassoWeb.HomeLive do
               
     <!-- Dashboard-style callout -->
               <div class="animate-float relative z-10">
-                <div class="animate-pulse-glow absolute -inset-1 rounded-2xl bg-gradient-to-r from-purple-600 to-blue-600 opacity-30 blur">
-                </div>
-                <div class="border-purple-500/25 from-purple-500/10 via-slate-950/90 to-black/90 shadow-[0_20px_45px_rgba(15,23,42,0.75)] relative rounded-2xl border bg-gradient-to-br p-4 backdrop-blur-xl sm:p-6">
-                  <div class="mb-6 flex items-start gap-4">
-                    <div class="bg-purple-500/20 border-purple-500/30 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border">
-                      <svg
-                        class="h-6 w-6 text-purple-200"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
-                        />
-                      </svg>
-                    </div>
-                    <div class="space-y-1">
-                      <h2 class="text-base font-semibold text-white">
-                        Smart, Observable RPC Request Routing
-                      </h2>
-                      <p class="text-purple-100/70 text-xs leading-relaxed">
-                        See every provider, chain, and strategy in real time: latency percentiles, success rates,
-                        circuit breaker status, and exactly which upstream handled each JSON-RPC call.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div class="border-purple-500/20 bg-black/40 space-y-3 rounded-xl border p-3 sm:p-4">
-                    <div class="text-[11px] flex items-center justify-between font-medium uppercase tracking-wider text-gray-400">
-                      <span>Recent routing decisions</span>
-                      <span class="bg-emerald-500/10 text-[10px] border-emerald-500/20 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-bold text-emerald-400">
-                        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400"></span>
-                        {if @is_live, do: "live", else: "simulated"}
-                      </span>
-                    </div>
-                    <div class="font-mono text-[11px] space-y-2 text-gray-200">
-                      <%= for decision <- @routing_decisions do %>
-                        <div class="bg-gray-900/60 border-gray-800/50 flex items-center justify-between gap-2 rounded-lg border px-3 py-2 transition-all hover:bg-gray-800/60">
-                          <div class="flex items-center gap-2 overflow-hidden">
-                            <%= if Map.get(decision, :strategy) do %>
-                              <span class="text-[9px] hidden rounded bg-gray-800 px-1.5 py-0.5 font-bold uppercase tracking-wider text-gray-400 lg:inline-flex">
-                                {decision.strategy}
-                              </span>
-                            <% end %>
-                            <span class="truncate font-medium text-sky-300">{decision.method}</span>
-                          </div>
-
-                          <div class="flex flex-shrink-0 items-center gap-2">
-                            <span class="text-gray-600">→</span>
-                            <span class="max-w-[80px] truncate text-right text-gray-300 lg:max-w-[100px]">
-                              {decision.provider}
-                            </span>
-                            <span class={"#{decision.color} min-w-[40px] text-right font-bold"}>
-                              {decision.latency}ms
-                            </span>
-                          </div>
-                        </div>
-                      <% end %>
-                    </div>
-
-                    <a
-                      href="/dashboard"
-                      class="group bg-purple-500/10 border-purple-500/20 mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-semibold text-purple-200 transition-all hover:bg-purple-500 hover:text-white"
-                    >
-                      Inspect live traffic
-                      <svg
-                        class="h-3.5 w-3.5 transition-transform group-hover:translate-x-1"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M13 7l5 5m0 0-5 5m5-5H6"
-                        />
-                      </svg>
-                    </a>
-                  </div>
-                </div>
+                <LandingHeroGraphic.graphic
+                  routing_decisions={@routing_decisions}
+                  is_live={@is_live}
+                />
               </div>
             </section>
             
@@ -544,10 +465,10 @@ defmodule LassoWeb.HomeLive do
             <section
               id="feature-routing"
               phx-hook="ScrollReveal"
-              class="grid translate-y-8 items-center gap-8 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-2 lg:gap-20"
+              class="grid translate-y-8 items-center gap-12 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-2 lg:gap-24"
             >
-              <div class="space-y-8">
-                <div class="space-y-4">
+              <div class="space-y-10">
+                <div class="space-y-5">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-purple-400">
                     <span class="h-[1px] w-8 bg-purple-400"></span> Intelligent Routing
                   </div>
@@ -560,7 +481,7 @@ defmodule LassoWeb.HomeLive do
                   </p>
                 </div>
 
-                <div class="space-y-4">
+                <div class="space-y-5">
                   <button
                     phx-click="select_strategy"
                     phx-value-strategy="load_balanced"
@@ -700,7 +621,7 @@ defmodule LassoWeb.HomeLive do
             <section
               id="feature-resilience"
               phx-hook="ScrollReveal"
-              class="grid translate-y-8 items-center gap-8 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-2 lg:gap-12"
+              class="grid translate-y-8 items-center gap-12 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-2 lg:gap-20"
             >
               <div class="bg-gray-950/50 relative order-2 transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 hover:scale-[1.01] lg:order-1">
                 <div class="from-emerald-500/10 absolute -inset-px rounded-2xl bg-gradient-to-b to-transparent opacity-50">
@@ -745,8 +666,8 @@ defmodule LassoWeb.HomeLive do
                 </div>
               </div>
 
-              <div class="order-1 space-y-8 lg:order-2">
-                <div class="space-y-4">
+              <div class="order-1 space-y-10 lg:order-2">
+                <div class="space-y-5">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-emerald-400">
                     <span class="h-[1px] w-8 bg-emerald-400"></span> Resilience & Scale
                   </div>
@@ -758,38 +679,38 @@ defmodule LassoWeb.HomeLive do
                   </p>
                 </div>
 
-                <div class="grid gap-4 sm:grid-cols-2">
-                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
+                <div class="grid gap-5 sm:grid-cols-2">
+                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-6 transition-colors hover:border-emerald-500/30">
                     <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
                       Zero-Downtime Failover
                     </h3>
-                    <p class="mt-2 text-xs leading-relaxed text-gray-400">
+                    <p class="mt-3 text-xs leading-relaxed text-gray-400">
                       Intelligent routing automatically switches between providers and protocols (HTTP/WS) to bypass outages and latency spikes.
                     </p>
                   </div>
-                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
+                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-6 transition-colors hover:border-emerald-500/30">
                     <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
                       Fault Isolated
                     </h3>
-                    <p class="mt-2 text-xs leading-relaxed text-gray-400">
+                    <p class="mt-3 text-xs leading-relaxed text-gray-400">
                       Chains and providers run in isolated supervision trees. Failures are contained and never cascade.
                     </p>
                   </div>
 
-                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
+                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-6 transition-colors hover:border-emerald-500/30">
                     <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
                       Massive Concurrency
                     </h3>
-                    <p class="mt-2 text-xs leading-relaxed text-gray-400">
+                    <p class="mt-3 text-xs leading-relaxed text-gray-400">
                       100k+ parallel routing connections enabled by the BEAM VM
                     </p>
                   </div>
 
-                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-5 transition-colors hover:border-emerald-500/30">
+                  <div class="bg-gray-900/30 group rounded-xl border border-gray-800 p-6 transition-colors hover:border-emerald-500/30">
                     <h3 class="text-sm font-bold text-white transition-colors group-hover:text-emerald-300">
                       Real-time Health Monitoring
                     </h3>
-                    <p class="mt-2 text-xs leading-relaxed text-gray-400">
+                    <p class="mt-3 text-xs leading-relaxed text-gray-400">
                       Continuously tracks latency, errors, and sync status per provider, view live status in the dashboard.
                     </p>
                   </div>
@@ -801,10 +722,10 @@ defmodule LassoWeb.HomeLive do
             <section
               id="feature-observability"
               phx-hook="ScrollReveal"
-              class="grid translate-y-8 items-start gap-4 opacity-0 transition-all duration-1000 ease-out 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:gap-12"
+              class="grid translate-y-8 items-start gap-10 opacity-0 transition-all duration-1000 ease-out 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:gap-16"
             >
-              <div class="space-y-8">
-                <div class="space-y-4">
+              <div class="space-y-10">
+                <div class="space-y-5">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
                     <span class="h-[1px] w-8 bg-sky-400"></span>
                   </div>
@@ -818,7 +739,7 @@ defmodule LassoWeb.HomeLive do
                   </p>
                 </div>
 
-                <div class="pt-4">
+                <div class="pt-2">
                   <a
                     href="/dashboard"
                     class="group inline-flex items-center gap-2 text-sm font-bold text-sky-400 transition-colors hover:text-sky-300"
@@ -846,14 +767,14 @@ defmodule LassoWeb.HomeLive do
         
     <!-- Footer / Closing -->
         <footer class="border-gray-800/50 bg-gray-900/30 mt-auto border-t backdrop-blur-sm">
-          <div class="max-w-[min(90%,110rem)] mx-auto px-6 py-12 lg:max-w-[min(83%,110rem)] lg:py-16">
-            <div class="grid gap-8 md:grid-cols-2 lg:grid-cols-4 lg:gap-12">
-              <div class="col-span-2 space-y-6">
+          <div class="max-w-[min(90%,110rem)] mx-auto px-6 py-16 lg:max-w-[min(83%,110rem)] lg:py-20">
+            <div class="grid gap-10 md:grid-cols-2 lg:grid-cols-4 lg:gap-16">
+              <div class="col-span-2 space-y-8">
                 <h3 class="text-xl font-bold text-white">Ready for production</h3>
                 <p class="max-w-md text-sm leading-relaxed text-gray-400">
                   Lasso is built on Elixir/OTP for massive concurrency and fault tolerance. It's designed to sit in your infrastructure as a stateless, scalable layer.
                 </p>
-                <div class="flex gap-6">
+                <div class="flex gap-8">
                   <a
                     href="https://github.com/LazerTechnologies/lasso-rpc"
                     class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
@@ -881,7 +802,7 @@ defmodule LassoWeb.HomeLive do
                 <h4 class="text-sm font-bold uppercase tracking-wide text-white">
                   Supported Networks
                 </h4>
-                <ul class="mt-4 space-y-3 text-sm text-gray-400">
+                <ul class="mt-5 space-y-4 text-sm text-gray-400">
                   <li class="flex items-center gap-3">
                     <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-emerald-500">
                     </span>
@@ -900,7 +821,7 @@ defmodule LassoWeb.HomeLive do
 
               <div>
                 <h4 class="text-sm font-bold uppercase tracking-wide text-white">Roadmap</h4>
-                <ul class="mt-4 space-y-3 text-sm text-gray-400">
+                <ul class="mt-5 space-y-4 text-sm text-gray-400">
                   <li class="flex items-center gap-2">
                     <span class="text-purple-500">›</span> Hedged Requests
                   </li>
