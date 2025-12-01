@@ -1665,7 +1665,27 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_params(params, _url, socket) do
-    {:noreply, assign(socket, :active_tab, Map.get(params, "tab", "overview"))}
+    socket = assign(socket, :active_tab, Map.get(params, "tab", "overview"))
+
+    # Handle chain param to auto-select a chain
+    socket =
+      case Map.get(params, "chain") do
+        nil ->
+          socket
+
+        "" ->
+          socket
+
+        chain ->
+          socket
+          |> assign(:selected_chain, chain)
+          |> assign(:selected_provider, nil)
+          |> assign(:details_collapsed, false)
+          |> update_selected_chain_metrics()
+          |> push_event("center_on_chain", %{chain: chain})
+      end
+
+    {:noreply, socket}
   end
 
   @impl true

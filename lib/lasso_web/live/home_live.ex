@@ -14,6 +14,9 @@ defmodule LassoWeb.HomeLive do
     config_status = Lasso.Config.ConfigStore.status()
     base_url = URI.parse(LassoWeb.Endpoint.url()).authority
 
+    # Load available chains
+    available_chains = ConfigStore.list_chains() |> Enum.sort()
+
     # Load initial heatmap data
     heatmap_chain = "ethereum"
     {heatmap_data, heatmap_methods, heatmap_live} = load_heatmap_data(heatmap_chain)
@@ -27,13 +30,14 @@ defmodule LassoWeb.HomeLive do
       )
       |> assign(:base_url, base_url)
       |> assign(:active_tab, "docs")
-      |> assign(:active_strategy, "fastest")
+      |> assign(:active_strategy, "load_balanced")
       |> assign(:routing_decisions, initial_decisions())
       |> assign(:provider_health, initial_health())
       |> assign(:metrics, %{latency: 42, success_rate: 99.9})
       |> assign(:total_endpoints, config_status.total_endpoints)
       |> assign(:total_providers, config_status.total_providers)
       |> assign(:total_strategies, config_status.total_strategies)
+      |> assign(:available_chains, available_chains)
       |> assign(:is_live, false)
       |> assign(:heatmap_chain, heatmap_chain)
       |> assign(:heatmap_data, heatmap_data)
@@ -247,28 +251,28 @@ defmodule LassoWeb.HomeLive do
 
   defp get_strategy_details(strategy) do
     case strategy do
+      "load_balanced" ->
+        %{
+          url: "eth",
+          name: "Load Balanced",
+          var_name: "client",
+          comment: "Distribute load across providers"
+        }
+
       "fastest" ->
         %{
-          url: "fastest",
+          url: "fastest/eth",
           name: "Fastest",
           var_name: "clientFast",
-          comment: "Route to the lowest latency provider for the given RPC method"
+          comment: "Optimize for per-method latency"
         }
 
       "throughput" ->
         %{
-          url: "throughput",
+          url: "throughput/eth",
           name: "Throughput",
-          var_name: "clientBatch",
-          comment: "Load balanced across providers based on capacity"
-        }
-
-      "best_sync" ->
-        %{
-          url: "best-sync",
-          name: "Best Sync",
-          var_name: "clientSync",
-          comment: "Always read from the canonical chain tip"
+          var_name: "clientThroughput",
+          comment: "Dynamic load balancing favoring low latency providers"
         }
     end
   end
@@ -559,12 +563,35 @@ defmodule LassoWeb.HomeLive do
                 <div class="space-y-4">
                   <button
                     phx-click="select_strategy"
+                    phx-value-strategy="load_balanced"
+                    class={"#{if @active_strategy == "load_balanced", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-3 text-left transition-all duration-200 sm:p-4"}
+                  >
+                    <div class="flex-none pt-1">
+                      <div class={"#{if @active_strategy == "load_balanced", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
+                        1
+                      </div>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class={"#{if @active_strategy == "load_balanced", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
+                        Load Balanced
+                        <span class="bg-purple-500/20 ml-2 rounded px-1.5 py-0.5 text-xs font-medium text-purple-300">
+                          default
+                        </span>
+                      </h3>
+                      <p class="mt-2 text-sm leading-relaxed text-gray-400">
+                        Default routing strategy at <code class="text-purple-300">/rpc/:chain</code>. Distributes load across providers.
+                      </p>
+                    </div>
+                  </button>
+
+                  <button
+                    phx-click="select_strategy"
                     phx-value-strategy="fastest"
                     class={"#{if @active_strategy == "fastest", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-3 text-left transition-all duration-200 sm:p-4"}
                   >
                     <div class="flex-none pt-1">
                       <div class={"#{if @active_strategy == "fastest", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
-                        1
+                        2
                       </div>
                     </div>
                     <div class="min-w-0 flex-1">
@@ -572,7 +599,7 @@ defmodule LassoWeb.HomeLive do
                         Fastest
                       </h3>
                       <p class="mt-2 text-sm leading-relaxed text-gray-400">
-                        Routes to the provider with the lowest p50 latency for that specific method over the last 5 minutes.
+                        Route to optimize for per-method latency. Ideal for latency-sensitive workloads.
                       </p>
                     </div>
                   </button>
@@ -584,38 +611,31 @@ defmodule LassoWeb.HomeLive do
                   >
                     <div class="flex-none pt-1">
                       <div class={"#{if @active_strategy == "throughput", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
-                        2
-                      </div>
-                    </div>
-                    <div class="min-w-0 flex-1">
-                      <h3 class={"#{if @active_strategy == "throughput", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
-                        Throughput (Weighted)
-                      </h3>
-                      <p class="mt-2 text-sm leading-relaxed text-gray-400">
-                        Probabilistic routing where faster providers get a larger share of the traffic. Maximizes total system throughput.
-                      </p>
-                    </div>
-                  </button>
-
-                  <button
-                    phx-click="select_strategy"
-                    phx-value-strategy="best_sync"
-                    class={"#{if @active_strategy == "best_sync", do: "bg-gray-800/60 ring-purple-500/50 shadow-purple-500/10 shadow-lg ring-1", else: "hover:bg-gray-900/30"} group flex w-full gap-5 rounded-xl p-3 text-left transition-all duration-200 sm:p-4"}
-                  >
-                    <div class="flex-none pt-1">
-                      <div class={"#{if @active_strategy == "best_sync", do: "shadow-purple-500/40 bg-purple-500 text-white shadow-lg", else: "bg-gray-800 text-gray-400 group-hover:bg-purple-500 group-hover:text-white"} flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-colors"}>
                         3
                       </div>
                     </div>
                     <div class="min-w-0 flex-1">
-                      <h3 class={"#{if @active_strategy == "best_sync", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
-                        Best Sync
+                      <h3 class={"#{if @active_strategy == "throughput", do: "text-purple-300", else: "text-white group-hover:text-purple-300"} text-base font-semibold transition-colors"}>
+                        Throughput
                       </h3>
                       <p class="mt-2 text-sm leading-relaxed text-gray-400">
-                        Ensures you're always reading from the tip of the chain. Routes to providers with the highest block height.
+                        Dynamic load balancing that favors low latency providers for high request throughput. Good for backfilling tasks.
                       </p>
                     </div>
                   </button>
+
+                  <div class="mt-5 flex flex-wrap items-center gap-2">
+                    <span class="ml-5 pr-2 text-sm font-medium text-gray-400">View endpoints: </span>
+                    <%= for chain <- @available_chains do %>
+                      <a
+                        href={"/dashboard?chain=#{chain}"}
+                        class="group bg-gray-800/50 inline-flex items-center gap-1.5 rounded-full border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-300 transition-all hover:border-purple-500/50 hover:bg-purple-500/10 hover:text-purple-300"
+                      >
+                        <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                        {chain}
+                      </a>
+                    <% end %>
+                  </div>
                 </div>
               </div>
 
@@ -647,24 +667,24 @@ defmodule LassoWeb.HomeLive do
                       chain: mainnet,
                     </div>
                     <div class="pl-4">
-                      transport: http(<span class="text-emerald-300">"https://{@base_url}/rpc/<span class="font-bold text-yellow-300">{@strategy_details.url}</span>/eth"</span>)
+                      transport: http(<span class="text-emerald-300">"https://{@base_url}/rpc/<span class="font-bold text-yellow-300">{@strategy_details.url}</span>"</span>)
                     </div>
                     <div>&#125;);</div>
 
                     <div class="mt-8"></div>
 
                     <div class="mb-2 italic text-gray-500">
-                      // Prioritize best sync for real-time block updates
+                      // {@strategy_details.comment} (WebSocket)
                     </div>
                     <div>
                       <span class="text-purple-400">const</span>
-                      clientRealtime = createPublicClient(&#123;
+                      {@strategy_details.var_name}Ws = createPublicClient(&#123;
                     </div>
                     <div class="pl-4">
                       chain: mainnet,
                     </div>
                     <div class="pl-4">
-                      transport: webSocket(<span class="text-emerald-300">"wss://{@base_url}/ws/rpc/<span class="font-bold text-yellow-300">best-sync</span>/eth"</span>)
+                      transport: webSocket(<span class="text-emerald-300">"wss://{@base_url}/ws/rpc/<span class="font-bold text-yellow-300">{@strategy_details.url}</span>"</span>)
                     </div>
                     <div>&#125;);</div>
                   </div>
@@ -782,8 +802,13 @@ defmodule LassoWeb.HomeLive do
               <div class="space-y-8">
                 <div class="space-y-4">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
-                    <span class="h-[1px] w-8 bg-sky-400"></span> Deep Observability
+                    <span class="h-[1px] w-8 bg-sky-400"></span>
                   </div>
+
+                  <h2 class="text-3xl font-bold text-white sm:text-4xl">
+                    Deep Observability
+                  </h2>
+
                   <p class="max-w-[500px] text-base leading-relaxed text-gray-400">
                     Get a unified view of your entire RPC layer. See where providers are winning and where providers are failing with granular metrics...
                   </p>
