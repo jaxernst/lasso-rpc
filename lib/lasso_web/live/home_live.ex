@@ -311,56 +311,104 @@ defmodule LassoWeb.HomeLive do
             <section
               id="hero-section"
               phx-hook="ScrollReveal"
-              class="grid translate-y-8 items-center gap-10 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.15fr)] lg:gap-16"
+              class="relative min-h-[600px] translate-y-8 opacity-0 transition-all duration-1000 ease-out lg:min-h-[700px]"
             >
-              <div class="animate-fade-in-up space-y-8">
-                <div class="space-y-5 lg:space-y-8">
-                  <h1 class="text-balance leading-[1.1] text-3xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
-                    Smart RPC aggregation for
-                    <span class="bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
-                      consumer grade
-                    </span>
-                    blockchain apps.
-                  </h1>
+              <!-- Oversized graphic that bleeds beyond section (underlaps header via z-index) -->
+              <div class="pointer-events-none absolute inset-0 -right-[30%] -top-[15%] -bottom-[30%] overflow-visible lg:-right-[20%] lg:-top-[25%] lg:-bottom-[40%]">
+                <LandingHeroGraphic.graphic
+                  routing_decisions={@routing_decisions}
+                  is_live={@is_live}
+                />
+              </div>
 
-                  <div class="flex flex-wrap gap-3">
-                    <div class="border-purple-500/30 bg-blue-400/10 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
-                      <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+              <!-- Content overlay -->
+              <div class="relative z-10 grid items-center gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:gap-16">
+                <div class="animate-fade-in-up space-y-8">
+                  <div class="space-y-5 lg:space-y-8">
+                    <h1 class="text-balance leading-[1.1] text-3xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
+                      Smart RPC aggregation for
+                      <span class="bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
+                        consumer grade
                       </span>
-                      {@total_endpoints} live public RPC endpoints
+                      blockchain apps.
+                    </h1>
+
+                    <div class="flex flex-wrap gap-3">
+                      <div class="border-purple-500/30 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                        <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                        </span>
+                        {@total_endpoints} live public RPC endpoints
+                      </div>
+
+                      <div class="border-purple-500/30 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                        <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                        </span>
+                        {@total_providers} node providers
+                      </div>
+
+                      <div class="border-purple-500/30 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                        <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                        </span>
+                        {@total_strategies} configurable routing strategies
+                      </div>
                     </div>
 
-                    <div class="border-purple-500/30 bg-blue-400/10 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
-                      <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                    <p class="max-w-xl text-base leading-relaxed text-gray-300 sm:text-lg">
+                      Lasso wrangles your node infrastructure and turns it into a
+                      <span class="border-purple-500/50 border-b font-medium text-gray-100">
+                        fast, performant, reliable, and deeply configurable
                       </span>
-                      {@total_providers} node providers
-                    </div>
-
-                    <div class="border-purple-500/30 bg-blue-400/10 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
-                      <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
-                      </span>
-                      {@total_strategies} configurable routing strategies
-                    </div>
+                      RPC layer. No SDKs, no downtime, just better RPC endpoints.
+                    </p>
                   </div>
 
-                  <p class="max-w-xl text-base leading-relaxed text-gray-300 sm:text-lg">
-                    Lasso wrangles your node infrastructure and turns it into a
-                    <span class="border-purple-500/50 border-b font-medium text-gray-100">
-                      fast, performant, reliable, and deeply configurable
-                    </span>
-                    RPC layer. No SDKs, no downtime, just better RPC endpoints.
-                  </p>
-                </div>
-
-                <div class="flex flex-wrap items-center gap-4 pt-4">
-                  <a
-                    href="/dashboard"
-                    class="group shadow-purple-500/20 relative inline-flex items-center gap-2 rounded-lg bg-purple-600 px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all hover:shadow-purple-500/40 hover:scale-105 hover:bg-purple-500"
-                  >
-                    <span class="relative z-10 flex items-center gap-2">
-                      Open live dashboard
+                  <div class="flex flex-wrap items-center gap-4 pt-4">
+                    <a
+                      href="/dashboard"
+                      class="group shadow-purple-500/20 relative inline-flex items-center gap-2 rounded-lg bg-purple-600 px-6 py-3 text-sm font-semibold text-white shadow-lg transition-all hover:shadow-purple-500/40 hover:scale-105 hover:bg-purple-500"
+                    >
+                      <span class="relative z-10 flex items-center gap-2">
+                        Open live dashboard
+                        <svg
+                          class="h-4 w-4 transition-transform group-hover:translate-x-1"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M13 7l5 5m0 0-5 5m5-5H6"
+                          />
+                        </svg>
+                      </span>
+                    </a>
+                    <a
+                      href="https://github.com/LazerTechnologies/lasso-rpc"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="group border-gray-700/70 bg-gray-900/60 inline-flex items-center gap-2 rounded-lg border px-6 py-3 text-sm font-semibold text-gray-200 backdrop-blur-sm transition-all hover:border-gray-500 hover:bg-gray-800 hover:text-white"
+                    >
                       <svg
-                        class="h-4 w-4 transition-transform group-hover:translate-x-1"
+                        class="h-5 w-5 transition-transform group-hover:rotate-12"
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          fill-rule="evenodd"
+                          clip-rule="evenodd"
+                          d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"
+                        />
+                      </svg>
+                      View on GitHub
+                    </a>
+                  </div>
+
+                  <div class="flex flex-wrap items-center gap-3 pt-2 text-sm font-medium tracking-tight text-gray-400">
+                    <span class="flex items-center gap-1.5">
+                      <svg
+                        class="h-4 w-4 text-emerald-500"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -369,95 +417,53 @@ defmodule LassoWeb.HomeLive do
                           stroke-linecap="round"
                           stroke-linejoin="round"
                           stroke-width="2"
-                          d="M13 7l5 5m0 0-5 5m5-5H6"
-                        />
+                          d="M5 13l4 4L19 7"
+                        >
+                        </path>
                       </svg>
+                      HTTP + WebSocket endpoints
                     </span>
-                  </a>
-                  <a
-                    href="https://github.com/LazerTechnologies/lasso-rpc"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="group border-gray-700/70 bg-gray-900/60 inline-flex items-center gap-2 rounded-lg border px-6 py-3 text-sm font-semibold text-gray-200 transition-all hover:border-gray-500 hover:bg-gray-800 hover:text-white"
-                  >
-                    <svg
-                      class="h-5 w-5 transition-transform group-hover:rotate-12"
-                      fill="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        fill-rule="evenodd"
-                        clip-rule="evenodd"
-                        d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"
-                      />
-                    </svg>
-                    View on GitHub
-                  </a>
+                    <span class="h-1 w-1 rounded-full bg-gray-700"></span>
+                    <span class="flex items-center gap-1.5">
+                      <svg
+                        class="h-4 w-4 text-emerald-500"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M5 13l4 4L19 7"
+                        >
+                        </path>
+                      </svg>
+                      Ethereum JSON-RPC superset
+                    </span>
+                    <span class="h-1 w-1 rounded-full bg-gray-700"></span>
+                    <span class="flex items-center gap-1.5">
+                      <svg
+                        class="h-4 w-4 text-emerald-500"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M5 13l4 4L19 7"
+                        >
+                        </path>
+                      </svg>
+                      Automatic failover + redundancy
+                    </span>
+                  </div>
                 </div>
 
-                <div class="flex flex-wrap items-center gap-3 pt-2 text-sm font-medium tracking-tight text-gray-400">
-                  <span class="flex items-center gap-1.5">
-                    <svg
-                      class="h-4 w-4 text-emerald-500"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M5 13l4 4L19 7"
-                      >
-                      </path>
-                    </svg>
-                    HTTP + WebSocket endpoints
-                  </span>
-                  <span class="h-1 w-1 rounded-full bg-gray-700"></span>
-                  <span class="flex items-center gap-1.5">
-                    <svg
-                      class="h-4 w-4 text-emerald-500"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M5 13l4 4L19 7"
-                      >
-                      </path>
-                    </svg>
-                    Ethereum JSON-RPC superset
-                  </span>
-                  <span class="h-1 w-1 rounded-full bg-gray-700"></span>
-                  <span class="flex items-center gap-1.5">
-                    <svg
-                      class="h-4 w-4 text-emerald-500"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M5 13l4 4L19 7"
-                      >
-                      </path>
-                    </svg>
-                    Automatic failover + redundancy
-                  </span>
-                </div>
-              </div>
-              
-    <!-- Dashboard-style callout -->
-              <div class="animate-float relative z-10">
-                <LandingHeroGraphic.graphic
-                  routing_decisions={@routing_decisions}
-                  is_live={@is_live}
-                />
+                <!-- Spacer for graphic area on larger screens -->
+                <div class="hidden lg:block"></div>
               </div>
             </section>
             
