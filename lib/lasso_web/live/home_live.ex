@@ -1,6 +1,9 @@
 defmodule LassoWeb.HomeLive do
   use LassoWeb, :live_view
   alias LassoWeb.Components.DashboardHeader
+  alias LassoWeb.Components.LatencyHeatmap
+  alias Lasso.Config.ConfigStore
+  alias Lasso.Benchmarking.BenchmarkStore
 
   @impl true
   def mount(_params, _session, socket) do
@@ -10,6 +13,10 @@ defmodule LassoWeb.HomeLive do
 
     config_status = Lasso.Config.ConfigStore.status()
     base_url = URI.parse(LassoWeb.Endpoint.url()).authority
+
+    # Load initial heatmap data
+    heatmap_chain = "ethereum"
+    {heatmap_data, heatmap_methods, heatmap_live} = load_heatmap_data(heatmap_chain)
 
     socket =
       socket
@@ -28,6 +35,10 @@ defmodule LassoWeb.HomeLive do
       |> assign(:total_providers, config_status.total_providers)
       |> assign(:total_strategies, config_status.total_strategies)
       |> assign(:is_live, false)
+      |> assign(:heatmap_chain, heatmap_chain)
+      |> assign(:heatmap_data, heatmap_data)
+      |> assign(:heatmap_methods, heatmap_methods)
+      |> assign(:heatmap_live, heatmap_live)
 
     {:ok, socket}
   end
@@ -47,11 +58,18 @@ defmodule LassoWeb.HomeLive do
         {rotate_decisions(socket.assigns.routing_decisions), false}
       end
 
+    # Refresh heatmap data
+    {heatmap_data, heatmap_methods, heatmap_live} =
+      load_heatmap_data(socket.assigns.heatmap_chain)
+
     {:noreply,
      socket
      |> assign(:routing_decisions, new_decisions)
      |> assign(:is_live, is_live)
-     |> assign(:metrics, fluctuate_metrics(socket.assigns.metrics))}
+     |> assign(:metrics, fluctuate_metrics(socket.assigns.metrics))
+     |> assign(:heatmap_data, heatmap_data)
+     |> assign(:heatmap_methods, heatmap_methods)
+     |> assign(:heatmap_live, heatmap_live)}
   end
 
   defp initial_decisions do
@@ -161,6 +179,59 @@ defmodule LassoWeb.HomeLive do
     new_success = max(98.0, min(100.0, metrics.success_rate + Enum.random(-10..10) / 100))
 
     %{latency: new_latency, success_rate: Float.round(new_success, 2)}
+  end
+
+  # Load heatmap data from BenchmarkStore for a specific chain
+  defp load_heatmap_data(chain_name) do
+    # Get providers configured for this chain
+    providers =
+      case ConfigStore.get_providers(chain_name) do
+        {:ok, provider_list} -> provider_list
+        _ -> []
+      end
+
+    # Get realtime stats to find available RPC methods
+    realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
+    rpc_methods = Map.get(realtime_stats, :rpc_methods, [])
+
+    # If no data, return empty state
+    if Enum.empty?(providers) or Enum.empty?(rpc_methods) do
+      {[], [], false}
+    else
+      # Build heatmap data: for each provider, get latency per method
+      heatmap_data =
+        providers
+        |> Enum.map(fn provider ->
+          method_latencies =
+            rpc_methods
+            |> Enum.reduce(%{}, fn method, acc ->
+              case BenchmarkStore.get_rpc_method_performance_with_percentiles(
+                     chain_name,
+                     provider.id,
+                     method
+                   ) do
+                %{avg_duration_ms: avg_latency} when is_number(avg_latency) ->
+                  Map.put(acc, method, avg_latency)
+
+                _ ->
+                  acc
+              end
+            end)
+
+          %{
+            id: provider.id,
+            name: provider.name || provider.id,
+            method_latencies: method_latencies
+          }
+        end)
+        # Only include providers that have at least one method with data
+        |> Enum.filter(fn p -> map_size(p.method_latencies) > 0 end)
+
+      # Determine if we have live data
+      has_data = length(heatmap_data) > 0
+
+      {heatmap_data, rpc_methods, has_data}
+    end
   end
 
   @impl true
@@ -706,14 +777,13 @@ defmodule LassoWeb.HomeLive do
             <section
               id="feature-observability"
               phx-hook="ScrollReveal"
-              class="grid translate-y-8 items-center gap-8 opacity-0 transition-all duration-1000 ease-out lg:grid-cols-2 lg:gap-12"
+              class="grid translate-y-8 items-start gap-4 opacity-0 transition-all duration-1000 ease-out 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:gap-12"
             >
               <div class="space-y-8">
                 <div class="space-y-4">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
                     <span class="h-[1px] w-8 bg-sky-400"></span> Deep Observability
                   </div>
-                  <h2 class="text-3xl font-bold text-white sm:text-4xl"></h2>
                   <p class="text-base leading-relaxed text-gray-400">
                     Get a unified view of your entire RPC layer. See exactly which providers are winning, which are failing, and where your latency is coming from.
                   </p>
@@ -750,83 +820,15 @@ defmodule LassoWeb.HomeLive do
                   </a>
                 </div>
               </div>
-
-              <div class="bg-gray-950/50 relative transform rounded-2xl border border-gray-800 p-1 shadow-2xl transition-transform duration-500 hover:scale-[1.01]">
-                <div class="from-sky-500/10 absolute -inset-px rounded-2xl bg-gradient-to-b to-transparent opacity-50">
-                </div>
-                <div class="bg-gray-900/90 relative rounded-xl p-4 sm:p-6">
-                  <!-- Mock Metrics UI -->
-                  <div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div class="bg-gray-800/40 border-gray-700/30 rounded-xl border p-4">
-                      <div class="text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                        Avg Latency
-                      </div>
-                      <div class="mt-1 text-2xl font-bold text-white">
-                        {@metrics.latency}<span class="ml-1 text-sm font-normal text-gray-500">ms</span>
-                      </div>
-                      <div class="bg-gray-700/50 mt-3 h-1.5 w-full overflow-hidden rounded-full">
-                        <div
-                          class="h-full bg-sky-500 transition-all duration-1000 ease-out"
-                          style={"width: #{@metrics.latency}%"}
-                        >
-                        </div>
-                      </div>
-                    </div>
-                    <div class="bg-gray-800/40 border-gray-700/30 rounded-xl border p-4">
-                      <div class="text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                        Success Rate
-                      </div>
-                      <div class="mt-1 text-2xl font-bold text-emerald-400">
-                        {@metrics.success_rate}<span class="ml-1 text-sm font-normal text-gray-500">%</span>
-                      </div>
-                      <div class="bg-gray-700/50 mt-3 h-1.5 w-full overflow-hidden rounded-full">
-                        <div class="h-full w-full bg-emerald-500"></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="space-y-4">
-                    <div class="text-[10px] flex items-center justify-between font-bold uppercase tracking-wider text-gray-500">
-                      <span>Provider</span>
-                      <span>Win Rate</span>
-                    </div>
-                    <div class="space-y-3">
-                      <div class="group flex items-center gap-3 text-xs">
-                        <span class="w-24 truncate font-medium text-gray-300">alchemy_eth</span>
-                        <div class="h-2.5 flex-1 overflow-hidden rounded-full bg-gray-800">
-                          <div
-                            class="h-full bg-purple-500 transition-colors group-hover:bg-purple-400"
-                            style="width: 65%"
-                          >
-                          </div>
-                        </div>
-                        <span class="font-mono text-gray-400">65%</span>
-                      </div>
-                      <div class="group flex items-center gap-3 text-xs">
-                        <span class="w-24 truncate font-medium text-gray-300">infura_eth</span>
-                        <div class="h-2.5 flex-1 overflow-hidden rounded-full bg-gray-800">
-                          <div
-                            class="bg-purple-500/60 h-full transition-colors group-hover:bg-purple-400/60"
-                            style="width: 25%"
-                          >
-                          </div>
-                        </div>
-                        <span class="font-mono text-gray-400">25%</span>
-                      </div>
-                      <div class="group flex items-center gap-3 text-xs">
-                        <span class="w-24 truncate font-medium text-gray-300">public_node</span>
-                        <div class="h-2.5 flex-1 overflow-hidden rounded-full bg-gray-800">
-                          <div
-                            class="bg-purple-500/30 h-full transition-colors group-hover:bg-purple-400/30"
-                            style="width: 10%"
-                          >
-                          </div>
-                        </div>
-                        <span class="font-mono text-gray-400">10%</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+              
+    <!-- Real Latency Heatmap -->
+              <div class="hidden w-full flex-col items-start overflow-hidden sm:flex">
+                <LatencyHeatmap.heatmap
+                  heatmap_data={@heatmap_data}
+                  methods={@heatmap_methods}
+                  chain_name={@heatmap_chain}
+                  is_live={@heatmap_live}
+                />
               </div>
             </section>
           </div>

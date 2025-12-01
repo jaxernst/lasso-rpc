@@ -1121,10 +1121,10 @@ defmodule LassoWeb.Dashboard do
           </div>
         </div>
 
-        <!-- CONNECTION -->
+        <!-- CIRCUIT BREAKER -->
         <div class="border-gray-700/50 border-b p-4">
-          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Connection</h4>
-          <div class="space-y-4">
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Circuit Breaker</h4>
+          <div class="space-y-2">
             <!-- HTTP Circuit Breaker -->
             <% has_http = Map.get(@provider_connection, :url) != nil %>
             <%= if has_http do %>
@@ -1145,9 +1145,9 @@ defmodule LassoWeb.Dashboard do
                     :half_open -> "text-yellow-400"
                     :open -> "text-red-400"
                   end
-                ]}>{http_state |> to_string() |> String.replace("_", "-") |> String.capitalize()}</span>
+                ]}>{if http_state == :closed, do: "Connected", else: http_state |> to_string() |> String.replace("_", "-") |> String.capitalize()}</span>
               </div>
-              <div class="flex justify-between text-[10px] text-gray-600 px-11">
+              <div class="flex pb-3 justify-between text-[10px] text-gray-600 px-11">
                 <span>closed</span>
                 <span>half-open</span>
                 <span>open</span>
@@ -1185,7 +1185,7 @@ defmodule LassoWeb.Dashboard do
                   end}
                 </span>
               </div>
-              <div class="flex justify-between text-[10px] text-gray-600 px-11">
+              <div class="flex pb-3 justify-between text-[10px] text-gray-600 px-11">
                 <span>closed</span>
                 <span>half-open</span>
                 <span>open</span>
