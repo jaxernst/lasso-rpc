@@ -1097,6 +1097,62 @@ const ExpandableDetails = {
   },
 };
 
+// Heatmap Animation Hook - adds dynamic cell highlighting effects
+const HeatmapAnimation = {
+  mounted() {
+    this.cells = [];
+    this.highlightInterval = null;
+
+    // Start random highlight effect when live
+    this.startHighlightEffect();
+  },
+
+  updated() {
+    // Refresh cell references and restart effect
+    this.startHighlightEffect();
+  },
+
+  startHighlightEffect() {
+    // Clear existing interval
+    if (this.highlightInterval) {
+      clearInterval(this.highlightInterval);
+    }
+
+    // Get all heatmap cells
+    this.cells = Array.from(this.el.querySelectorAll('.heatmap-cell'));
+
+    if (this.cells.length === 0) return;
+
+    // Random highlight every 800-1500ms
+    this.highlightInterval = setInterval(() => {
+      this.highlightRandomCell();
+    }, 800 + Math.random() * 700);
+  },
+
+  highlightRandomCell() {
+    if (this.cells.length === 0) return;
+
+    const cell = this.cells[Math.floor(Math.random() * this.cells.length)];
+
+    // Add a quick flash effect
+    cell.style.transition = 'filter 0.15s ease-out, transform 0.15s ease-out';
+    cell.style.filter = 'brightness(1.4)';
+    cell.style.transform = 'scale(1.05)';
+
+    // Reset after flash
+    setTimeout(() => {
+      cell.style.filter = '';
+      cell.style.transform = '';
+    }, 150);
+  },
+
+  destroyed() {
+    if (this.highlightInterval) {
+      clearInterval(this.highlightInterval);
+    }
+  }
+};
+
 // Parallax Background Hook
 const ParallaxBackground = {
   mounted() {
@@ -1156,6 +1212,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     ScrollReveal,
     ParallaxBackground,
     ExpandableDetails,
+    HeatmapAnimation,
   },
 });
 
