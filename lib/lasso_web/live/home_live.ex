@@ -784,36 +784,17 @@ defmodule LassoWeb.HomeLive do
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
                     <span class="h-[1px] w-8 bg-sky-400"></span> Deep Observability
                   </div>
-                  <p class="text-base leading-relaxed text-gray-400">
-                    Get a unified view of your entire RPC layer. See exactly which providers are winning, which are failing, and where your latency is coming from.
+                  <p class="max-w-[500px] text-base leading-relaxed text-gray-400">
+                    Get a unified view of your entire RPC layer. See where providers are winning and where providers are failing with granular metrics...
                   </p>
                 </div>
-
-                <ul class="space-y-4 text-sm text-gray-300">
-                  <li class="bg-gray-900/20 flex items-center gap-4 rounded-lg border border-transparent p-3 transition-colors hover:border-sky-500/20">
-                    <div class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-sky-400"></div>
-                    Real-time latency percentiles (p50, p95, p99)
-                  </li>
-                  <li class="bg-gray-900/20 flex items-center gap-4 rounded-lg border border-transparent p-3 transition-colors hover:border-sky-500/20">
-                    <div class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-sky-400"></div>
-                    Live routing decision stream
-                  </li>
-                  <li class="bg-gray-900/20 flex items-center gap-4 rounded-lg border border-transparent p-3 transition-colors hover:border-sky-500/20">
-                    <div class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-sky-400"></div>
-                    Exportable metrics for external analysis
-                  </li>
-                  <li class="bg-gray-900/20 flex items-center gap-4 rounded-lg border border-transparent p-3 transition-colors hover:border-sky-500/20">
-                    <div class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-sky-400"></div>
-                    Transparent Request Tracing
-                  </li>
-                </ul>
 
                 <div class="pt-4">
                   <a
                     href="/dashboard"
                     class="group inline-flex items-center gap-2 text-sm font-bold text-sky-400 transition-colors hover:text-sky-300"
                   >
-                    Explore the dashboard
+                    Explore the metrics
                     <span aria-hidden="true" class="transition-transform group-hover:translate-x-1">
                       →
                     </span>
@@ -822,7 +803,7 @@ defmodule LassoWeb.HomeLive do
               </div>
               
     <!-- Real Latency Heatmap -->
-              <div class="hidden w-full flex-col items-start overflow-hidden sm:flex">
+              <div class="hidden w-full flex-col items-start overflow-x-visible sm:flex">
                 <LatencyHeatmap.heatmap
                   heatmap_data={@heatmap_data}
                   methods={@heatmap_methods}
