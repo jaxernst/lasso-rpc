@@ -623,19 +623,6 @@ defmodule LassoWeb.HomeLive do
                       </p>
                     </div>
                   </button>
-
-                  <div class="mt-5 flex flex-wrap items-center gap-2">
-                    <span class="ml-5 pr-2 text-sm font-medium text-gray-400">View endpoints: </span>
-                    <%= for chain <- @available_chains do %>
-                      <a
-                        href={"/dashboard?chain=#{chain}"}
-                        class="group bg-gray-800/50 inline-flex items-center gap-1.5 rounded-full border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-300 transition-all hover:border-purple-500/50 hover:bg-purple-500/10 hover:text-purple-300"
-                      >
-                        <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-                        {chain}
-                      </a>
-                    <% end %>
-                  </div>
                 </div>
               </div>
 
@@ -687,6 +674,23 @@ defmodule LassoWeb.HomeLive do
                       transport: webSocket(<span class="text-emerald-300">"wss://{@base_url}/ws/rpc/<span class="font-bold text-yellow-300">{@strategy_details.url}</span>"</span>)
                     </div>
                     <div>&#125;);</div>
+                  </div>
+
+                  <div class="mt-2 ml-2 flex flex-wrap items-center gap-2 py-2">
+                    <div class="pr-2 pb-1 text-sm font-medium text-gray-400">
+                      View endpoints
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 pl-2">
+                      <%= for chain <- @available_chains do %>
+                        <a
+                          href={"/dashboard?chain=#{chain}"}
+                          class="group bg-gray-800/50 inline-flex items-center gap-1.5 rounded-full border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-300 transition-all hover:border-purple-500/50 hover:bg-purple-500/10 hover:text-purple-300"
+                        >
+                          <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                          {chain}
+                        </a>
+                      <% end %>
+                    </div>
                   </div>
                 </div>
               </div>
