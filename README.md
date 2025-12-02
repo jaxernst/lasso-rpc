@@ -281,15 +281,6 @@ This returns `X-Lasso-Request-ID` and a base64url `X-Lasso-Meta` header. Use `in
 
 ---
 
-## Limitations
-
-- Read-only only: write methods (for example, `eth_sendRawTransaction`) are not supported.
-- HTTP batching: JSON-RPC batch requests are supported via HTTP (default maximum 50 items per batch, configurable).
-- WebSocket: individual messages only; do not send batch arrays over WebSocket (will crash the connection). Send each request as a separate JSON object.
-- Compatibility: provider-specific api inconsistencies are normalized, but method availability and proivder-specific adapters and error parsing likely have coverage gaps that will improve over time
-
----
-
 ## Architecture
 
 Architecture brief (see full document for details):
