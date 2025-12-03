@@ -235,16 +235,10 @@ defmodule Lasso.RPC.TransportRegistry do
     {:noreply, new_state}
   end
 
+  # WebSocket connection established - create WS channel
   @impl true
-  def handle_info({:ws_connected, provider_id}, state) do
-    # Create WS channel on connect (idempotent)
-    new_state =
-      case create_channel(state, provider_id, :ws, []) do
-        {:ok, _ch, s} -> s
-        {:error, _} -> state
-      end
-
-    {:noreply, new_state}
+  def handle_info({:ws_connected, provider_id, _connection_id}, state) do
+    handle_ws_connected(provider_id, state)
   end
 
   @impl true
@@ -261,6 +255,18 @@ defmodule Lasso.RPC.TransportRegistry do
 
   @impl true
   def handle_info({_event, _provider_id, _jerr}, state), do: {:noreply, state}
+
+  # Private helper for ws_connected handling
+  defp handle_ws_connected(provider_id, state) do
+    # Create WS channel on connect (idempotent)
+    new_state =
+      case create_channel(state, provider_id, :ws, []) do
+        {:ok, _ch, s} -> s
+        {:error, _} -> state
+      end
+
+    {:noreply, new_state}
+  end
 
   # Private functions
 

@@ -80,6 +80,16 @@ defmodule Lasso.Testing.MockWSProvider do
       # Mark as healthy so it can be selected
       Lasso.RPC.ProviderPool.report_success(chain, provider_id)
 
+      # Generate connection_id and broadcast ws_connected event
+      # This is required by UpstreamSubscriptionManager to allow subscriptions
+      connection_id = "conn_mock_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
+
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        "ws:conn:#{chain}",
+        {:ws_connected, provider_id, connection_id}
+      )
+
       # Set up cleanup monitor
       setup_cleanup_monitor(chain, provider_id, pid)
 

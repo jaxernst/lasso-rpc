@@ -777,35 +777,10 @@ defmodule Lasso.RPC.ProviderPool do
     {:noreply, new_state}
   end
 
-  # Typed WS connection events
+  # WebSocket connection established
   @impl true
-  def handle_info({:ws_connected, provider_id}, state) do
-    case Map.get(state.providers, provider_id) do
-      nil ->
-        {:noreply, state}
-
-      provider ->
-        # Set grace period: keep reconnect_attempts for 30s after reconnection
-        # This allows dashboard to show "Reconnecting" status while provider stabilizes
-        grace_period_ms = 30_000
-        grace_until = System.monotonic_time(:millisecond) + grace_period_ms
-
-        updated =
-          provider
-          |> Map.put(:ws_status, :healthy)
-          |> Map.put(:status, derive_aggregate_status(provider))
-          |> Map.put(:consecutive_successes, provider.consecutive_successes + 1)
-          |> Map.put(:consecutive_failures, 0)
-          |> Map.put(:last_health_check, System.system_time(:millisecond))
-          |> Map.put(:reconnect_grace_until, grace_until)
-
-        # Schedule grace period cleanup
-        Process.send_after(self(), {:clear_reconnect_grace, provider_id}, grace_period_ms)
-
-        publish_provider_event(state.chain_name, provider_id, :ws_connected, %{})
-        new_state = put_provider_and_refresh(state, provider_id, updated)
-        {:noreply, new_state}
-    end
+  def handle_info({:ws_connected, provider_id, _connection_id}, state) do
+    handle_ws_connected(provider_id, state)
   end
 
   @impl true
@@ -1115,6 +1090,36 @@ defmodule Lasso.RPC.ProviderPool do
       nil ->
         Logger.debug("Unknown process died: #{inspect(pid)}")
         {:noreply, state}
+    end
+  end
+
+  # Handler for ws_connected events (extracted to avoid clause ordering warning)
+  defp handle_ws_connected(provider_id, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        # Set grace period: keep reconnect_attempts for 30s after reconnection
+        # This allows dashboard to show "Reconnecting" status while provider stabilizes
+        grace_period_ms = 30_000
+        grace_until = System.monotonic_time(:millisecond) + grace_period_ms
+
+        updated =
+          provider
+          |> Map.put(:ws_status, :healthy)
+          |> Map.put(:status, derive_aggregate_status(provider))
+          |> Map.put(:consecutive_successes, provider.consecutive_successes + 1)
+          |> Map.put(:consecutive_failures, 0)
+          |> Map.put(:last_health_check, System.system_time(:millisecond))
+          |> Map.put(:reconnect_grace_until, grace_until)
+
+        # Schedule grace period cleanup
+        Process.send_after(self(), {:clear_reconnect_grace, provider_id}, grace_period_ms)
+
+        publish_provider_event(state.chain_name, provider_id, :ws_connected, %{})
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
     end
   end
 

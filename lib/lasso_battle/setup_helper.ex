@@ -268,7 +268,7 @@ defmodule Lasso.Battle.SetupHelper do
 
     try do
       receive do
-        {:ws_connected, ^provider_id} ->
+        {:ws_connected, ^provider_id, _connection_id} ->
           Logger.info("✓ WebSocket connected for #{provider_id}")
           :ok
 

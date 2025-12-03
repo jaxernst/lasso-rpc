@@ -50,9 +50,26 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
     {:ok, chain: test_chain, provider: test_provider}
   end
 
+  # Helper to simulate connection establishment for tests
+  # Broadcasts ws_connected directly to UpstreamSubscriptionManager without triggering
+  # other listeners (like BlockHeightMonitor) that might create automatic subscriptions
+  defp establish_connection_for_manager(chain, provider) do
+    connection_id = "conn_test_#{System.unique_integer([:positive])}"
+
+    # Get the manager pid directly and send the event
+    [{manager_pid, _}] = Registry.lookup(Lasso.Registry, {:upstream_sub_manager, chain})
+    send(manager_pid, {:ws_connected, provider, connection_id})
+    Process.sleep(20)
+
+    connection_id
+  end
+
   describe "subscription lifecycle" do
     test "first consumer creates new upstream subscription", %{chain: chain, provider: provider} do
-      key = {:newHeads}
+      # Use a logs key to avoid race with BlockHeightMonitor which auto-subscribes to newHeads
+      key = {:logs, %{"address" => "0xtest123"}}
+
+      # Connection already established by MockWSProvider.start_mock()
 
       # First consumer
       {:ok, status} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key)
@@ -62,14 +79,17 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
 
       # Verify subscription was created
       manager_status = UpstreamSubscriptionManager.get_status(chain)
-      assert map_size(manager_status.active_subscriptions) == 1
+      assert map_size(manager_status.active_subscriptions) >= 1
       assert manager_status.active_subscriptions[{provider, key}] != nil
       assert manager_status.active_subscriptions[{provider, key}].upstream_id != nil
     end
 
     test "second consumer joins existing subscription", %{chain: chain, provider: provider} do
-      key = {:newHeads}
+      # Use a logs key to avoid race with BlockHeightMonitor which auto-subscribes to newHeads
+      key = {:logs, %{"address" => "0xtest456"}}
       test_pid = self()
+
+      # Connection already established by MockWSProvider.start_mock()
 
       # First consumer (stays alive)
       consumer1 =
@@ -110,10 +130,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
       chain: chain,
       provider: provider
     } do
-      key = {:newHeads}
+      # Use a logs key to avoid interference with BlockHeightMonitor's newHeads subscription
+      key = {:logs, %{"address" => "0xrelease_test"}}
+
+      # Connection already established by MockWSProvider.start_mock()
 
       # Subscribe
-      {:ok, :new} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key)
+      {:ok, _status} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key)
       Process.sleep(100)
 
       # Release (this process is the only consumer)
@@ -136,8 +159,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
     test "new consumer cancels pending teardown", %{chain: chain, provider: provider} do
       key = {:newHeads}
 
+      # Connection already established by MockWSProvider.start_mock()
+
       # First consumer subscribes
-      {:ok, :new} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key)
+      {:ok, _status} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key)
       Process.sleep(100)
 
       # Release
@@ -160,6 +185,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
     } do
       key = {:newHeads}
       test_pid = self()
+
+      # Connection already established by MockWSProvider.start_mock()
 
       # Spawn consumer that will die
       consumer =
@@ -193,6 +220,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
     test "events dispatched to all registered consumers", %{chain: chain, provider: provider} do
       key = {:newHeads}
       test_pid = self()
+
+      # Connection already established by MockWSProvider.start_mock()
 
       # Subscribe from two processes
       consumer1 =
@@ -249,22 +278,20 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
       key1 = {:newHeads}
       key2 = {:logs, %{"address" => "0x123"}}
 
+      # Connection already established by MockWSProvider.start_mock()
+
       # Subscribe to two keys
-      {:ok, :new} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key1)
-      {:ok, :new} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key2)
+      {:ok, _status1} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key1)
+      {:ok, _status2} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key2)
       Process.sleep(200)
 
       # Verify both subscriptions exist
       status_before = UpstreamSubscriptionManager.get_status(chain)
-      assert map_size(status_before.active_subscriptions) == 2
+      assert map_size(status_before.active_subscriptions) >= 2
 
-      # Simulate provider disconnect via PubSub
-      Phoenix.PubSub.broadcast(
-        Lasso.PubSub,
-        "provider_pool:events:#{chain}",
-        {:provider_event, %{type: :ws_disconnected, provider_id: provider}}
-      )
-
+      # Simulate provider disconnect via ws:conn PubSub channel (direct to manager)
+      [{manager_pid, _}] = Registry.lookup(Lasso.Registry, {:upstream_sub_manager, chain})
+      send(manager_pid, {:ws_disconnected, provider, %{reason: :test_disconnect}})
       Process.sleep(100)
 
       # Verify both subscriptions cleaned up
@@ -275,8 +302,11 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
 
   describe "concurrent access" do
     test "concurrent ensure_subscription calls handled safely", %{chain: chain, provider: provider} do
-      key = {:newHeads}
+      # Use a logs key to avoid race with BlockHeightMonitor which auto-subscribes to newHeads
+      key = {:logs, %{"address" => "0xconcurrent_test"}}
       test_pid = self()
+
+      # Connection already established by MockWSProvider.start_mock()
 
       # Spawn consumers that stay alive until we signal them
       consumers =
@@ -312,9 +342,9 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
       assert new_count == 1
       assert existing_count == 9
 
-      # Verify only ONE upstream subscription created while consumers are alive
+      # Verify only ONE upstream subscription created for this key
       status = UpstreamSubscriptionManager.get_status(chain)
-      assert map_size(status.active_subscriptions) == 1
+      assert status.active_subscriptions[{provider, key}] != nil
       assert status.active_subscriptions[{provider, key}].consumer_count == 10
 
       # Cleanup
@@ -323,6 +353,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
 
     test "rapid subscribe/unsubscribe cycles handled correctly", %{chain: chain, provider: provider} do
       key = {:newHeads}
+
+      # Connection already established by MockWSProvider.start_mock()
 
       # Rapid cycles
       for _ <- 1..5 do
@@ -363,13 +395,15 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
       key1 = {:newHeads}
       key2 = {:logs, %{"address" => "0x123"}}
 
+      # Connection already established by MockWSProvider.start_mock()
+
       # Subscribe to both
-      {:ok, :new} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key1)
-      {:ok, :new} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key2)
+      {:ok, _status1} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key1)
+      {:ok, _status2} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key2)
       Process.sleep(200)
 
       status = UpstreamSubscriptionManager.get_status(chain)
-      assert map_size(status.active_subscriptions) == 2
+      assert map_size(status.active_subscriptions) >= 2
 
       # Each has its own upstream_id
       id1 = status.active_subscriptions[{provider, key1}].upstream_id
@@ -384,6 +418,116 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
       status = UpstreamSubscriptionManager.get_status(chain)
       assert status.active_subscriptions[{provider, key2}] != nil
       assert status.active_subscriptions[{provider, key2}].marked_for_teardown == false
+    end
+  end
+
+  describe "stale subscription detection (race condition fix)" do
+    @moduledoc """
+    These tests verify the fix for the race condition where fast reconnects
+    could cause stale subscriptions to be reused, resulting in dropped events.
+    """
+
+    test "detects stale subscription after fast reconnect and recreates", %{
+      chain: chain,
+      provider: provider
+    } do
+      key = {:newHeads}
+
+      # First disconnect MockWSProvider's initial connection, then establish our own
+      # This gives us full control over connection_ids for this test
+      [{manager_pid, _}] = Registry.lookup(Lasso.Registry, {:upstream_sub_manager, chain})
+      send(manager_pid, {:ws_disconnected, provider, %{reason: :test_reset}})
+      Process.sleep(50)
+
+      # Establish initial connection with known connection_id
+      conn_id_1 = establish_connection_for_manager(chain, provider)
+      {:ok, _status} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key)
+      Process.sleep(100)
+
+      # Verify initial subscription state
+      status = UpstreamSubscriptionManager.get_status(chain)
+      upstream_id_1 = status.active_subscriptions[{provider, key}].upstream_id
+      assert status.active_subscriptions[{provider, key}].connection_id == conn_id_1
+
+      # Simulate fast reconnect - new connection_id without explicit disconnect
+      # This simulates the race condition where connection changes faster than cleanup
+      conn_id_2 = establish_connection_for_manager(chain, provider)
+      assert conn_id_1 != conn_id_2
+
+      # Consumer tries to reuse subscription - should detect stale and return existing
+      # (but internally recreates with new connection_id)
+      {:ok, _status} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key)
+      Process.sleep(100)
+
+      # Verify subscription was recreated with new connection_id
+      status = UpstreamSubscriptionManager.get_status(chain)
+      upstream_id_2 = status.active_subscriptions[{provider, key}].upstream_id
+      assert status.active_subscriptions[{provider, key}].connection_id == conn_id_2
+
+      # Upstream IDs should be different (new subscription created)
+      assert upstream_id_1 != upstream_id_2
+    end
+
+    test "returns error when connection state is unknown", %{chain: chain} do
+      key = {:newHeads}
+      # Use a provider that was never started (no ws_connected broadcast received)
+      unknown_provider = "unknown_provider_#{System.unique_integer([:positive])}"
+
+      # Don't establish connection - simulate Manager starting after connection
+      # or connection state not yet received
+      result = UpstreamSubscriptionManager.ensure_subscription(chain, unknown_provider, key)
+
+      assert result == {:error, :connection_unknown}
+    end
+
+    test "returns error when provider is disconnected", %{chain: chain, provider: provider} do
+      key = {:newHeads}
+
+      # Connection already established by MockWSProvider.start_mock()
+      {:ok, _status} = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key)
+
+      # Simulate disconnect
+      [{manager_pid, _}] = Registry.lookup(Lasso.Registry, {:upstream_sub_manager, chain})
+      send(manager_pid, {:ws_disconnected, provider, %{reason: :test}})
+      Process.sleep(50)
+
+      # Try to subscribe again - should fail
+      result = UpstreamSubscriptionManager.ensure_subscription(chain, provider, key)
+      assert result == {:error, :not_connected}
+    end
+
+    test "connection state tracks connection_id correctly through lifecycle", %{
+      chain: chain,
+      provider: provider
+    } do
+      # First disconnect MockWSProvider's initial connection, then establish our own
+      # This gives us full control over connection_ids for this test
+      [{manager_pid, _}] = Registry.lookup(Lasso.Registry, {:upstream_sub_manager, chain})
+      send(manager_pid, {:ws_disconnected, provider, %{reason: :test_reset}})
+      Process.sleep(50)
+
+      # Establish connection with known connection_id
+      conn_id_1 = establish_connection_for_manager(chain, provider)
+
+      status = UpstreamSubscriptionManager.get_status(chain)
+      assert status.connection_states[provider].connection_id == conn_id_1
+      assert status.connection_states[provider].status == :connected
+
+      # Disconnect
+      send(manager_pid, {:ws_disconnected, provider, %{reason: :test}})
+      Process.sleep(50)
+
+      status = UpstreamSubscriptionManager.get_status(chain)
+      assert status.connection_states[provider].status == :disconnected
+      assert status.connection_states[provider].connection_id == nil
+
+      # Reconnect with new connection_id
+      conn_id_2 = establish_connection_for_manager(chain, provider)
+
+      status = UpstreamSubscriptionManager.get_status(chain)
+      assert status.connection_states[provider].connection_id == conn_id_2
+      assert status.connection_states[provider].status == :connected
+      assert conn_id_1 != conn_id_2
     end
   end
 end

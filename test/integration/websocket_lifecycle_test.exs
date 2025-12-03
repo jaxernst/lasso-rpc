@@ -111,9 +111,10 @@ defmodule Lasso.Integration.WebSocketLifecycleTest do
       assert metadata.chain == chain
       assert metadata.reconnect_attempt == 0
 
-      # Verify PubSub event also fired (backward compatibility)
-      assert_receive {:ws_connected, provider_id}, 100
+      # Verify PubSub event also fired with connection_id
+      assert_receive {:ws_connected, provider_id, connection_id}, 100
       assert provider_id == endpoint.id
+      assert is_binary(connection_id) and String.starts_with?(connection_id, "conn_")
 
       # Verify status
       status = WSConnection.status(endpoint.id)
