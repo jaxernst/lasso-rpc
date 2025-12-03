@@ -114,7 +114,10 @@ defmodule Lasso.RPC.WSConnection do
       reconnect_attempts: 0,
       pending_requests: %{},
       heartbeat_ref: nil,
-      reconnect_ref: nil
+      reconnect_ref: nil,
+      # Unique ID per connection instance, regenerated on each reconnect
+      # Used by UpstreamSubscriptionManager to detect stale subscriptions
+      connection_id: nil
     }
 
     # Start the connection process
@@ -323,18 +326,23 @@ defmodule Lasso.RPC.WSConnection do
   def handle_info({:ws_connected}, state) do
     CircuitBreaker.record_success({state.chain_name, state.endpoint.id, :ws})
 
+    # Generate new connection_id for this connection instance
+    # This allows consumers to detect when subscriptions are stale (from previous connection)
+    connection_id = generate_connection_id()
+
     :telemetry.execute(
       [:lasso, :websocket, :connected],
       %{},
       %{
         provider_id: state.endpoint.id,
         chain: state.chain_name,
-        reconnect_attempt: state.reconnect_attempts
+        reconnect_attempt: state.reconnect_attempts,
+        connection_id: connection_id
       }
     )
 
     # Now reset the state for next potential disconnect/reconnect cycle
-    state = %{state | connected: true, reconnect_attempts: 0}
+    state = %{state | connected: true, reconnect_attempts: 0, connection_id: connection_id}
 
     # Cancel any pending reconnect timer (stale) now that we're connected
     state =
@@ -348,7 +356,7 @@ defmodule Lasso.RPC.WSConnection do
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
       "ws:conn:#{state.chain_name}",
-      {:ws_connected, state.endpoint.id}
+      {:ws_connected, state.endpoint.id, connection_id}
     )
 
     state = schedule_heartbeat(state)
@@ -973,6 +981,12 @@ defmodule Lasso.RPC.WSConnection do
   end
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+
+  # Generate unique connection ID for tracking connection instances
+  # Used to detect stale subscriptions after reconnect
+  defp generate_connection_id do
+    "conn_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
+  end
 
   defp via_name(connection_id) do
     {:via, Registry, {Lasso.Registry, {:ws_conn, connection_id}}}

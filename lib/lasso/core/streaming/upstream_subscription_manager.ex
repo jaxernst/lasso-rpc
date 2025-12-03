@@ -52,6 +52,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
   @cleanup_interval_ms 30_000
   @teardown_grace_period_ms 60_000
+  # Remove disconnected connection states after 5 minutes to prevent memory growth
+  @stale_connection_cleanup_ms 300_000
 
   @type chain :: String.t()
   @type provider_id :: String.t()
@@ -60,10 +62,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
   defstruct [
     :chain,
-    # %{{provider_id, sub_key} => %{upstream_id, created_at, marked_for_teardown_at}}
+    # %{{provider_id, sub_key} => %{upstream_id, connection_id, created_at, marked_for_teardown_at}}
     active_subscriptions: %{},
     # %{upstream_id => {provider_id, sub_key}} - reverse lookup for incoming events
-    upstream_index: %{}
+    upstream_index: %{},
+    # %{provider_id => %{connection_id, status, connected_at}} - track connection state per provider
+    # Used to detect stale subscriptions after reconnect
+    connection_states: %{}
   ]
 
   # Client API
@@ -130,8 +135,9 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
     # Subscribe to all subscription events for this chain
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:#{chain}")
 
-    # Subscribe to provider events for disconnect handling
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{chain}")
+    # Subscribe to connection events for connection state tracking
+    # This enables connection_id validation to detect stale subscriptions after reconnect
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain}")
 
     # Schedule periodic cleanup check
     Process.send_after(self(), :cleanup_check, @cleanup_interval_ms)
@@ -153,59 +159,19 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   def handle_call({:ensure_subscription, provider_id, sub_key}, _from, state) do
     key = {provider_id, sub_key}
 
-    case Map.get(state.active_subscriptions, key) do
+    # Connection state is required for subscription validation
+    case Map.get(state.connection_states, provider_id) do
       nil ->
-        # First consumer - create upstream subscription
-        case create_upstream_subscription(state.chain, provider_id, sub_key) do
-          {:ok, upstream_id} ->
-            sub_info = %{
-              upstream_id: upstream_id,
-              created_at: System.monotonic_time(:millisecond),
-              marked_for_teardown_at: nil
-            }
+        # Connection state unknown - consumer called before we received ws_connected
+        # Consumer should retry after short delay
+        {:reply, {:error, :connection_unknown}, state}
 
-            new_subs = Map.put(state.active_subscriptions, key, sub_info)
-            new_index = Map.put(state.upstream_index, upstream_id, key)
+      %{status: :disconnected} ->
+        # Provider is disconnected - cannot create subscription
+        {:reply, {:error, :not_connected}, state}
 
-            Logger.info("Created upstream subscription",
-              chain: state.chain,
-              provider_id: provider_id,
-              sub_key: inspect(sub_key),
-              upstream_id: upstream_id
-            )
-
-            emit_telemetry(:subscription_created, state.chain, provider_id, sub_key)
-
-            {:reply, {:ok, :new},
-             %{state | active_subscriptions: new_subs, upstream_index: new_index}}
-
-          {:error, reason} ->
-            # Demote to debug - callers handle their own logging with retry context
-            Logger.debug("Failed to create upstream subscription",
-              chain: state.chain,
-              provider_id: provider_id,
-              sub_key: inspect(sub_key),
-              reason: inspect(reason)
-            )
-
-            {:reply, {:error, reason}, state}
-        end
-
-      %{marked_for_teardown_at: nil} ->
-        # Already exists and not marked for teardown
-        {:reply, {:ok, :existing}, state}
-
-      sub_info ->
-        # Was marked for teardown, cancel it
-        Logger.debug("Cancelling teardown for subscription",
-          chain: state.chain,
-          provider_id: provider_id,
-          sub_key: inspect(sub_key)
-        )
-
-        new_sub_info = %{sub_info | marked_for_teardown_at: nil}
-        new_subs = Map.put(state.active_subscriptions, key, new_sub_info)
-        {:reply, {:ok, :existing}, %{state | active_subscriptions: new_subs}}
+      %{connection_id: current_conn_id} = _conn_state ->
+        handle_subscription_request(state, provider_id, sub_key, key, current_conn_id)
     end
   end
 
@@ -213,6 +179,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   def handle_call(:get_status, _from, state) do
     status = %{
       chain: state.chain,
+      connection_states: state.connection_states,
       active_subscriptions:
         Map.new(state.active_subscriptions, fn {{provider_id, sub_key}, info} ->
           consumer_count =
@@ -221,6 +188,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
           {{provider_id, sub_key},
            %{
              upstream_id: info.upstream_id,
+             connection_id: info.connection_id,
              created_at: info.created_at,
              marked_for_teardown: info.marked_for_teardown_at != nil,
              consumer_count: consumer_count
@@ -276,8 +244,17 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
         {:noreply, state}
 
       nil ->
-        # Orphaned subscription event - likely from before we started or race condition
-        # This is expected during startup or after provider reconnect
+        # Orphaned subscription event - this was previously silent but could mask issues
+        # Log at debug level for visibility (can be filtered if too noisy)
+        Logger.debug("Received event for unknown subscription",
+          chain: state.chain,
+          provider_id: provider_id,
+          upstream_id: upstream_id,
+          active_subscription_count: map_size(state.active_subscriptions),
+          known_upstream_ids: Map.keys(state.upstream_index)
+        )
+
+        emit_telemetry(:orphaned_event, state.chain, provider_id, nil)
         {:noreply, state}
 
       _mismatch ->
@@ -295,13 +272,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   def handle_info(:cleanup_check, state) do
     now = System.monotonic_time(:millisecond)
 
+    # Cleanup subscriptions marked for teardown
     {to_teardown, to_keep} =
       Enum.split_with(state.active_subscriptions, fn {_key, sub_info} ->
         sub_info.marked_for_teardown_at != nil and
           now - sub_info.marked_for_teardown_at >= @teardown_grace_period_ms
       end)
 
-    # Teardown expired subscriptions
     new_upstream_index =
       Enum.reduce(to_teardown, state.upstream_index, fn {{provider_id, sub_key}, sub_info}, acc ->
         teardown_upstream_subscription(state.chain, provider_id, sub_key, sub_info.upstream_id)
@@ -309,31 +286,90 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
         Map.delete(acc, sub_info.upstream_id)
       end)
 
+    # Cleanup stale disconnected connection states to prevent memory growth
+    new_connection_states =
+      Map.filter(state.connection_states, fn {_provider_id, conn_state} ->
+        case conn_state do
+          %{status: :disconnected, disconnected_at: disconnected_at} ->
+            now - disconnected_at < @stale_connection_cleanup_ms
+
+          _ ->
+            true
+        end
+      end)
+
     # Schedule next cleanup
     Process.send_after(self(), :cleanup_check, @cleanup_interval_ms)
 
     {:noreply,
-     %{state | active_subscriptions: Map.new(to_keep), upstream_index: new_upstream_index}}
+     %{
+       state
+       | active_subscriptions: Map.new(to_keep),
+         upstream_index: new_upstream_index,
+         connection_states: new_connection_states
+     }}
   end
 
-  # Handle provider disconnect events - mark affected subscriptions for teardown
-  def handle_info({:provider_event, %{type: type, provider_id: provider_id}}, state)
-      when type in [:ws_disconnected, :ws_closed] do
-    # Find all subscriptions for this provider
+  # Connection established - track connection state for subscription validation
+  def handle_info({:ws_connected, provider_id, connection_id}, state) do
+    Logger.debug("Connection established",
+      chain: state.chain,
+      provider_id: provider_id,
+      connection_id: connection_id
+    )
+
+    conn_state = %{
+      connection_id: connection_id,
+      status: :connected,
+      connected_at: System.monotonic_time(:millisecond)
+    }
+
+    new_connection_states = Map.put(state.connection_states, provider_id, conn_state)
+    {:noreply, %{state | connection_states: new_connection_states}}
+  end
+
+  # Connection lost - invalidate subscriptions and update state
+  def handle_info({:ws_disconnected, provider_id, _error}, state) do
+    handle_disconnect(state, provider_id)
+  end
+
+  def handle_info({:ws_closed, provider_id, _code, _error}, state) do
+    handle_disconnect(state, provider_id)
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp handle_disconnect(state, provider_id) do
+    Logger.debug("Connection disconnected",
+      chain: state.chain,
+      provider_id: provider_id
+    )
+
+    # Update connection state
+    conn_state = %{
+      connection_id: nil,
+      status: :disconnected,
+      disconnected_at: System.monotonic_time(:millisecond)
+    }
+
+    state = %{state | connection_states: Map.put(state.connection_states, provider_id, conn_state)}
+
+    # Find and invalidate all subscriptions for this provider
     affected =
       Enum.filter(state.active_subscriptions, fn {{prov_id, _sub_key}, _info} ->
         prov_id == provider_id
       end)
 
-    if affected != [] do
-      Logger.info("Provider disconnected, cleaning up subscriptions",
+    if affected == [] do
+      {:noreply, state}
+    else
+      Logger.info("Provider disconnected, invalidating subscriptions",
         chain: state.chain,
         provider_id: provider_id,
         affected_count: length(affected)
       )
 
-      # Notify consumers that their subscriptions have been invalidated
-      # This prevents consumers from being left in a zombie state
+      # Notify consumers so they can re-subscribe when connection returns
       Enum.each(affected, fn {{prov_id, sub_key}, _info} ->
         UpstreamSubscriptionRegistry.dispatch(
           state.chain,
@@ -343,7 +379,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
         )
       end)
 
-      # Remove subscriptions and index entries for this provider
+      # Remove subscriptions from state
       new_subs =
         Enum.reduce(affected, state.active_subscriptions, fn {key, _}, acc ->
           Map.delete(acc, key)
@@ -355,14 +391,99 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
         end)
 
       {:noreply, %{state | active_subscriptions: new_subs, upstream_index: new_index}}
-    else
-      {:noreply, state}
     end
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
-
   # Private helpers
+
+  # Handle subscription request when we have a valid connection
+  defp handle_subscription_request(state, provider_id, sub_key, key, current_conn_id) do
+    case Map.get(state.active_subscriptions, key) do
+      nil ->
+        # First consumer - create upstream subscription
+        create_new_subscription(state, provider_id, sub_key, key, current_conn_id)
+
+      %{marked_for_teardown_at: nil, connection_id: ^current_conn_id} ->
+        # Subscription exists for current connection - reuse it
+        {:reply, {:ok, :existing}, state}
+
+      %{marked_for_teardown_at: nil, connection_id: stale_conn_id} = sub_info ->
+        # Stale subscription from previous connection - remove and recreate
+        Logger.info("Detected stale subscription, recreating",
+          chain: state.chain,
+          provider_id: provider_id,
+          sub_key: inspect(sub_key),
+          stale_conn_id: stale_conn_id,
+          current_conn_id: current_conn_id
+        )
+
+        emit_telemetry(:stale_subscription_detected, state.chain, provider_id, sub_key)
+
+        state = remove_subscription(state, key, sub_info.upstream_id)
+        create_new_subscription(state, provider_id, sub_key, key, current_conn_id)
+
+      %{connection_id: ^current_conn_id} = sub_info ->
+        # Marked for teardown but connection still valid - cancel teardown
+        Logger.debug("Cancelling teardown for subscription",
+          chain: state.chain,
+          provider_id: provider_id,
+          sub_key: inspect(sub_key)
+        )
+
+        new_sub_info = %{sub_info | marked_for_teardown_at: nil}
+        new_subs = Map.put(state.active_subscriptions, key, new_sub_info)
+        {:reply, {:ok, :existing}, %{state | active_subscriptions: new_subs}}
+
+      %{upstream_id: upstream_id} ->
+        # Stale subscription marked for teardown - remove and recreate
+        state = remove_subscription(state, key, upstream_id)
+        create_new_subscription(state, provider_id, sub_key, key, current_conn_id)
+    end
+  end
+
+  defp remove_subscription(state, key, upstream_id) do
+    new_subs = Map.delete(state.active_subscriptions, key)
+    new_index = Map.delete(state.upstream_index, upstream_id)
+    %{state | active_subscriptions: new_subs, upstream_index: new_index}
+  end
+
+  defp create_new_subscription(state, provider_id, sub_key, key, connection_id) do
+    case create_upstream_subscription(state.chain, provider_id, sub_key) do
+      {:ok, upstream_id} ->
+        sub_info = %{
+          upstream_id: upstream_id,
+          connection_id: connection_id,
+          created_at: System.monotonic_time(:millisecond),
+          marked_for_teardown_at: nil
+        }
+
+        new_subs = Map.put(state.active_subscriptions, key, sub_info)
+        new_index = Map.put(state.upstream_index, upstream_id, key)
+
+        Logger.info("Created upstream subscription",
+          chain: state.chain,
+          provider_id: provider_id,
+          sub_key: inspect(sub_key),
+          upstream_id: upstream_id,
+          connection_id: connection_id
+        )
+
+        emit_telemetry(:subscription_created, state.chain, provider_id, sub_key)
+
+        {:reply, {:ok, :new},
+         %{state | active_subscriptions: new_subs, upstream_index: new_index}}
+
+      {:error, reason} ->
+        Logger.debug("Failed to create upstream subscription",
+          chain: state.chain,
+          provider_id: provider_id,
+          sub_key: inspect(sub_key),
+          reason: inspect(reason)
+        )
+
+        {:reply, {:error, reason}, state}
+    end
+  end
 
   defp create_upstream_subscription(chain, provider_id, {:newHeads}) do
     message = %{

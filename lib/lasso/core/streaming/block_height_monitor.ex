@@ -140,8 +140,7 @@ defmodule Lasso.RPC.BlockHeightMonitor do
   end
 
   # Handle WebSocket connection established - trigger subscription
-  def handle_info({:ws_connected, provider_id}, state) do
-    # Attempt to subscribe to this provider if we haven't already
+  def handle_info({:ws_connected, provider_id, _connection_id}, state) do
     state = attempt_subscription(state, provider_id)
     {:noreply, state}
   end
@@ -183,7 +182,11 @@ defmodule Lasso.RPC.BlockHeightMonitor do
           sub = %{status: :connecting, last_error: nil, retry_count: 0}
           acc = %{acc | subscriptions: Map.put(acc.subscriptions, provider_id, sub)}
 
-          case UpstreamSubscriptionManager.ensure_subscription(acc.chain, provider_id, {:newHeads}) do
+          case UpstreamSubscriptionManager.ensure_subscription(
+                 acc.chain,
+                 provider_id,
+                 {:newHeads}
+               ) do
             {:ok, _status} ->
               updated_sub = %{sub | status: :active}
               %{acc | subscriptions: Map.put(acc.subscriptions, provider_id, updated_sub)}
@@ -205,6 +208,28 @@ defmodule Lasso.RPC.BlockHeightMonitor do
       {:noreply, new_state}
     else
       {:noreply, state}
+    end
+  end
+
+  # Handle subscription invalidation from UpstreamSubscriptionManager
+  # This is dispatched when the provider disconnects and subscriptions are cleaned up
+  def handle_info({:upstream_subscription_invalidated, provider_id, {:newHeads}, _reason}, state) do
+    Logger.debug("Subscription invalidated by Manager, marking for re-subscription",
+      chain: state.chain,
+      provider_id: provider_id
+    )
+
+    # Mark as failed so next ws_connected or scheduled reconnect will resubscribe
+    case Map.get(state.subscriptions, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      sub ->
+        updated_sub = %{sub | status: :failed}
+        state = %{state | subscriptions: Map.put(state.subscriptions, provider_id, updated_sub)}
+        # Schedule reconnect attempt
+        Process.send_after(self(), {:reconnect_provider, provider_id}, @reconnect_delay_ms)
+        {:noreply, state}
     end
   end
 
@@ -319,6 +344,7 @@ defmodule Lasso.RPC.BlockHeightMonitor do
             reason: inspect(reason)
           )
         end
+
         delay = min(@reconnect_delay_ms * :math.pow(2, retry_count - 1), 60_000) |> trunc()
         Process.send_after(self(), {:reconnect_provider, provider_id}, delay)
 
