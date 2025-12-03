@@ -278,6 +278,22 @@ defmodule LassoWeb.HomeLive do
     end
   end
 
+  # Summarize supported networks from the live chain config.
+  # Used by the footer to render an accurate, environment-specific list.
+  defp supported_networks_summary do
+    ConfigStore.get_all_chains()
+    |> Enum.map(fn {_key, chain_config} -> chain_config end)
+    |> Enum.sort_by(& &1.name)
+    |> then(fn chains ->
+      {primary, rest} = Enum.split(chains, 3)
+
+      %{
+        primary: Enum.map(primary, & &1.name),
+        extra_count: length(rest)
+      }
+    end)
+  end
+
   @impl true
   def render(assigns) do
     assigns = assign(assigns, :strategy_details, get_strategy_details(assigns.active_strategy))
@@ -311,17 +327,21 @@ defmodule LassoWeb.HomeLive do
             <section
               id="hero-section"
               phx-hook="ScrollReveal"
-              class="relative min-h-[600px] translate-y-8 opacity-0 transition-all duration-1000 ease-out lg:min-h-[700px]"
+              class="min-h-[600px] relative translate-y-8 opacity-0 transition-all duration-1000 ease-out lg:min-h-[700px]"
             >
               <!-- Oversized graphic that bleeds beyond section (underlaps header via z-index) -->
-              <div class="pointer-events-none absolute inset-0 -right-[30%] -top-[15%] -bottom-[30%] overflow-visible lg:-right-[20%] lg:-top-[25%] lg:-bottom-[40%]">
+              <div
+                id="hero-parallax-graphic"
+                phx-hook="HeroParallax"
+                class="-right-[30%] -top-[15%] -bottom-[30%] pointer-events-none absolute inset-0 overflow-visible will-change-transform lg:-right-[20%] lg:-top-[25%] lg:-bottom-[40%]"
+              >
                 <LandingHeroGraphic.graphic
                   routing_decisions={@routing_decisions}
                   is_live={@is_live}
                 />
               </div>
-
-              <!-- Content overlay -->
+              
+    <!-- Content overlay -->
               <div class="relative z-10 grid items-center gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:gap-16">
                 <div class="animate-fade-in-up space-y-8">
                   <div class="space-y-5 lg:space-y-8">
@@ -334,19 +354,19 @@ defmodule LassoWeb.HomeLive do
                     </h1>
 
                     <div class="flex flex-wrap gap-3">
-                      <div class="border-purple-500/30 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                      <div class="border-purple-500/15 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
                         <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
                         </span>
-                        {@total_endpoints} live public RPC endpoints
+                        {@total_endpoints} live RPC endpoints
                       </div>
 
-                      <div class="border-purple-500/30 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                      <div class="border-purple-500/15 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
                         <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
                         </span>
                         {@total_providers} node providers
                       </div>
 
-                      <div class="border-purple-500/30 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                      <div class="border-purple-500/15 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
                         <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
                         </span>
                         {@total_strategies} configurable routing strategies
@@ -461,8 +481,8 @@ defmodule LassoWeb.HomeLive do
                     </span>
                   </div>
                 </div>
-
-                <!-- Spacer for graphic area on larger screens -->
+                
+    <!-- Spacer for graphic area on larger screens -->
                 <div class="hidden lg:block"></div>
               </div>
             </section>
@@ -728,16 +748,16 @@ defmodule LassoWeb.HomeLive do
             <section
               id="feature-observability"
               phx-hook="ScrollReveal"
-              class="grid translate-y-8 items-start gap-10 opacity-0 transition-all duration-1000 ease-out 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:gap-16"
+              class="grid translate-y-8 items-start gap-10 opacity-0 transition-all duration-1000 ease-out 2xl:grid-cols-[auto_minmax(0,1fr)] 2xl:gap-16"
             >
-              <div class="space-y-10">
+              <div class="max-w-[800px] space-y-10">
                 <div class="space-y-5">
                   <div class="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-sky-400">
                     <span class="h-[1px] w-8 bg-sky-400"></span>
                   </div>
 
                   <h2 class="text-3xl font-bold text-white sm:text-4xl">
-                    Deep Observability
+                    Unlock Deep Observability
                   </h2>
 
                   <p class="max-w-[500px] text-base leading-relaxed text-gray-400">
@@ -759,7 +779,7 @@ defmodule LassoWeb.HomeLive do
               </div>
               
     <!-- Real Latency Heatmap -->
-              <div class="hidden w-full flex-col items-start overflow-x-visible sm:flex">
+              <div class="hidden w-full flex-col items-start justify-center overflow-x-visible sm:flex xl:items-center">
                 <LatencyHeatmap.heatmap
                   heatmap_data={@heatmap_data}
                   methods={@heatmap_methods}
@@ -776,14 +796,14 @@ defmodule LassoWeb.HomeLive do
           <div class="max-w-[min(90%,110rem)] mx-auto px-6 py-16 lg:max-w-[min(83%,110rem)] lg:py-20">
             <div class="grid gap-10 md:grid-cols-2 lg:grid-cols-4 lg:gap-16">
               <div class="col-span-2 space-y-8">
-                <h3 class="text-xl font-bold text-white">Ready for production</h3>
-                <p class="max-w-md text-sm leading-relaxed text-gray-400">
-                  Lasso is built on Elixir/OTP for massive concurrency and fault tolerance. It's designed to sit in your infrastructure as a stateless, scalable layer.
-                </p>
-                <div class="flex gap-8">
+                <h3 class="text-xl font-bold text-gray-100">
+                  Built with <span class="text-purple-500">Elixir</span> for scale and resilience
+                </h3>
+
+                <div class="flex flex-col gap-2">
                   <a
                     href="https://github.com/LazerTechnologies/lasso-rpc"
-                    class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
+                    class="text-sm font-semibold text-gray-400 transition-colors hover:text-purple-400"
                   >
                     GitHub
                   </a>
@@ -791,13 +811,13 @@ defmodule LassoWeb.HomeLive do
                     href="https://github.com/LazerTechnologies/lasso-rpc/tree/main/project"
                     target="_blank"
                     rel="noopener noreferrer"
-                    class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
+                    class="text-sm font-semibold text-gray-400 transition-colors hover:text-purple-400"
                   >
                     Documentation
                   </a>
                   <a
                     href="/dashboard"
-                    class="text-sm font-semibold text-white transition-colors hover:text-purple-400"
+                    class="text-sm font-semibold text-gray-400 transition-colors hover:text-purple-400"
                   >
                     Dashboard
                   </a>
@@ -808,20 +828,22 @@ defmodule LassoWeb.HomeLive do
                 <h4 class="text-sm font-bold uppercase tracking-wide text-white">
                   Supported Networks
                 </h4>
+                <% summary = supported_networks_summary() %>
                 <ul class="mt-5 space-y-4 text-sm text-gray-400">
-                  <li class="flex items-center gap-3">
-                    <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-emerald-500">
-                    </span>
-                    Ethereum Mainnet
-                  </li>
-                  <li class="flex items-center gap-3">
-                    <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-blue-500">
-                    </span>
-                    Base
-                  </li>
-                  <li class="flex items-center gap-3">
-                    <span class="h-2 w-2 rounded-full bg-gray-600"></span> + Any EVM Chain
-                  </li>
+                  <%= for network_name <- summary.primary do %>
+                    <li class="flex items-center gap-3">
+                      <span class="shadow-[0_0_8px_currentColor] h-2 w-2 rounded-full bg-emerald-500">
+                      </span>
+                      {network_name}
+                    </li>
+                  <% end %>
+
+                  <%= if summary.extra_count > 0 do %>
+                    <li class="flex items-center gap-3">
+                      <span class="h-2 w-2 rounded-full bg-gray-600"></span>
+                      + {summary.extra_count} more networks
+                    </li>
+                  <% end %>
                 </ul>
               </div>
 

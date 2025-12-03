@@ -16,21 +16,22 @@ defmodule LassoWeb.Components.DashboardHeader do
             <div class="relative rounded-2xl ">
               <a href="/" class="group flex cursor-pointer items-center space-x-3">
                 <div class="relative">
-                  <div class="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 shadow-md transition-transform group-hover:rotate-3 group-hover:scale-110 sm:h-8 sm:w-8">
-                    <svg
-                      class="h-4 w-4 text-white sm:h-5 sm:w-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M13 10V3L4 14h7v7l9-11h-7z"
-                      />
-                    </svg>
-                  </div>
+                  <svg
+                    class="h-6 w-6 transition-transform group-hover:rotate-6 group-hover:scale-110 sm:h-7 sm:w-7"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <path
+                      d="M13 2L4 14h7v8l9-12h-7V2z"
+                      fill="url(#lightning-gradient)"
+                    />
+                    <defs>
+                      <linearGradient id="lightning-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#a78bfa" />
+                        <stop offset="100%" stop-color="#7c3aed" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
                 </div>
                 <div>
                   <div class="flex gap-1 text-2xl font-bold text-white sm:text-3xl">

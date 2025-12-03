@@ -24,21 +24,21 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
     # Define Lasso Hubs (Mesh Core) - subtle, blend with network
     # Rotated 30 degrees and pushed further right via cx offset
     hubs = [
-      %{id: "h1", angle: 60, r: 60, size: 18},
-      %{id: "h2", angle: 180, r: 60, size: 18},
-      %{id: "h3", angle: 300, r: 60, size: 18}
+      %{id: "h1", angle: 60, r: 60, size: 17},
+      %{id: "h2", angle: 180, r: 60, size: 17},
+      %{id: "h3", angle: 300, r: 60, size: 17}
     ]
 
     # Define Chains (Inner Orbit) - more nodes, smaller, spread out more
     chains = [
-      %{id: "c1", angle: 0, r: chain_radius, size: 14, delay: 0, hub_id: "h3"},
-      %{id: "c2", angle: 45, r: chain_radius, size: 12, delay: 1.2, hub_id: "h3"},
-      %{id: "c3", angle: 90, r: chain_radius, size: 14, delay: 0.5, hub_id: "h1"},
-      %{id: "c4", angle: 135, r: chain_radius, size: 12, delay: 1.8, hub_id: "h1"},
-      %{id: "c5", angle: 180, r: chain_radius, size: 14, delay: 0.8, hub_id: "h2"},
-      %{id: "c6", angle: 225, r: chain_radius, size: 12, delay: 2.2, hub_id: "h2"},
-      %{id: "c7", angle: 270, r: chain_radius, size: 14, delay: 1.0, hub_id: "h2"},
-      %{id: "c8", angle: 315, r: chain_radius, size: 12, delay: 2.5, hub_id: "h3"}
+      %{id: "c1", angle: 0, r: chain_radius, size: 13, delay: 0, hub_id: "h3"},
+      %{id: "c2", angle: 45, r: chain_radius, size: 10, delay: 1.2, hub_id: "h3"},
+      %{id: "c3", angle: 90, r: chain_radius, size: 13, delay: 0.5, hub_id: "h1"},
+      %{id: "c4", angle: 135, r: chain_radius, size: 10, delay: 1.8, hub_id: "h1"},
+      %{id: "c5", angle: 180, r: chain_radius, size: 13, delay: 0.8, hub_id: "h2"},
+      %{id: "c6", angle: 225, r: chain_radius, size: 10, delay: 2.2, hub_id: "h2"},
+      %{id: "c7", angle: 270, r: chain_radius, size: 13, delay: 1.0, hub_id: "h2"},
+      %{id: "c8", angle: 315, r: chain_radius, size: 10, delay: 2.5, hub_id: "h3"}
     ]
 
     # Define Providers (Outer Orbit) - smaller, more numerous
@@ -93,8 +93,8 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
       for i <- 1..50 do
         angle = :rand.uniform() * 360
         r = 150 + :rand.uniform() * 800
-        size = 0.5 + :rand.uniform() * 2
-        opacity = 0.08 + :rand.uniform() * 0.18
+        size = 0.2 + :rand.uniform() * 2
+        opacity = 0.08 + :rand.uniform() * 0.15
         delay = :rand.uniform() * 8
 
         %{
@@ -168,6 +168,7 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
           preserveAspectRatio="xMidYMid slice"
+          style={"--parallax-cx: #{@cx}px; --parallax-cy: #{@cy}px;"}
         >
           <defs>
             <radialGradient id="node-grad" cx="30%" cy="30%">
@@ -194,224 +195,235 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
             </filter>
           </defs>
           
-    <!-- Subtle ambient glow at center -->
+    <!-- Subtle ambient glow at center (static) -->
           <circle cx={@cx} cy={@cy} r="200" fill="url(#glow-grad)" opacity="0.3" />
           
-    <!-- Ambient particles (atmosphere) -->
-          <%= for particle <- @particles do %>
-            <circle
-              cx={particle.x}
-              cy={particle.y}
-              r={particle.size}
-              fill="#44f44b"
-              opacity={particle.opacity}
-            >
-              <animate
-                attributeName="opacity"
-                values={"#{particle.opacity};#{particle.opacity * 0.3};#{particle.opacity}"}
-                dur={"#{6 + particle.delay}s"}
-                repeatCount="indefinite"
-                begin={"#{particle.delay}s"}
-              />
-            </circle>
-          <% end %>
-          
-    <!-- Edge nodes (distant, faint) -->
-          <%= for edge <- @edge_nodes do %>
-            <circle cx={edge.x} cy={edge.y} r={edge.size} fill="#334155" opacity={edge.opacity} />
-          <% end %>
-          
-    <!-- Hub mesh connections (subtle triangle) -->
-          <path
-            d={"M #{Enum.at(@hubs, 0).x} #{Enum.at(@hubs, 0).y} L #{Enum.at(@hubs, 1).x} #{Enum.at(@hubs, 1).y} L #{Enum.at(@hubs, 2).x} #{Enum.at(@hubs, 2).y} Z"}
-            stroke="#a78bfa"
-            stroke-width="1"
-            fill="#8b5cf6"
-            fill-opacity="0.04"
-            opacity="0.35"
-            stroke-dasharray="3 5"
-          />
-          
-    <!-- Connections: Hubs -> Chains (thinner) -->
-          <%= for chain <- @chains do %>
-            <path
-              d={"M #{chain.hub_x} #{chain.hub_y} L #{chain.x} #{chain.y}"}
-              stroke="#475569"
-              stroke-width="0.8"
-              opacity="0.2"
-            />
-          <% end %>
-          
-    <!-- Connections: Chains -> Providers (thinner) -->
-          <%= for provider <- @providers do %>
-            <path
-              d={"M #{provider.parent_x} #{provider.parent_y} L #{provider.x} #{provider.y}"}
-              stroke="#334155"
-              stroke-width="0.6"
-              opacity="0.2"
-            />
-          <% end %>
-          
-    <!-- Cross-connections between chains (web effect) -->
-          <%= for {c1, c2} <- [{Enum.at(@chains, 0), Enum.at(@chains, 2)}, {Enum.at(@chains, 1), Enum.at(@chains, 3)}, {Enum.at(@chains, 2), Enum.at(@chains, 4)}, {Enum.at(@chains, 3), Enum.at(@chains, 5)}, {Enum.at(@chains, 4), Enum.at(@chains, 6)}, {Enum.at(@chains, 5), Enum.at(@chains, 7)}, {Enum.at(@chains, 6), Enum.at(@chains, 0)}, {Enum.at(@chains, 7), Enum.at(@chains, 1)}] do %>
-            <path
-              d={"M #{c1.x} #{c1.y} Q #{@cx} #{@cy} #{c2.x} #{c2.y}"}
-              stroke="#334155"
-              stroke-width="0.6"
-              fill="none"
-              opacity="0.4"
-              stroke-dasharray="3 2"
-            />
-          <% end %>
-          
-    <!-- Cross-connections between some providers (web effect) -->
-          <%= for {p1, p2} <- [{Enum.at(@providers, 0), Enum.at(@providers, 4)}, {Enum.at(@providers, 2), Enum.at(@providers, 8)}, {Enum.at(@providers, 6), Enum.at(@providers, 12)}, {Enum.at(@providers, 10), Enum.at(@providers, 14)}] do %>
-            <path
-              d={"M #{p1.x} #{p1.y} Q #{@cx} #{@cy} #{p2.x} #{p2.y}"}
-              stroke="#33D155"
-              stroke-width="0.3"
-              fill="none"
-              opacity=".5"
-              stroke-dasharray="2 6"
-            />
-          <% end %>
-          
-    <!-- Connections from providers to edge nodes -->
-          <%= for {p, e} <- [{Enum.at(@providers, 1), Enum.at(@edge_nodes, 0)}, {Enum.at(@providers, 5), Enum.at(@edge_nodes, 2)}, {Enum.at(@providers, 9), Enum.at(@edge_nodes, 4)}, {Enum.at(@providers, 13), Enum.at(@edge_nodes, 6)}] do %>
-            <path
-              d={"M #{p.x} #{p.y} L #{e.x} #{e.y}"}
-              stroke="#334155"
-              stroke-width="0.4"
-              opacity="0.1"
-            />
-          <% end %>
-          
-    <!-- Traffic animations: Hubs -> Chains -->
-          <%= for chain <- @chains do %>
-            <circle r="2.5" fill="#a5b4fc" opacity="0">
-              <animateMotion
-                dur="3s"
-                repeatCount="indefinite"
-                begin={"#{chain.delay}s"}
-                path={"M #{chain.hub_x} #{chain.hub_y} L #{chain.x} #{chain.y}"}
-                keyPoints="0;1"
-                keyTimes="0;1"
-                calcMode="linear"
-              />
-              <animate
-                attributeName="opacity"
-                values="0;0.3;0"
-                keyTimes="0;0.5;1"
-                dur="3s"
-                repeatCount="indefinite"
-                begin={"#{chain.delay}s"}
-              />
-            </circle>
-          <% end %>
-          
-    <!-- Traffic animations: Chains -> Providers -->
-          <%= for provider <- @providers do %>
-            <circle r="2" fill="#94a3b8" opacity="0">
-              <animateMotion
-                dur="2.5s"
-                repeatCount="indefinite"
-                begin={"#{provider.delay}s"}
-                path={"M #{provider.parent_x} #{provider.parent_y} L #{provider.x} #{provider.y}"}
-                keyPoints="0;1"
-                keyTimes="0;1"
-                calcMode="linear"
-              />
-              <animate
-                attributeName="opacity"
-                values="0;0.5;0"
-                keyTimes="0;0.5;1"
-                dur="2.5s"
-                repeatCount="indefinite"
-                begin={"#{provider.delay}s"}
-              />
-            </circle>
-          <% end %>
-          
-    <!-- Provider Nodes (smaller) -->
-          <%= for provider <- @providers do %>
-            <g>
+    <!-- ========== LAYER: PARTICLES (outermost - most parallax drift) ========== -->
+          <g data-parallax-layer="particles" style={"transform-origin: #{@cx}px #{@cy}px"}>
+            <%= for particle <- @particles do %>
               <circle
-                cx={provider.x}
-                cy={provider.y}
-                r={provider.size + 2}
-                fill="#475569"
-                opacity="0.1"
-                filter="url(#blur-sm)"
-              />
-              <circle
-                cx={provider.x}
-                cy={provider.y}
-                r={provider.size}
-                fill="url(#node-grad)"
-                stroke="#475569"
-                stroke-width="0.5"
-              />
-            </g>
-          <% end %>
-          
-    <!-- Chain Nodes (smaller) -->
-          <%= for chain <- @chains do %>
-            <g>
-              <circle
-                cx={chain.x}
-                cy={chain.y}
-                r={chain.size + 3}
-                fill="#64748b"
-                opacity="0.12"
-                filter="url(#blur-sm)"
-              />
-              <circle
-                cx={chain.x}
-                cy={chain.y}
-                r={chain.size}
-                fill="url(#node-grad)"
-                stroke="#64748b"
-                stroke-width="0.8"
-              />
-            </g>
-          <% end %>
-          
-    <!-- Lasso Hub Cluster (blend with network, subtle purple accent) -->
-          <%= for hub <- @hubs do %>
-            <g transform={"translate(#{hub.x}, #{hub.y})"}>
-              <!-- Very subtle glow -->
-              <circle r={hub.size + 8} fill="#7c3aed" opacity="0.04" filter="url(#blur-lg)" />
-              <!-- Subtle pulse ring -->
-              <circle r={hub.size + 3} fill="none" stroke="#7c3aed" stroke-width="0.4" opacity="0.15">
+                cx={particle.x}
+                cy={particle.y}
+                r={particle.size}
+                fill="#44f44b"
+                opacity={particle.opacity}
+              >
                 <animate
-                  attributeName="r"
-                  values={"#{hub.size + 3};#{hub.size + 8};#{hub.size + 3}"}
-                  dur="5s"
+                  attributeName="opacity"
+                  values={"#{particle.opacity};#{particle.opacity * 0.3};#{particle.opacity}"}
+                  dur={"#{6 + particle.delay}s"}
                   repeatCount="indefinite"
+                  begin={"#{particle.delay}s"}
+                />
+              </circle>
+            <% end %>
+          </g>
+          
+    <!-- ========== LAYER: EDGES (distant nodes - heavy parallax) ========== -->
+          <g data-parallax-layer="edges" style={"transform-origin: #{@cx}px #{@cy}px"}>
+            <%= for edge <- @edge_nodes do %>
+              <circle cx={edge.x} cy={edge.y} r={edge.size} fill="#334155" opacity={edge.opacity} />
+            <% end %>
+            <!-- Connections from providers to edge nodes -->
+            <%= for {p, e} <- [{Enum.at(@providers, 1), Enum.at(@edge_nodes, 0)}, {Enum.at(@providers, 5), Enum.at(@edge_nodes, 2)}, {Enum.at(@providers, 9), Enum.at(@edge_nodes, 4)}, {Enum.at(@providers, 13), Enum.at(@edge_nodes, 6)}] do %>
+              <path
+                d={"M #{p.x} #{p.y} L #{e.x} #{e.y}"}
+                stroke="#334155"
+                stroke-width="0.4"
+                opacity="0.1"
+              />
+            <% end %>
+          </g>
+          
+    <!-- ========== LAYER: PROVIDERS (outer orbit - medium-heavy parallax) ========== -->
+          <g data-parallax-layer="providers" style={"transform-origin: #{@cx}px #{@cy}px"}>
+            <!-- Connections: Chains -> Providers -->
+            <%= for provider <- @providers do %>
+              <path
+                d={"M #{provider.parent_x} #{provider.parent_y} L #{provider.x} #{provider.y}"}
+                stroke="#334155"
+                stroke-width="0.6"
+                opacity="0.2"
+              />
+            <% end %>
+            <!-- Cross-connections between providers -->
+            <%= for {p1, p2} <- [{Enum.at(@providers, 0), Enum.at(@providers, 4)}, {Enum.at(@providers, 2), Enum.at(@providers, 8)}, {Enum.at(@providers, 6), Enum.at(@providers, 12)}, {Enum.at(@providers, 10), Enum.at(@providers, 14)}] do %>
+              <path
+                d={"M #{p1.x} #{p1.y} Q #{@cx} #{@cy} #{p2.x} #{p2.y}"}
+                stroke="#33D155"
+                stroke-width="0.3"
+                fill="none"
+                opacity=".5"
+                stroke-dasharray="2 6"
+              />
+            <% end %>
+            <!-- Traffic animations: Chains -> Providers -->
+            <%= for provider <- @providers do %>
+              <circle r="1.5" fill="#94a3b8" opacity="0">
+                <animateMotion
+                  dur="2.5s"
+                  repeatCount="indefinite"
+                  begin={"#{provider.delay}s"}
+                  path={"M #{provider.parent_x} #{provider.parent_y} L #{provider.x} #{provider.y}"}
+                  keyPoints="0;1"
+                  keyTimes="0;1"
+                  calcMode="linear"
                 />
                 <animate
                   attributeName="opacity"
-                  values="0.15;0.03;0.15"
-                  dur="5s"
+                  values="0;0.5;0"
+                  keyTimes="0;0.5;1"
+                  dur="2.5s"
                   repeatCount="indefinite"
+                  begin={"#{provider.delay}s"}
                 />
               </circle>
-              <!-- Main hub - same gray as other nodes with purple stroke -->
-              <circle
-                r={hub.size}
-                fill="url(#node-grad)"
-                stroke="#7c3aed"
-                stroke-width="1"
-                opacity="0.9"
-              />
-              <!-- Lightning bolt icon (subtle) -->
+            <% end %>
+            <!-- Provider Nodes -->
+            <%= for provider <- @providers do %>
+              <g>
+                <circle
+                  cx={provider.x}
+                  cy={provider.y}
+                  r={provider.size + 2}
+                  fill="#475569"
+                  opacity="0.1"
+                  filter="url(#blur-sm)"
+                />
+                <circle
+                  cx={provider.x}
+                  cy={provider.y}
+                  r={provider.size}
+                  fill="url(#node-grad)"
+                  stroke="#475569"
+                  stroke-width="0.5"
+                />
+              </g>
+            <% end %>
+          </g>
+          
+    <!-- ========== LAYER: CHAINS (inner orbit - light parallax) ========== -->
+          <g data-parallax-layer="chains" style={"transform-origin: #{@cx}px #{@cy}px"}>
+            <!-- Connections: Hubs -> Chains -->
+            <%= for chain <- @chains do %>
               <path
-                d="M1.5 -6 L-4 1.5 L0 1.5 L-1.5 6 L4 -1.5 L0 -1.5 Z"
-                fill="#a78bfa"
-                opacity="0.7"
+                d={"M #{chain.hub_x} #{chain.hub_y} L #{chain.x} #{chain.y}"}
+                stroke="#475569"
+                stroke-width="0.8"
+                opacity="0.2"
               />
-            </g>
-          <% end %>
+            <% end %>
+            <!-- Cross-connections between chains -->
+            <%= for {c1, c2} <- [{Enum.at(@chains, 0), Enum.at(@chains, 2)}, {Enum.at(@chains, 1), Enum.at(@chains, 3)}, {Enum.at(@chains, 2), Enum.at(@chains, 4)}, {Enum.at(@chains, 3), Enum.at(@chains, 5)}, {Enum.at(@chains, 4), Enum.at(@chains, 6)}, {Enum.at(@chains, 5), Enum.at(@chains, 7)}, {Enum.at(@chains, 6), Enum.at(@chains, 0)}, {Enum.at(@chains, 7), Enum.at(@chains, 1)}] do %>
+              <path
+                d={"M #{c1.x} #{c1.y} Q #{@cx} #{@cy} #{c2.x} #{c2.y}"}
+                stroke="#334155"
+                stroke-width="0.6"
+                fill="none"
+                opacity="0.4"
+                stroke-dasharray="3 2"
+              />
+            <% end %>
+            <!-- Traffic animations: Hubs -> Chains -->
+            <%= for chain <- @chains do %>
+              <circle r="2" fill="#a5b4fc" opacity="0">
+                <animateMotion
+                  dur="3s"
+                  repeatCount="indefinite"
+                  begin={"#{chain.delay}s"}
+                  path={"M #{chain.hub_x} #{chain.hub_y} L #{chain.x} #{chain.y}"}
+                  keyPoints="0;1"
+                  keyTimes="0;1"
+                  calcMode="linear"
+                />
+                <animate
+                  attributeName="opacity"
+                  values="0;0.3;0"
+                  keyTimes="0;0.5;1"
+                  dur="3s"
+                  repeatCount="indefinite"
+                  begin={"#{chain.delay}s"}
+                />
+              </circle>
+            <% end %>
+            <!-- Chain Nodes -->
+            <%= for chain <- @chains do %>
+              <g>
+                <circle
+                  cx={chain.x}
+                  cy={chain.y}
+                  r={chain.size + 3}
+                  fill="#64748b"
+                  opacity="0.12"
+                  filter="url(#blur-sm)"
+                />
+                <circle
+                  cx={chain.x}
+                  cy={chain.y}
+                  r={chain.size}
+                  fill="url(#node-grad)"
+                  stroke="#64748b"
+                  stroke-width="0.8"
+                />
+              </g>
+            <% end %>
+          </g>
+          
+    <!-- ========== LAYER: CORE/HUBS (center - minimal/no parallax, anchor point) ========== -->
+          <g data-parallax-layer="core" style={"transform-origin: #{@cx}px #{@cy}px"}>
+            <!-- Hub mesh connections (subtle triangle) -->
+            <path
+              d={"M #{Enum.at(@hubs, 0).x} #{Enum.at(@hubs, 0).y} L #{Enum.at(@hubs, 1).x} #{Enum.at(@hubs, 1).y} L #{Enum.at(@hubs, 2).x} #{Enum.at(@hubs, 2).y} Z"}
+              stroke="#a78bfa"
+              stroke-width="1"
+              fill="#8b5cf6"
+              fill-opacity="0.04"
+              opacity="0.35"
+              stroke-dasharray="3 5"
+            />
+            <!-- Lasso Hub Cluster -->
+            <%= for hub <- @hubs do %>
+              <g transform={"translate(#{hub.x}, #{hub.y})"}>
+                <!-- Very subtle glow -->
+                <circle r={hub.size + 8} fill="#7c3aed" opacity="0.04" filter="url(#blur-lg)" />
+                <!-- Subtle pulse ring -->
+                <circle
+                  r={hub.size + 3}
+                  fill="none"
+                  stroke="#7c3aed"
+                  stroke-width="0.4"
+                  opacity="0.15"
+                >
+                  <animate
+                    attributeName="r"
+                    values={"#{hub.size + 3};#{hub.size + 8};#{hub.size + 3}"}
+                    dur="5s"
+                    repeatCount="indefinite"
+                  />
+                  <animate
+                    attributeName="opacity"
+                    values="0.15;0.03;0.15"
+                    dur="5s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+                <!-- Main hub node -->
+                <circle
+                  r={hub.size}
+                  fill="url(#node-grad)"
+                  stroke="#7c3aed"
+                  stroke-width="1"
+                  opacity="0.9"
+                />
+                <!-- Lightning bolt icon -->
+                <path
+                  d="M1.5 -6 L-4 1.5 L0 1.5 L-1.5 6 L4 -1.5 L0 -1.5 Z"
+                  fill="#a78bfa"
+                  opacity="0.7"
+                />
+              </g>
+            <% end %>
+          </g>
         </svg>
       </div>
     </div>
