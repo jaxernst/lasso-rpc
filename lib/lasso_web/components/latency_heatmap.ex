@@ -91,7 +91,7 @@ defmodule LassoWeb.Components.LatencyHeatmap do
 
       <%= if Enum.empty?(@heatmap_data) do %>
         <!-- Empty state -->
-        <div class="border-gray-800/60 bg-gray-900/20 mx-auto max-w-2xl rounded-xl border border-dashed p-8">
+        <div class="border-gray-800/60 bg-gray-900/20 max-w-2xl flex-grow rounded-xl border border-dashed p-8">
           <div class="flex flex-col items-center justify-center gap-3 text-center">
             <div class="relative">
               <div class="bg-gray-800/40 flex h-10 w-10 items-center justify-center rounded-lg">

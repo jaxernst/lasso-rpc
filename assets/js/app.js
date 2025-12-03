@@ -1054,7 +1054,9 @@ const ExpandableDetails = {
   mounted() {
     // Validate element has an ID for unique storage key
     if (!this.el.id) {
-      console.warn("ExpandableDetails: element must have an id attribute for state persistence");
+      console.warn(
+        "ExpandableDetails: element must have an id attribute for state persistence"
+      );
       return;
     }
 
@@ -1119,7 +1121,7 @@ const HeatmapAnimation = {
     }
 
     // Get all heatmap cells
-    this.cells = Array.from(this.el.querySelectorAll('.heatmap-cell'));
+    this.cells = Array.from(this.el.querySelectorAll(".heatmap-cell"));
 
     if (this.cells.length === 0) return;
 
@@ -1135,14 +1137,14 @@ const HeatmapAnimation = {
     const cell = this.cells[Math.floor(Math.random() * this.cells.length)];
 
     // Add a quick flash effect
-    cell.style.transition = 'filter 0.15s ease-out, transform 0.15s ease-out';
-    cell.style.filter = 'brightness(1.4)';
-    cell.style.transform = 'scale(1.05)';
+    cell.style.transition = "filter 0.15s ease-out, transform 0.15s ease-out";
+    cell.style.filter = "brightness(1.4)";
+    cell.style.transform = "scale(1.05)";
 
     // Reset after flash
     setTimeout(() => {
-      cell.style.filter = '';
-      cell.style.transform = '';
+      cell.style.filter = "";
+      cell.style.transform = "";
     }, 150);
   },
 
@@ -1150,7 +1152,7 @@ const HeatmapAnimation = {
     if (this.highlightInterval) {
       clearInterval(this.highlightInterval);
     }
-  }
+  },
 };
 
 // Parallax Background Hook
@@ -1194,6 +1196,145 @@ const ParallaxBackground = {
   },
 };
 
+// Hero Parallax Hook - Multi-layer parallax for the hero graphic
+// Each layer (particles, edges, providers, chains, core) moves at different rates
+// creating a dynamic, evolving mesh effect as you scroll
+const HeroParallax = {
+  mounted() {
+    this.scrollContainer = document.getElementById("main-scroll-container");
+    this.rafId = null;
+    this.lastScrolled = 0;
+
+    if (!this.scrollContainer) {
+      console.warn("HeroParallax: Could not find main-scroll-container");
+      return;
+    }
+
+    // Layer configuration: outer layers move more, inner layers act as anchors
+    // Each layer gets different movement characteristics for organic feel
+    this.layerConfig = {
+      particles: {
+        translateX: -15, // horizontal drift
+        translateY: 20, // vertical drift
+        rotation: 6, // rotation degrees
+        scale: [1, 1.04], // scale range [start, end]
+      },
+      edges: {
+        translateX: -18,
+        translateY: 8,
+        rotation: 4,
+        scale: [1, 1.025],
+      },
+      providers: {
+        translateX: -8,
+        translateY: 6,
+        rotation: 3,
+        scale: [1, 1.015],
+      },
+      chains: {
+        translateX: -5,
+        translateY: 6,
+        rotation: 1.5,
+        scale: [1, 1.005],
+      },
+      core: {
+        translateX: -3, // minimal movement - acts as anchor
+        translateY: 2,
+        rotation: 0.5,
+        scale: [1, 1],
+      },
+    };
+
+    // Cache layer elements
+    this.layers = {};
+    this.cacheLayers();
+
+    // Container-level parallax (vertical stickiness)
+    this.containerConfig = {
+      verticalMultiplier: 0.17, // how much the whole graphic lags behind scroll
+    };
+
+    this.updateTransform = (scrolled) => {
+      this.lastScrolled = scrolled;
+
+      const maxScroll =
+        this.scrollContainer.scrollHeight - this.scrollContainer.clientHeight;
+      const progress =
+        maxScroll > 0 ? Math.min(Math.max(scrolled / maxScroll, 0), 1) : 0;
+
+      // Container-level vertical parallax (makes the whole graphic "sticky")
+      const containerY = scrolled * this.containerConfig.verticalMultiplier;
+      this.el.style.transform = `translateY(${containerY}px)`;
+
+      // Different easing for different feels
+      const easeOutQuad = 1 - Math.pow(1 - progress, 2);
+      const easeOutCubic = 1 - Math.pow(1 - progress, 3);
+
+      // Apply transforms to each layer with slightly different easing
+      Object.entries(this.layers).forEach(([layerName, element]) => {
+        const config = this.layerConfig[layerName];
+        if (!config || !element) return;
+
+        // Outer layers use cubic (faster start), inner use quad (smoother)
+        const isOuter = ["particles", "edges"].includes(layerName);
+        const ease = isOuter ? easeOutCubic : easeOutQuad;
+
+        const translateX = ease * config.translateX;
+        const translateY = ease * config.translateY;
+        const rotation = ease * config.rotation;
+        const scale =
+          config.scale[0] + (config.scale[1] - config.scale[0]) * ease;
+
+        element.style.transform = `translate(${translateX}px, ${translateY}px) rotate(${rotation}deg) scale(${scale})`;
+      });
+    };
+
+    this.handleScroll = () => {
+      const scrolled = this.scrollContainer.scrollTop;
+
+      if (this.rafId) {
+        cancelAnimationFrame(this.rafId);
+      }
+
+      this.rafId = requestAnimationFrame(() => {
+        this.updateTransform(scrolled);
+        this.rafId = null;
+      });
+    };
+
+    this.scrollContainer.addEventListener("scroll", this.handleScroll, {
+      passive: true,
+    });
+
+    // Initial call
+    this.updateTransform(this.scrollContainer.scrollTop);
+  },
+
+  cacheLayers() {
+    const layerNames = ["particles", "edges", "providers", "chains", "core"];
+    layerNames.forEach((name) => {
+      this.layers[name] = this.el.querySelector(
+        `[data-parallax-layer="${name}"]`
+      );
+    });
+  },
+
+  // Re-apply transform after LiveView patches the DOM
+  updated() {
+    this.cacheLayers();
+    this.updateTransform(this.lastScrolled);
+  },
+
+  destroyed() {
+    if (this.scrollContainer) {
+      this.scrollContainer.removeEventListener("scroll", this.handleScroll);
+    }
+    if (this.rafId) {
+      cancelAnimationFrame(this.rafId);
+    }
+  },
+};
+
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");
@@ -1211,6 +1352,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     TabSwitcher: EndpointSelector,
     ScrollReveal,
     ParallaxBackground,
+    HeroParallax,
     ExpandableDetails,
     HeatmapAnimation,
   },
