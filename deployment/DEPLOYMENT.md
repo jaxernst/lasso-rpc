@@ -68,14 +68,14 @@ fly scale count 2 -a lasso-rpc --region iad
 **`deployment/env.staging`** - Staging configuration:
 
 - Single region: `sjc`
-- Memory: `1gb`
 - Stateless (no volumes)
 
 **`deployment/env.prod`** - Production configuration:
 
 - Multi-region: `sjc,iad`
-- Memory: `2gb`
 - Stateful (with volumes)
+
+> **Note:** Memory and VM settings are configured in `fly.staging.toml` and `fly.prod.toml`
 
 ### Fly.toml Files
 
@@ -131,10 +131,6 @@ If issues occur after deployment, use the rollback script:
 The deployment script automatically saves the previous image for easy rollback.
 
 ## 🔧 Multi-Region Setup
-
-See [`deployment/MULTI_REGION.md`](deployment/MULTI_REGION.md) for detailed multi-region documentation.
-
-**TL;DR:**
 
 1. Deploy once: `./deployment/deploy.sh prod`
 2. Scale once: `./deployment/scale-regions.sh prod`
@@ -209,10 +205,10 @@ deployment/
 ├── env.staging            # Staging environment config
 ├── env.prod               # Production environment config
 ├── entrypoint.sh          # Container startup script
-└── MULTI_REGION.md        # Multi-region documentation
+└── DEPLOYMENT.md          # This file
 
-fly.staging.toml           # Staging app configuration
-fly.prod.toml              # Production app configuration
+fly.staging.toml           # Staging app configuration (includes VM/memory settings)
+fly.prod.toml              # Production app configuration (includes VM/memory settings)
 ```
 
 ---

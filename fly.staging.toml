@@ -27,6 +27,6 @@ kill_signal = 'SIGTERM'
     soft_limit = 500
 
 [[vm]]
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
