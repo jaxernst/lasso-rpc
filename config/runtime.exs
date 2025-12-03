@@ -23,15 +23,19 @@ if System.get_env("PHX_SERVER") do
 end
 
 if config_env() == :prod do
-  # Get port from environment variable
+  # Get port from environment variable (internal port the app listens on)
   port = String.to_integer(System.get_env("PORT") || "4000")
 
   # Get host from environment variable, defaulting to localhost for development
   host = System.get_env("PHX_HOST") || "localhost"
 
+  # External URL scheme (HTTPS in production behind Fly.io proxy)
+  scheme = System.get_env("PHX_SCHEME") || "https"
+
   config :lasso, LassoWeb.Endpoint,
     http: [ip: {0, 0, 0, 0}, port: port],
-    url: [host: host, port: port, scheme: "http"],
+    # URL config is for external access - use HTTPS and standard port (443 is omitted from URLs)
+    url: [host: host, scheme: scheme],
     secret_key_base:
       System.get_env("SECRET_KEY_BASE") || "YourSecretKeyBaseHere" <> String.duplicate("a", 64)
 
