@@ -7,6 +7,9 @@ import { LiveSocket } from "phoenix_live_view";
 // Enhanced Simulator module
 import * as LassoSim from "./lasso_simulator";
 
+// Dynamic mesh visualization for hero graphic
+import { HeroMesh } from "./hero_mesh";
+
 // Collapsible Section Hook
 const CollapsibleSection = {
   mounted() {
@@ -1196,98 +1199,34 @@ const ParallaxBackground = {
   },
 };
 
-// Hero Parallax Hook - Multi-layer parallax for the hero graphic
-// Each layer (particles, edges, providers, chains, core) moves at different rates
-// creating a dynamic, evolving mesh effect as you scroll
+// Hero Parallax Hook - Dynamic mesh visualization with parallax and interactive effects
+// Uses HeroMesh module for real-time connection line recalculation during parallax
 const HeroParallax = {
   mounted() {
     this.scrollContainer = document.getElementById("main-scroll-container");
-    this.rafId = null;
-    this.lastScrolled = 0;
 
     if (!this.scrollContainer) {
       console.warn("HeroParallax: Could not find main-scroll-container");
       return;
     }
 
-    // Layer configuration: outer layers move more, inner layers act as anchors
-    // Each layer gets different movement characteristics for organic feel
-    this.layerConfig = {
-      particles: {
-        translateX: -15, // horizontal drift
-        translateY: 20, // vertical drift
-        rotation: 6, // rotation degrees
-        scale: [1, 1.04], // scale range [start, end]
-      },
-      edges: {
-        translateX: -18,
-        translateY: 8,
-        rotation: 4,
-        scale: [1, 1.025],
-      },
-      providers: {
-        translateX: -8,
-        translateY: 6,
-        rotation: 3,
-        scale: [1, 1.015],
-      },
-      chains: {
-        translateX: -5,
-        translateY: 6,
-        rotation: 1.5,
-        scale: [1, 1.005],
-      },
-      core: {
-        translateX: -3, // minimal movement - acts as anchor
-        translateY: 2,
-        rotation: 0.5,
-        scale: [1, 1],
-      },
-    };
+    // Find the SVG element
+    this.svg = this.el.querySelector("#hero-mesh-svg");
+    if (!this.svg) {
+      console.warn("HeroParallax: Could not find hero-mesh-svg");
+      return;
+    }
 
-    // Cache layer elements
-    this.layers = {};
-    this.cacheLayers();
+    // Initialize the dynamic mesh system
+    this.mesh = new HeroMesh(this.el, this.svg, this.scrollContainer);
 
     // Container-level parallax (vertical stickiness)
     this.containerConfig = {
-      verticalMultiplier: 0.17, // how much the whole graphic lags behind scroll
+      verticalMultiplier: 0.17,
     };
 
-    this.updateTransform = (scrolled) => {
-      this.lastScrolled = scrolled;
-
-      const maxScroll =
-        this.scrollContainer.scrollHeight - this.scrollContainer.clientHeight;
-      const progress =
-        maxScroll > 0 ? Math.min(Math.max(scrolled / maxScroll, 0), 1) : 0;
-
-      // Container-level vertical parallax (makes the whole graphic "sticky")
-      const containerY = scrolled * this.containerConfig.verticalMultiplier;
-      this.el.style.transform = `translateY(${containerY}px)`;
-
-      // Different easing for different feels
-      const easeOutQuad = 1 - Math.pow(1 - progress, 2);
-      const easeOutCubic = 1 - Math.pow(1 - progress, 3);
-
-      // Apply transforms to each layer with slightly different easing
-      Object.entries(this.layers).forEach(([layerName, element]) => {
-        const config = this.layerConfig[layerName];
-        if (!config || !element) return;
-
-        // Outer layers use cubic (faster start), inner use quad (smoother)
-        const isOuter = ["particles", "edges"].includes(layerName);
-        const ease = isOuter ? easeOutCubic : easeOutQuad;
-
-        const translateX = ease * config.translateX;
-        const translateY = ease * config.translateY;
-        const rotation = ease * config.rotation;
-        const scale =
-          config.scale[0] + (config.scale[1] - config.scale[0]) * ease;
-
-        element.style.transform = `translate(${translateX}px, ${translateY}px) rotate(${rotation}deg) scale(${scale})`;
-      });
-    };
+    this.lastScrolled = 0;
+    this.rafId = null;
 
     this.handleScroll = () => {
       const scrolled = this.scrollContainer.scrollTop;
@@ -1297,7 +1236,10 @@ const HeroParallax = {
       }
 
       this.rafId = requestAnimationFrame(() => {
-        this.updateTransform(scrolled);
+        this.lastScrolled = scrolled;
+        // Container-level vertical parallax (makes the whole graphic "sticky")
+        const containerY = scrolled * this.containerConfig.verticalMultiplier;
+        this.el.style.transform = `translateY(${containerY}px)`;
         this.rafId = null;
       });
     };
@@ -1307,22 +1249,16 @@ const HeroParallax = {
     });
 
     // Initial call
-    this.updateTransform(this.scrollContainer.scrollTop);
+    this.handleScroll();
   },
 
-  cacheLayers() {
-    const layerNames = ["particles", "edges", "providers", "chains", "core"];
-    layerNames.forEach((name) => {
-      this.layers[name] = this.el.querySelector(
-        `[data-parallax-layer="${name}"]`
-      );
-    });
-  },
-
-  // Re-apply transform after LiveView patches the DOM
   updated() {
-    this.cacheLayers();
-    this.updateTransform(this.lastScrolled);
+    // Re-apply container transform after LiveView patches
+    if (this.scrollContainer && this.el) {
+      const containerY =
+        this.lastScrolled * this.containerConfig.verticalMultiplier;
+      this.el.style.transform = `translateY(${containerY}px)`;
+    }
   },
 
   destroyed() {
@@ -1331,6 +1267,9 @@ const HeroParallax = {
     }
     if (this.rafId) {
       cancelAnimationFrame(this.rafId);
+    }
+    if (this.mesh) {
+      this.mesh.destroy();
     }
   },
 };
