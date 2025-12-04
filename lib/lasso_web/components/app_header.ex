@@ -36,7 +36,7 @@ defmodule LassoWeb.Components.DashboardHeader do
                 <div>
                   <div class="flex gap-1 text-2xl font-bold text-white sm:text-3xl">
                     Lasso
-                    <div class="ml-.5 text-[9px] text-emerald-400/90 flex -translate-y-1.5 items-center gap-1 align-super">
+                    <div class="ml-[4px] text-[9px] text-emerald-400/90 flex -translate-y-1.5 items-center gap-1 align-super">
                       <span class="relative flex h-2 w-2">
                         <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75">
                         </span>
