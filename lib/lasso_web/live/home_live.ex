@@ -374,9 +374,9 @@ defmodule LassoWeb.HomeLive do
                     </div>
 
                     <p class="max-w-xl text-base leading-relaxed text-gray-300 sm:text-lg">
-                      Lasso wrangles your node infrastructure and turns it into a
-                      <span class="border-purple-500/50 border-b font-medium text-gray-100">
-                        fast, performant, reliable, and deeply configurable
+                      Lasso wrangles your node infrastructure and turns it into a <span class="border-purple-500/50 border-b border-dashed font-medium text-gray-100">fast</span>, <span class="border-purple-500/50 border-b border-dashed font-medium text-gray-100">performant</span>, <span class="border-purple-500/50 border-b border-dashed font-medium text-gray-100">reliable</span>, and
+                      <span class="border-purple-500/50 border-b border-dashed font-medium text-gray-100">
+                        deeply configurable
                       </span>
                       RPC layer. No SDKs, no downtime, just better RPC endpoints.
                     </p>
