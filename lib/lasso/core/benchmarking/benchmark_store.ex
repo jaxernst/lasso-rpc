@@ -19,6 +19,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @max_entries_per_chain 86_400
   # 1 hour in milliseconds
   @cleanup_interval 3_600_000
+  # Table limits check interval (10 seconds) - moved from per-insert to periodic
+  @table_limits_interval 10_000
 
   # Public API
 
@@ -210,8 +212,10 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   @impl true
   def init(_opts) do
-    # Schedule periodic cleanup
+    # Schedule periodic cleanup (hourly - removes old entries)
     schedule_cleanup()
+    # Schedule periodic table limits enforcement (every 10s - caps table size)
+    schedule_table_limits_check()
 
     state = %{
       rpc_tables: %{},
@@ -228,9 +232,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     rpc_table = rpc_table_name(chain_name)
     score_table = score_table_name(chain_name)
-
-    # Check and enforce memory limits before inserting
-    enforce_table_limits(rpc_table)
 
     # Record detailed RPC entry
     timestamp = System.monotonic_time(:millisecond)
@@ -251,9 +252,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     rpc_table = rpc_table_name(chain_name)
     score_table = score_table_name(chain_name)
-
-    # Check and enforce memory limits before inserting
-    enforce_table_limits(rpc_table)
 
     # Record detailed RPC entry with provided timestamp
     :ets.insert(rpc_table, {timestamp, provider_id, method, duration_ms, result})
@@ -883,6 +881,19 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     {:noreply, state}
   end
 
+  @impl true
+  def handle_info(:enforce_table_limits, state) do
+    Enum.each(state.chains, fn chain_name ->
+      if Map.has_key?(state.rpc_tables, chain_name) do
+        rpc_table = rpc_table_name(chain_name)
+        enforce_table_limits(rpc_table)
+      end
+    end)
+
+    schedule_table_limits_check()
+    {:noreply, state}
+  end
+
   defp get_rpc_performance_with_percentiles_data(chain_name, provider_id, method) do
     score_table = score_table_name(chain_name)
     key = {provider_id, method, :rpc}
@@ -1366,6 +1377,10 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   defp schedule_cleanup do
     Process.send_after(__MODULE__, :cleanup_all_chains, @cleanup_interval)
+  end
+
+  defp schedule_table_limits_check do
+    Process.send_after(__MODULE__, :enforce_table_limits, @table_limits_interval)
   end
 
   defp enforce_table_limits(table_name) do
