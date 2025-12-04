@@ -64,30 +64,19 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
 
   @impl true
   def record_request(chain, provider_id, method, duration_ms, result, opts) do
-    async = Keyword.get(opts, :async, true)
     timestamp = Keyword.get(opts, :timestamp)
     transport = Keyword.get(opts, :transport, :http)
 
-    recording_fn = fn ->
-      # Persist transport-aware entry under augmented method key to avoid table format changes
-      method_key = "#{method}@#{transport}"
+    method_key = "#{method}@#{transport}"
 
-      BenchmarkStore.record_rpc_call(
-        chain,
-        provider_id,
-        method_key,
-        duration_ms,
-        result,
-        timestamp
-      )
-    end
-
-    if async do
-      # Record asynchronously to avoid blocking the request path
-      Task.start(recording_fn)
-    else
-      recording_fn.()
-    end
+    BenchmarkStore.record_rpc_call(
+      chain,
+      provider_id,
+      method_key,
+      duration_ms,
+      result,
+      timestamp
+    )
 
     :ok
   end
