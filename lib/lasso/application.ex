@@ -11,6 +11,12 @@ defmodule Lasso.Application do
     # Store application start time for uptime calculation
     Application.put_env(:lasso, :start_time, System.monotonic_time(:millisecond))
 
+    # Create ETS table for TransportRegistry channel cache.
+    # This table enables lockless reads in the Selection hot path.
+    # Owned by the Application process (never dies), managed by TransportRegistry.
+    # See TransportRegistry moduledoc for cache coherence details.
+    :ets.new(:transport_channel_cache, [:named_table, :public, :set, read_concurrency: true])
+
     children =
       [
         # Start PubSub for real-time messaging
@@ -23,17 +29,16 @@ defmodule Lasso.Application do
         Lasso.Telemetry,
 
         # Start Finch HTTP client for RPC provider requests
-        # High connection limit per pool to handle concurrent requests to same provider
-        # Each unique provider URL gets its own pool, so size must be high enough
-        # to handle burst traffic without queueing
+        # Pool size tuned for typical RPC proxy workloads:
+        # - size: max connections per pool (per unique host)
+        # - count: number of independent pools for parallel access
+        # For shared-cpu instances, keep this modest to avoid scheduler overhead
         {Finch,
          name: Lasso.Finch,
          pools: %{
-           # Use :default atom with => syntax to apply to ALL unregistered hosts
            :default => [
-             size: 1000,
-             # Max connections per pool (per unique host)
-             count: 10,
+             size: 200,
+             count: 5,
              pool_max_idle_time: :timer.seconds(60),
              conn_opts: [
                timeout: 30_000,

@@ -14,13 +14,44 @@ defmodule Lasso.RPC.TransportRegistry do
   The registry maintains channel lifecycle, health status, and provides
   channel selection capabilities for the routing logic.
 
-  Responsibilities:
+  ## Architecture
+
+  TransportRegistry uses a two-tier storage model for optimal performance:
+
+  1. **GenServer state** (authoritative): Stores channels map and capabilities.
+     All writes go through GenServer to ensure serialization.
+
+  2. **ETS cache** (read-optimized): Provides lockless reads for hot-path lookups.
+     The cache is kept in sync via `cache_channel/4` and `uncache_channel/3`.
+
+  The ETS table (`:transport_channel_cache`) is created by `Lasso.Application`
+  at startup and owned by the Application process (which never dies). This keeps
+  the table alive for the lifetime of the application while TransportRegistry
+  manages its contents.
+
+  ## WebSocket Lifecycle Invariant
+
+  For WebSocket channels, **cache presence implies the WebSocket is connected**.
+  This is enforced by PubSub event handling:
+
+  - On `:ws_connected` → channel is created and cached
+  - On `:ws_disconnected` or `:ws_closed` → channel is removed and uncached
+
+  This allows Selection to efficiently check WS availability via ETS lookup
+  rather than calling each WSConnection process. If a stale channel reference
+  is returned (race condition), the circuit breaker handles the failure gracefully
+  on first request attempt.
+
+  ## Responsibilities
+
   - Lazy channel opening (on-demand)
   - Channel health monitoring
   - Capability caching (supported methods, subscription support)
   - Channel lifecycle management
+  - ETS cache coherence
 
-  Not responsible for:
+  ## Not Responsible For
+
   - Provider health/availability (see ProviderPool)
   - Provider selection strategy (see Selection)
   """
@@ -32,6 +63,9 @@ defmodule Lasso.RPC.TransportRegistry do
   alias Lasso.Config.ConfigStore
   alias Lasso.RPC.ProviderPool
   alias Lasso.JSONRPC.Error, as: JError
+
+  # ETS table for lockless channel lookups in hot path
+  @channel_cache_table :transport_channel_cache
 
   defstruct [
     :chain_name,
@@ -57,11 +91,47 @@ defmodule Lasso.RPC.TransportRegistry do
   @doc """
   Gets or opens a channel for a provider and transport.
 
+  This function uses a two-tier lookup strategy for optimal performance:
+
+  1. **Fast path (ETS)**: First checks the ETS cache for lockless reads (~100ns)
+  2. **Slow path (GenServer)**: On cache miss, falls back to GenServer.call to
+     create the channel and populate the cache
+
+  Once a channel is cached, subsequent lookups are instant ETS reads.
+
+  ## Cache Coherence
+
+  The ETS cache is kept in sync with the GenServer state:
+  - Channels are cached when created via `create_channel/4`
+  - Channels are uncached when removed via `remove_channel/3`
+  - WebSocket channels are automatically uncached on disconnect
+    (via PubSub events: `:ws_disconnected`, `:ws_closed`)
+
+  **Important**: For WS channels, cache presence implies the WebSocket is connected.
+  Stale channel references are handled gracefully by the circuit breaker on
+  first failed request.
+
   Returns {:ok, channel} or {:error, reason}.
   """
   @spec get_channel(chain_name, provider_id, transport, keyword()) ::
           {:ok, Channel.t()} | {:error, term()}
   def get_channel(chain_name, provider_id, transport, opts \\ []) do
+    cache_key = {chain_name, provider_id, transport}
+
+    case :ets.lookup(@channel_cache_table, cache_key) do
+      [{^cache_key, channel}] ->
+        # Fast path: channel exists in ETS cache
+        {:ok, channel}
+
+      [] ->
+        # Slow path: channel not cached, use GenServer to create/fetch
+        # This will also populate the ETS cache for future lookups
+        do_get_channel(chain_name, provider_id, transport, opts)
+    end
+  end
+
+  # GenServer call for channel creation/retrieval. Called on cache miss.
+  defp do_get_channel(chain_name, provider_id, transport, opts) do
     GenServer.call(via_name(chain_name), {:get_channel, provider_id, transport, opts})
   end
 
@@ -235,7 +305,6 @@ defmodule Lasso.RPC.TransportRegistry do
     {:noreply, new_state}
   end
 
-  # WebSocket connection established - create WS channel
   @impl true
   def handle_info({:ws_connected, provider_id, _connection_id}, state) do
     handle_ws_connected(provider_id, state)
@@ -319,7 +388,7 @@ defmodule Lasso.RPC.TransportRegistry do
             channel =
               Channel.new(state.chain_name, provider_id, transport, raw_channel, transport_module)
 
-            # Store channel
+            # Store channel in GenServer state
             updated_channels =
               Map.update(state.channels, provider_id, %{}, fn provider_channels ->
                 Map.put(provider_channels, transport, channel)
@@ -332,6 +401,9 @@ defmodule Lasso.RPC.TransportRegistry do
             cap_key = {provider_id, transport}
             new_capabilities = Map.put(state.capabilities, cap_key, capabilities)
             final_state = %{new_state | capabilities: new_capabilities}
+
+            # Update ETS cache for lockless hot-path reads
+            cache_channel(state.chain_name, provider_id, transport, channel)
 
             {:ok, channel, final_state}
 
@@ -382,7 +454,10 @@ defmodule Lasso.RPC.TransportRegistry do
         :ok
     end
 
-    # Remove from state
+    # Remove from ETS cache (lockless reads will now miss)
+    uncache_channel(state.chain_name, provider_id, transport)
+
+    # Remove from GenServer state
     updated_channels =
       case Map.get(state.channels, provider_id) do
         nil ->
@@ -464,5 +539,19 @@ defmodule Lasso.RPC.TransportRegistry do
 
   defp via_name(chain_name) do
     {:via, Registry, {Lasso.Registry, {:transport_registry, chain_name}}}
+  end
+
+  # ETS cache management for lockless hot-path reads
+
+  # Updates the ETS channel cache. Called internally when channels are created.
+  defp cache_channel(chain_name, provider_id, transport, channel) do
+    cache_key = {chain_name, provider_id, transport}
+    :ets.insert(@channel_cache_table, {cache_key, channel})
+  end
+
+  # Removes a channel from ETS cache. Called internally when channels are closed.
+  defp uncache_channel(chain_name, provider_id, transport) do
+    cache_key = {chain_name, provider_id, transport}
+    :ets.delete(@channel_cache_table, cache_key)
   end
 end
