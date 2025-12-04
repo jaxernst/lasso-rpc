@@ -237,7 +237,16 @@ defmodule Lasso.RPC.Selection do
       max_lag_blocks: max_lag_blocks
     }
 
+    # Instrument ProviderPool.list_candidates call time
+    pool_start = System.monotonic_time(:microsecond)
     provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
+    pool_duration_us = System.monotonic_time(:microsecond) - pool_start
+
+    :telemetry.execute(
+      [:lasso, :selection, :pool_candidates],
+      %{duration_us: pool_duration_us, candidate_count: length(provider_candidates)},
+      %{chain: chain, method: method, strategy: strategy}
+    )
 
     require Logger
 
@@ -256,6 +265,8 @@ defmodule Lasso.RPC.Selection do
 
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
     # Map provider list into channels, lazily opening as needed
+    registry_start = System.monotonic_time(:microsecond)
+
     channels =
       provider_candidates
       |> Enum.flat_map(fn %{id: provider_id, config: provider_config} ->
@@ -279,18 +290,13 @@ defmodule Lasso.RPC.Selection do
               []
 
             t == :ws and has_ws? ->
-              # Only include WS if WSConnection shows connected; otherwise skip from candidates
-              with status <- safe_ws_status(provider_id),
-                   %{connected: true} <- status,
-                   {:ok, channel} <-
-                     TransportRegistry.get_channel(chain, provider_id, t,
-                       method: method,
-                       provider_config: provider_config
-                     ) do
-                [channel]
-              else
-                _ ->
-                  []
+              # WS channels are only cached when connected (TransportRegistry removes on disconnect)
+              case TransportRegistry.get_channel(chain, provider_id, t,
+                     method: method,
+                     provider_config: provider_config
+                   ) do
+                {:ok, channel} -> [channel]
+                _ -> []
               end
 
             true ->
@@ -305,6 +311,14 @@ defmodule Lasso.RPC.Selection do
         end)
       end)
       |> Enum.reject(&is_nil/1)
+
+    registry_duration_us = System.monotonic_time(:microsecond) - registry_start
+
+    :telemetry.execute(
+      [:lasso, :selection, :channel_building],
+      %{duration_us: registry_duration_us, channel_count: length(channels)},
+      %{chain: chain, method: method, provider_count: length(provider_candidates)}
+    )
 
     # Filter channels by method capability (adapter-based filtering)
     capable_channels =
@@ -374,16 +388,6 @@ defmodule Lasso.RPC.Selection do
       :priority -> "static_priority"
       :round_robin -> "round_robin_rotation"
       :latency_weighted -> "latency_weighted_balancing"
-    end
-  end
-
-  # Private helpers
-  defp safe_ws_status(provider_id) when is_binary(provider_id) do
-    try do
-      Lasso.RPC.WSConnection.status(provider_id)
-    catch
-      :exit, _ -> :error
-      _ -> :error
     end
   end
 
