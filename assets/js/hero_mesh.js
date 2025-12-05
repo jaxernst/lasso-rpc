@@ -39,6 +39,7 @@ const CONFIG = {
     particleColor: "#64748b", // Slate gray (matches line colors)
     particleOpacity: 0.5,
     maxParticles: 30,
+    poolSize: 40, // Pre-allocated particle pool size
   },
 };
 
@@ -74,6 +75,7 @@ class MeshNode {
 
 /**
  * MeshConnection - Represents a connection line between two nodes
+ * Optimized: caches last path to avoid redundant setAttribute calls
  */
 class MeshConnection {
   constructor(pathElement, fromNode, toNode, type) {
@@ -82,20 +84,50 @@ class MeshConnection {
     this.to = toNode;
     this.type = type; // 'hub-chain', 'chain-provider', 'cross-chain', 'cross-provider', 'provider-edge'
     this.isCurved = type.startsWith("cross");
+    // Cache last coordinates to skip redundant updates
+    this._lastFromX = -1;
+    this._lastFromY = -1;
+    this._lastToX = -1;
+    this._lastToY = -1;
   }
 
   updatePath(cx, cy) {
+    // Round coordinates to reduce path string variations (helps Safari caching)
+    const fromX = Math.round(this.from.x * 10) / 10;
+    const fromY = Math.round(this.from.y * 10) / 10;
+    const toX = Math.round(this.to.x * 10) / 10;
+    const toY = Math.round(this.to.y * 10) / 10;
+
+    // Skip update if coordinates haven't changed significantly
+    if (
+      fromX === this._lastFromX &&
+      fromY === this._lastFromY &&
+      toX === this._lastToX &&
+      toY === this._lastToY
+    ) {
+      return;
+    }
+    this._lastFromX = fromX;
+    this._lastFromY = fromY;
+    this._lastToX = toX;
+    this._lastToY = toY;
+
     if (this.isCurved) {
-      // Quadratic bezier through center point
+      // Cubic bezier with two control points biased toward center
+      // This renders more stably in Safari than quadratic bezier with dashed strokes
+      const cp1x = Math.round((fromX + (cx - fromX) * 0.6) * 10) / 10;
+      const cp1y = Math.round((fromY + (cy - fromY) * 0.6) * 10) / 10;
+      const cp2x = Math.round((toX + (cx - toX) * 0.6) * 10) / 10;
+      const cp2y = Math.round((toY + (cy - toY) * 0.6) * 10) / 10;
       this.element.setAttribute(
         "d",
-        `M ${this.from.x} ${this.from.y} Q ${cx} ${cy} ${this.to.x} ${this.to.y}`
+        `M ${fromX} ${fromY} C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${toX} ${toY}`
       );
     } else {
       // Straight line
       this.element.setAttribute(
         "d",
-        `M ${this.from.x} ${this.from.y} L ${this.to.x} ${this.to.y}`
+        `M ${fromX} ${fromY} L ${toX} ${toY}`
       );
     }
   }
@@ -105,13 +137,19 @@ class MeshConnection {
    */
   getPointAt(t, cx, cy) {
     if (this.isCurved) {
-      // Quadratic bezier: B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
+      // Cubic bezier: B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
+      const cp1x = this.from.x + (cx - this.from.x) * 0.6;
+      const cp1y = this.from.y + (cy - this.from.y) * 0.6;
+      const cp2x = this.to.x + (cx - this.to.x) * 0.6;
+      const cp2y = this.to.y + (cy - this.to.y) * 0.6;
       const t1 = 1 - t;
       const t1sq = t1 * t1;
+      const t1cu = t1sq * t1;
       const tsq = t * t;
+      const tcu = tsq * t;
       return {
-        x: t1sq * this.from.x + 2 * t1 * t * cx + tsq * this.to.x,
-        y: t1sq * this.from.y + 2 * t1 * t * cy + tsq * this.to.y,
+        x: t1cu * this.from.x + 3 * t1sq * t * cp1x + 3 * t1 * tsq * cp2x + tcu * this.to.x,
+        y: t1cu * this.from.y + 3 * t1sq * t * cp1y + 3 * t1 * tsq * cp2y + tcu * this.to.y,
       };
     } else {
       // Linear interpolation
@@ -125,31 +163,60 @@ class MeshConnection {
 
 /**
  * TrafficParticle - A particle that animates along a connection
+ * Uses object pooling to avoid DOM creation/destruction during animation
  */
 class TrafficParticle {
-  constructor(connection, element, speed, direction) {
-    this.connection = connection;
+  constructor(element) {
     this.element = element;
-    this.speed = speed; // 0-1 progress per second
-    this.direction = direction; // 1 = from->to, -1 = to->from
+    this.connection = null;
+    this.speed = 0;
+    this.direction = 1;
+    this.progress = 0;
+    this.active = false;
+    // Cache last position to avoid redundant setAttribute calls
+    this._lastX = 0;
+    this._lastY = 0;
+  }
+
+  activate(connection, speed, direction) {
+    this.connection = connection;
+    this.speed = speed;
+    this.direction = direction;
     this.progress = direction === 1 ? 0 : 1;
-    this.alive = true;
+    this.active = true;
+    this.element.style.display = "";
+  }
+
+  deactivate() {
+    this.active = false;
+    this.connection = null;
+    this.element.style.display = "none";
   }
 
   update(dt, cx, cy) {
+    if (!this.active) return;
+
     // Update progress
     this.progress += this.direction * this.speed * dt;
 
     // Check if particle has completed its journey
     if (this.progress > 1 || this.progress < 0) {
-      this.alive = false;
+      this.deactivate();
       return;
     }
 
     // Get position along the path
     const pos = this.connection.getPointAt(this.progress, cx, cy);
-    this.element.setAttribute("cx", pos.x);
-    this.element.setAttribute("cy", pos.y);
+
+    // Only update DOM if position changed significantly (reduces repaints)
+    const dx = Math.abs(pos.x - this._lastX);
+    const dy = Math.abs(pos.y - this._lastY);
+    if (dx > 0.5 || dy > 0.5) {
+      this.element.setAttribute("cx", pos.x);
+      this.element.setAttribute("cy", pos.y);
+      this._lastX = pos.x;
+      this._lastY = pos.y;
+    }
   }
 }
 
@@ -180,18 +247,55 @@ export class HeroMesh {
     this.mouse = { x: 0, y: 0 };
     this.mouseInContainer = false;
 
-    // Traffic particles
-    this.trafficParticles = [];
+    // Traffic particles (object pool)
+    this.particlePool = [];
     this.trafficGroup = null;
     this.lastSpawnTime = {};
     this.trafficConnections = []; // Connections eligible for traffic
+
+    // Performance: cache transform strings to avoid string allocation
+    this._transformCache = new Map();
+
+    // Performance: track if scroll changed to skip unnecessary updates
+    this._lastScrollProgress = -1;
+
+    // Safari detection for targeted optimizations
+    this.isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+    // Connection integrity check interval (frames)
+    this._integrityCheckCounter = 0;
+    this._integrityCheckInterval = 120; // Check every ~4 seconds at 30fps
 
     // Initialize
     this.parseStructure();
     this.createDynamicConnections();
     this.createTrafficLayer();
     this.setupEventListeners();
+    this.applyPerformanceHints();
     this.startAnimation();
+  }
+
+  /**
+   * Apply CSS hints to encourage GPU compositing
+   * Safari especially benefits from these hints for smoother SVG animation
+   */
+  applyPerformanceHints() {
+    // Promote SVG to its own compositor layer
+    // transform: translateZ(0) is more reliable cross-browser than will-change
+    this.svg.style.transform = "translateZ(0)";
+
+    // Hint to browser that layers will be transformed
+    for (const layer of Object.values(this.layers)) {
+      if (layer.element) {
+        // Use a 3D transform hint to promote to compositor layer
+        // This avoids Safari's SVG repaint issues during animation
+        layer.element.style.willChange = "transform";
+      }
+    }
+
+    if (this.isSafari) {
+      console.log("HeroMesh: Safari detected, GPU compositing hints applied");
+    }
   }
 
   /**
@@ -324,6 +428,8 @@ export class HeroMesh {
           const dash = el.getAttribute("stroke-dasharray");
           if (dash && dash !== "") {
             path.setAttribute("stroke-dasharray", dash);
+            // Safari fix: geometricPrecision prevents flickering on animated dashed curves
+            path.setAttribute("shape-rendering", "geometricPrecision");
           }
 
           connectionsGroup.appendChild(path);
@@ -395,6 +501,8 @@ export class HeroMesh {
 
           if (def.dash) {
             path.setAttribute("stroke-dasharray", def.dash);
+            // Safari fix: geometricPrecision prevents flickering on animated dashed curves
+            path.setAttribute("shape-rendering", "geometricPrecision");
           }
 
           connectionsGroup.appendChild(path);
@@ -416,6 +524,7 @@ export class HeroMesh {
 
   /**
    * Create the traffic particle layer and identify eligible connections
+   * Uses object pooling to pre-allocate particles and avoid runtime DOM creation
    */
   createTrafficLayer() {
     // Create SVG group for traffic particles
@@ -439,10 +548,27 @@ export class HeroMesh {
     }
 
     // Identify connections eligible for traffic particles
-    const { enabledTypes } = CONFIG.traffic;
+    const { enabledTypes, poolSize, particleRadius, particleColor, particleOpacity } = CONFIG.traffic;
     this.trafficConnections = this.connections.filter((conn) =>
       enabledTypes.includes(conn.type)
     );
+
+    // Pre-allocate particle pool (avoids runtime DOM creation)
+    this.particlePool = [];
+    for (let i = 0; i < poolSize; i++) {
+      const circle = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "circle"
+      );
+      circle.setAttribute("r", particleRadius);
+      circle.setAttribute("fill", particleColor);
+      circle.setAttribute("opacity", particleOpacity);
+      circle.style.display = "none"; // Start hidden
+      this.trafficGroup.appendChild(circle);
+
+      const particle = new TrafficParticle(circle);
+      this.particlePool.push(particle);
+    }
 
     // Initialize spawn timers for each traffic connection
     this.trafficConnections.forEach((_, i) => {
@@ -452,50 +578,33 @@ export class HeroMesh {
     });
 
     console.log(
-      `HeroMesh: Traffic enabled on ${this.trafficConnections.length} connections`
+      `HeroMesh: Traffic enabled on ${this.trafficConnections.length} connections, pool size: ${poolSize}`
     );
   }
 
   /**
-   * Spawn a new traffic particle on a connection
+   * Spawn a new traffic particle on a connection using object pool
    */
   spawnParticle(connection) {
-    const {
-      particleRadius,
-      particleColor,
-      particleOpacity,
-      speed,
-      speedVariance,
-    } = CONFIG.traffic;
+    // Find an inactive particle in the pool
+    const particle = this.particlePool.find(p => !p.active);
+    if (!particle) return; // Pool exhausted
 
-    // Create particle element (no expensive CSS filters)
-    const circle = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "circle"
-    );
-    circle.setAttribute("r", particleRadius);
-    circle.setAttribute("fill", particleColor);
-    circle.setAttribute("opacity", particleOpacity);
-
-    this.trafficGroup.appendChild(circle);
+    const { speed, speedVariance } = CONFIG.traffic;
 
     // Randomize speed with higher variance for organic feel
     const variance = 1 + (Math.random() * 2 - 1) * speedVariance;
     const particleSpeed = speed * variance;
 
-    const particle = new TrafficParticle(
-      connection,
-      circle,
-      particleSpeed,
-      1 // direction: from -> to
-    );
+    // Activate the pooled particle
+    particle.activate(connection, particleSpeed, 1);
 
     // Set initial position
     const pos = connection.getPointAt(0, this.cx, this.cy);
-    circle.setAttribute("cx", pos.x);
-    circle.setAttribute("cy", pos.y);
-
-    this.trafficParticles.push(particle);
+    particle.element.setAttribute("cx", pos.x);
+    particle.element.setAttribute("cy", pos.y);
+    particle._lastX = pos.x;
+    particle._lastY = pos.y;
   }
 
   /**
@@ -504,8 +613,11 @@ export class HeroMesh {
   updateTraffic(time, dt) {
     const { spawnInterval, spawnChance, maxParticles } = CONFIG.traffic;
 
+    // Count active particles
+    const activeCount = this.particlePool.filter(p => p.active).length;
+
     // Only check spawning occasionally, not every frame
-    if (this.trafficParticles.length < maxParticles) {
+    if (activeCount < maxParticles && this.trafficConnections.length > 0) {
       // Pick a random connection to potentially spawn on
       const i = Math.floor(Math.random() * this.trafficConnections.length);
       const conn = this.trafficConnections[i];
@@ -517,16 +629,9 @@ export class HeroMesh {
       }
     }
 
-    // Update existing particles and remove dead ones
-    for (let i = this.trafficParticles.length - 1; i >= 0; i--) {
-      const particle = this.trafficParticles[i];
+    // Update all particles in the pool (inactive ones skip update internally)
+    for (const particle of this.particlePool) {
       particle.update(dt, this.cx, this.cy);
-
-      if (!particle.alive) {
-        // Remove from DOM and array
-        particle.element.remove();
-        this.trafficParticles.splice(i, 1);
-      }
     }
   }
 
@@ -536,8 +641,7 @@ export class HeroMesh {
   ensureTrafficGroup() {
     if (!this.trafficGroup || !this.trafficGroup.parentNode) {
       this.createTrafficLayer();
-      // Clear existing particles since their elements are gone
-      this.trafficParticles = [];
+      // Pool is recreated in createTrafficLayer, all particles start inactive
     }
   }
 
@@ -586,37 +690,42 @@ export class HeroMesh {
 
   /**
    * Start the animation loop
+   * Uses requestAnimationFrame without artificial throttling for smoothest results
+   * Safari benefits from running at native refresh rate rather than artificial caps
    */
   startAnimation() {
-    let frameCount = 0;
     let lastFrameTime = 0;
-    const targetFPS = 30; // Target 30fps for smoother performance
-    const frameInterval = 1000 / targetFPS;
-    let accumulator = 0;
 
     const animate = (time) => {
-      const dt = lastFrameTime > 0 ? time - lastFrameTime : 16;
+      // Calculate delta time, cap at 100ms to prevent huge jumps after tab switch
+      const rawDt = lastFrameTime > 0 ? time - lastFrameTime : 16;
+      const dt = Math.min(rawDt, 100);
       lastFrameTime = time;
       this.lastTime = time;
-      accumulator += dt;
 
-      // Throttle to target FPS
-      if (accumulator >= frameInterval) {
-        accumulator = accumulator % frameInterval;
-
-        // Check every ~2 seconds if connections/traffic need rebuilding
-        frameCount++;
-        if (frameCount % 60 === 0) {
+      // Periodic integrity check (much less frequent, doesn't block main updates)
+      this._integrityCheckCounter++;
+      if (this._integrityCheckCounter >= this._integrityCheckInterval) {
+        this._integrityCheckCounter = 0;
+        // Use requestIdleCallback if available to avoid blocking animation
+        if (window.requestIdleCallback) {
+          requestIdleCallback(() => {
+            this.ensureConnections();
+            this.ensureTrafficGroup();
+          }, { timeout: 1000 });
+        } else {
+          // Fallback: just do it, but it's infrequent
           this.ensureConnections();
           this.ensureTrafficGroup();
         }
-
-        this.updateParallax();
-        this.updateNodePositions();
-        this.updateConnections();
-        this.updateLayerTransforms();
-        this.updateTraffic(time, dt);
       }
+
+      // Core animation updates - always run at native frame rate
+      this.updateParallax();
+      this.updateNodePositions();
+      this.updateConnections();
+      this.updateLayerTransforms();
+      this.updateTraffic(time, dt);
 
       this.animationId = requestAnimationFrame(animate);
     };
@@ -657,52 +766,63 @@ export class HeroMesh {
   /**
    * Apply combined transforms to layer elements (parallax + ambient)
    * Also updates node ambient offsets so connections stay aligned with visual nodes
+   * Optimized: caches transform strings and uses rounded values to reduce repaints
    */
   updateLayerTransforms() {
     const { breatheSpeed, breatheAmount, driftSpeed, driftAmount } =
       CONFIG.ambient;
     const time = this.lastTime;
 
-    Object.entries(this.layers).forEach(([layerName, layer]) => {
+    // Pre-compute intensity map (avoids repeated lookups)
+    const intensityMap = {
+      particles: 1.0,
+      edges: 1.0,
+      providers: 0.6,
+      chains: 0.3,
+      core: 0.1,
+    };
+
+    for (const [layerName, layer] of Object.entries(this.layers)) {
       const parallax = layer.parallaxOffset || { x: 0, y: 0 };
 
       // Calculate layer-wide ambient motion (use a consistent phase per layer)
-      const layerPhase = layerName.length * 0.5; // Simple deterministic phase per layer
+      const layerPhase = layerName.length * 0.5;
       const breathe =
         Math.sin(time * breatheSpeed + layerPhase) * breatheAmount;
       const driftX = Math.sin(time * driftSpeed + layerPhase) * driftAmount;
       const driftY =
         Math.cos(time * driftSpeed * 1.3 + layerPhase) * driftAmount * 0.7;
 
-      // Layer-based intensity (outer = more movement)
-      const intensity = ["particles", "edges"].includes(layerName)
-        ? 1.0
-        : ["providers"].includes(layerName)
-        ? 0.6
-        : ["chains"].includes(layerName)
-        ? 0.3
-        : 0.1;
+      const intensity = intensityMap[layerName] || 0.1;
 
       const ambientX = (driftX + breathe * 0.3) * intensity;
       const ambientY = (driftY + breathe * 0.5) * intensity;
 
       // Update each node's ambient offset so connections follow the breathing
-      // This ensures connection endpoints match where the visual nodes appear
-      layer.nodes.forEach((node) => {
+      for (const node of layer.nodes) {
         node.ambientOffset.x = ambientX;
         node.ambientOffset.y = ambientY;
-      });
+      }
 
-      // Apply combined transform to layer element (parallax + ambient)
-      // This moves the visual nodes; the ambient offset on nodes keeps connections aligned
-      const totalX = parallax.x + ambientX;
-      const totalY = parallax.y + ambientY;
+      // Round to 2 decimal places to reduce unique transform strings
+      // This helps Safari's compositor cache transforms better
+      const totalX = Math.round((parallax.x + ambientX) * 100) / 100;
+      const totalY = Math.round((parallax.y + ambientY) * 100) / 100;
 
+      // Check if transform actually changed (avoid unnecessary DOM updates)
+      const cacheKey = layerName;
+      const cached = this._transformCache.get(cacheKey);
+      if (cached && cached.x === totalX && cached.y === totalY) {
+        continue; // Skip DOM update if unchanged
+      }
+      this._transformCache.set(cacheKey, { x: totalX, y: totalY });
+
+      // Apply transform
       layer.element.setAttribute(
         "transform",
         `translate(${totalX}, ${totalY})`
       );
-    });
+    }
   }
 
   /**
@@ -738,12 +858,14 @@ export class HeroMesh {
     this.container.removeEventListener("mousemove", this.handleMouseMove);
     this.container.removeEventListener("mouseleave", this.handleMouseLeave);
 
-    // Clean up traffic particles
-    this.trafficParticles.forEach((p) => p.element.remove());
-    this.trafficParticles = [];
+    // Clean up particle pool
+    this.particlePool = [];
     if (this.trafficGroup) {
       this.trafficGroup.remove();
     }
+
+    // Clear caches
+    this._transformCache.clear();
   }
 }
 
