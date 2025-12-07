@@ -27,7 +27,6 @@ defmodule LassoWeb.Router do
 
     live("/", HomeLive)
     live("/dashboard", Dashboard)
-    live("/metrics/:chain", MetricsLive)
   end
 
   scope "/api", LassoWeb do
