@@ -508,13 +508,15 @@ async function runSingleChain(url, chainName, rpsLimit) {
           // Calculate current effective RPS limit (ramp-up or full)
           let currentLimit = rpsLimit;
           if (now < rampUpEndMs) {
-            // During ramp-up: linearly increase from 0 to target RPS
+            // During ramp-up: linearly increase from 10% to 100% of target RPS
+            // Starting at 10% avoids extremely long wait times at the very beginning
             const rampUpElapsed = now - startedAt;
             const rampUpProgress = Math.min(
               1,
               rampUpElapsed / (rampUpDuration * 1000)
             );
-            currentLimit = rpsLimit * rampUpProgress;
+            // Ramp from 10% to 100%
+            currentLimit = rpsLimit * (0.1 + 0.9 * rampUpProgress);
           }
 
           // Refill tokens based on elapsed time and current limit
@@ -529,7 +531,8 @@ async function runSingleChain(url, chainName, rpsLimit) {
 
           // Wait for next token to be available
           const waitMs = (1 - tokens) / tokensPerMs;
-          await sleep(Math.ceil(waitMs));
+          // Cap wait time at 500ms to allow responsive ramp-up adjustments
+          await sleep(Math.min(500, Math.ceil(waitMs)));
         }
       },
     };
