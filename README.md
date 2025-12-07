@@ -21,8 +21,7 @@ wss://lasso-rpc.fly.dev/ws/rpc/base
 (additional strategy-specific endpoints below)
 ```
 
-Provider Metrics dashboard (wip): https://lasso-rpc.fly.dev/metrics/ethereum  
-Full dashboard: https://lasso-rpc.fly.dev
+Live dashboard: https://lasso-rpc.fly.dev
 
 ---
 
