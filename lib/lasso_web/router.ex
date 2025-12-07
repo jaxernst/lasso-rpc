@@ -48,15 +48,15 @@ defmodule LassoWeb.Router do
 
     # Chain configuration management
     resources("/chains", ChainController, except: [:new, :edit]) do
-      post("/test", ChainController, :test_connectivity, as: :test)
+      # post("/test", ChainController, :test_connectivity, as: :test)
     end
 
     # Chain validation endpoint
-    post("/chains/validate", ChainController, :validate)
+    # post("/chains/validate", ChainController, :validate)
 
     # Backup management
-    get("/chains/backups", ChainController, :list_backups)
-    post("/chains/backup", ChainController, :create_backup)
+    # get("/chains/backups", ChainController, :list_backups)
+    # post("/chains/backup", ChainController, :create_backup)
   end
 
   # HTTP JSON-RPC endpoints

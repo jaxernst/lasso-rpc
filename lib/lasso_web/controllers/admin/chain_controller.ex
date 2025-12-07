@@ -8,7 +8,6 @@ defmodule LassoWeb.Admin.ChainController do
 
   @doc """
   Lists all chain configurations.
-  GET /api/admin/chains
   """
   def index(conn, _params) do
     case ChainConfigManager.list_chains() do
@@ -55,7 +54,6 @@ defmodule LassoWeb.Admin.ChainController do
 
   @doc """
   Gets a specific chain configuration.
-  GET /api/admin/chains/:id
   """
   def show(conn, %{"id" => chain_id}) do
     case ChainConfigManager.get_chain(chain_id) do
@@ -100,7 +98,6 @@ defmodule LassoWeb.Admin.ChainController do
 
   @doc """
   Creates a new chain configuration.
-  POST /api/admin/chains
   """
   def create(conn, %{"chain" => chain_params}) do
     with :ok <- validate_chain_params(chain_params),
@@ -139,7 +136,6 @@ defmodule LassoWeb.Admin.ChainController do
 
   @doc """
   Updates an existing chain configuration.
-  PUT /api/admin/chains/:id
   """
   def update(conn, %{"id" => chain_id, "chain" => chain_params}) do
     with :ok <- validate_chain_params(chain_params),
@@ -175,7 +171,6 @@ defmodule LassoWeb.Admin.ChainController do
 
   @doc """
   Deletes a chain configuration.
-  DELETE /api/admin/chains/:id
   """
   def delete(conn, %{"id" => chain_id}) do
     case ChainConfigManager.delete_chain(chain_id) do
@@ -207,7 +202,6 @@ defmodule LassoWeb.Admin.ChainController do
 
   @doc """
   Validates a chain configuration without saving.
-  POST /api/admin/chains/validate
   """
   def validate(conn, %{"chain" => chain_params}) do
     case ChainConfigManager.validate_chain_config(chain_params) do
@@ -227,7 +221,6 @@ defmodule LassoWeb.Admin.ChainController do
 
   @doc """
   Tests connectivity to chain providers.
-  POST /api/admin/chains/:id/test
   """
   def test_connectivity(conn, %{"id" => chain_id}) do
     case ChainConfigManager.get_chain(chain_id) do
@@ -280,7 +273,6 @@ defmodule LassoWeb.Admin.ChainController do
 
   @doc """
   Lists available backup files.
-  GET /api/admin/chains/backups
   """
   def list_backups(conn, _params) do
     case ChainConfigManager.list_backups() do
@@ -296,7 +288,6 @@ defmodule LassoWeb.Admin.ChainController do
 
   @doc """
   Creates a backup of current configuration.
-  POST /api/admin/chains/backup
   """
   def create_backup(conn, _params) do
     case ChainConfigManager.backup_config() do
