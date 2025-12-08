@@ -486,7 +486,11 @@ defmodule Lasso.Config.ConfigStore do
       probe_interval_ms:
         Map.get(attrs, :probe_interval_ms) || Map.get(attrs, "probe_interval_ms") || 12_000,
       lag_threshold_blocks:
-        Map.get(attrs, :lag_threshold_blocks) || Map.get(attrs, "lag_threshold_blocks") || 3
+        Map.get(attrs, :lag_threshold_blocks) || Map.get(attrs, "lag_threshold_blocks") || 3,
+      new_heads_staleness_threshold_ms:
+        Map.get(attrs, :new_heads_staleness_threshold_ms) ||
+          Map.get(attrs, "new_heads_staleness_threshold_ms") ||
+          42_000
     }
   end
 
