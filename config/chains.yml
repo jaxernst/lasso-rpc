@@ -38,6 +38,8 @@ chains:
     monitoring:
       probe_interval_ms: 12000 # 12s - Ethereum's block time
       lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~60s)
+      # How long without newHeads events before subscription is stale
+      new_heads_staleness_threshold_ms: 35000
 
     # Selection lag tolerance
     selection:
@@ -143,8 +145,11 @@ chains:
 
     # Provider health monitoring configuration
     monitoring:
-      probe_interval_ms: 12000 # 12s - Ethereum's block time
+      probe_interval_ms: 12000 # 12s - Sepolia block time
       lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~60s)
+      # Testnets have less reliable validators, use longer threshold
+      # ~5 blocks (60s) + 6s margin = tolerates unstable testnet conditions
+      new_heads_staleness_threshold_ms: 66000
 
     # Per-method lag overrides for selection
     selection:
@@ -207,6 +212,9 @@ chains:
     monitoring:
       probe_interval_ms: 6000 # 6s - probe every 3 blocks (2s block time)
       lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~10s)
+      # L2 with 2s blocks - use longer threshold to avoid false positives
+      # ~8 blocks (16s) + margin = tolerates temporary provider slowdowns
+      new_heads_staleness_threshold_ms: 20000
 
     # Per-method lag overrides for selection
     selection:
@@ -310,6 +318,8 @@ chains:
     monitoring:
       probe_interval_ms: 6000 # 6s - probe every 3 blocks (2s block time)
       lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~10s)
+      # L2 testnet - even more lenient for unstable conditions
+      new_heads_staleness_threshold_ms: 30000
 
     # Per-method lag overrides for selection
     selection:

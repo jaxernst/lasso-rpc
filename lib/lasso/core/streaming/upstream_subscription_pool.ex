@@ -399,6 +399,91 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     {:noreply, state}
   end
 
+  # Handle subscription invalidation from UpstreamSubscriptionManager
+  # Dispatched when subscription becomes stale or provider disconnects
+  def handle_info({:upstream_subscription_invalidated, provider_id, key, reason}, state) do
+    # Check if this affects one of our subscriptions
+    case Map.get(state.keys, key) do
+      %{primary_provider_id: ^provider_id} ->
+        handle_subscription_invalidation(state, provider_id, key, reason)
+
+      _ ->
+        # Not our primary provider (already failed over or different subscription)
+        :ok
+    end
+
+    {:noreply, state}
+  end
+
+  # Staleness: Provider is likely healthy, subscription just expired (e.g., DRPC ~21h TTL)
+  # Resubscribe to the same provider to maintain priority order
+  defp handle_subscription_invalidation(state, provider_id, key, :subscription_stale) do
+    Logger.info("Subscription stale, resubscribing to same provider",
+      chain: state.chain,
+      provider_id: provider_id,
+      key: inspect(key)
+    )
+
+    # Resubscribe to the same provider (don't failover)
+    case UpstreamSubscriptionManager.ensure_subscription(state.chain, provider_id, key) do
+      {:ok, _status} ->
+        Logger.debug("Resubscribed after staleness",
+          chain: state.chain,
+          provider_id: provider_id,
+          key: inspect(key)
+        )
+
+      {:error, reason} ->
+        # Resubscription failed - now failover to next provider
+        Logger.warning("Resubscription failed after staleness, failing over",
+          chain: state.chain,
+          provider_id: provider_id,
+          key: inspect(key),
+          reason: inspect(reason)
+        )
+
+        StreamCoordinator.provider_unhealthy(
+          state.chain,
+          key,
+          provider_id,
+          pick_next_provider(state, provider_id)
+        )
+    end
+  end
+
+  # Provider disconnected: Actual connectivity issue, failover to next provider
+  defp handle_subscription_invalidation(state, provider_id, key, :provider_disconnected) do
+    Logger.info("Provider disconnected, failing over",
+      chain: state.chain,
+      provider_id: provider_id,
+      key: inspect(key)
+    )
+
+    StreamCoordinator.provider_unhealthy(
+      state.chain,
+      key,
+      provider_id,
+      pick_next_provider(state, provider_id)
+    )
+  end
+
+  # Unknown reason: Default to failover for safety
+  defp handle_subscription_invalidation(state, provider_id, key, reason) do
+    Logger.info("Subscription invalidated with unknown reason, failing over",
+      chain: state.chain,
+      provider_id: provider_id,
+      key: inspect(key),
+      reason: reason
+    )
+
+    StreamCoordinator.provider_unhealthy(
+      state.chain,
+      key,
+      provider_id,
+      pick_next_provider(state, provider_id)
+    )
+  end
+
   # Handle Manager restart - re-establish all active subscriptions
   def handle_info({:upstream_sub_manager_restarted, _chain}, state) do
     active_keys =

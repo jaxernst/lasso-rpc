@@ -47,6 +47,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   use GenServer
   require Logger
 
+  alias Lasso.Config.ConfigStore
   alias Lasso.Core.Streaming.UpstreamSubscriptionRegistry
   alias Lasso.RPC.{TransportRegistry, Channel}
 
@@ -55,6 +56,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   # Remove disconnected connection states after 5 minutes to prevent memory growth
   @stale_connection_cleanup_ms 300_000
 
+  # Subscription liveness monitoring
+  # Grace period for new subscriptions before staleness check starts
+  @new_subscription_grace_ms 30_000
+  # Default staleness threshold if config unavailable (Ethereum mainnet: ~4 blocks + margin)
+  @default_new_heads_staleness_threshold_ms 42_000
+
   @type chain :: String.t()
   @type provider_id :: String.t()
   @type sub_key :: {:newHeads} | {:logs, map()}
@@ -62,13 +69,15 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
   defstruct [
     :chain,
-    # %{{provider_id, sub_key} => %{upstream_id, connection_id, created_at, marked_for_teardown_at}}
+    # %{{provider_id, sub_key} => %{upstream_id, connection_id, created_at, marked_for_teardown_at, last_event_at, staleness_timer_ref}}
     active_subscriptions: %{},
     # %{upstream_id => {provider_id, sub_key}} - reverse lookup for incoming events
     upstream_index: %{},
     # %{provider_id => %{connection_id, status, connected_at}} - track connection state per provider
     # Used to detect stale subscriptions after reconnect
-    connection_states: %{}
+    connection_states: %{},
+    # Staleness threshold in ms (read from chain config's new_heads_staleness_threshold_ms)
+    new_heads_staleness_threshold_ms: nil
   ]
 
   # Client API
@@ -150,9 +159,15 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
       {:upstream_sub_manager_restarted, chain}
     )
 
-    Logger.debug("UpstreamSubscriptionManager started", chain: chain)
+    new_heads_staleness_threshold_ms = calculate_staleness_threshold(chain)
 
-    {:ok, %__MODULE__{chain: chain}}
+    Logger.debug("UpstreamSubscriptionManager started",
+      chain: chain,
+      new_heads_staleness_threshold_ms: new_heads_staleness_threshold_ms
+    )
+
+    {:ok,
+     %__MODULE__{chain: chain, new_heads_staleness_threshold_ms: new_heads_staleness_threshold_ms}}
   end
 
   @impl true
@@ -232,7 +247,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   def handle_info({:subscription_event, provider_id, upstream_id, payload, received_at}, state) do
     # Find which subscription this event belongs to using reverse lookup
     case Map.get(state.upstream_index, upstream_id) do
-      {^provider_id, sub_key} ->
+      {^provider_id, sub_key} = key ->
         # Dispatch to all consumers via Registry
         UpstreamSubscriptionRegistry.dispatch(
           state.chain,
@@ -241,11 +256,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
           {:upstream_subscription_event, provider_id, sub_key, payload, received_at}
         )
 
+        state = update_subscription_liveness(state, key, received_at)
+
         {:noreply, state}
 
       nil ->
-        # Orphaned subscription event - this was previously silent but could mask issues
-        # Log at debug level for visibility (can be filtered if too noisy)
+        # Orphaned subscription event
         Logger.debug("Received event for unknown subscription",
           chain: state.chain,
           provider_id: provider_id,
@@ -281,6 +297,9 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
     new_upstream_index =
       Enum.reduce(to_teardown, state.upstream_index, fn {{provider_id, sub_key}, sub_info}, acc ->
+        # Cancel staleness timer before teardown
+        if sub_info.staleness_timer_ref, do: Process.cancel_timer(sub_info.staleness_timer_ref)
+
         teardown_upstream_subscription(state.chain, provider_id, sub_key, sub_info.upstream_id)
         emit_telemetry(:subscription_destroyed, state.chain, provider_id, sub_key)
         Map.delete(acc, sub_info.upstream_id)
@@ -337,6 +356,35 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
     handle_disconnect(state, provider_id)
   end
 
+  # Staleness timer fired - subscription hasn't received events within threshold
+  # Note: logs subscriptions don't have staleness monitoring (they can legitimately go silent)
+  def handle_info({:staleness_check, _provider_id, {:logs, _filter}, _timer_ref}, state) do
+    # Ignore staleness checks for logs subscriptions
+    {:noreply, state}
+  end
+
+  def handle_info({:staleness_check, provider_id, sub_key, timer_ref}, state) do
+    key = {provider_id, sub_key}
+
+    case Map.get(state.active_subscriptions, key) do
+      nil ->
+        # Subscription no longer exists
+        {:noreply, state}
+
+      %{staleness_timer_ref: current_ref} when current_ref != timer_ref ->
+        # Stale timer message (timer was cancelled/replaced but message was already in mailbox)
+        {:noreply, state}
+
+      %{marked_for_teardown_at: teardown_at} when not is_nil(teardown_at) ->
+        # Already marked for teardown, don't invalidate
+        {:noreply, state}
+
+      sub_info ->
+        # Subscription is stale - invalidate it
+        handle_stale_subscription(state, key, sub_info)
+    end
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp handle_disconnect(state, provider_id) do
@@ -352,7 +400,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
       disconnected_at: System.monotonic_time(:millisecond)
     }
 
-    state = %{state | connection_states: Map.put(state.connection_states, provider_id, conn_state)}
+    state = %{
+      state
+      | connection_states: Map.put(state.connection_states, provider_id, conn_state)
+    }
 
     # Find and invalidate all subscriptions for this provider
     affected =
@@ -369,8 +420,11 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
         affected_count: length(affected)
       )
 
-      # Notify consumers so they can re-subscribe when connection returns
-      Enum.each(affected, fn {{prov_id, sub_key}, _info} ->
+      # Cancel timers and notify consumers so they can re-subscribe when connection returns
+      Enum.each(affected, fn {{prov_id, sub_key}, info} ->
+        # Cancel staleness timer
+        if info.staleness_timer_ref, do: Process.cancel_timer(info.staleness_timer_ref)
+
         UpstreamSubscriptionRegistry.dispatch(
           state.chain,
           prov_id,
@@ -442,6 +496,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   end
 
   defp remove_subscription(state, key, upstream_id) do
+    # Cancel staleness timer before removing subscription
+    case Map.get(state.active_subscriptions, key) do
+      %{staleness_timer_ref: ref} when not is_nil(ref) -> Process.cancel_timer(ref)
+      _ -> :ok
+    end
+
     new_subs = Map.delete(state.active_subscriptions, key)
     new_index = Map.delete(state.upstream_index, upstream_id)
     %{state | active_subscriptions: new_subs, upstream_index: new_index}
@@ -450,11 +510,20 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   defp create_new_subscription(state, provider_id, sub_key, key, connection_id) do
     case create_upstream_subscription(state.chain, provider_id, sub_key) do
       {:ok, upstream_id} ->
+        now = System.monotonic_time(:millisecond)
+
+        # Start staleness timer for newHeads subscriptions
+        # Use grace period for initial timer to allow subscription to warm up
+        staleness_timer_ref =
+          schedule_staleness_check(state, provider_id, sub_key, @new_subscription_grace_ms)
+
         sub_info = %{
           upstream_id: upstream_id,
           connection_id: connection_id,
-          created_at: System.monotonic_time(:millisecond),
-          marked_for_teardown_at: nil
+          created_at: now,
+          marked_for_teardown_at: nil,
+          last_event_at: now,
+          staleness_timer_ref: staleness_timer_ref
         }
 
         new_subs = Map.put(state.active_subscriptions, key, sub_info)
@@ -553,4 +622,95 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   end
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+
+  # Subscription liveness monitoring helpers
+
+  defp calculate_staleness_threshold(chain) do
+    case ConfigStore.get_chain(chain) do
+      {:ok, config} ->
+        config.monitoring.new_heads_staleness_threshold_ms ||
+          @default_new_heads_staleness_threshold_ms
+
+      _ ->
+        @default_new_heads_staleness_threshold_ms
+    end
+  end
+
+  # Schedule a staleness check timer for newHeads subscriptions
+  # Returns nil for logs subscriptions (staleness detection not supported yet)
+  # Returns the timer ref which is also included in the message for race condition prevention
+  defp schedule_staleness_check(_state, _provider_id, {:logs, _filter}, _delay_ms), do: nil
+
+  defp schedule_staleness_check(_state, provider_id, sub_key, delay_ms) do
+    timer_ref = make_ref()
+    Process.send_after(self(), {:staleness_check, provider_id, sub_key, timer_ref}, delay_ms)
+    timer_ref
+  end
+
+  # Update last_event_at and reset staleness timer when an event is received
+  defp update_subscription_liveness(state, {provider_id, sub_key} = key, received_at) do
+    case Map.get(state.active_subscriptions, key) do
+      nil ->
+        state
+
+      sub_info ->
+        # Cancel existing timer
+        if sub_info.staleness_timer_ref do
+          Process.cancel_timer(sub_info.staleness_timer_ref)
+        end
+
+        # Schedule new staleness check (only for newHeads)
+        new_timer_ref =
+          schedule_staleness_check(
+            state,
+            provider_id,
+            sub_key,
+            state.new_heads_staleness_threshold_ms
+          )
+
+        updated_info = %{
+          sub_info
+          | last_event_at: received_at,
+            staleness_timer_ref: new_timer_ref
+        }
+
+        %{state | active_subscriptions: Map.put(state.active_subscriptions, key, updated_info)}
+    end
+  end
+
+  # Handle a subscription that hasn't received events within the staleness threshold
+  defp handle_stale_subscription(state, {provider_id, sub_key} = key, sub_info) do
+    now = System.monotonic_time(:millisecond)
+    stale_duration_ms = now - sub_info.last_event_at
+
+    Logger.warning("Subscription stale - no events received",
+      chain: state.chain,
+      provider_id: provider_id,
+      sub_key: inspect(sub_key),
+      stale_duration_ms: stale_duration_ms,
+      threshold_ms: state.new_heads_staleness_threshold_ms,
+      last_event_at: sub_info.last_event_at
+    )
+
+    # Emit telemetry
+    :telemetry.execute(
+      [:lasso, :upstream_subscriptions, :staleness_detected],
+      %{count: 1, stale_duration_ms: stale_duration_ms},
+      %{chain: state.chain, provider_id: provider_id, sub_key: inspect(sub_key)}
+    )
+
+    # Notify consumers so they can failover
+    UpstreamSubscriptionRegistry.dispatch(
+      state.chain,
+      provider_id,
+      sub_key,
+      {:upstream_subscription_invalidated, provider_id, sub_key, :subscription_stale}
+    )
+
+    # Remove subscription from state (consumers will re-subscribe to a different provider)
+    new_subs = Map.delete(state.active_subscriptions, key)
+    new_index = Map.delete(state.upstream_index, sub_info.upstream_id)
+
+    {:noreply, %{state | active_subscriptions: new_subs, upstream_index: new_index}}
+  end
 end
