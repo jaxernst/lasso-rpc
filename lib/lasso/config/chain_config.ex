@@ -128,6 +128,7 @@ defmodule Lasso.Config.ChainConfig do
     - Probe frequency (how often to query eth_blockNumber)
     - Lag detection thresholds (when to warn about providers falling behind)
     - Monotonicity violation thresholds (detect unstable provider backends)
+    - Subscription staleness detection threshold
 
     These settings are chain-specific because chains have different:
     - Block times (Ethereum: 12s, Base: 2s, Polygon: 2s)
@@ -137,11 +138,17 @@ defmodule Lasso.Config.ChainConfig do
 
     @type t :: %__MODULE__{
             probe_interval_ms: non_neg_integer(),
-            lag_threshold_blocks: non_neg_integer()
+            lag_threshold_blocks: non_neg_integer(),
+            new_heads_staleness_threshold_ms: non_neg_integer()
           }
 
     defstruct probe_interval_ms: 12_000,
-              lag_threshold_blocks: 3
+              lag_threshold_blocks: 3,
+              # How long without events before a newHeads subscription is considered stale
+              # Should account for: block time variance, missed slots, network delays
+              # Recommended: ~3-5x expected block time + margin
+              # Ethereum (12s blocks): 42000-60000ms, Base (2s blocks): 12000-16000ms
+              new_heads_staleness_threshold_ms: 42_000
   end
 
   defmodule Topology do
@@ -424,7 +431,9 @@ defmodule Lasso.Config.ChainConfig do
   defp parse_monitoring(monitoring_data) when is_map(monitoring_data) do
     %__MODULE__.Monitoring{
       probe_interval_ms: Map.get(monitoring_data, "probe_interval_ms", 12_000),
-      lag_threshold_blocks: Map.get(monitoring_data, "lag_threshold_blocks", 3)
+      lag_threshold_blocks: Map.get(monitoring_data, "lag_threshold_blocks", 3),
+      new_heads_staleness_threshold_ms:
+        Map.get(monitoring_data, "new_heads_staleness_threshold_ms", 42_000)
     }
   end
 
