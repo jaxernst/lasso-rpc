@@ -240,12 +240,6 @@ node scripts/export_metrics_csv.mjs --url "$HOST/api/metrics" --chain ethereum -
 node scripts/export_metrics_csv.mjs -u "$HOST/api/metrics" -c base -f json -o base_metrics.json
 ```
 
-From the live demo:
-
-```bash
-HOST=http://lasso-rpc.fly.dev node scripts/export_metrics_csv.mjs -u "$HOST/api/metrics" -c ethereum
-```
-
 You can also generate load locally to populate metrics:
 
 ```bash
