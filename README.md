@@ -3,8 +3,8 @@
 A smart blockchain node RPC aggregator for building reliable and performant onchain apps.
 
 - Multi-provider and multi-chain orchestration across HTTP and WebSocket
-- Intelligent and expressive request routing
-- Per-method request benchmarking and circuit-breaking failover
+- Intelligent and expressive request routing (slug-based url routing strategies)
+- Per-method request benchmarking and circuit-breaking failover (request redundancy)
 - WebSocket subscriptions with multiplexing and failover gap-filling
 - Structured observability with optional client-visible metadata
 - Realtime live dashboard
@@ -27,7 +27,7 @@ Live dashboard: https://lasso-rpc.fly.dev
 
 ## Why Lasso
 
-Choosing a single RPC provider has real UX and reliability consequences, yet the tradeoffs (latency, uptime, quotas, features, cost) are often opaque and shift over time. Performance varies by region, method, and hour; free tiers and API inconsistencies make a “one URL” setup brittle.
+Choosing a single RPC provider has real UX and reliability consequences, yet the tradeoffs (latency, uptime, quotas, features, cost, rate limits) are often opaque and shift over time. Performance varies by region, method, and hour; free tiers and API inconsistencies make a “one URL” setup brittle.
 
 Lasso makes the RPC layer programmable and resilient. Its a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that chain, method, and transport. You get redundancy without rewrites, and you can scale throughput by adding providers instead of replatforming.
 
