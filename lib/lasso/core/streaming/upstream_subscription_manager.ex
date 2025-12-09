@@ -161,11 +161,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
     new_heads_staleness_threshold_ms = calculate_staleness_threshold(chain)
 
-    Logger.debug("UpstreamSubscriptionManager started",
-      chain: chain,
-      new_heads_staleness_threshold_ms: new_heads_staleness_threshold_ms
-    )
-
     {:ok,
      %__MODULE__{chain: chain, new_heads_staleness_threshold_ms: new_heads_staleness_threshold_ms}}
   end
@@ -331,12 +326,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
   # Connection established - track connection state for subscription validation
   def handle_info({:ws_connected, provider_id, connection_id}, state) do
-    Logger.debug("Connection established",
-      chain: state.chain,
-      provider_id: provider_id,
-      connection_id: connection_id
-    )
-
     conn_state = %{
       connection_id: connection_id,
       status: :connected,
@@ -388,11 +377,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp handle_disconnect(state, provider_id) do
-    Logger.debug("Connection disconnected",
-      chain: state.chain,
-      provider_id: provider_id
-    )
-
     # Update connection state
     conn_state = %{
       connection_id: nil,
@@ -689,7 +673,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
       sub_key: inspect(sub_key),
       stale_duration_ms: stale_duration_ms,
       threshold_ms: state.new_heads_staleness_threshold_ms,
-      last_event_at: sub_info.last_event_at
+      last_event_at: sub_info.last_event_at,
+      upstream_id: sub_info.upstream_id
     )
 
     # Emit telemetry
@@ -698,6 +683,17 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
       %{count: 1, stale_duration_ms: stale_duration_ms},
       %{chain: state.chain, provider_id: provider_id, sub_key: inspect(sub_key)}
     )
+
+    # Cancel staleness timer
+    if sub_info.staleness_timer_ref do
+      Process.cancel_timer(sub_info.staleness_timer_ref)
+    end
+
+    # Unsubscribe from the upstream provider to clean up their resources
+    # Do this asynchronously to avoid blocking the GenServer
+    spawn(fn ->
+      teardown_upstream_subscription(state.chain, provider_id, sub_key, sub_info.upstream_id)
+    end)
 
     # Notify consumers so they can failover
     UpstreamSubscriptionRegistry.dispatch(
