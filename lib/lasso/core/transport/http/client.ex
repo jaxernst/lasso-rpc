@@ -26,15 +26,39 @@ defmodule Lasso.RPC.HttpClient do
           | {:encode_error, String.t()}
           | {:response_decode_error, String.t()}
 
+  # Raw bytes response
+  @type raw_response :: {:raw, binary()}
+
   @callback request(provider_config, method, params, opts) ::
-              {:ok, json_map} | {:error, error_reason}
+              {:ok, raw_response()} | {:error, error_reason}
 
   # Facade to configured adapter
   @spec request(provider_config, method, params, opts) ::
-          {:ok, json_map} | {:error, error_reason}
+          {:ok, raw_response()} | {:error, error_reason}
   def request(provider_config, method, params, opts \\ []) do
     adapter()
     |> apply(:request, [provider_config, method, params, opts])
+  end
+
+  @doc """
+  Makes an HTTP request and decodes the JSON response.
+
+  This is for cold-path callers (discovery, probes, etc.) that need
+  decoded JSON maps rather than raw passthrough bytes.
+  """
+  @spec request_decoded(provider_config, method, params, opts) ::
+          {:ok, json_map()} | {:error, error_reason}
+  def request_decoded(provider_config, method, params, opts \\ []) do
+    case request(provider_config, method, params, opts) do
+      {:ok, {:raw, bytes}} ->
+        case Jason.decode(bytes) do
+          {:ok, json} -> {:ok, json}
+          {:error, reason} -> {:error, {:response_decode_error, inspect(reason)}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp adapter do

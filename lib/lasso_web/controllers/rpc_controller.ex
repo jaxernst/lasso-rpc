@@ -32,6 +32,7 @@ defmodule LassoWeb.RPCController do
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.RequestOptions.Builder, as: RequestOptionsBuilder
   alias Lasso.RPC.RequestPipeline
+  alias Lasso.RPC.Response
   alias LassoWeb.Plugs.ObservabilityPlug
   alias LassoWeb.RPC.Helpers
 
@@ -126,26 +127,27 @@ defmodule LassoWeb.RPCController do
   defp handle_json_rpc(conn, params, chain) do
     with {:ok, request} <- validate_json_rpc_request(params),
          {:ok, result, ctx} <- process_json_rpc_request(request, chain, conn) do
-      response = %{
-        jsonrpc: @jsonrpc_version,
-        result: result,
-        id: request["id"]
-      }
-
-      # Inject observability metadata if requested
+      # Inject observability metadata to headers if requested
       conn = maybe_inject_observability_metadata(conn, ctx)
 
-      # Enrich response body if include_meta=body
-      response =
-        case conn.assigns[:include_meta] do
-          :body ->
-            ObservabilityPlug.enrich_response_body(response, ctx)
+      # Passthrough optimization: send raw bytes directly for Response.Success
+      case result do
+        %Response.Success{raw_bytes: bytes} ->
+          # Zero-copy passthrough - send raw bytes directly
+          conn
+          |> put_resp_content_type("application/json")
+          |> send_resp(200, bytes)
 
-          _ ->
-            response
-        end
+        # Non-passthrough response (fallback for any non-Response.Success results)
+        _ ->
+          response = %{
+            jsonrpc: @jsonrpc_version,
+            result: result,
+            id: request["id"]
+          }
 
-      json(conn, response)
+          json(conn, response)
+      end
     else
       {:error, error, ctx} ->
         # Inject observability metadata for errors with context
@@ -177,7 +179,7 @@ defmodule LassoWeb.RPCController do
       json(conn, JError.to_response(error, nil))
     else
       # Process all requests and collect results with contexts
-      {results, contexts} =
+      {items, contexts} =
         requests
         |> Enum.map(&process_batch_request(&1, chain, conn))
         |> Enum.unzip()
@@ -185,27 +187,78 @@ defmodule LassoWeb.RPCController do
       # Inject observability metadata headers (uses first non-nil context if available)
       conn = maybe_inject_observability_metadata(conn, Enum.find(contexts, & &1))
 
-      json(conn, results)
+      # Check if all items are passthrough-eligible (Response structs)
+      all_response_structs? =
+        Enum.all?(items, fn
+          %Response.Success{} -> true
+          %Response.Error{} -> true
+          _ -> false
+        end)
+
+      if all_response_structs? do
+        # Build batch response from Response structs and send raw bytes
+        request_ids = Enum.map(requests, &Map.get(&1, "id"))
+
+        case Response.Batch.build(items, request_ids) do
+          {:ok, batch} ->
+            {:ok, bytes} = Response.Batch.to_bytes(batch)
+
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(200, bytes)
+
+          {:error, _reason} ->
+            # Fallback to JSON encoding if batch build fails
+            json(conn, Enum.map(items, &response_to_map/1))
+        end
+      else
+        # Mixed responses - encode as JSON
+        json(conn, Enum.map(items, &response_to_map/1))
+      end
     end
   end
+
+  # Convert Response struct or map to JSON-encodable map
+  defp response_to_map(%Response.Success{id: id, raw_bytes: bytes}) do
+    # Decode to get the full response map
+    case Jason.decode(bytes) do
+      {:ok, decoded} ->
+        decoded
+
+      {:error, _} ->
+        %{
+          "jsonrpc" => "2.0",
+          "id" => id,
+          "error" => %{"code" => -32_700, "message" => "Internal decode error"}
+        }
+    end
+  end
+
+  defp response_to_map(%Response.Error{id: id, error: jerr}) do
+    JError.to_response(jerr, id)
+  end
+
+  defp response_to_map(map) when is_map(map), do: map
 
   defp process_batch_request(req, chain, conn) do
     with {:ok, request} <- validate_json_rpc_request(req),
          {:ok, result, ctx} <- process_json_rpc_request(request, chain, conn) do
-      response = %{jsonrpc: @jsonrpc_version, result: result, id: request["id"]}
-
-      # Enrich response body if include_meta=body
-      response =
-        case conn.assigns[:include_meta] do
-          :body -> ObservabilityPlug.enrich_response_body(response, ctx)
-          _ -> response
-        end
-
-      {response, ctx}
+      # Return the Response struct directly for passthrough
+      {result, ctx}
     else
       {:error, error} ->
+        # For errors, create a Response.Error or return error map
         request_id = Map.get(req, "id")
-        {JError.to_response(JError.from(error), request_id), nil}
+        jerr = JError.from(error)
+
+        error_response = %Response.Error{
+          id: request_id,
+          jsonrpc: "2.0",
+          error: jerr,
+          raw_bytes: nil
+        }
+
+        {error_response, nil}
     end
   end
 
@@ -227,13 +280,24 @@ defmodule LassoWeb.RPCController do
 
   defp validate_json_rpc_request(_), do: {:error, JError.new(-32_600, "Invalid Request")}
 
-  defp process_json_rpc_request(%{"method" => "eth_chainId", "params" => []}, chain, _conn) do
+  defp process_json_rpc_request(
+         %{"method" => "eth_chainId", "params" => [], "id" => req_id},
+         chain,
+         _conn
+       ) do
     Logger.debug("Getting chain ID", chain: chain)
 
     case get_chain_id(chain) do
       {:ok, chain_id} ->
-        # eth_chainId doesn't go through RequestPipeline, so no context
-        {:ok, chain_id, nil}
+        # Build a Response.Success struct for consistency with passthrough path
+        raw_bytes = Jason.encode!(%{"jsonrpc" => "2.0", "id" => req_id, "result" => chain_id})
+
+        {:ok,
+         %Response.Success{
+           id: req_id,
+           jsonrpc: "2.0",
+           raw_bytes: raw_bytes
+         }, nil}
 
       {:error, reason} ->
         {:error, JError.new(-32_603, "Failed to get chain ID: #{reason}")}

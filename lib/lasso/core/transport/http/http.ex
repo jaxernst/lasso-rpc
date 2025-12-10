@@ -11,7 +11,7 @@ defmodule Lasso.RPC.Transports.HTTP do
 
   require Logger
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{ErrorNormalizer, HttpClient}
+  alias Lasso.RPC.{ErrorNormalizer, HttpClient, Response}
 
   # Channel is the provider configuration for HTTP (stateless)
   @type channel :: %{url: String.t(), provider_id: String.t(), config: map()}
@@ -70,28 +70,34 @@ defmodule Lasso.RPC.Transports.HTTP do
              request_id: request_id,
              timeout: timeout
            ) do
-        {:ok, %{"error" => _error} = response} ->
-          jerr =
-            ErrorNormalizer.normalize(response,
-              provider_id: provider_id,
-              context: :jsonrpc,
-              transport: :http
-            )
+        {:ok, {:raw, raw_bytes}} ->
+          # Parse raw bytes using envelope parser for passthrough optimization
+          case Response.from_bytes(raw_bytes) do
+            {:ok, %Response.Success{} = resp} ->
+              {:ok, resp}
 
-          {:error, jerr}
+            {:ok, %Response.Error{error: jerr}} ->
+              # Error response - add provider context to the error
+              enriched_jerr = %{
+                jerr
+                | provider_id: provider_id,
+                  source: :jsonrpc,
+                  transport: :http
+              }
 
-        {:ok, %{"result" => result}} ->
-          {:ok, result}
+              {:error, enriched_jerr}
 
-        {:ok, invalid_response} ->
-          {:error,
-           JError.new(-32_700, "Invalid JSON-RPC response format",
-             data: invalid_response,
-             provider_id: provider_id,
-             source: :transport,
-             transport: :http,
-             retriable?: false
-           )}
+            {:error, parse_reason} ->
+              # EnvelopeParser couldn't parse - invalid JSON-RPC response
+              {:error,
+               JError.new(-32_700, "Invalid JSON-RPC response format",
+                 data: %{reason: parse_reason, raw_bytes_size: byte_size(raw_bytes)},
+                 provider_id: provider_id,
+                 source: :transport,
+                 transport: :http,
+                 retriable?: false
+               )}
+          end
 
         {:error, reason} ->
           {:error,

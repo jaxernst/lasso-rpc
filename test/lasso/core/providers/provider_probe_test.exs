@@ -146,4 +146,5 @@ defmodule Lasso.RPC.ProviderProbeTest do
       :telemetry.detach(handler_id)
     end
   end
+
 end

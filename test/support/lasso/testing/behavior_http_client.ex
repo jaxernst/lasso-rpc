@@ -42,9 +42,10 @@ defmodule Lasso.Testing.BehaviorHttpClient do
   Routes to MockHTTPProvider if provider is marked as mock,
   otherwise uses real HTTP client.
   """
-  def request(provider_config, method, params, _opts \\ []) do
+  def request(provider_config, method, params, opts \\ []) do
     provider_id = Map.get(provider_config, :id)
     is_mock = Map.get(provider_config, :__mock__, false)
+    request_id = Keyword.get(opts, :request_id, 1)
 
     Logger.info(
       "BehaviorHttpClient: provider_id=#{provider_id}, is_mock=#{is_mock}, config_keys=#{inspect(Map.keys(provider_config))}"
@@ -56,20 +57,21 @@ defmodule Lasso.Testing.BehaviorHttpClient do
 
       case MockHTTPProvider.execute_request(provider_id, method, params) do
         {:ok, result} ->
-          # Wrap the unwrapped result in JSONRPC format
+          # Wrap the unwrapped result in JSONRPC format and return as raw bytes
+          # This matches the production HttpClient interface: {:ok, {:raw, bytes}}
           response = %{
             "jsonrpc" => "2.0",
-            "id" => 1,
+            "id" => request_id,
             "result" => result
           }
 
-          {:ok, response}
+          {:ok, {:raw, Jason.encode!(response)}}
 
         {:error, %Lasso.JSONRPC.Error{} = error} ->
-          # Return JSONRPC error format
+          # Return JSONRPC error format as raw bytes
           error_response = %{
             "jsonrpc" => "2.0",
-            "id" => 1,
+            "id" => request_id,
             "error" => %{
               "code" => error.code,
               "message" => error.message,
@@ -77,7 +79,7 @@ defmodule Lasso.Testing.BehaviorHttpClient do
             }
           }
 
-          {:ok, error_response}
+          {:ok, {:raw, Jason.encode!(error_response)}}
 
         {:error, other} ->
           # Convert to connection error
@@ -88,13 +90,15 @@ defmodule Lasso.Testing.BehaviorHttpClient do
       # In tests, this typically won't be reached
       Logger.warning("BehaviorHttpClient called with non-mock provider: #{provider_id}")
 
-      # Return a mock response to prevent hanging
-      {:ok, %{"jsonrpc" => "2.0", "id" => 1, "result" => "0x1"}}
+      # Return a mock response as raw bytes to prevent hanging
+      {:ok, {:raw, Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "result" => "0x1"})}}
     end
   end
 
   @doc """
   Batch request support (routes to mock providers).
+
+  Returns {:ok, {:raw, bytes}} where bytes is JSON array of responses.
   """
   def batch_request(provider_config, requests, opts \\ []) do
     provider_id = Map.get(provider_config, :id)
@@ -103,17 +107,26 @@ defmodule Lasso.Testing.BehaviorHttpClient do
     if is_mock do
       # Execute each request individually through the mock
       results =
-        Enum.map(requests, fn %{method: method, params: params} ->
-          case request(provider_config, method, params, opts) do
-            {:ok, response} -> response
-            {:error, error} -> %{"error" => inspect(error)}
+        requests
+        |> Enum.with_index(1)
+        |> Enum.map(fn {%{method: method, params: params}, idx} ->
+          request_opts = Keyword.put(opts, :request_id, idx)
+
+          case request(provider_config, method, params, request_opts) do
+            {:ok, {:raw, bytes}} ->
+              # Decode the raw bytes to build the batch array
+              Jason.decode!(bytes)
+
+            {:error, error} ->
+              %{"jsonrpc" => "2.0", "id" => idx, "error" => %{"code" => -32_000, "message" => inspect(error)}}
           end
         end)
 
-      {:ok, results}
+      # Return the batch array as raw bytes
+      {:ok, {:raw, Jason.encode!(results)}}
     else
       Logger.warning("BehaviorHttpClient batch called with non-mock provider: #{provider_id}")
-      {:ok, []}
+      {:ok, {:raw, "[]"}}
     end
   end
 end

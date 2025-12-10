@@ -9,6 +9,8 @@ defmodule Lasso.RPC.RequestContext do
   - Result or error shapes
   """
 
+  alias Lasso.RPC.Response
+
   @type t :: %__MODULE__{
           # Request identification
           request_id: String.t(),
@@ -294,6 +296,11 @@ defmodule Lasso.RPC.RequestContext do
   defp generate_request_id do
     :crypto.strong_rand_bytes(16)
     |> Base.encode16(case: :lower)
+  end
+
+  defp analyze_result(%Response.Success{raw_bytes: raw_bytes}) do
+    # For passthrough responses, use raw bytes size directly (no re-encoding)
+    {"passthrough", byte_size(raw_bytes)}
   end
 
   defp analyze_result(result) do

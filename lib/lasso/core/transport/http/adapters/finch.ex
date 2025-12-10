@@ -103,24 +103,9 @@ defmodule Lasso.RPC.HttpClient.Finch do
   defp base_headers(_), do: [{"content-type", "application/json"}, {"accept", "application/json"}]
 
   defp handle_response(status, body) when status in 200..299 do
-    case Jason.decode(body) do
-      # JSON-RPC error response in successful HTTP response
-      {:ok, %{"error" => error} = response} when is_map(error) ->
-        # Return the full response so it can be properly normalized upstream
-        # This preserves the error structure for consistent handling
-        {:ok, response}
-
-      # Successful JSON-RPC response
-      {:ok, %{"result" => _} = response} ->
-        {:ok, response}
-
-      # Valid JSON but not JSON-RPC format: treat as invalid provider response (infra)
-      {:ok, decoded} ->
-        {:error, {:response_decode_error, "Invalid JSON-RPC response shape: #{inspect(decoded)}"}}
-
-      {:error, decode_error} ->
-        {:error, {:response_decode_error, "Failed to decode response: #{inspect(decode_error)}"}}
-    end
+    # Return raw bytes for passthrough optimization
+    # The caller (HTTP transport) will parse using Response.from_bytes/1
+    {:ok, {:raw, body}}
   end
 
   defp handle_response(429, body), do: {:error, {:rate_limit, %{status: 429, body: body}}}

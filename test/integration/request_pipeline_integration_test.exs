@@ -4,7 +4,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag :integration
   @moduletag timeout: 10_000
 
-  alias Lasso.RPC.{RequestPipeline, CircuitBreaker, RequestOptions}
+  alias Lasso.RPC.{RequestPipeline, CircuitBreaker, RequestOptions, Response}
   alias Lasso.Test.{TelemetrySync, CircuitBreakerHelper}
   alias Lasso.Testing.MockProviderBehavior
 
@@ -38,9 +38,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         )
 
       # Verify request succeeded (using backup)
-      assert result != nil
-      # eth_blockNumber returns a hex string
-      assert is_binary(result)
+      assert %Response.Success{} = result
+      # eth_blockNumber returns a hex string in raw_bytes
+      {:ok, block_number} = Response.Success.decode_result(result)
+      assert String.starts_with?(block_number, "0x")
     end
 
     test "opens circuit breaker after repeated failures", %{chain: chain} do
@@ -224,10 +225,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
         )
 
-      # Request should succeed via backup
-      assert result != nil
-      assert is_binary(result)
-      assert String.starts_with?(result, "0x")
+      # Request should succeed via backup - now returns Response.Success
+      assert %Response.Success{} = result
+      {:ok, block_number} = Response.Success.decode_result(result)
+      assert String.starts_with?(block_number, "0x")
 
       # Verify start event was captured
       {:ok, _measurements, _metadata} =
@@ -280,10 +281,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           }
         )
 
-      # Should succeed by failing over from preferred to fallback
-      assert result != nil
-      assert is_binary(result)
-      assert String.starts_with?(result, "0x")
+      # Should succeed by failing over from preferred to fallback - now returns Response.Success
+      assert %Response.Success{} = result
+      {:ok, block_number} = Response.Success.decode_result(result)
+      assert String.starts_with?(block_number, "0x")
     end
   end
 
@@ -499,10 +500,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       ])
 
       # Attach telemetry collector BEFORE executing request
+      # Note: telemetry metadata uses 'result' not 'status' for success/error indicator
       {:ok, collector} =
         Lasso.Testing.TelemetrySync.attach_collector(
           [:lasso, :rpc, :request, :stop],
-          match: [method: "eth_blockNumber", status: :success]
+          match: [method: "eth_blockNumber", result: :success]
         )
 
       # Execute request

@@ -25,7 +25,7 @@ defmodule Lasso.RPC.ProviderProbe do
   use GenServer
   require Logger
 
-  alias Lasso.RPC.{CircuitBreaker, ProviderPool, TransportRegistry, Channel}
+  alias Lasso.RPC.{CircuitBreaker, ProviderPool, TransportRegistry, Channel, Response}
   alias Lasso.Config.ConfigStore
 
   # Minimal state - only probing concerns
@@ -161,33 +161,58 @@ defmodule Lasso.RPC.ProviderProbe do
         }
 
         case Channel.request(channel, rpc_request, 3_000) do
-          {:ok, "0x" <> hex, _io_ms} ->
+          {:ok, %Response.Success{} = response, _io_ms} ->
             latency_ms = System.monotonic_time(:millisecond) - start_time
-            height = String.to_integer(hex, 16)
 
-            # Report success to circuit breaker for recovery (best-effort)
-            # This triggers: open → half_open → closed transitions
-            # Wrapped in try/rescue so CB errors don't mark successful probe as failed
-            try do
-              CircuitBreaker.record_success({chain, provider.id, :http})
-            rescue
-              e ->
-                Logger.warning("Circuit breaker reporting failed",
-                  error: Exception.message(e),
+            # Decode the result to get the block height
+            case Response.Success.decode_result(response) do
+              {:ok, "0x" <> hex} ->
+                height = String.to_integer(hex, 16)
+
+                # Report success to circuit breaker for recovery (best-effort)
+                # This triggers: open → half_open → closed transitions
+                # Wrapped in try/rescue so CB errors don't mark successful probe as failed
+                try do
+                  CircuitBreaker.record_success({chain, provider.id, :http})
+                rescue
+                  e ->
+                    Logger.warning("Circuit breaker reporting failed",
+                      error: Exception.message(e),
+                      provider_id: provider.id,
+                      chain: chain
+                    )
+                end
+
+                %{
                   provider_id: provider.id,
-                  chain: chain
-                )
-            end
+                  timestamp: System.system_time(:millisecond),
+                  sequence: sequence,
+                  success?: true,
+                  block_height: height,
+                  latency_ms: latency_ms,
+                  error: nil
+                }
 
-            %{
-              provider_id: provider.id,
-              timestamp: System.system_time(:millisecond),
-              sequence: sequence,
-              success?: true,
-              block_height: height,
-              latency_ms: latency_ms,
-              error: nil
-            }
+              {:ok, other} ->
+                %{
+                  provider_id: provider.id,
+                  timestamp: System.system_time(:millisecond),
+                  sequence: sequence,
+                  success?: false,
+                  latency_ms: latency_ms,
+                  error: {:unexpected_result, other}
+                }
+
+              {:error, decode_error} ->
+                %{
+                  provider_id: provider.id,
+                  timestamp: System.system_time(:millisecond),
+                  sequence: sequence,
+                  success?: false,
+                  latency_ms: latency_ms,
+                  error: {:decode_failed, decode_error}
+                }
+            end
 
           {:error, reason, _io_ms} ->
             latency_ms = System.monotonic_time(:millisecond) - start_time
