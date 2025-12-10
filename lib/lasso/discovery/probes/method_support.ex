@@ -70,10 +70,17 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
 
       result =
         case probe_result do
-          {:ok, map} -> map
-          {:error, reason} -> %{status: :error, error: inspect(reason), duration_ms: 0, error_code: nil}
-          {:timeout, _} -> %{status: :timeout, error: "Timeout", duration_ms: timeout, error_code: nil}
-          map when is_map(map) -> map
+          {:ok, map} ->
+            map
+
+          {:error, reason} ->
+            %{status: :error, error: inspect(reason), duration_ms: 0, error_code: nil}
+
+          {:timeout, _} ->
+            %{status: :timeout, error: "Timeout", duration_ms: timeout, error_code: nil}
+
+          map when is_map(map) ->
+            map
         end
 
       Map.merge(result, %{method: method, category: category})
@@ -91,7 +98,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
     provider_config = %{url: url}
     start_time = System.monotonic_time(:millisecond)
 
-    result = HttpClient.request(provider_config, method, params, timeout: timeout)
+    result = HttpClient.request_decoded(provider_config, method, params, timeout: timeout)
 
     duration = System.monotonic_time(:millisecond) - start_time
     classify_response(result, duration)

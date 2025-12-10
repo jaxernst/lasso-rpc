@@ -21,7 +21,7 @@ defmodule LassoWeb.RPCSocket do
 
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.RequestOptions
-  alias Lasso.RPC.{Observability, RequestContext, RequestPipeline, SubscriptionRouter}
+  alias Lasso.RPC.{Observability, RequestContext, RequestPipeline, Response, SubscriptionRouter}
   alias LassoWeb.RPC.Helpers
 
   # Heartbeat configuration (aggressive keepalive for subscription connections)
@@ -215,7 +215,7 @@ defmodule LassoWeb.RPCSocket do
   ## JSON-RPC handling
 
   defp handle_json_rpc(%{"method" => method, "params" => params, "id" => id} = request, state) do
-    # Extract and parse lasso_meta preference (inline, notify, or nil)
+    # Extract lasso_meta preference (notify or nil - inline mode removed)
     {lasso_meta_mode, _clean_request} = extract_lasso_meta(request)
 
     # Create request context for observability
@@ -231,33 +231,42 @@ defmodule LassoWeb.RPCSocket do
       {:ok, result, new_state, updated_ctx} ->
         Observability.log_request_completed(updated_ctx)
 
-        # Build base response
-        response = %{
-          "jsonrpc" => "2.0",
-          "id" => id,
-          "result" => result
-        }
+        # Passthrough optimization: send raw bytes directly for Response.Success
+        case result do
+          %Response.Success{raw_bytes: bytes} ->
+            # Zero-copy passthrough - send raw bytes directly
+            case lasso_meta_mode do
+              :notify ->
+                # Send response first, then metadata notification
+                notification = build_metadata_notification(updated_ctx)
+                {:ok, notification_json} = Jason.encode(notification)
+                send(self(), {:send_notification, notification_json})
+                {:reply, :ok, {:text, bytes}, new_state}
 
-        # Inject metadata based on mode
-        case lasso_meta_mode do
-          :inline ->
-            # Add lasso_meta field to response
-            enriched_response = inject_inline_metadata(response, updated_ctx)
-            {:reply, :ok, {:text, Jason.encode!(enriched_response)}, new_state}
+              _ ->
+                # No metadata requested - pure passthrough
+                {:reply, :ok, {:text, bytes}, new_state}
+            end
 
-          :notify ->
-            # Send response first, then notification
-            {:ok, json} = Jason.encode(response)
-            notification = build_metadata_notification(updated_ctx)
-            {:ok, notification_json} = Jason.encode(notification)
-
-            # Reply with response only, then send notification as separate push
-            send(self(), {:send_notification, notification_json})
-            {:reply, :ok, {:text, json}, new_state}
-
+          # Non-passthrough response (subscriptions, eth_chainId, etc.)
           _ ->
-            # No metadata requested
-            {:reply, :ok, {:text, Jason.encode!(response)}, new_state}
+            response = %{
+              "jsonrpc" => "2.0",
+              "id" => id,
+              "result" => result
+            }
+
+            case lasso_meta_mode do
+              :notify ->
+                {:ok, json} = Jason.encode(response)
+                notification = build_metadata_notification(updated_ctx)
+                {:ok, notification_json} = Jason.encode(notification)
+                send(self(), {:send_notification, notification_json})
+                {:reply, :ok, {:text, json}, new_state}
+
+              _ ->
+                {:reply, :ok, {:text, Jason.encode!(response)}, new_state}
+            end
         end
 
       {:error, reason, new_state, updated_ctx} ->
@@ -334,6 +343,8 @@ defmodule LassoWeb.RPCSocket do
   end
 
   defp handle_rpc_method("eth_chainId", [], state, ctx) do
+    # Note: We don't have request_id here, so we can't build a Response.Success
+    # This is fine - subscriptions and chainId return plain values, only pipeline results are Response.Success
     case get_chain_id(state.chain) do
       {:ok, chain_id} ->
         updated_ctx = RequestContext.record_success(ctx, chain_id)
@@ -390,10 +401,11 @@ defmodule LassoWeb.RPCSocket do
 
   defp extract_lasso_meta(%{"lasso_meta" => meta_value} = request) when is_binary(meta_value) do
     # Parse the lasso_meta field and strip it from request
+    # Note: :inline mode removed - only :notify supported for metadata delivery
     mode =
       case String.downcase(meta_value) do
-        "inline" -> :inline
         "notify" -> :notify
+        # "inline" was removed - passthrough optimization is incompatible with inline metadata
         _ -> nil
       end
 
@@ -404,11 +416,6 @@ defmodule LassoWeb.RPCSocket do
   defp extract_lasso_meta(request) do
     # No lasso_meta field present
     {nil, request}
-  end
-
-  defp inject_inline_metadata(response, ctx) do
-    metadata = Observability.build_client_metadata(ctx)
-    Map.put(response, "lasso_meta", metadata)
   end
 
   defp build_metadata_notification(ctx) do
