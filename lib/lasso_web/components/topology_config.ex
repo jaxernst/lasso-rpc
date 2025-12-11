@@ -24,13 +24,13 @@ defmodule LassoWeb.TopologyConfig do
   Controls how provider nodes are positioned around chain nodes.
   """
   # Gap between chain edge and provider orbit (providers orbit at chain_radius + this gap)
-  def provider_orbit_gap, do: 30
+  def provider_orbit_gap, do: 40
 
   # Provider node radius (size of the provider dots)
-  def provider_node_radius, do: 12
+  def provider_node_radius, do: 13
 
   # Angular variance for organic look (radians, ~22.5 degrees)
-  def provider_angle_variance, do: :math.pi() / 8
+  def provider_angle_variance, do: :math.pi() / 13
 
   # Distance variance for organic look (pixels)
   def provider_distance_variance, do: 15
