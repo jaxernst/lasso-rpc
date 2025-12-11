@@ -375,7 +375,7 @@ function makeMethodPool(ctxRef) {
       name: "eth_getLogs",
       params: () => {
         const latest = ctxRef.latestNumber || 0;
-        const span = 10;
+        const span = 30;
         const from = latest > 0 ? Math.max(0, latest - span) : 0;
         return [
           {
