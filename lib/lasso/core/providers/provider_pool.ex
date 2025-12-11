@@ -891,8 +891,6 @@ defmodule Lasso.RPC.ProviderPool do
              to in [:closed, :open, :half_open] do
     # Only handle circuit breaker events for THIS chain
     if event_chain == state.chain_name or is_nil(event_chain) do
-      start_time = System.monotonic_time(:millisecond)
-
       Logger.info(
         "ProviderPool[#{state.chain_name}]: CB event #{provider_id}:#{transport} #{from} -> #{to}"
       )
@@ -932,19 +930,6 @@ defmodule Lasso.RPC.ProviderPool do
 
       # Note: Rate limits are now managed independently via RateLimitState
       # They auto-expire based on Retry-After timing, not circuit breaker state
-
-      # Instrumentation: log slow circuit event processing (>100ms indicates blocking)
-      duration_ms = System.monotonic_time(:millisecond) - start_time
-
-      if duration_ms > 100 do
-        Logger.warning("SLOW circuit event processing",
-          duration_ms: duration_ms,
-          provider: provider_id,
-          transport: transport,
-          chain: state.chain_name,
-          transition: "#{from} -> #{to}"
-        )
-      end
 
       {:noreply,
        %{
@@ -1261,53 +1246,32 @@ defmodule Lasso.RPC.ProviderPool do
   defp filter_by_lag(providers, _chain, nil), do: providers
 
   defp filter_by_lag(providers, chain, max_lag_blocks) when is_integer(max_lag_blocks) do
-    # Track providers with missing lag data to detect if filtering is completely broken
-    {filtered, missing_lag_data} =
-      Enum.reduce(providers, {[], []}, fn provider, {included, missing} ->
+    filtered =
+      Enum.reduce(providers, [], fn provider, included ->
         case ChainState.provider_lag(chain, provider.id) do
           {:ok, lag} when lag >= -max_lag_blocks ->
             # Provider is within acceptable lag threshold (negative lag = blocks behind)
             # lag >= -max_lag_blocks means provider is at most max_lag_blocks behind
-            {[provider | included], missing}
+            [provider | included]
 
           {:ok, lag} ->
             # Provider is lagging beyond threshold - exclude it
-            telemetry_lag_excluded(chain, provider.id, lag, max_lag_blocks)
-
             Logger.debug(
               "Excluded provider #{provider.id} from selection: lag=#{lag} blocks (threshold: -#{max_lag_blocks})"
             )
 
-            {included, missing}
+            included
 
-          {:error, reason} ->
-            # Lag data unavailable - fail open (include provider but track it)
-            telemetry_lag_data_unavailable(chain, provider.id, reason)
-
-            Logger.debug(
-              "Lag data unavailable for provider #{provider.id}, including in candidates (reason: #{inspect(reason)})"
-            )
-
-            {[provider | included], [provider.id | missing]}
+          {:error, _reason} ->
+            # Lag data unavailable - fail open (include provider)
+            [provider | included]
         end
       end)
 
-    # Alert if ALL providers have missing lag data (lag filtering completely disabled)
-    if providers != [] and length(missing_lag_data) == length(providers) do
-      telemetry_lag_filtering_disabled(chain, length(providers))
-
-      Logger.warning(
-        "Lag filtering disabled for #{chain}: no lag data for any of #{length(providers)} providers. " <>
-          "Check ProviderProbe/ProviderPool health."
-      )
-    end
-
     filtered = Enum.reverse(filtered)
 
-    # Emit telemetry if ALL providers were excluded due to lag
+    # Warn if ALL providers were excluded due to lag
     if providers != [] and filtered == [] do
-      telemetry_all_providers_lagging(chain, length(providers), max_lag_blocks)
-
       Logger.warning(
         "All #{length(providers)} providers for #{chain} excluded due to lag (threshold: -#{max_lag_blocks} blocks)"
       )
@@ -1498,13 +1462,6 @@ defmodule Lasso.RPC.ProviderPool do
   defp maybe_emit_became_healthy(state, provider_id, provider) do
     if provider.status != :healthy do
       publish_provider_event(state.chain_name, provider_id, :healthy, %{})
-
-      :telemetry.execute([:lasso, :provider, :status], %{count: 1}, %{
-        chain: state.chain_name,
-        provider_id: provider_id,
-        status: :healthy
-      })
-
       state
     else
       state
@@ -1525,8 +1482,6 @@ defmodule Lasso.RPC.ProviderPool do
             # Provider stays healthy - RateLimitState is the authoritative source for rate limit status
             retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
             transport = jerr.transport || :http
-
-            Logger.debug("Provider #{provider_id} rate limited for #{retry_after_ms || 30_000}ms")
 
             # Only update last_error for debugging - don't change health status
             updated_provider =
@@ -1779,56 +1734,6 @@ defmodule Lasso.RPC.ProviderPool do
     Map.put(circuit_errors, provider_id, updated_errors)
   end
 
-  # Telemetry: emit event when provider excluded due to lag
-  defp telemetry_lag_excluded(chain, provider_id, lag, max_lag_blocks) do
-    :telemetry.execute(
-      [:lasso, :selection, :lag_excluded],
-      %{count: 1, lag_blocks: abs(lag)},
-      %{
-        chain: chain,
-        provider_id: provider_id,
-        lag: lag,
-        threshold: -max_lag_blocks
-      }
-    )
-  end
-
-  # Telemetry: emit event when ALL providers excluded due to lag
-  defp telemetry_all_providers_lagging(chain, provider_count, max_lag_blocks) do
-    :telemetry.execute(
-      [:lasso, :selection, :all_providers_lagging],
-      %{count: 1, provider_count: provider_count},
-      %{
-        chain: chain,
-        threshold: -max_lag_blocks
-      }
-    )
-  end
-
-  # Telemetry: emit event when individual provider has no lag data
-  defp telemetry_lag_data_unavailable(chain, provider_id, reason) do
-    :telemetry.execute(
-      [:lasso, :selection, :lag_data_unavailable],
-      %{count: 1},
-      %{
-        chain: chain,
-        provider_id: provider_id,
-        reason: reason
-      }
-    )
-  end
-
-  # Telemetry: emit event when lag filtering is completely disabled (all providers missing lag data)
-  defp telemetry_lag_filtering_disabled(chain, provider_count) do
-    :telemetry.execute(
-      [:lasso, :selection, :lag_filtering_disabled],
-      %{count: 1, provider_count: provider_count},
-      %{
-        chain: chain
-      }
-    )
-  end
-
   # Processes a batch of probe results
   defp apply_probe_batch(state, results) do
     # First pass: Update sync state for all successful probes
@@ -1885,44 +1790,11 @@ defmodule Lasso.RPC.ProviderPool do
               lag: lag
             })
 
-            # Log only on state transitions (not every poll cycle)
+            # Emit telemetry when lagging beyond threshold
             threshold = get_lag_threshold_for_chain(state.chain_name)
-            lag_key = {:provider_lagging_logged, state.chain_name, result.provider_id}
-            was_lagging = :ets.lookup(state.table, lag_key) != []
 
-            cond do
-              lag < -threshold and not was_lagging ->
-                # Just became lagging - log and remember
-                Logger.info("Provider lagging behind",
-                  chain: state.chain_name,
-                  provider_id: result.provider_id,
-                  lag_blocks: lag,
-                  threshold: threshold,
-                  consensus_height: consensus_height,
-                  provider_height: result.block_height
-                )
-
-                :ets.insert(state.table, {lag_key, lag})
-                emit_lag_telemetry(state.chain_name, result.provider_id, lag)
-
-              lag < -threshold and was_lagging ->
-                # Still lagging - update stored lag but don't log
-                :ets.insert(state.table, {lag_key, lag})
-
-              lag >= -threshold and was_lagging ->
-                # Recovered - log recovery and clear flag
-                Logger.info("Provider recovered from lag",
-                  chain: state.chain_name,
-                  provider_id: result.provider_id,
-                  current_lag: lag,
-                  threshold: threshold
-                )
-
-                :ets.delete(state.table, lag_key)
-
-              true ->
-                # Not lagging and wasn't lagging - nothing to do
-                :ok
+            if lag < -threshold do
+              emit_lag_telemetry(state.chain_name, result.provider_id, lag)
             end
           end
         end)

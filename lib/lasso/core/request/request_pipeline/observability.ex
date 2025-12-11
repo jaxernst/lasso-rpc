@@ -288,13 +288,9 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     Metrics.record_failure(chain, provider_id, method, duration_ms, transport: transport)
 
     # Normalize to JError and report to provider pool
-    jerr = normalize_to_jerror(reason, provider_id)
+    jerr = JError.from(reason, provider_id: provider_id)
     ProviderPool.report_failure(chain, provider_id, jerr, transport)
   end
-
-  @spec normalize_to_jerror(term(), String.t()) :: JError.t()
-  defp normalize_to_jerror(%JError{} = jerr, _provider_id), do: jerr
-  defp normalize_to_jerror(reason, provider_id), do: JError.from(reason, provider_id: provider_id)
 
   @spec extract_error_category(term()) :: atom()
   defp extract_error_category(%JError{category: category}), do: category || :unknown

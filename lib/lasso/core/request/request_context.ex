@@ -35,15 +35,21 @@ defmodule Lasso.RPC.RequestContext do
           repeated_error_categories: %{atom() => non_neg_integer()},
 
           # Timing
+          # Plug-level start time for true E2E measurement (from RequestTimingPlug)
+          plug_start_time: integer() | nil,
+
+          # Pipeline-level start time (fallback if plug timing not available)
           start_time: integer(),
           request_start_ms: integer() | nil,
           selection_start: integer() | nil,
           selection_end: integer() | nil,
           upstream_start: integer() | nil,
           upstream_end: integer() | nil,
+
           # TRUE upstream provider I/O time (HTTP/WS send→receive at transport boundary)
           upstream_latency_ms: float() | nil,
           end_to_end_latency_ms: float() | nil,
+
           # Computed: end_to_end - upstream = Lasso internal overhead
           lasso_overhead_ms: float() | nil,
 
@@ -71,6 +77,7 @@ defmodule Lasso.RPC.RequestContext do
             retries: 0,
             circuit_breaker_state: nil,
             repeated_error_categories: %{},
+            plug_start_time: nil,
             start_time: nil,
             request_start_ms: nil,
             selection_start: nil,
@@ -93,7 +100,10 @@ defmodule Lasso.RPC.RequestContext do
   """
   def new(chain, method, opts \\ []) do
     request_id = Keyword.get(opts, :request_id) || generate_request_id()
-    start_time = System.monotonic_time(:microsecond)
+
+    # Use plug_start_time if available for accurate E2E, otherwise use current time
+    plug_start = Keyword.get(opts, :plug_start_time)
+    start_time = plug_start || System.monotonic_time(:microsecond)
 
     %__MODULE__{
       request_id: request_id,
@@ -106,6 +116,7 @@ defmodule Lasso.RPC.RequestContext do
       path: Keyword.get(opts, :path),
       client_ip: Keyword.get(opts, :client_ip),
       user_agent: Keyword.get(opts, :user_agent),
+      plug_start_time: plug_start,
       start_time: start_time
     }
   end
@@ -161,11 +172,18 @@ defmodule Lasso.RPC.RequestContext do
   end
 
   @doc """
-  Sets the upstream I/O latency measured at the transport boundary (HTTP/WS send→receive).
-  This is the TRUE provider response time.
+  Adds upstream I/O latency measured at the transport boundary (HTTP/WS send→receive).
+
+  On failover, this sums the I/O time from all attempts so that:
+  - `upstream_latency_ms` = total time waiting on providers
+  - `lasso_overhead_ms` = e2e - upstream = actual Lasso processing time
+
+  Without accumulation, failover would inflate apparent Lasso overhead since
+  failed provider I/O time would be attributed to Lasso instead of upstream.
   """
-  def set_upstream_latency(%__MODULE__{} = ctx, io_ms) when is_number(io_ms) do
-    %{ctx | upstream_latency_ms: io_ms}
+  def add_upstream_latency(%__MODULE__{} = ctx, io_ms) when is_number(io_ms) do
+    current = ctx.upstream_latency_ms || 0
+    %{ctx | upstream_latency_ms: current + io_ms}
   end
 
   @doc """

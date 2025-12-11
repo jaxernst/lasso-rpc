@@ -415,6 +415,55 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     {:noreply, state}
   end
 
+  # Handle Manager restart - re-establish all active subscriptions
+  def handle_info({:upstream_sub_manager_restarted, _chain}, state) do
+    active_keys =
+      state.keys
+      |> Enum.filter(fn {_key, entry} ->
+        entry.status == :active and entry.primary_provider_id != nil
+      end)
+      |> Enum.map(fn {key, entry} -> {key, entry.primary_provider_id} end)
+
+    if active_keys != [] do
+      Logger.info("Manager restarted, re-establishing #{length(active_keys)} active subscriptions",
+        chain: state.chain
+      )
+
+      # Re-register each active subscription with the Manager
+      Enum.each(active_keys, fn {key, provider_id} ->
+        case UpstreamSubscriptionManager.ensure_subscription(state.chain, provider_id, key) do
+          {:ok, _status} ->
+            Logger.debug("Re-established subscription after Manager restart",
+              chain: state.chain,
+              key: inspect(key),
+              provider_id: provider_id
+            )
+
+          {:error, reason} ->
+            # If re-establishment fails, trigger failover
+            Logger.warning("Failed to re-establish subscription after Manager restart",
+              chain: state.chain,
+              key: inspect(key),
+              provider_id: provider_id,
+              reason: inspect(reason)
+            )
+
+            # Trigger failover to another provider
+            StreamCoordinator.provider_unhealthy(
+              state.chain,
+              key,
+              provider_id,
+              pick_next_provider(state, provider_id)
+            )
+        end
+      end)
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info(_, state), do: {:noreply, state}
+
   # Staleness: Provider is likely healthy, subscription just expired (e.g., DRPC ~21h TTL)
   # Resubscribe to the same provider to maintain priority order
   defp handle_subscription_invalidation(state, provider_id, key, :subscription_stale) do
@@ -483,55 +532,6 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       pick_next_provider(state, provider_id)
     )
   end
-
-  # Handle Manager restart - re-establish all active subscriptions
-  def handle_info({:upstream_sub_manager_restarted, _chain}, state) do
-    active_keys =
-      state.keys
-      |> Enum.filter(fn {_key, entry} ->
-        entry.status == :active and entry.primary_provider_id != nil
-      end)
-      |> Enum.map(fn {key, entry} -> {key, entry.primary_provider_id} end)
-
-    if active_keys != [] do
-      Logger.info("Manager restarted, re-establishing #{length(active_keys)} active subscriptions",
-        chain: state.chain
-      )
-
-      # Re-register each active subscription with the Manager
-      Enum.each(active_keys, fn {key, provider_id} ->
-        case UpstreamSubscriptionManager.ensure_subscription(state.chain, provider_id, key) do
-          {:ok, _status} ->
-            Logger.debug("Re-established subscription after Manager restart",
-              chain: state.chain,
-              key: inspect(key),
-              provider_id: provider_id
-            )
-
-          {:error, reason} ->
-            # If re-establishment fails, trigger failover
-            Logger.warning("Failed to re-establish subscription after Manager restart",
-              chain: state.chain,
-              key: inspect(key),
-              provider_id: provider_id,
-              reason: inspect(reason)
-            )
-
-            # Trigger failover to another provider
-            StreamCoordinator.provider_unhealthy(
-              state.chain,
-              key,
-              provider_id,
-              pick_next_provider(state, provider_id)
-            )
-        end
-      end)
-    end
-
-    {:noreply, state}
-  end
-
-  def handle_info(_, state), do: {:noreply, state}
 
   # Internal helpers
 

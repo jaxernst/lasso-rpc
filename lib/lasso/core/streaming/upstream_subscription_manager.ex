@@ -261,8 +261,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
           chain: state.chain,
           provider_id: provider_id,
           upstream_id: upstream_id,
-          active_subscription_count: map_size(state.active_subscriptions),
-          known_upstream_ids: Map.keys(state.upstream_index)
+          active_subscription_count: map_size(state.active_subscriptions)
         )
 
         emit_telemetry(:orphaned_event, state.chain, provider_id, nil)

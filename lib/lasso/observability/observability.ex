@@ -29,21 +29,25 @@ defmodule Lasso.RPC.Observability do
 
   @doc """
   Emits a structured log event for a completed request.
+
+  Options:
+    - batch_size: If provided, indicates this is a batch request log entry
   """
-  def log_request_completed(%RequestContext{} = ctx) do
+  def log_request_completed(%RequestContext{} = ctx, opts \\ []) do
     if should_sample?() do
-      event = build_log_event(ctx)
+      batch_size = Keyword.get(opts, :batch_size)
+      event = build_log_event(ctx, batch_size)
       log_level = get_config(:log_level, :info)
 
       # Human-readable log line
       Logger.log(log_level, fn ->
-        format_readable_log(ctx, event)
+        format_readable_log(ctx, event, batch_size)
       end)
 
       # Also emit telemetry for external consumption
       :telemetry.execute(
         [:lasso, :observability, :request_completed],
-        %{count: 1},
+        %{count: batch_size || 1},
         event
       )
     end
@@ -96,7 +100,7 @@ defmodule Lasso.RPC.Observability do
 
   # Private implementation
 
-  defp build_log_event(%RequestContext{} = ctx) do
+  defp build_log_event(%RequestContext{} = ctx, batch_size) do
     base_event = %{
       event: "rpc.request.completed",
       request_id: ctx.request_id,
@@ -113,6 +117,7 @@ defmodule Lasso.RPC.Observability do
     |> maybe_put(:params_digest, ctx.params_digest)
     |> maybe_put(:client_ip, ctx.client_ip)
     |> maybe_put(:user_agent, ctx.user_agent)
+    |> maybe_put(:batch_size, batch_size)
     |> Map.put(:routing, build_routing_section(ctx))
     |> Map.put(:timing, build_timing_section(ctx))
     |> Map.put(:response, build_response_section(ctx))
@@ -155,29 +160,20 @@ defmodule Lasso.RPC.Observability do
     end
   end
 
-  defp format_readable_log(ctx, _event) do
+  defp format_readable_log(ctx, _event, batch_size) do
     provider =
       case ctx.selected_provider do
         %{id: id, protocol: protocol} -> "#{id}:#{protocol}"
         _ -> "unknown"
       end
 
-    latency_str =
-      cond do
-        ctx.upstream_latency_ms && ctx.lasso_overhead_ms ->
-          " (upstream: #{round_num(ctx.upstream_latency_ms, 1)}ms, overhead: #{round_num(ctx.lasso_overhead_ms, 1)}ms)"
-
-        ctx.upstream_latency_ms ->
-          " (upstream: #{round_num(ctx.upstream_latency_ms, 1)}ms)"
-
-        ctx.end_to_end_latency_ms ->
-          " (e2e: #{round_num(ctx.end_to_end_latency_ms, 1)}ms)"
-
-        true ->
-          ""
-      end
+    # Compact timing format: (e2e: 45ms, io: 40ms)
+    # e2e = end-to-end latency (from plug entry to response)
+    # io = upstream provider I/O time
+    latency_str = format_compact_timing(ctx)
 
     retry_str = if ctx.retries > 0, do: " retries=#{ctx.retries}", else: ""
+    batch_str = if batch_size, do: " batch=#{batch_size}", else: ""
 
     case ctx.status do
       :success ->
@@ -188,7 +184,7 @@ defmodule Lasso.RPC.Observability do
             ""
           end
 
-        "RPC [#{ctx.chain}] #{ctx.method} → #{provider}#{latency_str}#{retry_str} ✓#{result_info}"
+        "RPC [#{ctx.chain}] #{ctx.method} -> #{provider}#{latency_str}#{retry_str}#{batch_str} OK#{result_info}"
 
       :error ->
         error_msg =
@@ -197,10 +193,30 @@ defmodule Lasso.RPC.Observability do
             _ -> ""
           end
 
-        "RPC [#{ctx.chain}] #{ctx.method} → #{provider}#{latency_str}#{retry_str} ✗#{error_msg}"
+        "RPC [#{ctx.chain}] #{ctx.method} -> #{provider}#{latency_str}#{retry_str}#{batch_str} ERR#{error_msg}"
 
       _ ->
-        "RPC [#{ctx.chain}] #{ctx.method} → #{provider}#{retry_str}"
+        "RPC [#{ctx.chain}] #{ctx.method} -> #{provider}#{retry_str}#{batch_str}"
+    end
+  end
+
+  # Format timing in compact notation: (e2e: 45ms, io: 40ms)
+  defp format_compact_timing(ctx) do
+    cond do
+      # Full timing available: show both e2e and io
+      ctx.end_to_end_latency_ms && ctx.upstream_latency_ms ->
+        " (e2e: #{round_num(ctx.end_to_end_latency_ms, 0)}ms, io: #{round_num(ctx.upstream_latency_ms, 0)}ms)"
+
+      # Only e2e timing available
+      ctx.end_to_end_latency_ms ->
+        " (e2e: #{round_num(ctx.end_to_end_latency_ms, 0)}ms)"
+
+      # Only io timing available
+      ctx.upstream_latency_ms ->
+        " (io: #{round_num(ctx.upstream_latency_ms, 0)}ms)"
+
+      true ->
+        ""
     end
   end
 

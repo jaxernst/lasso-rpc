@@ -78,6 +78,10 @@ defmodule LassoWeb.Endpoint do
   end
 
   plug(Plug.RequestId)
+
+  # Capture request start time for accurate E2E latency measurement
+  plug(LassoWeb.Plugs.RequestTimingPlug)
+
   # plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
   plug(Plug.Parsers,

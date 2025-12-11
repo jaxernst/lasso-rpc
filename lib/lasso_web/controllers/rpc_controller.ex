@@ -127,6 +127,9 @@ defmodule LassoWeb.RPCController do
   defp handle_json_rpc(conn, params, chain) do
     with {:ok, request} <- validate_json_rpc_request(params),
          {:ok, result, ctx} <- process_json_rpc_request(request, chain, conn) do
+      # Store context for observability logging in before_send callback
+      conn = Plug.Conn.put_private(conn, :lasso_request_context, ctx)
+
       # Inject observability metadata to headers if requested
       conn = maybe_inject_observability_metadata(conn, ctx)
 
@@ -150,6 +153,9 @@ defmodule LassoWeb.RPCController do
       end
     else
       {:error, error, ctx} ->
+        # Store context for observability logging in before_send callback
+        conn = Plug.Conn.put_private(conn, :lasso_request_context, ctx)
+
         # Inject observability metadata for errors with context
         conn = maybe_inject_observability_metadata(conn, ctx)
 
@@ -183,6 +189,10 @@ defmodule LassoWeb.RPCController do
         requests
         |> Enum.map(&process_batch_request(&1, chain, conn))
         |> Enum.unzip()
+
+      # Store all contexts for observability logging in before_send callback
+      valid_contexts = Enum.filter(contexts, & &1)
+      conn = Plug.Conn.put_private(conn, :lasso_request_contexts, valid_contexts)
 
       # Inject observability metadata headers (uses first non-nil context if available)
       conn = maybe_inject_observability_metadata(conn, Enum.find(contexts, & &1))

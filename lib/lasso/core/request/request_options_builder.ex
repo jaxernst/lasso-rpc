@@ -13,6 +13,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
 
   alias Lasso.RPC.RequestOptions
   alias Lasso.Config.{MethodPolicy, MethodConstraints}
+  alias LassoWeb.Plugs.RequestTimingPlug
 
   @type override_opts :: [
           strategy: RequestOptions.strategy(),
@@ -90,15 +91,19 @@ defmodule Lasso.RPC.RequestOptions.Builder do
     request_id = overrides[:request_id] || Logger.metadata()[:request_id]
     request_context = overrides[:request_context]
 
-    opts = %RequestOptions{
-      strategy: strategy,
-      provider_override: provider_override,
-      transport: transport,
-      failover_on_override: overrides[:failover_on_override] || false,
-      timeout_ms: timeout_ms,
-      request_id: request_id
-    }
-    |> put_request_context(request_context)
+    plug_start_time = RequestTimingPlug.get_start_time(conn)
+
+    opts =
+      %RequestOptions{
+        strategy: strategy,
+        provider_override: provider_override,
+        transport: transport,
+        failover_on_override: overrides[:failover_on_override] || false,
+        timeout_ms: timeout_ms,
+        request_id: request_id,
+        plug_start_time: plug_start_time
+      }
+      |> put_request_context(request_context)
 
     # Validate the constructed options
     case RequestOptions.validate(opts, method) do
