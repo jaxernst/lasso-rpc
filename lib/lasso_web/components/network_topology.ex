@@ -531,12 +531,10 @@ defmodule LassoWeb.NetworkTopology do
               base - :math.pi() / 2
           end
 
-        # Add controlled randomness for organic look
+        # Add controlled randomness for organic look (configurable in TopologyConfig)
         seed = :erlang.phash2(connection.id, 1000)
-        # ±22.5 degrees
-        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 8
-        # ±7.5px (increased from ±5px)
-        radius_variance = (seed / 1000 - 0.5) * 15
+        angle_variance = (seed / 1000 - 0.5) * TopologyConfig.provider_angle_variance()
+        radius_variance = (seed / 1000 - 0.5) * TopologyConfig.provider_distance_variance()
 
         final_angle = base_angle + angle_variance
         final_radius = adjusted_provider_orbit + radius_variance
