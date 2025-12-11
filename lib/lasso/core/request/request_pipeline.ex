@@ -8,6 +8,7 @@ defmodule Lasso.RPC.RequestPipeline do
   - Support provider override (attempt first; optional failover on retriable errors)
   - Execute single attempts wrapped in per-provider circuit breakers
   - Publish telemetry and update provider metrics for successes/failures
+  - Log request completion with timing via Observability
   """
 
   require Logger
@@ -83,7 +84,8 @@ defmodule Lasso.RPC.RequestPipeline do
           params_digest: compute_params_digest(params),
           transport: opts.transport || :http,
           strategy: opts.strategy,
-          request_id: opts.request_id
+          request_id: opts.request_id,
+          plug_start_time: opts.plug_start_time
         )
 
     # Build JSON-RPC request
@@ -102,21 +104,6 @@ defmodule Lasso.RPC.RequestPipeline do
       nil ->
         execute_with_channel_selection(chain, rpc_request, opts, ctx)
     end
-  end
-
-  # Completes a request with final logging (telemetry already emitted by Observability module)
-  @spec complete_request(
-          atom(),
-          RequestContext.t(),
-          non_neg_integer(),
-          String.t(),
-          String.t(),
-          keyword()
-        ) :: RequestContext.t()
-  defp complete_request(_status, ctx, _duration_ms, _chain, _method, _opts) do
-    # Telemetry is already emitted by Observability.record_success/record_failure
-    # This function now just returns the context for future extensibility
-    ctx
   end
 
   # Provider override execution path
@@ -147,10 +134,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
     case attempt_request_on_channels(channels, rpc_request, opts.timeout_ms, ctx) do
       {:ok, result, channel, updated_ctx} ->
-        handle_override_success(chain, method, opts, result, channel, updated_ctx)
+        handle_override_success(method, opts, result, channel, updated_ctx)
 
       {:error, :no_channels_available, updated_ctx} ->
-        handle_override_no_channels(chain, method, opts, provider_id, updated_ctx)
+        handle_override_no_channels(method, opts, provider_id, updated_ctx)
 
       {:error, reason, channel, ctx1} ->
         handle_override_failure(chain, rpc_request, opts, provider_id, reason, channel, ctx1)
@@ -159,33 +146,28 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # Handles successful provider override request
   @spec handle_override_success(
-          chain(),
           String.t(),
           RequestOptions.t(),
           any(),
           Channel.t(),
           RequestContext.t()
         ) :: {:ok, any(), RequestContext.t()}
-  defp handle_override_success(chain, method, opts, result, channel, updated_ctx) do
+  defp handle_override_success(method, opts, result, channel, updated_ctx) do
     duration_ms = RequestContext.get_duration(updated_ctx)
 
     Observability.record_success(updated_ctx, channel, method, opts.strategy, duration_ms)
 
-    final_ctx =
-      complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
-
-    {:ok, result, final_ctx}
+    {:ok, result, updated_ctx}
   end
 
   # Handles no channels available for provider override
   @spec handle_override_no_channels(
-          chain(),
           String.t(),
           RequestOptions.t(),
           String.t(),
           RequestContext.t()
         ) :: {:error, JError.t(), RequestContext.t()}
-  defp handle_override_no_channels(chain, method, opts, provider_id, updated_ctx) do
+  defp handle_override_no_channels(method, opts, provider_id, updated_ctx) do
     duration_ms = RequestContext.get_duration(updated_ctx)
 
     jerr =
@@ -202,8 +184,7 @@ defmodule Lasso.RPC.RequestPipeline do
       duration_ms
     )
 
-    final_ctx = complete_request(:error, updated_ctx, duration_ms, chain, method, error: jerr)
-    {:error, jerr, final_ctx}
+    {:error, jerr, updated_ctx}
   end
 
   # Handles failure of provider override with optional failover
@@ -226,7 +207,7 @@ defmodule Lasso.RPC.RequestPipeline do
          ctx1
        ) do
     duration_ms = RequestContext.get_duration(ctx1)
-    jerr = normalize_channel_error(reason, provider_id)
+    jerr = JError.from(reason, provider_id: provider_id)
 
     Observability.record_failure(ctx1, channel, method, opts.strategy, jerr, duration_ms)
 
@@ -235,8 +216,7 @@ defmodule Lasso.RPC.RequestPipeline do
     if should_failover do
       attempt_override_failover(chain, rpc_request, opts, provider_id, ctx1, jerr, method)
     else
-      final_ctx = complete_request(:error, ctx1, duration_ms, chain, method, error: jerr)
-      {:error, jerr, final_ctx}
+      {:error, jerr, ctx1}
     end
   end
 
@@ -263,9 +243,7 @@ defmodule Lasso.RPC.RequestPipeline do
     case failover_channels do
       [] ->
         # No alternative providers available
-        final_duration_ms = RequestContext.get_duration(ctx1)
-        final_ctx = complete_request(:error, ctx1, final_duration_ms, chain, method, error: jerr)
-        {:error, jerr, final_ctx}
+        {:error, jerr, ctx1}
 
       _ ->
         # Try failover channels using standard pipeline
@@ -275,28 +253,15 @@ defmodule Lasso.RPC.RequestPipeline do
             duration_ms = RequestContext.get_duration(updated_ctx)
             Observability.record_success(updated_ctx, channel, method, opts.strategy, duration_ms)
 
-            final_ctx =
-              complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
-
-            {:ok, result, final_ctx}
+            {:ok, result, updated_ctx}
 
           {:error, _reason, _channel, failed_ctx} ->
             # Failover failed - return original error
-            final_duration_ms = RequestContext.get_duration(failed_ctx)
-
-            final_ctx =
-              complete_request(:error, failed_ctx, final_duration_ms, chain, method, error: jerr)
-
-            {:error, jerr, final_ctx}
+            {:error, jerr, failed_ctx}
 
           {:error, :no_channels_available, failed_ctx} ->
             # All failover channels exhausted - return original error
-            final_duration_ms = RequestContext.get_duration(failed_ctx)
-
-            final_ctx =
-              complete_request(:error, failed_ctx, final_duration_ms, chain, method, error: jerr)
-
-            {:error, jerr, final_ctx}
+            {:error, jerr, failed_ctx}
         end
     end
   end
@@ -356,7 +321,6 @@ defmodule Lasso.RPC.RequestPipeline do
           RequestContext.t()
         ) :: {:error, JError.t(), RequestContext.t()}
   defp handle_channel_exhaustion(chain, method, %RequestOptions{} = opts, ctx) do
-    duration_ms = RequestContext.get_duration(ctx)
     retry_after_ms = calculate_min_recovery_time(chain, opts.transport)
     {error_message, error_data} = build_exhaustion_error_message(method, retry_after_ms, chain)
 
@@ -377,8 +341,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     Observability.record_exhaustion(chain, method, opts.transport, retry_after_ms)
 
-    final_ctx = complete_request(:error, updated_ctx, duration_ms, chain, method, error: jerr)
-    {:error, jerr, final_ctx}
+    {:error, jerr, updated_ctx}
   end
 
   # Builds error message with retry-after hint for channel exhaustion
@@ -451,17 +414,13 @@ defmodule Lasso.RPC.RequestPipeline do
         handle_success(chain, method, opts, ctx, result, channel, updated_ctx, mode)
 
       {:error, reason, channel, _ctx1} ->
-        handle_failure(chain, method, opts, ctx, reason, channel, mode)
+        handle_failure(method, opts, ctx, reason, channel)
 
       {:error, :no_channels_available, _updated_ctx} ->
         # No channels available - return error
-        duration_ms = RequestContext.get_duration(ctx)
         updated_ctx = RequestContext.mark_upstream_end(ctx)
         final_ctx = RequestContext.record_error(updated_ctx, :no_channels_available)
-        jerr = normalize_channel_error(:no_channels_available, "no_channels")
-
-        final_ctx =
-          complete_request(:error, final_ctx, duration_ms, ctx.chain, ctx.method, error: jerr)
+        jerr = JError.from(:no_channels_available, provider_id: "no_channels")
 
         {:error, jerr, final_ctx}
     end
@@ -505,40 +464,31 @@ defmodule Lasso.RPC.RequestPipeline do
       Observability.record_degraded_success(chain, method, channel)
     end
 
-    final_ctx =
-      complete_request(:success, updated_ctx, duration_ms, chain, method, result: result)
-
-    {:ok, result, final_ctx}
+    {:ok, result, updated_ctx}
   end
 
   # Unified failure handler for all execution modes
   @spec handle_failure(
-          chain(),
           String.t(),
           RequestOptions.t(),
           RequestContext.t(),
           any(),
-          Channel.t(),
-          atom()
+          Channel.t()
         ) :: {:error, JError.t(), RequestContext.t()}
   defp handle_failure(
-         chain,
          method,
          %RequestOptions{} = opts,
          ctx,
          reason,
-         channel,
-         _mode
+         channel
        ) do
-    duration_ms = RequestContext.get_duration(ctx)
     updated_ctx = RequestContext.mark_upstream_end(ctx)
     final_ctx = RequestContext.record_error(updated_ctx, reason)
-    jerr = normalize_channel_error(reason, "no_channels")
+    jerr = JError.from(reason, provider_id: "no_channels")
     duration = final_ctx.upstream_latency_ms || 0
 
     Observability.record_failure(final_ctx, channel, method, opts.strategy, jerr, duration)
 
-    final_ctx = complete_request(:error, final_ctx, duration_ms, chain, method, error: jerr)
     {:error, jerr, final_ctx}
   end
 
@@ -667,7 +617,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     log_slow_request_if_needed(io_ms, Map.get(rpc_request, "method"), channel, ctx)
 
-    ctx = RequestContext.set_upstream_latency(ctx, io_ms)
+    ctx = RequestContext.add_upstream_latency(ctx, io_ms)
     {:ok, result, channel, ctx}
   end
 
@@ -685,7 +635,7 @@ defmodule Lasso.RPC.RequestPipeline do
           | {:error, atom(), Channel.t(), RequestContext.t()}
           | {:error, atom(), RequestContext.t()}
   defp handle_channel_error(reason, io_ms, channel, rpc_request, timeout, ctx, rest_channels) do
-    ctx = RequestContext.set_upstream_latency(ctx, io_ms || 0)
+    ctx = RequestContext.add_upstream_latency(ctx, io_ms || 0)
 
     case FailoverStrategy.decide(reason, rest_channels, ctx) do
       {:failover, failover_reason} ->
@@ -754,24 +704,22 @@ defmodule Lasso.RPC.RequestPipeline do
           method: Map.get(rpc_request, "method")
         )
 
-        ctx = RequestContext.set_upstream_latency(ctx, 0)
+        ctx = RequestContext.add_upstream_latency(ctx, 0)
         ctx = RequestContext.increment_retries(ctx)
 
         Observability.record_circuit_open(ctx, channel)
 
         attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
 
-      # Direct errors from circuit breaker (timeouts, crashes, etc.)
+      # Direct errors from circuit breaker with IO time (timeouts)
+      {:error, reason, io_ms} ->
+        handle_channel_error(reason, io_ms, channel, rpc_request, timeout, ctx, rest_channels)
+
+      # Direct errors from circuit breaker without IO time (crashes, etc.)
       {:error, reason} ->
         handle_channel_error(reason, nil, channel, rpc_request, timeout, ctx, rest_channels)
     end
   end
-
-  @spec normalize_channel_error(any(), String.t()) :: JError.t()
-  defp normalize_channel_error(%JError{} = jerr, _provider_id), do: jerr
-
-  defp normalize_channel_error(reason, provider_id),
-    do: JError.from(reason, provider_id: provider_id)
 
   # Logs slow requests based on configured thresholds.
   # Thresholds:

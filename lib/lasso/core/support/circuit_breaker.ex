@@ -163,12 +163,14 @@ defmodule Lasso.RPC.CircuitBreaker do
                 %{chain: chain, provider_id: provider_id, transport: transport}
               )
 
+              # Return timeout as io_ms so it's included in upstream latency tracking
+              # (we waited ~timeout ms for the provider before giving up)
               {:error,
                JError.new(-32_000, "Request timeout after #{timeout}ms",
                  category: :timeout,
                  retriable?: true,
                  breaker_penalty?: true
-               )}
+               ), timeout}
           end
 
         report_result =

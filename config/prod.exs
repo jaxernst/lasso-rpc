@@ -19,30 +19,7 @@ config :lasso, LassoWeb.Endpoint,
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
   level: :info,
-  metadata: [
-    :provider,
-    :provider_id,
-    :method,
-    :url,
-    :request_id,
-    :transport,
-    :context,
-    :timeout,
-    :retry_count,
-    :error,
-    :channel,
-    :result,
-    :chain,
-    :chain_id,
-    :key,
-    :id,
-    :connection,
-    :topic,
-    :params,
-    :remaining_channels,
-    :retriable,
-    :current_status
-  ]
+  metadata: :all
 
 # Additional logger configuration for production
 config :logger,

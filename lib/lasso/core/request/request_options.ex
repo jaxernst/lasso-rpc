@@ -18,7 +18,9 @@ defmodule Lasso.RPC.RequestOptions do
             failover_on_override: false,
             timeout_ms: 30_000,
             request_id: nil,
-            request_context: nil
+            request_context: nil,
+            # Plug-level start time for accurate E2E measurement (microseconds)
+            plug_start_time: nil
 
   @type t :: %__MODULE__{
           strategy: strategy,
@@ -27,7 +29,8 @@ defmodule Lasso.RPC.RequestOptions do
           failover_on_override: boolean,
           timeout_ms: non_neg_integer,
           request_id: String.t() | nil,
-          request_context: any() | nil
+          request_context: any() | nil,
+          plug_start_time: integer() | nil
         }
 
   @doc """
@@ -85,7 +88,8 @@ defmodule Lasso.RPC.RequestOptions do
       failover_on_override: o.failover_on_override,
       timeout_ms: o.timeout_ms,
       request_id: o.request_id,
-      request_context: o.request_context
+      request_context: o.request_context,
+      plug_start_time: o.plug_start_time
     ]
   end
 end
