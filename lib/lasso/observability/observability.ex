@@ -34,10 +34,19 @@ defmodule Lasso.RPC.Observability do
     - batch_size: If provided, indicates this is a batch request log entry
   """
   def log_request_completed(%RequestContext{} = ctx, opts \\ []) do
-    if should_sample?() do
+    # Always log errors regardless of sampling rate
+    should_log = ctx.status == :error or should_sample?()
+
+    if should_log do
       batch_size = Keyword.get(opts, :batch_size)
       event = build_log_event(ctx, batch_size)
-      log_level = get_config(:log_level, :info)
+
+      # Use appropriate log level: warning for errors, info for success
+      log_level =
+        case ctx.status do
+          :error -> :warning
+          _ -> get_config(:log_level, :info)
+        end
 
       # Human-readable log line
       Logger.log(log_level, fn ->

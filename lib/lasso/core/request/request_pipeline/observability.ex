@@ -99,6 +99,8 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       %{count: 1},
       %{
         chain: ctx.chain,
+        method: ctx.method,
+        request_id: ctx.request_id,
         provider_id: provider_id,
         transport: transport,
         error_category: extract_error_category(error_reason),

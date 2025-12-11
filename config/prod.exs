@@ -36,8 +36,18 @@ config :lasso, :observability,
   include_params_digest: true,
   max_error_message_chars: 256,
   max_meta_header_bytes: 4096,
-  # Sample requests in production (adjust rate as needed)
-  sampling: [rate: 0.1]
+  # Request completion log sampling rate
+  # 1.0 = log all requests, 0.1 = log 10% of requests
+  # Note: Error responses are always logged regardless of sampling
+  sampling: [rate: 1]
+
+# Telemetry-based operational logging
+# These logs are NOT sampled - they always emit for important events
+config :lasso, Lasso.TelemetryLogger,
+  enabled: true,
+  log_slow_requests: true,
+  log_failovers: true,
+  log_circuit_breaker: true
 
 # Provider health check configuration (more conservative in production)
 config :lasso,
