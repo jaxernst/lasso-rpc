@@ -15,9 +15,8 @@ defmodule LassoWeb.Router do
     plug(:accepts, ["json"])
   end
 
-  # Debug pipeline for RPC endpoints
+  # RPC endpoints pipeline - uses custom Observability logging
   pipeline :api_with_logging do
-    plug(Plug.Logger, log: :info)
     plug(:accepts, ["json"])
     plug(LassoWeb.Plugs.ObservabilityPlug)
   end

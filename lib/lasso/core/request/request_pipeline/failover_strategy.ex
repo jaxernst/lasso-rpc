@@ -119,19 +119,7 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
       ) do
     error_category = extract_error_category(error)
 
-    # Log fast-fail event
-    Logger.info("Fast-failing to next channel",
-      request_id: ctx.request_id,
-      channel: Channel.to_string(channel),
-      provider_id: channel.provider_id,
-      method: ctx.method,
-      error_category: error_category,
-      reason: failover_reason,
-      remaining_channels: length(rest_channels),
-      chain: ctx.chain
-    )
-
-    # Record observability events
+    # Record observability events (logged via TelemetryLogger)
     Observability.record_fast_fail(ctx, channel, failover_reason, error)
 
     # Update context: increment retries and track error category

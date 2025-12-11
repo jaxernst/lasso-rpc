@@ -25,6 +25,14 @@ defmodule Lasso.Telemetry do
   end
 
   @doc """
+  Attaches default telemetry handlers for logging operational events.
+  Called after the supervisor tree is started.
+  """
+  def attach_default_handlers do
+    Lasso.TelemetryLogger.attach()
+  end
+
+  @doc """
   Returns a list of Telemetry.Metrics for LiveDashboard and other metric reporters.
   """
   def metrics do

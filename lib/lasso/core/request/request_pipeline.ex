@@ -118,15 +118,6 @@ defmodule Lasso.RPC.RequestPipeline do
     provider_id = opts.provider_override
     ctx = RequestContext.mark_request_start(ctx)
 
-    Logger.info("RPC request started (provider override)",
-      request_id: ctx.request_id,
-      chain: chain,
-      method: method,
-      provider_id: provider_id,
-      timeout_ms: opts.timeout_ms,
-      strategy: opts.strategy
-    )
-
     Observability.record_request_start(chain, method, opts.strategy, provider_id)
 
     # Get channels for the specific provider
@@ -276,14 +267,6 @@ defmodule Lasso.RPC.RequestPipeline do
          ctx
        ) do
     ctx = RequestContext.mark_request_start(ctx)
-
-    Logger.info("RPC request started",
-      request_id: ctx.request_id,
-      chain: chain,
-      method: method,
-      timeout_ms: opts.timeout_ms,
-      strategy: opts.strategy
-    )
 
     Observability.record_request_start(chain, method, opts.strategy)
 
