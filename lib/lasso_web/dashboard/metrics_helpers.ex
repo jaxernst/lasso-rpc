@@ -174,10 +174,15 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(chain_events), 1)} end)
       |> Enum.sort_by(fn {_pid, pct} -> -pct end)
 
+    # Count providers that are available for routing (not circuit open, not rate limited)
+    # Use determine_provider_status for comprehensive status evaluation
+    chain_connections = Enum.filter(assigns.connections, &(&1.chain == chain_name))
     connected_providers =
-      Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :connected))
+      Enum.count(chain_connections, fn provider ->
+        LassoWeb.Dashboard.StatusHelpers.determine_provider_status(provider) in [:healthy, :lagging, :testing_recovery, :recovering]
+      end)
 
-    total_providers = Enum.count(assigns.connections, &(&1.chain == chain_name))
+    total_providers = length(chain_connections)
 
     Map.put(assigns, :chain_performance, %{
       total_calls: Map.get(chain_stats, :total_calls, 0),
@@ -310,8 +315,10 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(chain_events), 1)} end)
       |> Enum.sort_by(fn {_pid, pct} -> -pct end)
 
+    # Count providers that are healthy/available for routing
+    # Status values from ProviderPool are :healthy, :unhealthy, :connecting, :disconnected
     connected_providers =
-      Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :connected))
+      Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :healthy))
 
     total_providers = Enum.count(assigns.connections, &(&1.chain == chain_name))
 
