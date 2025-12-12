@@ -851,7 +851,7 @@ defmodule LassoWeb.Dashboard do
       )
 
     ~H"""
-    <div class="flex h-full flex-col bg-gray-900 text-gray-200" id={"chain-details-" <> @chain}>
+    <div class="flex h-full flex-col bg-gray-900 text-gray-200 overflow-hidden" id={"chain-details-" <> @chain}>
       <!-- Hero Header -->
       <div class="p-6 pb-5 border-b border-gray-800 bg-gray-900/50 backdrop-blur-sm relative overflow-hidden">
         <!-- Background decorative glow -->
@@ -1009,7 +1009,7 @@ defmodule LassoWeb.Dashboard do
              <!-- Traffic Distribution -->
              <div class="bg-gray-800/20 border border-gray-800 rounded-lg p-4">
                <div class="flex justify-between items-center mb-3">
-                 <div class="text-xs text-gray-400 font-medium">Distribution (Last 5m)</div>
+                 <div class="text-[11px] text-gray-400">Distribution (Last 5m)</div>
                  <div class="text-[10px] text-gray-600 uppercase tracking-wide">Req Share</div>
                </div>
                <% decision_share = Map.get(@chain_performance, :decision_share, []) %>
@@ -1026,7 +1026,7 @@ defmodule LassoWeb.Dashboard do
                     </div>
                   <% end %>
                   <%= if Enum.empty?(decision_share) do %>
-                    <div class="text-xs text-gray-600 italic py-2 text-center">No traffic recorded recently</div>
+                    <div class="text-xs text-gray-600 italic pt-2 pb-3 text-center">No traffic recorded recently</div>
                   <% end %>
                </div>
              </div>
@@ -1051,7 +1051,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:performance_metrics, Map.get(assigns, :selected_provider_metrics, %{}))
 
     ~H"""
-    <div class="flex h-full flex-col overflow-y-auto bg-gray-900 text-gray-200" data-provider-id={@provider}>
+    <div class="flex h-full flex-col overflow-y-auto bg-gray-900 text-gray-200 overflow-hidden" data-provider-id={@provider}>
       <!-- HEADER -->
       <div class="border-b border-gray-800 p-6 pb-5 bg-gray-900/50 backdrop-blur-sm relative overflow-hidden">
         <!-- Background decorative glow -->
@@ -1490,7 +1490,7 @@ defmodule LassoWeb.Dashboard do
             </div>
           <% else %>
             <%= if length(active_alerts) == 0 do %>
-              <div class="text-xs text-gray-500 text-center py-3">No issues detected</div>
+              <div class="text-xs text-gray-500 text-center pt-2 pb-3">No issues detected</div>
             <% end %>
           <% end %>
         </div>
@@ -1575,13 +1575,10 @@ defmodule LassoWeb.Dashboard do
           "System Overview"
 
         assigns.selected_provider ->
-          case Enum.find(assigns.connections, &(&1.id == assigns.selected_provider)) do
-            %{name: name} -> name
-            _ -> assigns.selected_provider
-          end
+         "Provider Details"
 
         assigns.selected_chain ->
-          Helpers.get_chain_display_name(assigns.selected_chain)
+          "Chain Details"
 
         true ->
           "System Overview"
@@ -1981,7 +1978,7 @@ defmodule LassoWeb.Dashboard do
     assigns = assign(assigns, :provider_name, provider_name)
 
     ~H"""
-    <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-1">
+    <div class="bg-gray-800/20 border border-gray-800 rounded-lg p-4 md:col-span-1">
       <div class="text-[11px] text-gray-400 mb-1">Last decision</div>
       <%= if @last_decision do %>
         <div class="text-xs text-gray-300 space-y-1">
@@ -2000,7 +1997,7 @@ defmodule LassoWeb.Dashboard do
           </div>
         </div>
       <% else %>
-        <div class="text-xs text-gray-500">No recent decisions</div>
+        <div class="text-xs text-gray-600 italic py-2 text-center">No recent decisions</div>
       <% end %>
     </div>
     """
