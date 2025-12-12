@@ -754,12 +754,12 @@ const EndpointSelector = {
       const btn = e.target.closest("[data-copy-text]");
       if (btn && btn.dataset.copyText) {
         navigator.clipboard.writeText(btn.dataset.copyText).then(() => {
-          const originalText = btn.textContent;
-          btn.textContent = "Copied!";
-          btn.classList.add("text-emerald-400", "border-emerald-500");
+          const originalHTML = btn.innerHTML;
+          btn.innerHTML = `<span class="text-xs">Copied!</span>`;
+          btn.classList.add("text-emerald-400");
           setTimeout(() => {
-            btn.textContent = originalText;
-            btn.classList.remove("text-emerald-400", "border-emerald-500");
+            btn.innerHTML = originalHTML;
+            btn.classList.remove("text-emerald-400");
           }, 1500);
         });
       }
@@ -915,6 +915,7 @@ const EndpointSelector = {
   updateEndpointUrls() {
     const httpUrl = this.el.querySelector("#endpoint-url");
     const wsUrl = this.el.querySelector("#ws-endpoint-url");
+    const wsRow = this.el.querySelector("#ws-row");
     const httpCopyBtns = this.el.querySelectorAll("[data-copy-text]");
 
     if (httpUrl) {
@@ -924,29 +925,45 @@ const EndpointSelector = {
       const chain = this.chain; // Use chain name, not chain_id
 
       let newHttpUrl, newWsUrl;
+      let showWsRow = true;
 
       if (this.mode === "strategy" && this.selectedStrategy) {
         // Strategy mode: /rpc/{strategy}/{chain}
         newHttpUrl = `${baseUrl}/rpc/${this.selectedStrategy}/${chain}`;
         newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/${this.selectedStrategy}/${chain}`;
+        showWsRow = true;
       } else if (this.mode === "provider" && this.selectedProvider) {
         // Provider mode: /rpc/provider/{provider_id}/{chain}
         newHttpUrl = `${baseUrl}/rpc/provider/${this.selectedProvider}/${chain}`;
 
         if (this.selectedProviderSupportsWs) {
           newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/provider/${this.selectedProvider}/${chain}`;
+          showWsRow = true;
         } else {
-          newWsUrl = "WebSocket not supported by this provider";
+          newWsUrl = "";
+          showWsRow = false;
         }
       } else {
         // Default fallback
         newHttpUrl = `${baseUrl}/rpc/fastest/${chain}`;
         newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/fastest/${chain}`;
+        showWsRow = true;
       }
 
       httpUrl.textContent = newHttpUrl;
       if (wsUrl) {
         wsUrl.textContent = newWsUrl;
+      }
+
+      // Show/hide WebSocket row based on provider support
+      if (wsRow) {
+        if (showWsRow) {
+          wsRow.style.display = "";
+          wsRow.classList.remove("hidden");
+        } else {
+          wsRow.style.display = "none";
+          wsRow.classList.add("hidden");
+        }
       }
 
       // Update copy button data attributes
@@ -956,7 +973,8 @@ const EndpointSelector = {
         } else if (
           btn.dataset.copyText &&
           (btn.dataset.copyText.includes("ws://") ||
-            btn.dataset.copyText.includes("wss://"))
+            btn.dataset.copyText.includes("wss://") ||
+            btn.dataset.copyText === "")
         ) {
           // Only allow copying if it's a valid WebSocket URL
           if (this.selectedProviderSupportsWs || this.mode === "strategy") {

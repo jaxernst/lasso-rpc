@@ -3,7 +3,18 @@ defmodule LassoWeb.Dashboard do
   require Logger
 
   alias LassoWeb.NetworkTopology
-  alias LassoWeb.Dashboard.{Helpers, MetricsHelpers, StatusHelpers, EndpointHelpers, Constants, Status, EventBuffer, Formatting}
+
+  alias LassoWeb.Dashboard.{
+    Helpers,
+    MetricsHelpers,
+    StatusHelpers,
+    EndpointHelpers,
+    Constants,
+    Status,
+    EventBuffer,
+    Formatting
+  }
+
   alias LassoWeb.Dashboard.Components
   alias LassoWeb.Components.DashboardHeader
   alias LassoWeb.Components.NetworkStatusLegend
@@ -161,9 +172,10 @@ defmodule LassoWeb.Dashboard do
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
 
     # Buffer all events from the batch
-    socket = Enum.reduce(batch, socket, fn event, sock ->
-      buffer_event(sock, event)
-    end)
+    socket =
+      Enum.reduce(batch, socket, fn event, sock ->
+        buffer_event(sock, event)
+      end)
 
     {:noreply, socket}
   end
@@ -201,14 +213,15 @@ defmodule LassoWeb.Dashboard do
       method: method,
       strategy: strategy,
       provider_id: pid,
-      duration_ms: (if is_number(dur), do: round(dur), else: 0),
+      duration_ms: if(is_number(dur), do: round(dur), else: 0),
       result: Map.get(evt, :result, :unknown),
       failovers: Map.get(evt, :failover_count, 0)
     }
 
-    socket = update(socket, :routing_events, fn list ->
-      [entry | Enum.take(list, Constants.routing_events_limit() - 1)]
-    end)
+    socket =
+      update(socket, :routing_events, fn list ->
+        [entry | Enum.take(list, Constants.routing_events_limit() - 1)]
+      end)
 
     # Unified events + client-side push
     ev =
@@ -226,18 +239,20 @@ defmodule LassoWeb.Dashboard do
       |> push_event("provider_request", %{provider_id: pid})
 
     # Update chain-specific metrics if this event is for the currently selected chain
-    socket = if socket.assigns[:selected_chain] == chain do
-      update_selected_chain_metrics(socket)
-    else
-      socket
-    end
+    socket =
+      if socket.assigns[:selected_chain] == chain do
+        update_selected_chain_metrics(socket)
+      else
+        socket
+      end
 
     # Update provider-specific metrics if this event is for the currently selected provider
-    socket = if socket.assigns[:selected_provider] == pid do
-      update_selected_provider_data(socket)
-    else
-      socket
-    end
+    socket =
+      if socket.assigns[:selected_provider] == pid do
+        update_selected_provider_data(socket)
+      else
+        socket
+      end
 
     {:noreply, socket}
   end
@@ -251,11 +266,18 @@ defmodule LassoWeb.Dashboard do
              is_struct(evt, Provider.WSClosed) do
     {chain, pid, event, details, ts} =
       case evt do
-        %Provider.Healthy{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :healthy, nil, ts}
-        %Provider.Unhealthy{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :unhealthy, nil, ts}
+        %Provider.Healthy{chain: chain, provider_id: pid, ts: ts} ->
+          {chain, pid, :healthy, nil, ts}
+
+        %Provider.Unhealthy{chain: chain, provider_id: pid, ts: ts} ->
+          {chain, pid, :unhealthy, nil, ts}
+
         %Provider.HealthCheckFailed{chain: chain, provider_id: pid, reason: reason, ts: ts} ->
           {chain, pid, :health_check_failed, %{reason: reason}, ts}
-        %Provider.WSConnected{chain: chain, provider_id: pid, ts: ts} -> {chain, pid, :ws_connected, nil, ts}
+
+        %Provider.WSConnected{chain: chain, provider_id: pid, ts: ts} ->
+          {chain, pid, :ws_connected, nil, ts}
+
         %Provider.WSClosed{chain: chain, provider_id: pid, code: code, reason: reason, ts: ts} ->
           {chain, pid, :ws_closed, %{code: code, reason: reason}, ts}
       end
@@ -269,7 +291,10 @@ defmodule LassoWeb.Dashboard do
       details: details
     }
 
-    socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, Constants.provider_events_limit() - 1)] end)
+    socket =
+      update(socket, :provider_events, fn list ->
+        [entry | Enum.take(list, Constants.provider_events_limit() - 1)]
+      end)
 
     uev =
       Helpers.as_event(:provider,
@@ -283,20 +308,22 @@ defmodule LassoWeb.Dashboard do
     socket = buffer_event(socket, uev)
 
     # Update provider panel if this event is for the currently selected provider
-    socket = if socket.assigns[:selected_provider] == pid do
-      socket
-      |> fetch_connections()
-      |> update_selected_provider_data()
-    else
-      socket
-    end
+    socket =
+      if socket.assigns[:selected_provider] == pid do
+        socket
+        |> fetch_connections()
+        |> update_selected_provider_data()
+      else
+        socket
+      end
 
     # Update chain panel if this event is for the currently selected chain
-    socket = if socket.assigns[:selected_chain] == chain do
-      update_selected_chain_metrics(socket)
-    else
-      socket
-    end
+    socket =
+      if socket.assigns[:selected_chain] == chain do
+        update_selected_chain_metrics(socket)
+      else
+        socket
+      end
 
     {:noreply, socket}
   end
@@ -314,7 +341,10 @@ defmodule LassoWeb.Dashboard do
       ip: Map.get(msg, :remote_ip) || Map.get(msg, "remote_ip")
     }
 
-    socket = update(socket, :client_events, fn list -> [entry | Enum.take(list, Constants.client_events_limit() - 1)] end)
+    socket =
+      update(socket, :client_events, fn list ->
+        [entry | Enum.take(list, Constants.client_events_limit() - 1)]
+      end)
 
     uev =
       Helpers.as_event(:client,
@@ -375,7 +405,10 @@ defmodule LassoWeb.Dashboard do
       event: message
     }
 
-    socket = update(socket, :provider_events, fn list -> [entry | Enum.take(list, Constants.provider_events_limit() - 1)] end)
+    socket =
+      update(socket, :provider_events, fn list ->
+        [entry | Enum.take(list, Constants.provider_events_limit() - 1)]
+      end)
 
     # Include error details in meta for expanded view
     meta_base = %{transport: transport, from: from_state, to: to_state, reason: reason}
@@ -403,21 +436,24 @@ defmodule LassoWeb.Dashboard do
     socket =
       socket
       |> buffer_event(uev)
-      |> fetch_connections()  # Refresh provider data to show updated circuit state
+      # Refresh provider data to show updated circuit state
+      |> fetch_connections()
 
     # Update provider panel if this event is for the currently selected provider
-    socket = if socket.assigns[:selected_provider] == provider_id do
-      update_selected_provider_data(socket)
-    else
-      socket
-    end
+    socket =
+      if socket.assigns[:selected_provider] == provider_id do
+        update_selected_provider_data(socket)
+      else
+        socket
+      end
 
     # Update chain panel if this event is for the currently selected chain
-    socket = if socket.assigns[:selected_chain] == chain do
-      update_selected_chain_metrics(socket)
-    else
-      socket
-    end
+    socket =
+      if socket.assigns[:selected_chain] == chain do
+        update_selected_chain_metrics(socket)
+      else
+        socket
+      end
 
     {:noreply, socket}
   end
@@ -434,7 +470,10 @@ defmodule LassoWeb.Dashboard do
       margin_ms: Map.get(blk, :margin_ms) || Map.get(blk, "margin_ms")
     }
 
-    socket = update(socket, :latest_blocks, fn list -> [entry | Enum.take(list, Constants.recent_blocks_limit() - 1)] end)
+    socket =
+      update(socket, :latest_blocks, fn list ->
+        [entry | Enum.take(list, Constants.recent_blocks_limit() - 1)]
+      end)
 
     uev =
       Helpers.as_event(:block,
@@ -448,11 +487,12 @@ defmodule LassoWeb.Dashboard do
     socket = buffer_event(socket, uev)
 
     # Update chain-specific metrics if this event is for the currently selected chain
-    socket = if socket.assigns[:selected_chain] == chain do
-      update_selected_chain_metrics(socket)
-    else
-      socket
-    end
+    socket =
+      if socket.assigns[:selected_chain] == chain do
+        update_selected_chain_metrics(socket)
+      else
+        socket
+      end
 
     {:noreply, socket}
   end
@@ -503,7 +543,10 @@ defmodule LassoWeb.Dashboard do
 
   # Live sync/block height updates from ProviderPool probes
   @impl true
-  def handle_info(%{chain: _chain, provider_id: pid, block_height: _height} = _sync_update, socket) do
+  def handle_info(
+        %{chain: _chain, provider_id: pid, block_height: _height} = _sync_update,
+        socket
+      ) do
     # Update provider panel if this sync update is for the currently selected provider
     socket =
       if socket.assigns[:selected_provider] == pid do
@@ -569,6 +612,7 @@ defmodule LassoWeb.Dashboard do
       socket
       |> fetch_connections()
       |> push_event("show_notification", %{message: message, type: "warning"})
+
     {:noreply, socket}
   end
 
@@ -580,7 +624,9 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_info({:chain_config_notification, type, message}, socket) do
-    socket = push_event(socket, "show_notification", %{message: message, type: Atom.to_string(type)})
+    socket =
+      push_event(socket, "show_notification", %{message: message, type: Atom.to_string(type)})
+
     {:noreply, socket}
   end
 
@@ -591,6 +637,7 @@ defmodule LassoWeb.Dashboard do
       socket
       |> refresh_available_chains()
       |> fetch_connections()
+
     {:noreply, socket}
   end
 
@@ -600,6 +647,7 @@ defmodule LassoWeb.Dashboard do
       socket
       |> refresh_available_chains()
       |> fetch_connections()
+
     {:noreply, socket}
   end
 
@@ -609,6 +657,7 @@ defmodule LassoWeb.Dashboard do
       socket
       |> refresh_available_chains()
       |> fetch_connections()
+
     {:noreply, socket}
   end
 
@@ -618,6 +667,7 @@ defmodule LassoWeb.Dashboard do
       socket
       |> refresh_available_chains()
       |> fetch_connections()
+
     {:noreply, socket}
   end
 
@@ -692,28 +742,28 @@ defmodule LassoWeb.Dashboard do
   end
 
   # Dashboard tab content attrs
-  attr :connections, :list
-  attr :routing_events, :list
-  attr :provider_events, :list
-  attr :client_events, :list
-  attr :latest_blocks, :list
-  attr :events, :list
-  attr :selected_chain, :string
-  attr :selected_provider, :string
-  attr :details_collapsed, :boolean
-  attr :events_collapsed, :boolean
-  attr :available_chains, :list
-  attr :chain_config_open, :boolean
-  attr :chain_config_collapsed, :boolean, default: true
-  attr :latency_leaders, :map, default: %{}
-  attr :selected_chain_metrics, :map, default: %{}
-  attr :selected_chain_events, :list, default: []
-  attr :selected_chain_unified_events, :list, default: []
-  attr :selected_chain_endpoints, :map, default: %{}
-  attr :selected_chain_provider_events, :list, default: []
-  attr :selected_provider_events, :list, default: []
-  attr :selected_provider_unified_events, :list, default: []
-  attr :selected_provider_metrics, :map, default: %{}
+  attr(:connections, :list)
+  attr(:routing_events, :list)
+  attr(:provider_events, :list)
+  attr(:client_events, :list)
+  attr(:latest_blocks, :list)
+  attr(:events, :list)
+  attr(:selected_chain, :string)
+  attr(:selected_provider, :string)
+  attr(:details_collapsed, :boolean)
+  attr(:events_collapsed, :boolean)
+  attr(:available_chains, :list)
+  attr(:chain_config_open, :boolean)
+  attr(:chain_config_collapsed, :boolean, default: true)
+  attr(:latency_leaders, :map, default: %{})
+  attr(:selected_chain_metrics, :map, default: %{})
+  attr(:selected_chain_events, :list, default: [])
+  attr(:selected_chain_unified_events, :list, default: [])
+  attr(:selected_chain_endpoints, :map, default: %{})
+  attr(:selected_chain_provider_events, :list, default: [])
+  attr(:selected_provider_events, :list, default: [])
+  attr(:selected_provider_unified_events, :list, default: [])
+  attr(:selected_provider_metrics, :map, default: %{})
 
   def dashboard_tab_content(assigns) do
     ~H"""
@@ -772,246 +822,242 @@ defmodule LassoWeb.Dashboard do
     """
   end
 
-
-
-  attr :chain, :string, required: true
-  attr :connections, :list, required: true
-  attr :routing_events, :list, required: true
-  attr :provider_events, :list, required: true
-  attr :events, :list, required: true
-  attr :selected_chain_metrics, :map, required: true
-  attr :selected_chain_events, :list, required: true
-  attr :selected_chain_unified_events, :list, required: true
-  attr :selected_chain_endpoints, :map, required: true
-  attr :selected_chain_provider_events, :list, default: []
+  attr(:chain, :string, required: true)
+  attr(:connections, :list, required: true)
+  attr(:routing_events, :list, required: true)
+  attr(:provider_events, :list, required: true)
+  attr(:events, :list, required: true)
+  attr(:selected_chain_metrics, :map, required: true)
+  attr(:selected_chain_events, :list, required: true)
+  attr(:selected_chain_unified_events, :list, required: true)
+  attr(:selected_chain_endpoints, :map, required: true)
+  attr(:selected_chain_provider_events, :list, default: [])
 
   def chain_details_panel(assigns) do
     chain_connections = Enum.filter(assigns.connections, &(&1.chain == assigns.chain))
 
     # Use cached chain data from socket assigns (updated by update_selected_chain_metrics/1)
-    assigns = assigns
-    |> assign(:chain_connections, chain_connections)
-    |> assign(:chain_events, Map.get(assigns, :selected_chain_events, []))
-    |> assign(:chain_provider_events, Map.get(assigns, :selected_chain_provider_events, []))
-    |> assign(:chain_unified_events, Map.get(assigns, :selected_chain_unified_events, []))
-    |> assign(:chain_endpoints, Map.get(assigns, :selected_chain_endpoints, %{}))
-    |> assign(:chain_performance, Map.get(assigns, :selected_chain_metrics, %{}))
-    |> assign(:last_decision, Helpers.get_last_decision(Map.get(assigns, :selected_chain_events, []), assigns.chain))
-
+    assigns =
+      assigns
+      |> assign(:chain_connections, chain_connections)
+      |> assign(:chain_events, Map.get(assigns, :selected_chain_events, []))
+      |> assign(:chain_provider_events, Map.get(assigns, :selected_chain_provider_events, []))
+      |> assign(:chain_unified_events, Map.get(assigns, :selected_chain_unified_events, []))
+      |> assign(:chain_endpoints, Map.get(assigns, :selected_chain_endpoints, %{}))
+      |> assign(:chain_performance, Map.get(assigns, :selected_chain_metrics, %{}))
+      |> assign(
+        :last_decision,
+        Helpers.get_last_decision(Map.get(assigns, :selected_chain_events, []), assigns.chain)
+      )
 
     ~H"""
-    <div class="flex h-full flex-col" id={"chain-details-" <> @chain}>
-      <!-- Header -->
-      <div class="border-gray-700/50 border-b p-4">
+    <div class="flex h-full flex-col bg-gray-900 text-gray-200" id={"chain-details-" <> @chain}>
+      <!-- Hero Header -->
+      <div class="p-6 pb-5 border-b border-gray-800 bg-gray-900/50 backdrop-blur-sm relative overflow-hidden">
+        <!-- Background decorative glow -->
+        <div class="absolute top-0 right-0 -mt-10 -mr-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
         <% connected = Map.get(@chain_performance, :connected_providers, 0) %>
         <% total = Map.get(@chain_performance, :total_providers, 0) %>
-        <div class="flex items-center justify-between">
-          <div class="flex items-center space-x-3">
-            <div class={[
-              "h-3 w-3 rounded-full",
-              if(connected == total && connected > 0,
-                do: "bg-emerald-400",
-                else: if(connected == 0, do: "bg-red-400", else: "bg-yellow-400")
-              )
-            ]}>
-            </div>
-            <div>
-              <h3 class="text-lg font-semibold capitalize text-white">{@chain}</h3>
-              <div class="text-xs text-gray-400 flex items-center gap-2">
-                <span>{Helpers.get_chain_id(@chain)}</span>
-                <span>•</span>
-                <span><span class="text-emerald-400">{connected}</span>/<span class="text-gray-500">{total}</span> providers</span>
+
+        <div class="flex justify-between items-start mb-6 relative z-10">
+          <div>
+            <h3 class="text-3xl font-bold text-white tracking-tight mb-2 capitalize">{Helpers.get_chain_display_name(@chain)}</h3>
+            <div class="flex items-center gap-3 text-sm">
+              <div class={[
+                "flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium",
+                if(connected == total && connected > 0,
+                  do: "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
+                  else: if(connected == 0, do: "bg-red-500/10 border-red-500/20 text-red-400", else: "bg-yellow-500/10 border-yellow-500/20 text-yellow-400")
+                )
+              ]}>
+                <div class={[
+                  "h-1.5 w-1.5 rounded-full animate-pulse",
+                  if(connected == total && connected > 0,
+                    do: "bg-emerald-400",
+                    else: if(connected == 0, do: "bg-red-400", else: "bg-yellow-400")
+                  )
+                ]}></div>
+                <span>{if connected == total, do: "Healthy", else: if(connected == 0, do: "Down", else: "Degraded")}</span>
               </div>
+              <span class="text-gray-500">Chain ID: <span class="font-mono text-gray-400">{Helpers.get_chain_id(@chain)}</span></span>
+              <span class="text-gray-600">•</span>
+              <span class="text-gray-500">{connected}/{total} providers active</span>
             </div>
           </div>
-          <div class="flex items-center gap-2">
-            <button phx-click="select_chain" phx-value-chain="" class="rounded border border-gray-600 px-2 py-1 text-xs text-gray-400 transition-colors hover:border-gray-400 hover:text-white">
-              Close
-            </button>
-          </div>
+          <button phx-click="select_chain" phx-value-chain="" class="text-gray-500 hover:text-white transition-colors p-1 hover:bg-gray-800 rounded-md">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
-      </div>
 
-      <!-- KPIs -->
-      <div class="border-gray-700/50 p-4">
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div class="bg-gray-800/50 rounded-lg p-3 text-center overflow-hidden">
-            <div class="text-[11px] leading-tight text-gray-400 truncate">Latency p50 (5m)</div>
-            <div class="h-6 flex items-center justify-center">
-              <div class="text-lg font-bold text-sky-400">{if Map.get(@chain_performance, :p50_latency), do: "#{Map.get(@chain_performance, :p50_latency)}ms", else: "—"}</div>
-            </div>
-          </div>
-          <div class="bg-gray-800/50 rounded-lg p-3 text-center overflow-hidden">
-            <div class="text-[11px] leading-tight text-gray-400 truncate">Latency p95 (5m)</div>
-            <div class="h-6 flex items-center justify-center">
-              <div class="text-lg font-bold text-sky-400">{if Map.get(@chain_performance, :p95_latency), do: "#{Map.get(@chain_performance, :p95_latency)}ms", else: "—"}</div>
-            </div>
-          </div>
-          <div class="bg-gray-800/50 rounded-lg p-3 text-center overflow-hidden">
-            <div class="text-[11px] leading-tight text-gray-400 truncate">Success (5m)</div>
-            <div class="h-6 flex items-center justify-center">
-              <% success_rate = Map.get(@chain_performance, :success_rate, 0.0) %>
-              <div class={["text-lg font-bold", if(success_rate >= 95.0, do: "text-emerald-400", else: if(success_rate >= 80.0, do: "text-yellow-400", else: "text-red-400"))]}> {if success_rate > 0, do: "#{success_rate}%", else: "—"}</div>
-            </div>
-          </div>
-          <div class="bg-gray-800/50 rounded-lg p-3 text-center overflow-hidden">
-            <div class="text-[11px] leading-tight text-gray-400 truncate">RPS</div>
-            <div class="h-6 flex items-center justify-center">
-              <% rps = Map.get(@chain_performance, :rps, 0.0) %>
-              <div class="text-lg font-bold text-purple-400">{if rps > 0, do: "#{rps}", else: "0"}</div>
-            </div>
-          </div>
-        </div>
-      </div>
+        <!-- Endpoints (Primary Action) - All endpoint controls inside one hook container -->
+        <div id={"endpoint-config-#{@chain}"} phx-hook="TabSwitcher" phx-update="ignore" data-chain={@chain} data-chain-id={Helpers.get_chain_id(@chain)} class="relative z-10">
+          <div class="space-y-4">
+             <!-- Strategy Selector -->
+             <div>
+               <label class="text-xs font-semibold uppercase tracking-wider text-gray-500 block mb-3">Routing Strategy</label>
+               <div class="flex flex-wrap gap-2">
+                <%= for strategy <- EndpointHelpers.available_strategies() do %>
+                  <button
+                    data-strategy={strategy}
+                    class="px-3 py-1.5 rounded-md text-xs font-medium transition-all border border-gray-700 bg-gray-800/50 text-gray-400 hover:border-gray-600 hover:text-gray-300"
+                  >
+                    <%= case strategy do %>
+                      <% "fastest" -> %>⚡ Fastest
+                      <% "round-robin" -> %>🔄 Round Robin
+                      <% "latency-weighted" -> %>⚖️ Latency Weighted
+                      <% other -> %>{other}
+                    <% end %>
+                  </button>
+                <% end %>
+               </div>
+             </div>
 
-      <!-- Routing decision context -->
-      <div class="border-gray-700/50 border-t p-4">
-        <h4 class="mb-2 text-sm font-semibold text-gray-300">Routing decisions</h4>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <.last_decision_card last_decision={@last_decision} connections={@connections} />
-          <div class="bg-gray-800/40 rounded-lg p-3 md:col-span-2">
-            <div class="text-[11px] text-gray-400 mb-1">Decision breakdown (recent)</div>
-            <% decision_share = Map.get(@chain_performance, :decision_share, []) %>
-            <div class="space-y-1">
-              <%= for {pid, pct} <- decision_share do %>
-                <div class="flex items-center gap-2 text-[11px] text-gray-300">
-                  <div class="w-28 truncate text-emerald-300">{pid}</div>
-                  <div class="flex-1 bg-gray-900/60 rounded h-2">
-                    <div class="bg-emerald-500 h-2 rounded" style={"width: #{Helpers.to_float(pct) |> Float.round(1)}%"}></div>
+             <!-- Endpoint URLs -->
+             <div class="bg-black/20 border border-gray-700/50 rounded-xl overflow-hidden">
+               <!-- HTTP -->
+               <div class="flex items-stretch border-b border-gray-800/50" id="http-row">
+                  <div class="bg-gray-800/30 w-14 shrink-0 px-3 py-2 flex items-center justify-center border-r border-gray-800/50">
+                    <span class="text-[10px] font-bold text-gray-500 uppercase">HTTP</span>
                   </div>
-                  <div class="w-12 text-right text-gray-400">{Helpers.to_float(pct) |> Float.round(1)}%</div>
-                </div>
-              <% end %>
-              <%= if Enum.empty?(decision_share) do %>
-                <div class="text-xs text-gray-500">No decisions in the last 5 minutes</div>
-              <% end %>
-            </div>
+                  <div class="flex-grow px-3 py-2 font-mono text-xs text-gray-300 flex items-center overflow-hidden whitespace-nowrap" id="endpoint-url">
+                    {EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
+                  </div>
+                  <button
+                    data-copy-text={EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
+                    class="px-4 py-2 hover:bg-indigo-500/20 hover:text-indigo-300 text-gray-500 border-l border-gray-800/50 transition-colors flex items-center justify-center group"
+                    title="Copy HTTP URL"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4 group-hover:scale-110 transition-transform">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
+                    </svg>
+                  </button>
+               </div>
+               <!-- WS -->
+               <div class="flex items-stretch" id="ws-row">
+                  <div class="bg-gray-800/30 w-14 shrink-0 px-3 py-2 flex items-center justify-center border-r border-gray-800/50">
+                    <span class="text-[10px] font-bold text-gray-500 uppercase">WS</span>
+                  </div>
+                  <div class="flex-grow px-3 py-2 font-mono text-xs text-gray-300 flex items-center overflow-hidden whitespace-nowrap" id="ws-endpoint-url">
+                    <%= if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do %>
+                      {EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
+                    <% else %>
+                      <span class="text-gray-600 italic">WebSocket not available</span>
+                    <% end %>
+                  </div>
+                  <button
+                     disabled={!Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1)}
+                     data-copy-text={
+                      if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do
+                        EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")
+                      else
+                        ""
+                      end
+                    }
+                    class="px-4 py-2 hover:bg-indigo-500/20 hover:text-indigo-300 text-gray-500 border-l border-gray-800/50 transition-colors flex items-center justify-center group disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
+                    title="Copy WebSocket URL"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4 group-hover:scale-110 transition-transform">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
+                    </svg>
+                  </button>
+               </div>
+             </div>
+
+             <div class="text-[11px] text-gray-500 pl-1" id="mode-description">
+               Routes to fastest provider based on real-time latency benchmarks
+             </div>
           </div>
         </div>
       </div>
 
-      <!-- Endpoint Configuration -->
-      <div id={"endpoint-config-#{@chain}"} class="border-gray-700/50 border-b p-4" phx-hook="TabSwitcher" phx-update="ignore" data-chain={@chain} data-chain-id={Helpers.get_chain_id(@chain)}>
-        <h4 class="mb-3 text-sm font-semibold text-gray-300">RPC Endpoints</h4>
-
-        <div class="mb-4">
-          <div class="text-xs text-gray-400 mb-2">Routing Strategy</div>
-          <div class="flex flex-wrap gap-2">
-            <%= for strategy <- EndpointHelpers.available_strategies() do %>
-              <button
-                data-strategy={strategy}
-                class={[
-                  "px-3 py-1 rounded-full text-xs transition-all border",
-                  if strategy == "fastest" do
-                    "border-sky-500 bg-sky-500/20 text-sky-300"
-                  else
-                    "border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300"
-                  end
-                ]}
-              >
-                <%= case strategy do %>
-                  <% "fastest" -> %>⚡ Fastest
-                  <% "round-robin" -> %>🔄 Round Robin
-                  <% "latency-weighted" -> %>⚖️ Latency Weighted
-                  <% other -> %>{other}
-                <% end %>
-              </button>
-            <% end %>
+      <!-- Metrics Strip -->
+      <div class="grid grid-cols-4 divide-x divide-gray-800 border-b border-gray-800 bg-gray-900/30">
+          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+            <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Latency p50</div>
+            <div class="text-sm font-bold text-sky-400 font-mono">{if Map.get(@chain_performance, :p50_latency), do: "#{Map.get(@chain_performance, :p50_latency)}ms", else: "—"}</div>
           </div>
-        </div>
-
-        <div class="mb-2 text-xs text-gray-400">Provider Override (bypass routing)</div>
-        <div class="mb-4 flex flex-wrap gap-2">
-          <%= for provider <- @chain_connections do %>
-            <% provider_status = StatusHelpers.determine_provider_status(provider) %>
-            <%= if provider_status in [:healthy, :lagging, :recovering, :degraded] do %>
-              <button
-                data-provider={provider.id}
-                data-provider-type={provider.type}
-                data-provider-supports-ws={to_string(EndpointHelpers.provider_supports_websocket(provider))}
-                class="px-3 py-1 rounded-full text-xs transition-all border border-gray-600 text-gray-300 hover:border-indigo-400 hover:text-indigo-300 flex items-center space-x-1"
-              >
-                <div class={["h-1.5 w-1.5 rounded-full", StatusHelpers.provider_status_indicator_class(provider)]}></div>
-                <span>{provider.name}</span>
-              </button>
-            <% end %>
-          <% end %>
-          <% available_count = Enum.count(@chain_connections, fn p ->
-            StatusHelpers.determine_provider_status(p) in [:healthy, :lagging, :recovering, :degraded]
-          end) %>
-          <%= if available_count == 0 do %>
-            <span class="text-xs text-gray-500">No available providers</span>
-          <% end %>
-        </div>
-
-        <!-- Endpoint Display -->
-        <div class="bg-gray-800/30 rounded-lg p-3">
-          <!-- HTTP Endpoint -->
-          <div class="mb-3">
-              <div class="mb-1 text-xs font-medium text-gray-300">HTTP</div>
-            <div class="flex gap-1 items-center">
-            <div class="flex-grow text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="endpoint-url">
-              {EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
-            </div>
-            <button
-                data-copy-text={EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
-                class="border border-gray-700 hover:border-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
-              >
-                Copy
-              </button>
+          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+            <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Latency p95</div>
+            <div class="text-sm font-bold text-sky-400 font-mono">{if Map.get(@chain_performance, :p95_latency), do: "#{Map.get(@chain_performance, :p95_latency)}ms", else: "—"}</div>
+          </div>
+          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+            <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Success</div>
+            <% success_rate = Map.get(@chain_performance, :success_rate, 0.0) %>
+            <div class={["text-sm font-bold font-mono", if(success_rate >= 95.0, do: "text-emerald-400", else: if(success_rate >= 80.0, do: "text-yellow-400", else: "text-red-400"))]}>
+              {if success_rate > 0, do: "#{success_rate}%", else: "—"}
             </div>
           </div>
-
-          <!-- WebSocket Endpoint -->
-          <div class="mb-3">
-            <div class="mb-1 text-xs font-medium text-gray-300">WebSocket</div>
-            <div class="flex gap-1 items-center">
-              <div class="flex-grow text-xs font-mono text-gray-500 bg-gray-900/50 rounded px-2 py-1 break-all" id="ws-endpoint-url">
-                <%= if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do %>
-                  {EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
-                <% else %>
-                  No WebSocket providers available for this chain
-                <% end %>
-              </div>
-              <button
-                data-copy-text={
-                  if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do
-                    EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")
-                  else
-                    ""
-                  end
-                }
-                class="border border-gray-700 hover:border-gray-600 rounded px-2 py-1 text-xs text-white transition-colors"
-              >
-                Copy
-              </button>
-            </div>
+          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+            <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">RPS</div>
+            <% rps = Map.get(@chain_performance, :rps, 0.0) %>
+            <div class="text-sm font-bold text-purple-400 font-mono">{if rps > 0, do: "#{rps}", else: "0"}</div>
           </div>
-
-          <div class="text-xs text-gray-400" id="mode-description">
-            Routes to fastest provider based on real-time latency benchmarks
-          </div>
-        </div>
       </div>
-         </div>
+
+      <!-- Scrollable Content: Traffic & More -->
+      <div class="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+
+        <!-- Routing Decisions -->
+        <div>
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Routing Decisions</h4>
+          <div class="grid grid-cols-1 gap-4">
+             <.last_decision_card last_decision={@last_decision} connections={@connections} />
+
+             <!-- Traffic Distribution -->
+             <div class="bg-gray-800/20 border border-gray-800 rounded-lg p-4">
+               <div class="flex justify-between items-center mb-3">
+                 <div class="text-xs text-gray-400 font-medium">Distribution (Last 5m)</div>
+                 <div class="text-[10px] text-gray-600 uppercase tracking-wide">Req Share</div>
+               </div>
+               <% decision_share = Map.get(@chain_performance, :decision_share, []) %>
+               <div class="space-y-2">
+                  <%= for {pid, pct} <- decision_share do %>
+                    <div class="group">
+                      <div class="flex items-center justify-between text-xs mb-1">
+                        <span class="text-gray-300 font-medium truncate max-w-[150px] group-hover:text-white transition-colors">{pid}</span>
+                        <span class="text-gray-500 font-mono group-hover:text-gray-400">{Helpers.to_float(pct) |> Float.round(1)}%</span>
+                      </div>
+                      <div class="w-full bg-gray-900 rounded-full h-1.5 overflow-hidden">
+                        <div class="bg-emerald-500/80 h-full rounded-full transition-all duration-500" style={"width: #{Helpers.to_float(pct) |> Float.round(1)}%"}></div>
+                      </div>
+                    </div>
+                  <% end %>
+                  <%= if Enum.empty?(decision_share) do %>
+                    <div class="text-xs text-gray-600 italic py-2 text-center">No traffic recorded recently</div>
+                  <% end %>
+               </div>
+             </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
     """
   end
 
   def provider_details_panel(assigns) do
     # Use cached provider data from socket assigns (updated by update_selected_provider_data/1)
-    assigns = assigns
-      |> assign(:provider_connection, Enum.find(assigns.connections, &(&1.id == assigns.provider)))
+    assigns =
+      assigns
+      |> assign(
+        :provider_connection,
+        Enum.find(assigns.connections, &(&1.id == assigns.provider))
+      )
       |> assign(:provider_events, Map.get(assigns, :selected_provider_events, []))
       |> assign(:provider_unified_events, Map.get(assigns, :selected_provider_unified_events, []))
       |> assign(:performance_metrics, Map.get(assigns, :selected_provider_metrics, %{}))
 
-
-
     ~H"""
-    <div class="flex h-full flex-col overflow-y-auto" data-provider-id={@provider}>
+    <div class="flex h-full flex-col overflow-y-auto bg-gray-900 text-gray-200" data-provider-id={@provider}>
       <!-- HEADER -->
-      <div class="border-gray-700/50 border-b p-4">
-        <div class="flex items-center justify-between">
+      <div class="border-b border-gray-800 p-6 pb-5 bg-gray-900/50 backdrop-blur-sm relative overflow-hidden">
+        <!-- Background decorative glow -->
+        <div class="absolute top-0 right-0 -mt-10 -mr-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div class="flex items-center justify-between relative z-10">
           <div class="flex items-center space-x-3">
             <div class={[
               "h-3 w-3 rounded-full",
@@ -1019,10 +1065,10 @@ defmodule LassoWeb.Dashboard do
             ]}>
             </div>
             <div>
-              <h3 class="text-lg font-semibold text-white">
+              <h3 class="text-2xl font-bold text-white tracking-tight">
                 {if @provider_connection, do: @provider_connection.name, else: @provider}
               </h3>
-              <div class="text-xs text-gray-400">
+              <div class="text-sm text-gray-400 mt-1">
                 {if @provider_connection, do: Helpers.get_chain_display_name(@provider_connection.chain || "unknown"), else: "Provider"} • <span class={StatusHelpers.provider_status_class_text(@provider_connection || %{})}>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
               </div>
             </div>
@@ -1030,16 +1076,18 @@ defmodule LassoWeb.Dashboard do
           <button
             phx-click="select_provider"
             phx-value-provider=""
-            class="rounded border border-gray-600 px-2 py-1 text-xs text-gray-400 transition-colors hover:border-gray-400 hover:text-white"
+            class="text-gray-500 hover:text-white transition-colors p-1 hover:bg-gray-800 rounded-md"
           >
-            Close
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
       </div>
 
       <%= if @provider_connection do %>
         <!-- SYNC STATUS -->
-        <div class="border-gray-700/50 border-b p-4">
+        <div class="border-b border-gray-800 p-4">
           <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Sync Status</h4>
           <% block_height = Map.get(@provider_connection, :block_height) %>
           <% consensus_height = Map.get(@provider_connection, :consensus_height) %>
@@ -1091,18 +1139,18 @@ defmodule LassoWeb.Dashboard do
         </div>
 
         <!-- PERFORMANCE -->
-        <div class="border-gray-700/50 border-b p-4">
+        <div class="border-b border-gray-800 p-4">
           <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Performance</h4>
           <div class="grid grid-cols-4 gap-3">
-            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-700/50">
+            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-800">
               <div class="text-[10px] text-gray-500 mb-1">p50</div>
               <div class="text-lg font-bold text-white">{if Map.get(@performance_metrics, :p50_latency), do: "#{Map.get(@performance_metrics, :p50_latency)}ms", else: "—"}</div>
             </div>
-            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-700/50">
+            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-800">
               <div class="text-[10px] text-gray-500 mb-1">p95</div>
               <div class="text-lg font-bold text-white">{if Map.get(@performance_metrics, :p95_latency), do: "#{Map.get(@performance_metrics, :p95_latency)}ms", else: "—"}</div>
             </div>
-            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-700/50">
+            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-800">
               <div class="text-[10px] text-gray-500 mb-1">Success</div>
               <% success_rate = Map.get(@performance_metrics, :success_rate, 0.0) %>
               <div class={[
@@ -1114,7 +1162,7 @@ defmodule LassoWeb.Dashboard do
                 end
               ]}>{if success_rate > 0, do: "#{success_rate}%", else: "—"}</div>
             </div>
-            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-700/50">
+            <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-800">
               <div class="text-[10px] text-gray-500 mb-1">Traffic</div>
               <div class="text-lg font-bold text-white">{(Map.get(@performance_metrics, :pick_share_5m, 0.0) || 0.0) |> Helpers.to_float() |> Float.round(1)}%</div>
             </div>
@@ -1122,7 +1170,7 @@ defmodule LassoWeb.Dashboard do
         </div>
 
         <!-- CIRCUIT BREAKER -->
-        <div class="border-gray-700/50 border-b p-4">
+        <div class="border-b border-gray-800 p-4">
           <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Circuit Breaker</h4>
           <div class="space-y-2">
             <!-- HTTP Circuit Breaker -->
@@ -1201,7 +1249,7 @@ defmodule LassoWeb.Dashboard do
         </div>
 
         <!-- ISSUES (infrastructure only) -->
-        <div class="border-gray-700/50 border-b p-4">
+        <div class="border-b border-gray-800 p-4">
           <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Issues</h4>
           <%
             # Build active alerts from current state (compact status indicators)
@@ -1485,24 +1533,24 @@ defmodule LassoWeb.Dashboard do
   end
 
   # Floating details window wrapper (pinned top-right)
-  attr :selected_chain, :string
-  attr :selected_provider, :string
-  attr :details_collapsed, :boolean
-  attr :connections, :list
-  attr :routing_events, :list
-  attr :provider_events, :list
-  attr :latest_blocks, :list
-  attr :events, :list
-  attr :chain_config_open, :boolean
-  attr :chain_config_collapsed, :boolean
-  attr :selected_chain_metrics, :map
-  attr :selected_chain_events, :list
-  attr :selected_chain_unified_events, :list
-  attr :selected_chain_endpoints, :map
-  attr :selected_chain_provider_events, :list, default: []
-  attr :selected_provider_events, :list, default: []
-  attr :selected_provider_unified_events, :list, default: []
-  attr :selected_provider_metrics, :map, default: %{}
+  attr(:selected_chain, :string)
+  attr(:selected_provider, :string)
+  attr(:details_collapsed, :boolean)
+  attr(:connections, :list)
+  attr(:routing_events, :list)
+  attr(:provider_events, :list)
+  attr(:latest_blocks, :list)
+  attr(:events, :list)
+  attr(:chain_config_open, :boolean)
+  attr(:chain_config_collapsed, :boolean)
+  attr(:selected_chain_metrics, :map)
+  attr(:selected_chain_events, :list)
+  attr(:selected_chain_unified_events, :list)
+  attr(:selected_chain_endpoints, :map)
+  attr(:selected_chain_provider_events, :list, default: [])
+  attr(:selected_provider_events, :list, default: [])
+  attr(:selected_provider_unified_events, :list, default: [])
+  attr(:selected_provider_metrics, :map, default: %{})
 
   def floating_details_window(assigns) do
     import LassoWeb.Components.FloatingWindow
@@ -1513,33 +1561,39 @@ defmodule LassoWeb.Dashboard do
     total_chains = assigns.connections |> Enum.map(& &1.chain) |> Enum.uniq() |> length()
 
     # Determine status indicator
-    status = if connected_providers == total_connections && total_connections > 0 do
-      :healthy
-    else
-      :degraded
-    end
+    status =
+      if connected_providers == total_connections && total_connections > 0 do
+        :healthy
+      else
+        :degraded
+      end
 
     # Determine title based on selection
-    title = cond do
-      assigns.details_collapsed ->
-        "System Overview"
-      assigns.selected_provider ->
-        case Enum.find(assigns.connections, &(&1.id == assigns.selected_provider)) do
-          %{name: name} -> name
-          _ -> assigns.selected_provider
-        end
-      assigns.selected_chain ->
-        Helpers.get_chain_display_name(assigns.selected_chain)
-      true ->
-        "System Overview"
-    end
+    title =
+      cond do
+        assigns.details_collapsed ->
+          "System Overview"
+
+        assigns.selected_provider ->
+          case Enum.find(assigns.connections, &(&1.id == assigns.selected_provider)) do
+            %{name: name} -> name
+            _ -> assigns.selected_provider
+          end
+
+        assigns.selected_chain ->
+          Helpers.get_chain_display_name(assigns.selected_chain)
+
+        true ->
+          "System Overview"
+      end
 
     # Determine if toggle should be enabled (only when chain or provider is selected)
-    on_toggle = if assigns.selected_chain || assigns.selected_provider do
-      "toggle_details_panel"
-    else
-      nil
-    end
+    on_toggle =
+      if assigns.selected_chain || assigns.selected_provider do
+        "toggle_details_panel"
+      else
+        nil
+      end
 
     assigns =
       assigns
@@ -1660,9 +1714,6 @@ defmodule LassoWeb.Dashboard do
     """
   end
 
-
-
-
   @impl true
   def handle_params(params, _url, socket) do
     socket = assign(socket, :active_tab, Map.get(params, "tab", "overview"))
@@ -1716,7 +1767,6 @@ defmodule LassoWeb.Dashboard do
     # Re-enable auto-centering to animate pan to the selected chain
     socket =
       if chain != "", do: push_event(socket, "center_on_chain", %{chain: chain}), else: socket
-
 
     {:noreply, socket}
   end
@@ -1819,7 +1869,9 @@ defmodule LassoWeb.Dashboard do
   # Private helper for timer management
   defp cancel_provider_refresh_timer(socket) do
     case socket.assigns[:provider_refresh_timer] do
-      nil -> socket
+      nil ->
+        socket
+
       timer_ref ->
         Process.cancel_timer(timer_ref)
         assign(socket, :provider_refresh_timer, nil)
@@ -1895,6 +1947,7 @@ defmodule LassoWeb.Dashboard do
   # Format circuit breaker error for display in active alerts
   # Returns a map with :code, :category, :message keys or nil
   defp format_cb_error(nil), do: nil
+
   defp format_cb_error(%{} = error) do
     # The error map from ProviderPool has :error_code, :error_category, :error_message keys
     # But the circuit breaker stores it as :code, :category, :message
@@ -1907,19 +1960,23 @@ defmodule LassoWeb.Dashboard do
 
   # Shared components
 
-  attr :last_decision, :map, default: nil
-  attr :connections, :list, default: []
+  attr(:last_decision, :map, default: nil)
+  attr(:connections, :list, default: [])
 
   def last_decision_card(assigns) do
     # Get provider name from connections if available
-    provider_name = case assigns[:connections] do
-      connections when is_list(connections) ->
-        case assigns[:last_decision] && Enum.find(connections, &(&1.id == assigns.last_decision.provider_id)) do
-          %{name: name} -> name
-          _ -> assigns[:last_decision] && assigns.last_decision.provider_id
-        end
-      _ -> assigns[:last_decision] && assigns.last_decision.provider_id
-    end
+    provider_name =
+      case assigns[:connections] do
+        connections when is_list(connections) ->
+          case assigns[:last_decision] &&
+                 Enum.find(connections, &(&1.id == assigns.last_decision.provider_id)) do
+            %{name: name} -> name
+            _ -> assigns[:last_decision] && assigns.last_decision.provider_id
+          end
+
+        _ ->
+          assigns[:last_decision] && assigns.last_decision.provider_id
+      end
 
     assigns = assign(assigns, :provider_name, provider_name)
 
@@ -2030,8 +2087,11 @@ defmodule LassoWeb.Dashboard do
 
       provider_id ->
         # Filter events for selected provider (lightweight in-memory operations)
-        provider_events = Enum.filter(socket.assigns.routing_events, &(&1.provider_id == provider_id))
-        provider_unified_events = Enum.filter(socket.assigns.events, fn e -> e[:provider_id] == provider_id end)
+        provider_events =
+          Enum.filter(socket.assigns.routing_events, &(&1.provider_id == provider_id))
+
+        provider_unified_events =
+          Enum.filter(socket.assigns.events, fn e -> e[:provider_id] == provider_id end)
 
         # Calculate provider-specific metrics
         provider_metrics =
@@ -2040,7 +2100,6 @@ defmodule LassoWeb.Dashboard do
             socket.assigns.connections,
             socket.assigns.routing_events
           )
-
 
         # Update all provider-specific assigns at once
         socket
@@ -2062,11 +2121,13 @@ defmodule LassoWeb.Dashboard do
     consensus_by_chain =
       chains
       |> Enum.map(fn chain_name ->
-        consensus = case ChainState.consensus_height(chain_name, allow_stale: true) do
-          {:ok, height} -> height
-          {:ok, height, :stale} -> height
-          {:error, _} -> nil
-        end
+        consensus =
+          case ChainState.consensus_height(chain_name, allow_stale: true) do
+            {:ok, height} -> height
+            {:ok, height, :stale} -> height
+            {:error, _} -> nil
+          end
+
         {chain_name, consensus}
       end)
       |> Enum.into(%{})
@@ -2085,9 +2146,15 @@ defmodule LassoWeb.Dashboard do
               # Determine overall circuit state (if either transport is open, show open)
               overall_circuit_state =
                 cond do
-                  provider_map.http_cb_state == :open or provider_map.ws_cb_state == :open -> :open
-                  provider_map.http_cb_state == :half_open or provider_map.ws_cb_state == :half_open -> :half_open
-                  true -> :closed
+                  provider_map.http_cb_state == :open or provider_map.ws_cb_state == :open ->
+                    :open
+
+                  provider_map.http_cb_state == :half_open or
+                      provider_map.ws_cb_state == :half_open ->
+                    :half_open
+
+                  true ->
+                    :closed
                 end
 
               # Determine provider type based on configuration
@@ -2115,7 +2182,8 @@ defmodule LassoWeb.Dashboard do
                   :down -> :unhealthy
                   :limited -> :rate_limited
                   :misconfigured -> :misconfigured
-                  other -> other  # Fallback for any new states
+                  # Fallback for any new states
+                  other -> other
                 end
 
               # Get provider block height and lag from ChainState
@@ -2125,7 +2193,8 @@ defmodule LassoWeb.Dashboard do
                     # lag is negative when behind (e.g., -5 means 5 blocks behind)
                     # Convert to block_height and blocks_behind
                     height = consensus_height + lag
-                    {height, -lag}  # blocks_behind is positive when behind
+                    # blocks_behind is positive when behind
+                    {height, -lag}
 
                   _ ->
                     {nil, nil}
@@ -2136,7 +2205,8 @@ defmodule LassoWeb.Dashboard do
                 id: provider_map.id,
                 chain: chain_name,
                 name: provider_map.name,
-                status: provider_map.status,  # For legacy compatibility
+                # For legacy compatibility
+                status: provider_map.status,
                 health_status: health_status,
                 type: provider_type,
                 circuit_state: overall_circuit_state,
@@ -2151,13 +2221,16 @@ defmodule LassoWeb.Dashboard do
                 # Rate limit state (from RateLimitState, auto-expires)
                 http_rate_limited: Map.get(provider_map, :http_rate_limited, false),
                 ws_rate_limited: Map.get(provider_map, :ws_rate_limited, false),
-                rate_limit_remaining: Map.get(provider_map, :rate_limit_remaining, %{http: nil, ws: nil}),
+                rate_limit_remaining:
+                  Map.get(provider_map, :rate_limit_remaining, %{http: nil, ws: nil}),
                 # Legacy cooldown fields for backwards compatibility
                 is_in_cooldown: provider_map.is_in_cooldown,
                 cooldown_until: provider_map.cooldown_until,
-                reconnect_attempts: 0,  # Not tracked currently
+                # Not tracked currently
+                reconnect_attempts: 0,
                 ws_connected: ws_connected,
-                subscriptions: 0,  # Would need to query UpstreamSubscriptionPool
+                # Would need to query UpstreamSubscriptionPool
+                subscriptions: 0,
                 url: provider_map.config.url,
                 ws_url: provider_map.config.ws_url,
                 # Block sync data
@@ -2169,7 +2242,11 @@ defmodule LassoWeb.Dashboard do
 
           {:error, reason} ->
             require Logger
-            Logger.warning("Failed to get provider status for chain #{chain_name}: #{inspect(reason)}")
+
+            Logger.warning(
+              "Failed to get provider status for chain #{chain_name}: #{inspect(reason)}"
+            )
+
             []
         end
       end)
@@ -2198,21 +2275,23 @@ defmodule LassoWeb.Dashboard do
       provider_ids = Enum.map(provider_configs, & &1.id)
 
       # Collect detailed metrics by provider
-      provider_metrics = collect_provider_metrics(
-        chain_name,
-        provider_ids,
-        provider_configs,
-        provider_leaderboard,
-        rpc_methods
-      )
+      provider_metrics =
+        collect_provider_metrics(
+          chain_name,
+          provider_ids,
+          provider_configs,
+          provider_leaderboard,
+          rpc_methods
+        )
 
       # Collect method-level metrics for comparison
-      method_metrics = collect_method_metrics(
-        chain_name,
-        provider_ids,
-        provider_configs,
-        rpc_methods
-      )
+      method_metrics =
+        collect_method_metrics(
+          chain_name,
+          provider_ids,
+          provider_configs,
+          rpc_methods
+        )
 
       socket
       |> assign(:metrics_loading, false)
@@ -2227,7 +2306,13 @@ defmodule LassoWeb.Dashboard do
     end
   end
 
-  defp collect_provider_metrics(chain_name, provider_ids, provider_configs, leaderboard, rpc_methods) do
+  defp collect_provider_metrics(
+         chain_name,
+         provider_ids,
+         provider_configs,
+         leaderboard,
+         rpc_methods
+       ) do
     alias Lasso.Benchmarking.BenchmarkStore
 
     provider_ids
@@ -2236,66 +2321,79 @@ defmodule LassoWeb.Dashboard do
       leaderboard_entry = Enum.find(leaderboard, &(&1.provider_id == provider_id))
 
       # Get aggregate stats across all methods
-      method_stats = rpc_methods
+      method_stats =
+        rpc_methods
         |> Enum.map(fn method ->
-          BenchmarkStore.get_rpc_method_performance_with_percentiles(chain_name, provider_id, method)
+          BenchmarkStore.get_rpc_method_performance_with_percentiles(
+            chain_name,
+            provider_id,
+            method
+          )
         end)
         |> Enum.reject(&is_nil/1)
 
       # Calculate aggregates
       total_calls = Enum.reduce(method_stats, 0, fn stat, acc -> acc + stat.total_calls end)
 
-      avg_latency = if total_calls > 0 do
-        weighted_sum = Enum.reduce(method_stats, 0, fn stat, acc ->
-          acc + (stat.avg_duration_ms * stat.total_calls)
-        end)
-        weighted_sum / total_calls
-      else
-        nil
-      end
+      avg_latency =
+        if total_calls > 0 do
+          weighted_sum =
+            Enum.reduce(method_stats, 0, fn stat, acc ->
+              acc + stat.avg_duration_ms * stat.total_calls
+            end)
 
-      p50_latency = if length(method_stats) > 0 do
-        method_stats
-        |> Enum.map(& &1.percentiles.p50)
-        |> Enum.sum()
-        |> Kernel./(length(method_stats))
-      else
-        nil
-      end
+          weighted_sum / total_calls
+        else
+          nil
+        end
 
-      p95_latency = if length(method_stats) > 0 do
-        method_stats
-        |> Enum.map(& &1.percentiles.p95)
-        |> Enum.sum()
-        |> Kernel./(length(method_stats))
-      else
-        nil
-      end
+      p50_latency =
+        if length(method_stats) > 0 do
+          method_stats
+          |> Enum.map(& &1.percentiles.p50)
+          |> Enum.sum()
+          |> Kernel./(length(method_stats))
+        else
+          nil
+        end
 
-      p99_latency = if length(method_stats) > 0 do
-        method_stats
-        |> Enum.map(& &1.percentiles.p99)
-        |> Enum.sum()
-        |> Kernel./(length(method_stats))
-      else
-        nil
-      end
+      p95_latency =
+        if length(method_stats) > 0 do
+          method_stats
+          |> Enum.map(& &1.percentiles.p95)
+          |> Enum.sum()
+          |> Kernel./(length(method_stats))
+        else
+          nil
+        end
 
-      success_rate = if length(method_stats) > 0 do
-        method_stats
-        |> Enum.map(& &1.success_rate)
-        |> Enum.sum()
-        |> Kernel./(length(method_stats))
-      else
-        nil
-      end
+      p99_latency =
+        if length(method_stats) > 0 do
+          method_stats
+          |> Enum.map(& &1.percentiles.p99)
+          |> Enum.sum()
+          |> Kernel./(length(method_stats))
+        else
+          nil
+        end
+
+      success_rate =
+        if length(method_stats) > 0 do
+          method_stats
+          |> Enum.map(& &1.success_rate)
+          |> Enum.sum()
+          |> Kernel./(length(method_stats))
+        else
+          nil
+        end
 
       # Calculate variance/consistency (P99/P50 ratio)
-      consistency_ratio = if p50_latency && p99_latency && p50_latency > 0 do
-        p99_latency / p50_latency
-      else
-        nil
-      end
+      consistency_ratio =
+        if p50_latency && p99_latency && p50_latency > 0 do
+          p99_latency / p50_latency
+        else
+          nil
+        end
 
       %{
         id: provider_id,
@@ -2313,7 +2411,7 @@ defmodule LassoWeb.Dashboard do
       }
     end)
     |> Enum.reject(&(&1.total_calls == 0))
-    |> Enum.sort_by(& &1.avg_latency || 999_999)
+    |> Enum.sort_by(&(&1.avg_latency || 999_999))
   end
 
   defp collect_method_metrics(chain_name, provider_ids, provider_configs, rpc_methods) do
@@ -2321,12 +2419,19 @@ defmodule LassoWeb.Dashboard do
 
     rpc_methods
     |> Enum.map(fn method ->
-      provider_stats = provider_ids
+      provider_stats =
+        provider_ids
         |> Enum.map(fn provider_id ->
           config = Enum.find(provider_configs, &(&1.id == provider_id))
 
-          case BenchmarkStore.get_rpc_method_performance_with_percentiles(chain_name, provider_id, method) do
-            nil -> nil
+          case BenchmarkStore.get_rpc_method_performance_with_percentiles(
+                 chain_name,
+                 provider_id,
+                 method
+               ) do
+            nil ->
+              nil
+
             stats ->
               %{
                 provider_id: provider_id,
@@ -2358,19 +2463,20 @@ defmodule LassoWeb.Dashboard do
   end
 
   # Metrics tab component
-  attr :available_chains, :list, required: true
-  attr :metrics_selected_chain, :string, required: true
-  attr :provider_metrics, :list, required: true
-  attr :method_metrics, :list, required: true
-  attr :metrics_loading, :boolean, required: true
-  attr :metrics_last_updated, :any, default: nil
+  attr(:available_chains, :list, required: true)
+  attr(:metrics_selected_chain, :string, required: true)
+  attr(:provider_metrics, :list, required: true)
+  attr(:method_metrics, :list, required: true)
+  attr(:metrics_loading, :boolean, required: true)
+  attr(:metrics_last_updated, :any, default: nil)
 
   defp metrics_tab_content(assigns) do
     # Get chain config for the selected chain
-    chain_config = case Lasso.Config.ConfigStore.get_chain(assigns.metrics_selected_chain) do
-      {:ok, config} -> config
-      {:error, _} -> %{chain_id: "Unknown"}
-    end
+    chain_config =
+      case Lasso.Config.ConfigStore.get_chain(assigns.metrics_selected_chain) do
+        {:ok, config} -> config
+        {:error, _} -> %{chain_id: "Unknown"}
+      end
 
     assigns = assign(assigns, :chain_config, chain_config)
 
@@ -2612,5 +2718,4 @@ defmodule LassoWeb.Dashboard do
     </section>
     """
   end
-
- end
+end
