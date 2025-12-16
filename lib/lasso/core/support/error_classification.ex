@@ -92,6 +92,16 @@ defmodule Lasso.RPC.ErrorClassification do
     "requests per second"
   ]
 
+  # Patterns indicating transient/retriable server errors
+  # These are provider-specific errors that should trigger failover
+  @transient_error_patterns [
+    "please retry",  # DRPC error code 19: "Temporary internal error. Please retry"
+    "temporary internal error",
+    "try again",
+    "service temporarily unavailable",
+    "temporarily unavailable"
+  ]
+
   @auth_patterns [
     "unauthorized",
     "authentication",
@@ -305,6 +315,9 @@ defmodule Lasso.RPC.ErrorClassification do
       contains_any?(message_lower, @rate_limit_patterns) -> :rate_limit
       # Auth errors
       contains_any?(message_lower, @auth_patterns) -> :auth_error
+      # Transient/retriable server errors (check before capability violations)
+      # Patterns like "please retry" indicate the provider wants a retry
+      contains_any?(message_lower, @transient_error_patterns) -> :server_error
       # Result size violations are provider-specific capabilities, not client errors
       # Different providers have different limits (10k free tier, 100k+ premium)
       contains_any?(message_lower, @result_size_violation_patterns) -> :capability_violation

@@ -9,7 +9,7 @@ defmodule Lasso.Config.ChainConfig do
   require Logger
 
   @type t :: %__MODULE__{
-          chain_id: non_neg_integer(),
+          chain_id: non_neg_integer() | nil,
           name: String.t(),
           providers: [__MODULE__.Provider.t()],
           connection: __MODULE__.Connection.t(),
