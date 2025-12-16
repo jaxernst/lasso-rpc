@@ -952,14 +952,17 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   @doc """
   Record a failed operation for the circuit breaker.
+
+  Optionally accepts the error reason for proper classification and logging.
+  If no reason is provided, defaults to a generic failure.
   """
-  def record_failure(id) do
+  def record_failure(id, reason \\ :failure) do
     case GenServer.whereis(via_name(id)) do
       nil ->
         {:error, :not_found}
 
       _pid ->
-        GenServer.cast(via_name(id), {:report_external, {:error, :failure}})
+        GenServer.cast(via_name(id), {:report_external, {:error, reason}})
         :ok
     end
   end

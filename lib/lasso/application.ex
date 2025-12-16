@@ -59,11 +59,14 @@ defmodule Lasso.Application do
         # Add a local Registry for dynamic process names (high-cardinality)
         {Registry, keys: :unique, name: Lasso.Registry, partitions: System.schedulers_online()},
 
-        # Start Task.Supervisor for async probe execution in ProviderProbe
+        # Start Task.Supervisor for async operations
         {Task.Supervisor, name: Lasso.TaskSupervisor},
 
         # Start block cache for real-time block data from WebSocket subscriptions
         Lasso.Core.BlockCache,
+
+        # Start BlockSync registry (single source of truth for block heights)
+        Lasso.BlockSync.Registry,
 
         # Start upstream subscription registry for tracking subscription consumers
         Lasso.Core.Streaming.UpstreamSubscriptionRegistry,

@@ -22,7 +22,8 @@ defmodule Lasso.RPC.ChainSupervisor do
   alias Lasso.RPC.{WSConnection, ProviderPool, TransportRegistry}
   alias Lasso.RPC.ProviderSupervisor
   alias Lasso.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
-  alias Lasso.RPC.ProviderProbe
+  alias Lasso.BlockSync
+  alias Lasso.HealthProbe
 
   @doc """
   Starts a ChainSupervisor for a specific blockchain.
@@ -154,8 +155,13 @@ defmodule Lasso.RPC.ChainSupervisor do
       # Per-provider supervisor manager
       {DynamicSupervisor, strategy: :one_for_one, name: provider_supervisors_name(chain_name)},
 
-      # Integrated probe system for provider health and sync monitoring
-      {ProviderProbe, chain_name},
+      # BlockSync system for unified block height tracking
+      # Tracks block heights via WS subscriptions and HTTP polling
+      {BlockSync.Supervisor, chain_name},
+
+      # HealthProbe system for circuit breaker recovery detection
+      # Probes providers independently of circuit breaker to detect recovery
+      {HealthProbe.Supervisor, chain_name},
 
       # Start per-chain subscription registry, manager, and pool
       {ClientSubscriptionRegistry, chain_name},
@@ -164,9 +170,6 @@ defmodule Lasso.RPC.ChainSupervisor do
 
       # StreamSupervisor for per-key coordinators
       {Lasso.RPC.StreamSupervisor, chain_name},
-
-      # BlockHeightMonitor for real-time block tracking via WebSocket newHeads
-      {Lasso.RPC.BlockHeightMonitor, chain_name},
 
       # Start provider connections after all other children are initialized
       # This Task runs once and completes (restart: :transient)
@@ -186,6 +189,12 @@ defmodule Lasso.RPC.ChainSupervisor do
     Enum.each(chain_config.providers, fn provider ->
       _ = start_provider_supervisor(chain_name, chain_config, provider, [])
     end)
+
+    # Start BlockSync workers for all providers (block height tracking)
+    BlockSync.Supervisor.start_all_workers(chain_name)
+
+    # Start HealthProbe workers for all providers (circuit breaker recovery)
+    HealthProbe.Supervisor.start_all_workers(chain_name)
 
     Logger.info(
       "Started supervisors for #{length(chain_config.providers)} providers in #{chain_name}"

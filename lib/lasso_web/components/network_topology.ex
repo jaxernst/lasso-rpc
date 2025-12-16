@@ -592,45 +592,19 @@ defmodule LassoWeb.NetworkTopology do
   # Import StatusHelpers for comprehensive status determination
   alias LassoWeb.Dashboard.StatusHelpers
 
-  # Enhanced provider line colors based on comprehensive status
-  defp provider_line_color(connection_status) when is_atom(connection_status) do
-    case connection_status do
-      # Green - healthy
-      :connected -> "#10b981"
-      # Red - failed
-      :disconnected -> "#ef4444"
-      # Yellow/Orange - connecting
-      :connecting -> "#f59e0b"
-      # Purple - rate limited
-      :rate_limited -> "#8B5CF6"
-      # Gray - unknown
-      _ -> "#6b7280"
-    end
-  end
-
-  # Enhanced provider line colors using comprehensive connection data
-  defp provider_line_color(connection) when is_map(connection) do
+  # Provider line colors using comprehensive connection data
+  defp provider_line_color(connection) do
     case StatusHelpers.determine_provider_status(connection) do
-      # Purple - rate limited (highest priority)
       :rate_limited -> "#8b5cf6"
-      # Dark red - circuit open (complete failure)
       :circuit_open -> "#dc2626"
-      # Amber - testing recovery (same as recovering)
       :testing_recovery -> "#f59e0b"
-      # Amber - recovering
       :recovering -> "#f59e0b"
-      # Orange - degraded
       :degraded -> "#f97316"
-      # Sky blue - lagging (lagging blocks)
       :lagging -> "#38bdf8"
-      # Green - healthy
       :healthy -> "#10b981"
-      # Gray - unknown
       :unknown -> "#6b7280"
     end
   end
-
-  defp provider_line_color(status), do: provider_line_color(status)
 
   defp extract_chain_from_connection(connection) do
     # Use the actual chain field from the connection if available
@@ -741,33 +715,16 @@ defmodule LassoWeb.NetworkTopology do
     end
   end
 
-  defp provider_status_dot_class(connection_status) when is_atom(connection_status) do
-    case connection_status do
-      :connected -> "bg-emerald-400"
-      :disconnected -> "bg-red-400"
-      :connecting -> "bg-yellow-400"
-      :rate_limited -> "bg-purple-400"
-      _ -> "bg-gray-400"
-    end
-  end
-
-  defp provider_status_dot_class(connection) when is_map(connection) do
+  # Provider status dot colors using comprehensive connection data
+  defp provider_status_dot_class(connection) do
     case StatusHelpers.determine_provider_status(connection) do
-      # Dark red - circuit open
       :circuit_open -> "bg-red-500"
-      # Amber - testing recovery (same as recovering)
       :testing_recovery -> "bg-amber-400"
-      # Purple - rate limited
       :rate_limited -> "bg-purple-400"
-      # Amber - recovering
       :recovering -> "bg-amber-400"
-      # Orange - degraded
       :degraded -> "bg-orange-400"
-      # Sky blue - lagging
       :lagging -> "bg-sky-400"
-      # Green - healthy
       :healthy -> "bg-emerald-400"
-      # Gray - unknown
       :unknown -> "bg-gray-400"
     end
   end

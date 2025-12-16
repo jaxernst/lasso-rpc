@@ -54,7 +54,11 @@ defmodule Lasso.Config.ChainConfig do
             region: String.t() | nil,
             # Per-provider adapter configuration overrides
             # Maps to adapter-specific config keys (e.g., eth_get_logs_block_range: 10)
-            adapter_config: %{atom() => any()} | nil
+            adapter_config: %{atom() => any()} | nil,
+            # Per-provider override for newHeads subscription behavior
+            # nil = use chain-level default from Monitoring.subscribe_new_heads
+            # true/false = explicit override for this provider
+            subscribe_new_heads: boolean() | nil
           }
 
     defstruct [
@@ -67,6 +71,7 @@ defmodule Lasso.Config.ChainConfig do
       :api_key_required,
       :region,
       :adapter_config,
+      :subscribe_new_heads,
       # For test mock providers
       :__mock__
     ]
@@ -129,6 +134,7 @@ defmodule Lasso.Config.ChainConfig do
     - Lag detection thresholds (when to warn about providers falling behind)
     - Monotonicity violation thresholds (detect unstable provider backends)
     - Subscription staleness detection threshold
+    - NewHeads subscription behavior
 
     These settings are chain-specific because chains have different:
     - Block times (Ethereum: 12s, Base: 2s, Polygon: 2s)
@@ -139,7 +145,8 @@ defmodule Lasso.Config.ChainConfig do
     @type t :: %__MODULE__{
             probe_interval_ms: non_neg_integer(),
             lag_threshold_blocks: non_neg_integer(),
-            new_heads_staleness_threshold_ms: non_neg_integer()
+            new_heads_staleness_threshold_ms: non_neg_integer(),
+            subscribe_new_heads: boolean()
           }
 
     defstruct probe_interval_ms: 12_000,
@@ -148,7 +155,11 @@ defmodule Lasso.Config.ChainConfig do
               # Should account for: block time variance, missed slots, network delays
               # Recommended: ~3-5x expected block time + margin
               # Ethereum (12s blocks): 42000-60000ms, Base (2s blocks): 12000-16000ms
-              new_heads_staleness_threshold_ms: 42_000
+              new_heads_staleness_threshold_ms: 42_000,
+              # Whether to subscribe to newHeads via WebSocket for block height tracking
+              # Set to false to use HTTP polling only (avoids expensive WS subscriptions)
+              # Can be overridden per-provider via Provider.subscribe_new_heads
+              subscribe_new_heads: true
   end
 
   defmodule Topology do
@@ -274,6 +285,30 @@ defmodule Lasso.Config.ChainConfig do
     end
   end
 
+  @doc """
+  Determines if newHeads subscription should be enabled for a provider.
+
+  Provider-level setting overrides chain-level default from Monitoring.subscribe_new_heads.
+  Returns true if the provider should subscribe to newHeads via WebSocket.
+
+  ## Examples
+
+      # Provider uses chain default (true)
+      iex> should_subscribe_new_heads?(chain_config, %Provider{subscribe_new_heads: nil})
+      true
+
+      # Provider explicitly disabled
+      iex> should_subscribe_new_heads?(chain_config, %Provider{subscribe_new_heads: false})
+      false
+  """
+  @spec should_subscribe_new_heads?(t(), Provider.t()) :: boolean()
+  def should_subscribe_new_heads?(chain_config, provider) do
+    case provider.subscribe_new_heads do
+      nil -> chain_config.monitoring.subscribe_new_heads
+      value when is_boolean(value) -> value
+    end
+  end
+
   defp provider_available?(%Provider{api_key_required: false}), do: true
 
   defp provider_available?(%Provider{api_key_required: true, url: url}) do
@@ -335,7 +370,8 @@ defmodule Lasso.Config.ChainConfig do
         ws_url: substitute_env_vars(provider_data["ws_url"]),
         api_key_required: provider_data["api_key_required"],
         region: provider_data["region"],
-        adapter_config: parse_adapter_config(provider_data["adapter_config"])
+        adapter_config: parse_adapter_config(provider_data["adapter_config"]),
+        subscribe_new_heads: provider_data["subscribe_new_heads"]
       }
     end)
   end
@@ -433,7 +469,8 @@ defmodule Lasso.Config.ChainConfig do
       probe_interval_ms: Map.get(monitoring_data, "probe_interval_ms", 12_000),
       lag_threshold_blocks: Map.get(monitoring_data, "lag_threshold_blocks", 3),
       new_heads_staleness_threshold_ms:
-        Map.get(monitoring_data, "new_heads_staleness_threshold_ms", 42_000)
+        Map.get(monitoring_data, "new_heads_staleness_threshold_ms", 42_000),
+      subscribe_new_heads: Map.get(monitoring_data, "subscribe_new_heads", true)
     }
   end
 
