@@ -174,12 +174,13 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(chain_events), 1)} end)
       |> Enum.sort_by(fn {_pid, pct} -> -pct end)
 
-    # Count providers that are available for routing (not circuit open, not rate limited)
+    # Count providers that are available for routing (not circuit open, not rate limited, not lagging)
     # Use determine_provider_status for comprehensive status evaluation
+    # Note: :lagging providers are excluded since they return stale data
     chain_connections = Enum.filter(assigns.connections, &(&1.chain == chain_name))
     connected_providers =
       Enum.count(chain_connections, fn provider ->
-        LassoWeb.Dashboard.StatusHelpers.determine_provider_status(provider) in [:healthy, :lagging, :testing_recovery, :recovering]
+        LassoWeb.Dashboard.StatusHelpers.determine_provider_status(provider) in [:healthy, :recovering]
       end)
 
     total_providers = length(chain_connections)
@@ -315,12 +316,20 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       |> Enum.map(fn {pid, evs} -> {pid, 100.0 * length(evs) / max(length(chain_events), 1)} end)
       |> Enum.sort_by(fn {_pid, pct} -> -pct end)
 
-    # Count providers that are healthy/available for routing
-    # Status values from ProviderPool are :healthy, :unhealthy, :connecting, :disconnected
-    connected_providers =
-      Enum.count(assigns.connections, &(&1.chain == chain_name && &1.status == :healthy))
+    # Count providers that are available for routing (not circuit open, not rate limited, not lagging)
+    # Use determine_provider_status for comprehensive status evaluation
+    # Note: :lagging providers are excluded since they return stale data
+    chain_connections = Enum.filter(assigns.connections, &(&1.chain == chain_name))
 
-    total_providers = Enum.count(assigns.connections, &(&1.chain == chain_name))
+    connected_providers =
+      Enum.count(chain_connections, fn provider ->
+        LassoWeb.Dashboard.StatusHelpers.determine_provider_status(provider) in [
+          :healthy,
+          :recovering
+        ]
+      end)
+
+    total_providers = length(chain_connections)
 
     # Calculate RPS for the chain
     rps = rpc_calls_per_second(chain_events)
