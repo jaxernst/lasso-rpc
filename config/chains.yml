@@ -46,16 +46,16 @@ chains:
       max_lag_blocks: 1
 
     providers:
-      - id: "alchemy_ethereum"
-        name: "Alchemy Ethereum"
-        priority: 1
-        type: "premium"
-        url: "https://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        ws_url: "wss://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        api_key_required: true
-        # Disable WS newHeads subscription to avoid expensive compute unit usage
-        # Block height will be tracked via HTTP polling instead
-        subscribe_new_heads: false
+      # - id: "alchemy_ethereum"
+      #   name: "Alchemy Ethereum"
+      #   priority: 1
+      #   type: "premium"
+      #   url: "https://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   ws_url: "wss://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   api_key_required: true
+      #   # Disable WS newHeads subscription to avoid expensive compute unit usage
+      #   # Block height will be tracked via HTTP polling instead
+      #   subscribe_new_heads: false
       - id: "ethereum_llamarpc"
         name: "LlamaRPC"
         priority: 2
@@ -117,14 +117,15 @@ chains:
         # ws_url disabled - Lava double-quotes string IDs in responses (JSON-RPC non-compliant)
         api_key_required: false
 
-      # Needs adapter for eth_getLogs params
-      # - id: "ethereum_blastapi"
-      #   name: "BlastAPI Ethereum"
-      #   priority: 6
-      #   type: "public"
-      #   url: "https://ethereum.publicnode.com"
-      #   ws_url: "wss://ethereum.publicnode.com"
-      #   api_key_required: false
+      - id: "tenderly_ethereum"
+        name: "Tenderly Ethereum"
+        priority: 7
+        type: "public"
+        url: "https://gateway.tenderly.co/public/mainnet"
+        ws_url: "wss://mainnet.gateway.tenderly.co"
+        api_key_required: false
+        # Tenderly: Full archive, unlimited block range, no batch support
+        # 20k result limit on eth_getLogs (standard response size limit)
 
     connection:
       heartbeat_interval: 10000
@@ -159,16 +160,16 @@ chains:
       max_lag_blocks: 1
 
     providers:
-      - id: "alchemy_ethereum_sepolia"
-        name: "Alchemy Ethereum Sepolia"
-        priority: 1
-        type: "premium"
-        url: "https://eth-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        ws_url: "wss://eth-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        api_key_required: true
-        subscribe_new_heads: false
-        adapter_config:
-          eth_get_logs_block_range: 10
+      # - id: "alchemy_ethereum_sepolia"
+      #   name: "Alchemy Ethereum Sepolia"
+      #   priority: 1
+      #   type: "premium"
+      #   url: "https://eth-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   ws_url: "wss://eth-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   api_key_required: true
+      #   subscribe_new_heads: false
+      #   adapter_config:
+      #     eth_get_logs_block_range: 10
 
       - id: "lava_ethereum_sepolia"
         name: "Lava Ethereum Sepolia"
@@ -201,6 +202,15 @@ chains:
         ws_url: "https://lb.drpc.live/sepolia/AsX7SwWUH0vGkFOHPHzUyaGtM9G3rgMR8LnWQrxF2MGT"
         api_key_required: false
 
+      - id: "tenderly_ethereum_sepolia"
+        name: "Tenderly Ethereum Sepolia"
+        priority: 5
+        type: "public"
+        url: "https://gateway.tenderly.co/public/sepolia"
+        ws_url: "wss://sepolia.gateway.tenderly.co"
+        api_key_required: false
+        # Tenderly: Full archive, unlimited block range, no batch support
+
     connection:
       heartbeat_interval: 10000
       reconnect_interval: 5000
@@ -224,7 +234,7 @@ chains:
 
     # Provider health monitoring configuration
     monitoring:
-      probe_interval_ms: 6000 # 6s - probe every 3 blocks (2s block time)
+      probe_interval_ms: 3000 # 3s - probe every 1.5 blocks (2s block time)
       lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~10s)
       # L2 with 2s blocks - use longer threshold to avoid false positives
       # ~8 blocks (16s) + margin = tolerates temporary provider slowdowns
@@ -235,17 +245,17 @@ chains:
       max_lag_blocks: 5 # Default: stricter for L2 (faster blocks)
 
     providers:
-      - id: "alchemy_base"
-        name: "Alchemy Base"
-        priority: 1
-        type: "premium"
-        url: "https://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        ws_url: "wss://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        api_key_required: true
-        subscribe_new_heads: false
-        # Alchemy Base free tier has 10 block limit for eth_getLogs
-        adapter_config:
-          eth_get_logs_block_range: 10
+      # - id: "alchemy_base"
+      #   name: "Alchemy Base"
+      #   priority: 1
+      #   type: "premium"
+      #   url: "https://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   ws_url: "wss://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   api_key_required: true
+      #   subscribe_new_heads: false
+      #   # Alchemy Base free tier has 10 block limit for eth_getLogs
+      #   adapter_config:
+      #     eth_get_logs_block_range: 10
 
       - id: "base_llamarpc"
         name: "LlamaRPC Base"
@@ -278,13 +288,13 @@ chains:
         ws_url: "wss://lb.drpc.live/base/AsX7SwWUH0vGkFOHPHzUyaGtM9G3rgMR8LnWQrxF2MGT"
         api_key_required: false
 
-      - id: "base_chainstack"
-        name: "Chainstack Base"
-        priority: 5
-        type: "public"
-        url: "https://base-mainnet.core.chainstack.com/23176815cc2d60f44ef134679c79ab8f"
-        ws_url: "wss://base-mainnet.core.chainstack.com/23176815cc2d60f44ef134679c79ab8f"
-        api_key_required: false
+      # - id: "base_chainstack"
+      #   name: "Chainstack Base"
+      #   priority: 5
+      #   type: "public"
+      #   url: "https://base-mainnet.core.chainstack.com/23176815cc2d60f44ef134679c79ab8f"
+      #   ws_url: "wss://base-mainnet.core.chainstack.com/23176815cc2d60f44ef134679c79ab8f"
+      #   api_key_required: false
 
       # - id: "base_ankr"
       #   name: "Ankr Base"
@@ -307,6 +317,15 @@ chains:
         url: "https://g.w.lavanet.xyz:443/gateway/base/rpc-http/c8ce92e7c11c66d297bddc4c7315d677"
         # ws_url disabled - Lava double-quotes string IDs in responses (JSON-RPC non-compliant)
         api_key_required: false
+
+      - id: "tenderly_base"
+        name: "Tenderly Base"
+        priority: 8
+        type: "public"
+        url: "https://gateway.tenderly.co/public/base"
+        ws_url: "wss://gateway.tenderly.co/public/base"
+        api_key_required: false
+        # Tenderly: Full archive, unlimited block range, no batch support
 
     connection:
       heartbeat_interval: 10000
@@ -331,7 +350,7 @@ chains:
 
     # Provider health monitoring configuration
     monitoring:
-      probe_interval_ms: 6000 # 6s - probe every 3 blocks (2s block time)
+      probe_interval_ms: 3000 # 3s - probe every 1.5 blocks (2s block time)
       lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~10s)
       # L2 testnet - even more lenient for unstable conditions
       new_heads_staleness_threshold_ms: 30000
@@ -341,16 +360,16 @@ chains:
       max_lag_blocks: 5 # Default: stricter for L2 (faster blocks)
 
     providers:
-      - id: "alchemy_base_sepolia"
-        name: "Alchemy Base Sepolia"
-        priority: 1
-        type: "premium"
-        url: "https://base-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        ws_url: "wss://base-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
-        api_key_required: true
-        subscribe_new_heads: false
-        adapter_config:
-          eth_get_logs_block_range: 10
+      # - id: "alchemy_base_sepolia"
+      #   name: "Alchemy Base Sepolia"
+      #   priority: 1
+      #   type: "premium"
+      #   url: "https://base-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   ws_url: "wss://base-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
+      #   api_key_required: true
+      #   subscribe_new_heads: false
+      #   adapter_config:
+      #     eth_get_logs_block_range: 10
 
       - id: "lava_base_sepolia"
         name: "Lava Base Sepolia"
@@ -373,6 +392,23 @@ chains:
         type: "public"
         url: "https://base-sepolia-rpc.publicnode.com"
         ws_url: "wss://base-sepolia-rpc.publicnode.com"
+        api_key_required: false
+
+      - id: "tenderly_base_sepolia"
+        name: "Tenderly Base Sepolia"
+        priority: 4
+        type: "public"
+        url: "https://gateway.tenderly.co/public/base-sepolia"
+        ws_url: "wss://base-sepolia.gateway.tenderly.co"
+        api_key_required: false
+        # Tenderly: Full archive, unlimited block range, no batch support
+
+      - id: "base_sepolia_drpc"
+        name: "DRPC Base Sepolia"
+        priority: 5
+        type: "public"
+        url: "https://lb.drpc.org/ogrpc?network=base-sepolia&dkey=AsX7SwWUH0vGkFOHPHzUyaGtM9G3rgMR8LnWQrxF2MGT"
+        ws_url: "wss://lb.drpc.org/ogws?network=base-sepolia&dkey=AsX7SwWUH0vGkFOHPHzUyaGtM9G3rgMR8LnWQrxF2MGT"
         api_key_required: false
 
     connection:
