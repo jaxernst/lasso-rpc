@@ -211,6 +211,15 @@ chains:
         api_key_required: false
         # Tenderly: Full archive, unlimited block range, no batch support
 
+      - id: "0xrpc_ethereum_sepolia"
+        name: "0xRPC Ethereum Sepolia"
+        priority: 6
+        type: "public"
+        url: "https://0xrpc.io/sep"
+        ws_url: "wss://0xrpc.io/sep"
+        api_key_required: false
+        # 0xRPC: Full WS subscriptions (newHeads, logs, pendingTx), batch support up to 100
+
     connection:
       heartbeat_interval: 10000
       reconnect_interval: 5000
