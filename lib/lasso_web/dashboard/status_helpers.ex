@@ -74,7 +74,9 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
         case check_block_lag(chain, provider_id) do
           :synced -> :healthy
           :lagging -> :lagging
-          # Fail-open: if no lag data, show as healthy
+          # Show degraded when block height polling is persistently failing
+          :degraded_no_data -> :degraded
+          # Fail-open: if no lag data (startup/transient), show as healthy
           :unavailable -> :healthy
         end
 
@@ -96,6 +98,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
         case check_block_lag(chain, provider_id) do
           :synced -> :healthy
           :lagging -> :lagging
+          :degraded_no_data -> :degraded
           :unavailable -> :healthy
         end
 
@@ -114,7 +117,8 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   Returns:
   - :synced - Within acceptable lag threshold
   - :lagging - Beyond lag threshold
-  - :unavailable - No lag data available (fail-open)
+  - :degraded_no_data - Block height polling is failing (distinct from startup transient)
+  - :unavailable - No lag data available (fail-open for startup/transient)
   """
   def check_block_lag(chain, provider_id) when is_binary(chain) and is_binary(provider_id) do
     threshold = lag_threshold_blocks()
@@ -134,13 +138,49 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
           :lagging
 
         {:error, _reason} ->
-          # Lag data unavailable - fail open (don't penalize provider)
-          :unavailable
+          # No lag data - check if HTTP polling is persistently failing
+          case check_block_height_source_status(chain, provider_id) do
+            :polling_failing -> :degraded_no_data
+            _ -> :unavailable
+          end
       end
     end
   end
 
   def check_block_lag(_chain, _provider_id), do: :unavailable
+
+  @doc """
+  Check the status of block height tracking for a provider.
+
+  Returns:
+  - :ok - Block height tracking is working (has recent height data)
+  - :polling_failing - No recent height data
+  """
+  def check_block_height_source_status(chain, provider_id)
+      when is_binary(chain) and is_binary(provider_id) do
+    alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+
+    # Check if we have recent height data for this provider
+    case BlockSyncRegistry.get_height(chain, provider_id) do
+      {:ok, {_height, timestamp, _source, _meta}} ->
+        # Check if data is recent (within 60 seconds)
+        age = System.system_time(:millisecond) - timestamp
+
+        if age < 60_000 do
+          :ok
+        else
+          :polling_failing
+        end
+
+      {:error, :not_found} ->
+        # No height data yet - provider may still be initializing
+        :ok
+    end
+  catch
+    :exit, _ -> :ok
+  end
+
+  def check_block_height_source_status(_chain, _provider_id), do: :ok
 
   # Check if the provider is still in reconnection grace period.
   # During this period, we show "Reconnecting" status even if reconnected successfully,

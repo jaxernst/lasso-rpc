@@ -864,20 +864,38 @@ defmodule Lasso.RPC.WSConnection do
         %{state | reconnect_attempts: state.reconnect_attempts + 1, reconnect_ref: ref}
 
       true ->
-        Logger.error("Max reconnection attempts reached for #{state.endpoint.name}")
+        # Max attempts reached - continue with extended backoff (5 minutes)
+        # This ensures we keep probing so circuit breaker can eventually recover
+        extended_delay_ms = 5 * 60 * 1000
+        jitter = :rand.uniform(30_000)
 
-        # Emit telemetry event
+        Logger.warning(
+          "Max reconnection attempts (#{max_attempts}) reached for #{state.endpoint.name}, " <>
+            "continuing with extended backoff (#{div(extended_delay_ms, 60_000)}min)"
+        )
+
+        # Emit telemetry event (keeping for observability, but we continue)
         :telemetry.execute(
           [:lasso, :websocket, :reconnect_exhausted],
           %{},
           %{
             provider_id: state.endpoint.id,
             attempts: state.reconnect_attempts,
-            max_attempts: max_attempts
+            max_attempts: max_attempts,
+            extended_backoff: true
           }
         )
 
-        state
+        # Broadcast reconnection attempt to ProviderPool
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.chain_name}",
+          {:ws_reconnecting, state.endpoint.id, state.reconnect_attempts + 1}
+        )
+
+        ref = Process.send_after(self(), {:reconnect}, extended_delay_ms + jitter)
+        # Keep reconnect_attempts incrementing so we stay in extended backoff mode
+        %{state | reconnect_attempts: state.reconnect_attempts + 1, reconnect_ref: ref}
     end
   end
 

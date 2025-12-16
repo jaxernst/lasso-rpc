@@ -109,9 +109,8 @@ defmodule Lasso.RPC.Providers.Adapters.DRPC do
   defp estimate_current_block(ctx) do
     chain = Map.get(ctx, :chain, "ethereum")
 
-    case ChainState.consensus_height(chain, allow_stale: true) do
+    case ChainState.consensus_height(chain) do
       {:ok, height} -> height
-      {:ok, height, :stale} -> height
       {:error, _} -> 0
     end
   end

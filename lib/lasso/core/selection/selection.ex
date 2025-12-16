@@ -213,7 +213,7 @@ defmodule Lasso.RPC.Selection do
     strategy = Keyword.get(opts, :strategy, :round_robin)
     transport = Keyword.get(opts, :transport, :both)
     exclude = Keyword.get(opts, :exclude, [])
-    limit = Keyword.get(opts, :limit, 10)
+    limit = Keyword.get(opts, :limit, 1000)
 
     # Always include half-open providers for recovery opportunities.
     # Half-open channels are deprioritized (ranked after closed) but not excluded.
@@ -256,6 +256,7 @@ defmodule Lasso.RPC.Selection do
       provider_candidates
       |> Enum.flat_map(fn %{id: provider_id} = candidate ->
         cs = Map.get(candidate, :circuit_state, %{})
+
         [
           {{provider_id, :http}, Map.get(cs, :http, :closed)},
           {{provider_id, :ws}, Map.get(cs, :ws, :closed)}

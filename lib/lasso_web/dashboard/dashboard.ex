@@ -2119,9 +2119,8 @@ defmodule LassoWeb.Dashboard do
       chains
       |> Enum.map(fn chain_name ->
         consensus =
-          case ChainState.consensus_height(chain_name, allow_stale: true) do
+          case ChainState.consensus_height(chain_name) do
             {:ok, height} -> height
-            {:ok, height, :stale} -> height
             {:error, _} -> nil
           end
 

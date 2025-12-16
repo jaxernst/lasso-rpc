@@ -2,97 +2,56 @@ defmodule Lasso.RPC.ChainStateTest do
   use ExUnit.Case, async: false
 
   alias Lasso.RPC.ChainState
-  alias Lasso.RPC.ProviderPool
+  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
 
   setup do
     # Generate unique chain name for each test to avoid conflicts
     chain = "test_chain_#{System.unique_integer([:positive])}"
 
-    # Configure test chain
-    chain_config = %{
-      chain_id: 1,
-      providers: [
-        %{id: "provider_1", name: "Provider 1", url: "http://localhost:8545", priority: 100},
-        %{id: "provider_2", name: "Provider 2", url: "http://localhost:8546", priority: 90},
-        %{id: "provider_3", name: "Provider 3", url: "http://localhost:8547", priority: 80}
-      ]
-    }
+    # Clear any existing data for this chain
+    BlockSyncRegistry.clear_chain(chain)
 
-    # Start ProviderPool (creates ETS table)
-    # Registry and PubSub are already started by the application
-    # Use explicit ID to avoid ExUnit supervision tree conflicts
-    start_supervised!({ProviderPool, {chain, chain_config}}, id: {:provider_pool, chain})
+    on_exit(fn ->
+      BlockSyncRegistry.clear_chain(chain)
+    end)
 
     {:ok, chain: chain}
   end
 
   describe "consensus_height/2" do
     test "calculates consensus from fresh provider data", %{chain: chain} do
-      # Insert fresh provider sync states
-      table = ProviderPool.table_name(chain)
-      now = System.system_time(:millisecond)
-
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, now, 1}})
-      :ets.insert(table, {{:provider_sync, chain, "provider_2"}, {1_000_005, now, 1}})
-      :ets.insert(table, {{:provider_sync, chain, "provider_3"}, {999_995, now, 1}})
+      # Insert fresh provider heights via Registry
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
+      BlockSyncRegistry.put_height(chain, "provider_2", 1_000_005, :http, %{})
+      BlockSyncRegistry.put_height(chain, "provider_3", 999_995, :http, %{})
 
       # Consensus should be max height
       assert {:ok, 1_000_005} = ChainState.consensus_height(chain)
     end
 
-    test "excludes stale provider data from consensus", %{chain: chain} do
-      # Insert mix of fresh and stale data
-      table = ProviderPool.table_name(chain)
-      now = System.system_time(:millisecond)
-      old = now - 30_000  # 30 seconds old
-
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, now, 1}})
-      :ets.insert(table, {{:provider_sync, chain, "provider_2"}, {1_000_005, now, 1}})
-      :ets.insert(table, {{:provider_sync, chain, "provider_3"}, {1_100_000, old, 0}})  # Stale, higher
-
-      # Consensus should be max of FRESH data only (not the stale 1_100_000)
-      assert {:ok, 1_000_005} = ChainState.consensus_height(chain)
+    test "returns error when no data available", %{chain: chain} do
+      # No data in registry
+      assert {:error, :no_data} = ChainState.consensus_height(chain)
     end
 
-    test "returns error when no fresh data available", %{chain: chain} do
-      # No data in table
-      assert {:error, :no_fresh_data} = ChainState.consensus_height(chain)
-    end
+    test "returns error when data is stale", %{chain: chain} do
+      # Manually insert old timestamp via ETS (for testing staleness)
+      old_ts = System.system_time(:millisecond) - 35_000
 
-    test "returns stale consensus when allow_stale: true", %{chain: chain} do
-      # Insert stale data
-      table = ProviderPool.table_name(chain)
-      old = System.system_time(:millisecond) - 30_000
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "provider_1"}, {1_000_000, old_ts, :http, %{}}}
+      )
 
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, old, 1}})
-      :ets.insert(table, {{:provider_sync, chain, "provider_2"}, {1_000_005, old, 1}})
-
-      # Without allow_stale, should error
-      assert {:error, :no_fresh_data} = ChainState.consensus_height(chain)
-
-      # With allow_stale, should return stale data with :stale indicator
-      assert {:ok, 1_000_005, :stale} = ChainState.consensus_height(chain, allow_stale: true)
-    end
-
-    test "returns error when data is too old even with allow_stale", %{chain: chain} do
-      # Insert very old data (> 60 seconds)
-      table = ProviderPool.table_name(chain)
-      very_old = System.system_time(:millisecond) - 70_000
-
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, very_old, 1}})
-
-      # Should error even with allow_stale
-      assert {:error, :no_data_available} = ChainState.consensus_height(chain, allow_stale: true)
+      # Data older than 30s freshness threshold returns error
+      assert {:error, :no_data} = ChainState.consensus_height(chain)
     end
   end
 
   describe "consensus_height!/1" do
     test "returns height directly when available", %{chain: chain} do
       # Insert fresh data
-      table = ProviderPool.table_name(chain)
-      now = System.system_time(:millisecond)
-
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, now, 1}})
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
 
       assert 1_000_000 = ChainState.consensus_height!(chain)
     end
@@ -107,44 +66,49 @@ defmodule Lasso.RPC.ChainStateTest do
 
   describe "provider_lag/2" do
     test "returns lag for a provider", %{chain: chain} do
-      # Insert lag data
-      table = ProviderPool.table_name(chain)
+      # Insert heights for multiple providers
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
+      BlockSyncRegistry.put_height(chain, "provider_2", 1_000_005, :http, %{})
+      BlockSyncRegistry.put_height(chain, "provider_3", 1_000_002, :http, %{})
 
-      :ets.insert(table, {{:provider_lag, chain, "provider_1"}, -5})
-      :ets.insert(table, {{:provider_lag, chain, "provider_2"}, 0})
-      :ets.insert(table, {{:provider_lag, chain, "provider_3"}, 3})
-
+      # Consensus is 1_000_005 (max)
+      # Provider 1 lag: 1_000_000 - 1_000_005 = -5
+      # Provider 2 lag: 1_000_005 - 1_000_005 = 0
+      # Provider 3 lag: 1_000_002 - 1_000_005 = -3
       assert {:ok, -5} = ChainState.provider_lag(chain, "provider_1")
       assert {:ok, 0} = ChainState.provider_lag(chain, "provider_2")
-      assert {:ok, 3} = ChainState.provider_lag(chain, "provider_3")
+      assert {:ok, -3} = ChainState.provider_lag(chain, "provider_3")
     end
 
     test "returns error when provider not found", %{chain: chain} do
-      assert {:error, :not_found} = ChainState.provider_lag(chain, "nonexistent")
+      # Add some data so consensus exists
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
+
+      assert {:error, :no_provider_data} = ChainState.provider_lag(chain, "nonexistent")
     end
 
-    test "returns error when table not found" do
-      assert {:error, :table_not_found} = ChainState.provider_lag("nonexistent_chain", "provider")
+    test "returns error when no data for provider and no consensus", %{chain: chain} do
+      # No data at all - provider check happens first
+      assert {:error, :no_provider_data} = ChainState.provider_lag(chain, "provider")
     end
   end
 
   describe "consensus_fresh?/1" do
     test "returns true when consensus is fresh", %{chain: chain} do
       # Insert fresh data
-      table = ProviderPool.table_name(chain)
-      now = System.system_time(:millisecond)
-
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, now, 1}})
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
 
       assert ChainState.consensus_fresh?(chain) == true
     end
 
     test "returns false when consensus is stale", %{chain: chain} do
-      # Insert stale data
-      table = ProviderPool.table_name(chain)
-      old = System.system_time(:millisecond) - 30_000
+      # Manually insert stale data
+      old_ts = System.system_time(:millisecond) - 35_000
 
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, old, 1}})
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "provider_1"}, {1_000_000, old_ts, :http, %{}}}
+      )
 
       assert ChainState.consensus_fresh?(chain) == false
     end
@@ -154,64 +118,90 @@ defmodule Lasso.RPC.ChainStateTest do
     end
   end
 
-  describe "current_sequence/1" do
-    test "returns current sequence number from provider data", %{chain: chain} do
-      # Insert data with different sequences
-      table = ProviderPool.table_name(chain)
-      now = System.system_time(:millisecond)
+  describe "data_available?/1" do
+    test "returns true when height data exists", %{chain: chain} do
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
 
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, now, 5}})
-      :ets.insert(table, {{:provider_sync, chain, "provider_2"}, {1_000_005, now, 7}})
-      :ets.insert(table, {{:provider_sync, chain, "provider_3"}, {999_995, now, 3}})
-
-      # Should return max sequence
-      assert {:ok, 7} = ChainState.current_sequence(chain)
+      assert ChainState.data_available?(chain) == true
     end
 
-    test "returns error when no data available", %{chain: chain} do
-      assert {:error, :no_data} = ChainState.current_sequence(chain)
+    test "returns false when no height data exists", %{chain: chain} do
+      assert ChainState.data_available?(chain) == false
     end
   end
 
-  describe "configuration" do
-    test "uses chain-specific probe interval for consensus window" do
-      # Configure probe interval
-      Application.put_env(:lasso, :provider_probe,
-        probe_interval_by_chain: %{"test_chain" => 10_000},
-        default_probe_interval_ms: 12_000
-      )
+  describe "provider_height/2" do
+    test "returns provider height with timestamp", %{chain: chain} do
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
 
-      # Insert data just within the 1.5x window (15s for 10s interval)
-      chain = "test_chain"
-      table = ProviderPool.table_name(chain)
-      now = System.system_time(:millisecond)
-      almost_stale = now - 14_000  # 14 seconds old, within 15s window
-
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, almost_stale, 1}})
-
-      # Should still be considered fresh
-      assert {:ok, 1_000_000} = ChainState.consensus_height(chain)
+      assert {:ok, 1_000_000, timestamp} = ChainState.provider_height(chain, "provider_1")
+      assert is_integer(timestamp)
+      # Timestamp should be recent (within last second)
+      assert System.system_time(:millisecond) - timestamp < 1000
     end
 
-    test "uses default probe interval when chain not configured" do
-      Application.put_env(:lasso, :provider_probe,
-        default_probe_interval_ms: 12_000
+    test "returns error when provider not found", %{chain: chain} do
+      assert {:error, :not_found} = ChainState.provider_height(chain, "nonexistent")
+    end
+  end
+
+  describe "all_provider_heights/2" do
+    test "returns all provider heights", %{chain: chain} do
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
+      BlockSyncRegistry.put_height(chain, "provider_2", 1_000_005, :ws, %{})
+
+      heights = ChainState.all_provider_heights(chain)
+
+      assert length(heights) == 2
+      assert Enum.any?(heights, fn {id, h, _ts} -> id == "provider_1" and h == 1_000_000 end)
+      assert Enum.any?(heights, fn {id, h, _ts} -> id == "provider_2" and h == 1_000_005 end)
+    end
+
+    test "returns empty list when no data", %{chain: chain} do
+      assert [] = ChainState.all_provider_heights(chain)
+    end
+
+    test "filters fresh data when only_fresh: true", %{chain: chain} do
+      # Insert fresh data
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
+
+      # Insert stale data manually
+      old_ts = System.system_time(:millisecond) - 35_000
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "provider_2"}, {1_000_005, old_ts, :http, %{}}}
       )
 
-      # Consensus window should be 18s (1.5x 12s)
-      # Generate unique chain name to avoid conflicts
-      chain = "unconfigured_chain_#{System.unique_integer([:positive])}"
+      # Without filter, should get both
+      all_heights = ChainState.all_provider_heights(chain)
+      assert length(all_heights) == 2
 
-      # Start pool for unconfigured chain with explicit ID
-      start_supervised!({ProviderPool, {chain, %{chain_id: 2, providers: []}}}, id: {:provider_pool, chain})
+      # With filter, should only get fresh
+      fresh_heights = ChainState.all_provider_heights(chain, only_fresh: true)
+      assert length(fresh_heights) == 1
+      assert Enum.any?(fresh_heights, fn {id, _h, _ts} -> id == "provider_1" end)
+    end
+  end
 
-      table = ProviderPool.table_name(chain)
-      now = System.system_time(:millisecond)
-      within_window = now - 17_000  # Within 18s
+  describe "get_chain_status/1" do
+    test "returns comprehensive status for all providers", %{chain: chain} do
+      BlockSyncRegistry.put_height(chain, "provider_1", 1_000_000, :http, %{})
+      BlockSyncRegistry.put_height(chain, "provider_2", 1_000_005, :ws, %{hash: "0xabc"})
 
-      :ets.insert(table, {{:provider_sync, chain, "provider_1"}, {1_000_000, within_window, 1}})
+      status = ChainState.get_chain_status(chain)
 
-      assert {:ok, 1_000_000} = ChainState.consensus_height(chain)
+      assert Map.has_key?(status, "provider_1")
+      assert Map.has_key?(status, "provider_2")
+
+      p1 = status["provider_1"]
+      assert p1.height == 1_000_000
+      assert p1.source == :http
+
+      p2 = status["provider_2"]
+      assert p2.height == 1_000_005
+      assert p2.source == :ws
+      assert p2.metadata.hash == "0xabc"
     end
   end
 end

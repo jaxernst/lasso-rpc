@@ -747,17 +747,9 @@ defmodule Lasso.RPC.StreamCoordinator do
 
   defp fetch_head(chain, _provider_id) do
     # Use consensus height for fast failover (<1ms vs 200-500ms)
-    case ChainState.consensus_height(chain, allow_stale: true) do
+    case ChainState.consensus_height(chain) do
       {:ok, height} ->
         Logger.debug("Using consensus height for failover gap calculation",
-          chain: chain,
-          height: height
-        )
-
-        height
-
-      {:ok, height, :stale} ->
-        Logger.debug("Using stale consensus height for failover gap calculation",
           chain: chain,
           height: height
         )

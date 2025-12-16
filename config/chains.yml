@@ -53,6 +53,9 @@ chains:
         url: "https://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         ws_url: "wss://eth-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         api_key_required: true
+        # Disable WS newHeads subscription to avoid expensive compute unit usage
+        # Block height will be tracked via HTTP polling instead
+        subscribe_new_heads: false
       - id: "ethereum_llamarpc"
         name: "LlamaRPC"
         priority: 2
@@ -163,6 +166,7 @@ chains:
         url: "https://eth-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         ws_url: "wss://eth-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         api_key_required: true
+        subscribe_new_heads: false
         adapter_config:
           eth_get_logs_block_range: 10
 
@@ -238,6 +242,7 @@ chains:
         url: "https://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         ws_url: "wss://base-mainnet.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         api_key_required: true
+        subscribe_new_heads: false
         # Alchemy Base free tier has 10 block limit for eth_getLogs
         adapter_config:
           eth_get_logs_block_range: 10
@@ -343,6 +348,7 @@ chains:
         url: "https://base-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         ws_url: "wss://base-sepolia.g.alchemy.com/v2/fNX8dFL_on49XdPAq4WmGJjxeQscfs0k"
         api_key_required: true
+        subscribe_new_heads: false
         adapter_config:
           eth_get_logs_block_range: 10
 
