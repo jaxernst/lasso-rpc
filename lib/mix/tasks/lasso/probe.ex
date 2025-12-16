@@ -85,7 +85,7 @@ defmodule Mix.Tasks.Lasso.Probe do
         ]
       )
 
-    if length(args) == 0 do
+    if args == [] do
       Mix.shell().error("Usage: mix lasso.probe <provider_url> [options]")
       Mix.shell().info("\nRun `mix help lasso.probe` for details")
       System.halt(1)

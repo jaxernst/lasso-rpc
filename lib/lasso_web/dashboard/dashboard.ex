@@ -1195,10 +1195,16 @@ defmodule LassoWeb.Dashboard do
                   end
                 ]}>{if http_state == :closed, do: "Connected", else: http_state |> to_string() |> String.replace("_", "-") |> String.capitalize()}</span>
               </div>
-              <div class="flex pb-3 justify-between text-[10px] text-gray-600 px-11">
-                <span>closed</span>
-                <span>half-open</span>
-                <span>open</span>
+              <div class="flex items-center gap-3 pb-3">
+                <span class="w-10"></span>
+                <div class="flex-1 flex items-center gap-1 -mx-2">
+                  <span class="text-[10px] text-gray-600">closed</span>
+                  <div class="flex-1"></div>
+                  <span class="text-[10px] text-gray-600">half-open</span>
+                  <div class="flex-1"></div>
+                  <span class="text-[10px] text-gray-600">open</span>
+                </div>
+                <span class="w-20"></span>
               </div>
             <% end %>
 
@@ -1233,10 +1239,16 @@ defmodule LassoWeb.Dashboard do
                   end}
                 </span>
               </div>
-              <div class="flex pb-3 justify-between text-[10px] text-gray-600 px-11">
-                <span>closed</span>
-                <span>half-open</span>
-                <span>open</span>
+              <div class="flex items-center gap-3 pb-3">
+                <span class="w-10"></span>
+                <div class="flex-1 flex items-center gap-1 -mx-2">
+                  <span class="text-[10px] text-gray-600">closed</span>
+                  <div class="flex-1"></div>
+                  <span class="text-[10px] text-gray-600">half-open</span>
+                  <div class="flex-1"></div>
+                  <span class="text-[10px] text-gray-600">open</span>
+                </div>
+                <span class="w-20"></span>
               </div>
             <% end %>
 

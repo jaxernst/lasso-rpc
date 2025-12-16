@@ -723,23 +723,6 @@ defmodule Lasso.RPC.ProviderPool do
           lag: lag
         })
 
-      {:ok, consensus_height, :stale} ->
-        # Use stale consensus if that's all we have
-        lag = block_height - consensus_height
-
-        :ets.insert(
-          state.table,
-          {{:provider_lag, state.chain_name, provider_id}, lag}
-        )
-
-        Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates", %{
-          chain: state.chain_name,
-          provider_id: provider_id,
-          block_height: block_height,
-          consensus_height: consensus_height,
-          lag: lag
-        })
-
       {:error, _reason} ->
         # No consensus available - can't calculate lag yet
         :ok

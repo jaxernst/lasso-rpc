@@ -533,9 +533,44 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
           reason: inspect(reason)
         )
 
+        # If the error indicates the connection is dead, update connection_states
+        # to prevent infinite retry loops where we keep trying to use a dead connection
+        state =
+          if connection_dead_error?(reason) do
+            Logger.debug("Detected dead connection during subscription, marking disconnected",
+              chain: state.chain,
+              provider_id: provider_id
+            )
+
+            conn_state = %{
+              connection_id: nil,
+              status: :disconnected,
+              disconnected_at: System.monotonic_time(:millisecond)
+            }
+
+            %{state | connection_states: Map.put(state.connection_states, provider_id, conn_state)}
+          else
+            state
+          end
+
         {:reply, {:error, reason}, state}
     end
   end
+
+  # Detect errors that indicate the WebSocket connection process is dead
+  # These errors mean the connection_states is stale and should be updated
+  defp connection_dead_error?(%Lasso.JSONRPC.Error{message: message}) when is_binary(message) do
+    message_lower = String.downcase(message)
+
+    String.contains?(message_lower, "noproc") or
+      String.contains?(message_lower, "not connected") or
+      String.contains?(message_lower, "process not alive")
+  end
+
+  defp connection_dead_error?(:noproc), do: true
+  defp connection_dead_error?(:not_connected), do: true
+  defp connection_dead_error?({:noproc, _}), do: true
+  defp connection_dead_error?(_), do: false
 
   defp create_upstream_subscription(chain, provider_id, {:newHeads}) do
     message = %{

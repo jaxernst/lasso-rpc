@@ -73,7 +73,7 @@ defmodule Lasso.RPC.RateLimitState do
       iex> RateLimitState.rate_limited?(state, :http)
       true
   """
-  @spec record_rate_limit(t(), transport(), pos_integer() | nil, integer()) :: t()
+  @spec record_rate_limit(t(), transport(), pos_integer() | nil, integer() | nil) :: t()
   def record_rate_limit(state, transport, retry_after_ms \\ nil, now_ms \\ nil) do
     now = now_ms || System.monotonic_time(:millisecond)
     retry_ms = retry_after_ms || @default_retry_after_ms
@@ -99,7 +99,7 @@ defmodule Lasso.RPC.RateLimitState do
   - `transport` - :http or :ws
   - `now_ms` - Current monotonic time in milliseconds (optional)
   """
-  @spec rate_limited?(t(), transport(), integer()) :: boolean()
+  @spec rate_limited?(t(), transport(), integer() | nil) :: boolean()
   def rate_limited?(state, transport, now_ms \\ nil) do
     now = now_ms || System.monotonic_time(:millisecond)
     limited_until = get_limited_until(state, transport)
@@ -112,7 +112,7 @@ defmodule Lasso.RPC.RateLimitState do
 
   Returns nil if not rate limited or if rate limit has expired.
   """
-  @spec time_remaining(t(), transport(), integer()) :: pos_integer() | nil
+  @spec time_remaining(t(), transport(), integer() | nil) :: pos_integer() | nil
   def time_remaining(state, transport, now_ms \\ nil) do
     now = now_ms || System.monotonic_time(:millisecond)
     limited_until = get_limited_until(state, transport)
@@ -152,7 +152,7 @@ defmodule Lasso.RPC.RateLimitState do
   @doc """
   Checks if any transport is currently rate limited.
   """
-  @spec any_rate_limited?(t(), integer()) :: boolean()
+  @spec any_rate_limited?(t(), integer() | nil) :: boolean()
   def any_rate_limited?(state, now_ms \\ nil) do
     rate_limited?(state, :http, now_ms) or rate_limited?(state, :ws, now_ms)
   end
@@ -162,7 +162,7 @@ defmodule Lasso.RPC.RateLimitState do
 
   Only includes active (non-expired) rate limits.
   """
-  @spec to_map(t(), integer()) :: map()
+  @spec to_map(t(), integer() | nil) :: map()
   def to_map(state, now_ms \\ nil) do
     now = now_ms || System.monotonic_time(:millisecond)
 
