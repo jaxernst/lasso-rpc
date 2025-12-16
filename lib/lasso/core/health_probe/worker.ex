@@ -9,8 +9,9 @@ defmodule Lasso.HealthProbe.Worker do
   ## Responsibilities
 
   1. Probe provider at regular intervals using lightweight request (eth_chainId)
-  2. Record success/failure to circuit breaker
+  2. Record success/failure to circuit breaker (both HTTP and WS)
   3. Continue probing even when circuit is open (that's the point)
+
 
   ## Separation from BlockSync
 
@@ -26,7 +27,7 @@ defmodule Lasso.HealthProbe.Worker do
   use GenServer
   require Logger
 
-  alias Lasso.RPC.{TransportRegistry, Channel, Response, CircuitBreaker}
+  alias Lasso.RPC.{TransportRegistry, Channel, Response, CircuitBreaker, WSConnection}
 
   @default_probe_interval_ms 10_000
   @default_timeout_ms 5_000
@@ -38,11 +39,18 @@ defmodule Lasso.HealthProbe.Worker do
     :probe_interval_ms,
     :timeout_ms,
     :timer_ref,
+    # HTTP probe state
     :consecutive_failures,
     :consecutive_successes,
     :last_probe_time,
     :last_latency_ms,
-    :has_http
+    :has_http,
+    # WS probe state
+    :ws_consecutive_failures,
+    :ws_consecutive_successes,
+    :ws_last_probe_time,
+    :ws_last_latency_ms,
+    :has_ws
   ]
 
   ## Client API
@@ -71,8 +79,9 @@ defmodule Lasso.HealthProbe.Worker do
     probe_interval = Keyword.get(opts, :probe_interval_ms, @default_probe_interval_ms)
     timeout = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
 
-    # Check if provider has HTTP capability
+    # Check transport capabilities
     has_http = has_http_capability?(chain, provider_id)
+    has_ws = has_ws_capability?(chain, provider_id)
 
     state = %__MODULE__{
       chain: chain,
@@ -80,27 +89,36 @@ defmodule Lasso.HealthProbe.Worker do
       probe_interval_ms: probe_interval,
       timeout_ms: timeout,
       timer_ref: nil,
+      # HTTP probe state
       consecutive_failures: 0,
       consecutive_successes: 0,
       last_probe_time: nil,
       last_latency_ms: nil,
-      has_http: has_http
+      has_http: has_http,
+      # WS probe state
+      ws_consecutive_failures: 0,
+      ws_consecutive_successes: 0,
+      ws_last_probe_time: nil,
+      ws_last_latency_ms: nil,
+      has_ws: has_ws
     }
 
-    if has_http do
+    if has_http or has_ws do
       # Schedule first probe after a short delay to let connections establish
       state = schedule_probe(state, 2_000)
 
       Logger.debug("HealthProbe.Worker started",
         chain: chain,
         provider_id: provider_id,
-        probe_interval_ms: probe_interval
+        probe_interval_ms: probe_interval,
+        has_http: has_http,
+        has_ws: has_ws
       )
 
       {:ok, state}
     else
-      # No HTTP capability, nothing to probe
-      Logger.debug("HealthProbe.Worker skipped (no HTTP)",
+      # No transport capability, nothing to probe
+      Logger.debug("HealthProbe.Worker skipped (no HTTP or WS)",
         chain: chain,
         provider_id: provider_id
       )
@@ -112,12 +130,19 @@ defmodule Lasso.HealthProbe.Worker do
   @impl true
   def handle_call(:get_status, _from, state) do
     status = %{
+      # HTTP probe status
       consecutive_failures: state.consecutive_failures,
       consecutive_successes: state.consecutive_successes,
       last_probe_time: state.last_probe_time,
       last_latency_ms: state.last_latency_ms,
       probe_interval_ms: state.probe_interval_ms,
-      has_http: state.has_http
+      has_http: state.has_http,
+      # WS probe status
+      ws_consecutive_failures: state.ws_consecutive_failures,
+      ws_consecutive_successes: state.ws_consecutive_successes,
+      ws_last_probe_time: state.ws_last_probe_time,
+      ws_last_latency_ms: state.ws_last_latency_ms,
+      has_ws: state.has_ws
     }
 
     {:reply, {:ok, status}, state}
@@ -142,25 +167,61 @@ defmodule Lasso.HealthProbe.Worker do
     %{state | timer_ref: ref}
   end
 
-  defp execute_probe(%__MODULE__{has_http: false} = state), do: state
-
+  # Execute probes for all available transports
   defp execute_probe(%__MODULE__{} = state) do
+    state
+    |> execute_http_probe()
+    |> execute_ws_probe()
+  end
+
+  # HTTP probe execution
+  defp execute_http_probe(%__MODULE__{has_http: false} = state), do: state
+
+  defp execute_http_probe(%__MODULE__{} = state) do
     start_time = System.monotonic_time(:millisecond)
 
-    result = do_probe(state.chain, state.provider_id, state.timeout_ms)
+    result = do_http_probe(state.chain, state.provider_id, state.timeout_ms)
     latency_ms = System.monotonic_time(:millisecond) - start_time
     now = System.system_time(:millisecond)
 
     case result do
       {:ok, _chain_id} ->
-        handle_probe_success(state, latency_ms, now)
+        handle_http_probe_success(state, latency_ms, now)
 
       {:error, reason} ->
-        handle_probe_failure(state, reason, latency_ms, now)
+        handle_http_probe_failure(state, reason, latency_ms, now)
     end
   end
 
-  defp handle_probe_success(state, latency_ms, now) do
+  # WS probe execution
+  defp execute_ws_probe(%__MODULE__{has_ws: false} = state), do: state
+
+  defp execute_ws_probe(%__MODULE__{} = state) do
+    # Re-check WS availability on each probe since connections can come and go
+    if ws_connected?(state.chain, state.provider_id) do
+      start_time = System.monotonic_time(:millisecond)
+
+      result = do_ws_probe(state.chain, state.provider_id, state.timeout_ms)
+      latency_ms = System.monotonic_time(:millisecond) - start_time
+      now = System.system_time(:millisecond)
+
+      case result do
+        {:ok, _chain_id} ->
+          handle_ws_probe_success(state, latency_ms, now)
+
+        {:error, reason} ->
+          handle_ws_probe_failure(state, reason, latency_ms, now)
+      end
+    else
+      # WS not currently connected, skip probe but don't record failure
+      # (the circuit breaker already knows about the disconnect)
+      state
+    end
+  end
+
+  # HTTP probe success/failure handlers
+
+  defp handle_http_probe_success(state, latency_ms, now) do
     # Record success to HTTP circuit breaker
     cb_id = {state.chain, state.provider_id, :http}
     CircuitBreaker.record_success(cb_id)
@@ -186,7 +247,7 @@ defmodule Lasso.HealthProbe.Worker do
     }
   end
 
-  defp handle_probe_failure(state, reason, latency_ms, now) do
+  defp handle_http_probe_failure(state, reason, latency_ms, now) do
     # Record failure to HTTP circuit breaker with actual error for proper classification
     cb_id = {state.chain, state.provider_id, :http}
     CircuitBreaker.record_failure(cb_id, reason)
@@ -212,7 +273,63 @@ defmodule Lasso.HealthProbe.Worker do
     }
   end
 
-  defp do_probe(chain, provider_id, timeout_ms) do
+  # WS probe success/failure handlers
+
+  defp handle_ws_probe_success(state, latency_ms, now) do
+    # Record success to WS circuit breaker
+    cb_id = {state.chain, state.provider_id, :ws}
+    CircuitBreaker.record_success(cb_id)
+
+    new_consecutive_successes = state.ws_consecutive_successes + 1
+
+    # Log recovery if we were failing
+    if state.ws_consecutive_failures >= @max_consecutive_failures_before_warn do
+      Logger.info("HealthProbe: WS recovered",
+        chain: state.chain,
+        provider_id: state.provider_id,
+        latency_ms: latency_ms,
+        after_failures: state.ws_consecutive_failures
+      )
+    end
+
+    %{
+      state
+      | ws_consecutive_failures: 0,
+        ws_consecutive_successes: new_consecutive_successes,
+        ws_last_probe_time: now,
+        ws_last_latency_ms: latency_ms
+    }
+  end
+
+  defp handle_ws_probe_failure(state, reason, latency_ms, now) do
+    # Record failure to WS circuit breaker with actual error for proper classification
+    cb_id = {state.chain, state.provider_id, :ws}
+    CircuitBreaker.record_failure(cb_id, reason)
+
+    new_consecutive_failures = state.ws_consecutive_failures + 1
+
+    # Log warning when failures accumulate
+    if new_consecutive_failures == @max_consecutive_failures_before_warn do
+      Logger.warning("HealthProbe: WS degraded",
+        chain: state.chain,
+        provider_id: state.provider_id,
+        consecutive_failures: new_consecutive_failures,
+        reason: inspect(reason)
+      )
+    end
+
+    %{
+      state
+      | ws_consecutive_failures: new_consecutive_failures,
+        ws_consecutive_successes: 0,
+        ws_last_probe_time: now,
+        ws_last_latency_ms: latency_ms
+    }
+  end
+
+  # HTTP probe implementation
+
+  defp do_http_probe(chain, provider_id, timeout_ms) do
     # Get channel directly - NOT through circuit breaker
     case TransportRegistry.get_channel(chain, provider_id, :http) do
       {:ok, channel} ->
@@ -268,10 +385,79 @@ defmodule Lasso.HealthProbe.Worker do
       {:error, {:exception, Exception.message(e)}}
   end
 
+  # WS probe implementation
+  # Uses WSConnection.request directly (bypasses circuit breaker)
+
+  defp do_ws_probe(chain, provider_id, timeout_ms) do
+    # Use WSConnection.request directly - NOT through circuit breaker
+    # The WSConnection uses the provider_id as the connection_id
+    try do
+      case WSConnection.request(provider_id, "eth_chainId", [], timeout_ms) do
+        {:ok, "0x" <> hex} ->
+          {:ok, String.to_integer(hex, 16)}
+
+        {:ok, result} ->
+          # Even if parsing fails, we got a response - provider is alive
+          {:ok, result}
+
+        {:error, %{category: :rate_limit} = jerr} ->
+          # Rate limit errors should count as failures
+          {:error, jerr}
+
+        {:error, %{retriable?: true} = _jerr} ->
+          # Other retriable errors but connection worked - provider is reachable
+          {:ok, :error_response}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    catch
+      :exit, {:noproc, _} ->
+        # WSConnection process not running
+        {:error, {:ws_not_connected, chain, provider_id}}
+
+      :exit, {:timeout, _} ->
+        {:error, {:ws_request_timeout, timeout_ms}}
+
+      kind, error ->
+        Logger.error("WS HealthProbe crashed",
+          chain: chain,
+          provider_id: provider_id,
+          error: Exception.format(kind, error, __STACKTRACE__)
+        )
+
+        {:error, {:exception, inspect({kind, error})}}
+    end
+  end
+
+  # Capability checks
+
   defp has_http_capability?(chain, provider_id) do
     case TransportRegistry.get_channel(chain, provider_id, :http) do
       {:ok, _} -> true
       _ -> false
+    end
+  end
+
+  defp has_ws_capability?(chain, provider_id) do
+    # Check if provider has WS configured (not necessarily connected)
+    # We check for the WS channel in the registry cache
+    case TransportRegistry.get_channel(chain, provider_id, :ws) do
+      {:ok, _} -> true
+      _ -> false
+    end
+  end
+
+  # Check if WS is currently connected (not just configured)
+  defp ws_connected?(_chain, provider_id) do
+    # Check if WSConnection process is alive and connected
+    try do
+      case WSConnection.status(provider_id) do
+        %{connected: true} -> true
+        _ -> false
+      end
+    catch
+      :exit, _ -> false
     end
   end
 end
