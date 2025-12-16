@@ -9,55 +9,97 @@ Complete end-to-end workflow for integrating a new RPC provider into Lasso.
 ## Overview
 
 Adding a provider involves:
-1. Gathering provider information
-2. Creating provider adapter (if needed)
-3. Updating configuration
-4. Creating tests
-5. Validating integration
+1. Quick connectivity smoke tests
+2. Full capability discovery (automated probing)
+3. Analyzing probe results to determine adapter needs
+4. Creating provider adapter (if needed)
+5. Updating configuration
+6. Validation and testing
 
-## Step 1: Gather Provider Information
+## Step 1: Quick Connectivity Smoke Tests
 
-**Ask user for:**
-- Provider name (e.g., "Alchemy", "Infura", "QuickNode")
-- Provider type/category (public, private, premium)
-- RPC endpoint URL (HTTP)
-- WebSocket endpoint URL (if supported)
-- API key requirements (if any)
-- Known limitations:
-  - Rate limits
-  - Block range limits for eth_getLogs
-  - Supported methods
-  - Archive node availability
+Before deep probing, verify basic connectivity across chains.
 
-**Example questions:**
-```
-I'll help you add a new RPC provider to Lasso.
-
-Please provide:
-1. Provider name: ___
-2. HTTP endpoint URL: ___
-3. WebSocket endpoint URL (or "none"): ___
-4. Is this a public provider? (y/n): ___
-5. Does it require an API key? (y/n): ___
-6. Any known limitations? (rate limits, block ranges, etc.): ___
+**HTTP connectivity test:**
+```bash
+# Test basic RPC connectivity
+curl -s -X POST <HTTP_URL> \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
 ```
 
-## Step 2: Determine If Custom Adapter Needed
+**WebSocket connectivity test:**
+```bash
+# Quick WebSocket probe (connection + basic requests)
+mix lasso.probe <WS_URL> --probes websocket --subscription-wait 5000
+```
 
-**Check if provider has special requirements:**
+**Multi-chain discovery:**
+If the provider supports multiple chains, test URL patterns:
+- Common patterns: `/public/{chain}`, `/{chain}`, `/{chain_id}`
+- WS patterns may differ: `wss://{chain}.provider.com` vs `wss://provider.com/public/{chain}`
 
-**Needs custom adapter if:**
-- Custom error codes or messages
-- Special rate limit behavior
-- Block range restrictions for eth_getLogs
-- Custom authentication headers
-- Non-standard JSON-RPC responses
+Run quick tests across all target chains before proceeding.
+
+## Step 2: Full Capability Discovery
+
+Use `mix lasso.probe` for comprehensive capability detection.
+
+**Full probe (all capabilities):**
+```bash
+mix lasso.probe <HTTP_URL> --level standard
+```
+
+**Probe options:**
+- `--probes <list>` - Comma-separated: methods, limits, websocket (default: all)
+- `--level <level>` - Method depth: critical (~10), standard (~25), full (~70 methods)
+- `--timeout <ms>` - Request timeout (default: 10000)
+- `--output <format>` - Output: table, json (default: table)
+- `--subscription-wait <ms>` - WebSocket event wait time (default: 15000)
+
+**Example probe commands:**
+```bash
+# Standard probe (methods + limits + websocket)
+mix lasso.probe https://provider.com/rpc
+
+# HTTP-only probe (methods and limits)
+mix lasso.probe https://provider.com/rpc --probes methods,limits
+
+# WebSocket-only probe
+mix lasso.probe wss://provider.com/ws --probes websocket
+
+# Full method coverage with JSON output
+mix lasso.probe https://provider.com/rpc --level full --output json
+```
+
+**Key capabilities detected:**
+
+| Capability | What It Tests | Adapter Impact |
+|------------|---------------|----------------|
+| Block Range | eth_getLogs range limits | `max_block_range` config |
+| Address Count | Multi-address query limits | `max_addresses` config |
+| Batch Requests | JSON-RPC batching support | May need to disable batching |
+| Archive Support | Historical state queries | Archive node flag |
+| Rate Limits | Concurrent request handling | Circuit breaker tuning |
+| Block Params | safe/finalized/pending support | Method filtering |
+| Subscriptions | newHeads, logs, pendingTx | WebSocket capability flags |
+
+## Step 3: Analyze Probe Results
+
+Review the probe output to determine adapter requirements.
+
+**Needs custom adapter if probe shows:**
+- Block range limit < 10000 blocks
+- Address count limit < 50
+- Custom error codes (non-standard -32xxx codes)
+- Batch requests not supported
+- Specific methods unsupported
 
 **Can use generic adapter if:**
-- Standard JSON-RPC 2.0
-- No special limitations
-- Standard error codes
-- No custom headers
+- No block range limits detected
+- Standard JSON-RPC 2.0 error codes
+- Batch requests supported
+- All standard methods work
 
 **Existing adapters in `lib/lasso/core/providers/adapters/`:**
 - Alchemy (eth_getLogs block range: 10)
@@ -68,7 +110,7 @@ Please provide:
 - DRPC (custom error codes)
 - 1RPC (custom rate limit errors)
 
-## Step 3: Create Provider Adapter (if needed)
+## Step 4: Create Provider Adapter (if needed)
 
 **If custom adapter needed, create from template:**
 
@@ -79,30 +121,27 @@ defmodule Lasso.RPC.Providers.Adapters.[ProviderName] do
   @moduledoc """
   Provider adapter for [Provider Name].
 
-  Known limitations:
-  - [List specific limitations]
+  Discovered via `mix lasso.probe`:
+  - Block range: [unlimited | limited to N]
+  - Batch requests: [supported | not supported]
+  - Archive: [full | partial | none]
 
   Configuration options:
-  - `:option_name` - Description (default: value)
+  - `:max_block_range` - Maximum block range for eth_getLogs
   """
 
   @behaviour Lasso.RPC.ProviderAdapter
 
   import Lasso.RPC.Providers.AdapterHelpers
 
-  # Default limits
-  @default_block_range 1000
+  # Limits discovered via probing
+  @default_block_range 1000  # Set based on probe results
 
   @impl true
   def supports_method?(method, _transport, _ctx) do
-    # Most providers support all standard methods
-    # Override if provider has limitations
-    method in [
-      "eth_blockNumber",
-      "eth_chainId",
-      "eth_getBalance",
-      "eth_getLogs",
-      # ... etc
+    # Based on probe results - list unsupported methods
+    method not in [
+      # "debug_traceTransaction",  # If probe showed unsupported
     ]
   end
 
@@ -162,7 +201,7 @@ end
 }
 ```
 
-## Step 4: Update Configuration
+## Step 5: Update Configuration
 
 **Add provider to `config/chains.yml`:**
 
@@ -178,139 +217,48 @@ ethereum:
       type: "public"  # or "private"
       priority: 5
       adapter_config:
-        max_block_range: 1000  # If custom adapter
+        max_block_range: 1000  # Based on probe results
+        # disable_batching: true  # If batch not supported
 ```
 
-**If API key required, document in README:**
+**For multi-chain providers, add to each chain:**
 
-```markdown
-## Environment Variables
-
-For [Provider Name], set:
-```bash
-export [PROVIDER]_API_KEY="your-api-key"
+```yaml
+base:
+  chain_id: 8453
+  providers:
+    - id: "[provider_name]_base"
+      name: "[Provider Display Name]"
+      url: "https://[provider-endpoint]/base"
+      ws_url: "wss://[provider-ws-endpoint]/base"
+      type: "public"
+      priority: 5
 ```
 
-## Step 5: Create Tests
-
-**Create adapter test (if custom adapter):**
-
-```elixir
-# test/lasso/core/providers/adapters/[provider_name]_test.exs
-
-defmodule Lasso.RPC.Providers.Adapters.[ProviderName]Test do
-  use ExUnit.Case, async: true
-
-  alias Lasso.RPC.Providers.Adapters.[ProviderName]
-
-  describe "supports_method?/3" do
-    test "supports standard eth methods" do
-      assert [ProviderName].supports_method?("eth_blockNumber", :http, %{})
-      assert [ProviderName].supports_method?("eth_getLogs", :http, %{})
-    end
-  end
-
-  describe "validate_params/4" do
-    test "accepts eth_getLogs within block range limit" do
-      params = [%{"fromBlock" => "0x1", "toBlock" => "0x64"}]  # 100 blocks
-      assert :ok = [ProviderName].validate_params("eth_getLogs", params, :http, %{})
-    end
-
-    test "rejects eth_getLogs exceeding block range limit" do
-      # Test with range exceeding default limit
-      params = [%{"fromBlock" => "0x1", "toBlock" => "0x1000"}]  # 4096 blocks
-      assert {:error, {:param_limit, _}} =
-        [ProviderName].validate_params("eth_getLogs", params, :http, %{})
-    end
-  end
-
-  describe "classify_error/2" do
-    # Add tests for any custom error classification
-  end
-
-  describe "metadata/0" do
-    test "returns adapter metadata" do
-      meta = [ProviderName].metadata()
-      assert meta.provider_type == "[provider_name]"
-      assert is_map(meta.configurable_limits)
-    end
-  end
-end
-```
-
-**Create integration test:**
-
-```elixir
-# test/integration/providers/[provider_name]_integration_test.exs
-
-defmodule Lasso.Integration.Providers.[ProviderName]IntegrationTest do
-  use Lasso.IntegrationCase, async: false
-
-  @moduletag :integration
-  @moduletag :skip  # Remove after provider configured
-
-  describe "[Provider Name] integration" do
-    test "successfully routes request to [provider_name]" do
-      # Start provider
-      {:ok, _} = start_provider("[provider_name]_ethereum")
-
-      # Make request
-      {:ok, result} = make_rpc_request("ethereum", "eth_blockNumber", [])
-
-      # Validate
-      assert is_binary(result)
-      assert String.starts_with?(result, "0x")
-    end
-  end
-end
-```
-
-## Step 6: Validate Integration
+## Step 6: Validation
 
 **Run validation checks:**
 
 ```bash
-# 1. Compile
-mix compile
+# 1. Compile and check for warnings
+mix compile --warnings-as-errors
 
-# 2. Run adapter tests
+# 2. Run adapter tests (if custom adapter created)
 mix test test/lasso/core/providers/adapters/[provider_name]_test.exs
 
-# 3. Run integration test (if provider configured)
-mix test test/integration/providers/[provider_name]_integration_test.exs
+# 3. Start server and smoke test
+mix phx.server
 
-# 4. Manual smoke test
+# In another terminal:
 curl -X POST http://localhost:4000/rpc/provider/[provider_name]_ethereum/ethereum \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 ```
 
 **Verify in dashboard:**
-- Start server: `mix phx.server`
 - Open: http://localhost:4000/metrics/ethereum
 - Confirm provider appears in leaderboard
-- Check circuit breaker status
-
-## Step 7: Documentation
-
-**Update documentation:**
-
-1. **README.md** - Add provider to supported list
-2. **project/ARCHITECTURE.md** - Document any adapter-specific behavior
-3. **config/chains.yml** - Add comments for configuration options
-
-## Completion Checklist
-
-```
-✅ Provider information gathered
-✅ Adapter created (if needed) and registered
-✅ Configuration updated in chains.yml
-✅ Adapter tests created and passing
-✅ Integration tests created
-✅ Manual smoke test successful
-✅ Provider visible in dashboard
-✅ Documentation updated
-```
+- Check circuit breaker status (should be :closed)
 
 ## Output Format
 
@@ -320,39 +268,69 @@ Provide clear progress report:
 ADDING RPC PROVIDER: [Provider Name]
 ====================================
 
-STEP 1: Information Gathered
-  Name: [Provider Name]
-  Type: Public
-  HTTP: https://[endpoint]
-  WS: wss://[endpoint]
-  Limitations: Block range 1000, no archive
+STEP 1: Connectivity Tests
+  ✅ ethereum HTTP: https://[endpoint] - chainId: 0x1
+  ✅ ethereum WS: wss://[endpoint] - connected
+  ✅ base HTTP: https://[endpoint]/base - chainId: 0x2105
+  ✅ base WS: wss://[endpoint]/base - connected
 
-STEP 2: Adapter Strategy
-  Decision: Custom adapter needed (block range limit)
+STEP 2: Capability Discovery (via mix lasso.probe)
+  Block Range:      unlimited (tested 10k+)
+  Address Count:    unlimited (tested 100+)
+  Batch Requests:   NOT SUPPORTED
+  Archive Node:     full archive
+  Rate Limits:      ~400 req/s, 89% success under load
+  Subscriptions:    newHeads ✅, logs ✅, pendingTx ✅
 
-STEP 3: Adapter Created
+STEP 3: Adapter Decision
+  Decision: Custom adapter needed
+  Reasons:
+    - Batch requests disabled
+    - Custom rate limit handling recommended
+
+STEP 4: Implementation
   ✅ Created: lib/lasso/core/providers/adapters/[name].ex
   ✅ Registered in adapter_registry.ex
-  ✅ Implements block range validation
+  ✅ Disables batch request forwarding
 
-STEP 4: Configuration Updated
-  ✅ Added to config/chains.yml for ethereum
-
-STEP 5: Tests Created
-  ✅ Adapter tests: 8 tests passing
-  ✅ Integration test: created (requires provider setup)
+STEP 5: Configuration
+  ✅ Added to config/chains.yml:
+     - [provider_name]_ethereum
+     - [provider_name]_base
 
 STEP 6: Validation
-  ✅ Compilation: PASS
-  ✅ Adapter tests: 8/8 PASS
-  ⚠️  Integration test: SKIPPED (needs API key)
-  ⏳ Manual smoke test: TODO
+  ✅ Compilation: PASS (0 warnings)
+  ✅ Smoke test: eth_blockNumber successful
+  ✅ Dashboard: Provider visible, circuit breaker closed
 
-NEXT STEPS:
-1. Set API key in environment
-2. Run manual smoke test
-3. Remove :skip tag from integration test
-4. Update README with provider details
+COMPLETE ✅
+```
+
+## Probe-Driven Workflow Example
+
+Here's a real example workflow:
+
+```bash
+# 1. Quick connectivity check
+curl -s -X POST https://gateway.tenderly.co/public/mainnet \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+# Returns: {"id":1,"jsonrpc":"2.0","result":"0x1"}
+
+# 2. Check other chains
+curl -s -X POST https://gateway.tenderly.co/public/base ...
+curl -s -X POST https://gateway.tenderly.co/public/sepolia ...
+
+# 3. WebSocket quick test
+mix lasso.probe wss://mainnet.gateway.tenderly.co --probes websocket --subscription-wait 5000
+
+# 4. Full capability probe
+mix lasso.probe https://gateway.tenderly.co/public/mainnet --level standard
+
+# 5. Review output for:
+#    - PROVIDER LIMITS section (block range, batch support)
+#    - METHOD SUPPORT section (unsupported methods)
+#    - RECOMMENDATIONS section (suggested adapter config)
 ```
 
 ## When to Use
@@ -361,10 +339,12 @@ NEXT STEPS:
 - Migrating from one provider to another
 - Expanding multi-chain support
 - Testing provider compatibility
+- Diagnosing provider-specific issues
 
 ## Notes
 
-- Use existing adapters as reference examples
-- Test thoroughly before production use
-- Document provider-specific quirks
-- Monitor circuit breaker behavior after adding
+- Always run probes before creating adapters - let data drive decisions
+- Test across multiple chains if provider supports them
+- Document probe results in adapter moduledoc
+- Monitor circuit breaker behavior after deployment
+- Re-probe periodically as providers may change limits
