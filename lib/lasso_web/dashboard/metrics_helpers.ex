@@ -42,8 +42,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     # Schema: {{provider_id, method, :rpc}, successes, total, avg_duration, recent_latencies, last_updated}
     latencies =
       :ets.select(score_table, [
-        {{{:_, :_, :rpc}, :_, :_, :_, :"$1", :"$2"},
-         [{:>=, :"$2", cutoff}, {:is_list, :"$1"}],
+        {{{:_, :_, :rpc}, :_, :_, :_, :"$1", :"$2"}, [{:>=, :"$2", cutoff}, {:is_list, :"$1"}],
          [:"$1"]}
       ])
       |> List.flatten()
@@ -71,8 +70,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     # Select {successes, total} from all RPC entries updated within the window
     stats =
       :ets.select(score_table, [
-        {{{:_, :_, :rpc}, :"$1", :"$2", :_, :_, :"$3"},
-         [{:>=, :"$3", cutoff}],
+        {{{:_, :_, :rpc}, :"$1", :"$2", :_, :_, :"$3"}, [{:>=, :"$3", cutoff}],
          [{{:"$1", :"$2"}}]}
       ])
 
@@ -103,8 +101,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     latencies =
       :ets.select(score_table, [
         {{{:"$1", :_, :rpc}, :_, :_, :_, :"$2", :"$3"},
-         [{:==, :"$1", provider_id}, {:>=, :"$3", cutoff}, {:is_list, :"$2"}],
-         [:"$2"]}
+         [{:==, :"$1", provider_id}, {:>=, :"$3", cutoff}, {:is_list, :"$2"}], [:"$2"]}
       ])
       |> List.flatten()
 
@@ -126,8 +123,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     stats =
       :ets.select(score_table, [
         {{{:"$1", :_, :rpc}, :"$2", :"$3", :_, :_, :"$4"},
-         [{:==, :"$1", provider_id}, {:>=, :"$4", cutoff}],
-         [{{:"$2", :"$3"}}]}
+         [{:==, :"$1", provider_id}, {:>=, :"$4", cutoff}], [{{:"$2", :"$3"}}]}
       ])
 
     {total_successes, total_calls} =
@@ -178,9 +174,13 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     # Use determine_provider_status for comprehensive status evaluation
     # Note: :lagging providers are excluded since they return stale data
     chain_connections = Enum.filter(assigns.connections, &(&1.chain == chain_name))
+
     connected_providers =
       Enum.count(chain_connections, fn provider ->
-        LassoWeb.Dashboard.StatusHelpers.determine_provider_status(provider) in [:healthy, :recovering]
+        LassoWeb.Dashboard.StatusHelpers.determine_provider_status(provider) in [
+          :healthy,
+          :recovering
+        ]
       end)
 
     total_providers = length(chain_connections)
@@ -307,7 +307,8 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
     # "Live feel" metrics from routing_events buffer (instant updates)
     # These don't need strict time windows - they show recent activity patterns
-    failovers_recent = Enum.count(chain_events, &((&1[:failovers] || &1[:failover_count] || 0) > 0))
+    failovers_recent =
+      Enum.count(chain_events, &((&1[:failovers] || &1[:failover_count] || 0) > 0))
 
     # Provider decision share from buffer (shows real-time routing patterns)
     decision_share =
