@@ -1197,12 +1197,12 @@ defmodule LassoWeb.Dashboard do
               </div>
               <div class="flex items-center gap-3 pb-3">
                 <span class="w-10"></span>
-                <div class="flex-1 flex items-center gap-1 -mx-2">
-                  <span class="text-[10px] text-gray-600">closed</span>
+                <div class="flex-1 flex items-center gap-1 pl-1.5">
+                  <span class="text-[10px] text-gray-600 text-center">closed</span>
                   <div class="flex-1"></div>
-                  <span class="text-[10px] text-gray-600">half-open</span>
+                  <span class="text-[10px] text-gray-600 text-center">half-open</span>
                   <div class="flex-1"></div>
-                  <span class="text-[10px] text-gray-600">open</span>
+                  <span class="text-[10px] text-gray-600 text-center">open</span>
                 </div>
                 <span class="w-20"></span>
               </div>
@@ -1241,12 +1241,12 @@ defmodule LassoWeb.Dashboard do
               </div>
               <div class="flex items-center gap-3 pb-3">
                 <span class="w-10"></span>
-                <div class="flex-1 flex items-center gap-1 -mx-2">
-                  <span class="text-[10px] text-gray-600">closed</span>
+                <div class="flex-1 flex items-center gap-1 pl-1.5">
+                  <span class="text-[10px] text-gray-600 text-center">closed</span>
                   <div class="flex-1"></div>
-                  <span class="text-[10px] text-gray-600">half-open</span>
+                  <span class="text-[10px] text-gray-600 text-center">half-open</span>
                   <div class="flex-1"></div>
-                  <span class="text-[10px] text-gray-600">open</span>
+                  <span class="text-[10px] text-gray-600 text-center">open</span>
                 </div>
                 <span class="w-20"></span>
               </div>
