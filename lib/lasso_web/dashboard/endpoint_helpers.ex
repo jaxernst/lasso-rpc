@@ -59,8 +59,11 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   @doc "Get WebSocket URL for strategy"
   def get_strategy_ws_url(endpoints, strategy) do
     chain = extract_chain_name(endpoints)
-    ws_base_url = Map.get(endpoints, :ws_base_url) ||
-                  String.replace(LassoWeb.Endpoint.url(), ~r/^http/, "ws")
+
+    ws_base_url =
+      Map.get(endpoints, :ws_base_url) ||
+        String.replace(LassoWeb.Endpoint.url(), ~r/^http/, "ws")
+
     "#{ws_base_url}/ws/rpc/#{strategy}/#{chain}"
   end
 
@@ -75,8 +78,11 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   @doc "Get WebSocket URL for specific provider"
   def get_provider_ws_url(endpoints, provider) do
     chain = extract_chain_name(endpoints)
-    ws_base_url = Map.get(endpoints, :ws_base_url) ||
-                  String.replace(LassoWeb.Endpoint.url(), ~r/^http/, "ws")
+
+    ws_base_url =
+      Map.get(endpoints, :ws_base_url) ||
+        String.replace(LassoWeb.Endpoint.url(), ~r/^http/, "ws")
+
     provider_id = Map.get(provider, :id)
     "#{ws_base_url}/ws/rpc/provider/#{provider_id}/#{chain}"
   end
@@ -114,15 +120,15 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
 
   # Strategy descriptions
   defp strategy_description("fastest") do
-    "Routes to the fastest provider based on real-time latency benchmarks"
+    "Routes to the fastest provider based on real-time latency benchmarks (good for low-volume high-priority RPC calls)"
   end
 
   defp strategy_description("round-robin") do
-    "Distributes requests evenly across all available providers"
+    "Distributes requests evenly across all available providers (good for general purpose RPC calls)"
   end
 
   defp strategy_description("latency-weighted") do
-    "Weighted random selection favoring providers with low latency and high success rates"
+    "Load balanced selection favoring faster providers, maximizing throughput (good for indexing + backfilling tasks)"
   end
 
   defp strategy_description(_), do: "Strategy-based routing"

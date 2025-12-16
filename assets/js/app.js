@@ -997,11 +997,11 @@ const EndpointSelector = {
     if (this.mode === "strategy" && this.selectedStrategy) {
       const descriptions = {
         fastest:
-          "Routes to the fastest provider based on real-time latency benchmarks",
+          "Routes to the fastest provider based on real-time latency benchmarks (good for low-volume high-priority RPC calls)",
         "round-robin":
-          "Distributes requests evenly across all available providers",
+          "Distributes requests evenly across all available providers (good for general purpose RPC calls)",
         "latency-weighted":
-          "Weighted random selection favoring providers with low latency and high success rates",
+          "Load balanced selection favoring faster providers, maximizing throughput (good for indexing + backfilling tasks)",
       };
       descriptionEl.textContent =
         descriptions[this.selectedStrategy] || "Strategy-based routing";
