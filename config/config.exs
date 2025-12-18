@@ -66,6 +66,12 @@ config :lasso, :dashboard_status,
   # instead of "healthy". Set to 0 to disable lag-based status.
   lag_threshold_blocks: 2
 
+# VM Metrics Configuration
+# Enable/disable BEAM VM metrics collection and the System Metrics tab.
+# When disabled, no VM statistics are collected and the tab is hidden.
+# Disable for production deployments where exposing VM internals is not desired.
+config :lasso, :vm_metrics_enabled, true
+
 # Provider probe configuration (integrated health & block height monitoring)
 # These are fallback defaults for dynamic/test chains not defined in chains.yml
 config :lasso, :provider_probe,
@@ -125,7 +131,6 @@ config :logger, :console,
 # Environment specific configs
 import_config "#{config_env()}.exs"
 
-# Runtime configuration (loaded at runtime, not compile time)
-if File.exists?("config/runtime.exs") do
-  import_config "runtime.exs"
-end
+# NOTE: runtime.exs is automatically loaded by Mix at application startup.
+# Do NOT import_config it here - that would run it at compile time when
+# Application.get_env can't read the merged config yet.

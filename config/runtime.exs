@@ -22,6 +22,18 @@ if System.get_env("PHX_SERVER") do
   config :lasso, LassoWeb.Endpoint, server: true
 end
 
+# VM Metrics configuration
+# Disable in production SaaS by setting LASSO_VM_METRICS_ENABLED=false
+vm_metrics_enabled =
+  case System.get_env("LASSO_VM_METRICS_ENABLED") do
+    "false" -> false
+    "0" -> false
+    nil -> Application.get_env(:lasso, :vm_metrics_enabled, true)
+    _ -> true
+  end
+
+config :lasso, :vm_metrics_enabled, vm_metrics_enabled
+
 if config_env() == :prod do
   # Get port from environment variable (internal port the app listens on)
   port = String.to_integer(System.get_env("PORT") || "4000")

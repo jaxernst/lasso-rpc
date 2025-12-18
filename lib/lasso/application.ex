@@ -53,6 +53,9 @@ defmodule Lasso.Application do
         # Start benchmark persistence for historical data
         Lasso.Benchmarking.Persistence,
 
+        # Start centralized VM metrics collector for dashboard
+        Lasso.VMMetricsCollector,
+
         # Start process registry for centralized process management
         {Lasso.RPC.ProcessRegistry, name: Lasso.RPC.ProcessRegistry},
 

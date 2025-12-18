@@ -42,20 +42,13 @@ defmodule LassoWeb.Dashboard do
         Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{chain}")
       end)
 
-      # Enable scheduler wall time if supported (for utilization metrics)
-      try do
-        :erlang.system_flag(:scheduler_wall_time, true)
-      rescue
-        _ -> :ok
+      # Subscribe to centralized VM metrics collector (if enabled)
+      # This replaces per-LiveView metrics collection which had correctness issues
+      # with global statistics deltas when multiple users were connected
+      if Lasso.VMMetricsCollector.enabled?() do
+        Lasso.VMMetricsCollector.subscribe()
       end
 
-      # Prime deltas for statistics-based counters
-      _ = :erlang.statistics(:runtime)
-      _ = :erlang.statistics(:wall_clock)
-      _ = :erlang.statistics(:reductions)
-      _ = :erlang.statistics(:io)
-
-      Process.send_after(self(), :vm_metrics_tick, Constants.vm_metrics_interval())
       Process.send_after(self(), :metrics_refresh, Constants.vm_metrics_interval())
     end
 
@@ -99,6 +92,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:method_metrics, [])
       |> assign(:metrics_loading, true)
       |> assign(:metrics_last_updated, nil)
+      |> assign(:vm_metrics_enabled, Lasso.VMMetricsCollector.enabled?())
       |> fetch_connections()
 
     {:ok, initial_state}
@@ -495,11 +489,9 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # VM metrics ticker
+  # VM metrics update from centralized collector
   @impl true
-  def handle_info(:vm_metrics_tick, socket) do
-    metrics = MetricsHelpers.collect_vm_metrics()
-    Process.send_after(self(), :vm_metrics_tick, 2_000)
+  def handle_info({:vm_metrics_update, metrics}, socket) do
     {:noreply, assign(socket, :vm_metrics, metrics)}
   end
 
@@ -675,7 +667,7 @@ defmodule LassoWeb.Dashboard do
       >
       </div>
 
-      <DashboardHeader.header active_tab={@active_tab} />
+      <DashboardHeader.header active_tab={@active_tab} vm_metrics_enabled={@vm_metrics_enabled} />
 
     <!-- Content Section -->
       <div class="grid-pattern animate-fade-in relative flex-1 overflow-hidden">
@@ -716,13 +708,24 @@ defmodule LassoWeb.Dashboard do
           <% "benchmarks" -> %>
             <DashboardComponents.benchmarks_tab_content />
           <% "system" -> %>
-            <DashboardComponents.metrics_tab_content
-              connections={@connections}
-              routing_events={@routing_events}
-              provider_events={@provider_events}
-              last_updated={@last_updated}
-              vm_metrics={@vm_metrics}
-            />
+            <%= if @vm_metrics_enabled do %>
+              <DashboardComponents.metrics_tab_content
+                connections={@connections}
+                routing_events={@routing_events}
+                provider_events={@provider_events}
+                last_updated={@last_updated}
+                vm_metrics={@vm_metrics}
+              />
+            <% else %>
+              <div class="flex h-full w-full items-center justify-center">
+                <div class="text-center p-8">
+                  <div class="text-gray-500 mb-2">System metrics are disabled</div>
+                  <div class="text-sm text-gray-600">
+                    Set <code class="bg-gray-800 px-1 rounded">LASSO_VM_METRICS_ENABLED=true</code> to enable
+                  </div>
+                </div>
+              </div>
+            <% end %>
         <% end %>
       </div>
     </div>

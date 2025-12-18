@@ -3,8 +3,35 @@ defmodule LassoWeb.Components.DashboardHeader do
   import LassoWeb.CoreComponents
 
   attr(:active_tab, :string, required: true, doc: "currently active tab")
+  attr(:vm_metrics_enabled, :boolean, default: true, doc: "whether VM metrics tab is enabled")
 
   def header(assigns) do
+    base_tabs = [
+      %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
+      %{
+        id: "metrics",
+        label: "Provider Metrics",
+        icon:
+          "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+      }
+    ]
+
+    system_tab = %{
+      id: "system",
+      label: "System Metrics",
+      icon:
+        "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"
+    }
+
+    tabs =
+      if assigns.vm_metrics_enabled do
+        base_tabs ++ [system_tab]
+      else
+        base_tabs
+      end
+
+    assigns = assign(assigns, :tabs, tabs)
+
     ~H"""
     <div class={["relative z-20 flex-shrink-0 transition-all duration-500 ease-in-out", if(@active_tab == "docs", do: "", else: "animate-fade-in-border border-gray-700/50 border-b")]}>
       <div class="relative flex items-center justify-between px-6 py-4">
@@ -56,21 +83,7 @@ defmodule LassoWeb.Components.DashboardHeader do
           <div class="hidden md:block">
             <.tab_switcher
               id="main-tabs"
-              tabs={[
-                %{id: "overview", label: "Dashboard", icon: "M13 10V3L4 14h7v7l9-11h-7z"},
-                %{
-                  id: "metrics",
-                  label: "Provider Metrics",
-                  icon:
-                    "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                },
-                %{
-                  id: "system",
-                  label: "System Metrics",
-                  icon:
-                    "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m-6 3l6-3"
-                }
-              ]}
+              tabs={@tabs}
               active_tab={@active_tab}
             />
           </div>
