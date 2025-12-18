@@ -352,10 +352,6 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     }
   end
 
-  def get_latency_leaders_by_chain(_connections) do
-    %{}
-  end
-
   @doc "Collect VM metrics"
   def collect_vm_metrics do
     mem = :erlang.memory()

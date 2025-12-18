@@ -530,33 +530,6 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <% end %>
         </div>
       </div>
-      
-    <!-- Load Type Toggles
-      <div class="space-y-2">
-        <label class="text-[10px] font-medium text-gray-400">Load Types</label>
-        <div class="flex gap-2">
-          <button
-            phx-click="toggle_load_type"
-            phx-value-type="http"
-            phx-target={@myself}
-            class={["text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200", if(@load_types.http,
-    do: "bg-sky-500/20 border border-sky-500 text-sky-300",
-    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-sky-400/50")]}>
-            HTTP Load
-          </button>
-          <button
-            phx-click="toggle_load_type"
-            phx-value-type="ws"
-            phx-target={@myself}
-            class={["text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200", if(@load_types.ws,
-    do: "bg-purple-500/20 border border-purple-500 text-purple-300",
-    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50")]}
-          >
-            WebSocket Load
-          </button>
-        </div>
-      </div>
-     -->
 
       <!-- Request Rate -->
       <div class="space-y-2">

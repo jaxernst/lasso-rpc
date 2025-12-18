@@ -56,7 +56,6 @@ defmodule LassoWeb.Dashboard do
       _ = :erlang.statistics(:io)
 
       Process.send_after(self(), :vm_metrics_tick, Constants.vm_metrics_interval())
-      Process.send_after(self(), :latency_leaders_refresh, Constants.latency_refresh_interval())
       Process.send_after(self(), :metrics_refresh, Constants.vm_metrics_interval())
     end
 
@@ -85,7 +84,6 @@ defmodule LassoWeb.Dashboard do
       |> assign(:available_chains, available_chains)
       |> assign(:details_collapsed, true)
       |> assign(:events_collapsed, true)
-      |> assign(:latency_leaders, %{})
       |> assign(:chain_config_open, true)
       |> assign(:chain_config_collapsed, true)
       |> assign(:selected_chain_metrics, %{})
@@ -505,15 +503,6 @@ defmodule LassoWeb.Dashboard do
     {:noreply, assign(socket, :vm_metrics, metrics)}
   end
 
-  # Latency leaders refresh
-  @impl true
-  def handle_info(:latency_leaders_refresh, socket) do
-    connections = Map.get(socket.assigns, :connections, [])
-    latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
-    Process.send_after(self(), :latency_leaders_refresh, 30_000)
-    {:noreply, assign(socket, :latency_leaders, latency_leaders)}
-  end
-
   # Provider metrics refresh
   @impl true
   def handle_info(:metrics_refresh, socket) do
@@ -714,7 +703,6 @@ defmodule LassoWeb.Dashboard do
               selected_provider_events={@selected_provider_events}
               selected_provider_unified_events={@selected_provider_unified_events}
               selected_provider_metrics={@selected_provider_metrics}
-              latency_leaders={@latency_leaders}
             />
           <% "metrics" -> %>
             <.metrics_tab_content
@@ -755,7 +743,6 @@ defmodule LassoWeb.Dashboard do
   attr(:available_chains, :list)
   attr(:chain_config_open, :boolean)
   attr(:chain_config_collapsed, :boolean, default: true)
-  attr(:latency_leaders, :map, default: %{})
   attr(:selected_chain_metrics, :map, default: %{})
   attr(:selected_chain_events, :list, default: [])
   attr(:selected_chain_unified_events, :list, default: [])
@@ -781,7 +768,6 @@ defmodule LassoWeb.Dashboard do
             connections={@connections}
             selected_chain={@selected_chain}
             selected_provider={@selected_provider}
-            latency_leaders={@latency_leaders}
             on_chain_select="select_chain"
             on_provider_select="select_provider"
           />
@@ -2259,11 +2245,8 @@ defmodule LassoWeb.Dashboard do
         end
       end)
 
-    latency_leaders = MetricsHelpers.get_latency_leaders_by_chain(connections)
-
     socket
     |> assign(:connections, connections)
-    |> assign(:latency_leaders, latency_leaders)
     |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
   end
 

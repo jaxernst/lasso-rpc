@@ -18,8 +18,8 @@ defmodule LassoWeb.HomeLive do
     # Load available chains
     available_chains = ConfigStore.list_chains() |> Enum.sort()
 
-    # Load initial heatmap data
-    heatmap_chain = "ethereum"
+    # Load initial heatmap data - use first available chain
+    heatmap_chain = List.first(available_chains, "ethereum")
     {heatmap_data, heatmap_methods, heatmap_live} = load_heatmap_data(heatmap_chain)
 
     socket =
@@ -52,8 +52,8 @@ defmodule LassoWeb.HomeLive do
   def handle_info(:tick, socket) do
     Process.send_after(self(), :tick, 1000)
 
-    # Try to get real data
-    real_calls = Lasso.Benchmarking.BenchmarkStore.get_recent_calls("ethereum", 4)
+    # Try to get real data from the selected heatmap chain
+    real_calls = Lasso.Benchmarking.BenchmarkStore.get_recent_calls(socket.assigns.heatmap_chain, 4)
 
     {new_decisions, is_live} =
       if length(real_calls) > 0 do

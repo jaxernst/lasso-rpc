@@ -17,24 +17,6 @@ defmodule LassoWeb.CoreComponents do
   alias Phoenix.LiveView.JS
 
   @doc """
-  Renders a status indicator badge.
-
-  ## Examples
-
-      <.status_badge status={:connected} />
-      <.status_badge status={:disconnected} />
-  """
-  attr(:status, :atom, required: true)
-
-  def status_badge(assigns) do
-    ~H"""
-    <span class={["inline-flex items-center rounded-full px-2 py-1 text-xs font-medium", status_color(@status)]}>
-      {status_text(@status)}
-    </span>
-    """
-  end
-
-  @doc """
   Renders a simple table with generic styling.
 
   ## Examples
@@ -112,18 +94,6 @@ defmodule LassoWeb.CoreComponents do
     </div>
     """
   end
-
-  defp status_color(:connected), do: "bg-green-100 text-green-800"
-  defp status_color(:disconnected), do: "bg-red-100 text-red-800"
-  defp status_color(:unknown), do: "bg-gray-100 text-gray-800"
-  defp status_color(:dead), do: "bg-gray-100 text-gray-800"
-  defp status_color(_), do: "bg-gray-100 text-gray-800"
-
-  defp status_text(:connected), do: "Connected"
-  defp status_text(:disconnected), do: "Disconnected"
-  defp status_text(:unknown), do: "Unknown"
-  defp status_text(:dead), do: "Dead"
-  defp status_text(status), do: to_string(status)
 
   @doc """
   Renders flash notices.
