@@ -33,6 +33,7 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
     ]
 
     # Define Chains (Inner Orbit) - more nodes, smaller, spread out more
+    # Some chains have logos (grayscale) - currently showing Ethereum and Base for visible nodes
     chains = [
       %{id: "c1", angle: 0, r: chain_radius, size: 11, delay: 0, hub_id: "h3"},
       %{id: "c2", angle: 45, r: chain_radius, size: 8, delay: 1.2, hub_id: "h3"},
@@ -40,8 +41,8 @@ defmodule LassoWeb.Components.LandingHeroGraphic do
       %{id: "c4", angle: 135, r: chain_radius, size: 8, delay: 1.8, hub_id: "h1"},
       %{id: "c5", angle: 180, r: chain_radius, size: 11, delay: 0.8, hub_id: "h2"},
       %{id: "c6", angle: 225, r: chain_radius, size: 8, delay: 2.2, hub_id: "h2"},
-      %{id: "c7", angle: 270, r: chain_radius, size: 11, delay: 1.0, hub_id: "h2"},
-      %{id: "c8", angle: 315, r: chain_radius, size: 8, delay: 2.5, hub_id: "h3"}
+      %{id: "c7", angle: 270, r: chain_radius, size: 14, delay: 1.0, hub_id: "h2", logo: :ethereum},
+      %{id: "c8", angle: 315, r: chain_radius, size: 12, delay: 2.5, hub_id: "h3", logo: :base}
     ]
 
     # Define Providers (Outer Orbit) - smaller, more numerous

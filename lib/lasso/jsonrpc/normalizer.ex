@@ -80,9 +80,6 @@ defmodule Lasso.RPC.Normalizer do
     end
   end
 
-  # In the future, dispatch to method normalizers here
-  # defp cast_with_method_normalizer(result, opts), do: ...
-
   defp emit_result_telemetry(provider_id, method, status) do
     :telemetry.execute([:lasso, :normalize, :result], %{count: 1}, %{
       provider_id: provider_id,

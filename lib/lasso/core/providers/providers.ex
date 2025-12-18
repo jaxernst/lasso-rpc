@@ -46,7 +46,7 @@ defmodule Lasso.Providers do
   """
 
   require Logger
-  alias Lasso.Config.{ConfigStore, ConfigValidator, ChainConfigManager}
+  alias Lasso.Config.{ChainConfigManager, ConfigStore, ConfigValidator}
   alias Lasso.RPC.{ChainSupervisor, ProviderPool}
 
   @type provider_config :: %{

@@ -1891,25 +1891,23 @@ defmodule LassoWeb.Dashboard do
   # Format event messages for display (handles Lasso.JSONRPC.Error structs, etc.)
   defp format_event_message(message) when is_binary(message) do
     # Check if this looks like an inspected struct and try to clean it up
-    cond do
-      String.starts_with?(message, "%Lasso.JSONRPC.Error{") ->
-        # Parse out key fields from the struct string representation
-        code = extract_field(message, "code:")
-        msg = extract_field(message, "message:")
-        category = extract_field(message, "category:")
+    if String.starts_with?(message, "%Lasso.JSONRPC.Error{") do
+      # Parse out key fields from the struct string representation
+      code = extract_field(message, "code:")
+      msg = extract_field(message, "message:")
+      category = extract_field(message, "category:")
 
-        parts = []
-        parts = if msg && msg != "nil", do: [clean_string_value(msg) | parts], else: parts
-        parts = if code && code != "nil", do: ["ERR #{code}" | parts], else: parts
-        parts = if category && category != "nil", do: ["(#{category})" | parts], else: parts
+      parts = []
+      parts = if msg && msg != "nil", do: [clean_string_value(msg) | parts], else: parts
+      parts = if code && code != "nil", do: ["ERR #{code}" | parts], else: parts
+      parts = if category && category != "nil", do: ["(#{category})" | parts], else: parts
 
-        case parts do
-          [] -> message
-          _ -> Enum.reverse(parts) |> Enum.join(" ")
-        end
-
-      true ->
-        message
+      case parts do
+        [] -> message
+        _ -> Enum.reverse(parts) |> Enum.join(" ")
+      end
+    else
+      message
     end
   end
 

@@ -571,7 +571,7 @@ defmodule Lasso.RPC.WSConnection do
 
   def handle_info(
         {:heartbeat},
-        state = %{connected: true, connection: connection, endpoint: endpoint}
+        %{connected: true, connection: connection, endpoint: endpoint} = state
       ) do
     case send_frame(connection, :ping) do
       :ok ->
@@ -628,7 +628,7 @@ defmodule Lasso.RPC.WSConnection do
     end
   end
 
-  def handle_info({:heartbeat}, state = %{connected: false}) do
+  def handle_info({:heartbeat}, %{connected: false} = state) do
     {:noreply, state}
   end
 
