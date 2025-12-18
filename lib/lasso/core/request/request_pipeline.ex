@@ -1,14 +1,22 @@
 defmodule Lasso.RPC.RequestPipeline do
   @moduledoc """
-  Orchestrates provider selection, optional override short-circuit,
-  and resilient retries/failover for RPC requests across transports.
+  Orchestrates RPC request execution with provider selection, retries, and failover.
 
-  Responsibilities:
-  - Select provider using strategy and protocol constraints
-  - Support provider override (attempt first; optional failover on retriable errors)
-  - Execute single attempts wrapped in per-provider circuit breakers
-  - Publish telemetry and update provider metrics for successes/failures
-  - Log request completion with timing via Observability
+  This module provides a unified pipeline for executing JSON-RPC requests across
+  multiple providers and transports (HTTP/WebSocket). Key features:
+
+  - Single execution path for both normal routing and provider overrides
+  - Automatic failover on retriable errors
+  - Circuit breaker integration per provider/transport
+  - Full observability via RequestContext
+
+  ## Return Type Contract
+
+  All functions return 3-tuples:
+  - `{:ok, result, ctx}` - Success with result and updated context
+  - `{:error, %JError{}, ctx}` - Failure with typed error and updated context
+
+  The executed channel is stored in `ctx.executed_channel` for observability,
   """
 
   require Logger
@@ -28,32 +36,41 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.RPC.RequestOptions
   alias Lasso.RPC.RequestPipeline.{FailoverStrategy, Observability}
 
+  # Type definitions
   @type chain :: String.t()
   @type method :: String.t()
   @type params :: list()
+  @type result :: {:ok, any(), RequestContext.t()} | {:error, JError.t(), RequestContext.t()}
 
-  # Configuration constants
+  # A channel source is a function that returns channels to try
+  @type channel_source :: (RequestContext.t() -> [Channel.t()])
+
+  # Configuration
   @max_channel_candidates 10
+
+  # ============================================================================
+  # Public API
+  # ============================================================================
 
   @doc """
   Execute an RPC request using transport-agnostic channels.
 
-  This is a channel-based API that supports mixed HTTP and WebSocket routing.
-  It automatically selects the best channels across different transports based on
-  strategy, health, and capabilities.
+  This is the main entry point for request execution. It handles:
+  - Provider selection (or override)
+  - Automatic failover on retriable errors
+  - Circuit breaker integration
+  - Full observability tracking
 
-  Returns the final RequestContext alongside the result, providing observability
-  metadata including provider selection details, latency measurements, retry history,
-  and error chains.
+  ## Options
 
-  Takes a `RequestOptions` struct containing all execution parameters:
+  Takes a `RequestOptions` struct with:
   - `strategy` - Routing strategy (:fastest, :cheapest, etc.)
   - `provider_override` - Force specific provider (optional)
   - `transport` - Transport preference (:http, :ws, :both)
   - `failover_on_override` - Retry on other providers if override fails
   - `timeout_ms` - Per-attempt timeout in milliseconds
   - `request_id` - Request tracing ID (optional)
-  - `request_context` - Pre-created RequestContext for observability (optional)
+  - `request_context` - Pre-created RequestContext (optional)
 
   ## Examples
 
@@ -63,416 +80,407 @@ defmodule Lasso.RPC.RequestPipeline do
         [],
         %RequestOptions{strategy: :fastest}
       )
-      # ctx contains: selected_provider, upstream_latency_ms, retries, etc.
+      # ctx.executed_channel contains the channel that succeeded
 
-      {:error, error, ctx} = execute_via_channels(
+      {:error, %JError{}, ctx} = execute_via_channels(
         "ethereum",
         "eth_call",
         [],
         %RequestOptions{provider_override: "failing_provider"}
       )
-      # ctx.errors contains the error chain
   """
-  @spec execute_via_channels(chain, method, params, RequestOptions.t()) ::
-          {:ok, any(), RequestContext.t()} | {:error, any(), RequestContext.t()}
+  @spec execute_via_channels(chain(), method(), params(), RequestOptions.t()) :: result()
   def execute_via_channels(chain, method, params, %RequestOptions{} = opts) do
-    # Get or create request context
-    ctx =
-      opts.request_context ||
-        RequestContext.new(chain, method,
-          params_present: params != [] and not is_nil(params),
-          params_digest: compute_params_digest(params),
-          transport: opts.transport || :http,
-          strategy: opts.strategy,
-          request_id: opts.request_id,
-          plug_start_time: opts.plug_start_time
-        )
+    # Initialize context
+    ctx = initialize_context(chain, method, params, opts)
 
-    # Build JSON-RPC request
-    rpc_request = %{
-      "jsonrpc" => "2.0",
-      "method" => method,
-      "params" => params,
-      "id" => ctx.request_id
-    }
+    # Build RPC request and set execution params on context
+    rpc_request = build_rpc_request(method, params, ctx)
+    ctx = RequestContext.set_execution_params(ctx, rpc_request, opts.timeout_ms, opts)
 
-    # Route based on provider override
-    case opts.provider_override do
-      provider_id when is_binary(provider_id) ->
-        execute_with_provider_override(chain, rpc_request, opts, ctx)
+    # Build channel source based on options (unifies override vs normal selection)
+    channel_source = build_channel_source(chain, method, opts)
 
-      nil ->
-        execute_with_channel_selection(chain, rpc_request, opts, ctx)
-    end
+    # Execute the pipeline
+    execute_pipeline(channel_source, ctx)
   end
 
-  # Provider override execution path
-  @spec execute_with_provider_override(chain(), map(), RequestOptions.t(), RequestContext.t()) ::
-          {:ok, any(), RequestContext.t()} | {:error, any(), RequestContext.t()}
-  defp execute_with_provider_override(
-         chain,
-         %{"method" => method} = rpc_request,
-         %RequestOptions{} = opts,
-         ctx
-       ) do
-    provider_id = opts.provider_override
+  # ============================================================================
+  # Pipeline Execution
+  # ============================================================================
+
+  @spec execute_pipeline(channel_source(), RequestContext.t()) :: result()
+  defp execute_pipeline(channel_source, ctx) do
     ctx = RequestContext.mark_request_start(ctx)
 
-    Observability.record_request_start(chain, method, opts.strategy, provider_id)
-
-    # Get channels for the specific provider
-    channels = get_provider_channels(chain, provider_id, opts.transport)
-
-    case attempt_request_on_channels(channels, rpc_request, opts.timeout_ms, ctx) do
-      {:ok, result, channel, updated_ctx} ->
-        handle_override_success(method, opts, result, channel, updated_ctx)
-
-      {:error, :no_channels_available, updated_ctx} ->
-        handle_override_no_channels(method, opts, provider_id, updated_ctx)
-
-      {:error, reason, channel, ctx1} ->
-        handle_override_failure(chain, rpc_request, opts, provider_id, reason, channel, ctx1)
-    end
-  end
-
-  # Handles successful provider override request
-  @spec handle_override_success(
-          String.t(),
-          RequestOptions.t(),
-          any(),
-          Channel.t(),
-          RequestContext.t()
-        ) :: {:ok, any(), RequestContext.t()}
-  defp handle_override_success(method, opts, result, channel, updated_ctx) do
-    duration_ms = RequestContext.get_duration(updated_ctx)
-
-    Observability.record_success(updated_ctx, channel, method, opts.strategy, duration_ms)
-
-    {:ok, result, updated_ctx}
-  end
-
-  # Handles no channels available for provider override
-  @spec handle_override_no_channels(
-          String.t(),
-          RequestOptions.t(),
-          String.t(),
-          RequestContext.t()
-        ) :: {:error, JError.t(), RequestContext.t()}
-  defp handle_override_no_channels(method, opts, provider_id, updated_ctx) do
-    duration_ms = RequestContext.get_duration(updated_ctx)
-
-    jerr =
-      JError.new(-32_000, "Provider not found or no channels available",
-        category: :provider_error
-      )
-
-    Observability.record_failure(
-      updated_ctx,
-      provider_id,
-      method,
-      opts.strategy,
-      jerr,
-      duration_ms
+    Observability.record_request_start(
+      ctx.chain,
+      ctx.method,
+      ctx.opts.strategy,
+      ctx.opts.provider_override
     )
 
-    {:error, jerr, updated_ctx}
-  end
+    # Get channels from the source
+    ctx = RequestContext.mark_selection_start(ctx)
+    channels = channel_source.(ctx)
 
-  # Handles failure of provider override with optional failover
-  @spec handle_override_failure(
-          chain(),
-          map(),
-          RequestOptions.t(),
-          String.t(),
-          any(),
-          Channel.t(),
-          RequestContext.t()
-        ) :: {:ok, any(), RequestContext.t()} | {:error, JError.t(), RequestContext.t()}
-  defp handle_override_failure(
-         chain,
-         %{"method" => method} = rpc_request,
-         opts,
-         provider_id,
-         reason,
-         channel,
-         ctx1
-       ) do
-    duration_ms = RequestContext.get_duration(ctx1)
-    jerr = JError.from(reason, provider_id: provider_id)
-
-    Observability.record_failure(ctx1, channel, method, opts.strategy, jerr, duration_ms)
-
-    should_failover = opts.failover_on_override and retriable_error?(jerr)
-
-    if should_failover do
-      attempt_override_failover(chain, rpc_request, opts, provider_id, ctx1, jerr, method)
-    else
-      {:error, jerr, ctx1}
-    end
-  end
-
-  # Attempts failover after provider override failure
-  @spec attempt_override_failover(
-          chain(),
-          map(),
-          RequestOptions.t(),
-          String.t(),
-          RequestContext.t(),
-          JError.t(),
-          String.t()
-        ) :: {:ok, any(), RequestContext.t()} | {:error, JError.t(), RequestContext.t()}
-  defp attempt_override_failover(chain, rpc_request, opts, provider_id, ctx1, jerr, method) do
-    # Select alternative channels excluding the failed provider
-    failover_channels =
-      Selection.select_channels(chain, method,
-        strategy: opts.strategy,
-        transport: :both,
-        exclude: [provider_id],
-        limit: @max_channel_candidates
+    ctx =
+      RequestContext.mark_selection_end(ctx,
+        candidates: Enum.map(channels, &"#{&1.provider_id}:#{&1.transport}"),
+        selected: List.first(channels)
       )
 
-    case failover_channels do
+    case channels do
       [] ->
-        # No alternative providers available
-        {:error, jerr, ctx1}
+        handle_no_channels(ctx)
 
       _ ->
-        # Try failover channels using standard pipeline
-        case attempt_request_on_channels(failover_channels, rpc_request, opts.timeout_ms, ctx1) do
-          {:ok, result, channel, updated_ctx} ->
-            # Failover succeeded
-            duration_ms = RequestContext.get_duration(updated_ctx)
-            Observability.record_success(updated_ctx, channel, method, opts.strategy, duration_ms)
-
-            {:ok, result, updated_ctx}
-
-          {:error, _reason, _channel, failed_ctx} ->
-            # Failover failed - return original error
-            {:error, jerr, failed_ctx}
-
-          {:error, :no_channels_available, failed_ctx} ->
-            # All failover channels exhausted - return original error
-            {:error, jerr, failed_ctx}
-        end
+        ctx = RequestContext.mark_upstream_start(ctx)
+        attempt_channels(channels, ctx)
     end
   end
 
-  # Normal selection execution path
-  @spec execute_with_channel_selection(chain(), map(), RequestOptions.t(), RequestContext.t()) ::
-          {:ok, any(), RequestContext.t()} | {:error, any(), RequestContext.t()}
-  defp execute_with_channel_selection(
-         chain,
-         %{"method" => method} = rpc_request,
-         %RequestOptions{} = opts,
-         ctx
-       ) do
-    ctx = RequestContext.mark_request_start(ctx)
+  # ============================================================================
+  # Channel Source Builders
+  # ============================================================================
 
-    Observability.record_request_start(chain, method, opts.strategy)
-
-    # Mark selection start and get candidate channels
-    ctx = RequestContext.mark_selection_start(ctx)
-
-    channels =
+  # Builds a function that returns channels to try, unifying override vs normal selection
+  @spec build_channel_source(chain(), method(), RequestOptions.t()) :: channel_source()
+  defp build_channel_source(chain, method, %RequestOptions{provider_override: nil} = opts) do
+    # Normal selection: get best channels via Selection module
+    fn _ctx ->
       Selection.select_channels(chain, method,
         strategy: opts.strategy,
         transport: opts.transport || :both,
         limit: @max_channel_candidates
       )
-
-    # Update context with selection metadata
-    ctx =
-      RequestContext.mark_selection_end(ctx,
-        candidates: Enum.map(channels, &"#{&1.provider_id}:#{&1.transport}"),
-        selected: if(length(channels) > 0, do: List.first(channels), else: nil)
-      )
-
-    case channels do
-      [] ->
-        handle_channel_exhaustion(chain, method, opts, ctx)
-
-      _ ->
-        execute_request_with_channels(chain, rpc_request, method, opts, ctx, channels, :normal)
     end
   end
 
-  # Handles request execution when all circuits are open
-  @spec handle_channel_exhaustion(
-          chain(),
-          String.t(),
-          RequestOptions.t(),
-          RequestContext.t()
-        ) :: {:error, JError.t(), RequestContext.t()}
-  defp handle_channel_exhaustion(chain, method, %RequestOptions{} = opts, ctx) do
-    retry_after_ms = calculate_min_recovery_time(chain, opts.transport)
-    {error_message, error_data} = build_exhaustion_error_message(method, retry_after_ms, chain)
+  defp build_channel_source(chain, method, %RequestOptions{provider_override: provider_id} = opts) do
+    # Provider override: get channels for specific provider, optionally with failover
+    fn _ctx ->
+      primary_channels = get_provider_channels(chain, provider_id, opts.transport)
+
+      if opts.failover_on_override do
+        # Append alternative channels for failover
+        failover_channels =
+          Selection.select_channels(chain, method,
+            strategy: opts.strategy,
+            transport: :both,
+            exclude: [provider_id],
+            limit: @max_channel_candidates
+          )
+
+        primary_channels ++ failover_channels
+      else
+        primary_channels
+      end
+    end
+  end
+
+  # ============================================================================
+  # Channel Attempts (Tail-Recursive)
+  # ============================================================================
+
+  @spec attempt_channels([Channel.t()], RequestContext.t()) :: result()
+  defp attempt_channels([], ctx) do
+    # All channels exhausted
+    Logger.warning("All channels exhausted",
+      chain: ctx.chain,
+      method: ctx.method,
+      request_id: ctx.request_id,
+      attempts: length(ctx.attempted_channels)
+    )
 
     jerr =
-      JError.new(-32_000, error_message,
+      JError.new(-32_000, "No channels available",
         category: :provider_error,
-        retriable?: true,
-        data: error_data
+        retriable?: true
       )
 
-    updated_ctx = RequestContext.record_error(ctx, jerr)
+    finalize_error(jerr, ctx)
+  end
 
-    Logger.warning("Channel exhaustion: all circuits open",
-      chain: chain,
-      method: method,
+  defp attempt_channels([channel | rest], ctx) do
+    %{"method" => method, "params" => params} = ctx.rpc_request
+
+    # Validate params for this channel first
+    case AdapterFilter.validate_params(channel, method, params) do
+      :ok ->
+        execute_on_channel(channel, rest, ctx)
+
+      {:error, reason} ->
+        Logger.debug("Parameters invalid for channel, skipping",
+          channel: Channel.to_string(channel),
+          method: method,
+          reason: inspect(reason)
+        )
+
+        ctx = RequestContext.increment_retries(ctx)
+        attempt_channels(rest, ctx)
+    end
+  end
+
+  # ============================================================================
+  # Single Channel Execution
+  # ============================================================================
+
+  @spec execute_on_channel(Channel.t(), [Channel.t()], RequestContext.t()) :: result()
+  defp execute_on_channel(channel, rest_channels, ctx) do
+    # Update context with current channel selection
+    ctx = %{
+      ctx
+      | selected_provider: %{id: channel.provider_id, protocol: channel.transport},
+        circuit_breaker_state: :unknown
+    }
+
+    case execute_with_circuit_breaker(channel, ctx.rpc_request, ctx.timeout_ms) do
+      # Function executed - examine what it returned
+      {:executed, {:ok, result, io_ms}} ->
+        handle_success(result, io_ms, channel, ctx)
+
+      {:executed, {:error, :unsupported_method, _io_ms}} ->
+        Logger.debug("Method not supported on channel, skipping",
+          channel: Channel.to_string(channel),
+          method: ctx.rpc_request["method"]
+        )
+        attempt_channels(rest_channels, ctx)
+
+      {:executed, {:error, reason, io_ms}} ->
+        handle_channel_error(reason, io_ms, channel, rest_channels, ctx)
+
+      {:executed, {:exception, {kind, error, _stacktrace}}} ->
+        Logger.error("Exception during request execution",
+          channel: Channel.to_string(channel),
+          kind: kind,
+          error: inspect(error)
+        )
+        exception_error = JError.new(-32_000, "Internal error: #{kind}", category: :server_error, retriable?: true)
+        handle_channel_error(exception_error, nil, channel, rest_channels, ctx)
+
+      # Circuit breaker rejected execution
+      {:rejected, :circuit_open} ->
+        handle_circuit_open(channel, rest_channels, ctx)
+
+      {:rejected, :half_open_busy} ->
+        handle_circuit_open(channel, rest_channels, ctx)
+
+      {:rejected, :admission_timeout} ->
+        Logger.warning("Circuit breaker admission timeout",
+          channel: Channel.to_string(channel),
+          request_id: ctx.request_id
+        )
+        # Treat as retriable - try next channel
+        ctx = RequestContext.increment_retries(ctx)
+        attempt_channels(rest_channels, ctx)
+
+      {:rejected, :not_found} ->
+        Logger.error("Circuit breaker not found",
+          channel: Channel.to_string(channel),
+          request_id: ctx.request_id
+        )
+        # Treat as retriable - try next channel
+        ctx = RequestContext.increment_retries(ctx)
+        attempt_channels(rest_channels, ctx)
+    end
+  end
+
+  # ============================================================================
+  # Result Handlers
+  # ============================================================================
+
+  @spec handle_success(any(), number(), Channel.t(), RequestContext.t()) :: result()
+  defp handle_success(result, io_ms, channel, ctx) do
+    Logger.debug("Request succeeded",
+      channel: Channel.to_string(channel),
+      request_id: ctx.request_id,
+      io_latency_ms: io_ms
+    )
+
+    log_slow_request_if_needed(io_ms, ctx.method, channel, ctx)
+
+    # Update context with success info
+    ctx =
+      ctx
+      |> RequestContext.add_upstream_latency(io_ms)
+      |> RequestContext.record_channel_success(channel)
+      |> RequestContext.set_executed_channel(channel)
+      |> RequestContext.mark_upstream_end()
+      |> RequestContext.record_success(result)
+
+    duration_ms = RequestContext.get_duration(ctx)
+    Observability.record_success(ctx, channel, ctx.method, ctx.opts.strategy, duration_ms)
+
+    {:ok, result, ctx}
+  end
+
+  @spec handle_channel_error(any(), number() | nil, Channel.t(), [Channel.t()], RequestContext.t()) ::
+          result()
+  defp handle_channel_error(reason, io_ms, channel, rest_channels, ctx) do
+    # Record the failed attempt
+    ctx =
+      ctx
+      |> RequestContext.add_upstream_latency(io_ms || 0)
+      |> RequestContext.record_channel_attempt(channel, reason)
+
+    # Use FailoverStrategy to decide next action
+    case FailoverStrategy.decide(reason, rest_channels, ctx) do
+      {:failover, failover_reason} ->
+        Logger.debug("Failing over to next channel",
+          channel: Channel.to_string(channel),
+          reason: failover_reason,
+          remaining: length(rest_channels)
+        )
+
+        error_category = extract_error_category(reason)
+
+        ctx =
+          ctx
+          |> RequestContext.increment_retries()
+          |> RequestContext.track_error_category(error_category)
+
+        Observability.record_fast_fail(ctx, channel, failover_reason, reason)
+
+        attempt_channels(rest_channels, ctx)
+
+      {:terminal_error, terminal_reason} ->
+        Logger.warning("Terminal error, not retrying",
+          channel: Channel.to_string(channel),
+          reason: terminal_reason,
+          error: inspect(reason)
+        )
+
+        jerr = JError.from(reason, provider_id: channel.provider_id)
+
+        ctx = RequestContext.set_executed_channel(ctx, channel)
+
+        finalize_error(jerr, ctx)
+    end
+  end
+
+  @spec handle_circuit_open(Channel.t(), [Channel.t()], RequestContext.t()) :: result()
+  defp handle_circuit_open(channel, rest_channels, ctx) do
+    Logger.info("Circuit breaker open, skipping",
+      channel: Channel.to_string(channel),
+      request_id: ctx.request_id
+    )
+
+    ctx =
+      ctx
+      |> RequestContext.add_upstream_latency(0)
+      |> RequestContext.increment_retries()
+
+    Observability.record_circuit_open(ctx, channel)
+
+    attempt_channels(rest_channels, ctx)
+  end
+
+  @spec handle_no_channels(RequestContext.t()) :: result()
+  defp handle_no_channels(ctx) do
+    retry_after_ms = calculate_min_recovery_time(ctx.chain, ctx.opts.transport)
+    {message, data} = build_exhaustion_error_message(ctx.method, retry_after_ms, ctx.chain)
+
+    jerr =
+      JError.new(-32_000, message,
+        category: :provider_error,
+        retriable?: true,
+        data: data
+      )
+
+    Logger.warning("No channels available",
+      chain: ctx.chain,
+      method: ctx.method,
       retry_after_ms: retry_after_ms
     )
 
-    Observability.record_exhaustion(chain, method, opts.transport, retry_after_ms)
+    Observability.record_exhaustion(ctx.chain, ctx.method, ctx.opts.transport, retry_after_ms)
 
-    {:error, jerr, updated_ctx}
+    finalize_error(jerr, ctx)
   end
 
-  # Builds error message with retry-after hint for channel exhaustion
-  @spec build_exhaustion_error_message(String.t(), non_neg_integer() | nil, String.t()) ::
-          {String.t(), map()}
-  defp build_exhaustion_error_message(method, nil, _chain) do
-    {"No available channels for method: #{method}. All circuit breakers are open.", %{}}
-  end
+  # ============================================================================
+  # Finalization
+  # ============================================================================
 
-  defp build_exhaustion_error_message(method, ms, _chain) when is_integer(ms) and ms > 0 do
-    seconds = div(ms, 1000)
-
-    message =
-      "No available channels for method: #{method}. All circuits open, retry after #{seconds}s"
-
-    {message, %{retry_after_ms: ms}}
-  end
-
-  defp build_exhaustion_error_message(method, retry_after_ms, chain) do
-    Logger.warning("Invalid recovery time returned: #{inspect(retry_after_ms)}",
-      chain: chain,
-      method: method
-    )
-
-    {"No available channels for method: #{method}. All circuit breakers are open.", %{}}
-  end
-
-  # Unified request execution with channels (works for both normal and degraded modes)
-  @spec execute_request_with_channels(
-          chain(),
-          map(),
-          String.t(),
-          RequestOptions.t(),
-          RequestContext.t(),
-          [Channel.t()],
-          atom()
-        ) :: {:ok, any(), RequestContext.t()} | {:error, any(), RequestContext.t()}
-  defp execute_request_with_channels(
-         chain,
-         rpc_request,
-         method,
-         %RequestOptions{} = opts,
-         ctx,
-         channels,
-         mode
-       ) do
-    # Log and update context for degraded mode
+  @spec finalize_error(JError.t(), RequestContext.t()) :: result()
+  defp finalize_error(jerr, ctx) do
     ctx =
-      if mode == :degraded do
-        Logger.info("Degraded mode: attempting #{length(channels)} half-open channels",
-          chain: chain,
-          method: method,
-          channels: Enum.map(channels, &"#{&1.provider_id}:#{&1.transport}")
-        )
+      ctx
+      |> RequestContext.mark_upstream_end()
+      |> RequestContext.record_error(jerr)
 
-        # Update context to reflect degraded mode selection
-        RequestContext.mark_selection_end(ctx,
-          candidates: Enum.map(channels, &"#{&1.provider_id}:#{&1.transport}"),
-          selected: if(length(channels) > 0, do: List.first(channels), else: nil)
-        )
-      else
-        ctx
-      end
+    duration_ms = RequestContext.get_duration(ctx)
 
-    # Mark upstream start and attempt request
-    ctx = RequestContext.mark_upstream_start(ctx)
-
-    case attempt_request_on_channels(channels, rpc_request, opts.timeout_ms, ctx) do
-      {:ok, result, channel, updated_ctx} ->
-        handle_success(chain, method, opts, ctx, result, channel, updated_ctx, mode)
-
-      {:error, reason, channel, _ctx1} ->
-        handle_failure(method, opts, ctx, reason, channel)
-
-      {:error, :no_channels_available, _updated_ctx} ->
-        # No channels available - return error
-        updated_ctx = RequestContext.mark_upstream_end(ctx)
-        final_ctx = RequestContext.record_error(updated_ctx, :no_channels_available)
-        jerr = JError.from(:no_channels_available, provider_id: "no_channels")
-
-        {:error, jerr, final_ctx}
-    end
-  end
-
-  # Unified success handler for all execution modes
-  @spec handle_success(
-          chain(),
-          String.t(),
-          RequestOptions.t(),
-          RequestContext.t(),
-          any(),
-          Channel.t(),
-          RequestContext.t(),
-          atom()
-        ) :: {:ok, any(), RequestContext.t()}
-  defp handle_success(
-         chain,
-         method,
-         %RequestOptions{} = opts,
-         _original_ctx,
-         result,
-         channel,
-         updated_ctx,
-         mode
-       ) do
-    duration_ms = RequestContext.get_duration(updated_ctx)
-    updated_ctx = RequestContext.mark_upstream_end(updated_ctx)
-    updated_ctx = RequestContext.record_success(updated_ctx, result)
-
-    Observability.record_success(updated_ctx, channel, method, opts.strategy, duration_ms)
-
-    # Additional logging and observability for degraded mode
-    if mode == :degraded do
-      Logger.info("Degraded mode success via half-open channel",
-        chain: chain,
-        method: method,
-        channel: "#{channel.provider_id}:#{channel.transport}"
+    # Record observability if we have an executed channel
+    if ctx.executed_channel do
+      Observability.record_failure(
+        ctx,
+        ctx.executed_channel,
+        ctx.method,
+        ctx.opts.strategy,
+        jerr,
+        duration_ms
       )
-
-      Observability.record_degraded_success(chain, method, channel)
+    else
+      Observability.record_failure(
+        ctx,
+        "no_channel",
+        ctx.method,
+        ctx.opts.strategy,
+        jerr,
+        duration_ms
+      )
     end
 
-    {:ok, result, updated_ctx}
+    {:error, jerr, ctx}
   end
 
-  # Unified failure handler for all execution modes
-  @spec handle_failure(
-          String.t(),
-          RequestOptions.t(),
-          RequestContext.t(),
-          any(),
-          Channel.t()
-        ) :: {:error, JError.t(), RequestContext.t()}
-  defp handle_failure(
-         method,
-         %RequestOptions{} = opts,
-         ctx,
-         reason,
-         channel
-       ) do
-    updated_ctx = RequestContext.mark_upstream_end(ctx)
-    final_ctx = RequestContext.record_error(updated_ctx, reason)
-    jerr = JError.from(reason, provider_id: "no_channels")
-    duration = final_ctx.upstream_latency_ms || 0
+  # ============================================================================
+  # Circuit Breaker Execution
+  # ============================================================================
 
-    Observability.record_failure(final_ctx, channel, method, opts.strategy, jerr, duration)
+  # CircuitBreaker.call returns:
+  # - {:executed, fun_result} - Function executed, fun_result is what Channel.request returned
+  # - {:rejected, reason} - Circuit breaker prevented execution
+  #
+  # Channel.request returns: {:ok, result, io_ms} | {:error, reason, io_ms}
+  #
+  # The CB handles all exit cases internally (timeout, noproc, etc.) and returns
+  # {:rejected, :admission_timeout} or {:rejected, :not_found} instead.
+  @spec execute_with_circuit_breaker(Channel.t(), map(), timeout()) ::
+          CircuitBreaker.call_result({:ok, any(), number()} | {:error, any(), number()})
+  defp execute_with_circuit_breaker(channel, rpc_request, timeout) do
+    attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
+    cb_id = {channel.chain, channel.provider_id, channel.transport}
+    CircuitBreaker.call(cb_id, attempt_fun, timeout)
+  end
 
-    {:error, jerr, final_ctx}
+  # ============================================================================
+  # Helpers
+  # ============================================================================
+
+  @spec initialize_context(chain(), method(), params(), RequestOptions.t()) :: RequestContext.t()
+  defp initialize_context(chain, method, params, opts) do
+    opts.request_context ||
+      RequestContext.new(chain, method,
+        params_present: params != [] and not is_nil(params),
+        params_digest: compute_params_digest(params),
+        transport: opts.transport || :http,
+        strategy: opts.strategy,
+        request_id: opts.request_id,
+        plug_start_time: opts.plug_start_time
+      )
+  end
+
+  @spec build_rpc_request(method(), params(), RequestContext.t()) :: map()
+  defp build_rpc_request(method, params, ctx) do
+    %{
+      "jsonrpc" => "2.0",
+      "method" => method,
+      "params" => params,
+      "id" => ctx.request_id
+    }
   end
 
   @spec get_provider_channels(chain(), String.t(), atom() | nil) :: [Channel.t()]
@@ -495,230 +503,64 @@ defmodule Lasso.RPC.RequestPipeline do
     :exit, _ -> nil
   end
 
-  @spec attempt_request_on_channels([Channel.t()], map(), timeout(), RequestContext.t()) ::
-          {:ok, any(), Channel.t(), RequestContext.t()}
-          | {:error, atom(), Channel.t(), RequestContext.t()}
-          | {:error, atom(), RequestContext.t()}
-  defp attempt_request_on_channels([], _rpc_request, _timeout, ctx) do
-    Logger.warning("No channels available for request",
-      chain: ctx.chain,
-      method: ctx.method,
-      request_id: ctx.request_id,
-      transport: ctx.transport
-    )
-
-    {:error, :no_channels_available, ctx}
+  @spec build_exhaustion_error_message(method(), non_neg_integer() | nil, chain()) ::
+          {String.t(), map()}
+  defp build_exhaustion_error_message(method, nil, _chain) do
+    {"No available channels for method: #{method}. All circuit breakers are open.", %{}}
   end
 
-  defp attempt_request_on_channels(
-         [channel | rest_channels],
-         %{"method" => method, "params" => params} = rpc_request,
-         timeout,
-         ctx
-       ) do
-    # Validate parameters for this specific channel before attempting request
-    case AdapterFilter.validate_params(channel, method, params) do
-      :ok ->
-        # Params valid, proceed with request
-        execute_channel_request(channel, rpc_request, timeout, ctx, rest_channels)
+  defp build_exhaustion_error_message(method, ms, _chain) when is_integer(ms) and ms > 0 do
+    seconds = div(ms, 1000)
+    message = "No available channels for method: #{method}. All circuits open, retry after #{seconds}s"
+    {message, %{retry_after_ms: ms}}
+  end
 
-      {:error, reason} ->
-        # Params invalid for this provider, skip to next channel
-        Logger.debug(
-          "Parameters invalid for channel, trying next: #{inspect(reason)}",
-          channel: Channel.to_string(channel),
-          method: method,
-          reason: reason
-        )
+  defp build_exhaustion_error_message(method, retry_after_ms, chain) do
+    Logger.warning("Invalid recovery time: #{inspect(retry_after_ms)}", chain: chain)
+    {"No available channels for method: #{method}. All circuit breakers are open.", %{}}
+  end
 
-        # Increment retries and try next channel
-        ctx = RequestContext.increment_retries(ctx)
-        attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
+  @spec calculate_min_recovery_time(chain(), atom() | nil) :: non_neg_integer() | nil
+  defp calculate_min_recovery_time(chain, transport_filter) do
+    transport = transport_filter || :both
+
+    case ProviderPool.get_min_recovery_time(chain, transport: transport, timeout: 2000) do
+      {:ok, min_time} -> min_time
+      {:error, :timeout} ->
+        Logger.warning("Timeout getting recovery time", chain: chain)
+        60_000
+      {:error, _reason} -> nil
     end
   end
 
-  # Executes a circuit breaker call with error handling for exits
-  @spec execute_with_circuit_breaker(Channel.t(), map(), timeout(), RequestContext.t()) ::
-          {:ok, {:ok, any(), number()} | {:error, any(), number()}} | {:error, any()}
-  defp execute_with_circuit_breaker(channel, rpc_request, timeout, ctx) do
-    attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
-    cb_id = {channel.chain, channel.provider_id, channel.transport}
+  @spec compute_params_digest(params()) :: String.t() | nil
+  defp compute_params_digest(params) when params in [nil, []], do: nil
 
-    try do
-      CircuitBreaker.call(cb_id, attempt_fun, timeout)
-    catch
-      :exit, {:timeout, _} ->
-        Logger.error("Request timeout on channel (GenServer.call)",
-          request_id: ctx.request_id,
-          channel: Channel.to_string(channel),
-          method: Map.get(rpc_request, "method"),
-          timeout: timeout
-        )
-
-        {:error, JError.new(-32_000, "Request timeout", category: :timeout, retriable?: true)}
-
-      :exit, {:noproc, _} ->
-        Logger.error("Circuit breaker not found for channel - provider may not be initialized",
-          request_id: ctx.request_id,
-          channel: Channel.to_string(channel),
-          method: Map.get(rpc_request, "method"),
-          circuit_breaker_id: inspect(cb_id)
-        )
-
-        {:error,
-         JError.new(-32_000, "Provider not available",
-           category: :provider_error,
-           retriable?: true
-         )}
-
-      :exit, reason ->
-        Logger.error("Circuit breaker unexpected exit",
-          request_id: ctx.request_id,
-          channel: Channel.to_string(channel),
-          method: Map.get(rpc_request, "method"),
-          reason: inspect(reason)
-        )
-
-        {:error,
-         JError.new(-32_000, "Circuit breaker error",
-           category: :provider_error,
-           retriable?: true
-         )}
-    end
+  defp compute_params_digest(params) do
+    params
+    |> Jason.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  rescue
+    _ -> nil
   end
 
-  # Handles successful channel request result
-  @spec handle_channel_success(any(), number(), Channel.t(), map(), RequestContext.t()) ::
-          {:ok, any(), Channel.t(), RequestContext.t()}
-  defp handle_channel_success(result, io_ms, channel, rpc_request, ctx) do
-    Logger.debug("✓ Request Success via #{Channel.to_string(channel)}",
-      chain: ctx.chain,
-      request_id: ctx.request_id,
-      provider_id: channel.provider_id,
-      io_latency_ms: io_ms
-    )
+  @spec extract_error_category(any()) :: atom()
+  defp extract_error_category(%JError{category: category}), do: category || :unknown
+  defp extract_error_category(:circuit_open), do: :circuit_open
+  defp extract_error_category(_), do: :unknown
 
-    log_slow_request_if_needed(io_ms, Map.get(rpc_request, "method"), channel, ctx)
+  # ============================================================================
+  # Slow Request Logging
+  # ============================================================================
 
-    ctx = RequestContext.add_upstream_latency(ctx, io_ms)
-    {:ok, result, channel, ctx}
-  end
-
-  # Unified error handler - decides between retry, failover, or terminal error
-  @spec handle_channel_error(
-          any(),
-          number() | nil,
-          Channel.t(),
-          map(),
-          timeout(),
-          RequestContext.t(),
-          [Channel.t()]
-        ) ::
-          {:ok, any(), Channel.t(), RequestContext.t()}
-          | {:error, any(), Channel.t(), RequestContext.t()}
-          | {:error, atom(), RequestContext.t()}
-  defp handle_channel_error(reason, io_ms, channel, rpc_request, timeout, ctx, rest_channels) do
-    ctx = RequestContext.add_upstream_latency(ctx, io_ms || 0)
-
-    case FailoverStrategy.decide(reason, rest_channels, ctx) do
-      {:failover, failover_reason} ->
-        FailoverStrategy.execute_failover(
-          ctx,
-          channel,
-          reason,
-          failover_reason,
-          rest_channels,
-          rpc_request,
-          timeout,
-          &attempt_request_on_channels/4
-        )
-
-      {:terminal_error, terminal_reason} ->
-        FailoverStrategy.handle_terminal_error(
-          ctx,
-          channel,
-          reason,
-          terminal_reason,
-          length(rest_channels)
-        )
-    end
-  end
-
-  @spec execute_channel_request(Channel.t(), map(), timeout(), RequestContext.t(), [Channel.t()]) ::
-          {:ok, any(), Channel.t(), RequestContext.t()}
-          | {:error, any(), Channel.t(), RequestContext.t()}
-          | {:error, atom(), RequestContext.t()}
-  defp execute_channel_request(channel, rpc_request, timeout, ctx, rest_channels) do
-    # Update context with selected provider
-    ctx = %{
-      ctx
-      | selected_provider: %{id: channel.provider_id, protocol: channel.transport},
-        circuit_breaker_state: :unknown
-    }
-
-    result = execute_with_circuit_breaker(channel, rpc_request, timeout, ctx)
-
-    case result do
-      # Success: circuit breaker wraps transport result as {:ok, {:ok, result, io_ms}}
-      {:ok, {:ok, result, io_ms}} ->
-        handle_channel_success(result, io_ms, channel, rpc_request, ctx)
-
-      # Unsupported method: fast fallthrough, try next channel immediately
-      {:ok, {:error, :unsupported_method, _io_ms}} ->
-        Logger.debug("Method not supported on channel, trying next",
-          channel: Channel.to_string(channel),
-          provider_id: channel.provider_id,
-          method: Map.get(rpc_request, "method")
-        )
-
-        attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
-
-      # Transport error: use failover strategy to decide next action
-      {:ok, {:error, reason, io_ms}} ->
-        handle_channel_error(reason, io_ms, channel, rpc_request, timeout, ctx, rest_channels)
-
-      # Circuit breaker open: fast fail to next provider
-      {:error, :circuit_open} ->
-        Logger.info("Circuit breaker open, fast-failing to next channel",
-          request_id: ctx.request_id,
-          channel: Channel.to_string(channel),
-          provider_id: channel.provider_id,
-          chain: ctx.chain,
-          method: Map.get(rpc_request, "method")
-        )
-
-        ctx = RequestContext.add_upstream_latency(ctx, 0)
-        ctx = RequestContext.increment_retries(ctx)
-
-        Observability.record_circuit_open(ctx, channel)
-
-        attempt_request_on_channels(rest_channels, rpc_request, timeout, ctx)
-
-      # Direct errors from circuit breaker with IO time (timeouts)
-      {:error, reason, io_ms} ->
-        handle_channel_error(reason, io_ms, channel, rpc_request, timeout, ctx, rest_channels)
-
-      # Direct errors from circuit breaker without IO time (crashes, etc.)
-      {:error, reason} ->
-        handle_channel_error(reason, nil, channel, rpc_request, timeout, ctx, rest_channels)
-    end
-  end
-
-  # Logs slow requests based on configured thresholds.
-  # Thresholds:
-  # - ERROR: > 4000ms (4 seconds) - May cause client timeouts
-  # - WARN:  > 2000ms (2 seconds)
-  # - INFO:  > 1000ms (1 second)
-  @spec log_slow_request_if_needed(number(), String.t(), Channel.t(), RequestContext.t()) :: :ok
+  @spec log_slow_request_if_needed(number(), method(), Channel.t(), RequestContext.t()) :: :ok
   defp log_slow_request_if_needed(latency_ms, method, channel, ctx) when latency_ms > 4000 do
-    Logger.error("VERY SLOW request detected (may timeout clients)",
+    Logger.error("VERY SLOW request (may timeout clients)",
       request_id: ctx.request_id,
       method: method,
       provider: channel.provider_id,
-      transport: channel.transport,
-      chain: ctx.chain,
-      latency_ms: latency_ms,
-      threshold: "4s"
+      latency_ms: latency_ms
     )
 
     Observability.record_very_slow_request(
@@ -731,14 +573,11 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp log_slow_request_if_needed(latency_ms, method, channel, ctx) when latency_ms > 2000 do
-    Logger.warning("Slow request detected",
+    Logger.warning("Slow request",
       request_id: ctx.request_id,
       method: method,
       provider: channel.provider_id,
-      transport: channel.transport,
-      chain: ctx.chain,
-      latency_ms: latency_ms,
-      threshold: "2s"
+      latency_ms: latency_ms
     )
 
     Observability.record_slow_request(
@@ -751,57 +590,13 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp log_slow_request_if_needed(latency_ms, method, channel, ctx) when latency_ms > 1000 do
-    Logger.info("Elevated latency detected",
+    Logger.info("Elevated latency",
       request_id: ctx.request_id,
       method: method,
       provider: channel.provider_id,
-      transport: channel.transport,
-      chain: ctx.chain,
       latency_ms: latency_ms
     )
   end
 
   defp log_slow_request_if_needed(_latency_ms, _method, _channel, _ctx), do: :ok
-
-  # Calculates the minimum recovery time across all circuit breakers for a chain.
-  # Returns the shortest time until any circuit breaker will attempt recovery,
-  # or nil if no recovery times are available.
-  #
-  # This uses the cached recovery times in ProviderPool (single GenServer call)
-  # instead of making N sequential calls to each CircuitBreaker.
-  @spec calculate_min_recovery_time(String.t(), atom() | nil) :: non_neg_integer() | nil
-  defp calculate_min_recovery_time(chain, transport_filter) do
-    transport = transport_filter || :both
-
-    case ProviderPool.get_min_recovery_time(chain, transport: transport, timeout: 2000) do
-      {:ok, min_time} ->
-        min_time
-
-      {:error, :timeout} ->
-        Logger.warning("Timeout calculating recovery time, using default", chain: chain)
-        60_000
-
-      {:error, reason} ->
-        Logger.warning("Failed to get recovery times", chain: chain, reason: inspect(reason))
-        nil
-    end
-  end
-
-  defp compute_params_digest(params) when params in [nil, []], do: nil
-
-  defp compute_params_digest(params) do
-    params
-    |> Jason.encode!()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
-  rescue
-    _ -> nil
-  end
-
-  # Helper to check if an error is retriable (defaults to false)
-  @spec retriable_error?(any()) :: boolean()
-  defp retriable_error?(%JError{retriable?: retriable?}) when is_boolean(retriable?),
-    do: retriable?
-
-  defp retriable_error?(_), do: false
 end

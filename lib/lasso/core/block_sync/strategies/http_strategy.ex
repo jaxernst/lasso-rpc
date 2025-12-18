@@ -168,22 +168,27 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
     # Go through circuit breaker - when open, HealthProbe handles recovery detection
     case CircuitBreaker.call(cb_id, fn -> do_poll_request(chain, provider_id) end) do
-      {:ok, {:ok, height}} ->
+      # Function executed - examine what it returned
+      {:executed, {:ok, height}} ->
         {:ok, height}
 
-      {:ok, {:error, reason}} ->
+      {:executed, {:error, reason}} ->
         {:error, reason}
 
-      # Handle case where CB returns unwrapped result (happens in half_open state)
-      {:ok, height} when is_integer(height) ->
+      {:executed, height} when is_integer(height) ->
         {:ok, height}
 
-      {:error, :circuit_open} ->
-        # Circuit is open, skip this poll cycle
-        # HealthProbe will detect recovery and close the circuit
+      {:executed, {:exception, _}} ->
+        {:error, :exception}
+
+      # Circuit breaker rejected execution
+      {:rejected, :circuit_open} ->
         {:error, :circuit_open}
 
-      {:error, reason} ->
+      {:rejected, :half_open_busy} ->
+        {:error, :circuit_open}
+
+      {:rejected, reason} ->
         {:error, reason}
     end
   end

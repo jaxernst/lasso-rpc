@@ -70,21 +70,48 @@ defmodule Lasso.RPC.CircuitBreaker do
   end
 
   @doc """
-  Attempts to execute a function guarded by the circuit breaker without
-  executing the function inside the GenServer.
+  Attempts to execute a function guarded by the circuit breaker.
 
-  Flow:
-  - Fast admission check (GenServer.call {:admit, now_ms})
-  - Execute fun in the caller process
-  - Report result asynchronously (GenServer.cast {:report, token, result})
+  Returns an explicit execution envelope that separates circuit breaker
+  concerns from function results:
+
+  - `{:executed, fun_result}` - Function was executed. `fun_result` is whatever
+    the wrapped function returned (which could itself be an error tuple).
+
+  - `{:rejected, reason}` - Circuit breaker prevented execution.
+
+  ## Rejection Reasons
+
+  - `:circuit_open` - Circuit is open due to failures
+  - `:half_open_busy` - Circuit is half-open but at max inflight capacity
+  - `:admission_timeout` - Admission check timed out
+  - `:not_found` - Circuit breaker process not found
+
+  ## Exception Handling
+
+  If the wrapped function raises an exception, it's returned as:
+  `{:executed, {:exception, {kind, error, stacktrace}}}`
+
+  This treats exceptions as "executed but failed" rather than "rejected".
+
+  ## Flow
+
+  1. Fast admission check (GenServer.call {:admit, now_ms})
+  2. Execute fun in the caller process with timeout
+  3. Report result asynchronously (GenServer.cast {:report, token, result})
   """
   # Timeout for admission check (reduced from 2000ms to 500ms to fail faster under load)
   # Under normal conditions admission is <10ms, but during GenServer queue backlog this limits
   # worst-case blocking per channel attempt to 500ms instead of 2 seconds.
   @admit_timeout 500
 
-  @spec call(breaker_id, (-> any()), non_neg_integer()) ::
-          {:ok, any()} | {:error, term()}
+  @typedoc "Reasons why the circuit breaker rejected execution"
+  @type rejection_reason :: :circuit_open | :half_open_busy | :admission_timeout | :not_found
+
+  @typedoc "Result of a circuit breaker call - separates execution status from function result"
+  @type call_result(result) :: {:executed, result} | {:rejected, rejection_reason()}
+
+  @spec call(breaker_id, (-> result), non_neg_integer()) :: call_result(result) when result: term()
   def call({chain, provider_id, transport} = id, fun, timeout \\ 30_000) do
     now_ms = System.monotonic_time(:millisecond)
     admit_start_us = System.monotonic_time(:microsecond)
@@ -100,8 +127,7 @@ defmodule Lasso.RPC.CircuitBreaker do
             transport: transport
           )
 
-          # Conservative: deny on timeout to avoid overwhelming provider
-          {:deny, :timeout}
+          {:deny, :admission_timeout}
 
         :exit, {:noproc, _} ->
           Logger.warning("Circuit breaker not found",
@@ -130,76 +156,83 @@ defmodule Lasso.RPC.CircuitBreaker do
 
     case decision do
       {:allow, token} ->
-        # Execute function with timeout enforcement
-        task =
-          Task.async(fn ->
-            try do
-              fun.()
-            catch
-              kind, error -> {:__trap__, {kind, error}}
-            end
-          end)
-
-        raw_result =
-          case Task.yield(task, timeout) do
-            {:ok, result} ->
-              # Task completed within timeout
-              result
-
-            nil ->
-              # Timeout occurred - kill the task and return timeout error
-              Task.shutdown(task, :brutal_kill)
-
-              Logger.error("Request timeout in circuit breaker",
-                chain: chain,
-                provider_id: provider_id,
-                transport: transport,
-                timeout_ms: timeout
-              )
-
-              :telemetry.execute(
-                [:lasso, :circuit_breaker, :timeout],
-                %{timeout_ms: timeout},
-                %{chain: chain, provider_id: provider_id, transport: transport}
-              )
-
-              # Return timeout as io_ms so it's included in upstream latency tracking
-              # (we waited ~timeout ms for the provider before giving up)
-              {:error,
-               JError.new(-32_000, "Request timeout after #{timeout}ms",
-                 category: :timeout,
-                 retriable?: true,
-                 breaker_penalty?: true
-               ), timeout}
-          end
-
-        report_result =
-          case raw_result do
-            {:__trap__, {kind, error}} -> {:error, {kind, error}}
-            other -> other
-          end
-
-        GenServer.cast(via_name(id), {:report, token, report_result})
-
-        case raw_result do
-          {:__trap__, {kind, error}} -> {:error, {kind, error}}
-          {:ok, _} -> raw_result
-          {:error, _} -> raw_result
-          other -> {:ok, other}
-        end
+        execute_with_token(id, token, fun, timeout, chain, provider_id, transport)
 
       {:deny, :open} ->
-        {:error, :circuit_open}
+        {:rejected, :circuit_open}
 
       {:deny, :half_open_busy} ->
-        {:error, :circuit_open}
+        {:rejected, :half_open_busy}
 
-      {:deny, :timeout} ->
-        {:error, :circuit_breaker_timeout}
+      {:deny, :admission_timeout} ->
+        {:rejected, :admission_timeout}
 
       {:deny, :not_found} ->
-        {:error, :circuit_breaker_not_found}
+        {:rejected, :not_found}
     end
+  end
+
+  # Executes the function with timeout enforcement and reports result to CB
+  @spec execute_with_token(breaker_id(), term(), (-> result), timeout(), chain(), provider_id(), transport()) ::
+          {:executed, result} when result: term()
+  defp execute_with_token(id, token, fun, timeout, chain, provider_id, transport) do
+    task =
+      Task.async(fn ->
+        try do
+          fun.()
+        catch
+          kind, error ->
+            {:__exception__, {kind, error, __STACKTRACE__}}
+        end
+      end)
+
+    result =
+      case Task.yield(task, timeout) do
+        {:ok, {:__exception__, exception_info}} ->
+          # Function threw an exception - treat as executed but failed
+          {:exception, exception_info}
+
+        {:ok, fun_result} ->
+          # Function completed normally - pass through its result unchanged
+          fun_result
+
+        nil ->
+          # Timeout occurred - kill the task
+          Task.shutdown(task, :brutal_kill)
+
+          Logger.error("Request timeout in circuit breaker",
+            chain: chain,
+            provider_id: provider_id,
+            transport: transport,
+            timeout_ms: timeout
+          )
+
+          :telemetry.execute(
+            [:lasso, :circuit_breaker, :timeout],
+            %{timeout_ms: timeout},
+            %{chain: chain, provider_id: provider_id, transport: transport}
+          )
+
+          # Return timeout error with io_ms for latency tracking
+          {:error,
+           JError.new(-32_000, "Request timeout after #{timeout}ms",
+             category: :timeout,
+             retriable?: true,
+             breaker_penalty?: true
+           ), timeout}
+      end
+
+    # Report to circuit breaker for state tracking
+    report_result =
+      case result do
+        {:exception, {kind, error, _stacktrace}} -> {:error, {kind, error}}
+        other -> other
+      end
+
+    GenServer.cast(via_name(id), {:report, token, report_result})
+
+    # Always wrap in {:executed, _} - the CB executed the function
+    {:executed, result}
   end
 
   # Timeout for state queries
