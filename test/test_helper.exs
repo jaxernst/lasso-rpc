@@ -33,9 +33,9 @@ Code.require_file("test/support/lasso_integration_case.ex")
 Application.put_env(:lasso, :http_client, Lasso.Testing.BehaviorHttpClient)
 
 # Ensure test isolation by resetting benchmark store between tests
-# By default, exclude slow-running tests (integration, battle, real providers)
+# By default, exclude slow-running tests (integration, real providers)
 ExUnit.configure(
-  exclude: [:skip, :integration, :battle, :real_providers, :slow],
+  exclude: [:skip, :integration, :real_providers, :slow],
   timeout: 60_000,
   max_cases: 1
 )

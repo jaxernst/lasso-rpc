@@ -1304,7 +1304,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   defp update_active_providers(state) do
     # Use runtime provider state instead of ConfigStore
-    # This allows dynamically registered providers (battle tests, mocks) to participate
+    # This allows dynamically registered providers (mocks, tests) to participate
     viable_providers =
       state.providers
       |> Enum.filter(fn {_id, provider} ->
