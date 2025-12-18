@@ -144,7 +144,7 @@ chains:
     topology:
       category: l1
       network: sepolia
-      color: "#526ED390"
+      color: "#7A8AB5"
       size: md
 
     # Provider health monitoring configuration
@@ -354,7 +354,7 @@ chains:
       category: l2_optimistic
       parent: ethereum_sepolia # Connects to Sepolia testnet, floats if not present
       network: sepolia
-      color: "#0052FF90"
+      color: "#4A6BB2"
       size: sm
 
     # Provider health monitoring configuration
