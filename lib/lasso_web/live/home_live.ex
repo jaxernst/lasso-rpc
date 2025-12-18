@@ -44,6 +44,7 @@ defmodule LassoWeb.HomeLive do
       |> assign(:heatmap_data, heatmap_data)
       |> assign(:heatmap_methods, heatmap_methods)
       |> assign(:heatmap_live, heatmap_live)
+      |> assign(:vm_metrics_enabled, Lasso.VMMetricsCollector.enabled?())
 
     {:ok, socket}
   end
@@ -319,7 +320,7 @@ defmodule LassoWeb.HomeLive do
       </div>
 
       <div class="relative z-10 flex min-h-full flex-col">
-        <DashboardHeader.header active_tab={@active_tab} />
+        <DashboardHeader.header active_tab={@active_tab} vm_metrics_enabled={@vm_metrics_enabled} />
 
         <div class="flex-1">
           <div class="max-w-[min(90%,110rem)] relative mx-auto flex flex-col gap-20 py-10 lg:max-w-[min(83%,110rem)] lg:gap-32 lg:py-28">
