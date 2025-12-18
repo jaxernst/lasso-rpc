@@ -17,8 +17,9 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         {id, %{failure_threshold: 2, recovery_timeout: 100, success_threshold: 2}}
       )
 
-    assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
-    assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+    # Exceptions are wrapped as {:executed, {:exception, {kind, error, stacktrace}}}
+    assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+    assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
 
     # allow async state update to apply
     Process.sleep(20)
@@ -26,12 +27,12 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     assert state.state == :open
 
     # Should reject before recovery timeout elapses
-    assert {:error, :circuit_open} = CircuitBreaker.call(id, fn -> :ok end)
+    assert {:rejected, :circuit_open} = CircuitBreaker.call(id, fn -> :ok end)
 
     # After timeout, it should attempt half-open
     Process.sleep(120)
     result = CircuitBreaker.call(id, fn -> :ok end)
-    assert match?({:ok, :ok}, result)
+    assert match?({:executed, :ok}, result)
   end
 
   test "half-open requires success_threshold successes to close; failure re-opens" do
@@ -42,15 +43,15 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         {id, %{failure_threshold: 1, recovery_timeout: 50, success_threshold: 2}}
       )
 
-    assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+    assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
     Process.sleep(20)
     assert CircuitBreaker.get_state(id).state == :open
 
     Process.sleep(60)
     # First success in half-open
-    assert {:ok, :ok} = CircuitBreaker.call(id, fn -> :ok end)
-    # Failure should re-open (caller receives raw error now)
-    assert {:error, _} = CircuitBreaker.call(id, fn -> raise "oops" end)
+    assert {:executed, :ok} = CircuitBreaker.call(id, fn -> :ok end)
+    # Failure should re-open (caller receives wrapped exception)
+    assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "oops" end)
     Process.sleep(20)
     assert CircuitBreaker.get_state(id).state == :open
   end
@@ -65,8 +66,12 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
     # Use network_error which has threshold of 3 in category thresholds
     # But since we set failure_threshold to 2, it should use 2
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, {:network_error, "timeout"}} end)
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, {:network_error, "timeout"}} end)
+    # The function returns are now wrapped in {:executed, result}
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, {:network_error, "timeout"}} end)
+
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, {:network_error, "timeout"}} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
@@ -78,17 +83,19 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     # Let me add one more failure
     assert state.state == :closed
 
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, {:network_error, "timeout"}} end)
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, {:network_error, "timeout"}} end)
+
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
     assert state.state == :open
 
     # Should reject before recovery timeout elapses
-    assert {:error, :circuit_open} = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
+    assert {:rejected, :circuit_open} = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
 
     Process.sleep(120)
     # Half-open success path: need two successes to close
-    assert {:ok, :ok} = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
+    assert {:executed, {:ok, :ok}} = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
     assert CircuitBreaker.get_state(id).state in [:half_open, :closed]
   end
 
@@ -127,8 +134,8 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     # Rate limit error should use threshold of 2, not 5
     rate_limit_error = JError.new(-32_005, "Rate limited", category: :rate_limit)
 
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
@@ -147,8 +154,8 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     server_error = JError.new(-32_000, "Server error", category: :server_error)
 
     # Should not open after 2 server errors (needs 5)
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, server_error} end)
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, server_error} end)
+    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, server_error} end)
+    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, server_error} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
@@ -172,8 +179,8 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         data: %{retry_after_ms: 2000}
       )
 
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
@@ -183,7 +190,9 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     # Wait 2.1 seconds and verify circuit attempts recovery
     Process.sleep(2100)
     result = CircuitBreaker.call(id, fn -> {:ok, :success} end)
-    assert match?({:ok, :success}, result), "Circuit should attempt recovery after 2 seconds"
+
+    assert match?({:executed, {:ok, :success}}, result),
+           "Circuit should attempt recovery after 2 seconds"
   end
 
   test "custom category thresholds can be configured" do
@@ -205,15 +214,15 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     rate_limit_error = JError.new(-32_005, "Rate limited", category: :rate_limit)
 
     # Should not open after 2 failures (needs 3 now)
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
     assert state.state == :closed, "Circuit should remain closed with custom threshold"
 
     # Should open after 3rd failure
-    assert {:error, _} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
     assert state.state == :open
@@ -229,8 +238,8 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         )
 
       # Open the circuit
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :open
 
@@ -252,8 +261,8 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         )
 
       # Open the circuit
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :open
 
@@ -262,7 +271,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       assert CircuitBreaker.get_state(id).state == :half_open
 
       # Now a success should close the circuit
-      assert {:ok, :recovered} = CircuitBreaker.call(id, fn -> {:ok, :recovered} end)
+      assert {:executed, {:ok, :recovered}} = CircuitBreaker.call(id, fn -> {:ok, :recovered} end)
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :closed
     end
@@ -276,8 +285,8 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         )
 
       # Open the circuit
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :open
 
@@ -302,14 +311,14 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         )
 
       # Open the circuit
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :open
 
       # Wait for recovery timeout, then trigger recovery via traffic
       Process.sleep(70)
-      assert {:ok, :ok} = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
+      assert {:executed, {:ok, :ok}} = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
       Process.sleep(20)
 
       # Should be closed now
@@ -329,8 +338,8 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         )
 
       # Open the circuit
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :open
 
@@ -339,7 +348,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       assert CircuitBreaker.get_state(id).state == :half_open
 
       # Fail during half_open - should reopen and reschedule timer
-      assert {:error, _} = CircuitBreaker.call(id, fn -> raise "still failing" end)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "still failing" end)
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :open
 

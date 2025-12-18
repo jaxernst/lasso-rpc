@@ -88,9 +88,9 @@ defmodule Lasso.HealthProbe.WorkerTest do
 
       assert CircuitBreaker.get_state(cb_id).state == :open
 
-      # Calls should be blocked
+      # Calls should be rejected with {:rejected, :circuit_open}
       result = CircuitBreaker.call(cb_id, fn -> {:ok, :should_not_run} end)
-      assert result == {:error, :circuit_open}
+      assert result == {:rejected, :circuit_open}
     end
 
     test "HealthProbe bypasses circuit by using record_success/failure directly" do

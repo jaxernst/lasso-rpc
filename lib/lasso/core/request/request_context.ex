@@ -6,10 +6,13 @@ defmodule Lasso.RPC.RequestContext do
   - Request identification and timing
   - Provider selection details
   - Routing decisions and circuit breaker states
+  - Channel execution history
   - Result or error shapes
   """
 
-  alias Lasso.RPC.Response
+  alias Lasso.RPC.{Channel, RequestOptions, Response}
+
+  @type channel_attempt :: {Channel.t(), :success | {:error, term()}}
 
   @type t :: %__MODULE__{
           # Request identification
@@ -34,6 +37,10 @@ defmodule Lasso.RPC.RequestContext do
           # Track repeated error categories to detect universal failures
           repeated_error_categories: %{atom() => non_neg_integer()},
 
+          # Channel execution tracking (for observability without polluting return types)
+          executed_channel: Channel.t() | nil,
+          attempted_channels: [channel_attempt()],
+
           # Timing
           # Plug-level start time for true E2E measurement (from RequestTimingPlug)
           plug_start_time: integer() | nil,
@@ -57,7 +64,12 @@ defmodule Lasso.RPC.RequestContext do
           status: :success | :error | nil,
           result_type: String.t() | nil,
           result_size_bytes: non_neg_integer() | nil,
-          error: map() | nil
+          error: map() | nil,
+
+          # Execution parameters (immutable throughout pipeline)
+          rpc_request: map() | nil,
+          timeout_ms: timeout() | nil,
+          opts: RequestOptions.t() | nil
         }
 
   defstruct request_id: nil,
@@ -77,6 +89,8 @@ defmodule Lasso.RPC.RequestContext do
             retries: 0,
             circuit_breaker_state: nil,
             repeated_error_categories: %{},
+            executed_channel: nil,
+            attempted_channels: [],
             plug_start_time: nil,
             start_time: nil,
             request_start_ms: nil,
@@ -90,7 +104,10 @@ defmodule Lasso.RPC.RequestContext do
             status: nil,
             result_type: nil,
             result_size_bytes: nil,
-            error: nil
+            error: nil,
+            rpc_request: nil,
+            timeout_ms: nil,
+            opts: nil
 
   @doc """
   Creates a new request context with request_id and start_time.
@@ -119,6 +136,19 @@ defmodule Lasso.RPC.RequestContext do
       plug_start_time: plug_start,
       start_time: start_time
     }
+  end
+
+  @doc """
+  Sets the execution parameters for pipeline processing.
+
+  These are immutable throughout the pipeline execution:
+  - rpc_request: The JSON-RPC request map being executed
+  - timeout_ms: Per-attempt timeout in milliseconds
+  - opts: The RequestOptions struct with routing configuration
+  """
+  def set_execution_params(%__MODULE__{} = ctx, rpc_request, timeout_ms, %RequestOptions{} = opts)
+      when is_map(rpc_request) and is_integer(timeout_ms) do
+    %{ctx | rpc_request: rpc_request, timeout_ms: timeout_ms, opts: opts}
   end
 
   @doc """
@@ -308,6 +338,36 @@ defmodule Lasso.RPC.RequestContext do
   end
 
   def compute_params_digest(_), do: nil
+
+  @doc """
+  Records the channel that successfully executed the request.
+  Also updates selected_provider for backwards compatibility.
+  """
+  def set_executed_channel(%__MODULE__{} = ctx, %Channel{} = channel) do
+    %{
+      ctx
+      | executed_channel: channel,
+        selected_provider: %{id: channel.provider_id, protocol: channel.transport}
+    }
+  end
+
+  @doc """
+  Records a failed channel attempt for observability/debugging.
+  Appends to the attempted_channels list to maintain audit trail.
+  """
+  def record_channel_attempt(%__MODULE__{} = ctx, %Channel{} = channel, error) do
+    attempt = {channel, {:error, error}}
+    %{ctx | attempted_channels: ctx.attempted_channels ++ [attempt]}
+  end
+
+  @doc """
+  Records a successful channel attempt. Called before set_executed_channel
+  to capture the full attempt history.
+  """
+  def record_channel_success(%__MODULE__{} = ctx, %Channel{} = channel) do
+    attempt = {channel, :success}
+    %{ctx | attempted_channels: ctx.attempted_channels ++ [attempt]}
+  end
 
   # Private helpers
 

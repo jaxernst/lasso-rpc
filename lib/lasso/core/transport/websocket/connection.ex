@@ -144,12 +144,13 @@ defmodule Lasso.RPC.WSConnection do
     case CircuitBreaker.call({state.chain_name, state.endpoint.id, :ws}, fn ->
            connect_to_websocket(state.endpoint, ws_connection_pid)
          end) do
-      {:ok, connection} ->
+      # Circuit breaker executed the function - examine the result
+      {:executed, {:ok, connection}} ->
         state = %{state | connection: connection}
         # success path continues via {:ws_connected}
         {:noreply, state}
 
-      {:error, %JError{} = jerr} ->
+      {:executed, {:error, %JError{} = jerr}} ->
         Logger.error(
           "Failed to connect to #{state.endpoint.name} (WebSocket): #{jerr.message} (code=#{inspect(jerr.code)})"
         )
@@ -183,38 +184,8 @@ defmodule Lasso.RPC.WSConnection do
 
         {:noreply, state}
 
-      {:error, :circuit_open} ->
-        Logger.debug("Circuit breaker open for #{state.endpoint.id}, skipping connect attempt")
-
-        jerr =
-          JError.new(-32_000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)
-
-        # Emit telemetry event
-        :telemetry.execute(
-          [:lasso, :websocket, :connection_failed],
-          %{},
-          %{
-            provider_id: state.endpoint.id,
-            chain: state.chain_name,
-            error_code: jerr.code,
-            error_message: jerr.message,
-            retriable: true,
-            will_reconnect: true
-          }
-        )
-
-        Phoenix.PubSub.broadcast(
-          Lasso.PubSub,
-          "ws:conn:#{state.chain_name}",
-          {:connection_error, state.endpoint.id, jerr}
-        )
-
-        # Try again later (uses existing backoff)
-        state = schedule_reconnect(state)
-        {:noreply, state}
-
-      {:error, other} ->
-        Logger.debug("Circuit breaker call error: #{inspect(other)}")
+      {:executed, {:error, other}} ->
+        Logger.debug("Connection function returned error: #{inspect(other)}")
 
         jerr = JError.from(other, provider_id: state.endpoint.id)
 
@@ -245,6 +216,69 @@ defmodule Lasso.RPC.WSConnection do
             state
           end
 
+        {:noreply, state}
+
+      # Circuit breaker rejected execution
+      {:rejected, :circuit_open} ->
+        Logger.debug("Circuit breaker open for #{state.endpoint.id}, skipping connect attempt")
+
+        jerr =
+          JError.new(-32_000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)
+
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :connection_failed],
+          %{},
+          %{
+            provider_id: state.endpoint.id,
+            chain: state.chain_name,
+            error_code: jerr.code,
+            error_message: jerr.message,
+            retriable: true,
+            will_reconnect: true
+          }
+        )
+
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.chain_name}",
+          {:connection_error, state.endpoint.id, jerr}
+        )
+
+        # Try again later (uses existing backoff)
+        state = schedule_reconnect(state)
+        {:noreply, state}
+
+      {:rejected, reason} ->
+        Logger.debug("Circuit breaker rejected: #{inspect(reason)}")
+
+        jerr =
+          JError.new(-32_000, "Circuit breaker: #{reason}",
+            provider_id: state.endpoint.id,
+            retriable?: true
+          )
+
+        # Emit telemetry event
+        :telemetry.execute(
+          [:lasso, :websocket, :connection_failed],
+          %{},
+          %{
+            provider_id: state.endpoint.id,
+            chain: state.chain_name,
+            error_code: jerr.code,
+            error_message: jerr.message,
+            retriable: true,
+            will_reconnect: true
+          }
+        )
+
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.chain_name}",
+          {:connection_error, state.endpoint.id, jerr}
+        )
+
+        state = schedule_reconnect(state)
         {:noreply, state}
     end
   end

@@ -62,8 +62,8 @@ defmodule Lasso.ErrorScenariosTest do
             raise "Simulated failure #{i}"
           end)
 
-        # Circuit breaker should return an error (format may vary)
-        assert {:error, _} = result
+        # Circuit breaker wraps exceptions as {:executed, {:exception, {kind, error, stacktrace}}}
+        assert {:executed, {:exception, _}} = result
       end
 
       # Circuit should be open
@@ -95,7 +95,7 @@ defmodule Lasso.ErrorScenariosTest do
       # Attempt recovery with successes
       for _ <- 1..2 do
         result = CircuitBreaker.call(breaker_id, fn -> :ok end)
-        assert {:ok, :ok} = result
+        assert {:executed, :ok} = result
       end
 
       # Circuit should be closed
