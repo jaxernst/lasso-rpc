@@ -98,10 +98,10 @@ defmodule LassoWeb.NetworkTopology do
           <% {x, y} = chain_data.position %>
           <% radius = chain_data.radius %>
           <div
-            class={["absolute z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl shadow-inner transition-all duration-300 hover:scale-110", if(@selected_chain == chain_name,
+            class={["absolute z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-all duration-300 hover:scale-110", if(@selected_chain == chain_name,
     do: "ring-purple-400/30 border-purple-400 ring-4",
     else: "border-gray-500 hover:border-gray-400"), "from-gray-800 to-gray-900"]}
-            style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name)} 0%, #11182780 100%); " <>
+            style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name)} 0%, #111827 100%); " <>
               if(@selected_chain == chain_name,
                 do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
                 else: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.2), inset 0 0 15px rgba(0, 0, 0, 0.3);")}
@@ -150,8 +150,8 @@ defmodule LassoWeb.NetworkTopology do
                 style={"width: #{max(4, radius - 4)}px; height: #{max(4, radius - 4)}px;"}
               >
               </div>
-
-              <!-- WebSocket support indicator -->
+              
+    <!-- WebSocket support indicator -->
               <%= if has_websocket_support?(connection) do %>
                 <div
                   class="absolute -right-1.5 -bottom-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white shadow-md"
@@ -553,7 +553,10 @@ defmodule LassoWeb.NetworkTopology do
   alias LassoWeb.Dashboard.StatusHelpers
 
   defp provider_line_color(connection) do
-    connection |> StatusHelpers.determine_provider_status() |> StatusHelpers.status_color_scheme() |> Map.get(:hex)
+    connection
+    |> StatusHelpers.determine_provider_status()
+    |> StatusHelpers.status_color_scheme()
+    |> Map.get(:hex)
   end
 
   defp extract_chain_from_connection(connection) do
@@ -561,15 +564,24 @@ defmodule LassoWeb.NetworkTopology do
   end
 
   defp provider_status_bg_class(connection) when is_map(connection) do
-    connection |> StatusHelpers.determine_provider_status() |> StatusHelpers.status_color_scheme() |> Map.get(:bg_muted)
+    connection
+    |> StatusHelpers.determine_provider_status()
+    |> StatusHelpers.status_color_scheme()
+    |> Map.get(:bg_muted)
   end
 
   defp provider_border_class(connection) do
-    connection |> StatusHelpers.determine_provider_status() |> StatusHelpers.status_color_scheme() |> Map.get(:border)
+    connection
+    |> StatusHelpers.determine_provider_status()
+    |> StatusHelpers.status_color_scheme()
+    |> Map.get(:border)
   end
 
   defp provider_status_dot_class(connection) do
-    connection |> StatusHelpers.determine_provider_status() |> StatusHelpers.status_color_scheme() |> Map.get(:dot)
+    connection
+    |> StatusHelpers.determine_provider_status()
+    |> StatusHelpers.status_color_scheme()
+    |> Map.get(:dot)
   end
 
   # Helper to check if a provider supports WebSocket connections
@@ -603,5 +615,4 @@ defmodule LassoWeb.NetworkTopology do
     all_chain_configs = ConfigStore.get_all_chains()
     get_chain_topology(chain_name, all_chain_configs)
   end
-
 end
