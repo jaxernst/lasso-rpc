@@ -291,7 +291,6 @@ Every RPC request is tracked through its entire lifecycle using a `RequestContex
   chain: "ethereum",
   method: "eth_blockNumber",
   params_present: false,
-  params_digest: "sha256:...",
   transport: :http,
   strategy: :cheapest,
 
@@ -419,7 +418,6 @@ end
 # config/config.exs
 config :lasso, :observability,
   log_level: :info,
-  include_params_digest: true,
   max_error_message_chars: 256,
   max_meta_header_bytes: 4096,
   sampling: [rate: 1.0]

@@ -20,7 +20,6 @@ defmodule Lasso.RPC.RequestContext do
           chain: String.t(),
           method: String.t(),
           params_present: boolean(),
-          params_digest: String.t() | nil,
           transport: :http | :ws,
           strategy: atom(),
           path: String.t() | nil,
@@ -76,7 +75,6 @@ defmodule Lasso.RPC.RequestContext do
             chain: nil,
             method: nil,
             params_present: false,
-            params_digest: nil,
             transport: :http,
             strategy: nil,
             path: nil,
@@ -127,7 +125,6 @@ defmodule Lasso.RPC.RequestContext do
       chain: chain,
       method: method,
       params_present: Keyword.get(opts, :params_present, false),
-      params_digest: Keyword.get(opts, :params_digest),
       transport: Keyword.get(opts, :transport, :http),
       strategy: Keyword.get(opts, :strategy),
       path: Keyword.get(opts, :path),
@@ -327,17 +324,6 @@ defmodule Lasso.RPC.RequestContext do
   def get_error_category_count(%__MODULE__{} = ctx, category) when is_atom(category) do
     Map.get(ctx.repeated_error_categories, category, 0)
   end
-
-  @doc """
-  Generates a params digest for logging (SHA-256 hex).
-  """
-  def compute_params_digest(params) when is_list(params) or is_map(params) do
-    json = Jason.encode!(params)
-    hash = :crypto.hash(:sha256, json)
-    ("sha256:" <> Base.encode16(hash, case: :lower)) |> String.slice(0..15)
-  end
-
-  def compute_params_digest(_), do: nil
 
   @doc """
   Records the channel that successfully executed the request.
