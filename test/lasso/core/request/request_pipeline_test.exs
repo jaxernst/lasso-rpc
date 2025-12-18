@@ -3,7 +3,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
   Tests for RequestPipeline - the critical path for all RPC requests.
 
   Focus: API surface validation and basic behavior verification.
-  Note: Full integration testing is covered by existing integration/battle tests.
+  Note: Full integration testing is covered by existing integration tests.
         These tests validate that the API accepts correct parameters and creates
         proper RequestContext tracking.
   """

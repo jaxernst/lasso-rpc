@@ -1,11 +1,5 @@
 [
   # =============================================================================
-  # Battle Testing Utilities - Exclude all warnings from test utilities
-  # =============================================================================
-  # These are test-only utilities with intentional type flexibility
-  ~r"lib/lasso_battle/.*",
-
-  # =============================================================================
   # Mix Tasks - Known false positives
   # =============================================================================
   # Mix.shell/0 is available at runtime but Dialyzer doesn't see it

@@ -9,9 +9,7 @@
         excluded: [
           ~r"/_build/",
           ~r"/deps/",
-          ~r"/node_modules/",
-          # Exclude battle testing utilities from strict analysis
-          ~r"/lib/lasso_battle/"
+          ~r"/node_modules/"
         ]
       },
       plugins: [],

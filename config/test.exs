@@ -5,7 +5,7 @@ import Config
 config :lasso, LassoWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "test_secret_key_base" <> String.duplicate("a", 32),
-  # Enable for battle tests (end-to-end HTTP testing)
+  # Enable server for integration/HTTP testing
   server: true
 
 # Print only warnings and errors during test
