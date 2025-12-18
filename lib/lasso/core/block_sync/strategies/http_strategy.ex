@@ -159,7 +159,11 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
           send(state.parent, {:status, state.provider_id, :http, :degraded})
         end
 
-        %{state | consecutive_failures: failures, last_poll_time: System.system_time(:millisecond)}
+        %{
+          state
+          | consecutive_failures: failures,
+            last_poll_time: System.system_time(:millisecond)
+        }
     end
   end
 
@@ -168,7 +172,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
     # Go through circuit breaker - when open, HealthProbe handles recovery detection
     case CircuitBreaker.call(cb_id, fn -> do_poll_request(chain, provider_id) end) do
-      # Function executed - examine what it returned
       {:executed, {:ok, height}} ->
         {:ok, height}
 
