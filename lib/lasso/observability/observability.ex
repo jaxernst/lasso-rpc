@@ -10,7 +10,6 @@ defmodule Lasso.RPC.Observability do
   Configuration:
       config :lasso, :observability,
         log_level: :info,
-        include_params_digest: true,
         max_error_message_chars: 256,
         max_meta_header_bytes: 4096,
         sampling: [rate: 1.0]
@@ -21,7 +20,6 @@ defmodule Lasso.RPC.Observability do
 
   @default_config [
     log_level: :info,
-    include_params_digest: true,
     max_error_message_chars: 256,
     max_meta_header_bytes: 4096,
     sampling: [rate: 1.0]
@@ -123,7 +121,6 @@ defmodule Lasso.RPC.Observability do
     # Add optional fields
     base_event
     |> maybe_put(:path, ctx.path)
-    |> maybe_put(:params_digest, ctx.params_digest)
     |> maybe_put(:client_ip, ctx.client_ip)
     |> maybe_put(:user_agent, ctx.user_agent)
     |> maybe_put(:batch_size, batch_size)

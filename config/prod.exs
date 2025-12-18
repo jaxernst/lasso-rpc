@@ -33,7 +33,6 @@ config :phoenix, :logger, true
 # Observability in production
 config :lasso, :observability,
   log_level: :info,
-  include_params_digest: true,
   max_error_message_chars: 256,
   max_meta_header_bytes: 4096,
   # Request completion log sampling rate

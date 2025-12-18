@@ -40,7 +40,6 @@ Lasso's observability system provides comprehensive visibility into RPC request 
 │    RequestPipeline.execute_via_channels/4                           │
 │    • Create RequestContext with request details                     │
 │    • Generate unique request_id                                     │
-│    • Compute params_digest (SHA-256)                                │
 │    • Record chain, method, transport, strategy                      │
 └─────────────────────────────────────────────────────────────────────┘
                                     ↓
@@ -102,7 +101,6 @@ Lasso's observability system provides comprehensive visibility into RPC request 
   "transport": "http|ws",
   "jsonrpc_method": "eth_blockNumber",
   "params_present": false,
-  "params_digest": "sha256:a3b2c1...",
   "routing": {
     "candidate_providers": [
       "ethereum_cloudflare:http",
@@ -146,7 +144,6 @@ Lasso's observability system provides comprehensive visibility into RPC request 
 - **transport**: Protocol used ("http" or "ws")
 - **jsonrpc_method**: RPC method called (e.g., "eth_blockNumber")
 - **params_present**: Boolean indicating if params were provided
-- **params_digest**: SHA-256 hash of params (if `include_params_digest: true`)
 
 #### Routing Section
 
@@ -252,12 +249,6 @@ Standard JSON-RPC response enriched with `lasso_meta` field:
 
 ### Sensitive Data Handling
 
-#### Params Digest
-
-- **Raw params never logged**: Protects private keys, addresses, transaction data
-- **SHA-256 digest logged**: `"sha256:a3b2c1..."` for correlation
-- **Configurable**: `include_params_digest: false` disables digest entirely
-
 #### Error Message Truncation
 
 - **Truncation**: Error messages limited to `max_error_message_chars` (default 256)
@@ -292,9 +283,6 @@ config :lasso, :observability,
 config :lasso, :observability,
   # Log level for rpc.request.completed events
   log_level: :info,
-
-  # Include SHA-256 digest of params in logs
-  include_params_digest: true,
 
   # Maximum error message length in logs
   max_error_message_chars: 256,

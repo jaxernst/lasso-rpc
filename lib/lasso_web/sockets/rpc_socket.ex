@@ -222,7 +222,6 @@ defmodule LassoWeb.RPCSocket do
     ctx =
       RequestContext.new(state.chain, method,
         params_present: params != nil and params != [],
-        params_digest: RequestContext.compute_params_digest(params),
         transport: :ws,
         strategy: default_provider_strategy()
       )

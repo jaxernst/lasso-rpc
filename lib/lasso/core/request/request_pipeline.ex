@@ -465,7 +465,6 @@ defmodule Lasso.RPC.RequestPipeline do
     opts.request_context ||
       RequestContext.new(chain, method,
         params_present: params != [] and not is_nil(params),
-        params_digest: compute_params_digest(params),
         transport: opts.transport || :http,
         strategy: opts.strategy,
         request_id: opts.request_id,
@@ -531,18 +530,6 @@ defmodule Lasso.RPC.RequestPipeline do
         60_000
       {:error, _reason} -> nil
     end
-  end
-
-  @spec compute_params_digest(params()) :: String.t() | nil
-  defp compute_params_digest(params) when params in [nil, []], do: nil
-
-  defp compute_params_digest(params) do
-    params
-    |> Jason.encode!()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
-  rescue
-    _ -> nil
   end
 
   @spec extract_error_category(any()) :: atom()

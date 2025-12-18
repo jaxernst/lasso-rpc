@@ -161,8 +161,7 @@ Update `RequestPipeline` to exclude providers on capability errors:
     chain: ctx.chain,
     provider_id: channel.provider_id,
     method: rpc_request["method"],
-    category: cat,
-    params_digest: ctx.params_digest
+    category: cat
   })
 
   # Try next channel WITHOUT incrementing retries
@@ -184,8 +183,7 @@ def log_capability_limitation(ctx, channel, error) do
     provider: channel.provider_id,
     transport: channel.transport,
     error_category: error.category,
-    error_message: error.message,
-    params_digest: ctx.params_digest
+    error_message: error.message
   )
 end
 ```
@@ -577,7 +575,6 @@ defmodule Lasso.RPC.CapabilityLearner do
       provider_id: metadata.provider_id,
       method: metadata.method,
       category: metadata.category,
-      params_digest: metadata[:params_digest],
       timestamp: System.system_time(:millisecond),
       type: :limitation
     }
@@ -593,7 +590,6 @@ defmodule Lasso.RPC.CapabilityLearner do
       chain: metadata.chain,
       provider_id: metadata.provider_id,
       method: metadata.method,
-      params_digest: metadata[:params_digest],
       timestamp: System.system_time(:millisecond),
       type: :success
     }
@@ -634,7 +630,6 @@ defmodule Lasso.RPC.CapabilityLearner do
     limitation = %{
       method: observation.method,
       category: observation.category,
-      params_pattern: observation.params_digest,
       confidence: :high,
       first_observed: observation.timestamp,
       last_observed: observation.timestamp,
@@ -741,8 +736,8 @@ defmodule Lasso.RPC.CapabilityLearner do
         state
 
       limitations ->
-        # Find matching limitation
-        matching = Enum.find(limitations, &params_match?(&1.params_pattern, observation.params_digest))
+        # Find matching limitation by method and category
+        matching = Enum.find(limitations, &(&1.method == observation.method))
 
         if matching do
           # Success contradicts learned limitation - reduce confidence
@@ -1105,7 +1100,6 @@ end
   "method": "eth_getLogs",
   "error_category": "capability_limitation",
   "error_message": "query returned more than 10000 results",
-  "params_digest": "sha256:abc123...",
   "timestamp": 1704067200000
 }
 
