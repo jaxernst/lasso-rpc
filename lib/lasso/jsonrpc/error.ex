@@ -50,6 +50,8 @@ defmodule Lasso.JSONRPC.Error do
     :transport
   ]
 
+  alias Lasso.RPC.{ErrorClassification, ErrorNormalizer}
+
   @type t :: %__MODULE__{
           code: integer(),
           message: String.t(),
@@ -92,9 +94,9 @@ defmodule Lasso.JSONRPC.Error do
       end
 
     # Auto-classify if not explicitly provided
-    category = Keyword.get(opts, :category) || Lasso.RPC.ErrorClassification.categorize(normalized_code, message)
-    retriable? = Keyword.get(opts, :retriable?) || Lasso.RPC.ErrorClassification.retriable?(normalized_code, message)
-    breaker_penalty? = Keyword.get(opts, :breaker_penalty?) || Lasso.RPC.ErrorClassification.breaker_penalty?(category)
+    category = Keyword.get(opts, :category) || ErrorClassification.categorize(normalized_code, message)
+    retriable? = Keyword.get(opts, :retriable?) || ErrorClassification.retriable?(normalized_code, message)
+    breaker_penalty? = Keyword.get(opts, :breaker_penalty?) || ErrorClassification.breaker_penalty?(category)
 
     %__MODULE__{
       code: normalized_code,
@@ -157,5 +159,5 @@ defmodule Lasso.JSONRPC.Error do
   @spec from(any(), keyword()) :: t()
   def from(error, opts \\ [])
   def from(%__MODULE__{} = error, _opts), do: error
-  def from(error, opts), do: Lasso.RPC.ErrorNormalizer.normalize(error, opts)
+  def from(error, opts), do: ErrorNormalizer.normalize(error, opts)
 end

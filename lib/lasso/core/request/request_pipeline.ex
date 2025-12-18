@@ -615,7 +615,7 @@ defmodule Lasso.RPC.RequestPipeline do
           [Channel.t()]
         ) ::
           {:ok, any(), Channel.t(), RequestContext.t()}
-          | {:error, atom(), Channel.t(), RequestContext.t()}
+          | {:error, any(), Channel.t(), RequestContext.t()}
           | {:error, atom(), RequestContext.t()}
   defp handle_channel_error(reason, io_ms, channel, rpc_request, timeout, ctx, rest_channels) do
     ctx = RequestContext.add_upstream_latency(ctx, io_ms || 0)
@@ -646,7 +646,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec execute_channel_request(Channel.t(), map(), timeout(), RequestContext.t(), [Channel.t()]) ::
           {:ok, any(), Channel.t(), RequestContext.t()}
-          | {:error, atom(), Channel.t(), RequestContext.t()}
+          | {:error, any(), Channel.t(), RequestContext.t()}
           | {:error, atom(), RequestContext.t()}
   defp execute_channel_request(channel, rpc_request, timeout, ctx, rest_channels) do
     # Update context with selected provider
