@@ -36,7 +36,7 @@ chains:
 
     # Provider health monitoring configuration
     monitoring:
-      probe_interval_ms: 12000 # 12s - Ethereum's block time
+      probe_interval_ms: 12000 # 12s - block time
       lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~60s)
       # How long without newHeads events before subscription is stale
       new_heads_staleness_threshold_ms: 35000
@@ -106,7 +106,7 @@ chains:
         name: "1RPC Ethereum"
         priority: 5
         type: "public"
-        url: "https://1rpc.io/eth"
+        url: "https://1rpc.io/3obFgyJdJdY9t6Stq/eth"
         api_key_required: false
 
       - id: "lava_ethereum"
@@ -149,7 +149,7 @@ chains:
 
     # Provider health monitoring configuration
     monitoring:
-      probe_interval_ms: 12000 # 12s - Sepolia block time
+      probe_interval_ms: 12000 # 12s - block time
       lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~60s)
       # Testnets have less reliable validators, use longer threshold
       # ~5 blocks (60s) + 6s margin = tolerates unstable testnet conditions
@@ -191,7 +191,7 @@ chains:
         name: "1RPC Ethereum Sepolia"
         priority: 3
         type: "public"
-        url: "https://1rpc.io/sepolia"
+        url: "https://1rpc.io/3obFgyJdJdY9t6Stq/sepolia"
         api_key_required: false
 
       - id: "ethereum_sepolia_drpc"
@@ -316,7 +316,7 @@ chains:
         name: "1RPC Base"
         priority: 6
         type: "public"
-        url: "https://1rpc.io/base"
+        url: "https://1rpc.io/3obFgyJdJdY9t6Stq/base"
         api_key_required: false
 
       - id: "lava_base"

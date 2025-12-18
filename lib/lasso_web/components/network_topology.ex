@@ -9,7 +9,6 @@ defmodule LassoWeb.NetworkTopology do
   attr(:connections, :list, required: true, doc: "list of connection maps")
   attr(:selected_chain, :string, default: nil, doc: "currently selected chain")
   attr(:selected_provider, :string, default: nil, doc: "currently selected provider")
-  attr(:latency_leaders, :map, default: %{}, doc: "map of chain names to fastest provider ids")
   attr(:on_chain_select, :string, default: "select_chain", doc: "event name for chain selection")
 
   attr(:on_provider_select, :string,
@@ -151,20 +150,8 @@ defmodule LassoWeb.NetworkTopology do
                 style={"width: #{max(4, radius - 4)}px; height: #{max(4, radius - 4)}px;"}
               >
               </div>
-              
-    <!-- Racing flag indicator for fastest provider -->
-              <%= if fastest_provider?(connection, chain_name, @latency_leaders) do %>
-                <div
-                  class="absolute -top-2.5 -right-2.5 flex h-5 w-5 animate-pulse items-center justify-center rounded-full bg-purple-600 text-xs font-bold text-white shadow-lg"
-                  title="Fastest average latency"
-                >
-                  <svg class="h-3.5 w-3.5 text-yellow-300" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M3 3v18l7-3 7 3V3H3z" />
-                  </svg>
-                </div>
-              <% end %>
-              
-    <!-- WebSocket support indicator -->
+
+              <!-- WebSocket support indicator -->
               <%= if has_websocket_support?(connection) do %>
                 <div
                   class="absolute -right-1.5 -bottom-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white shadow-md"
@@ -260,12 +247,8 @@ defmodule LassoWeb.NetworkTopology do
     {l1_chains, l2_chains, other_chains}
   end
 
-  # Check if chain is an L1 (either by topology config or known L1 names)
+  # Check if chain is an L1 (from topology config only)
   defp is_l1_chain?(%{category: :l1}, _chain_name), do: true
-
-  defp is_l1_chain?(nil, chain_name),
-    do: chain_name in ~w(ethereum ethereum_sepolia ethereum_goerli)
-
   defp is_l1_chain?(_, _), do: false
 
   # Check if chain is an L2 with an active parent chain
@@ -279,34 +262,11 @@ defmodule LassoWeb.NetworkTopology do
     parent in active_chain_names
   end
 
-  # Fallback for chains without topology - check if known L2 AND parent exists
-  defp is_l2_with_active_parent?(nil, chain_name, active_chain_names) do
-    case fallback_l2_parent(chain_name) do
-      nil -> false
-      parent -> parent in active_chain_names
-    end
-  end
-
+  # Chains without topology config are not treated as L2s
   defp is_l2_with_active_parent?(_, _, _), do: false
 
-  # Fallback parent mapping for known L2s without topology config
-  # Maps L2 chain names to their expected parent chains
-  defp fallback_l2_parent(chain_name) do
-    mainnet_l2s =
-      ~w(base arbitrum optimism zksync linea polygon scroll starknet mantle blast mode zora unichain manta taiko)
-
-    sepolia_l2s = ~w(base_sepolia arbitrum_sepolia optimism_sepolia)
-
-    cond do
-      chain_name in mainnet_l2s -> "ethereum"
-      chain_name in sepolia_l2s -> "ethereum_sepolia"
-      true -> nil
-    end
-  end
-
-  # Get the parent chain for an L2 (from topology or fallback)
+  # Get the parent chain for an L2 (from topology config only)
   defp get_l2_parent(%{parent: parent}, _chain_name) when is_binary(parent), do: parent
-  defp get_l2_parent(nil, chain_name), do: fallback_l2_parent(chain_name)
   defp get_l2_parent(_, _), do: nil
 
   # Get topology config for a chain, returns nil if not configured
@@ -589,144 +549,27 @@ defmodule LassoWeb.NetworkTopology do
     end
   end
 
-  # Import StatusHelpers for comprehensive status determination
+  # Use centralized StatusHelpers for all provider status colors
   alias LassoWeb.Dashboard.StatusHelpers
 
-  # Provider line colors using comprehensive connection data
   defp provider_line_color(connection) do
-    case StatusHelpers.determine_provider_status(connection) do
-      :rate_limited -> "#8b5cf6"
-      :circuit_open -> "#dc2626"
-      :testing_recovery -> "#f59e0b"
-      :recovering -> "#f59e0b"
-      :degraded -> "#f97316"
-      :lagging -> "#38bdf8"
-      :healthy -> "#10b981"
-      :unknown -> "#6b7280"
-    end
+    connection |> StatusHelpers.determine_provider_status() |> StatusHelpers.status_color_scheme() |> Map.get(:hex)
   end
 
   defp extract_chain_from_connection(connection) do
-    # Use the actual chain field from the connection if available
-    case Map.get(connection, :chain) do
-      chain when is_binary(chain) -> chain
-      _ -> extract_chain_from_connection_name(connection.name)
-    end
+    Map.get(connection, :chain, "unknown")
   end
 
-  defp extract_chain_from_connection_name(name) do
-    # Use pattern matching lookup table (ordered by specificity)
-    # This reduces complexity from 42 to 3 and is more maintainable
-    case Enum.find(chain_patterns(), fn {_chain, pattern} -> name =~ pattern end) do
-      {chain, _pattern} -> chain
-      nil -> "unknown"
-    end
-  end
-
-  # Chain name pattern matching lookup - ordered by specificity
-  # Must check specific patterns first to avoid false matches
-  defp chain_patterns do
-    [
-      {"arbitrum_nova", ~r/arbitrum[_\s-]?nova/i},
-      {"optimism_bedrock", ~r/optimism[_\s-]?bedrock/i},
-      {"op_celestia", ~r/op[_\s-]?celestia/i},
-      {"polygon_zkevm", ~r/polygon[_\s-]?zkevm/i},
-      # Base needs word boundary to avoid matching "blastapi"
-      {"base", ~r/\bbase\b/i},
-      # General patterns
-      {"ethereum", ~r/ethereum/i},
-      {"arbitrum", ~r/arbitrum/i},
-      {"optimism", ~r/optimism/i},
-      {"zksync", ~r/zksync/i},
-      {"linea", ~r/linea/i},
-      {"polygon", ~r/polygon/i},
-      {"mantle", ~r/mantle/i},
-      {"scroll", ~r/scroll/i},
-      {"starknet", ~r/starknet/i},
-      {"immutable", ~r/immutable/i},
-      {"metis", ~r/metis/i},
-      {"boba", ~r/boba/i},
-      {"loopring", ~r/loopring/i},
-      {"dydx", ~r/dydx/i},
-      {"zora", ~r/zora/i},
-      {"blast", ~r/blast/i},
-      {"mode", ~r/mode/i},
-      {"fraxtal", ~r/fraxtal/i},
-      {"manta", ~r/manta/i},
-      {"opbnb", ~r/opbnb/i},
-      {"taiko", ~r/taiko/i},
-      {"kroma", ~r/kroma/i},
-      {"eclipse", ~r/eclipse/i},
-      {"lumio", ~r/lumio/i},
-      {"astria", ~r/astria/i},
-      {"caldera", ~r/caldera/i},
-      {"degen", ~r/degen/i},
-      {"lyra", ~r/lyra/i},
-      {"aevo", ~r/aevo/i},
-      {"hyperliquid", ~r/hyperliquid/i},
-      {"vertex", ~r/vertex/i},
-      {"drift", ~r/drift/i},
-      {"jupiter", ~r/jupiter/i},
-      {"pyth", ~r/pyth/i},
-      {"chainlink", ~r/chainlink/i},
-      {"unichain", ~r/unichain/i}
-    ]
-  end
-
-  # Background-only version for provider rings
   defp provider_status_bg_class(connection) when is_map(connection) do
-    case StatusHelpers.determine_provider_status(connection) do
-      # Dark red - circuit open
-      :circuit_open -> "bg-red-900/40"
-      # Amber - testing recovery (same as recovering)
-      :testing_recovery -> "bg-amber-900/30"
-      # Purple - rate limited
-      :rate_limited -> "bg-purple-900/30"
-      # Amber - recovering
-      :recovering -> "bg-amber-900/30"
-      # Orange - degraded
-      :degraded -> "bg-orange-900/30"
-      # Sky blue - lagging
-      :lagging -> "bg-sky-900/30"
-      # Green - healthy
-      :healthy -> "bg-emerald-900/30"
-      # Gray - unknown
-      :unknown -> "bg-gray-900/30"
-    end
+    connection |> StatusHelpers.determine_provider_status() |> StatusHelpers.status_color_scheme() |> Map.get(:bg_muted)
   end
 
-  # Get border class for provider ring based on status
-  # Gray by default (healthy/unknown/recovering), colored for problematic states
   defp provider_border_class(connection) do
-    case StatusHelpers.determine_provider_status(connection) do
-      # Dark red - circuit open
-      :circuit_open -> "border-red-500"
-      # Purple - rate limited
-      :rate_limited -> "border-purple-500"
-      # Sky blue - lagging
-      :lagging -> "border-sky-500"
-      # Orange - degraded
-      :degraded -> "border-orange-500"
-      # Gray - healthy, unknown, or recovering (default)
-      :healthy -> "border-gray-600"
-      :unknown -> "border-gray-600"
-      :testing_recovery -> "border-gray-600"
-      :recovering -> "border-gray-600"
-    end
+    connection |> StatusHelpers.determine_provider_status() |> StatusHelpers.status_color_scheme() |> Map.get(:border)
   end
 
-  # Provider status dot colors using comprehensive connection data
   defp provider_status_dot_class(connection) do
-    case StatusHelpers.determine_provider_status(connection) do
-      :circuit_open -> "bg-red-500"
-      :testing_recovery -> "bg-amber-400"
-      :rate_limited -> "bg-purple-400"
-      :recovering -> "bg-amber-400"
-      :degraded -> "bg-orange-400"
-      :lagging -> "bg-sky-400"
-      :healthy -> "bg-emerald-400"
-      :unknown -> "bg-gray-400"
-    end
+    connection |> StatusHelpers.determine_provider_status() |> StatusHelpers.status_color_scheme() |> Map.get(:dot)
   end
 
   # Helper to check if a provider supports WebSocket connections
@@ -751,17 +594,14 @@ defmodule LassoWeb.NetworkTopology do
 
   # Get chain color from topology config, with fallback to defaults
   defp chain_color(chain_name) do
-    topology = get_chain_topology_cached(chain_name)
+    topology = get_chain_topology_from_config(chain_name)
     TopologyConfig.chain_color(topology, chain_name)
   end
 
-  # Cache chain topology lookups for rendering performance
-  defp get_chain_topology_cached(chain_name) do
+  # Lookup chain topology from ConfigStore
+  defp get_chain_topology_from_config(chain_name) do
     all_chain_configs = ConfigStore.get_all_chains()
     get_chain_topology(chain_name, all_chain_configs)
   end
 
-  defp fastest_provider?(_connection, _chain_name, _latency_leaders) do
-    false
-  end
 end

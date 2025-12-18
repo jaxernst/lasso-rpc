@@ -205,40 +205,54 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     end
   end
 
+  @doc """
+  Get comprehensive color scheme for a provider status.
+  Returns a map with all color variants for consistent styling across the UI.
+
+  Keys:
+  - :hex - Hex color code (for SVG/canvas)
+  - :text - Text color class
+  - :bg - Background color class
+  - :bg_muted - Muted/transparent background class
+  - :border - Border color class
+  - :dot - Status indicator dot class
+  """
+  def status_color_scheme(status) do
+    case status do
+      :circuit_open ->
+        %{hex: "#dc2626", text: "text-red-500", bg: "bg-red-500", bg_muted: "bg-red-900/40", border: "border-red-500", dot: "bg-red-500"}
+
+      :testing_recovery ->
+        %{hex: "#f59e0b", text: "text-amber-400", bg: "bg-amber-400", bg_muted: "bg-amber-900/30", border: "border-gray-600", dot: "bg-amber-400"}
+
+      :rate_limited ->
+        %{hex: "#8b5cf6", text: "text-purple-300", bg: "bg-purple-400", bg_muted: "bg-purple-900/30", border: "border-purple-500", dot: "bg-purple-400"}
+
+      :recovering ->
+        %{hex: "#f59e0b", text: "text-amber-400", bg: "bg-amber-400", bg_muted: "bg-amber-900/30", border: "border-gray-600", dot: "bg-amber-400"}
+
+      :degraded ->
+        %{hex: "#f97316", text: "text-orange-400", bg: "bg-orange-400", bg_muted: "bg-orange-900/30", border: "border-orange-500", dot: "bg-orange-400"}
+
+      :lagging ->
+        %{hex: "#38bdf8", text: "text-sky-400", bg: "bg-sky-400", bg_muted: "bg-sky-900/30", border: "border-sky-500", dot: "bg-sky-400"}
+
+      :healthy ->
+        %{hex: "#10b981", text: "text-emerald-400", bg: "bg-emerald-400", bg_muted: "bg-emerald-900/30", border: "border-gray-600", dot: "bg-emerald-400"}
+
+      :unknown ->
+        %{hex: "#6b7280", text: "text-gray-400", bg: "bg-gray-400", bg_muted: "bg-gray-900/30", border: "border-gray-600", dot: "bg-gray-400"}
+    end
+  end
+
   @doc "Get provider status CSS text class with enhanced colors"
   def provider_status_class_text(provider) do
-    case determine_provider_status(provider) do
-      # 🔴 Critical failure
-      :circuit_open -> "text-red-500"
-      # 🟡 Testing recovery (amber - same as recovering)
-      :testing_recovery -> "text-amber-400"
-      # 🟣 Rate limited
-      :rate_limited -> "text-purple-300"
-      # 🟡 Recovering
-      :recovering -> "text-amber-400"
-      # 🟠 Degraded
-      :degraded -> "text-orange-400"
-      # 🔵 Lagging
-      :lagging -> "text-sky-400"
-      # 🟢 Healthy
-      :healthy -> "text-emerald-400"
-      # ⚫ Unknown
-      :unknown -> "text-gray-400"
-    end
+    provider |> determine_provider_status() |> status_color_scheme() |> Map.get(:text)
   end
 
   @doc "Get provider status indicator color (for dots/circles)"
   def provider_status_indicator_class(provider) do
-    case determine_provider_status(provider) do
-      :circuit_open -> "bg-red-500"
-      :testing_recovery -> "bg-amber-400"
-      :rate_limited -> "bg-purple-400"
-      :recovering -> "bg-amber-400"
-      :degraded -> "bg-orange-400"
-      :lagging -> "bg-sky-400"
-      :healthy -> "bg-emerald-400"
-      :unknown -> "bg-gray-400"
-    end
+    provider |> determine_provider_status() |> status_color_scheme() |> Map.get(:dot)
   end
 
   @doc "Check if provider status is considered critical"

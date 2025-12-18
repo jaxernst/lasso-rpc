@@ -98,48 +98,21 @@ defmodule LassoWeb.TopologyConfig do
   def provider_orbit_for_radius(chain_radius), do: chain_radius + provider_orbit_gap()
 
   # ===========================================================================
-  # Color Configuration - Default colors for chains without config
+  # Color Configuration
   # ===========================================================================
 
-  @default_chain_colors %{
-    "ethereum" => "#627EEA",
-    "arbitrum" => "#28A0F0",
-    "optimism" => "#FF0420",
-    "base" => "#0052FF",
-    "zksync" => "#4E529A",
-    "linea" => "#61DFFF",
-    "polygon" => "#8247E5",
-    "mantle" => "#000000",
-    "scroll" => "#FEF201",
-    "starknet" => "#00FFC2",
-    "unichain" => "#FF007A",
-    "blast" => "#FCFC03",
-    "mode" => "#DFFE00",
-    "zora" => "#000000",
-    "manta" => "#15B2C0",
-    "taiko" => "#E81899"
-  }
+  # Default fallback color for chains without topology config
+  @default_chain_color "#6B7280"
 
   @doc """
-  Get chain color from topology config, with fallback to defaults.
+  Get chain color from topology config.
+  Chain colors are defined in chains.yml topology config.
+  Falls back to a neutral gray for unconfigured chains.
   """
   def chain_color(%Topology{color: color}, _chain_name) when is_binary(color) and color != "",
     do: color
 
-  def chain_color(_topology, chain_name), do: default_chain_color(chain_name)
-
-  defp default_chain_color(chain_name) do
-    # Try exact match first, then check if chain_name contains a known key
-    Map.get(@default_chain_colors, chain_name) ||
-      find_partial_match(chain_name) ||
-      "#6B7280"
-  end
-
-  defp find_partial_match(chain_name) do
-    Enum.find_value(@default_chain_colors, fn {key, color} ->
-      if String.contains?(chain_name, key), do: color
-    end)
-  end
+  def chain_color(_topology, _chain_name), do: @default_chain_color
 
   # ===========================================================================
   # Categorization Helpers
