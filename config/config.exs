@@ -70,7 +70,7 @@ config :lasso, :dashboard_status,
 # Enable/disable BEAM VM metrics collection and the System Metrics tab.
 # When disabled, no VM statistics are collected and the tab is hidden.
 # Disable for production deployments where exposing VM internals is not desired.
-config :lasso, :vm_metrics_enabled, true
+config :lasso, :vm_metrics_enabled, false
 
 # Provider probe configuration (integrated health & block height monitoring)
 # These are fallback defaults for dynamic/test chains not defined in chains.yml
@@ -130,7 +130,3 @@ config :logger, :console,
 
 # Environment specific configs
 import_config "#{config_env()}.exs"
-
-# NOTE: runtime.exs is automatically loaded by Mix at application startup.
-# Do NOT import_config it here - that would run it at compile time when
-# Application.get_env can't read the merged config yet.

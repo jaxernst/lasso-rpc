@@ -61,7 +61,7 @@ config :lasso,
   heartbeat_interval: 45_000,
   reconnect_interval: 10_000
 
+config :lasso, :vm_metrics_enabled, false
+
 # Environment marker
 config :lasso, environment: :prod
-
-# Runtime production config (secrets) is handled by runtime.exs
