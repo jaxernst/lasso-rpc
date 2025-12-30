@@ -318,17 +318,14 @@ defmodule Lasso.Test.CircuitBreakerHelper do
   # Private helpers
 
   defp list_all_circuit_breakers do
-    # Circuit breakers are registered via Registry
-    # The breaker_id can be "chain:provider:transport", "provider:transport", or just "provider"
     try do
       Registry.select(Lasso.Registry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
       |> Enum.filter(fn
-        {{:circuit_breaker, _breaker_id}, _pid} -> true
+        {{:circuit_breaker, _profile, _chain, _provider_id, _transport}, _pid} -> true
         _ -> false
       end)
-      |> Enum.map(fn {{:circuit_breaker, breaker_key}, pid} ->
-        # Parse the breaker_key string back to breaker_id tuple
-        breaker_id = parse_breaker_key(breaker_key)
+      |> Enum.map(fn {{:circuit_breaker, profile, chain, provider_id, transport}, pid} ->
+        breaker_id = {profile, chain, provider_id, transport}
         {breaker_id, pid}
       end)
     catch
@@ -336,34 +333,10 @@ defmodule Lasso.Test.CircuitBreakerHelper do
     end
   end
 
-  defp parse_breaker_key(key) when is_binary(key) do
-    parts = String.split(key, ":")
-
-    case parts do
-      [chain, provider_id, transport] -> {chain, provider_id, String.to_atom(transport)}
-      [provider_id, transport] -> {provider_id, String.to_atom(transport)}
-      [provider_id] -> provider_id
-    end
-  end
-
   defp reset_circuit_breaker(pid) when is_pid(pid) do
     try do
-      # Get current state to extract the ID
       state = :sys.get_state(pid)
-
-      # Reset via the API
-      breaker_id =
-        cond do
-          state.chain != nil and state.transport != :unknown ->
-            {state.chain, state.provider_id, state.transport}
-
-          state.transport != :unknown ->
-            {state.provider_id, state.transport}
-
-          true ->
-            state.provider_id
-        end
-
+      breaker_id = {state.profile, state.chain, state.provider_id, state.transport}
       CircuitBreaker.close(breaker_id)
     catch
       :exit, _ -> :ok

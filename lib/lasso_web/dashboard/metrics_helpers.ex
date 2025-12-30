@@ -148,9 +148,11 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
   @doc "Assign chain performance metrics to assigns"
   def assign_chain_performance_metrics(assigns, chain_name) do
+    profile = Map.get(assigns, :selected_profile, "default")
+
     # Get chain-wide statistics
-    chain_stats = BenchmarkStore.get_chain_wide_stats(chain_name)
-    realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
+    chain_stats = BenchmarkStore.get_chain_wide_stats(profile, chain_name)
+    realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_name)
 
     # Time window for ETS queries
     window_ms = Constants.metrics_window_5min()
@@ -203,6 +205,8 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
   @doc "Assign provider performance metrics to assigns"
   def assign_provider_performance_metrics(assigns, provider_id) do
+    profile = Map.get(assigns, :selected_profile, "default")
+
     # Get the chain for this provider
     chain =
       case Enum.find(assigns.connections, &(&1.id == provider_id)) do
@@ -212,7 +216,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
     metrics =
       if chain do
-        calculate_provider_metrics(chain, provider_id, assigns.routing_events)
+        calculate_provider_metrics(profile, chain, provider_id, assigns.routing_events)
       else
         empty_provider_metrics()
       end
@@ -221,7 +225,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   end
 
   @doc "Get provider performance metrics (non-socket version)"
-  def get_provider_performance_metrics(provider_id, connections \\ [], routing_events \\ []) do
+  def get_provider_performance_metrics(provider_id, connections \\ [], routing_events \\ [], profile \\ "default") do
     # Get the chain for this provider
     chain =
       case Enum.find(connections, &(&1.id == provider_id)) do
@@ -230,17 +234,17 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       end
 
     if chain do
-      calculate_provider_metrics(chain, provider_id, routing_events)
+      calculate_provider_metrics(profile, chain, provider_id, routing_events)
     else
       empty_provider_metrics()
     end
   end
 
   # Private: Calculate provider metrics (shared logic)
-  defp calculate_provider_metrics(chain, provider_id, routing_events) do
-    provider_score = BenchmarkStore.get_provider_score(chain, provider_id)
-    real_time_stats = BenchmarkStore.get_real_time_stats(chain, provider_id)
-    anomalies = BenchmarkStore.detect_performance_anomalies(chain, provider_id)
+  defp calculate_provider_metrics(profile, chain, provider_id, routing_events) do
+    provider_score = BenchmarkStore.get_provider_score(profile, chain, provider_id)
+    real_time_stats = BenchmarkStore.get_real_time_stats(profile, chain, provider_id)
+    anomalies = BenchmarkStore.detect_performance_anomalies(profile, chain, provider_id)
 
     # Time window for ETS queries
     five_min_ms = Constants.metrics_window_5min()

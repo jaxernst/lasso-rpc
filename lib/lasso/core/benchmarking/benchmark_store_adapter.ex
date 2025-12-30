@@ -12,7 +12,9 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
 
   @impl true
   def get_provider_performance(chain, provider_id, method) do
-    case BenchmarkStore.get_rpc_performance(chain, provider_id, method) do
+    # TODO: Default profile - should be passed from caller context
+    profile = "default"
+    case BenchmarkStore.get_rpc_performance(profile, chain, provider_id, method) do
       %{total_calls: 0} ->
         nil
 
@@ -33,7 +35,9 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
 
   @impl true
   def get_method_performance(chain, method) do
-    case BenchmarkStore.get_rpc_method_performance(chain, method) do
+    # TODO: Default profile - should be passed from caller context
+    profile = "default"
+    case BenchmarkStore.get_rpc_method_performance(profile, chain, method) do
       %{providers: providers} when is_list(providers) ->
         providers
         |> Enum.filter(fn provider -> provider.total_calls > 0 end)
@@ -63,13 +67,14 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
   end
 
   @impl true
-  def record_request(chain, provider_id, method, duration_ms, result, opts) do
+  def record_request(profile, chain, provider_id, method, duration_ms, result, opts) do
     timestamp = Keyword.get(opts, :timestamp)
     transport = Keyword.get(opts, :transport, :http)
 
     method_key = "#{method}@#{transport}"
 
     BenchmarkStore.record_rpc_call(
+      profile,
       chain,
       provider_id,
       method_key,
@@ -83,9 +88,11 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
 
   @impl true
   def get_provider_transport_performance(chain, provider_id, method, transport) do
+    # TODO: Default profile - should be passed from caller context
+    profile = "default"
     method_key = "#{method}@#{transport}"
 
-    case Lasso.Benchmarking.BenchmarkStore.get_rpc_performance(chain, provider_id, method_key) do
+    case Lasso.Benchmarking.BenchmarkStore.get_rpc_performance(profile, chain, provider_id, method_key) do
       %{total_calls: 0} ->
         nil
 

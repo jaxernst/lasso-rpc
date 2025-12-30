@@ -147,9 +147,11 @@ defmodule Lasso.RPC.RequestPipeline do
   # Builds a function that returns channels to try, unifying override vs normal selection
   @spec build_channel_source(chain(), method(), RequestOptions.t()) :: channel_source()
   defp build_channel_source(chain, method, %RequestOptions{provider_override: nil} = opts) do
+    profile = opts.profile || "default"
+
     # Normal selection: get best channels via Selection module
     fn _ctx ->
-      Selection.select_channels(chain, method,
+      Selection.select_channels(profile, chain, method,
         strategy: opts.strategy,
         transport: opts.transport || :both,
         limit: @max_channel_candidates
@@ -158,14 +160,16 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp build_channel_source(chain, method, %RequestOptions{provider_override: provider_id} = opts) do
+    profile = opts.profile || "default"
+
     # Provider override: get channels for specific provider, optionally with failover
     fn _ctx ->
-      primary_channels = get_provider_channels(chain, provider_id, opts.transport)
+      primary_channels = get_provider_channels(profile, chain, provider_id, opts.transport)
 
       if opts.failover_on_override do
         # Append alternative channels for failover
         failover_channels =
-          Selection.select_channels(chain, method,
+          Selection.select_channels(profile, chain, method,
             strategy: opts.strategy,
             transport: :both,
             exclude: [provider_id],
@@ -482,19 +486,19 @@ defmodule Lasso.RPC.RequestPipeline do
     }
   end
 
-  @spec get_provider_channels(chain(), String.t(), atom() | nil) :: [Channel.t()]
-  defp get_provider_channels(chain, provider_id, transport_override) do
+  @spec get_provider_channels(String.t(), chain(), String.t(), atom() | nil) :: [Channel.t()]
+  defp get_provider_channels(profile, chain, provider_id, transport_override) do
     transports = if transport_override, do: [transport_override], else: [:http, :ws]
 
     for transport <- transports,
-        channel = fetch_channel_safe(chain, provider_id, transport),
+        channel = fetch_channel_safe(profile, chain, provider_id, transport),
         not is_nil(channel),
         do: channel
   end
 
-  @spec fetch_channel_safe(chain(), String.t(), atom()) :: Channel.t() | nil
-  defp fetch_channel_safe(chain, provider_id, transport) do
-    case TransportRegistry.get_channel(chain, provider_id, transport) do
+  @spec fetch_channel_safe(String.t(), chain(), String.t(), atom()) :: Channel.t() | nil
+  defp fetch_channel_safe(profile, chain, provider_id, transport) do
+    case TransportRegistry.get_channel(profile, chain, provider_id, transport) do
       {:ok, channel} -> channel
       {:error, _} -> nil
     end

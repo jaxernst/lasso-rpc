@@ -317,14 +317,24 @@ defmodule Lasso.Providers do
     }
   end
 
+  # Default profile for dynamically added chains (backward compatibility)
+  @default_profile "default"
+
   defp start_chain_supervisor(chain_name, _chain_config_attrs) do
     # Get the full ChainConfig struct from ConfigStore (it was normalized during registration)
     case Lasso.Config.ConfigStore.get_chain(chain_name) do
       {:ok, chain_config} ->
-        # Start the ChainSupervisor under the dynamic supervisor
-        DynamicSupervisor.start_child(
-          Lasso.RPC.Supervisor,
-          {ChainSupervisor, {chain_name, chain_config}}
+        # Start global chain processes (BlockSync, HealthProbe) if not already running
+        case Lasso.GlobalChainSupervisor.ensure_chain_processes(chain_name) do
+          :ok -> :ok
+          {:error, reason} -> Logger.warning("Global chain processes failed: #{inspect(reason)}")
+        end
+
+        # Start profile chain supervisor under the default profile
+        Lasso.ProfileChainSupervisor.start_profile_chain(
+          @default_profile,
+          chain_name,
+          chain_config
         )
 
       {:error, reason} ->

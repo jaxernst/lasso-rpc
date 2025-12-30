@@ -21,11 +21,20 @@ defmodule LassoWeb.Router do
     plug(LassoWeb.Plugs.ObservabilityPlug)
   end
 
+  # Profile-aware RPC pipeline
+  pipeline :api_with_profile do
+    plug(:accepts, ["json"])
+    plug(LassoWeb.Plugs.ProfileResolverPlug)
+    plug(LassoWeb.Plugs.ObservabilityPlug)
+  end
+
   scope "/", LassoWeb do
     pipe_through(:browser)
 
     live("/", HomeLive)
-    live("/dashboard", Dashboard)
+    live("/dashboard", Dashboard, :index)
+    live("/dashboard/:profile", Dashboard, :show)
+    live("/admin/profiles", ProfileManagementLive, :index)
   end
 
   scope "/api", LassoWeb do
@@ -59,6 +68,25 @@ defmodule LassoWeb.Router do
   end
 
   # HTTP JSON-RPC endpoints
+
+  # Profile-aware endpoints (new multi-profile architecture)
+  scope "/rpc", LassoWeb do
+    pipe_through(:api_with_profile)
+
+    # Profile-scoped base endpoint
+    post("/:profile/:chain_id", RPCController, :rpc_base)
+
+    # Profile-scoped strategy endpoints
+    post("/:profile/fastest/:chain_id", RPCController, :rpc_fastest)
+    post("/:profile/round-robin/:chain_id", RPCController, :rpc_round_robin)
+    post("/:profile/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
+
+    # Profile-scoped provider override
+    post("/:profile/provider/:provider_id/:chain_id", RPCController, :rpc_provider_override)
+    post("/:profile/:chain_id/:provider_id", RPCController, :rpc_provider_override)
+  end
+
+  # Legacy endpoints (backward compatible - use default profile)
   scope "/rpc", LassoWeb do
     pipe_through(:api_with_logging)
 

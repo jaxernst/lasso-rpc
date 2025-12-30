@@ -91,6 +91,7 @@ defmodule Lasso.RPC.SelectionTest do
   describe "select_provider/1 - context validation" do
     test "returns error for empty chain name" do
       ctx = %SelectionContext{
+        profile: "default",
         chain: "",
         method: "eth_blockNumber",
         strategy: :priority,
@@ -105,6 +106,7 @@ defmodule Lasso.RPC.SelectionTest do
 
     test "returns error for empty method name" do
       ctx = %SelectionContext{
+        profile: "default",
         chain: "ethereum",
         method: "",
         strategy: :priority,
@@ -119,6 +121,7 @@ defmodule Lasso.RPC.SelectionTest do
 
     test "returns error for invalid strategy" do
       ctx = %SelectionContext{
+        profile: "default",
         chain: "ethereum",
         method: "eth_blockNumber",
         strategy: :invalid_strategy,
@@ -133,6 +136,7 @@ defmodule Lasso.RPC.SelectionTest do
 
     test "returns error for invalid protocol" do
       ctx = %SelectionContext{
+        profile: "default",
         chain: "ethereum",
         method: "eth_blockNumber",
         strategy: :priority,
@@ -147,6 +151,7 @@ defmodule Lasso.RPC.SelectionTest do
 
     test "returns error for non-list exclude" do
       ctx = %SelectionContext{
+        profile: "default",
         chain: "ethereum",
         method: "eth_blockNumber",
         strategy: :priority,
@@ -161,6 +166,7 @@ defmodule Lasso.RPC.SelectionTest do
 
     test "returns error for non-positive timeout" do
       ctx = %SelectionContext{
+        profile: "default",
         chain: "ethereum",
         method: "eth_blockNumber",
         strategy: :priority,

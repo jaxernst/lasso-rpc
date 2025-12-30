@@ -38,7 +38,7 @@ defmodule Lasso.RPC.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
-      {:ok, pid} = StreamCoordinator.start_link({chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
 
       state = get_coordinator_state(pid)
 
@@ -61,7 +61,7 @@ defmodule Lasso.RPC.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_event_buffer: 10]
 
-      {:ok, pid} = StreamCoordinator.start_link({chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -167,7 +167,7 @@ defmodule Lasso.RPC.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
-      {:ok, pid} = StreamCoordinator.start_link({chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -258,7 +258,7 @@ defmodule Lasso.RPC.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_failover_attempts: 2, failover_cooldown_ms: 1_000]
 
-      {:ok, pid} = StreamCoordinator.start_link({chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -319,7 +319,7 @@ defmodule Lasso.RPC.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
-      {:ok, pid} = StreamCoordinator.start_link({chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
 
       # Initial history empty
       state = get_coordinator_state(pid)
@@ -344,7 +344,7 @@ defmodule Lasso.RPC.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_event_buffer: 3]
 
-      {:ok, pid} = StreamCoordinator.start_link({chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -454,7 +454,7 @@ defmodule Lasso.RPC.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
-      {:ok, pid} = StreamCoordinator.start_link({chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -512,7 +512,7 @@ defmodule Lasso.RPC.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_failover_attempts: 2]
 
-      {:ok, pid} = StreamCoordinator.start_link({chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 

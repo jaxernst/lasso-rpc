@@ -9,6 +9,7 @@ defmodule LassoWeb.NetworkTopology do
   attr(:connections, :list, required: true, doc: "list of connection maps")
   attr(:selected_chain, :string, default: nil, doc: "currently selected chain")
   attr(:selected_provider, :string, default: nil, doc: "currently selected provider")
+  attr(:selected_profile, :string, default: nil, doc: "currently selected profile")
   attr(:on_chain_select, :string, default: "select_chain", doc: "event name for chain selection")
 
   attr(:on_provider_select, :string,
@@ -26,7 +27,12 @@ defmodule LassoWeb.NetworkTopology do
 
     ~H"""
     <div class={["relative h-full w-full overflow-hidden", @class]}>
-      
+      <%= if @selected_profile do %>
+        <div class="absolute top-4 left-4 z-50 text-xs text-zinc-400 bg-zinc-900/80 px-2 py-1 rounded">
+          Profile: <%= @selected_profile %>
+        </div>
+      <% end %>
+
     <!-- Hierarchical orbital network layout -->
       <div
         class="relative cursor-default"

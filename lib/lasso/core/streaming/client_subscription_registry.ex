@@ -1,6 +1,6 @@
 defmodule Lasso.RPC.ClientSubscriptionRegistry do
   @moduledoc """
-  Per-chain registry that tracks client subscriptions and fans out events.
+  Per-profile registry that tracks client subscriptions and fans out events.
 
   Holds mappings:
     subscription_id → %{client_pid, key}
@@ -12,37 +12,42 @@ defmodule Lasso.RPC.ClientSubscriptionRegistry do
 
   @type key :: {:newHeads} | {:logs, map()}
 
-  def start_link(chain) when is_binary(chain) do
-    GenServer.start_link(__MODULE__, chain, name: via(chain))
+  def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
+    GenServer.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
   end
 
-  def via(chain), do: {:via, Registry, {Lasso.Registry, {:client_registry, chain}}}
-
-  @spec add_client(String.t(), String.t(), pid(), key) :: :ok
-  def add_client(chain, subscription_id, client_pid, key) do
-    GenServer.call(via(chain), {:add, subscription_id, client_pid, key})
+  def via(profile, chain) when is_binary(profile) and is_binary(chain) do
+    {:via, Registry, {Lasso.Registry, {:client_registry, profile, chain}}}
   end
 
-  @spec remove_client(String.t(), String.t()) :: {:ok, key | nil}
-  def remove_client(chain, subscription_id) do
-    GenServer.call(via(chain), {:remove, subscription_id})
+  @spec add_client(String.t(), String.t(), String.t(), pid(), key) :: :ok
+  def add_client(profile, chain, subscription_id, client_pid, key)
+      when is_binary(profile) and is_binary(chain) do
+    GenServer.call(via(profile, chain), {:add, subscription_id, client_pid, key})
   end
 
-  @spec list_by_key(String.t(), key) :: [String.t()]
-  def list_by_key(chain, key) do
-    GenServer.call(via(chain), {:list_by_key, key})
+  @spec remove_client(String.t(), String.t(), String.t()) :: {:ok, key | nil}
+  def remove_client(profile, chain, subscription_id)
+      when is_binary(profile) and is_binary(chain) do
+    GenServer.call(via(profile, chain), {:remove, subscription_id})
   end
 
-  @spec dispatch(String.t(), key, map()) :: :ok
-  def dispatch(chain, key, payload) do
-    GenServer.cast(via(chain), {:dispatch, key, payload})
+  @spec list_by_key(String.t(), String.t(), key) :: [String.t()]
+  def list_by_key(profile, chain, key) when is_binary(profile) and is_binary(chain) do
+    GenServer.call(via(profile, chain), {:list_by_key, key})
+  end
+
+  @spec dispatch(String.t(), String.t(), key, map()) :: :ok
+  def dispatch(profile, chain, key, payload) when is_binary(profile) and is_binary(chain) do
+    GenServer.cast(via(profile, chain), {:dispatch, key, payload})
   end
 
   # GenServer callbacks
 
   @impl true
-  def init(chain) do
+  def init({profile, chain}) do
     state = %{
+      profile: profile,
       chain: chain,
       by_id: %{},
       by_key: %{}

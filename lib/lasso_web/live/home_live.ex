@@ -12,15 +12,18 @@ defmodule LassoWeb.HomeLive do
       Process.send_after(self(), :tick, 1000)
     end
 
+    # Use default profile for home page
+    default_profile = "default"
+
     config_status = Lasso.Config.ConfigStore.status()
     base_url = URI.parse(LassoWeb.Endpoint.url()).authority
 
-    # Load available chains
-    available_chains = ConfigStore.list_chains() |> Enum.sort()
+    # Load available chains for default profile
+    available_chains = ConfigStore.list_chains_for_profile(default_profile) |> Enum.sort()
 
     # Load initial heatmap data - use first available chain
     heatmap_chain = List.first(available_chains, "ethereum")
-    {heatmap_data, heatmap_methods, heatmap_live} = load_heatmap_data(heatmap_chain)
+    {heatmap_data, heatmap_methods, heatmap_live} = load_heatmap_data(default_profile, heatmap_chain)
 
     socket =
       socket
@@ -35,11 +38,12 @@ defmodule LassoWeb.HomeLive do
       |> assign(:routing_decisions, initial_decisions())
       |> assign(:provider_health, initial_health())
       |> assign(:metrics, %{latency: 42, success_rate: 99.9})
-      |> assign(:total_endpoints, config_status.total_endpoints)
-      |> assign(:total_providers, config_status.total_providers)
-      |> assign(:total_strategies, config_status.total_strategies)
+      |> assign(:total_endpoints, Map.get(config_status, :total_providers, 0))
+      |> assign(:total_providers, Map.get(config_status, :total_providers, 0))
+      |> assign(:total_strategies, 3)
       |> assign(:available_chains, available_chains)
       |> assign(:is_live, false)
+      |> assign(:selected_profile, default_profile)
       |> assign(:heatmap_chain, heatmap_chain)
       |> assign(:heatmap_data, heatmap_data)
       |> assign(:heatmap_methods, heatmap_methods)
@@ -54,7 +58,7 @@ defmodule LassoWeb.HomeLive do
     Process.send_after(self(), :tick, 1000)
 
     # Try to get real data from the selected heatmap chain
-    real_calls = Lasso.Benchmarking.BenchmarkStore.get_recent_calls(socket.assigns.heatmap_chain, 4)
+    real_calls = Lasso.Benchmarking.BenchmarkStore.get_recent_calls(socket.assigns.selected_profile, socket.assigns.heatmap_chain, 4)
 
     {new_decisions, is_live} =
       if length(real_calls) > 0 do
@@ -66,7 +70,7 @@ defmodule LassoWeb.HomeLive do
 
     # Refresh heatmap data
     {heatmap_data, heatmap_methods, heatmap_live} =
-      load_heatmap_data(socket.assigns.heatmap_chain)
+      load_heatmap_data(socket.assigns.selected_profile, socket.assigns.heatmap_chain)
 
     {:noreply,
      socket
@@ -188,7 +192,7 @@ defmodule LassoWeb.HomeLive do
   end
 
   # Load heatmap data from BenchmarkStore for a specific chain
-  defp load_heatmap_data(chain_name) do
+  defp load_heatmap_data(profile, chain_name) do
     # Get providers configured for this chain
     providers =
       case ConfigStore.get_providers(chain_name) do
@@ -197,7 +201,7 @@ defmodule LassoWeb.HomeLive do
       end
 
     # Get realtime stats to find available RPC methods
-    realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
+    realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_name)
     rpc_methods = Map.get(realtime_stats, :rpc_methods, [])
 
     # If no data, return empty state
@@ -212,6 +216,7 @@ defmodule LassoWeb.HomeLive do
             rpc_methods
             |> Enum.reduce(%{}, fn method, acc ->
               case BenchmarkStore.get_rpc_method_performance_with_percentiles(
+                     profile,
                      chain_name,
                      provider.id,
                      method
@@ -785,6 +790,7 @@ defmodule LassoWeb.HomeLive do
                   heatmap_data={@heatmap_data}
                   methods={@heatmap_methods}
                   chain_name={@heatmap_chain}
+                  profile={@selected_profile}
                   is_live={@heatmap_live}
                 />
               </div>

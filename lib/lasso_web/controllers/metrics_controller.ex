@@ -43,17 +43,17 @@ defmodule LassoWeb.MetricsController do
     })
   end
 
-  defp collect_chain_metrics(chain_name) do
+  defp collect_chain_metrics(chain_name, profile \\ "default") do
     # Get basic chain information
     {:ok, chain_config} = ConfigStore.get_chain(chain_name)
     {:ok, provider_configs} = ConfigStore.get_providers(chain_name)
 
     # Get performance data from BenchmarkStore
-    chain_stats = BenchmarkStore.get_chain_wide_stats(chain_name)
-    realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
+    chain_stats = BenchmarkStore.get_chain_wide_stats(profile, chain_name)
+    realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_name)
 
     # Get provider leaderboard
-    provider_leaderboard = BenchmarkStore.get_provider_leaderboard(chain_name)
+    provider_leaderboard = BenchmarkStore.get_provider_leaderboard(profile, chain_name)
 
     # Calculate VM/system metrics
     vm_metrics = MetricsHelpers.collect_vm_metrics()
@@ -89,7 +89,7 @@ defmodule LassoWeb.MetricsController do
           avg_margin_ms: provider.avg_margin_ms || 0,
           calls_last_minute:
             Map.get(
-              BenchmarkStore.get_real_time_stats(chain_name, provider.provider_id),
+              BenchmarkStore.get_real_time_stats(profile, chain_name, provider.provider_id),
               :calls_last_minute,
               0
             )
@@ -102,6 +102,7 @@ defmodule LassoWeb.MetricsController do
 
     # Collect detailed performance data organized by provider
     rpc_performance_by_provider = collect_rpc_performance_by_provider(
+      profile,
       chain_name,
       provider_ids,
       rpc_methods,
@@ -110,6 +111,7 @@ defmodule LassoWeb.MetricsController do
 
     # Collect detailed performance data organized by method
     rpc_performance_by_method = collect_rpc_performance_by_method(
+      profile,
       chain_name,
       provider_ids,
       rpc_methods,
@@ -151,12 +153,12 @@ defmodule LassoWeb.MetricsController do
     end
   end
 
-  defp collect_rpc_performance_by_provider(chain_name, provider_ids, rpc_methods, provider_configs) do
+  defp collect_rpc_performance_by_provider(profile, chain_name, provider_ids, rpc_methods, provider_configs) do
     Enum.map(provider_ids, fn provider_id ->
       method_metrics =
         rpc_methods
         |> Enum.map(fn method ->
-          collect_method_performance(chain_name, provider_id, method)
+          collect_method_performance(profile, chain_name, provider_id, method)
         end)
         |> Enum.reject(&is_nil/1)
 
@@ -169,13 +171,13 @@ defmodule LassoWeb.MetricsController do
     |> Enum.reject(fn provider -> Enum.empty?(provider.methods) end)
   end
 
-  defp collect_rpc_performance_by_method(chain_name, provider_ids, rpc_methods, provider_configs) do
+  defp collect_rpc_performance_by_method(profile, chain_name, provider_ids, rpc_methods, provider_configs) do
     rpc_methods
     |> Enum.map(fn method ->
       provider_metrics =
         provider_ids
         |> Enum.map(fn provider_id ->
-          case collect_method_performance(chain_name, provider_id, method) do
+          case collect_method_performance(profile, chain_name, provider_id, method) do
             nil -> nil
             metrics ->
               Map.merge(metrics, %{
@@ -198,8 +200,8 @@ defmodule LassoWeb.MetricsController do
     |> Enum.reject(&is_nil/1)
   end
 
-  defp collect_method_performance(chain_name, provider_id, method) do
-    case BenchmarkStore.get_rpc_method_performance_with_percentiles(chain_name, provider_id, method) do
+  defp collect_method_performance(profile, chain_name, provider_id, method) do
+    case BenchmarkStore.get_rpc_method_performance_with_percentiles(profile, chain_name, provider_id, method) do
       nil ->
         nil
 

@@ -68,6 +68,7 @@ defmodule Lasso.RPC.TransportRegistry do
   @channel_cache_table :transport_channel_cache
 
   defstruct [
+    :profile,
     :chain_name,
     # Map of provider_id => %{http: channel, ws: channel}
     :channels,
@@ -75,17 +76,27 @@ defmodule Lasso.RPC.TransportRegistry do
     :capabilities
   ]
 
+  @type profile :: String.t()
   @type chain_name :: String.t()
   @type provider_id :: String.t()
   @type transport :: :http | :ws
   @type channel_map :: %{transport => Channel.t()}
 
   @doc """
-  Starts the TransportRegistry for a chain.
+  Starts the TransportRegistry for a profile/chain pair.
+
+  Accepts either `{profile, chain_name, chain_config}` (profile-aware) or
+  `{chain_name, chain_config}` (backward compatible, uses "default" profile).
   """
-  @spec start_link({chain_name, map()}) :: GenServer.on_start()
+  @spec start_link({profile, chain_name, map()} | {chain_name, map()}) :: GenServer.on_start()
+  def start_link({profile, chain_name, chain_config}) when is_binary(profile) do
+    GenServer.start_link(__MODULE__, {profile, chain_name, chain_config},
+      name: via_name(profile, chain_name)
+    )
+  end
+
   def start_link({chain_name, chain_config}) do
-    GenServer.start_link(__MODULE__, {chain_name, chain_config}, name: via_name(chain_name))
+    start_link({"default", chain_name, chain_config})
   end
 
   @doc """
@@ -111,12 +122,22 @@ defmodule Lasso.RPC.TransportRegistry do
   Stale channel references are handled gracefully by the circuit breaker on
   first failed request.
 
+  Accepts optional profile as first argument (defaults to "default").
+
   Returns {:ok, channel} or {:error, reason}.
   """
   @spec get_channel(chain_name, provider_id, transport, keyword()) ::
           {:ok, Channel.t()} | {:error, term()}
-  def get_channel(chain_name, provider_id, transport, opts \\ []) do
-    cache_key = {chain_name, provider_id, transport}
+  def get_channel(chain_name, provider_id, transport, opts)
+      when is_binary(chain_name) and is_binary(provider_id) and is_atom(transport) and is_list(opts) do
+    get_channel("default", chain_name, provider_id, transport, opts)
+  end
+
+  @spec get_channel(profile, chain_name, provider_id, transport, keyword()) ::
+          {:ok, Channel.t()} | {:error, term()}
+  def get_channel(profile, chain_name, provider_id, transport, opts \\ [])
+      when is_binary(profile) and is_binary(chain_name) and is_binary(provider_id) and is_atom(transport) do
+    cache_key = {profile, chain_name, provider_id, transport}
 
     case :ets.lookup(@channel_cache_table, cache_key) do
       [{^cache_key, channel}] ->
@@ -126,13 +147,13 @@ defmodule Lasso.RPC.TransportRegistry do
       [] ->
         # Slow path: channel not cached, use GenServer to create/fetch
         # This will also populate the ETS cache for future lookups
-        do_get_channel(chain_name, provider_id, transport, opts)
+        do_get_channel(profile, chain_name, provider_id, transport, opts)
     end
   end
 
   # GenServer call for channel creation/retrieval. Called on cache miss.
-  defp do_get_channel(chain_name, provider_id, transport, opts) do
-    GenServer.call(via_name(chain_name), {:get_channel, provider_id, transport, opts})
+  defp do_get_channel(profile, chain_name, provider_id, transport, opts) do
+    GenServer.call(via_name(profile, chain_name), {:get_channel, provider_id, transport, opts})
   end
 
   @doc """
@@ -140,11 +161,20 @@ defmodule Lasso.RPC.TransportRegistry do
 
   HTTP is created if url/http_url is configured. WS is created only if ws_url is
   configured and the WS connection is currently established.
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec initialize_provider_channels(chain_name, provider_id, map()) :: :ok | {:error, term()}
   def initialize_provider_channels(chain_name, provider_id, provider_config) do
+    initialize_provider_channels("default", chain_name, provider_id, provider_config)
+  end
+
+  @spec initialize_provider_channels(profile, chain_name, provider_id, map()) ::
+          :ok | {:error, term()}
+  def initialize_provider_channels(profile, chain_name, provider_id, provider_config)
+      when is_binary(profile) do
     GenServer.call(
-      via_name(chain_name),
+      via_name(profile, chain_name),
       {:initialize_provider_channels, provider_id, provider_config}
     )
   end
@@ -152,11 +182,18 @@ defmodule Lasso.RPC.TransportRegistry do
   @doc """
   Lists all available channels for a provider.
 
+  Accepts optional profile as first argument (defaults to "default").
+
   Returns a list of {transport, channel} tuples.
   """
   @spec list_provider_channels(chain_name, provider_id) :: [{transport, Channel.t()}]
   def list_provider_channels(chain_name, provider_id) do
-    GenServer.call(via_name(chain_name), {:list_provider_channels, provider_id})
+    list_provider_channels("default", chain_name, provider_id)
+  end
+
+  @spec list_provider_channels(profile, chain_name, provider_id) :: [{transport, Channel.t()}]
+  def list_provider_channels(profile, chain_name, provider_id) when is_binary(profile) do
+    GenServer.call(via_name(profile, chain_name), {:list_provider_channels, provider_id})
   end
 
   @doc """
@@ -167,40 +204,65 @@ defmodule Lasso.RPC.TransportRegistry do
   - exclude: [provider_id]
   - method: String.t() (for capability filtering)
 
+  Accepts optional profile as first argument (defaults to "default").
+
   Returns a list of Channel structs with transport and capability information.
   """
   @spec get_candidate_channels(chain_name, map()) :: [Channel.t()]
   def get_candidate_channels(chain_name, filters \\ %{}) do
-    GenServer.call(via_name(chain_name), {:get_candidate_channels, filters})
+    get_candidate_channels("default", chain_name, filters)
+  end
+
+  @spec get_candidate_channels(profile, chain_name, map()) :: [Channel.t()]
+  def get_candidate_channels(profile, chain_name, filters) when is_binary(profile) and is_map(filters) do
+    GenServer.call(via_name(profile, chain_name), {:get_candidate_channels, filters})
   end
 
   @doc """
   Forces refresh of capabilities for a provider/transport combination.
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec refresh_capabilities(chain_name, provider_id, transport) :: :ok
   def refresh_capabilities(chain_name, provider_id, transport) do
-    GenServer.cast(via_name(chain_name), {:refresh_capabilities, provider_id, transport})
+    refresh_capabilities("default", chain_name, provider_id, transport)
+  end
+
+  @spec refresh_capabilities(profile, chain_name, provider_id, transport) :: :ok
+  def refresh_capabilities(profile, chain_name, provider_id, transport) when is_binary(profile) do
+    GenServer.cast(via_name(profile, chain_name), {:refresh_capabilities, provider_id, transport})
   end
 
   @doc """
   Closes and removes a channel from the registry.
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec close_channel(chain_name, provider_id, transport) :: :ok
   def close_channel(chain_name, provider_id, transport) do
-    GenServer.cast(via_name(chain_name), {:close_channel, provider_id, transport})
+    close_channel("default", chain_name, provider_id, transport)
+  end
+
+  @spec close_channel(profile, chain_name, provider_id, transport) :: :ok
+  def close_channel(profile, chain_name, provider_id, transport) when is_binary(profile) do
+    GenServer.cast(via_name(profile, chain_name), {:close_channel, provider_id, transport})
   end
 
   # GenServer implementation
 
-  # Fallback for backward compatibility
   @impl true
-  def init({chain_name, _chain_config}) when is_binary(chain_name) do
+  def init({profile, chain_name, _chain_config}) when is_binary(profile) and is_binary(chain_name) do
     state = %__MODULE__{
+      profile: profile,
       chain_name: chain_name,
       channels: %{},
       capabilities: %{}
     }
 
+    # Subscribe to profile-scoped WS connection events
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{profile}:#{chain_name}")
+
+    # Also subscribe to legacy topic for backward compatibility during migration
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
 
     {:ok, state}
@@ -403,7 +465,7 @@ defmodule Lasso.RPC.TransportRegistry do
             final_state = %{new_state | capabilities: new_capabilities}
 
             # Update ETS cache for lockless hot-path reads
-            cache_channel(state.chain_name, provider_id, transport, channel)
+            cache_channel(state, provider_id, transport, channel)
 
             {:ok, channel, final_state}
 
@@ -455,7 +517,7 @@ defmodule Lasso.RPC.TransportRegistry do
     end
 
     # Remove from ETS cache (lockless reads will now miss)
-    uncache_channel(state.chain_name, provider_id, transport)
+    uncache_channel(state, provider_id, transport)
 
     # Remove from GenServer state
     updated_channels =
@@ -537,21 +599,31 @@ defmodule Lasso.RPC.TransportRegistry do
   defp get_transport_module(:http), do: Lasso.RPC.Transports.HTTP
   defp get_transport_module(:ws), do: Lasso.RPC.Transports.WebSocket
 
-  defp via_name(chain_name) do
-    {:via, Registry, {Lasso.Registry, {:transport_registry, chain_name}}}
+  @doc """
+  Returns the via tuple for the TransportRegistry GenServer.
+
+  Accepts optional profile as first argument (defaults to "default").
+  """
+  def via_name(chain_name) when is_binary(chain_name) do
+    via_name("default", chain_name)
+  end
+
+  def via_name(profile, chain_name) when is_binary(profile) and is_binary(chain_name) do
+    {:via, Registry, {Lasso.Registry, {:transport_registry, profile, chain_name}}}
   end
 
   # ETS cache management for lockless hot-path reads
 
   # Updates the ETS channel cache. Called internally when channels are created.
-  defp cache_channel(chain_name, provider_id, transport, channel) do
-    cache_key = {chain_name, provider_id, transport}
+  # Cache key includes profile for isolation.
+  defp cache_channel(state, provider_id, transport, channel) do
+    cache_key = {state.profile, state.chain_name, provider_id, transport}
     :ets.insert(@channel_cache_table, {cache_key, channel})
   end
 
   # Removes a channel from ETS cache. Called internally when channels are closed.
-  defp uncache_channel(chain_name, provider_id, transport) do
-    cache_key = {chain_name, provider_id, transport}
+  defp uncache_channel(state, provider_id, transport) do
+    cache_key = {state.profile, state.chain_name, provider_id, transport}
     :ets.delete(@channel_cache_table, cache_key)
   end
 end

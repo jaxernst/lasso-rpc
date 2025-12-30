@@ -19,6 +19,7 @@ defmodule Lasso.RPC.ProviderPool do
   alias Lasso.RPC.{ChainState, CircuitBreaker, RateLimitState}
 
   @type t :: %__MODULE__{
+          profile: profile(),
           chain_name: chain_name(),
           providers: %{provider_id() => __MODULE__.ProviderState.t()},
           active_providers: [provider_id()],
@@ -40,6 +41,7 @@ defmodule Lasso.RPC.ProviderPool do
   @type rate_limit_states :: %{provider_id() => RateLimitState.t()}
 
   defstruct [
+    :profile,
     :chain_name,
     :providers,
     :active_providers,
@@ -110,6 +112,7 @@ defmodule Lasso.RPC.ProviderPool do
     ]
   end
 
+  @type profile :: String.t()
   @type chain_name :: String.t()
   @type provider_id :: String.t()
   @type strategy :: :priority | :round_robin | :fastest | :cheapest | :latency_weighted
@@ -129,45 +132,82 @@ defmodule Lasso.RPC.ProviderPool do
   @failure_threshold 3
 
   @doc """
-  Starts the ProviderPool for a chain.
+  Starts the ProviderPool for a profile/chain pair.
+
+  Accepts either `{profile, chain_name, chain_config}` (profile-aware) or
+  `{chain_name, chain_config}` (backward compatible, uses "default" profile).
   """
-  @spec start_link({chain_name, map()}) :: GenServer.on_start()
+  @spec start_link({profile, chain_name, map()} | {chain_name, map()}) :: GenServer.on_start()
+  def start_link({profile, chain_name, chain_config}) when is_binary(profile) do
+    GenServer.start_link(__MODULE__, {profile, chain_name, chain_config},
+      name: via_name(profile, chain_name)
+    )
+  end
+
   def start_link({chain_name, chain_config}) do
-    GenServer.start_link(__MODULE__, {chain_name, chain_config}, name: via_name(chain_name))
+    start_link({"default", chain_name, chain_config})
   end
 
   @doc """
   Registers a provider's configuration with the pool (no pid).
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec register_provider(chain_name, provider_id, map()) :: :ok
   def register_provider(chain_name, provider_id, provider_config) do
-    GenServer.call(via_name(chain_name), {:register_provider, provider_id, provider_config})
+    register_provider("default", chain_name, provider_id, provider_config)
+  end
+
+  @spec register_provider(profile, chain_name, provider_id, map()) :: :ok
+  def register_provider(profile, chain_name, provider_id, provider_config) do
+    GenServer.call(via_name(profile, chain_name), {:register_provider, provider_id, provider_config})
   end
 
   @doc """
   Attaches a WebSocket connection pid to an already-registered provider.
-  The pid will be monitored
+  The pid will be monitored.
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec attach_ws_connection(chain_name, provider_id, pid()) :: :ok | {:error, term()}
   def attach_ws_connection(chain_name, provider_id, pid) do
-    GenServer.call(via_name(chain_name), {:attach_ws_connection, provider_id, pid})
+    attach_ws_connection("default", chain_name, provider_id, pid)
+  end
+
+  @spec attach_ws_connection(profile, chain_name, provider_id, pid()) :: :ok | {:error, term()}
+  def attach_ws_connection(profile, chain_name, provider_id, pid) do
+    GenServer.call(via_name(profile, chain_name), {:attach_ws_connection, provider_id, pid})
   end
 
   @doc """
   Gets all currently active providers.
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec get_active_providers(chain_name) :: [provider_id]
   def get_active_providers(chain_name) do
-    GenServer.call(via_name(chain_name), :get_active_providers)
+    get_active_providers("default", chain_name)
+  end
+
+  @spec get_active_providers(profile, chain_name) :: [provider_id]
+  def get_active_providers(profile, chain_name) do
+    GenServer.call(via_name(profile, chain_name), :get_active_providers)
   end
 
   @doc """
   Gets the health status of all providers.
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec get_status(chain_name) :: {:ok, map()} | {:error, term()}
   def get_status(chain_name) do
+    get_status("default", chain_name)
+  end
+
+  @spec get_status(profile, chain_name) :: {:ok, map()} | {:error, term()}
+  def get_status(profile, chain_name) do
     try do
-      GenServer.call(via_name(chain_name), :get_status, @call_timeout)
+      GenServer.call(via_name(profile, chain_name), :get_status, @call_timeout)
     catch
       :exit, {:timeout, _} ->
         Logger.warning("Timeout getting status for chain #{chain_name}")
@@ -186,11 +226,18 @@ defmodule Lasso.RPC.ProviderPool do
   - exclude: [provider_id]
   - include_half_open: boolean (default false) - include providers with half-open circuits
   - max_lag_blocks: integer (optional) - exclude providers lagging more than N blocks behind best known height
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec list_candidates(chain_name, map()) :: [map()]
   def list_candidates(chain_name, filters \\ %{}) when is_map(filters) do
+    list_candidates("default", chain_name, filters)
+  end
+
+  @spec list_candidates(profile, chain_name, map()) :: [map()]
+  def list_candidates(profile, chain_name, filters) when is_binary(profile) and is_map(filters) do
     try do
-      GenServer.call(via_name(chain_name), {:list_candidates, filters}, @call_timeout)
+      GenServer.call(via_name(profile, chain_name), {:list_candidates, filters}, @call_timeout)
     catch
       :exit, {:timeout, _} ->
         Logger.warning("Timeout listing candidates for chain #{chain_name}")
@@ -205,45 +252,75 @@ defmodule Lasso.RPC.ProviderPool do
   @doc """
   Reports a successful operation (no latency needed; performance is tracked elsewhere).
   If transport is provided, updates the corresponding transport policy/status.
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec report_success(chain_name, provider_id) :: :ok
   def report_success(chain_name, provider_id) do
-    GenServer.cast(via_name(chain_name), {:report_success, provider_id})
+    report_success("default", chain_name, provider_id, nil)
   end
 
   @spec report_success(chain_name, provider_id, :http | :ws | nil) :: :ok
   def report_success(chain_name, provider_id, transport) when transport in [:http, :ws, nil] do
-    GenServer.cast(via_name(chain_name), {:report_success, provider_id, transport})
+    report_success("default", chain_name, provider_id, transport)
+  end
+
+  @spec report_success(profile, chain_name, provider_id, :http | :ws | nil) :: :ok
+  def report_success(profile, chain_name, provider_id, transport)
+      when is_binary(profile) and transport in [:http, :ws, nil] do
+    GenServer.cast(via_name(profile, chain_name), {:report_success, provider_id, transport})
   end
 
   @doc """
   Reports a failure for error rate tracking. If transport is provided, updates that transport.
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec report_failure(chain_name, provider_id, term()) :: :ok
   def report_failure(chain_name, provider_id, error) do
-    GenServer.cast(via_name(chain_name), {:report_failure, provider_id, error})
+    report_failure("default", chain_name, provider_id, error, nil)
   end
 
   @spec report_failure(chain_name, provider_id, term(), :http | :ws | nil) :: :ok
   def report_failure(chain_name, provider_id, error, transport)
       when transport in [:http, :ws, nil] do
-    GenServer.cast(via_name(chain_name), {:report_failure, provider_id, error, transport})
+    report_failure("default", chain_name, provider_id, error, transport)
+  end
+
+  @spec report_failure(profile, chain_name, provider_id, term(), :http | :ws | nil) :: :ok
+  def report_failure(profile, chain_name, provider_id, error, transport)
+      when is_binary(profile) and transport in [:http, :ws, nil] do
+    GenServer.cast(via_name(profile, chain_name), {:report_failure, provider_id, error, transport})
   end
 
   @doc """
   Unregisters a provider from the pool (for test cleanup).
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec unregister_provider(chain_name, provider_id) :: :ok
   def unregister_provider(chain_name, provider_id) do
-    GenServer.call(via_name(chain_name), {:unregister_provider, provider_id})
+    unregister_provider("default", chain_name, provider_id)
+  end
+
+  @spec unregister_provider(profile, chain_name, provider_id) :: :ok
+  def unregister_provider(profile, chain_name, provider_id) do
+    GenServer.call(via_name(profile, chain_name), {:unregister_provider, provider_id})
   end
 
   @doc """
   Gets the WebSocket PID for a provider (for chaos testing).
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec get_provider_ws_pid(chain_name, provider_id) :: {:ok, pid()} | {:error, :not_found}
   def get_provider_ws_pid(chain_name, provider_id) do
-    GenServer.call(via_name(chain_name), {:get_provider_ws_pid, provider_id})
+    get_provider_ws_pid("default", chain_name, provider_id)
+  end
+
+  @spec get_provider_ws_pid(profile, chain_name, provider_id) :: {:ok, pid()} | {:error, :not_found}
+  def get_provider_ws_pid(profile, chain_name, provider_id) do
+    GenServer.call(via_name(profile, chain_name), {:get_provider_ws_pid, provider_id})
   end
 
   @doc """
@@ -260,6 +337,8 @@ defmodule Lasso.RPC.ProviderPool do
   - `:transport` - Filter by :http, :ws, or :both (default: :both)
   - `:only_open` - Only return entries for open circuits (default: true)
 
+  Accepts optional profile as first argument (defaults to "default").
+
   ## Examples
 
       iex> ProviderPool.get_recovery_times("ethereum")
@@ -272,10 +351,17 @@ defmodule Lasso.RPC.ProviderPool do
           {:ok, %{provider_id => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}}}
           | {:error, term()}
   def get_recovery_times(chain_name, opts \\ []) do
+    get_recovery_times("default", chain_name, opts)
+  end
+
+  @spec get_recovery_times(profile, chain_name, keyword()) ::
+          {:ok, %{provider_id => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}}}
+          | {:error, term()}
+  def get_recovery_times(profile, chain_name, opts) when is_binary(profile) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
     try do
-      GenServer.call(via_name(chain_name), {:get_recovery_times, opts}, timeout)
+      GenServer.call(via_name(profile, chain_name), {:get_recovery_times, opts}, timeout)
     catch
       :exit, {:timeout, _} ->
         Logger.warning("Timeout getting recovery times for chain #{chain_name}")
@@ -297,6 +383,8 @@ defmodule Lasso.RPC.ProviderPool do
   - `:transport` - Filter by :http, :ws, or :both (default: :both)
   - `:timeout` - GenServer call timeout in ms (default: 5000)
 
+  Accepts optional profile as first argument (defaults to "default").
+
   ## Examples
 
       iex> ProviderPool.get_min_recovery_time("ethereum", transport: :http)
@@ -308,9 +396,15 @@ defmodule Lasso.RPC.ProviderPool do
   @spec get_min_recovery_time(chain_name, keyword()) ::
           {:ok, non_neg_integer() | nil} | {:error, term()}
   def get_min_recovery_time(chain_name, opts \\ []) do
+    get_min_recovery_time("default", chain_name, opts)
+  end
+
+  @spec get_min_recovery_time(profile, chain_name, keyword()) ::
+          {:ok, non_neg_integer() | nil} | {:error, term()}
+  def get_min_recovery_time(profile, chain_name, opts) when is_binary(profile) do
     transport_filter = Keyword.get(opts, :transport, :both)
 
-    case get_recovery_times(chain_name, opts) do
+    case get_recovery_times(profile, chain_name, opts) do
       {:ok, times_map} ->
         min_time =
           times_map
@@ -338,23 +432,39 @@ defmodule Lasso.RPC.ProviderPool do
   @doc """
   Reports probe results from ProviderProbe (called by ProviderProbe).
   Results are processed in batch to maintain consistency.
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec report_probe_results(chain_name, [map()]) :: :ok
   def report_probe_results(chain_name, results) when is_list(results) do
-    GenServer.cast(via_name(chain_name), {:probe_results, results})
+    report_probe_results("default", chain_name, results)
+  end
+
+  @spec report_probe_results(profile, chain_name, [map()]) :: :ok
+  def report_probe_results(profile, chain_name, results) when is_binary(profile) and is_list(results) do
+    GenServer.cast(via_name(profile, chain_name), {:probe_results, results})
   end
 
   @doc """
   Reports a newHeads update from WebSocket subscription (future use).
+
+  Accepts optional profile as first argument (defaults to "default").
   """
   @spec report_newheads(chain_name, provider_id, non_neg_integer()) :: :ok
   def report_newheads(chain_name, provider_id, block_height) do
-    GenServer.cast(via_name(chain_name), {:newheads, provider_id, block_height})
+    report_newheads("default", chain_name, provider_id, block_height)
+  end
+
+  @spec report_newheads(profile, chain_name, provider_id, non_neg_integer()) :: :ok
+  def report_newheads(profile, chain_name, provider_id, block_height) when is_binary(profile) do
+    GenServer.cast(via_name(profile, chain_name), {:newheads, provider_id, block_height})
   end
 
   @doc """
   Gets the ETS table name for a chain.
   Used by ChainState for consensus calculations.
+
+  Note: ETS tables are chain-scoped (not profile-scoped) since sync data is global.
   """
   @spec table_name(chain_name) :: atom()
   def table_name(chain_name), do: :"provider_pool_#{chain_name}"
@@ -362,18 +472,34 @@ defmodule Lasso.RPC.ProviderPool do
   # GenServer callbacks
 
   @impl true
-  def init({chain_name, chain_config}) do
+  def init({profile, chain_name, chain_config}) do
+    # Subscribe to global circuit events and profile-scoped WS connection events
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events:#{profile}:#{chain_name}")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{profile}:#{chain_name}")
+
+    # Subscribe to profile-scoped block sync and health probe events
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{profile}:#{chain_name}")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain_name}")
+
+    # Also subscribe to legacy topics for backward compatibility during migration
     Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
 
     # Create ETS table for sync state and lag tracking
+    # ETS table is chain-scoped (shared across profiles) since sync data is global
     table =
-      :ets.new(table_name(chain_name), [
-        :set,
-        :public,
-        :named_table,
-        read_concurrency: true
-      ])
+      case :ets.whereis(table_name(chain_name)) do
+        :undefined ->
+          :ets.new(table_name(chain_name), [
+            :set,
+            :public,
+            :named_table,
+            read_concurrency: true
+          ])
+
+        existing ->
+          existing
+      end
 
     # Pre-populate providers from chain_config to survive restarts
     # This ensures providers are immediately available even if async Task fails
@@ -397,6 +523,7 @@ defmodule Lasso.RPC.ProviderPool do
       |> Enum.into(%{})
 
     state = %__MODULE__{
+      profile: profile,
       chain_name: chain_name,
       table: table,
       providers: initial_providers,
@@ -409,7 +536,7 @@ defmodule Lasso.RPC.ProviderPool do
 
     if map_size(initial_providers) > 0 do
       Logger.info(
-        "ProviderPool initialized for #{chain_name} with #{map_size(initial_providers)} providers"
+        "ProviderPool initialized for #{profile}/#{chain_name} with #{map_size(initial_providers)} providers"
       )
     end
 
@@ -888,6 +1015,7 @@ defmodule Lasso.RPC.ProviderPool do
             state.recovery_times,
             provider_id,
             transport,
+            state.profile,
             state.chain_name
           )
         else
@@ -1059,6 +1187,52 @@ defmodule Lasso.RPC.ProviderPool do
         Logger.debug("Unknown process died: #{inspect(pid)}")
         {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_info({:block_height_update, {_profile, provider_id}, height, source, timestamp}, state) do
+    # Update ETS height tracking
+    sequence = get_current_sequence(state)
+
+    :ets.insert(
+      state.table,
+      {{:provider_sync, state.chain_name, provider_id}, {height, timestamp, sequence}}
+    )
+
+    # Calculate and broadcast lag if consensus height is available
+    case ChainState.consensus_height(state.chain_name) do
+      {:ok, consensus_height} ->
+        lag = height - consensus_height
+        :ets.insert(state.table, {{:provider_lag, state.chain_name, provider_id}, lag})
+
+        Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates", %{
+          chain: state.chain_name,
+          provider_id: provider_id,
+          block_height: height,
+          consensus_height: consensus_height,
+          lag: lag,
+          source: source
+        })
+
+      {:error, _} ->
+        :ok
+    end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(
+        {:health_probe_recovery, {_profile, provider_id}, transport, old_state, _new_state, _ts},
+        state
+      ) do
+    Logger.debug("ProviderPool received health probe recovery",
+      provider_id: provider_id,
+      transport: transport,
+      after_failures: old_state.consecutive_failures
+    )
+
+    {:noreply, state}
   end
 
   # Handler for ws_connected events (extracted to avoid clause ordering warning)
@@ -1668,8 +1842,9 @@ defmodule Lasso.RPC.ProviderPool do
   # Updates recovery time for a specific circuit by querying CircuitBreaker asynchronously.
   # This spawns a Task to avoid blocking the ProviderPool GenServer on CircuitBreaker calls,
   # which was causing GenServer call cascades and 2+ second delays during circuit thrashing.
-  defp update_recovery_time_for_circuit(recovery_times, provider_id, transport, chain) do
-    breaker_id = {chain, provider_id, transport}
+  defp update_recovery_time_for_circuit(recovery_times, provider_id, transport, profile, chain) do
+    # Circuit breaker ID includes profile for isolation
+    breaker_id = {profile, chain, provider_id, transport}
 
     # Spawn async task to query recovery time - don't block ProviderPool
     Task.start(fn ->
@@ -1686,7 +1861,7 @@ defmodule Lasso.RPC.ProviderPool do
       # Send result back to ProviderPool as cast (non-blocking)
       if recovery_time do
         GenServer.cast(
-          via_name(chain),
+          via_name(profile, chain),
           {:update_recovery_time_async, provider_id, transport, recovery_time}
         )
       end
@@ -1821,7 +1996,16 @@ defmodule Lasso.RPC.ProviderPool do
     )
   end
 
-  def via_name(chain_name) do
-    {:via, Registry, {Lasso.Registry, {:provider_pool, chain_name}}}
+  @doc """
+  Returns the via tuple for the ProviderPool GenServer.
+
+  Accepts optional profile as first argument (defaults to "default").
+  """
+  def via_name(chain_name) when is_binary(chain_name) do
+    via_name("default", chain_name)
+  end
+
+  def via_name(profile, chain_name) when is_binary(profile) and is_binary(chain_name) do
+    {:via, Registry, {Lasso.Registry, {:provider_pool, profile, chain_name}}}
   end
 end

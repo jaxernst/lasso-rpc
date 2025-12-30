@@ -18,11 +18,13 @@ defmodule LassoWeb.Components.LatencyHeatmap do
     * `:heatmap_data` - List of provider data with method latencies
     * `:methods` - List of RPC methods to display as columns
     * `:chain_name` - Name of the chain being displayed
+    * `:profile` - Current profile name
     * `:is_live` - Whether showing live data or simulated
   """
   attr(:heatmap_data, :list, required: true)
   attr(:methods, :list, required: true)
   attr(:chain_name, :string, default: "ethereum")
+  attr(:profile, :string, default: nil)
   attr(:is_live, :boolean, default: false)
 
   def heatmap(assigns) do
@@ -53,6 +55,12 @@ defmodule LassoWeb.Components.LatencyHeatmap do
 
     ~H"""
     <div class="relative" id="latency-heatmap" phx-hook="HeatmapAnimation">
+      <%= if @profile do %>
+        <div class="text-xs text-zinc-400 mb-2">
+          Profile: <%= @profile %> · Chain: <%= @chain_name %>
+        </div>
+      <% end %>
+
       <!-- Subtle animations -->
       <style>
         @keyframes cell-glow {

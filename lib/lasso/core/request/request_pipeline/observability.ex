@@ -33,8 +33,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   """
   @spec record_success(RequestContext.t(), Channel.t(), String.t(), atom(), non_neg_integer()) :: :ok
   def record_success(ctx, %Channel{provider_id: provider_id, transport: transport}, method, strategy, duration_ms) do
+    profile = ctx.opts.profile
+
     # Record metrics with transport dimension
-    Metrics.record_success(ctx.chain, provider_id, method, duration_ms, transport: transport)
+    Metrics.record_success(profile, ctx.chain, provider_id, method, duration_ms, transport: transport)
     ProviderPool.report_success(ctx.chain, provider_id, transport)
 
     # Publish routing decision for dashboard/analytics
@@ -64,8 +66,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
   # Variant with full channel info (has transport)
   def record_failure(ctx, %Channel{provider_id: provider_id, transport: transport} = _channel, method, strategy, reason, duration_ms) do
+    profile = ctx.opts.profile
+
     # Record failure with transport dimension
-    record_rpc_failure(ctx.chain, provider_id, method, reason, duration_ms, transport)
+    record_rpc_failure(profile, ctx.chain, provider_id, method, reason, duration_ms, transport)
 
     # Publish routing decision
     publish_routing_decision(ctx.chain, method, strategy, provider_id, transport, duration_ms, :error, ctx.retries)
@@ -78,8 +82,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
   # Variant with just provider_id (no transport info - legacy path)
   def record_failure(ctx, provider_id, method, strategy, reason, duration_ms) when is_binary(provider_id) do
+    profile = ctx.opts.profile
+
     # Record failure without transport dimension
-    record_rpc_failure(ctx.chain, provider_id, method, reason, duration_ms, nil)
+    record_rpc_failure(profile, ctx.chain, provider_id, method, reason, duration_ms, nil)
 
     # Emit telemetry with unknown transport
     emit_request_telemetry(ctx.chain, method, strategy, provider_id, :unknown, duration_ms, :error, ctx.retries)
@@ -284,10 +290,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     )
   end
 
-  @spec record_rpc_failure(String.t(), String.t(), String.t(), term(), non_neg_integer(), atom() | nil) :: :ok
-  defp record_rpc_failure(chain, provider_id, method, reason, duration_ms, transport) do
+  @spec record_rpc_failure(String.t(), String.t(), String.t(), String.t(), term(), non_neg_integer(), atom() | nil) :: :ok
+  defp record_rpc_failure(profile, chain, provider_id, method, reason, duration_ms, transport) do
     # Record failure metrics
-    Metrics.record_failure(chain, provider_id, method, duration_ms, transport: transport)
+    Metrics.record_failure(profile, chain, provider_id, method, duration_ms, transport: transport)
 
     # Normalize to JError and report to provider pool
     jerr = JError.from(reason, provider_id: provider_id)

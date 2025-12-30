@@ -1,41 +1,58 @@
 defmodule Lasso.RPC.ChainSupervisor do
   @moduledoc """
-  Supervises multiple RPC provider connections for a single blockchain.
+  Profile-scoped supervisor for RPC provider connections on a single blockchain.
 
-  This supervisor manages multiple WSConnection processes for redundancy,
-  failover, and performance optimization. It coordinates with ProviderPool
-  for intelligent provider selection based on real performance metrics.
+  This supervisor manages provider connections for a specific (profile, chain) pair.
+  Multiple profiles can use the same chain, each with independent provider pools
+  and transport registries. Global components (BlockSync, HealthProbe) are managed
+  by GlobalChainSupervisor and shared across profiles.
 
-  Architecture:
-  ChainSupervisor
-  ├── WSConnection (Provider 1 - Priority 1)
-  ├── WSConnection (Provider 2 - Priority 2)
-  ├── WSConnection (Provider 3 - Priority 3)
+  ## Architecture
+
+  ```
+  ChainSupervisor {profile, chain}
   ├── ProviderPool (Health & Performance Tracking)
-  └── CircuitBreaker (Failure Protection)
+  ├── TransportRegistry (Transport Channel Management)
+  ├── DynamicSupervisor (Per-Provider Supervisors)
+  │   ├── ProviderSupervisor (Provider 1)
+  │   └── ProviderSupervisor (Provider 2)
+  ├── ClientSubscriptionRegistry
+  ├── UpstreamSubscriptionManager
+  ├── UpstreamSubscriptionPool
+  └── StreamSupervisor
+  ```
+
+  Global components (BlockSync, HealthProbe) are NOT children of ChainSupervisor.
+  They are managed by GlobalChainSupervisor and shared across all profiles.
   """
 
   use Supervisor
   require Logger
 
-  # alias Lasso.Config.ChainConfig
   alias Lasso.RPC.{WSConnection, ProviderPool, TransportRegistry}
   alias Lasso.RPC.ProviderSupervisor
   alias Lasso.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
-  alias Lasso.BlockSync
-  alias Lasso.HealthProbe
 
   @doc """
-  Starts a ChainSupervisor for a specific blockchain.
+  Starts a ChainSupervisor for a specific profile and blockchain.
+
+  The `profile` parameter isolates this chain's components from other profiles
+  using the same blockchain. Registry keys include the profile for isolation.
   """
-  def start_link({chain_name, chain_config}) do
-    Supervisor.start_link(__MODULE__, {chain_name, chain_config}, name: via_name(chain_name))
+  def start_link({profile, chain_name, chain_config}) do
+    Supervisor.start_link(__MODULE__, {profile, chain_name, chain_config},
+      name: via_name(profile, chain_name)
+    )
   end
 
   @doc """
   Gets the status of all providers for a chain, including WebSocket connection information.
+
+  For backward compatibility, profile defaults to "default".
   """
-  def get_chain_status(chain_name) do
+  def get_chain_status(chain_name), do: get_chain_status("default", chain_name)
+
+  def get_chain_status(_profile, chain_name) do
     try do
       case ProviderPool.get_status(chain_name) do
         {:ok, status} ->
@@ -58,8 +75,12 @@ defmodule Lasso.RPC.ChainSupervisor do
 
   @doc """
   Gets active provider connections for a chain.
+
+  For backward compatibility, profile defaults to "default".
   """
-  def get_active_providers(chain_name) do
+  def get_active_providers(chain_name), do: get_active_providers("default", chain_name)
+
+  def get_active_providers(_profile, chain_name) do
     ProviderPool.get_active_providers(chain_name)
   end
 
@@ -77,7 +98,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   - `:start_ws` - Whether to start WebSocket connection (:auto | :force | :skip). Default: :auto
 
   ## Example
-      ensure_provider("ethereum", %{
+      ensure_provider("default", "ethereum", %{
         id: "new_provider",
         name: "New Provider",
         url: "https://rpc.example.com",
@@ -86,13 +107,19 @@ defmodule Lasso.RPC.ChainSupervisor do
         priority: 100
       })
   """
-  @spec ensure_provider(String.t(), map(), keyword()) :: :ok | {:error, term()}
-  def ensure_provider(chain_name, provider_config, opts \\ []) do
+  # Backward compatibility: default profile
+  def ensure_provider(chain_name, provider_config, opts) when is_binary(chain_name) do
+    ensure_provider("default", chain_name, provider_config, opts)
+  end
+
+  @spec ensure_provider(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
+  def ensure_provider(profile, chain_name, provider_config, opts \\ []) do
     with {:ok, chain_config} <- get_chain_config(chain_name),
          :ok <- ProviderPool.register_provider(chain_name, provider_config.id, provider_config),
-         :ok <- start_provider_supervisor(chain_name, chain_config, provider_config, opts),
+         :ok <- start_provider_supervisor(profile, chain_name, chain_config, provider_config, opts),
          :ok <-
            TransportRegistry.initialize_provider_channels(
+             profile,
              chain_name,
              provider_config.id,
              provider_config
@@ -120,19 +147,24 @@ defmodule Lasso.RPC.ChainSupervisor do
   The provider is immediately removed from request routing.
 
   ## Example
-      remove_provider("ethereum", "old_provider")
+      remove_provider("default", "ethereum", "old_provider")
   """
-  @spec remove_provider(String.t(), String.t()) :: :ok | {:error, term()}
-  def remove_provider(chain_name, provider_id) do
+  # Backward compatibility: default profile
+  def remove_provider(chain_name, provider_id) when is_binary(chain_name) do
+    remove_provider("default", chain_name, provider_id)
+  end
+
+  @spec remove_provider(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_provider(profile, chain_name, provider_id) do
     # Stop the per-provider supervisor (cascades WS then circuit breakers)
-    case GenServer.whereis(provider_supervisor_via(chain_name, provider_id)) do
+    case GenServer.whereis(provider_supervisor_via(profile, chain_name, provider_id)) do
       nil -> :ok
-      pid -> DynamicSupervisor.terminate_child(provider_supervisors_name(chain_name), pid)
+      pid -> DynamicSupervisor.terminate_child(provider_supervisors_name(profile, chain_name), pid)
     end
 
     # Close transport channels (idempotent)
-    TransportRegistry.close_channel(chain_name, provider_id, :http)
-    TransportRegistry.close_channel(chain_name, provider_id, :ws)
+    TransportRegistry.close_channel(profile, chain_name, provider_id, :http)
+    TransportRegistry.close_channel(profile, chain_name, provider_id, :ws)
 
     # Unregister from pool
     :ok = ProviderPool.unregister_provider(chain_name, provider_id)
@@ -144,32 +176,25 @@ defmodule Lasso.RPC.ChainSupervisor do
   # Supervisor callbacks
 
   @impl true
-  def init({chain_name, chain_config}) do
+  def init({profile, chain_name, chain_config}) do
     children = [
       # Start ProviderPool for health monitoring and performance tracking
-      {ProviderPool, {chain_name, chain_config}},
+      {ProviderPool, {profile, chain_name, chain_config}},
 
       # Start TransportRegistry for transport-agnostic channel management
-      {TransportRegistry, {chain_name, chain_config}},
+      {TransportRegistry, {profile, chain_name, chain_config}},
 
-      # Per-provider supervisor manager
-      {DynamicSupervisor, strategy: :one_for_one, name: provider_supervisors_name(chain_name)},
+      # Per-provider supervisor manager (Registry-based name for profile isolation)
+      {DynamicSupervisor,
+       strategy: :one_for_one, name: provider_supervisors_name(profile, chain_name)},
 
-      # BlockSync system for unified block height tracking
-      # Tracks block heights via WS subscriptions and HTTP polling
-      {BlockSync.Supervisor, chain_name},
-
-      # HealthProbe system for circuit breaker recovery detection
-      # Probes providers independently of circuit breaker to detect recovery
-      {HealthProbe.Supervisor, chain_name},
-
-      # Start per-chain subscription registry, manager, and pool
-      {ClientSubscriptionRegistry, chain_name},
-      {Lasso.RPC.UpstreamSubscriptionManager, chain_name},
-      {UpstreamSubscriptionPool, chain_name},
+      # Start per-profile subscription registry, manager, and pool
+      {ClientSubscriptionRegistry, {profile, chain_name}},
+      {Lasso.RPC.UpstreamSubscriptionManager, {profile, chain_name}},
+      {UpstreamSubscriptionPool, {profile, chain_name}},
 
       # StreamSupervisor for per-key coordinators
-      {Lasso.RPC.StreamSupervisor, chain_name},
+      {Lasso.RPC.StreamSupervisor, {profile, chain_name}},
 
       # Start provider connections after all other children are initialized
       # This Task runs once and completes (restart: :transient)
@@ -177,7 +202,7 @@ defmodule Lasso.RPC.ChainSupervisor do
         id: :provider_connection_starter,
         start:
           {Task, :start_link,
-           [fn -> start_provider_connections_async(chain_name, chain_config) end]},
+           [fn -> start_provider_connections_async(profile, chain_name, chain_config) end]},
         restart: :transient
       }
     ]
@@ -185,39 +210,34 @@ defmodule Lasso.RPC.ChainSupervisor do
     Supervisor.init(children, strategy: :one_for_one)
   end
 
-  defp start_provider_connections_async(chain_name, chain_config) do
+  defp start_provider_connections_async(profile, chain_name, chain_config) do
     Enum.each(chain_config.providers, fn provider ->
-      _ = start_provider_supervisor(chain_name, chain_config, provider, [])
+      _ = start_provider_supervisor(profile, chain_name, chain_config, provider, [])
     end)
 
-    # Start BlockSync workers for all providers (block height tracking)
-    BlockSync.Supervisor.start_all_workers(chain_name)
-
-    # Start HealthProbe workers for all providers (circuit breaker recovery)
-    HealthProbe.Supervisor.start_all_workers(chain_name)
-
-    Logger.info(
-      "Started supervisors for #{length(chain_config.providers)} providers in #{chain_name}"
+    Logger.info("Started #{length(chain_config.providers)} provider supervisors",
+      profile: profile,
+      chain: chain_name
     )
   end
 
   # Private functions
 
-  defp via_name(chain_name) do
-    {:via, Registry, {Lasso.Registry, {:chain_supervisor, chain_name}}}
+  defp via_name(profile, chain_name) do
+    {:via, Registry, {Lasso.Registry, {:chain_supervisor, profile, chain_name}}}
   end
 
-  defp provider_supervisors_name(chain_name) do
-    :"#{chain_name}_provider_supervisors"
+  defp provider_supervisors_name(profile, chain_name) do
+    {:via, Registry, {Lasso.Registry, {:provider_supervisors, profile, chain_name}}}
   end
 
-  defp provider_supervisor_via(chain_name, provider_id) do
-    {:via, Registry, {Lasso.Registry, {:provider_supervisor, chain_name, provider_id}}}
+  defp provider_supervisor_via(profile, chain_name, provider_id) do
+    {:via, Registry, {Lasso.Registry, {:provider_supervisor, profile, chain_name, provider_id}}}
   end
 
-  defp start_provider_supervisor(chain_name, chain_config, provider_config, _opts) do
+  defp start_provider_supervisor(profile, chain_name, chain_config, provider_config, _opts) do
     case DynamicSupervisor.start_child(
-           provider_supervisors_name(chain_name),
+           provider_supervisors_name(profile, chain_name),
            {ProviderSupervisor, {chain_name, chain_config, provider_config}}
          ) do
       {:ok, _pid} -> :ok

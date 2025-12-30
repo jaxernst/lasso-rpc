@@ -1292,6 +1292,20 @@ const HeroParallax = {
   },
 };
 
+// Profile Persistence Hook - saves selected profile to sessionStorage
+const ProfilePersistence = {
+  mounted() {
+    this.handleEvent("persist_profile", ({ profile }) => {
+      sessionStorage.setItem("lasso_selected_profile", profile);
+    });
+
+    const stored = sessionStorage.getItem("lasso_selected_profile");
+    if (stored) {
+      this.pushEvent("restore_profile", { profile: stored });
+    }
+  },
+};
+
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");
@@ -1312,6 +1326,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     HeroParallax,
     ExpandableDetails,
     HeatmapAnimation,
+    ProfilePersistence,
   },
 });
 

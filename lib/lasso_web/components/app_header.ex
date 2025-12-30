@@ -4,6 +4,8 @@ defmodule LassoWeb.Components.DashboardHeader do
 
   attr(:active_tab, :string, required: true, doc: "currently active tab")
   attr(:vm_metrics_enabled, :boolean, default: true, doc: "whether VM metrics tab is enabled")
+  attr(:profiles, :list, default: [], doc: "list of available profiles")
+  attr(:selected_profile, :string, default: nil, doc: "currently selected profile")
 
   def header(assigns) do
     base_tabs = [
@@ -77,9 +79,16 @@ defmodule LassoWeb.Components.DashboardHeader do
             </div>
           </div>
         </div>
-        
+
     <!-- Navigation Tabs -->
         <div class="flex items-center gap-4">
+          <%= if @selected_profile && length(@profiles) > 0 do %>
+            <LassoWeb.Components.ProfileSelector.profile_selector
+              profiles={@profiles}
+              selected_profile={@selected_profile}
+            />
+          <% end %>
+
           <div class="hidden md:block">
             <.tab_switcher
               id="main-tabs"

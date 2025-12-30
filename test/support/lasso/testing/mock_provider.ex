@@ -186,7 +186,7 @@ defmodule Lasso.Testing.MockProvider do
                 setup_cleanup_monitor(chain, provider_id, pid)
 
                 # Eagerly initialize HTTP channel for deterministic testing
-                case Lasso.RPC.TransportRegistry.get_channel(chain, provider_id, :http) do
+                case Lasso.RPC.TransportRegistry.get_channel("default", chain, provider_id, :http) do
                   {:ok, _channel} ->
                     Logger.debug("Started mock provider #{provider_id} at #{url} (channel ready)")
                     {:ok, provider_id}
