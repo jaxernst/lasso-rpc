@@ -13,6 +13,7 @@ defmodule Lasso.RPC.CircuitBreaker do
   alias Lasso.RPC.ErrorNormalizer
 
   defstruct [
+    :profile,
     :chain,
     :provider_id,
     :transport,
@@ -43,10 +44,12 @@ defmodule Lasso.RPC.CircuitBreaker do
     last_open_error: nil
   ]
 
+  @type profile :: String.t()
   @type chain :: String.t()
   @type provider_id :: String.t()
   @type transport :: :http | :ws
-  @type breaker_id :: {chain, provider_id, transport}
+  # Support both 3-tuple (legacy) and 4-tuple (profile-aware) IDs
+  @type breaker_id :: {chain, provider_id, transport} | {profile, chain, provider_id, transport}
   @type breaker_state :: :closed | :open | :half_open
   @type state_t :: %__MODULE__{
           chain: chain,
@@ -316,8 +319,20 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   # GenServer callbacks
 
+  # Handle 4-tuple format: {profile, chain, provider_id, transport}
   @impl true
-  def init({{chain, provider_id, transport}, config}) do
+  def init({{profile, chain, provider_id, transport}, config})
+      when is_binary(profile) and is_binary(chain) do
+    do_init(profile, chain, provider_id, transport, config)
+  end
+
+  # Handle 3-tuple format: {chain, provider_id, transport} (backward compat, uses "default" profile)
+  @impl true
+  def init({{chain, provider_id, transport}, config}) when is_binary(chain) do
+    do_init("default", chain, provider_id, transport, config)
+  end
+
+  defp do_init(profile, chain, provider_id, transport, config) do
     # Default category-specific thresholds
     # Rate limits should open circuit quickly (2 failures)
     # Server errors are more tolerant (5 failures) as they may be transient
@@ -338,6 +353,7 @@ defmodule Lasso.RPC.CircuitBreaker do
     half_open_max_inflight = Map.get(config, :half_open_max_inflight, 3)
 
     state = %__MODULE__{
+      profile: profile,
       chain: chain,
       provider_id: provider_id,
       transport: transport,
@@ -375,6 +391,7 @@ defmodule Lasso.RPC.CircuitBreaker do
           })
 
           publish_circuit_event(
+            state.profile,
             state.provider_id,
             :open,
             :half_open,
@@ -460,6 +477,7 @@ defmodule Lasso.RPC.CircuitBreaker do
     })
 
     publish_circuit_event(
+      state.profile,
       state.provider_id,
       state.state,
       :open,
@@ -491,6 +509,7 @@ defmodule Lasso.RPC.CircuitBreaker do
     })
 
     publish_circuit_event(
+      state.profile,
       state.provider_id,
       state.state,
       :closed,
@@ -533,6 +552,7 @@ defmodule Lasso.RPC.CircuitBreaker do
         })
 
         publish_circuit_event(
+          state.profile,
           state.provider_id,
           :open,
           :half_open,
@@ -678,6 +698,7 @@ defmodule Lasso.RPC.CircuitBreaker do
         })
 
         publish_circuit_event(
+          state.profile,
           state.provider_id,
           :open,
           :half_open,
@@ -698,6 +719,7 @@ defmodule Lasso.RPC.CircuitBreaker do
           })
 
           publish_circuit_event(
+            state.profile,
             state.provider_id,
             :open,
             :closed,
@@ -744,6 +766,7 @@ defmodule Lasso.RPC.CircuitBreaker do
           })
 
           publish_circuit_event(
+            state.profile,
             state.provider_id,
             :half_open,
             :closed,
@@ -821,6 +844,7 @@ defmodule Lasso.RPC.CircuitBreaker do
           })
 
           publish_circuit_event(
+            state.profile,
             state.provider_id,
             :closed,
             :open,
@@ -861,6 +885,7 @@ defmodule Lasso.RPC.CircuitBreaker do
         })
 
         publish_circuit_event(
+          state.profile,
           state.provider_id,
           :half_open,
           :open,
@@ -926,7 +951,7 @@ defmodule Lasso.RPC.CircuitBreaker do
     :ok
   end
 
-  defp publish_circuit_event(provider_id, from, to, reason, transport, chain, error \\ nil) do
+  defp publish_circuit_event(profile, provider_id, from, to, reason, transport, chain, error \\ nil) do
     # Extract error details for dashboard display
     error_info =
       case error do
@@ -941,12 +966,10 @@ defmodule Lasso.RPC.CircuitBreaker do
           nil
       end
 
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
-      "circuit:events",
-      {:circuit_breaker_event,
+    event = {:circuit_breaker_event,
        %{
          ts: System.system_time(:millisecond),
+         profile: profile,
          chain: chain,
          provider_id: provider_id,
          transport: transport,
@@ -955,7 +978,12 @@ defmodule Lasso.RPC.CircuitBreaker do
          reason: reason,
          error: error_info
        }}
-    )
+
+    # Broadcast to profile-scoped topic
+    Phoenix.PubSub.broadcast(Lasso.PubSub, "circuit:events:#{profile}:#{chain}", event)
+
+    # Also broadcast to legacy global topic for backward compatibility
+    Phoenix.PubSub.broadcast(Lasso.PubSub, "circuit:events", event)
   end
 
   # Truncate long error messages for dashboard display
@@ -1019,8 +1047,15 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   defp extract_error_info(_), do: nil
 
-  defp via_name({chain, provider_id, transport}) do
-    key = "#{chain}:#{provider_id}:#{transport}"
+  # Handle 4-tuple format: {profile, chain, provider_id, transport}
+  defp via_name({profile, chain, provider_id, transport})
+       when is_binary(profile) and is_binary(chain) do
+    key = "#{profile}:#{chain}:#{provider_id}:#{transport}"
     {:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}
+  end
+
+  # Handle 3-tuple format: {chain, provider_id, transport} (backward compat)
+  defp via_name({chain, provider_id, transport}) when is_binary(chain) do
+    via_name({"default", chain, provider_id, transport})
   end
 end

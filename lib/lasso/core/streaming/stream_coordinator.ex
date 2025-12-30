@@ -29,31 +29,36 @@ defmodule Lasso.RPC.StreamCoordinator do
   @max_event_buffer 100
   @degraded_mode_retry_delay_ms 30_000
 
-  def start_link({chain, key, opts}) do
-    GenServer.start_link(__MODULE__, {chain, key, opts}, name: via(chain, key))
+  def start_link({profile, chain, key, opts})
+      when is_binary(profile) and is_binary(chain) do
+    GenServer.start_link(__MODULE__, {profile, chain, key, opts}, name: via(profile, chain, key))
   end
 
-  def via(chain, key),
-    do: {:via, Registry, {Lasso.Registry, {:stream_coordinator, chain, key}}}
+  def via(profile, chain, key) when is_binary(profile) and is_binary(chain) do
+    {:via, Registry, {Lasso.Registry, {:stream_coordinator, profile, chain, key}}}
+  end
 
   # API called by UpstreamSubscriptionPool
 
-  def upstream_event(chain, key, provider_id, upstream_id, payload, received_at) do
+  def upstream_event(profile, chain, key, provider_id, upstream_id, payload, received_at)
+      when is_binary(profile) and is_binary(chain) do
     GenServer.cast(
-      via(chain, key),
+      via(profile, chain, key),
       {:upstream_event, provider_id, upstream_id, payload, received_at}
     )
   end
 
-  def provider_unhealthy(chain, key, failed_id, proposed_new_id) do
-    GenServer.cast(via(chain, key), {:provider_unhealthy, failed_id, proposed_new_id})
+  def provider_unhealthy(profile, chain, key, failed_id, proposed_new_id)
+      when is_binary(profile) and is_binary(chain) do
+    GenServer.cast(via(profile, chain, key), {:provider_unhealthy, failed_id, proposed_new_id})
   end
 
   # GenServer callbacks
 
   @impl true
-  def init({chain, key, opts}) do
+  def init({profile, chain, key, opts}) do
     state = %{
+      profile: profile,
       chain: chain,
       key: key,
       primary_provider_id: Keyword.get(opts, :primary_provider_id),
@@ -211,7 +216,7 @@ defmodule Lasso.RPC.StreamCoordinator do
       {:newHeads} ->
         case StreamState.ingest_new_head(state.state, payload) do
           {stream_state, :emit} ->
-            ClientSubscriptionRegistry.dispatch(state.chain, state.key, payload)
+            ClientSubscriptionRegistry.dispatch(state.profile, state.chain, state.key, payload)
             {:noreply, %{state | state: stream_state}}
 
           {stream_state, :skip} ->
@@ -221,7 +226,7 @@ defmodule Lasso.RPC.StreamCoordinator do
       {:logs, _filter} ->
         case StreamState.ingest_log(state.state, payload) do
           {stream_state, :emit} ->
-            ClientSubscriptionRegistry.dispatch(state.chain, state.key, payload)
+            ClientSubscriptionRegistry.dispatch(state.profile, state.chain, state.key, payload)
             {:noreply, %{state | state: stream_state}}
 
           {stream_state, :skip} ->
@@ -278,6 +283,7 @@ defmodule Lasso.RPC.StreamCoordinator do
       enter_degraded_mode(state)
     else
       # Start backfill task
+      profile = state.profile
       chain = state.chain
       key = state.key
       max_backfill = state.max_backfill_blocks
@@ -288,6 +294,7 @@ defmodule Lasso.RPC.StreamCoordinator do
       task =
         Task.async(fn ->
           execute_backfill(
+            profile,
             chain,
             key,
             new_provider_id,
@@ -334,6 +341,7 @@ defmodule Lasso.RPC.StreamCoordinator do
   end
 
   defp execute_backfill(
+         profile,
          chain,
          key,
          new_provider_id,
@@ -347,6 +355,7 @@ defmodule Lasso.RPC.StreamCoordinator do
       case key do
         {:newHeads} ->
           backfill_blocks(
+            profile,
             chain,
             key,
             new_provider_id,
@@ -359,6 +368,7 @@ defmodule Lasso.RPC.StreamCoordinator do
 
         {:logs, filter} ->
           backfill_logs(
+            profile,
             chain,
             key,
             filter,
@@ -378,6 +388,7 @@ defmodule Lasso.RPC.StreamCoordinator do
   end
 
   defp backfill_blocks(
+         profile,
          chain,
          key,
          _new_ws_provider_id,
@@ -390,7 +401,7 @@ defmodule Lasso.RPC.StreamCoordinator do
     last = StreamState.last_block_num(stream_state)
 
     # Use decoupled HTTP provider selection for backfill
-    http_provider = pick_best_http_provider(chain, excluded_providers)
+    http_provider = pick_best_http_provider(profile, chain, excluded_providers)
     head = fetch_head(chain, http_provider)
 
     case ContinuityPolicy.needed_block_range(last, head, max_backfill, continuity_policy) do
@@ -406,7 +417,7 @@ defmodule Lasso.RPC.StreamCoordinator do
           )
 
         # Send blocks to coordinator via cast
-        coordinator_pid = via(chain, key)
+        coordinator_pid = via(profile, chain, key)
 
         Enum.each(blocks, fn block ->
           GenServer.cast(
@@ -434,7 +445,7 @@ defmodule Lasso.RPC.StreamCoordinator do
                 timeout_ms: backfill_timeout
               )
 
-            coordinator_pid = via(chain, key)
+            coordinator_pid = via(profile, chain, key)
 
             Enum.each(blocks, fn block ->
               GenServer.cast(
@@ -453,6 +464,7 @@ defmodule Lasso.RPC.StreamCoordinator do
   end
 
   defp backfill_logs(
+         profile,
          chain,
          key,
          filter,
@@ -466,7 +478,7 @@ defmodule Lasso.RPC.StreamCoordinator do
     last = StreamState.last_log_block(stream_state) || StreamState.last_block_num(stream_state)
 
     # Use decoupled HTTP provider selection for backfill
-    http_provider = pick_best_http_provider(chain, excluded_providers)
+    http_provider = pick_best_http_provider(profile, chain, excluded_providers)
     head = fetch_head(chain, http_provider)
 
     case ContinuityPolicy.needed_block_range(last, head, max_backfill, continuity_policy) do
@@ -480,7 +492,7 @@ defmodule Lasso.RPC.StreamCoordinator do
                timeout_ms: backfill_timeout
              ) do
           {:ok, logs} ->
-            coordinator_pid = via(chain, key)
+            coordinator_pid = via(profile, chain, key)
 
             Enum.each(logs, fn log ->
               GenServer.cast(
@@ -510,7 +522,7 @@ defmodule Lasso.RPC.StreamCoordinator do
                timeout_ms: backfill_timeout
              ) do
           {:ok, logs} ->
-            coordinator_pid = via(chain, key)
+            coordinator_pid = via(profile, chain, key)
 
             Enum.each(logs, fn log ->
               GenServer.cast(
@@ -536,7 +548,7 @@ defmodule Lasso.RPC.StreamCoordinator do
     )
 
     # Request resubscription from Pool
-    pool_ref = Lasso.RPC.UpstreamSubscriptionPool.via(state.chain)
+    pool_ref = Lasso.RPC.UpstreamSubscriptionPool.via(state.profile, state.chain)
 
     GenServer.cast(
       pool_ref,
@@ -604,7 +616,7 @@ defmodule Lasso.RPC.StreamCoordinator do
           {:newHeads} ->
             case StreamState.ingest_new_head(acc.state, payload) do
               {stream_state, :emit} ->
-                ClientSubscriptionRegistry.dispatch(acc.chain, acc.key, payload)
+                ClientSubscriptionRegistry.dispatch(acc.profile, acc.chain, acc.key, payload)
                 %{acc | state: stream_state}
 
               {stream_state, :skip} ->
@@ -614,7 +626,7 @@ defmodule Lasso.RPC.StreamCoordinator do
           {:logs, _filter} ->
             case StreamState.ingest_log(acc.state, payload) do
               {stream_state, :emit} ->
-                ClientSubscriptionRegistry.dispatch(acc.chain, acc.key, payload)
+                ClientSubscriptionRegistry.dispatch(acc.profile, acc.chain, acc.key, payload)
                 %{acc | state: stream_state}
 
               {stream_state, :skip} ->
@@ -720,7 +732,7 @@ defmodule Lasso.RPC.StreamCoordinator do
 
   defp pick_next_provider(state, excluded) do
     case Selection.select_provider(
-           SelectionContext.new(state.chain, "eth_subscribe",
+           SelectionContext.new(state.profile, state.chain, "eth_subscribe",
              strategy: :priority,
              protocol: :ws,
              exclude: excluded
@@ -731,10 +743,10 @@ defmodule Lasso.RPC.StreamCoordinator do
     end
   end
 
-  defp pick_best_http_provider(chain, excluded) do
+  defp pick_best_http_provider(profile, chain, excluded) do
     # Select best available HTTP provider for backfill (decoupled from WS selection)
     case Selection.select_provider(
-           SelectionContext.new(chain, "eth_getBlockByNumber",
+           SelectionContext.new(profile, chain, "eth_getBlockByNumber",
              strategy: :fastest,
              protocol: :http,
              exclude: excluded

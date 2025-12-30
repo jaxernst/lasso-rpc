@@ -23,11 +23,14 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
   alias Lasso.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry, StreamSupervisor}
   alias Lasso.Testing.MockWSProvider
 
+  @default_profile "default"
+
   setup do
     # Unique chain per test to avoid interference
     suffix = System.unique_integer([:positive])
     test_chain = "test_pool_unit_#{suffix}"
     test_provider = "mock_provider_#{suffix}"
+    test_profile = @default_profile
 
     # Start mock WS provider - it will auto-create the chain and its dependencies
     {:ok, ^test_provider} =
@@ -42,24 +45,22 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
     on_exit(fn ->
       MockWSProvider.stop_mock(test_chain, test_provider)
 
-      case Registry.lookup(Lasso.Registry, {:chain_supervisor, test_chain}) do
-        [{pid, _}] -> DynamicSupervisor.terminate_child(Lasso.RPC.Supervisor, pid)
-        [] -> :ok
-      end
+      # Stop the profile chain supervisor (uses "default" profile for tests)
+      Lasso.ProfileChainSupervisor.stop_profile_chain("default", test_chain)
 
       Lasso.Config.ConfigStore.unregister_chain_runtime(test_chain)
       Process.sleep(50)
     end)
 
-    {:ok, chain: test_chain, provider: test_provider}
+    {:ok, chain: test_chain, provider: test_provider, profile: test_profile}
   end
 
   describe "refcount lifecycle and consistency" do
-    test "maintains correct refcount through subscribe/unsubscribe cycle", %{chain: chain} do
+    test "maintains correct refcount through subscribe/unsubscribe cycle", %{chain: chain, profile: profile} do
       # First subscribe (MockWSProvider auto-confirms)
       client1 = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
-      {:ok, sub1} = UpstreamSubscriptionPool.subscribe_client(chain, client1, key)
+      {:ok, sub1} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client1, key)
 
       Process.sleep(150)
 
@@ -70,7 +71,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
 
       # Second subscribe (should increment refcount, not create new upstream)
       client2 = spawn(fn -> Process.sleep(:infinity) end)
-      {:ok, sub2} = UpstreamSubscriptionPool.subscribe_client(chain, client2, key)
+      {:ok, sub2} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client2, key)
 
       state = get_pool_state(chain)
       assert state.keys[key].refcount == 2
@@ -78,7 +79,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       assert map_size(state.keys) == 1
 
       # First unsubscribe (should decrement, keep key)
-      :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub1)
+      :ok = UpstreamSubscriptionPool.unsubscribe_client(profile, chain, sub1)
       Process.sleep(10)
 
       state = get_pool_state(chain)
@@ -86,7 +87,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       assert state.keys[key] != nil
 
       # Second unsubscribe (should cleanup everything)
-      :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub2)
+      :ok = UpstreamSubscriptionPool.unsubscribe_client(profile, chain, sub2)
       Process.sleep(100)
 
       state = get_pool_state(chain)
@@ -99,15 +100,15 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
   end
 
   describe "subscription state consistency" do
-    test "keys map tracks primary_provider_id correctly", %{chain: chain} do
+    test "keys map tracks primary_provider_id correctly", %{chain: chain, profile: profile} do
       client = spawn(fn -> Process.sleep(:infinity) end)
 
       # Subscribe to two different keys
       key1 = {:newHeads}
       key2 = {:logs, %{"address" => "0x123"}}
 
-      {:ok, sub1} = UpstreamSubscriptionPool.subscribe_client(chain, client, key1)
-      {:ok, sub2} = UpstreamSubscriptionPool.subscribe_client(chain, client, key2)
+      {:ok, sub1} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client, key1)
+      {:ok, sub2} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client, key2)
 
       Process.sleep(200)
 
@@ -119,7 +120,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       assert state.keys[key2].status == :active
 
       # Unsubscribe one key
-      :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub1)
+      :ok = UpstreamSubscriptionPool.unsubscribe_client(profile, chain, sub1)
       Process.sleep(100)
 
       # Verify only one key remains
@@ -128,7 +129,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       assert state.keys[key2] != nil
 
       # Unsubscribe second key
-      :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub2)
+      :ok = UpstreamSubscriptionPool.unsubscribe_client(profile, chain, sub2)
       Process.sleep(100)
 
       # Verify complete cleanup
@@ -140,14 +141,14 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
   end
 
   describe "error handling boundaries" do
-    test "handles resubscribe when key no longer exists", %{chain: chain} do
+    test "handles resubscribe when key no longer exists", %{chain: chain, profile: profile} do
       # Empty pool - no keys
       key = {:newHeads}
       coordinator_pid = self()
 
       # Attempt resubscription for non-existent key
       GenServer.cast(
-        UpstreamSubscriptionPool.via(chain),
+        UpstreamSubscriptionPool.via(profile, chain),
         {:resubscribe, key, "provider_2", coordinator_pid}
       )
 
@@ -161,13 +162,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
   end
 
   describe "async subscription behavior" do
-    test "first subscriber gets immediate response while upstream establishes", %{chain: chain} do
+    test "first subscriber gets immediate response while upstream establishes", %{chain: chain, profile: profile} do
       client = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
 
       # Subscribe should return immediately (< 100ms), not wait for upstream
       start_time = System.monotonic_time(:millisecond)
-      {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+      {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client, key)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should be instant (< 100ms), not waiting for upstream
@@ -190,7 +191,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       Process.exit(client, :kill)
     end
 
-    test "multiple subscribers during establishment all get immediate response", %{chain: chain} do
+    test "multiple subscribers during establishment all get immediate response", %{chain: chain, profile: profile} do
       key = {:newHeads}
 
       # Create 5 clients that subscribe rapidly
@@ -202,7 +203,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       # All should subscribe instantly
       sub_ids =
         Enum.map(clients, fn client ->
-          {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+          {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client, key)
           sub_id
         end)
 
@@ -224,12 +225,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       Enum.each(clients, fn client -> Process.exit(client, :kill) end)
     end
 
-    test "client unsubscribes during or after establishment", %{chain: chain} do
+    test "client unsubscribes during or after establishment", %{chain: chain, profile: profile} do
       client = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
 
       # Subscribe
-      {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+      {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client, key)
 
       # Verify entry exists (status can be establishing or active depending on timing)
       state = get_pool_state(chain)
@@ -237,7 +238,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       assert state.keys[key].status in [:establishing, :active]
 
       # Unsubscribe immediately
-      :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub_id)
+      :ok = UpstreamSubscriptionPool.unsubscribe_client(profile, chain, sub_id)
       Process.sleep(50)
 
       # Entry should be cleaned up (refcount was 1)
@@ -252,15 +253,15 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       Process.exit(client, :kill)
     end
 
-    test "rapid subscribe/unsubscribe cycles maintain consistency", %{chain: chain} do
+    test "rapid subscribe/unsubscribe cycles maintain consistency", %{chain: chain, profile: profile} do
       key = {:newHeads}
 
       # Rapid subscribe/unsubscribe cycles
       for _ <- 1..10 do
         client = spawn(fn -> Process.sleep(:infinity) end)
-        {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+        {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client, key)
         Process.sleep(5)
-        :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub_id)
+        :ok = UpstreamSubscriptionPool.unsubscribe_client(profile, chain, sub_id)
         Process.exit(client, :kill)
       end
 
@@ -272,12 +273,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       assert state.keys == %{}
     end
 
-    test "subsequent subscribers after activation are instant", %{chain: chain} do
+    test "subsequent subscribers after activation are instant", %{chain: chain, profile: profile} do
       key = {:newHeads}
 
       # First subscriber triggers establishment
       client1 = spawn(fn -> Process.sleep(:infinity) end)
-      {:ok, _sub1} = UpstreamSubscriptionPool.subscribe_client(chain, client1, key)
+      {:ok, _sub1} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client1, key)
 
       # Wait for establishment to complete
       Process.sleep(200)
@@ -287,7 +288,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       # Subsequent subscribers should be instant
       client2 = spawn(fn -> Process.sleep(:infinity) end)
       start_time = System.monotonic_time(:millisecond)
-      {:ok, _sub2} = UpstreamSubscriptionPool.subscribe_client(chain, client2, key)
+      {:ok, _sub2} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client2, key)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should be fast (< 50ms) - accounting for test infrastructure overhead
@@ -303,11 +304,11 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
   end
 
   describe "transitioning_from race condition handling" do
-    test "tracks transitioning_from during resubscribe", %{chain: chain} do
+    test "tracks transitioning_from during resubscribe", %{chain: chain, profile: profile} do
       client = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
 
-      {:ok, _sub} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+      {:ok, _sub} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client, key)
       Process.sleep(200)
 
       state = get_pool_state(chain)
@@ -316,7 +317,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       # Trigger resubscription to a new provider (simulating failover)
       # This is normally triggered by StreamCoordinator
       GenServer.cast(
-        UpstreamSubscriptionPool.via(chain),
+        UpstreamSubscriptionPool.via(profile, chain),
         {:resubscribe, key, "provider_2", self()}
       )
 
@@ -344,11 +345,11 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
   end
 
   describe "manager restart recovery" do
-    test "pool re-establishes subscriptions after manager restart broadcast", %{chain: chain} do
+    test "pool re-establishes subscriptions after manager restart broadcast", %{chain: chain, profile: profile} do
       client = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
 
-      {:ok, _sub} = UpstreamSubscriptionPool.subscribe_client(chain, client, key)
+      {:ok, _sub} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client, key)
       Process.sleep(200)
 
       state_before = get_pool_state(chain)
@@ -357,7 +358,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       # Simulate manager restart by broadcasting the restart event
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
-        "upstream_sub_manager:#{chain}",
+        "upstream_sub_manager:#{profile}:#{chain}",
         {:upstream_sub_manager_restarted, chain}
       )
 
@@ -373,7 +374,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
 
   # Helper functions
 
-  defp get_pool_state(chain) do
-    :sys.get_state(UpstreamSubscriptionPool.via(chain))
+  defp get_pool_state(profile \\ @default_profile, chain) do
+    :sys.get_state(UpstreamSubscriptionPool.via(profile, chain))
   end
 end

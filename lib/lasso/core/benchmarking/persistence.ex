@@ -45,15 +45,15 @@ defmodule Lasso.Benchmarking.Persistence do
   @doc """
   Saves a performance snapshot to file storage.
   """
-  def save_snapshot(chain_name, snapshot_data) do
-    GenServer.cast(__MODULE__, {:save_snapshot, chain_name, snapshot_data})
+  def save_snapshot(profile, chain_name, snapshot_data) do
+    GenServer.cast(__MODULE__, {:save_snapshot, profile, chain_name, snapshot_data})
   end
 
   @doc """
-  Loads historical snapshots for a chain within a time range.
+  Loads historical snapshots for a profile and chain within a time range.
   """
-  def load_snapshots(chain_name, hours_back \\ 24) do
-    GenServer.call(__MODULE__, {:load_snapshots, chain_name, hours_back})
+  def load_snapshots(profile, chain_name, hours_back \\ 24) do
+    GenServer.call(__MODULE__, {:load_snapshots, profile, chain_name, hours_back})
   end
 
   @doc """
@@ -86,12 +86,13 @@ defmodule Lasso.Benchmarking.Persistence do
   end
 
   @impl true
-  def handle_cast({:save_snapshot, chain_name, snapshot_data}, state) do
+  def handle_cast({:save_snapshot, profile, chain_name, snapshot_data}, state) do
     timestamp = System.system_time(:second)
-    filename = "#{chain_name}_#{timestamp}.json"
+    filename = "#{profile}_#{chain_name}_#{timestamp}.json"
     filepath = Path.join(@snapshots_dir, filename)
 
     snapshot_with_metadata = %{
+      profile: profile,
       chain_name: chain_name,
       timestamp: timestamp,
       datetime: DateTime.utc_now() |> DateTime.to_iso8601(),
@@ -154,7 +155,7 @@ defmodule Lasso.Benchmarking.Persistence do
   end
 
   @impl true
-  def handle_call({:load_snapshots, chain_name, hours_back}, _from, state) do
+  def handle_call({:load_snapshots, profile, chain_name, hours_back}, _from, state) do
     cutoff_timestamp = System.system_time(:second) - hours_back * 60 * 60
 
     snapshots =
@@ -162,7 +163,7 @@ defmodule Lasso.Benchmarking.Persistence do
         {:ok, files} ->
           files
           |> Enum.filter(fn filename ->
-            String.starts_with?(filename, "#{chain_name}_") and
+            String.starts_with?(filename, "#{profile}_#{chain_name}_") and
               String.ends_with?(filename, ".json")
           end)
           |> Enum.map(fn filename ->
@@ -253,7 +254,7 @@ defmodule Lasso.Benchmarking.Persistence do
 
   defp extract_timestamp_from_filename(filename) do
     case String.split(filename, "_") do
-      [_chain, timestamp_str] ->
+      [_profile, _chain, timestamp_str] ->
         timestamp_str
         |> String.replace(".json", "")
         |> String.to_integer()
@@ -268,7 +269,7 @@ defmodule Lasso.Benchmarking.Persistence do
 
   defp extract_chain_from_filename(filename) do
     case String.split(filename, "_") do
-      [chain, _timestamp] -> chain
+      [_profile, chain, _timestamp] -> chain
       _ -> nil
     end
   end

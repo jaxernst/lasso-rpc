@@ -34,9 +34,11 @@ defmodule Lasso.RPC.Selection do
 
   Returns {:ok, provider_id} or {:error, reason}
   """
-  @spec select_provider(String.t(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
-  def select_provider(chain, method, opts \\ []) when is_binary(chain) and is_binary(method) do
-    ctx = SelectionContext.new(chain, method, opts)
+  @spec select_provider(String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def select_provider(profile, chain, method, opts \\ [])
+      when is_binary(profile) and is_binary(chain) and is_binary(method) do
+    ctx = SelectionContext.new(profile, chain, method, opts)
     select_provider(ctx)
   end
 
@@ -63,11 +65,11 @@ defmodule Lasso.RPC.Selection do
   - reason: selection reason (e.g., "fastest_method_latency")
   - cb_state: circuit breaker state of selected provider
   """
-  @spec select_provider_with_metadata(String.t(), String.t(), keyword()) ::
+  @spec select_provider_with_metadata(String.t(), String.t(), String.t(), keyword()) ::
           {:ok, %{provider_id: String.t(), metadata: map()}} | {:error, term()}
-  def select_provider_with_metadata(chain, method, opts \\ [])
-      when is_binary(chain) and is_binary(method) do
-    ctx = SelectionContext.new(chain, method, opts)
+  def select_provider_with_metadata(profile, chain, method, opts \\ [])
+      when is_binary(profile) and is_binary(chain) and is_binary(method) do
+    ctx = SelectionContext.new(profile, chain, method, opts)
 
     with {:ok, validated_ctx} <- SelectionContext.validate(ctx) do
       do_select_provider_with_metadata(validated_ctx)
@@ -100,7 +102,7 @@ defmodule Lasso.RPC.Selection do
               end
 
             Enum.flat_map(transports, fn t ->
-              case TransportRegistry.get_channel(ctx.chain, provider_id, t,
+              case TransportRegistry.get_channel(ctx.profile, ctx.chain, provider_id, t,
                      method: ctx.method,
                      provider_config: provider_config
                    ) do
@@ -155,7 +157,7 @@ defmodule Lasso.RPC.Selection do
               end
 
             Enum.flat_map(transports, fn t ->
-              case TransportRegistry.get_channel(ctx.chain, provider_id, t,
+              case TransportRegistry.get_channel(ctx.profile, ctx.chain, provider_id, t,
                      method: ctx.method,
                      provider_config: provider_config
                    ) do
@@ -208,8 +210,9 @@ defmodule Lasso.RPC.Selection do
 
   Returns a list of Channel structs ordered by strategy preference.
   """
-  @spec select_channels(String.t(), String.t(), keyword()) :: [Channel.t()]
-  def select_channels(chain, method, opts \\ []) do
+  @spec select_channels(String.t(), String.t(), String.t(), keyword()) :: [Channel.t()]
+  def select_channels(profile, chain, method, opts \\ [])
+      when is_binary(profile) and is_binary(chain) and is_binary(method) do
     strategy = Keyword.get(opts, :strategy, :round_robin)
     transport = Keyword.get(opts, :transport, :both)
     exclude = Keyword.get(opts, :exclude, [])
@@ -292,7 +295,7 @@ defmodule Lasso.RPC.Selection do
 
             t == :ws and has_ws? ->
               # WS channels are only cached when connected (TransportRegistry removes on disconnect)
-              case TransportRegistry.get_channel(chain, provider_id, t,
+              case TransportRegistry.get_channel(profile, chain, provider_id, t,
                      method: method,
                      provider_config: provider_config
                    ) do
@@ -301,7 +304,7 @@ defmodule Lasso.RPC.Selection do
               end
 
             true ->
-              case TransportRegistry.get_channel(chain, provider_id, t,
+              case TransportRegistry.get_channel(profile, chain, provider_id, t,
                      method: method,
                      provider_config: provider_config
                    ) do
@@ -343,7 +346,7 @@ defmodule Lasso.RPC.Selection do
       end
 
     # Strategy delegation: allow strategy modules to rank channels when available.
-    selection_ctx = SelectionContext.new(chain, method, strategy: strategy, protocol: transport)
+    selection_ctx = SelectionContext.new(profile, chain, method, strategy: strategy, protocol: transport)
     strategy_mod = StrategyRegistry.resolve(strategy)
     prepared_ctx = strategy_mod.prepare_context(selection_ctx)
 

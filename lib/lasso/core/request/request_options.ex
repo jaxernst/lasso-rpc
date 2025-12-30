@@ -12,7 +12,8 @@ defmodule Lasso.RPC.RequestOptions do
   @type transport :: :http | :ws | :both | nil
 
   @enforce_keys [:strategy, :timeout_ms]
-  defstruct strategy: :cheapest,
+  defstruct profile: "default",
+            strategy: :cheapest,
             provider_override: nil,
             transport: nil,
             failover_on_override: false,
@@ -23,6 +24,7 @@ defmodule Lasso.RPC.RequestOptions do
             plug_start_time: nil
 
   @type t :: %__MODULE__{
+          profile: String.t(),
           strategy: strategy,
           provider_override: String.t() | nil,
           transport: transport,

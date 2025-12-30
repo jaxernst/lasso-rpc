@@ -68,6 +68,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   @type upstream_id :: String.t()
 
   defstruct [
+    :profile,
     :chain,
     # %{{provider_id, sub_key} => %{upstream_id, connection_id, created_at, marked_for_teardown_at, last_event_at, staleness_timer_ref}}
     active_subscriptions: %{},
@@ -82,11 +83,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
   # Client API
 
-  def start_link(chain) when is_binary(chain) do
-    GenServer.start_link(__MODULE__, chain, name: via(chain))
+  def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
+    GenServer.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
   end
 
-  def via(chain), do: {:via, Registry, {Lasso.Registry, {:upstream_sub_manager, chain}}}
+  def via(profile, chain) when is_binary(profile) and is_binary(chain) do
+    {:via, Registry, {Lasso.Registry, {:upstream_sub_manager, profile, chain}}}
+  end
 
   @doc """
   Ensure a subscription exists and register caller as consumer.
@@ -101,15 +104,16 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   - `{:ok, :existing}` if joining an existing subscription
   - `{:error, reason}` if subscription creation failed
   """
-  @spec ensure_subscription(chain(), provider_id(), sub_key()) ::
+  @spec ensure_subscription(String.t(), chain(), provider_id(), sub_key()) ::
           {:ok, :new | :existing} | {:error, term()}
-  def ensure_subscription(chain, provider_id, sub_key) do
+  def ensure_subscription(profile, chain, provider_id, sub_key)
+      when is_binary(profile) and is_binary(chain) do
     # Register as consumer first (idempotent per-process)
-    case UpstreamSubscriptionRegistry.register_consumer(chain, provider_id, sub_key) do
+    case UpstreamSubscriptionRegistry.register_consumer(profile, chain, provider_id, sub_key) do
       :ok ->
         # Use :infinity - the inner Channel.request has its own bounded timeout (10s)
         # and will return {:error, :timeout} which propagates up cleanly
-        GenServer.call(via(chain), {:ensure_subscription, provider_id, sub_key}, :infinity)
+        GenServer.call(via(profile, chain), {:ensure_subscription, provider_id, sub_key}, :infinity)
 
       {:error, reason} ->
         {:error, {:registry_error, reason}}
@@ -121,18 +125,19 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
   Subscription will be torn down after grace period if no consumers remain.
   """
-  @spec release_subscription(chain(), provider_id(), sub_key()) :: :ok
-  def release_subscription(chain, provider_id, sub_key) do
-    UpstreamSubscriptionRegistry.unregister_consumer(chain, provider_id, sub_key)
-    GenServer.cast(via(chain), {:check_teardown, provider_id, sub_key})
+  @spec release_subscription(String.t(), chain(), provider_id(), sub_key()) :: :ok
+  def release_subscription(profile, chain, provider_id, sub_key)
+      when is_binary(profile) and is_binary(chain) do
+    UpstreamSubscriptionRegistry.unregister_consumer(profile, chain, provider_id, sub_key)
+    GenServer.cast(via(profile, chain), {:check_teardown, provider_id, sub_key})
   end
 
   @doc """
   Get status of all active subscriptions for this chain.
   """
-  @spec get_status(chain()) :: map()
-  def get_status(chain) do
-    GenServer.call(via(chain), :get_status)
+  @spec get_status(String.t(), chain()) :: map()
+  def get_status(profile, chain) when is_binary(profile) and is_binary(chain) do
+    GenServer.call(via(profile, chain), :get_status)
   catch
     :exit, _ -> %{error: :not_running}
   end
@@ -140,13 +145,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   # GenServer Callbacks
 
   @impl true
-  def init(chain) do
-    # Subscribe to all subscription events for this chain
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:#{chain}")
+  def init({profile, chain}) do
+    # Subscribe to all subscription events for this chain (profile-scoped)
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:#{profile}:#{chain}")
 
     # Subscribe to connection events for connection state tracking
     # This enables connection_id validation to detect stale subscriptions after reconnect
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain}")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{profile}:#{chain}")
 
     # Schedule periodic cleanup check
     Process.send_after(self(), :cleanup_check, @cleanup_interval_ms)
@@ -155,14 +160,18 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
     # This handles the case where Manager crashed/restarted but consumers are still alive
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "upstream_sub_manager:#{chain}",
+      "upstream_sub_manager:#{profile}:#{chain}",
       {:upstream_sub_manager_restarted, chain}
     )
 
     new_heads_staleness_threshold_ms = calculate_staleness_threshold(chain)
 
     {:ok,
-     %__MODULE__{chain: chain, new_heads_staleness_threshold_ms: new_heads_staleness_threshold_ms}}
+     %__MODULE__{
+       profile: profile,
+       chain: chain,
+       new_heads_staleness_threshold_ms: new_heads_staleness_threshold_ms
+     }}
   end
 
   @impl true
@@ -188,12 +197,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   @impl true
   def handle_call(:get_status, _from, state) do
     status = %{
+      profile: state.profile,
       chain: state.chain,
       connection_states: state.connection_states,
       active_subscriptions:
         Map.new(state.active_subscriptions, fn {{provider_id, sub_key}, info} ->
           consumer_count =
-            UpstreamSubscriptionRegistry.count_consumers(state.chain, provider_id, sub_key)
+            UpstreamSubscriptionRegistry.count_consumers(state.profile, state.chain, provider_id, sub_key)
 
           {{provider_id, sub_key},
            %{
@@ -219,7 +229,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
       sub_info ->
         consumer_count =
-          UpstreamSubscriptionRegistry.count_consumers(state.chain, provider_id, sub_key)
+          UpstreamSubscriptionRegistry.count_consumers(state.profile, state.chain, provider_id, sub_key)
 
         if consumer_count == 0 do
           # Mark for teardown (will be cleaned up by periodic check)
@@ -245,6 +255,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
       {^provider_id, sub_key} = key ->
         # Dispatch to all consumers via Registry
         UpstreamSubscriptionRegistry.dispatch(
+          state.profile,
           state.chain,
           provider_id,
           sub_key,
@@ -294,7 +305,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
         # Cancel staleness timer before teardown
         if sub_info.staleness_timer_ref, do: Process.cancel_timer(sub_info.staleness_timer_ref)
 
-        teardown_upstream_subscription(state.chain, provider_id, sub_key, sub_info.upstream_id)
+        teardown_upstream_subscription(state.profile, state.chain, provider_id, sub_key, sub_info.upstream_id)
         emit_telemetry(:subscription_destroyed, state.chain, provider_id, sub_key)
         Map.delete(acc, sub_info.upstream_id)
       end)
@@ -409,6 +420,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
         if info.staleness_timer_ref, do: Process.cancel_timer(info.staleness_timer_ref)
 
         UpstreamSubscriptionRegistry.dispatch(
+          state.profile,
           state.chain,
           prov_id,
           sub_key,
@@ -491,7 +503,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   end
 
   defp create_new_subscription(state, provider_id, sub_key, key, connection_id) do
-    case create_upstream_subscription(state.chain, provider_id, sub_key) do
+    case create_upstream_subscription(state.profile, state.chain, provider_id, sub_key) do
       {:ok, upstream_id} ->
         now = System.monotonic_time(:millisecond)
 
@@ -572,7 +584,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   defp connection_dead_error?({:noproc, _}), do: true
   defp connection_dead_error?(_), do: false
 
-  defp create_upstream_subscription(chain, provider_id, {:newHeads}) do
+  defp create_upstream_subscription(profile, chain, provider_id, {:newHeads}) do
     message = %{
       "jsonrpc" => "2.0",
       "id" => generate_id(),
@@ -580,7 +592,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
       "params" => ["newHeads"]
     }
 
-    with {:ok, channel} <- TransportRegistry.get_channel(chain, provider_id, :ws),
+    with {:ok, channel} <- TransportRegistry.get_channel(profile, chain, provider_id, :ws),
          {:ok, upstream_id, _io_ms} <- Channel.request(channel, message, 10_000) do
       {:ok, upstream_id}
     else
@@ -589,7 +601,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
     end
   end
 
-  defp create_upstream_subscription(chain, provider_id, {:logs, filter}) do
+  defp create_upstream_subscription(profile, chain, provider_id, {:logs, filter}) do
     message = %{
       "jsonrpc" => "2.0",
       "id" => generate_id(),
@@ -597,7 +609,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
       "params" => ["logs", filter]
     }
 
-    with {:ok, channel} <- TransportRegistry.get_channel(chain, provider_id, :ws),
+    with {:ok, channel} <- TransportRegistry.get_channel(profile, chain, provider_id, :ws),
          {:ok, upstream_id, _io_ms} <- Channel.request(channel, message, 10_000) do
       {:ok, upstream_id}
     else
@@ -606,7 +618,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
     end
   end
 
-  defp teardown_upstream_subscription(chain, provider_id, sub_key, upstream_id) do
+  defp teardown_upstream_subscription(profile, chain, provider_id, sub_key, upstream_id) do
     message = %{
       "jsonrpc" => "2.0",
       "id" => generate_id(),
@@ -614,7 +626,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
       "params" => [upstream_id]
     }
 
-    case TransportRegistry.get_channel(chain, provider_id, :ws) do
+    case TransportRegistry.get_channel(profile, chain, provider_id, :ws) do
       {:ok, channel} ->
         _ = Channel.request(channel, message, 5_000)
 
@@ -726,11 +738,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
     # Unsubscribe from the upstream provider to clean up their resources
     # Do this asynchronously to avoid blocking the GenServer
     spawn(fn ->
-      teardown_upstream_subscription(state.chain, provider_id, sub_key, sub_info.upstream_id)
+      teardown_upstream_subscription(state.profile, state.chain, provider_id, sub_key, sub_info.upstream_id)
     end)
 
     # Notify consumers so they can failover
     UpstreamSubscriptionRegistry.dispatch(
+      state.profile,
       state.chain,
       provider_id,
       sub_key,

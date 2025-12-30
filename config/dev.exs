@@ -22,7 +22,7 @@ config :lasso, LassoWeb.Endpoint,
 # Enhanced logging for development debugging
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
-  level: :info,
+  level: :debug,
   metadata: :all
 
 # Filter out Phoenix LiveView "HANDLE EVENT" debug logs

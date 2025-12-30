@@ -27,8 +27,8 @@ defmodule Lasso.BlockSync.Supervisor do
   @doc """
   Start a worker for a specific provider.
   """
-  def start_worker(chain, provider_id) do
-    spec = {Worker, {chain, provider_id}}
+  def start_worker(chain, profile, provider_id) when is_binary(profile) do
+    spec = {Worker, {chain, profile, provider_id}}
 
     case DynamicSupervisor.start_child(via(chain), spec) do
       {:ok, pid} ->
@@ -40,6 +40,7 @@ defmodule Lasso.BlockSync.Supervisor do
       {:error, reason} ->
         Logger.warning("Failed to start BlockSync worker",
           chain: chain,
+          profile: profile,
           provider_id: provider_id,
           reason: inspect(reason)
         )
@@ -48,11 +49,16 @@ defmodule Lasso.BlockSync.Supervisor do
     end
   end
 
+  # Backward compatible (defaults to "default" profile)
+  def start_worker(chain, provider_id) do
+    start_worker(chain, "default", provider_id)
+  end
+
   @doc """
   Stop a worker for a specific provider.
   """
-  def stop_worker(chain, provider_id) do
-    case GenServer.whereis(Worker.via(chain, provider_id)) do
+  def stop_worker(chain, profile, provider_id) when is_binary(profile) do
+    case GenServer.whereis(Worker.via(chain, profile, provider_id)) do
       nil ->
         :ok
 
@@ -61,19 +67,37 @@ defmodule Lasso.BlockSync.Supervisor do
     end
   end
 
+  # Backward compatible (defaults to "default" profile)
+  def stop_worker(chain, provider_id) do
+    stop_worker(chain, "default", provider_id)
+  end
+
   @doc """
-  Start workers for all providers in the chain.
+  Start workers for a profile's providers in the chain.
   """
+  def start_all_workers(chain, profile, provider_ids) when is_binary(profile) and is_list(provider_ids) do
+    Logger.info("Starting BlockSync workers",
+      chain: chain,
+      profile: profile,
+      provider_count: length(provider_ids)
+    )
+
+    Enum.each(provider_ids, fn provider_id ->
+      start_worker(chain, profile, provider_id)
+    end)
+  end
+
+  # Backward compatible - starts workers for all providers in chain config using "default" profile
   def start_all_workers(chain) do
     providers = get_provider_ids(chain)
 
-    Logger.info("Starting BlockSync workers",
+    Logger.info("Starting BlockSync workers (legacy)",
       chain: chain,
       provider_count: length(providers)
     )
 
     Enum.each(providers, fn provider_id ->
-      start_worker(chain, provider_id)
+      start_worker(chain, "default", provider_id)
     end)
   end
 

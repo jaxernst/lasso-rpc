@@ -32,148 +32,148 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @doc """
-  Gets the provider leaderboard for a chain showing RPC performance.
+  Gets the provider leaderboard for a profile and chain showing RPC performance.
 
   Returns a list of providers sorted by average latency and success rate.
   """
-  def get_provider_leaderboard(chain_name) do
-    GenServer.call(__MODULE__, {:get_provider_leaderboard, chain_name})
+  def get_provider_leaderboard(profile, chain_name) do
+    GenServer.call(__MODULE__, {:get_provider_leaderboard, profile, chain_name})
   end
 
   @doc """
-  Gets detailed metrics for a specific provider on a chain.
+  Gets detailed metrics for a specific provider on a chain within a profile.
   """
-  def get_provider_metrics(chain_name, provider_id) do
-    GenServer.call(__MODULE__, {:get_provider_metrics, chain_name, provider_id})
+  def get_provider_metrics(profile, chain_name, provider_id) do
+    GenServer.call(__MODULE__, {:get_provider_metrics, profile, chain_name, provider_id})
   end
 
   @doc """
-  Gets performance metrics for a specific RPC method across all providers.
+  Gets performance metrics for a specific RPC method across all providers in a profile.
   """
-  def get_rpc_method_performance(chain_name, method) do
-    GenServer.call(__MODULE__, {:get_rpc_method_performance, chain_name, method})
+  def get_rpc_method_performance(profile, chain_name, method) do
+    GenServer.call(__MODULE__, {:get_rpc_method_performance, profile, chain_name, method})
   end
 
   @doc """
-  Gets real-time benchmark statistics for dashboard display.
+  Gets real-time benchmark statistics for dashboard display for a profile and chain.
   """
-  def get_realtime_stats(chain_name) do
-    GenServer.call(__MODULE__, {:get_realtime_stats, chain_name})
+  def get_realtime_stats(profile, chain_name) do
+    GenServer.call(__MODULE__, {:get_realtime_stats, profile, chain_name})
   end
 
   @doc """
-  Manually triggers cleanup of old entries for a chain.
+  Manually triggers cleanup of old entries for a profile and chain.
   """
-  def cleanup_old_entries(chain_name) do
-    GenServer.cast(__MODULE__, {:cleanup_old_entries, chain_name})
+  def cleanup_old_entries(profile, chain_name) do
+    GenServer.cast(__MODULE__, {:cleanup_old_entries, profile, chain_name})
   end
 
   @doc """
-  Creates an hourly snapshot of performance data for persistence.
+  Creates an hourly snapshot of performance data for persistence for a profile and chain.
   """
-  def create_hourly_snapshot(chain_name) do
-    GenServer.call(__MODULE__, {:create_hourly_snapshot, chain_name})
+  def create_hourly_snapshot(profile, chain_name) do
+    GenServer.call(__MODULE__, {:create_hourly_snapshot, profile, chain_name})
   end
 
   @doc """
-  Gets RPC method performance including percentiles for a provider.
+  Gets RPC method performance including percentiles for a provider in a profile.
   """
-  def get_rpc_method_performance_with_percentiles(chain_name, provider_id, method) do
+  def get_rpc_method_performance_with_percentiles(profile, chain_name, provider_id, method) do
     GenServer.call(
       __MODULE__,
-      {:get_rpc_performance_with_percentiles, chain_name, provider_id, method}
+      {:get_rpc_performance_with_percentiles, profile, chain_name, provider_id, method}
     )
   end
 
   @doc """
-  Clears all metrics for a specific chain.
+  Clears all metrics for a specific profile and chain.
   """
-  def clear_chain_metrics(chain_name) do
-    GenServer.call(__MODULE__, {:clear_chain_metrics, chain_name})
+  def clear_chain_metrics(profile, chain_name) do
+    GenServer.call(__MODULE__, {:clear_chain_metrics, profile, chain_name})
   end
 
   @doc """
-  Gets RPC performance metrics for a specific provider and method.
+  Gets RPC performance metrics for a specific provider and method in a profile.
   """
-  def get_rpc_performance(chain_name, provider_id, method) do
-    GenServer.call(__MODULE__, {:get_rpc_performance, chain_name, provider_id, method})
+  def get_rpc_performance(profile, chain_name, provider_id, method) do
+    GenServer.call(__MODULE__, {:get_rpc_performance, profile, chain_name, provider_id, method})
   end
 
   @doc """
-  Gets error statistics for a specific provider and method.
+  Gets error statistics for a specific provider and method in a profile.
   """
-  def get_error_stats(chain_name, provider_id, method) do
-    GenServer.call(__MODULE__, {:get_error_stats, chain_name, provider_id, method})
+  def get_error_stats(profile, chain_name, provider_id, method) do
+    GenServer.call(__MODULE__, {:get_error_stats, profile, chain_name, provider_id, method})
   end
 
   @doc """
-  Gets latency percentiles for a specific provider and method.
+  Gets latency percentiles for a specific provider and method in a profile.
   """
-  def get_latency_percentiles(chain_name, provider_id, method) do
-    GenServer.call(__MODULE__, {:get_latency_percentiles, chain_name, provider_id, method})
+  def get_latency_percentiles(profile, chain_name, provider_id, method) do
+    GenServer.call(__MODULE__, {:get_latency_percentiles, profile, chain_name, provider_id, method})
   end
 
   @doc """
-  Gets the overall score for a provider on a chain.
+  Gets the overall score for a provider on a chain within a profile.
   """
-  def get_provider_score(chain_name, provider_id) do
-    GenServer.call(__MODULE__, {:get_provider_score, chain_name, provider_id})
+  def get_provider_score(profile, chain_name, provider_id) do
+    GenServer.call(__MODULE__, {:get_provider_score, profile, chain_name, provider_id})
   end
 
   @doc """
-  Gets hourly statistics for a provider and method.
+  Gets hourly statistics for a provider and method in a profile.
   """
-  def get_hourly_stats(chain_name, provider_id, method) do
-    GenServer.call(__MODULE__, {:get_hourly_stats, chain_name, provider_id, method})
+  def get_hourly_stats(profile, chain_name, provider_id, method) do
+    GenServer.call(__MODULE__, {:get_hourly_stats, profile, chain_name, provider_id, method})
   end
 
   @doc """
-  Gets recent RPC calls for display.
+  Gets recent RPC calls for display for a profile and chain.
   """
-  def get_recent_calls(chain_name, limit \\ 10) do
-    GenServer.call(__MODULE__, {:get_recent_calls, chain_name, limit})
+  def get_recent_calls(profile, chain_name, limit \\ 10) do
+    GenServer.call(__MODULE__, {:get_recent_calls, profile, chain_name, limit})
   end
 
   @doc """
-  Cleans up old metrics across all chains.
+  Cleans up old metrics across all profiles and chains.
   """
   def cleanup_old_metrics do
     GenServer.cast(__MODULE__, :cleanup_old_metrics)
   end
 
   @doc """
-  Gets chain-wide statistics.
+  Gets chain-wide statistics for a profile and chain.
   """
-  def get_chain_wide_stats(chain_name) do
-    GenServer.call(__MODULE__, {:get_chain_wide_stats, chain_name})
+  def get_chain_wide_stats(profile, chain_name) do
+    GenServer.call(__MODULE__, {:get_chain_wide_stats, profile, chain_name})
   end
 
   @doc """
-  Gets real-time statistics for a provider.
+  Gets real-time statistics for a provider in a profile.
   """
-  def get_real_time_stats(chain_name, provider_id) do
-    GenServer.call(__MODULE__, {:get_real_time_stats, chain_name, provider_id})
+  def get_real_time_stats(profile, chain_name, provider_id) do
+    GenServer.call(__MODULE__, {:get_real_time_stats, profile, chain_name, provider_id})
   end
 
   @doc """
-  Detects performance anomalies for a provider.
+  Detects performance anomalies for a provider in a profile.
   """
-  def detect_performance_anomalies(chain_name, provider_id) do
-    GenServer.call(__MODULE__, {:detect_performance_anomalies, chain_name, provider_id})
+  def detect_performance_anomalies(profile, chain_name, provider_id) do
+    GenServer.call(__MODULE__, {:detect_performance_anomalies, profile, chain_name, provider_id})
   end
 
   @doc """
-  Creates a performance snapshot for a chain.
+  Creates a performance snapshot for a profile and chain.
   """
-  def create_performance_snapshot(chain_name) do
-    GenServer.call(__MODULE__, {:create_performance_snapshot, chain_name})
+  def create_performance_snapshot(profile, chain_name) do
+    GenServer.call(__MODULE__, {:create_performance_snapshot, profile, chain_name})
   end
 
   @doc """
-  Gets historical performance data.
+  Gets historical performance data for a profile and chain.
   """
-  def get_historical_performance(chain_name, hours) do
-    GenServer.call(__MODULE__, {:get_historical_performance, chain_name, hours})
+  def get_historical_performance(profile, chain_name, hours) do
+    GenServer.call(__MODULE__, {:get_historical_performance, profile, chain_name, hours})
   end
 
   @doc """
@@ -187,6 +187,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   Records an RPC call performance metric.
 
   ## Parameters
+    - `profile`: The routing profile name
     - `chain_name`: The blockchain name
     - `provider_id`: Unique provider identifier
     - `method`: The RPC method called
@@ -196,15 +197,16 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   ## Examples
 
-      iex> BenchmarkStore.record_rpc_call("ethereum", "infura_provider", "eth_getLogs", 150, :success)
+      iex> BenchmarkStore.record_rpc_call("default", "ethereum", "infura_provider", "eth_getLogs", 150, :success)
       :ok
   """
-  def record_rpc_call(chain_name, provider_id, method, duration_ms, result, timestamp \\ nil) do
+  def record_rpc_call(profile, chain_name, provider_id, method, duration_ms, result, timestamp \\ nil) do
     actual_timestamp = timestamp || System.system_time(:millisecond)
 
     GenServer.cast(
       __MODULE__,
-      {:record_rpc_call, chain_name, provider_id, method, duration_ms, result, actual_timestamp}
+      {:record_rpc_call, profile, chain_name, provider_id, method, duration_ms, result,
+       actual_timestamp}
     )
   end
 
@@ -220,38 +222,22 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     state = %{
       rpc_tables: %{},
       score_tables: %{},
-      chains: MapSet.new()
+      profile_chains: %{}
     }
 
     {:ok, state}
   end
 
   @impl true
-  def handle_cast({:record_rpc_call, chain_name, provider_id, method, duration_ms, result}, state) do
-    new_state = ensure_tables_exist(state, chain_name)
-
-    rpc_table = rpc_table_name(chain_name)
-    score_table = score_table_name(chain_name)
-
-    # Record detailed RPC entry
-    timestamp = System.monotonic_time(:millisecond)
-    :ets.insert(rpc_table, {timestamp, provider_id, method, duration_ms, result})
-
-    # Update aggregated RPC scores
-    update_rpc_scores(score_table, provider_id, method, duration_ms, result)
-
-    {:noreply, new_state}
-  end
-
-  @impl true
   def handle_cast(
-        {:record_rpc_call, chain_name, provider_id, method, duration_ms, result, timestamp},
+        {:record_rpc_call, profile, chain_name, provider_id, method, duration_ms, result,
+         timestamp},
         state
       ) do
-    new_state = ensure_tables_exist(state, chain_name)
+    new_state = ensure_tables_exist(state, profile, chain_name)
 
-    rpc_table = rpc_table_name(chain_name)
-    score_table = score_table_name(chain_name)
+    rpc_table = rpc_table_name(profile, chain_name)
+    score_table = score_table_name(profile, chain_name)
 
     # Record detailed RPC entry with provided timestamp
     :ets.insert(rpc_table, {timestamp, provider_id, method, duration_ms, result})
@@ -263,21 +249,23 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_cast({:cleanup_old_entries, chain_name}, state) do
-    Logger.info("Cleaning up old benchmark entries for #{chain_name}")
+  def handle_cast({:cleanup_old_entries, profile, chain_name}, state) do
+    Logger.info("Cleaning up old benchmark entries for profile: #{profile}, chain: #{chain_name}")
+
+    key = {profile, chain_name}
 
     # 24 hours ago - use monotonic time for consistency
     cutoff_time = System.monotonic_time(:millisecond) - 24 * 60 * 60 * 1000
 
     # Clean RPC table
-    if Map.has_key?(state.rpc_tables, chain_name) do
-      rpc_table = rpc_table_name(chain_name)
+    if Map.has_key?(state.rpc_tables, key) do
+      rpc_table = rpc_table_name(profile, chain_name)
       cleanup_table_by_timestamp(rpc_table, cutoff_time, 0)
     end
 
     # Clean score table - remove entries that are too old
-    if Map.has_key?(state.score_tables, chain_name) do
-      score_table = score_table_name(chain_name)
+    if Map.has_key?(state.score_tables, key) do
+      score_table = score_table_name(profile, chain_name)
       cleanup_score_table_by_timestamp(score_table, cutoff_time)
     end
 
@@ -286,21 +274,25 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   @impl true
   def handle_cast(:cleanup_old_metrics, state) do
-    Logger.info("Cleaning up old metrics across all chains")
+    Logger.info("Cleaning up old metrics across all profiles and chains")
 
-    # Clean up old entries for all chains
-    Enum.each(state.chains, fn chain_name ->
-      GenServer.cast(__MODULE__, {:cleanup_old_entries, chain_name})
+    # Clean up old entries for all profile-chain combinations
+    Enum.each(state.profile_chains, fn {profile, chains} ->
+      Enum.each(chains, fn chain_name ->
+        GenServer.cast(__MODULE__, {:cleanup_old_entries, profile, chain_name})
+      end)
     end)
 
     {:noreply, state}
   end
 
   @impl true
-  def handle_call({:get_provider_leaderboard, chain_name}, _from, state) do
+  def handle_call({:get_provider_leaderboard, profile, chain_name}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        calculate_leaderboard(chain_name)
+      if Map.has_key?(state.score_tables, key) do
+        calculate_leaderboard(profile, chain_name)
       else
         []
       end
@@ -309,10 +301,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_provider_metrics, chain_name, provider_id}, _from, state) do
+  def handle_call({:get_provider_metrics, profile, chain_name, provider_id}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        get_detailed_provider_metrics(chain_name, provider_id)
+      if Map.has_key?(state.score_tables, key) do
+        get_detailed_provider_metrics(profile, chain_name, provider_id)
       else
         %{}
       end
@@ -321,10 +315,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_rpc_method_performance, chain_name, method}, _from, state) do
+  def handle_call({:get_rpc_method_performance, profile, chain_name, method}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.rpc_tables, chain_name) do
-        get_rpc_performance_stats(chain_name, method)
+      if Map.has_key?(state.rpc_tables, key) do
+        get_rpc_performance_stats(profile, chain_name, method)
       else
         %{}
       end
@@ -333,10 +329,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_realtime_stats, chain_name}, _from, state) do
+  def handle_call({:get_realtime_stats, profile, chain_name}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        get_realtime_benchmark_stats(chain_name)
+      if Map.has_key?(state.score_tables, key) do
+        get_realtime_benchmark_stats(profile, chain_name)
       else
         %{providers: [], event_types: [], rpc_methods: []}
       end
@@ -345,14 +343,16 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:create_hourly_snapshot, chain_name}, _from, state) do
+  def handle_call({:create_hourly_snapshot, profile, chain_name}, _from, state) do
+    key = {profile, chain_name}
+
     snapshot =
-      if Map.has_key?(state.score_tables, chain_name) do
-        snapshot_data = create_performance_snapshot_private(chain_name)
+      if Map.has_key?(state.score_tables, key) do
+        snapshot_data = create_performance_snapshot_private(profile, chain_name)
 
         # Save to persistence layer
         alias Lasso.Benchmarking.Persistence
-        Persistence.save_snapshot(chain_name, snapshot_data)
+        Persistence.save_snapshot(profile, chain_name, snapshot_data)
 
         snapshot_data
       else
@@ -363,35 +363,50 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:clear_chain_metrics, chain_name}, _from, state) do
-    if Map.has_key?(state.rpc_tables, chain_name) do
-      rpc_table = rpc_table_name(chain_name)
+  def handle_call({:clear_chain_metrics, profile, chain_name}, _from, state) do
+    key = {profile, chain_name}
+
+    if Map.has_key?(state.rpc_tables, key) do
+      rpc_table = rpc_table_name(profile, chain_name)
       :ets.delete(rpc_table)
     end
 
-    if Map.has_key?(state.score_tables, chain_name) do
-      score_table = score_table_name(chain_name)
+    if Map.has_key?(state.score_tables, key) do
+      score_table = score_table_name(profile, chain_name)
       :ets.delete(score_table)
     end
 
+    # Update profile_chains map
+    profile_chains_set = Map.get(state.profile_chains, profile, MapSet.new())
+    updated_profile_chains_set = MapSet.delete(profile_chains_set, chain_name)
+
+    updated_profile_chains =
+      if MapSet.size(updated_profile_chains_set) == 0 do
+        Map.delete(state.profile_chains, profile)
+      else
+        Map.put(state.profile_chains, profile, updated_profile_chains_set)
+      end
+
     new_state = %{
       state
-      | rpc_tables: Map.delete(state.rpc_tables, chain_name),
-        score_tables: Map.delete(state.score_tables, chain_name),
-        chains: MapSet.delete(state.chains, chain_name)
+      | rpc_tables: Map.delete(state.rpc_tables, key),
+        score_tables: Map.delete(state.score_tables, key),
+        profile_chains: updated_profile_chains
     }
 
     {:reply, :ok, new_state}
   end
 
   @impl true
-  def handle_call({:get_rpc_performance, chain_name, provider_id, method}, _from, state) do
-    result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        score_table = score_table_name(chain_name)
-        key = {provider_id, method, :rpc}
+  def handle_call({:get_rpc_performance, profile, chain_name, provider_id, method}, _from, state) do
+    key = {profile, chain_name}
 
-        case :ets.lookup(score_table, key) do
+    result =
+      if Map.has_key?(state.score_tables, key) do
+        score_table = score_table_name(profile, chain_name)
+        lookup_key = {provider_id, method, :rpc}
+
+        case :ets.lookup(score_table, lookup_key) do
           [{_key, successes, total, avg_duration, _samples, _last_updated}] ->
             %{
               total_calls: total,
@@ -412,10 +427,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_error_stats, chain_name, provider_id, method}, _from, state) do
+  def handle_call({:get_error_stats, profile, chain_name, provider_id, method}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.rpc_tables, chain_name) do
-        rpc_table = rpc_table_name(chain_name)
+      if Map.has_key?(state.rpc_tables, key) do
+        rpc_table = rpc_table_name(profile, chain_name)
 
         # Count different error types
         error_counts =
@@ -445,10 +462,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_latency_percentiles, chain_name, provider_id, method}, _from, state) do
+  def handle_call({:get_latency_percentiles, profile, chain_name, provider_id, method}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.rpc_tables, chain_name) do
-        rpc_table = rpc_table_name(chain_name)
+      if Map.has_key?(state.rpc_tables, key) do
+        rpc_table = rpc_table_name(profile, chain_name)
 
         # Get all latencies for successful calls
         latencies =
@@ -469,10 +488,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_provider_score, chain_name, provider_id}, _from, state) do
+  def handle_call({:get_provider_score, profile, chain_name, provider_id}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        score_table = score_table_name(chain_name)
+      if Map.has_key?(state.score_tables, key) do
+        score_table = score_table_name(profile, chain_name)
 
         # Get all RPC entries for this provider
         rpc_entries =
@@ -506,10 +527,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_hourly_stats, chain_name, provider_id, method}, _from, state) do
+  def handle_call({:get_hourly_stats, profile, chain_name, provider_id, method}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.rpc_tables, chain_name) do
-        rpc_table = rpc_table_name(chain_name)
+      if Map.has_key?(state.rpc_tables, key) do
+        rpc_table = rpc_table_name(profile, chain_name)
         current_hour = div(System.system_time(:second), 3600) * 3600
         hour_ago = current_hour - 3600
 
@@ -565,10 +588,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_recent_calls, chain_name, limit}, _from, state) do
+  def handle_call({:get_recent_calls, profile, chain_name, limit}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.rpc_tables, chain_name) do
-        rpc_table = rpc_table_name(chain_name)
+      if Map.has_key?(state.rpc_tables, key) do
+        rpc_table = rpc_table_name(profile, chain_name)
         current_time = System.monotonic_time(:millisecond)
         # Look back 30 seconds to find recent activity
         lookback = current_time - 30_000
@@ -606,10 +631,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_chain_wide_stats, chain_name}, _from, state) do
+  def handle_call({:get_chain_wide_stats, profile, chain_name}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        score_table = score_table_name(chain_name)
+      if Map.has_key?(state.score_tables, key) do
+        score_table = score_table_name(profile, chain_name)
 
         # Get all RPC entries for this chain
         rpc_entries =
@@ -653,10 +680,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_real_time_stats, chain_name, provider_id}, _from, state) do
+  def handle_call({:get_real_time_stats, profile, chain_name, provider_id}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        score_table = score_table_name(chain_name)
+      if Map.has_key?(state.score_tables, key) do
+        score_table = score_table_name(profile, chain_name)
 
         # Get current racing and RPC stats
         racing_stats =
@@ -700,8 +729,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         minute_ago = current_time - 60_000
 
         calls_last_minute =
-          if Map.has_key?(state.rpc_tables, chain_name) do
-            rpc_table = rpc_table_name(chain_name)
+          if Map.has_key?(state.rpc_tables, key) do
+            rpc_table = rpc_table_name(profile, chain_name)
 
             rpc_table
             |> :ets.tab2list()
@@ -734,10 +763,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:detect_performance_anomalies, chain_name, provider_id}, _from, state) do
+  def handle_call({:detect_performance_anomalies, profile, chain_name, provider_id}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        score_table = score_table_name(chain_name)
+      if Map.has_key?(state.score_tables, key) do
+        score_table = score_table_name(profile, chain_name)
 
         # Get recent RPC performance
         rpc_entries =
@@ -780,11 +811,13 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:create_performance_snapshot, chain_name}, _from, state) do
+  def handle_call({:create_performance_snapshot, profile, chain_name}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
+      if Map.has_key?(state.score_tables, key) do
         # Call the private function directly instead of making a GenServer call
-        create_performance_snapshot_private(chain_name)
+        create_performance_snapshot_private(profile, chain_name)
       else
         %{}
       end
@@ -793,12 +826,14 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_call({:get_historical_performance, chain_name, hours}, _from, state) do
+  def handle_call({:get_historical_performance, profile, chain_name, hours}, _from, state) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
+      if Map.has_key?(state.score_tables, key) do
         # For now, return current data as historical
         # In a real implementation, this would query persistent storage
-        score_table = score_table_name(chain_name)
+        score_table = score_table_name(profile, chain_name)
         current_time = System.system_time(:second)
         _cutoff_time = current_time - hours * 3600
 
@@ -816,25 +851,24 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @impl true
   def handle_call(:get_memory_usage, _from, state) do
     total_size =
-      state.chains
-      |> Enum.map(fn chain_name ->
-        rpc_size =
-          if Map.has_key?(state.rpc_tables, chain_name),
-            do: :ets.info(rpc_table_name(chain_name), :size) || 0,
-            else: 0
-
-        score_size =
-          if Map.has_key?(state.score_tables, chain_name),
-            do: :ets.info(score_table_name(chain_name), :size) || 0,
-            else: 0
-
+      state.rpc_tables
+      |> Map.keys()
+      |> Enum.map(fn key ->
+        rpc_size = :ets.info(Map.get(state.rpc_tables, key), :size) || 0
+        score_size = :ets.info(Map.get(state.score_tables, key), :size) || 0
         rpc_size + score_size
       end)
       |> Enum.sum()
 
+    # Count unique profiles
+    profile_count =
+      state.profile_chains
+      |> Map.keys()
+      |> length()
+
     result = %{
       total_entries: total_size,
-      chains_tracked: MapSet.size(state.chains),
+      chains_tracked: profile_count,
       # Use the key the test expects
       memory_mb: total_size * 0.001,
       # Keep the original key too
@@ -846,13 +880,15 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   @impl true
   def handle_call(
-        {:get_rpc_performance_with_percentiles, chain_name, provider_id, method},
+        {:get_rpc_performance_with_percentiles, profile, chain_name, provider_id, method},
         _from,
         state
       ) do
+    key = {profile, chain_name}
+
     result =
-      if Map.has_key?(state.score_tables, chain_name) do
-        get_rpc_performance_with_percentiles_data(chain_name, provider_id, method)
+      if Map.has_key?(state.score_tables, key) do
+        get_rpc_performance_with_percentiles_data(profile, chain_name, provider_id, method)
       else
         nil
       end
@@ -864,17 +900,21 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   def handle_info(:cleanup_all_chains, state) do
     Logger.debug("Running periodic cleanup for all benchmark tables")
 
-    # Create snapshots before cleanup for all tracked chains
-    Enum.each(state.chains, fn chain_name ->
-      # Avoid self-call; call private directly
-      snapshot = create_performance_snapshot_private(chain_name)
-      alias Lasso.Benchmarking.Persistence
-      Persistence.save_snapshot(chain_name, snapshot)
+    # Create snapshots before cleanup for all tracked profile-chain combinations
+    Enum.each(state.profile_chains, fn {profile, chains} ->
+      Enum.each(chains, fn chain_name ->
+        # Avoid self-call; call private directly
+        snapshot = create_performance_snapshot_private(profile, chain_name)
+        alias Lasso.Benchmarking.Persistence
+        Persistence.save_snapshot(profile, chain_name, snapshot)
+      end)
     end)
 
     # Then cleanup old entries
-    Enum.each(state.chains, fn chain_name ->
-      GenServer.cast(__MODULE__, {:cleanup_old_entries, chain_name})
+    Enum.each(state.profile_chains, fn {profile, chains} ->
+      Enum.each(chains, fn chain_name ->
+        GenServer.cast(__MODULE__, {:cleanup_old_entries, profile, chain_name})
+      end)
     end)
 
     schedule_cleanup()
@@ -883,19 +923,16 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   @impl true
   def handle_info(:enforce_table_limits, state) do
-    Enum.each(state.chains, fn chain_name ->
-      if Map.has_key?(state.rpc_tables, chain_name) do
-        rpc_table = rpc_table_name(chain_name)
-        enforce_table_limits(rpc_table)
-      end
+    Enum.each(state.rpc_tables, fn {_key, rpc_table} ->
+      enforce_table_limits(rpc_table)
     end)
 
     schedule_table_limits_check()
     {:noreply, state}
   end
 
-  defp get_rpc_performance_with_percentiles_data(chain_name, provider_id, method) do
-    score_table = score_table_name(chain_name)
+  defp get_rpc_performance_with_percentiles_data(profile, chain_name, provider_id, method) do
+    score_table = score_table_name(profile, chain_name)
     key = {provider_id, method, :rpc}
 
     case :ets.lookup(score_table, key) do
@@ -958,8 +995,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     }
   end
 
-  defp create_performance_snapshot_private(chain_name) do
-    score_table = score_table_name(chain_name)
+  defp create_performance_snapshot_private(profile, chain_name) do
+    score_table = score_table_name(profile, chain_name)
     current_hour = div(System.system_time(:second), 3600) * 3600
 
     # Get all current scores as snapshot
@@ -971,6 +1008,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         case type do
           :racing ->
             %{
+              profile: profile,
               chain_name: chain_name,
               provider_id: provider_id,
               hour_timestamp: current_hour,
@@ -989,6 +1027,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
           :rpc ->
             %{
+              profile: profile,
               chain_name: chain_name,
               provider_id: provider_id,
               hour_timestamp: current_hour,
@@ -1016,6 +1055,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       |> Enum.uniq()
 
     %{
+      profile: profile,
       chain_name: chain_name,
       hour_timestamp: current_hour,
       # Add the field the test expects
@@ -1028,24 +1068,31 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   # Private functions
 
-  defp ensure_tables_exist(state, chain_name) do
-    if MapSet.member?(state.chains, chain_name) do
+  defp ensure_tables_exist(state, profile, chain) do
+    key = {profile, chain}
+
+    if Map.has_key?(state.rpc_tables, key) do
       state
     else
-      Logger.info("Creating benchmark tables for chain: #{chain_name}")
+      Logger.info("Creating benchmark tables for profile: #{profile}, chain: #{chain}")
 
-      rpc_table = rpc_table_name(chain_name)
-      score_table = score_table_name(chain_name)
+      rpc_table = rpc_table_name(profile, chain)
+      score_table = score_table_name(profile, chain)
 
       # Create ETS tables (no racing table needed)
       :ets.new(rpc_table, [:public, :named_table, :bag, :compressed])
       :ets.new(score_table, [:public, :named_table, :set, :compressed])
 
+      # Update profile_chains map
+      profile_chains_set = Map.get(state.profile_chains, profile, MapSet.new())
+      updated_profile_chains =
+        Map.put(state.profile_chains, profile, MapSet.put(profile_chains_set, chain))
+
       %{
         state
-        | rpc_tables: Map.put(state.rpc_tables, chain_name, rpc_table),
-          score_tables: Map.put(state.score_tables, chain_name, score_table),
-          chains: MapSet.put(state.chains, chain_name)
+        | rpc_tables: Map.put(state.rpc_tables, key, rpc_table),
+          score_tables: Map.put(state.score_tables, key, score_table),
+          profile_chains: updated_profile_chains
       }
     end
   end
@@ -1191,8 +1238,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     end
   end
 
-  defp calculate_leaderboard(chain_name) do
-    score_table = score_table_name(chain_name)
+  defp calculate_leaderboard(profile, chain_name) do
+    score_table = score_table_name(profile, chain_name)
 
     # Get all RPC scores grouped by provider
     rpc_scores =
@@ -1236,8 +1283,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     |> Enum.sort_by(& &1.score, :desc)
   end
 
-  defp get_detailed_provider_metrics(chain_name, provider_id) do
-    score_table = score_table_name(chain_name)
+  defp get_detailed_provider_metrics(profile, chain_name, provider_id) do
+    score_table = score_table_name(profile, chain_name)
 
     # Get all entries for this provider
     provider_entries =
@@ -1287,8 +1334,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     }
   end
 
-  defp get_rpc_performance_stats(chain_name, method) do
-    score_table = score_table_name(chain_name)
+  defp get_rpc_performance_stats(profile, chain_name, method) do
+    score_table = score_table_name(profile, chain_name)
 
     # Get all RPC entries for this method
     method_entries =
@@ -1318,8 +1365,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     }
   end
 
-  defp get_realtime_benchmark_stats(chain_name) do
-    score_table = score_table_name(chain_name)
+  defp get_realtime_benchmark_stats(profile, chain_name) do
+    score_table = score_table_name(profile, chain_name)
 
     all_entries = :ets.tab2list(score_table)
 
@@ -1372,8 +1419,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     success_rate * latency_factor * confidence_factor
   end
 
-  defp rpc_table_name(chain_name), do: :"rpc_metrics_#{chain_name}"
-  defp score_table_name(chain_name), do: :"provider_scores_#{chain_name}"
+  defp rpc_table_name(profile, chain), do: :"rpc_metrics_#{profile}_#{chain}"
+  defp score_table_name(profile, chain), do: :"provider_scores_#{profile}_#{chain}"
 
   defp schedule_cleanup do
     Process.send_after(__MODULE__, :cleanup_all_chains, @cleanup_interval)

@@ -28,6 +28,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   @max_consecutive_failures 3
 
   defstruct [
+    :profile,
     :chain,
     :provider_id,
     :parent,
@@ -44,8 +45,10 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   def start(chain, provider_id, opts) do
     parent = Keyword.get(opts, :parent, self())
     poll_interval = Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms)
+    profile = Keyword.get(opts, :profile, "default")
 
     state = %__MODULE__{
+      profile: profile,
       chain: chain,
       provider_id: provider_id,
       parent: parent,
@@ -117,7 +120,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   defp execute_poll(%__MODULE__{} = state) do
     start_time = System.monotonic_time(:millisecond)
 
-    result = do_poll(state.chain, state.provider_id)
+    result = do_poll(state.profile, state.chain, state.provider_id)
     latency_ms = System.monotonic_time(:millisecond) - start_time
 
     case result do
@@ -167,11 +170,11 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     end
   end
 
-  defp do_poll(chain, provider_id) do
+  defp do_poll(profile, chain, provider_id) do
     cb_id = {chain, provider_id, :http}
 
     # Go through circuit breaker - when open, HealthProbe handles recovery detection
-    case CircuitBreaker.call(cb_id, fn -> do_poll_request(chain, provider_id) end) do
+    case CircuitBreaker.call(cb_id, fn -> do_poll_request(profile, chain, provider_id) end) do
       {:executed, {:ok, height}} ->
         {:ok, height}
 
@@ -196,8 +199,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     end
   end
 
-  defp do_poll_request(chain, provider_id) do
-    case TransportRegistry.get_channel(chain, provider_id, :http) do
+  defp do_poll_request(profile, chain, provider_id) do
+    case TransportRegistry.get_channel(profile, chain, provider_id, :http) do
       {:ok, channel} ->
         rpc_request = %{
           "jsonrpc" => "2.0",

@@ -27,35 +27,40 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     UpstreamSubscriptionManager
   }
 
+  @type profile :: String.t()
   @type chain :: String.t()
   @type provider_id :: String.t()
   @type key :: {:newHeads} | {:logs, map()}
 
-  def start_link(chain) when is_binary(chain) do
-    GenServer.start_link(__MODULE__, chain, name: via(chain))
+  def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
+    GenServer.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
   end
 
-  def via(chain), do: {:via, Registry, {Lasso.Registry, {:pool, chain}}}
-
-  @spec subscribe_client(chain, pid(), key) :: {:ok, String.t()} | {:error, term()}
-  def subscribe_client(chain, client_pid, key) do
-    GenServer.call(via(chain), {:subscribe, client_pid, key})
+  def via(profile, chain) when is_binary(profile) and is_binary(chain) do
+    {:via, Registry, {Lasso.Registry, {:pool, profile, chain}}}
   end
 
-  @spec unsubscribe_client(chain, String.t()) :: :ok | {:error, term()}
-  def unsubscribe_client(chain, subscription_id) do
-    GenServer.call(via(chain), {:unsubscribe, subscription_id})
+  @spec subscribe_client(profile, chain, pid(), key) :: {:ok, String.t()} | {:error, term()}
+  def subscribe_client(profile, chain, client_pid, key)
+      when is_binary(profile) and is_binary(chain) do
+    GenServer.call(via(profile, chain), {:subscribe, client_pid, key})
+  end
+
+  @spec unsubscribe_client(profile, chain, String.t()) :: :ok | {:error, term()}
+  def unsubscribe_client(profile, chain, subscription_id)
+      when is_binary(profile) and is_binary(chain) do
+    GenServer.call(via(profile, chain), {:unsubscribe, subscription_id})
   end
 
   # GenServer callbacks
 
   @impl true
-  def init(chain) do
-    # Subscribe to provider pool events for health/availability changes
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{chain}")
+  def init({profile, chain}) do
+    # Subscribe to provider pool events for health/availability changes (profile-scoped)
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{profile}:#{chain}")
 
     # Subscribe to Manager restart events to re-establish subscriptions
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "upstream_sub_manager:#{chain}")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "upstream_sub_manager:#{profile}:#{chain}")
 
     # Load dedupe config
     dedupe_cfg =
@@ -65,6 +70,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       end
 
     state = %{
+      profile: profile,
       chain: chain,
       # key => %{refcount, primary_provider_id, status, markers, dedupe}
       keys: %{},
@@ -82,7 +88,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   def handle_call({:subscribe, client_pid, key}, _from, state) do
     # Allocate subscription id and register client immediately (non-blocking)
     subscription_id = generate_id()
-    :ok = ClientSubscriptionRegistry.add_client(state.chain, subscription_id, client_pid, key)
+    :ok = ClientSubscriptionRegistry.add_client(state.profile, state.chain, subscription_id, client_pid, key)
 
     # Start coordinator for this key (idempotent, safe to call multiple times)
     _ = start_coordinator_for_key(state, key)
@@ -137,7 +143,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
   @impl true
   def handle_call({:unsubscribe, subscription_id}, _from, state) do
-    case ClientSubscriptionRegistry.remove_client(state.chain, subscription_id) do
+    case ClientSubscriptionRegistry.remove_client(state.profile, state.chain, subscription_id) do
       {:ok, nil} ->
         {:reply, :ok, state}
 
@@ -159,7 +165,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
       # Register with new provider via Manager FIRST (before releasing old)
       # This ensures we receive events from both during transition - StreamCoordinator dedupes
-      case UpstreamSubscriptionManager.ensure_subscription(state.chain, new_provider_id, key) do
+      case UpstreamSubscriptionManager.ensure_subscription(state.profile, state.chain, new_provider_id, key) do
         {:ok, _status} ->
           # Update entry with new provider, but track old for cleanup
           # We stay registered for old provider until coordinator confirms
@@ -209,8 +215,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   @impl true
   def handle_cast({:establish_upstream, key, excluded_providers}, state) do
     with {:ok, entry} <- validate_entry_for_establishment(state.keys[key]),
-         {:ok, provider_id} <- select_available_provider(state.chain, excluded_providers),
-         {:ok, _status} <- attempt_upstream_subscribe(state.chain, provider_id, key) do
+         {:ok, provider_id} <- select_available_provider(state.profile, state.chain, excluded_providers),
+         {:ok, _status} <- attempt_upstream_subscribe(state.profile, state.chain, provider_id, key) do
       # Happy path: subscription established successfully
       new_state = activate_subscription(state, key, entry, provider_id)
 
@@ -251,9 +257,9 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   defp validate_entry_for_establishment(entry), do: {:ok, entry}
 
   # Select an available provider, excluding failed attempts
-  defp select_available_provider(chain, excluded_providers) do
+  defp select_available_provider(profile, chain, excluded_providers) do
     channels =
-      Selection.select_channels(chain, "eth_subscribe",
+      Selection.select_channels(profile, chain, "eth_subscribe",
         strategy: :priority,
         transport: :ws,
         limit: 1
@@ -270,10 +276,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   end
 
   # Attempt upstream subscription via Manager
-  defp attempt_upstream_subscribe(chain, provider_id, key) do
+  defp attempt_upstream_subscribe(profile, chain, provider_id, key) do
     Logger.debug("Attempting upstream subscribe to #{provider_id} for key #{inspect(key)}")
 
-    case UpstreamSubscriptionManager.ensure_subscription(chain, provider_id, key) do
+    case UpstreamSubscriptionManager.ensure_subscription(profile, chain, provider_id, key) do
       {:ok, status} ->
         {:ok, status}
 
@@ -339,13 +345,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     case Map.get(state.keys, key) do
       %{primary_provider_id: ^provider_id, status: :active} ->
         # Event from current primary provider
-        StreamCoordinator.upstream_event(state.chain, key, provider_id, nil, payload, received_at)
+        StreamCoordinator.upstream_event(state.profile, state.chain, key, provider_id, nil, payload, received_at)
         {:noreply, state}
 
       %{transitioning_from: ^provider_id, status: :active} ->
         # Event from old provider during transition - forward for deduplication
         # StreamCoordinator will buffer or dedupe as appropriate
-        StreamCoordinator.upstream_event(state.chain, key, provider_id, nil, payload, received_at)
+        StreamCoordinator.upstream_event(state.profile, state.chain, key, provider_id, nil, payload, received_at)
         {:noreply, state}
 
       _ ->
@@ -359,7 +365,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     case Map.get(state.keys, key) do
       %{transitioning_from: ^old_provider_id} = entry ->
         # Release old subscription now that transition is complete
-        UpstreamSubscriptionManager.release_subscription(state.chain, old_provider_id, key)
+        UpstreamSubscriptionManager.release_subscription(state.profile, state.chain, old_provider_id, key)
 
         # Clear the transitioning_from field
         updated_entry = Map.delete(entry, :transitioning_from)
@@ -389,6 +395,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
     Enum.each(keys_to_failover, fn key ->
       StreamCoordinator.provider_unhealthy(
+        state.profile,
         state.chain,
         key,
         provider_id,
@@ -431,7 +438,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
       # Re-register each active subscription with the Manager
       Enum.each(active_keys, fn {key, provider_id} ->
-        case UpstreamSubscriptionManager.ensure_subscription(state.chain, provider_id, key) do
+        case UpstreamSubscriptionManager.ensure_subscription(state.profile, state.chain, provider_id, key) do
           {:ok, _status} ->
             Logger.debug("Re-established subscription after Manager restart",
               chain: state.chain,
@@ -450,6 +457,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
             # Trigger failover to another provider
             StreamCoordinator.provider_unhealthy(
+              state.profile,
               state.chain,
               key,
               provider_id,
@@ -474,7 +482,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     )
 
     # Resubscribe to the same provider (don't failover)
-    case UpstreamSubscriptionManager.ensure_subscription(state.chain, provider_id, key) do
+    case UpstreamSubscriptionManager.ensure_subscription(state.profile, state.chain, provider_id, key) do
       {:ok, _status} ->
         Logger.debug("Resubscribed after staleness",
           chain: state.chain,
@@ -492,6 +500,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
         )
 
         StreamCoordinator.provider_unhealthy(
+          state.profile,
           state.chain,
           key,
           provider_id,
@@ -509,6 +518,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     )
 
     StreamCoordinator.provider_unhealthy(
+      state.profile,
       state.chain,
       key,
       provider_id,
@@ -526,6 +536,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
     )
 
     StreamCoordinator.provider_unhealthy(
+      state.profile,
       state.chain,
       key,
       provider_id,
@@ -545,12 +556,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
       continuity_policy: :best_effort
     ]
 
-    StreamSupervisor.ensure_coordinator(state.chain, key, opts)
+    StreamSupervisor.ensure_coordinator(state.profile, state.chain, key, opts)
   end
 
   defp pick_next_provider(state, failed_provider_id) do
     case Selection.select_provider(
-           SelectionContext.new(state.chain, "eth_subscribe",
+           SelectionContext.new(state.profile, state.chain, "eth_subscribe",
              strategy: :priority,
              protocol: :ws,
              exclude: [failed_provider_id]
@@ -568,18 +579,20 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
       %{refcount: 1, primary_provider_id: provider_id} when not is_nil(provider_id) ->
         # Release subscription from Manager
-        UpstreamSubscriptionManager.release_subscription(state.chain, provider_id, key)
+        UpstreamSubscriptionManager.release_subscription(state.profile, state.chain, provider_id, key)
 
         telemetry_upstream(:unsubscribe, state.chain, provider_id, key)
 
         # Stop the StreamCoordinator for this key (async to avoid blocking)
-        Task.start(fn -> StreamSupervisor.stop_coordinator(state.chain, key) end)
+        profile = state.profile
+        Task.start(fn -> StreamSupervisor.stop_coordinator(profile, state.chain, key) end)
 
         %{state | keys: Map.delete(state.keys, key)}
 
       %{refcount: 1} ->
         # No provider assigned yet, just clean up
-        Task.start(fn -> StreamSupervisor.stop_coordinator(state.chain, key) end)
+        profile = state.profile
+        Task.start(fn -> StreamSupervisor.stop_coordinator(profile, state.chain, key) end)
         %{state | keys: Map.delete(state.keys, key)}
 
       entry ->

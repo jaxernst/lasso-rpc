@@ -72,6 +72,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
       result =
         Lasso.RPC.TransportRegistry.initialize_provider_channels(
+          "default",
           chain,
           provider_id,
           provider_config
@@ -150,10 +151,14 @@ defmodule Lasso.Testing.MockHTTPProvider do
   end
 
   # Private helper to ensure chain exists (auto-create if needed)
+  # Uses "default" profile for test chains
+  @test_profile "default"
+
   defp ensure_chain_exists(chain_name) do
     case Lasso.Config.ConfigStore.get_chain(chain_name) do
       {:ok, _chain_config} ->
-        :ok
+        # Chain exists, ensure supervisors are running
+        ensure_chain_supervisors_running(chain_name)
 
       {:error, :not_found} ->
         # Create chain with default config
@@ -178,11 +183,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
         with :ok <-
                Lasso.Config.ConfigStore.register_chain_runtime(chain_name, default_config),
              {:ok, chain_config} <- Lasso.Config.ConfigStore.get_chain(chain_name),
-             {:ok, _pid} <-
-               DynamicSupervisor.start_child(
-                 Lasso.RPC.Supervisor,
-                 {Lasso.RPC.ChainSupervisor, {chain_name, chain_config}}
-               ) do
+             :ok <- start_chain_supervisors(chain_name, chain_config) do
           Logger.info("Successfully started chain supervisor for '#{chain_name}'")
           :ok
         else
@@ -190,6 +191,39 @@ defmodule Lasso.Testing.MockHTTPProvider do
             Logger.error("Failed to start chain '#{chain_name}': #{inspect(reason)}")
             error
         end
+    end
+  end
+
+  defp ensure_chain_supervisors_running(chain_name) do
+    # Check if profile chain supervisor is running
+    case Lasso.ProfileChainSupervisor.running?(@test_profile, chain_name) do
+      true ->
+        :ok
+
+      false ->
+        # Get chain config and start supervisors
+        case Lasso.Config.ConfigStore.get_chain(chain_name) do
+          {:ok, chain_config} ->
+            start_chain_supervisors(chain_name, chain_config)
+
+          {:error, _} = error ->
+            error
+        end
+    end
+  end
+
+  defp start_chain_supervisors(chain_name, chain_config) do
+    # Start global chain processes (BlockSync, HealthProbe) if not already running
+    case Lasso.GlobalChainSupervisor.ensure_chain_processes(chain_name) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Global chain processes failed: #{inspect(reason)}")
+    end
+
+    # Start profile chain supervisor
+    case Lasso.ProfileChainSupervisor.start_profile_chain(@test_profile, chain_name, chain_config) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 

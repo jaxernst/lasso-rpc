@@ -59,7 +59,11 @@ defmodule LassoWeb.RPCSocket do
     # Determine if a strategy or provider override is specified by parsing the URI
     {strategy, provider_id} = extract_routing_params(uri, params)
 
+    # Profile defaults to "default" for now, can be extracted from params later
+    profile = params["profile"] || "default"
+
     socket_state = %{
+      profile: profile,
       chain: chain,
       strategy: strategy,
       provider_id: provider_id,
@@ -206,7 +210,7 @@ defmodule LassoWeb.RPCSocket do
 
     # Unsubscribe all active subscriptions
     Enum.each(state.subscriptions, fn {subscription_id, _type} ->
-      SubscriptionRouter.unsubscribe(state.chain, subscription_id)
+      SubscriptionRouter.unsubscribe(state.profile, state.chain, subscription_id)
     end)
 
     :ok
@@ -293,7 +297,7 @@ defmodule LassoWeb.RPCSocket do
   defp handle_rpc_method("eth_subscribe", [subscription_type | rest], state, ctx) do
     case subscription_type do
       "newHeads" ->
-        case SubscriptionRouter.subscribe(state.chain, {:newHeads}) do
+        case SubscriptionRouter.subscribe(state.profile, state.chain, {:newHeads}) do
           {:ok, subscription_id} ->
             new_state = update_subscriptions(state, subscription_id, "newHeads")
             updated_ctx = RequestContext.record_success(ctx, subscription_id)
@@ -308,7 +312,7 @@ defmodule LassoWeb.RPCSocket do
       "logs" ->
         filter = List.first(rest, %{})
 
-        case SubscriptionRouter.subscribe(state.chain, {:logs, filter}) do
+        case SubscriptionRouter.subscribe(state.profile, state.chain, {:logs, filter}) do
           {:ok, subscription_id} ->
             new_state = update_subscriptions(state, subscription_id, {"logs", filter})
             updated_ctx = RequestContext.record_success(ctx, subscription_id)
@@ -334,7 +338,7 @@ defmodule LassoWeb.RPCSocket do
         {:ok, false, state, updated_ctx}
 
       {_subscription_type, updated_subscriptions} ->
-        SubscriptionRouter.unsubscribe(state.chain, subscription_id)
+        SubscriptionRouter.unsubscribe(state.profile, state.chain, subscription_id)
         new_state = %{state | subscriptions: updated_subscriptions}
         updated_ctx = RequestContext.record_success(ctx, true)
         {:ok, true, new_state, updated_ctx}

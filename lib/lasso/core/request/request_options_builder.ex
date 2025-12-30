@@ -39,6 +39,9 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   """
   @spec from_conn(Plug.Conn.t(), String.t(), override_opts) :: RequestOptions.t()
   def from_conn(%Plug.Conn{} = conn, method, overrides \\ []) when is_binary(method) do
+    # Profile (from ProfileResolverPlug or default)
+    profile = Map.get(conn.assigns, :profile_slug, "default")
+
     # Strategy
     strategy =
       cond do
@@ -95,6 +98,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
 
     opts =
       %RequestOptions{
+        profile: profile,
         strategy: strategy,
         provider_override: provider_override,
         transport: transport,
@@ -143,6 +147,9 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   @spec from_map(map(), String.t(), override_opts) :: RequestOptions.t()
   def from_map(params, method, overrides \\ [])
       when is_map(params) and is_binary(method) do
+    # Profile (overrides > params > default)
+    profile = overrides[:profile] || params["profile"] || "default"
+
     # Strategy (overrides > params > default)
     strategy =
       cond do
@@ -183,6 +190,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
 
     opts =
       %RequestOptions{
+        profile: profile,
         strategy: strategy,
         provider_override: provider_override,
         transport: transport,

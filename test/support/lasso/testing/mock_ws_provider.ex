@@ -84,9 +84,16 @@ defmodule Lasso.Testing.MockWSProvider do
       # This is required by UpstreamSubscriptionManager to allow subscriptions
       connection_id = "conn_mock_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
 
+      # Broadcast to both legacy and profile-scoped topics for compatibility
+      profile = "default"
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
         "ws:conn:#{chain}",
+        {:ws_connected, provider_id, connection_id}
+      )
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        "ws:conn:#{profile}:#{chain}",
         {:ws_connected, provider_id, connection_id}
       )
 
@@ -237,10 +244,14 @@ defmodule Lasso.Testing.MockWSProvider do
   end
 
   # Private helper to ensure chain exists (auto-create if needed)
+  # Uses "default" profile for test chains
+  @test_profile "default"
+
   defp ensure_chain_exists(chain_name) do
     case Lasso.Config.ConfigStore.get_chain(chain_name) do
       {:ok, _chain_config} ->
-        :ok
+        # Chain exists, ensure supervisors are running
+        ensure_chain_supervisors_running(chain_name)
 
       {:error, :not_found} ->
         # Create chain with default config
@@ -265,11 +276,7 @@ defmodule Lasso.Testing.MockWSProvider do
         with :ok <-
                Lasso.Config.ConfigStore.register_chain_runtime(chain_name, default_config),
              {:ok, chain_config} <- Lasso.Config.ConfigStore.get_chain(chain_name),
-             {:ok, _pid} <-
-               DynamicSupervisor.start_child(
-                 Lasso.RPC.Supervisor,
-                 {Lasso.RPC.ChainSupervisor, {chain_name, chain_config}}
-               ) do
+             :ok <- start_chain_supervisors(chain_name, chain_config) do
           Logger.info("Successfully started chain supervisor for '#{chain_name}'")
           :ok
         else
@@ -277,6 +284,39 @@ defmodule Lasso.Testing.MockWSProvider do
             Logger.error("Failed to start chain '#{chain_name}': #{inspect(reason)}")
             error
         end
+    end
+  end
+
+  defp ensure_chain_supervisors_running(chain_name) do
+    # Check if profile chain supervisor is running
+    case Lasso.ProfileChainSupervisor.running?(@test_profile, chain_name) do
+      true ->
+        :ok
+
+      false ->
+        # Get chain config and start supervisors
+        case Lasso.Config.ConfigStore.get_chain(chain_name) do
+          {:ok, chain_config} ->
+            start_chain_supervisors(chain_name, chain_config)
+
+          {:error, _} = error ->
+            error
+        end
+    end
+  end
+
+  defp start_chain_supervisors(chain_name, chain_config) do
+    # Start global chain processes (BlockSync, HealthProbe) if not already running
+    case Lasso.GlobalChainSupervisor.ensure_chain_processes(chain_name) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Global chain processes failed: #{inspect(reason)}")
+    end
+
+    # Start profile chain supervisor
+    case Lasso.ProfileChainSupervisor.start_profile_chain(@test_profile, chain_name, chain_config) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -533,10 +573,17 @@ defmodule Lasso.Testing.MockWSProvider do
 
   defp send_subscription_event(chain, provider_id, subscription_id, payload) do
     received_at = System.monotonic_time(:millisecond)
+    profile = "default"
 
+    # Broadcast to both legacy and profile-scoped topics for compatibility
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
       "ws:subs:#{chain}",
+      {:subscription_event, provider_id, subscription_id, payload, received_at}
+    )
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:subs:#{profile}:#{chain}",
       {:subscription_event, provider_id, subscription_id, payload, received_at}
     )
   end

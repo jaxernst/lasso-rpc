@@ -32,6 +32,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @default_staleness_threshold_ms 35_000
 
   defstruct [
+    :profile,
     :chain,
     :provider_id,
     :parent,
@@ -49,8 +50,10 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   def start(chain, provider_id, opts) do
     parent = Keyword.get(opts, :parent, self())
     staleness_threshold = Keyword.get(opts, :staleness_threshold_ms, @default_staleness_threshold_ms)
+    profile = Keyword.get(opts, :profile, "default")
 
     state = %__MODULE__{
+      profile: profile,
       chain: chain,
       provider_id: provider_id,
       parent: parent,
@@ -75,11 +78,11 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   end
 
   @impl true
-  def stop(%__MODULE__{staleness_timer_ref: ref, chain: chain, provider_id: provider_id}) do
+  def stop(%__MODULE__{staleness_timer_ref: ref, profile: profile, chain: chain, provider_id: provider_id}) do
     if ref, do: Process.cancel_timer(ref)
 
     # Release our subscription from the manager
-    UpstreamSubscriptionManager.release_subscription(chain, provider_id, {:newHeads})
+    UpstreamSubscriptionManager.release_subscription(profile, chain, provider_id, {:newHeads})
 
     :ok
   end
@@ -176,6 +179,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
   defp do_subscribe(state) do
     case UpstreamSubscriptionManager.ensure_subscription(
+           state.profile,
            state.chain,
            state.provider_id,
            {:newHeads}

@@ -42,11 +42,13 @@ defmodule LassoWeb.MetricsLive do
 
   defp load_metrics(socket) do
     chain_name = socket.assigns.chain_name
+    # TODO: Get profile from socket assigns or route params
+    profile = "default"
 
     try do
       {:ok, provider_configs} = ConfigStore.get_providers(chain_name)
-      provider_leaderboard = BenchmarkStore.get_provider_leaderboard(chain_name)
-      realtime_stats = BenchmarkStore.get_realtime_stats(chain_name)
+      provider_leaderboard = BenchmarkStore.get_provider_leaderboard(profile, chain_name)
+      realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_name)
 
       # Get all RPC methods we have data for
       rpc_methods = Map.get(realtime_stats, :rpc_methods, [])
@@ -54,6 +56,7 @@ defmodule LassoWeb.MetricsLive do
 
       # Collect detailed metrics by provider
       provider_metrics = collect_provider_metrics(
+        profile,
         chain_name,
         provider_ids,
         provider_configs,
@@ -63,6 +66,7 @@ defmodule LassoWeb.MetricsLive do
 
       # Collect method-level metrics for comparison
       method_metrics = collect_method_metrics(
+        profile,
         chain_name,
         provider_ids,
         provider_configs,
@@ -81,7 +85,7 @@ defmodule LassoWeb.MetricsLive do
     end
   end
 
-  defp collect_provider_metrics(chain_name, provider_ids, provider_configs, leaderboard, rpc_methods) do
+  defp collect_provider_metrics(profile, chain_name, provider_ids, provider_configs, leaderboard, rpc_methods) do
     provider_ids
     |> Enum.map(fn provider_id ->
       config = Enum.find(provider_configs, &(&1.id == provider_id))
@@ -90,7 +94,7 @@ defmodule LassoWeb.MetricsLive do
       # Get aggregate stats across all methods
       method_stats = rpc_methods
         |> Enum.map(fn method ->
-          BenchmarkStore.get_rpc_method_performance_with_percentiles(chain_name, provider_id, method)
+          BenchmarkStore.get_rpc_method_performance_with_percentiles(profile, chain_name, provider_id, method)
         end)
         |> Enum.reject(&is_nil/1)
 
@@ -168,14 +172,14 @@ defmodule LassoWeb.MetricsLive do
     |> Enum.sort_by(& &1.avg_latency || 999_999)
   end
 
-  defp collect_method_metrics(chain_name, provider_ids, provider_configs, rpc_methods) do
+  defp collect_method_metrics(profile, chain_name, provider_ids, provider_configs, rpc_methods) do
     rpc_methods
     |> Enum.map(fn method ->
       provider_stats = provider_ids
         |> Enum.map(fn provider_id ->
           config = Enum.find(provider_configs, &(&1.id == provider_id))
 
-          case BenchmarkStore.get_rpc_method_performance_with_percentiles(chain_name, provider_id, method) do
+          case BenchmarkStore.get_rpc_method_performance_with_percentiles(profile, chain_name, provider_id, method) do
             nil -> nil
             stats ->
               %{

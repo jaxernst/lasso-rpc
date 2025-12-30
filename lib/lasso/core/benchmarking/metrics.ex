@@ -71,7 +71,7 @@ defmodule Lasso.RPC.Metrics do
   This should not block the calling process and should handle
   any storage failures gracefully.
   """
-  @callback record_request(chain, provider_id, method, non_neg_integer(), result, recording_opts) ::
+  @callback record_request(String.t(), chain, provider_id, method, non_neg_integer(), result, recording_opts) ::
               :ok
 
   @doc """
@@ -120,18 +120,18 @@ defmodule Lasso.RPC.Metrics do
   - `:async` - If false, records synchronously (default: true)
   - `:timestamp` - Custom timestamp (default: current time)
   """
-  @spec record_request(chain, provider_id, method, non_neg_integer(), result, recording_opts) ::
+  @spec record_request(String.t(), chain, provider_id, method, non_neg_integer(), result, recording_opts) ::
           :ok
-  def record_request(chain, provider_id, method, duration_ms, result, opts \\ []) do
-    backend().record_request(chain, provider_id, method, duration_ms, result, opts)
+  def record_request(profile, chain, provider_id, method, duration_ms, result, opts \\ []) do
+    backend().record_request(profile, chain, provider_id, method, duration_ms, result, opts)
   end
 
   @doc """
   Convenience function to record a successful request.
   """
-  @spec record_success(chain, provider_id, method, non_neg_integer(), recording_opts) :: :ok
-  def record_success(chain, provider_id, method, duration_ms, opts \\ []) do
-    record_request(chain, provider_id, method, duration_ms, :success, opts)
+  @spec record_success(String.t(), chain, provider_id, method, non_neg_integer(), recording_opts) :: :ok
+  def record_success(profile, chain, provider_id, method, duration_ms, opts \\ []) do
+    record_request(profile, chain, provider_id, method, duration_ms, :success, opts)
   end
 
   @doc """
@@ -153,9 +153,9 @@ defmodule Lasso.RPC.Metrics do
   @doc """
   Convenience function to record a failed request.
   """
-  @spec record_failure(chain, provider_id, method, non_neg_integer(), recording_opts) :: :ok
-  def record_failure(chain, provider_id, method, duration_ms, opts \\ []) do
-    record_request(chain, provider_id, method, duration_ms, :error, opts)
+  @spec record_failure(String.t(), chain, provider_id, method, non_neg_integer(), recording_opts) :: :ok
+  def record_failure(profile, chain, provider_id, method, duration_ms, opts \\ []) do
+    record_request(profile, chain, provider_id, method, duration_ms, :error, opts)
   end
 
   @doc """

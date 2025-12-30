@@ -7,8 +7,9 @@ defmodule Lasso.RPC.SelectionContext do
   interface for selection strategies.
   """
 
-  @enforce_keys [:chain, :method]
+  @enforce_keys [:profile, :chain, :method]
   defstruct [
+    :profile,
     :chain,
     :method,
     :strategy,
@@ -22,6 +23,7 @@ defmodule Lasso.RPC.SelectionContext do
   @type protocol :: :http | :ws | :both
 
   @type t :: %__MODULE__{
+          profile: String.t(),
           chain: String.t(),
           method: String.t(),
           strategy: strategy(),
@@ -36,12 +38,14 @@ defmodule Lasso.RPC.SelectionContext do
 
   ## Examples
 
-      iex> SelectionContext.new("ethereum", "eth_blockNumber", strategy: :fastest)
-      %SelectionContext{chain: "ethereum", method: "eth_blockNumber", strategy: :fastest, ...}
+      iex> SelectionContext.new("default", "ethereum", "eth_blockNumber", strategy: :fastest)
+      %SelectionContext{profile: "default", chain: "ethereum", method: "eth_blockNumber", strategy: :fastest, ...}
   """
-  @spec new(String.t(), String.t(), keyword()) :: t()
-  def new(chain, method, opts \\ []) do
+  @spec new(String.t(), String.t(), String.t(), keyword()) :: t()
+  def new(profile, chain, method, opts \\ [])
+      when is_binary(profile) and is_binary(chain) and is_binary(method) do
     %__MODULE__{
+      profile: profile,
       chain: chain,
       method: method,
       strategy: Keyword.get(opts, :strategy, :cheapest),
@@ -57,7 +61,8 @@ defmodule Lasso.RPC.SelectionContext do
   """
   @spec validate(t()) :: {:ok, t()} | {:error, String.t()}
   def validate(%__MODULE__{} = ctx) do
-    with :ok <- validate_chain(ctx.chain),
+    with :ok <- validate_profile(ctx.profile),
+         :ok <- validate_chain(ctx.chain),
          :ok <- validate_method(ctx.method),
          :ok <- validate_strategy(ctx.strategy),
          :ok <- validate_protocol(ctx.protocol),
@@ -66,6 +71,9 @@ defmodule Lasso.RPC.SelectionContext do
       {:ok, ctx}
     end
   end
+
+  defp validate_profile(profile) when is_binary(profile) and profile != "", do: :ok
+  defp validate_profile(_), do: {:error, "Profile name is required"}
 
   defp validate_chain(chain) when is_binary(chain) and chain != "", do: :ok
   defp validate_chain(_), do: {:error, "Chain name is required"}

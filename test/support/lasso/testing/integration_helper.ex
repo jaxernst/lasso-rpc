@@ -136,10 +136,11 @@ defmodule Lasso.Testing.IntegrationHelper do
   """
   def setup_coordinator_with_subscription(chain, key, opts \\ []) do
     wait_ms = Keyword.get(opts, :wait_ms, 100)
-    coordinator_opts = Keyword.drop(opts, [:wait_ms])
+    profile = Keyword.get(opts, :profile, "default")
+    coordinator_opts = Keyword.drop(opts, [:wait_ms, :profile])
 
     # Start coordinator - it will auto-subscribe via Pool
-    {:ok, coord_pid} = StreamCoordinator.start_link({chain, key, coordinator_opts})
+    {:ok, coord_pid} = StreamCoordinator.start_link({profile, chain, key, coordinator_opts})
 
     # Wait for subscription to settle
     Process.sleep(wait_ms)
@@ -232,9 +233,9 @@ defmodule Lasso.Testing.IntegrationHelper do
 
   This is a convenience wrapper around UpstreamSubscriptionPool.subscribe_client.
   """
-  def subscribe_client(chain, client_pid \\ nil, key) do
+  def subscribe_client(chain, client_pid \\ nil, key, profile \\ "default") do
     client_pid = client_pid || self()
-    UpstreamSubscriptionPool.subscribe_client(chain, client_pid, key)
+    UpstreamSubscriptionPool.subscribe_client(profile, chain, client_pid, key)
   end
 
   @doc """
@@ -242,8 +243,8 @@ defmodule Lasso.Testing.IntegrationHelper do
 
   This is a convenience wrapper around UpstreamSubscriptionPool.unsubscribe_client.
   """
-  def unsubscribe_client(chain, subscription_id) do
-    UpstreamSubscriptionPool.unsubscribe_client(chain, subscription_id)
+  def unsubscribe_client(chain, subscription_id, profile \\ "default") do
+    UpstreamSubscriptionPool.unsubscribe_client(profile, chain, subscription_id)
   end
 
   @doc """

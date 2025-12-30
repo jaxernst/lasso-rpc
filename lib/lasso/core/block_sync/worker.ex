@@ -35,6 +35,7 @@ defmodule Lasso.BlockSync.Worker do
 
   defstruct [
     :chain,
+    :profile,
     :provider_id,
     :mode,
     :ws_strategy,
@@ -45,37 +46,57 @@ defmodule Lasso.BlockSync.Worker do
 
   ## Client API
 
-  def start_link({chain, provider_id}) do
-    GenServer.start_link(__MODULE__, {chain, provider_id}, name: via(chain, provider_id))
+  # Profile-aware start_link
+  def start_link({chain, profile, provider_id}) when is_binary(profile) do
+    GenServer.start_link(__MODULE__, {chain, profile, provider_id},
+      name: via(chain, profile, provider_id)
+    )
   end
 
+  # Backward compatible (defaults to "default" profile)
+  def start_link({chain, provider_id}) do
+    start_link({chain, "default", provider_id})
+  end
+
+  # Profile-aware via
+  def via(chain, profile, provider_id) when is_binary(profile) do
+    {:via, Registry, {Lasso.Registry, {:block_sync_worker, chain, profile, provider_id}}}
+  end
+
+  # Backward compatible via (defaults to "default" profile)
   def via(chain, provider_id) do
-    {:via, Registry, {Lasso.Registry, {:block_sync_worker, chain, provider_id}}}
+    via(chain, "default", provider_id)
   end
 
   @doc """
   Get the current status of a worker.
   """
-  def get_status(chain, provider_id) do
-    GenServer.call(via(chain, provider_id), :get_status)
+  def get_status(chain, profile, provider_id) when is_binary(profile) do
+    GenServer.call(via(chain, profile, provider_id), :get_status)
   catch
     :exit, _ -> {:error, :not_running}
+  end
+
+  # Backward compatible
+  def get_status(chain, provider_id) do
+    get_status(chain, "default", provider_id)
   end
 
   ## GenServer Callbacks
 
   @impl true
-  def init({chain, provider_id}) do
-    # Subscribe to WebSocket connection events
+  def init({chain, profile, provider_id}) when is_binary(profile) do
+    # Subscribe to WebSocket connection events (chain-scoped, shared across profiles)
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain}")
 
-    # Subscribe to Manager restart events
+    # Subscribe to Manager restart events (chain-scoped)
     Phoenix.PubSub.subscribe(Lasso.PubSub, "upstream_sub_manager:#{chain}")
 
-    config = load_config(chain, provider_id)
+    config = load_config(profile, chain, provider_id)
 
     state = %__MODULE__{
       chain: chain,
+      profile: profile,
       provider_id: provider_id,
       mode: nil,
       ws_strategy: nil,
@@ -89,6 +110,7 @@ defmodule Lasso.BlockSync.Worker do
 
     Logger.debug("BlockSync.Worker started",
       chain: chain,
+      profile: profile,
       provider_id: provider_id,
       subscribe_new_heads: config.subscribe_new_heads
     )
@@ -121,6 +143,9 @@ defmodule Lasso.BlockSync.Worker do
 
     # Store in BlockSync Registry (health metrics tracked by ProviderPool)
     BlockSyncRegistry.put_height(state.chain, provider_id, height, source, metadata)
+
+    # Broadcast to subscribers (Dashboard, ProviderPool)
+    broadcast_height_update(state, height, source)
 
     {:noreply, state}
   end
@@ -215,7 +240,17 @@ defmodule Lasso.BlockSync.Worker do
 
   ## Private Functions
 
-  defp load_config(chain, provider_id) do
+  defp broadcast_height_update(state, height, source) do
+    provider_key = {state.profile, state.provider_id}
+    timestamp = System.system_time(:millisecond)
+    msg = {:block_height_update, provider_key, height, source, timestamp}
+
+    # Dual-broadcast pattern: both global and profile-scoped topics
+    Phoenix.PubSub.broadcast(Lasso.PubSub, "block_sync:#{state.chain}", msg)
+    Phoenix.PubSub.broadcast(Lasso.PubSub, "block_sync:#{state.profile}:#{state.chain}", msg)
+  end
+
+  defp load_config(profile, chain, provider_id) do
     case ConfigStore.get_chain(chain) do
       {:ok, chain_config} ->
         {subscribe_new_heads, poll_interval, staleness_threshold} =
@@ -236,7 +271,7 @@ defmodule Lasso.BlockSync.Worker do
           end
 
         # Check if provider has WS capability
-        has_ws = has_ws_capability?(chain, provider_id)
+        has_ws = has_ws_capability?(profile, chain, provider_id)
 
         %{
           subscribe_new_heads: subscribe_new_heads and has_ws,
@@ -247,15 +282,15 @@ defmodule Lasso.BlockSync.Worker do
       {:error, _} ->
         # Fallback defaults
         %{
-          subscribe_new_heads: has_ws_capability?(chain, provider_id),
+          subscribe_new_heads: has_ws_capability?(profile, chain, provider_id),
           poll_interval_ms: 12_000,
           staleness_threshold_ms: 35_000
         }
     end
   end
 
-  defp has_ws_capability?(chain, provider_id) do
-    case Lasso.RPC.TransportRegistry.get_channel(chain, provider_id, :ws) do
+  defp has_ws_capability?(profile, chain, provider_id) do
+    case Lasso.RPC.TransportRegistry.get_channel(profile, chain, provider_id, :ws) do
       {:ok, _} -> true
       _ -> false
     end
@@ -308,6 +343,7 @@ defmodule Lasso.BlockSync.Worker do
 
   defp start_http_only(state) do
     http_opts = [
+      profile: state.profile,
       parent: self(),
       poll_interval_ms: state.config.poll_interval_ms
     ]
@@ -324,6 +360,7 @@ defmodule Lasso.BlockSync.Worker do
 
   defp start_http_fallback(state) do
     http_opts = [
+      profile: state.profile,
       parent: self(),
       poll_interval_ms: state.config.poll_interval_ms
     ]
@@ -344,6 +381,7 @@ defmodule Lasso.BlockSync.Worker do
   # Quick retry for connection_unknown - connection state arrives shortly
   defp start_http_fallback_with_quick_retry(state) do
     http_opts = [
+      profile: state.profile,
       parent: self(),
       poll_interval_ms: state.config.poll_interval_ms
     ]

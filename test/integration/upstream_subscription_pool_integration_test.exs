@@ -4,11 +4,14 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
   alias Lasso.RPC.UpstreamSubscriptionPool
   alias Lasso.Testing.MockWSProvider
 
+  @default_profile "default"
+
   setup do
     # Unique chain/provider per test to avoid cross-test interference
     suffix = System.unique_integer([:positive])
     test_chain = "test_ws_subs_#{suffix}"
     test_provider = "mock_ws_provider_#{suffix}"
+    test_profile = @default_profile
 
     # Start mock WebSocket provider for non-existent chain
     # Chain will be auto-created by Providers module (called internally by MockWSProvider)
@@ -26,14 +29,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
       # Clean up provider
       MockWSProvider.stop_mock(test_chain, test_provider)
 
-      # Stop the chain supervisor
-      case Registry.lookup(Lasso.Registry, {:chain_supervisor, test_chain}) do
-        [{pid, _}] ->
-          DynamicSupervisor.terminate_child(Lasso.RPC.Supervisor, pid)
-
-        [] ->
-          :ok
-      end
+      # Stop the profile chain supervisor (uses "default" profile for tests)
+      Lasso.ProfileChainSupervisor.stop_profile_chain("default", test_chain)
 
       # Unregister chain from ConfigStore
       Lasso.Config.ConfigStore.unregister_chain_runtime(test_chain)
@@ -42,15 +39,15 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
       Process.sleep(100)
     end)
 
-    {:ok, chain: test_chain, provider: test_provider}
+    {:ok, chain: test_chain, provider: test_provider, profile: test_profile}
   end
 
   describe "basic subscription lifecycle" do
-    test "creates subscription entry and confirms synchronously", %{chain: chain} do
+    test "creates subscription entry and confirms synchronously", %{chain: chain, profile: profile} do
       client_pid = self()
       key = {:newHeads}
 
-      {:ok, _sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client_pid, key)
+      {:ok, _sub_id} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client_pid, key)
 
       # Give time for subscription to be confirmed
       Process.sleep(100)
@@ -62,17 +59,17 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
       assert state.keys[key] != nil
     end
 
-    test "increments refcount for duplicate subscriptions", %{chain: chain} do
+    test "increments refcount for duplicate subscriptions", %{chain: chain, profile: profile} do
       client1 = spawn(fn -> Process.sleep(:infinity) end)
       client2 = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
 
-      {:ok, _sub1} = UpstreamSubscriptionPool.subscribe_client(chain, client1, key)
+      {:ok, _sub1} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client1, key)
 
       # Wait for confirmation
       Process.sleep(100)
 
-      {:ok, _sub2} = UpstreamSubscriptionPool.subscribe_client(chain, client2, key)
+      {:ok, _sub2} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client2, key)
 
       state = get_pool_state(chain)
       assert state.keys[key].refcount == 2
@@ -82,13 +79,13 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
       Process.exit(client2, :kill)
     end
 
-    test "handles multiple different subscription types", %{chain: chain} do
+    test "handles multiple different subscription types", %{chain: chain, profile: profile} do
       client_pid = self()
       key1 = {:newHeads}
       key2 = {:logs, %{"address" => "0x123"}}
 
-      {:ok, _sub1} = UpstreamSubscriptionPool.subscribe_client(chain, client_pid, key1)
-      {:ok, _sub2} = UpstreamSubscriptionPool.subscribe_client(chain, client_pid, key2)
+      {:ok, _sub1} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client_pid, key1)
+      {:ok, _sub2} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client_pid, key2)
 
       # Wait for confirmations
       Process.sleep(100)
@@ -103,12 +100,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
   describe "subscription confirmation" do
     test "processes successful confirmation and updates state", %{
       chain: chain,
-      provider: _provider
+      provider: _provider, profile: profile
     } do
       client_pid = self()
       key = {:newHeads}
 
-      {:ok, _sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client_pid, key)
+      {:ok, _sub_id} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client_pid, key)
 
       # Wait for auto-confirmation from MockWSProvider
       Process.sleep(100)
@@ -124,11 +121,11 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
   end
 
   describe "subscription events" do
-    test "receives and routes newHeads events", %{chain: chain, provider: provider} do
+    test "receives and routes newHeads events", %{chain: chain, provider: provider, profile: profile} do
       client_pid = self()
       key = {:newHeads}
 
-      {:ok, _sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client_pid, key)
+      {:ok, _sub_id} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client_pid, key)
 
       # Wait for confirmation
       Process.sleep(100)
@@ -153,11 +150,11 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
   end
 
   describe "unsubscription" do
-    test "cleans up state when last client unsubscribes", %{chain: chain} do
+    test "cleans up state when last client unsubscribes", %{chain: chain, profile: profile} do
       client_pid = self()
       key = {:newHeads}
 
-      {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(chain, client_pid, key)
+      {:ok, sub_id} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client_pid, key)
 
       # Wait for confirmation
       Process.sleep(100)
@@ -167,26 +164,26 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
       assert state_before.keys[key] != nil
 
       # Unsubscribe
-      :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub_id)
+      :ok = UpstreamSubscriptionPool.unsubscribe_client(profile, chain, sub_id)
       Process.sleep(50)
 
       state_after = get_pool_state(chain)
       assert state_after.keys == %{}
     end
 
-    test "maintains subscription when refcount > 1", %{chain: chain} do
+    test "maintains subscription when refcount > 1", %{chain: chain, profile: profile} do
       client1 = spawn(fn -> Process.sleep(:infinity) end)
       client2 = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
 
-      {:ok, sub1} = UpstreamSubscriptionPool.subscribe_client(chain, client1, key)
+      {:ok, sub1} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client1, key)
       Process.sleep(100)
 
-      {:ok, _sub2} = UpstreamSubscriptionPool.subscribe_client(chain, client2, key)
+      {:ok, _sub2} = UpstreamSubscriptionPool.subscribe_client(profile, chain, client2, key)
       Process.sleep(50)
 
       # Unsubscribe first client
-      :ok = UpstreamSubscriptionPool.unsubscribe_client(chain, sub1)
+      :ok = UpstreamSubscriptionPool.unsubscribe_client(profile, chain, sub1)
       Process.sleep(50)
 
       # Subscription should remain (refcount = 1)
@@ -202,7 +199,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
 
   # Helper functions
 
-  defp get_pool_state(chain) do
-    :sys.get_state(UpstreamSubscriptionPool.via(chain))
+  defp get_pool_state(profile \\ @default_profile, chain) do
+    :sys.get_state(UpstreamSubscriptionPool.via(profile, chain))
   end
 end
