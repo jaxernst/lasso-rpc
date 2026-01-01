@@ -10,6 +10,12 @@ chains:
     chain_id: 1
     name: "Ethereum Mainnet"
 
+    topology:
+      category: l1
+      network: mainnet
+      color: "#627EEA"
+      size: xl
+
     # Provider health monitoring configuration
     monitoring:
       probe_interval_ms: 12000 # 12s - block time
@@ -73,6 +79,13 @@ chains:
   base:
     chain_id: 8453
     name: "Base Mainnet"
+
+    topology:
+      category: l2_optimistic
+      parent: ethereum
+      network: mainnet
+      color: "#0052FF"
+      size: md
 
     # Provider health monitoring configuration
     monitoring:
