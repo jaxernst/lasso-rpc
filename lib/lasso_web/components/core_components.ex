@@ -378,4 +378,50 @@ defmodule LassoWeb.CoreComponents do
     </div>
     """
   end
+
+  @doc """
+  Renders underline-style navigation tabs.
+
+  Lighter visual weight than pill-style tabs, better for unified navigation bars.
+
+  ## Examples
+
+      <.underline_tabs
+        id="main-nav"
+        tabs={[
+          %{id: "dashboard", label: "Dashboard"},
+          %{id: "metrics", label: "Provider Metrics"}
+        ]}
+        active_tab={@active_tab}
+      />
+  """
+  attr(:id, :string, required: true, doc: "unique identifier for the tab navigation")
+  attr(:tabs, :list, required: true, doc: "list of tab maps with id and label keys")
+  attr(:active_tab, :string, required: true, doc: "currently active tab id")
+  attr(:class, :string, default: "", doc: "additional CSS classes")
+
+  def underline_tabs(assigns) do
+    ~H"""
+    <nav class={["flex items-center gap-1", @class]}>
+      <%= for tab <- @tabs do %>
+        <button
+          phx-click="switch_tab"
+          phx-value-tab={tab.id}
+          class={[
+            "relative px-4 py-2 text-sm font-medium transition-colors duration-200",
+            if(@active_tab == tab.id,
+              do: "text-purple-400",
+              else: "text-gray-400 hover:text-gray-200"
+            )
+          ]}
+        >
+          {tab.label}
+          <%= if @active_tab == tab.id do %>
+            <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-400 rounded-full"></span>
+          <% end %>
+        </button>
+      <% end %>
+    </nav>
+    """
+  end
 end
