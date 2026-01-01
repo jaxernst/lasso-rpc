@@ -1723,7 +1723,7 @@ defmodule LassoWeb.Dashboard do
     title =
       cond do
         assigns.details_collapsed ->
-          "System Overview"
+          "Profile Overview"
 
         assigns.selected_provider ->
          "Provider Details"
@@ -1732,7 +1732,7 @@ defmodule LassoWeb.Dashboard do
           "Chain Details"
 
         true ->
-          "System Overview"
+          "Profile Overview"
       end
 
     # Determine if toggle should be enabled (only when chain or provider is selected)
@@ -1923,6 +1923,24 @@ defmodule LassoWeb.Dashboard do
 
       {:error, :not_found} ->
         {:noreply, put_flash(socket, :error, "Profile not found")}
+    end
+  end
+
+  @impl true
+  def handle_event("navigate_create_profile", _params, socket) do
+    {:noreply, push_navigate(socket, to: ~p"/admin/profiles")}
+  end
+
+  @impl true
+  def handle_event("restore_profile", %{"profile" => profile_slug}, socket) do
+    profiles = Map.get(socket.assigns, :profiles, [])
+    current_profile = Map.get(socket.assigns, :selected_profile)
+
+    # Only switch if profile is valid and different from current
+    if profile_slug in profiles and profile_slug != current_profile do
+      {:noreply, push_patch(socket, to: ~p"/dashboard/#{profile_slug}")}
+    else
+      {:noreply, socket}
     end
   end
 

@@ -27,12 +27,6 @@ defmodule LassoWeb.NetworkTopology do
 
     ~H"""
     <div class={["relative h-full w-full overflow-hidden", @class]}>
-      <%= if @selected_profile do %>
-        <div class="absolute top-4 left-4 z-50 text-xs text-zinc-400 bg-zinc-900/80 px-2 py-1 rounded">
-          Profile: <%= @selected_profile %>
-        </div>
-      <% end %>
-
     <!-- Hierarchical orbital network layout -->
       <div
         class="relative cursor-default"

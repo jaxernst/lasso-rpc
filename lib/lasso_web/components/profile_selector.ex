@@ -1,67 +1,175 @@
 defmodule LassoWeb.Components.ProfileSelector do
+  @moduledoc """
+  Profile selector dropdown component for switching between RPC profiles.
+
+  Displays the current profile with a health status indicator and provides
+  a dropdown menu for switching between available profiles.
+  """
   use Phoenix.Component
 
+  alias Phoenix.LiveView.JS
   alias Lasso.Config.ConfigStore
 
-  attr :profiles, :list, required: true
-  attr :selected_profile, :string, required: true
-  attr :class, :string, default: ""
+  attr(:profiles, :list, required: true)
+  attr(:selected_profile, :string, required: true)
+  attr(:class, :string, default: "")
+  attr(:show_create_cta, :boolean, default: true)
 
   def profile_selector(assigns) do
     assigns = assign(assigns, :profile_data, get_profile_data(assigns.profiles))
 
     ~H"""
-    <div class={["relative inline-block", @class]}>
-      <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800 text-sm">
-        <.profile_status_dot profile={@selected_profile} />
-        <span class="font-medium"><%= @selected_profile %></span>
-        <div class="text-xs text-zinc-400 ml-2">
-          <%= case get_profile_stats(@selected_profile, @profile_data) do %>
-            <% {chain_count, provider_count} -> %>
-              <%= chain_count %> chains · <%= provider_count %> providers
-            <% _ -> %>
-
-          <% end %>
+    <div class={["relative", @class]} id="profile-selector">
+      <!-- Trigger Button - Unified modern style -->
+      <button
+        phx-click={toggle_dropdown()}
+        class="group bg-gray-900/60 flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-left transition-all hover:bg-gray-900/50 hover:border-gray-600 focus:ring-purple-500/30 focus:outline-none focus:ring-1"
+      >
+        <div class="flex items-center gap-3">
+          <!-- Label & Icon -->
+          <div class="flex items-center gap-2 text-gray-400 transition-colors group-hover:text-gray-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+              />
+            </svg>
+            <span class="text-xs font-medium uppercase tracking-wide text-gray-500 group-hover:text-gray-400">
+              Profile
+            </span>
+          </div>
+          
+    <!-- Subtle Divider -->
+          <div class="h-4 w-px bg-gray-800 transition-colors group-hover:bg-gray-700"></div>
+          
+    <!-- Selected Value -->
+          <span class="text-sm font-semibold text-gray-200 transition-colors group-hover:text-white">
+            {@selected_profile}
+          </span>
         </div>
-      </div>
-      <%= if length(@profiles) > 1 do %>
-        <div class="mt-1 space-y-1">
+        
+    <!-- Chevron -->
+        <svg
+          class="h-4 w-4 text-gray-500 transition-colors group-hover:text-gray-400"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      
+    <!-- Dropdown Panel -->
+      <div
+        id="profile-dropdown"
+        phx-click-away={hide_dropdown()}
+        class={["absolute top-full right-0 mt-2 w-72", "ring-black/50 rounded-lg border border-gray-700 bg-gray-900 shadow-xl ring-1", "z-50 overflow-hidden", "hidden"]}
+      >
+        <!-- Header -->
+        <div class="bg-gray-900/50 border-b border-gray-800 px-3 py-2.5">
+          <div class="text-sm font-medium text-gray-200">Switch Profile</div>
+          <div class="mt-0.5 text-xs text-gray-500">Select a provider configuration</div>
+        </div>
+        
+    <!-- Profile List -->
+        <div class="py-1">
           <%= for {profile, data} <- @profile_data do %>
-            <%= if profile != @selected_profile do %>
-              <button
-                phx-click="select_profile"
-                phx-value-profile={profile}
-                class="w-full px-3 py-2 text-left hover:bg-zinc-800 transition rounded-lg border border-zinc-800"
-              >
-                <div class="flex items-center gap-2">
-                  <.profile_status_dot profile={profile} />
-                  <span class="font-medium"><%= profile %></span>
-                </div>
-                <div class="text-xs text-zinc-400 mt-0.5">
-                  <%= data.chain_count %> chains · <%= data.provider_count %> providers
-                </div>
-              </button>
-            <% end %>
+            <.profile_item
+              profile={profile}
+              data={data}
+              selected={profile == @selected_profile}
+            />
           <% end %>
         </div>
-      <% end %>
+        
+    <!-- Create Profile CTA -->
+        <%= if @show_create_cta do %>
+          <div class="border-t border-gray-800 p-2">
+            <.create_profile_cta />
+          </div>
+        <% end %>
+      </div>
     </div>
     """
   end
 
-  defp profile_status_dot(assigns) do
-    assigns = assign(assigns, :status, get_profile_status(assigns.profile))
+  defp toggle_dropdown do
+    JS.toggle(
+      to: "#profile-dropdown",
+      in:
+        {"transition ease-out duration-200", "opacity-0 -translate-y-1",
+         "opacity-100 translate-y-0"},
+      out:
+        {"transition ease-in duration-150", "opacity-100 translate-y-0",
+         "opacity-0 -translate-y-1"}
+    )
+  end
 
+  defp hide_dropdown(js \\ %JS{}) do
+    JS.hide(js,
+      to: "#profile-dropdown",
+      transition:
+        {"transition ease-in duration-150", "opacity-100 translate-y-0",
+         "opacity-0 -translate-y-1"}
+    )
+  end
+
+  defp profile_item(assigns) do
     ~H"""
-    <div class={[
-      "w-2 h-2 rounded-full",
-      case @status do
-        :healthy -> "bg-emerald-500"
-        :degraded -> "bg-yellow-500"
-        :warning -> "bg-red-500"
-        _ -> "bg-zinc-500"
-      end
-    ]} />
+    <button
+      phx-click={JS.push("select_profile", value: %{profile: @profile}) |> hide_dropdown()}
+      class={["flex w-full items-center gap-3 px-3 py-2.5 text-left", "transition-colors hover:bg-gray-800", @selected && "bg-purple-500/10"]}
+    >
+      <!-- Layers icon -->
+      <svg
+        class={["h-4 w-4 flex-none", if(@selected, do: "text-purple-400", else: "text-gray-600 group-hover:text-gray-500")]}
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+        />
+      </svg>
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2">
+          <span class={["truncate text-sm font-medium", if(@selected, do: "text-white", else: "text-gray-300")]}>
+            {@profile}
+          </span>
+          <%= if @selected do %>
+            <svg class="h-3.5 w-3.5 flex-none text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+              <path
+                fill-rule="evenodd"
+                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          <% end %>
+        </div>
+        <div class="text-xs text-gray-500">
+          {@data.chain_count} chains · {@data.provider_count} providers
+        </div>
+      </div>
+    </button>
+    """
+  end
+
+  defp create_profile_cta(assigns) do
+    ~H"""
+    <button
+      phx-click={JS.push("navigate_create_profile") |> hide_dropdown()}
+      class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 transition-colors hover:bg-gray-800 hover:text-purple-300"
+    >
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+      </svg>
+      <span>Create profile</span>
+    </button>
     """
   end
 
@@ -70,46 +178,22 @@ defmodule LassoWeb.Components.ProfileSelector do
       chains = ConfigStore.list_chains_for_profile(profile)
 
       provider_count =
-        Enum.reduce(chains, 0, fn chain, acc ->
+        Enum.reduce(chains, 0, fn chain, count ->
           case ConfigStore.get_chain(chain) do
-            {:ok, chain_config} -> acc + length(chain_config.providers || [])
-            _ -> acc
+            {:ok, chain_config} ->
+              providers = chain_config.providers || []
+              count + length(providers)
+
+            _ ->
+              count
           end
         end)
 
-      {profile, %{chain_count: length(chains), provider_count: provider_count}}
+      {profile,
+       %{
+         chain_count: length(chains),
+         provider_count: provider_count
+       }}
     end)
-  end
-
-  defp get_profile_stats(profile, profile_data) do
-    case Enum.find(profile_data, fn {p, _} -> p == profile end) do
-      {_, data} -> {data.chain_count, data.provider_count}
-      nil -> nil
-    end
-  end
-
-  defp get_profile_status(profile) do
-    chains = ConfigStore.list_chains_for_profile(profile)
-
-    status_list =
-      Enum.flat_map(chains, fn chain ->
-        case Lasso.RPC.ProviderPool.get_status(profile, chain) do
-          {:ok, status} ->
-            status.providers
-            |> Enum.map(fn provider_map ->
-              Map.get(provider_map, :status, :unknown)
-            end)
-
-          _ ->
-            []
-        end
-      end)
-
-    cond do
-      Enum.empty?(status_list) -> :unknown
-      Enum.all?(status_list, &(&1 == :healthy)) -> :healthy
-      Enum.any?(status_list, &(&1 == :healthy)) -> :degraded
-      true -> :warning
-    end
   end
 end
