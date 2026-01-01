@@ -76,20 +76,13 @@ defmodule LassoWeb.TopologyConfig do
 
   @doc """
   Get the chain node radius based on topology size config.
-  Falls back to provider count if no topology config.
+  Sizes are generous enough to fit typical chain names with CSS truncation.
   """
-  def chain_radius(:xl, _provider_count), do: 80
-  def chain_radius(:lg, _provider_count), do: 70
-  def chain_radius(:md, _provider_count), do: 50
-  def chain_radius(:sm, _provider_count), do: 38
-
-  def chain_radius(nil, provider_count) do
-    # Legacy fallback: calculate based on provider count
-    # Guard against nil or negative values to prevent :math.log errors
-    safe_count = max(0, provider_count || 0)
-    provider_factor = min(15, :math.log(safe_count + 1) * 6)
-    max(38, min(55, 35 + provider_factor)) |> round()
-  end
+  def chain_radius(:xl, _provider_count), do: 90
+  def chain_radius(:lg, _provider_count), do: 75
+  def chain_radius(:md, _provider_count), do: 60
+  def chain_radius(:sm, _provider_count), do: 50
+  def chain_radius(nil, _provider_count), do: 55
 
   @doc """
   Get provider orbit distance from chain center.
@@ -113,35 +106,6 @@ defmodule LassoWeb.TopologyConfig do
     do: color
 
   def chain_color(_topology, _chain_name), do: @default_chain_color
-
-  # ===========================================================================
-  # Categorization Helpers
-  # ===========================================================================
-
-  @doc """
-  Check if a chain should be connected to a parent chain.
-  Returns the parent chain key if connected, nil otherwise.
-  """
-  def parent_chain(%Topology{parent: parent}) when is_binary(parent), do: parent
-  def parent_chain(_), do: nil
-
-  @doc """
-  Check if a chain is an L2 (should orbit around parent).
-  """
-  def l2?(%Topology{} = topology), do: Topology.l2?(topology)
-  def l2?(nil), do: false
-
-  @doc """
-  Check if a chain is a mainnet chain.
-  """
-  def mainnet?(%Topology{} = topology), do: Topology.mainnet?(topology)
-  def mainnet?(nil), do: true
-
-  @doc """
-  Check if a chain is a testnet.
-  """
-  def testnet?(%Topology{} = topology), do: Topology.testnet?(topology)
-  def testnet?(nil), do: false
 
   # ===========================================================================
   # Connection Line Configuration

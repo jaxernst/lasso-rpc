@@ -10,6 +10,12 @@ chains:
     chain_id: 11155111
     name: "Ethereum Sepolia"
 
+    topology:
+      category: l1
+      network: sepolia
+      color: "#7A8AB5"
+      size: md
+
     # Provider health monitoring configuration
     monitoring:
       probe_interval_ms: 12000 # 12s - block time
@@ -74,6 +80,13 @@ chains:
   base_sepolia:
     chain_id: 84532
     name: "Base Sepolia"
+
+    topology:
+      category: l2_optimistic
+      parent: ethereum_sepolia
+      network: sepolia
+      color: "#4A6BB2"
+      size: sm
 
     # Provider health monitoring configuration
     monitoring:

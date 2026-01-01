@@ -1,7 +1,6 @@
 defmodule LassoWeb.NetworkTopology do
   use Phoenix.Component
 
-  alias LassoWeb.Dashboard.Helpers
   alias LassoWeb.TopologyConfig
   alias Lasso.Config.ConfigStore
 
@@ -20,10 +19,13 @@ defmodule LassoWeb.NetworkTopology do
   attr(:class, :string, default: "", doc: "additional CSS classes")
 
   def nodes_display(assigns) do
+    profile = assigns[:selected_profile] || "default"
+
     assigns =
       assigns
       |> assign(:chains, group_connections_by_chain(assigns.connections))
-      |> assign(:spiral_layout, calculate_spiral_layout(assigns.connections))
+      |> assign(:spiral_layout, calculate_spiral_layout(assigns.connections, profile))
+      |> assign(:profile_chains, get_profile_chain_configs(profile))
 
     ~H"""
     <div class={["relative h-full w-full overflow-hidden", @class]}>
@@ -86,8 +88,8 @@ defmodule LassoWeb.NetworkTopology do
                 x2={line_end_x}
                 y2={line_end_y}
                 stroke={provider_line_color(connection)}
-                stroke-width="2"
-                opacity="0.6"
+                stroke-width={TopologyConfig.provider_line_width()}
+                opacity={TopologyConfig.provider_line_opacity()}
               />
             </svg>
           <% end %>
@@ -98,10 +100,10 @@ defmodule LassoWeb.NetworkTopology do
           <% {x, y} = chain_data.position %>
           <% radius = chain_data.radius %>
           <div
-            class={["absolute z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-all duration-300 hover:scale-110", if(@selected_chain == chain_name,
+            class={["absolute z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-transform duration-200 hover:scale-110", if(@selected_chain == chain_name,
     do: "ring-purple-400/30 border-purple-400 ring-4",
     else: "border-gray-500 hover:border-gray-400"), "from-gray-800 to-gray-900"]}
-            style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name)} 0%, #111827 100%); " <>
+            style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name, @profile_chains)} 0%, #111827 100%); " <>
               if(@selected_chain == chain_name,
                 do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
                 else: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.2), inset 0 0 15px rgba(0, 0, 0, 0.3);")}
@@ -111,12 +113,16 @@ defmodule LassoWeb.NetworkTopology do
             data-chain={chain_name}
             data-chain-center={"#{x},#{y}"}
           >
-            <div class="px-2 py-1 text-center text-white">
-              <div class={"#{if radius < 50, do: "text-xs", else: "text-sm"} mb-1 font-bold text-white"}>
-                {Helpers.get_chain_display_name(chain_name)}
+            <div
+              class="flex flex-col items-center justify-center overflow-hidden px-1 text-center"
+              style={"max-width: #{radius * 1.7}px;"}
+              title={"#{get_chain_display_name(chain_name, @profile_chains)} (#{get_chain_id_display(chain_name, @profile_chains)})"}
+            >
+              <div class={"#{if radius < 55, do: "text-xs", else: "text-sm"} truncate w-full font-semibold text-white"}>
+                {get_chain_display_name(chain_name, @profile_chains)}
               </div>
-              <div class={"#{if radius < 50, do: "text-xs", else: "text-sm"} text-gray-300"}>
-                {Helpers.get_chain_id(chain_name)}
+              <div class={"#{if radius < 55, do: "text-[10px]", else: "text-xs"} text-gray-400"}>
+                {get_chain_id_display(chain_name, @profile_chains)}
               </div>
             </div>
           </div>
@@ -128,7 +134,7 @@ defmodule LassoWeb.NetworkTopology do
             <% {x, y} = provider_data.position %>
             <% radius = provider_data.radius %>
             <div
-              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-all duration-200 hover:scale-125", if(@selected_provider == connection.id,
+              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-transform duration-150 hover:scale-125", if(@selected_provider == connection.id,
     do: "ring-purple-400/30 !border-purple-400 ring-2",
     else: provider_border_class(connection)), if(@selected_provider != connection.id,
     do: provider_status_bg_class(connection))]}
@@ -186,7 +192,7 @@ defmodule LassoWeb.NetworkTopology do
     |> Enum.group_by(&extract_chain_from_connection(&1))
   end
 
-  defp calculate_spiral_layout(connections) do
+  defp calculate_spiral_layout(connections, profile) do
     chains = group_connections_by_chain(connections)
     {center_x, center_y} = TopologyConfig.canvas_center()
 
@@ -201,26 +207,35 @@ defmodule LassoWeb.NetworkTopology do
       chain_distance_variance: TopologyConfig.chain_distance_variance()
     }
 
-    # Categorize chains using topology config from chains.yml
-    {l1_chains, l2_chains, other_chains} = categorize_chains_by_config(chains)
+    # Get chain configs for the current profile
+    all_chain_configs = get_profile_chain_configs(profile)
+
+    # Categorize chains using topology config from profile
+    {l1_chains, l2_chains, other_chains} = categorize_chains_by_config(chains, all_chain_configs)
 
     # Build hierarchical structure with parent-child relationships
     positioned_chains =
-      build_orbital_structure(l1_chains, l2_chains, other_chains, center_x, center_y, config)
+      build_orbital_structure(l1_chains, l2_chains, other_chains, center_x, center_y, config, all_chain_configs)
 
     %{chains: positioned_chains}
   end
 
-  # Categorize chains using topology config from chains.yml
+  # Get chain configs for the selected profile
+  defp get_profile_chain_configs(profile) do
+    case ConfigStore.get_profile_chains(profile) do
+      {:ok, chains} -> chains
+      {:error, :not_found} -> %{}
+    end
+  end
+
+  # Categorize chains using topology config from profile
   # Returns {l1_chains, l2_chains, other_chains} where each is a map of chain_name => connections
   #
   # Key design decisions:
   # - L2s are only placed in l2_chains if their parent chain EXISTS in the active chains
   # - This ensures testnets (e.g., base_sepolia) don't connect to mainnet (ethereum)
   # - L2s with missing parents float independently in other_chains
-  defp categorize_chains_by_config(chains) do
-    # Get all chain configs from ConfigStore
-    all_chain_configs = ConfigStore.get_all_chains()
+  defp categorize_chains_by_config(chains, all_chain_configs) do
     active_chain_names = Map.keys(chains)
 
     # Categorize based on topology config
@@ -284,9 +299,9 @@ defmodule LassoWeb.NetworkTopology do
          other_chains,
          center_x,
          center_y,
-         config
+         config,
+         all_chain_configs
        ) do
-    all_chain_configs = ConfigStore.get_all_chains()
     positioned = %{}
 
     # 1. Position L1 chains (spread around center if multiple)
@@ -439,12 +454,9 @@ defmodule LassoWeb.NetworkTopology do
     positioned
   end
 
-  # Calculate chain radius from topology config, with fallback to provider count
-  defp calculate_chain_radius_from_config(nil, provider_count) do
-    TopologyConfig.chain_radius(nil, provider_count)
-  end
-
-  defp calculate_chain_radius_from_config(%{size: size}, provider_count) do
+  # Calculate chain radius from topology config
+  defp calculate_chain_radius_from_config(topology, provider_count) do
+    size = if topology, do: Map.get(topology, :size), else: nil
     TopologyConfig.chain_radius(size, provider_count)
   end
 
@@ -605,14 +617,35 @@ defmodule LassoWeb.NetworkTopology do
   end
 
   # Get chain color from topology config, with fallback to defaults
-  defp chain_color(chain_name) do
-    topology = get_chain_topology_from_config(chain_name)
+  defp chain_color(chain_name, profile_chains) do
+    topology = get_chain_topology(chain_name, profile_chains)
     TopologyConfig.chain_color(topology, chain_name)
   end
 
-  # Lookup chain topology from ConfigStore
-  defp get_chain_topology_from_config(chain_name) do
-    all_chain_configs = ConfigStore.get_all_chains()
-    get_chain_topology(chain_name, all_chain_configs)
+  # Get display name from profile chain config, with fallback
+  defp get_chain_display_name(chain_name, profile_chains) do
+    case Map.get(profile_chains, chain_name) do
+      %{name: display_name} when is_binary(display_name) ->
+        display_name
+
+      _ ->
+        # Fallback: convert chain_name to title case
+        chain_name
+        |> String.replace("_", " ")
+        |> String.split(" ")
+        |> Enum.map(&String.capitalize/1)
+        |> Enum.join(" ")
+    end
+  end
+
+  # Get chain ID display from profile chain config
+  defp get_chain_id_display(chain_name, profile_chains) do
+    case Map.get(profile_chains, chain_name) do
+      %{chain_id: chain_id} when is_integer(chain_id) ->
+        chain_id
+
+      _ ->
+        chain_name
+    end
   end
 end
