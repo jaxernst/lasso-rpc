@@ -15,13 +15,7 @@ defmodule LassoWeb.Router do
     plug(:accepts, ["json"])
   end
 
-  # RPC endpoints pipeline - uses custom Observability logging
-  pipeline :api_with_logging do
-    plug(:accepts, ["json"])
-    plug(LassoWeb.Plugs.ObservabilityPlug)
-  end
-
-  # Profile-aware RPC pipeline
+  # Profile-aware RPC pipeline (resolves profile from URL or defaults to "default")
   pipeline :api_with_profile do
     plug(:accepts, ["json"])
     plug(LassoWeb.Plugs.ProfileResolverPlug)
@@ -68,41 +62,35 @@ defmodule LassoWeb.Router do
   end
 
   # HTTP JSON-RPC endpoints
-
-  # Profile-aware endpoints (new multi-profile architecture)
   scope "/rpc", LassoWeb do
     pipe_through(:api_with_profile)
 
-    # Profile-scoped base endpoint
-    post("/:profile/:chain_id", RPCController, :rpc_base)
-
-    # Profile-scoped strategy endpoints
-    post("/:profile/fastest/:chain_id", RPCController, :rpc_fastest)
-    post("/:profile/round-robin/:chain_id", RPCController, :rpc_round_robin)
-    post("/:profile/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
-
-    # Profile-scoped provider override
-    post("/:profile/provider/:provider_id/:chain_id", RPCController, :rpc_provider_override)
-    post("/:profile/:chain_id/:provider_id", RPCController, :rpc_provider_override)
-  end
-
-  # Legacy endpoints (backward compatible - use default profile)
-  scope "/rpc", LassoWeb do
-    pipe_through(:api_with_logging)
-
-    # Base endpoint
-    post("/:chain_id", RPCController, :rpc_base)
-
-    # Strategy-specific endpoints for different routing approaches
-    # Use fastest provider based on latency
+    # Legacy endpoints (no profile slug - uses "default" profile)
+    # Strategy-specific endpoints
     post("/fastest/:chain_id", RPCController, :rpc_fastest)
-    # Round-robin provider selection (default strategy)
     post("/round-robin/:chain_id", RPCController, :rpc_round_robin)
-    # Latency-weighted randomized balancer
     post("/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
 
-    # Provider override endpoints - directly target specific providers
+    # Provider override endpoints
     post("/provider/:provider_id/:chain_id", RPCController, :rpc_provider_override)
     post("/:chain_id/:provider_id", RPCController, :rpc_provider_override)
+
+    # Base endpoint (catch-all for legacy routes)
+    post("/:chain_id", RPCController, :rpc_base)
+
+    # Profile-aware endpoints (explicit profile slug in URL)
+    scope "/:profile" do
+      # Strategy-specific endpoints
+      post("/fastest/:chain_id", RPCController, :rpc_fastest)
+      post("/round-robin/:chain_id", RPCController, :rpc_round_robin)
+      post("/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
+
+      # Provider override endpoints
+      post("/provider/:provider_id/:chain_id", RPCController, :rpc_provider_override)
+      post("/:chain_id/:provider_id", RPCController, :rpc_provider_override)
+
+      # Base endpoint (catch-all for profile-aware routes)
+      post("/:chain_id", RPCController, :rpc_base)
+    end
   end
 end
