@@ -22,7 +22,7 @@ config :lasso, LassoWeb.Endpoint,
 # Enhanced logging for development debugging
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
-  level: :debug,
+  level: :info,
   metadata: :all
 
 # Filter out Phoenix LiveView "HANDLE EVENT" debug logs
@@ -44,5 +44,4 @@ config :phoenix, :stacktrace_depth, 20
 config :phoenix, :plug_init_mode, :runtime
 
 config :lasso,
-  environment: :dev,
-  chains_config_path: "config/chains.yml"
+  environment: :dev

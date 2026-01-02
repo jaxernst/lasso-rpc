@@ -51,10 +51,6 @@ if config_env() == :prod do
     secret_key_base:
       System.get_env("SECRET_KEY_BASE") || "YourSecretKeyBaseHere" <> String.duplicate("a", 64)
 
-  # Chains configuration path (supports mounting to a volume like /data/chains.yml)
-  chains_path = System.get_env("LASSO_CHAINS_PATH") || "config/chains.yml"
-  config :lasso, :chains_config_path, chains_path
-
   # Optional: surface Fly region to the app for tagging
   if System.get_env("FLY_REGION") do
     config :lasso, :region, System.get_env("FLY_REGION")

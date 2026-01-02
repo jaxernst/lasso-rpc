@@ -84,8 +84,10 @@ defmodule LassoWeb.Components.ProfileSelector do
       >
         <!-- Header -->
         <div class="bg-gray-900/50 border-b border-gray-800 px-3 py-2.5">
-          <div class="text-sm font-medium text-gray-200">Switch Profile</div>
-          <div class="mt-0.5 text-xs text-gray-500">Select a provider configuration</div>
+          <div class="text-sm font-medium text-gray-200">Routing Profiles</div>
+          <div class="mt-0.5 text-xs text-gray-500">
+            Routing profiles define the set of chains and providers available for RPC request routing
+          </div>
         </div>
         
     <!-- Profile List -->
@@ -208,7 +210,7 @@ defmodule LassoWeb.Components.ProfileSelector do
 
       provider_count =
         Enum.reduce(chains, 0, fn chain, count ->
-          case ConfigStore.get_chain(chain) do
+          case ConfigStore.get_chain(profile_slug, chain) do
             {:ok, chain_config} ->
               providers = chain_config.providers || []
               count + length(providers)
