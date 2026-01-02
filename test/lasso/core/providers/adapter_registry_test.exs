@@ -62,24 +62,6 @@ defmodule Lasso.RPC.Providers.AdapterRegistryTest do
     end
   end
 
-  describe "providers_needing_adapters/0" do
-    test "returns list of providers without custom adapters" do
-      # This test depends on ConfigStore being available
-      # We just verify the function returns a list
-      result = AdapterRegistry.providers_needing_adapters()
-      assert is_list(result)
-    end
-
-    test "providers returned should not have custom adapters" do
-      providers = AdapterRegistry.providers_needing_adapters()
-
-      # All providers in the list should use Generic adapter
-      Enum.each(providers, fn provider_id ->
-        assert AdapterRegistry.adapter_for(provider_id) == Generic
-      end)
-    end
-  end
-
   describe "adapter dispatch correctness" do
     test "adapter lookup is consistent" do
       # Call twice to ensure no state issues

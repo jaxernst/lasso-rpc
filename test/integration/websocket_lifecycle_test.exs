@@ -33,6 +33,7 @@ defmodule Lasso.Integration.WebSocketLifecycleTest do
   # Helper to build test endpoint
   defp build_endpoint(chain, id_suffix) do
     %WSEndpoint{
+      profile: "default",
       id: "ws_#{chain}_#{id_suffix}",
       name: "Test WebSocket #{id_suffix}",
       ws_url: "ws://test.local/ws",

@@ -33,7 +33,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
       Lasso.ProfileChainSupervisor.stop_profile_chain("default", test_chain)
 
       # Unregister chain from ConfigStore
-      Lasso.Config.ConfigStore.unregister_chain_runtime(test_chain)
+      Lasso.Config.ConfigStore.unregister_chain_runtime("default", test_chain)
 
       # Give some time for cleanup
       Process.sleep(100)

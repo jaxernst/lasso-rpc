@@ -56,26 +56,14 @@ defmodule Lasso.HealthProbe.Worker do
 
   ## Client API
 
-  # Profile-aware start_link
   def start_link({chain, profile, provider_id, opts}) when is_binary(profile) do
     GenServer.start_link(__MODULE__, {chain, profile, provider_id, opts},
       name: via(chain, profile, provider_id)
     )
   end
 
-  # Backward compatible (defaults to "default" profile)
-  def start_link({chain, provider_id, opts}) do
-    start_link({chain, "default", provider_id, opts})
-  end
-
-  # Profile-aware via
   def via(chain, profile, provider_id) when is_binary(profile) do
     {:via, Registry, {Lasso.Registry, {:health_probe_worker, chain, profile, provider_id}}}
-  end
-
-  # Backward compatible via (defaults to "default" profile)
-  def via(chain, provider_id) do
-    via(chain, "default", provider_id)
   end
 
   @doc """
@@ -85,11 +73,6 @@ defmodule Lasso.HealthProbe.Worker do
     GenServer.call(via(chain, profile, provider_id), :get_status)
   catch
     :exit, _ -> {:error, :not_running}
-  end
-
-  # Backward compatible
-  def get_status(chain, provider_id) do
-    get_status(chain, "default", provider_id)
   end
 
   ## GenServer Callbacks
@@ -199,8 +182,6 @@ defmodule Lasso.HealthProbe.Worker do
 
     msg = {:health_probe_recovery, provider_key, transport, old_state, new_state, timestamp}
 
-    # Dual-broadcast pattern: both global and profile-scoped topics
-    Phoenix.PubSub.broadcast(Lasso.PubSub, "health_probe:#{state.chain}", msg)
     Phoenix.PubSub.broadcast(Lasso.PubSub, "health_probe:#{state.profile}:#{state.chain}", msg)
   end
 

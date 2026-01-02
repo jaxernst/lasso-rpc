@@ -19,6 +19,7 @@ defmodule LassoWeb.Components.DashboardComponents do
       |> assign_new(:config_validation_errors, fn -> [] end)
       |> assign_new(:available_chains, fn -> [] end)
       |> assign_new(:config_expanded_providers, fn -> MapSet.new() end)
+      |> assign_new(:selected_profile, fn -> "default" end)
 
     ~H"""
     <div class={["pointer-events-none absolute top-4 left-4 z-40 transition-all duration-300", if(@chain_config_open,
@@ -76,7 +77,7 @@ defmodule LassoWeb.Components.DashboardComponents do
     else: "bg-gray-800/40 text-gray-300 hover:bg-gray-700/60")]}
                   >
                     <div>
-                      <div class="font-medium">{Helpers.get_chain_display_name(chain.name)}</div>
+                      <div class="font-medium">{Helpers.get_chain_display_name(@selected_profile, chain.name)}</div>
                       <div class="text-gray-400">Chain ID: {chain.chain_id || "—"}</div>
                     </div>
                     <div class="text-xs text-gray-400">{length(chain.providers || [])} providers</div>
@@ -166,6 +167,7 @@ defmodule LassoWeb.Components.DashboardComponents do
       |> assign_new(:form_data, fn -> %{} end)
       |> assign_new(:validation_errors, fn -> [] end)
       |> assign_new(:expanded, fn -> MapSet.new() end)
+      |> assign_new(:selected_profile, fn -> "default" end)
 
     ~H"""
     <form
@@ -175,16 +177,16 @@ defmodule LassoWeb.Components.DashboardComponents do
       class="space-y-4"
     >
       <div class="text-sm font-medium text-gray-300">
-        Configure: <span class="text-purple-300">{Helpers.get_chain_display_name(@selected_chain)}</span>
+        Configure: <span class="text-purple-300">{Helpers.get_chain_display_name(@selected_profile, @selected_chain)}</span>
       </div>
-      
+
     <!-- Basic Chain Information -->
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2">
           <.form_field
             label="Chain Name"
             name="chain[name]"
-            value={Map.get(@form_data, :name, Helpers.get_chain_display_name(@selected_chain))}
+            value={Map.get(@form_data, :name, Helpers.get_chain_display_name(@selected_profile, @selected_chain))}
             placeholder="e.g., Ethereum Mainnet"
             phx-debounce="300"
           />

@@ -64,7 +64,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
 
     # Load dedupe config
     dedupe_cfg =
-      case ConfigStore.get_chain(chain) do
+      case ConfigStore.get_chain(profile, chain) do
         {:ok, cfg} -> Map.get(cfg, :dedupe, %{})
         _ -> %{}
       end

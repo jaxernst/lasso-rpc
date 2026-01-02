@@ -33,6 +33,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
   # Helper to build test endpoint
   defp build_endpoint(chain, id_suffix, opts \\ []) do
     %WSEndpoint{
+      profile: "default",
       id: "ws_#{chain}_#{id_suffix}",
       name: "Test WebSocket #{id_suffix}",
       ws_url: "ws://test.local/ws",
@@ -476,6 +477,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       # max_reconnect_attempts: :infinity means infinite retries
       endpoint =
         %WSEndpoint{
+      profile: "default",
           id: "ws_#{chain}_infinite",
           name: "Test WebSocket infinite",
           ws_url: "ws://test.local/ws",

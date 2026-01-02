@@ -136,16 +136,16 @@ defmodule Lasso.Providers do
   ## Example
 
       # Remove provider (runtime only)
-      Lasso.Providers.remove_provider("ethereum", "old_provider")
+      Lasso.Providers.remove_provider("default", "ethereum", "old_provider")
 
       # Remove and persist to YAML
-      Lasso.Providers.remove_provider("ethereum", "old_provider", persist: true)
+      Lasso.Providers.remove_provider("default", "ethereum", "old_provider", persist: true)
   """
-  @spec remove_provider(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
-  def remove_provider(chain_name, provider_id, opts \\ []) do
+  @spec remove_provider(String.t(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def remove_provider(profile, chain_name, provider_id, opts \\ []) do
     persist? = Keyword.get(opts, :persist, false)
 
-    with :ok <- ChainSupervisor.remove_provider(chain_name, provider_id),
+    with :ok <- ChainSupervisor.remove_provider(profile, chain_name, provider_id),
          :ok <- maybe_persist_remove(chain_name, provider_id, persist?) do
       Logger.info("Successfully removed provider #{provider_id} from #{chain_name}")
       :ok
@@ -270,8 +270,11 @@ defmodule Lasso.Providers do
 
   # Private functions
 
+  # Default profile for dynamically added chains
+  @default_profile "default"
+
   defp ensure_chain_started(chain_name) do
-    case ConfigStore.get_chain(chain_name) do
+    case ConfigStore.get_chain(@default_profile, chain_name) do
       {:ok, _chain_config} ->
         # Chain already exists and is running
         :ok
@@ -282,7 +285,7 @@ defmodule Lasso.Providers do
 
         default_config = create_default_chain_config(chain_name)
 
-        with :ok <- ConfigStore.register_chain_runtime(chain_name, default_config),
+        with :ok <- ConfigStore.register_chain_runtime(@default_profile, chain_name, default_config),
              {:ok, _pid} <- start_chain_supervisor(chain_name, default_config) do
           Logger.info("Successfully started chain supervisor for '#{chain_name}'")
           :ok
@@ -317,12 +320,9 @@ defmodule Lasso.Providers do
     }
   end
 
-  # Default profile for dynamically added chains (backward compatibility)
-  @default_profile "default"
-
   defp start_chain_supervisor(chain_name, _chain_config_attrs) do
     # Get the full ChainConfig struct from ConfigStore (it was normalized during registration)
-    case Lasso.Config.ConfigStore.get_chain(chain_name) do
+    case Lasso.Config.ConfigStore.get_chain(@default_profile, chain_name) do
       {:ok, chain_config} ->
         # Start global chain processes (BlockSync, HealthProbe) if not already running
         case Lasso.GlobalChainSupervisor.ensure_chain_processes(chain_name) do

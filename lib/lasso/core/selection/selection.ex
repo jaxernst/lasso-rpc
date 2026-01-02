@@ -79,9 +79,9 @@ defmodule Lasso.RPC.Selection do
   # Private implementation
 
   defp do_select_provider(%SelectionContext{} = ctx) do
-    max_lag_blocks = get_max_lag(ctx.chain)
+    max_lag_blocks = get_max_lag(ctx.profile, ctx.chain)
     filters = %{exclude: ctx.exclude, protocol: ctx.protocol, max_lag_blocks: max_lag_blocks}
-    candidates = ProviderPool.list_candidates(ctx.chain, filters)
+    candidates = ProviderPool.list_candidates(ctx.profile, ctx.chain, filters)
 
     case candidates do
       [] ->
@@ -112,7 +112,7 @@ defmodule Lasso.RPC.Selection do
             end)
           end)
 
-        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.chain)
+        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
 
         case List.first(ordered) do
           %Channel{provider_id: pid} ->
@@ -133,9 +133,9 @@ defmodule Lasso.RPC.Selection do
   end
 
   defp do_select_provider_with_metadata(%SelectionContext{} = ctx) do
-    max_lag_blocks = get_max_lag(ctx.chain)
+    max_lag_blocks = get_max_lag(ctx.profile, ctx.chain)
     filters = %{exclude: ctx.exclude, protocol: ctx.protocol, max_lag_blocks: max_lag_blocks}
-    candidates = ProviderPool.list_candidates(ctx.chain, filters)
+    candidates = ProviderPool.list_candidates(ctx.profile, ctx.chain, filters)
 
     case candidates do
       [] ->
@@ -167,7 +167,7 @@ defmodule Lasso.RPC.Selection do
             end)
           end)
 
-        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.chain)
+        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
 
         case List.first(ordered) do
           %Channel{provider_id: pid, transport: transport} ->
@@ -231,7 +231,7 @@ defmodule Lasso.RPC.Selection do
         _ -> nil
       end
 
-    max_lag_blocks = get_max_lag(chain)
+    max_lag_blocks = get_max_lag(profile, chain)
 
     pool_filters = %{
       protocol: pool_protocol,
@@ -242,7 +242,7 @@ defmodule Lasso.RPC.Selection do
 
     # Instrument ProviderPool.list_candidates call time
     pool_start = System.monotonic_time(:microsecond)
-    provider_candidates = ProviderPool.list_candidates(chain, pool_filters)
+    provider_candidates = ProviderPool.list_candidates(profile, chain, pool_filters)
     pool_duration_us = System.monotonic_time(:microsecond) - pool_start
 
     :telemetry.execute(
@@ -351,7 +351,7 @@ defmodule Lasso.RPC.Selection do
     prepared_ctx = strategy_mod.prepare_context(selection_ctx)
 
     ordered_channels =
-      strategy_mod.rank_channels(capable_channels, method, prepared_ctx, chain)
+      strategy_mod.rank_channels(capable_channels, method, prepared_ctx, profile, chain)
 
     # Tiered selection: partition by circuit state to deprioritize half-open channels.
     # Closed-circuit channels come first (healthy), half-open channels come last (recovering).
@@ -372,10 +372,10 @@ defmodule Lasso.RPC.Selection do
 
   Returns {:ok, channel} or {:error, reason}.
   """
-  @spec select_provider_channel(String.t(), String.t(), :http | :ws, keyword()) ::
+  @spec select_provider_channel(String.t(), String.t(), String.t(), :http | :ws, keyword()) ::
           {:ok, Channel.t()} | {:error, term()}
-  def select_provider_channel(chain, provider_id, transport, opts \\ []) do
-    TransportRegistry.get_channel(chain, provider_id, transport, opts)
+  def select_provider_channel(profile, chain, provider_id, transport, opts \\ []) do
+    TransportRegistry.get_channel(profile, chain, provider_id, transport, opts)
   end
 
   ## Private Functions
@@ -395,14 +395,14 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  # Configuration helper: Get max lag threshold for a specific chain
+  # Configuration helper: Get max lag threshold for a specific profile/chain
   # Returns nil if no lag filtering should be applied
   # Configuration precedence (highest to lowest):
-  # 1. Per-chain default
+  # 1. Per-chain default (from profile config)
   # 2. Global application default
-  defp get_max_lag(chain) do
-    # Try to get chain-specific config
-    case Lasso.Config.ConfigStore.get_chain(chain) do
+  defp get_max_lag(profile, chain) do
+    # Try to get chain-specific config from the profile
+    case Lasso.Config.ConfigStore.get_chain(profile, chain) do
       {:ok, %{selection: %{max_lag_blocks: chain_default}}} ->
         # Use chain-level default
         chain_default || get_global_max_lag()

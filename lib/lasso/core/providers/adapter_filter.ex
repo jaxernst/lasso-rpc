@@ -93,7 +93,7 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   """
   @spec validate_params(Channel.t(), String.t(), term()) :: :ok | {:error, term()}
   def validate_params(%Channel{} = channel, method, params) do
-    safe_validate_params?(channel.provider_id, method, params, channel.transport, channel.chain)
+    safe_validate_params?(channel.provider_id, method, params, channel.transport, channel.profile, channel.chain)
   end
 
   # Private Implementation
@@ -113,11 +113,11 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   # IMPORTANT: Fails closed on adapter crashes. An adapter crash indicates a bug
   # or unexpected input that should trigger failover to the next provider rather
   # than allowing potentially malicious requests through.
-  defp safe_validate_params?(provider_id, method, params, transport, chain) do
+  defp safe_validate_params?(provider_id, method, params, transport, profile, chain) do
     adapter = AdapterRegistry.adapter_for(provider_id)
 
     # Build comprehensive context including provider config
-    ctx = build_validation_context(provider_id, chain)
+    ctx = build_validation_context(provider_id, profile, chain)
 
     try do
       adapter.validate_params(method, params, transport, ctx)
@@ -148,11 +148,11 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   #
   # This fail-open approach ensures requests can proceed even if ConfigStore
   # is temporarily unavailable during startup or reload.
-  defp build_validation_context(provider_id, chain) do
-    base_ctx = %{provider_id: provider_id, chain: chain}
+  defp build_validation_context(provider_id, profile, chain) do
+    base_ctx = %{provider_id: provider_id, profile: profile, chain: chain}
 
     # Add provider config if available
-    case Lasso.Config.ConfigStore.get_provider(chain, provider_id) do
+    case Lasso.Config.ConfigStore.get_provider(profile, chain, provider_id) do
       {:ok, provider_config} ->
         Map.put(base_ctx, :provider_config, provider_config)
 

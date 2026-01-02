@@ -1949,7 +1949,7 @@ defmodule Lasso.RPC.ProviderPool do
             })
 
             # Emit telemetry when lagging beyond threshold
-            threshold = get_lag_threshold_for_chain(state.chain_name)
+            threshold = get_lag_threshold_for_chain(state.profile, state.chain_name)
 
             if lag < -threshold do
               emit_lag_telemetry(state.chain_name, result.provider_id, lag)
@@ -1969,10 +1969,10 @@ defmodule Lasso.RPC.ProviderPool do
     div(System.system_time(:millisecond), 1000)
   end
 
-  defp get_lag_threshold_for_chain(chain) do
+  defp get_lag_threshold_for_chain(profile, chain) do
     # Get lag threshold from chain configuration (chains.yml)
     # Falls back to application config if chain not found
-    case Lasso.Config.ConfigStore.get_chain(chain) do
+    case Lasso.Config.ConfigStore.get_chain(profile, chain) do
       {:ok, chain_config} ->
         chain_config.monitoring.lag_threshold_blocks
 

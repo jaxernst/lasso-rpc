@@ -2,6 +2,7 @@ defmodule LassoWeb.Dashboard do
   use LassoWeb, :live_view
   require Logger
 
+  alias Lasso.Config.ProfileValidator
   alias LassoWeb.NetworkTopology
 
   alias LassoWeb.Dashboard.{
@@ -31,9 +32,27 @@ defmodule LassoWeb.Dashboard do
     profiles = ConfigStore.list_profiles()
     selected_profile = determine_initial_profile(params, session, profiles)
 
+    # Validate the selected profile before using it
+    # LiveView should not crash on invalid profile - fall back gracefully
+    validated_profile =
+      case ProfileValidator.validate(selected_profile) do
+        {:ok, validated} ->
+          validated
+
+        {:error, error_type, message} ->
+          Logger.warning("Dashboard mount profile validation failed: #{message}",
+            error_type: error_type,
+            provided_profile: selected_profile,
+            fallback: List.first(profiles) || "default"
+          )
+
+          # Fallback to first available profile or default
+          List.first(profiles) || "default"
+      end
+
     if connected?(socket) do
-      # Profile-scoped subscriptions
-      subscribe_profile_topics(selected_profile)
+      # Profile-scoped subscriptions use validated profile
+      subscribe_profile_topics(validated_profile)
 
       # Global subscriptions
       subscribe_global_topics()
@@ -46,21 +65,21 @@ defmodule LassoWeb.Dashboard do
       Process.send_after(self(), :metrics_refresh, Constants.vm_metrics_interval())
     end
 
-    # Transform profile's chain names into map structures for the UI
+    # Transform profile's chain names into map structures for the UI (use validated profile)
     available_chains =
-      ConfigStore.list_chains_for_profile(selected_profile)
+      ConfigStore.list_chains_for_profile(validated_profile)
       |> Enum.map(fn chain_name ->
         %{
           name: chain_name,
-          display_name: Helpers.get_chain_display_name(chain_name)
+          display_name: Helpers.get_chain_display_name(validated_profile, chain_name)
         }
       end)
 
     initial_state =
       socket
       |> assign(:profiles, profiles)
-      |> assign(:selected_profile, selected_profile)
-      |> assign(:profile_chains, ConfigStore.list_chains_for_profile(selected_profile))
+      |> assign(:selected_profile, validated_profile)
+      |> assign(:profile_chains, ConfigStore.list_chains_for_profile(validated_profile))
       |> assign(:connections, [])
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
       |> assign(:selected_chain, nil)
@@ -90,7 +109,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:metrics_loading, true)
       |> assign(:metrics_last_updated, nil)
       |> assign(:vm_metrics_enabled, Lasso.VMMetricsCollector.enabled?())
-      |> fetch_connections(selected_profile)
+      |> fetch_connections(validated_profile)
 
     {:ok, initial_state}
   end
@@ -161,7 +180,8 @@ defmodule LassoWeb.Dashboard do
   defp switch_profile(socket, new_profile) do
     alias Lasso.Config.ConfigStore
 
-    old_profile = Map.get(socket.assigns, :selected_profile, "default")
+    # Mount guarantees selected_profile is set
+    old_profile = socket.assigns.selected_profile
 
     unsubscribe_profile_topics(old_profile)
     subscribe_profile_topics(new_profile)
@@ -171,7 +191,7 @@ defmodule LassoWeb.Dashboard do
       |> Enum.map(fn chain_name ->
         %{
           name: chain_name,
-          display_name: Helpers.get_chain_display_name(chain_name)
+          display_name: Helpers.get_chain_display_name(new_profile, chain_name)
         }
       end)
 
@@ -848,6 +868,7 @@ defmodule LassoWeb.Dashboard do
             <.metrics_tab_content
               available_chains={@available_chains}
               metrics_selected_chain={@metrics_selected_chain}
+              selected_profile={@selected_profile}
               provider_metrics={@provider_metrics}
               method_metrics={@method_metrics}
               metrics_loading={@metrics_loading}
@@ -932,11 +953,13 @@ defmodule LassoWeb.Dashboard do
         module={Components.SimulatorControls}
         id="simulator-controls"
         available_chains={@available_chains}
+        selected_profile={@selected_profile}
       />
 
       <NetworkStatusLegend.legend />
 
       <.floating_details_window
+        selected_profile={@selected_profile}
         selected_chain={@selected_chain}
         selected_provider={@selected_provider}
         details_collapsed={@details_collapsed}
@@ -966,6 +989,7 @@ defmodule LassoWeb.Dashboard do
   attr(:routing_events, :list, required: true)
   attr(:provider_events, :list, required: true)
   attr(:events, :list, required: true)
+  attr(:selected_profile, :string)
   attr(:selected_chain_metrics, :map, required: true)
   attr(:selected_chain_events, :list, required: true)
   attr(:selected_chain_unified_events, :list, required: true)
@@ -1001,7 +1025,7 @@ defmodule LassoWeb.Dashboard do
 
         <div class="flex justify-between items-start mb-6 relative z-10">
           <div>
-            <h3 class="text-3xl font-bold text-white tracking-tight mb-2 capitalize">{Helpers.get_chain_display_name(@chain)}</h3>
+            <h3 class="text-3xl font-bold text-white tracking-tight mb-2 capitalize">{Helpers.get_chain_display_name(@selected_profile, @chain)}</h3>
             <div class="flex items-center gap-3 text-sm">
               <div class={[
                 "flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium",
@@ -1019,7 +1043,7 @@ defmodule LassoWeb.Dashboard do
                 ]}></div>
                 <span>{if connected == total, do: "Healthy", else: if(connected == 0, do: "Down", else: "Degraded")}</span>
               </div>
-              <span class="text-gray-500">Chain ID: <span class="font-mono text-gray-400">{Helpers.get_chain_id(@chain)}</span></span>
+              <span class="text-gray-500">Chain ID: <span class="font-mono text-gray-400">{Helpers.get_chain_id(@selected_profile, @chain)}</span></span>
               <span class="text-gray-600">•</span>
               <span class="text-gray-500">{connected}/{total} providers active</span>
             </div>
@@ -1032,7 +1056,7 @@ defmodule LassoWeb.Dashboard do
         </div>
 
         <!-- Endpoints (Primary Action) - All endpoint controls inside one hook container -->
-        <div id={"endpoint-config-#{@chain}"} phx-hook="TabSwitcher" phx-update="ignore" data-chain={@chain} data-chain-id={Helpers.get_chain_id(@chain)} class="relative z-10">
+        <div id={"endpoint-config-#{@chain}"} phx-hook="TabSwitcher" phx-update="ignore" data-chain={@chain} data-chain-id={Helpers.get_chain_id(@selected_profile, @chain)} class="relative z-10">
           <div class="space-y-4">
              <!-- Strategy Selector -->
              <div>
@@ -1177,6 +1201,18 @@ defmodule LassoWeb.Dashboard do
     """
   end
 
+  attr(:id, :string)
+  attr(:provider, :string, required: true)
+  attr(:connections, :list, required: true)
+  attr(:routing_events, :list, required: true)
+  attr(:provider_events, :list, default: [])
+  attr(:events, :list, default: [])
+  attr(:selected_chain, :string)
+  attr(:selected_profile, :string, default: "default")
+  attr(:selected_provider_events, :list, default: [])
+  attr(:selected_provider_unified_events, :list, default: [])
+  attr(:selected_provider_metrics, :map, default: %{})
+
   def provider_details_panel(assigns) do
     # Use cached provider data from socket assigns (updated by update_selected_provider_data/1)
     assigns =
@@ -1208,7 +1244,7 @@ defmodule LassoWeb.Dashboard do
                 {if @provider_connection, do: @provider_connection.name, else: @provider}
               </h3>
               <div class="text-sm text-gray-400 mt-1">
-                {if @provider_connection, do: Helpers.get_chain_display_name(@provider_connection.chain || "unknown"), else: "Provider"} • <span class={StatusHelpers.provider_status_class_text(@provider_connection || %{})}>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
+                {if @provider_connection, do: Helpers.get_chain_display_name(@selected_profile, @provider_connection.chain || "unknown"), else: "Provider"} • <span class={StatusHelpers.provider_status_class_text(@provider_connection || %{})}>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
               </div>
             </div>
           </div>
@@ -1684,6 +1720,7 @@ defmodule LassoWeb.Dashboard do
   end
 
   # Floating details window wrapper (pinned top-right)
+  attr(:selected_profile, :string)
   attr(:selected_chain, :string)
   attr(:selected_provider, :string)
   attr(:details_collapsed, :boolean)
@@ -1837,6 +1874,7 @@ defmodule LassoWeb.Dashboard do
             provider_events={@provider_events}
             events={@events}
             selected_chain={@selected_chain}
+            selected_profile={@selected_profile}
             selected_provider_events={@selected_provider_events}
             selected_provider_unified_events={@selected_provider_unified_events}
             selected_provider_metrics={@selected_provider_metrics}
@@ -1849,6 +1887,7 @@ defmodule LassoWeb.Dashboard do
               routing_events={@routing_events}
               provider_events={@provider_events}
               events={@events}
+              selected_profile={@selected_profile}
               selected_chain_metrics={@selected_chain_metrics}
               selected_chain_events={@selected_chain_events}
               selected_chain_unified_events={@selected_chain_unified_events}
@@ -1869,7 +1908,8 @@ defmodule LassoWeb.Dashboard do
       case Map.get(params, "profile") do
         nil ->
           # No profile in URL, redirect to selected profile
-          profile = Map.get(socket.assigns, :selected_profile, "default")
+          # Mount guarantees selected_profile is set
+          profile = socket.assigns.selected_profile
           push_patch(socket, to: ~p"/dashboard/#{profile}")
 
         profile_slug ->
@@ -1909,7 +1949,8 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
-    profile = Map.get(socket.assigns, :selected_profile, "default")
+    # Mount guarantees selected_profile is set
+    profile = socket.assigns.selected_profile
     {:noreply, push_patch(socket, to: ~p"/dashboard/#{profile}?tab=#{tab}")}
   end
 
@@ -2312,8 +2353,9 @@ defmodule LassoWeb.Dashboard do
     alias Lasso.RPC.ProviderPool
     alias Lasso.RPC.ChainState
 
-    # Get profile-scoped chains - use safe access
-    profile = profile || Map.get(socket.assigns, :selected_profile, "default")
+    # Get profile-scoped chains
+    # Mount guarantees selected_profile is set
+    profile = profile || socket.assigns.selected_profile
     chains = ConfigStore.list_chains_for_profile(profile)
 
     # Get consensus heights for all chains upfront
@@ -2456,46 +2498,57 @@ defmodule LassoWeb.Dashboard do
 
   defp load_provider_metrics(socket) do
     chain_name = Map.get(socket.assigns, :metrics_selected_chain, "ethereum")
-    profile = Map.get(socket.assigns, :selected_profile, "default")
+    # Mount guarantees selected_profile is set
+    profile = socket.assigns.selected_profile
 
     try do
       alias Lasso.Config.ConfigStore
       alias Lasso.Benchmarking.BenchmarkStore
 
-      {:ok, provider_configs} = ConfigStore.get_providers(chain_name)
-      provider_leaderboard = BenchmarkStore.get_provider_leaderboard(profile, chain_name)
-      realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_name)
+      case ConfigStore.get_providers(profile, chain_name) do
+        {:ok, provider_configs} ->
+          provider_leaderboard = BenchmarkStore.get_provider_leaderboard(profile, chain_name)
+          realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_name)
 
-      # Get all RPC methods we have data for
-      rpc_methods = Map.get(realtime_stats, :rpc_methods, [])
-      provider_ids = Enum.map(provider_configs, & &1.id)
+          # Get all RPC methods we have data for
+          rpc_methods = Map.get(realtime_stats, :rpc_methods, [])
+          provider_ids = Enum.map(provider_configs, & &1.id)
 
-      # Collect detailed metrics by provider
-      provider_metrics =
-        collect_provider_metrics(
-          profile,
-          chain_name,
-          provider_ids,
-          provider_configs,
-          provider_leaderboard,
-          rpc_methods
-        )
+          # Collect detailed metrics by provider
+          provider_metrics =
+            collect_provider_metrics(
+              profile,
+              chain_name,
+              provider_ids,
+              provider_configs,
+              provider_leaderboard,
+              rpc_methods
+            )
 
-      # Collect method-level metrics for comparison
-      method_metrics =
-        collect_method_metrics(
-          profile,
-          chain_name,
-          provider_ids,
-          provider_configs,
-          rpc_methods
-        )
+          # Collect method-level metrics for comparison
+          method_metrics =
+            collect_method_metrics(
+              profile,
+              chain_name,
+              provider_ids,
+              provider_configs,
+              rpc_methods
+            )
 
-      socket
-      |> assign(:metrics_loading, false)
-      |> assign(:provider_metrics, provider_metrics)
-      |> assign(:method_metrics, method_metrics)
-      |> assign(:metrics_last_updated, DateTime.utc_now())
+          socket
+          |> assign(:metrics_loading, false)
+          |> assign(:provider_metrics, provider_metrics)
+          |> assign(:method_metrics, method_metrics)
+          |> assign(:metrics_last_updated, DateTime.utc_now())
+
+        {:error, :not_found} ->
+          # Chain not configured in this profile - return empty metrics
+          socket
+          |> assign(:metrics_loading, false)
+          |> assign(:provider_metrics, [])
+          |> assign(:method_metrics, [])
+          |> assign(:metrics_last_updated, DateTime.utc_now())
+      end
     rescue
       error ->
         require Logger
@@ -2666,6 +2719,7 @@ defmodule LassoWeb.Dashboard do
   # Metrics tab component
   attr(:available_chains, :list, required: true)
   attr(:metrics_selected_chain, :string, required: true)
+  attr(:selected_profile, :string, required: true)
   attr(:provider_metrics, :list, required: true)
   attr(:method_metrics, :list, required: true)
   attr(:metrics_loading, :boolean, required: true)
@@ -2674,7 +2728,7 @@ defmodule LassoWeb.Dashboard do
   defp metrics_tab_content(assigns) do
     # Get chain config for the selected chain
     chain_config =
-      case Lasso.Config.ConfigStore.get_chain(assigns.metrics_selected_chain) do
+      case Lasso.Config.ConfigStore.get_chain(assigns.selected_profile, assigns.metrics_selected_chain) do
         {:ok, config} -> config
         {:error, _} -> %{chain_id: "Unknown"}
       end

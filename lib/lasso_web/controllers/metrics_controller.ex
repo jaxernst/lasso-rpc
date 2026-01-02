@@ -12,9 +12,11 @@ defmodule LassoWeb.MetricsController do
   """
   def metrics(conn, %{"chain" => chain_name}) do
     Logger.info("Metrics requested for chain: #{chain_name}")
+    # TODO: Update route to require profile parameter (Phase 5)
+    profile = "default"
 
     # Check if chain is configured
-    case ConfigStore.get_chain(chain_name) do
+    case ConfigStore.get_chain(profile, chain_name) do
       {:ok, _chain_config} ->
         # Chain exists, collect metrics
         metrics_data = collect_chain_metrics(chain_name)
@@ -45,8 +47,8 @@ defmodule LassoWeb.MetricsController do
 
   defp collect_chain_metrics(chain_name, profile \\ "default") do
     # Get basic chain information
-    {:ok, chain_config} = ConfigStore.get_chain(chain_name)
-    {:ok, provider_configs} = ConfigStore.get_providers(chain_name)
+    {:ok, chain_config} = ConfigStore.get_chain(profile, chain_name)
+    {:ok, provider_configs} = ConfigStore.get_providers(profile, chain_name)
 
     # Get performance data from BenchmarkStore
     chain_stats = BenchmarkStore.get_chain_wide_stats(profile, chain_name)

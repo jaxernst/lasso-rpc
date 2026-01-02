@@ -7,8 +7,11 @@ defmodule LassoWeb.MetricsLive do
 
   @impl true
   def mount(%{"chain" => chain_name}, _session, socket) do
+    # TODO: Get profile from socket assigns or route params (Phase 5)
+    profile = "default"
+
     # Check if chain exists
-    case ConfigStore.get_chain(chain_name) do
+    case ConfigStore.get_chain(profile, chain_name) do
       {:ok, chain_config} ->
         # Initial load
         socket = socket
@@ -42,11 +45,11 @@ defmodule LassoWeb.MetricsLive do
 
   defp load_metrics(socket) do
     chain_name = socket.assigns.chain_name
-    # TODO: Get profile from socket assigns or route params
+    # TODO: Get profile from socket assigns or route params (Phase 5)
     profile = "default"
 
     try do
-      {:ok, provider_configs} = ConfigStore.get_providers(chain_name)
+      {:ok, provider_configs} = ConfigStore.get_providers(profile, chain_name)
       provider_leaderboard = BenchmarkStore.get_provider_leaderboard(profile, chain_name)
       realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_name)
 

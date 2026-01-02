@@ -164,7 +164,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
       {:upstream_sub_manager_restarted, chain}
     )
 
-    new_heads_staleness_threshold_ms = calculate_staleness_threshold(chain)
+    new_heads_staleness_threshold_ms = calculate_staleness_threshold(profile, chain)
 
     {:ok,
      %__MODULE__{
@@ -655,8 +655,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
 
   # Subscription liveness monitoring helpers
 
-  defp calculate_staleness_threshold(chain) do
-    case ConfigStore.get_chain(chain) do
+  defp calculate_staleness_threshold(profile, chain) do
+    case ConfigStore.get_chain(profile, chain) do
       {:ok, config} ->
         config.monitoring.new_heads_staleness_threshold_ms ||
           @default_new_heads_staleness_threshold_ms

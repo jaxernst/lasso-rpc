@@ -66,7 +66,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
     # Ensure chain exists and register provider
     with :ok <- ensure_chain_exists(chain),
-         :ok <- Lasso.Config.ConfigStore.register_provider_runtime(chain, provider_config),
+         :ok <- Lasso.Config.ConfigStore.register_provider_runtime("default", chain, provider_config),
          :ok <- Lasso.RPC.ProviderPool.register_provider(chain, provider_id, provider_config) do
       Logger.info("MockHTTPProvider: registered #{provider_id}, initializing channels...")
 
@@ -128,7 +128,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
   """
   def stop_mock(chain, provider_id) do
     # Remove from ConfigStore
-    Lasso.Config.ConfigStore.unregister_provider_runtime(chain, provider_id)
+    Lasso.Config.ConfigStore.unregister_provider_runtime("default", chain, provider_id)
 
     # Stop the GenServer
     case Registry.lookup(Lasso.Registry, {:http_provider, provider_id}) do
@@ -155,7 +155,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
   @test_profile "default"
 
   defp ensure_chain_exists(chain_name) do
-    case Lasso.Config.ConfigStore.get_chain(chain_name) do
+    case Lasso.Config.ConfigStore.get_chain("default", chain_name) do
       {:ok, _chain_config} ->
         # Chain exists, ensure supervisors are running
         ensure_chain_supervisors_running(chain_name)
@@ -181,8 +181,8 @@ defmodule Lasso.Testing.MockHTTPProvider do
         }
 
         with :ok <-
-               Lasso.Config.ConfigStore.register_chain_runtime(chain_name, default_config),
-             {:ok, chain_config} <- Lasso.Config.ConfigStore.get_chain(chain_name),
+               Lasso.Config.ConfigStore.register_chain_runtime("default", chain_name, default_config),
+             {:ok, chain_config} <- Lasso.Config.ConfigStore.get_chain("default", chain_name),
              :ok <- start_chain_supervisors(chain_name, chain_config) do
           Logger.info("Successfully started chain supervisor for '#{chain_name}'")
           :ok
@@ -202,7 +202,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
       false ->
         # Get chain config and start supervisors
-        case Lasso.Config.ConfigStore.get_chain(chain_name) do
+        case Lasso.Config.ConfigStore.get_chain("default", chain_name) do
           {:ok, chain_config} ->
             start_chain_supervisors(chain_name, chain_config)
 
@@ -229,7 +229,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
   # Private helper to ensure circuit breaker exists
   defp ensure_circuit_breaker(chain, provider_id, transport) do
-    breaker_id = {chain, provider_id, transport}
+    breaker_id = {"default", chain, provider_id, transport}
 
     try do
       case Lasso.RPC.CircuitBreaker.get_state(breaker_id) do

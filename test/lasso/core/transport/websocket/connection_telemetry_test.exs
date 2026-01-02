@@ -11,11 +11,14 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
   alias Lasso.RPC.{WSConnection, WSEndpoint, CircuitBreaker}
   alias Lasso.Test.TelemetrySync
 
+  @default_profile "default"
+
   setup do
     # Configure test to use MockWSClient
     Application.put_env(:lasso, :ws_client_module, TestSupport.MockWSClient)
 
     endpoint = %WSEndpoint{
+      profile: "default",
       id: "telemetry_test_ws",
       name: "Telemetry Test WebSocket",
       ws_url: "ws://test.local/ws",
@@ -30,7 +33,9 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
     circuit_breaker_config = %{failure_threshold: 3, recovery_timeout: 200, success_threshold: 1}
 
     {:ok, _} =
-      CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
+      CircuitBreaker.start_link(
+        {{@default_profile, endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config}
+      )
 
     on_exit(fn ->
       # Clean up WebSocket connection
@@ -53,8 +58,10 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
   end
 
   defp cleanup_circuit_breaker(provider_id) do
+    key = "#{@default_profile}:test_chain:#{provider_id}:ws"
+
     case GenServer.whereis(
-           {:via, Registry, {Lasso.Registry, {:circuit_breaker, "#{provider_id}:ws"}}}
+           {:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}
          ) do
       nil -> :ok
       pid -> catch_exit(GenServer.stop(pid, :normal))

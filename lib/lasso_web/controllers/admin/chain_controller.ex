@@ -56,7 +56,8 @@ defmodule LassoWeb.Admin.ChainController do
   Gets a specific chain configuration.
   """
   def show(conn, %{"id" => chain_id}) do
-    case ChainConfigManager.get_chain(chain_id) do
+    profile = conn.assigns[:profile] || "default"
+    case ChainConfigManager.get_chain(profile, chain_id) do
       {:ok, config} ->
         chain_data = %{
           id: chain_id,
@@ -223,7 +224,8 @@ defmodule LassoWeb.Admin.ChainController do
   Tests connectivity to chain providers.
   """
   def test_connectivity(conn, %{"id" => chain_id}) do
-    case ChainConfigManager.get_chain(chain_id) do
+    profile = conn.assigns[:profile] || "default"
+    case ChainConfigManager.get_chain(profile, chain_id) do
       {:ok, config} ->
         # Test each provider
         test_results =

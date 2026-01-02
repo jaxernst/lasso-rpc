@@ -19,6 +19,7 @@ defmodule LassoWeb.RPCSocket do
   @behaviour Phoenix.Socket.Transport
   require Logger
 
+  alias Lasso.Config.ProfileValidator
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.RequestOptions
   alias Lasso.RPC.{Observability, RequestContext, RequestPipeline, Response, SubscriptionRouter}
@@ -59,8 +60,25 @@ defmodule LassoWeb.RPCSocket do
     # Determine if a strategy or provider override is specified by parsing the URI
     {strategy, provider_id} = extract_routing_params(uri, params)
 
-    # Profile defaults to "default" for now, can be extracted from params later
-    profile = params["profile"] || "default"
+    # Validate profile parameter, falling back to "default" for WebSocket connections
+    # WebSocket connections should not be rejected for invalid profiles - instead log
+    # a warning and fall back to default profile to maintain connection stability
+    profile =
+      case ProfileValidator.validate_with_default(params["profile"]) do
+        {:ok, validated} ->
+          validated
+
+        {:error, error_type, message} ->
+          Logger.warning("WebSocket connection profile validation failed: #{message}",
+            error_type: error_type,
+            provided_profile: params["profile"],
+            fallback: "default",
+            connection_id: connection_id
+          )
+
+          # Fall back to default profile to avoid rejecting connection
+          "default"
+      end
 
     socket_state = %{
       profile: profile,
@@ -79,7 +97,7 @@ defmodule LassoWeb.RPCSocket do
     routing_info = build_routing_info(strategy, provider_id)
 
     Logger.info(
-      "JSON-RPC WebSocket client connected: #{chain}#{routing_info} (id: #{connection_id}, ip: #{client_ip})"
+      "JSON-RPC WebSocket client connected: #{profile}:#{chain}#{routing_info} (id: #{connection_id}, ip: #{client_ip})"
     )
 
     {:ok, socket_state}
@@ -348,7 +366,7 @@ defmodule LassoWeb.RPCSocket do
   defp handle_rpc_method("eth_chainId", [], state, ctx) do
     # Note: We don't have request_id here, so we can't build a Response.Success
     # This is fine - subscriptions and chainId return plain values, only pipeline results are Response.Success
-    case get_chain_id(state.chain) do
+    case get_chain_id(state.profile, state.chain) do
       {:ok, chain_id} ->
         updated_ctx = RequestContext.record_success(ctx, chain_id)
         {:ok, chain_id, state, updated_ctx}
@@ -392,8 +410,8 @@ defmodule LassoWeb.RPCSocket do
     %{state | subscriptions: updated_subscriptions}
   end
 
-  defp get_chain_id(chain_name) do
-    Helpers.get_chain_id(chain_name)
+  defp get_chain_id(profile, chain_name) do
+    Helpers.get_chain_id(profile, chain_name)
   end
 
   defp default_provider_strategy do

@@ -195,7 +195,7 @@ defmodule LassoWeb.HomeLive do
   defp load_heatmap_data(profile, chain_name) do
     # Get providers configured for this chain
     providers =
-      case ConfigStore.get_providers(chain_name) do
+      case ConfigStore.get_providers(profile, chain_name) do
         {:ok, provider_list} -> provider_list
         _ -> []
       end

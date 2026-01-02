@@ -83,27 +83,6 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
   end
 
   @doc """
-  Returns list of providers using Generic adapter (providers that need custom adapters).
-
-  This is useful for identifying which providers don't have specialized adapters yet.
-
-  ## Examples
-
-      iex> AdapterRegistry.providers_needing_adapters()
-      ["ethereum_llamarpc", "ethereum_merkle", ...]
-  """
-  @spec providers_needing_adapters() :: [String.t()]
-  def providers_needing_adapters do
-    # Get all configured providers from ConfigStore
-    all_providers = get_all_configured_providers()
-
-    # Find those not in mapping
-    Enum.filter(all_providers, fn provider_id ->
-      adapter_for(provider_id) == Lasso.RPC.Providers.Generic
-    end)
-  end
-
-  @doc """
   Checks if a provider has a custom adapter (not using Generic).
 
   ## Examples
@@ -155,26 +134,6 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
   defp lookup_adapter(nil), do: Lasso.RPC.Providers.Generic
   defp lookup_adapter(provider_type) do
     Map.get(@provider_type_mapping, provider_type, Lasso.RPC.Providers.Generic)
-  end
-
-  defp get_all_configured_providers do
-    # Get all chains from ConfigStore
-    chains = Lasso.Config.ConfigStore.list_chains()
-
-    chains
-    |> Enum.flat_map(fn chain_name ->
-      case Lasso.Config.ConfigStore.get_chain(chain_name) do
-        {:ok, chain_config} ->
-          Enum.map(chain_config.providers, & &1.id)
-
-        _ ->
-          []
-      end
-    end)
-    |> Enum.uniq()
-  rescue
-    # If ConfigStore isn't available (e.g., during compilation), return empty list
-    _ -> []
   end
 
   # Compile-time validation: Ensure all adapters implement the behaviour

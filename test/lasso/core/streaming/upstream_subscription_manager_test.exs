@@ -44,7 +44,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
       # Stop the profile chain supervisor (uses "default" profile for tests)
       Lasso.ProfileChainSupervisor.stop_profile_chain("default", test_chain)
 
-      Lasso.Config.ConfigStore.unregister_chain_runtime(test_chain)
+      Lasso.Config.ConfigStore.unregister_chain_runtime("default", test_chain)
       Process.sleep(50)
     end)
 

@@ -43,7 +43,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
   Strategy-provided channel ranking used by Selection.select_channels/3 when present.
   """
   @impl true
-  def rank_channels(channels, method, ctx, chain) do
+  def rank_channels(channels, method, ctx, profile, chain) do
     # Fetch strategy-specific tuning params from app config
     beta = Application.get_env(:lasso, :lw_beta, @default_beta)
     ms_floor = Application.get_env(:lasso, :lw_ms_floor, @default_ms_floor)
@@ -55,6 +55,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
 
     weight_fn = fn ch ->
       case Lasso.RPC.Metrics.get_provider_transport_performance(
+             profile,
              chain,
              ch.provider_id,
              method,

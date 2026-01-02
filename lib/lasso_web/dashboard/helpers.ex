@@ -88,8 +88,8 @@ defmodule LassoWeb.Dashboard.Helpers do
   end
 
   @doc "Get chain ID from chain name using config"
-  def get_chain_id(chain_name) do
-    case Lasso.Config.ConfigStore.get_chain(chain_name) do
+  def get_chain_id(profile, chain_name) do
+    case Lasso.Config.ConfigStore.get_chain(profile, chain_name) do
       {:ok, %{chain_id: chain_id}} when is_integer(chain_id) ->
         to_string(chain_id)
 
@@ -111,8 +111,8 @@ defmodule LassoWeb.Dashboard.Helpers do
   end
 
   @doc "Get human-readable display name for a chain from config"
-  def get_chain_display_name(chain_name) do
-    case ConfigStore.get_chain(chain_name) do
+  def get_chain_display_name(profile, chain_name) do
+    case ConfigStore.get_chain(profile, chain_name) do
       {:ok, %{name: display_name}} when is_binary(display_name) ->
         display_name
 

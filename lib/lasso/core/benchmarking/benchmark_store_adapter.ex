@@ -2,8 +2,9 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
   @moduledoc """
   BenchmarkStore adapter implementing the Metrics behavior.
 
-  Provides a bridge between the new metrics abstraction and the existing
-  BenchmarkStore implementation, enabling gradual migration.
+  Provides a bridge between the metrics abstraction and the existing
+  BenchmarkStore implementation. All read operations are profile-scoped
+  to ensure metrics isolation across routing profiles.
   """
 
   @behaviour Lasso.RPC.Metrics
@@ -11,9 +12,7 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
   alias Lasso.Benchmarking.BenchmarkStore
 
   @impl true
-  def get_provider_performance(chain, provider_id, method) do
-    # TODO: Default profile - should be passed from caller context
-    profile = "default"
+  def get_provider_performance(profile, chain, provider_id, method) do
     case BenchmarkStore.get_rpc_performance(profile, chain, provider_id, method) do
       %{total_calls: 0} ->
         nil
@@ -34,9 +33,7 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
   end
 
   @impl true
-  def get_method_performance(chain, method) do
-    # TODO: Default profile - should be passed from caller context
-    profile = "default"
+  def get_method_performance(profile, chain, method) do
     case BenchmarkStore.get_rpc_method_performance(profile, chain, method) do
       %{providers: providers} when is_list(providers) ->
         providers
@@ -87,12 +84,10 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
   end
 
   @impl true
-  def get_provider_transport_performance(chain, provider_id, method, transport) do
-    # TODO: Default profile - should be passed from caller context
-    profile = "default"
+  def get_provider_transport_performance(profile, chain, provider_id, method, transport) do
     method_key = "#{method}@#{transport}"
 
-    case Lasso.Benchmarking.BenchmarkStore.get_rpc_performance(profile, chain, provider_id, method_key) do
+    case BenchmarkStore.get_rpc_performance(profile, chain, provider_id, method_key) do
       %{total_calls: 0} ->
         nil
 
@@ -110,13 +105,15 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
   end
 
   @impl true
-  def get_method_transport_performance(chain, provider_id, method, transport) do
-    # Gather for both transports
-    data = get_method_transport_performance(chain, provider_id, method, transport)
+  def get_method_transport_performance(profile, chain, provider_id, method, transport) do
+    # Get performance for the specific provider and transport
+    case get_provider_transport_performance(profile, chain, provider_id, method, transport) do
+      nil ->
+        []
 
-    Enum.map(data, fn %{provider_id: pid, performance: perf} ->
-      %{provider_id: pid, transport: transport, performance: perf}
-    end)
+      perf ->
+        [%{provider_id: provider_id, transport: transport, performance: perf}]
+    end
   end
 
   # Private functions

@@ -177,7 +177,7 @@ defmodule Lasso.Testing.MockProvider do
         }
 
         # Register with ConfigStore first (required for TransportRegistry)
-        case Lasso.Config.ConfigStore.register_provider_runtime(chain, provider_config) do
+        case Lasso.Config.ConfigStore.register_provider_runtime("default", chain, provider_config) do
           :ok ->
             # Now register with ChainSupervisor/ProviderPool
             case Lasso.Providers.add_provider(chain, provider_config) do
@@ -202,7 +202,7 @@ defmodule Lasso.Testing.MockProvider do
 
               {:error, reason} ->
                 # Failed to register with ChainSupervisor - cleanup ConfigStore
-                Lasso.Config.ConfigStore.unregister_provider_runtime(chain, provider_id)
+                Lasso.Config.ConfigStore.unregister_provider_runtime("default", chain, provider_id)
                 Plug.Cowboy.shutdown(provider_id)
                 {:error, {:registration_failed, reason}}
             end
@@ -238,7 +238,7 @@ defmodule Lasso.Testing.MockProvider do
     Lasso.Providers.remove_provider(chain, provider_id)
 
     # Remove from ConfigStore
-    Lasso.Config.ConfigStore.unregister_provider_runtime(chain, provider_id)
+    Lasso.Config.ConfigStore.unregister_provider_runtime("default", chain, provider_id)
 
     # Stop HTTP server
     try do

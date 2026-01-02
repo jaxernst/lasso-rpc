@@ -32,7 +32,7 @@ defmodule Lasso.RPC.Strategies.Cheapest do
   Strategy-provided channel ranking: prefer HTTP, and loosely round-robin by provider id.
   """
   @impl true
-  def rank_channels(channels, _method, ctx, _chain) do
+  def rank_channels(channels, _method, ctx, _profile, _chain) do
     total_requests = ctx.total_requests || 0
 
     channels

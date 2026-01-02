@@ -146,7 +146,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
       Process.sleep(300)
 
       # Check that provider connections are being tracked
-      status = ChainSupervisor.get_chain_status(chain_name)
+      status = ChainSupervisor.get_chain_status(@test_profile, chain_name)
 
       # Should have attempted to start connections
       # Note: They may not be healthy due to mock setup, but should be tracked
@@ -173,7 +173,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
 
       # Should only start 2 providers even though 3 are configured
       # This is verified by checking that the system respects the max_providers setting
-      status = ChainSupervisor.get_chain_status(chain_name)
+      status = ChainSupervisor.get_chain_status(@test_profile, chain_name)
       assert is_map(status)
 
       # Cleanup
@@ -188,7 +188,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
       {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
       Process.sleep(200)
 
-      status = ChainSupervisor.get_chain_status(chain_name)
+      status = ChainSupervisor.get_chain_status(@test_profile, chain_name)
 
       # Should return a map with status information
       assert is_map(status)
@@ -201,7 +201,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     end
 
     test "handles status request for non-existent chain" do
-      status = ChainSupervisor.get_chain_status("non_existent_chain")
+      status = ChainSupervisor.get_chain_status(@test_profile, "non_existent_chain")
 
       assert status[:error] == :chain_not_started
     end
@@ -213,7 +213,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
       Process.sleep(200)
 
       # Get active providers (may be empty due to mock setup)
-      result = ChainSupervisor.get_active_providers(chain_name)
+      result = ChainSupervisor.get_active_providers(@test_profile, chain_name)
 
       # Should return a list (empty or populated)
       assert is_list(result)
@@ -274,13 +274,13 @@ defmodule Lasso.RPC.ChainSupervisorTest do
         assert provider_pool_found, "ProviderPool should be started as a child"
       else
         # If we can't find it directly, verify functionality works
-        active_providers = ChainSupervisor.get_active_providers(chain_name)
+        active_providers = ChainSupervisor.get_active_providers(@test_profile, chain_name)
         # Should return a list even if empty
         assert is_list(active_providers)
       end
 
       # Try to get chain status (which uses ProviderPool internally)
-      status = ChainSupervisor.get_chain_status(chain_name)
+      status = ChainSupervisor.get_chain_status(@test_profile, chain_name)
       assert is_map(status)
 
       # Cleanup
@@ -306,7 +306,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
       assert Process.alive?(supervisor_pid)
 
       # Should be able to get status without errors
-      status = ChainSupervisor.get_chain_status(chain_name)
+      status = ChainSupervisor.get_chain_status(@test_profile, chain_name)
       assert is_map(status)
 
       # Cleanup
@@ -320,7 +320,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
       Process.sleep(200)
 
       # Initial status should be available
-      initial_status = ChainSupervisor.get_chain_status(chain_name)
+      initial_status = ChainSupervisor.get_chain_status(@test_profile, chain_name)
       assert is_map(initial_status)
 
       # Cleanup
@@ -339,7 +339,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
       # Note: The actual subscription functionality may be in SubscriptionManager
       # This tests that ChainSupervisor can handle subscription-related requests
 
-      status = ChainSupervisor.get_chain_status(chain_name)
+      status = ChainSupervisor.get_chain_status(@test_profile, chain_name)
       assert is_map(status)
 
       # Cleanup
