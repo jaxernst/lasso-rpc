@@ -990,7 +990,7 @@ defmodule LassoWeb.Dashboard do
       )
 
     ~H"""
-    <div class="flex h-full flex-col bg-gray-900 text-gray-200 overflow-hidden" id={"chain-details-" <> @chain}>
+    <div class="flex h-full flex-col text-gray-200 overflow-hidden" id={"chain-details-" <> @chain}>
       <!-- Hero Header -->
       <div class="p-6 pb-5 border-b border-gray-800 bg-gray-900/50 backdrop-blur-sm relative overflow-hidden">
         <!-- Background decorative glow -->
@@ -1190,7 +1190,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:performance_metrics, Map.get(assigns, :selected_provider_metrics, %{}))
 
     ~H"""
-    <div class="flex h-full flex-col overflow-y-auto bg-gray-900 text-gray-200 overflow-hidden" data-provider-id={@provider}>
+    <div class="flex h-full flex-col overflow-y-auto text-gray-200 overflow-hidden" data-provider-id={@provider}>
       <!-- HEADER -->
       <div class="border-b border-gray-800 p-6 pb-5 bg-gray-900/50 backdrop-blur-sm relative overflow-hidden">
         <!-- Background decorative glow -->

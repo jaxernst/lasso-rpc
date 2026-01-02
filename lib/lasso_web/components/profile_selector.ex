@@ -16,13 +16,28 @@ defmodule LassoWeb.Components.ProfileSelector do
   attr(:show_create_cta, :boolean, default: true)
 
   def profile_selector(assigns) do
-    assigns = assign(assigns, :profile_data, get_profile_data(assigns.profiles))
+    profile_data = get_profile_data(assigns.profiles)
+
+    # Get display name for selected profile
+    selected_display_name =
+      case Enum.find(profile_data, fn {slug, _} -> slug == assigns.selected_profile end) do
+        {_, data} -> data.name
+        nil -> assigns.selected_profile
+      end
+
+    assigns =
+      assigns
+      |> assign(:profile_data, profile_data)
+      |> assign(:selected_display_name, selected_display_name)
 
     ~H"""
     <div class={["relative", @class]} id="profile-selector">
-      <!-- Trigger Button - Unified modern style -->
+      <!-- Trigger Button -->
       <button
+        id="profile-selector-trigger"
         phx-click={toggle_dropdown()}
+        aria-haspopup="listbox"
+        aria-expanded="false"
         class="group bg-gray-900/60 flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-left transition-all hover:bg-gray-900/50 hover:border-gray-600 focus:ring-purple-500/30 focus:outline-none focus:ring-1"
       >
         <div class="flex items-center gap-3">
@@ -46,7 +61,7 @@ defmodule LassoWeb.Components.ProfileSelector do
           
     <!-- Selected Value -->
           <span class="text-sm font-semibold text-gray-200 transition-colors group-hover:text-white">
-            {@selected_profile}
+            {@selected_display_name}
           </span>
         </div>
         
@@ -96,7 +111,8 @@ defmodule LassoWeb.Components.ProfileSelector do
   end
 
   defp toggle_dropdown do
-    JS.toggle(
+    %JS{}
+    |> JS.toggle(
       to: "#profile-dropdown",
       in:
         {"transition ease-out duration-200", "opacity-0 -translate-y-1",
@@ -105,15 +121,21 @@ defmodule LassoWeb.Components.ProfileSelector do
         {"transition ease-in duration-150", "opacity-100 translate-y-0",
          "opacity-0 -translate-y-1"}
     )
+    |> JS.toggle_attribute({"aria-expanded", "true", "false"},
+      to: "#profile-selector-trigger"
+    )
   end
 
   defp hide_dropdown(js \\ %JS{}) do
-    JS.hide(js,
+    js
+    |> JS.hide(
       to: "#profile-dropdown",
       transition:
         {"transition ease-in duration-150", "opacity-100 translate-y-0",
          "opacity-0 -translate-y-1"}
     )
+    |> JS.set_attribute({"aria-expanded", "false"}, to: "#profile-selector-trigger")
+    |> JS.dispatch("blur", to: "#profile-selector-trigger")
   end
 
   defp profile_item(assigns) do
@@ -139,7 +161,7 @@ defmodule LassoWeb.Components.ProfileSelector do
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
           <span class={["truncate text-sm font-medium", if(@selected, do: "text-white", else: "text-gray-300")]}>
-            {@profile}
+            {@data.name}
           </span>
           <%= if @selected do %>
             <svg class="h-3.5 w-3.5 flex-none text-purple-400" fill="currentColor" viewBox="0 0 20 20">
@@ -174,8 +196,15 @@ defmodule LassoWeb.Components.ProfileSelector do
   end
 
   defp get_profile_data(profiles) do
-    Enum.map(profiles, fn profile ->
-      chains = ConfigStore.list_chains_for_profile(profile)
+    Enum.map(profiles, fn profile_slug ->
+      chains = ConfigStore.list_chains_for_profile(profile_slug)
+
+      # Get display name from profile metadata
+      display_name =
+        case ConfigStore.get_profile(profile_slug) do
+          {:ok, meta} -> meta.name || profile_slug
+          _ -> profile_slug
+        end
 
       provider_count =
         Enum.reduce(chains, 0, fn chain, count ->
@@ -189,8 +218,9 @@ defmodule LassoWeb.Components.ProfileSelector do
           end
         end)
 
-      {profile,
+      {profile_slug,
        %{
+         name: display_name,
          chain_count: length(chains),
          provider_count: provider_count
        }}
