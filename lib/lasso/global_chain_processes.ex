@@ -36,49 +36,49 @@ defmodule Lasso.GlobalChainProcesses do
   end
 
   @doc """
-  Start BlockSync workers for all global providers of a chain.
+  Start BlockSync workers for a profile's providers in a chain.
 
   Should be called after providers are registered with ConfigStore.
   """
-  def start_block_sync_workers(chain_name) do
-    BlockSync.Supervisor.start_all_workers(chain_name)
+  def start_block_sync_workers(chain_name, profile, provider_ids) do
+    BlockSync.Supervisor.start_all_workers(chain_name, profile, provider_ids)
   end
 
   @doc """
-  Start HealthProbe workers for all global providers of a chain.
+  Start HealthProbe workers for a profile's providers in a chain.
 
   Should be called after providers are registered with ConfigStore.
   """
-  def start_health_probe_workers(chain_name) do
-    HealthProbe.Supervisor.start_all_workers(chain_name)
+  def start_health_probe_workers(chain_name, profile, provider_ids, opts \\ []) do
+    HealthProbe.Supervisor.start_all_workers(chain_name, profile, provider_ids, opts)
   end
 
   @doc """
   Start a BlockSync worker for a specific provider.
   """
-  def start_block_sync_worker(chain_name, provider_id) do
-    BlockSync.Supervisor.start_worker(chain_name, provider_id)
+  def start_block_sync_worker(chain_name, profile, provider_id) do
+    BlockSync.Supervisor.start_worker(chain_name, profile, provider_id)
   end
 
   @doc """
   Start a HealthProbe worker for a specific provider.
   """
-  def start_health_probe_worker(chain_name, provider_id, opts \\ []) do
-    HealthProbe.Supervisor.start_worker(chain_name, provider_id, opts)
+  def start_health_probe_worker(chain_name, profile, provider_id, opts \\ []) do
+    HealthProbe.Supervisor.start_worker(chain_name, profile, provider_id, opts)
   end
 
   @doc """
   Stop a BlockSync worker for a specific provider.
   """
-  def stop_block_sync_worker(chain_name, provider_id) do
-    BlockSync.Supervisor.stop_worker(chain_name, provider_id)
+  def stop_block_sync_worker(chain_name, profile, provider_id) do
+    BlockSync.Supervisor.stop_worker(chain_name, profile, provider_id)
   end
 
   @doc """
   Stop a HealthProbe worker for a specific provider.
   """
-  def stop_health_probe_worker(chain_name, provider_id) do
-    HealthProbe.Supervisor.stop_worker(chain_name, provider_id)
+  def stop_health_probe_worker(chain_name, profile, provider_id) do
+    HealthProbe.Supervisor.stop_worker(chain_name, profile, provider_id)
   end
 
   ## Supervisor Callbacks

@@ -25,11 +25,11 @@ defmodule Lasso.Config.ChainConfigManager do
   end
 
   @doc """
-  Gets a specific chain configuration by name.
+  Gets a specific chain configuration by name for a specific profile.
   """
-  @spec get_chain(String.t()) :: {:ok, ChainConfig.t()} | {:error, :not_found}
-  def get_chain(chain_name) do
-    ConfigStore.get_chain(chain_name)
+  @spec get_chain(String.t(), String.t()) :: {:ok, ChainConfig.t()} | {:error, :not_found}
+  def get_chain(profile, chain_name) do
+    ConfigStore.get_chain(profile, chain_name)
   end
 
   @doc """

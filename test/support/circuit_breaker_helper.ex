@@ -265,19 +265,12 @@ defmodule Lasso.Test.CircuitBreakerHelper do
   def get_provider_circuit_breakers(chain, provider_id) do
     list_all_circuit_breakers()
     |> Enum.filter(fn
-      {{^chain, ^provider_id, _transport}, _pid} -> true
-      {{^provider_id, _transport}, _pid} -> true
+      {{_profile, ^chain, ^provider_id, _transport}, _pid} -> true
       _ -> false
     end)
     |> Enum.map(fn
-      {{_chain, _provider_id, transport}, _pid} ->
-        case get_circuit_breaker_state({chain, provider_id, transport}) do
-          {:ok, state} -> {transport, state}
-          {:error, _} -> nil
-        end
-
-      {{_provider_id, transport}, _pid} ->
-        case get_circuit_breaker_state({provider_id, transport}) do
+      {{_profile, _chain, _provider_id, transport}, _pid} ->
+        case get_circuit_breaker_state({"default", chain, provider_id, transport}) do
           {:ok, state} -> {transport, state}
           {:error, _} -> nil
         end

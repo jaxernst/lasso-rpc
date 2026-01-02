@@ -108,6 +108,7 @@ defmodule Lasso.RPC.WSConnection do
   def init(%WSEndpoint{} = endpoint) do
     state = %{
       endpoint: endpoint,
+      profile: endpoint.profile,
       chain_name: endpoint.chain_name,
       connection: nil,
       connected: false,
@@ -141,7 +142,7 @@ defmodule Lasso.RPC.WSConnection do
   def handle_continue(:connect, state) do
     ws_connection_pid = self()
 
-    case CircuitBreaker.call({state.chain_name, state.endpoint.id, :ws}, fn ->
+    case CircuitBreaker.call({state.profile, state.chain_name, state.endpoint.id, :ws}, fn ->
            connect_to_websocket(state.endpoint, ws_connection_pid)
          end) do
       # Circuit breaker executed the function - examine the result
@@ -358,7 +359,7 @@ defmodule Lasso.RPC.WSConnection do
 
   @impl true
   def handle_info({:ws_connected}, state) do
-    CircuitBreaker.record_success({state.chain_name, state.endpoint.id, :ws})
+    CircuitBreaker.record_success({state.profile, state.chain_name, state.endpoint.id, :ws})
 
     # Generate new connection_id for this connection instance
     # This allows consumers to detect when subscriptions are stale (from previous connection)
@@ -778,7 +779,7 @@ defmodule Lasso.RPC.WSConnection do
   end
 
   defp schedule_reconnect_with_circuit_check(state) do
-    case CircuitBreaker.get_state({state.chain_name, state.endpoint.id, :ws}) do
+    case CircuitBreaker.get_state({state.profile, state.chain_name, state.endpoint.id, :ws}) do
       :open ->
         # Circuit is open - use longer delay before next reconnect attempt
         Logger.debug("Circuit breaker open for #{state.endpoint.id}, delaying reconnect")

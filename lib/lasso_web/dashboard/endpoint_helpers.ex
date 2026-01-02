@@ -21,19 +21,21 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   Get comprehensive chain endpoints structure with all available routes.
   Returns a map with HTTP and WebSocket URLs for all strategies.
   """
-  def get_chain_endpoints(_assigns, chain_name) do
+  def get_chain_endpoints(assigns, chain_name) do
     base_url = LassoWeb.Endpoint.url()
     ws_base_url = String.replace(base_url, ~r/^http/, "ws")
-    chain_id = Helpers.get_chain_id(chain_name)
+    profile = Map.get(assigns, :selected_profile, "default")
+    chain_id = Helpers.get_chain_id(profile, chain_name)
 
     %{
       chain: chain_name,
       chain_id: chain_id,
+      profile: profile,
       base_url: base_url,
       ws_base_url: ws_base_url,
       # Base endpoints (use default strategy configured in config.exs)
-      http_base: "#{base_url}/rpc/#{chain_name}",
-      ws_base: "#{ws_base_url}/ws/rpc/#{chain_name}",
+      http_base: "#{base_url}/rpc/#{profile}/#{chain_name}",
+      ws_base: "#{ws_base_url}/ws/rpc/#{profile}/#{chain_name}",
       # Strategy-specific endpoints
       strategies:
         Enum.map(@available_strategies, fn strategy ->
@@ -42,8 +44,8 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
             display_name: strategy_display_name(strategy),
             icon: strategy_icon(strategy),
             description: strategy_description(strategy),
-            http_url: "#{base_url}/rpc/#{strategy}/#{chain_name}",
-            ws_url: "#{ws_base_url}/ws/rpc/#{strategy}/#{chain_name}"
+            http_url: "#{base_url}/rpc/#{profile}/#{strategy}/#{chain_name}",
+            ws_url: "#{ws_base_url}/ws/rpc/#{profile}/#{strategy}/#{chain_name}"
           }
         end)
     }
@@ -52,39 +54,43 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   @doc "Get HTTP URL for strategy"
   def get_strategy_http_url(endpoints, strategy) do
     chain = extract_chain_name(endpoints)
+    profile = Map.get(endpoints, :profile, "default")
     base_url = Map.get(endpoints, :base_url, LassoWeb.Endpoint.url())
-    "#{base_url}/rpc/#{strategy}/#{chain}"
+    "#{base_url}/rpc/#{profile}/#{strategy}/#{chain}"
   end
 
   @doc "Get WebSocket URL for strategy"
   def get_strategy_ws_url(endpoints, strategy) do
     chain = extract_chain_name(endpoints)
+    profile = Map.get(endpoints, :profile, "default")
 
     ws_base_url =
       Map.get(endpoints, :ws_base_url) ||
         String.replace(LassoWeb.Endpoint.url(), ~r/^http/, "ws")
 
-    "#{ws_base_url}/ws/rpc/#{strategy}/#{chain}"
+    "#{ws_base_url}/ws/rpc/#{profile}/#{strategy}/#{chain}"
   end
 
   @doc "Get HTTP URL for specific provider"
   def get_provider_http_url(endpoints, provider) do
     chain = extract_chain_name(endpoints)
+    profile = Map.get(endpoints, :profile, "default")
     base_url = Map.get(endpoints, :base_url, LassoWeb.Endpoint.url())
     provider_id = Map.get(provider, :id)
-    "#{base_url}/rpc/provider/#{provider_id}/#{chain}"
+    "#{base_url}/rpc/#{profile}/provider/#{provider_id}/#{chain}"
   end
 
   @doc "Get WebSocket URL for specific provider"
   def get_provider_ws_url(endpoints, provider) do
     chain = extract_chain_name(endpoints)
+    profile = Map.get(endpoints, :profile, "default")
 
     ws_base_url =
       Map.get(endpoints, :ws_base_url) ||
         String.replace(LassoWeb.Endpoint.url(), ~r/^http/, "ws")
 
     provider_id = Map.get(provider, :id)
-    "#{ws_base_url}/ws/rpc/provider/#{provider_id}/#{chain}"
+    "#{ws_base_url}/ws/rpc/#{profile}/provider/#{provider_id}/#{chain}"
   end
 
   @doc "Get provider name or fallback to ID"

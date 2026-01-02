@@ -57,7 +57,11 @@ defmodule LassoWeb.RPCController do
         |> json(JError.to_response(error, nil))
 
       chain_id ->
-        case resolve_chain_name(chain_id) do
+        # ProfileResolverPlug guarantees :profile_slug is set and validated
+        # No fallback needed - if plug didn't run, we should fail fast
+        profile = conn.assigns.profile_slug
+
+        case resolve_chain_name(profile, chain_id) do
           {:ok, chain_name} ->
             strategy = strategy_from(conn, params)
             conn = assign(conn, :provider_strategy, strategy)
@@ -293,11 +297,12 @@ defmodule LassoWeb.RPCController do
   defp process_json_rpc_request(
          %{"method" => "eth_chainId", "params" => [], "id" => req_id},
          chain,
-         _conn
+         conn
        ) do
     Logger.debug("Getting chain ID", chain: chain)
+    profile = conn.assigns[:profile] || "default"
 
-    case get_chain_id(chain) do
+    case get_chain_id(profile, chain) do
       {:ok, chain_id} ->
         # Build a Response.Success struct for consistency with passthrough path
         raw_bytes = Jason.encode!(%{"jsonrpc" => "2.0", "id" => req_id, "result" => chain_id})
@@ -438,21 +443,36 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  defp resolve_chain_name(chain_identifier) do
-    case ConfigStore.get_chain_by_name_or_id(chain_identifier) do
-      {:ok, {chain_name, _chain_config}} ->
-        {:ok, chain_name}
+  defp resolve_chain_name(profile, chain_identifier) do
+    # First try to get chain from the specified profile
+    case ConfigStore.get_chain(profile, chain_identifier) do
+      {:ok, _chain_config} ->
+        {:ok, chain_identifier}
 
       {:error, :not_found} ->
-        {:error, "Chain ID #{inspect(chain_identifier)} not configured"}
+        # If not found, try parsing as numeric chain ID
+        case Integer.parse(chain_identifier) do
+          {chain_id, ""} ->
+            # Try to find chain by ID across all profiles
+            case ConfigStore.get_chain_by_name_or_id(chain_id) do
+              {:ok, {chain_name, _chain_config}} ->
+                {:ok, chain_name}
 
-      {:error, :invalid_format} ->
-        {:error, "Invalid chain identifier: #{inspect(chain_identifier)}"}
+              {:error, :not_found} ->
+                {:error, "Chain ID #{inspect(chain_id)} not configured in profile '#{profile}'"}
+
+              {:error, :invalid_format} ->
+                {:error, "Invalid chain identifier: #{inspect(chain_identifier)}"}
+            end
+
+          _ ->
+            {:error, "Chain '#{chain_identifier}' not found in profile '#{profile}'"}
+        end
     end
   end
 
-  defp get_chain_id(chain_name) do
-    Helpers.get_chain_id(chain_name)
+  defp get_chain_id(profile, chain_name) do
+    Helpers.get_chain_id(profile, chain_name)
   end
 
   defp maybe_inject_observability_metadata(conn, ctx) do

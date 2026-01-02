@@ -42,6 +42,10 @@ defmodule LassoWeb.Endpoint do
     longpoll: false
   ]
 
+  # =========================================================================
+  # Legacy routes (without profile parameter) - use "default" profile
+  # =========================================================================
+
   # Alternative provider override format (least specific - two variables) - defined first!
   socket("/ws/rpc/:chain_id/:provider_id", LassoWeb.RPCSocket, @socket_config)
 
@@ -55,6 +59,24 @@ defmodule LassoWeb.Endpoint do
 
   # Provider override WebSocket endpoint (most specific - has "provider" literal) - defined last!
   socket("/ws/rpc/provider/:provider_id/:chain_id", LassoWeb.RPCSocket, @socket_config)
+
+  # =========================================================================
+  # Profile-aware routes (with profile parameter)
+  # =========================================================================
+
+  # Profile-aware alternative provider override (three variables)
+  socket("/ws/rpc/:profile/:chain_id/:provider_id", LassoWeb.RPCSocket, @socket_config)
+
+  # Profile-aware base WebSocket endpoint (two variables)
+  socket("/ws/rpc/:profile/:chain_id", LassoWeb.RPCSocket, @socket_config)
+
+  # Profile-aware strategy-specific endpoints (has profile + strategy literals)
+  for strategy <- @rpc_strategies do
+    socket("/ws/rpc/:profile/#{strategy}/:chain_id", LassoWeb.RPCSocket, @socket_config)
+  end
+
+  # Profile-aware provider override (has profile + "provider" literal)
+  socket("/ws/rpc/:profile/provider/:provider_id/:chain_id", LassoWeb.RPCSocket, @socket_config)
 
   # Serve at "/" the static files from "priv/static" directory.
   plug(Plug.Static,

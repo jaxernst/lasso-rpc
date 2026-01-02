@@ -47,11 +47,7 @@ defmodule Lasso.RPC.ChainSupervisor do
 
   @doc """
   Gets the status of all providers for a chain, including WebSocket connection information.
-
-  For backward compatibility, profile defaults to "default".
   """
-  def get_chain_status(chain_name), do: get_chain_status("default", chain_name)
-
   def get_chain_status(_profile, chain_name) do
     try do
       case ProviderPool.get_status(chain_name) do
@@ -75,11 +71,7 @@ defmodule Lasso.RPC.ChainSupervisor do
 
   @doc """
   Gets active provider connections for a chain.
-
-  For backward compatibility, profile defaults to "default".
   """
-  def get_active_providers(chain_name), do: get_active_providers("default", chain_name)
-
   def get_active_providers(_profile, chain_name) do
     ProviderPool.get_active_providers(chain_name)
   end
@@ -107,14 +99,9 @@ defmodule Lasso.RPC.ChainSupervisor do
         priority: 100
       })
   """
-  # Backward compatibility: default profile
-  def ensure_provider(chain_name, provider_config, opts) when is_binary(chain_name) do
-    ensure_provider("default", chain_name, provider_config, opts)
-  end
-
   @spec ensure_provider(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
   def ensure_provider(profile, chain_name, provider_config, opts \\ []) do
-    with {:ok, chain_config} <- get_chain_config(chain_name),
+    with {:ok, chain_config} <- get_chain_config(profile, chain_name),
          :ok <- ProviderPool.register_provider(chain_name, provider_config.id, provider_config),
          :ok <- start_provider_supervisor(profile, chain_name, chain_config, provider_config, opts),
          :ok <-
@@ -149,11 +136,6 @@ defmodule Lasso.RPC.ChainSupervisor do
   ## Example
       remove_provider("default", "ethereum", "old_provider")
   """
-  # Backward compatibility: default profile
-  def remove_provider(chain_name, provider_id) when is_binary(chain_name) do
-    remove_provider("default", chain_name, provider_id)
-  end
-
   @spec remove_provider(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def remove_provider(profile, chain_name, provider_id) do
     # Stop the per-provider supervisor (cascades WS then circuit breakers)
@@ -238,7 +220,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   defp start_provider_supervisor(profile, chain_name, chain_config, provider_config, _opts) do
     case DynamicSupervisor.start_child(
            provider_supervisors_name(profile, chain_name),
-           {ProviderSupervisor, {chain_name, chain_config, provider_config}}
+           {ProviderSupervisor, {profile, chain_name, chain_config, provider_config}}
          ) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> :ok
@@ -298,8 +280,8 @@ defmodule Lasso.RPC.ChainSupervisor do
 
   # Dynamic provider management helpers
 
-  defp get_chain_config(chain_name) do
-    case Lasso.Config.ConfigStore.get_chain(chain_name) do
+  defp get_chain_config(profile, chain_name) do
+    case Lasso.Config.ConfigStore.get_chain(profile, chain_name) do
       {:ok, config} ->
         {:ok, config}
 

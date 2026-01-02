@@ -21,12 +21,12 @@ defmodule Lasso.ErrorScenariosTest do
     on_exit(fn ->
       # Stop any circuit breakers that might have been started
       [
-        {"test_chain", "test_provider_failures", :http},
-        {"test_chain", "test_provider_recovery", :http}
+        {"default", "test_chain", "test_provider_failures", :http},
+        {"default", "test_chain", "test_provider_recovery", :http}
       ]
       |> Enum.each(fn breaker_id ->
-        {chain, provider_id, transport} = breaker_id
-        key = "#{chain}:#{provider_id}:#{transport}"
+        {profile, chain, provider_id, transport} = breaker_id
+        key = "#{profile}:#{chain}:#{provider_id}:#{transport}"
         via_name = {:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}
 
         case GenServer.whereis(via_name) do
@@ -48,9 +48,10 @@ defmodule Lasso.ErrorScenariosTest do
 
   describe "circuit breaker behavior" do
     test "opens circuit after consecutive failures" do
+      profile = "default"
       chain = "test_chain"
       provider_id = "test_provider_failures"
-      breaker_id = {chain, provider_id, :http}
+      breaker_id = {profile, chain, provider_id, :http}
       config = %{failure_threshold: 3, recovery_timeout: 1000, success_threshold: 2}
 
       {:ok, _pid} = CircuitBreaker.start_link({breaker_id, config})
@@ -73,9 +74,10 @@ defmodule Lasso.ErrorScenariosTest do
     end
 
     test "recovers circuit after success threshold" do
+      profile = "default"
       chain = "test_chain"
       provider_id = "test_provider_recovery"
-      breaker_id = {chain, provider_id, :http}
+      breaker_id = {profile, chain, provider_id, :http}
       config = %{failure_threshold: 2, recovery_timeout: 100, success_threshold: 2}
 
       {:ok, _pid} = CircuitBreaker.start_link({breaker_id, config})

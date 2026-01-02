@@ -42,6 +42,8 @@ defmodule Lasso.Testing.MockWSProvider do
   use GenServer
   require Logger
 
+  @test_profile "default"
+
   @doc """
   Starts a mock WebSocket provider and registers it with the chain.
 
@@ -75,7 +77,7 @@ defmodule Lasso.Testing.MockWSProvider do
 
     # Ensure chain exists (auto-create if needed) and register provider
     with :ok <- ensure_chain_exists(chain),
-         :ok <- Lasso.Config.ConfigStore.register_provider_runtime(chain, provider_config),
+         :ok <- Lasso.Config.ConfigStore.register_provider_runtime(@test_profile, chain, provider_config),
          :ok <- Lasso.RPC.ProviderPool.register_provider(chain, provider_id, provider_config) do
       # Mark as healthy so it can be selected
       Lasso.RPC.ProviderPool.report_success(chain, provider_id)
@@ -221,7 +223,7 @@ defmodule Lasso.Testing.MockWSProvider do
   """
   def stop_mock(chain, provider_id) do
     # Remove from ConfigStore
-    Lasso.Config.ConfigStore.unregister_provider_runtime(chain, provider_id)
+    Lasso.Config.ConfigStore.unregister_provider_runtime(@test_profile, chain, provider_id)
 
     # Stop the GenServer
     case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
@@ -245,10 +247,9 @@ defmodule Lasso.Testing.MockWSProvider do
 
   # Private helper to ensure chain exists (auto-create if needed)
   # Uses "default" profile for test chains
-  @test_profile "default"
 
   defp ensure_chain_exists(chain_name) do
-    case Lasso.Config.ConfigStore.get_chain(chain_name) do
+    case Lasso.Config.ConfigStore.get_chain(@test_profile, chain_name) do
       {:ok, _chain_config} ->
         # Chain exists, ensure supervisors are running
         ensure_chain_supervisors_running(chain_name)
@@ -274,8 +275,8 @@ defmodule Lasso.Testing.MockWSProvider do
         }
 
         with :ok <-
-               Lasso.Config.ConfigStore.register_chain_runtime(chain_name, default_config),
-             {:ok, chain_config} <- Lasso.Config.ConfigStore.get_chain(chain_name),
+               Lasso.Config.ConfigStore.register_chain_runtime(@test_profile, chain_name, default_config),
+             {:ok, chain_config} <- Lasso.Config.ConfigStore.get_chain(@test_profile, chain_name),
              :ok <- start_chain_supervisors(chain_name, chain_config) do
           Logger.info("Successfully started chain supervisor for '#{chain_name}'")
           :ok
@@ -295,7 +296,7 @@ defmodule Lasso.Testing.MockWSProvider do
 
       false ->
         # Get chain config and start supervisors
-        case Lasso.Config.ConfigStore.get_chain(chain_name) do
+        case Lasso.Config.ConfigStore.get_chain(@test_profile, chain_name) do
           {:ok, chain_config} ->
             start_chain_supervisors(chain_name, chain_config)
 

@@ -24,7 +24,7 @@ defmodule Lasso.RPC.Strategies.RoundRobin do
   Strategy-provided channel ranking: random shuffle per call (legacy behavior).
   """
   @impl true
-  def rank_channels(channels, _method, ctx, _chain) do
+  def rank_channels(channels, _method, ctx, _profile, _chain) do
     _ = ctx
     Enum.shuffle(channels)
   end

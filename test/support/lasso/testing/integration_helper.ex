@@ -301,7 +301,7 @@ defmodule Lasso.Testing.IntegrationHelper do
     transports = [:http, :ws]
 
     Enum.each(transports, fn transport ->
-      breaker_id = {chain, provider_id, transport}
+      breaker_id = {"default", chain, provider_id, transport}
 
       case poll_until_deadline(short_deadline, interval, fn ->
              circuit_breaker_exists?(breaker_id)

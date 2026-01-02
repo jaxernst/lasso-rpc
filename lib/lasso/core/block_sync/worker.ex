@@ -46,26 +46,14 @@ defmodule Lasso.BlockSync.Worker do
 
   ## Client API
 
-  # Profile-aware start_link
   def start_link({chain, profile, provider_id}) when is_binary(profile) do
     GenServer.start_link(__MODULE__, {chain, profile, provider_id},
       name: via(chain, profile, provider_id)
     )
   end
 
-  # Backward compatible (defaults to "default" profile)
-  def start_link({chain, provider_id}) do
-    start_link({chain, "default", provider_id})
-  end
-
-  # Profile-aware via
   def via(chain, profile, provider_id) when is_binary(profile) do
     {:via, Registry, {Lasso.Registry, {:block_sync_worker, chain, profile, provider_id}}}
-  end
-
-  # Backward compatible via (defaults to "default" profile)
-  def via(chain, provider_id) do
-    via(chain, "default", provider_id)
   end
 
   @doc """
@@ -77,20 +65,15 @@ defmodule Lasso.BlockSync.Worker do
     :exit, _ -> {:error, :not_running}
   end
 
-  # Backward compatible
-  def get_status(chain, provider_id) do
-    get_status(chain, "default", provider_id)
-  end
-
   ## GenServer Callbacks
 
   @impl true
   def init({chain, profile, provider_id}) when is_binary(profile) do
-    # Subscribe to WebSocket connection events (chain-scoped, shared across profiles)
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain}")
+    # Subscribe to WebSocket connection events (profile-scoped)
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{profile}:#{chain}")
 
-    # Subscribe to Manager restart events (chain-scoped)
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "upstream_sub_manager:#{chain}")
+    # Subscribe to Manager restart events (profile-scoped)
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "upstream_sub_manager:#{profile}:#{chain}")
 
     config = load_config(profile, chain, provider_id)
 
@@ -245,13 +228,11 @@ defmodule Lasso.BlockSync.Worker do
     timestamp = System.system_time(:millisecond)
     msg = {:block_height_update, provider_key, height, source, timestamp}
 
-    # Dual-broadcast pattern: both global and profile-scoped topics
-    Phoenix.PubSub.broadcast(Lasso.PubSub, "block_sync:#{state.chain}", msg)
     Phoenix.PubSub.broadcast(Lasso.PubSub, "block_sync:#{state.profile}:#{state.chain}", msg)
   end
 
   defp load_config(profile, chain, provider_id) do
-    case ConfigStore.get_chain(chain) do
+    case ConfigStore.get_chain(profile, chain) do
       {:ok, chain_config} ->
         {subscribe_new_heads, poll_interval, staleness_threshold} =
           case ChainConfig.get_provider_by_id(chain_config, provider_id) do

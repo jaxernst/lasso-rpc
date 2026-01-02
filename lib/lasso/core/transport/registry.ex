@@ -262,9 +262,6 @@ defmodule Lasso.RPC.TransportRegistry do
     # Subscribe to profile-scoped WS connection events
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{profile}:#{chain_name}")
 
-    # Also subscribe to legacy topic for backward compatibility during migration
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
-
     {:ok, state}
   end
 
@@ -417,7 +414,7 @@ defmodule Lasso.RPC.TransportRegistry do
           {:ok, config}
 
         _ ->
-          case ConfigStore.get_provider(state.chain_name, provider_id) do
+          case ConfigStore.get_provider(state.profile, state.chain_name, provider_id) do
             {:ok, _} = ok -> ok
             _ -> get_provider_config_from_pool(state.chain_name, provider_id)
           end
@@ -448,7 +445,7 @@ defmodule Lasso.RPC.TransportRegistry do
           {:ok, raw_channel} ->
             # Wrap in Channel struct
             channel =
-              Channel.new(state.chain_name, provider_id, transport, raw_channel, transport_module)
+              Channel.new(state.profile, state.chain_name, provider_id, transport, raw_channel, transport_module)
 
             # Store channel in GenServer state
             updated_channels =

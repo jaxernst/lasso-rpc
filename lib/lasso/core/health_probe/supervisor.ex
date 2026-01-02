@@ -55,11 +55,6 @@ defmodule Lasso.HealthProbe.Supervisor do
     start_worker(chain, profile, provider_id, [])
   end
 
-  # Backward compatible (defaults to "default" profile)
-  def start_worker(chain, provider_id, opts) when is_list(opts) do
-    start_worker(chain, "default", provider_id, opts)
-  end
-
   @doc """
   Stop a worker for a specific provider.
   """
@@ -73,17 +68,12 @@ defmodule Lasso.HealthProbe.Supervisor do
     end
   end
 
-  # Backward compatible (defaults to "default" profile)
-  def stop_worker(chain, provider_id) do
-    stop_worker(chain, "default", provider_id)
-  end
-
   @doc """
   Start workers for a profile's providers in the chain.
   """
   def start_all_workers(chain, profile, provider_ids, opts)
       when is_binary(profile) and is_list(provider_ids) and is_list(opts) do
-    probe_interval = get_probe_interval(chain)
+    probe_interval = get_probe_interval(profile, chain)
     worker_opts = Keyword.merge([probe_interval_ms: probe_interval], opts)
 
     Logger.info("Starting HealthProbe workers",
@@ -102,27 +92,6 @@ defmodule Lasso.HealthProbe.Supervisor do
   def start_all_workers(chain, profile, provider_ids)
       when is_binary(profile) and is_list(provider_ids) do
     start_all_workers(chain, profile, provider_ids, [])
-  end
-
-  # Backward compatible - starts workers for all providers in chain config using "default" profile
-  def start_all_workers(chain) do
-    start_all_workers(chain, [])
-  end
-
-  def start_all_workers(chain, opts) when is_list(opts) do
-    providers = get_provider_ids(chain)
-    probe_interval = get_probe_interval(chain)
-    worker_opts = Keyword.merge([probe_interval_ms: probe_interval], opts)
-
-    Logger.info("Starting HealthProbe workers (legacy)",
-      chain: chain,
-      provider_count: length(providers),
-      probe_interval_ms: probe_interval
-    )
-
-    Enum.each(providers, fn provider_id ->
-      start_worker(chain, "default", provider_id, worker_opts)
-    end)
   end
 
   @doc """
@@ -149,18 +118,8 @@ defmodule Lasso.HealthProbe.Supervisor do
 
   ## Private Functions
 
-  defp get_provider_ids(chain) do
-    case ConfigStore.get_chain(chain) do
-      {:ok, chain_config} ->
-        Enum.map(chain_config.providers, & &1.id)
-
-      {:error, _} ->
-        []
-    end
-  end
-
-  defp get_probe_interval(chain) do
-    case ConfigStore.get_chain(chain) do
+  defp get_probe_interval(profile, chain) do
+    case ConfigStore.get_chain(profile, chain) do
       {:ok, chain_config} ->
         # Use the same interval as BlockSync HTTP polling
         chain_config.monitoring.probe_interval_ms

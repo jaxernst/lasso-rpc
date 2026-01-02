@@ -14,7 +14,6 @@ defmodule Lasso.BlockSync.Supervisor do
   require Logger
 
   alias Lasso.BlockSync.Worker
-  alias Lasso.Config.ConfigStore
 
   ## Client API
 
@@ -49,11 +48,6 @@ defmodule Lasso.BlockSync.Supervisor do
     end
   end
 
-  # Backward compatible (defaults to "default" profile)
-  def start_worker(chain, provider_id) do
-    start_worker(chain, "default", provider_id)
-  end
-
   @doc """
   Stop a worker for a specific provider.
   """
@@ -65,11 +59,6 @@ defmodule Lasso.BlockSync.Supervisor do
       pid ->
         DynamicSupervisor.terminate_child(via(chain), pid)
     end
-  end
-
-  # Backward compatible (defaults to "default" profile)
-  def stop_worker(chain, provider_id) do
-    stop_worker(chain, "default", provider_id)
   end
 
   @doc """
@@ -84,20 +73,6 @@ defmodule Lasso.BlockSync.Supervisor do
 
     Enum.each(provider_ids, fn provider_id ->
       start_worker(chain, profile, provider_id)
-    end)
-  end
-
-  # Backward compatible - starts workers for all providers in chain config using "default" profile
-  def start_all_workers(chain) do
-    providers = get_provider_ids(chain)
-
-    Logger.info("Starting BlockSync workers (legacy)",
-      chain: chain,
-      provider_count: length(providers)
-    )
-
-    Enum.each(providers, fn provider_id ->
-      start_worker(chain, "default", provider_id)
     end)
   end
 
@@ -126,15 +101,4 @@ defmodule Lasso.BlockSync.Supervisor do
     )
   end
 
-  ## Private Functions
-
-  defp get_provider_ids(chain) do
-    case ConfigStore.get_chain(chain) do
-      {:ok, chain_config} ->
-        Enum.map(chain_config.providers, & &1.id)
-
-      {:error, _} ->
-        []
-    end
-  end
 end

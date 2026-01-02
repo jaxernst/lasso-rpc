@@ -15,11 +15,7 @@ defmodule Lasso.Config.ConfigStore do
   - `{:chain_profiles, chain}` -> List of profiles containing this chain
   - `{:all_chains}` -> Union of all chain names across all profiles
   - `{:global_providers, chain}` -> `[{profile, provider_id}, ...]`
-
-  ## Backward Compatibility
-
-  Single-argument functions like `get_chain/1` continue to work by using the
-  "default" profile. New code should use the two-argument versions.
+  - `{:chain_id_index}` -> `%{chain_id => chain_name}` for cross-profile lookups
 
   ## Configuration Backend
 
@@ -36,10 +32,6 @@ defmodule Lasso.Config.ConfigStore do
 
   @config_table :lasso_config_store
   @default_profile "default"
-
-  # Legacy keys for backward compatibility
-  @legacy_chains_key :chains
-  @legacy_chain_ids_key :chain_ids
 
   ## Profile Metadata Type
 
@@ -101,7 +93,7 @@ defmodule Lasso.Config.ConfigStore do
   Gets chain configuration for a specific profile and chain.
   """
   @spec get_chain(String.t(), String.t()) :: {:ok, ChainConfig.t()} | {:error, :not_found}
-  def get_chain(profile, chain_name) do
+  def get_chain(profile, chain_name) when is_binary(profile) and is_binary(chain_name) do
     case :ets.lookup(@config_table, {:profile, profile, :chains}) do
       [{{:profile, ^profile, :chains}, chains}] ->
         case Map.get(chains, chain_name) do
@@ -111,31 +103,6 @@ defmodule Lasso.Config.ConfigStore do
 
       [] ->
         {:error, :not_found}
-    end
-  end
-
-  @doc """
-  Gets chain configuration using the default profile (backward compatibility).
-  """
-  @spec get_chain(String.t()) :: {:ok, ChainConfig.t()} | {:error, :not_found}
-  def get_chain(chain_name) do
-    # Try profile-based lookup first, fall back to legacy
-    case get_chain(@default_profile, chain_name) do
-      {:ok, _} = result ->
-        result
-
-      {:error, :not_found} ->
-        # Legacy fallback for backward compatibility
-        case :ets.lookup(@config_table, @legacy_chains_key) do
-          [{@legacy_chains_key, chains}] ->
-            case Map.get(chains, chain_name) do
-              nil -> {:error, :not_found}
-              chain_config -> {:ok, chain_config}
-            end
-
-          [] ->
-            {:error, :not_found}
-        end
     end
   end
 
@@ -156,15 +123,8 @@ defmodule Lasso.Config.ConfigStore do
   @spec list_chains() :: [String.t()]
   def list_chains do
     case :ets.lookup(@config_table, {:all_chains}) do
-      [{{:all_chains}, chains}] ->
-        chains
-
-      [] ->
-        # Legacy fallback
-        case :ets.lookup(@config_table, @legacy_chains_key) do
-          [{@legacy_chains_key, chains}] -> Map.keys(chains)
-          [] -> []
-        end
+      [{{:all_chains}, chains}] -> chains
+      [] -> []
     end
   end
 
@@ -182,7 +142,8 @@ defmodule Lasso.Config.ConfigStore do
   @doc """
   Gets all chains for a profile as a map.
   """
-  @spec get_profile_chains(String.t()) :: {:ok, %{String.t() => ChainConfig.t()}} | {:error, :not_found}
+  @spec get_profile_chains(String.t()) ::
+          {:ok, %{String.t() => ChainConfig.t()}} | {:error, :not_found}
   def get_profile_chains(profile) do
     case :ets.lookup(@config_table, {:profile, profile, :chains}) do
       [{{:profile, ^profile, :chains}, chains}] -> {:ok, chains}
@@ -191,21 +152,15 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   @doc """
-  Gets all chains as a map (union, backward compatibility).
+  Gets all chains for the default profile as a map.
+
+  Used for cross-profile operations like chain ID lookups.
   """
   @spec get_all_chains() :: %{String.t() => ChainConfig.t()}
   def get_all_chains do
-    # Try to return default profile's chains first
     case get_profile_chains(@default_profile) do
-      {:ok, chains} ->
-        chains
-
-      {:error, :not_found} ->
-        # Legacy fallback
-        case :ets.lookup(@config_table, @legacy_chains_key) do
-          [{@legacy_chains_key, chains}] -> chains
-          [] -> %{}
-        end
+      {:ok, chains} -> chains
+      {:error, :not_found} -> %{}
     end
   end
 
@@ -214,7 +169,8 @@ defmodule Lasso.Config.ConfigStore do
   """
   @spec get_provider(String.t(), String.t(), String.t()) ::
           {:ok, Provider.t()} | {:error, :not_found}
-  def get_provider(profile, chain_name, provider_id) do
+  def get_provider(profile, chain_name, provider_id)
+      when is_binary(profile) and is_binary(chain_name) and is_binary(provider_id) do
     with {:ok, chain_config} <- get_chain(profile, chain_name) do
       case Enum.find(chain_config.providers, &(&1.id == provider_id)) do
         nil -> {:error, :not_found}
@@ -224,20 +180,11 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   @doc """
-  Gets provider configuration (backward compatibility).
+  Gets all providers for a specific profile and chain.
   """
-  @spec get_provider(String.t(), String.t()) ::
-          {:ok, Provider.t()} | {:error, :not_found}
-  def get_provider(chain_name, provider_id) do
-    get_provider(@default_profile, chain_name, provider_id)
-  end
-
-  @doc """
-  Gets all providers for a specific chain (backward compatibility).
-  """
-  @spec get_providers(String.t()) :: {:ok, [Provider.t()]} | {:error, :not_found}
-  def get_providers(chain_name) do
-    case get_chain(chain_name) do
+  @spec get_providers(String.t(), String.t()) :: {:ok, [Provider.t()]} | {:error, :not_found}
+  def get_providers(profile, chain_name) when is_binary(profile) and is_binary(chain_name) do
+    case get_chain(profile, chain_name) do
       {:ok, chain_config} -> {:ok, chain_config.providers}
       error -> error
     end
@@ -269,7 +216,13 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   @doc """
-  Gets a chain configuration by chain name or chain ID (backward compatibility).
+  Gets a chain configuration by chain name or chain ID.
+
+  Searches across all profiles to find a matching chain by numeric ID.
+  For name lookups, searches the default profile first.
+
+  Note: This is a cross-profile lookup used for RPC routing where only
+  the chain ID/name is known (e.g., `/rpc/1` or `/rpc/ethereum`).
   """
   @spec get_chain_by_name_or_id(String.t() | integer()) ::
           {:ok, {String.t(), ChainConfig.t()}} | {:error, :not_found | :invalid_format}
@@ -278,7 +231,8 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   def get_chain_by_name_or_id(chain_name) when is_binary(chain_name) do
-    case get_chain(chain_name) do
+    # Try default profile first for name lookup
+    case get_chain(@default_profile, chain_name) do
       {:ok, chain_config} ->
         {:ok, {chain_name, chain_config}}
 
@@ -294,35 +248,39 @@ defmodule Lasso.Config.ConfigStore do
   ## Public API - Runtime Registration (for tests)
 
   @doc """
-  Registers a chain configuration in-memory (runtime only, not persisted).
+  Registers a chain configuration in-memory for a profile (runtime only, not persisted).
   """
-  @spec register_chain_runtime(String.t(), map()) :: :ok | {:error, term()}
-  def register_chain_runtime(chain_name, chain_attrs) do
-    GenServer.call(__MODULE__, {:register_chain_runtime, chain_name, chain_attrs})
+  @spec register_chain_runtime(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def register_chain_runtime(profile, chain_name, chain_attrs)
+      when is_binary(profile) and is_binary(chain_name) do
+    GenServer.call(__MODULE__, {:register_chain_runtime, profile, chain_name, chain_attrs})
   end
 
   @doc """
-  Unregisters a chain from in-memory configuration (runtime only).
+  Unregisters a chain from in-memory configuration for a profile (runtime only).
   """
-  @spec unregister_chain_runtime(String.t()) :: :ok | {:error, term()}
-  def unregister_chain_runtime(chain_name) do
-    GenServer.call(__MODULE__, {:unregister_chain_runtime, chain_name})
+  @spec unregister_chain_runtime(String.t(), String.t()) :: :ok | {:error, term()}
+  def unregister_chain_runtime(profile, chain_name)
+      when is_binary(profile) and is_binary(chain_name) do
+    GenServer.call(__MODULE__, {:unregister_chain_runtime, profile, chain_name})
   end
 
   @doc """
-  Registers a provider configuration in-memory (runtime only).
+  Registers a provider configuration in-memory for a profile (runtime only).
   """
-  @spec register_provider_runtime(String.t(), map()) :: :ok | {:error, term()}
-  def register_provider_runtime(chain_name, provider_attrs) do
-    GenServer.call(__MODULE__, {:register_provider_runtime, chain_name, provider_attrs})
+  @spec register_provider_runtime(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def register_provider_runtime(profile, chain_name, provider_attrs)
+      when is_binary(profile) and is_binary(chain_name) do
+    GenServer.call(__MODULE__, {:register_provider_runtime, profile, chain_name, provider_attrs})
   end
 
   @doc """
-  Unregisters a provider from in-memory configuration (runtime only).
+  Unregisters a provider from in-memory configuration for a profile (runtime only).
   """
-  @spec unregister_provider_runtime(String.t(), String.t()) :: :ok | {:error, term()}
-  def unregister_provider_runtime(chain_name, provider_id) do
-    GenServer.call(__MODULE__, {:unregister_provider_runtime, chain_name, provider_id})
+  @spec unregister_provider_runtime(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def unregister_provider_runtime(profile, chain_name, provider_id)
+      when is_binary(profile) and is_binary(chain_name) and is_binary(provider_id) do
+    GenServer.call(__MODULE__, {:unregister_provider_runtime, profile, chain_name, provider_id})
   end
 
   @doc """
@@ -387,15 +345,12 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   @impl true
-  def handle_call({:register_chain_runtime, chain_name, chain_attrs}, _from, state) do
-    # Register in default profile for backward compatibility
-    with {:error, :not_found} <- get_chain(@default_profile, chain_name),
+  def handle_call({:register_chain_runtime, profile, chain_name, chain_attrs}, _from, state) do
+    with {:error, :not_found} <- get_chain(profile, chain_name),
          chain_config <- normalize_chain_config(chain_name, chain_attrs) do
-      # Store in legacy format for backward compat
-      store_chain_legacy(chain_name, chain_config)
-      # Also store in profile format
-      add_chain_to_profile(@default_profile, chain_name, chain_config)
-      Logger.debug("Registered chain #{chain_name} in ConfigStore (runtime)")
+      add_chain_to_profile(profile, chain_name, chain_config)
+      update_chain_id_index(chain_name, chain_config)
+      Logger.debug("Registered chain #{chain_name} in profile #{profile} (runtime)")
       {:reply, :ok, state}
     else
       {:ok, _existing} -> {:reply, {:error, :already_exists}, state}
@@ -403,11 +358,10 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   @impl true
-  def handle_call({:unregister_chain_runtime, chain_name}, _from, state) do
-    with {:ok, chain_config} <- get_chain(chain_name) do
-      remove_chain_legacy(chain_name, chain_config)
-      remove_chain_from_profile(@default_profile, chain_name)
-      Logger.debug("Unregistered chain #{chain_name} from ConfigStore (runtime)")
+  def handle_call({:unregister_chain_runtime, profile, chain_name}, _from, state) do
+    with {:ok, _chain_config} <- get_chain(profile, chain_name) do
+      remove_chain_from_profile(profile, chain_name)
+      Logger.debug("Unregistered chain #{chain_name} from profile #{profile} (runtime)")
       {:reply, :ok, state}
     else
       {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
@@ -415,13 +369,17 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   @impl true
-  def handle_call({:register_provider_runtime, chain_name, provider_attrs}, _from, state) do
-    with {:ok, chain_config} <- get_chain(chain_name),
+  def handle_call({:register_provider_runtime, profile, chain_name, provider_attrs}, _from, state) do
+    with {:ok, chain_config} <- get_chain(profile, chain_name),
          provider_config <- normalize_provider_config(provider_attrs),
          :ok <- validate_provider_not_exists(chain_config, provider_config.id) do
       updated_chain = add_provider_to_chain(chain_config, provider_config)
-      update_chain_in_ets(chain_name, updated_chain)
-      Logger.debug("Registered provider #{provider_config.id} for #{chain_name} (runtime)")
+      update_chain_in_profile(profile, chain_name, updated_chain)
+
+      Logger.debug(
+        "Registered provider #{provider_config.id} for #{chain_name} in profile #{profile} (runtime)"
+      )
+
       {:reply, :ok, state}
     else
       {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
@@ -430,11 +388,15 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   @impl true
-  def handle_call({:unregister_provider_runtime, chain_name, provider_id}, _from, state) do
-    with {:ok, chain_config} <- get_chain(chain_name),
+  def handle_call({:unregister_provider_runtime, profile, chain_name, provider_id}, _from, state) do
+    with {:ok, chain_config} <- get_chain(profile, chain_name),
          {:ok, updated_chain} <- remove_provider_from_chain(chain_config, provider_id) do
-      update_chain_in_ets(chain_name, updated_chain)
-      Logger.debug("Unregistered provider #{provider_id} from #{chain_name} (runtime)")
+      update_chain_in_profile(profile, chain_name, updated_chain)
+
+      Logger.debug(
+        "Unregistered provider #{provider_id} from #{chain_name} in profile #{profile} (runtime)"
+      )
+
       {:reply, :ok, state}
     else
       {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
@@ -449,9 +411,12 @@ defmodule Lasso.Config.ConfigStore do
 
     total_providers =
       profiles
-      |> Enum.flat_map(&list_chains_for_profile/1)
-      |> Enum.map(fn chain ->
-        case get_chain(chain) do
+      |> Enum.flat_map(fn profile ->
+        list_chains_for_profile(profile)
+        |> Enum.map(fn chain -> {profile, chain} end)
+      end)
+      |> Enum.map(fn {profile, chain} ->
+        case get_chain(profile, chain) do
           {:ok, config} -> length(config.providers)
           _ -> 0
         end
@@ -472,7 +437,7 @@ defmodule Lasso.Config.ConfigStore do
   ## Private Functions
 
   defp parse_backend_opts(opts) when is_binary(opts) do
-    # Legacy: single path string means use file backend with legacy chains.yml
+    # Legacy: single path string means use file backend
     {Lasso.Config.Backend.File,
      [
        profiles_dir: "config/profiles",
@@ -509,9 +474,6 @@ defmodule Lasso.Config.ConfigStore do
       # Build indices
       build_indices(profile_specs)
 
-      # Also populate legacy format for backward compatibility
-      populate_legacy_format(profile_specs)
-
       new_state = %{
         state
         | backend_state: backend_state,
@@ -528,6 +490,7 @@ defmodule Lasso.Config.ConfigStore do
     :ets.match_delete(@config_table, {{:profile, :_, :_}, :_})
     :ets.delete(@config_table, {:profile_list})
     :ets.delete(@config_table, {:all_chains})
+    :ets.delete(@config_table, {:chain_id_index})
     :ets.match_delete(@config_table, {{:chain_profiles, :_}, :_})
     :ets.match_delete(@config_table, {{:global_providers, :_}, :_})
   end
@@ -580,41 +543,34 @@ defmodule Lasso.Config.ConfigStore do
     Enum.each(global_providers_map, fn {chain, providers} ->
       :ets.insert(@config_table, {{:global_providers, chain}, providers})
     end)
-  end
 
-  defp populate_legacy_format(profile_specs) do
-    # Find default profile or use first profile
-    default_spec =
-      Enum.find(profile_specs, fn s -> s.slug == @default_profile end) ||
-        List.first(profile_specs)
-
-    if default_spec do
-      # Store in legacy format
-      :ets.insert(@config_table, {@legacy_chains_key, default_spec.chains})
-
-      # Build chain_id index
-      chain_id_index =
-        Enum.reduce(default_spec.chains, %{}, fn {chain_name, chain_config}, acc ->
+    # Build chain_id index (for cross-profile lookups by numeric chain ID)
+    chain_id_index =
+      profile_specs
+      |> Enum.flat_map(fn spec ->
+        Enum.flat_map(spec.chains, fn {chain_name, chain_config} ->
           if chain_config.chain_id do
-            Map.put(acc, chain_config.chain_id, chain_name)
+            [{chain_config.chain_id, chain_name}]
           else
-            acc
+            []
           end
         end)
+      end)
+      |> Map.new()
 
-      :ets.insert(@config_table, {@legacy_chain_ids_key, chain_id_index})
-    end
+    :ets.insert(@config_table, {{:chain_id_index}, chain_id_index})
   end
 
   defp find_chain_by_id(chain_id) do
-    case :ets.lookup(@config_table, @legacy_chain_ids_key) do
-      [{@legacy_chain_ids_key, id_index}] ->
+    case :ets.lookup(@config_table, {:chain_id_index}) do
+      [{{:chain_id_index}, id_index}] ->
         case Map.get(id_index, chain_id) do
           nil ->
             {:error, :not_found}
 
           chain_name ->
-            case get_chain(chain_name) do
+            # Return chain from default profile (used for routing)
+            case get_chain(@default_profile, chain_name) do
               {:ok, chain_config} -> {:ok, {chain_name, chain_config}}
               error -> error
             end
@@ -651,6 +607,17 @@ defmodule Lasso.Config.ConfigStore do
     end
   end
 
+  defp update_chain_in_profile(profile, chain_name, chain_config) do
+    case :ets.lookup(@config_table, {:profile, profile, :chains}) do
+      [{{:profile, ^profile, :chains}, chains}] ->
+        updated_chains = Map.put(chains, chain_name, chain_config)
+        :ets.insert(@config_table, {{:profile, profile, :chains}, updated_chains})
+
+      [] ->
+        :ok
+    end
+  end
+
   defp update_chain_profiles_index(chain_name, profile) do
     current =
       case :ets.lookup(@config_table, {:chain_profiles, chain_name}) do
@@ -675,71 +642,16 @@ defmodule Lasso.Config.ConfigStore do
     end
   end
 
-  # Legacy storage helpers
-
-  defp store_chain_legacy(chain_name, chain_config) do
-    chains =
-      case :ets.lookup(@config_table, @legacy_chains_key) do
-        [{@legacy_chains_key, existing}] -> existing
-        [] -> %{}
-      end
-
-    updated_chains = Map.put(chains, chain_name, chain_config)
-    :ets.insert(@config_table, {@legacy_chains_key, updated_chains})
-
+  defp update_chain_id_index(chain_name, chain_config) do
     if chain_config.chain_id do
-      id_index =
-        case :ets.lookup(@config_table, @legacy_chain_ids_key) do
-          [{@legacy_chain_ids_key, existing}] -> existing
+      current =
+        case :ets.lookup(@config_table, {:chain_id_index}) do
+          [{{:chain_id_index}, index}] -> index
           [] -> %{}
         end
 
-      updated_index = Map.put(id_index, chain_config.chain_id, chain_name)
-      :ets.insert(@config_table, {@legacy_chain_ids_key, updated_index})
-    end
-  end
-
-  defp remove_chain_legacy(chain_name, chain_config) do
-    chains =
-      case :ets.lookup(@config_table, @legacy_chains_key) do
-        [{@legacy_chains_key, existing}] -> existing
-        [] -> %{}
-      end
-
-    updated_chains = Map.delete(chains, chain_name)
-    :ets.insert(@config_table, {@legacy_chains_key, updated_chains})
-
-    if chain_config.chain_id do
-      id_index =
-        case :ets.lookup(@config_table, @legacy_chain_ids_key) do
-          [{@legacy_chain_ids_key, existing}] -> existing
-          [] -> %{}
-        end
-
-      updated_index = Map.delete(id_index, chain_config.chain_id)
-      :ets.insert(@config_table, {@legacy_chain_ids_key, updated_index})
-    end
-  end
-
-  defp update_chain_in_ets(chain_name, chain_config) do
-    # Update legacy format
-    chains =
-      case :ets.lookup(@config_table, @legacy_chains_key) do
-        [{@legacy_chains_key, existing}] -> existing
-        [] -> %{}
-      end
-
-    updated_chains = Map.put(chains, chain_name, chain_config)
-    :ets.insert(@config_table, {@legacy_chains_key, updated_chains})
-
-    # Update profile format
-    case :ets.lookup(@config_table, {:profile, @default_profile, :chains}) do
-      [{{:profile, @default_profile, :chains}, profile_chains}] ->
-        updated_profile_chains = Map.put(profile_chains, chain_name, chain_config)
-        :ets.insert(@config_table, {{:profile, @default_profile, :chains}, updated_profile_chains})
-
-      [] ->
-        :ok
+      updated = Map.put(current, chain_config.chain_id, chain_name)
+      :ets.insert(@config_table, {{:chain_id_index}, updated})
     end
   end
 

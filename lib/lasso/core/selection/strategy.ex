@@ -33,11 +33,14 @@ defmodule Lasso.RPC.Strategy do
   @doc """
   Rank eligible channels for a request. Returns the channels ordered from most
   preferred to least preferred.
+
+  The profile parameter enables profile-scoped metrics lookups for routing decisions.
   """
   @callback rank_channels(
               channels :: [Channel.t()],
               method :: String.t(),
               ctx :: context(),
+              profile :: String.t(),
               chain :: String.t()
             ) :: [Channel.t()]
 end

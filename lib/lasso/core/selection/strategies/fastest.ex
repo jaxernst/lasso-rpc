@@ -29,10 +29,11 @@ defmodule Lasso.RPC.Strategies.Fastest do
   Falls back to a large latency when unknown to de-prioritize.
   """
   @impl true
-  def rank_channels(channels, method, _ctx, chain) do
+  def rank_channels(channels, method, _ctx, profile, chain) do
     Enum.sort_by(channels, fn channel ->
       perf =
         Metrics.get_provider_transport_performance(
+          profile,
           chain,
           channel.provider_id,
           method,

@@ -42,16 +42,16 @@ defmodule LassoWeb.RPC.Helpers do
 
   ## Examples
 
-      iex> LassoWeb.RPC.Helpers.get_chain_id("ethereum")
+      iex> LassoWeb.RPC.Helpers.get_chain_id("default", "ethereum")
       {:ok, "0x1"}
 
-      iex> LassoWeb.RPC.Helpers.get_chain_id("unknown")
+      iex> LassoWeb.RPC.Helpers.get_chain_id("default", "unknown")
       {:error, "Chain not configured: unknown"}
 
   """
-  @spec get_chain_id(String.t()) :: {:ok, String.t()} | {:error, String.t()}
-  def get_chain_id(chain_name) do
-    case ConfigStore.get_chain(chain_name) do
+  @spec get_chain_id(String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def get_chain_id(profile, chain_name) do
+    case ConfigStore.get_chain(profile, chain_name) do
       {:ok, %{chain_id: chain_id}} when is_integer(chain_id) ->
         {:ok, "0x" <> Integer.to_string(chain_id, 16)}
 

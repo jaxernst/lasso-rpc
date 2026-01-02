@@ -456,7 +456,7 @@ defmodule Lasso.RPC.RequestPipeline do
           CircuitBreaker.call_result({:ok, any(), number()} | {:error, any(), number()})
   defp execute_with_circuit_breaker(channel, rpc_request, timeout) do
     attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
-    cb_id = {channel.chain, channel.provider_id, channel.transport}
+    cb_id = {channel.profile, channel.chain, channel.provider_id, channel.transport}
     CircuitBreaker.call(cb_id, attempt_fun, timeout)
   end
 

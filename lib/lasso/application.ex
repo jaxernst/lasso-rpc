@@ -6,6 +6,8 @@ defmodule Lasso.Application do
   use Application
   require Logger
 
+  alias Lasso.Config.ProfileValidator
+
   @impl true
   def start(_type, _args) do
     # Store application start time for uptime calculation
@@ -114,6 +116,19 @@ defmodule Lasso.Application do
       case Lasso.Config.ConfigStore.load_all_profiles() do
         {:ok, profile_slugs} ->
           Logger.info("Loaded #{length(profile_slugs)} profiles: #{Enum.join(profile_slugs, ", ")}")
+
+          # Validate that "default" profile exists after loading all profiles
+          # This ensures the system can always fall back to "default" profile
+          case ProfileValidator.validate("default") do
+            {:ok, _} ->
+              Logger.info("Startup validation passed: 'default' profile found")
+
+            {:error, _type, message} ->
+              Logger.error("STARTUP FAILURE: #{message}")
+              Logger.error("The 'default' profile must be configured at startup")
+              Logger.error("Ensure config/profiles/default.yml exists and is valid")
+              raise "Default profile validation failed: #{message}"
+          end
 
         {:error, reason} ->
           Logger.warning("Failed to load profiles: #{inspect(reason)}")

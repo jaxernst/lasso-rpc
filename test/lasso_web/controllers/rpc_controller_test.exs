@@ -15,9 +15,6 @@ defmodule LassoWeb.RPCControllerTest do
       assert function_exported?(LassoWeb.HealthController, :health, 2)
     end
 
-    test "status controller exists" do
-      assert Code.ensure_loaded?(LassoWeb.StatusController)
-      assert function_exported?(LassoWeb.StatusController, :status, 2)
-    end
+    # StatusController was removed - status endpoint functionality moved elsewhere
   end
 end

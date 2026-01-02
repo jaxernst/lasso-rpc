@@ -5,8 +5,12 @@ defmodule Lasso.RPC.Metrics do
   Provides clean producer/consumer interface that decouples strategy
   implementations from specific metrics storage backends. Supports
   async metrics recording to avoid impacting request path performance.
+
+  All read operations require a profile parameter to ensure metrics
+  are scoped to the appropriate routing profile context.
   """
 
+  @type profile :: String.t()
   @type chain :: String.t()
   @type provider_id :: String.t()
   @type method :: String.t()
@@ -31,7 +35,7 @@ defmodule Lasso.RPC.Metrics do
   Returns aggregated performance metrics with confidence scoring
   to help strategies make informed routing decisions.
   """
-  @callback get_provider_performance(chain, provider_id, method) ::
+  @callback get_provider_performance(profile, chain, provider_id, method) ::
               performance_data() | nil
 
   @doc """
@@ -40,7 +44,7 @@ defmodule Lasso.RPC.Metrics do
   Returns aggregated performance metrics with confidence scoring
   to help strategies make informed routing decisions.
   """
-  @callback get_provider_transport_performance(chain, provider_id, method, :http | :ws) ::
+  @callback get_provider_transport_performance(profile, chain, provider_id, method, :http | :ws) ::
               performance_data() | nil
 
   @doc """
@@ -48,7 +52,7 @@ defmodule Lasso.RPC.Metrics do
 
   Returns a list of performance data sorted by the backend's ranking algorithm.
   """
-  @callback get_method_performance(chain, method) ::
+  @callback get_method_performance(profile, chain, method) ::
               [%{provider_id: provider_id, performance: performance_data()}]
 
   @doc """
@@ -56,7 +60,7 @@ defmodule Lasso.RPC.Metrics do
 
   Returns a list of performance data sorted by the backend's ranking algorithm.
   """
-  @callback get_method_transport_performance(chain, provider_id, method, :http | :ws) ::
+  @callback get_method_transport_performance(profile, chain, provider_id, method, :http | :ws) ::
               [
                 %{
                   provider_id: provider_id,
@@ -77,28 +81,28 @@ defmodule Lasso.RPC.Metrics do
   @doc """
   Gets performance data using the configured metrics backend.
   """
-  @spec get_provider_performance(chain, provider_id, method) :: performance_data() | nil
-  def get_provider_performance(chain, provider_id, method) do
-    backend().get_provider_performance(chain, provider_id, method)
+  @spec get_provider_performance(profile, chain, provider_id, method) :: performance_data() | nil
+  def get_provider_performance(profile, chain, provider_id, method) do
+    backend().get_provider_performance(profile, chain, provider_id, method)
   end
 
   @doc """
   Gets performance data for a specific provider, method, and transport.
   """
-  @spec get_provider_transport_performance(chain, provider_id, method, :http | :ws) ::
+  @spec get_provider_transport_performance(profile, chain, provider_id, method, :http | :ws) ::
           performance_data() | nil
-  def get_provider_transport_performance(chain, provider_id, method, transport) do
-    backend().get_provider_transport_performance(chain, provider_id, method, transport)
+  def get_provider_transport_performance(profile, chain, provider_id, method, transport) do
+    backend().get_provider_transport_performance(profile, chain, provider_id, method, transport)
   end
 
   @doc """
   Gets method performance comparison using the configured metrics backend.
   """
-  @spec get_method_performance(chain, method) :: [
+  @spec get_method_performance(profile, chain, method) :: [
           %{provider_id: provider_id, performance: performance_data()}
         ]
-  def get_method_performance(chain, method) do
-    backend().get_method_performance(chain, method)
+  def get_method_performance(profile, chain, method) do
+    backend().get_method_performance(profile, chain, method)
   end
 
   @doc """
@@ -106,11 +110,11 @@ defmodule Lasso.RPC.Metrics do
 
   Returns performance data with transport dimension included.
   """
-  @spec get_method_transport_performance(chain, method) :: [
+  @spec get_method_transport_performance(profile, chain, provider_id, method, :http | :ws) :: [
           %{provider_id: provider_id, transport: :http | :ws, performance: performance_data()}
         ]
-  def get_method_transport_performance(chain, method) do
-    backend().get_method_transport_performance(chain, method)
+  def get_method_transport_performance(profile, chain, provider_id, method, transport) do
+    backend().get_method_transport_performance(profile, chain, provider_id, method, transport)
   end
 
   @doc """
@@ -135,43 +139,11 @@ defmodule Lasso.RPC.Metrics do
   end
 
   @doc """
-  Convenience function to record a successful request with transport information.
-  """
-  @spec record_transport_success(
-          chain,
-          provider_id,
-          method,
-          non_neg_integer(),
-          :http | :ws,
-          recording_opts
-        ) :: :ok
-  def record_transport_success(chain, provider_id, method, duration_ms, transport, opts \\ []) do
-    transport_opts = Keyword.put(opts, :transport, transport)
-    record_request(chain, provider_id, method, duration_ms, :success, transport_opts)
-  end
-
-  @doc """
   Convenience function to record a failed request.
   """
   @spec record_failure(String.t(), chain, provider_id, method, non_neg_integer(), recording_opts) :: :ok
   def record_failure(profile, chain, provider_id, method, duration_ms, opts \\ []) do
     record_request(profile, chain, provider_id, method, duration_ms, :error, opts)
-  end
-
-  @doc """
-  Convenience function to record a failed request with transport information.
-  """
-  @spec record_transport_failure(
-          chain,
-          provider_id,
-          method,
-          non_neg_integer(),
-          :http | :ws,
-          recording_opts
-        ) :: :ok
-  def record_transport_failure(chain, provider_id, method, duration_ms, transport, opts \\ []) do
-    transport_opts = Keyword.put(opts, :transport, transport)
-    record_request(chain, provider_id, method, duration_ms, :error, transport_opts)
   end
 
   # Private functions

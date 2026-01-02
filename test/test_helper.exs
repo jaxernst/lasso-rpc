@@ -60,11 +60,11 @@ defmodule TestHelper do
           :ok
 
         _pid ->
-          # Clear metrics for common test chains
+          # Clear metrics for common test chains (using default profile)
           Enum.each(
             ["ethereum", "polygon", "testnet", "test_chain", "integration_test_chain"],
             fn chain ->
-              Lasso.Benchmarking.BenchmarkStore.clear_chain_metrics(chain)
+              Lasso.Benchmarking.BenchmarkStore.clear_chain_metrics("default", chain)
             end
           )
       end
@@ -261,6 +261,7 @@ defmodule TestHelper do
     Enum.each(provider_ids, fn provider_id ->
       # Add some benchmark data so the provider appears in selection
       Lasso.Benchmarking.BenchmarkStore.record_rpc_call(
+        "default",
         chain_name,
         provider_id,
         "eth_blockNumber",

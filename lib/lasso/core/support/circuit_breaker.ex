@@ -48,8 +48,7 @@ defmodule Lasso.RPC.CircuitBreaker do
   @type chain :: String.t()
   @type provider_id :: String.t()
   @type transport :: :http | :ws
-  # Support both 3-tuple (legacy) and 4-tuple (profile-aware) IDs
-  @type breaker_id :: {chain, provider_id, transport} | {profile, chain, provider_id, transport}
+  @type breaker_id :: {profile, chain, provider_id, transport}
   @type breaker_state :: :closed | :open | :half_open
   @type state_t :: %__MODULE__{
           chain: chain,
@@ -115,7 +114,7 @@ defmodule Lasso.RPC.CircuitBreaker do
   @type call_result(result) :: {:executed, result} | {:rejected, rejection_reason()}
 
   @spec call(breaker_id, (-> result), non_neg_integer()) :: call_result(result) when result: term()
-  def call({chain, provider_id, transport} = id, fun, timeout \\ 30_000) do
+  def call({profile, chain, provider_id, transport} = id, fun, timeout \\ 30_000) do
     now_ms = System.monotonic_time(:millisecond)
     admit_start_us = System.monotonic_time(:microsecond)
 
@@ -125,6 +124,7 @@ defmodule Lasso.RPC.CircuitBreaker do
       catch
         :exit, {:timeout, _} ->
           Logger.warning("Circuit breaker admission timeout",
+            profile: profile,
             chain: chain,
             provider_id: provider_id,
             transport: transport
@@ -134,6 +134,7 @@ defmodule Lasso.RPC.CircuitBreaker do
 
         :exit, {:noproc, _} ->
           Logger.warning("Circuit breaker not found",
+            profile: profile,
             chain: chain,
             provider_id: provider_id,
             transport: transport
@@ -154,12 +155,12 @@ defmodule Lasso.RPC.CircuitBreaker do
     :telemetry.execute(
       [:lasso, :circuit_breaker, :admit],
       %{admit_call_ms: admit_call_ms},
-      %{chain: chain, provider_id: provider_id, transport: transport, decision: decision_tag}
+      %{profile: profile, chain: chain, provider_id: provider_id, transport: transport, decision: decision_tag}
     )
 
     case decision do
       {:allow, token} ->
-        execute_with_token(id, token, fun, timeout, chain, provider_id, transport)
+        execute_with_token(id, token, fun, timeout, profile, chain, provider_id, transport)
 
       {:deny, :open} ->
         {:rejected, :circuit_open}
@@ -176,9 +177,9 @@ defmodule Lasso.RPC.CircuitBreaker do
   end
 
   # Executes the function with timeout enforcement and reports result to CB
-  @spec execute_with_token(breaker_id(), term(), (-> result), timeout(), chain(), provider_id(), transport()) ::
+  @spec execute_with_token(breaker_id(), term(), (-> result), timeout(), profile(), chain(), provider_id(), transport()) ::
           {:executed, result} when result: term()
-  defp execute_with_token(id, token, fun, timeout, chain, provider_id, transport) do
+  defp execute_with_token(id, token, fun, timeout, profile, chain, provider_id, transport) do
     task =
       Task.async(fn ->
         try do
@@ -204,6 +205,7 @@ defmodule Lasso.RPC.CircuitBreaker do
           Task.shutdown(task, :brutal_kill)
 
           Logger.error("Request timeout in circuit breaker",
+            profile: profile,
             chain: chain,
             provider_id: provider_id,
             transport: transport,
@@ -213,7 +215,7 @@ defmodule Lasso.RPC.CircuitBreaker do
           :telemetry.execute(
             [:lasso, :circuit_breaker, :timeout],
             %{timeout_ms: timeout},
-            %{chain: chain, provider_id: provider_id, transport: transport}
+            %{profile: profile, chain: chain, provider_id: provider_id, transport: transport}
           )
 
           # Return timeout error with io_ms for latency tracking
@@ -319,17 +321,10 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   # GenServer callbacks
 
-  # Handle 4-tuple format: {profile, chain, provider_id, transport}
   @impl true
   def init({{profile, chain, provider_id, transport}, config})
       when is_binary(profile) and is_binary(chain) do
     do_init(profile, chain, provider_id, transport, config)
-  end
-
-  # Handle 3-tuple format: {chain, provider_id, transport} (backward compat, uses "default" profile)
-  @impl true
-  def init({{chain, provider_id, transport}, config}) when is_binary(chain) do
-    do_init("default", chain, provider_id, transport, config)
   end
 
   defp do_init(profile, chain, provider_id, transport, config) do
@@ -979,11 +974,7 @@ defmodule Lasso.RPC.CircuitBreaker do
          error: error_info
        }}
 
-    # Broadcast to profile-scoped topic
     Phoenix.PubSub.broadcast(Lasso.PubSub, "circuit:events:#{profile}:#{chain}", event)
-
-    # Also broadcast to legacy global topic for backward compatibility
-    Phoenix.PubSub.broadcast(Lasso.PubSub, "circuit:events", event)
   end
 
   # Truncate long error messages for dashboard display
@@ -1047,15 +1038,9 @@ defmodule Lasso.RPC.CircuitBreaker do
 
   defp extract_error_info(_), do: nil
 
-  # Handle 4-tuple format: {profile, chain, provider_id, transport}
   defp via_name({profile, chain, provider_id, transport})
        when is_binary(profile) and is_binary(chain) do
     key = "#{profile}:#{chain}:#{provider_id}:#{transport}"
     {:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}
-  end
-
-  # Handle 3-tuple format: {chain, provider_id, transport} (backward compat)
-  defp via_name({chain, provider_id, transport}) when is_binary(chain) do
-    via_name({"default", chain, provider_id, transport})
   end
 end

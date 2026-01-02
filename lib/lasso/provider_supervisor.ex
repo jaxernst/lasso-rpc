@@ -11,22 +11,23 @@ defmodule Lasso.RPC.ProviderSupervisor do
 
   alias Lasso.RPC.{CircuitBreaker, WSConnection, WSEndpoint}
 
+  @type profile :: String.t()
   @type chain_name :: String.t()
   @type provider_config :: map()
 
-  @spec start_link({chain_name, map(), map()}) :: Supervisor.on_start()
-  def start_link({chain_name, chain_config, provider_config}) do
-    name = via_name(chain_name, provider_config.id)
-    Supervisor.start_link(__MODULE__, {chain_name, chain_config, provider_config}, name: name)
+  @spec start_link({profile, chain_name, map(), map()}) :: Supervisor.on_start()
+  def start_link({profile, chain_name, chain_config, provider_config}) do
+    name = via_name(profile, chain_name, provider_config.id)
+    Supervisor.start_link(__MODULE__, {profile, chain_name, chain_config, provider_config}, name: name)
   end
 
   @impl true
-  def init({chain_name, chain_config, provider}) do
+  def init({profile, chain_name, chain_config, provider}) do
     children =
       []
-      |> maybe_add_http_circuit(chain_name, provider)
-      |> maybe_add_ws_circuit(chain_name, provider)
-      |> maybe_add_ws_connection(chain_name, chain_config, provider)
+      |> maybe_add_http_circuit(profile, chain_name, provider)
+      |> maybe_add_ws_circuit(profile, chain_name, provider)
+      |> maybe_add_ws_connection(profile, chain_name, chain_config, provider)
 
     # Use one_for_one to prevent linked restarts
     # Circuit breakers and WSConnection are independent - a circuit breaker restart
@@ -34,14 +35,14 @@ defmodule Lasso.RPC.ProviderSupervisor do
     Supervisor.init(children, strategy: :one_for_one)
   end
 
-  defp maybe_add_http_circuit(children, chain_name, provider) do
+  defp maybe_add_http_circuit(children, profile, chain_name, provider) do
     if is_binary(Map.get(provider, :url)) do
       circuit_config = %{failure_threshold: 5, recovery_timeout: 60_000, success_threshold: 2}
 
       child = %{
         id: {:circuit_http, provider.id},
         start:
-          {CircuitBreaker, :start_link, [{{chain_name, provider.id, :http}, circuit_config}]},
+          {CircuitBreaker, :start_link, [{{profile, chain_name, provider.id, :http}, circuit_config}]},
         type: :worker,
         restart: :permanent,
         shutdown: 5_000
@@ -53,13 +54,13 @@ defmodule Lasso.RPC.ProviderSupervisor do
     end
   end
 
-  defp maybe_add_ws_circuit(children, chain_name, provider) do
+  defp maybe_add_ws_circuit(children, profile, chain_name, provider) do
     if is_binary(Map.get(provider, :ws_url)) do
       circuit_config = %{failure_threshold: 5, recovery_timeout: 60_000, success_threshold: 2}
 
       child = %{
         id: {:circuit_ws, provider.id},
-        start: {CircuitBreaker, :start_link, [{{chain_name, provider.id, :ws}, circuit_config}]},
+        start: {CircuitBreaker, :start_link, [{{profile, chain_name, provider.id, :ws}, circuit_config}]},
         type: :worker,
         restart: :permanent,
         shutdown: 5_000
@@ -71,10 +72,11 @@ defmodule Lasso.RPC.ProviderSupervisor do
     end
   end
 
-  defp maybe_add_ws_connection(children, chain_name, chain_config, provider) do
+  defp maybe_add_ws_connection(children, profile, chain_name, chain_config, provider) do
     case Map.get(provider, :ws_url) do
       url when is_binary(url) ->
         endpoint = %WSEndpoint{
+          profile: profile,
           id: provider.id,
           name: provider.name,
           ws_url: url,
@@ -100,7 +102,7 @@ defmodule Lasso.RPC.ProviderSupervisor do
     end
   end
 
-  def via_name(chain_name, provider_id) do
-    {:via, Registry, {Lasso.Registry, {:provider_supervisor, chain_name, provider_id}}}
+  def via_name(profile, chain_name, provider_id) do
+    {:via, Registry, {Lasso.Registry, {:provider_supervisor, profile, chain_name, provider_id}}}
   end
 end

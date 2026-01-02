@@ -7,6 +7,7 @@ defmodule Lasso.RPC.WSEndpoint do
   """
 
   @type t :: %__MODULE__{
+          profile: String.t(),
           id: String.t(),
           name: String.t(),
           chain_id: non_neg_integer(),
@@ -20,6 +21,7 @@ defmodule Lasso.RPC.WSEndpoint do
         }
 
   defstruct [
+    :profile,
     :id,
     :name,
     :chain_id,

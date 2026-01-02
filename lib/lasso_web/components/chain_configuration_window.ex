@@ -25,6 +25,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
       socket
       |> assign(assigns)
       |> assign(:chain_config_collapsed, collapsed_state)
+      |> assign_new(:selected_profile, fn -> Map.get(assigns, :selected_profile, "default") end)
 
     # Load available chains when needed
     socket =
@@ -54,10 +55,11 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
 
   defp auto_select_context(socket, assigns) do
     selected_chain = Map.get(assigns, :selected_chain)
+    profile = socket.assigns.selected_profile
 
     if selected_chain do
       # Load the selected chain configuration
-      case ChainConfigManager.get_chain(selected_chain) do
+      case ChainConfigManager.get_chain(profile, selected_chain) do
         {:ok, config} ->
           form_data = %{
             name: config.name,
@@ -174,7 +176,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
     else: "bg-gray-800/40 text-gray-300 hover:bg-gray-700/60")]}
                   >
                     <div>
-                      <div class="font-medium">{Helpers.get_chain_display_name(chain.name)}</div>
+                      <div class="font-medium">{Helpers.get_chain_display_name(@selected_profile, chain.name)}</div>
                       <div class="text-gray-400">Chain ID: {chain.chain_id || "—"}</div>
                     </div>
                     <div class="text-xs text-gray-400">{length(chain.providers || [])} providers</div>
@@ -270,7 +272,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
         <%= if @selected_chain == "new_chain" do %>
           Create New Chain
         <% else %>
-          Configure: <span class="text-purple-300">{Helpers.get_chain_display_name(@selected_chain)}</span>
+          Configure: <span class="text-purple-300">{Helpers.get_chain_display_name(@selected_profile, @selected_chain)}</span>
         <% end %>
       </div>
       
@@ -546,7 +548,8 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
 
   @impl true
   def handle_event("select_chain", %{"chain" => chain_name}, socket) do
-    case ChainConfigManager.get_chain(chain_name) do
+    profile = socket.assigns.selected_profile
+    case ChainConfigManager.get_chain(profile, chain_name) do
       {:ok, config} ->
         form_data = %{
           name: config.name,
@@ -794,8 +797,9 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
   @impl true
   def handle_event("test_connection", _params, socket) do
     chain_name = socket.assigns.config_selected_chain
+    profile = socket.assigns.selected_profile
 
-    case ChainConfigManager.get_chain(chain_name) do
+    case ChainConfigManager.get_chain(profile, chain_name) do
       {:ok, config} ->
         # Test each provider (simplified version for now)
         test_results =
@@ -877,6 +881,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
   @impl true
   def handle_event("quick_add_submit", _params, socket) do
     qa_data = socket.assigns.quick_add_data
+    profile = socket.assigns.selected_profile
     name = Map.get(qa_data, :name, "")
     chain_id = Map.get(qa_data, :chain_id)
     url = Map.get(qa_data, :url, "")
@@ -886,7 +891,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
     target_chain = String.downcase(name) |> String.replace(~r/[^a-z0-9]/, "_")
 
     chain_exists =
-      case ChainConfigManager.get_chain(target_chain) do
+      case ChainConfigManager.get_chain(profile, target_chain) do
         {:ok, _} -> true
         _ -> false
       end
@@ -904,7 +909,7 @@ defmodule LassoWeb.Components.ChainConfigurationWindow do
     result =
       if chain_exists do
         # Append provider to existing chain
-        case ChainConfigManager.get_chain(target_chain) do
+        case ChainConfigManager.get_chain(profile, target_chain) do
           {:ok, cfg} ->
             providers =
               cfg.providers ++

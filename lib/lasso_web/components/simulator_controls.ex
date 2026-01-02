@@ -13,6 +13,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     socket =
       socket
       |> assign(assigns)
+      |> assign_new(:selected_profile, fn -> "default" end)
       |> assign_new(:sim_stats, fn ->
         %{http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0}, ws: %{open: 0}}
       end)
@@ -26,7 +27,10 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       |> assign_new(:recent_calls, fn -> [] end)
       |> assign_new(:available_chains, fn -> [] end)
       |> assign_new(:active_runs, fn -> [] end)
-      |> assign_new(:quick_run_config, fn -> get_default_run_config() end)
+      |> assign_new(:quick_run_config, fn ->
+        # Dashboard mount guarantees selected_profile is set
+        get_default_run_config(socket.assigns.selected_profile)
+      end)
       |> assign_new(:preview_text, fn ->
         get_preview_text(%{
           strategy: "round-robin",
@@ -62,6 +66,33 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       if Map.has_key?(assigns, :active_runs) do
         is_running = length(assigns.active_runs) > 0
         assign(socket, :simulator_running, is_running)
+      else
+        socket
+      end
+
+    # Handle profile changes - update selected_profile and reset chain selection
+    socket =
+      if Map.has_key?(assigns, :selected_profile) do
+        old_profile = socket.assigns[:selected_profile]
+        new_profile = assigns.selected_profile
+
+        if old_profile != new_profile do
+          socket
+          |> assign(:selected_profile, new_profile)
+          |> assign(:selected_chains, [])
+          |> assign(:quick_run_config, get_default_run_config(new_profile))
+          |> update_preview_text()
+        else
+          socket
+        end
+      else
+        socket
+      end
+
+    # Handle available_chains changes
+    socket =
+      if Map.has_key?(assigns, :available_chains) do
+        assign(socket, :available_chains, assigns.available_chains)
       else
         socket
       end
@@ -650,10 +681,11 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   end
 
   # Run configuration helpers
-  defp get_default_run_config do
+  defp get_default_run_config(profile) do
     %{
       type: "custom",
       duration: 30_000,
+      profile: profile,
       strategy: "round-robin",  # Default strategy to avoid undefined routes
       http: %{
         enabled: true,
@@ -673,10 +705,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     load_types = socket.assigns.load_types
     # Ensure strategy is valid or omit it to use default route
     strategy = socket.assigns.selected_strategy
+    # Dashboard mount guarantees selected_profile is set
+    profile = socket.assigns.selected_profile
 
     config = %{
       type: "custom",
       duration: 30_000,
+      profile: profile,
       chains: get_selected_chains(socket),
       http: %{
         enabled: load_types.http,
