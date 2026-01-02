@@ -1,6 +1,6 @@
 ---
 name: Lasso Free
-slug: lasso-free
+slug: default
 type: standard
 default_rps_limit: 100
 default_burst_limit: 500
