@@ -30,11 +30,12 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   describe "execute_via_channels/4 - parameter validation" do
     test "creates RequestContext when not provided" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-        profile: "default",
-        strategy: :round_robin,
-        timeout_ms: 30_000
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          profile: "default",
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       ctx = extract_context(result)
       assert %RequestContext{} = ctx
@@ -45,12 +46,13 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "uses provided RequestContext" do
       custom_ctx = RequestContext.new("ethereum", "eth_call", strategy: :fastest)
 
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
-        profile: "default",
-        strategy: :fastest,
-        timeout_ms: 30_000,
-        request_context: custom_ctx
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
+          profile: "default",
+          strategy: :fastest,
+          timeout_ms: 30_000,
+          request_context: custom_ctx
+        })
 
       returned_ctx = extract_context(result)
       assert returned_ctx.request_id == custom_ctx.request_id
@@ -69,7 +71,13 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "accepts standard options" do
-      opts = %RequestOptions{profile: "default", strategy: :fastest, timeout_ms: 5000, transport: :http}
+      opts = %RequestOptions{
+        profile: "default",
+        strategy: :fastest,
+        timeout_ms: 5000,
+        transport: :http
+      }
+
       result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], opts)
       assert_result_valid(result)
     end
@@ -77,22 +85,24 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   describe "execute_via_channels/4 - observability" do
     test "marks selection start" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-        profile: "default",
-        strategy: :round_robin,
-        timeout_ms: 30_000
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          profile: "default",
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       ctx = extract_context(result)
       assert ctx.selection_start != nil
     end
 
     test "tracks retry count" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-        profile: "default",
-        strategy: :round_robin,
-        timeout_ms: 30_000
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          profile: "default",
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       ctx = extract_context(result)
       assert is_integer(ctx.retries)
@@ -100,12 +110,13 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "stores request metadata in context" do
-      result = RequestPipeline.execute_via_channels(
-        "ethereum",
-        "eth_getBalance",
-        ["0x123", "latest"],
-        %RequestOptions{profile: "default", strategy: :round_robin, timeout_ms: 30_000}
-      )
+      result =
+        RequestPipeline.execute_via_channels(
+          "ethereum",
+          "eth_getBalance",
+          ["0x123", "latest"],
+          %RequestOptions{profile: "default", strategy: :round_robin, timeout_ms: 30_000}
+        )
 
       ctx = extract_context(result)
       assert ctx.chain == "ethereum"
@@ -160,11 +171,12 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "stores strategy in context" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
-        profile: "default",
-        strategy: :fastest,
-        timeout_ms: 30_000
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
+          profile: "default",
+          strategy: :fastest,
+          timeout_ms: 30_000
+        })
 
       ctx = extract_context(result)
       assert ctx.strategy == :fastest
@@ -197,11 +209,12 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "defaults to :http when no transport specified" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-        profile: "default",
-        strategy: :round_robin,
-        timeout_ms: 30_000
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          profile: "default",
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       ctx = extract_context(result)
       assert ctx.transport == :http
@@ -263,22 +276,24 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   describe "RequestContext lifecycle" do
     test "context is always returned in result tuple" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
-        profile: "default",
-        strategy: :round_robin,
-        timeout_ms: 30_000
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
+          profile: "default",
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       ctx = extract_context(result)
       assert %RequestContext{} = ctx
     end
 
     test "context tracks timing information" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-        profile: "default",
-        strategy: :round_robin,
-        timeout_ms: 30_000
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          profile: "default",
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       ctx = extract_context(result)
       assert ctx.start_time != nil
@@ -286,11 +301,12 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "context includes unique request ID" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
-        profile: "default",
-        strategy: :round_robin,
-        timeout_ms: 30_000
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
+          profile: "default",
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       ctx = extract_context(result)
       assert is_binary(ctx.request_id)
@@ -298,12 +314,14 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
   end
 
-  describe "Fast-fail failover logic (Issue #1 fix)" do
+  describe "Fast-fail failover logic" do
     alias Lasso.JSONRPC.Error, as: JError
 
     @pipeline Lasso.RPC.RequestPipeline
 
+    @tag :pending
     test "should_fast_fail_error?/2 returns false when no channels remaining" do
+      # TODO: Implement test for should_fast_fail_error? function
       error = JError.new(-32_005, "Rate limit", category: :rate_limit, retriable?: true)
       assert true
     end
@@ -363,16 +381,19 @@ defmodule Lasso.RPC.RequestPipelineTest do
       assert error.retriable? == false
     end
 
+    @tag :pending
     test "circuit_open errors should be handled as fast-fail" do
+      # TODO: Implement test to verify circuit_open errors trigger fast-fail behavior
       assert :circuit_open == :circuit_open
     end
 
     test "execute_via_channels increments retry count on failover" do
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-        profile: "default",
-        strategy: :round_robin,
-        timeout_ms: 30_000
-      })
+      result =
+        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+          profile: "default",
+          strategy: :round_robin,
+          timeout_ms: 30_000
+        })
 
       ctx = extract_context(result)
       assert is_integer(ctx.retries)
@@ -381,7 +402,9 @@ defmodule Lasso.RPC.RequestPipelineTest do
   end
 
   describe "Fast-fail telemetry events" do
+    @tag :pending
     test "telemetry event should be emitted for fast-fail (observability test)" do
+      # TODO: Implement test to verify telemetry events are actually emitted
       assert [:lasso, :failover, :fast_fail] == [:lasso, :failover, :fast_fail]
     end
   end
@@ -408,77 +431,111 @@ defmodule Lasso.RPC.RequestPipelineTest do
   end
 
   describe "Channel exhaustion recovery (Issue #2)" do
+    @tag :pending
     test "documents degraded mode behavior" do
+      # TODO: Implement test for degraded mode behavior
       assert true
     end
 
+    @tag :pending
     test "telemetry event emitted when entering degraded mode" do
+      # TODO: Implement test to verify telemetry events are emitted
       assert [:lasso, :failover, :degraded_mode] == [:lasso, :failover, :degraded_mode]
     end
 
+    @tag :pending
     test "telemetry event emitted on degraded mode success" do
+      # TODO: Implement test to verify telemetry events are emitted
       assert [:lasso, :failover, :degraded_success] == [:lasso, :failover, :degraded_success]
     end
 
+    @tag :pending
     test "telemetry event emitted on complete channel exhaustion" do
+      # TODO: Implement test to verify telemetry events are emitted
       assert [:lasso, :failover, :exhaustion] == [:lasso, :failover, :exhaustion]
     end
 
+    @tag :pending
     test "error includes retry_after_ms when all circuits open" do
+      # TODO: Implement test to verify retry_after_ms in error
       assert true
     end
 
+    @tag :pending
     test "degraded mode attempts half-open providers" do
+      # TODO: Implement test for half-open provider attempts
       assert true
     end
 
+    @tag :pending
     test "retry-after hint calculated from minimum circuit recovery time" do
+      # TODO: Implement test for retry-after calculation
       assert true
     end
 
+    @tag :pending
     test "no blocking calls in degraded mode path" do
+      # TODO: Implement test to verify non-blocking behavior
       assert true
     end
   end
 
   describe "Degraded mode selection behavior" do
+    @tag :pending
     test "include_half_open flag passed to Selection.select_channels" do
+      # TODO: Implement test to verify include_half_open flag
       assert true
     end
 
+    @tag :pending
     test "ProviderPool respects include_half_open filter" do
+      # TODO: Implement test to verify ProviderPool behavior
       assert true
     end
 
+    @tag :pending
     test "half-open circuits allow limited concurrent traffic" do
+      # TODO: Implement test for half-open circuit concurrency
       assert true
     end
   end
 
   describe "Recovery time calculation" do
+    @tag :pending
     test "CircuitBreaker.get_recovery_time_remaining returns time in ms" do
+      # TODO: Implement test for recovery time calculation
       assert true
     end
 
+    @tag :pending
     test "calculate_min_recovery_time finds shortest recovery across providers" do
+      # TODO: Implement test for min recovery time calculation
       assert true
     end
 
+    @tag :pending
     test "retry-after hint included in error message" do
+      # TODO: Implement test to verify retry-after in error message
       assert true
     end
   end
 
   describe "Degraded mode logging and observability" do
+    @tag :pending
     test "logs when entering degraded mode" do
+      # TODO: Implement test to verify logging
       assert true
     end
 
+    @tag :pending
     test "logs degraded mode success with channel details" do
+      # TODO: Implement test to verify logging
       assert true
     end
 
+    @tag :pending
     test "logs channel exhaustion with retry hint" do
+      # TODO: Implement test to verify logging
       assert true
     end
   end

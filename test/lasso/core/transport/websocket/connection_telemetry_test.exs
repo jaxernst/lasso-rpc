@@ -41,7 +41,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
       # Clean up WebSocket connection
       cleanup_ws_connection(endpoint.id)
       # Clean up circuit breaker
-      cleanup_circuit_breaker(endpoint.id)
+      cleanup_circuit_breaker(endpoint.chain_name, endpoint.id)
       # Clean up application config
       Application.delete_env(:lasso, :ws_client_module)
       Application.delete_env(:lasso, :ws_client_opts)
@@ -57,12 +57,11 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
     end
   end
 
-  defp cleanup_circuit_breaker(provider_id) do
-    key = "#{@default_profile}:test_chain:#{provider_id}:ws"
+  defp cleanup_circuit_breaker(chain_name, provider_id) do
+    # CircuitBreaker.via_name converts tuple to string format: "profile:chain:provider:transport"
+    key = "#{@default_profile}:#{chain_name}:#{provider_id}:ws"
 
-    case GenServer.whereis(
-           {:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}
-         ) do
+    case GenServer.whereis({:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}) do
       nil -> :ok
       pid -> catch_exit(GenServer.stop(pid, :normal))
     end

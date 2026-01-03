@@ -104,35 +104,103 @@ defmodule Lasso.Config.ProfileIsolationTest do
   describe "Metrics/Benchmark isolation" do
     test "benchmark data recorded in profile_a doesn't appear in profile_b" do
       # Record some metrics in profile_a
-      BenchmarkStore.record_rpc_call(@profile_a, @test_chain, "provider1", "eth_blockNumber", 100, :success)
-      BenchmarkStore.record_rpc_call(@profile_a, @test_chain, "provider1", "eth_blockNumber", 150, :success)
+      BenchmarkStore.record_rpc_call(
+        @profile_a,
+        @test_chain,
+        "provider1",
+        "eth_blockNumber",
+        100,
+        :success
+      )
+
+      BenchmarkStore.record_rpc_call(
+        @profile_a,
+        @test_chain,
+        "provider1",
+        "eth_blockNumber",
+        150,
+        :success
+      )
 
       # Get metrics from profile_a (should have data)
-      metrics_a = BenchmarkStore.get_rpc_performance(@profile_a, @test_chain, "provider1", "eth_blockNumber")
+      metrics_a =
+        BenchmarkStore.get_rpc_performance(
+          @profile_a,
+          @test_chain,
+          "provider1",
+          "eth_blockNumber"
+        )
+
       assert metrics_a != nil
       assert metrics_a.total_calls > 0
 
       # Get metrics from profile_b (should have no data - empty/zeroed metrics)
-      metrics_b = BenchmarkStore.get_rpc_performance(@profile_b, @test_chain, "provider1", "eth_blockNumber")
-      # Profile B hasn't recorded any data, so should be nil or have zero calls
-      assert metrics_b == nil || metrics_b.total_calls == 0
+      metrics_b =
+        BenchmarkStore.get_rpc_performance(
+          @profile_b,
+          @test_chain,
+          "provider1",
+          "eth_blockNumber"
+        )
+
+      # Profile B hasn't recorded any data, so should have zero calls
+      assert metrics_b.total_calls == 0
     end
 
     test "clear_chain_metrics only affects the specified profile" do
       # Record metrics in both profiles
-      BenchmarkStore.record_rpc_call(@profile_a, @test_chain, "provider1", "eth_blockNumber", 100, :success)
-      BenchmarkStore.record_rpc_call(@profile_b, @test_chain, "provider1", "eth_blockNumber", 200, :success)
+      BenchmarkStore.record_rpc_call(
+        @profile_a,
+        @test_chain,
+        "provider1",
+        "eth_blockNumber",
+        100,
+        :success
+      )
+
+      BenchmarkStore.record_rpc_call(
+        @profile_b,
+        @test_chain,
+        "provider1",
+        "eth_blockNumber",
+        200,
+        :success
+      )
 
       # Verify both have metrics
-      assert BenchmarkStore.get_rpc_performance(@profile_a, @test_chain, "provider1", "eth_blockNumber") != nil
-      assert BenchmarkStore.get_rpc_performance(@profile_b, @test_chain, "provider1", "eth_blockNumber") != nil
+      assert BenchmarkStore.get_rpc_performance(
+               @profile_a,
+               @test_chain,
+               "provider1",
+               "eth_blockNumber"
+             ) != nil
+
+      assert BenchmarkStore.get_rpc_performance(
+               @profile_b,
+               @test_chain,
+               "provider1",
+               "eth_blockNumber"
+             ) != nil
 
       # Clear metrics for profile_a only
       BenchmarkStore.clear_chain_metrics(@profile_a, @test_chain)
 
       # Verify profile_a is cleared but profile_b still has data
-      metrics_a_after = BenchmarkStore.get_rpc_performance(@profile_a, @test_chain, "provider1", "eth_blockNumber")
-      metrics_b_after = BenchmarkStore.get_rpc_performance(@profile_b, @test_chain, "provider1", "eth_blockNumber")
+      metrics_a_after =
+        BenchmarkStore.get_rpc_performance(
+          @profile_a,
+          @test_chain,
+          "provider1",
+          "eth_blockNumber"
+        )
+
+      metrics_b_after =
+        BenchmarkStore.get_rpc_performance(
+          @profile_b,
+          @test_chain,
+          "provider1",
+          "eth_blockNumber"
+        )
 
       # After clearing, metrics return a zeroed struct
       assert metrics_a_after.total_calls == 0

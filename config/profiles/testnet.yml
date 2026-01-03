@@ -97,7 +97,7 @@ chains:
 
     # Per-method lag overrides for selection
     selection:
-      max_lag_blocks: 5 # Default: stricter for L2 (faster blocks)
+      max_lag_blocks: 5 # More tolerant for L2 (accounts for faster block times)
 
     connection:
       heartbeat_interval: 10000

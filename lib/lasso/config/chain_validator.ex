@@ -148,8 +148,13 @@ defmodule Lasso.Config.ChainValidator do
   2. If canonical, `chain_id` in config must match expected value
   3. Custom chains must have a valid chain_id specified
   """
-  @spec validate_chain(String.t(), map()) :: :ok | {:error, term()}
-  def validate_chain(chain_name, config) when is_binary(chain_name) and is_map(config) do
+  @spec validate_chain(String.t(), map() | ChainConfig.t()) :: :ok | {:error, term()}
+  def validate_chain(chain_name, %Lasso.Config.ChainConfig{} = config) do
+    validate_chain(chain_name, %{chain_id: config.chain_id})
+  end
+
+  def validate_chain(chain_name, config)
+      when is_binary(chain_name) and is_map(config) and not is_struct(config) do
     cond do
       # Check if it's a custom chain
       custom_chain?(chain_name) ->
@@ -167,10 +172,6 @@ defmodule Lasso.Config.ChainValidator do
       true ->
         validate_chain_id(chain_name, config)
     end
-  end
-
-  def validate_chain(chain_name, %Lasso.Config.ChainConfig{} = config) do
-    validate_chain(chain_name, %{chain_id: config.chain_id})
   end
 
   # Private functions
@@ -240,7 +241,7 @@ defmodule Lasso.Config.ChainValidator do
 
   ## Examples
 
-      iex> ChainValidator.format_error({:invalid_chain_name, "eth", ["ethereum"]})
+      iex> ChainValidator.format_error({:invalid_chain_name, "eth", ["ethereum"], "Use canonical name. Did you mean: ethereum?"})
       "Invalid chain name \\"eth\\". Did you mean: ethereum?"
   """
   @spec format_error(term()) :: String.t()

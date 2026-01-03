@@ -191,7 +191,7 @@ defmodule Lasso.Config.ChainConfig do
               color: "#6B7280",
               size: :md
 
-    @doc "Check if this chain is an L2 (optimistic or ZK rollup)"
+    @doc "Check if this chain is an L2 "
     def l2?(%__MODULE__{category: category}), do: category in [:l2]
 
     @doc "Check if this chain is a mainnet chain"

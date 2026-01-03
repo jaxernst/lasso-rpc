@@ -92,20 +92,21 @@ defmodule Lasso.Testing.IntegrationHelper do
     timeout = Keyword.get(opts, :timeout, 5_000)
     skip_cb_check = Keyword.get(opts, :skip_cb_check, false)
     skip_health_check = Keyword.get(opts, :skip_health_check, false)
+    profile = Keyword.get(opts, :profile, "default")
 
     deadline = System.monotonic_time(:millisecond) + timeout
 
     # Wait for provider registration
-    wait_for_provider_registered(chain, provider_id, deadline)
+    wait_for_provider_registered(chain, provider_id, profile, deadline)
 
     # Wait for circuit breakers (unless skipped)
     if !skip_cb_check do
-      wait_for_circuit_breakers_ready(chain, provider_id, deadline)
+      wait_for_circuit_breakers_ready(chain, provider_id, profile, deadline)
     end
 
     # Wait for health status (unless skipped)
     if !skip_health_check do
-      wait_for_provider_health_available(chain, provider_id, deadline)
+      wait_for_provider_health_available(chain, provider_id, profile, deadline)
     end
 
     :ok
@@ -276,11 +277,11 @@ defmodule Lasso.Testing.IntegrationHelper do
 
   # Private synchronization helpers
 
-  defp wait_for_provider_registered(chain, provider_id, deadline) do
+  defp wait_for_provider_registered(chain, provider_id, profile, deadline) do
     interval = 50
 
     case poll_until_deadline(deadline, interval, fn ->
-           provider_registered?(chain, provider_id)
+           provider_registered?(chain, provider_id, profile)
          end) do
       :ok ->
         :ok
@@ -290,7 +291,7 @@ defmodule Lasso.Testing.IntegrationHelper do
     end
   end
 
-  defp wait_for_circuit_breakers_ready(chain, provider_id, deadline) do
+  defp wait_for_circuit_breakers_ready(chain, provider_id, profile, deadline) do
     interval = 50
 
     # For mock providers, circuit breakers are created lazily on first request
@@ -301,7 +302,7 @@ defmodule Lasso.Testing.IntegrationHelper do
     transports = [:http, :ws]
 
     Enum.each(transports, fn transport ->
-      breaker_id = {"default", chain, provider_id, transport}
+      breaker_id = {profile, chain, provider_id, transport}
 
       case poll_until_deadline(short_deadline, interval, fn ->
              circuit_breaker_exists?(breaker_id)
@@ -319,11 +320,11 @@ defmodule Lasso.Testing.IntegrationHelper do
     :ok
   end
 
-  defp wait_for_provider_health_available(chain, provider_id, deadline) do
+  defp wait_for_provider_health_available(chain, provider_id, profile, deadline) do
     interval = 50
 
     case poll_until_deadline(deadline, interval, fn ->
-           provider_health_available?(chain, provider_id)
+           provider_health_available?(chain, provider_id, profile)
          end) do
       :ok ->
         :ok
@@ -349,8 +350,8 @@ defmodule Lasso.Testing.IntegrationHelper do
     end
   end
 
-  defp provider_registered?(chain, provider_id) do
-    case Lasso.RPC.ProviderPool.get_status("default", chain) do
+  defp provider_registered?(chain, provider_id, profile \\ "default") do
+    case Lasso.RPC.ProviderPool.get_status(profile, chain) do
       {:ok, status} ->
         # Check if provider exists in the providers list
         Enum.any?(status.providers, fn p -> p.id == provider_id end)
@@ -374,8 +375,8 @@ defmodule Lasso.Testing.IntegrationHelper do
     end
   end
 
-  defp provider_health_available?(chain, provider_id) do
-    case Lasso.RPC.ProviderPool.get_status("default", chain) do
+  defp provider_health_available?(chain, provider_id, profile \\ "default") do
+    case Lasso.RPC.ProviderPool.get_status(profile, chain) do
       {:ok, status} ->
         # Find the provider and check if it has a health status
         case Enum.find(status.providers, fn p -> p.id == provider_id end) do

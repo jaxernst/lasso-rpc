@@ -65,19 +65,18 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
 
   @impl true
   def record_request(profile, chain, provider_id, method, duration_ms, result, opts) do
-    timestamp = Keyword.get(opts, :timestamp)
     transport = Keyword.get(opts, :transport, :http)
 
     method_key = "#{method}@#{transport}"
 
+    # Timestamps are captured automatically inside record_rpc_call
     BenchmarkStore.record_rpc_call(
       profile,
       chain,
       provider_id,
       method_key,
       duration_ms,
-      result,
-      timestamp
+      result
     )
 
     :ok

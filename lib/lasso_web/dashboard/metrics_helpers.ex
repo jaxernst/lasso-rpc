@@ -39,11 +39,12 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     cutoff = System.monotonic_time(:millisecond) - window_ms
 
     # Select recent_latencies from all RPC entries updated within the window
-    # Schema: {{provider_id, method, :rpc}, successes, total, avg_duration, recent_latencies, last_updated}
+    # New 7-tuple schema: monotonic_last_updated is 6th field (:"$6")
+    # {{provider_id, method, :rpc}, successes, total, avg_duration, recent_latencies, monotonic_ts, system_ts}
     latencies =
       :ets.select(score_table, [
-        {{{:_, :_, :rpc}, :_, :_, :_, :"$1", :"$2"}, [{:>=, :"$2", cutoff}, {:is_list, :"$1"}],
-         [:"$1"]}
+        {{{:_, :_, :rpc}, :_, :_, :_, :"$1", :"$6", :_},
+         [{:>=, :"$6", cutoff}, {:is_list, :"$1"}], [:"$1"]}
       ])
       |> List.flatten()
 
@@ -68,9 +69,10 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     cutoff = System.monotonic_time(:millisecond) - window_ms
 
     # Select {successes, total} from all RPC entries updated within the window
+    # New 7-tuple: monotonic_last_updated is 6th field (:"$6")
     stats =
       :ets.select(score_table, [
-        {{{:_, :_, :rpc}, :"$1", :"$2", :_, :_, :"$3"}, [{:>=, :"$3", cutoff}],
+        {{{:_, :_, :rpc}, :"$1", :"$2", :_, :_, :"$6", :_}, [{:>=, :"$6", cutoff}],
          [{{:"$1", :"$2"}}]}
       ])
 
@@ -93,15 +95,21 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   @doc """
   Get latency percentiles for a specific provider from ETS within a time window.
   """
-  def get_provider_windowed_percentiles_from_ets(profile, chain_name, provider_id, window_ms \\ 300_000) do
+  def get_provider_windowed_percentiles_from_ets(
+        profile,
+        chain_name,
+        provider_id,
+        window_ms \\ 300_000
+      ) do
     score_table = score_table_name(profile, chain_name)
     cutoff = System.monotonic_time(:millisecond) - window_ms
 
     # Select recent_latencies for this specific provider
+    # New 7-tuple: monotonic_last_updated is 6th field (:"$6")
     latencies =
       :ets.select(score_table, [
-        {{{:"$1", :_, :rpc}, :_, :_, :_, :"$2", :"$3"},
-         [{:==, :"$1", provider_id}, {:>=, :"$3", cutoff}, {:is_list, :"$2"}], [:"$2"]}
+        {{{:"$1", :_, :rpc}, :_, :_, :_, :"$2", :"$6", :_},
+         [{:==, :"$1", provider_id}, {:>=, :"$6", cutoff}, {:is_list, :"$2"}], [:"$2"]}
       ])
       |> List.flatten()
 
@@ -115,15 +123,21 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   @doc """
   Get success rate for a specific provider from ETS within a time window.
   """
-  def get_provider_windowed_success_rate_from_ets(profile, chain_name, provider_id, window_ms \\ 300_000) do
+  def get_provider_windowed_success_rate_from_ets(
+        profile,
+        chain_name,
+        provider_id,
+        window_ms \\ 300_000
+      ) do
     score_table = score_table_name(profile, chain_name)
     cutoff = System.monotonic_time(:millisecond) - window_ms
 
     # Select {successes, total} for this specific provider
+    # New 7-tuple: monotonic_last_updated is 6th field (:"$6")
     stats =
       :ets.select(score_table, [
-        {{{:"$1", :_, :rpc}, :"$2", :"$3", :_, :_, :"$4"},
-         [{:==, :"$1", provider_id}, {:>=, :"$4", cutoff}], [{{:"$2", :"$3"}}]}
+        {{{:"$1", :_, :rpc}, :"$2", :"$3", :_, :_, :"$6", :_},
+         [{:==, :"$1", provider_id}, {:>=, :"$6", cutoff}], [{{:"$2", :"$3"}}]}
       ])
 
     {total_successes, total_calls} =
@@ -148,7 +162,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
   @doc "Assign chain performance metrics to assigns"
   def assign_chain_performance_metrics(assigns, chain_name) do
-    profile = Map.get(assigns, :selected_profile, "default")
+    profile = assigns.selected_profile
 
     # Get chain-wide statistics
     chain_stats = BenchmarkStore.get_chain_wide_stats(profile, chain_name)
@@ -205,7 +219,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
   @doc "Assign provider performance metrics to assigns"
   def assign_provider_performance_metrics(assigns, provider_id) do
-    profile = Map.get(assigns, :selected_profile, "default")
+    profile = assigns.selected_profile
 
     # Get the chain for this provider
     chain =
@@ -225,7 +239,12 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   end
 
   @doc "Get provider performance metrics (non-socket version)"
-  def get_provider_performance_metrics(provider_id, connections \\ [], routing_events \\ [], profile \\ "default") do
+  def get_provider_performance_metrics(
+        provider_id,
+        connections \\ [],
+        routing_events \\ [],
+        profile \\ "default"
+      ) do
     # Get the chain for this provider
     chain =
       case Enum.find(connections, &(&1.id == provider_id)) do
@@ -250,8 +269,11 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     five_min_ms = Constants.metrics_window_5min()
 
     # Get time-windowed metrics from ETS (accurate 5-minute aggregations)
-    {p50, p95} = get_provider_windowed_percentiles_from_ets(profile, chain, provider_id, five_min_ms)
-    success_rate = get_provider_windowed_success_rate_from_ets(profile, chain, provider_id, five_min_ms)
+    {p50, p95} =
+      get_provider_windowed_percentiles_from_ets(profile, chain, provider_id, five_min_ms)
+
+    success_rate =
+      get_provider_windowed_success_rate_from_ets(profile, chain, provider_id, five_min_ms)
 
     # Get call counts from BenchmarkStore real-time stats
     calls_last_minute = Map.get(real_time_stats, :calls_last_minute, 0)
@@ -299,7 +321,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
   @doc "Get chain performance metrics (non-socket version)"
   def get_chain_performance_metrics(assigns, chain_name) do
-    profile = Map.get(assigns, :selected_profile, "default")
+    profile = assigns.selected_profile
 
     # Chain-specific routing events (from 100-item buffer - used for "live feel" metrics)
     chain_events = Enum.filter(assigns.routing_events, &(&1.chain == chain_name))

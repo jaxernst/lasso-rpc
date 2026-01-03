@@ -29,10 +29,6 @@ defmodule Lasso.Application do
     # Keys: {:provider_sync, profile, chain, provider_id}, {:block_height, chain, {profile, provider_id}}
     :ets.new(:lasso_provider_state, [:named_table, :public, :set, read_concurrency: true])
 
-    # Chain reference counting for cleanup tracking (atomic counters)
-    # Keys: chain_name => count of profiles using this chain
-    :ets.new(:lasso_chain_refcount, [:named_table, :public, :set, read_concurrency: true])
-
     children =
       [
         # Start PubSub for real-time messaging
@@ -90,9 +86,6 @@ defmodule Lasso.Application do
         # Start upstream subscription registry for tracking subscription consumers
         Lasso.Core.Streaming.UpstreamSubscriptionRegistry,
 
-        # Global chain supervisor for shared components (BlockSync, HealthProbe per chain)
-        Lasso.GlobalChainSupervisor,
-
         # Profile-scoped chain supervisor for (profile, chain) pairs
         Lasso.ProfileChainSupervisor,
 
@@ -115,7 +108,9 @@ defmodule Lasso.Application do
       # This must happen after ConfigStore starts but before chains are started
       case Lasso.Config.ConfigStore.load_all_profiles() do
         {:ok, profile_slugs} ->
-          Logger.info("Loaded #{length(profile_slugs)} profiles: #{Enum.join(profile_slugs, ", ")}")
+          Logger.info(
+            "Loaded #{length(profile_slugs)} profiles: #{Enum.join(profile_slugs, ", ")}"
+          )
 
           # Validate that "default" profile exists after loading all profiles
           # This ensures the system can always fall back to "default" profile
@@ -146,7 +141,6 @@ defmodule Lasso.Application do
 
   defp start_all_chains do
     alias Lasso.Config.ConfigStore
-    alias Lasso.GlobalChainSupervisor
 
     # Get all profiles from ConfigStore
     profiles = ConfigStore.list_profiles()
@@ -155,48 +149,19 @@ defmodule Lasso.Application do
       Logger.warning("No profiles loaded - skipping chain startup")
       {:ok, 0}
     else
-      # Track unique chains for global process startup
-      started_global_chains = MapSet.new()
-
       # Start chains for each profile
-      {results, _} =
-        Enum.flat_map_reduce(profiles, started_global_chains, fn profile, global_chains ->
+      results =
+        Enum.flat_map(profiles, fn profile ->
           case ConfigStore.get_profile_chains(profile) do
             {:ok, chains} ->
-              profile_results =
-                Enum.map(chains, fn {chain_name, chain_config} ->
-                  # Start global chain processes if not already started
-                  global_chains =
-                    if chain_name in global_chains do
-                      global_chains
-                    else
-                      case GlobalChainSupervisor.ensure_chain_processes(chain_name) do
-                        :ok ->
-                          Logger.debug("Started global processes for chain: #{chain_name}")
-                          MapSet.put(global_chains, chain_name)
-
-                        {:error, reason} ->
-                          Logger.error("Failed to start global processes for #{chain_name}: #{inspect(reason)}")
-                          global_chains
-                      end
-                    end
-
-                  # Start profile chain supervisor
-                  result = start_profile_chain(profile, chain_name, chain_config)
-                  {{profile, chain_name, result}, global_chains}
-                end)
-
-              # Extract results and last global_chains state
-              {results, last_global} =
-                Enum.map_reduce(profile_results, global_chains, fn {result, gc}, _acc ->
-                  {result, gc}
-                end)
-
-              {results, last_global}
+              Enum.map(chains, fn {chain_name, chain_config} ->
+                result = start_profile_chain(profile, chain_name, chain_config)
+                {profile, chain_name, result}
+              end)
 
             {:error, :not_found} ->
               Logger.warning("Profile #{profile} not found during chain startup")
-              {[], global_chains}
+              []
           end
         end)
 
@@ -216,7 +181,9 @@ defmodule Lasso.Application do
         :ok
 
       {:error, reason} ->
-        Logger.warning("Chain #{chain_name} validation failed for profile #{profile}: #{inspect(reason)}")
+        Logger.warning(
+          "Chain #{chain_name} validation failed for profile #{profile}: #{inspect(reason)}"
+        )
     end
 
     case Lasso.ProfileChainSupervisor.start_profile_chain(profile, chain_name, chain_config) do
@@ -225,7 +192,10 @@ defmodule Lasso.Application do
         result
 
       {:error, reason} = result ->
-        Logger.error("✗ Failed to start chain supervisor: #{profile}/#{chain_name} - #{inspect(reason)}")
+        Logger.error(
+          "✗ Failed to start chain supervisor: #{profile}/#{chain_name} - #{inspect(reason)}"
+        )
+
         result
     end
   end

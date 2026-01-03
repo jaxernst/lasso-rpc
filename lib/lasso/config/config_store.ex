@@ -14,7 +14,6 @@ defmodule Lasso.Config.ConfigStore do
   - `{:profile_list}` -> List of all profile slugs
   - `{:chain_profiles, chain}` -> List of profiles containing this chain
   - `{:all_chains}` -> Union of all chain names across all profiles
-  - `{:global_providers, chain}` -> `[{profile, provider_id}, ...]`
   - `{:chain_id_index}` -> `%{chain_id => chain_name}` for cross-profile lookups
 
   ## Configuration Backend
@@ -202,48 +201,33 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   @doc """
-  Lists all global provider keys for a chain (across all profiles).
+  Find the canonical chain name for a numeric chain ID.
 
-  Returns list of `{profile, provider_id}` tuples for use in global components
-  like BlockSync and HealthProbe.
+  Returns the chain name from the chain_id index without loading the full config.
+  The index prefers "default" profile when multiple profiles define the same chain_id.
+
+  ## Examples
+
+      find_chain_name_by_id(1)  # Returns {:ok, "ethereum"} if chain_id 1 maps to ethereum
+
+  Note: This does NOT return chain configuration, only the name mapping.
+  Callers should verify the chain exists in their target profile separately.
   """
-  @spec list_global_providers(String.t()) :: [{String.t(), String.t()}]
-  def list_global_providers(chain_name) do
-    case :ets.lookup(@config_table, {:global_providers, chain_name}) do
-      [{{:global_providers, ^chain_name}, providers}] -> providers
-      [] -> []
-    end
-  end
-
-  @doc """
-  Gets a chain configuration by chain name or chain ID.
-
-  Searches across all profiles to find a matching chain by numeric ID.
-  For name lookups, searches the default profile first.
-
-  Note: This is a cross-profile lookup used for RPC routing where only
-  the chain ID/name is known (e.g., `/rpc/1` or `/rpc/ethereum`).
-  """
-  @spec get_chain_by_name_or_id(String.t() | integer()) ::
-          {:ok, {String.t(), ChainConfig.t()}} | {:error, :not_found | :invalid_format}
-  def get_chain_by_name_or_id(chain_id) when is_integer(chain_id) do
-    find_chain_by_id(chain_id)
-  end
-
-  def get_chain_by_name_or_id(chain_name) when is_binary(chain_name) do
-    # Try default profile first for name lookup
-    case get_chain(@default_profile, chain_name) do
-      {:ok, chain_config} ->
-        {:ok, {chain_name, chain_config}}
-
-      {:error, :not_found} ->
-        # Try parsing as numeric chain ID
-        case Integer.parse(chain_name) do
-          {chain_id, ""} -> find_chain_by_id(chain_id)
-          _ -> {:error, :invalid_format}
+  @spec find_chain_name_by_id(integer()) :: {:ok, String.t()} | {:error, :not_found}
+  def find_chain_name_by_id(chain_id) when is_integer(chain_id) do
+    case :ets.lookup(@config_table, {:chain_id_index}) do
+      [{{:chain_id_index}, id_index}] ->
+        case Map.get(id_index, chain_id) do
+          nil -> {:error, :not_found}
+          chain_name -> {:ok, chain_name}
         end
+
+      [] ->
+        {:error, :not_found}
     end
   end
+
+  ## Public API - Chain ID Lookups
 
   ## Public API - Runtime Registration (for tests)
 
@@ -346,14 +330,17 @@ defmodule Lasso.Config.ConfigStore do
 
   @impl true
   def handle_call({:register_chain_runtime, profile, chain_name, chain_attrs}, _from, state) do
-    with {:error, :not_found} <- get_chain(profile, chain_name),
-         chain_config <- normalize_chain_config(chain_name, chain_attrs) do
-      add_chain_to_profile(profile, chain_name, chain_config)
-      update_chain_id_index(chain_name, chain_config)
-      Logger.debug("Registered chain #{chain_name} in profile #{profile} (runtime)")
-      {:reply, :ok, state}
-    else
-      {:ok, _existing} -> {:reply, {:error, :already_exists}, state}
+    # Use GenServer serialization to make check-then-act atomic
+    case get_chain(profile, chain_name) do
+      {:ok, _existing} ->
+        {:reply, {:error, :already_exists}, state}
+
+      {:error, :not_found} ->
+        chain_config = normalize_chain_config(chain_name, chain_attrs)
+        add_chain_to_profile(profile, chain_name, chain_config)
+        update_chain_id_index(chain_name, chain_config)
+        Logger.debug("Registered chain #{chain_name} in profile #{profile} (runtime)")
+        {:reply, :ok, state}
     end
   end
 
@@ -492,7 +479,6 @@ defmodule Lasso.Config.ConfigStore do
     :ets.delete(@config_table, {:all_chains})
     :ets.delete(@config_table, {:chain_id_index})
     :ets.match_delete(@config_table, {{:chain_profiles, :_}, :_})
-    :ets.match_delete(@config_table, {{:global_providers, :_}, :_})
   end
 
   defp store_profile(spec) do
@@ -528,57 +514,56 @@ defmodule Lasso.Config.ConfigStore do
       :ets.insert(@config_table, {{:chain_profiles, chain}, profiles})
     end)
 
-    # Build global providers index
-    global_providers_map =
-      profile_specs
-      |> Enum.flat_map(fn spec ->
-        Enum.flat_map(spec.chains, fn {chain_name, chain_config} ->
-          Enum.map(chain_config.providers, fn provider ->
-            {chain_name, {spec.slug, provider.id}}
-          end)
-        end)
-      end)
-      |> Enum.group_by(fn {chain, _} -> chain end, fn {_, provider} -> provider end)
-
-    Enum.each(global_providers_map, fn {chain, providers} ->
-      :ets.insert(@config_table, {{:global_providers, chain}, providers})
-    end)
-
     # Build chain_id index (for cross-profile lookups by numeric chain ID)
-    chain_id_index =
+    # Collect all {chain_id, {profile_slug, chain_name}} tuples
+    chain_id_list =
       profile_specs
       |> Enum.flat_map(fn spec ->
         Enum.flat_map(spec.chains, fn {chain_name, chain_config} ->
           if chain_config.chain_id do
-            [{chain_config.chain_id, chain_name}]
+            [{chain_config.chain_id, {spec.slug, chain_name}}]
           else
             []
           end
         end)
       end)
+
+    # Check for duplicates and warn
+    duplicates =
+      chain_id_list
+      |> Enum.group_by(fn {chain_id, _} -> chain_id end)
+      |> Enum.filter(fn {_, matches} -> length(matches) > 1 end)
+
+    if duplicates != [] do
+      Logger.warning("Duplicate chain IDs detected across profiles",
+        duplicates:
+          Enum.map(duplicates, fn {chain_id, matches} ->
+            {chain_id, Enum.map(matches, fn {_, {profile, chain}} -> {profile, chain} end)}
+          end)
+      )
+    end
+
+    # Build index with resolution strategy: prefer default profile, otherwise first match
+    chain_id_index =
+      chain_id_list
+      |> Enum.group_by(fn {chain_id, _} -> chain_id end)
+      |> Enum.map(fn {chain_id, matches} ->
+        # Prefer default profile if present, otherwise use first match
+        resolved =
+          case Enum.find(matches, fn {_, {profile, _}} -> profile == @default_profile end) do
+            {_, {_profile, chain_name}} ->
+              chain_name
+
+            nil ->
+              {_, {_profile, chain_name}} = List.first(matches)
+              chain_name
+          end
+
+        {chain_id, resolved}
+      end)
       |> Map.new()
 
     :ets.insert(@config_table, {{:chain_id_index}, chain_id_index})
-  end
-
-  defp find_chain_by_id(chain_id) do
-    case :ets.lookup(@config_table, {:chain_id_index}) do
-      [{{:chain_id_index}, id_index}] ->
-        case Map.get(id_index, chain_id) do
-          nil ->
-            {:error, :not_found}
-
-          chain_name ->
-            # Return chain from default profile (used for routing)
-            case get_chain(@default_profile, chain_name) do
-              {:ok, chain_config} -> {:ok, {chain_name, chain_config}}
-              error -> error
-            end
-        end
-
-      [] ->
-        {:error, :not_found}
-    end
   end
 
   defp add_chain_to_profile(profile, chain_name, chain_config) do
@@ -591,16 +576,21 @@ defmodule Lasso.Config.ConfigStore do
     updated_chains = Map.put(chains, chain_name, chain_config)
     :ets.insert(@config_table, {{:profile, profile, :chains}, updated_chains})
 
-    # Update indices
-    update_chain_profiles_index(chain_name, profile)
-    update_all_chains_index(chain_name)
+    # Update indices atomically
+    update_indices_for_chain_add(profile, chain_name, chain_config)
   end
 
   defp remove_chain_from_profile(profile, chain_name) do
     case :ets.lookup(@config_table, {:profile, profile, :chains}) do
       [{{:profile, ^profile, :chains}, chains}] ->
+        chain_config = Map.get(chains, chain_name)
         updated_chains = Map.delete(chains, chain_name)
         :ets.insert(@config_table, {{:profile, profile, :chains}, updated_chains})
+
+        # Update indices atomically after chain is removed
+        if chain_config do
+          update_indices_for_chain_remove(profile, chain_name, chain_config)
+        end
 
       [] ->
         :ok
@@ -642,16 +632,132 @@ defmodule Lasso.Config.ConfigStore do
     end
   end
 
-  defp update_chain_id_index(chain_name, chain_config) do
-    if chain_config.chain_id do
-      current =
+  defp update_chain_id_index(_chain_name, chain_config) do
+    rebuild_chain_id_entry(chain_config.chain_id)
+  end
+
+  # Rebuild a single chain_id entry by scanning profiles and preferring default profile if present.
+  defp rebuild_chain_id_entry(nil), do: :ok
+
+  defp rebuild_chain_id_entry(chain_id) do
+    matches =
+      :ets.match(@config_table, {{:profile, :"$1", :chains}, :"$2"})
+      |> Enum.flat_map(fn [profile, chains] ->
+        Enum.flat_map(chains, fn {chain_name, cc} ->
+          if cc.chain_id == chain_id, do: [{profile, chain_name}], else: []
+        end)
+      end)
+
+    case matches do
+      [] ->
         case :ets.lookup(@config_table, {:chain_id_index}) do
-          [{{:chain_id_index}, index}] -> index
-          [] -> %{}
+          [{{:chain_id_index}, index}] ->
+            :ets.insert(@config_table, {{:chain_id_index}, Map.delete(index, chain_id)})
+
+          [] ->
+            :ok
         end
 
-      updated = Map.put(current, chain_config.chain_id, chain_name)
-      :ets.insert(@config_table, {{:chain_id_index}, updated})
+      list ->
+        preferred =
+          Enum.find(list, fn {profile, _} -> profile == @default_profile end) ||
+            hd(list)
+
+        {_profile, chain_name} = preferred
+
+        current =
+          case :ets.lookup(@config_table, {:chain_id_index}) do
+            [{{:chain_id_index}, index}] -> index
+            [] -> %{}
+          end
+
+        :ets.insert(@config_table, {{:chain_id_index}, Map.put(current, chain_id, chain_name)})
+    end
+  end
+
+  # Atomic index updates for chain addition
+  defp update_indices_for_chain_add(profile, chain_name, chain_config) do
+    # Update chain_profiles index (add profile to chain's profile list)
+    update_chain_profiles_index(chain_name, profile)
+
+    # Update all_chains index (add chain if not present)
+    update_all_chains_index(chain_name)
+
+    # Update chain_id index if chain has a numeric ID
+    if chain_config.chain_id do
+      update_chain_id_index(chain_name, chain_config)
+    end
+  end
+
+  # Atomic index updates for chain removal
+  defp update_indices_for_chain_remove(profile, chain_name, chain_config) do
+    # Remove profile from chain_profiles index
+    remove_profile_from_chain_profiles(chain_name, profile)
+
+    # Remove chain from all_chains index if no profiles remain
+    maybe_remove_chain_from_all_chains(chain_name)
+
+    # Remove from chain_id index if applicable
+    if chain_config.chain_id do
+      remove_from_chain_id_index(chain_config.chain_id, chain_name)
+    end
+  end
+
+  # Remove profile from chain_profiles index
+  defp remove_profile_from_chain_profiles(chain_name, profile) do
+    case :ets.lookup(@config_table, {:chain_profiles, chain_name}) do
+      [{{:chain_profiles, ^chain_name}, profiles}] ->
+        updated = List.delete(profiles, profile)
+
+        if updated == [] do
+          :ets.delete(@config_table, {:chain_profiles, chain_name})
+        else
+          :ets.insert(@config_table, {{:chain_profiles, chain_name}, updated})
+        end
+
+      [] ->
+        :ok
+    end
+  end
+
+  # Remove chain from all_chains index if no profiles remain
+  defp maybe_remove_chain_from_all_chains(chain_name) do
+    # Check if any profile still has this chain
+    has_chain =
+      :ets.match(@config_table, {{:profile, :"$1", :chains}, :"$2"})
+      |> Enum.any?(fn [_, chains] ->
+        Map.has_key?(chains, chain_name)
+      end)
+
+    if not has_chain do
+      case :ets.lookup(@config_table, {:all_chains}) do
+        [{{:all_chains}, chains}] ->
+          updated = List.delete(chains, chain_name)
+          :ets.insert(@config_table, {{:all_chains}, updated})
+
+        [] ->
+          :ok
+      end
+    end
+  end
+
+  # Remove entry from chain_id_index if it points to this chain
+  defp remove_from_chain_id_index(chain_id, chain_name) do
+    case :ets.lookup(@config_table, {:chain_id_index}) do
+      [{{:chain_id_index}, index}] ->
+        case Map.get(index, chain_id) do
+          ^chain_name ->
+            # Only remove if this chain_id was pointing to this chain_name
+            updated = Map.delete(index, chain_id)
+            :ets.insert(@config_table, {{:chain_id_index}, updated})
+
+          _ ->
+            # chain_id points to a different chain, don't remove
+            :ok
+        end
+
+      [] ->
+        :ok
     end
   end
 
