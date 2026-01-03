@@ -201,6 +201,7 @@ defmodule LassoWeb.Dashboard do
     |> assign(:available_chains, available_chains)
     |> assign(:selected_chain, nil)
     |> assign(:selected_provider, nil)
+    |> assign(:details_collapsed, true)
     |> assign(:events, [])
     |> assign(:routing_events, [])
     |> assign(:provider_events, [])
