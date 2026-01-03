@@ -218,13 +218,14 @@ defmodule TestSupport.MockWSClient do
           end
 
         {:ok, %{"id" => id, "method" => method, "params" => params}} ->
-          # Other methods return mock response with method/params echo
+          # Other methods return mock response echoing request info
           response =
             case mode do
               :result ->
                 # Return the JSON string directly with properly formatted params
-                # This ensures params round-trip correctly through JSON encoding
-                ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"result":{"method":#{Jason.encode!(method)},"params":#{Jason.encode!(params)},"mock_response":true}})
+                # Note: Use "rpc_method" instead of "method" to avoid triggering
+                # EnvelopeParser's notification detection (responses shouldn't have "method" key)
+                ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"result":{"rpc_method":#{Jason.encode!(method)},"params":#{Jason.encode!(params)},"mock_response":true}})
 
               :error ->
                 # Return different error types based on method for more realistic testing

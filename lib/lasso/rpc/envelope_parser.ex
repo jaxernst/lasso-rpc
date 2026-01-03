@@ -369,7 +369,22 @@ defmodule Lasso.RPC.EnvelopeParser do
   # --- Private: Key Detection ---
 
   # Find "result": or "error": key in the envelope (handles any key order)
+  # Rejects notifications (messages with "method" key) since they are not responses.
+  # Per JSON-RPC 2.0 spec: responses have result/error, notifications have method.
   defp find_result_or_error(chunk) do
+    # Check for "method" key first - if present, this is a notification, not a response.
+    # Subscription notifications have format: {"method":"eth_subscription","params":{"result":...}}
+    # The nested "result" inside params would otherwise be incorrectly matched.
+    case find_key_value_start(chunk, "\"method\"") do
+      {:ok, _offset} ->
+        {:error, :not_a_response}
+
+      :nomatch ->
+        find_result_or_error_key(chunk)
+    end
+  end
+
+  defp find_result_or_error_key(chunk) do
     result_match = find_key_value_start(chunk, "\"result\"")
     error_match = find_key_value_start(chunk, "\"error\"")
 
