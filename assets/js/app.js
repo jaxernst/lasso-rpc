@@ -276,6 +276,31 @@ const SimulatorControl = {
     }, 500); // Reduce frequency from 200ms to 500ms
   },
 
+  updated() {
+    // Check if available chains changed (e.g., when profile switches)
+    try {
+      const chainsData = this.el.getAttribute("data-available-chains");
+      const newAvailableChains = chainsData ? JSON.parse(chainsData) : [];
+
+      // Compare with current chains (deep equality check)
+      const chainsChanged = JSON.stringify(this.availableChains) !== JSON.stringify(newAvailableChains);
+
+      if (chainsChanged) {
+        console.log("Available chains changed from", this.availableChains, "to", newAvailableChains);
+        this.availableChains = newAvailableChains;
+        LassoSim.setAvailableChains(this.availableChains);
+
+        // Stop all running simulations since chains changed
+        if (LassoSim.isRunning()) {
+          console.log("Stopping all runs due to chain change");
+          LassoSim.stopAllRuns();
+        }
+      }
+    } catch (e) {
+      console.error("Failed to update available chains:", e);
+    }
+  },
+
   startSimulatorRun(config) {
     try {
       // Use the new run-based API

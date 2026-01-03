@@ -33,6 +33,24 @@ defmodule Lasso.BlockSync.Worker do
 
   @reconnect_delay_ms 5_000
 
+  @type mode :: :ws_only | :ws_with_http | :http_only
+  @type config :: %{
+          subscribe_new_heads: boolean(),
+          poll_interval_ms: pos_integer(),
+          staleness_threshold_ms: pos_integer()
+        }
+
+  @type t :: %__MODULE__{
+          chain: String.t(),
+          profile: String.t(),
+          provider_id: String.t(),
+          mode: mode() | nil,
+          ws_strategy: pid() | nil,
+          http_strategy: pid() | nil,
+          config: config(),
+          ws_retry_count: non_neg_integer()
+        }
+
   defstruct [
     :chain,
     :profile,
@@ -68,6 +86,7 @@ defmodule Lasso.BlockSync.Worker do
   ## GenServer Callbacks
 
   @impl true
+  @spec init({String.t(), String.t(), String.t()}) :: {:ok, t()}
   def init({chain, profile, provider_id}) when is_binary(profile) do
     # Subscribe to WebSocket connection events (profile-scoped)
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{profile}:#{chain}")
@@ -231,6 +250,7 @@ defmodule Lasso.BlockSync.Worker do
     Phoenix.PubSub.broadcast(Lasso.PubSub, "block_sync:#{state.profile}:#{state.chain}", msg)
   end
 
+  @spec load_config(String.t(), String.t(), String.t()) :: config()
   defp load_config(profile, chain, provider_id) do
     case ConfigStore.get_chain(profile, chain) do
       {:ok, chain_config} ->
@@ -270,6 +290,7 @@ defmodule Lasso.BlockSync.Worker do
     end
   end
 
+  @spec has_ws_capability?(String.t(), String.t(), String.t()) :: boolean()
   defp has_ws_capability?(profile, chain, provider_id) do
     case Lasso.RPC.TransportRegistry.get_channel(profile, chain, provider_id, :ws) do
       {:ok, _} -> true

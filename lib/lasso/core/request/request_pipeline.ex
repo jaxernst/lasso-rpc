@@ -146,9 +146,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # Builds a function that returns channels to try, unifying override vs normal selection
   @spec build_channel_source(chain(), method(), RequestOptions.t()) :: channel_source()
-  defp build_channel_source(chain, method, %RequestOptions{provider_override: nil} = opts) do
-    profile = opts.profile || "default"
-
+  defp build_channel_source(chain, method, %RequestOptions{provider_override: nil, profile: profile} = opts) do
     # Normal selection: get best channels via Selection module
     fn _ctx ->
       Selection.select_channels(profile, chain, method,
@@ -159,9 +157,7 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp build_channel_source(chain, method, %RequestOptions{provider_override: provider_id} = opts) do
-    profile = opts.profile || "default"
-
+  defp build_channel_source(chain, method, %RequestOptions{provider_override: provider_id, profile: profile} = opts) do
     # Provider override: get channels for specific provider, optionally with failover
     fn _ctx ->
       primary_channels = get_provider_channels(profile, chain, provider_id, opts.transport)

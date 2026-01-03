@@ -8,7 +8,7 @@ defmodule LassoWeb.Components.DashboardHeader do
 
   def header(assigns) do
     base_tabs = [
-      %{id: "overview", label: "Provider Dashboard"},
+      %{id: "overview", label: "Dashboard"},
       %{id: "metrics", label: "Metrics"}
     ]
 
