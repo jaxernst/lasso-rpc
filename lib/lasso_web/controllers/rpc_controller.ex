@@ -138,20 +138,42 @@ defmodule LassoWeb.RPCController do
       conn = maybe_inject_observability_metadata(conn, ctx)
 
       # Passthrough optimization: send raw bytes directly for Response.Success
-      case result do
-        %Response.Success{raw_bytes: bytes} ->
+      # Skip passthrough if body metadata is requested (requires JSON manipulation)
+      case {result, conn.assigns[:include_meta]} do
+        {%Response.Success{raw_bytes: bytes}, mode} when mode != :body ->
           # Zero-copy passthrough - send raw bytes directly
           conn
           |> put_resp_content_type("application/json")
           |> send_resp(200, bytes)
 
+        {%Response.Success{raw_bytes: bytes}, :body} ->
+          # Need to decode, add metadata, and re-encode
+          case Jason.decode(bytes) do
+            {:ok, decoded} ->
+              response = ObservabilityPlug.enrich_response_body(decoded, ctx)
+              json(conn, response)
+
+            {:error, _} ->
+              # Fallback: send without metadata if decode fails
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(200, bytes)
+          end
+
         # Non-passthrough response (fallback for any non-Response.Success results)
-        _ ->
+        {result, _} ->
           response = %{
             jsonrpc: @jsonrpc_version,
             result: result,
             id: request["id"]
           }
+
+          # Add metadata to body if requested
+          response =
+            case conn.assigns[:include_meta] do
+              :body -> ObservabilityPlug.enrich_response_body(response, ctx)
+              _ -> response
+            end
 
           json(conn, response)
       end
@@ -163,12 +185,19 @@ defmodule LassoWeb.RPCController do
         # Inject observability metadata for errors with context
         conn = maybe_inject_observability_metadata(conn, ctx)
 
-        json(
-          conn,
+        error_response =
           error
           |> JError.from()
           |> JError.to_response(Map.get(params, "id"))
-        )
+
+        # Add metadata to body if requested
+        error_response =
+          case conn.assigns[:include_meta] do
+            :body -> ObservabilityPlug.enrich_response_body(error_response, ctx)
+            _ -> error_response
+          end
+
+        json(conn, error_response)
 
       {:error, error} ->
         # Inject observability metadata even for errors (no context available)
@@ -260,8 +289,22 @@ defmodule LassoWeb.RPCController do
       # Return the Response struct directly for passthrough
       {result, ctx}
     else
+      {:error, error, ctx} ->
+        # Error with context
+        request_id = Map.get(req, "id")
+        jerr = JError.from(error)
+
+        error_response = %Response.Error{
+          id: request_id,
+          jsonrpc: "2.0",
+          error: jerr,
+          raw_bytes: nil
+        }
+
+        {error_response, ctx}
+
       {:error, error} ->
-        # For errors, create a Response.Error or return error map
+        # Error without context
         request_id = Map.get(req, "id")
         jerr = JError.from(error)
 
@@ -300,7 +343,7 @@ defmodule LassoWeb.RPCController do
          conn
        ) do
     Logger.debug("Getting chain ID", chain: chain)
-    profile = conn.assigns[:profile] || "default"
+    profile = conn.assigns[:profile_slug] || "default"
 
     case get_chain_id(profile, chain) do
       {:ok, chain_id} ->
