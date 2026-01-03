@@ -43,9 +43,9 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @impl true
   def start(chain, provider_id, opts) do
+    profile = Keyword.fetch!(opts, :profile)
     parent = Keyword.get(opts, :parent, self())
     poll_interval = Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms)
-    profile = Keyword.get(opts, :profile, "default")
 
     state = %__MODULE__{
       profile: profile,
@@ -171,7 +171,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   end
 
   defp do_poll(profile, chain, provider_id) do
-    cb_id = {chain, provider_id, :http}
+    cb_id = {profile, chain, provider_id, :http}
 
     # Go through circuit breaker - when open, HealthProbe handles recovery detection
     case CircuitBreaker.call(cb_id, fn -> do_poll_request(profile, chain, provider_id) end) do

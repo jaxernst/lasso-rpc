@@ -2,10 +2,9 @@ defmodule Lasso.GlobalChainSupervisor do
   @moduledoc """
   DynamicSupervisor for per-chain global processes shared across profiles.
 
-  This supervisor manages chain-level components that are shared across all profiles
-  using that chain:
-  - BlockSync.Supervisor - Tracks block heights from all profiles' providers
-  - HealthProbe.Supervisor - Monitors provider health for circuit breaker recovery
+  This supervisor manages GlobalChainProcesses instances per chain, providing
+  reference counting for chain lifecycle management. Note that BlockSync and
+  HealthProbe supervisors are now managed by ChainSupervisor (profile-scoped).
 
   ## Reference Counting
 
@@ -18,12 +17,10 @@ defmodule Lasso.GlobalChainSupervisor do
   ```
   GlobalChainSupervisor (DynamicSupervisor)
   └── GlobalChainProcesses (per chain, Supervisor)
-      ├── BlockSync.Supervisor
-      └── HealthProbe.Supervisor
+      └── (empty - reserved for future chain-global processes)
   ```
 
-  Workers within BlockSync.Supervisor and HealthProbe.Supervisor use composite
-  keys `{profile, provider_id}` to track providers across profiles.
+  BlockSync and HealthProbe are now profile-scoped under ChainSupervisor.
   """
 
   use DynamicSupervisor

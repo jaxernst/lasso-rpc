@@ -310,6 +310,7 @@ defmodule Lasso.BlockSync.Worker do
 
   defp start_ws_strategy(state) do
     ws_opts = [
+      profile: state.profile,
       parent: self(),
       staleness_threshold_ms: state.config.staleness_threshold_ms
     ]
@@ -492,6 +493,7 @@ defmodule Lasso.BlockSync.Worker do
   defp attempt_ws_reconnect(state) do
     if state.config.subscribe_new_heads and state.mode == :ws_with_http do
       ws_opts = [
+        profile: state.profile,
         parent: self(),
         staleness_threshold_ms: state.config.staleness_threshold_ms
       ]

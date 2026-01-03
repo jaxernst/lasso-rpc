@@ -315,6 +315,11 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_info({:connection_error, _provider_id, _error}, socket) do
+    {:noreply, socket}
+  end
+
   # Routing decision feed (real or synthetic)
   @impl true
   def handle_info(
@@ -655,25 +660,6 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Provider panel periodic refresh (when provider is selected)
-  @impl true
-  def handle_info(:provider_panel_refresh, socket) do
-    if socket.assigns[:selected_provider] do
-      # Do the work first
-      socket =
-        socket
-        |> fetch_connections()
-        |> update_selected_provider_data()
-
-      # Schedule next refresh AFTER work completes and store timer ref
-      timer_ref = Process.send_after(self(), :provider_panel_refresh, 3_000)
-      {:noreply, assign(socket, :provider_refresh_timer, timer_ref)}
-    else
-      # Provider no longer selected, clear timer ref and don't reschedule
-      {:noreply, assign(socket, :provider_refresh_timer, nil)}
-    end
-  end
-
   # Live sync/block height updates from ProviderPool probes
   @impl true
   def handle_info(
@@ -815,7 +801,20 @@ defmodule LassoWeb.Dashboard do
     }
 
     events = [event | Map.get(socket.assigns, :events, [])] |> Enum.take(100)
-    {:noreply, assign(socket, :events, events)}
+    socket = assign(socket, :events, events)
+
+    # If a provider is selected and this update is for the current profile,
+    # update the connections list and provider panel data in real-time
+    socket =
+      if socket.assigns[:selected_provider] && profile == socket.assigns[:selected_profile] do
+        socket
+        |> fetch_connections()
+        |> update_selected_provider_data()
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   def handle_info(
@@ -2038,9 +2037,6 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_event("select_provider", %{"provider" => ""}, socket) do
-    # Cancel any existing refresh timer when deselecting provider
-    socket = cancel_provider_refresh_timer(socket)
-
     socket =
       socket
       |> assign(:selected_provider, nil)
@@ -2052,18 +2048,11 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_event("select_provider", %{"provider" => provider}, socket) do
-    # Cancel any existing refresh timer before starting a new one
-    socket = cancel_provider_refresh_timer(socket)
-
-    # Schedule periodic refresh for provider panel and store timer ref
-    timer_ref = Process.send_after(self(), :provider_panel_refresh, 3_000)
-
     socket =
       socket
       |> assign(:selected_provider, provider)
       |> assign(:selected_chain, nil)
       |> assign(:details_collapsed, false)
-      |> assign(:provider_refresh_timer, timer_ref)
       |> fetch_connections()
       |> update_selected_provider_data()
       |> push_event("center_on_provider", %{provider: provider})
@@ -2129,18 +2118,6 @@ defmodule LassoWeb.Dashboard do
     # Forward to SimulatorControls component
     send_update(Components.SimulatorControls, id: "simulator-controls", active_runs: runs)
     {:noreply, socket}
-  end
-
-  # Private helper for timer management
-  defp cancel_provider_refresh_timer(socket) do
-    case socket.assigns[:provider_refresh_timer] do
-      nil ->
-        socket
-
-      timer_ref ->
-        Process.cancel_timer(timer_ref)
-        assign(socket, :provider_refresh_timer, nil)
-    end
   end
 
   # Format error code for display (e.g., -32000 -> "ERR -32000")
