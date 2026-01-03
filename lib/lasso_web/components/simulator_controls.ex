@@ -27,10 +27,6 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       |> assign_new(:recent_calls, fn -> [] end)
       |> assign_new(:available_chains, fn -> [] end)
       |> assign_new(:active_runs, fn -> [] end)
-      |> assign_new(:quick_run_config, fn ->
-        # Dashboard mount guarantees selected_profile is set
-        get_default_run_config(socket.assigns.selected_profile)
-      end)
       |> assign_new(:preview_text, fn ->
         get_preview_text(%{
           strategy: "round-robin",
@@ -70,7 +66,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         socket
       end
 
-    # Handle profile changes - update selected_profile and reset chain selection
+    # Handle profile changes - reset chain selection when profile changes
     socket =
       if Map.has_key?(assigns, :selected_profile) do
         old_profile = socket.assigns[:selected_profile]
@@ -80,7 +76,6 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           socket
           |> assign(:selected_profile, new_profile)
           |> assign(:selected_chains, [])
-          |> assign(:quick_run_config, get_default_run_config(new_profile))
           |> update_preview_text()
         else
           socket
@@ -96,6 +91,10 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       else
         socket
       end
+
+    # Always derive quick_run_config from current selected_profile
+    # This ensures it's always in sync without manual change tracking
+    socket = assign(socket, :quick_run_config, get_default_run_config(socket.assigns.selected_profile))
 
     {:ok, socket}
   end

@@ -8,10 +8,11 @@ defmodule Lasso.RPC.Strategies.RoundRobin do
   @impl true
   def prepare_context(selection) do
     base_ctx = Lasso.RPC.StrategyContext.new(selection)
+    profile = selection.profile
     chain = selection.chain
 
     total_requests =
-      case ProviderPool.get_status(chain) do
+      case ProviderPool.get_status(profile, chain) do
         {:ok, %{total_requests: tr}} when is_integer(tr) -> tr
         {:ok, status} when is_map(status) -> Map.get(status, :total_requests, 0)
         _ -> base_ctx.total_requests || 0

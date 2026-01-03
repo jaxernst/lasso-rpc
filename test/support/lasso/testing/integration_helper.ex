@@ -350,7 +350,7 @@ defmodule Lasso.Testing.IntegrationHelper do
   end
 
   defp provider_registered?(chain, provider_id) do
-    case Lasso.RPC.ProviderPool.get_status(chain) do
+    case Lasso.RPC.ProviderPool.get_status("default", chain) do
       {:ok, status} ->
         # Check if provider exists in the providers list
         Enum.any?(status.providers, fn p -> p.id == provider_id end)
@@ -375,7 +375,7 @@ defmodule Lasso.Testing.IntegrationHelper do
   end
 
   defp provider_health_available?(chain, provider_id) do
-    case Lasso.RPC.ProviderPool.get_status(chain) do
+    case Lasso.RPC.ProviderPool.get_status("default", chain) do
       {:ok, status} ->
         # Find the provider and check if it has a health status
         case Enum.find(status.providers, fn p -> p.id == provider_id end) do

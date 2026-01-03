@@ -190,7 +190,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       Process.sleep(200)
 
       # Verify all providers are available
-      candidates = ProviderPool.list_candidates(chain)
+      candidates = ProviderPool.list_candidates("default", chain)
       assert length(candidates) == 3
 
       # Simulate rate limiting on the fastest provider by opening its circuit breaker
@@ -221,11 +221,11 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert state.state == :open
 
       # Mark provider as rate_limited in the pool
-      ProviderPool.report_failure(chain, provider_id, rate_limit_error)
+      ProviderPool.report_failure("default", chain, provider_id, rate_limit_error)
       Process.sleep(100)
 
       # Verify pool recognizes the rate limited provider
-      {:ok, pool_status} = ProviderPool.get_status(chain)
+      {:ok, pool_status} = ProviderPool.get_status("default", chain)
 
       rate_limited_provider =
         Enum.find(pool_status.providers, fn p -> p.id == provider_id end)
@@ -238,7 +238,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert is_integer(rate_limited_provider.cooldown_until)
 
       # Get available candidates (should exclude rate limited provider)
-      available_candidates = ProviderPool.list_candidates(chain)
+      available_candidates = ProviderPool.list_candidates("default", chain)
 
       # The rate limited provider should have degraded availability
       primary_candidate = Enum.find(available_candidates, fn c -> c.id == "fast_primary" end)
@@ -306,11 +306,11 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert state.state == :open
 
       # Mark as rate limited
-      ProviderPool.report_failure(chain, primary_id, {:rate_limit, "429"})
+      ProviderPool.report_failure("default", chain, primary_id, {:rate_limit, "429"})
       Process.sleep(100)
 
       # Verify backup providers are still available for failover
-      candidates = ProviderPool.list_candidates(chain)
+      candidates = ProviderPool.list_candidates("default", chain)
       healthy_backups = Enum.filter(candidates, fn c -> c.availability == :up end)
 
       assert length(healthy_backups) >= 1,
@@ -370,20 +370,20 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       provider_id = "recovering"
 
       # Simulate rate limiting
-      ProviderPool.report_failure(chain, provider_id, {:rate_limit, "429"})
+      ProviderPool.report_failure("default", chain, provider_id, {:rate_limit, "429"})
       Process.sleep(50)
 
-      {:ok, status_during_limit} = ProviderPool.get_status(chain)
+      {:ok, status_during_limit} = ProviderPool.get_status("default", chain)
       provider_during = Enum.find(status_during_limit.providers, fn p -> p.id == provider_id end)
       assert provider_during.status == :rate_limited
 
       # Simulate recovery with successful requests
-      ProviderPool.report_success(chain, provider_id)
-      ProviderPool.report_success(chain, provider_id)
-      ProviderPool.report_success(chain, provider_id)
+      ProviderPool.report_success("default", chain, provider_id)
+      ProviderPool.report_success("default", chain, provider_id)
+      ProviderPool.report_success("default", chain, provider_id)
       Process.sleep(50)
 
-      {:ok, status_after_recovery} = ProviderPool.get_status(chain)
+      {:ok, status_after_recovery} = ProviderPool.get_status("default", chain)
 
       provider_after =
         Enum.find(status_after_recovery.providers, fn p -> p.id == provider_id end)
@@ -410,16 +410,16 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       Process.sleep(200)
 
       # Simulate fast_1 getting rate limited under load
-      ProviderPool.report_failure(chain, "fast_1", {:rate_limit, "429"})
+      ProviderPool.report_failure("default", chain, "fast_1", {:rate_limit, "429"})
       Process.sleep(100)
 
       # Verify fast_1 is marked as rate limited
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       fast_1 = Enum.find(status.providers, fn p -> p.id == "fast_1" end)
       assert fast_1.status == :rate_limited
 
       # Verify other providers are still available
-      candidates = ProviderPool.list_candidates(chain)
+      candidates = ProviderPool.list_candidates("default", chain)
       healthy_candidates = Enum.filter(candidates, fn c -> c.availability == :up end)
 
       # Should have fast_2 and fast_3 available for failover
@@ -428,11 +428,11 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert "fast_3" in healthy_ids
 
       # Simulate successful requests to backup providers
-      ProviderPool.report_success(chain, "fast_2")
-      ProviderPool.report_success(chain, "fast_3")
+      ProviderPool.report_success("default", chain, "fast_2")
+      ProviderPool.report_success("default", chain, "fast_3")
       Process.sleep(50)
 
-      {:ok, final_status} = ProviderPool.get_status(chain)
+      {:ok, final_status} = ProviderPool.get_status("default", chain)
 
       # Verify backup providers are handling load successfully
       fast_2 = Enum.find(final_status.providers, fn p -> p.id == "fast_2" end)
@@ -470,10 +470,10 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert normalized.retriable? == true
 
       # Report to pool
-      ProviderPool.report_failure(chain, "infura_provider", normalized)
+      ProviderPool.report_failure("default", chain, "infura_provider", normalized)
       Process.sleep(50)
 
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       provider = Enum.find(status.providers, fn p -> p.id == "infura_provider" end)
       assert provider.status == :rate_limited
     end
@@ -579,28 +579,28 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       Process.sleep(200)
 
       # First: rate limit error
-      ProviderPool.report_failure(chain, "mixed_provider", {:rate_limit, "429"})
+      ProviderPool.report_failure("default", chain, "mixed_provider", {:rate_limit, "429"})
       Process.sleep(50)
 
-      {:ok, status1} = ProviderPool.get_status(chain)
+      {:ok, status1} = ProviderPool.get_status("default", chain)
       provider1 = Enum.find(status1.providers, fn p -> p.id == "mixed_provider" end)
       assert provider1.status == :rate_limited
 
       # Then: successful recovery
-      ProviderPool.report_success(chain, "mixed_provider")
-      ProviderPool.report_success(chain, "mixed_provider")
+      ProviderPool.report_success("default", chain, "mixed_provider")
+      ProviderPool.report_success("default", chain, "mixed_provider")
       Process.sleep(50)
 
-      {:ok, status2} = ProviderPool.get_status(chain)
+      {:ok, status2} = ProviderPool.get_status("default", chain)
       provider2 = Enum.find(status2.providers, fn p -> p.id == "mixed_provider" end)
       assert provider2.status in [:healthy, :connecting]
 
       # Then: user error (should NOT cause failover, but may affect status)
       user_error = JError.new(-32_602, "Invalid params", provider_id: "mixed_provider")
-      ProviderPool.report_failure(chain, "mixed_provider", user_error)
+      ProviderPool.report_failure("default", chain, "mixed_provider", user_error)
       Process.sleep(50)
 
-      {:ok, status3} = ProviderPool.get_status(chain)
+      {:ok, status3} = ProviderPool.get_status("default", chain)
       provider3 = Enum.find(status3.providers, fn p -> p.id == "mixed_provider" end)
       # User errors don't cause failover, but may degrade status temporarily
       assert provider3.status in [:healthy, :connecting, :degraded]
@@ -691,18 +691,18 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
 
       # Interleave successes and rate limit errors
       for _round <- 1..5 do
-        ProviderPool.report_success(chain, "interleaved_provider")
+        ProviderPool.report_success("default", chain, "interleaved_provider")
         Process.sleep(10)
-        ProviderPool.report_failure(chain, "interleaved_provider", {:rate_limit, "429"})
+        ProviderPool.report_failure("default", chain, "interleaved_provider", {:rate_limit, "429"})
         Process.sleep(10)
-        ProviderPool.report_success(chain, "interleaved_provider")
+        ProviderPool.report_success("default", chain, "interleaved_provider")
         Process.sleep(10)
       end
 
       Process.sleep(100)
 
       # Provider state should be consistent
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       provider = Enum.find(status.providers, fn p -> p.id == "interleaved_provider" end)
 
       # Should have recorded both successes and the rate limit status
@@ -726,11 +726,11 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       Process.sleep(200)
 
       # Rate limit both providers
-      ProviderPool.report_failure(chain, "p1", {:rate_limit, "429"})
-      ProviderPool.report_failure(chain, "p2", {:rate_limit, "429"})
+      ProviderPool.report_failure("default", chain, "p1", {:rate_limit, "429"})
+      ProviderPool.report_failure("default", chain, "p2", {:rate_limit, "429"})
       Process.sleep(100)
 
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
 
       # Both should be marked as rate limited
       p1 = Enum.find(status.providers, fn p -> p.id == "p1" end)
@@ -740,7 +740,7 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       assert p2.status == :rate_limited
 
       # System should still be queryable (graceful degradation)
-      candidates = ProviderPool.list_candidates(chain)
+      candidates = ProviderPool.list_candidates("default", chain)
       assert is_list(candidates)
     end
 
@@ -753,12 +753,12 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
         )
 
       # Immediately report rate limit before provider is fully ready
-      ProviderPool.report_failure(chain, "instant_rate_limit", {:rate_limit, "429"})
+      ProviderPool.report_failure("default", chain, "instant_rate_limit", {:rate_limit, "429"})
 
       # System should handle this gracefully
       Process.sleep(100)
 
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       assert is_map(status)
       assert is_list(status.providers)
     end
@@ -794,10 +794,10 @@ defmodule Lasso.RPC.RateLimitFailoverTest do
       Process.sleep(200)
 
       # Report rate limit
-      ProviderPool.report_failure(chain, "long_cooldown", {:rate_limit, "429"})
+      ProviderPool.report_failure("default", chain, "long_cooldown", {:rate_limit, "429"})
       Process.sleep(50)
 
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       provider = Enum.find(status.providers, fn p -> p.id == "long_cooldown" end)
 
       assert provider.status == :rate_limited

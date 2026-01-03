@@ -48,9 +48,9 @@ defmodule Lasso.RPC.ChainSupervisor do
   @doc """
   Gets the status of all providers for a chain, including WebSocket connection information.
   """
-  def get_chain_status(_profile, chain_name) do
+  def get_chain_status(profile, chain_name) do
     try do
-      case ProviderPool.get_status(chain_name) do
+      case ProviderPool.get_status(profile, chain_name) do
         {:ok, status} ->
           # Collect WebSocket connection status from WSConnection processes
           ws_connections = collect_ws_connection_status(status.providers)
@@ -72,8 +72,8 @@ defmodule Lasso.RPC.ChainSupervisor do
   @doc """
   Gets active provider connections for a chain.
   """
-  def get_active_providers(_profile, chain_name) do
-    ProviderPool.get_active_providers(chain_name)
+  def get_active_providers(profile, chain_name) do
+    ProviderPool.get_active_providers(profile, chain_name)
   end
 
   @doc """
@@ -102,7 +102,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   @spec ensure_provider(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
   def ensure_provider(profile, chain_name, provider_config, opts \\ []) do
     with {:ok, chain_config} <- get_chain_config(profile, chain_name),
-         :ok <- ProviderPool.register_provider(chain_name, provider_config.id, provider_config),
+         :ok <- ProviderPool.register_provider(profile, chain_name, provider_config.id, provider_config),
          :ok <- start_provider_supervisor(profile, chain_name, chain_config, provider_config, opts),
          :ok <-
            TransportRegistry.initialize_provider_channels(
@@ -149,7 +149,7 @@ defmodule Lasso.RPC.ChainSupervisor do
     TransportRegistry.close_channel(profile, chain_name, provider_id, :ws)
 
     # Unregister from pool
-    :ok = ProviderPool.unregister_provider(chain_name, provider_id)
+    :ok = ProviderPool.unregister_provider(profile, chain_name, provider_id)
 
     Logger.info("Successfully removed provider #{provider_id} from #{chain_name}")
     :ok
