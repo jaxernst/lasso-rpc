@@ -3,9 +3,8 @@ defmodule Lasso.RPC.ChainSupervisor do
   Profile-scoped supervisor for RPC provider connections on a single blockchain.
 
   This supervisor manages provider connections for a specific (profile, chain) pair.
-  Multiple profiles can use the same chain, each with independent provider pools
-  and transport registries. Global components (BlockSync, HealthProbe) are managed
-  by GlobalChainSupervisor and shared across profiles.
+  Multiple profiles can use the same chain, each with independent provider pools,
+  transport registries, and block sync/health probe workers.
 
   ## Architecture
 
@@ -13,6 +12,8 @@ defmodule Lasso.RPC.ChainSupervisor do
   ChainSupervisor {profile, chain}
   ├── ProviderPool (Health & Performance Tracking)
   ├── TransportRegistry (Transport Channel Management)
+  ├── BlockSync.Supervisor (Block Height Tracking)
+  ├── HealthProbe.Supervisor (Provider Health Probing)
   ├── DynamicSupervisor (Per-Provider Supervisors)
   │   ├── ProviderSupervisor (Provider 1)
   │   └── ProviderSupervisor (Provider 2)
@@ -22,8 +23,9 @@ defmodule Lasso.RPC.ChainSupervisor do
   └── StreamSupervisor
   ```
 
-  Global components (BlockSync, HealthProbe) are NOT children of ChainSupervisor.
-  They are managed by GlobalChainSupervisor and shared across all profiles.
+  BlockSync and HealthProbe supervisors are profile-scoped children of this
+  supervisor, ensuring proper restart semantics and eliminating cross-tree
+  coordination complexity.
   """
 
   use Supervisor
@@ -32,7 +34,8 @@ defmodule Lasso.RPC.ChainSupervisor do
   alias Lasso.RPC.{WSConnection, ProviderPool, TransportRegistry}
   alias Lasso.RPC.ProviderSupervisor
   alias Lasso.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
-  alias Lasso.GlobalChainProcesses
+  alias Lasso.BlockSync
+  alias Lasso.HealthProbe
 
   @doc """
   Starts a ChainSupervisor for a specific profile and blockchain.
@@ -113,11 +116,9 @@ defmodule Lasso.RPC.ChainSupervisor do
              provider_config
            ) do
       # Start BlockSync and HealthProbe workers for the new provider
-      # Only start if GlobalChainProcesses is running (may not be in tests)
-      if Lasso.GlobalChainSupervisor.chain_running?(chain_name) do
-        GlobalChainProcesses.start_block_sync_worker(chain_name, profile, provider_config.id)
-        GlobalChainProcesses.start_health_probe_worker(chain_name, profile, provider_config.id)
-      end
+      # Supervisors are siblings in the tree - guaranteed to be up
+      BlockSync.Supervisor.start_worker(profile, chain_name, provider_config.id)
+      HealthProbe.Supervisor.start_worker(profile, chain_name, provider_config.id)
 
       :ok
     else
@@ -147,11 +148,9 @@ defmodule Lasso.RPC.ChainSupervisor do
   @spec remove_provider(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def remove_provider(profile, chain_name, provider_id) do
     # Stop BlockSync and HealthProbe workers for this provider
-    # Only stop if GlobalChainProcesses is running (may not be in tests)
-    if Lasso.GlobalChainSupervisor.chain_running?(chain_name) do
-      GlobalChainProcesses.stop_block_sync_worker(chain_name, profile, provider_id)
-      GlobalChainProcesses.stop_health_probe_worker(chain_name, profile, provider_id)
-    end
+    # Supervisors are siblings in the tree - use profile-scoped versions
+    BlockSync.Supervisor.stop_worker(profile, chain_name, provider_id)
+    HealthProbe.Supervisor.stop_worker(profile, chain_name, provider_id)
 
     # Stop the per-provider supervisor (cascades WS then circuit breakers)
     case GenServer.whereis(provider_supervisor_via(profile, chain_name, provider_id)) do
@@ -180,6 +179,10 @@ defmodule Lasso.RPC.ChainSupervisor do
 
       # Start TransportRegistry for transport-agnostic channel management
       {TransportRegistry, {profile, chain_name, chain_config}},
+
+      # Profile-scoped BlockSync and HealthProbe supervisors
+      {BlockSync.Supervisor, {profile, chain_name}},
+      {HealthProbe.Supervisor, {profile, chain_name}},
 
       # Per-provider supervisor manager (Registry-based name for profile isolation)
       {DynamicSupervisor,
@@ -218,15 +221,11 @@ defmodule Lasso.RPC.ChainSupervisor do
       chain: chain_name
     )
 
-    # Start BlockSync workers for this profile's providers
-    # These track block heights via WS subscriptions and HTTP polling
-    # Only start if GlobalChainProcesses is running (may not be in tests)
+    # Start BlockSync and HealthProbe workers for this profile's providers
+    # These supervisors are siblings in the supervision tree (guaranteed to be up)
     provider_ids = Enum.map(chain_config.providers, & &1.id)
-
-    if Lasso.GlobalChainSupervisor.chain_running?(chain_name) do
-      GlobalChainProcesses.start_block_sync_workers(chain_name, profile, provider_ids)
-      GlobalChainProcesses.start_health_probe_workers(chain_name, profile, provider_ids)
-    end
+    BlockSync.Supervisor.start_all_workers(profile, chain_name, provider_ids)
+    HealthProbe.Supervisor.start_all_workers(profile, chain_name, provider_ids)
   end
 
   # Private functions

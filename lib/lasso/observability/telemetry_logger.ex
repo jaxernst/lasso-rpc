@@ -69,61 +69,62 @@ defmodule Lasso.TelemetryLogger do
     [
       # Failover events
       {[:lasso, :failover, :fast_fail], "#{@handler_id_prefix}_fast_fail",
-       &handle_fast_fail/4, :log_failovers},
+       {__MODULE__, :handle_fast_fail}, :log_failovers},
 
       {[:lasso, :failover, :circuit_open], "#{@handler_id_prefix}_circuit_open",
-       &handle_circuit_open/4, :log_failovers},
+       {__MODULE__, :handle_circuit_open}, :log_failovers},
 
       {[:lasso, :failover, :degraded_mode], "#{@handler_id_prefix}_degraded_mode",
-       &handle_degraded_mode/4, :log_failovers},
+       {__MODULE__, :handle_degraded_mode}, :log_failovers},
 
       {[:lasso, :failover, :degraded_success], "#{@handler_id_prefix}_degraded_success",
-       &handle_degraded_success/4, :log_failovers},
+       {__MODULE__, :handle_degraded_success}, :log_failovers},
 
       {[:lasso, :failover, :exhaustion], "#{@handler_id_prefix}_exhaustion",
-       &handle_exhaustion/4, :log_failovers},
+       {__MODULE__, :handle_exhaustion}, :log_failovers},
 
       # Slow request events
       {[:lasso, :request, :slow], "#{@handler_id_prefix}_slow_request",
-       &handle_slow_request/4, :log_slow_requests},
+       {__MODULE__, :handle_slow_request}, :log_slow_requests},
 
       {[:lasso, :request, :very_slow], "#{@handler_id_prefix}_very_slow_request",
-       &handle_very_slow_request/4, :log_slow_requests},
+       {__MODULE__, :handle_very_slow_request}, :log_slow_requests},
 
       # Circuit breaker events
       {[:lasso, :circuit_breaker, :state_change], "#{@handler_id_prefix}_cb_state_change",
-       &handle_circuit_breaker_state_change/4, :log_circuit_breaker}
+       {__MODULE__, :handle_circuit_breaker_state_change}, :log_circuit_breaker}
     ]
   end
 
   # Failover handlers
+  # These are public because they're callbacks for :telemetry.attach/4
 
-  defp handle_fast_fail(_event, _measurements, metadata, _config) do
+  def handle_fast_fail(_event, _measurements, metadata, _config) do
     Logger.warning("Failover: #{metadata.method} #{metadata.provider_id}:#{metadata.transport} -> #{metadata.error_category}",
       chain: metadata.chain,
       request_id: metadata.request_id
     )
   end
 
-  defp handle_circuit_open(_event, _measurements, metadata, _config) do
+  def handle_circuit_open(_event, _measurements, metadata, _config) do
     Logger.warning("Circuit open: skipping #{metadata.provider_id}:#{metadata.transport}",
       chain: metadata.chain
     )
   end
 
-  defp handle_degraded_mode(_event, _measurements, metadata, _config) do
+  def handle_degraded_mode(_event, _measurements, metadata, _config) do
     Logger.warning("Degraded mode: #{metadata.method} trying half-open circuits",
       chain: metadata.chain
     )
   end
 
-  defp handle_degraded_success(_event, _measurements, metadata, _config) do
+  def handle_degraded_success(_event, _measurements, metadata, _config) do
     Logger.info("Degraded recovery: #{metadata.method} via #{metadata.provider_id}:#{metadata.transport}",
       chain: metadata.chain
     )
   end
 
-  defp handle_exhaustion(_event, _measurements, metadata, _config) do
+  def handle_exhaustion(_event, _measurements, metadata, _config) do
     Logger.error("Exhausted: #{metadata.method} all providers failed (retry_after: #{metadata.retry_after_ms}ms)",
       chain: metadata.chain
     )
@@ -131,13 +132,13 @@ defmodule Lasso.TelemetryLogger do
 
   # Slow request handlers
 
-  defp handle_slow_request(_event, measurements, metadata, _config) do
+  def handle_slow_request(_event, measurements, metadata, _config) do
     Logger.warning("Slow (>2s): #{metadata.method} #{metadata.provider}:#{metadata.transport} #{round(measurements.latency_ms)}ms",
       chain: metadata.chain
     )
   end
 
-  defp handle_very_slow_request(_event, measurements, metadata, _config) do
+  def handle_very_slow_request(_event, measurements, metadata, _config) do
     Logger.error("Very slow (>4s): #{metadata.method} #{metadata.provider}:#{metadata.transport} #{round(measurements.latency_ms)}ms",
       chain: metadata.chain
     )
@@ -145,7 +146,7 @@ defmodule Lasso.TelemetryLogger do
 
   # Circuit breaker handlers
 
-  defp handle_circuit_breaker_state_change(_event, _measurements, metadata, _config) do
+  def handle_circuit_breaker_state_change(_event, _measurements, metadata, _config) do
     level = circuit_breaker_log_level(metadata.old_state, metadata.new_state)
 
     Logger.log(level, "Circuit #{metadata.provider_id}: #{metadata.old_state} -> #{metadata.new_state}")

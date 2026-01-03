@@ -1,8 +1,9 @@
 defmodule Lasso.HealthProbe.Supervisor do
   @moduledoc """
-  Per-chain supervisor for HealthProbe Workers.
+  Per-profile, per-chain supervisor for HealthProbe Workers.
 
-  Manages one Worker per provider for a chain. Started by ChainSupervisor.
+  Manages one Worker per provider for a (profile, chain) pair.
+  Started as a child of ChainSupervisor.
 
   ## Purpose
 
@@ -19,19 +20,19 @@ defmodule Lasso.HealthProbe.Supervisor do
 
   ## Client API
 
-  def start_link(chain) when is_binary(chain) do
-    DynamicSupervisor.start_link(__MODULE__, chain, name: via(chain))
+  def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
+    DynamicSupervisor.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
   end
 
-  def via(chain), do: {:via, Registry, {Lasso.Registry, {:health_probe_supervisor, chain}}}
+  def via(profile, chain), do: {:via, Registry, {Lasso.Registry, {:health_probe_supervisor, profile, chain}}}
 
   @doc """
   Start a worker for a specific provider.
   """
-  def start_worker(chain, profile, provider_id, opts) when is_binary(profile) and is_list(opts) do
+  def start_worker(profile, chain, provider_id, opts) when is_binary(profile) and is_binary(chain) and is_list(opts) do
     spec = {Worker, {chain, profile, provider_id, opts}}
 
-    case DynamicSupervisor.start_child(via(chain), spec) do
+    case DynamicSupervisor.start_child(via(profile, chain), spec) do
       {:ok, pid} ->
         {:ok, pid}
 
@@ -50,29 +51,28 @@ defmodule Lasso.HealthProbe.Supervisor do
     end
   end
 
-  # Profile-aware without opts
-  def start_worker(chain, profile, provider_id) when is_binary(profile) do
-    start_worker(chain, profile, provider_id, [])
+  def start_worker(profile, chain, provider_id) when is_binary(profile) and is_binary(chain) do
+    start_worker(profile, chain, provider_id, [])
   end
 
   @doc """
   Stop a worker for a specific provider.
   """
-  def stop_worker(chain, profile, provider_id) when is_binary(profile) do
+  def stop_worker(profile, chain, provider_id) when is_binary(profile) and is_binary(chain) do
     case GenServer.whereis(Worker.via(chain, profile, provider_id)) do
       nil ->
         :ok
 
       pid ->
-        DynamicSupervisor.terminate_child(via(chain), pid)
+        DynamicSupervisor.terminate_child(via(profile, chain), pid)
     end
   end
 
   @doc """
   Start workers for a profile's providers in the chain.
   """
-  def start_all_workers(chain, profile, provider_ids, opts)
-      when is_binary(profile) and is_list(provider_ids) and is_list(opts) do
+  def start_all_workers(profile, chain, provider_ids, opts)
+      when is_binary(profile) and is_binary(chain) and is_list(provider_ids) and is_list(opts) do
     probe_interval = get_probe_interval(profile, chain)
     worker_opts = Keyword.merge([probe_interval_ms: probe_interval], opts)
 
@@ -84,21 +84,20 @@ defmodule Lasso.HealthProbe.Supervisor do
     )
 
     Enum.each(provider_ids, fn provider_id ->
-      start_worker(chain, profile, provider_id, worker_opts)
+      start_worker(profile, chain, provider_id, worker_opts)
     end)
   end
 
-  # Profile-aware without opts
-  def start_all_workers(chain, profile, provider_ids)
-      when is_binary(profile) and is_list(provider_ids) do
-    start_all_workers(chain, profile, provider_ids, [])
+  def start_all_workers(profile, chain, provider_ids)
+      when is_binary(profile) and is_binary(chain) and is_list(provider_ids) do
+    start_all_workers(profile, chain, provider_ids, [])
   end
 
   @doc """
-  List all running workers for a chain.
+  List all running workers for a profile and chain.
   """
-  def list_workers(chain) do
-    DynamicSupervisor.which_children(via(chain))
+  def list_workers(profile, chain) when is_binary(profile) and is_binary(chain) do
+    DynamicSupervisor.which_children(via(profile, chain))
     |> Enum.map(fn {_, pid, _, _} -> pid end)
     |> Enum.reject(&is_nil/1)
   end
@@ -106,8 +105,8 @@ defmodule Lasso.HealthProbe.Supervisor do
   ## DynamicSupervisor Callbacks
 
   @impl true
-  def init(chain) do
-    Logger.debug("HealthProbe.Supervisor starting", chain: chain)
+  def init({profile, chain}) do
+    Logger.debug("HealthProbe.Supervisor starting", profile: profile, chain: chain)
 
     DynamicSupervisor.init(
       strategy: :one_for_one,

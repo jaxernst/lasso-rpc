@@ -48,9 +48,9 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
   @impl true
   def start(chain, provider_id, opts) do
+    profile = Keyword.fetch!(opts, :profile)
     parent = Keyword.get(opts, :parent, self())
     staleness_threshold = Keyword.get(opts, :staleness_threshold_ms, @default_staleness_threshold_ms)
-    profile = Keyword.get(opts, :profile, "default")
 
     state = %__MODULE__{
       profile: profile,
