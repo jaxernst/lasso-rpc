@@ -650,7 +650,7 @@ defmodule LassoWeb.NetworkTopology do
   defp get_chain_id_display(chain_name, profile_chains) do
     case Map.get(profile_chains, chain_name) do
       %{chain_id: chain_id} when is_integer(chain_id) ->
-        chain_id
+        Integer.to_string(chain_id)
 
       _ ->
         chain_name

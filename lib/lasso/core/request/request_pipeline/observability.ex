@@ -17,33 +17,61 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   alias Lasso.RPC.{Channel, Metrics, ProviderPool, RequestContext}
 
   @type telemetry_metadata :: %{
-    chain: String.t(),
-    method: String.t(),
-    strategy: atom(),
-    provider_id: String.t(),
-    transport: atom(),
-    result: atom(),
-    failovers: non_neg_integer()
-  }
+          chain: String.t(),
+          method: String.t(),
+          strategy: atom(),
+          provider_id: String.t(),
+          transport: atom(),
+          result: atom(),
+          failovers: non_neg_integer()
+        }
 
   @doc """
   Records a successful channel request with all observability concerns.
 
   Emits metrics, telemetry events, and PubSub notifications for successful requests.
   """
-  @spec record_success(RequestContext.t(), Channel.t(), String.t(), atom(), non_neg_integer()) :: :ok
-  def record_success(ctx, %Channel{provider_id: provider_id, transport: transport}, method, strategy, duration_ms) do
+  @spec record_success(RequestContext.t(), Channel.t(), String.t(), atom(), non_neg_integer()) ::
+          :ok
+  def record_success(
+        ctx,
+        %Channel{provider_id: provider_id, transport: transport},
+        method,
+        strategy,
+        duration_ms
+      ) do
     profile = ctx.opts.profile
 
     # Record metrics with transport dimension
-    Metrics.record_success(profile, ctx.chain, provider_id, method, duration_ms, transport: transport)
+    Metrics.record_success(profile, ctx.chain, provider_id, method, duration_ms,
+      transport: transport
+    )
+
     ProviderPool.report_success(profile, ctx.chain, provider_id, transport)
 
     # Publish routing decision for dashboard/analytics
-    publish_routing_decision(ctx.chain, method, strategy, provider_id, transport, duration_ms, :success, ctx.retries)
+    publish_routing_decision(
+      ctx.chain,
+      method,
+      strategy,
+      provider_id,
+      transport,
+      duration_ms,
+      :success,
+      ctx.retries
+    )
 
     # Emit telemetry for observability stack
-    emit_request_telemetry(ctx.chain, method, strategy, provider_id, transport, duration_ms, :success, ctx.retries)
+    emit_request_telemetry(
+      ctx.chain,
+      method,
+      strategy,
+      provider_id,
+      transport,
+      duration_ms,
+      :success,
+      ctx.retries
+    )
 
     :ok
   end
@@ -65,30 +93,65 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   def record_failure(ctx, channel_or_provider_id, method, strategy, reason, duration_ms)
 
   # Variant with full channel info (has transport)
-  def record_failure(ctx, %Channel{provider_id: provider_id, transport: transport} = _channel, method, strategy, reason, duration_ms) do
+  def record_failure(
+        ctx,
+        %Channel{provider_id: provider_id, transport: transport} = _channel,
+        method,
+        strategy,
+        reason,
+        duration_ms
+      ) do
     profile = ctx.opts.profile
 
     # Record failure with transport dimension
     record_rpc_failure(profile, ctx.chain, provider_id, method, reason, duration_ms, transport)
 
     # Publish routing decision
-    publish_routing_decision(ctx.chain, method, strategy, provider_id, transport, duration_ms, :error, ctx.retries)
+    publish_routing_decision(
+      ctx.chain,
+      method,
+      strategy,
+      provider_id,
+      transport,
+      duration_ms,
+      :error,
+      ctx.retries
+    )
 
     # Emit telemetry
-    emit_request_telemetry(ctx.chain, method, strategy, provider_id, transport, duration_ms, :error, ctx.retries)
+    emit_request_telemetry(
+      ctx.chain,
+      method,
+      strategy,
+      provider_id,
+      transport,
+      duration_ms,
+      :error,
+      ctx.retries
+    )
 
     :ok
   end
 
   # Variant with just provider_id (no transport info - legacy path)
-  def record_failure(ctx, provider_id, method, strategy, reason, duration_ms) when is_binary(provider_id) do
+  def record_failure(ctx, provider_id, method, strategy, reason, duration_ms)
+      when is_binary(provider_id) do
     profile = ctx.opts.profile
 
     # Record failure without transport dimension
     record_rpc_failure(profile, ctx.chain, provider_id, method, reason, duration_ms, nil)
 
     # Emit telemetry with unknown transport
-    emit_request_telemetry(ctx.chain, method, strategy, provider_id, :unknown, duration_ms, :error, ctx.retries)
+    emit_request_telemetry(
+      ctx.chain,
+      method,
+      strategy,
+      provider_id,
+      :unknown,
+      duration_ms,
+      :error,
+      ctx.retries
+    )
 
     :ok
   end
@@ -99,7 +162,12 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   Emits telemetry for failover events with error categorization.
   """
   @spec record_fast_fail(RequestContext.t(), Channel.t(), atom(), term()) :: :ok
-  def record_fast_fail(ctx, %Channel{provider_id: provider_id, transport: transport}, failover_reason, error_reason) do
+  def record_fast_fail(
+        ctx,
+        %Channel{provider_id: provider_id, transport: transport},
+        failover_reason,
+        error_reason
+      ) do
     :telemetry.execute(
       [:lasso, :failover, :fast_fail],
       %{count: 1},
@@ -167,7 +235,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   Records successful request via degraded mode (half-open circuit).
   """
   @spec record_degraded_success(String.t(), String.t(), Channel.t()) :: :ok
-  def record_degraded_success(chain, method, %Channel{provider_id: provider_id, transport: transport}) do
+  def record_degraded_success(chain, method, %Channel{
+        provider_id: provider_id,
+        transport: transport
+      }) do
     :telemetry.execute(
       [:lasso, :failover, :degraded_success],
       %{count: 1},
@@ -246,7 +317,16 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
           atom(),
           non_neg_integer()
         ) :: :ok | {:error, term()}
-  defp publish_routing_decision(chain, method, strategy, provider_id, transport, duration_ms, result, failovers) do
+  defp publish_routing_decision(
+         chain,
+         method,
+         strategy,
+         provider_id,
+         transport,
+         duration_ms,
+         result,
+         failovers
+       ) do
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
       "routing:decisions",
@@ -274,7 +354,16 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
           atom(),
           non_neg_integer()
         ) :: :ok
-  defp emit_request_telemetry(chain, method, strategy, provider_id, transport, duration_ms, result, failovers) do
+  defp emit_request_telemetry(
+         chain,
+         method,
+         strategy,
+         provider_id,
+         transport,
+         duration_ms,
+         result,
+         failovers
+       ) do
     :telemetry.execute(
       [:lasso, :rpc, :request, :stop],
       %{duration: duration_ms},
@@ -290,7 +379,15 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     )
   end
 
-  @spec record_rpc_failure(String.t(), String.t(), String.t(), String.t(), term(), non_neg_integer(), atom() | nil) :: :ok
+  @spec record_rpc_failure(
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          term(),
+          non_neg_integer(),
+          atom() | nil
+        ) :: :ok
   defp record_rpc_failure(profile, chain, provider_id, method, reason, duration_ms, transport) do
     # Record failure metrics
     Metrics.record_failure(profile, chain, provider_id, method, duration_ms, transport: transport)

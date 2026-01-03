@@ -105,7 +105,8 @@ defmodule Lasso.Providers do
     add_provider(@default_profile, chain_name, provider_attrs, opts)
   end
 
-  @spec add_provider(String.t(), String.t(), map(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  @spec add_provider(String.t(), String.t(), map(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
   def add_provider(profile, chain_name, provider_attrs, opts) do
     persist? = Keyword.get(opts, :persist, false)
     validate? = Keyword.get(opts, :validate, true)
@@ -117,7 +118,10 @@ defmodule Lasso.Providers do
     with :ok <- maybe_validate(provider_config, validate?),
          :ok <- ensure_chain_started(profile, chain_name),
          :ok <- check_not_duplicate(profile, chain_name, provider_id),
-         :ok <- ChainSupervisor.ensure_provider(profile, chain_name, provider_config, start_ws: start_ws),
+         :ok <-
+           ChainSupervisor.ensure_provider(profile, chain_name, provider_config,
+             start_ws: start_ws
+           ),
          :ok <- maybe_persist_add(chain_name, provider_config, persist?) do
       Logger.info("Successfully added provider #{provider_id} to #{chain_name}")
       {:ok, provider_id}
@@ -148,6 +152,13 @@ defmodule Lasso.Providers do
       # Remove and persist to YAML
       Lasso.Providers.remove_provider("default", "ethereum", "old_provider", persist: true)
   """
+  # Backward-compatible wrapper for old 2-arg form
+  @spec remove_provider(String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_provider(chain_name, provider_id)
+      when is_binary(chain_name) and is_binary(provider_id) do
+    remove_provider(@default_profile, chain_name, provider_id, [])
+  end
+
   @spec remove_provider(String.t(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def remove_provider(profile, chain_name, provider_id, opts \\ []) do
     persist? = Keyword.get(opts, :persist, false)
@@ -188,7 +199,8 @@ defmodule Lasso.Providers do
     update_provider(@default_profile, chain_name, provider_id, updates, opts)
   end
 
-  @spec update_provider(String.t(), String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
+  @spec update_provider(String.t(), String.t(), String.t(), map(), keyword()) ::
+          :ok | {:error, term()}
   def update_provider(profile, chain_name, provider_id, updates, opts) do
     persist? = Keyword.get(opts, :persist, false)
 
@@ -343,13 +355,8 @@ defmodule Lasso.Providers do
     # Get the full ChainConfig struct from ConfigStore (it was normalized during registration)
     case Lasso.Config.ConfigStore.get_chain(profile, chain_name) do
       {:ok, chain_config} ->
-        # Start global chain processes (BlockSync, HealthProbe) if not already running
-        case Lasso.GlobalChainSupervisor.ensure_chain_processes(chain_name) do
-          :ok -> :ok
-          {:error, reason} -> Logger.warning("Global chain processes failed: #{inspect(reason)}")
-        end
-
         # Start profile chain supervisor under the specified profile
+        # This includes BlockSync, HealthProbe, and all provider connections
         Lasso.ProfileChainSupervisor.start_profile_chain(
           profile,
           chain_name,

@@ -45,10 +45,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
     on_exit(fn ->
       MockWSProvider.stop_mock(test_chain, test_provider)
 
-      # Stop the profile chain supervisor (uses "default" profile for tests)
-      Lasso.ProfileChainSupervisor.stop_profile_chain("default", test_chain)
+      # Stop the profile chain supervisor
+      Lasso.ProfileChainSupervisor.stop_profile_chain(test_profile, test_chain)
 
-      Lasso.Config.ConfigStore.unregister_chain_runtime("default", test_chain)
+      Lasso.Config.ConfigStore.unregister_chain_runtime(test_profile, test_chain)
       Process.sleep(50)
     end)
 
@@ -56,7 +56,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
   end
 
   describe "refcount lifecycle and consistency" do
-    test "maintains correct refcount through subscribe/unsubscribe cycle", %{chain: chain, profile: profile} do
+    test "maintains correct refcount through subscribe/unsubscribe cycle", %{
+      chain: chain,
+      profile: profile
+    } do
       # First subscribe (MockWSProvider auto-confirms)
       client1 = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
@@ -162,7 +165,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
   end
 
   describe "async subscription behavior" do
-    test "first subscriber gets immediate response while upstream establishes", %{chain: chain, profile: profile} do
+    test "first subscriber gets immediate response while upstream establishes", %{
+      chain: chain,
+      profile: profile
+    } do
       client = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
 
@@ -191,7 +197,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       Process.exit(client, :kill)
     end
 
-    test "multiple subscribers during establishment all get immediate response", %{chain: chain, profile: profile} do
+    test "multiple subscribers during establishment all get immediate response", %{
+      chain: chain,
+      profile: profile
+    } do
       key = {:newHeads}
 
       # Create 5 clients that subscribe rapidly
@@ -253,7 +262,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
       Process.exit(client, :kill)
     end
 
-    test "rapid subscribe/unsubscribe cycles maintain consistency", %{chain: chain, profile: profile} do
+    test "rapid subscribe/unsubscribe cycles maintain consistency", %{
+      chain: chain,
+      profile: profile
+    } do
       key = {:newHeads}
 
       # Rapid subscribe/unsubscribe cycles
@@ -345,7 +357,10 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
   end
 
   describe "manager restart recovery" do
-    test "pool re-establishes subscriptions after manager restart broadcast", %{chain: chain, profile: profile} do
+    test "pool re-establishes subscriptions after manager restart broadcast", %{
+      chain: chain,
+      profile: profile
+    } do
       client = spawn(fn -> Process.sleep(:infinity) end)
       key = {:newHeads}
 
@@ -374,7 +389,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
 
   # Helper functions
 
-  defp get_pool_state(profile \\ @default_profile, chain) do
+  defp get_pool_state(chain, profile \\ @default_profile) do
     :sys.get_state(UpstreamSubscriptionPool.via(profile, chain))
   end
 end

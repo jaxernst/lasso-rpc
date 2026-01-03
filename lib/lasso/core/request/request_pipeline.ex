@@ -122,7 +122,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     # Get channels from the source
     ctx = RequestContext.mark_selection_start(ctx)
-    channels = channel_source.(ctx)
+    channels = get_channels_from_source(channel_source, ctx)
 
     ctx =
       RequestContext.mark_selection_end(ctx,
@@ -144,9 +144,16 @@ defmodule Lasso.RPC.RequestPipeline do
   # Channel Source Builders
   # ============================================================================
 
+  @spec get_channels_from_source(channel_source(), RequestContext.t()) :: [Channel.t()]
+  defp get_channels_from_source(channel_source, ctx), do: channel_source.(ctx)
+
   # Builds a function that returns channels to try, unifying override vs normal selection
   @spec build_channel_source(chain(), method(), RequestOptions.t()) :: channel_source()
-  defp build_channel_source(chain, method, %RequestOptions{provider_override: nil, profile: profile} = opts) do
+  defp build_channel_source(
+         chain,
+         method,
+         %RequestOptions{provider_override: nil, profile: profile} = opts
+       ) do
     # Normal selection: get best channels via Selection module
     fn _ctx ->
       Selection.select_channels(profile, chain, method,
@@ -157,7 +164,11 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp build_channel_source(chain, method, %RequestOptions{provider_override: provider_id, profile: profile} = opts) do
+  defp build_channel_source(
+         chain,
+         method,
+         %RequestOptions{provider_override: provider_id, profile: profile} = opts
+       ) do
     # Provider override: get channels for specific provider, optionally with failover
     fn _ctx ->
       primary_channels = get_provider_channels(profile, chain, provider_id, opts.transport)
@@ -202,7 +213,7 @@ defmodule Lasso.RPC.RequestPipeline do
     finalize_error(jerr, ctx)
   end
 
-  defp attempt_channels([%Channel{} = channel | rest], ctx) do
+  defp attempt_channels([%Channel{} = channel | rest], ctx) when is_list(rest) do
     %{"method" => method, "params" => params} = ctx.rpc_request
 
     # Validate params for this channel first
@@ -245,6 +256,7 @@ defmodule Lasso.RPC.RequestPipeline do
           channel: Channel.to_string(channel),
           method: ctx.rpc_request["method"]
         )
+
         attempt_channels(rest_channels, ctx)
 
       {:executed, {:error, reason, io_ms}} ->
@@ -256,7 +268,13 @@ defmodule Lasso.RPC.RequestPipeline do
           kind: kind,
           error: inspect(error)
         )
-        exception_error = JError.new(-32_000, "Internal error: #{kind}", category: :server_error, retriable?: true)
+
+        exception_error =
+          JError.new(-32_000, "Internal error: #{kind}",
+            category: :server_error,
+            retriable?: true
+          )
+
         handle_channel_error(exception_error, nil, channel, rest_channels, ctx)
 
       # Circuit breaker rejected execution
@@ -271,6 +289,7 @@ defmodule Lasso.RPC.RequestPipeline do
           channel: Channel.to_string(channel),
           request_id: ctx.request_id
         )
+
         # Treat as retriable - try next channel
         ctx = RequestContext.increment_retries(ctx)
         attempt_channels(rest_channels, ctx)
@@ -280,6 +299,7 @@ defmodule Lasso.RPC.RequestPipeline do
           channel: Channel.to_string(channel),
           request_id: ctx.request_id
         )
+
         # Treat as retriable - try next channel
         ctx = RequestContext.increment_retries(ctx)
         attempt_channels(rest_channels, ctx)
@@ -315,13 +335,22 @@ defmodule Lasso.RPC.RequestPipeline do
     {:ok, result, ctx}
   end
 
-  @spec handle_channel_error(any(), number() | nil, Channel.t(), [Channel.t()], RequestContext.t()) ::
+  @spec handle_channel_error(
+          any(),
+          number() | nil,
+          Channel.t(),
+          [Channel.t()],
+          RequestContext.t()
+        ) ::
           result()
   defp handle_channel_error(reason, io_ms, channel, rest_channels, ctx) do
+    # Normalize io_ms: exceptions don't have latency measurements (nil -> 0)
+    latency_ms = if is_nil(io_ms), do: 0, else: io_ms
+
     # Record the failed attempt
     ctx =
       ctx
-      |> RequestContext.add_upstream_latency(io_ms || 0)
+      |> RequestContext.add_upstream_latency(latency_ms)
       |> RequestContext.record_channel_attempt(channel, reason)
 
     # Use FailoverStrategy to decide next action
@@ -378,7 +407,11 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec handle_no_channels(RequestContext.t()) :: result()
   defp handle_no_channels(ctx) do
-    retry_after_ms = calculate_min_recovery_time(ctx.profile, ctx.chain, ctx.opts.transport)
+    profile = if ctx.opts, do: ctx.opts.profile, else: "default"
+
+    retry_after_ms =
+      calculate_min_recovery_time(profile, ctx.chain, ctx.opts && ctx.opts.transport)
+
     {message, data} = build_exhaustion_error_message(ctx.method, retry_after_ms, ctx.chain)
 
     jerr =
@@ -442,14 +475,20 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # CircuitBreaker.call returns:
   # - {:executed, fun_result} - Function executed, fun_result is what Channel.request returned
+  # - {:executed, {:exception, {kind, error, stacktrace}}} - Function raised an exception
   # - {:rejected, reason} - Circuit breaker prevented execution
   #
   # Channel.request returns: {:ok, result, io_ms} | {:error, reason, io_ms}
   #
   # The CB handles all exit cases internally (timeout, noproc, etc.) and returns
   # {:rejected, :admission_timeout} or {:rejected, :not_found} instead.
+  @type circuit_breaker_result ::
+          {:ok, any(), number()}
+          | {:error, any(), number()}
+          | {:exception, {atom(), any(), list()}}
+
   @spec execute_with_circuit_breaker(Channel.t(), map(), timeout()) ::
-          CircuitBreaker.call_result({:ok, any(), number()} | {:error, any(), number()})
+          CircuitBreaker.call_result(circuit_breaker_result())
   defp execute_with_circuit_breaker(channel, rpc_request, timeout) do
     attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
     cb_id = {channel.profile, channel.chain, channel.provider_id, channel.transport}
@@ -510,7 +549,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp build_exhaustion_error_message(method, ms, _chain) when is_integer(ms) and ms > 0 do
     seconds = div(ms, 1000)
-    message = "No available channels for method: #{method}. All circuits open, retry after #{seconds}s"
+
+    message =
+      "No available channels for method: #{method}. All circuits open, retry after #{seconds}s"
+
     {message, %{retry_after_ms: ms}}
   end
 
@@ -524,11 +566,15 @@ defmodule Lasso.RPC.RequestPipeline do
     transport = transport_filter || :both
 
     case ProviderPool.get_min_recovery_time(profile, chain, transport: transport, timeout: 2000) do
-      {:ok, min_time} -> min_time
+      {:ok, min_time} ->
+        min_time
+
       {:error, :timeout} ->
         Logger.warning("Timeout getting recovery time", chain: chain)
         60_000
-      {:error, _reason} -> nil
+
+      {:error, _reason} ->
+        nil
     end
   end
 

@@ -22,16 +22,22 @@ defmodule Lasso.RPC.ChainState do
   # Default freshness window for consensus calculation (30 seconds)
   @default_freshness_ms 30_000
 
-  @spec consensus_height(String.t(), list(String.t()) | nil, keyword()) ::
+  @spec consensus_height(String.t(), keyword()) ::
           {:ok, non_neg_integer()}
           | {:error, term()}
-  def consensus_height(chain, provider_ids \\ nil, _opts \\ []) do
-    BlockSyncRegistry.get_consensus_height(chain, provider_ids, @default_freshness_ms)
+  def consensus_height(chain, opts \\ []) do
+    provider_ids = Keyword.get(opts, :provider_ids, nil)
+    freshness_ms = Keyword.get(opts, :freshness_ms, @default_freshness_ms)
+
+    if provider_ids do
+      BlockSyncRegistry.get_consensus_height_filtered(chain, provider_ids, freshness_ms)
+    else
+      BlockSyncRegistry.get_consensus_height(chain, freshness_ms)
+    end
   rescue
     e ->
       Logger.error("ChainState consensus_height crashed",
         chain: chain,
-        provider_ids: provider_ids,
         error: Exception.message(e)
       )
 
@@ -49,18 +55,19 @@ defmodule Lasso.RPC.ChainState do
     end
   end
 
-  @spec provider_lag(String.t(), String.t(), list(String.t()) | nil) :: {:ok, integer()} | {:error, term()}
-  def provider_lag(chain, provider_id, provider_ids \\ nil) do
+  @spec provider_lag(String.t(), String.t(), keyword()) :: {:ok, integer()} | {:error, term()}
+  def provider_lag(chain, provider_id, opts \\ []) do
     # Use BlockSync Registry for lag calculation
-    BlockSyncRegistry.get_provider_lag(chain, provider_id, provider_ids, @default_freshness_ms)
+    freshness_ms = Keyword.get(opts, :freshness_ms, @default_freshness_ms)
+    BlockSyncRegistry.get_provider_lag(chain, provider_id, freshness_ms)
   rescue
     e ->
       Logger.error("ChainState provider_lag crashed",
         chain: chain,
         provider_id: provider_id,
-        provider_ids: provider_ids,
         error: Exception.message(e)
       )
+
       {:error, :calculation_failed}
   end
 

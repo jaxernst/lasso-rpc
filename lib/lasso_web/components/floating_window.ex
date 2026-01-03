@@ -145,7 +145,8 @@ defmodule LassoWeb.Components.FloatingWindow do
         
     <!-- Collapsed preview content -->
         <%= if @collapsed and @collapsed_preview != [] do %>
-          <div class={@collapsed_preview[:class] || ""}>
+          <% class = get_in(List.first(@collapsed_preview), [:attrs, :class]) || "" %>
+          <div class={class}>
             {render_slot(@collapsed_preview)}
           </div>
         <% end %>

@@ -3,8 +3,8 @@ defmodule Lasso.ProfileChainSupervisor do
   DynamicSupervisor for profile-scoped chain instances.
 
   Manages ChainSupervisor processes for each (profile, chain) pair. Each profile
-  gets its own set of chain supervisors, enabling isolation between profiles
-  while sharing global components (BlockSync, HealthProbe) via GlobalChainSupervisor.
+  gets its own set of chain supervisors with full isolation. All components
+  (BlockSync, HealthProbe, ProviderPool) are scoped per (profile, chain).
 
   ## Architecture
 
@@ -42,8 +42,8 @@ defmodule Lasso.ProfileChainSupervisor do
   @doc """
   Start a ChainSupervisor for a specific profile and chain.
 
-  This should be called after `GlobalChainSupervisor.ensure_chain_processes/1`
-  to ensure global components are running.
+  Creates a complete supervisor tree for the (profile, chain) pair, including
+  all providers, BlockSync, HealthProbe, and subscription management.
 
   Returns `{:ok, pid}` on success or `{:error, reason}` on failure.
   """
@@ -99,6 +99,15 @@ defmodule Lasso.ProfileChainSupervisor do
 
           {:error, :not_found} ->
             :ok
+
+          {:error, reason} ->
+            Logger.warning("Failed to terminate chain supervisor",
+              profile: profile,
+              chain: chain_name,
+              reason: inspect(reason)
+            )
+
+            {:error, reason}
         end
     end
   end

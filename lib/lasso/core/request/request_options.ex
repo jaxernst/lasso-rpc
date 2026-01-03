@@ -11,7 +11,7 @@ defmodule Lasso.RPC.RequestOptions do
   @type strategy :: :fastest | :cheapest | :priority | :round_robin | :latency_weighted
   @type transport :: :http | :ws | :both | nil
 
-  @enforce_keys [:strategy, :timeout_ms]
+  @enforce_keys [:timeout_ms]
   defstruct profile: "default",
             strategy: :cheapest,
             provider_override: nil,
@@ -54,8 +54,14 @@ defmodule Lasso.RPC.RequestOptions do
     end
   end
 
-  defp validate_strategy(strategy) when strategy in [:fastest, :cheapest, :priority, :round_robin, :latency_weighted], do: :ok
-  defp validate_strategy(strategy), do: {:error, "Invalid strategy: #{inspect(strategy)}. Must be one of: :fastest, :cheapest, :priority, :round_robin, :latency_weighted"}
+  defp validate_strategy(strategy)
+       when strategy in [:fastest, :cheapest, :priority, :round_robin, :latency_weighted],
+       do: :ok
+
+  defp validate_strategy(strategy),
+    do:
+      {:error,
+       "Invalid strategy: #{inspect(strategy)}. Must be one of: :fastest, :cheapest, :priority, :round_robin, :latency_weighted"}
 
   defp validate_transport(%__MODULE__{transport: transport}, method) do
     required = MethodConstraints.required_transport_for(method)
@@ -73,7 +79,9 @@ defmodule Lasso.RPC.RequestOptions do
   end
 
   defp validate_timeout(timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0, do: :ok
-  defp validate_timeout(timeout_ms), do: {:error, "timeout_ms must be a positive integer, got: #{inspect(timeout_ms)}"}
+
+  defp validate_timeout(timeout_ms),
+    do: {:error, "timeout_ms must be a positive integer, got: #{inspect(timeout_ms)}"}
 
   @doc """
   Convert to legacy keyword options for backward compatibility.

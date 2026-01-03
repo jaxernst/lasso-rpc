@@ -498,30 +498,34 @@ defmodule LassoWeb.RPCController do
   end
 
   defp resolve_chain_name(profile, chain_identifier) do
-    # First try to get chain from the specified profile
+    # Try to get chain by name from the specified profile
     case ConfigStore.get_chain(profile, chain_identifier) do
       {:ok, _chain_config} ->
         {:ok, chain_identifier}
 
       {:error, :not_found} ->
-        # If not found, try parsing as numeric chain ID
+        # Not found by name - try parsing as numeric chain ID and search within profile
         case Integer.parse(chain_identifier) do
           {chain_id, ""} ->
-            # Try to find chain by ID across all profiles
-            case ConfigStore.get_chain_by_name_or_id(chain_id) do
-              {:ok, {chain_name, _chain_config}} ->
-                {:ok, chain_name}
-
-              {:error, :not_found} ->
-                {:error, "Chain ID #{inspect(chain_id)} not configured in profile '#{profile}'"}
-
-              {:error, :invalid_format} ->
-                {:error, "Invalid chain identifier: #{inspect(chain_identifier)}"}
-            end
+            find_chain_by_id_in_profile(profile, chain_id)
 
           _ ->
             {:error, "Chain '#{chain_identifier}' not found in profile '#{profile}'"}
         end
+    end
+  end
+
+  # Find a chain by numeric ID within a specific profile (never crosses profiles)
+  defp find_chain_by_id_in_profile(profile, chain_id) do
+    case ConfigStore.get_profile_chains(profile) do
+      {:ok, chains} ->
+        case Enum.find(chains, fn {_name, config} -> config.chain_id == chain_id end) do
+          {chain_name, _config} -> {:ok, chain_name}
+          nil -> {:error, "Chain ID #{chain_id} not found in profile '#{profile}'"}
+        end
+
+      {:error, :not_found} ->
+        {:error, "Profile '#{profile}' not found"}
     end
   end
 

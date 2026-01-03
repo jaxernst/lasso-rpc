@@ -2,7 +2,6 @@ defmodule LassoWeb.Dashboard do
   use LassoWeb, :live_view
   require Logger
 
-  alias Lasso.Config.ProfileValidator
   alias LassoWeb.NetworkTopology
 
   alias LassoWeb.Dashboard.{
@@ -32,27 +31,9 @@ defmodule LassoWeb.Dashboard do
     profiles = ConfigStore.list_profiles()
     selected_profile = determine_initial_profile(params, session, profiles)
 
-    # Validate the selected profile before using it
-    # LiveView should not crash on invalid profile - fall back gracefully
-    validated_profile =
-      case ProfileValidator.validate(selected_profile) do
-        {:ok, validated} ->
-          validated
-
-        {:error, error_type, message} ->
-          Logger.warning("Dashboard mount profile validation failed: #{message}",
-            error_type: error_type,
-            provided_profile: selected_profile,
-            fallback: List.first(profiles) || "default"
-          )
-
-          # Fallback to first available profile or default
-          List.first(profiles) || "default"
-      end
-
     if connected?(socket) do
-      # Profile-scoped subscriptions use validated profile
-      subscribe_profile_topics(validated_profile)
+      # Profile-scoped subscriptions
+      subscribe_profile_topics(selected_profile)
 
       # Global subscriptions
       subscribe_global_topics()
@@ -65,21 +46,21 @@ defmodule LassoWeb.Dashboard do
       Process.send_after(self(), :metrics_refresh, Constants.vm_metrics_interval())
     end
 
-    # Transform profile's chain names into map structures for the UI (use validated profile)
+    # Transform profile's chain names into map structures for the UI
     available_chains =
-      ConfigStore.list_chains_for_profile(validated_profile)
+      ConfigStore.list_chains_for_profile(selected_profile)
       |> Enum.map(fn chain_name ->
         %{
           name: chain_name,
-          display_name: Helpers.get_chain_display_name(validated_profile, chain_name)
+          display_name: Helpers.get_chain_display_name(selected_profile, chain_name)
         }
       end)
 
     initial_state =
       socket
       |> assign(:profiles, profiles)
-      |> assign(:selected_profile, validated_profile)
-      |> assign(:profile_chains, ConfigStore.list_chains_for_profile(validated_profile))
+      |> assign(:selected_profile, selected_profile)
+      |> assign(:profile_chains, ConfigStore.list_chains_for_profile(selected_profile))
       |> assign(:connections, [])
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
       |> assign(:selected_chain, nil)
@@ -109,7 +90,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:metrics_loading, true)
       |> assign(:metrics_last_updated, nil)
       |> assign(:vm_metrics_enabled, Lasso.VMMetricsCollector.enabled?())
-      |> fetch_connections(validated_profile)
+      |> fetch_connections(selected_profile)
 
     {:ok, initial_state}
   end

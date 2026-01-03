@@ -28,7 +28,6 @@ defmodule LassoWeb.Router do
     live("/", HomeLive)
     live("/dashboard", Dashboard, :index)
     live("/dashboard/:profile", Dashboard, :show)
-    live("/admin/profiles", ProfileManagementLive, :index)
   end
 
   scope "/api", LassoWeb do
@@ -77,8 +76,8 @@ defmodule LassoWeb.Router do
     # Base endpoint (catch-all for legacy routes)
     post("/:chain_id", RPCController, :rpc_base)
 
-    # Profile-aware endpoints (explicit profile slug in URL)
-    scope "/:profile" do
+    # Profile-aware endpoints (explicit profile namespace in URL)
+    scope "/profile/:profile" do
       # Strategy-specific endpoints
       post("/fastest/:chain_id", RPCController, :rpc_fastest)
       post("/round-robin/:chain_id", RPCController, :rpc_round_robin)

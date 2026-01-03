@@ -220,28 +220,84 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   def status_color_scheme(status) do
     case status do
       :circuit_open ->
-        %{hex: "#dc2626", text: "text-red-500", bg: "bg-red-500", bg_muted: "bg-red-900/40", border: "border-red-500", dot: "bg-red-500"}
+        %{
+          hex: "#dc2626",
+          text: "text-red-500",
+          bg: "bg-red-500",
+          bg_muted: "bg-red-900/40",
+          border: "border-red-500",
+          dot: "bg-red-500"
+        }
 
       :testing_recovery ->
-        %{hex: "#f59e0b", text: "text-amber-400", bg: "bg-amber-400", bg_muted: "bg-amber-900/30", border: "border-gray-600", dot: "bg-amber-400"}
+        %{
+          hex: "#f59e0b",
+          text: "text-amber-400",
+          bg: "bg-amber-400",
+          bg_muted: "bg-amber-900/30",
+          border: "border-gray-600",
+          dot: "bg-amber-400"
+        }
 
       :rate_limited ->
-        %{hex: "#8b5cf6", text: "text-purple-300", bg: "bg-purple-400", bg_muted: "bg-purple-900/30", border: "border-purple-500", dot: "bg-purple-400"}
+        %{
+          hex: "#8b5cf6",
+          text: "text-purple-300",
+          bg: "bg-purple-400",
+          bg_muted: "bg-purple-900/30",
+          border: "border-purple-500",
+          dot: "bg-purple-400"
+        }
 
       :recovering ->
-        %{hex: "#f59e0b", text: "text-amber-400", bg: "bg-amber-400", bg_muted: "bg-amber-900/30", border: "border-gray-600", dot: "bg-amber-400"}
+        %{
+          hex: "#f59e0b",
+          text: "text-amber-400",
+          bg: "bg-amber-400",
+          bg_muted: "bg-amber-900/30",
+          border: "border-gray-600",
+          dot: "bg-amber-400"
+        }
 
       :degraded ->
-        %{hex: "#f97316", text: "text-orange-400", bg: "bg-orange-400", bg_muted: "bg-orange-900/30", border: "border-orange-500", dot: "bg-orange-400"}
+        %{
+          hex: "#f97316",
+          text: "text-orange-400",
+          bg: "bg-orange-400",
+          bg_muted: "bg-orange-900/30",
+          border: "border-orange-500",
+          dot: "bg-orange-400"
+        }
 
       :lagging ->
-        %{hex: "#38bdf8", text: "text-sky-400", bg: "bg-sky-400", bg_muted: "bg-sky-900/30", border: "border-sky-500", dot: "bg-sky-400"}
+        %{
+          hex: "#38bdf8",
+          text: "text-sky-400",
+          bg: "bg-sky-400",
+          bg_muted: "bg-sky-900/30",
+          border: "border-sky-500",
+          dot: "bg-sky-400"
+        }
 
       :healthy ->
-        %{hex: "#10b981", text: "text-emerald-400", bg: "bg-emerald-400", bg_muted: "bg-emerald-900/30", border: "border-gray-600", dot: "bg-emerald-400"}
+        %{
+          hex: "#10b981",
+          text: "text-emerald-400",
+          bg: "bg-emerald-400",
+          bg_muted: "bg-emerald-900/30",
+          border: "border-gray-600",
+          dot: "bg-emerald-400"
+        }
 
       :unknown ->
-        %{hex: "#6b7280", text: "text-gray-400", bg: "bg-gray-400", bg_muted: "bg-gray-900/30", border: "border-gray-600", dot: "bg-gray-400"}
+        %{
+          hex: "#6b7280",
+          text: "text-gray-400",
+          bg: "bg-gray-400",
+          bg_muted: "bg-gray-900/30",
+          border: "border-gray-600",
+          dot: "bg-gray-400"
+        }
     end
   end
 
@@ -355,6 +411,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
 
       :degraded ->
         failures = Map.get(provider, :consecutive_failures, 0)
+
         "Provider is experiencing issues (#{failures} consecutive failures). Still attempting requests."
 
       :lagging ->
@@ -362,6 +419,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
           {:ok, lag} when lag < 0 ->
             blocks_behind = abs(lag)
             "Provider is responsive but lagging #{blocks_behind} blocks behind the network head."
+
           _ ->
             "Provider is responsive but lagging behind the network."
         end

@@ -18,9 +18,22 @@ defmodule LassoWeb.Plugs.ProfileResolverPlug do
   - `:profile_slug` - The validated profile slug from the URL (e.g., "default", "testnet")
   - `:profile` - Full profile metadata from ConfigStore
 
-  ## Default Profile
-  Routes without a profile slug in the URL use the "default" profile.
-  Ensure `config/profiles/default.yml` exists at startup.
+  ## Default Profile Fallback
+
+  Routes without an explicit profile slug in the URL (legacy routes) automatically
+  use the "default" profile. This provides backward compatibility for:
+
+  - `POST /rpc/:chain_id` → Uses "default" profile
+  - `POST /rpc/fastest/:chain_id` → Uses "default" profile
+  - `POST /rpc/provider/:provider_id/:chain_id` → Uses "default" profile
+
+  Profile-aware routes explicitly include the profile:
+
+  - `POST /rpc/profile/:profile/:chain_id` → Uses specified profile
+  - `POST /rpc/profile/:profile/fastest/:chain_id` → Uses specified profile
+
+  **Important**: Ensure `config/profiles/default.yml` exists at startup, or default profile
+  routes will fail with 404 errors.
   """
 
   import Plug.Conn

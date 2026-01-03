@@ -13,17 +13,26 @@
   ~r"lib/lasso/core/streaming/stream_state.ex.*contract_with_opaque",
 
   # =============================================================================
-  # Request Pipeline Type Inference (Technical Debt)
+  # Request Pipeline - Dialyzer Type Inference Limitation
   # =============================================================================
-  # Dialyzer infers [map()] instead of [Channel.t()] due to complex type flow
-  # through Selection.select_channels -> AdapterFilter -> pattern matching.
-  # Code functions correctly - this is a false positive from type inference limits.
-  # See: docs/DIALYZER_ANALYSIS.md for details
+  # Dialyzer loses Channel.t() type information through recursive tail calls
+  # in attempt_channels/execute_on_channel, inferring [map()] instead despite:
+  # - Proper @spec declarations on all functions
+  # - Explicit @type channel_attempt :: {Channel.t(), ...} in RequestContext
+  # - @spec on record_channel_attempt/3 and record_channel_success/2
+  # - Pattern matching with %Channel{} guards
+  #
+  # This is a known Dialyzer limitation with complex recursive pipelines where
+  # types flow through struct updates, lambdas, and tail recursion. The code
+  # is correct (verified by tests) but Dialyzer's constraint solver cannot
+  # prove Channel.t() is preserved through the call chain.
+  #
+  # Real bugs fixed (not ignored):
+  # - Added circuit_breaker_result type to include :exception case
+  # - Made io_ms nil handling explicit in handle_channel_error
   ~r"lib/lasso/core/request/request_pipeline.ex.*call",
   ~r"lib/lasso/core/request/request_pipeline.ex.*invalid_contract",
   ~r"lib/lasso/core/request/request_pipeline.ex.*no_return",
-  ~r"lib/lasso/core/request/request_pipeline.ex.*guard_fail",
-  ~r"lib/lasso/core/request/request_pipeline.ex:253.*pattern_match",
 
   # =============================================================================
   # Defensive Error Handling - Intentional Safety Patterns

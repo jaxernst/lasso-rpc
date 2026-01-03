@@ -341,6 +341,7 @@ defmodule Lasso.RPC.RequestContext do
   Records a failed channel attempt for observability/debugging.
   Appends to the attempted_channels list to maintain audit trail.
   """
+  @spec record_channel_attempt(t(), Channel.t(), term()) :: t()
   def record_channel_attempt(%__MODULE__{} = ctx, %Channel{} = channel, error) do
     attempt = {channel, {:error, error}}
     %{ctx | attempted_channels: ctx.attempted_channels ++ [attempt]}
@@ -350,6 +351,7 @@ defmodule Lasso.RPC.RequestContext do
   Records a successful channel attempt. Called before set_executed_channel
   to capture the full attempt history.
   """
+  @spec record_channel_success(t(), Channel.t()) :: t()
   def record_channel_success(%__MODULE__{} = ctx, %Channel{} = channel) do
     attempt = {channel, :success}
     %{ctx | attempted_channels: ctx.attempted_channels ++ [attempt]}

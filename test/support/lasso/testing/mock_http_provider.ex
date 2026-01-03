@@ -213,13 +213,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
   end
 
   defp start_chain_supervisors(chain_name, chain_config) do
-    # Start global chain processes (BlockSync, HealthProbe) if not already running
-    case Lasso.GlobalChainSupervisor.ensure_chain_processes(chain_name) do
-      :ok -> :ok
-      {:error, reason} -> Logger.warning("Global chain processes failed: #{inspect(reason)}")
-    end
-
-    # Start profile chain supervisor
+    # Start profile chain supervisor (BlockSync, HealthProbe are profile-scoped)
     case Lasso.ProfileChainSupervisor.start_profile_chain(@test_profile, chain_name, chain_config) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> :ok
