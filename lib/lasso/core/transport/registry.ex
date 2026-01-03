@@ -122,17 +122,8 @@ defmodule Lasso.RPC.TransportRegistry do
   Stale channel references are handled gracefully by the circuit breaker on
   first failed request.
 
-  Accepts optional profile as first argument (defaults to "default").
-
   Returns {:ok, channel} or {:error, reason}.
   """
-  @spec get_channel(chain_name, provider_id, transport, keyword()) ::
-          {:ok, Channel.t()} | {:error, term()}
-  def get_channel(chain_name, provider_id, transport, opts)
-      when is_binary(chain_name) and is_binary(provider_id) and is_atom(transport) and is_list(opts) do
-    get_channel("default", chain_name, provider_id, transport, opts)
-  end
-
   @spec get_channel(profile, chain_name, provider_id, transport, keyword()) ::
           {:ok, Channel.t()} | {:error, term()}
   def get_channel(profile, chain_name, provider_id, transport, opts \\ [])

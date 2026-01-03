@@ -1,5 +1,5 @@
 ---
-name: Testnet
+name: Lasso Public Testnet
 slug: testnet
 type: standard
 default_rps_limit: 100
@@ -82,7 +82,7 @@ chains:
     name: "Base Sepolia"
 
     topology:
-      category: l2_optimistic
+      category: l2
       parent: ethereum_sepolia
       network: sepolia
       color: "#4A6BB2"

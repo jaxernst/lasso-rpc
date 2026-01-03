@@ -1,5 +1,5 @@
 ---
-name: Lasso Free
+name: Lasso Public
 slug: default
 type: standard
 default_rps_limit: 100
@@ -81,7 +81,7 @@ chains:
     name: "Base Mainnet"
 
     topology:
-      category: l2_optimistic
+      category: l2
       parent: ethereum
       network: mainnet
       color: "#0052FF"

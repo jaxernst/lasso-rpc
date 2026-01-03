@@ -94,7 +94,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
     # Always derive quick_run_config from current selected_profile
     # This ensures it's always in sync without manual change tracking
-    socket = assign(socket, :quick_run_config, get_default_run_config(socket.assigns.selected_profile))
+    socket =
+      assign(socket, :quick_run_config, get_default_run_config(socket.assigns.selected_profile))
 
     {:ok, socket}
   end
@@ -218,11 +219,12 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     }
 
     # Only include strategy if it's a valid non-empty string
-    opts = if is_binary(strategy) and String.length(strategy) > 0 do
-      Map.put(opts, :strategy, strategy)
-    else
-      opts
-    end
+    opts =
+      if is_binary(strategy) and String.length(strategy) > 0 do
+        Map.put(opts, :strategy, strategy)
+      else
+        opts
+      end
 
     socket =
       socket
@@ -368,11 +370,12 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   @impl true
   def render(assigns) do
     # Determine status indicator state
-    status = if is_simulator_active(assigns.sim_stats, assigns.simulator_running) do
-      :healthy
-    else
-      :info
-    end
+    status =
+      if is_simulator_active(assigns.sim_stats, assigns.simulator_running) do
+        :healthy
+      else
+        :info
+      end
 
     assigns = assign(assigns, :status, status)
 
@@ -392,7 +395,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
             animated={is_simulator_active(@sim_stats, @simulator_running)}
           />
           <div class="truncate text-xs font-medium text-white">
-            RPC Load Simulator
+            RPC Load Test
           </div>
         </:header>
 
@@ -497,8 +500,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           </div>
         <% end %>
       </div>
-
-      <!-- Chain Selection -->
+      
+    <!-- Chain Selection -->
       <div class="space-y-2">
         <div class="flex items-center justify-between">
           <label class="text-[10px] font-medium text-gray-400">Target Chains</label>
@@ -517,13 +520,9 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
                 phx-click="toggle_chain_selection"
                 phx-value-chain={chain.name}
                 phx-target={@myself}
-                class={[
-                  "text-[9px] rounded px-2 py-1 font-medium transition-all duration-200",
-                  if(chain.name in (@selected_chains || []),
-                    do: "bg-sky-500/20 border border-sky-500 text-sky-300",
-                    else: "border border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300"
-                  )
-                ]}
+                class={["text-[9px] rounded px-2 py-1 font-medium transition-all duration-200", if(chain.name in (@selected_chains || []),
+    do: "bg-sky-500/20 border border-sky-500 text-sky-300",
+    else: "border border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300")]}
               >
                 {chain.display_name}
               </button>
@@ -533,8 +532,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <% end %>
         </div>
       </div>
-
-      <!-- Routing Strategy -->
+      
+    <!-- Routing Strategy -->
       <div class="space-y-2">
         <label class="text-[10px] font-medium text-gray-400">Routing Strategy</label>
         <div class="grid grid-cols-2 gap-1">
@@ -547,21 +546,17 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
               phx-click="select_strategy"
               phx-value-strategy={strategy}
               phx-target={@myself}
-              class={[
-                "text-[10px] rounded-lg p-2 text-left transition-all duration-200",
-                if(@selected_strategy == strategy,
-                  do: "bg-purple-500/20 border border-purple-500 text-purple-300",
-                  else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50"
-                )
-              ]}
+              class={["text-[10px] rounded-lg p-2 text-left transition-all duration-200", if(@selected_strategy == strategy,
+    do: "bg-purple-500/20 border border-purple-500 text-purple-300",
+    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50")]}
             >
               <div class="font-medium">{icon} {label}</div>
             </button>
           <% end %>
         </div>
       </div>
-
-      <!-- Request Rate -->
+      
+    <!-- Request Rate -->
       <div class="space-y-2">
         <label class="text-[10px] font-medium text-gray-400">Request Rate</label>
         <div class="flex gap-2">
@@ -579,9 +574,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <% end %>
         </div>
       </div>
-
-
-      <!-- Live Statistics -->
+      
+    <!-- Live Statistics -->
       <div class="bg-gray-800/40 space-y-3 rounded-lg p-3">
         <div class="text-xs font-medium text-gray-300">Live Statistics</div>
 
@@ -685,7 +679,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       type: "custom",
       duration: 30_000,
       profile: profile,
-      strategy: "round-robin",  # Default strategy to avoid undefined routes
+      # Default strategy to avoid undefined routes
+      strategy: "round-robin",
       http: %{
         enabled: true,
         methods: ["eth_blockNumber", "eth_getBalance"],

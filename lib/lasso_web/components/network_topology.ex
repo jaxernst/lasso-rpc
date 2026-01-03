@@ -29,7 +29,7 @@ defmodule LassoWeb.NetworkTopology do
 
     ~H"""
     <div class={["relative h-full w-full overflow-hidden", @class]}>
-    <!-- Hierarchical orbital network layout -->
+      <!-- Hierarchical orbital network layout -->
       <div
         class="relative cursor-default"
         data-network-canvas
@@ -118,7 +118,7 @@ defmodule LassoWeb.NetworkTopology do
               style={"max-width: #{radius * 1.7}px;"}
               title={"#{get_chain_display_name(chain_name, @profile_chains)} (#{get_chain_id_display(chain_name, @profile_chains)})"}
             >
-              <div class={"#{if radius < 55, do: "text-xs", else: "text-sm"} truncate w-full font-semibold text-white"}>
+              <div class={"#{if radius < 55, do: "text-xs", else: "text-sm"} w-full truncate font-semibold text-white"}>
                 {get_chain_display_name(chain_name, @profile_chains)}
               </div>
               <div class={"#{if radius < 55, do: "text-[10px]", else: "text-xs"} text-gray-400"}>
@@ -215,7 +215,15 @@ defmodule LassoWeb.NetworkTopology do
 
     # Build hierarchical structure with parent-child relationships
     positioned_chains =
-      build_orbital_structure(l1_chains, l2_chains, other_chains, center_x, center_y, config, all_chain_configs)
+      build_orbital_structure(
+        l1_chains,
+        l2_chains,
+        other_chains,
+        center_x,
+        center_y,
+        config,
+        all_chain_configs
+      )
 
     %{chains: positioned_chains}
   end
@@ -273,7 +281,7 @@ defmodule LassoWeb.NetworkTopology do
          _chain_name,
          active_chain_names
        )
-       when category in [:l2_optimistic, :l2_zk] and is_binary(parent) do
+       when category in [:l2] and is_binary(parent) do
     parent in active_chain_names
   end
 

@@ -173,7 +173,7 @@ defmodule Lasso.Config.ChainConfig do
     - Group by network (mainnet vs testnets)
     """
 
-    @type category :: :l1 | :l2_optimistic | :l2_zk | :sidechain | :other
+    @type category :: :l1 | :l2 | :sidechain | :other
     @type network :: :mainnet | :sepolia | :goerli | :holesky
     @type size :: :sm | :md | :lg | :xl
 
@@ -192,7 +192,7 @@ defmodule Lasso.Config.ChainConfig do
               size: :md
 
     @doc "Check if this chain is an L2 (optimistic or ZK rollup)"
-    def l2?(%__MODULE__{category: category}), do: category in [:l2_optimistic, :l2_zk]
+    def l2?(%__MODULE__{category: category}), do: category in [:l2]
 
     @doc "Check if this chain is a mainnet chain"
     def mainnet?(%__MODULE__{network: network}), do: network == :mainnet
@@ -490,8 +490,7 @@ defmodule Lasso.Config.ChainConfig do
   end
 
   defp parse_topology_category("l1"), do: :l1
-  defp parse_topology_category("l2_optimistic"), do: :l2_optimistic
-  defp parse_topology_category("l2_zk"), do: :l2_zk
+  defp parse_topology_category("l2"), do: :l2
   defp parse_topology_category("sidechain"), do: :sidechain
   defp parse_topology_category(_), do: :other
 

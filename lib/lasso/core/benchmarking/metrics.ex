@@ -26,7 +26,7 @@ defmodule Lasso.RPC.Metrics do
   @type recording_opts :: [
           timestamp: integer(),
           async: boolean(),
-          transport: :http | :ws
+          transport: :http | :ws | nil
         ]
 
   @doc """

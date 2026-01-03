@@ -17,7 +17,7 @@
 # Topology Configuration:
 # Each chain can have topology metadata for dashboard visualization:
 #   topology:
-#     category: l1 | l2_optimistic | l2_zk | sidechain | other
+#     category: l1 | l2 | sidechain | other
 #     parent: <chain_key>     # For L2s, which L1 they connect to (e.g., "ethereum")
 #     network: mainnet | sepolia | goerli | holesky
 #     color: "#HEXCODE"       # Brand color for UI
@@ -235,7 +235,7 @@ chains:
     name: "Base Mainnet"
 
     topology:
-      category: l2_optimistic
+      category: l2
       parent: ethereum
       network: mainnet
       color: "#0052FF"
@@ -351,7 +351,7 @@ chains:
     name: "Base Sepolia"
 
     topology:
-      category: l2_optimistic
+      category: l2
       parent: ethereum_sepolia # Connects to Sepolia testnet, floats if not present
       network: sepolia
       color: "#4A6BB2"
