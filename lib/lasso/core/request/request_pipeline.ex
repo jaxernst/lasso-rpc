@@ -382,7 +382,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec handle_no_channels(RequestContext.t()) :: result()
   defp handle_no_channels(ctx) do
-    retry_after_ms = calculate_min_recovery_time(ctx.chain, ctx.opts.transport)
+    retry_after_ms = calculate_min_recovery_time(ctx.profile, ctx.chain, ctx.opts.transport)
     {message, data} = build_exhaustion_error_message(ctx.method, retry_after_ms, ctx.chain)
 
     jerr =
@@ -523,11 +523,11 @@ defmodule Lasso.RPC.RequestPipeline do
     {"No available channels for method: #{method}. All circuit breakers are open.", %{}}
   end
 
-  @spec calculate_min_recovery_time(chain(), atom() | nil) :: non_neg_integer() | nil
-  defp calculate_min_recovery_time(chain, transport_filter) do
+  @spec calculate_min_recovery_time(String.t(), chain(), atom() | nil) :: non_neg_integer() | nil
+  defp calculate_min_recovery_time(profile, chain, transport_filter) do
     transport = transport_filter || :both
 
-    case ProviderPool.get_min_recovery_time(chain, transport: transport, timeout: 2000) do
+    case ProviderPool.get_min_recovery_time(profile, chain, transport: transport, timeout: 2000) do
       {:ok, min_time} -> min_time
       {:error, :timeout} ->
         Logger.warning("Timeout getting recovery time", chain: chain)

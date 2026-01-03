@@ -416,7 +416,7 @@ defmodule Lasso.RPC.TransportRegistry do
         _ ->
           case ConfigStore.get_provider(state.profile, state.chain_name, provider_id) do
             {:ok, _} = ok -> ok
-            _ -> get_provider_config_from_pool(state.chain_name, provider_id)
+            _ -> get_provider_config_from_pool(state.profile, state.chain_name, provider_id)
           end
       end
 
@@ -490,8 +490,8 @@ defmodule Lasso.RPC.TransportRegistry do
     end
   end
 
-  defp get_provider_config_from_pool(chain_name, provider_id) do
-    case ProviderPool.get_status(chain_name) do
+  defp get_provider_config_from_pool(profile, chain_name, provider_id) do
+    case ProviderPool.get_status(profile, chain_name) do
       {:ok, status} ->
         case Enum.find(status.providers, fn p -> p.id == provider_id end) do
           nil -> {:error, :provider_not_found}

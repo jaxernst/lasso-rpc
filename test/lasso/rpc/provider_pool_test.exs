@@ -68,24 +68,24 @@ defmodule Lasso.RPC.ProviderPoolTest do
 
     {:ok, _pid} = ProviderPool.start_link({"testnet", chain_config})
 
-    :ok = ProviderPool.register_provider("testnet", p1.id, p1)
-    :ok = ProviderPool.register_provider("testnet", p2.id, p2)
+    :ok = ProviderPool.register_provider("default", "testnet", p1.id, p1)
+    :ok = ProviderPool.register_provider("default", "testnet", p2.id, p2)
 
-    ProviderPool.report_success("testnet", p1.id)
-    {:ok, status} = ProviderPool.get_status("testnet")
+    ProviderPool.report_success("default", "testnet", p1.id, nil)
+    {:ok, status} = ProviderPool.get_status("default", "testnet")
     p1_status = Enum.find(status.providers, &(&1.id == p1.id))
     assert p1_status.status in [:healthy, :connecting]
 
-    ProviderPool.report_failure("testnet", p1.id, {:rate_limit, "HTTP 429"})
-    {:ok, status2} = ProviderPool.get_status("testnet")
+    ProviderPool.report_failure("default", "testnet", p1.id, {:rate_limit, "HTTP 429"}, nil)
+    {:ok, status2} = ProviderPool.get_status("default", "testnet")
     p1_status2 = Enum.find(status2.providers, &(&1.id == p1.id))
     # Rate limits don't change health status - check rate limit state via RateLimitState fields
     assert p1_status2.http_rate_limited == true or p1_status2.is_in_cooldown == true
     # Health status should remain unchanged (healthy or connecting)
     assert p1_status2.status in [:healthy, :connecting]
 
-    ProviderPool.report_failure("testnet", p1.id, {:server_error, "500"})
-    {:ok, status3} = ProviderPool.get_status("testnet")
+    ProviderPool.report_failure("default", "testnet", p1.id, {:server_error, "500"}, nil)
+    {:ok, status3} = ProviderPool.get_status("default", "testnet")
     p1_status3 = Enum.find(status3.providers, &(&1.id == p1.id))
     assert p1_status3.consecutive_failures >= p1_status2.consecutive_failures
   end
@@ -104,7 +104,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
 
       chain_config = base_chain_config([provider])
       {:ok, _pid} = ProviderPool.start_link({"test_cb_chain", chain_config})
-      :ok = ProviderPool.register_provider("test_cb_chain", provider.id, provider)
+      :ok = ProviderPool.register_provider("default", "test_cb_chain", provider.id, provider)
 
       # Wait for provider to be active
       Process.sleep(50)
@@ -121,7 +121,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
       Process.sleep(10)
 
       # Filter for HTTP protocol - should exclude provider
-      candidates = ProviderPool.list_candidates(chain, %{protocol: :http})
+      candidates = ProviderPool.list_candidates("default", chain, %{protocol: :http})
 
       assert Enum.empty?(candidates),
              "Provider should be excluded when HTTP CB is open and filtering for :http"
@@ -135,7 +135,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
       send_cb_event(chain, provider.id, :http, :open, :closed)
       Process.sleep(10)
 
-      candidates = ProviderPool.list_candidates(chain, %{protocol: :http})
+      candidates = ProviderPool.list_candidates("default", chain, %{protocol: :http})
 
       assert length(candidates) == 1, "Provider should be included when HTTP CB is closed"
       assert hd(candidates).id == provider.id
@@ -149,7 +149,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
       send_cb_event(chain, provider.id, :ws, :closed, :open)
       Process.sleep(10)
 
-      candidates = ProviderPool.list_candidates(chain, %{protocol: :ws})
+      candidates = ProviderPool.list_candidates("default", chain, %{protocol: :ws})
 
       assert Enum.empty?(candidates),
              "Provider should be excluded when WS CB is open and filtering for :ws"
@@ -164,7 +164,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
       send_cb_event(chain, provider.id, :ws, :closed, :open)
       Process.sleep(10)
 
-      candidates = ProviderPool.list_candidates(chain, %{})
+      candidates = ProviderPool.list_candidates("default", chain, %{})
 
       assert Enum.empty?(candidates),
              "Provider should be excluded when both CBs are open"
@@ -179,7 +179,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
       send_cb_event(chain, provider.id, :ws, :open, :closed)
       Process.sleep(10)
 
-      candidates = ProviderPool.list_candidates(chain, %{})
+      candidates = ProviderPool.list_candidates("default", chain, %{})
 
       assert length(candidates) == 1,
              "Provider should be included when at least one transport CB is closed"
@@ -196,7 +196,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
       send_cb_event(chain, provider.id, :ws, :closed, :open)
       Process.sleep(10)
 
-      candidates = ProviderPool.list_candidates(chain, %{})
+      candidates = ProviderPool.list_candidates("default", chain, %{})
 
       assert length(candidates) == 1,
              "Provider should be included when at least one transport CB is closed"
@@ -215,7 +215,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
 
       # Should include with include_half_open=true
       candidates =
-        ProviderPool.list_candidates(chain, %{protocol: :http, include_half_open: true})
+        ProviderPool.list_candidates("default", chain, %{protocol: :http, include_half_open: true})
 
       assert length(candidates) == 1,
              "Provider should be included when CB is half-open and include_half_open=true"
@@ -231,7 +231,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
       Process.sleep(10)
 
       # Should exclude with include_half_open=false (default)
-      candidates = ProviderPool.list_candidates(chain, %{protocol: :http})
+      candidates = ProviderPool.list_candidates("default", chain, %{protocol: :http})
 
       assert Enum.empty?(candidates),
              "Provider should be excluded when CB is half-open and include_half_open=false"
@@ -248,7 +248,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
           priority: 2
         })
 
-      :ok = ProviderPool.register_provider(chain, http_only_provider.id, http_only_provider)
+      :ok = ProviderPool.register_provider("default", chain, http_only_provider.id, http_only_provider)
       Process.sleep(50)
 
       # Open HTTP CB
@@ -256,7 +256,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
       Process.sleep(10)
 
       # Should be excluded because HTTP (only transport) has open CB
-      candidates = ProviderPool.list_candidates(chain, %{})
+      candidates = ProviderPool.list_candidates("default", chain, %{})
 
       http_only_candidate = Enum.find(candidates, &(&1.id == http_only_provider.id))
 
@@ -294,7 +294,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
 
       chain_config = base_chain_config([provider])
       {:ok, _pid} = ProviderPool.start_link({"rate_limit_chain", chain_config})
-      :ok = ProviderPool.register_provider("rate_limit_chain", provider.id, provider)
+      :ok = ProviderPool.register_provider("default", "rate_limit_chain", provider.id, provider)
       Process.sleep(50)
 
       %{provider: provider, chain: "rate_limit_chain"}
@@ -305,15 +305,15 @@ defmodule Lasso.RPC.ProviderPoolTest do
       chain: chain
     } do
       # Get initial status - should be healthy/connecting
-      {:ok, status_before} = ProviderPool.get_status(chain)
+      {:ok, status_before} = ProviderPool.get_status("default", chain)
       provider_before = Enum.find(status_before.providers, &(&1.id == provider.id))
       initial_http_status = provider_before.http_status
 
       # Report rate limit - should NOT change health status
-      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
+      ProviderPool.report_failure("default", chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
       Process.sleep(10)
 
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       provider_status = Enum.find(status.providers, &(&1.id == provider.id))
 
       # Health status should NOT change - rate limits are backpressure, not failures
@@ -332,15 +332,15 @@ defmodule Lasso.RPC.ProviderPoolTest do
       chain: chain
     } do
       # Get initial status
-      {:ok, status_before} = ProviderPool.get_status(chain)
+      {:ok, status_before} = ProviderPool.get_status("default", chain)
       provider_before = Enum.find(status_before.providers, &(&1.id == provider.id))
       initial_ws_status = provider_before.ws_status
 
       # Report rate limit - should NOT change health status
-      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "WS 429"}, :ws)
+      ProviderPool.report_failure("default", chain, provider.id, {:rate_limit, "WS 429"}, :ws)
       Process.sleep(10)
 
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       provider_status = Enum.find(status.providers, &(&1.id == provider.id))
 
       # Health status should NOT change
@@ -357,11 +357,11 @@ defmodule Lasso.RPC.ProviderPoolTest do
       chain: chain
     } do
       # Report rate limit
-      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
+      ProviderPool.report_failure("default", chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
       Process.sleep(10)
 
       # Circuit breaker should NOT open from rate limits (breaker_penalty?: false)
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       provider_status = Enum.find(status.providers, &(&1.id == provider.id))
 
       # Rate limit should be recorded
@@ -377,18 +377,18 @@ defmodule Lasso.RPC.ProviderPoolTest do
       chain: chain
     } do
       # Report rate limit
-      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
+      ProviderPool.report_failure("default", chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
       Process.sleep(10)
 
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       provider_status = Enum.find(status.providers, &(&1.id == provider.id))
       assert provider_status.http_rate_limited == true
 
       # Report success - should clear rate limit
-      ProviderPool.report_success(chain, provider.id, :http)
+      ProviderPool.report_success("default", chain, provider.id, :http)
       Process.sleep(10)
 
-      {:ok, status_after} = ProviderPool.get_status(chain)
+      {:ok, status_after} = ProviderPool.get_status("default", chain)
       provider_after = Enum.find(status_after.providers, &(&1.id == provider.id))
       assert provider_after.http_rate_limited == false,
              "Success should clear rate limit state"
@@ -399,16 +399,16 @@ defmodule Lasso.RPC.ProviderPoolTest do
       chain: chain
     } do
       # Get initial health status
-      {:ok, status_before} = ProviderPool.get_status(chain)
+      {:ok, status_before} = ProviderPool.get_status("default", chain)
       provider_before = Enum.find(status_before.providers, &(&1.id == provider.id))
       initial_status = provider_before.status
 
       # Rate limit both transports - health status should NOT change
-      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
-      ProviderPool.report_failure(chain, provider.id, {:rate_limit, "WS 429"}, :ws)
+      ProviderPool.report_failure("default", chain, provider.id, {:rate_limit, "HTTP 429"}, :http)
+      ProviderPool.report_failure("default", chain, provider.id, {:rate_limit, "WS 429"}, :ws)
       Process.sleep(10)
 
-      {:ok, status} = ProviderPool.get_status(chain)
+      {:ok, status} = ProviderPool.get_status("default", chain)
       provider_status = Enum.find(status.providers, &(&1.id == provider.id))
 
       # Health status should remain unchanged - rate limits don't affect it

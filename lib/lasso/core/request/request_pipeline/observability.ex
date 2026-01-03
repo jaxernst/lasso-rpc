@@ -37,7 +37,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     # Record metrics with transport dimension
     Metrics.record_success(profile, ctx.chain, provider_id, method, duration_ms, transport: transport)
-    ProviderPool.report_success(ctx.chain, provider_id, transport)
+    ProviderPool.report_success(profile, ctx.chain, provider_id, transport)
 
     # Publish routing decision for dashboard/analytics
     publish_routing_decision(ctx.chain, method, strategy, provider_id, transport, duration_ms, :success, ctx.retries)
@@ -297,7 +297,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     # Normalize to JError and report to provider pool
     jerr = JError.from(reason, provider_id: provider_id)
-    ProviderPool.report_failure(chain, provider_id, jerr, transport)
+    ProviderPool.report_failure(profile, chain, provider_id, jerr, transport)
   end
 
   @spec extract_error_category(term()) :: atom()

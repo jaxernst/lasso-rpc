@@ -49,16 +49,16 @@ defmodule Lasso.RPC.TransportFailureReportingIntegrationTest do
     CircuitBreakerHelper.assert_circuit_breaker_state({chain, "fail_http", :http}, :open)
 
     # ProviderPool should reflect HTTP transport failure without forcing WS changes
-    {:ok, status} = ProviderPool.get_status(chain)
+    {:ok, status} = ProviderPool.get_status("default", chain)
     p = Enum.find(status.providers, &(&1.id == "fail_http"))
     assert p.http_status in [:unhealthy, :rate_limited, :degraded]
 
     # HTTP candidate list should exclude the failing provider due to CB open
-    http_candidates = ProviderPool.list_candidates(chain, %{protocol: :http})
+    http_candidates = ProviderPool.list_candidates("default", chain, %{protocol: :http})
     refute Enum.any?(http_candidates, &(&1.id == "fail_http"))
 
     # Agnostic (nil) candidates should still include ok_http
-    any_candidates = ProviderPool.list_candidates(chain, %{protocol: nil})
+    any_candidates = ProviderPool.list_candidates("default", chain, %{protocol: nil})
     assert Enum.any?(any_candidates, &(&1.id == "ok_http"))
   end
 end

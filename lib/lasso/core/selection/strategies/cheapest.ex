@@ -8,10 +8,11 @@ defmodule Lasso.RPC.Strategies.Cheapest do
   @impl true
   def prepare_context(selection) do
     base_ctx = Lasso.RPC.StrategyContext.new(selection)
+    profile = selection.profile
     chain = selection.chain
 
     total_requests =
-      case ProviderPool.get_status(chain) do
+      case ProviderPool.get_status(profile, chain) do
         {:ok, %{total_requests: tr}} when is_integer(tr) ->
           tr
 

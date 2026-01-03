@@ -30,10 +30,10 @@ defmodule Lasso.RPC.HttpInclusionWithWsDisconnectIntegrationTest do
       )
 
     # HTTP candidates should include the provider
-    http_candidates = ProviderPool.list_candidates(chain, %{protocol: :http})
+    http_candidates = ProviderPool.list_candidates("default", chain, %{protocol: :http})
     assert Enum.any?(http_candidates, &(&1.id == "dual"))
 
-    {:ok, status} = ProviderPool.get_status(chain)
+    {:ok, status} = ProviderPool.get_status("default", chain)
     p = Enum.find(status.providers, &(&1.id == "dual"))
     # WS status may be :disconnected or still :connecting depending on background ws init timing
     assert p.ws_status in [:disconnected, :connecting]

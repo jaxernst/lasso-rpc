@@ -219,7 +219,12 @@ defmodule Lasso.Providers do
   """
   @spec list_providers(String.t()) :: {:ok, [provider_summary()]} | {:error, term()}
   def list_providers(chain_name) do
-    case ProviderPool.get_status(chain_name) do
+    list_providers("default", chain_name)
+  end
+
+  @spec list_providers(String.t(), String.t()) :: {:ok, [provider_summary()]} | {:error, term()}
+  def list_providers(profile, chain_name) do
+    case ProviderPool.get_status(profile, chain_name) do
       {:ok, status} ->
         summaries =
           Enum.map(status.providers, fn provider ->
@@ -256,7 +261,12 @@ defmodule Lasso.Providers do
   """
   @spec get_provider(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def get_provider(chain_name, provider_id) do
-    case ProviderPool.get_status(chain_name) do
+    get_provider("default", chain_name, provider_id)
+  end
+
+  @spec get_provider(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def get_provider(profile, chain_name, provider_id) do
+    case ProviderPool.get_status(profile, chain_name) do
       {:ok, status} ->
         case Enum.find(status.providers, fn p -> p.id == provider_id end) do
           nil -> {:error, :not_found}

@@ -67,7 +67,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
     # Ensure chain exists and register provider
     with :ok <- ensure_chain_exists(chain),
          :ok <- Lasso.Config.ConfigStore.register_provider_runtime("default", chain, provider_config),
-         :ok <- Lasso.RPC.ProviderPool.register_provider(chain, provider_id, provider_config) do
+         :ok <- Lasso.RPC.ProviderPool.register_provider("default", chain, provider_id, provider_config) do
       Logger.info("MockHTTPProvider: registered #{provider_id}, initializing channels...")
 
       result =
@@ -86,7 +86,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
           ensure_circuit_breaker(chain, provider_id, :http)
 
           # Mark as healthy so it can be selected
-          Lasso.RPC.ProviderPool.report_success(chain, provider_id)
+          Lasso.RPC.ProviderPool.report_success("default", chain, provider_id, nil)
 
           # Give report_success (async cast) time to complete
           Process.sleep(50)
