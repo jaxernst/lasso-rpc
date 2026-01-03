@@ -1256,16 +1256,13 @@ defmodule LassoWeb.Dashboard do
     <div class="flex h-full flex-col overflow-y-auto text-gray-200 overflow-hidden" data-provider-id={@provider}>
       <!-- HEADER -->
       <div class="flex gap-2 items-center border-b border-gray-800 p-6 pb-5 relative overflow-hidden">
-      <div>
+      <div class="w-full">
         <!-- Title row with status badge -->
-        <div class="flex items-center justify-between mb-1.5 relative z-10">
+        <div class="flex items-center w-full justify-between mb-1.5 relative z-10">
           <h3 class="text-3xl font-bold text-white tracking-tight">
             {if @provider_connection, do: @provider_connection.name, else: @provider}
           </h3>
-        </div>
 
-        <!-- Provider metadata -->
-        <div class="flex items-center gap-3 text-sm mb-2 relative z-10">
           <div class={[
             "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium",
             StatusHelpers.provider_status_badge_class(@provider_connection || %{})
@@ -1276,7 +1273,10 @@ defmodule LassoWeb.Dashboard do
           ]}></div>
           <span>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
         </div>
+        </div>
 
+        <!-- Provider metadata -->
+        <div class="flex items-center gap-2 text-sm mb-2 relative z-10">
           <span class="text-gray-400">{if @provider_connection, do: "Chain ID: " <> Helpers.get_chain_id(@selected_profile, @provider_connection.chain || "unknown"), else: "Provider"}</span>
           <%= if @provider_connection do %>
             <span class="text-gray-300">·</span>
