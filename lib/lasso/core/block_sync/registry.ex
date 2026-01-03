@@ -65,15 +65,26 @@ defmodule Lasso.BlockSync.Registry do
 
   Only considers heights from the last `freshness_ms` milliseconds.
 
+  ## Parameters
+  - `chain` - Chain identifier
+  - `provider_ids` - Optional list of provider IDs to consider. If nil or empty, uses all providers.
+  - `freshness_ms` - Maximum age of data to consider
+
   Returns `{:ok, height}` or `{:error, :no_data}`.
   """
-  def get_consensus_height(chain, freshness_ms \\ @default_freshness_ms)
+  def get_consensus_height(chain, provider_ids \\ nil, freshness_ms \\ @default_freshness_ms)
       when is_binary(chain) do
-    calculate_consensus(chain, freshness_ms)
+    calculate_consensus(chain, provider_ids, freshness_ms)
   end
 
   @doc """
   Calculate provider's lag compared to consensus height.
+
+  ## Parameters
+  - `chain` - Chain identifier
+  - `provider_id` - Provider to check lag for
+  - `provider_ids` - Optional list of provider IDs for consensus calculation. If nil or empty, uses all providers.
+  - `freshness_ms` - Maximum age of data to consider
 
   Returns:
   - `{:ok, lag}` where lag is `provider_height - consensus_height`
@@ -81,12 +92,12 @@ defmodule Lasso.BlockSync.Registry do
   - `{:error, :no_provider_data}` if provider has no height data
   - `{:error, :no_consensus}` if no consensus can be calculated
   """
-  def get_provider_lag(chain, provider_id, freshness_ms \\ @default_freshness_ms)
+  def get_provider_lag(chain, provider_id, provider_ids \\ nil, freshness_ms \\ @default_freshness_ms)
       when is_binary(chain) and is_binary(provider_id) do
     with {:ok, {height, timestamp, _source, _meta}} <- get_height(chain, provider_id),
          age = System.system_time(:millisecond) - timestamp,
          true <- age <= freshness_ms,
-         {:ok, consensus} <- get_consensus_height(chain, freshness_ms) do
+         {:ok, consensus} <- get_consensus_height(chain, provider_ids, freshness_ms) do
       {:ok, height - consensus}
     else
       {:ok, _stale} -> {:error, :stale_data}
@@ -170,15 +181,27 @@ defmodule Lasso.BlockSync.Registry do
 
   ## Private Functions
 
-  defp calculate_consensus(chain, freshness_ms) do
+  defp calculate_consensus(chain, provider_ids, freshness_ms) do
     now = System.system_time(:millisecond)
     cutoff = now - freshness_ms
 
     # Find all fresh heights for this chain
     heights = get_all_heights(chain)
 
+    # Filter by provider_ids if specified
+    heights_filtered =
+      case provider_ids do
+        nil -> heights
+        [] -> heights
+        ids when is_list(ids) ->
+          provider_set = MapSet.new(ids)
+          Enum.filter(heights, fn {provider_id, _data} ->
+            MapSet.member?(provider_set, provider_id)
+          end)
+      end
+
     fresh_heights =
-      heights
+      heights_filtered
       |> Enum.filter(fn {_provider_id, {_height, timestamp, _source, _meta}} ->
         timestamp >= cutoff
       end)

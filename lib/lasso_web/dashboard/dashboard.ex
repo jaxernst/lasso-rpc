@@ -294,6 +294,27 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
+  # WebSocket connection events - ProviderPool handles these, dashboard just ignores them
+  @impl true
+  def handle_info({:ws_reconnecting, _provider_id, _attempt}, socket) do
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:ws_connected, _provider_id, _connection_id}, socket) do
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:ws_disconnected, _provider_id, _error}, socket) do
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:ws_closed, _provider_id, _code, _error}, socket) do
+    {:noreply, socket}
+  end
+
   # Routing decision feed (real or synthetic)
   @impl true
   def handle_info(
@@ -1903,6 +1924,8 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_params(params, _url, socket) do
+    tab_param = Map.get(params, "tab")
+
     # Handle profile param changes
     socket =
       case Map.get(params, "profile") do
@@ -1910,7 +1933,8 @@ defmodule LassoWeb.Dashboard do
           # No profile in URL, redirect to selected profile
           # Mount guarantees selected_profile is set
           profile = socket.assigns.selected_profile
-          push_patch(socket, to: ~p"/dashboard/#{profile}")
+          tab = tab_param || Map.get(socket.assigns, :active_tab, "overview")
+          push_patch(socket, to: ~p"/dashboard/#{profile}?tab=#{tab}")
 
         profile_slug ->
           current_profile = Map.get(socket.assigns, :selected_profile)
@@ -2337,7 +2361,8 @@ defmodule LassoWeb.Dashboard do
           MetricsHelpers.get_provider_performance_metrics(
             provider_id,
             socket.assigns.connections,
-            socket.assigns.routing_events
+            socket.assigns.routing_events,
+            socket.assigns.selected_profile
           )
 
         # Update all provider-specific assigns at once
@@ -2358,12 +2383,28 @@ defmodule LassoWeb.Dashboard do
     profile = profile || socket.assigns.selected_profile
     chains = ConfigStore.list_chains_for_profile(profile)
 
-    # Get consensus heights for all chains upfront
+    # Build map of chain -> provider_ids for profile-scoped consensus
+    provider_ids_by_chain =
+      chains
+      |> Enum.map(fn chain_name ->
+        provider_ids =
+          case ProviderPool.get_status(profile, chain_name) do
+            {:ok, pool_status} -> Enum.map(pool_status.providers, & &1.id)
+            {:error, _} -> []
+          end
+
+        {chain_name, provider_ids}
+      end)
+      |> Enum.into(%{})
+
+    # Get consensus heights for all chains upfront (using profile's providers)
     consensus_by_chain =
       chains
       |> Enum.map(fn chain_name ->
+        provider_ids = Map.get(provider_ids_by_chain, chain_name, [])
+
         consensus =
-          case ChainState.consensus_height(chain_name) do
+          case ChainState.consensus_height(chain_name, provider_ids) do
             {:ok, height} -> height
             {:error, _} -> nil
           end
@@ -2426,9 +2467,11 @@ defmodule LassoWeb.Dashboard do
                   other -> other
                 end
 
-              # Get provider block height and lag from ChainState
+              # Get provider block height and lag from ChainState (using profile's providers for consensus)
+              provider_ids = Map.get(provider_ids_by_chain, chain_name, [])
+
               {block_height, blocks_behind} =
-                case ChainState.provider_lag(chain_name, provider_map.id) do
+                case ChainState.provider_lag(chain_name, provider_map.id, provider_ids) do
                   {:ok, lag} when is_integer(lag) and not is_nil(consensus_height) ->
                     # lag is negative when behind (e.g., -5 means 5 blocks behind)
                     # Convert to block_height and blocks_behind

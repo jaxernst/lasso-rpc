@@ -172,7 +172,7 @@ defmodule Lasso.RPC.WSConnection do
 
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
-          "ws:conn:#{state.chain_name}",
+          "ws:conn:#{state.profile}:#{state.chain_name}",
           {:connection_error, state.endpoint.id, jerr}
         )
 
@@ -206,7 +206,7 @@ defmodule Lasso.RPC.WSConnection do
 
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
-          "ws:conn:#{state.chain_name}",
+          "ws:conn:#{state.profile}:#{state.chain_name}",
           {:connection_error, state.endpoint.id, jerr}
         )
 
@@ -242,7 +242,7 @@ defmodule Lasso.RPC.WSConnection do
 
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
-          "ws:conn:#{state.chain_name}",
+          "ws:conn:#{state.profile}:#{state.chain_name}",
           {:connection_error, state.endpoint.id, jerr}
         )
 
@@ -275,7 +275,7 @@ defmodule Lasso.RPC.WSConnection do
 
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
-          "ws:conn:#{state.chain_name}",
+          "ws:conn:#{state.profile}:#{state.chain_name}",
           {:connection_error, state.endpoint.id, jerr}
         )
 
@@ -390,7 +390,7 @@ defmodule Lasso.RPC.WSConnection do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:conn:#{state.chain_name}",
+      "ws:conn:#{state.profile}:#{state.chain_name}",
       {:ws_connected, state.endpoint.id, connection_id}
     )
 
@@ -473,7 +473,7 @@ defmodule Lasso.RPC.WSConnection do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:conn:#{state.chain_name}",
+      "ws:conn:#{state.profile}:#{state.chain_name}",
       {:connection_error, state.endpoint.id, jerr}
     )
 
@@ -540,7 +540,7 @@ defmodule Lasso.RPC.WSConnection do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:conn:#{state.chain_name}",
+      "ws:conn:#{state.profile}:#{state.chain_name}",
       {:ws_closed, state.endpoint.id, code, jerr_with_penalty}
     )
 
@@ -596,7 +596,7 @@ defmodule Lasso.RPC.WSConnection do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:conn:#{state.chain_name}",
+      "ws:conn:#{state.profile}:#{state.chain_name}",
       {:ws_disconnected, state.endpoint.id, jerr_with_penalty}
     )
 
@@ -649,7 +649,7 @@ defmodule Lasso.RPC.WSConnection do
 
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
-          "ws:conn:#{state.chain_name}",
+          "ws:conn:#{state.profile}:#{state.chain_name}",
           {:ws_disconnected, endpoint.id, jerr}
         )
 
@@ -736,7 +736,7 @@ defmodule Lasso.RPC.WSConnection do
     # Notify of disconnection via typed events
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:conn:#{state.chain_name}",
+      "ws:conn:#{state.profile}:#{state.chain_name}",
       {:ws_disconnected, state.endpoint.id,
        JError.new(-32_000, "terminated", provider_id: state.endpoint.id, retriable?: false)}
     )
@@ -852,7 +852,7 @@ defmodule Lasso.RPC.WSConnection do
         # Broadcast reconnection attempt to ProviderPool
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
-          "ws:conn:#{state.chain_name}",
+          "ws:conn:#{state.profile}:#{state.chain_name}",
           {:ws_reconnecting, state.endpoint.id, state.reconnect_attempts + 1}
         )
 
@@ -891,7 +891,7 @@ defmodule Lasso.RPC.WSConnection do
         # Broadcast reconnection attempt to ProviderPool
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
-          "ws:conn:#{state.chain_name}",
+          "ws:conn:#{state.profile}:#{state.chain_name}",
           {:ws_reconnecting, state.endpoint.id, state.reconnect_attempts + 1}
         )
 
@@ -924,7 +924,7 @@ defmodule Lasso.RPC.WSConnection do
         # Broadcast reconnection attempt to ProviderPool
         Phoenix.PubSub.broadcast(
           Lasso.PubSub,
-          "ws:conn:#{state.chain_name}",
+          "ws:conn:#{state.profile}:#{state.chain_name}",
           {:ws_reconnecting, state.endpoint.id, state.reconnect_attempts + 1}
         )
 
@@ -975,7 +975,7 @@ defmodule Lasso.RPC.WSConnection do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:subs:#{state.chain_name}",
+      "ws:subs:#{state.profile}:#{state.chain_name}",
       {:subscription_event, state.endpoint.id, sub_id, payload, received_at}
     )
 
@@ -1000,7 +1000,7 @@ defmodule Lasso.RPC.WSConnection do
 
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
-        "ws:conn:#{state.chain_name}",
+        "ws:conn:#{state.profile}:#{state.chain_name}",
         {:connection_error, state.endpoint.id, jerr}
       )
 

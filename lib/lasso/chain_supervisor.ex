@@ -32,6 +32,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   alias Lasso.RPC.{WSConnection, ProviderPool, TransportRegistry}
   alias Lasso.RPC.ProviderSupervisor
   alias Lasso.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
+  alias Lasso.GlobalChainProcesses
 
   @doc """
   Starts a ChainSupervisor for a specific profile and blockchain.
@@ -111,6 +112,13 @@ defmodule Lasso.RPC.ChainSupervisor do
              provider_config.id,
              provider_config
            ) do
+      # Start BlockSync and HealthProbe workers for the new provider
+      # Only start if GlobalChainProcesses is running (may not be in tests)
+      if Lasso.GlobalChainSupervisor.chain_running?(chain_name) do
+        GlobalChainProcesses.start_block_sync_worker(chain_name, profile, provider_config.id)
+        GlobalChainProcesses.start_health_probe_worker(chain_name, profile, provider_config.id)
+      end
+
       :ok
     else
       {:error, reason} = error ->
@@ -138,6 +146,13 @@ defmodule Lasso.RPC.ChainSupervisor do
   """
   @spec remove_provider(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def remove_provider(profile, chain_name, provider_id) do
+    # Stop BlockSync and HealthProbe workers for this provider
+    # Only stop if GlobalChainProcesses is running (may not be in tests)
+    if Lasso.GlobalChainSupervisor.chain_running?(chain_name) do
+      GlobalChainProcesses.stop_block_sync_worker(chain_name, profile, provider_id)
+      GlobalChainProcesses.stop_health_probe_worker(chain_name, profile, provider_id)
+    end
+
     # Stop the per-provider supervisor (cascades WS then circuit breakers)
     case GenServer.whereis(provider_supervisor_via(profile, chain_name, provider_id)) do
       nil -> :ok
@@ -193,6 +208,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   end
 
   defp start_provider_connections_async(profile, chain_name, chain_config) do
+    # Start provider supervisors (circuit breakers, WS connections)
     Enum.each(chain_config.providers, fn provider ->
       _ = start_provider_supervisor(profile, chain_name, chain_config, provider, [])
     end)
@@ -201,6 +217,16 @@ defmodule Lasso.RPC.ChainSupervisor do
       profile: profile,
       chain: chain_name
     )
+
+    # Start BlockSync workers for this profile's providers
+    # These track block heights via WS subscriptions and HTTP polling
+    # Only start if GlobalChainProcesses is running (may not be in tests)
+    provider_ids = Enum.map(chain_config.providers, & &1.id)
+
+    if Lasso.GlobalChainSupervisor.chain_running?(chain_name) do
+      GlobalChainProcesses.start_block_sync_workers(chain_name, profile, provider_ids)
+      GlobalChainProcesses.start_health_probe_workers(chain_name, profile, provider_ids)
+    end
   end
 
   # Private functions

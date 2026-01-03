@@ -67,6 +67,15 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   @type sub_key :: {:newHeads} | {:logs, map()}
   @type upstream_id :: String.t()
 
+  @type t :: %__MODULE__{
+          profile: String.t(),
+          chain: String.t(),
+          active_subscriptions: map(),
+          upstream_index: map(),
+          connection_states: map(),
+          new_heads_staleness_threshold_ms: pos_integer() | nil
+        }
+
   defstruct [
     :profile,
     :chain,
@@ -145,6 +154,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   # GenServer Callbacks
 
   @impl true
+  @spec init({String.t(), String.t()}) :: {:ok, t()}
   def init({profile, chain}) do
     # Subscribe to all subscription events for this chain (profile-scoped)
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:#{profile}:#{chain}")

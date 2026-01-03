@@ -33,6 +33,25 @@ defmodule Lasso.HealthProbe.Worker do
   @default_timeout_ms 5_000
   @max_consecutive_failures_before_warn 3
 
+  @type t :: %__MODULE__{
+          chain: String.t(),
+          profile: String.t(),
+          provider_id: String.t(),
+          probe_interval_ms: pos_integer(),
+          timeout_ms: pos_integer(),
+          timer_ref: reference() | nil,
+          consecutive_failures: non_neg_integer(),
+          consecutive_successes: non_neg_integer(),
+          last_probe_time: integer() | nil,
+          last_latency_ms: non_neg_integer() | nil,
+          has_http: boolean(),
+          ws_consecutive_failures: non_neg_integer(),
+          ws_consecutive_successes: non_neg_integer(),
+          ws_last_probe_time: integer() | nil,
+          ws_last_latency_ms: non_neg_integer() | nil,
+          has_ws: boolean()
+        }
+
   defstruct [
     :chain,
     :profile,
@@ -78,6 +97,7 @@ defmodule Lasso.HealthProbe.Worker do
   ## GenServer Callbacks
 
   @impl true
+  @spec init({String.t(), String.t(), String.t(), keyword()}) :: {:ok, t()}
   def init({chain, profile, provider_id, opts}) when is_binary(profile) do
     probe_interval = Keyword.get(opts, :probe_interval_ms, @default_probe_interval_ms)
     timeout = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
