@@ -401,6 +401,12 @@ defmodule Lasso.RPC.WSConnection do
 
   def handle_info({:ws_message, raw_bytes, _frame_received_at}, state) do
     case Response.from_bytes(raw_bytes) do
+      {:ok, %Response.Success{id: nil}} ->
+        # Safety guard: Response with nil id is likely a misclassified notification.
+        # This shouldn't happen with proper EnvelopeParser method-field detection,
+        # but provides defense-in-depth.
+        handle_non_response_message(raw_bytes, state)
+
       {:ok, %Response.Success{id: id} = resp} ->
         handle_response_success(id, resp, state)
 

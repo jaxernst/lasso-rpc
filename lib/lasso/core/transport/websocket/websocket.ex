@@ -12,7 +12,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
   require Logger
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{ErrorNormalizer, WSConnection}
+  alias Lasso.RPC.{ErrorNormalizer, WSConnection, Response}
 
   # Channel represents a WebSocket connection
   @type channel :: %{
@@ -129,9 +129,15 @@ defmodule Lasso.RPC.Transports.WebSocket do
     case method do
       "eth_subscribe" ->
         case WSConnection.request(provider_id, method, params, 30_000) do
-          {:ok, subscription_id} ->
-            # Return a subscription reference with the upstream subscription ID
-            {:ok, {provider_id, subscription_id, handler_pid}}
+          {:ok, %Response.Success{} = response} ->
+            case Response.Success.decode_result(response) do
+              {:ok, subscription_id} ->
+                # Return a subscription reference with the upstream subscription ID
+                {:ok, {provider_id, subscription_id, handler_pid}}
+
+              {:error, reason} ->
+                {:error, {:decode_failed, reason}}
+            end
 
           {:error, reason} ->
             {:error, reason}

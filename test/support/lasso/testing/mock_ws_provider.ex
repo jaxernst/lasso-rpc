@@ -41,6 +41,7 @@ defmodule Lasso.Testing.MockWSProvider do
 
   use GenServer
   require Logger
+  alias Lasso.RPC.Response
 
   @test_profile "default"
 
@@ -368,14 +369,19 @@ defmodule Lasso.Testing.MockWSProvider do
         # Broadcast confirmation immediately
         send_response(state.chain, state.provider_id, request_id, sub_id)
 
-        # Return subscription ID
-        {:reply, {:ok, sub_id}, new_state}
+        # Return subscription ID wrapped in Response.Success (matches real WSConnection behavior)
+        raw_bytes = Jason.encode!(%{"jsonrpc" => "2.0", "id" => request_id, "result" => sub_id})
+        response = %Response.Success{id: request_id, jsonrpc: "2.0", raw_bytes: raw_bytes}
+        {:reply, {:ok, response}, new_state}
 
       _ ->
         # For other methods, process normally
         new_state = handle_rpc_request(message, state)
-        # Mock response - in real implementation this would wait for upstream
-        {:reply, {:ok, %{"mock" => true}}, new_state}
+        # Mock response wrapped in Response.Success (matches real WSConnection behavior)
+        result = %{"mock" => true}
+        raw_bytes = Jason.encode!(%{"jsonrpc" => "2.0", "id" => request_id, "result" => result})
+        response = %Response.Success{id: request_id, jsonrpc: "2.0", raw_bytes: raw_bytes}
+        {:reply, {:ok, response}, new_state}
     end
   end
 

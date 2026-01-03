@@ -453,12 +453,19 @@ defmodule Lasso.HealthProbe.Worker do
     # The WSConnection uses the provider_id as the connection_id
     try do
       case WSConnection.request(provider_id, "eth_chainId", [], timeout_ms) do
-        {:ok, "0x" <> hex} ->
-          {:ok, String.to_integer(hex, 16)}
+        {:ok, %Response.Success{} = response} ->
+          case Response.Success.decode_result(response) do
+            {:ok, "0x" <> hex} ->
+              {:ok, String.to_integer(hex, 16)}
 
-        {:ok, result} ->
-          # Even if parsing fails, we got a response - provider is alive
-          {:ok, result}
+            {:ok, result} ->
+              # Even if parsing fails, we got a response - provider is alive
+              {:ok, result}
+
+            {:error, _} ->
+              # Decode failed but we got a response - provider is alive
+              {:ok, :parse_error}
+          end
 
         {:error, %{category: :rate_limit} = jerr} ->
           # Rate limit errors should count as failures

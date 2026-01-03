@@ -50,6 +50,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Streaming.UpstreamSubscriptionRegistry
   alias Lasso.RPC.{TransportRegistry, Channel}
+  alias Lasso.RPC.Response
 
   @cleanup_interval_ms 30_000
   @teardown_grace_period_ms 60_000
@@ -603,7 +604,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
     }
 
     with {:ok, channel} <- TransportRegistry.get_channel(profile, chain, provider_id, :ws),
-         {:ok, upstream_id, _io_ms} <- Channel.request(channel, message, 10_000) do
+         {:ok, %Response.Success{} = response, _io_ms} <- Channel.request(channel, message, 10_000),
+         {:ok, upstream_id} <- Response.Success.decode_result(response) do
       {:ok, upstream_id}
     else
       {:error, reason} -> {:error, reason}
@@ -620,7 +622,8 @@ defmodule Lasso.RPC.UpstreamSubscriptionManager do
     }
 
     with {:ok, channel} <- TransportRegistry.get_channel(profile, chain, provider_id, :ws),
-         {:ok, upstream_id, _io_ms} <- Channel.request(channel, message, 10_000) do
+         {:ok, %Response.Success{} = response, _io_ms} <- Channel.request(channel, message, 10_000),
+         {:ok, upstream_id} <- Response.Success.decode_result(response) do
       {:ok, upstream_id}
     else
       {:error, reason} -> {:error, reason}

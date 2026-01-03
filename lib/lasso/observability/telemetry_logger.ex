@@ -69,30 +69,30 @@ defmodule Lasso.TelemetryLogger do
     [
       # Failover events
       {[:lasso, :failover, :fast_fail], "#{@handler_id_prefix}_fast_fail",
-       {__MODULE__, :handle_fast_fail}, :log_failovers},
+       &handle_fast_fail/4, :log_failovers},
 
       {[:lasso, :failover, :circuit_open], "#{@handler_id_prefix}_circuit_open",
-       {__MODULE__, :handle_circuit_open}, :log_failovers},
+       &handle_circuit_open/4, :log_failovers},
 
       {[:lasso, :failover, :degraded_mode], "#{@handler_id_prefix}_degraded_mode",
-       {__MODULE__, :handle_degraded_mode}, :log_failovers},
+       &handle_degraded_mode/4, :log_failovers},
 
       {[:lasso, :failover, :degraded_success], "#{@handler_id_prefix}_degraded_success",
-       {__MODULE__, :handle_degraded_success}, :log_failovers},
+       &handle_degraded_success/4, :log_failovers},
 
       {[:lasso, :failover, :exhaustion], "#{@handler_id_prefix}_exhaustion",
-       {__MODULE__, :handle_exhaustion}, :log_failovers},
+       &handle_exhaustion/4, :log_failovers},
 
       # Slow request events
       {[:lasso, :request, :slow], "#{@handler_id_prefix}_slow_request",
-       {__MODULE__, :handle_slow_request}, :log_slow_requests},
+       &handle_slow_request/4, :log_slow_requests},
 
       {[:lasso, :request, :very_slow], "#{@handler_id_prefix}_very_slow_request",
-       {__MODULE__, :handle_very_slow_request}, :log_slow_requests},
+       &handle_very_slow_request/4, :log_slow_requests},
 
       # Circuit breaker events
       {[:lasso, :circuit_breaker, :state_change], "#{@handler_id_prefix}_cb_state_change",
-       {__MODULE__, :handle_circuit_breaker_state_change}, :log_circuit_breaker}
+       &handle_circuit_breaker_state_change/4, :log_circuit_breaker}
     ]
   end
 
