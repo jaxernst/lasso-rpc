@@ -1019,6 +1019,11 @@ defmodule LassoWeb.Dashboard do
   def chain_details_panel(assigns) do
     chain_connections = Enum.filter(assigns.connections, &(&1.chain == assigns.chain))
 
+    # Get consensus height from chain connections (all providers on same chain share consensus)
+    consensus_height =
+      chain_connections
+      |> Enum.find_value(fn conn -> Map.get(conn, :consensus_height) end)
+
     # Use cached chain data from socket assigns (updated by update_selected_chain_metrics/1)
     assigns =
       assigns
@@ -1028,6 +1033,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:chain_unified_events, Map.get(assigns, :selected_chain_unified_events, []))
       |> assign(:chain_endpoints, Map.get(assigns, :selected_chain_endpoints, %{}))
       |> assign(:chain_performance, Map.get(assigns, :selected_chain_metrics, %{}))
+      |> assign(:consensus_height, consensus_height)
       |> assign(
         :last_decision,
         Helpers.get_last_decision(Map.get(assigns, :selected_chain_events, []), assigns.chain)
@@ -1036,43 +1042,43 @@ defmodule LassoWeb.Dashboard do
     ~H"""
     <div class="flex h-full flex-col text-gray-200 overflow-hidden" id={"chain-details-" <> @chain}>
       <!-- Hero Header -->
-      <div class="p-6 pb-5 border-b border-gray-800 bg-gray-900/50 backdrop-blur-sm relative overflow-hidden">
-        <!-- Background decorative glow -->
-        <div class="absolute top-0 right-0 -mt-10 -mr-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
-
+      <div class="p-6 pb-5 border-b border-gray-800 relative overflow-hidden">
         <% connected = Map.get(@chain_performance, :connected_providers, 0) %>
         <% total = Map.get(@chain_performance, :total_providers, 0) %>
 
-        <div class="flex justify-between items-start mb-6 relative z-10">
-          <div>
-            <h3 class="text-3xl font-bold text-white tracking-tight mb-2 capitalize">{Helpers.get_chain_display_name(@selected_profile, @chain)}</h3>
-            <div class="flex items-center gap-3 text-sm">
-              <div class={[
-                "flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium",
-                if(connected == total && connected > 0,
-                  do: "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
-                  else: if(connected == 0, do: "bg-red-500/10 border-red-500/20 text-red-400", else: "bg-yellow-500/10 border-yellow-500/20 text-yellow-400")
-                )
-              ]}>
-                <div class={[
-                  "h-1.5 w-1.5 rounded-full animate-pulse",
-                  if(connected == total && connected > 0,
-                    do: "bg-emerald-400",
-                    else: if(connected == 0, do: "bg-red-400", else: "bg-yellow-400")
-                  )
-                ]}></div>
-                <span>{if connected == total, do: "Healthy", else: if(connected == 0, do: "Down", else: "Degraded")}</span>
-              </div>
-              <span class="text-gray-500">Chain ID: <span class="font-mono text-gray-400">{Helpers.get_chain_id(@selected_profile, @chain)}</span></span>
-              <span class="text-gray-600">•</span>
-              <span class="text-gray-500">{connected}/{total} providers active</span>
-            </div>
+        <!-- Title row with status badge -->
+        <div class="flex items-center justify-between mb-1.5 relative z-10">
+          <h3 class="text-3xl font-bold text-white tracking-tight capitalize">{Helpers.get_chain_display_name(@selected_profile, @chain)}</h3>
+          <div class={[
+            "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium",
+            if(connected == total && connected > 0,
+              do: "bg-emerald-500/10 border-emerald-500/30 text-emerald-400",
+              else: if(connected == 0, do: "bg-red-500/10 border-red-500/30 text-red-400", else: "bg-yellow-500/10 border-yellow-500/30 text-yellow-400")
+            )
+          ]}>
+            <div class={[
+              "h-1.5 w-1.5 rounded-full animate-pulse",
+              if(connected == total && connected > 0,
+                do: "bg-emerald-400",
+                else: if(connected == 0, do: "bg-red-400", else: "bg-yellow-400")
+              )
+            ]}></div>
+            <span>{if connected == total && connected > 0, do: "Healthy", else: if(connected == 0, do: "Down", else: "Degraded")}</span>
           </div>
-          <button phx-click="select_chain" phx-value-chain="" class="text-gray-500 hover:text-white transition-colors p-1 hover:bg-gray-800 rounded-md">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+        </div>
+
+        <!-- Chain metadata -->
+        <div class="flex items-center gap-3 text-sm mb-6 relative z-10">
+          <span class="text-gray-500">Chain ID <span class="font-mono text-gray-300">{Helpers.get_chain_id(@selected_profile, @chain)}</span></span>
+          <span class="text-gray-400">·</span>
+          <span class="text-gray-500">Block <%= if @consensus_height do %><span class="font-mono text-emerald-400">{Formatting.format_number(@consensus_height)}</span><% else %><span class="text-gray-600">—</span><% end %></span>
+          <span class="text-gray-400">·</span>
+          <span class={["text-gray-500", if(connected < total, do: "", else: "")]}>
+            <span class={[
+              "font-mono",
+              if(connected == total && connected > 0, do: "text-gray-300", else: if(connected == 0, do: "text-red-400", else: "text-yellow-400"))
+            ]}>{connected}/{total}</span> providers
+          </span>
         </div>
 
         <!-- Endpoints (Primary Action) - All endpoint controls inside one hook container -->
@@ -1248,36 +1254,44 @@ defmodule LassoWeb.Dashboard do
     ~H"""
     <div class="flex h-full flex-col overflow-y-auto text-gray-200 overflow-hidden" data-provider-id={@provider}>
       <!-- HEADER -->
-      <div class="border-b border-gray-800 p-6 pb-5 bg-gray-900/50 backdrop-blur-sm relative overflow-hidden">
-        <!-- Background decorative glow -->
-        <div class="absolute top-0 right-0 -mt-10 -mr-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
-
-        <div class="flex items-center justify-between relative z-10">
-          <div class="flex items-center space-x-3">
-            <div class={[
-              "h-3 w-3 rounded-full",
-              StatusHelpers.provider_status_indicator_class(@provider_connection || %{})
-            ]}>
-            </div>
-            <div>
-              <h3 class="text-2xl font-bold text-white tracking-tight">
-                {if @provider_connection, do: @provider_connection.name, else: @provider}
-              </h3>
-              <div class="text-sm text-gray-400 mt-1">
-                {if @provider_connection, do: Helpers.get_chain_display_name(@selected_profile, @provider_connection.chain || "unknown"), else: "Provider"} • <span class={StatusHelpers.provider_status_class_text(@provider_connection || %{})}>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
-              </div>
-            </div>
-          </div>
-          <button
-            phx-click="select_provider"
-            phx-value-provider=""
-            class="text-gray-500 hover:text-white transition-colors p-1 hover:bg-gray-800 rounded-md"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+      <div class="flex gap-2 items-center border-b border-gray-800 p-6 pb-5 relative overflow-hidden">
+      <div>
+        <!-- Title row with status badge -->
+        <div class="flex items-center justify-between mb-1.5 relative z-10">
+          <h3 class="text-3xl font-bold text-white tracking-tight">
+            {if @provider_connection, do: @provider_connection.name, else: @provider}
+          </h3>
         </div>
+
+        <!-- Provider metadata -->
+        <div class="flex items-center gap-3 text-sm mb-2 relative z-10">
+          <div class={[
+            "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium",
+            StatusHelpers.provider_status_badge_class(@provider_connection || %{})
+          ]}>
+          <div class={[
+            "h-1.5 w-1.5 rounded-full animate-pulse",
+            StatusHelpers.provider_status_indicator_class(@provider_connection || %{})
+          ]}></div>
+          <span>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
+        </div>
+
+          <span class="text-gray-400">{if @provider_connection, do: "Chain ID: " <> Helpers.get_chain_id(@selected_profile, @provider_connection.chain || "unknown"), else: "Provider"}</span>
+          <%= if @provider_connection do %>
+            <span class="text-gray-300">·</span>
+            <span class="text-gray-400">
+              <%= cond do %>
+                <% @provider_connection.url && @provider_connection.ws_url -> %>
+                  <span class="text-gray-400">HTTP + WS</span>
+                <% @provider_connection.ws_url -> %>
+                  <span class="text-gray-400">WS only</span>
+                <% true -> %>
+                  <span class="text-gray-400">HTTP only</span>
+              <% end %>
+            </span>
+          <% end %>
+        </div>
+      </div>
       </div>
 
       <%= if @provider_connection do %>
