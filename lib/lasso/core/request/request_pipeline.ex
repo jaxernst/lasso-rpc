@@ -202,7 +202,7 @@ defmodule Lasso.RPC.RequestPipeline do
     finalize_error(jerr, ctx)
   end
 
-  defp attempt_channels([channel | rest], ctx) do
+  defp attempt_channels([%Channel{} = channel | rest], ctx) do
     %{"method" => method, "params" => params} = ctx.rpc_request
 
     # Validate params for this channel first

@@ -343,8 +343,7 @@ defmodule Lasso.Config.Backend.File do
   end
 
   defp parse_topology_category("l1"), do: :l1
-  defp parse_topology_category("l2_optimistic"), do: :l2_optimistic
-  defp parse_topology_category("l2_zk"), do: :l2_zk
+  defp parse_topology_category("l2"), do: :l2
   defp parse_topology_category("sidechain"), do: :sidechain
   defp parse_topology_category(_), do: :other
 
@@ -591,7 +590,9 @@ defmodule Lasso.Config.Backend.File do
     yaml = if provider["name"], do: yaml <> "        name: \"#{provider["name"]}\"\n", else: yaml
 
     yaml =
-      if provider["priority"], do: yaml <> "        priority: #{provider["priority"]}\n", else: yaml
+      if provider["priority"],
+        do: yaml <> "        priority: #{provider["priority"]}\n",
+        else: yaml
 
     yaml = if provider["type"], do: yaml <> "        type: \"#{provider["type"]}\"\n", else: yaml
     yaml = if provider["url"], do: yaml <> "        url: \"#{provider["url"]}\"\n", else: yaml

@@ -86,7 +86,7 @@ defmodule LassoWeb.Components.ProfileSelector do
         <div class="bg-gray-900/50 border-b border-gray-800 px-3 py-2.5">
           <div class="text-sm font-medium text-gray-200">Routing Profiles</div>
           <div class="mt-0.5 text-xs text-gray-500">
-            Routing profiles define the set of chains and providers available for RPC request routing
+            Routing profiles define the set of chains and providers available for RPC request routing with per-profile config customization.
           </div>
         </div>
         
@@ -206,7 +206,7 @@ defmodule LassoWeb.Components.ProfileSelector do
       # Get display name from profile metadata
       display_name =
         case ConfigStore.get_profile(profile_slug) do
-          {:ok, meta} -> meta.name || profile_slug
+          {:ok, meta} -> meta.name
           _ -> profile_slug
         end
 
@@ -214,8 +214,7 @@ defmodule LassoWeb.Components.ProfileSelector do
         Enum.reduce(chains, 0, fn chain, count ->
           case ConfigStore.get_chain(profile_slug, chain) do
             {:ok, chain_config} ->
-              providers = chain_config.providers || []
-              count + length(providers)
+              count + length(chain_config.providers)
 
             _ ->
               count

@@ -49,6 +49,8 @@ defmodule Lasso.Providers do
   alias Lasso.Config.{ChainConfigManager, ConfigStore, ConfigValidator}
   alias Lasso.RPC.{ChainSupervisor, ProviderPool}
 
+  @default_profile "default"
+
   @type provider_config :: %{
           id: String.t(),
           name: String.t(),
@@ -100,6 +102,11 @@ defmodule Lasso.Providers do
   """
   @spec add_provider(String.t(), map(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def add_provider(chain_name, provider_attrs, opts \\ []) do
+    add_provider(@default_profile, chain_name, provider_attrs, opts)
+  end
+
+  @spec add_provider(String.t(), String.t(), map(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def add_provider(profile, chain_name, provider_attrs, opts) do
     persist? = Keyword.get(opts, :persist, false)
     validate? = Keyword.get(opts, :validate, true)
     start_ws = Keyword.get(opts, :start_ws, :auto)
@@ -108,9 +115,9 @@ defmodule Lasso.Providers do
     provider_id = Map.get(provider_config, :id)
 
     with :ok <- maybe_validate(provider_config, validate?),
-         :ok <- ensure_chain_started(chain_name),
-         :ok <- check_not_duplicate(chain_name, provider_id),
-         :ok <- ChainSupervisor.ensure_provider(chain_name, provider_config, start_ws: start_ws),
+         :ok <- ensure_chain_started(profile, chain_name),
+         :ok <- check_not_duplicate(profile, chain_name, provider_id),
+         :ok <- ChainSupervisor.ensure_provider(profile, chain_name, provider_config, start_ws: start_ws),
          :ok <- maybe_persist_add(chain_name, provider_config, persist?) do
       Logger.info("Successfully added provider #{provider_id} to #{chain_name}")
       {:ok, provider_id}
@@ -178,13 +185,18 @@ defmodule Lasso.Providers do
   """
   @spec update_provider(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
   def update_provider(chain_name, provider_id, updates, opts \\ []) do
+    update_provider(@default_profile, chain_name, provider_id, updates, opts)
+  end
+
+  @spec update_provider(String.t(), String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
+  def update_provider(profile, chain_name, provider_id, updates, opts) do
     persist? = Keyword.get(opts, :persist, false)
 
     # Get existing provider config
-    with {:ok, existing} <- get_provider(chain_name, provider_id),
+    with {:ok, existing} <- get_provider(profile, chain_name, provider_id),
          updated_config = Map.merge(existing, normalize_provider_config(updates)),
-         :ok <- remove_provider(chain_name, provider_id, persist: false),
-         {:ok, _} <- add_provider(chain_name, updated_config, persist: persist?) do
+         :ok <- remove_provider(profile, chain_name, provider_id, persist: false),
+         {:ok, _} <- add_provider(profile, chain_name, updated_config, persist: persist?) do
       Logger.info("Successfully updated provider #{provider_id} in #{chain_name}")
       :ok
     else
@@ -280,11 +292,8 @@ defmodule Lasso.Providers do
 
   # Private functions
 
-  # Default profile for dynamically added chains
-  @default_profile "default"
-
-  defp ensure_chain_started(chain_name) do
-    case ConfigStore.get_chain(@default_profile, chain_name) do
+  defp ensure_chain_started(profile, chain_name) do
+    case ConfigStore.get_chain(profile, chain_name) do
       {:ok, _chain_config} ->
         # Chain already exists and is running
         :ok
@@ -295,8 +304,8 @@ defmodule Lasso.Providers do
 
         default_config = create_default_chain_config(chain_name)
 
-        with :ok <- ConfigStore.register_chain_runtime(@default_profile, chain_name, default_config),
-             {:ok, _pid} <- start_chain_supervisor(chain_name, default_config) do
+        with :ok <- ConfigStore.register_chain_runtime(profile, chain_name, default_config),
+             {:ok, _pid} <- start_chain_supervisor(profile, chain_name, default_config) do
           Logger.info("Successfully started chain supervisor for '#{chain_name}'")
           :ok
         else
@@ -330,9 +339,9 @@ defmodule Lasso.Providers do
     }
   end
 
-  defp start_chain_supervisor(chain_name, _chain_config_attrs) do
+  defp start_chain_supervisor(profile, chain_name, _chain_config_attrs) do
     # Get the full ChainConfig struct from ConfigStore (it was normalized during registration)
-    case Lasso.Config.ConfigStore.get_chain(@default_profile, chain_name) do
+    case Lasso.Config.ConfigStore.get_chain(profile, chain_name) do
       {:ok, chain_config} ->
         # Start global chain processes (BlockSync, HealthProbe) if not already running
         case Lasso.GlobalChainSupervisor.ensure_chain_processes(chain_name) do
@@ -340,9 +349,9 @@ defmodule Lasso.Providers do
           {:error, reason} -> Logger.warning("Global chain processes failed: #{inspect(reason)}")
         end
 
-        # Start profile chain supervisor under the default profile
+        # Start profile chain supervisor under the specified profile
         Lasso.ProfileChainSupervisor.start_profile_chain(
-          @default_profile,
+          profile,
           chain_name,
           chain_config
         )
@@ -392,8 +401,8 @@ defmodule Lasso.Providers do
     ConfigValidator.validate_provider_url(ws_url)
   end
 
-  defp check_not_duplicate(chain_name, provider_id) do
-    case get_provider(chain_name, provider_id) do
+  defp check_not_duplicate(profile, chain_name, provider_id) do
+    case get_provider(profile, chain_name, provider_id) do
       {:ok, _} -> {:error, {:already_exists, provider_id}}
       {:error, :not_found} -> :ok
       {:error, reason} -> {:error, reason}
