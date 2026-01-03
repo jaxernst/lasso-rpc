@@ -91,7 +91,7 @@ defmodule LassoWeb.Components.ProfileSelector do
         </div>
         
     <!-- Profile List -->
-        <div class="py-1">
+        <div class="">
           <%= for {profile, data} <- @profile_data do %>
             <.profile_item
               profile={profile}
@@ -186,13 +186,15 @@ defmodule LassoWeb.Components.ProfileSelector do
   defp create_profile_cta(assigns) do
     ~H"""
     <button
-      phx-click={JS.push("navigate_create_profile") |> hide_dropdown()}
-      class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 transition-colors hover:bg-gray-800 hover:text-purple-300"
+      disabled
+      class="flex w-full cursor-not-allowed items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 opacity-60 transition-colors"
     >
       <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
       </svg>
-      <span>Create profile</span>
+      <span>
+        Create profile (coming soon)
+      </span>
     </button>
     """
   end

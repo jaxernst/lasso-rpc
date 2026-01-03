@@ -194,14 +194,14 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   @doc "Get provider status label with enhanced classifications"
   def provider_status_label(provider) do
     case determine_provider_status(provider) do
-      :circuit_open -> "CIRCUIT OPEN"
-      :testing_recovery -> "TESTING RECOVERY"
-      :rate_limited -> "RATE LIMITED"
-      :recovering -> "RECOVERING"
-      :degraded -> "DEGRADED"
-      :lagging -> "LAGGING"
-      :healthy -> "HEALTHY"
-      :unknown -> "UNKNOWN"
+      :circuit_open -> "Circuit Open"
+      :testing_recovery -> "Recovering"
+      :rate_limited -> "Rate Limited"
+      :recovering -> "Recovering"
+      :degraded -> "Degraded"
+      :lagging -> "Lagging"
+      :healthy -> "Healthy"
+      :unknown -> "Unknown"
     end
   end
 
@@ -253,6 +253,20 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   @doc "Get provider status indicator color (for dots/circles)"
   def provider_status_indicator_class(provider) do
     provider |> determine_provider_status() |> status_color_scheme() |> Map.get(:dot)
+  end
+
+  @doc "Get provider status badge classes (background + border for pill badges)"
+  def provider_status_badge_class(provider) do
+    case determine_provider_status(provider) do
+      :healthy -> "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+      :lagging -> "bg-sky-500/10 border-sky-500/30 text-sky-400"
+      :recovering -> "bg-amber-500/10 border-amber-500/30 text-amber-400"
+      :testing_recovery -> "bg-amber-500/10 border-amber-500/30 text-amber-400"
+      :degraded -> "bg-orange-500/10 border-orange-500/30 text-orange-400"
+      :rate_limited -> "bg-purple-500/10 border-purple-500/30 text-purple-400"
+      :circuit_open -> "bg-red-500/10 border-red-500/30 text-red-400"
+      :unknown -> "bg-gray-500/10 border-gray-500/30 text-gray-400"
+    end
   end
 
   @doc "Check if provider status is considered critical"

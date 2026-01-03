@@ -217,7 +217,7 @@ defmodule LassoWeb.Components.FloatingWindow do
 
   def window_frame(assigns) do
     ~H"""
-    <div class={["border-gray-700/60 bg-gray-900/90 pointer-events-auto overflow-hidden rounded-xl border shadow-2xl backdrop-blur-lg transition-all duration-300", if(@collapsed, do: @collapsed_size, else: @expanded_size), @class]}>
+    <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto overflow-hidden rounded-xl border shadow-2xl backdrop-blur-md transition-all duration-300", if(@collapsed, do: @collapsed_size, else: @expanded_size), @class]}>
       {render_slot(@inner_block)}
     </div>
     """
