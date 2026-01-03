@@ -252,17 +252,28 @@ defmodule LassoWeb.RPCController do
 
           {:error, _reason} ->
             # Fallback to JSON encoding if batch build fails
-            json(conn, Enum.map(items, &response_to_map/1))
+            responses =
+              Enum.zip(items, request_ids)
+              |> Enum.map(fn {item, req_id} -> response_to_map(item, req_id) end)
+
+            json(conn, responses)
         end
       else
         # Mixed responses - encode as JSON
-        json(conn, Enum.map(items, &response_to_map/1))
+        # Pair items with request IDs for proper response construction
+        request_ids = Enum.map(requests, &Map.get(&1, "id"))
+
+        responses =
+          Enum.zip(items, request_ids)
+          |> Enum.map(fn {item, req_id} -> response_to_map(item, req_id) end)
+
+        json(conn, responses)
       end
     end
   end
 
   # Convert Response struct or map to JSON-encodable map
-  defp response_to_map(%Response.Success{id: id, raw_bytes: bytes}) do
+  defp response_to_map(%Response.Success{id: id, raw_bytes: bytes}, _req_id) do
     # Decode to get the full response map
     case Jason.decode(bytes) do
       {:ok, decoded} ->
@@ -277,11 +288,11 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  defp response_to_map(%Response.Error{id: id, error: jerr}) do
+  defp response_to_map(%Response.Error{id: id, error: jerr}, _req_id) do
     JError.to_response(jerr, id)
   end
 
-  defp response_to_map(map) when is_map(map), do: map
+  defp response_to_map(map, _req_id) when is_map(map), do: map
 
   defp process_batch_request(req, chain, conn) do
     with {:ok, request} <- validate_json_rpc_request(req),

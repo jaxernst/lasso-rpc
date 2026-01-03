@@ -73,6 +73,7 @@ defmodule Lasso.RPC.WSConnection do
   alias Lasso.RPC.WSEndpoint
   alias Lasso.RPC.CircuitBreaker
   alias Lasso.RPC.ErrorNormalizer
+  alias Lasso.RPC.Response
   alias Lasso.JSONRPC.Error, as: JError
 
   # Client API
@@ -398,66 +399,16 @@ defmodule Lasso.RPC.WSConnection do
     {:noreply, state}
   end
 
-  def handle_info({:ws_message, decoded, _frame_received_at}, state) do
-    case decoded do
-      %{"jsonrpc" => "2.0", "id" => id} = resp ->
-        case Map.pop(state.pending_requests, id) do
-          {nil, _pending} ->
-            # Not a tracked request; treat as generic message
-            {:ok, new_state} = handle_websocket_message(decoded, state)
-            {:noreply, new_state}
+  def handle_info({:ws_message, raw_bytes, _frame_received_at}, state) do
+    case Response.from_bytes(raw_bytes) do
+      {:ok, %Response.Success{id: id} = resp} ->
+        handle_response_success(id, resp, state)
 
-          {%{from: from, timer: timer, sent_at: sent_at, method: method}, new_pending} ->
-            Process.cancel_timer(timer)
+      {:ok, %Response.Error{id: id, error: jerr}} ->
+        handle_response_error(id, jerr, state)
 
-            duration_ms = div(System.monotonic_time(:microsecond) - sent_at, 1000)
-
-            reply =
-              case resp do
-                %{"result" => result} ->
-                  {:ok, result}
-
-                %{"error" => _} ->
-                  {:error, JError.from(resp, provider_id: state.endpoint.id, transport: :ws)}
-
-                _ ->
-                  {:error,
-                   JError.new(-32_700, "Invalid JSON-RPC response",
-                     provider_id: state.endpoint.id
-                   )}
-              end
-
-            status = if match?({:ok, _}, reply), do: :success, else: :error
-
-            # Emit telemetry event for request completion
-            :telemetry.execute(
-              [:lasso, :websocket, :request, :completed],
-              %{
-                duration_ms: duration_ms
-              },
-              %{
-                provider_id: state.endpoint.id,
-                method: method,
-                request_id: id,
-                status: status
-              }
-            )
-
-            # Emit I/O-specific telemetry (for comparison with HTTP I/O)
-            :telemetry.execute(
-              [:lasso, :ws, :request, :io],
-              %{io_ms: duration_ms},
-              %{provider_id: state.endpoint.id, method: method, request_id: id}
-            )
-
-            GenServer.reply(from, reply)
-
-            {:noreply, %{state | pending_requests: new_pending}}
-        end
-
-      _other ->
-        {:ok, new_state} = handle_websocket_message(decoded, state)
-        {:noreply, new_state}
+      {:error, _parse_reason} ->
+        handle_non_response_message(raw_bytes, state)
     end
   end
 
@@ -748,6 +699,66 @@ defmodule Lasso.RPC.WSConnection do
   # and communicated back via messages
 
   # Private functions
+
+  defp handle_response_success(id, resp, state) do
+    case Map.pop(state.pending_requests, id) do
+      {nil, _pending} ->
+        {:noreply, state}
+
+      {%{from: from, timer: timer, sent_at: sent_at, method: method}, new_pending} ->
+        Process.cancel_timer(timer)
+        duration_ms = div(System.monotonic_time(:microsecond) - sent_at, 1000)
+
+        emit_completion_telemetry(state.endpoint.id, method, id, :success, duration_ms)
+        GenServer.reply(from, {:ok, resp})
+
+        {:noreply, %{state | pending_requests: new_pending}}
+    end
+  end
+
+  defp handle_response_error(id, jerr, state) do
+    case Map.pop(state.pending_requests, id) do
+      {nil, _pending} ->
+        {:noreply, state}
+
+      {%{from: from, timer: timer, sent_at: sent_at, method: method}, new_pending} ->
+        Process.cancel_timer(timer)
+        duration_ms = div(System.monotonic_time(:microsecond) - sent_at, 1000)
+
+        enriched = %{jerr | provider_id: state.endpoint.id, transport: :ws}
+
+        emit_completion_telemetry(state.endpoint.id, method, id, :error, duration_ms)
+        GenServer.reply(from, {:error, enriched})
+
+        {:noreply, %{state | pending_requests: new_pending}}
+    end
+  end
+
+  defp handle_non_response_message(raw_bytes, state) do
+    case Jason.decode(raw_bytes) do
+      {:ok, decoded} ->
+        {:ok, new_state} = handle_websocket_message(decoded, state)
+        {:noreply, new_state}
+
+      {:error, reason} ->
+        Logger.error("Failed to decode WebSocket message: #{inspect(reason)}")
+        {:noreply, state}
+    end
+  end
+
+  defp emit_completion_telemetry(provider_id, method, request_id, status, duration_ms) do
+    :telemetry.execute(
+      [:lasso, :websocket, :request, :completed],
+      %{duration_ms: duration_ms},
+      %{provider_id: provider_id, method: method, request_id: request_id, status: status}
+    )
+
+    :telemetry.execute(
+      [:lasso, :ws, :request, :io],
+      %{io_ms: duration_ms},
+      %{provider_id: provider_id, method: method, request_id: request_id}
+    )
+  end
 
   defp connect_to_websocket(endpoint, parent_pid) do
     # Start a separate WebSocket handler process

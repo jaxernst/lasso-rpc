@@ -42,19 +42,9 @@ defmodule Lasso.RPC.WSHandler do
   end
 
   def handle_frame({:text, message}, state) do
-    # Timestamp when frame arrives from network
     received_at = System.monotonic_time(:microsecond)
-
-    case Jason.decode(message) do
-      {:ok, decoded} ->
-        send(state.parent, {:ws_message, decoded, received_at})
-        {:ok, state}
-
-      {:error, reason} ->
-        Logger.error("Failed to decode WebSocket message: #{reason}")
-        send(state.parent, {:ws_error, {:decode_error, reason}})
-        {:ok, state}
-    end
+    send(state.parent, {:ws_message, message, received_at})
+    {:ok, state}
   end
 
   def handle_frame({:ping, payload}, state) do
