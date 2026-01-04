@@ -86,9 +86,9 @@ defmodule LassoWeb.MetricsController do
           id: provider.provider_id,
           name: get_provider_name(provider.provider_id, provider_configs),
           score: Float.round(provider.score || 0.0, 2),
-          win_rate: Float.round(provider.win_rate || 0.0, 2),
-          total_races: provider.total_races || 0,
-          avg_margin_ms: provider.avg_margin_ms || 0,
+          success_rate: Float.round(provider.success_rate || 0.0, 2),
+          total_calls: provider.total_calls || 0,
+          avg_latency_ms: Float.round(provider.avg_latency_ms || 0.0, 2),
           calls_last_minute:
             Map.get(
               BenchmarkStore.get_real_time_stats(profile, chain_name, provider.provider_id),

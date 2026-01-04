@@ -2671,7 +2671,6 @@ defmodule LassoWeb.Dashboard do
         total_calls: total_calls,
         consistency_ratio: consistency_ratio,
         score: if(leaderboard_entry, do: leaderboard_entry.score, else: nil),
-        win_rate: if(leaderboard_entry, do: leaderboard_entry.win_rate, else: nil),
         method_count: length(method_stats)
       }
     end)
