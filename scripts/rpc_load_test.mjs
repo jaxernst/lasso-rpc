@@ -22,6 +22,7 @@ function parseArgs(argv) {
     host: process.env.HOST || null, // base host URL
     chains: process.env.CHAINS || null, // comma-separated chain names
     strategy: process.env.STRATEGY || "round-robin", // routing strategy
+    profile: process.env.PROFILE || null, // profile name (e.g., "default", "testnet")
     concurrency: Number(process.env.CONCURRENCY) || 16,
     duration: Number(process.env.DURATION) || 30, // seconds
     rampUpDuration: Number(process.env.RAMP_UP_DURATION) || null, // seconds (defaults to 10s or 20% of duration, whichever is smaller)
@@ -52,6 +53,11 @@ function parseArgs(argv) {
       case "--strategy":
       case "-s":
         opts.strategy = String(next());
+        i++;
+        break;
+      case "--profile":
+      case "-p":
+        opts.profile = String(next());
         i++;
         break;
       case "--concurrency":
@@ -117,6 +123,8 @@ function printHelpAndExit() {
       `                             If specified, tests all chains in parallel\n` +
       `  -s, --strategy <name>     Routing strategy: round-robin, fastest, latency-weighted\n` +
       `                             (default: round-robin, used with --chains)\n` +
+      `  -p, --profile <name>      Profile name (e.g., "default", "testnet")\n` +
+      `                             If not specified, uses legacy routes (default profile)\n` +
       `  -c, --concurrency <n>     Concurrent workers per chain (default: 16)\n` +
       `  -d, --duration <sec>      Test duration seconds (default: 30)\n` +
       `  --ramp-up <sec>           Ramp-up duration seconds (default: 10s or 20% of duration, whichever is smaller)\n` +
@@ -140,7 +148,13 @@ function printHelpAndExit() {
       `  node scripts/rpc_load_test.mjs --chains ethereum,base --chain-rates "ethereum:100,base:50"\n` +
       `\n` +
       `  # All chains with fastest strategy and 15s ramp-up\n` +
-      `  node scripts/rpc_load_test.mjs --chains ethereum,base --strategy fastest --ramp-up 15\n`
+      `  node scripts/rpc_load_test.mjs --chains ethereum,base --strategy fastest --ramp-up 15\n` +
+      `\n` +
+      `  # Single chain with specific profile\n` +
+      `  node scripts/rpc_load_test.mjs --url http://localhost:4000/rpc/ethereum --profile testnet\n` +
+      `\n` +
+      `  # Multiple chains with profile\n` +
+      `  node scripts/rpc_load_test.mjs --chains ethereum,base --profile testnet --strategy fastest\n`
   );
   process.exit(0);
 }
@@ -425,10 +439,19 @@ function parseChainRates(chainRatesCsv) {
   return rates;
 }
 
-function buildChainUrl(host, strategy, chain) {
+function buildChainUrl(host, strategy, chain, profile) {
   // Remove trailing slash from host
   const base = host.replace(/\/$/, "");
-  // Strategy can be empty for default, or a specific strategy
+  
+  // If profile is specified, use profile-aware routes: /rpc/profile/:profile/...
+  if (profile) {
+    if (strategy && strategy !== "default") {
+      return `${base}/rpc/profile/${profile}/${strategy}/${chain}`;
+    }
+    return `${base}/rpc/profile/${profile}/${chain}`;
+  }
+  
+  // Legacy routes (no profile - uses default profile)
   if (strategy && strategy !== "default") {
     return `${base}/rpc/${strategy}/${chain}`;
   }
@@ -727,6 +750,7 @@ async function run() {
     console.log(`  host=${host}`);
     console.log(`  chains=${chains.join(", ")}`);
     console.log(`  strategy=${options.strategy}`);
+    if (options.profile) console.log(`  profile=${options.profile}`);
     console.log(`  concurrency=${options.concurrency} per chain`);
     console.log(`  duration=${options.duration}s`);
     console.log(`  ramp-up=${rampUpDuration}s`);
@@ -745,7 +769,7 @@ async function run() {
 
     // Run tests for all chains in parallel
     const chainTests = chains.map(async (chain) => {
-      const url = buildChainUrl(host, options.strategy, chain);
+      const url = buildChainUrl(host, options.strategy, chain, options.profile);
       const rpsLimit = chainRates.get(chain) || options.rpsLimit || null;
       try {
         return await runSingleChain(url, chain, rpsLimit);
@@ -825,6 +849,7 @@ async function run() {
 
     console.log(`RPC load test starting...`);
     console.log(`  url=${options.url}`);
+    if (options.profile) console.log(`  profile=${options.profile}`);
     console.log(`  concurrency=${options.concurrency}`);
     console.log(`  duration=${options.duration}s`);
     console.log(`  ramp-up=${rampUpDuration}s`);
@@ -833,11 +858,44 @@ async function run() {
     if (options.rpsLimit) console.log(`  rps limit=${options.rpsLimit}`);
     if (options.verbose) console.log(`  verbose logging enabled`);
 
+    // If profile is specified and URL doesn't already include it, construct profile-aware URL
+    let testUrl = options.url;
+    if (options.profile && !testUrl.includes("/profile/")) {
+      // Parse the existing URL to extract base, strategy, and chain
+      const urlObj = new URL(testUrl);
+      const pathParts = urlObj.pathname.split("/").filter(Boolean);
+      
+      // Find the position of "rpc" in the path
+      const rpcIndex = pathParts.indexOf("rpc");
+      if (rpcIndex !== -1) {
+        // Extract parts after "rpc"
+        const afterRpc = pathParts.slice(rpcIndex + 1);
+        
+        // Determine if there's a strategy (check if first part is a valid strategy)
+        const validStrategies = ["round-robin", "fastest", "latency-weighted"];
+        let strategy = null;
+        let chain = null;
+        
+        if (afterRpc.length >= 2 && validStrategies.includes(afterRpc[0])) {
+          strategy = afterRpc[0];
+          chain = afterRpc[1];
+        } else if (afterRpc.length >= 1) {
+          chain = afterRpc[0];
+        }
+        
+        if (chain) {
+          // Rebuild URL with profile
+          const base = `${urlObj.protocol}//${urlObj.host}`;
+          testUrl = buildChainUrl(base, strategy, chain, options.profile);
+        }
+      }
+    }
+    
     // Extract chain name from URL for single-chain mode, or use empty string
-    const urlMatch = options.url.match(/\/rpc\/(?:[^\/]+\/)?([^\/\?]+)/);
+    const urlMatch = testUrl.match(/\/rpc\/(?:profile\/[^\/]+\/)?(?:[^\/]+\/)?([^\/\?]+)/);
     const chainName = urlMatch ? urlMatch[1] : "";
     const result = await runSingleChain(
-      options.url,
+      testUrl,
       chainName,
       options.rpsLimit
     );

@@ -653,5 +653,183 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
   end
 
+  describe "rate limit failover" do
+    test "rate-limited provider triggers automatic failover to healthy provider", %{chain: chain} do
+      profile = "default"
+
+      # Setup: Primary provider that rate limits, backup that's healthy
+      rate_limit_error =
+        %Lasso.JSONRPC.Error{
+          code: 429,
+          message: "Rate limit exceeded",
+          category: :rate_limit,
+          retriable?: true
+        }
+
+      setup_providers([
+        %{id: "rate_limited", priority: 10, behavior: {:error, rate_limit_error}, profile: profile},
+        %{id: "healthy_backup", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      # Ensure circuit breakers exist
+      CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "rate_limited", :http)
+      CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "healthy_backup", :http)
+
+      # CRITICAL TEST: Request should automatically failover to healthy backup
+      # The system is smart enough to retry within the same request when hitting rate limits
+      {:ok, result, ctx} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          %RequestOptions{strategy: :priority, timeout_ms: 30_000}
+        )
+
+      # Verify we got a successful response (system avoids or recovers from rate limits)
+      assert %Response.Success{} = result
+      {:ok, block_number} = Response.Success.decode_result(result)
+      assert String.starts_with?(block_number, "0x")
+
+      # Execute second request to trigger circuit breaker opening
+      {:ok, _result2, _ctx2} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          %RequestOptions{strategy: :priority, timeout_ms: 30_000}
+        )
+
+      # Give circuit breaker time to open (rate limit threshold is 2)
+      Process.sleep(500)
+
+      # Verify rate-limited provider's circuit is now open
+      CircuitBreakerHelper.assert_circuit_breaker_state(
+        {profile, chain, "rate_limited", :http},
+        :open
+      )
+    end
+
+    test "rate limit error opens circuit breaker faster than normal errors", %{chain: chain} do
+      profile = "default"
+
+      # Setup provider that rate limits
+      rate_limit_error =
+        %Lasso.JSONRPC.Error{
+          code: 429,
+          message: "Rate limit exceeded",
+          category: :rate_limit,
+          retriable?: true
+        }
+
+      setup_providers([
+        %{id: "rate_limited_fast", priority: 10, behavior: {:error, rate_limit_error}, profile: profile}
+      ])
+
+      CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "rate_limited_fast", :http)
+
+      # Execute 2 requests (rate limit threshold is 2, vs 5 for normal errors)
+      for _ <- 1..2 do
+        {:error, _error, _ctx} =
+          RequestPipeline.execute_via_channels(
+            chain,
+            "eth_blockNumber",
+            [],
+            %RequestOptions{
+              provider_override: "rate_limited_fast",
+              failover_on_override: false,
+              timeout_ms: 30_000
+            }
+          )
+
+        Process.sleep(50)
+      end
+
+      # Give circuit breaker time to open
+      Process.sleep(500)
+
+      # Verify circuit opened after only 2 rate limit errors (not 5)
+      CircuitBreakerHelper.assert_circuit_breaker_state(
+        {profile, chain, "rate_limited_fast", :http},
+        :open
+      )
+    end
+
+    test "multiple providers can be rate-limited independently", %{chain: chain} do
+      profile = "default"
+
+      # Setup: Multiple providers, all rate-limited
+      rate_limit_error =
+        %Lasso.JSONRPC.Error{
+          code: 429,
+          message: "Rate limit exceeded",
+          category: :rate_limit,
+          retriable?: true
+        }
+
+      setup_providers([
+        %{id: "provider_a", priority: 10, behavior: {:error, rate_limit_error}, profile: profile},
+        %{id: "provider_b", priority: 20, behavior: {:error, rate_limit_error}, profile: profile},
+        %{id: "provider_c", priority: 30, behavior: :healthy, profile: profile}
+      ])
+
+      # Ensure circuit breakers exist
+      for provider_id <- ["provider_a", "provider_b", "provider_c"] do
+        CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, provider_id, :http)
+      end
+
+      # Rate limit provider_a
+      for _ <- 1..2 do
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          %RequestOptions{
+            provider_override: "provider_a",
+            failover_on_override: false,
+            timeout_ms: 30_000
+          }
+        )
+
+        Process.sleep(50)
+      end
+
+      Process.sleep(300)
+
+      # Rate limit provider_b
+      for _ <- 1..2 do
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          %RequestOptions{
+            provider_override: "provider_b",
+            failover_on_override: false,
+            timeout_ms: 30_000
+          }
+        )
+
+        Process.sleep(50)
+      end
+
+      Process.sleep(300)
+
+      # Verify both a and b are open, but c is still closed
+      CircuitBreakerHelper.assert_circuit_breaker_state({profile, chain, "provider_a", :http}, :open)
+      CircuitBreakerHelper.assert_circuit_breaker_state({profile, chain, "provider_b", :http}, :open)
+      CircuitBreakerHelper.assert_circuit_breaker_state({profile, chain, "provider_c", :http}, :closed)
+
+      # Request with priority strategy should use provider_c (only healthy one)
+      {:ok, result, _ctx} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          %RequestOptions{strategy: :priority, timeout_ms: 30_000}
+        )
+
+      assert %Response.Success{} = result
+    end
+  end
+
   # Helper functions for circuit breaker state waiting
 end
