@@ -50,14 +50,18 @@ defmodule Lasso.Testing.IntegrationHelper do
     skip_cb_check = Keyword.get(opts, :skip_circuit_breaker_check, false)
     skip_health_check = Keyword.get(opts, :skip_health_check, false)
     provider_type = Keyword.get(opts, :provider_type, :http)
+    profile = Keyword.get(opts, :profile, "default")
 
     # Start all provider mocks (HTTP or WS based on provider_type)
     provider_ids =
       Enum.map(providers, fn spec ->
+        # Add profile to spec if not already present
+        spec_with_profile = Map.put_new(spec, :profile, profile)
+
         result =
           case provider_type do
-            :http -> MockHTTPProvider.start_mock(chain, spec)
-            :ws -> MockWSProvider.start_mock(chain, spec)
+            :http -> MockHTTPProvider.start_mock(chain, spec_with_profile)
+            :ws -> MockWSProvider.start_mock(chain, spec_with_profile)
           end
 
         case result do
@@ -69,6 +73,7 @@ defmodule Lasso.Testing.IntegrationHelper do
     # Wait for all providers to be fully registered
     Enum.each(provider_ids, fn provider_id ->
       wait_for_provider_ready(chain, provider_id,
+        profile: profile,
         timeout: wait_timeout,
         skip_cb_check: skip_cb_check,
         skip_health_check: skip_health_check

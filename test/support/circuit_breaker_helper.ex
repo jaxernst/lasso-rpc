@@ -88,15 +88,15 @@ defmodule Lasso.Test.CircuitBreakerHelper do
 
       assert state.state == :closed
   """
-  @spec ensure_circuit_breaker_started(String.t(), String.t(), atom(), keyword()) ::
+  @spec ensure_circuit_breaker_started(String.t(), String.t(), String.t(), atom(), keyword()) ::
           {:ok, map()} | {:error, term()}
-  def ensure_circuit_breaker_started(chain, provider_id, transport, opts \\ []) do
+  def ensure_circuit_breaker_started(profile, chain, provider_id, transport, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 2_000)
     config = Keyword.get(opts, :config, %{})
 
     deadline = System.monotonic_time(:millisecond) + timeout
 
-    ensure_cb_started_loop({chain, provider_id, transport}, config, deadline)
+    ensure_cb_started_loop({profile, chain, provider_id, transport}, config, deadline)
   end
 
   defp ensure_cb_started_loop(breaker_id, config, deadline) do
@@ -258,19 +258,19 @@ defmodule Lasso.Test.CircuitBreakerHelper do
 
   ## Example
 
-      cbs = get_provider_circuit_breakers("ethereum", "alchemy")
+      cbs = get_provider_circuit_breakers("default", "ethereum", "alchemy")
       # Returns circuit breakers for "alchemy" on both :http and :ws
   """
-  @spec get_provider_circuit_breakers(String.t(), String.t()) :: [{atom(), map()}]
-  def get_provider_circuit_breakers(chain, provider_id) do
+  @spec get_provider_circuit_breakers(String.t(), String.t(), String.t()) :: [{atom(), map()}]
+  def get_provider_circuit_breakers(profile, chain, provider_id) do
     list_all_circuit_breakers()
     |> Enum.filter(fn
-      {{_profile, ^chain, ^provider_id, _transport}, _pid} -> true
+      {{^profile, ^chain, ^provider_id, _transport}, _pid} -> true
       _ -> false
     end)
     |> Enum.map(fn
       {{_profile, _chain, _provider_id, transport}, _pid} ->
-        case get_circuit_breaker_state({"default", chain, provider_id, transport}) do
+        case get_circuit_breaker_state({profile, chain, provider_id, transport}) do
           {:ok, state} -> {transport, state}
           {:error, _} -> nil
         end

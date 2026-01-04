@@ -3,6 +3,39 @@ ExUnit.start()
 # Start the full application to ensure all registries and services are available
 Application.ensure_all_started(:lasso)
 
+# Validate test environment isolation
+defmodule TestStartupValidator do
+  require Logger
+
+  def validate_test_environment! do
+    # Verify only test profiles loaded
+    profiles = Lasso.Config.ConfigStore.list_profiles()
+
+    unless profiles == ["default"] do
+      raise """
+      Test environment loaded unexpected profiles: #{inspect(profiles)}
+      Expected only: ["default"]
+      Check config/test_profiles/default.yml exists and config/test.exs uses backend_config
+      """
+    end
+
+    # Verify no chains pre-configured
+    chains = Lasso.Config.ConfigStore.list_chains()
+
+    unless Enum.empty?(chains) do
+      raise """
+      Test environment has pre-configured chains: #{inspect(chains)}
+      Integration tests should register chains dynamically.
+      Check config/test_profiles/default.yml has empty chains: {}
+      """
+    end
+
+    Logger.info("✓ Test environment validated: no real providers loaded")
+  end
+end
+
+TestStartupValidator.validate_test_environment!()
+
 Mox.defmock(Lasso.RPC.HttpClientMock, for: Lasso.RPC.HttpClient)
 
 # Note: HTTP client mock is available but NOT set by default

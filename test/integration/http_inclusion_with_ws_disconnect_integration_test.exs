@@ -7,8 +7,10 @@ defmodule Lasso.RPC.HttpInclusionWithWsDisconnectIntegrationTest do
   alias Lasso.RPC.{RequestPipeline, ProviderPool, RequestOptions}
 
   test "WS disconnect does not exclude provider from HTTP selection", %{chain: chain} do
+    profile = "default"
+
     setup_providers([
-      %{id: "dual", priority: 10, behavior: :healthy}
+      %{id: "dual", priority: 10, behavior: :healthy, profile: profile}
     ])
 
     # Simulate WS closed event for the provider using the tuple form

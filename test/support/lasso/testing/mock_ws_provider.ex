@@ -42,6 +42,7 @@ defmodule Lasso.Testing.MockWSProvider do
   use GenServer
   require Logger
   alias Lasso.RPC.Response
+  alias Lasso.Testing.ChainHelper
 
   @test_profile "default"
 
@@ -50,12 +51,14 @@ defmodule Lasso.Testing.MockWSProvider do
 
   Options:
   - `:id` (required) - Provider identifier
+  - `:profile` - Profile to register provider with (default: "default")
   - `:auto_confirm` - Automatically confirm subscriptions (default: true)
   - `:confirm_delay` - Delay before confirming subscriptions in ms (default: 0)
   - `:priority` - Provider priority (default: 100)
   """
   def start_mock(chain, spec) when is_map(spec) do
     provider_id = Map.get(spec, :id) || raise "Mock WS provider requires :id field"
+    profile = Map.get(spec, :profile, @test_profile)
 
     # Start the mock WS connection GenServer with the WSConnection-compatible name
     {:ok, pid} =
@@ -77,31 +80,25 @@ defmodule Lasso.Testing.MockWSProvider do
     }
 
     # Ensure chain exists (auto-create if needed) and register provider
-    with :ok <- ensure_chain_exists(chain),
-         :ok <- Lasso.Config.ConfigStore.register_provider_runtime(@test_profile, chain, provider_config),
-         :ok <- Lasso.RPC.ProviderPool.register_provider(@test_profile, chain, provider_id, provider_config) do
+    with :ok <- ChainHelper.ensure_chain_exists(chain, profile: profile),
+         :ok <- Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
+         :ok <- Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
       # Mark as healthy so it can be selected
-      Lasso.RPC.ProviderPool.report_success(@test_profile, chain, provider_id, nil)
+      Lasso.RPC.ProviderPool.report_success(profile, chain, provider_id, nil)
 
       # Generate connection_id and broadcast ws_connected event
       # This is required by UpstreamSubscriptionManager to allow subscriptions
       connection_id = "conn_mock_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
 
-      # Broadcast to both legacy and profile-scoped topics for compatibility
-      profile = "default"
-      Phoenix.PubSub.broadcast(
-        Lasso.PubSub,
-        "ws:conn:#{chain}",
-        {:ws_connected, provider_id, connection_id}
-      )
+      # Broadcast profile-scoped ws_connected event
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
         "ws:conn:#{profile}:#{chain}",
         {:ws_connected, provider_id, connection_id}
       )
 
-      # Set up cleanup monitor
-      setup_cleanup_monitor(chain, provider_id, pid)
+      # Set up cleanup callback
+      setup_cleanup(profile, chain, provider_id)
 
       Logger.debug("Started mock WS provider #{provider_id} for #{chain}")
       {:ok, provider_id}
@@ -223,8 +220,22 @@ defmodule Lasso.Testing.MockWSProvider do
   Stops a mock WebSocket provider.
   """
   def stop_mock(chain, provider_id) do
+    # Get profile from the running process state before stopping
+    profile =
+      case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
+        [{pid, _}] when is_pid(pid) ->
+          try do
+            GenServer.call(pid, :get_profile, 100)
+          catch
+            _, _ -> @test_profile
+          end
+
+        _ ->
+          @test_profile
+      end
+
     # Remove from ConfigStore
-    Lasso.Config.ConfigStore.unregister_provider_runtime(@test_profile, chain, provider_id)
+    Lasso.Config.ConfigStore.unregister_provider_runtime(profile, chain, provider_id)
 
     # Stop the GenServer
     case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
@@ -246,75 +257,6 @@ defmodule Lasso.Testing.MockWSProvider do
     :ok
   end
 
-  # Private helper to ensure chain exists (auto-create if needed)
-  # Uses "default" profile for test chains
-
-  defp ensure_chain_exists(chain_name) do
-    case Lasso.Config.ConfigStore.get_chain(@test_profile, chain_name) do
-      {:ok, _chain_config} ->
-        # Chain exists, ensure supervisors are running
-        ensure_chain_supervisors_running(chain_name)
-
-      {:error, :not_found} ->
-        # Create chain with default config
-        Logger.info("Chain '#{chain_name}' not found, creating for mock provider")
-
-        default_config = %{
-          chain_id: nil,
-          name: chain_name,
-          providers: [],
-          connection: %{
-            heartbeat_interval: 30_000,
-            reconnect_interval: 5_000,
-            max_reconnect_attempts: 5
-          },
-          failover: %{
-            enabled: false,
-            max_backfill_blocks: 100,
-            backfill_timeout: 30_000
-          }
-        }
-
-        with :ok <-
-               Lasso.Config.ConfigStore.register_chain_runtime(@test_profile, chain_name, default_config),
-             {:ok, chain_config} <- Lasso.Config.ConfigStore.get_chain(@test_profile, chain_name),
-             :ok <- start_chain_supervisors(chain_name, chain_config) do
-          Logger.info("Successfully started chain supervisor for '#{chain_name}'")
-          :ok
-        else
-          {:error, reason} = error ->
-            Logger.error("Failed to start chain '#{chain_name}': #{inspect(reason)}")
-            error
-        end
-    end
-  end
-
-  defp ensure_chain_supervisors_running(chain_name) do
-    # Check if profile chain supervisor is running
-    case Lasso.ProfileChainSupervisor.running?(@test_profile, chain_name) do
-      true ->
-        :ok
-
-      false ->
-        # Get chain config and start supervisors
-        case Lasso.Config.ConfigStore.get_chain(@test_profile, chain_name) do
-          {:ok, chain_config} ->
-            start_chain_supervisors(chain_name, chain_config)
-
-          {:error, _} = error ->
-            error
-        end
-    end
-  end
-
-  defp start_chain_supervisors(chain_name, chain_config) do
-    # Start profile chain supervisor (BlockSync, HealthProbe are profile-scoped)
-    case Lasso.ProfileChainSupervisor.start_profile_chain(@test_profile, chain_name, chain_config) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   # GenServer callbacks
 
@@ -323,6 +265,7 @@ defmodule Lasso.Testing.MockWSProvider do
     state = %{
       chain: chain,
       provider_id: Map.get(spec, :id),
+      profile: Map.get(spec, :profile, @test_profile),
       subscriptions: %{},
       auto_confirm: Map.get(spec, :auto_confirm, true),
       confirm_delay: Map.get(spec, :confirm_delay, 0),
@@ -330,6 +273,11 @@ defmodule Lasso.Testing.MockWSProvider do
     }
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_call(:get_profile, _from, state) do
+    {:reply, state.profile, state}
   end
 
   @impl true
@@ -410,7 +358,7 @@ defmodule Lasso.Testing.MockWSProvider do
     state.subscriptions
     |> Enum.filter(fn {_sub_id, sub} -> sub.type == :newHeads end)
     |> Enum.each(fn {sub_id, _sub} ->
-      send_subscription_event(chain, state.provider_id, sub_id, block_header)
+      send_subscription_event(state.profile, chain, state.provider_id, sub_id, block_header)
     end)
 
     {:noreply, state}
@@ -422,7 +370,7 @@ defmodule Lasso.Testing.MockWSProvider do
     state.subscriptions
     |> Enum.filter(fn {_sub_id, sub} -> sub.type == :logs end)
     |> Enum.each(fn {sub_id, _sub} ->
-      send_subscription_event(chain, state.provider_id, sub_id, log)
+      send_subscription_event(state.profile, chain, state.provider_id, sub_id, log)
     end)
 
     {:noreply, state}
@@ -572,16 +520,10 @@ defmodule Lasso.Testing.MockWSProvider do
     )
   end
 
-  defp send_subscription_event(chain, provider_id, subscription_id, payload) do
+  defp send_subscription_event(profile, chain, provider_id, subscription_id, payload) do
     received_at = System.monotonic_time(:millisecond)
-    profile = "default"
 
-    # Broadcast to both legacy and profile-scoped topics for compatibility
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
-      "ws:subs:#{chain}",
-      {:subscription_event, provider_id, subscription_id, payload, received_at}
-    )
+    # Broadcast profile-scoped subscription event
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
       "ws:subs:#{profile}:#{chain}",
@@ -593,16 +535,20 @@ defmodule Lasso.Testing.MockWSProvider do
     "0x" <> Integer.to_string(state.next_sub_id, 16)
   end
 
-  defp setup_cleanup_monitor(chain, provider_id, _ws_pid) do
-    test_pid = self()
+  defp setup_cleanup(profile, chain, provider_id) do
+    ExUnit.Callbacks.on_exit({:cleanup_mock_ws, provider_id}, fn ->
+      Logger.debug("Test cleanup: stopping mock WS provider #{provider_id}")
+      stop_mock(chain, provider_id)
 
-    spawn(fn ->
-      ref = Process.monitor(test_pid)
+      # Clean up circuit breakers
+      for transport <- [:http, :ws] do
+        breaker_id = {profile, chain, provider_id, transport}
 
-      receive do
-        {:DOWN, ^ref, :process, ^test_pid, _reason} ->
-          Logger.debug("Test process exited, cleaning up mock WS provider #{provider_id}")
-          stop_mock(chain, provider_id)
+        try do
+          Lasso.RPC.CircuitBreaker.close(breaker_id)
+        catch
+          :exit, _ -> :ok
+        end
       end
     end)
   end

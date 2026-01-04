@@ -10,23 +10,25 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "circuit breaker coordination" do
     test "fails over when circuit breaker is open", %{chain: chain} do
+      profile = "default"
+
       # Setup primary and backup providers
       setup_providers([
-        %{id: "primary", priority: 10, behavior: :healthy},
-        %{id: "backup", priority: 20, behavior: :healthy}
+        %{id: "primary", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "backup", priority: 20, behavior: :healthy, profile: profile}
       ])
 
       # Ensure circuit breakers exist before forcing open
-      CircuitBreakerHelper.ensure_circuit_breaker_started(chain, "primary", :http)
+      CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "primary", :http)
 
       # Manually open circuit breaker on primary
-      CircuitBreakerHelper.force_open({chain, "primary", :http})
+      CircuitBreakerHelper.force_open({profile, chain, "primary", :http})
 
       # Give circuit breaker a moment to process the open command
       Process.sleep(100)
 
       # Verify circuit breaker is open
-      CircuitBreakerHelper.assert_circuit_breaker_state({chain, "primary", :http}, :open)
+      CircuitBreakerHelper.assert_circuit_breaker_state({profile, chain, "primary", :http}, :open)
 
       # Execute request - should automatically use backup
       {:ok, result, _ctx} =
@@ -45,9 +47,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "opens circuit breaker after repeated failures", %{chain: chain} do
+      profile = "default"
+
       # Setup provider that always fails
       setup_providers([
-        %{id: "failing_provider", priority: 10, behavior: :always_fail}
+        %{id: "failing_provider", priority: 10, behavior: :always_fail, profile: profile}
       ])
 
       # Execute multiple requests to trigger circuit breaker
@@ -74,7 +78,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
       # Verify circuit breaker is now open
       CircuitBreakerHelper.assert_circuit_breaker_state(
-        {chain, "failing_provider", :http},
+        {profile, chain, "failing_provider", :http},
         :open
       )
 
@@ -97,9 +101,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "circuit breaker respects recovery timeout", %{chain: chain} do
+      profile = "default"
+
       # Setup provider with intermittent failures
       setup_providers([
-        %{id: "flaky", priority: 10, behavior: MockProviderBehavior.intermittent_failures(0.0)}
+        %{id: "flaky", priority: 10, behavior: MockProviderBehavior.intermittent_failures(0.0), profile: profile}
       ])
 
       # Attach telemetry collector BEFORE forcing circuit breaker open
@@ -110,7 +116,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         )
 
       # Force circuit breaker open
-      CircuitBreakerHelper.force_open({chain, "flaky", :http})
+      CircuitBreakerHelper.force_open({profile, chain, "flaky", :http})
 
       # Wait for telemetry event
       {:ok, _measurements, _metadata} =
@@ -141,7 +147,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           match: [provider_id: "flaky"]
         )
 
-      CircuitBreakerHelper.reset_to_closed({chain, "flaky", :http})
+      CircuitBreakerHelper.reset_to_closed({profile, chain, "flaky", :http})
 
       # Wait for telemetry event
       {:ok, _measurements, _metadata} =
@@ -169,10 +175,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "provider selection and failover" do
     test "selects provider based on priority", %{chain: chain} do
+      profile = "default"
+
       # Setup providers with different priorities
       setup_providers([
-        %{id: "low_priority", priority: 100, behavior: :healthy},
-        %{id: "high_priority", priority: 10, behavior: :healthy}
+        %{id: "low_priority", priority: 100, behavior: :healthy, profile: profile},
+        %{id: "high_priority", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       # Attach telemetry collector BEFORE executing request
@@ -202,10 +210,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "fails over to backup provider on retriable error", %{chain: chain} do
+      profile = "default"
+
       # Setup primary that fails, backup that succeeds
       setup_providers([
-        %{id: "primary", priority: 10, behavior: :always_fail},
-        %{id: "backup", priority: 20, behavior: :healthy}
+        %{id: "primary", priority: 10, behavior: :always_fail, profile: profile},
+        %{id: "backup", priority: 20, behavior: :healthy, profile: profile}
       ])
 
       # Attach telemetry collector BEFORE executing request
@@ -236,10 +246,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "respects provider override without failover", %{chain: chain} do
+      profile = "default"
+
       # Setup two providers
       setup_providers([
-        %{id: "primary", priority: 10, behavior: :healthy},
-        %{id: "backup", priority: 20, behavior: :healthy}
+        %{id: "primary", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "backup", priority: 20, behavior: :healthy, profile: profile}
       ])
 
       # Execute with override and no failover
@@ -261,10 +273,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "provider override with failover allows retry", %{chain: chain} do
+      profile = "default"
+
       # Setup override provider that fails, and backup
       setup_providers([
-        %{id: "preferred", priority: 50, behavior: :always_fail},
-        %{id: "fallback", priority: 100, behavior: :healthy}
+        %{id: "preferred", priority: 50, behavior: :always_fail, profile: profile},
+        %{id: "fallback", priority: 100, behavior: :healthy, profile: profile}
       ])
 
       # Execute with override and failover enabled
@@ -290,11 +304,13 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "adapter validation and parameter handling" do
     test "skips providers that reject parameters", %{chain: chain} do
+      profile = "default"
+
       # This test would require a method that some providers don't support
       # For now, we test with a generic method that all providers accept
       setup_providers([
-        %{id: "provider1", priority: 10, behavior: :healthy},
-        %{id: "provider2", priority: 20, behavior: :healthy}
+        %{id: "provider1", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider2", priority: 20, behavior: :healthy, profile: profile}
       ])
 
       # Execute standard method - should work on any provider
@@ -313,8 +329,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "handles empty parameters correctly", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       # Execute with empty params
@@ -341,12 +359,15 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "error handling and classification" do
     test "classifies errors correctly", %{chain: chain} do
+      profile = "default"
+
       # Setup provider with specific error behavior
       setup_providers([
         %{
           id: "provider",
           priority: 10,
-          behavior: {:error, %{code: -32_000, message: "Server error"}}
+          behavior: {:error, %{code: -32_000, message: "Server error"}},
+          profile: profile
         }
       ])
 
@@ -370,9 +391,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "handles timeout errors", %{chain: chain} do
+      profile = "default"
+
       # Setup provider that times out
       setup_providers([
-        %{id: "slow", priority: 10, behavior: :always_timeout}
+        %{id: "slow", priority: 10, behavior: :always_timeout, profile: profile}
       ])
 
       # Execute with short timeout
@@ -421,9 +444,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "transport selection" do
     test "respects transport override", %{chain: chain} do
+      profile = "default"
+
       # Setup providers on multiple transports
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       # Execute with HTTP transport override
@@ -447,8 +472,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "telemetry and observability" do
     test "emits request start and stop events", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       # Attach telemetry collectors BEFORE executing request
@@ -495,8 +522,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "records metrics for successful requests", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       # Attach telemetry collector BEFORE executing request
@@ -525,8 +554,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "records metrics for failed requests", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "failing", priority: 10, behavior: :always_fail}
+        %{id: "failing", priority: 10, behavior: :always_fail, profile: profile}
       ])
 
       # Attach telemetry collector BEFORE executing request
@@ -561,9 +592,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "retry and resilience" do
     test "retries on transient failures", %{chain: chain} do
+      profile = "default"
+
       # Setup provider with intermittent failures (70% success)
       setup_providers([
-        %{id: "flaky", priority: 10, behavior: MockProviderBehavior.intermittent_failures(0.7)}
+        %{id: "flaky", priority: 10, behavior: MockProviderBehavior.intermittent_failures(0.7), profile: profile}
       ])
 
       # Execute multiple requests
@@ -590,10 +623,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "gives up after max retries", %{chain: chain} do
+      profile = "default"
+
       # Setup only failing providers
       setup_providers([
-        %{id: "fail1", priority: 10, behavior: :always_fail},
-        %{id: "fail2", priority: 20, behavior: :always_fail}
+        %{id: "fail1", priority: 10, behavior: :always_fail, profile: profile},
+        %{id: "fail2", priority: 20, behavior: :always_fail, profile: profile}
       ])
 
       # Attach telemetry collector BEFORE executing request

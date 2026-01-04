@@ -21,41 +21,47 @@ defmodule Lasso.RPC.SelectionTest do
 
   describe "select_provider/3 - filter handling" do
     test "respects exclude filter", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider_1", priority: 10, behavior: :healthy},
-        %{id: "provider_2", priority: 20, behavior: :healthy},
-        %{id: "provider_3", priority: 30, behavior: :healthy}
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile},
+        %{id: "provider_3", priority: 30, behavior: :healthy, profile: profile}
       ])
 
       # Select without exclusions
-      {:ok, selected1} = Selection.select_provider(chain, "eth_blockNumber")
+      {:ok, selected1} = Selection.select_provider(profile, chain, "eth_blockNumber")
       assert selected1 in ["provider_1", "provider_2", "provider_3"]
 
       # Select with exclusion
-      {:ok, selected2} = Selection.select_provider(chain, "eth_blockNumber", exclude: [selected1])
+      {:ok, selected2} = Selection.select_provider(profile, chain, "eth_blockNumber", exclude: [selected1])
       assert selected2 != selected1
       assert selected2 in ["provider_1", "provider_2", "provider_3"]
     end
 
     test "respects protocol filter for http", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "http_only", priority: 10, behavior: :healthy}
+        %{id: "http_only", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       # HTTP protocol should work
-      {:ok, selected} = Selection.select_provider(chain, "eth_blockNumber", protocol: :http)
+      {:ok, selected} = Selection.select_provider(profile, chain, "eth_blockNumber", protocol: :http)
       assert selected == "http_only"
     end
 
     test "combines exclude and protocol filters", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider_1", priority: 10, behavior: :healthy},
-        %{id: "provider_2", priority: 20, behavior: :healthy}
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile}
       ])
 
       # Exclude provider_1 and use HTTP protocol
       {:ok, selected} =
-        Selection.select_provider(chain, "eth_blockNumber",
+        Selection.select_provider(profile, chain, "eth_blockNumber",
           exclude: ["provider_1"],
           protocol: :http
         )
@@ -66,25 +72,29 @@ defmodule Lasso.RPC.SelectionTest do
 
   describe "select_provider/3 - error handling" do
     test "returns error when no providers available", %{chain: chain} do
+      profile = "default"
       # Don't setup any providers
 
       assert {:error, :no_providers_available} =
-               Selection.select_provider(chain, "eth_blockNumber")
+               Selection.select_provider(profile, chain, "eth_blockNumber")
     end
 
     test "returns error when all providers excluded", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider_1", priority: 10, behavior: :healthy}
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       assert {:error, :no_providers_available} =
-               Selection.select_provider(chain, "eth_blockNumber", exclude: ["provider_1"])
+               Selection.select_provider(profile, chain, "eth_blockNumber", exclude: ["provider_1"])
     end
 
     test "returns error for invalid chain" do
+      profile = "default"
       # Non-existent chain with no providers
       assert {:error, :no_providers_available} =
-               Selection.select_provider("nonexistent_chain", "eth_blockNumber")
+               Selection.select_provider(profile, "nonexistent_chain", "eth_blockNumber")
     end
   end
 
@@ -182,8 +192,10 @@ defmodule Lasso.RPC.SelectionTest do
 
   describe "select_provider/3 - telemetry" do
     test "emits telemetry on successful selection", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider_1", priority: 10, behavior: :healthy}
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       # Attach telemetry collector
@@ -194,7 +206,7 @@ defmodule Lasso.RPC.SelectionTest do
         )
 
       # Perform selection
-      {:ok, _selected} = Selection.select_provider(chain, "eth_blockNumber")
+      {:ok, _selected} = Selection.select_provider(profile, chain, "eth_blockNumber")
 
       # Verify telemetry emitted
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1000)
@@ -208,13 +220,15 @@ defmodule Lasso.RPC.SelectionTest do
 
   describe "select_provider_with_metadata/3" do
     test "returns metadata with candidate list", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider_1", priority: 10, behavior: :healthy},
-        %{id: "provider_2", priority: 20, behavior: :healthy}
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile}
       ])
 
       assert {:ok, %{provider_id: selected, metadata: metadata}} =
-               Selection.select_provider_with_metadata(chain, "eth_blockNumber")
+               Selection.select_provider_with_metadata(profile, chain, "eth_blockNumber")
 
       # Verify metadata structure
       assert is_list(metadata.candidates)
@@ -231,21 +245,24 @@ defmodule Lasso.RPC.SelectionTest do
     end
 
     test "includes correct protocol in metadata", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider_1", priority: 10, behavior: :healthy}
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       assert {:ok, %{metadata: metadata}} =
-               Selection.select_provider_with_metadata(chain, "eth_blockNumber", protocol: :http)
+               Selection.select_provider_with_metadata(profile, chain, "eth_blockNumber", protocol: :http)
 
       assert metadata.selected.protocol == :http
     end
 
     test "returns error when no providers available", %{chain: chain} do
+      profile = "default"
       # Don't setup any providers
 
       assert {:error, :no_providers_available} =
-               Selection.select_provider_with_metadata(chain, "eth_blockNumber")
+               Selection.select_provider_with_metadata(profile, chain, "eth_blockNumber")
     end
   end
 end
