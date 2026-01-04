@@ -139,8 +139,8 @@ class SimulatorRun {
       // strategy is already normalized to null if invalid at the top of _startHttpLoad
       const profile = this.config.profile || 'default';
       const url = strategy
-        ? `/rpc/${encodeURIComponent(profile)}/${encodeURIComponent(strategy)}/${encodeURIComponent(chain)}`
-        : `/rpc/${encodeURIComponent(profile)}/${encodeURIComponent(chain)}`;
+        ? `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(strategy)}/${encodeURIComponent(chain)}`
+        : `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(chain)}`;
 
       this.stats.http.inflight++;
       const start = now();
@@ -221,7 +221,7 @@ class SimulatorRun {
     for (let i = 0; i < connections; i++) {
       const chain = chains[i % chains.length];
       const profile = this.config.profile || 'default';
-      const url = `${location.origin.replace(/^http/, "ws")}/ws/rpc/${encodeURIComponent(profile)}/${encodeURIComponent(chain)}`;
+      const url = `${location.origin.replace(/^http/, "ws")}/ws/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(chain)}`;
       const ws = new WebSocket(url);
 
       ws.onopen = () => {

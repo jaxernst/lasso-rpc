@@ -283,10 +283,17 @@ const SimulatorControl = {
       const newAvailableChains = chainsData ? JSON.parse(chainsData) : [];
 
       // Compare with current chains (deep equality check)
-      const chainsChanged = JSON.stringify(this.availableChains) !== JSON.stringify(newAvailableChains);
+      const chainsChanged =
+        JSON.stringify(this.availableChains) !==
+        JSON.stringify(newAvailableChains);
 
       if (chainsChanged) {
-        console.log("Available chains changed from", this.availableChains, "to", newAvailableChains);
+        console.log(
+          "Available chains changed from",
+          this.availableChains,
+          "to",
+          newAvailableChains
+        );
         this.availableChains = newAvailableChains;
         LassoSim.setAvailableChains(this.availableChains);
 
