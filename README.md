@@ -84,6 +84,11 @@ const fastClient = createPublicClient({
 const wsClient = createPublicClient({
   transport: webSocket(`${WS_HOST}/ws/rpc/ethereum`),
 });
+
+// Profile-aware client (e.g., testnet profile)
+const testnetClient = createPublicClient({
+  transport: http(`${HOST}/rpc/profile/testnet/ethereum`),
+});
 ```
 
 ---
@@ -94,19 +99,35 @@ Routing strategies are defined with url slug parameters
 
 HTTP (POST):
 
+**Default profile routes:**
 - `/rpc/:chain` (configurable default strategy with round-robin as the preset default)
 - `/rpc/fastest/:chain`
 - `/rpc/round-robin/:chain`
 - `/rpc/latency-weighted/:chain`
 - `/rpc/provider/:provider_id/:chain`
 
+**Profile-aware routes:**
+- `/rpc/profile/:profile/:chain`
+- `/rpc/profile/:profile/fastest/:chain`
+- `/rpc/profile/:profile/round-robin/:chain`
+- `/rpc/profile/:profile/latency-weighted/:chain`
+- `/rpc/profile/:profile/provider/:provider_id/:chain`
+
 WebSocket (same routes with /ws/ prefix):
 
+**Legacy routes (default profile):**
 - `ws://host/ws/rpc/:chain`
 - `ws://host/ws/rpc/fastest/:chain`
 - `ws://host/ws/rpc/round-robin/:chain`
 - `ws://host/ws/rpc/latency-weighted/:chain`
 - `ws://host/ws/rpc/provider/:provider_id/:chain`
+
+**Profile-aware routes:**
+- `ws://host/ws/rpc/profile/:profile/:chain`
+- `ws://host/ws/rpc/profile/:profile/fastest/:chain`
+- `ws://host/ws/rpc/profile/:profile/round-robin/:chain`
+- `ws://host/ws/rpc/profile/:profile/latency-weighted/:chain`
+- `ws://host/ws/rpc/profile/:profile/provider/:provider_id/:chain`
 
 Metrics API (provider performance):
 
@@ -145,6 +166,11 @@ curl -s -X POST "$HOST/rpc/provider/ethereum_llamarpc/ethereum" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq
 
+# Profile-aware route (e.g., testnet profile)
+curl -s -X POST "$HOST/rpc/profile/testnet/ethereum" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq
+
 # Include routing metadata in response body
 curl -s -X POST "$HOST/rpc/ethereum?include_meta=body" \
   -H 'Content-Type: application/json' \
@@ -168,6 +194,9 @@ wscat -c "$WS_HOST/ws/rpc/ethereum"
 
 # Strategy-specific
 wscat -c "$WS_HOST/ws/rpc/fastest/ethereum"
+
+# Profile-aware route
+wscat -c "$WS_HOST/ws/rpc/profile/testnet/ethereum"
 ```
 
 Subscriptions:
@@ -246,8 +275,14 @@ You can also generate load locally to populate metrics:
 # Single chain
 node scripts/rpc_load_test.mjs --url "$HOST/rpc/round-robin/ethereum" --concurrency 24 --duration 45
 
+# Single chain with specific profile
+node scripts/rpc_load_test.mjs --url "$HOST/rpc/ethereum" --profile testnet --concurrency 16 --duration 30
+
 # Multiple chains in parallel
 node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --concurrency 16 --duration 30
+
+# Multiple chains with profile
+node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --profile testnet --strategy fastest --duration 30
 
 # Multiple chains with per-chain rate limits
 node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --chain-rates "ethereum:100,base:50" --duration 30
