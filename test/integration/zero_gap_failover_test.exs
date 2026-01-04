@@ -20,6 +20,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
 
   use Lasso.Test.LassoIntegrationCase, async: false
 
+  alias Lasso.RPC.{UpstreamSubscriptionManager, UpstreamSubscriptionPool}
   alias Lasso.Testing.{IntegrationHelper, MockWSProvider}
 
   @moduletag :integration
@@ -91,27 +92,29 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
       # Wait for subscription to be active
       wait_for_subscription_active(profile, chain, {:newHeads})
 
-      # Send blocks out of order from primary provider: 300, 302, 301, 303
-      # (Only primary receives subscription; others are filtered)
-      MockWSProvider.send_block(chain, p1_id, %{
+      # Wait for upstream subscription to be fully established in Manager
+      selected_provider = wait_for_any_upstream_subscription_established(profile, chain, {:newHeads})
+
+      # Send blocks out of order from selected provider: 300, 302, 301, 303
+      MockWSProvider.send_block(chain, selected_provider, %{
         "number" => "0x12c",
         "hash" => "0x#{Integer.to_string(300 * 1000, 16)}",
         "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
       })
       Process.sleep(50)
-      MockWSProvider.send_block(chain, p1_id, %{
+      MockWSProvider.send_block(chain, selected_provider, %{
         "number" => "0x12e",
         "hash" => "0x#{Integer.to_string(302 * 1000, 16)}",
         "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
       })
       Process.sleep(50)
-      MockWSProvider.send_block(chain, p1_id, %{
+      MockWSProvider.send_block(chain, selected_provider, %{
         "number" => "0x12d",
         "hash" => "0x#{Integer.to_string(301 * 1000, 16)}",
         "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
       })
       Process.sleep(50)
-      MockWSProvider.send_block(chain, p1_id, %{
+      MockWSProvider.send_block(chain, selected_provider, %{
         "number" => "0x12f",
         "hash" => "0x#{Integer.to_string(303 * 1000, 16)}",
         "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
@@ -211,6 +214,48 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
       :exit, _ ->
         Process.sleep(50)
         wait_for_sub_loop(profile, chain, key, deadline)
+    end
+  end
+
+  defp wait_for_any_upstream_subscription_established(profile, chain, key, timeout \\ 3000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    wait_for_any_upstream_sub_loop(profile, chain, key, deadline)
+  end
+
+  defp wait_for_any_upstream_sub_loop(profile, chain, key, deadline) do
+    if System.monotonic_time(:millisecond) > deadline do
+      manager_state = :sys.get_state(UpstreamSubscriptionManager.via(profile, chain))
+
+      raise """
+      Timeout waiting for any upstream subscription for #{inspect(key)}
+
+      Active subscriptions: #{inspect(manager_state.active_subscriptions)}
+      Upstream index: #{inspect(manager_state.upstream_index)}
+      """
+    end
+
+    try do
+      manager_state = :sys.get_state(UpstreamSubscriptionManager.via(profile, chain))
+
+      matching_sub =
+        Enum.find(manager_state.active_subscriptions, fn
+          {{_provider_id, ^key}, %{upstream_id: upstream_id}} when is_binary(upstream_id) ->
+            Map.has_key?(manager_state.upstream_index, upstream_id)
+
+          _ ->
+            false
+        end)
+
+      case matching_sub do
+        {{provider_id, ^key}, _} -> provider_id
+        nil ->
+          Process.sleep(50)
+          wait_for_any_upstream_sub_loop(profile, chain, key, deadline)
+      end
+    catch
+      :exit, _ ->
+        Process.sleep(50)
+        wait_for_any_upstream_sub_loop(profile, chain, key, deadline)
     end
   end
 end

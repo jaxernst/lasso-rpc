@@ -455,12 +455,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         error_counts =
           rpc_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {_timestamp, pid, m, _duration, result} ->
+          |> Enum.filter(fn {_monotonic_ts, _system_ts, pid, m, _duration, result} ->
             pid == provider_id and m == method and result != :success
           end)
           |> Enum.reduce(
             %{timeout_count: 0, network_error_count: 0, rate_limit_count: 0},
-            fn {_timestamp, _pid, _m, _duration, result}, acc ->
+            fn {_monotonic_ts, _system_ts, _pid, _m, _duration, result}, acc ->
               case result do
                 :timeout -> Map.update(acc, :timeout_count, 1, &(&1 + 1))
                 :network_error -> Map.update(acc, :network_error_count, 1, &(&1 + 1))
@@ -494,10 +494,10 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         latencies =
           rpc_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {_timestamp, pid, m, duration, result} ->
+          |> Enum.filter(fn {_monotonic_ts, _system_ts, pid, m, duration, result} ->
             pid == provider_id and m == method and result == :success and duration > 0
           end)
-          |> Enum.map(fn {_timestamp, _pid, _m, duration, _result} -> duration end)
+          |> Enum.map(fn {_monotonic_ts, _system_ts, _pid, _m, duration, _result} -> duration end)
           |> Enum.sort()
 
         calculate_percentiles(latencies)
@@ -561,13 +561,13 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         hourly_calls =
           rpc_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {timestamp, pid, m, _duration, _result} ->
-            pid == provider_id and m == method and timestamp >= hour_ago
+          |> Enum.filter(fn {_monotonic_ts, system_ts, pid, m, _duration, _result} ->
+            pid == provider_id and m == method and system_ts >= hour_ago
           end)
 
         if length(hourly_calls) > 0 do
           successful_calls =
-            Enum.filter(hourly_calls, fn {_timestamp, _pid, _m, _duration, result} ->
+            Enum.filter(hourly_calls, fn {_monotonic_ts, _system_ts, _pid, _m, _duration, result} ->
               result == :success
             end)
 
@@ -619,14 +619,14 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         # Look back 30 seconds to find recent activity
         lookback = current_time - 30_000
 
-        # Select entries newer than lookback
-        match_spec = [{{:"$1", :"$2", :"$3", :"$4", :"$5"}, [{:>, :"$1", lookback}], [:"$_"]}]
+        # Select entries newer than lookback (6-tuple: monotonic_ts, system_ts, provider_id, method, duration_ms, result)
+        match_spec = [{{:"$1", :"$2", :"$3", :"$4", :"$5", :"$6"}, [{:>, :"$2", lookback}], [:"$_"]}]
 
         try do
           :ets.select(rpc_table, match_spec)
-          |> Enum.sort_by(fn {ts, _, _, _, _} -> ts end, :desc)
+          |> Enum.sort_by(fn {_monotonic_ts, system_ts, _, _, _, _} -> system_ts end, :desc)
           |> Enum.take(limit)
-          |> Enum.map(fn {_, pid, method, latency, _} ->
+          |> Enum.map(fn {_monotonic_ts, _system_ts, pid, method, latency, _result} ->
             color =
               cond do
                 latency < 50 -> "text-emerald-300"
@@ -708,25 +708,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       if Map.has_key?(state.score_tables, key) do
         score_table = score_table_name(profile, chain_name)
 
-        # Get current racing and RPC stats
-        racing_stats =
-          score_table
-          |> :ets.tab2list()
-          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
-            pid == provider_id and type == :racing
-          end)
-          |> Enum.map(fn {{_pid, event_type, _type}, wins, total, avg_margin, _samples,
-                          _monotonic_updated, last_updated} ->
-            %{
-              event_type: event_type,
-              wins: wins,
-              total_races: total,
-              win_rate: if(total > 0, do: wins / total, else: 0.0),
-              avg_margin_ms: avg_margin,
-              last_updated: last_updated
-            }
-          end)
-
+        # Get current RPC stats
         rpc_stats =
           score_table
           |> :ets.tab2list()
@@ -755,8 +737,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
             rpc_table
             |> :ets.tab2list()
-            |> Enum.filter(fn {timestamp, pid, _method, _duration, _result} ->
-              pid == provider_id and timestamp >= minute_ago
+            |> Enum.filter(fn {_monotonic_ts, system_ts, pid, _method, _duration, _result} ->
+              pid == provider_id and system_ts >= minute_ago
             end)
             |> length()
           else
@@ -765,7 +747,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
         %{
           provider_id: provider_id,
-          racing_stats: racing_stats,
           rpc_stats: rpc_stats,
           calls_last_minute: calls_last_minute,
           last_updated: System.system_time(:millisecond)
@@ -773,7 +754,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       else
         %{
           provider_id: provider_id,
-          racing_stats: [],
           rpc_stats: [],
           calls_last_minute: 0,
           last_updated: 0
@@ -1005,51 +985,29 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     score_table = score_table_name(profile, chain_name)
     current_hour = div(System.system_time(:second), 3600) * 3600
 
-    # Get all current scores as snapshot
+    # Get all current RPC scores as snapshot
     all_entries = :ets.tab2list(score_table)
 
     snapshot_data =
-      Enum.map(all_entries, fn {{provider_id, key, type}, stat1, stat2, stat3, _samples,
-                                _monotonic_updated, last_updated} ->
-        case type do
-          :racing ->
-            %{
-              profile: profile,
-              chain_name: chain_name,
-              provider_id: provider_id,
-              hour_timestamp: current_hour,
-              # Add the field the test expects
-              timestamp: current_hour,
-              event_type: key,
-              wins: stat1,
-              total_races: stat2,
-              avg_margin_ms: stat3,
-              rpc_method: nil,
-              rpc_calls: nil,
-              rpc_avg_duration_ms: nil,
-              rpc_success_rate: nil,
-              last_updated: last_updated
-            }
-
-          :rpc ->
-            %{
-              profile: profile,
-              chain_name: chain_name,
-              provider_id: provider_id,
-              hour_timestamp: current_hour,
-              # Add the field the test expects
-              timestamp: current_hour,
-              event_type: nil,
-              wins: nil,
-              total_races: nil,
-              avg_margin_ms: nil,
-              rpc_method: key,
-              rpc_calls: stat2,
-              rpc_avg_duration_ms: stat3,
-              rpc_success_rate: if(stat2 > 0, do: stat1 / stat2, else: 0.0),
-              last_updated: last_updated
-            }
-        end
+      all_entries
+      |> Enum.filter(fn {{_provider_id, _key, type}, _stat1, _stat2, _stat3, _samples,
+                         _monotonic_updated, _last_updated} ->
+        type == :rpc
+      end)
+      |> Enum.map(fn {{provider_id, method, _type}, successes, total, avg_duration, _samples,
+                      _monotonic_updated, last_updated} ->
+        %{
+          profile: profile,
+          chain_name: chain_name,
+          provider_id: provider_id,
+          hour_timestamp: current_hour,
+          timestamp: current_hour,
+          rpc_method: method,
+          rpc_calls: total,
+          rpc_avg_duration_ms: avg_duration,
+          rpc_success_rate: if(total > 0, do: successes / total, else: 0.0),
+          last_updated: last_updated
+        }
       end)
 
     # Extract unique providers
@@ -1246,11 +1204,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         total_successes: total_successes,
         success_rate: success_rate,
         avg_latency_ms: avg_latency,
-        # For backward compatibility, include legacy fields mapped to RPC equivalents
-        total_wins: total_successes,
-        total_races: total_calls,
-        win_rate: success_rate,
-        avg_margin_ms: avg_latency,
         score: calculate_rpc_provider_score(success_rate, avg_latency, total_calls)
       }
     end)
@@ -1260,37 +1213,15 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   defp get_detailed_provider_metrics(profile, chain_name, provider_id) do
     score_table = score_table_name(profile, chain_name)
 
-    # Get all entries for this provider
-    provider_entries =
+    # Get all RPC entries for this provider
+    rpc_metrics =
       score_table
       |> :ets.tab2list()
-      |> Enum.filter(fn {{pid, _event_type, _type}, _wins, _total, _avg, _samples, _monotonic_updated, _system_updated} ->
-        pid == provider_id
+      |> Enum.filter(fn {{pid, _method, type}, _successes, _total, _avg, _samples, _monotonic_updated, _system_updated} ->
+        pid == provider_id and type == :rpc
       end)
-
-    # Group by type (racing vs rpc)
-    {racing_entries, rpc_entries} =
-      Enum.split_with(provider_entries, fn {{_pid, _key, type}, _wins, _total, _avg, _samples,
-                                            _monotonic_updated, _system_updated} ->
-        type == :racing
-      end)
-
-    racing_metrics =
-      Enum.map(racing_entries, fn {{_pid, event_type, _type}, wins, total, avg_margin, _samples,
-                                   _monotonic_updated, last_updated} ->
-        %{
-          event_type: event_type,
-          wins: wins,
-          total_races: total,
-          win_rate: if(total > 0, do: wins / total, else: 0.0),
-          avg_margin_ms: avg_margin,
-          last_updated: last_updated
-        }
-      end)
-
-    rpc_metrics =
-      Enum.map(rpc_entries, fn {{_pid, method, _type}, successes, total, avg_duration, _samples,
-                                _monotonic_updated, last_updated} ->
+      |> Enum.map(fn {{_pid, method, _type}, successes, total, avg_duration, _samples,
+                      _monotonic_updated, last_updated} ->
         %{
           method: method,
           successes: successes,
@@ -1303,7 +1234,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     %{
       provider_id: provider_id,
-      racing_metrics: racing_metrics,
       rpc_metrics: rpc_metrics
     }
   end
@@ -1351,16 +1281,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       end)
       |> Enum.uniq()
 
-    event_types =
-      all_entries
-      |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
-        type == :racing
-      end)
-      |> Enum.map(fn {{_pid, event_type, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
-        event_type
-      end)
-      |> Enum.uniq()
-
     rpc_methods =
       all_entries
       |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
@@ -1373,7 +1293,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     %{
       providers: providers,
-      event_types: event_types,
       rpc_methods: rpc_methods,
       total_entries: length(all_entries),
       last_updated: System.system_time(:millisecond)
