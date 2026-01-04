@@ -17,7 +17,7 @@ defmodule LassoWeb.TopologyConfig do
   """
   def canvas_width, do: 4000
   def canvas_height, do: 3000
-  def canvas_center, do: {div(canvas_width(), 2), div(canvas_height(), 2)}
+  def canvas_center, do: {div(canvas_width() * 9, 20), div(canvas_height(), 2)}
 
   @doc """
   Provider orbital configuration.

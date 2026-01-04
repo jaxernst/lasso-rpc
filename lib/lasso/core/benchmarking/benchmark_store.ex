@@ -252,7 +252,15 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     :ets.insert(rpc_table, {monotonic_ts, system_ts, provider_id, method, duration_ms, result})
 
     # Update aggregated RPC scores with dual timestamps
-    update_rpc_scores(score_table, provider_id, method, duration_ms, result, monotonic_ts, system_ts)
+    update_rpc_scores(
+      score_table,
+      provider_id,
+      method,
+      duration_ms,
+      result,
+      monotonic_ts,
+      system_ts
+    )
 
     {:noreply, new_state}
   end
@@ -512,7 +520,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         rpc_entries =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{pid, _method, type}, _successes, _total, _avg, _samples, _updated} ->
+          |> Enum.filter(fn {{pid, _method, type}, _successes, _total, _avg, _samples, _monotonic_updated, _system_updated} ->
             pid == provider_id and type == :rpc
           end)
 
@@ -520,7 +528,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         if length(rpc_entries) > 0 do
           {total_successes, total_calls, weighted_avg_latency} =
             Enum.reduce(rpc_entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total,
-                                                      avg_duration, _samples, _updated},
+                                                      avg_duration, _samples, _monotonic_updated, _system_updated},
                                                      {acc_successes, acc_total, acc_latency} ->
               {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total}
             end)
@@ -655,18 +663,18 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         rpc_entries =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+          |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
             type == :rpc
           end)
 
         total_calls =
-          Enum.reduce(rpc_entries, 0, fn {_key, _successes, total, _avg, _samples, _updated},
+          Enum.reduce(rpc_entries, 0, fn {_key, _successes, total, _avg, _samples, _monotonic_updated, _system_updated},
                                          acc ->
             acc + total
           end)
 
         total_successes =
-          Enum.reduce(rpc_entries, 0, fn {_key, successes, _total, _avg, _samples, _updated},
+          Enum.reduce(rpc_entries, 0, fn {_key, successes, _total, _avg, _samples, _monotonic_updated, _system_updated},
                                          acc ->
             acc + successes
           end)
@@ -679,7 +687,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
           overall_success_rate: overall_success_rate,
           total_providers:
             rpc_entries
-            |> Enum.map(fn {{pid, _key, _type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+            |> Enum.map(fn {{pid, _key, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
               pid
             end)
             |> Enum.uniq()
@@ -704,11 +712,11 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         racing_stats =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
             pid == provider_id and type == :racing
           end)
           |> Enum.map(fn {{_pid, event_type, _type}, wins, total, avg_margin, _samples,
-                          last_updated} ->
+                          _monotonic_updated, last_updated} ->
             %{
               event_type: event_type,
               wins: wins,
@@ -722,11 +730,11 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         rpc_stats =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
             pid == provider_id and type == :rpc
           end)
           |> Enum.map(fn {{_pid, method, _type}, successes, total, avg_duration, _samples,
-                          last_updated} ->
+                          _monotonic_updated, last_updated} ->
             %{
               method: method,
               successes: successes,
@@ -787,21 +795,21 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         rpc_entries =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
             pid == provider_id and type == :rpc
           end)
 
         anomalies =
           rpc_entries
           |> Enum.filter(fn {{_pid, _method, _type}, successes, total, avg_duration, _samples,
-                             _last_updated} ->
+                             _monotonic_updated, _system_updated} ->
             # Very lenient anomaly detection for testing
             success_rate = if total > 0, do: successes / total, else: 0.0
             # 95% success rate, 1 second
             success_rate < 0.95 or avg_duration > 1000
           end)
           |> Enum.map(fn {{_pid, method, _type}, successes, total, avg_duration, _samples,
-                          _last_updated} ->
+                          _monotonic_updated, _system_updated} ->
             %{
               method: method,
               success_rate: if(total > 0, do: successes / total, else: 0.0),
@@ -1002,7 +1010,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     snapshot_data =
       Enum.map(all_entries, fn {{provider_id, key, type}, stat1, stat2, stat3, _samples,
-                                last_updated} ->
+                                _monotonic_updated, last_updated} ->
         case type do
           :racing ->
             %{
@@ -1047,7 +1055,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     # Extract unique providers
     providers =
       all_entries
-      |> Enum.map(fn {{provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+      |> Enum.map(fn {{provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
         provider_id
       end)
       |> Enum.uniq()
@@ -1096,7 +1104,15 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     end
   end
 
-  defp update_rpc_scores(score_table, provider_id, method, duration_ms, result, monotonic_ts, system_ts) do
+  defp update_rpc_scores(
+         score_table,
+         provider_id,
+         method,
+         duration_ms,
+         result,
+         monotonic_ts,
+         system_ts
+       ) do
     key = {provider_id, method, :rpc}
 
     try do
@@ -1116,8 +1132,10 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
             {key, successes, total, avg_duration, recent_latencies, monotonic_ts, system_ts}
           )
 
-        [{_key, successes, total, avg_duration, recent_latencies, _monotonic_last_updated,
-          _system_last_updated}] ->
+        [
+          {_key, successes, total, avg_duration, recent_latencies, _monotonic_last_updated,
+           _system_last_updated}
+        ] ->
           # Update existing entry
           new_successes = if result == :success, do: successes + 1, else: successes
           new_total = total + 1
@@ -1175,8 +1193,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         all_entries
         |> Enum.filter(fn
           # 7-tuple format: monotonic_last_updated is 6th field
-          {{_provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples,
-           monotonic_last_updated, _system_last_updated} ->
+          {{_provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples, monotonic_last_updated,
+           _system_last_updated} ->
             monotonic_last_updated < cutoff_time
 
           _ ->
@@ -1202,11 +1220,11 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       score_table
       |> :ets.tab2list()
       |> Enum.filter(fn {{_provider_id, _method, type}, _successes, _total, _avg_duration,
-                         _samples, _updated} ->
+                         _samples, _monotonic_updated, _system_updated} ->
         type == :rpc
       end)
       |> Enum.group_by(fn {{provider_id, _method, _type}, _successes, _total, _avg_duration,
-                           _samples, _updated} ->
+                           _samples, _monotonic_updated, _system_updated} ->
         provider_id
       end)
 
@@ -1214,7 +1232,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     Enum.map(rpc_scores, fn {provider_id, entries} ->
       {total_successes, total_calls, weighted_avg_latency} =
         Enum.reduce(entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total,
-                                              avg_duration, _samples, _updated},
+                                              avg_duration, _samples, _monotonic_updated, _system_updated},
                                              {acc_successes, acc_total, acc_latency} ->
           {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total}
         end)
@@ -1246,20 +1264,20 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     provider_entries =
       score_table
       |> :ets.tab2list()
-      |> Enum.filter(fn {{pid, _event_type, _type}, _wins, _total, _avg, _samples, _updated} ->
+      |> Enum.filter(fn {{pid, _event_type, _type}, _wins, _total, _avg, _samples, _monotonic_updated, _system_updated} ->
         pid == provider_id
       end)
 
     # Group by type (racing vs rpc)
     {racing_entries, rpc_entries} =
       Enum.split_with(provider_entries, fn {{_pid, _key, type}, _wins, _total, _avg, _samples,
-                                            _updated} ->
+                                            _monotonic_updated, _system_updated} ->
         type == :racing
       end)
 
     racing_metrics =
       Enum.map(racing_entries, fn {{_pid, event_type, _type}, wins, total, avg_margin, _samples,
-                                   last_updated} ->
+                                   _monotonic_updated, last_updated} ->
         %{
           event_type: event_type,
           wins: wins,
@@ -1272,7 +1290,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     rpc_metrics =
       Enum.map(rpc_entries, fn {{_pid, method, _type}, successes, total, avg_duration, _samples,
-                                last_updated} ->
+                                _monotonic_updated, last_updated} ->
         %{
           method: method,
           successes: successes,
@@ -1297,13 +1315,13 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     method_entries =
       score_table
       |> :ets.tab2list()
-      |> Enum.filter(fn {{_pid, m, type}, _successes, _total, _avg, _samples, _updated} ->
+      |> Enum.filter(fn {{_pid, m, type}, _successes, _total, _avg, _samples, _monotonic_updated, _system_updated} ->
         type == :rpc and m == method
       end)
 
     provider_stats =
       Enum.map(method_entries, fn {{provider_id, _m, _type}, successes, total, avg_duration,
-                                   _samples, last_updated} ->
+                                   _samples, _monotonic_updated, last_updated} ->
         %{
           provider_id: provider_id,
           successes: successes,
@@ -1328,27 +1346,27 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     providers =
       all_entries
-      |> Enum.map(fn {{provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+      |> Enum.map(fn {{provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
         provider_id
       end)
       |> Enum.uniq()
 
     event_types =
       all_entries
-      |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+      |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
         type == :racing
       end)
-      |> Enum.map(fn {{_pid, event_type, _type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+      |> Enum.map(fn {{_pid, event_type, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
         event_type
       end)
       |> Enum.uniq()
 
     rpc_methods =
       all_entries
-      |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+      |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
         type == :rpc
       end)
-      |> Enum.map(fn {{_pid, method, _type}, _stat1, _stat2, _stat3, _samples, _updated} ->
+      |> Enum.map(fn {{_pid, method, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
         method
       end)
       |> Enum.uniq()

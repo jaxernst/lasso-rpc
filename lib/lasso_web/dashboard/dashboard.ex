@@ -1986,10 +1986,6 @@ defmodule LassoWeb.Dashboard do
     end
   end
 
-  @impl true
-  def handle_event("navigate_create_profile", _params, socket) do
-    {:noreply, push_navigate(socket, to: ~p"/admin/profiles")}
-  end
 
   @impl true
   def handle_event("restore_profile", %{"profile" => profile_slug}, socket) do
@@ -2295,7 +2291,7 @@ defmodule LassoWeb.Dashboard do
         chain_metrics = MetricsHelpers.get_chain_performance_metrics(socket.assigns, chain)
 
         # Get chain-specific endpoints
-        chain_endpoints = EndpointHelpers.get_chain_endpoints(socket.assigns, chain)
+        chain_endpoints = EndpointHelpers.get_chain_endpoints(socket.assigns.selected_profile, chain)
 
         # Filter events for selected chain
         chain_events = Enum.filter(socket.assigns.routing_events, &(&1.chain == chain))
