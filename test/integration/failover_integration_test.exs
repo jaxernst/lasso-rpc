@@ -325,6 +325,8 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
 
   describe "old upstream cleanup" do
     test "unsubscribes from old provider after failover", %{chain: chain} do
+      profile = "default"
+
       {:ok, _providers} =
         IntegrationHelper.setup_test_chain_with_providers(
           chain,
@@ -339,7 +341,7 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
       Process.sleep(200)
 
       # Verify primary has active subscription by checking internal state
-      pool_pid = Lasso.RPC.UpstreamSubscriptionPool.via(chain)
+      pool_pid = Lasso.RPC.UpstreamSubscriptionPool.via(profile, chain)
       pool_state = :sys.get_state(pool_pid)
 
       # Should have upstream subscription to ws_primary
@@ -465,6 +467,8 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
 
   describe "client subscription registry" do
     test "correctly routes events to subscribed clients", %{chain: chain} do
+      profile = "default"
+
       {:ok, _providers} =
         IntegrationHelper.setup_test_chain_with_providers(
           chain,
@@ -482,7 +486,7 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
       Process.sleep(200)
 
       # Verify both subscriptions are registered
-      assert ClientSubscriptionRegistry.list_by_key(chain, {:newHeads}) |> Enum.count() == 2
+      assert ClientSubscriptionRegistry.list_by_key(profile, chain, {:newHeads}) |> Enum.count() == 2
 
       # Send a block
       MockWSProvider.send_block(chain, "ws_primary", %{
@@ -496,7 +500,7 @@ defmodule Lasso.RPC.FailoverIntegrationTest do
       assert extract_block_numbers([block]) == [256]
 
       # Verify both subscriptions still active
-      assert ClientSubscriptionRegistry.list_by_key(chain, {:newHeads}) |> Enum.count() == 2
+      assert ClientSubscriptionRegistry.list_by_key(profile, chain, {:newHeads}) |> Enum.count() == 2
 
       IntegrationHelper.unsubscribe_client(chain, sub_id1)
       IntegrationHelper.unsubscribe_client(chain, sub_id2)

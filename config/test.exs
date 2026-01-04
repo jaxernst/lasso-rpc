@@ -11,7 +11,7 @@ config :lasso, LassoWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
-  level: :info,
+  level: :none,
   metadata: [
     :provider,
     :provider_id,
@@ -44,7 +44,13 @@ config :phoenix, :plug_init_mode, :runtime
 
 config :lasso,
   environment: :test,
-  chains_config_path: "config/test_chains.yml",
+  backend_config: [
+    backend: Lasso.Config.Backend.File,
+    config: [
+      profiles_dir: "test/support/profiles",
+      legacy_config_path: "config/test_chains.yml"
+    ]
+  ],
   # Use real HTTP client (Finch) for integration tests
   # (can be overridden in test_helper.exs for unit tests)
   http_client: Lasso.RPC.HttpClient.Finch

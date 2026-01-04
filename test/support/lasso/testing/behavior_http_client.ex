@@ -47,10 +47,6 @@ defmodule Lasso.Testing.BehaviorHttpClient do
     is_mock = Map.get(provider_config, :__mock__, false)
     request_id = Keyword.get(opts, :request_id, 1)
 
-    Logger.info(
-      "BehaviorHttpClient: provider_id=#{provider_id}, is_mock=#{is_mock}, config_keys=#{inspect(Map.keys(provider_config))}"
-    )
-
     if is_mock do
       # Route to mock provider
       Logger.debug("Routing request to mock HTTP provider: #{provider_id}")
@@ -86,10 +82,6 @@ defmodule Lasso.Testing.BehaviorHttpClient do
           {:error, {:connection_error, other}}
       end
     else
-      # Fall back to real HTTP client for non-mock providers
-      # In tests, this typically won't be reached
-      Logger.warning("BehaviorHttpClient called with non-mock provider: #{provider_id}")
-
       # Return a mock response as raw bytes to prevent hanging
       {:ok, {:raw, Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "result" => "0x1"})}}
     end
@@ -118,14 +110,17 @@ defmodule Lasso.Testing.BehaviorHttpClient do
               Jason.decode!(bytes)
 
             {:error, error} ->
-              %{"jsonrpc" => "2.0", "id" => idx, "error" => %{"code" => -32_000, "message" => inspect(error)}}
+              %{
+                "jsonrpc" => "2.0",
+                "id" => idx,
+                "error" => %{"code" => -32_000, "message" => inspect(error)}
+              }
           end
         end)
 
       # Return the batch array as raw bytes
       {:ok, {:raw, Jason.encode!(results)}}
     else
-      Logger.warning("BehaviorHttpClient batch called with non-mock provider: #{provider_id}")
       {:ok, {:raw, "[]"}}
     end
   end

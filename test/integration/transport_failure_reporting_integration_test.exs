@@ -8,14 +8,16 @@ defmodule Lasso.RPC.TransportFailureReportingIntegrationTest do
   alias Lasso.Test.{TelemetrySync, CircuitBreakerHelper}
 
   test "failures are reported with correct transport and gate HTTP only", %{chain: chain} do
+    profile = "default"
+
     # Setup two providers: one failing, one healthy
     setup_providers([
-      %{id: "fail_http", priority: 10, behavior: :always_fail},
-      %{id: "ok_http", priority: 20, behavior: :healthy}
+      %{id: "fail_http", priority: 10, behavior: :always_fail, profile: profile},
+      %{id: "ok_http", priority: 20, behavior: :healthy, profile: profile}
     ])
 
     # Ensure circuit breaker exists for HTTP transport
-    CircuitBreakerHelper.ensure_circuit_breaker_started(chain, "fail_http", :http)
+    CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "fail_http", :http)
 
     # Attach telemetry collector BEFORE triggering failures
     {:ok, cb_open} =
@@ -46,7 +48,7 @@ defmodule Lasso.RPC.TransportFailureReportingIntegrationTest do
     _ = TelemetrySync.await_event(cb_open, timeout: 1500)
 
     # Verify HTTP circuit breaker is open
-    CircuitBreakerHelper.assert_circuit_breaker_state({chain, "fail_http", :http}, :open)
+    CircuitBreakerHelper.assert_circuit_breaker_state({profile, chain, "fail_http", :http}, :open)
 
     # ProviderPool should reflect HTTP transport failure without forcing WS changes
     {:ok, status} = ProviderPool.get_status("default", chain)

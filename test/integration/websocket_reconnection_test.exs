@@ -50,7 +50,9 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
     circuit_breaker_config = %{failure_threshold: 5, recovery_timeout: 200, success_threshold: 1}
 
     {:ok, _cb_pid} =
-      CircuitBreaker.start_link({{endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
+      CircuitBreaker.start_link(
+        {{endpoint.profile, endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config}
+      )
 
     # Start connection
     {:ok, pid} = WSConnection.start_link(endpoint)
@@ -65,9 +67,9 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
     end
 
     # Clean up circuit breaker
-    case GenServer.whereis(
-           {:via, Registry, {Lasso.Registry, {:circuit_breaker, "#{endpoint.id}:ws"}}}
-         ) do
+    cb_id = "#{endpoint.profile}:#{endpoint.chain_name}:#{endpoint.id}:ws"
+
+    case GenServer.whereis({:via, Registry, {Lasso.Registry, {:circuit_breaker, cb_id}}}) do
       nil -> :ok
       pid when is_pid(pid) -> if Process.alive?(pid), do: GenServer.stop(pid, :normal)
     end

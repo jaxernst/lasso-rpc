@@ -22,8 +22,10 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
 
   describe "HTTP passthrough - basic responses" do
     test "returns Response.Success with raw_bytes for eth_blockNumber", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       {:ok, result, _ctx} =
@@ -50,8 +52,10 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
     end
 
     test "decode_result extracts result field correctly", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       {:ok, result, _ctx} =
@@ -75,8 +79,10 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
     end
 
     test "response_size returns byte size of raw response", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       {:ok, result, _ctx} =
@@ -97,8 +103,10 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
 
   describe "HTTP passthrough - various result types" do
     test "handles eth_chainId response", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       {:ok, result, _ctx} =
@@ -124,8 +132,10 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
     end
 
     test "handles eth_getBalance response with address param", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       # Use a well-known address (Vitalik's address)
@@ -150,10 +160,12 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
 
   describe "HTTP passthrough - failover preserves passthrough" do
     test "failover result is still Response.Success", %{chain: chain} do
+      profile = "default"
+
       # Primary fails, backup succeeds
       setup_providers([
-        %{id: "primary", priority: 10, behavior: :always_fail},
-        %{id: "backup", priority: 20, behavior: :healthy}
+        %{id: "primary", priority: 10, behavior: :always_fail, profile: profile},
+        %{id: "backup", priority: 20, behavior: :healthy, profile: profile}
       ])
 
       {:ok, result, _ctx} =
@@ -175,11 +187,14 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
 
   describe "HTTP passthrough - error responses" do
     test "provider errors return Response.Error", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
         %{
           id: "error_provider",
           priority: 10,
-          behavior: {:error, %{code: -32_600, message: "Invalid Request"}}
+          behavior: {:error, %{code: -32_600, message: "Invalid Request"}},
+          profile: profile
         }
       ])
 
@@ -203,8 +218,10 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
 
   describe "HTTP passthrough - ID preservation" do
     test "response ID matches request ID for integer IDs", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       {:ok, result, _ctx} =
@@ -228,8 +245,10 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
 
   describe "HTTP passthrough - context tracking" do
     test "RequestContext records passthrough result type", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       {:ok, result, ctx} =
@@ -249,8 +268,10 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
     end
 
     test "RequestContext records upstream latency", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       {:ok, _result, ctx} =
@@ -276,8 +297,10 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
 
   describe "HTTP passthrough - to_bytes roundtrip" do
     test "Response.to_bytes returns identical bytes", %{chain: chain} do
+      profile = "default"
+
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy}
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
       {:ok, result, _ctx} =

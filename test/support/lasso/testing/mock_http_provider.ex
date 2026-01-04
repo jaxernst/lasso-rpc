@@ -30,18 +30,20 @@ defmodule Lasso.Testing.MockHTTPProvider do
   use GenServer
   require Logger
 
-  alias Lasso.Testing.MockProviderBehavior
+  alias Lasso.Testing.{MockProviderBehavior, ChainHelper}
 
   @doc """
   Starts a mock HTTP provider and registers it with the chain.
 
   Options:
   - `:id` (required) - Provider identifier
+  - `:profile` - Profile to register provider with (default: "default")
   - `:behavior` - Behavior specification (default: :healthy)
   - `:priority` - Provider priority (default: 100)
   """
   def start_mock(chain, spec) when is_map(spec) do
     provider_id = Map.get(spec, :id) || raise "Mock HTTP provider requires :id field"
+    profile = Map.get(spec, :profile, "default")
 
     # Start the GenServer
     {:ok, pid} =
@@ -65,14 +67,14 @@ defmodule Lasso.Testing.MockHTTPProvider do
     }
 
     # Ensure chain exists and register provider
-    with :ok <- ensure_chain_exists(chain),
-         :ok <- Lasso.Config.ConfigStore.register_provider_runtime("default", chain, provider_config),
-         :ok <- Lasso.RPC.ProviderPool.register_provider("default", chain, provider_id, provider_config) do
+    with :ok <- ChainHelper.ensure_chain_exists(chain, profile: profile),
+         :ok <- Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
+         :ok <- Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
       Logger.info("MockHTTPProvider: registered #{provider_id}, initializing channels...")
 
       result =
         Lasso.RPC.TransportRegistry.initialize_provider_channels(
-          "default",
+          profile,
           chain,
           provider_id,
           provider_config
@@ -83,16 +85,16 @@ defmodule Lasso.Testing.MockHTTPProvider do
       case result do
         :ok ->
           # Ensure circuit breaker exists for HTTP transport
-          ensure_circuit_breaker(chain, provider_id, :http)
+          ensure_circuit_breaker(profile, chain, provider_id, :http)
 
           # Mark as healthy so it can be selected
-          Lasso.RPC.ProviderPool.report_success("default", chain, provider_id, nil)
+          Lasso.RPC.ProviderPool.report_success(profile, chain, provider_id, nil)
 
           # Give report_success (async cast) time to complete
           Process.sleep(50)
 
-          # Set up cleanup monitor
-          setup_cleanup_monitor(chain, provider_id, pid)
+          # Set up cleanup callback
+          setup_cleanup(profile, chain, provider_id)
 
           Logger.debug("Started mock HTTP provider #{provider_id} for #{chain}")
           {:ok, provider_id}
@@ -150,80 +152,10 @@ defmodule Lasso.Testing.MockHTTPProvider do
     :ok
   end
 
-  # Private helper to ensure chain exists (auto-create if needed)
-  # Uses "default" profile for test chains
-  @test_profile "default"
-
-  defp ensure_chain_exists(chain_name) do
-    case Lasso.Config.ConfigStore.get_chain("default", chain_name) do
-      {:ok, _chain_config} ->
-        # Chain exists, ensure supervisors are running
-        ensure_chain_supervisors_running(chain_name)
-
-      {:error, :not_found} ->
-        # Create chain with default config
-        Logger.info("Chain '#{chain_name}' not found, creating for mock provider")
-
-        default_config = %{
-          chain_id: nil,
-          name: chain_name,
-          providers: [],
-          connection: %{
-            heartbeat_interval: 30_000,
-            reconnect_interval: 5_000,
-            max_reconnect_attempts: 5
-          },
-          failover: %{
-            enabled: false,
-            max_backfill_blocks: 100,
-            backfill_timeout: 30_000
-          }
-        }
-
-        with :ok <-
-               Lasso.Config.ConfigStore.register_chain_runtime("default", chain_name, default_config),
-             {:ok, chain_config} <- Lasso.Config.ConfigStore.get_chain("default", chain_name),
-             :ok <- start_chain_supervisors(chain_name, chain_config) do
-          Logger.info("Successfully started chain supervisor for '#{chain_name}'")
-          :ok
-        else
-          {:error, reason} = error ->
-            Logger.error("Failed to start chain '#{chain_name}': #{inspect(reason)}")
-            error
-        end
-    end
-  end
-
-  defp ensure_chain_supervisors_running(chain_name) do
-    # Check if profile chain supervisor is running
-    case Lasso.ProfileChainSupervisor.running?(@test_profile, chain_name) do
-      true ->
-        :ok
-
-      false ->
-        # Get chain config and start supervisors
-        case Lasso.Config.ConfigStore.get_chain("default", chain_name) do
-          {:ok, chain_config} ->
-            start_chain_supervisors(chain_name, chain_config)
-
-          {:error, _} = error ->
-            error
-        end
-    end
-  end
-
-  defp start_chain_supervisors(chain_name, chain_config) do
-    # Start profile chain supervisor (BlockSync, HealthProbe are profile-scoped)
-    case Lasso.ProfileChainSupervisor.start_profile_chain(@test_profile, chain_name, chain_config) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   # Private helper to ensure circuit breaker exists
-  defp ensure_circuit_breaker(chain, provider_id, transport) do
-    breaker_id = {"default", chain, provider_id, transport}
+  defp ensure_circuit_breaker(profile, chain, provider_id, transport) do
+    breaker_id = {profile, chain, provider_id, transport}
 
     try do
       case Lasso.RPC.CircuitBreaker.get_state(breaker_id) do
@@ -318,16 +250,20 @@ defmodule Lasso.Testing.MockHTTPProvider do
     {:reply, response, state}
   end
 
-  defp setup_cleanup_monitor(chain, provider_id, _pid) do
-    test_pid = self()
+  defp setup_cleanup(profile, chain, provider_id) do
+    ExUnit.Callbacks.on_exit({:cleanup_mock_http, provider_id}, fn ->
+      Logger.debug("Test cleanup: stopping mock HTTP provider #{provider_id}")
+      stop_mock(chain, provider_id)
 
-    spawn(fn ->
-      ref = Process.monitor(test_pid)
+      # Clean up circuit breakers
+      for transport <- [:http, :ws] do
+        breaker_id = {profile, chain, provider_id, transport}
 
-      receive do
-        {:DOWN, ^ref, :process, ^test_pid, _reason} ->
-          Logger.debug("Test process exited, cleaning up mock HTTP provider #{provider_id}")
-          stop_mock(chain, provider_id)
+        try do
+          Lasso.RPC.CircuitBreaker.close(breaker_id)
+        catch
+          :exit, _ -> :ok
+        end
       end
     end)
   end

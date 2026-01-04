@@ -90,8 +90,7 @@ defmodule Lasso.Application do
         Lasso.ProfileChainSupervisor,
 
         # Start configuration store for centralized config caching
-        {Lasso.Config.ConfigStore,
-         Application.get_env(:lasso, :chains_config_path, "config/chains.yml")},
+        {Lasso.Config.ConfigStore, get_config_store_opts()},
 
         # Start Phoenix endpoint
         LassoWeb.Endpoint
@@ -130,14 +129,32 @@ defmodule Lasso.Application do
       end
 
       # Start all configured chains
-      {:ok, started_count} = start_all_chains()
-      Logger.info("Started #{started_count} chain supervisors")
+      case start_all_chains() do
+        {:ok, 0} ->
+          Logger.info("No chains configured - starting in minimal mode")
+
+        {:ok, count} ->
+          Logger.info("Started #{count} chain supervisors")
+      end
 
       {:ok, supervisor}
     end
   end
 
   # Private helper functions
+
+  defp get_config_store_opts do
+    # Check for explicit backend_config first (test environment)
+    case Application.get_env(:lasso, :backend_config) do
+      nil ->
+        # Fall back to legacy chains_config_path
+        Application.get_env(:lasso, :chains_config_path, "config/chains.yml")
+
+      backend_config ->
+        # Use explicit backend config (allows test env to specify profiles_dir)
+        backend_config
+    end
+  end
 
   defp start_all_chains do
     alias Lasso.Config.ConfigStore

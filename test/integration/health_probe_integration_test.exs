@@ -45,6 +45,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
   describe "HealthProbe → CircuitBreaker integration" do
     @tag :integration
     test "HealthProbe success closes open circuit", %{chain: chain} do
+      profile = "default"
+
       # Setup: Create provider with behavior that will fail then succeed
       provider_spec = %{
         id: "probe_recovery_provider",
@@ -60,7 +62,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
           skip_health_check: true
         )
 
-      cb_id = {chain, provider_id, :http}
+      cb_id = {profile, chain, provider_id, :http}
 
       # Wait for circuit breaker to be ready
       wait_for_circuit_breaker(cb_id)
@@ -90,8 +92,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       # Make a successful call to fully close the circuit
       if state.state == :half_open do
         result = CircuitBreaker.call(cb_id, fn -> {:ok, :test} end)
-        # Result should indicate success (either {:ok, {:ok, :test}} or {:ok, :test} depending on circuit state)
-        assert match?({:ok, _}, result), "Call should succeed in half_open state"
+        # CircuitBreaker.call returns {:executed, result} on success
+        assert match?({:executed, _}, result), "Call should succeed in half_open state"
         Process.sleep(50)
       end
 
@@ -102,6 +104,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
     @tag :integration
     test "HealthProbe failure opens circuit after threshold", %{chain: chain} do
+      profile = "default"
+
       provider_spec = %{
         id: "probe_failure_provider",
         behavior: :healthy,
@@ -116,7 +120,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
           skip_health_check: true
         )
 
-      cb_id = {chain, provider_id, :http}
+      cb_id = {profile, chain, provider_id, :http}
       wait_for_circuit_breaker(cb_id)
 
       # Verify circuit starts closed
@@ -136,6 +140,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
     @tag :integration
     test "circuit transitions: closed → open → half_open → closed", %{chain: chain} do
+      profile = "default"
+
       provider_spec = %{
         id: "transition_provider",
         behavior: :healthy,
@@ -150,7 +156,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
           skip_health_check: true
         )
 
-      cb_id = {chain, provider_id, :http}
+      cb_id = {profile, chain, provider_id, :http}
       wait_for_circuit_breaker(cb_id)
 
       # 1. Start closed
@@ -175,7 +181,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       # 4. Successful call from half_open closes it
       if state.state == :half_open do
         result = CircuitBreaker.call(cb_id, fn -> {:ok, :test} end)
-        assert match?({:ok, _}, result), "Call should succeed in half_open state"
+        assert match?({:executed, _}, result), "Call should succeed in half_open state"
         Process.sleep(50)
       end
 
@@ -186,6 +192,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
   describe "BlockSync HTTP respects circuit breaker" do
     @tag :integration
     test "BlockSync HTTP is blocked when circuit is open", %{chain: chain} do
+      profile = "default"
+
       provider_spec = %{
         id: "blocksync_cb_provider",
         behavior: :healthy,
@@ -200,7 +208,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
           skip_health_check: true
         )
 
-      cb_id = {chain, provider_id, :http}
+      cb_id = {profile, chain, provider_id, :http}
       wait_for_circuit_breaker(cb_id)
 
       # Open the circuit (default threshold is 5)
@@ -210,11 +218,14 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
       # BlockSync HTTP should get :circuit_open when trying to poll
       result = CircuitBreaker.call(cb_id, fn -> {:ok, 12345} end)
-      assert result == {:error, :circuit_open}
+      # CircuitBreaker.call returns {:rejected, :circuit_open} when circuit is open
+      assert result == {:rejected, :circuit_open}
     end
 
     @tag :integration
     test "BlockSync HTTP resumes when circuit closes", %{chain: chain} do
+      profile = "default"
+
       provider_spec = %{
         id: "blocksync_resume_provider",
         behavior: :healthy,
@@ -229,7 +240,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
           skip_health_check: true
         )
 
-      cb_id = {chain, provider_id, :http}
+      cb_id = {profile, chain, provider_id, :http}
       wait_for_circuit_breaker(cb_id)
 
       # Open the circuit (default threshold is 5)
@@ -251,7 +262,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
       # BlockSync HTTP should work again - a successful call closes the circuit fully
       result = CircuitBreaker.call(cb_id, fn -> {:ok, 12345} end)
-      assert match?({:ok, _}, result), "Call should succeed in half_open/closed state"
+      assert match?({:executed, _}, result), "Call should succeed in half_open/closed state"
       Process.sleep(50)
 
       # Now circuit should be closed
@@ -263,6 +274,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
     @tag :integration
     test "full recovery: provider fails → circuit opens → HealthProbe detects recovery → circuit closes",
          %{chain: chain} do
+      profile = "default"
+
       provider_spec = %{
         id: "e2e_recovery_provider",
         behavior: :healthy,
@@ -277,7 +290,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
           skip_health_check: true
         )
 
-      cb_id = {chain, provider_id, :http}
+      cb_id = {profile, chain, provider_id, :http}
       wait_for_circuit_breaker(cb_id)
 
       # Phase 1: Provider is healthy, circuit is closed
@@ -293,7 +306,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
       # Phase 3: User traffic is blocked
       result = CircuitBreaker.call(cb_id, fn -> {:ok, :should_not_run} end)
-      assert result == {:error, :circuit_open}
+      assert result == {:rejected, :circuit_open}
 
       # Phase 4: HealthProbe continues probing (bypasses circuit)
       # and eventually detects recovery
@@ -310,7 +323,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
       # First successful call through closes the circuit
       result = CircuitBreaker.call(cb_id, fn -> {:ok, :traffic_resumed} end)
-      assert match?({:ok, _}, result), "Call should succeed in half_open/closed state"
+      assert match?({:executed, _}, result), "Call should succeed in half_open/closed state"
       Process.sleep(50)
 
       # Circuit should now be closed
@@ -319,6 +332,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
     @tag :integration
     test "flapping provider: rapid up/down doesn't cause thrashing", %{chain: chain} do
+      profile = "default"
+
       provider_spec = %{
         id: "flapping_provider",
         behavior: :healthy,
@@ -333,7 +348,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
           skip_health_check: true
         )
 
-      cb_id = {chain, provider_id, :http}
+      cb_id = {profile, chain, provider_id, :http}
       wait_for_circuit_breaker(cb_id)
 
       # Simulate flapping: success, fail, success, fail...
@@ -354,6 +369,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
     @tag :integration
     test "multiple providers have independent circuit states", %{chain: chain} do
+      profile = "default"
+
       providers = [
         %{id: "independent_p1", behavior: :healthy, priority: 100},
         %{id: "independent_p2", behavior: :healthy, priority: 90},
@@ -369,9 +386,9 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
         )
 
       [p1, p2, p3] = provider_ids
-      cb1 = {chain, p1, :http}
-      cb2 = {chain, p2, :http}
-      cb3 = {chain, p3, :http}
+      cb1 = {profile, chain, p1, :http}
+      cb2 = {profile, chain, p2, :http}
+      cb3 = {profile, chain, p3, :http}
 
       # Wait for all circuit breakers
       wait_for_circuit_breaker(cb1)
@@ -408,7 +425,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       # Make a successful call to fully close p1
       if state1.state == :half_open do
         result = CircuitBreaker.call(cb1, fn -> {:ok, :test} end)
-        assert match?({:ok, _}, result), "Call should succeed in half_open state"
+        assert match?({:executed, _}, result), "Call should succeed in half_open state"
         Process.sleep(50)
       end
 
@@ -422,6 +439,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
   describe "rate limit handling" do
     @tag :integration
     test "rate limit opens circuit with lower threshold", %{chain: chain} do
+      profile = "default"
+
       provider_spec = %{
         id: "rate_limit_provider",
         behavior: :healthy,
@@ -436,7 +455,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
           skip_health_check: true
         )
 
-      cb_id = {chain, provider_id, :http}
+      cb_id = {profile, chain, provider_id, :http}
       wait_for_circuit_breaker(cb_id)
 
       # Rate limit errors should open circuit faster (threshold: 2)
@@ -483,8 +502,10 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
   end
 
   defp cleanup_chain(chain) do
+    profile = "default"
+
     # Stop HealthProbe supervisor if running
-    if pid = GenServer.whereis(HealthProbe.Supervisor.via(chain)) do
+    if pid = GenServer.whereis(HealthProbe.Supervisor.via(profile, chain)) do
       try do
         DynamicSupervisor.stop(pid, :normal, 1000)
       catch
@@ -493,7 +514,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
     end
 
     # Stop BlockSync supervisor if running
-    if pid = GenServer.whereis(BlockSync.Supervisor.via(chain)) do
+    if pid = GenServer.whereis(BlockSync.Supervisor.via(profile, chain)) do
       try do
         DynamicSupervisor.stop(pid, :normal, 1000)
       catch
