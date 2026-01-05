@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.ErrorNormalizer do
+defmodule Lasso.Core.Support.ErrorNormalizer do
   @moduledoc """
   Centralized error normalization for consistent error handling across the system.
 
@@ -10,7 +10,7 @@ defmodule Lasso.RPC.ErrorNormalizer do
   """
 
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.ErrorClassifier
+  alias Lasso.Core.Support.ErrorClassifier
 
   @type context :: :health_check | :live_traffic | :transport | :jsonrpc
   @type transport :: :http | :ws | nil

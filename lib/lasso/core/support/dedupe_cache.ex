@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.DedupeCache do
+defmodule Lasso.Core.Support.DedupeCache do
   @moduledoc """
   Bounded, O(1) membership deduplication cache with optional time-based eviction.
 

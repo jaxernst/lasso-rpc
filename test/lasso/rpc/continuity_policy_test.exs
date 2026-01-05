@@ -1,7 +1,7 @@
 defmodule Lasso.RPC.ContinuityPolicyTest do
   use ExUnit.Case, async: true
 
-  alias Lasso.RPC.ContinuityPolicy
+  alias Lasso.Core.Support.ContinuityPolicy
 
   describe "needed_block_range/4" do
     test "returns :none when head is at last_seen + 1" do

@@ -14,7 +14,8 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
 
   @behaviour Lasso.RPC.Strategy
 
-  alias Lasso.RPC.{StrategyContext, Metrics}
+  alias Lasso.Core.Benchmarking.Metrics
+  alias Lasso.RPC.StrategyContext
 
   # Default tuning knobs (can be overridden via application config)
   @freshness_cutoff_ms 10 * 60 * 1000

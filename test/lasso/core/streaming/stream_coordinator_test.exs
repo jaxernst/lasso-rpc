@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.StreamCoordinatorTest do
+defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
   @moduledoc """
   Unit tests for StreamCoordinator failover orchestration.
 
@@ -15,7 +15,7 @@ defmodule Lasso.RPC.StreamCoordinatorTest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureLog
 
-  alias Lasso.RPC.StreamCoordinator
+  alias Lasso.Core.Streaming.StreamCoordinator
 
   # Test helpers for event creation
   defp new_heads_event(block_num) do

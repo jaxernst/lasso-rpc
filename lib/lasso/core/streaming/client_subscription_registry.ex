@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.ClientSubscriptionRegistry do
+defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
   @moduledoc """
   Per-profile registry that tracks client subscriptions and fans out events.
 

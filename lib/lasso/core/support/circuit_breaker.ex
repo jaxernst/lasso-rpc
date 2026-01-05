@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.CircuitBreaker do
+defmodule Lasso.Core.Support.CircuitBreaker do
   @moduledoc """
   Circuit breaker implementation for RPC provider fault tolerance.
 
@@ -10,7 +10,7 @@ defmodule Lasso.RPC.CircuitBreaker do
   use GenServer
   require Logger
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.ErrorNormalizer
+  alias Lasso.Core.Support.ErrorNormalizer
 
   defstruct [
     :profile,

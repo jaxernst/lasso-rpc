@@ -31,9 +31,10 @@ defmodule Lasso.RPC.ChainSupervisor do
   use Supervisor
   require Logger
 
-  alias Lasso.RPC.{WSConnection, ProviderPool, TransportRegistry}
+  alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
+  alias Lasso.RPC.{ProviderPool, TransportRegistry}
   alias Lasso.RPC.ProviderSupervisor
-  alias Lasso.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
+  alias Lasso.Core.Streaming.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
   alias Lasso.BlockSync
   alias Lasso.HealthProbe
 
@@ -190,11 +191,11 @@ defmodule Lasso.RPC.ChainSupervisor do
 
       # Start per-profile subscription registry, manager, and pool
       {ClientSubscriptionRegistry, {profile, chain_name}},
-      {Lasso.RPC.UpstreamSubscriptionManager, {profile, chain_name}},
+      {Lasso.Core.Streaming.UpstreamSubscriptionManager, {profile, chain_name}},
       {UpstreamSubscriptionPool, {profile, chain_name}},
 
       # StreamSupervisor for per-key coordinators
-      {Lasso.RPC.StreamSupervisor, {profile, chain_name}},
+      {Lasso.Core.Streaming.StreamSupervisor, {profile, chain_name}},
 
       # Start provider connections after all other children are initialized
       # This Task runs once and completes (restart: :transient)

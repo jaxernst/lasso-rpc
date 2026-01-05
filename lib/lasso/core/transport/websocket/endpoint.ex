@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.WSEndpoint do
+defmodule Lasso.RPC.Transport.WebSocket.Endpoint do
   @moduledoc """
   Defines the structure for blockchain WebSocket RPC endpoint configurations.
 
@@ -39,14 +39,14 @@ defmodule Lasso.RPC.WSEndpoint do
 
   ## Examples
 
-      iex> Lasso.RPC.WSEndpoint.new(
+      iex> Lasso.RPC.Transport.WebSocket.Endpoint.new(
       ...>   id: "ethereum_ws",
       ...>   name: "Ethereum WebSocket",
       ...>   url: "https://mainnet.infura.io/v3/YOUR_KEY",
       ...>   ws_url: "wss://mainnet.infura.io/ws/v3/YOUR_KEY",
       ...>   chain_id: 1
       ...> )
-      %Lasso.RPC.WSEndpoint{
+      %Lasso.RPC.Transport.WebSocket.Endpoint{
         id: "ethereum_ws",
         name: "Ethereum WebSocket",
         ws_url: "wss://mainnet.infura.io/ws/v3/YOUR_KEY",

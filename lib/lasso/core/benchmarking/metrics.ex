@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.Metrics do
+defmodule Lasso.Core.Benchmarking.Metrics do
   @moduledoc """
   Unified metrics abstraction for provider performance data.
 

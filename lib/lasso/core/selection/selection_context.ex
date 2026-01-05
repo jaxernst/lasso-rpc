@@ -51,7 +51,7 @@ defmodule Lasso.RPC.SelectionContext do
       strategy: Keyword.get(opts, :strategy, :cheapest),
       protocol: Keyword.get(opts, :protocol, :both),
       exclude: Keyword.get(opts, :exclude, []),
-      metrics: Keyword.get(opts, :metrics, Lasso.RPC.Metrics),
+      metrics: Keyword.get(opts, :metrics, Lasso.Core.Benchmarking.Metrics),
       timeout: Keyword.get(opts, :timeout, 30_000)
     }
   end

@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.WSConnection do
+defmodule Lasso.RPC.Transport.WebSocket.Connection do
   @moduledoc """
   A GenServer that manages a single WebSocket connection to a blockchain RPC endpoint.
 
@@ -70,9 +70,9 @@ defmodule Lasso.RPC.WSConnection do
   use GenServer, restart: :permanent
   require Logger
 
-  alias Lasso.RPC.WSEndpoint
-  alias Lasso.RPC.CircuitBreaker
-  alias Lasso.RPC.ErrorNormalizer
+  alias Lasso.RPC.Transport.WebSocket.Endpoint
+  alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.ErrorNormalizer
   alias Lasso.RPC.Response
   alias Lasso.JSONRPC.Error, as: JError
 
@@ -83,11 +83,11 @@ defmodule Lasso.RPC.WSConnection do
 
   ## Examples
 
-      iex> {:ok, pid} = Lasso.RPC.WSConnection.start_link(endpoint)
+      iex> {:ok, pid} = Lasso.RPC.Transport.WebSocket.Connection.start_link(endpoint)
       iex> Process.alive?(pid)
       true
   """
-  def start_link(%WSEndpoint{} = endpoint) do
+  def start_link(%Endpoint{} = endpoint) do
     GenServer.start_link(__MODULE__, endpoint, name: via_name(endpoint.id))
   end
 
@@ -96,7 +96,7 @@ defmodule Lasso.RPC.WSConnection do
 
   ## Examples
 
-      iex> Lasso.RPC.WSConnection.status("ethereum_ws")
+      iex> Lasso.RPC.Transport.WebSocket.Connection.status("ethereum_ws")
       %{connected: true, endpoint_id: "ethereum_ws", reconnect_attempts: 0}
   """
   def status(connection_id) do
@@ -106,7 +106,7 @@ defmodule Lasso.RPC.WSConnection do
   # Server Callbacks
 
   @impl true
-  def init(%WSEndpoint{} = endpoint) do
+  def init(%Endpoint{} = endpoint) do
     state = %{
       endpoint: endpoint,
       profile: endpoint.profile,
@@ -774,7 +774,7 @@ defmodule Lasso.RPC.WSConnection do
 
     case ws_client().start_link(
            endpoint.ws_url,
-           Lasso.RPC.WSHandler,
+           Lasso.RPC.Transport.WebSocket.Handler,
            %{endpoint: endpoint, parent: parent_pid},
            opts
          ) do

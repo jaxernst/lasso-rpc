@@ -11,7 +11,7 @@ defmodule Lasso.ErrorScenariosTest do
   use ExUnit.Case, async: false
   require Logger
 
-  alias Lasso.RPC.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker
 
   @moduletag :error_scenarios
   @moduletag :fault_tolerance

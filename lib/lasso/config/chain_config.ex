@@ -317,8 +317,8 @@ defmodule Lasso.Config.ChainConfig do
       System.get_env("ALCHEMY_API_KEY") != nil
   end
 
-  # Handle WSEndpoint structs (used in tests) - always available for testing
-  defp provider_available?(%Lasso.RPC.WSEndpoint{}), do: true
+  # Handle Endpoint structs (used in tests) - always available for testing
+  defp provider_available?(%Lasso.RPC.Transport.WebSocket.Endpoint{}), do: true
 
   # Fallback for unknown provider types
   defp provider_available?(_), do: false

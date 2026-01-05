@@ -36,14 +36,14 @@ end
 
 TestStartupValidator.validate_test_environment!()
 
-Mox.defmock(Lasso.RPC.HttpClientMock, for: Lasso.RPC.HttpClient)
+Mox.defmock(Lasso.RPC.HttpClientMock, for: Lasso.RPC.Transport.HTTP.Client)
 
 # Note: HTTP client mock is available but NOT set by default
 # Integration tests use real Finch client (configured in config/test.exs)
 # Unit tests can opt-in to mocking via:
 #   setup do
 #     Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClientMock)
-#     on_exit(fn -> Application.put_env(:lasso, :http_client, Lasso.RPC.HttpClient.Finch) end)
+#     on_exit(fn -> Application.put_env(:lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch) end)
 #   end
 
 # Use mock WS client in tests for deterministic WSConnection behavior
@@ -167,7 +167,7 @@ defmodule TestHelper do
       "Registry (Lasso.Registry)"
     )
 
-    wait_for_service(Lasso.RPC.ProcessRegistry, "ProcessRegistry")
+    wait_for_service(Lasso.Core.Support.ProcessRegistry, "ProcessRegistry")
 
     # Give a moment for any post-startup initialization
     Process.sleep(100)

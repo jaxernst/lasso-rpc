@@ -1,11 +1,11 @@
-defmodule Lasso.RPC.StreamSupervisor do
+defmodule Lasso.Core.Streaming.StreamSupervisor do
   @moduledoc """
   Per-profile, per-chain DynamicSupervisor for StreamCoordinator processes.
   """
 
   use DynamicSupervisor
 
-  alias Lasso.RPC.StreamCoordinator
+  alias Lasso.Core.Streaming.StreamCoordinator
 
   def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
     DynamicSupervisor.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))

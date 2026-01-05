@@ -1,11 +1,11 @@
-defmodule Lasso.RPC.StreamState do
+defmodule Lasso.Core.Streaming.StreamState do
   @moduledoc """
   Per-key stream state helpers: markers, dedupe, and ingestion helpers.
 
   Keeps hot-path operations O(1) using DedupeCache.
   """
 
-  alias Lasso.RPC.DedupeCache
+  alias Lasso.Core.Support.DedupeCache
 
   @enforce_keys [:markers, :dedupe]
   defstruct markers: %{last_block_num: nil, last_log_block: nil},

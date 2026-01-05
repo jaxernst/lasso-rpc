@@ -37,7 +37,7 @@ defmodule Lasso.Testing.BehaviorHttpClient do
   @doc """
   Executes an HTTP RPC request.
 
-  Compatible with Lasso.RPC.HttpClient.Finch interface.
+  Compatible with Lasso.RPC.Transport.HTTP.Client.Finch interface.
 
   Routes to MockHTTPProvider if provider is marked as mock,
   otherwise uses real HTTP client.

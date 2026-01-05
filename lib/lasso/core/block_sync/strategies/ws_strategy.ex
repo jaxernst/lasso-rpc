@@ -27,7 +27,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
   require Logger
 
-  alias Lasso.RPC.UpstreamSubscriptionManager
+  alias Lasso.Core.Streaming.UpstreamSubscriptionManager
 
   @default_staleness_threshold_ms 35_000
 

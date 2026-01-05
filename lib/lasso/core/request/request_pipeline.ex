@@ -23,9 +23,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
   alias Lasso.JSONRPC.Error, as: JError
 
+  alias Lasso.Core.Support.CircuitBreaker
+
   alias Lasso.RPC.{
     Channel,
-    CircuitBreaker,
     ProviderPool,
     RequestContext,
     Selection,

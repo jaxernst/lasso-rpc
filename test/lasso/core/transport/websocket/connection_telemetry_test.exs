@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.WSConnection.TelemetryTest do
+defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
   @moduledoc """
   Tests that verify WSConnection emits correct telemetry events.
 
@@ -8,7 +8,8 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
 
   use ExUnit.Case, async: false
 
-  alias Lasso.RPC.{WSConnection, WSEndpoint, CircuitBreaker}
+  alias Lasso.RPC.Transport.WebSocket.{Connection, Endpoint}
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Test.TelemetrySync
 
   @default_profile "default"
@@ -17,7 +18,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
     # Configure test to use MockWSClient
     Application.put_env(:lasso, :ws_client_module, TestSupport.MockWSClient)
 
-    endpoint = %WSEndpoint{
+    endpoint = %Endpoint{
       profile: "default",
       id: "telemetry_test_ws",
       name: "Telemetry Test WebSocket",
@@ -76,7 +77,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
           match: %{provider_id: endpoint.id}
         )
 
-      {:ok, pid} = WSConnection.start_link(endpoint)
+      {:ok, pid} = Connection.start_link(endpoint)
 
       # Wait for telemetry event
       {:ok, measurements, metadata} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
@@ -92,7 +93,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
 
     test "emits disconnected event on unexpected disconnect", %{endpoint: endpoint} do
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
-      {:ok, pid} = WSConnection.start_link(endpoint)
+      {:ok, pid} = Connection.start_link(endpoint)
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       disconn_collector =
@@ -124,7 +125,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
   describe "reconnection telemetry" do
     test "emits reconnect_scheduled with correct delay calculation", %{endpoint: endpoint} do
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
-      {:ok, pid} = WSConnection.start_link(endpoint)
+      {:ok, pid} = Connection.start_link(endpoint)
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Start collecting reconnect scheduled events
@@ -161,7 +162,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
   describe "request lifecycle telemetry" do
     test "emits request sent event", %{endpoint: endpoint} do
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
-      {:ok, pid} = WSConnection.start_link(endpoint)
+      {:ok, pid} = Connection.start_link(endpoint)
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Start collecting request sent events
@@ -172,7 +173,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
 
       # Send a request
       Task.async(fn ->
-        WSConnection.request(endpoint.id, "eth_blockNumber", [], 5_000)
+        Connection.request(endpoint.id, "eth_blockNumber", [], 5_000)
       end)
 
       {:ok, _measurements, metadata} = TelemetrySync.await_event(sent_collector, timeout: 2_000)
@@ -187,7 +188,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
 
     test "emits request completed event with duration", %{endpoint: endpoint} do
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
-      {:ok, pid} = WSConnection.start_link(endpoint)
+      {:ok, pid} = Connection.start_link(endpoint)
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Start collecting completed events
@@ -199,7 +200,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
       # Send request in background
       _task =
         Task.async(fn ->
-          WSConnection.request(endpoint.id, "eth_blockNumber", [], 5_000)
+          Connection.request(endpoint.id, "eth_blockNumber", [], 5_000)
         end)
 
       {:ok, measurements, metadata} =
@@ -216,7 +217,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
 
     test "emits request timeout event", %{endpoint: endpoint} do
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
-      {:ok, pid} = WSConnection.start_link(endpoint)
+      {:ok, pid} = Connection.start_link(endpoint)
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Configure mock to delay response longer than timeout
@@ -231,7 +232,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
 
       # Send request with short timeout
       Task.async(fn ->
-        WSConnection.request(endpoint.id, "eth_blockNumber", [], 100)
+        Connection.request(endpoint.id, "eth_blockNumber", [], 100)
       end)
 
       {:ok, measurements, metadata} =
@@ -259,7 +260,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
           match: %{provider_id: endpoint.id}
         )
 
-      {:ok, pid} = WSConnection.start_link(endpoint)
+      {:ok, pid} = Connection.start_link(endpoint)
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Wait for heartbeat to fire (wait longer than heartbeat interval)
@@ -280,7 +281,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
       endpoint = %{endpoint | heartbeat_interval: 200}
 
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
-      {:ok, pid} = WSConnection.start_link(endpoint)
+      {:ok, pid} = Connection.start_link(endpoint)
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Configure mock to fail heartbeat
@@ -330,7 +331,7 @@ defmodule Lasso.RPC.WSConnection.TelemetryTest do
         nil
       )
 
-      {:ok, pid} = WSConnection.start_link(endpoint)
+      {:ok, pid} = Connection.start_link(endpoint)
 
       # Should receive connected event first
       assert_receive {^events_ref, [:lasso, :websocket, :connected]}, 2_000

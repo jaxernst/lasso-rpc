@@ -10,7 +10,7 @@ defmodule Lasso.Testing.IntegrationHelper do
   """
 
   alias Lasso.Testing.{MockWSProvider, MockHTTPProvider}
-  alias Lasso.RPC.{StreamCoordinator, UpstreamSubscriptionPool}
+  alias Lasso.Core.Streaming.{StreamCoordinator, UpstreamSubscriptionPool}
 
   @doc """
   Sets up a test chain with mock WebSocket and HTTP providers.
@@ -371,7 +371,7 @@ defmodule Lasso.Testing.IntegrationHelper do
 
   defp circuit_breaker_exists?(breaker_id) do
     try do
-      case Lasso.RPC.CircuitBreaker.get_state(breaker_id) do
+      case Lasso.Core.Support.CircuitBreaker.get_state(breaker_id) do
         %{} -> true
         _ -> false
       end

@@ -107,7 +107,7 @@ defmodule Lasso.RPC.SelectionTest do
         strategy: :priority,
         protocol: :http,
         exclude: [],
-        metrics: Lasso.RPC.Metrics,
+        metrics: Lasso.Core.Benchmarking.Metrics,
         timeout: 30_000
       }
 
@@ -122,7 +122,7 @@ defmodule Lasso.RPC.SelectionTest do
         strategy: :priority,
         protocol: :http,
         exclude: [],
-        metrics: Lasso.RPC.Metrics,
+        metrics: Lasso.Core.Benchmarking.Metrics,
         timeout: 30_000
       }
 
@@ -137,7 +137,7 @@ defmodule Lasso.RPC.SelectionTest do
         strategy: :invalid_strategy,
         protocol: :http,
         exclude: [],
-        metrics: Lasso.RPC.Metrics,
+        metrics: Lasso.Core.Benchmarking.Metrics,
         timeout: 30_000
       }
 
@@ -152,7 +152,7 @@ defmodule Lasso.RPC.SelectionTest do
         strategy: :priority,
         protocol: :invalid_protocol,
         exclude: [],
-        metrics: Lasso.RPC.Metrics,
+        metrics: Lasso.Core.Benchmarking.Metrics,
         timeout: 30_000
       }
 
@@ -167,7 +167,7 @@ defmodule Lasso.RPC.SelectionTest do
         strategy: :priority,
         protocol: :http,
         exclude: "not_a_list",
-        metrics: Lasso.RPC.Metrics,
+        metrics: Lasso.Core.Benchmarking.Metrics,
         timeout: 30_000
       }
 
@@ -182,7 +182,7 @@ defmodule Lasso.RPC.SelectionTest do
         strategy: :priority,
         protocol: :http,
         exclude: [],
-        metrics: Lasso.RPC.Metrics,
+        metrics: Lasso.Core.Benchmarking.Metrics,
         timeout: -1
       }
 

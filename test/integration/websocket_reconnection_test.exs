@@ -13,7 +13,8 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
 
   use Lasso.Test.LassoIntegrationCase, async: false
 
-  alias Lasso.RPC.{WSConnection, WSEndpoint, CircuitBreaker}
+  alias Lasso.RPC.Transport.WebSocket.{Connection, Endpoint}
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Test.TelemetrySync
 
   @moduletag :integration
@@ -32,7 +33,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
 
   # Helper to build test endpoint
   defp build_endpoint(chain, id_suffix, opts \\ []) do
-    %WSEndpoint{
+    %Endpoint{
       profile: "default",
       id: "ws_#{chain}_#{id_suffix}",
       name: "Test WebSocket #{id_suffix}",
@@ -55,7 +56,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       )
 
     # Start connection
-    {:ok, pid} = WSConnection.start_link(endpoint)
+    {:ok, pid} = Connection.start_link(endpoint)
     {pid, endpoint}
   end
 
@@ -121,7 +122,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       assert meta2.reconnect_attempt == 1
 
       # Verify status shows connected
-      status = WSConnection.status(endpoint.id)
+      status = Connection.status(endpoint.id)
       assert status.connected == true
 
       cleanup_connection(endpoint)
@@ -412,7 +413,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       assert metadata.max_attempts == 2
 
       # Verify no more reconnections attempted
-      status = WSConnection.status(endpoint.id)
+      status = Connection.status(endpoint.id)
       assert status.connected == false
 
       cleanup_connection(endpoint)
@@ -478,7 +479,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
     test "handles infinite retry configuration", %{chain: chain} do
       # max_reconnect_attempts: :infinity means infinite retries
       endpoint =
-        %WSEndpoint{
+        %Endpoint{
       profile: "default",
           id: "ws_#{chain}_infinite",
           name: "Test WebSocket infinite",
@@ -543,7 +544,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Verify initial state
-      initial_status = WSConnection.status(endpoint.id)
+      initial_status = Connection.status(endpoint.id)
       assert initial_status.endpoint_id == endpoint.id
       assert initial_status.connected == true
 
@@ -555,7 +556,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Verify state maintained
-      reconnected_status = WSConnection.status(endpoint.id)
+      reconnected_status = Connection.status(endpoint.id)
       assert reconnected_status.endpoint_id == endpoint.id
       assert reconnected_status.connected == true
       # Reconnect attempts should have incremented then reset
@@ -589,7 +590,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       # Send request that won't complete
       _task =
         Task.async(fn ->
-          WSConnection.request(endpoint.id, "eth_blockNumber", [], 5_000)
+          Connection.request(endpoint.id, "eth_blockNumber", [], 5_000)
         end)
 
       # Wait a bit for request to be tracked

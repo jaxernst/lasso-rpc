@@ -14,7 +14,8 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
 
   use Lasso.Test.LassoIntegrationCase, async: false
 
-  alias Lasso.RPC.{WSConnection, WSEndpoint, CircuitBreaker}
+  alias Lasso.RPC.Transport.WebSocket.{Connection, Endpoint}
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Test.TelemetrySync
 
   @moduletag :integration
@@ -33,7 +34,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
 
   # Helper to build test endpoint
   defp build_endpoint(chain, id_suffix, opts \\ []) do
-    %WSEndpoint{
+    %Endpoint{
       profile: "default",
       id: "ws_#{chain}_#{id_suffix}",
       name: "Test WebSocket #{id_suffix}",
@@ -54,7 +55,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       CircuitBreaker.start_link({{endpoint.profile, endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
 
     # Start connection
-    {:ok, pid} = WSConnection.start_link(endpoint)
+    {:ok, pid} = Connection.start_link(endpoint)
     {pid, endpoint}
   end
 
@@ -100,7 +101,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       # Start request in background
       task =
         Task.async(fn ->
-          WSConnection.request(endpoint.id, "eth_blockNumber", [], 5_000)
+          Connection.request(endpoint.id, "eth_blockNumber", [], 5_000)
         end)
 
       # Give request time to be registered
@@ -152,7 +153,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
 
       # Connection should remain stable
       assert Process.alive?(pid)
-      status = WSConnection.status(endpoint.id)
+      status = Connection.status(endpoint.id)
       assert status.connected == true
 
       cleanup_connection(endpoint)
@@ -215,7 +216,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       # Start request
       task =
         Task.async(fn ->
-          WSConnection.request(endpoint.id, "eth_blockNumber", [], 5_000)
+          Connection.request(endpoint.id, "eth_blockNumber", [], 5_000)
         end)
 
       # Wait for request to be registered
@@ -270,7 +271,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
 
       # Connection should be healthy
       assert Process.alive?(pid)
-      status = WSConnection.status(endpoint.id)
+      status = Connection.status(endpoint.id)
       assert status.connected == true
 
       cleanup_connection(endpoint)
@@ -306,7 +307,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       assert Process.alive?(pid)
 
       # Should still accept new requests
-      result = WSConnection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+      result = Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
@@ -327,7 +328,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       # Send a normal request
       task =
         Task.async(fn ->
-          WSConnection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+          Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
         end)
 
       # Request should complete normally
@@ -416,7 +417,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       assert Process.alive?(pid)
 
       # Should still work for valid requests
-      result = WSConnection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+      result = Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
@@ -474,7 +475,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       tasks =
         for _i <- 1..3 do
           Task.async(fn ->
-            WSConnection.request(endpoint.id, "eth_blockNumber", [], 500)
+            Connection.request(endpoint.id, "eth_blockNumber", [], 500)
           end)
         end
 
@@ -491,7 +492,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       # (we can't directly inspect pending_requests map without internal access,
       # but we can verify the connection still works)
       TestSupport.MockWSClient.set_response_delay(ws_state.connection, 0)
-      result = WSConnection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+      result = Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
@@ -520,7 +521,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       tasks =
         for _i <- 1..3 do
           Task.async(fn ->
-            WSConnection.request(endpoint.id, "eth_blockNumber", [], 5_000)
+            Connection.request(endpoint.id, "eth_blockNumber", [], 5_000)
           end)
         end
 
@@ -558,7 +559,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
         for i <- 1..10 do
           Task.async(fn ->
             # Query status multiple times
-            status = WSConnection.status(endpoint.id)
+            status = Connection.status(endpoint.id)
             {i, status}
           end)
         end

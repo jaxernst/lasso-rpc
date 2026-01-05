@@ -1,7 +1,7 @@
 defmodule Lasso.RPC.CircuitBreakerTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.RPC.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker
 
   setup_all do
     # Ensure test environment is ready with all services

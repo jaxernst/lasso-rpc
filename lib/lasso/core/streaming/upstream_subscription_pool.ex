@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.UpstreamSubscriptionPool do
+defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   @moduledoc """
   Per-chain pool that multiplexes client subscriptions onto minimal upstream
   subscriptions. MVP supports single-provider policy with priority selection,
@@ -19,9 +19,12 @@ defmodule Lasso.RPC.UpstreamSubscriptionPool do
   alias Lasso.Events.Provider
   alias Lasso.RPC.{
     Channel,
-    ClientSubscriptionRegistry,
     Selection,
-    SelectionContext,
+    SelectionContext
+  }
+
+  alias Lasso.Core.Streaming.{
+    ClientSubscriptionRegistry,
     StreamCoordinator,
     StreamSupervisor,
     UpstreamSubscriptionManager

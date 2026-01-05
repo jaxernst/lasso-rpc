@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
+defmodule Lasso.Core.Streaming.UpstreamSubscriptionManagerTest do
   @moduledoc """
   Tests for UpstreamSubscriptionManager - the central hub for upstream subscription lifecycle.
 
@@ -15,7 +15,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionManagerTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Streaming.UpstreamSubscriptionRegistry
-  alias Lasso.RPC.UpstreamSubscriptionManager
+  alias Lasso.Core.Streaming.UpstreamSubscriptionManager
   alias Lasso.Testing.MockWSProvider
 
   @default_profile "default"

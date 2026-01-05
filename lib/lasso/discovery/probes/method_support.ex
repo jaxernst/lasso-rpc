@@ -7,7 +7,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
   """
 
   alias Lasso.Discovery.{ErrorClassifier, ProbeEngine, TestParams}
-  alias Lasso.RPC.{HttpClient, MethodRegistry}
+  alias Lasso.RPC.MethodRegistry
+  alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
 
   @levels %{
     critical: [:core],

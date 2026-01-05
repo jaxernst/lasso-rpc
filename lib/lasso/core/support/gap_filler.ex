@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.GapFiller do
+defmodule Lasso.Core.Support.GapFiller do
   @moduledoc """
   HTTP backfill utilities. Pure API with no GenServer; run in Task from callers.
   """

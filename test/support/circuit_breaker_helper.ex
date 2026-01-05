@@ -25,7 +25,7 @@ defmodule Lasso.Test.CircuitBreakerHelper do
       end
   """
 
-  alias Lasso.RPC.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker
   require Logger
 
   @doc """
