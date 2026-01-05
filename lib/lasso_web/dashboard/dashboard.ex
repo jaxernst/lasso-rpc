@@ -3,6 +3,7 @@ defmodule LassoWeb.Dashboard do
   require Logger
 
   alias LassoWeb.NetworkTopology
+  alias LassoWeb.TopologyConfig
 
   alias LassoWeb.Dashboard.{
     Helpers,
@@ -935,6 +936,7 @@ defmodule LassoWeb.Dashboard do
         class="flex-1 overflow-hidden"
         phx-hook="DraggableNetworkViewport"
         id="draggable-viewport"
+        data-canvas-center={"#{elem(TopologyConfig.canvas_center(), 0)},#{elem(TopologyConfig.canvas_center(), 1)}"}
       >
         <div class="h-full w-full" data-draggable-content>
           <div id="provider-request-animator" phx-hook="ProviderRequestAnimator" class="hidden"></div>

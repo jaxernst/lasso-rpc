@@ -400,6 +400,8 @@ const DraggableNetworkViewport = {
     this.translateY = 0;
     this.scale = 1;
     this.animationId = null;
+    this.canvasCenterX = null;
+    this.canvasCenterY = null;
 
     // Store bound handler functions for proper event listener cleanup
     this.boundHandleCanvasClick = this.handleCanvasClick.bind(this);
@@ -417,6 +419,17 @@ const DraggableNetworkViewport = {
     this.canvasEl =
       this.networkContainer.querySelector("[data-network-canvas]") ||
       this.networkContainer;
+
+    // Optional: preferred canvas center (in canvas coordinates) for consistent framing
+    // Example: "1800,1500" (from TopologyConfig.canvas_center/0)
+    const configuredCenter = this.el?.dataset?.canvasCenter;
+    if (configuredCenter) {
+      const [cx, cy] = configuredCenter.split(",").map(Number);
+      if (Number.isFinite(cx) && Number.isFinite(cy)) {
+        this.canvasCenterX = cx;
+        this.canvasCenterY = cy;
+      }
+    }
 
     // Compute initial transform to center the canvas in the viewport
     const viewportRect = this.el.getBoundingClientRect();
@@ -607,6 +620,38 @@ const DraggableNetworkViewport = {
     }
   },
 
+  // Canvas dimensions used for viewport anchoring math.
+  // Prefer measured DOM dimensions; fall back to configured topology canvas size.
+  getCanvasDimensions() {
+    const canvasWidth =
+      this.canvasEl?.scrollWidth || this.canvasEl?.offsetWidth || 4000;
+    const canvasHeight =
+      this.canvasEl?.scrollHeight || this.canvasEl?.offsetHeight || 3000;
+    return { canvasWidth, canvasHeight };
+  },
+
+  // Preferred "camera center" inside the viewport when centering on a target point.
+  // If TopologyConfig.canvas_center is left-of-canvas-center, this keeps the view
+  // framed slightly left even when focusing a chain/provider.
+  getViewportAnchor(viewportRect, scale) {
+    const { canvasWidth, canvasHeight } = this.getCanvasDimensions();
+    const viewportCenterX = viewportRect.width / 2;
+    const viewportCenterY = viewportRect.height / 2;
+
+    const canvasCenterX =
+      this.canvasCenterX == null ? canvasWidth / 2 : this.canvasCenterX;
+    const canvasCenterY =
+      this.canvasCenterY == null ? canvasHeight / 2 : this.canvasCenterY;
+
+    const offsetX = canvasWidth / 2 - canvasCenterX;
+    const offsetY = canvasHeight / 2 - canvasCenterY;
+
+    return {
+      x: viewportCenterX - offsetX * scale,
+      y: viewportCenterY - offsetY * scale,
+    };
+  },
+
   // Center the viewport on the first chain on initial load
   centerOnFirstChain() {
     setTimeout(() => {
@@ -662,11 +707,10 @@ const DraggableNetworkViewport = {
     const startY = this.translateY;
 
     const viewportRect = this.el.getBoundingClientRect();
-    const viewportCenterX = viewportRect.width / 2;
-    const viewportCenterY = viewportRect.height / 2;
+    const anchorStart = this.getViewportAnchor(viewportRect, startScale);
 
-    const currentCanvasCenterX = (viewportCenterX - startX) / startScale;
-    const currentCanvasCenterY = (viewportCenterY - startY) / startScale;
+    const currentCanvasAnchorX = (anchorStart.x - startX) / startScale;
+    const currentCanvasAnchorY = (anchorStart.y - startY) / startScale;
 
     const startTime = performance.now();
 
@@ -675,9 +719,10 @@ const DraggableNetworkViewport = {
       const ease = 1 - Math.pow(1 - progress, 3);
       this.scale = startScale + (targetScale - startScale) * ease;
 
-      // Keep the same canvas point under the viewport center
-      this.translateX = viewportCenterX - currentCanvasCenterX * this.scale;
-      this.translateY = viewportCenterY - currentCanvasCenterY * this.scale;
+      // Keep the same canvas point under the preferred viewport anchor
+      const anchor = this.getViewportAnchor(viewportRect, this.scale);
+      this.translateX = anchor.x - currentCanvasAnchorX * this.scale;
+      this.translateY = anchor.y - currentCanvasAnchorY * this.scale;
 
       this.updateTransform();
       if (progress < 1) {
@@ -697,8 +742,6 @@ const DraggableNetworkViewport = {
     }
 
     const viewportRect = this.el.getBoundingClientRect();
-    const viewportCenterX = viewportRect.width / 2;
-    const viewportCenterY = viewportRect.height / 2;
 
     const startTranslateX = this.translateX;
     const startTranslateY = this.translateY;
@@ -706,10 +749,11 @@ const DraggableNetworkViewport = {
 
     // If targetScale provided, animate scale too, keeping target point centered
     const finalScale = targetScale == null ? this.scale : targetScale;
+    const anchorFinal = this.getViewportAnchor(viewportRect, finalScale);
 
     // Compute the translation needed at the final scale
-    const targetTranslateX_final = viewportCenterX - targetX * finalScale;
-    const targetTranslateY_final = viewportCenterY - targetY * finalScale;
+    const targetTranslateX_final = anchorFinal.x - targetX * finalScale;
+    const targetTranslateY_final = anchorFinal.y - targetY * finalScale;
 
     const startTime = performance.now();
 
