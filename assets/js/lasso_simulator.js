@@ -1,9 +1,9 @@
 // Run states
 const RunState = {
-  STARTING: 'STARTING',
-  RUNNING: 'RUNNING', 
-  STOPPING: 'STOPPING',
-  STOPPED: 'STOPPED'
+  STARTING: "STARTING",
+  RUNNING: "RUNNING",
+  STOPPING: "STOPPING",
+  STOPPED: "STOPPED",
 };
 
 // Global state
@@ -32,18 +32,18 @@ class SimulatorRun {
     this.state = RunState.STARTING;
     this.startTime = Date.now();
     this.endTime = null;
-    
+
     // HTTP state
     this.httpController = null;
     this.httpTimer = null;
-    
-    // WebSocket state  
+
+    // WebSocket state
     this.wsSockets = [];
-    
+
     // Per-run statistics
     this.stats = {
       http: { success: 0, error: 0, avgLatencyMs: 0, inflight: 0 },
-      ws: { open: 0 }
+      ws: { open: 0 },
     };
   }
 
@@ -51,43 +51,46 @@ class SimulatorRun {
     if (this.state !== RunState.STARTING) {
       throw new Error(`Cannot start run in state ${this.state}`);
     }
-    
+
     this.state = RunState.RUNNING;
-    
+
     // Start HTTP load if enabled
     if (this.config.http?.enabled) {
       this._startHttpLoad();
     }
-    
+
     // Start WebSocket load if enabled
     if (this.config.ws?.enabled) {
       this._startWsLoad();
     }
-    
+
     // Set duration timeout if specified
     if (this.config.duration > 0) {
       setTimeout(() => this.stop(), this.config.duration);
     }
-    
-    this._logActivity('run', { status: 'started', config: this.config });
+
+    this._logActivity("run", { status: "started", config: this.config });
   }
 
   stop() {
     if (this.state === RunState.STOPPED || this.state === RunState.STOPPING) {
       return;
     }
-    
+
     this.state = RunState.STOPPING;
     this.endTime = Date.now();
-    
+
     // Stop HTTP load
     this._stopHttpLoad();
-    
-    // Stop WebSocket load  
+
+    // Stop WebSocket load
     this._stopWsLoad();
-    
+
     this.state = RunState.STOPPED;
-    this._logActivity('run', { status: 'stopped', duration: this.endTime - this.startTime });
+    this._logActivity("run", {
+      status: "stopped",
+      duration: this.endTime - this.startTime,
+    });
   }
 
   isActive() {
@@ -101,26 +104,30 @@ class SimulatorRun {
   _startHttpLoad() {
     const httpConfig = this.config.http;
     const chains = this.config.chains || getDefaultChains();
-    const methods = httpConfig.methods || ['eth_blockNumber'];
+    const methods = httpConfig.methods || ["eth_blockNumber"];
     const rps = httpConfig.rps || 5;
     const concurrency = httpConfig.concurrency || 4;
 
     // Robust strategy normalization: convert undefined, null, empty string, or string "undefined"/"null" to null
     const rawStrategy = this.config.strategy;
-    const strategy = (rawStrategy &&
-                     typeof rawStrategy === 'string' &&
-                     rawStrategy.length > 0 &&
-                     rawStrategy !== 'undefined' &&
-                     rawStrategy !== 'null' &&
-                     rawStrategy.trim() !== '') ? rawStrategy : null;
-    
+    const strategy =
+      rawStrategy &&
+      typeof rawStrategy === "string" &&
+      rawStrategy.length > 0 &&
+      rawStrategy !== "undefined" &&
+      rawStrategy !== "null" &&
+      rawStrategy.trim() !== ""
+        ? rawStrategy
+        : null;
+
     this.stats.http = { success: 0, error: 0, avgLatencyMs: 0, inflight: 0 };
-    
+
     const intervalMs = Math.max(50, Math.floor(1000 / Math.max(1, rps)));
     this.httpController = { stopped: false };
 
     const fireOnce = async () => {
-      if (this.httpController.stopped || this.state !== RunState.RUNNING) return;
+      if (this.httpController.stopped || this.state !== RunState.RUNNING)
+        return;
       if (this.stats.http.inflight >= concurrency) return;
 
       const chain = chains[Math.floor(Math.random() * chains.length)];
@@ -130,52 +137,69 @@ class SimulatorRun {
         jsonrpc: "2.0",
         id: Math.floor(Math.random() * 1e9),
         method,
-        params: method === "eth_getBalance" 
-          ? ["0x0000000000000000000000000000000000000000", "latest"] 
-          : [],
+        params:
+          method === "eth_getBalance"
+            ? ["0x0000000000000000000000000000000000000000", "latest"]
+            : [],
       };
 
       // Use strategy-specific endpoints as defined in the router
       // strategy is already normalized to null if invalid at the top of _startHttpLoad
-      const profile = this.config.profile || 'default';
+      const profile = this.config.profile || "default";
       const url = strategy
-        ? `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(strategy)}/${encodeURIComponent(chain)}`
-        : `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(chain)}`;
+        ? `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
+            strategy
+          )}/${encodeURIComponent(chain)}`
+        : `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
+            chain
+          )}`;
 
       this.stats.http.inflight++;
       const start = now();
-      
+
       this._logActivity("http", {
-        method, chain, status: "started", url, runId: this.id
+        method,
+        chain,
+        status: "started",
+        url,
+        runId: this.id,
       });
-      
+
       try {
         const resp = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-        
+
         const _json = await resp.json().catch(() => null);
         const dur = now() - start;
-        
+
         this.stats.http.avgLatencyMs = updateAvg(
           this.stats.http.avgLatencyMs,
           this.stats.http.success + this.stats.http.error,
           dur
         );
-        
+
         if (resp.ok) {
           this.stats.http.success++;
           this._logActivity("http", {
-            method, chain, status: "success", latency: Math.round(dur),
-            statusCode: resp.status, runId: this.id
+            method,
+            chain,
+            status: "success",
+            latency: Math.round(dur),
+            statusCode: resp.status,
+            runId: this.id,
           });
         } else {
           this.stats.http.error++;
           this._logActivity("http", {
-            method, chain, status: "error", latency: Math.round(dur),
-            statusCode: resp.status, runId: this.id
+            method,
+            chain,
+            status: "error",
+            latency: Math.round(dur),
+            statusCode: resp.status,
+            runId: this.id,
           });
         }
       } catch (error) {
@@ -187,8 +211,12 @@ class SimulatorRun {
         );
         this.stats.http.error++;
         this._logActivity("http", {
-          method, chain, status: "error", latency: Math.round(dur),
-          error: error.message, runId: this.id
+          method,
+          chain,
+          status: "error",
+          latency: Math.round(dur),
+          error: error.message,
+          runId: this.id,
         });
       } finally {
         this.stats.http.inflight--;
@@ -213,23 +241,31 @@ class SimulatorRun {
     const wsConfig = this.config.ws;
     const chains = this.config.chains || getDefaultChains();
     const connections = wsConfig.connections || 2;
-    const topics = wsConfig.topics || ['newHeads'];
-    
+    const topics = wsConfig.topics || ["newHeads"];
+
     this.stats.ws.open = 0;
     this.wsSockets = [];
 
     for (let i = 0; i < connections; i++) {
       const chain = chains[i % chains.length];
-      const profile = this.config.profile || 'default';
-      const url = `${location.origin.replace(/^http/, "ws")}/ws/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(chain)}`;
+      const profile = this.config.profile || "default";
+      const url = `${location.origin.replace(
+        /^http/,
+        "ws"
+      )}/ws/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
+        chain
+      )}`;
       const ws = new WebSocket(url);
 
       ws.onopen = () => {
         this.stats.ws.open++;
         this._logActivity("websocket", {
-          chain, status: "connected", url, runId: this.id
+          chain,
+          status: "connected",
+          url,
+          runId: this.id,
         });
-        
+
         for (const topic of topics) {
           const subscribeMsg = {
             jsonrpc: "2.0",
@@ -238,10 +274,13 @@ class SimulatorRun {
             params: [topic],
           };
           ws.send(JSON.stringify(subscribeMsg));
-          
+
           this._logActivity("websocket", {
-            method: "eth_subscribe", chain, status: "subscribed",
-            topic, runId: this.id
+            method: "eth_subscribe",
+            chain,
+            status: "subscribed",
+            topic,
+            runId: this.id,
           });
         }
       };
@@ -249,14 +288,18 @@ class SimulatorRun {
       ws.onclose = () => {
         this.stats.ws.open = Math.max(0, this.stats.ws.open - 1);
         this._logActivity("websocket", {
-          chain, status: "disconnected", runId: this.id
+          chain,
+          status: "disconnected",
+          runId: this.id,
         });
       };
 
       ws.onerror = (error) => {
         this._logActivity("websocket", {
-          chain, status: "error", error: error.message || "Connection error",
-          runId: this.id
+          chain,
+          status: "error",
+          error: error.message || "Connection error",
+          runId: this.id,
         });
       };
 
@@ -264,12 +307,18 @@ class SimulatorRun {
         try {
           const data = JSON.parse(event.data);
           this._logActivity("websocket", {
-            chain, status: "message", method: data.method || "notification",
-            id: data.id, runId: this.id
+            chain,
+            status: "message",
+            method: data.method || "notification",
+            id: data.id,
+            runId: this.id,
           });
         } catch (e) {
           this._logActivity("websocket", {
-            chain, status: "message", method: "raw_data", runId: this.id
+            chain,
+            status: "message",
+            method: "raw_data",
+            runId: this.id,
           });
         }
       };
@@ -294,7 +343,7 @@ class SimulatorRun {
         type,
         timestamp: Date.now(),
         runId: this.id,
-        ...data
+        ...data,
       });
     }
   }
@@ -309,7 +358,7 @@ class SimulatorManager {
   startRun(config) {
     const run = new SimulatorRun(config);
     this.runs.set(run.id, run);
-    
+
     try {
       run.start();
       return run;
@@ -348,11 +397,11 @@ class SimulatorManager {
   }
 
   isRunning() {
-    return Array.from(this.runs.values()).some(run => run.isActive());
+    return Array.from(this.runs.values()).some((run) => run.isActive());
   }
 
   getActiveRuns() {
-    return Array.from(this.runs.values()).filter(run => run.isActive());
+    return Array.from(this.runs.values()).filter((run) => run.isActive());
   }
 
   getAllRuns() {
@@ -362,7 +411,7 @@ class SimulatorManager {
   getAggregateStats() {
     const aggregate = {
       http: { success: 0, error: 0, avgLatencyMs: 0, inflight: 0 },
-      ws: { open: 0 }
+      ws: { open: 0 },
     };
 
     const activeRuns = this.getActiveRuns();
@@ -399,7 +448,7 @@ simulator = new SimulatorManager();
 function getDefaultChains() {
   // Use chain names from available chains, fallback to ethereum if none available
   if (availableChains && availableChains.length > 0) {
-    return availableChains.map(chain => chain.name);
+    return availableChains.map((chain) => chain.name);
   }
   return ["ethereum"]; // Ethereum mainnet as fallback
 }
@@ -426,7 +475,12 @@ export function startHttpLoad(opts = {}) {
 
   // Normalize strategy: ensure undefined/null/empty becomes a valid strategy or omitted
   let strategy = opts.strategy;
-  if (!strategy || strategy === 'undefined' || strategy === 'null' || typeof strategy !== 'string') {
+  if (
+    !strategy ||
+    strategy === "undefined" ||
+    strategy === "null" ||
+    typeof strategy !== "string"
+  ) {
     strategy = null; // Will use default routing on backend
   }
 
@@ -437,11 +491,11 @@ export function startHttpLoad(opts = {}) {
       enabled: true,
       methods: opts.methods || ["eth_blockNumber"],
       rps: opts.rps || 5,
-      concurrency: opts.concurrency || 4
+      concurrency: opts.concurrency || 4,
     },
     ws: {
-      enabled: false
-    }
+      enabled: false,
+    },
   };
 
   // Only include strategy if it's valid
@@ -459,20 +513,20 @@ export function stopHttpLoad() {
 export function startWsLoad(opts = {}) {
   // Stop any existing runs first to maintain old behavior
   simulator.stopAllRuns();
-  
+
   const config = {
     chains: opts.chains || getDefaultChains(),
     duration: opts.durationMs || 30000,
     http: {
-      enabled: false
+      enabled: false,
     },
     ws: {
       enabled: true,
       connections: opts.connections || 2,
-      topics: opts.topics || ["newHeads"]
-    }
+      topics: opts.topics || ["newHeads"],
+    },
   };
-  
+
   return simulator.startRun(config);
 }
 
