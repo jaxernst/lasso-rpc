@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.StreamCoordinator do
+defmodule Lasso.Core.Streaming.StreamCoordinator do
   @moduledoc """
   Per-key coordinator that owns continuity (markers, dedupe) and orchestrates failover.
 
@@ -10,14 +10,17 @@ defmodule Lasso.RPC.StreamCoordinator do
   use GenServer
   require Logger
 
+  alias Lasso.Core.Support.{ContinuityPolicy, GapFiller}
+
   alias Lasso.RPC.{
     ChainState,
-    ClientSubscriptionRegistry,
-    ContinuityPolicy,
-    GapFiller,
     RequestOptions,
     Selection,
-    SelectionContext,
+    SelectionContext
+  }
+
+  alias Lasso.Core.Streaming.{
+    ClientSubscriptionRegistry,
     StreamState
   }
 
@@ -548,7 +551,7 @@ defmodule Lasso.RPC.StreamCoordinator do
     )
 
     # Request resubscription from Pool
-    pool_ref = Lasso.RPC.UpstreamSubscriptionPool.via(state.profile, state.chain)
+    pool_ref = Lasso.Core.Streaming.UpstreamSubscriptionPool.via(state.profile, state.chain)
 
     GenServer.cast(
       pool_ref,

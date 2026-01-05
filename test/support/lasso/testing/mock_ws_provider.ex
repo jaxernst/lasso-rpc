@@ -545,7 +545,7 @@ defmodule Lasso.Testing.MockWSProvider do
         breaker_id = {profile, chain, provider_id, transport}
 
         try do
-          Lasso.RPC.CircuitBreaker.close(breaker_id)
+          Lasso.Core.Support.CircuitBreaker.close(breaker_id)
         catch
           :exit, _ -> :ok
         end

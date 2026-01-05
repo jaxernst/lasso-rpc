@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.ErrorClassifier do
+defmodule Lasso.Core.Support.ErrorClassifier do
   @moduledoc """
   Unified error classification with provider-specific overrides.
 
@@ -43,7 +43,7 @@ defmodule Lasso.RPC.ErrorClassifier do
   retriability is determined from the original error code.
   """
 
-  alias Lasso.RPC.ErrorClassification
+  alias Lasso.Core.Support.ErrorClassification
   alias Lasso.RPC.Providers.AdapterRegistry
 
   require Logger

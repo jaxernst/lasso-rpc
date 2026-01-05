@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.SubscriptionRouter do
+defmodule Lasso.Core.Streaming.SubscriptionRouter do
   @moduledoc """
   Thin facade used by channels/controllers. Resolves chain and forwards
   to the per-chain `UpstreamSubscriptionPool`.
@@ -7,8 +7,8 @@ defmodule Lasso.RPC.SubscriptionRouter do
   disconnect/close and bounded backfill.
   """
 
-  alias Lasso.RPC.UpstreamSubscriptionPool
-  alias Lasso.RPC.FilterNormalizer
+  alias Lasso.Core.Streaming.UpstreamSubscriptionPool
+  alias Lasso.Core.Support.FilterNormalizer
 
   @type key :: {:newHeads} | {:logs, map()}
 

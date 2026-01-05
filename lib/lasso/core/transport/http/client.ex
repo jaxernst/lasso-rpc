@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.HttpClient do
+defmodule Lasso.RPC.Transport.HTTP.Client do
   @moduledoc """
   Behaviour for HTTP JSON-RPC clients used to contact upstream RPC providers.
 
@@ -8,7 +8,7 @@ defmodule Lasso.RPC.HttpClient do
   This module also provides a small facade for dispatching to the configured
   adapter. Configure with:
 
-      config :lasso, :http_client, Lasso.RPC.HttpClient.Finch
+      config :lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch
   """
 
   @type provider_config :: %{required(:url) => String.t(), optional(:api_key) => String.t()}
@@ -62,6 +62,6 @@ defmodule Lasso.RPC.HttpClient do
   end
 
   defp adapter do
-    Application.get_env(:lasso, :http_client, Lasso.RPC.HttpClient.Finch)
+    Application.get_env(:lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch)
   end
 end

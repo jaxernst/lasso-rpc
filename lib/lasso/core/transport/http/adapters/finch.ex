@@ -1,9 +1,9 @@
-defmodule Lasso.RPC.HttpClient.Finch do
+defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   @moduledoc """
-  Finch-based implementation of `Lasso.RPC.HttpClient`.
+  Finch-based implementation of `Lasso.RPC.Transport.HTTP.Client`.
   """
 
-  @behaviour Lasso.RPC.HttpClient
+  @behaviour Lasso.RPC.Transport.HTTP.Client
   require Logger
 
   @impl true

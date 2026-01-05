@@ -22,7 +22,8 @@ defmodule LassoWeb.RPCSocket do
   alias Lasso.Config.ProfileValidator
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.RequestOptions
-  alias Lasso.RPC.{Observability, RequestContext, RequestPipeline, Response, SubscriptionRouter}
+  alias Lasso.Core.Streaming.SubscriptionRouter
+  alias Lasso.RPC.{Observability, RequestContext, RequestPipeline, Response}
   alias LassoWeb.RPC.Helpers
 
   # Heartbeat configuration (aggressive keepalive for subscription connections)

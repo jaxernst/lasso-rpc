@@ -3,7 +3,8 @@ defmodule Lasso.RPC.Strategies.Fastest do
 
   @behaviour Lasso.RPC.Strategy
 
-  alias Lasso.RPC.{Metrics, StrategyContext}
+  alias Lasso.Core.Benchmarking.Metrics
+  alias Lasso.RPC.StrategyContext
 
   # Metrics older than 10 minutes are considered stale
   @freshness_cutoff_ms 10 * 60 * 1000

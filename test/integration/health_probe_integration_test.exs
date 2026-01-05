@@ -18,7 +18,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Testing.IntegrationHelper
-  alias Lasso.RPC.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.HealthProbe
   alias Lasso.BlockSync
 

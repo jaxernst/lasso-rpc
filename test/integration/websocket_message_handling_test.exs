@@ -15,7 +15,8 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
 
   use Lasso.Test.LassoIntegrationCase, async: false
 
-  alias Lasso.RPC.{WSConnection, WSEndpoint, CircuitBreaker}
+  alias Lasso.RPC.Transport.WebSocket.{Connection, Endpoint}
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Test.TelemetrySync
 
   @moduletag :integration
@@ -34,7 +35,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
 
   # Helper to build test endpoint
   defp build_endpoint(chain, id_suffix, opts \\ []) do
-    %WSEndpoint{
+    %Endpoint{
       profile: "default",
       id: "ws_#{chain}_#{id_suffix}",
       name: "Test WebSocket #{id_suffix}",
@@ -55,7 +56,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       CircuitBreaker.start_link({{endpoint.profile, endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
 
     # Start connection
-    {:ok, pid} = WSConnection.start_link(endpoint)
+    {:ok, pid} = Connection.start_link(endpoint)
     {pid, endpoint}
   end
 
@@ -89,7 +90,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Send request
-      result = WSConnection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+      result = Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
 
       # Should receive successful response
       assert match?({:ok, _}, result)
@@ -114,7 +115,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
         for i <- 1..5 do
           Task.async(fn ->
             result =
-              WSConnection.request(
+              Connection.request(
                 endpoint.id,
                 "eth_getBlockByNumber",
                 ["0x#{Integer.to_string(i, 16)}", false],
@@ -156,7 +157,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
         for i <- 1..20 do
           Task.async(fn ->
             # Each request will get a unique ID from WSConnection
-            WSConnection.request(
+            Connection.request(
               endpoint.id,
               "eth_blockNumber",
               [],
@@ -172,7 +173,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
 
       # Verify no crashes and connection is still healthy
       assert Process.alive?(pid)
-      status = WSConnection.status(endpoint.id)
+      status = Connection.status(endpoint.id)
       assert status.connected == true
 
       cleanup_connection(endpoint)
@@ -197,7 +198,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       TestSupport.MockWSClient.set_response_mode(ws_state.connection, :error)
 
       # Send request that will get error response
-      result = WSConnection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+      result = Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
 
       # Should receive error response
       assert match?({:error, %{code: _}}, result)
@@ -261,7 +262,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       assert Process.alive?(pid)
 
       # Should still be able to send new requests
-      result = WSConnection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+      result = Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
@@ -287,7 +288,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
 
       # Send request with short timeout
       start_time = System.monotonic_time(:millisecond)
-      result = WSConnection.request(endpoint.id, "eth_blockNumber", [], 500)
+      result = Connection.request(endpoint.id, "eth_blockNumber", [], 500)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should timeout
@@ -323,7 +324,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       TestSupport.MockWSClient.set_response_delay(ws_state.connection, 1_500)
 
       # Send request with short timeout
-      result = WSConnection.request(endpoint.id, "eth_blockNumber", [], 500)
+      result = Connection.request(endpoint.id, "eth_blockNumber", [], 500)
 
       # Should timeout
       assert match?({:error, _}, result)
@@ -333,12 +334,12 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
 
       # Connection should still be healthy
       assert Process.alive?(pid)
-      status = WSConnection.status(endpoint.id)
+      status = Connection.status(endpoint.id)
       assert status.connected == true
 
       # Should be able to send new request
       TestSupport.MockWSClient.set_response_delay(ws_state.connection, 0)
-      result2 = WSConnection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+      result2 = Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
       assert match?({:ok, _}, result2)
 
       cleanup_connection(endpoint)
@@ -373,7 +374,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       # Send request
       task =
         Task.async(fn ->
-          WSConnection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+          Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
         end)
 
       # Should emit sent event
@@ -426,7 +427,7 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       # Send request with short timeout
       task =
         Task.async(fn ->
-          WSConnection.request(endpoint.id, "eth_blockNumber", [], 500)
+          Connection.request(endpoint.id, "eth_blockNumber", [], 500)
         end)
 
       # Should emit timeout event

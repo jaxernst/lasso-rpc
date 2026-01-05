@@ -50,7 +50,7 @@ defmodule Lasso.JSONRPC.Error do
     :transport
   ]
 
-  alias Lasso.RPC.{ErrorClassification, ErrorNormalizer}
+  alias Lasso.Core.Support.{ErrorClassification, ErrorNormalizer}
 
   @type t :: %__MODULE__{
           code: integer(),

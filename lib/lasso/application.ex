@@ -69,7 +69,7 @@ defmodule Lasso.Application do
         Lasso.VMMetricsCollector,
 
         # Start process registry for centralized process management
-        {Lasso.RPC.ProcessRegistry, name: Lasso.RPC.ProcessRegistry},
+        {Lasso.Core.Support.ProcessRegistry, name: Lasso.Core.Support.ProcessRegistry},
 
         # Add a local Registry for dynamic process names (high-cardinality)
         {Registry, keys: :unique, name: Lasso.Registry, partitions: System.schedulers_online()},

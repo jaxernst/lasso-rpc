@@ -16,7 +16,8 @@ defmodule Lasso.RPC.ProviderPool do
 
   alias Lasso.Events.Provider
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{ChainState, CircuitBreaker, RateLimitState}
+  alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.RPC.{ChainState, RateLimitState}
 
   @type t :: %__MODULE__{
           profile: profile(),

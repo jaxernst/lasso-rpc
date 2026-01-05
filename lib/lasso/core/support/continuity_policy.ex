@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.ContinuityPolicy do
+defmodule Lasso.Core.Support.ContinuityPolicy do
   @moduledoc """
   Pure helpers to determine backfill requirements and ranges.
 

@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.ErrorClassification do
+defmodule Lasso.Core.Support.ErrorClassification do
   @moduledoc """
   Pure functions for error categorization, retriability assessment, and penalty determination.
 

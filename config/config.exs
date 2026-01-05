@@ -17,7 +17,7 @@ config :lasso, LassoWeb.Endpoint,
 config :lasso, :provider_selection_strategy, :round_robin
 
 # Default HTTP client adapter
-config :lasso, :http_client, Lasso.RPC.HttpClient.Finch
+config :lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch
 
 # Health check and provider management defaults
 config :lasso, :health_check_interval, 30_000

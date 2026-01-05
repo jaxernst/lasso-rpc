@@ -7,7 +7,7 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
   to ensure metrics isolation across routing profiles.
   """
 
-  @behaviour Lasso.RPC.Metrics
+  @behaviour Lasso.Core.Benchmarking.Metrics
 
   alias Lasso.Benchmarking.BenchmarkStore
 

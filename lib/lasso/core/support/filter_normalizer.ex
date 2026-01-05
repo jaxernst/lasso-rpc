@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.FilterNormalizer do
+defmodule Lasso.Core.Support.FilterNormalizer do
   @moduledoc """
   Deterministic canonicalization for log filters used as pooling keys.
   - Lowercase hex and ensure 0x prefix where appropriate

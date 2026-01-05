@@ -53,10 +53,10 @@ config :lasso,
   ],
   # Use real HTTP client (Finch) for integration tests
   # (can be overridden in test_helper.exs for unit tests)
-  http_client: Lasso.RPC.HttpClient.Finch
+  http_client: Lasso.RPC.Transport.HTTP.Client.Finch
 
 # Configure Phoenix PubSub for testing
 config :lasso, Lasso.PubSub, adapter: Phoenix.PubSub.PG
 
 # Configure process registry for testing
-config :lasso, Lasso.RPC.ProcessRegistry, partitions: 1
+config :lasso, Lasso.Core.Support.ProcessRegistry, partitions: 1

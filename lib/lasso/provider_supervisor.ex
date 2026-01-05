@@ -9,7 +9,8 @@ defmodule Lasso.RPC.ProviderSupervisor do
   use Supervisor
   require Logger
 
-  alias Lasso.RPC.{CircuitBreaker, WSConnection, WSEndpoint}
+  alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.RPC.Transport.WebSocket.{Connection, Endpoint}
 
   @type profile :: String.t()
   @type chain_name :: String.t()
@@ -75,7 +76,7 @@ defmodule Lasso.RPC.ProviderSupervisor do
   defp maybe_add_ws_connection(children, profile, chain_name, chain_config, provider) do
     case Map.get(provider, :ws_url) do
       url when is_binary(url) ->
-        endpoint = %WSEndpoint{
+        endpoint = %Endpoint{
           profile: profile,
           id: provider.id,
           name: provider.name,
@@ -89,7 +90,7 @@ defmodule Lasso.RPC.ProviderSupervisor do
 
         child = %{
           id: {:ws_conn, provider.id},
-          start: {WSConnection, :start_link, [endpoint]},
+          start: {Connection, :start_link, [endpoint]},
           type: :worker,
           restart: :permanent,
           shutdown: 5_000

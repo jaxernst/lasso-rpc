@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.ProcessRegistry do
+defmodule Lasso.Core.Support.ProcessRegistry do
   @moduledoc """
   Centralized process registry for Lasso RPC components.
 
@@ -147,18 +147,18 @@ defmodule Lasso.RPC.ProcessRegistry do
   end
 
   def chain_supervisor_name(chain_name) do
-    via_name(Lasso.RPC.ProcessRegistry, :chain_supervisor, chain_name)
+    via_name(Lasso.Core.Support.ProcessRegistry, :chain_supervisor, chain_name)
   end
 
   def message_aggregator_name(chain_name) do
-    via_name(Lasso.RPC.ProcessRegistry, :message_aggregator, chain_name)
+    via_name(Lasso.Core.Support.ProcessRegistry, :message_aggregator, chain_name)
   end
 
   def provider_pool_name(chain_name) do
-    via_name(Lasso.RPC.ProcessRegistry, :provider_pool, chain_name)
+    via_name(Lasso.Core.Support.ProcessRegistry, :provider_pool, chain_name)
   end
 
   def ws_connection_name(connection_id) do
-    via_name(Lasso.RPC.ProcessRegistry, :ws_connection, connection_id)
+    via_name(Lasso.Core.Support.ProcessRegistry, :ws_connection, connection_id)
   end
 end

@@ -158,7 +158,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
     breaker_id = {profile, chain, provider_id, transport}
 
     try do
-      case Lasso.RPC.CircuitBreaker.get_state(breaker_id) do
+      case Lasso.Core.Support.CircuitBreaker.get_state(breaker_id) do
         %{} ->
           # Circuit breaker already exists
           :ok
@@ -175,7 +175,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
   end
 
   defp start_circuit_breaker(breaker_id) do
-    case Lasso.RPC.CircuitBreaker.start_link({breaker_id, %{}}) do
+    case Lasso.Core.Support.CircuitBreaker.start_link({breaker_id, %{}}) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> :ok
       _ -> :ok
@@ -260,7 +260,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
         breaker_id = {profile, chain, provider_id, transport}
 
         try do
-          Lasso.RPC.CircuitBreaker.close(breaker_id)
+          Lasso.Core.Support.CircuitBreaker.close(breaker_id)
         catch
           :exit, _ -> :ok
         end

@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
+defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
   @moduledoc """
   Focused unit tests for UpstreamSubscriptionPool state management.
 
@@ -20,7 +20,7 @@ defmodule Lasso.RPC.UpstreamSubscriptionPoolTest do
 
   use ExUnit.Case, async: false
 
-  alias Lasso.RPC.{UpstreamSubscriptionPool, ClientSubscriptionRegistry, StreamSupervisor}
+  alias Lasso.Core.Streaming.{UpstreamSubscriptionPool, ClientSubscriptionRegistry, StreamSupervisor}
   alias Lasso.Testing.MockWSProvider
 
   @default_profile "default"

@@ -1,7 +1,7 @@
-defmodule Lasso.RPC.UpstreamSubscriptionPoolIntegrationTest do
+defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.RPC.UpstreamSubscriptionPool
+  alias Lasso.Core.Streaming.UpstreamSubscriptionPool
   alias Lasso.Testing.MockWSProvider
 
   @default_profile "default"

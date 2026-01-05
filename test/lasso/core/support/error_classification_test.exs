@@ -1,8 +1,8 @@
 defmodule Lasso.RPC.ErrorClassificationTest do
   use ExUnit.Case, async: true
 
-  alias Lasso.RPC.ErrorClassification
-  alias Lasso.RPC.ErrorClassifier
+  alias Lasso.Core.Support.ErrorClassification
+  alias Lasso.Core.Support.ErrorClassifier
 
   describe "categorize/2" do
     test "classifies LlamaRPC block range error as capability violation" do
@@ -123,7 +123,7 @@ defmodule Lasso.RPC.ErrorClassificationTest do
   end
 
   describe "integration test with ErrorNormalizer" do
-    alias Lasso.RPC.ErrorNormalizer
+    alias Lasso.Core.Support.ErrorNormalizer
 
     test "LlamaRPC error gets proper classification and no breaker penalty" do
       error_response = %{

@@ -20,7 +20,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
 
   use Lasso.Test.LassoIntegrationCase, async: false
 
-  alias Lasso.RPC.{UpstreamSubscriptionManager, UpstreamSubscriptionPool}
+  alias Lasso.Core.Streaming.{UpstreamSubscriptionManager, UpstreamSubscriptionPool}
   alias Lasso.Testing.{IntegrationHelper, MockWSProvider}
 
   @moduletag :integration

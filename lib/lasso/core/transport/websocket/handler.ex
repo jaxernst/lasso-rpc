@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.WSHandler do
+defmodule Lasso.RPC.Transport.WebSocket.Handler do
   @moduledoc """
   WebSockex handler for managing WebSocket connections.
 

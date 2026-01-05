@@ -7,7 +7,7 @@ defmodule Lasso.RPC.StrategyContext do
   """
 
   alias Lasso.RPC.SelectionContext
-  alias Lasso.RPC.Metrics
+  alias Lasso.Core.Benchmarking.Metrics
 
   # Fallback latency when no provider data exists
   @default_fallback_latency_ms 500.0

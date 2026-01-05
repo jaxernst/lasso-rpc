@@ -16,7 +16,7 @@ defmodule Lasso.Config.ProfileIsolationTest do
 
   alias Lasso.Config.ConfigStore
   alias Lasso.Benchmarking.BenchmarkStore
-  alias Lasso.RPC.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker
 
   @profile_a "profile_a"
   @profile_b "profile_b"

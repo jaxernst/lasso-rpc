@@ -1,4 +1,4 @@
-defmodule Lasso.RPC.UpstreamSubscriptionManager do
+defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
   @moduledoc """
   Per-chain manager for upstream WebSocket subscriptions.
 

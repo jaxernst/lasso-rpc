@@ -27,7 +27,9 @@ defmodule Lasso.HealthProbe.Worker do
   use GenServer
   require Logger
 
-  alias Lasso.RPC.{TransportRegistry, Channel, Response, CircuitBreaker, WSConnection}
+  alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.RPC.{TransportRegistry, Channel, Response}
+  alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
 
   @default_probe_interval_ms 10_000
   @default_timeout_ms 5_000
