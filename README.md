@@ -1,433 +1,256 @@
 # Lasso RPC
 
-A smart blockchain node RPC aggregator for building reliable and performant onchain apps.
+**Smart RPC aggregation for consumer-grade blockchain apps.**
 
-- Multi-provider and multi-chain orchestration across HTTP and WebSocket
-- Intelligent and expressive request routing (slug-based url routing strategies)
-- Per-method request benchmarking and circuit-breaking failover (request redundancy)
-- WebSocket subscriptions with multiplexing and failover gap-filling
-- Structured observability with optional client-visible metadata
-- Realtime live dashboard
+Lasso wrangles your node infrastructure and turns it into a **fast, observable, and resilient** multi-chain JSON-RPC layer.
 
-Multi-region production RPC endpoints (base, ethereum currently supported):
+It sits in front of a set of upstream RPC providers (hosted provider + self-hosted nodes), measures real latency/errors, and routes each request to the best available option. When something degrades, it fails over so your application can carry on. You get better RPC URLs with explicit routing control via URL slugs while your users see fewer errors.
 
-```
-https://lasso-rpc.fly.dev/rpc/ethereum
-https://lasso-rpc.fly.dev/rpc/base
+What you get:
 
-wss://lasso-rpc.fly.dev/ws/rpc/ethereum
-wss://lasso-rpc.fly.dev/ws/rpc/base
+- Multi-provider, multi-chain, Ethereum JSON-RPC spec proxy for **HTTP + WebSocket**
+- Strategy routes (`fastest`, `round-robin`, `latency-weighted`) + provider override routes
+- Per-method latency benchmarking (w/ latency feedback for routing decisions)
+- Circuit breakers + retries + transport-aware failover
+- WebSocket subscriptions with multiplexing + subscription gap-filling
+- Profile isolation (dev/staging/prod, multi-tenant, experiments) with independent state/metrics/breakers
+- LiveView dashboard: aggregate provider status, routing decision breakdowns, issue logs, per-method latency metrics, provider health, RPC load testing, and more
 
-(additional strategy-specific endpoints below)
-```
+Live hosted public-provider dashboard: https://lasso-rpc.fly.dev/dashboard
 
-Live dashboard: https://lasso-rpc.fly.dev
+---
+
+## Endpoints
+
+HTTP (POST):
+
+- `/rpc/:chain_id` (default strategy)
+- `/rpc/fastest/:chain_id`
+- `/rpc/round-robin/:chain_id`
+- `/rpc/latency-weighted/:chain_id`
+- `/rpc/provider/:provider_id/:chain_id` (provider override)
+
+WebSocket:
+
+- `/ws/rpc/:chain_id`
+- `/ws/rpc/:strategy/:chain_id`
+- `/ws/rpc/provider/:provider_id/:chain_id`
+
+Profiles (namespaced routing configs):
+
+- HTTP: `/rpc/profile/:profile/...`
+- WS: `/ws/rpc/profile/:profile/...`
 
 ---
 
 ## Why Lasso
 
-Choosing a single RPC provider has real UX and reliability consequences, yet the tradeoffs (latency, uptime, quotas, features, cost, rate limits) are often opaque and shift over time. Performance varies by region, method, and hour; free tiers and API inconsistencies make a “one URL” setup brittle.
+Choosing a single RPC provider has real UX + reliability consequences, yet the tradeoffs (latency, uptime, quotas, features, cost, method quirks) are often opaque and shift over time. Performance varies by region, method, and hour; API “compatibility” is a polite fiction.
 
-Lasso makes the RPC layer programmable and resilient. Its a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that chain, method, and transport. You get redundancy without rewrites, and you can scale throughput by adding providers instead of replatforming.
-
-Designed for production workloads: from hot reads to archival queries and subscriptions, different providers excel at different tasks. Lasso lets you express those preferences and enforce them automatically.
-
-Key benefits:
-
-- Faster responses: method-aware, real-latency routing
-- Higher reliability: circuit breakers, retries, graceful failover
-- Horizontal scale: add nodes/providers to raise throughput and headroom
-- Transport-agnostic: HTTP and WebSocket channels support, extendable for other protocols (i.e. grpc)
-- Clear visibility: real-time Lasso node dashboards, deep telemetry + observability, opt-in client metadata
-- Transparent benchmarking: per-provider method/transport metrics
+Lasso makes the RPC layer programmable and resilient. It’s a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that **method + transport**. You get redundancy without rewrites, and you scale throughput by adding providers instead of replatforming.
 
 ---
 
-## Built w/ Elixir/OTP (BEAM)
+## Key Features
 
-Lasso is built with Elixir on the Erlang VM (BEAM). This runtime was designed for fault-tolerant, real-time systems and powers major telecom systems + web-scale platforms (Discord, WhatsApp, Supabase). It’s a strong fit for an RPC aggregator/proxy/routing layer, with some key unlocks:
+### Profiles: isolated configs, isolated state
 
-- Massive concurrency via lightweight processes (100k+ processes per VM)
-- Fault isolation via OTP supervision trees
-- Low-latency networking with efficient websocket and http transport perf
-- Shared, concurrent in‑memory tables (ETS) for fast lookups, lock‑free reads, and cross‑process caching; optional snapshot/restore for warm starts
-- Simple distribution primitives and VM clustering + orchestration for easy distribution + decentralization
-- First‑class telemetry and observability (OpenTelemetry)
+Profiles are complete, isolated routing universes: providers, chains, rate limits, circuit breakers, metrics, and WS state do not bleed across profiles.
 
-This foundation lets Lasso handle thousands of concurrent HTTP/WS requests with predictable latency and strong resilience.
+Use them for:
 
-Elixir is also very fun + nice to work with.
+- dev/staging/prod
+- per-tenant configs
+- “try the new routing policy without wrecking prod”
 
----
+### Method-aware routing + real benchmarking
 
-## JSON-RPC Compatibility
+- Benchmarks are recorded per **provider × method × transport**
+- Strategies can route differently for `eth_call` vs `eth_getLogs` vs `debug_*`
 
-Lasso follows the standard Ethereum JSON-RPC API for read-only methods. It works as a drop-in replacement for existing RPC URLs in client libraries and apps (e.g., Viem, Ethers, Wagmi) for non-mutating calls and subscriptions. Write methods (e.g., eth_sendRawTransaction) are not supported yet. See Limitations below for details on future write and batching support
+### Failure handling that doesn’t lie
 
-Drop-in usage:
+- Per-provider, per-transport circuit breakers
+- Retries + failover across a ranked candidate list
+- Transport-aware routing (HTTP/WS are first-class, not an afterthought)
 
-```ts
-// Viem
-import { createPublicClient, http, webSocket } from "viem";
+### WebSocket subscriptions: multiplexing + continuity
 
-// Default strategy: load balanced requests
-const loadBalancedClient = createPublicClient({
-  transport: http(`${HOST}/rpc/ethereum/round-robin`),
-});
+- Multiplex many client subscriptions onto fewer upstream subscriptions
+- On upstream failure, Lasso can switch providers and **gap-fill** missed blocks/events via HTTP
 
-const fastClient = createPublicClient({
-  transport: http(`${HOST}/rpc/fastest/ethereum`),
-});
+### Observability built-in
 
-// Optional WS client (route parity)
-const wsClient = createPublicClient({
-  transport: webSocket(`${WS_HOST}/ws/rpc/ethereum`),
-});
-
-// Profile-aware client (e.g., testnet profile)
-const testnetClient = createPublicClient({
-  transport: http(`${HOST}/rpc/profile/testnet/ethereum`),
-});
-```
-
----
-
-## RPC Endpoints
-
-Routing strategies are defined with url slug parameters
-
-HTTP (POST):
-
-**Default profile routes:**
-- `/rpc/:chain` (configurable default strategy with round-robin as the preset default)
-- `/rpc/fastest/:chain`
-- `/rpc/round-robin/:chain`
-- `/rpc/latency-weighted/:chain`
-- `/rpc/provider/:provider_id/:chain`
-
-**Profile-aware routes:**
-- `/rpc/profile/:profile/:chain`
-- `/rpc/profile/:profile/fastest/:chain`
-- `/rpc/profile/:profile/round-robin/:chain`
-- `/rpc/profile/:profile/latency-weighted/:chain`
-- `/rpc/profile/:profile/provider/:provider_id/:chain`
-
-WebSocket (same routes with /ws/ prefix):
-
-**Legacy routes (default profile):**
-- `ws://host/ws/rpc/:chain`
-- `ws://host/ws/rpc/fastest/:chain`
-- `ws://host/ws/rpc/round-robin/:chain`
-- `ws://host/ws/rpc/latency-weighted/:chain`
-- `ws://host/ws/rpc/provider/:provider_id/:chain`
-
-**Profile-aware routes:**
-- `ws://host/ws/rpc/profile/:profile/:chain`
-- `ws://host/ws/rpc/profile/:profile/fastest/:chain`
-- `ws://host/ws/rpc/profile/:profile/round-robin/:chain`
-- `ws://host/ws/rpc/profile/:profile/latency-weighted/:chain`
-- `ws://host/ws/rpc/profile/:profile/provider/:provider_id/:chain`
-
-Metrics API (provider performance):
-
-- `GET /api/metrics/:chain` (JSON)
-- `GET /metrics/:chain` (HTML page)
-
----
-
-## Try It (Live or Local)
-
-Set convenience variables first:
-
-```bash
-export HOST=https://lasso-rpc.fly.dev
-export WS_HOST=wss://lasso-rpc.fly.dev
-# or for local
-# export HOST=http://localhost:4000
-# export WS_HOST=ws://localhost:4000
-```
-
-HTTP examples:
-
-```bash
-# Round-robin
-curl -s -X POST "$HOST/rpc/ethereum" \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result'
-
-# Fastest per current metrics
-curl -s -X POST "$HOST/rpc/fastest/ethereum" \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":1}' | jq
-
-# Provider override (example id)
-curl -s -X POST "$HOST/rpc/provider/ethereum_llamarpc/ethereum" \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq
-
-# Profile-aware route (e.g., testnet profile)
-curl -s -X POST "$HOST/rpc/profile/testnet/ethereum" \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq
-
-# Include routing metadata in response body
-curl -s -X POST "$HOST/rpc/ethereum?include_meta=body" \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq
-
-# HTTP batching (array of requests)
-curl -s -X POST "$HOST/rpc/ethereum" \
-  -H 'Content-Type: application/json' \
-  -d '[
-    {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1},
-    {"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":2}
-  ]' | jq .
-```
-
-WebSocket examples (wscat or websocat):
-
-```bash
-# Default strategy
-wscat -c "$WS_HOST/ws/rpc/ethereum"
-> {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}
-
-# Strategy-specific
-wscat -c "$WS_HOST/ws/rpc/fastest/ethereum"
-
-# Profile-aware route
-wscat -c "$WS_HOST/ws/rpc/profile/testnet/ethereum"
-```
-
-Subscriptions:
-
-```bash
-wscat -c "$WS_HOST/ws/rpc/ethereum"
-> {"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
-< {"jsonrpc":"2.0","id":1,"result":"0x..."}
-< {"jsonrpc":"2.0","method":"eth_subscription","params":{...}}
-```
+- LiveView dashboard: routing events, decision breakdowns, provider status, realtime method performance
+- Deep telemetry handlers with OpenTelemetry
+- Structured logs with request context
+- Optional client-visible metadata (`include_meta=headers|body`)
 
 ---
 
 ## Quick Start
 
-Docker:
+### Local (recommended)
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/jaxernst/lasso-rpc
 cd lasso-rpc
-./run-docker.sh
-# or
-docker build -t lasso-rpc . && docker run --rm -p 4000:4000 lasso-rpc
-```
-
-Local (Elixir 1.15+/OTP 26+):
-
-```bash
 mix deps.get
 mix phx.server
 ```
 
-Access: http://localhost:4000
+Dashboard: `http://localhost:4000/dashboard`
 
-Configuration lives in `config/chains.yml`. Minimal example:
+### Docker
+
+```bash
+./run-docker.sh
+```
+
+---
+
+## Try It
+
+```bash
+curl -sS -X POST http://localhost:4000/rpc/ethereum \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+WebSocket subscription:
+
+```bash
+wscat -c ws://localhost:4000/ws/rpc/ethereum
+> {"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
+```
+
+Want routing metadata back:
+
+```bash
+curl -sS -X POST 'http://localhost:4000/rpc/ethereum?include_meta=headers' \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' -i | sed -n '1,15p'
+```
+
+---
+
+## Configuration (profiles)
+
+Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and limits. `${ENV_VAR}` substitution is supported.
+
+Minimal example:
 
 ```yaml
+# config/profiles/default.yml
+name: "Default"
+slug: "default"
+type: "standard"
+
 chains:
   ethereum:
     chain_id: 1
     providers:
-      - id: "ethereum_llamarpc"
-        name: "LlamaRPC"
+      - id: "llamarpc"
         url: "https://eth.llamarpc.com"
         ws_url: "wss://eth.llamarpc.com"
-        type: "public"
+
+      - id: "alchemy"
+        url: "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+        ws_url: "wss://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
 ```
 
-Default strategy can be changed:
+Multiple profiles:
 
-```elixir
-# config/config.exs
-config :lasso, :provider_selection_strategy, :round_robin
-# options: :fastest | :round_robin | :latency_weighted
+```yaml
+# config/profiles/production.yml
+name: "Production"
+slug: "production"
+default_rps_limit: 1000
+default_burst_limit: 5000
+
+chains:
+  ethereum:
+    providers:
+      - id: "your_erigon"
+        url: "http://your-erigon-node:8545"
+        priority: 1
+      - id: "alchemy_fallback"
+        url: "https://..."
+        priority: 2
 ```
 
-WebSocket subscriptions use a stable, priority-based provider chosen from `chains.yml` to maintain continuity; unary WS calls still follow the selected strategy.
+Access it via:
+
+- `POST /rpc/profile/production/ethereum`
+- `ws://localhost:4000/ws/rpc/profile/production/ethereum`
 
 ---
 
-## Metrics and Reporting
+## Use Cases (real ones)
 
-Fetch runtime performance metrics and export a report:
-
-```bash
-# CSV (default)
-node scripts/export_metrics_csv.mjs --url "$HOST/api/metrics" --chain ethereum --output ethereum_rpc_performance.csv
-
-# JSON
-node scripts/export_metrics_csv.mjs -u "$HOST/api/metrics" -c base -f json -o base_metrics.json
-```
-
-You can also generate load locally to populate metrics:
-
-```bash
-# Single chain
-node scripts/rpc_load_test.mjs --url "$HOST/rpc/round-robin/ethereum" --concurrency 24 --duration 45
-
-# Single chain with specific profile
-node scripts/rpc_load_test.mjs --url "$HOST/rpc/ethereum" --profile testnet --concurrency 16 --duration 30
-
-# Multiple chains in parallel
-node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --concurrency 16 --duration 30
-
-# Multiple chains with profile
-node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --profile testnet --strategy fastest --duration 30
-
-# Multiple chains with per-chain rate limits
-node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --chain-rates "ethereum:100,base:50" --duration 30
-
-# All chains with fastest strategy and custom ramp-up
-node scripts/rpc_load_test.mjs --chains ethereum,base --host "$HOST" --strategy fastest --rps-limit 50 --ramp-up 15
-```
-
-**Ramp-up period**: Default 5 seconds
+- Run your own node, keep a paid provider as a fallback (and stop waking up to “provider outage” incidents).
+- Route `eth_getLogs` differently from “hot reads” so your indexer stops melting your cheapest endpoint.
+- Multiplex subscriptions so 10k clients don’t mean 10k upstream WebSockets.
+- Give every env/tenant a profile so you can debug + experiment without cross-contamination.
 
 ---
 
-## Observability (Optional Client Metadata)
+## How it works (short version)
 
-Add `include_meta=headers|body` to get routing details back:
+Request pipeline:
 
-```bash
-curl -s -X POST "$HOST/rpc/ethereum?include_meta=headers" \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' -i | sed -n '1,10p'
-```
+1. Build candidates (method + transport aware)
+2. Filter unhealthy channels (breakers / health)
+3. Execute request
+4. On failure: retry/failover
+5. Record benchmarking + telemetry
 
-This returns `X-Lasso-Request-ID` and a base64url `X-Lasso-Meta` header. Use `include_meta=body` to embed metadata in the JSON-RPC response instead.
+If you want the details (supervision tree, BenchmarkStore, adapters, streaming internals), start here:
 
----
-
-## Architecture
-
-Architecture brief (see full document for details):
-
-- Provider pool and per-transport circuit breakers
-- Unified request pipeline selecting across HTTP and WS channels
-- Per-method benchmarking feeding the fastest strategy
-- Subscription multiplexing with gap-filling on failover
-- Transport-agnostic architecture - HTTP and WebSocket treated as first-class routing options
-- Per-transport circuit breakers - {chain, provider_id, :http} and {chain, provider_id, :ws} independently managed
-- Per-method, per-transport metrics - Selection strategies can make transport-aware decisions
-- Sophisticated error classification - Message-pattern-first classification handles provider inconsistencies
-- Adapter-based capability validation - Method-level (supports_method?/3) and parameter-level (validate_params/4)
-- Two-phase validation - Fast method filtering, then lazy param validation on finalists
-- Category-specific circuit breaker thresholds - Rate limits, capability violations, server errors have different thresholds
-- Adaptive capability discovery - Learns provider constraints in real-time and prevents requests that would fail
-- Intelligent provider filtering - Avoids archival queries on non-archive providers, respects block range limits, and tracks per-proivder RPC method support
-
-Read more:
-
-- `project/ARCHITECTURE.md`
-- `project/OBSERVABILITY.md`
+- `docs/ARCHITECTURE.md`
 
 ---
 
-## Development
+## Why Elixir/OTP?
 
-Tests and basic dev workflow:
+Because this problem is basically “a million tiny concurrent state machines with strict fault isolation”.
 
-```bash
-mix test --exclude battle --include integration
-mix phx.server
-```
-
-Load testing and metrics export are in `scripts/`.
-
-**Provider Discovery and Probing:**
-
-Probe RPC providers to discover supported methods, limits, and WebSocket capabilities:
-
-```bash
-# Full probe (methods + limits + websocket)
-mix lasso.probe https://eth.llamarpc.com
-
-# Probe specific capabilities only
-mix lasso.probe https://eth.llamarpc.com --probes methods,limits
-
-# WebSocket-only probe
-mix lasso.probe wss://eth.llamarpc.com --probes websocket
-
-# Full method probe with JSON output
-mix lasso.probe https://eth.llamarpc.com --level full --output json
-```
-
-**Probe Options:**
-
-- `--probes <list>` - Comma-separated: methods, limits, websocket (default: all)
-- `--level <level>` - Method probe depth: critical, standard, full (default: standard)
-- `--timeout <ms>` - Request timeout (default: 10000)
-- `--output <format>` - Output: table, json (default: table)
-- `--chain <name>` - Chain context for test contracts (default: ethereum)
-- `--subscription-wait <ms>` - WebSocket event wait time (default: 15000)
-
-**What it discovers:**
-
-- **Methods**: Which JSON-RPC methods the provider supports
-- **Limits**: Block range limits, address count limits, batch request support, archive node support, rate limiting
-- **WebSocket**: Connection capability, subscription support (newHeads, logs, newPendingTransactions)
-
-Use the probe task when adding new providers or debugging provider issues
+- OTP supervision trees keep failures local
+- BEAM processes are cheap enough to model everything as a process
+- ETS makes hot-path lookups fast without hand-rolled lock-free C++ nightmares
 
 ---
 
-## Development Automation (Claude Code)
+## Managed service
 
-Lasso includes comprehensive Claude Code automation to accelerate development workflows:
-
-**Slash Commands** (use immediately):
-
-- `/health-check` - Run compile + test + credo + dialyzer in one command
-- `/smoke-test [target]` - Validate local/staging/prod endpoints with performance regression detection
-- `/test-audit` - test quality review with improvement and coverage expansion recommendations
-- `/code-cleanup` - Fix compilation warnings, remove dead code, update deprecations
-- `/add-provider` - Complete guided workflow for integrating new RPC providers
-- `/review-changes` - Pre-commit review with automated quality checks
-- `/docs-sync` - Quick check for documentation drift (provider lists, broken refs, TODOs)
-
-**Agent Skills** (auto-invoke):
-
-- `elixir-quality` - Automatically detects and fixes compilation warnings and code quality issues
-- `smoke-test-runner` - Automated endpoint validation with baseline comparison
-- `provider-integration` - End-to-end provider addition with templates and testing
-
-**Quick examples:**
-
-```bash
-# Check codebase health before committing
-/health-check
-
-# Validate production endpoint after deployment
-/smoke-test prod
-
-# Auto-fix compilation warnings
-"Fix the compilation warnings"  # elixir-quality skill auto-invokes
-```
+There will be a hosted version.
 
 ---
 
-## Future Features
+## Docs
 
-- Caching strategies
-- Request racing strategies
-- Provider method support superset (partial implementation done with adapters - need method support tracking)
-- Integrate block height/sync state into provider selection
-
-Additional roadmap items and ideas tracked here:
-
-- `project/FUTURE_FEATURES.md`
+- `docs/ARCHITECTURE.md` - System design + components
+- `docs/OBSERVABILITY.md` - Logging/metrics
+- `docs/TESTING.md` - Dev workflow
+- `docs/FUTURE_FEATURES.md` - Roadmap
 
 ---
 
-### Additional docs and project tracking available in `/project`
+## Community
+
+Built by one person (for now): [@jaxernst](https://github.com/jaxernst).
+
+- Issues/PRs welcome
+- Telegram/Discord links will show up here once they exist
+
+---
+
+## License
+
+Lasso is licensed under **AGPL-3.0**.
+
+- You can self-host it freely
+- You can modify it
+- If you run a modified version as a service, you must publish those modifications
+
+See `LICENSE.md` for full terms.
