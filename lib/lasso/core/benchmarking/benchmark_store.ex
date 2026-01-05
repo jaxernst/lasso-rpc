@@ -424,20 +424,21 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         lookup_key = {provider_id, method, :rpc}
 
         case :ets.lookup(score_table, lookup_key) do
-          [{_key, successes, total, avg_duration, _samples, _mono_ts, _sys_ts}] ->
+          [{_key, successes, total, avg_duration, _samples, _mono_ts, sys_ts}] ->
             %{
               total_calls: total,
               success_calls: successes,
               error_calls: total - successes,
               success_rate: if(total > 0, do: successes / total, else: 0.0),
-              avg_latency: avg_duration
+              avg_latency: avg_duration,
+              last_updated_ms: sys_ts
             }
 
           [] ->
-            %{total_calls: 0, success_calls: 0, error_calls: 0, success_rate: 0.0, avg_latency: 0}
+            %{total_calls: 0, success_calls: 0, error_calls: 0, success_rate: 0.0, avg_latency: 0, last_updated_ms: nil}
         end
       else
-        %{total_calls: 0, success_calls: 0, error_calls: 0, success_rate: 0.0, avg_latency: 0}
+        %{total_calls: 0, success_calls: 0, error_calls: 0, success_rate: 0.0, avg_latency: 0, last_updated_ms: nil}
       end
 
     {:reply, result, state}

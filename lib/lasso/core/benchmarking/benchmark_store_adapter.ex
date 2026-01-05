@@ -17,14 +17,15 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
       %{total_calls: 0} ->
         nil
 
-      %{avg_latency: latency, success_rate: success_rate, total_calls: total_calls} ->
+      %{avg_latency: latency, success_rate: success_rate, total_calls: total_calls, last_updated_ms: last_updated_ms} ->
         confidence_score = calculate_confidence_score(total_calls, success_rate)
 
         %{
           latency_ms: latency,
           success_rate: success_rate,
           total_calls: total_calls,
-          confidence_score: confidence_score
+          confidence_score: confidence_score,
+          last_updated_ms: last_updated_ms
         }
 
       _ ->
@@ -48,7 +49,8 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
               latency_ms: provider.avg_duration_ms,
               success_rate: provider.success_rate,
               total_calls: provider.total_calls,
-              confidence_score: confidence_score
+              confidence_score: confidence_score,
+              last_updated_ms: provider.last_updated
             }
           }
         end)
@@ -90,12 +92,13 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
       %{total_calls: 0} ->
         nil
 
-      %{avg_latency: latency, success_rate: success_rate, total_calls: total_calls} ->
+      %{avg_latency: latency, success_rate: success_rate, total_calls: total_calls, last_updated_ms: last_updated_ms} ->
         %{
           latency_ms: latency,
           success_rate: success_rate,
           total_calls: total_calls,
-          confidence_score: calculate_confidence_score(total_calls, success_rate)
+          confidence_score: calculate_confidence_score(total_calls, success_rate),
+          last_updated_ms: last_updated_ms
         }
 
       _ ->
@@ -115,7 +118,61 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
     end
   end
 
+  @impl true
+  def batch_get_transport_performance(profile, chain, requests) do
+    score_table = score_table_name(profile, chain)
+
+    # Check if table exists
+    if table_exists?(score_table) do
+      # Batch lookup using :ets.lookup/2 for each request
+      Enum.reduce(requests, %{}, fn {provider_id, method, transport}, acc ->
+        method_key = "#{method}@#{transport}"
+        lookup_key = {provider_id, method_key, :rpc}
+
+        result =
+          case :ets.lookup(score_table, lookup_key) do
+            [{_key, successes, total, avg_duration, _samples, _mono_ts, sys_ts}] ->
+              if total > 0 do
+                success_rate = successes / total
+
+                %{
+                  latency_ms: avg_duration,
+                  success_rate: success_rate,
+                  total_calls: total,
+                  confidence_score: calculate_confidence_score(total, success_rate),
+                  last_updated_ms: sys_ts
+                }
+              else
+                nil
+              end
+
+            [] ->
+              nil
+          end
+
+        Map.put(acc, {provider_id, method, transport}, result)
+      end)
+    else
+      # Table doesn't exist, return nil for all requests
+      Enum.reduce(requests, %{}, fn key, acc ->
+        Map.put(acc, key, nil)
+      end)
+    end
+  end
+
   # Private functions
+
+  defp score_table_name(profile, chain) do
+    # Match BenchmarkStore naming convention
+    :"provider_scores_#{profile}_#{chain}"
+  end
+
+  defp table_exists?(table_name) do
+    case :ets.whereis(table_name) do
+      :undefined -> false
+      _ -> true
+    end
+  end
 
   defp calculate_confidence_score(total_calls, success_rate) when total_calls > 0 do
     # Calculate confidence based on sample size and success rate

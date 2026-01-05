@@ -411,7 +411,7 @@ defmodule LassoWeb.HomeLive do
                       </span>
                     </a>
                     <a
-                      href="https://github.com/LazerTechnologies/lasso-rpc"
+                      href="https://github.com/jaxernst/lasso-rpc"
                       target="_blank"
                       rel="noopener noreferrer"
                       class="group border-gray-700/70 bg-gray-900/60 inline-flex items-center gap-2 rounded-lg border px-6 py-3 text-sm font-semibold text-gray-200 backdrop-blur-sm transition-all hover:border-gray-500 hover:bg-gray-800 hover:text-white"
@@ -809,13 +809,13 @@ defmodule LassoWeb.HomeLive do
 
                 <div class="flex flex-col gap-2">
                   <a
-                    href="https://github.com/LazerTechnologies/lasso-rpc"
+                    href="https://github.com/jaxernst/lasso-rpc"
                     class="text-sm font-semibold text-gray-400 transition-colors hover:text-purple-400"
                   >
                     GitHub
                   </a>
                   <a
-                    href="https://github.com/LazerTechnologies/lasso-rpc/tree/main/project"
+                    href="https://github.com/jaxernst/lasso-rpc/tree/main/project"
                     target="_blank"
                     rel="noopener noreferrer"
                     class="text-sm font-semibold text-gray-400 transition-colors hover:text-purple-400"
