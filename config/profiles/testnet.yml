@@ -43,7 +43,7 @@ chains:
         name: "Lava Ethereum Sepolia"
         priority: 1
         type: "public"
-        url: "https://g.w.lavanet.xyz:443/gateway/sep1/rpc-http/***REMOVED***"
+        url: "https://g.w.lavanet.xyz:443/gateway/sep1/rpc-http/REDACTED_LAVA_KEY"
         api_key_required: false
 
       - id: "ethereum_sepolia_publicnode"
@@ -58,15 +58,15 @@ chains:
         name: "1RPC Ethereum Sepolia"
         priority: 3
         type: "public"
-        url: "https://1rpc.io/***REMOVED***/sepolia"
+        url: "https://1rpc.io/REDACTED_1RPC_KEY/sepolia"
         api_key_required: false
 
       - id: "ethereum_sepolia_drpc"
         name: "DRPC Ethereum Sepolia"
         priority: 4
         type: "public"
-        url: "https://lb.drpc.live/sepolia/***REMOVED***"
-        ws_url: "https://lb.drpc.live/sepolia/***REMOVED***"
+        url: "https://lb.drpc.live/sepolia/REDACTED_DRPC_KEY"
+        ws_url: "https://lb.drpc.live/sepolia/REDACTED_DRPC_KEY"
         api_key_required: false
 
       - id: "0xrpc_ethereum_sepolia"
@@ -114,7 +114,7 @@ chains:
         name: "Lava Base Sepolia"
         priority: 1
         type: "public"
-        url: "https://g.w.lavanet.xyz:443/gateway/bases/rpc-http/***REMOVED***"
+        url: "https://g.w.lavanet.xyz:443/gateway/bases/rpc-http/REDACTED_LAVA_KEY"
         api_key_required: false
 
       - id: "base_official_sepolia"
@@ -136,6 +136,6 @@ chains:
         name: "DRPC Base Sepolia"
         priority: 4
         type: "public"
-        url: "https://lb.drpc.org/ogrpc?network=base-sepolia&dkey=***REMOVED***"
-        ws_url: "wss://lb.drpc.org/ogws?network=base-sepolia&dkey=***REMOVED***"
+        url: "https://lb.drpc.org/ogrpc?network=base-sepolia&dkey=REDACTED_DRPC_KEY"
+        ws_url: "wss://lb.drpc.org/ogws?network=base-sepolia&dkey=REDACTED_DRPC_KEY"
         api_key_required: false
