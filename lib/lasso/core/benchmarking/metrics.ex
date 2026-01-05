@@ -20,7 +20,8 @@ defmodule Lasso.RPC.Metrics do
           latency_ms: float(),
           success_rate: float(),
           total_calls: non_neg_integer(),
-          confidence_score: float()
+          confidence_score: float(),
+          last_updated_ms: integer()
         }
 
   @type recording_opts :: [
@@ -77,6 +78,15 @@ defmodule Lasso.RPC.Metrics do
   """
   @callback record_request(String.t(), chain, provider_id, method, non_neg_integer(), result, recording_opts) ::
               :ok
+
+  @doc """
+  Batch fetches performance data for multiple provider/method/transport combinations.
+
+  This is an optimized path that can fetch multiple metrics in a single operation,
+  avoiding N sequential calls. Returns a map keyed by the request tuple.
+  """
+  @callback batch_get_transport_performance(profile, chain, [{provider_id, method, :http | :ws}]) ::
+              %{{provider_id, method, :http | :ws} => performance_data() | nil}
 
   @doc """
   Gets performance data using the configured metrics backend.
@@ -144,6 +154,17 @@ defmodule Lasso.RPC.Metrics do
   @spec record_failure(String.t(), chain, provider_id, method, non_neg_integer(), recording_opts) :: :ok
   def record_failure(profile, chain, provider_id, method, duration_ms, opts \\ []) do
     record_request(profile, chain, provider_id, method, duration_ms, :error, opts)
+  end
+
+  @doc """
+  Batch fetches performance data for multiple provider/method/transport combinations.
+
+  Returns a map keyed by {provider_id, method, transport} tuples.
+  """
+  @spec batch_get_transport_performance(profile, chain, [{provider_id, method, :http | :ws}]) ::
+          %{{provider_id, method, :http | :ws} => performance_data() | nil}
+  def batch_get_transport_performance(profile, chain, requests) do
+    backend().batch_get_transport_performance(profile, chain, requests)
   end
 
   # Private functions
