@@ -40,13 +40,12 @@ defmodule Lasso.Providers do
   - `ProviderPool` - Health tracking and availability
   - `TransportRegistry` - Lazy channel opening
   - `ConfigValidator` - Input validation
-  - `ChainConfigManager` - Optional persistence to YAML
 
   The provider becomes immediately available for request routing after `add_provider/3` returns.
   """
 
   require Logger
-  alias Lasso.Config.{ChainConfigManager, ConfigStore, ConfigValidator}
+  alias Lasso.Config.{ConfigStore, ConfigValidator}
   alias Lasso.RPC.{ChainSupervisor, ProviderPool}
 
   @default_profile "default"
@@ -416,32 +415,7 @@ defmodule Lasso.Providers do
     end
   end
 
-  defp maybe_persist_add(_chain_name, _provider_config, false), do: :ok
+  defp maybe_persist_add(_chain_name, _provider_config, _persist?), do: :ok
 
-  defp maybe_persist_add(chain_name, provider_config, true) do
-    case ChainConfigManager.add_provider_to_chain(chain_name, provider_config) do
-      {:ok, _provider} ->
-        :ok
-
-      {:error, reason} = error ->
-        Logger.error(
-          "Failed to persist provider #{provider_config.id} to YAML: #{inspect(reason)}"
-        )
-
-        error
-    end
-  end
-
-  defp maybe_persist_remove(_chain_name, _provider_id, false), do: :ok
-
-  defp maybe_persist_remove(chain_name, provider_id, true) do
-    case ChainConfigManager.remove_provider_from_chain(chain_name, provider_id) do
-      :ok ->
-        :ok
-
-      {:error, reason} = error ->
-        Logger.error("Failed to remove provider #{provider_id} from YAML: #{inspect(reason)}")
-        error
-    end
-  end
+  defp maybe_persist_remove(_chain_name, _provider_id, _persist?), do: :ok
 end

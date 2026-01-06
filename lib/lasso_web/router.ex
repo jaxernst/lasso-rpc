@@ -42,23 +42,6 @@ defmodule LassoWeb.Router do
     get("/chains/:chain_id/status", ChainController, :status)
   end
 
-  # Admin API endpoints
-  scope "/api/admin", LassoWeb.Admin do
-    pipe_through(:api)
-
-    # Chain configuration management
-    resources("/chains", ChainController, except: [:new, :edit]) do
-      # post("/test", ChainController, :test_connectivity, as: :test)
-    end
-
-    # Chain validation endpoint
-    # post("/chains/validate", ChainController, :validate)
-
-    # Backup management
-    # get("/chains/backups", ChainController, :list_backups)
-    # post("/chains/backup", ChainController, :create_backup)
-  end
-
   # HTTP JSON-RPC endpoints
   scope "/rpc", LassoWeb do
     pipe_through(:api_with_profile)
