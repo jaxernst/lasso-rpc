@@ -8,13 +8,13 @@ Lasso's observability system provides comprehensive visibility into RPC request 
 
 ### Core Components
 
-1. **RequestContext** (`lib/lasso/rpc/request_context.ex`)
+1. **RequestContext** (`lib/lasso/core/request/request_context.ex`)
 
    - Stateless struct tracking request lifecycle
    - Threads through entire execution pipeline
    - Captures selection, execution, and result phases
 
-2. **Observability** (`lib/lasso/rpc/observability.ex`)
+2. **Observability** (`lib/lasso/core/request/request_pipeline/observability.ex`)
 
    - Emits structured `rpc.request.completed` events
    - Builds client-visible metadata

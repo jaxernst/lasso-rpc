@@ -2,9 +2,23 @@
 
 **Smart RPC aggregation for consumer-grade blockchain apps.**
 
-Lasso wrangles your node infrastructure and turns it into a **fast, observable, and resilient** multi-chain JSON-RPC layer.
+Lasso is a smart proxy/router that turns a set of upstream RPCs (hosted providers + self-hosted nodes) into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
 
-It sits in front of a set of upstream RPC providers (hosted provider + self-hosted nodes), measures real latency/errors, and routes each request to the best available option. When something degrades, it fails over so your application can carry on. You get better RPC URLs with explicit routing control via URL slugs while your users see fewer errors.
+It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single, stable RPC surface area with explicit routing control (strategies, provider overrides, and profiles).
+
+Route every request to the best available provider to handle that request, while configuring providers to match your application's needs. Leverage deep redundancy, expressive routing, and built-in observability to improve end-user UX without changing client code.
+
+---
+
+## Why Lasso
+
+Choosing a single RPC provider has real UX and reliability consequences, yet the tradeoffs (latency, uptime, quotas, features, cost, rate limits) are often opaque and shift over time. Performance varies by region, method, and hour; free tiers and API inconsistencies make a “one URL” setup brittle.
+
+Lasso makes the RPC layer programmable and resilient. It's a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that chain, method, and transport. You get redundancy without brittle application code, and you can scale throughput by adding providers instead of replatforming.
+
+Designed for production workloads: from hot reads to archival queries and subscriptions, different providers excel at different tasks. Lasso lets you express those preferences and enforce them automatically.
+
+---
 
 What you get:
 
@@ -16,7 +30,7 @@ What you get:
 - Profile isolation (dev/staging/prod, multi-tenant, experiments) with independent state/metrics/breakers
 - LiveView dashboard: aggregate provider status, routing decision breakdowns, issue logs, per-method latency metrics, provider health, RPC load testing, and more
 
-Live hosted public-provider dashboard: https://lasso-rpc.fly.dev/dashboard
+Live hosted public-provider dashboard: [lasso-rpc.fly.dev/dashboard](https://lasso-rpc.fly.dev/dashboard)
 
 ---
 
@@ -40,14 +54,6 @@ Profiles (namespaced routing configs):
 
 - HTTP: `/rpc/profile/:profile/...`
 - WS: `/ws/rpc/profile/:profile/...`
-
----
-
-## Why Lasso
-
-Choosing a single RPC provider has real UX + reliability consequences, yet the tradeoffs (latency, uptime, quotas, features, cost, method quirks) are often opaque and shift over time. Performance varies by region, method, and hour; API “compatibility” is a polite fiction.
-
-Lasso makes the RPC layer programmable and resilient. It’s a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that **method + transport**. You get redundancy without rewrites, and you scale throughput by adding providers instead of replatforming.
 
 ---
 
@@ -138,6 +144,17 @@ curl -sS -X POST 'http://localhost:4000/rpc/ethereum?include_meta=headers' \
 
 Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and limits. `${ENV_VAR}` substitution is supported.
 
+### Ready to Use: Default Profile
+
+The included `default.yml` profile is configured free public providers (LlamaRPC, PublicNode, DRPC, 0xRPC, Merkle) and provides premium-provider performance and throughput. No API keys required—just `mix phx.server` and you have a working multi-provider RPC proxy for Ethereum and Base.
+
+Perfect for:
+
+- **Getting started** without setting up API keys
+- **Local development** with instant redundancy
+- **Production fallback** when combined with your own nodes
+- **Testing Lasso's routing** before configuring custom providers
+
 Minimal example:
 
 ```yaml
@@ -221,10 +238,6 @@ Because this problem is basically “a million tiny concurrent state machines wi
 
 ---
 
-## Managed service
-
-There will be a hosted version.
-
 ---
 
 ## Docs
@@ -238,10 +251,12 @@ There will be a hosted version.
 
 ## Community
 
-Built by one person (for now): [@jaxernst](https://github.com/jaxernst).
+Built by [@jaxernst](https://github.com/jaxernst).
 
-- Issues/PRs welcome
-- Telegram/Discord links will show up here once they exist
+[Follow me on Farcaster for updates](https://farcaster.xyz/jaxer.eth)
+
+- Issues and PRs welcome
+- For questions, open a GitHub issue
 
 ---
 

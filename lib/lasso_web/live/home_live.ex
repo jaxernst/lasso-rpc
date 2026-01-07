@@ -815,7 +815,7 @@ defmodule LassoWeb.HomeLive do
                     GitHub
                   </a>
                   <a
-                    href="https://github.com/jaxernst/lasso-rpc/tree/main/project"
+                    href="https://github.com/jaxernst/lasso-rpc/tree/main/docs"
                     target="_blank"
                     rel="noopener noreferrer"
                     class="text-sm font-semibold text-gray-400 transition-colors hover:text-purple-400"

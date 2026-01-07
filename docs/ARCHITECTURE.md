@@ -98,45 +98,57 @@ Lasso.Application
 ### Key Components
 
 **ProfileChainSupervisor** (`Lasso.ProfileChainSupervisor`)
+
 - Top-level dynamic supervisor managing `(profile, chain)` pairs
 - Enables independent lifecycle per configuration
 
 **ChainSupervisor** (`Lasso.ChainSupervisor`)
+
 - Per-(profile, chain) supervisor providing fault isolation
 - Manages provider pool, health monitoring, and subscriptions
 
 **ProviderSupervisor** (`Lasso.ProviderSupervisor`)
+
 - Per-provider supervisor managing circuit breakers and connections
 - One per provider in each (profile, chain)
 
 **CircuitBreaker** (`Lasso.Core.Support.CircuitBreaker`)
+
 - GenServer tracking failures per provider+transport
 - Implements open/half-open/closed state machine
 
 **WSConnection** (`Lasso.Core.Transport.WebSocket.Connection`)
+
 - GenServer managing persistent WebSocket connection to single provider
 
 **ProviderPool** (`Lasso.Core.Providers.ProviderPool`)
+
 - GenServer tracking provider health and sync state in ETS
 
 **HealthProbe.Worker** (`Lasso.Core.HealthProbe.Worker`)
+
 - Per-provider worker executing periodic `eth_blockNumber` probes
 - Reports results to ProviderPool
 
 **BlockSync.Worker** (`Lasso.Core.BlockSync.Worker`)
+
 - Tracks block heights from passive traffic and probes
 - Centralized source for consensus height
 
 **TransportRegistry** (`Lasso.Core.Transport.Registry`)
+
 - Registry for discovering available HTTP/WS channels per provider
 
 **UpstreamSubscriptionPool** (`Lasso.Core.Streaming.UpstreamSubscriptionPool`)
+
 - GenServer multiplexing client subscriptions to minimal upstream connections
 
 **StreamCoordinator** (`Lasso.Core.Streaming.StreamCoordinator`)
+
 - Per-subscription-key GenServer managing continuity and gap-filling
 
 **ClientSubscriptionRegistry** (`Lasso.Core.Streaming.ClientSubscriptionRegistry`)
+
 - Registry for fan-out of subscription events to connected clients
 
 ---
@@ -169,10 +181,12 @@ Record metrics per provider+transport+method
 ### Transport Implementations
 
 **HTTP Transport** (`Lasso.Core.Transport.HTTP`)
+
 - Uses Finch connection pools for HTTP/2 multiplexing
 - Per-provider circuit breaker wraps all requests
 
 **WebSocket Transport** (`Lasso.Core.Transport.WebSocket`)
+
 - Uses persistent WSConnection GenServers
 - Supports both unary calls and subscriptions
 - Correlation ID mapping for request/response
@@ -181,7 +195,7 @@ Record metrics per provider+transport+method
 
 ## WebSocket Subscription Management
 
-Lasso provides production-grade WebSocket subscriptions with multiplexing and automatic failover.
+Lasso provides WebSocket subscriptions with multiplexing and automatic failover.
 
 ### Architecture
 
@@ -230,11 +244,13 @@ Lasso tracks blockchain state through two mechanisms:
 ### BlockSync System
 
 **BlockSync.Worker** (`Lasso.Core.BlockSync.Worker`)
+
 - Tracks block heights from passive traffic
 - Periodic `eth_blockNumber` queries
 - Stores in centralized ETS registry
 
 **BlockSync.Registry** (`Lasso.Core.BlockSync.Registry`)
+
 - Centralized block height source per (profile, chain)
 - <1ms lookups via ETS
 - Used for consensus height calculations
@@ -242,17 +258,19 @@ Lasso tracks blockchain state through two mechanisms:
 ### Health Probing
 
 **HealthProbe.Worker** (`Lasso.Core.HealthProbe.Worker`)
+
 - Per-provider periodic probes (configurable interval)
 - Sends `eth_blockNumber` to each provider
 - Reports results to ProviderPool
 - Fire-and-forget (non-blocking)
 
 **Configuration** (per-chain in profile YAML):
+
 ```yaml
 chains:
   ethereum:
     monitoring:
-      probe_interval_ms: 12000  # 12s (mainnet block time)
+      probe_interval_ms: 12000 # 12s (mainnet block time)
 ```
 
 ---
@@ -264,32 +282,44 @@ Selection strategies determine which provider serves each request.
 ### Available Strategies
 
 **:fastest** (default)
+
 - Selects provider with lowest latency for specific method
 - Based on passive benchmarking via BenchmarkStore
 
 **:latency_weighted**
+
 - Weighted random selection based on latency scores
 - Prevents overloading single "fastest" provider
 
 **:round_robin**
+
 - Rotates through healthy providers
 - Simple load balancing
 
 ### Selection API
 
 ```elixir
-# Best HTTP provider for method
-{:ok, provider_id} = Selection.select_best_http_provider(
+# Select best provider for a method
+{:ok, provider_id} = Selection.select_provider(
   profile,
   chain,
   method
 )
 
-# Best WebSocket provider for subscription
-{:ok, provider_id} = Selection.select_best_ws_provider(
+# Select ordered list of channels (provider + transport combinations)
+{:ok, channels} = Selection.select_channels(
   profile,
   chain,
   method
+)
+# Returns: [%Channel{provider: "alchemy", transport: :http}, ...]
+
+# Select specific provider channel
+{:ok, channel} = Selection.select_provider_channel(
+  profile,
+  chain,
+  provider_id,
+  transport  # :http or :ws
 )
 ```
 
@@ -367,7 +397,7 @@ All requests emit JSON logs:
   "transport": "http",
   "jsonrpc_method": "eth_blockNumber",
   "routing": {
-    "selected_provider": {"id": "ethereum_llamarpc"},
+    "selected_provider": { "id": "ethereum_llamarpc" },
     "retries": 0,
     "circuit_breaker_state": "closed"
   },
@@ -383,12 +413,14 @@ All requests emit JSON logs:
 **Query parameter**: `?include_meta=headers|body`
 
 **Headers mode**:
+
 ```
 X-Lasso-Request-ID: uuid
 X-Lasso-Meta: eyJ2ZXJzaW9u... (base64url JSON)
 ```
 
 **Body mode**:
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -396,7 +428,7 @@ X-Lasso-Meta: eyJ2ZXJzaW9u... (base64url JSON)
   "lasso_meta": {
     "request_id": "uuid",
     "strategy": "fastest",
-    "selected_provider": {"id": "ethereum_llamarpc"}
+    "selected_provider": { "id": "ethereum_llamarpc" }
   }
 }
 ```
@@ -410,6 +442,7 @@ Provider adapters validate requests before sending upstream, preventing rejectio
 ### Design
 
 **Lazy Parameter Validation**:
+
 1. Filter by method support (build candidate list)
 2. Selection returns ordered channels
 3. Validate params for selected channel
@@ -438,7 +471,7 @@ providers:
   - id: "alchemy_base"
     url: "https://..."
     adapter_config:
-      eth_get_logs_block_range: 50  # Override Alchemy's default (10)
+      eth_get_logs_block_range: 50 # Override Alchemy's default (10)
 ```
 
 ### Current Adapters
@@ -478,13 +511,16 @@ end
 ### Categories
 
 **Retriable** (triggers failover):
+
 - `:rate_limit`, `:network_error`, `:server_error`
 - `:capability_violation`, `:method_not_found`
 
 **Non-retriable**:
+
 - `:invalid_params`, `:user_error`, `:client_error`
 
 **No circuit breaker penalty**:
+
 - `:rate_limit` - Temporary backpressure with known recovery
 - `:capability_violation` - Permanent constraint, not transient failure
 
@@ -505,10 +541,12 @@ ETS-based configuration cache:
 ### Profile Loading
 
 **Two-phase initialization**:
+
 1. ConfigStore.init creates ETS tables
 2. Application calls `load_all_profiles()` after supervision tree is up
 
 **Configuration backend abstraction**:
+
 - File backend: Loads from `config/profiles/*.yml`
 - Database backend: SaaS extension (not in OSS)
 
@@ -526,16 +564,19 @@ Lasso works as drop-in replacement for existing RPC URLs:
 ### Method Support
 
 **Read-only methods** (full support):
+
 - Block queries: `eth_blockNumber`, `eth_getBlockByNumber`
 - State queries: `eth_getBalance`, `eth_call`, `eth_getLogs`
 - Gas queries: `eth_gasPrice`, `eth_estimateGas`
 
 **Subscriptions** (WebSocket):
+
 - `eth_subscribe("newHeads")`
 - `eth_subscribe("logs", filter)`
 - `eth_unsubscribe(subscription_id)`
 
 **Not yet supported**:
+
 - Write methods: `eth_sendRawTransaction`, `eth_sendTransaction`
 - Batch requests (planned)
 
@@ -545,14 +586,14 @@ Lasso works as drop-in replacement for existing RPC URLs:
 
 ### Overhead
 
-| Operation | Latency | Notes |
-|-----------|---------|-------|
-| Context creation | <1ms | Single struct allocation |
-| Provider selection | 2-5ms | ETS lookups + scoring |
-| Benchmarking update | <1ms | Async ETS write |
-| Circuit breaker check | <0.1ms | GenServer call |
-| Request observability | <5ms | Async logger |
-| Total overhead | ~10ms | End-to-end added latency |
+| Operation             | Latency | Notes                    |
+| --------------------- | ------- | ------------------------ |
+| Context creation      | <1ms    | Single struct allocation |
+| Provider selection    | 2-5ms   | ETS lookups + scoring    |
+| Benchmarking update   | <1ms    | Async ETS write          |
+| Circuit breaker check | <0.1ms  | GenServer call           |
+| Request observability | <5ms    | Async logger             |
+| Total overhead        | ~10ms   | End-to-end added latency |
 
 ### Scalability
 

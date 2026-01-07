@@ -6,28 +6,26 @@ Living backlog of high-impact improvements. Active features are prioritized at t
 
 ## Triage + Backlog
 
-@STATE_CONSISTENCY_MONITORING.md
+**State Consistency Monitoring**
 
-Provider health and performance gossiping
+Periodic consensus checks by racing requests to 2-3 upstream providers to detect state divergence:
+- Client can wait for first response or require 2/3 consensus
+- Returns error if consensus fails
+- Collects valuable provider health feedback with minimal overhead
+- Useful for critical state and gossip queries
 
-- Use BEAM clustering to communicate node to node about provider health issues
-  - Can communicate to the Lasso network when providers appear unhealthy
-  - Cluster-level circuit breakers
-  - Need to be careful about
+**Provider Health Gossiping**
 
-Periodic and randomly selected 'racing' requests sent to a 2/3 upstream providers to check consensus (state, gossip, or history). Client can either get back from the first result or
-wait for 2/3 consensus before returning the result (will return an error if consensus fails). Would have to figure out how to deal with to failover in these situations. Consensus checks can collect valuable provider health feedback with very little overhead. This could be useful for critcial state or gossip and could yield some valuable selection/routing strategies
+Use BEAM clustering to communicate node-to-node about provider health:
+- Nodes share provider health observations across the cluster
+- Enables cluster-level circuit breaker coordination
+- Reduces time to detect and isolate unhealthy providers
 
-- Transport channels should use 'lazy' creation, and should be created at startup and actively monitored
-  - Mostly due to the concern of channels being slo to open or failing to open
-  - (Bug) When channels get created, it will try to create with both http and ws even if there is no ws_url configured, resulting in a warning:
-    ```
-    [info] Created http channel for provider ethereum_cloudflare =>
-    [warning] Failed to create ws channel for provider ethereum_cloudflare: :no_ws_config =>
-    [info] Created http channel for provider ethereum_llamarpc =>
-    [info] Created http channel for provider ethereum_merkle =>
-    [warning] Failed to create ws channel for provider ethereum_merkle: :no_ws_config =>
-    ```
+**Transport Channel Improvements**
+
+- Use lazy creation for transport channels
+- Create and validate channels at startup
+- Fix warning when WS URL not configured but WS channel creation attempted
 
 ## Active Roadmap
 
@@ -161,7 +159,6 @@ providers:
 - Client region detection (header, IP geolocation, or config)
 - Prefer providers with lowest RTT for client's region
 - Cross-region failover with bounded latency budget
-- See [REGIONAL_LATENCY_ROUTING_DESIGN_CONSIDERATIONS.md](REGIONAL_LATENCY_ROUTING_DESIGN_CONSIDERATIONS.md)
 
 ### Configuration & Operations
 
@@ -273,28 +270,28 @@ providers:
 
 ## Priority Phases
 
-**P0 (Core Routing)** - Q1 2026
+**P0 (Core Routing)** - Q1 2026 (In Progress)
 
 - Per-method strategy overrides
 - Best sync routing strategy
 - MethodPolicy timeout configuration
 - Per-method provider priorities
 
-**P1 (Performance)** - Q2 2026
+**P1 (Performance)** - Q2 2026 (Apr-Jun)
 
 - Hedged requests (race top N)
 - Result caching with instrumentation
 - Request coalescing
 - Enhanced telemetry and OpenTelemetry integration
 
-**P2 (Resilience & Scale)** - Q3 2026
+**P2 (Resilience & Scale)** - Q3 2026 (Jul-Sep)
 
 - Adaptive retry/backoff
 - Regional/geo-aware routing
 - Live config reload
 - Staged provider rollouts
 
-**P3 (Product & Multi-Tenancy)** - Q4 2026
+**P3 (Product & Multi-Tenancy)** - Q4 2026 (Oct-Dec)
 
 - Cost-aware routing
 - Multi-tenant quotas and auth
@@ -461,7 +458,6 @@ Development log of implemented features, moved from active roadmap.
 - Chaos engineering: kill, flap, degrade providers
 - Telemetry collection and percentile analysis (P50, P95, P99)
 - SLO verification and automated reporting
-- See [battle-testing/BATTLE_TESTING_GUIDE.md](battle-testing/BATTLE_TESTING_GUIDE.md)
 
 ### ✅ Live Dashboard (Aug 2025)
 
@@ -481,4 +477,4 @@ Development log of implemented features, moved from active roadmap.
 
 ---
 
-**Last Updated:** October 1, 2025
+**Last Updated:** January 6, 2026

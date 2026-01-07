@@ -33,7 +33,6 @@ RUN mix deps.get --only prod
 COPY lib/ ./lib/
 COPY assets/ ./assets/
 COPY priv/ ./priv/
-COPY deployment/ ./deployment/
 
 # Compile application
 RUN mix compile
@@ -68,15 +67,11 @@ ENV PHX_SERVER=true
 
 # Copy built release from builder stage
 COPY --from=builder /app/_build/prod/rel/lasso ./
-COPY --from=builder /app/deployment ./deployment
 # Copy config/chains.yml for runtime (fallback if no volume mounted)
 COPY --from=builder /app/config/chains.yml ./config/chains.yml
-
-# Make entrypoint executable
-RUN chmod +x ./deployment/entrypoint.sh
 
 # Expose port
 EXPOSE 4000
 
-# Use entrypoint to seed /data/chains.yml on first boot, then start Phoenix
-CMD ["/app/deployment/entrypoint.sh"]
+# Start the Phoenix application using the release script
+CMD ["/app/bin/lasso", "start"]
