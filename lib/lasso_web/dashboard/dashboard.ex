@@ -44,6 +44,8 @@ defmodule LassoWeb.Dashboard do
         Lasso.VMMetricsCollector.subscribe()
       end
 
+      # Load metrics immediately on connection, then refresh periodically
+      Process.send_after(self(), :load_metrics_on_connect, 0)
       Process.send_after(self(), :metrics_refresh, Constants.vm_metrics_interval())
     end
 
@@ -633,6 +635,13 @@ defmodule LassoWeb.Dashboard do
   @impl true
   def handle_info({:vm_metrics_update, metrics}, socket) do
     {:noreply, assign(socket, :vm_metrics, metrics)}
+  end
+
+  # Load metrics immediately after socket connects
+  @impl true
+  def handle_info(:load_metrics_on_connect, socket) do
+    socket = load_provider_metrics(socket)
+    {:noreply, socket}
   end
 
   # Provider metrics refresh
@@ -2779,7 +2788,7 @@ defmodule LassoWeb.Dashboard do
 
         <%= if @metrics_loading do %>
           <div class="py-12">
-            <div class="rounded-lg border border-gray-800 bg-gray-900/30 p-6 text-center">
+            <div class=" text-center">
               <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-sky-500 border-r-transparent"></div>
               <p class="mt-4 text-gray-400">Loading metrics...</p>
             </div>
@@ -2817,7 +2826,7 @@ defmodule LassoWeb.Dashboard do
       </div>
 
       <%= if Enum.empty?(@provider_metrics) do %>
-        <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 border-dashed shadow-2xl overflow-hidden">
+        <div class="backdrop-blur-lg rounded-xl border border-gray-700/60 border-dashed shadow-2xl overflow-hidden">
           <div class="flex flex-col items-center justify-center py-16 px-8">
             <div class="relative mb-4">
               <div class="bg-gray-800/40 flex h-12 w-12 items-center justify-center rounded-lg">
@@ -2830,12 +2839,10 @@ defmodule LassoWeb.Dashboard do
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
-                    stroke-width="1.5"
+                    stroke-width="1.1"
                     d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
                   />
                 </svg>
-              </div>
-              <div class="bg-sky-500/50 absolute -top-1 -right-1 h-2.5 w-2.5 animate-ping rounded-full">
               </div>
             </div>
             <div class="text-center">
@@ -2847,7 +2854,7 @@ defmodule LassoWeb.Dashboard do
           </div>
         </div>
       <% else %>
-        <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-2xl overflow-hidden">
+        <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-sm overflow-hidden">
           <div class="overflow-x-auto">
             <table class="w-full">
               <thead class="bg-gray-800/50 border-b border-gray-700/50">
@@ -2955,7 +2962,7 @@ defmodule LassoWeb.Dashboard do
       <h2 class="text-lg font-semibold mb-3 text-white">Method Performance Breakdown</h2>
 
       <%= if Enum.empty?(@method_metrics) do %>
-        <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 border-dashed shadow-2xl overflow-hidden">
+        <div class="backdrop-blur-lg rounded-xl border border-gray-700/60 border-dashed shadow-2xl overflow-hidden">
           <div class="flex flex-col items-center justify-center py-16 px-8">
             <div class="relative mb-4">
               <div class="bg-gray-800/40 flex h-12 w-12 items-center justify-center rounded-lg">
@@ -2968,12 +2975,10 @@ defmodule LassoWeb.Dashboard do
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
-                    stroke-width="1.5"
+                    stroke-width="1.1"
                     d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
                   />
                 </svg>
-              </div>
-              <div class="bg-sky-500/50 absolute -top-1 -right-1 h-2.5 w-2.5 animate-ping rounded-full">
               </div>
             </div>
             <div class="text-center">
