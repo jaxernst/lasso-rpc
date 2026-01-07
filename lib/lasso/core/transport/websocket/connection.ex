@@ -360,7 +360,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   @impl true
   def handle_info({:ws_connected}, state) do
-    CircuitBreaker.record_success({state.profile, state.chain_name, state.endpoint.id, :ws})
+    CircuitBreaker.signal_recovery({state.profile, state.chain_name, state.endpoint.id, :ws})
 
     # Generate new connection_id for this connection instance
     # This allows consumers to detect when subscriptions are stale (from previous connection)

@@ -268,9 +268,10 @@ defmodule Lasso.HealthProbe.Worker do
   # HTTP probe success/failure handlers
 
   defp handle_http_probe_success(state, latency_ms, now) do
-    # Record success to HTTP circuit breaker (4-tuple: profile, chain, provider_id, transport)
+    # Signal to HTTP circuit breaker that provider is reachable
+    # Circuit breaker decides whether to use this signal based on its state
     cb_id = {state.profile, state.chain, state.provider_id, :http}
-    CircuitBreaker.record_success(cb_id)
+    CircuitBreaker.signal_recovery(cb_id)
 
     new_consecutive_successes = state.consecutive_successes + 1
     was_failing = state.consecutive_failures >= @max_consecutive_failures_before_warn
@@ -330,9 +331,10 @@ defmodule Lasso.HealthProbe.Worker do
   # WS probe success/failure handlers
 
   defp handle_ws_probe_success(state, latency_ms, now) do
-    # Record success to WS circuit breaker (4-tuple: profile, chain, provider_id, transport)
+    # Signal to WS circuit breaker that provider is reachable
+    # Circuit breaker decides whether to use this signal based on its state
     cb_id = {state.profile, state.chain, state.provider_id, :ws}
-    CircuitBreaker.record_success(cb_id)
+    CircuitBreaker.signal_recovery(cb_id)
 
     new_consecutive_successes = state.ws_consecutive_successes + 1
     was_failing = state.ws_consecutive_failures >= @max_consecutive_failures_before_warn

@@ -117,7 +117,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
     # After recovery timeout, half-open then success should close
     Process.sleep(60)
-    assert :ok = CircuitBreaker.record_success(id)
+    assert :ok = CircuitBreaker.signal_recovery(id)
     Process.sleep(20)
     assert CircuitBreaker.get_state(id).state == :closed
   end

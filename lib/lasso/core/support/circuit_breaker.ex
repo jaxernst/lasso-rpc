@@ -113,7 +113,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @typedoc "Result of a circuit breaker call - separates execution status from function result"
   @type call_result(result) :: {:executed, result} | {:rejected, rejection_reason()}
 
-  @spec call(breaker_id, (-> result), non_neg_integer()) :: call_result(result) when result: term()
+  @spec call(breaker_id, (-> result), non_neg_integer()) :: call_result(result)
+        when result: term()
   def call({profile, chain, provider_id, transport} = id, fun, timeout \\ 30_000) do
     now_ms = System.monotonic_time(:millisecond)
     admit_start_us = System.monotonic_time(:microsecond)
@@ -155,7 +156,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     :telemetry.execute(
       [:lasso, :circuit_breaker, :admit],
       %{admit_call_ms: admit_call_ms},
-      %{profile: profile, chain: chain, provider_id: provider_id, transport: transport, decision: decision_tag}
+      %{
+        profile: profile,
+        chain: chain,
+        provider_id: provider_id,
+        transport: transport,
+        decision: decision_tag
+      }
     )
 
     case decision do
@@ -177,8 +184,18 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   # Executes the function with timeout enforcement and reports result to CB
-  @spec execute_with_token(breaker_id(), term(), (-> result), timeout(), profile(), chain(), provider_id(), transport()) ::
-          {:executed, result} when result: term()
+  @spec execute_with_token(
+          breaker_id(),
+          term(),
+          (-> result),
+          timeout(),
+          profile(),
+          chain(),
+          provider_id(),
+          transport()
+        ) ::
+          {:executed, result}
+        when result: term()
   defp execute_with_token(id, token, fun, timeout, profile, chain, provider_id, transport) do
     task =
       Task.async(fn ->
@@ -946,7 +963,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     :ok
   end
 
-  defp publish_circuit_event(profile, provider_id, from, to, reason, transport, chain, error \\ nil) do
+  defp publish_circuit_event(
+         profile,
+         provider_id,
+         from,
+         to,
+         reason,
+         transport,
+         chain,
+         error \\ nil
+       ) do
     # Extract error details for dashboard display
     error_info =
       case error do
@@ -961,7 +987,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           nil
       end
 
-    event = {:circuit_breaker_event,
+    event =
+      {:circuit_breaker_event,
        %{
          ts: System.system_time(:millisecond),
          profile: profile,
@@ -989,18 +1016,59 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   defp truncate_error_message(other), do: inspect(other) |> truncate_error_message()
 
   @doc """
-  Record a successful operation for the circuit breaker.
+  Signals that external health monitoring has detected the provider is reachable.
+
+  This is used by health probes and other external monitors to indicate that a
+  provider appears to be responding. The circuit breaker uses this signal to
+  attempt recovery when appropriate.
+
+  ## Behavior by Circuit State
+
+  - **Open**: Triggers transition to half-open state (recovery attempt)
+  - **Half-open**: Counts toward success threshold for closing circuit
+  - **Closed**: No-op (circuit doesn't need recovery signals)
+
+  ## Important
+
+  This is NOT for recording live traffic outcomes. Live traffic goes through
+  `call/3` which reports results internally. This function is specifically for
+  external monitoring systems to signal "provider appears healthy, consider recovery."
+
+  ## Returns
+
+  - `:ok` - Signal was processed (or ignored if circuit is closed)
+  - `{:error, :not_found}` - Circuit breaker not found
   """
-  def record_success(id) do
+  @spec signal_recovery(breaker_id()) :: :ok | {:error, :not_found}
+  def signal_recovery(id) do
     case GenServer.whereis(via_name(id)) do
       nil ->
         {:error, :not_found}
 
       _pid ->
-        GenServer.cast(via_name(id), {:report_external, {:ok, :success}})
-        :ok
+        # Only signal recovery when circuit needs it (open/half-open)
+        # Closed circuits don't need recovery signals from external monitors
+        case get_state(id) do
+          %{state: state} when state in [:open, :half_open] ->
+            GenServer.cast(via_name(id), {:report_external, {:ok, :success}})
+            :ok
+
+          _ ->
+            :ok
+        end
     end
   end
+
+  @doc """
+  Record a successful operation for the circuit breaker.
+
+  **Deprecated**: Use `signal_recovery/1` instead. This function has been renamed
+  to better reflect its purpose - signaling recovery readiness to open/half-open
+  circuits, not recording live traffic successes.
+  """
+  @deprecated "Use signal_recovery/1 instead"
+  @spec record_success(breaker_id()) :: :ok | {:error, :not_found}
+  def record_success(id), do: signal_recovery(id)
 
   @doc """
   Record a failed operation for the circuit breaker.

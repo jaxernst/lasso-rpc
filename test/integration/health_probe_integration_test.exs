@@ -10,7 +10,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
   These tests validate the core value proposition:
   1. HealthProbe bypasses circuit breaker to detect recovery
-  2. HealthProbe informs circuit breaker via record_success/record_failure
+  2. HealthProbe informs circuit breaker via signal_recovery/record_failure
   3. BlockSync HTTP respects circuit breaker state
   4. Full recovery flow works end-to-end
   """
@@ -81,11 +81,11 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       # Wait for recovery timeout first
       Process.sleep(150)
 
-      CircuitBreaker.record_success(cb_id)
+      CircuitBreaker.signal_recovery(cb_id)
       Process.sleep(50)
 
-      # record_success transitions open -> half_open
-      # A successful call (or another record_success) closes it fully
+      # signal_recovery transitions open -> half_open
+      # A successful call (or another signal_recovery) closes it fully
       state = CircuitBreaker.get_state(cb_id)
       assert state.state in [:half_open, :closed], "Circuit should be in recovery after HealthProbe success"
 
@@ -170,12 +170,12 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       # 3. Wait for recovery timeout → half_open
       Process.sleep(150)
 
-      # record_success triggers transition to half_open
-      CircuitBreaker.record_success(cb_id)
+      # signal_recovery triggers transition to half_open
+      CircuitBreaker.signal_recovery(cb_id)
       Process.sleep(20)
 
       state = CircuitBreaker.get_state(cb_id)
-      # State should be half_open after record_success from open
+      # State should be half_open after signal_recovery from open
       assert state.state in [:half_open, :closed], "Expected half_open or closed, got: #{state.state}"
 
       # 4. Successful call from half_open closes it
@@ -186,6 +186,60 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       end
 
       assert CircuitBreaker.get_state(cb_id).state == :closed
+    end
+
+    @tag :integration
+    test "HealthProbe success does not reset failure counter on closed circuit", %{chain: chain} do
+      profile = "default"
+
+      provider_spec = %{
+        id: "probe_closed_circuit_provider",
+        behavior: :healthy,
+        priority: 100
+      }
+
+      {:ok, [provider_id]} =
+        IntegrationHelper.setup_test_chain_with_providers(
+          chain,
+          [provider_spec],
+          provider_type: :http,
+          skip_health_check: true
+        )
+
+      cb_id = {profile, chain, provider_id, :http}
+      wait_for_circuit_breaker(cb_id)
+
+      # Verify circuit starts closed
+      state = CircuitBreaker.get_state(cb_id)
+      assert state.state == :closed
+      assert state.failure_count == 0
+
+      # Record 3 failures (below threshold of 5)
+      for _ <- 1..3, do: CircuitBreaker.record_failure(cb_id)
+      Process.sleep(50)
+
+      # Verify failures were counted
+      state = CircuitBreaker.get_state(cb_id)
+      assert state.state == :closed, "Circuit should still be closed"
+      assert state.failure_count == 3, "Should have 3 failures recorded"
+
+      # Simulate health probe success - should NOT reset counter when circuit is closed
+      CircuitBreaker.signal_recovery(cb_id)
+      Process.sleep(50)
+
+      # Verify failure count is unchanged (health probe didn't reset it)
+      state = CircuitBreaker.get_state(cb_id)
+      assert state.state == :closed, "Circuit should still be closed"
+      assert state.failure_count == 3, "Failure count should remain at 3 (not reset by health probe)"
+
+      # Record 2 more failures to reach threshold
+      for _ <- 1..2, do: CircuitBreaker.record_failure(cb_id)
+      Process.sleep(50)
+
+      # Circuit should now be open (would fail if counter was reset to 0)
+      state = CircuitBreaker.get_state(cb_id)
+      assert state.state == :open, "Circuit should open after 5 total failures (3 + 2)"
+      assert state.failure_count == 5, "Should have 5 failures recorded"
     end
   end
 
@@ -253,7 +307,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
       # Record success (simulating HealthProbe recovery detection)
       # This transitions from open -> half_open
-      CircuitBreaker.record_success(cb_id)
+      CircuitBreaker.signal_recovery(cb_id)
       Process.sleep(50)
 
       # Circuit should be in recovery state (half_open or closed)
@@ -312,9 +366,9 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       # and eventually detects recovery
       Process.sleep(150)  # Wait for recovery timeout
 
-      # HealthProbe detects recovery and records success
+      # HealthProbe detects recovery and signals recovery
       # This transitions open -> half_open
-      CircuitBreaker.record_success(cb_id)
+      CircuitBreaker.signal_recovery(cb_id)
       Process.sleep(50)
 
       # Phase 5: Circuit is in recovery state, traffic can test
@@ -331,7 +385,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
     end
 
     @tag :integration
-    test "flapping provider: rapid up/down doesn't cause thrashing", %{chain: chain} do
+    test "flapping provider: failures accumulate despite health probe successes", %{chain: chain} do
       profile = "default"
 
       provider_spec = %{
@@ -351,20 +405,24 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       cb_id = {profile, chain, provider_id, :http}
       wait_for_circuit_breaker(cb_id)
 
-      # Simulate flapping: success, fail, success, fail...
+      # Simulate scenario: alternating health probe success and live traffic failure
+      # Health probe successes should NOT reset failure counter when circuit is closed
+      # Need 10 iterations to get 5 failures (default threshold)
       for i <- 1..10 do
         if rem(i, 2) == 0 do
           CircuitBreaker.record_failure(cb_id)
         else
-          CircuitBreaker.record_success(cb_id)
+          CircuitBreaker.signal_recovery(cb_id)  # No-op when circuit is closed
         end
 
         Process.sleep(10)
       end
 
-      # Circuit should still be closed (failures didn't accumulate consecutively)
+      # Circuit should open because failures accumulated to threshold (5)
+      # Health probe successes didn't reset the counter
       state = CircuitBreaker.get_state(cb_id)
-      assert state.state == :closed
+      assert state.state == :open, "Circuit should open when failures accumulate despite health probe successes"
+      assert state.failure_count == 5, "Should have accumulated 5 failures"
     end
 
     @tag :integration
@@ -415,7 +473,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
       # Recover p1
       Process.sleep(150)
-      CircuitBreaker.record_success(cb1)
+      CircuitBreaker.signal_recovery(cb1)
       Process.sleep(50)
 
       # p1 should be in recovery state (half_open)
