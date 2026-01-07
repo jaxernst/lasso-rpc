@@ -124,6 +124,10 @@ defmodule Lasso.Application do
               raise "Default profile validation failed: #{message}"
           end
 
+          # Validate that all provider URLs have resolved environment variables
+          # This prevents silent failures where URLs contain literal ${VAR_NAME} placeholders
+          validate_all_providers_configured(profile_slugs)
+
         {:error, reason} ->
           Logger.warning("Failed to load profiles: #{inspect(reason)}")
       end
@@ -142,6 +146,59 @@ defmodule Lasso.Application do
   end
 
   # Private helper functions
+
+  defp validate_all_providers_configured(profile_slugs) do
+    alias Lasso.Config.{ConfigStore, ChainConfig}
+
+    profile_slugs
+    |> Enum.flat_map(&collect_profile_validation_errors/1)
+    |> case do
+      [] ->
+        Logger.info("Startup validation passed: all provider URLs resolved")
+
+      errors ->
+        log_validation_errors(errors)
+        raise "Provider configuration validation failed: unresolved environment variables"
+    end
+  end
+
+  defp collect_profile_validation_errors(profile) do
+    alias Lasso.Config.{ConfigStore, ChainConfig}
+
+    with {:ok, chains} <- ConfigStore.get_profile_chains(profile) do
+      Enum.flat_map(chains, fn {chain_name, chain_config} ->
+        case ChainConfig.validate_no_unresolved_placeholders(chain_config) do
+          :ok -> []
+          {:error, {:unresolved_env_vars, providers}} -> [{profile, chain_name, providers}]
+        end
+      end)
+    else
+      _ -> []
+    end
+  end
+
+  defp log_validation_errors(errors) do
+    Logger.error("""
+    STARTUP FAILURE: Unresolved environment variables in provider configuration
+
+    #{format_validation_errors(errors)}
+
+    Please ensure all required environment variables are set in your .env file or system environment.
+    """)
+  end
+
+  defp format_validation_errors(errors) do
+    Enum.map_join(errors, "\n\n", fn {profile, chain, providers} ->
+      "Profile '#{profile}', Chain '#{chain}':\n#{format_provider_issues(providers)}"
+    end)
+  end
+
+  defp format_provider_issues(providers) do
+    Enum.map_join(providers, "\n", fn {provider_id, issues} ->
+      issue_list = Enum.map_join(issues, "\n", fn {type, url} -> "    - #{type}: #{url}" end)
+      "  Provider '#{provider_id}':\n#{issue_list}"
+    end)
+  end
 
   defp get_config_store_opts do
     # Check for explicit backend_config first (test environment)

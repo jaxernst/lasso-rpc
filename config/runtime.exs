@@ -7,6 +7,15 @@ import Config
 # any compile-time configuration in here, as it won't be applied.
 # The block below contains prod specific runtime configuration.
 
+# Load .env file if present (system env vars take precedence)
+if File.exists?(".env") and Code.ensure_loaded?(Dotenvy) do
+  vars = Dotenvy.source!([".env", System.get_env()])
+  Enum.each(vars, fn {key, value} -> System.put_env(key, value) end)
+
+  require Logger
+  Logger.info("Loaded #{map_size(vars)} environment variables from .env")
+end
+
 # ## Using releases (Elixir v1.9+)
 #
 # If you are doing OTP releases, you need to instruct Phoenix
@@ -44,12 +53,19 @@ if config_env() == :prod do
   # External URL scheme (HTTPS in production behind Fly.io proxy)
   scheme = System.get_env("PHX_SCHEME") || "https"
 
+  # Require SECRET_KEY_BASE in production for security
+  secret_key_base =
+    System.get_env("SECRET_KEY_BASE") ||
+      raise """
+      environment variable SECRET_KEY_BASE is missing.
+      You can generate one by calling: mix phx.gen.secret
+      """
+
   config :lasso, LassoWeb.Endpoint,
     http: [ip: {0, 0, 0, 0}, port: port],
     # URL config is for external access - use HTTPS and standard port (443 is omitted from URLs)
     url: [host: host, scheme: scheme],
-    secret_key_base:
-      System.get_env("SECRET_KEY_BASE") || "YourSecretKeyBaseHere" <> String.duplicate("a", 64)
+    secret_key_base: secret_key_base
 
   # Optional: surface Fly region to the app for tagging
   if System.get_env("FLY_REGION") do

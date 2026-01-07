@@ -194,11 +194,7 @@ defmodule Lasso.Config.ChainConfig do
     end
   end
 
-  @doc """
-  Substitutes environment variables in configuration strings.
-
-  Replaces ${VAR_NAME} with the value of the environment variable.
-  """
+  @doc "Substitutes ${VAR_NAME} patterns with environment variable values."
   def substitute_env_vars(nil), do: nil
 
   def substitute_env_vars(string) when is_binary(string) do
@@ -208,6 +204,39 @@ defmodule Lasso.Config.ChainConfig do
   end
 
   def substitute_env_vars(value), do: value
+
+  @doc "Returns true if string contains unresolved ${VAR_NAME} placeholders."
+  def has_unresolved_placeholders?(string) when is_binary(string) do
+    string =~ ~r/\$\{[^}]+\}/
+  end
+
+  def has_unresolved_placeholders?(_), do: false
+
+  @doc "Validates that all provider URLs have resolved environment variables."
+  @spec validate_no_unresolved_placeholders(t()) ::
+          :ok | {:error, {:unresolved_env_vars, [{String.t(), [{atom(), String.t()}]}]}}
+  def validate_no_unresolved_placeholders(%__MODULE__{} = chain_config) do
+    chain_config.providers
+    |> Enum.flat_map(&collect_provider_issues/1)
+    |> case do
+      [] -> :ok
+      unresolved -> {:error, {:unresolved_env_vars, unresolved}}
+    end
+  end
+
+  defp collect_provider_issues(provider) do
+    issues =
+      [
+        if(has_unresolved_placeholders?(provider.url), do: {:url, provider.url}),
+        if(has_unresolved_placeholders?(provider.ws_url), do: {:ws_url, provider.ws_url})
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    case issues do
+      [] -> []
+      issues -> [{provider.id, issues}]
+    end
+  end
 
   @doc """
   Validates that a chain configuration has valid providers.
