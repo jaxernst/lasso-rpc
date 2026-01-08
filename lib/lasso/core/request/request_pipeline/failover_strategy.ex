@@ -31,8 +31,8 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
 
   require Logger
 
-  alias Lasso.RPC.{Channel, RequestContext}
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.{Channel, RequestContext}
 
   @type decision :: {:failover, atom()} | {:terminal_error, atom()}
 

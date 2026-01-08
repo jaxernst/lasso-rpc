@@ -1,4 +1,5 @@
 defmodule LassoWeb.Components.DashboardHeader do
+  @moduledoc "Dashboard header component with tab navigation."
   use Phoenix.Component
 
   attr(:active_tab, :string, required: true, doc: "currently active tab")

@@ -22,6 +22,7 @@ defmodule Lasso.Events.Provider do
   def topic(chain) when is_binary(chain), do: @provider_topic_prefix <> chain
 
   defmodule Healthy do
+    @moduledoc "Event indicating a provider is healthy."
     @derive Jason.Encoder
     @enforce_keys [:ts, :chain, :provider_id]
     defstruct v: 1, ts: nil, chain: nil, provider_id: nil
@@ -35,6 +36,7 @@ defmodule Lasso.Events.Provider do
   end
 
   defmodule Unhealthy do
+    @moduledoc "Event indicating a provider is unhealthy."
     @derive Jason.Encoder
     @enforce_keys [:ts, :chain, :provider_id]
     defstruct v: 1, ts: nil, chain: nil, provider_id: nil, reason: nil
@@ -49,6 +51,7 @@ defmodule Lasso.Events.Provider do
   end
 
   defmodule HealthCheckFailed do
+    @moduledoc "Event indicating a provider health check failed."
     @derive Jason.Encoder
     @enforce_keys [:ts, :chain, :provider_id]
     defstruct v: 1,
@@ -77,6 +80,7 @@ defmodule Lasso.Events.Provider do
   def kind(%HealthCheckFailed{}), do: :health_check_failed
 
   defmodule WSDisconnected do
+    @moduledoc "Event indicating a WebSocket connection was disconnected."
     @derive Jason.Encoder
     @enforce_keys [:ts, :chain, :provider_id]
     defstruct v: 1, ts: nil, chain: nil, provider_id: nil, reason: nil
@@ -91,6 +95,7 @@ defmodule Lasso.Events.Provider do
   end
 
   defmodule WSClosed do
+    @moduledoc "Event indicating a WebSocket connection was closed."
     @derive Jason.Encoder
     @enforce_keys [:ts, :chain, :provider_id, :code]
     defstruct v: 1, ts: nil, chain: nil, provider_id: nil, code: nil, reason: nil
@@ -109,6 +114,7 @@ defmodule Lasso.Events.Provider do
   def kind(%WSClosed{}), do: :ws_closed
 
   defmodule WSConnected do
+    @moduledoc "Event indicating a WebSocket connection was established."
     @derive Jason.Encoder
     @enforce_keys [:ts, :chain, :provider_id]
     defstruct v: 1, ts: nil, chain: nil, provider_id: nil

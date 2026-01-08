@@ -9,8 +9,8 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   All categorization logic is delegated to ErrorClassification for maintainability.
   """
 
-  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Core.Support.ErrorClassifier
+  alias Lasso.JSONRPC.Error, as: JError
 
   @type context :: :health_check | :live_traffic | :transport | :jsonrpc
   @type transport :: :http | :ws | nil

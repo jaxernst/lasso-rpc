@@ -1,10 +1,10 @@
 defmodule LassoWeb.HomeLive do
   use LassoWeb, :live_view
-  alias LassoWeb.Components.DashboardHeader
-  alias LassoWeb.Components.LatencyHeatmap
-  alias LassoWeb.Components.LandingHeroGraphic
-  alias Lasso.Config.ConfigStore
   alias Lasso.Benchmarking.BenchmarkStore
+  alias Lasso.Config.ConfigStore
+  alias LassoWeb.Components.DashboardHeader
+  alias LassoWeb.Components.LandingHeroGraphic
+  alias LassoWeb.Components.LatencyHeatmap
 
   @impl true
   def mount(_params, _session, socket) do

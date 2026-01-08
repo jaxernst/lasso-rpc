@@ -28,8 +28,8 @@ defmodule Lasso.HealthProbe.Worker do
   require Logger
 
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.RPC.{TransportRegistry, Channel, Response}
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
+  alias Lasso.RPC.{Channel, Response, TransportRegistry}
 
   @default_probe_interval_ms 10_000
   @default_timeout_ms 5_000

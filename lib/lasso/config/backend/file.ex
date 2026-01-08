@@ -441,10 +441,9 @@ defmodule Lasso.Config.Backend.File do
 
   defp generate_chains_yaml(chains_data) when is_map(chains_data) do
     chains_data
-    |> Enum.map(fn {chain_name, chain_config} ->
+    |> Enum.map_join("\n", fn {chain_name, chain_config} ->
       generate_chain_yaml(chain_name, chain_config)
     end)
-    |> Enum.join("\n")
   end
 
   defp generate_chains_yaml(_), do: ""
@@ -581,8 +580,7 @@ defmodule Lasso.Config.Backend.File do
 
   defp generate_providers_yaml(providers) do
     providers
-    |> Enum.map(&generate_provider_yaml/1)
-    |> Enum.join("")
+    |> Enum.map_join("", &generate_provider_yaml/1)
   end
 
   defp generate_provider_yaml(provider) do

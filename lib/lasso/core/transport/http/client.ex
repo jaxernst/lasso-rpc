@@ -36,8 +36,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
   @spec request(provider_config, method, params, opts) ::
           {:ok, raw_response()} | {:error, error_reason}
   def request(provider_config, method, params, opts \\ []) do
-    adapter()
-    |> apply(:request, [provider_config, method, params, opts])
+    adapter().request(provider_config, method, params, opts)
   end
 
   @doc """

@@ -173,7 +173,7 @@ defmodule Mix.Tasks.Lasso.Probe do
   end
 
   defp print_header(url, probes, level, timeout) do
-    probes_str = Enum.map(probes, &Atom.to_string/1) |> Enum.join(", ")
+    probes_str = Enum.map_join(probes, ", ", &Atom.to_string/1)
 
     Mix.shell().info("Probing provider: #{url}")
     Mix.shell().info("Probes: #{probes_str}")

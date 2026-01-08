@@ -59,10 +59,10 @@ defmodule Lasso.RPC.TransportRegistry do
   use GenServer
   require Logger
 
-  alias Lasso.RPC.Channel
   alias Lasso.Config.ConfigStore
-  alias Lasso.RPC.ProviderPool
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.Channel
+  alias Lasso.RPC.ProviderPool
 
   # ETS table for lockless channel lookups in hot path
   @channel_cache_table :transport_channel_cache

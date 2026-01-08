@@ -40,8 +40,8 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   """
 
   require Logger
-  alias Lasso.RPC.Providers.AdapterRegistry
   alias Lasso.RPC.Channel
+  alias Lasso.RPC.Providers.AdapterRegistry
 
   @doc """
   Filters channels to only those whose adapters support the method.

@@ -6,8 +6,8 @@ defmodule Lasso.RPC.StrategyContext do
   populate optional fields during their `prepare_context/1` implementation.
   """
 
-  alias Lasso.RPC.SelectionContext
   alias Lasso.Core.Benchmarking.Metrics
+  alias Lasso.RPC.SelectionContext
 
   # Fallback latency when no provider data exists
   @default_fallback_latency_ms 500.0

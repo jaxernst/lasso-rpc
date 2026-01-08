@@ -1,26 +1,26 @@
 defmodule LassoWeb.Dashboard do
+  @moduledoc "Main dashboard LiveView for monitoring RPC chains and providers."
   use LassoWeb, :live_view
   require Logger
 
+  alias Lasso.Events.Provider
+  alias LassoWeb.Components.DashboardComponents
+  alias LassoWeb.Components.DashboardHeader
+  alias LassoWeb.Components.NetworkStatusLegend
+  alias LassoWeb.Dashboard.Components
   alias LassoWeb.NetworkTopology
   alias LassoWeb.TopologyConfig
 
   alias LassoWeb.Dashboard.{
+    Constants,
+    EndpointHelpers,
+    EventBuffer,
+    Formatting,
     Helpers,
     MetricsHelpers,
-    StatusHelpers,
-    EndpointHelpers,
-    Constants,
     Status,
-    EventBuffer,
-    Formatting
+    StatusHelpers
   }
-
-  alias LassoWeb.Dashboard.Components
-  alias LassoWeb.Components.DashboardHeader
-  alias LassoWeb.Components.NetworkStatusLegend
-  alias LassoWeb.Components.DashboardComponents
-  alias Lasso.Events.Provider
 
   @impl true
   def mount(params, session, socket) do
@@ -322,9 +322,7 @@ defmodule LassoWeb.Dashboard do
     # Filter out events for chains not in the selected profile
     profile_chains = Map.get(socket.assigns, :profile_chains, [])
 
-    if chain not in profile_chains do
-      {:noreply, socket}
-    else
+    if chain in profile_chains do
       entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
       ts_ms: System.system_time(:millisecond),
@@ -374,6 +372,8 @@ defmodule LassoWeb.Dashboard do
         end
 
       {:noreply, socket}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -405,9 +405,7 @@ defmodule LassoWeb.Dashboard do
     # Filter out events for chains not in the selected profile
     profile_chains = Map.get(socket.assigns, :profile_chains, [])
 
-    if chain not in profile_chains do
-      {:noreply, socket}
-    else
+    if chain in profile_chains do
       entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
       ts_ms: ts,
@@ -451,6 +449,8 @@ defmodule LassoWeb.Dashboard do
           socket
         end
 
+      {:noreply, socket}
+    else
       {:noreply, socket}
     end
   end
@@ -501,9 +501,7 @@ defmodule LassoWeb.Dashboard do
     # Filter out events for chains not in the selected profile
     profile_chains = Map.get(socket.assigns, :profile_chains, [])
 
-    if chain not in profile_chains do
-      {:noreply, socket}
-    else
+    if chain in profile_chains do
       # Extract error details if present (new format includes error info)
       error_info = Map.get(event_data, :error)
 
@@ -588,6 +586,8 @@ defmodule LassoWeb.Dashboard do
           socket
         end
 
+      {:noreply, socket}
+    else
       {:noreply, socket}
     end
   end
@@ -2363,8 +2363,8 @@ defmodule LassoWeb.Dashboard do
 
   defp fetch_connections(socket, profile \\ nil) do
     alias Lasso.Config.ConfigStore
-    alias Lasso.RPC.ProviderPool
     alias Lasso.RPC.ChainState
+    alias Lasso.RPC.ProviderPool
 
     # Get profile-scoped chains
     # Mount guarantees selected_profile is set
@@ -2533,8 +2533,8 @@ defmodule LassoWeb.Dashboard do
     profile = socket.assigns.selected_profile
 
     try do
-      alias Lasso.Config.ConfigStore
       alias Lasso.Benchmarking.BenchmarkStore
+      alias Lasso.Config.ConfigStore
 
       case ConfigStore.get_providers(profile, chain_name) do
         {:ok, provider_configs} ->

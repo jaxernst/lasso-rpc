@@ -10,7 +10,7 @@ defmodule Lasso.RPC.Strategy do
   `choose/3` is required in the unified API.
   """
 
-  alias Lasso.RPC.{SelectionContext, StrategyContext, Channel}
+  alias Lasso.RPC.{Channel, SelectionContext, StrategyContext}
 
   @type candidate :: %{
           required(:id) => String.t(),

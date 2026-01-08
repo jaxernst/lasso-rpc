@@ -29,7 +29,7 @@ defmodule Lasso.BlockSync.Worker do
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.BlockSync.Strategies.{HttpStrategy, WsStrategy}
-  alias Lasso.Config.{ConfigStore, ChainConfig}
+  alias Lasso.Config.{ChainConfig, ConfigStore}
 
   @reconnect_delay_ms 5_000
 

@@ -1,8 +1,9 @@
 defmodule LassoWeb.NetworkTopology do
+  @moduledoc "Network topology visualization component for RPC providers."
   use Phoenix.Component
 
-  alias LassoWeb.TopologyConfig
   alias Lasso.Config.ConfigStore
+  alias LassoWeb.TopologyConfig
 
   attr(:id, :string, required: true, doc: "unique identifier for the topology component")
   attr(:connections, :list, required: true, doc: "list of connection maps")
@@ -641,8 +642,7 @@ defmodule LassoWeb.NetworkTopology do
         chain_name
         |> String.replace("_", " ")
         |> String.split(" ")
-        |> Enum.map(&String.capitalize/1)
-        |> Enum.join(" ")
+        |> Enum.map_join(" ", &String.capitalize/1)
     end
   end
 

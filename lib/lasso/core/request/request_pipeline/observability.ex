@@ -13,8 +13,8 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
   require Logger
 
-  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Core.Benchmarking.Metrics
+  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.{Channel, ProviderPool, RequestContext}
 
   @type telemetry_metadata :: %{

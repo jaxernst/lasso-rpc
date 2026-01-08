@@ -10,6 +10,8 @@ defmodule Lasso.Discovery.Probes.WebSocket do
 
   require Logger
 
+  alias Client
+
   @subscription_types ["newHeads", "logs", "newPendingTransactions"]
 
   @type ws_result :: %{
@@ -80,20 +82,20 @@ defmodule Lasso.Discovery.Probes.WebSocket do
   # Connection management using a simple GenServer wrapper around WebSockex
   defp connect(ws_url, timeout) do
     # Start our probe client
-    case Lasso.Discovery.Probes.WebSocket.Client.start_link(ws_url, timeout) do
+    case Client.start_link(ws_url, timeout) do
       {:ok, pid} -> {:ok, pid}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp disconnect(conn) do
-    Lasso.Discovery.Probes.WebSocket.Client.stop(conn)
+    Client.stop(conn)
   end
 
   defp test_connection_latency(conn, timeout) do
     start = System.monotonic_time(:millisecond)
 
-    case Lasso.Discovery.Probes.WebSocket.Client.request(conn, "eth_blockNumber", [], timeout) do
+    case Client.request(conn, "eth_blockNumber", [], timeout) do
       {:ok, _result} ->
         latency = System.monotonic_time(:millisecond) - start
         %{status: :ok, latency_ms: latency}
@@ -111,7 +113,7 @@ defmodule Lasso.Discovery.Probes.WebSocket do
         start = System.monotonic_time(:millisecond)
 
         result =
-          case Lasso.Discovery.Probes.WebSocket.Client.request(conn, method, [], timeout) do
+          case Client.request(conn, method, [], timeout) do
             {:ok, _} ->
               %{status: :supported, latency_ms: System.monotonic_time(:millisecond) - start}
 
@@ -138,7 +140,7 @@ defmodule Lasso.Discovery.Probes.WebSocket do
           end
 
         result =
-          case Lasso.Discovery.Probes.WebSocket.Client.subscribe(
+          case Client.subscribe(
                  conn,
                  params,
                  timeout,
@@ -176,7 +178,7 @@ defmodule Lasso.Discovery.Probes.WebSocket do
   defp format_error(reason), do: inspect(reason)
 end
 
-defmodule Lasso.Discovery.Probes.WebSocket.Client do
+defmodule Client do
   @moduledoc false
   # Internal WebSocket client for probing
 

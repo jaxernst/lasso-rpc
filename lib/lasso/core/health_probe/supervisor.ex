@@ -15,8 +15,8 @@ defmodule Lasso.HealthProbe.Supervisor do
   use DynamicSupervisor
   require Logger
 
-  alias Lasso.HealthProbe.Worker
   alias Lasso.Config.ConfigStore
+  alias Lasso.HealthProbe.Worker
 
   ## Client API
 

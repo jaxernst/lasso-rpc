@@ -1,4 +1,5 @@
 defmodule LassoWeb.Dashboard.Components.SimulatorControls do
+  @moduledoc "LiveView component for dashboard simulator controls."
   use LassoWeb, :live_component
   import LassoWeb.Components.FloatingWindow
   alias LassoWeb.Dashboard.Helpers

@@ -3,9 +3,9 @@ defmodule LassoWeb.MetricsController do
 
   require Logger
 
-  alias LassoWeb.Dashboard.MetricsHelpers
-  alias Lasso.Config.ConfigStore
   alias Lasso.Benchmarking.BenchmarkStore
+  alias Lasso.Config.ConfigStore
+  alias LassoWeb.Dashboard.MetricsHelpers
 
   @doc """
   Returns comprehensive metrics for a specific chain.

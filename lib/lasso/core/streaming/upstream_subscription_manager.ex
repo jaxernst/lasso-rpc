@@ -49,8 +49,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
 
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Streaming.UpstreamSubscriptionRegistry
-  alias Lasso.RPC.{TransportRegistry, Channel}
   alias Lasso.RPC.Response
+  alias Lasso.RPC.{Channel, TransportRegistry}
 
   @cleanup_interval_ms 30_000
   @teardown_grace_period_ms 60_000

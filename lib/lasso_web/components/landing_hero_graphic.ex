@@ -1,4 +1,5 @@
 defmodule LassoWeb.Components.LandingHeroGraphic do
+  @moduledoc "Landing page hero graphic component with animated network visualization."
   use Phoenix.Component
 
   @doc """

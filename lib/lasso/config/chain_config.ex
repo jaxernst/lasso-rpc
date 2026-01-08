@@ -31,6 +31,7 @@ defmodule Lasso.Config.ChainConfig do
   ]
 
   defmodule Provider do
+    @moduledoc "Configuration for an RPC provider."
     @derive Jason.Encoder
     @type t :: %__MODULE__{
             id: String.t(),
@@ -61,6 +62,7 @@ defmodule Lasso.Config.ChainConfig do
   end
 
   defmodule Connection do
+    @moduledoc "Connection settings for RPC providers."
     @type t :: %__MODULE__{
             heartbeat_interval: non_neg_integer(),
             reconnect_interval: non_neg_integer(),
@@ -75,6 +77,7 @@ defmodule Lasso.Config.ChainConfig do
   end
 
   defmodule Failover do
+    @moduledoc "Failover configuration for RPC provider selection."
     @type t :: %__MODULE__{
             max_backfill_blocks: non_neg_integer(),
             backfill_timeout: non_neg_integer(),

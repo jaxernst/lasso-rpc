@@ -31,12 +31,12 @@ defmodule Lasso.RPC.ChainSupervisor do
   use Supervisor
   require Logger
 
+  alias Lasso.BlockSync
+  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, UpstreamSubscriptionPool}
+  alias Lasso.HealthProbe
+  alias Lasso.RPC.ProviderSupervisor
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
   alias Lasso.RPC.{ProviderPool, TransportRegistry}
-  alias Lasso.RPC.ProviderSupervisor
-  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, UpstreamSubscriptionPool}
-  alias Lasso.BlockSync
-  alias Lasso.HealthProbe
 
   @doc """
   Starts a ChainSupervisor for a specific profile and blockchain.

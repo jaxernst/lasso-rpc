@@ -11,8 +11,8 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   - application defaults
   """
 
+  alias Lasso.Config.{MethodConstraints, MethodPolicy}
   alias Lasso.RPC.RequestOptions
-  alias Lasso.Config.{MethodPolicy, MethodConstraints}
   alias LassoWeb.Plugs.RequestTimingPlug
 
   @type override_opts :: [

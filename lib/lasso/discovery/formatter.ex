@@ -83,8 +83,7 @@ defmodule Lasso.Discovery.Formatter do
 
     probes =
       (results[:probes_run] || [])
-      |> Enum.map(&Atom.to_string/1)
-      |> Enum.join(", ")
+      |> Enum.map_join(", ", &Atom.to_string/1)
 
     [
       divider(),
@@ -403,8 +402,7 @@ defmodule Lasso.Discovery.Formatter do
 
   defp format_map_value(map) when is_map(map) do
     map
-    |> Enum.map(fn {k, v} -> "#{k}: #{v}" end)
-    |> Enum.join(", ")
+    |> Enum.map_join(", ", fn {k, v} -> "#{k}: #{v}" end)
   end
 
   defp prepare_for_json(results) do

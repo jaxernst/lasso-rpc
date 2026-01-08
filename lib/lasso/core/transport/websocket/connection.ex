@@ -70,11 +70,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   use GenServer, restart: :permanent
   require Logger
 
-  alias Lasso.RPC.Transport.WebSocket.Endpoint
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.ErrorNormalizer
-  alias Lasso.RPC.Response
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.Response
+  alias Lasso.RPC.Transport.WebSocket.Endpoint
 
   # Client API
 

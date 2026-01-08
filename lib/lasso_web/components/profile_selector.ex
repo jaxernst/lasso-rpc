@@ -7,8 +7,8 @@ defmodule LassoWeb.Components.ProfileSelector do
   """
   use Phoenix.Component
 
-  alias Phoenix.LiveView.JS
   alias Lasso.Config.ConfigStore
+  alias Phoenix.LiveView.JS
 
   attr(:profiles, :list, required: true)
   attr(:selected_profile, :string, required: true)

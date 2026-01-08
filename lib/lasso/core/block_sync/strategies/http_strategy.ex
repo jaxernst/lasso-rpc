@@ -22,7 +22,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   require Logger
 
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.RPC.{TransportRegistry, Channel, Response}
+  alias Lasso.RPC.{Channel, Response, TransportRegistry}
 
   @default_poll_interval_ms 12_000
   @default_timeout_ms 3_000

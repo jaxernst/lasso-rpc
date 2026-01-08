@@ -15,7 +15,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   require Logger
 
   alias Lasso.Benchmarking.BenchmarkStore
-  alias LassoWeb.Dashboard.{Helpers, Constants}
+  alias LassoWeb.Dashboard.{Constants, Helpers}
   alias LassoWeb.Dashboard.Metrics.Calculations
 
   # ETS table name helpers (must match BenchmarkStore)
