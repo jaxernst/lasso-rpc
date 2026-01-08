@@ -50,7 +50,9 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   def start(chain, provider_id, opts) do
     profile = Keyword.fetch!(opts, :profile)
     parent = Keyword.get(opts, :parent, self())
-    staleness_threshold = Keyword.get(opts, :staleness_threshold_ms, @default_staleness_threshold_ms)
+
+    staleness_threshold =
+      Keyword.get(opts, :staleness_threshold_ms, @default_staleness_threshold_ms)
 
     state = %__MODULE__{
       profile: profile,
@@ -78,7 +80,12 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   end
 
   @impl true
-  def stop(%__MODULE__{staleness_timer_ref: ref, profile: profile, chain: chain, provider_id: provider_id}) do
+  def stop(%__MODULE__{
+        staleness_timer_ref: ref,
+        profile: profile,
+        chain: chain,
+        provider_id: provider_id
+      }) do
     if ref, do: Process.cancel_timer(ref)
 
     # Release our subscription from the manager
@@ -107,13 +114,19 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   end
 
   @impl true
-  def handle_message({:upstream_subscription_event, provider_id, {:newHeads}, payload, _received_at}, state)
+  def handle_message(
+        {:upstream_subscription_event, provider_id, {:newHeads}, payload, _received_at},
+        state
+      )
       when provider_id == state.provider_id do
     new_state = process_new_head(state, payload)
     {:ok, new_state}
   end
 
-  def handle_message({:upstream_subscription_invalidated, provider_id, {:newHeads}, reason}, state)
+  def handle_message(
+        {:upstream_subscription_invalidated, provider_id, {:newHeads}, reason},
+        state
+      )
       when provider_id == state.provider_id do
     Logger.debug("WS subscription invalidated",
       chain: state.chain,
@@ -292,7 +305,13 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
     # Check staleness at half the threshold interval
     check_interval = div(state.staleness_threshold_ms, 2)
-    ref = Process.send_after(state.parent, {:ws_strategy, :check_staleness, state.provider_id}, check_interval)
+
+    ref =
+      Process.send_after(
+        state.parent,
+        {:ws_strategy, :check_staleness, state.provider_id},
+        check_interval
+      )
 
     %{state | staleness_timer_ref: ref}
   end

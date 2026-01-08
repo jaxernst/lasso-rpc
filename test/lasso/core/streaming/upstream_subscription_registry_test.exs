@@ -138,7 +138,14 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionRegistryTest do
       {profile, chain, provider, key} = unique_key()
 
       # Should not crash even with no consumers
-      assert :ok = UpstreamSubscriptionRegistry.dispatch(profile, chain, provider, key, {:test, "msg"})
+      assert :ok =
+               UpstreamSubscriptionRegistry.dispatch(
+                 profile,
+                 chain,
+                 provider,
+                 key,
+                 {:test, "msg"}
+               )
     end
   end
 

@@ -196,9 +196,13 @@ defmodule Lasso.HealthProbe.Worker do
     old_state = %{
       consecutive_failures: old_consecutive_failures
     }
+
     new_state = %{
       consecutive_successes:
-        if(transport == :http, do: state.consecutive_successes, else: state.ws_consecutive_successes),
+        if(transport == :http,
+          do: state.consecutive_successes,
+          else: state.ws_consecutive_successes
+        ),
       status: :healthy
     }
 

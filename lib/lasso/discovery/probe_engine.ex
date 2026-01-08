@@ -89,7 +89,11 @@ defmodule Lasso.Discovery.ProbeEngine do
   @doc """
   Counts results by status.
   """
-  @spec count_results([{term(), probe_result()}]) :: %{ok: integer(), error: integer(), timeout: integer()}
+  @spec count_results([{term(), probe_result()}]) :: %{
+          ok: integer(),
+          error: integer(),
+          timeout: integer()
+        }
   def count_results(results) do
     Enum.reduce(results, %{ok: 0, error: 0, timeout: 0}, fn
       {_item, {:ok, _}}, acc -> %{acc | ok: acc.ok + 1}

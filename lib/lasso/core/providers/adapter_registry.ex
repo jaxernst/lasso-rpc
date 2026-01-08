@@ -116,14 +116,14 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
       |> Enum.sort_by(&String.length/1, :desc)
 
     # Try prefix pattern: "{provider}_{chain}" (e.g., "alchemy_ethereum")
+    # Try suffix pattern: "{chain}_{provider}" (e.g., "ethereum_cloudflare")
+    # Try exact match for single-word provider IDs
     Enum.find_value(provider_types, fn type ->
       if String.starts_with?(provider_id, type <> "_"), do: type
     end) ||
-      # Try suffix pattern: "{chain}_{provider}" (e.g., "ethereum_cloudflare")
       Enum.find_value(provider_types, fn type ->
         if String.ends_with?(provider_id, "_" <> type), do: type
       end) ||
-      # Try exact match for single-word provider IDs
       Enum.find(provider_types, fn type ->
         provider_id == type
       end)
@@ -132,6 +132,7 @@ defmodule Lasso.RPC.Providers.AdapterRegistry do
   # Looks up adapter module from provider type
   @spec lookup_adapter(String.t() | nil) :: module()
   defp lookup_adapter(nil), do: Lasso.RPC.Providers.Generic
+
   defp lookup_adapter(provider_type) do
     Map.get(@provider_type_mapping, provider_type, Lasso.RPC.Providers.Generic)
   end

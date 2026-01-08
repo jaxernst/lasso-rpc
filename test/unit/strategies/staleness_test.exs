@@ -17,7 +17,8 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
 
       ctx = Fastest.prepare_context(selection)
 
-      {:ok, ctx: ctx, profile: selection.profile, chain: selection.chain, method: selection.method}
+      {:ok,
+       ctx: ctx, profile: selection.profile, chain: selection.chain, method: selection.method}
     end
 
     test "provider with fresh metrics (< 10min) gets normal latency score", %{
@@ -41,7 +42,8 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
             success_rate: 0.95,
             total_calls: 50,
             confidence_score: 0.8,
-            last_updated_ms: current_time - 60_000  # 1 minute ago (fresh)
+            # 1 minute ago (fresh)
+            last_updated_ms: current_time - 60_000
           }
         }
       end)
@@ -74,14 +76,16 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
             success_rate: 0.95,
             total_calls: 50,
             confidence_score: 0.8,
-            last_updated_ms: current_time - 20 * 60 * 1000  # 20 minutes ago (stale)
+            # 20 minutes ago (stale)
+            last_updated_ms: current_time - 20 * 60 * 1000
           },
           {"slow_fresh", "eth_blockNumber", :http} => %{
             latency_ms: 200.0,
             success_rate: 0.95,
             total_calls: 50,
             confidence_score: 0.8,
-            last_updated_ms: current_time - 60_000  # 1 minute ago (fresh)
+            # 1 minute ago (fresh)
+            last_updated_ms: current_time - 60_000
           }
         }
       end)
@@ -139,7 +143,8 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
 
       ctx = LatencyWeighted.prepare_context(selection)
 
-      {:ok, ctx: ctx, profile: selection.profile, chain: selection.chain, method: selection.method}
+      {:ok,
+       ctx: ctx, profile: selection.profile, chain: selection.chain, method: selection.method}
     end
 
     test "fresh metrics get normal weight calculation", %{
@@ -161,7 +166,8 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
             success_rate: 0.95,
             total_calls: 50,
             confidence_score: 0.8,
-            last_updated_ms: current_time - 60_000  # 1 minute ago
+            # 1 minute ago
+            last_updated_ms: current_time - 60_000
           }
         }
       end)
@@ -190,7 +196,8 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
             success_rate: 0.95,
             total_calls: 50,
             confidence_score: 0.8,
-            last_updated_ms: current_time - 20 * 60 * 1000  # 20 minutes ago
+            # 20 minutes ago
+            last_updated_ms: current_time - 20 * 60 * 1000
           }
         }
       end)
@@ -220,21 +227,24 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
             success_rate: 0.95,
             total_calls: 50,
             confidence_score: 0.8,
-            last_updated_ms: current_time - 20 * 60 * 1000  # Stale
+            # Stale
+            last_updated_ms: current_time - 20 * 60 * 1000
           },
           {"p2_fresh", "eth_blockNumber", :http} => %{
             latency_ms: 200.0,
             success_rate: 0.95,
             total_calls: 50,
             confidence_score: 0.8,
-            last_updated_ms: current_time - 60_000  # Fresh
+            # Fresh
+            last_updated_ms: current_time - 60_000
           },
           {"p3_fresh", "eth_blockNumber", :http} => %{
             latency_ms: 300.0,
             success_rate: 0.95,
             total_calls: 50,
             confidence_score: 0.8,
-            last_updated_ms: current_time - 60_000  # Fresh
+            # Fresh
+            last_updated_ms: current_time - 60_000
           }
         }
       end)
@@ -265,9 +275,14 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
         []
       end
 
-      def get_provider_transport_performance(_profile, _chain, _provider_id, _method, _transport), do: nil
-      def get_method_transport_performance(_profile, _chain, _provider_id, _method, _transport), do: []
-      def record_request(_profile, _chain, _provider_id, _method, _duration_ms, _result, _opts), do: :ok
+      def get_provider_transport_performance(_profile, _chain, _provider_id, _method, _transport),
+        do: nil
+
+      def get_method_transport_performance(_profile, _chain, _provider_id, _method, _transport),
+        do: []
+
+      def record_request(_profile, _chain, _provider_id, _method, _duration_ms, _result, _opts),
+        do: :ok
     end
 
     Process.put(:batch_mock_fun, fun)

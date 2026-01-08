@@ -123,7 +123,11 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
       :ok ->
         # Use :infinity - the inner Channel.request has its own bounded timeout (10s)
         # and will return {:error, :timeout} which propagates up cleanly
-        GenServer.call(via(profile, chain), {:ensure_subscription, provider_id, sub_key}, :infinity)
+        GenServer.call(
+          via(profile, chain),
+          {:ensure_subscription, provider_id, sub_key},
+          :infinity
+        )
 
       {:error, reason} ->
         {:error, {:registry_error, reason}}
@@ -214,7 +218,12 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
       active_subscriptions:
         Map.new(state.active_subscriptions, fn {{provider_id, sub_key}, info} ->
           consumer_count =
-            UpstreamSubscriptionRegistry.count_consumers(state.profile, state.chain, provider_id, sub_key)
+            UpstreamSubscriptionRegistry.count_consumers(
+              state.profile,
+              state.chain,
+              provider_id,
+              sub_key
+            )
 
           {{provider_id, sub_key},
            %{
@@ -240,7 +249,12 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
 
       sub_info ->
         consumer_count =
-          UpstreamSubscriptionRegistry.count_consumers(state.profile, state.chain, provider_id, sub_key)
+          UpstreamSubscriptionRegistry.count_consumers(
+            state.profile,
+            state.chain,
+            provider_id,
+            sub_key
+          )
 
         if consumer_count == 0 do
           # Mark for teardown (will be cleaned up by periodic check)
@@ -316,7 +330,14 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
         # Cancel staleness timer before teardown
         if sub_info.staleness_timer_ref, do: Process.cancel_timer(sub_info.staleness_timer_ref)
 
-        teardown_upstream_subscription(state.profile, state.chain, provider_id, sub_key, sub_info.upstream_id)
+        teardown_upstream_subscription(
+          state.profile,
+          state.chain,
+          provider_id,
+          sub_key,
+          sub_info.upstream_id
+        )
+
         emit_telemetry(:subscription_destroyed, state.chain, provider_id, sub_key)
         Map.delete(acc, sub_info.upstream_id)
       end)
@@ -571,7 +592,10 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
               disconnected_at: System.monotonic_time(:millisecond)
             }
 
-            %{state | connection_states: Map.put(state.connection_states, provider_id, conn_state)}
+            %{
+              state
+              | connection_states: Map.put(state.connection_states, provider_id, conn_state)
+            }
           else
             state
           end
@@ -604,7 +628,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
     }
 
     with {:ok, channel} <- TransportRegistry.get_channel(profile, chain, provider_id, :ws),
-         {:ok, %Response.Success{} = response, _io_ms} <- Channel.request(channel, message, 10_000),
+         {:ok, %Response.Success{} = response, _io_ms} <-
+           Channel.request(channel, message, 10_000),
          {:ok, upstream_id} <- Response.Success.decode_result(response) do
       {:ok, upstream_id}
     else
@@ -622,7 +647,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
     }
 
     with {:ok, channel} <- TransportRegistry.get_channel(profile, chain, provider_id, :ws),
-         {:ok, %Response.Success{} = response, _io_ms} <- Channel.request(channel, message, 10_000),
+         {:ok, %Response.Success{} = response, _io_ms} <-
+           Channel.request(channel, message, 10_000),
          {:ok, upstream_id} <- Response.Success.decode_result(response) do
       {:ok, upstream_id}
     else
@@ -750,7 +776,13 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
     # Unsubscribe from the upstream provider to clean up their resources
     # Do this asynchronously to avoid blocking the GenServer
     spawn(fn ->
-      teardown_upstream_subscription(state.profile, state.chain, provider_id, sub_key, sub_info.upstream_id)
+      teardown_upstream_subscription(
+        state.profile,
+        state.chain,
+        provider_id,
+        sub_key,
+        sub_info.upstream_id
+      )
     end)
 
     # Notify consumers so they can failover

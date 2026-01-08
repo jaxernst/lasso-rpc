@@ -103,22 +103,24 @@ defmodule LassoWeb.MetricsController do
     provider_ids = Enum.map(provider_configs, & &1.id)
 
     # Collect detailed performance data organized by provider
-    rpc_performance_by_provider = collect_rpc_performance_by_provider(
-      profile,
-      chain_name,
-      provider_ids,
-      rpc_methods,
-      provider_configs
-    )
+    rpc_performance_by_provider =
+      collect_rpc_performance_by_provider(
+        profile,
+        chain_name,
+        provider_ids,
+        rpc_methods,
+        provider_configs
+      )
 
     # Collect detailed performance data organized by method
-    rpc_performance_by_method = collect_rpc_performance_by_method(
-      profile,
-      chain_name,
-      provider_ids,
-      rpc_methods,
-      provider_configs
-    )
+    rpc_performance_by_method =
+      collect_rpc_performance_by_method(
+        profile,
+        chain_name,
+        provider_ids,
+        rpc_methods,
+        provider_configs
+      )
 
     # Build comprehensive response
     %{
@@ -155,7 +157,13 @@ defmodule LassoWeb.MetricsController do
     end
   end
 
-  defp collect_rpc_performance_by_provider(profile, chain_name, provider_ids, rpc_methods, provider_configs) do
+  defp collect_rpc_performance_by_provider(
+         profile,
+         chain_name,
+         provider_ids,
+         rpc_methods,
+         provider_configs
+       ) do
     Enum.map(provider_ids, fn provider_id ->
       method_metrics =
         rpc_methods
@@ -173,14 +181,22 @@ defmodule LassoWeb.MetricsController do
     |> Enum.reject(fn provider -> Enum.empty?(provider.methods) end)
   end
 
-  defp collect_rpc_performance_by_method(profile, chain_name, provider_ids, rpc_methods, provider_configs) do
+  defp collect_rpc_performance_by_method(
+         profile,
+         chain_name,
+         provider_ids,
+         rpc_methods,
+         provider_configs
+       ) do
     rpc_methods
     |> Enum.map(fn method ->
       provider_metrics =
         provider_ids
         |> Enum.map(fn provider_id ->
           case collect_method_performance(profile, chain_name, provider_id, method) do
-            nil -> nil
+            nil ->
+              nil
+
             metrics ->
               Map.merge(metrics, %{
                 provider_id: provider_id,
@@ -203,7 +219,12 @@ defmodule LassoWeb.MetricsController do
   end
 
   defp collect_method_performance(profile, chain_name, provider_id, method) do
-    case BenchmarkStore.get_rpc_method_performance_with_percentiles(profile, chain_name, provider_id, method) do
+    case BenchmarkStore.get_rpc_method_performance_with_percentiles(
+           profile,
+           chain_name,
+           provider_id,
+           method
+         ) do
       nil ->
         nil
 
@@ -223,8 +244,10 @@ defmodule LassoWeb.MetricsController do
   end
 
   defp round_float(nil, _precision), do: nil
+
   defp round_float(value, precision) when is_float(value) or is_integer(value) do
     Float.round(value / 1, precision)
   end
+
   defp round_float(value, _precision), do: value
 end

@@ -138,12 +138,22 @@ defmodule Lasso.Discovery.Probes.WebSocket do
           end
 
         result =
-          case Lasso.Discovery.Probes.WebSocket.Client.subscribe(conn, params, timeout, subscription_wait) do
+          case Lasso.Discovery.Probes.WebSocket.Client.subscribe(
+                 conn,
+                 params,
+                 timeout,
+                 subscription_wait
+               ) do
             {:ok, %{subscription_id: sub_id, received_event: true}} ->
               %{status: :supported, subscription_id: sub_id, received_event: true}
 
             {:ok, %{subscription_id: sub_id, received_event: false}} ->
-              %{status: :supported, subscription_id: sub_id, received_event: false, note: "No event received within timeout"}
+              %{
+                status: :supported,
+                subscription_id: sub_id,
+                received_event: false,
+                note: "No event received within timeout"
+              }
 
             {:error, %{"code" => -32_601}} ->
               %{status: :unsupported, error: "Method not found"}
@@ -302,7 +312,11 @@ defmodule Lasso.Discovery.Probes.WebSocket.Client do
       {:ok, %{"id" => id, "error" => error}} when is_integer(id) ->
         handle_error_response(id, error, state)
 
-      {:ok, %{"method" => "eth_subscription", "params" => %{"subscription" => sub_id, "result" => event}}} ->
+      {:ok,
+       %{
+         "method" => "eth_subscription",
+         "params" => %{"subscription" => sub_id, "result" => event}
+       }} ->
         handle_subscription_event(sub_id, event, state)
 
       {:ok, _other} ->
@@ -350,7 +364,8 @@ defmodule Lasso.Discovery.Probes.WebSocket.Client do
           {^id, from} when is_binary(result) ->
             send(from, {:subscription_created, id, result})
             # Keep event_listener so we can forward subscription events
-            {:ok, %{state | pending_subscription: nil, subscription_id: result, event_listener: from}}
+            {:ok,
+             %{state | pending_subscription: nil, subscription_id: result, event_listener: from}}
 
           _ ->
             {:ok, state}

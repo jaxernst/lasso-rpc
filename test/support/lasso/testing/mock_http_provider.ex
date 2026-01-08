@@ -68,8 +68,10 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
     # Ensure chain exists and register provider
     with :ok <- ChainHelper.ensure_chain_exists(chain, profile: profile),
-         :ok <- Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
-         :ok <- Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
+         :ok <-
+           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
+         :ok <-
+           Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
       Logger.info("MockHTTPProvider: registered #{provider_id}, initializing channels...")
 
       result =
@@ -151,7 +153,6 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
     :ok
   end
-
 
   # Private helper to ensure circuit breaker exists
   defp ensure_circuit_breaker(profile, chain, provider_id, transport) do

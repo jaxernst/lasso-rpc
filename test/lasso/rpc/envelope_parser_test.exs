@@ -103,7 +103,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
 
   describe "parse/1 - error responses" do
     test "parses full error object" do
-      json = ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request","data":{"details":"missing field"}}})
+      json =
+        ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request","data":{"details":"missing field"}}})
 
       assert {:ok, envelope} = EnvelopeParser.parse(json)
       assert envelope.type == :error
@@ -113,7 +114,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
     end
 
     test "handles error with nested objects" do
-      json = ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Server error","data":{"context":{"block":123}}}})
+      json =
+        ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Server error","data":{"context":{"block":123}}}})
 
       assert {:ok, envelope} = EnvelopeParser.parse(json)
       assert envelope.error["data"]["context"]["block"] == 123
@@ -274,7 +276,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
     end
 
     test "block range error response" do
-      json = ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"block range too large","data":{"max":10000}}})
+      json =
+        ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"block range too large","data":{"max":10000}}})
 
       assert {:ok, envelope} = EnvelopeParser.parse(json)
       assert envelope.error["code"] == -32000
@@ -300,7 +303,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
     end
 
     test "handles two-item batch" do
-      json = ~s([{"jsonrpc":"2.0","id":1,"result":"first"},{"jsonrpc":"2.0","id":2,"result":"second"}])
+      json =
+        ~s([{"jsonrpc":"2.0","id":1,"result":"first"},{"jsonrpc":"2.0","id":2,"result":"second"}])
 
       assert {:ok, envelopes} = EnvelopeParser.parse_batch(json)
       assert length(envelopes) == 2
@@ -310,7 +314,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
     end
 
     test "handles three-item batch with mixed types" do
-      json = ~s([{"jsonrpc":"2.0","id":1,"result":null},{"jsonrpc":"2.0","id":2,"error":{"code":-1,"message":"err"}},{"jsonrpc":"2.0","id":3,"result":[]}])
+      json =
+        ~s([{"jsonrpc":"2.0","id":1,"result":null},{"jsonrpc":"2.0","id":2,"error":{"code":-1,"message":"err"}},{"jsonrpc":"2.0","id":3,"result":[]}])
 
       assert {:ok, envelopes} = EnvelopeParser.parse_batch(json)
       assert length(envelopes) == 3
@@ -443,7 +448,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
 
   describe "parse_batch/1 - real-world batch responses" do
     test "handles multi-request eth_getBalance batch" do
-      json = ~s([{"jsonrpc":"2.0","id":1,"result":"0x1234"},{"jsonrpc":"2.0","id":2,"result":"0x5678"}])
+      json =
+        ~s([{"jsonrpc":"2.0","id":1,"result":"0x1234"},{"jsonrpc":"2.0","id":2,"result":"0x5678"}])
 
       assert {:ok, envelopes} = EnvelopeParser.parse_batch(json)
       assert length(envelopes) == 2
@@ -451,7 +457,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
     end
 
     test "handles batch with mixed success and error" do
-      json = ~s([{"jsonrpc":"2.0","id":1,"result":"0xabc"},{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"insufficient funds"}}])
+      json =
+        ~s([{"jsonrpc":"2.0","id":1,"result":"0xabc"},{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"insufficient funds"}}])
 
       assert {:ok, envelopes} = EnvelopeParser.parse_batch(json)
       assert length(envelopes) == 2
@@ -462,7 +469,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
     end
 
     test "handles batch with notifications (null IDs)" do
-      json = ~s([{"jsonrpc":"2.0","id":null,"result":true},{"jsonrpc":"2.0","id":null,"result":false}])
+      json =
+        ~s([{"jsonrpc":"2.0","id":null,"result":true},{"jsonrpc":"2.0","id":null,"result":false}])
 
       assert {:ok, envelopes} = EnvelopeParser.parse_batch(json)
       assert length(envelopes) == 2
@@ -566,7 +574,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
 
     # Bug 4: Dual-field responses (Nethermind)
     test "prefers error when both result and error are present" do
-      json = ~s({"jsonrpc":"2.0","id":1,"result":"ignored","error":{"code":-32000,"message":"real error"}})
+      json =
+        ~s({"jsonrpc":"2.0","id":1,"result":"ignored","error":{"code":-32000,"message":"real error"}})
 
       assert {:ok, envelope} = EnvelopeParser.parse(json)
       assert envelope.type == :error
@@ -575,7 +584,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
     end
 
     test "prefers error when result appears first in bytes" do
-      json = ~s({"result":"should ignore","error":{"code":-1,"message":"take this"},"jsonrpc":"2.0","id":1})
+      json =
+        ~s({"result":"should ignore","error":{"code":-1,"message":"take this"},"jsonrpc":"2.0","id":1})
 
       assert {:ok, envelope} = EnvelopeParser.parse(json)
       assert envelope.type == :error
@@ -583,7 +593,8 @@ defmodule Lasso.RPC.EnvelopeParserTest do
     end
 
     test "prefers error when error appears first in bytes" do
-      json = ~s({"error":{"code":-1,"message":"priority"},"result":"ignored","jsonrpc":"2.0","id":1})
+      json =
+        ~s({"error":{"code":-1,"message":"priority"},"result":"ignored","jsonrpc":"2.0","id":1})
 
       assert {:ok, envelope} = EnvelopeParser.parse(json)
       assert envelope.type == :error

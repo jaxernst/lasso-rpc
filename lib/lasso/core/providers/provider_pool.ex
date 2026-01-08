@@ -14,9 +14,9 @@ defmodule Lasso.RPC.ProviderPool do
   use GenServer
   require Logger
 
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Events.Provider
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.RPC.{ChainState, RateLimitState}
 
   @type t :: %__MODULE__{
@@ -154,7 +154,10 @@ defmodule Lasso.RPC.ProviderPool do
   """
   @spec register_provider(profile, chain_name, provider_id, map()) :: :ok
   def register_provider(profile, chain_name, provider_id, provider_config) do
-    GenServer.call(via_name(profile, chain_name), {:register_provider, provider_id, provider_config})
+    GenServer.call(
+      via_name(profile, chain_name),
+      {:register_provider, provider_id, provider_config}
+    )
   end
 
   @doc """
@@ -174,7 +177,10 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use get_active_providers(profile, chain_name) instead with explicit profile parameter"
   @spec get_active_providers(chain_name) :: [provider_id]
   def get_active_providers(chain_name) do
-    IO.warn("ProviderPool.get_active_providers/1 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.get_active_providers/1 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     get_active_providers("default", chain_name)
   end
 
@@ -223,7 +229,10 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use list_candidates(profile, chain_name, filters) instead with explicit profile parameter"
   @spec list_candidates(chain_name, map()) :: [map()]
   def list_candidates(chain_name, filters \\ %{}) when is_map(filters) do
-    IO.warn("ProviderPool.list_candidates/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.list_candidates/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     list_candidates("default", chain_name, filters)
   end
 
@@ -251,14 +260,20 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use report_success(profile, chain_name, provider_id, transport) instead with explicit profile parameter"
   @spec report_success(chain_name, provider_id) :: :ok
   def report_success(chain_name, provider_id) do
-    IO.warn("ProviderPool.report_success/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_success/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_success("default", chain_name, provider_id, nil)
   end
 
   @deprecated "Use report_success(profile, chain_name, provider_id, transport) instead with explicit profile parameter"
   @spec report_success(chain_name, provider_id, :http | :ws | nil) :: :ok
   def report_success(chain_name, provider_id, transport) when transport in [:http, :ws, nil] do
-    IO.warn("ProviderPool.report_success/3 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_success/3 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_success("default", chain_name, provider_id, transport)
   end
 
@@ -276,7 +291,10 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use report_failure(profile, chain_name, provider_id, error, transport) instead with explicit profile parameter"
   @spec report_failure(chain_name, provider_id, term()) :: :ok
   def report_failure(chain_name, provider_id, error) do
-    IO.warn("ProviderPool.report_failure/3 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_failure/3 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_failure("default", chain_name, provider_id, error, nil)
   end
 
@@ -284,14 +302,20 @@ defmodule Lasso.RPC.ProviderPool do
   @spec report_failure(chain_name, provider_id, term(), :http | :ws | nil) :: :ok
   def report_failure(chain_name, provider_id, error, transport)
       when transport in [:http, :ws, nil] do
-    IO.warn("ProviderPool.report_failure/4 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_failure/4 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_failure("default", chain_name, provider_id, error, transport)
   end
 
   @spec report_failure(profile, chain_name, provider_id, term(), :http | :ws | nil) :: :ok
   def report_failure(profile, chain_name, provider_id, error, transport)
       when is_binary(profile) and transport in [:http, :ws, nil] do
-    GenServer.cast(via_name(profile, chain_name), {:report_failure, provider_id, error, transport})
+    GenServer.cast(
+      via_name(profile, chain_name),
+      {:report_failure, provider_id, error, transport}
+    )
   end
 
   @doc """
@@ -302,7 +326,10 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use unregister_provider(profile, chain_name, provider_id) instead with explicit profile parameter"
   @spec unregister_provider(chain_name, provider_id) :: :ok
   def unregister_provider(chain_name, provider_id) do
-    IO.warn("ProviderPool.unregister_provider/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.unregister_provider/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     unregister_provider("default", chain_name, provider_id)
   end
 
@@ -319,11 +346,15 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use get_provider_ws_pid(profile, chain_name, provider_id) instead with explicit profile parameter"
   @spec get_provider_ws_pid(chain_name, provider_id) :: {:ok, pid()} | {:error, :not_found}
   def get_provider_ws_pid(chain_name, provider_id) do
-    IO.warn("ProviderPool.get_provider_ws_pid/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.get_provider_ws_pid/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     get_provider_ws_pid("default", chain_name, provider_id)
   end
 
-  @spec get_provider_ws_pid(profile, chain_name, provider_id) :: {:ok, pid()} | {:error, :not_found}
+  @spec get_provider_ws_pid(profile, chain_name, provider_id) ::
+          {:ok, pid()} | {:error, :not_found}
   def get_provider_ws_pid(profile, chain_name, provider_id) do
     GenServer.call(via_name(profile, chain_name), {:get_provider_ws_pid, provider_id})
   end
@@ -357,7 +388,10 @@ defmodule Lasso.RPC.ProviderPool do
           {:ok, %{provider_id => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}}}
           | {:error, term()}
   def get_recovery_times(chain_name, opts \\ []) do
-    IO.warn("ProviderPool.get_recovery_times/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.get_recovery_times/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     get_recovery_times("default", chain_name, opts)
   end
 
@@ -404,7 +438,10 @@ defmodule Lasso.RPC.ProviderPool do
   @spec get_min_recovery_time(chain_name, keyword()) ::
           {:ok, non_neg_integer() | nil} | {:error, term()}
   def get_min_recovery_time(chain_name, opts \\ []) do
-    IO.warn("ProviderPool.get_min_recovery_time/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.get_min_recovery_time/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     get_min_recovery_time("default", chain_name, opts)
   end
 
@@ -447,12 +484,16 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use report_probe_results(profile, chain_name, results) instead with explicit profile parameter"
   @spec report_probe_results(chain_name, [map()]) :: :ok
   def report_probe_results(chain_name, results) when is_list(results) do
-    IO.warn("ProviderPool.report_probe_results/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_probe_results/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_probe_results("default", chain_name, results)
   end
 
   @spec report_probe_results(profile, chain_name, [map()]) :: :ok
-  def report_probe_results(profile, chain_name, results) when is_binary(profile) and is_list(results) do
+  def report_probe_results(profile, chain_name, results)
+      when is_binary(profile) and is_list(results) do
     GenServer.cast(via_name(profile, chain_name), {:probe_results, results})
   end
 
@@ -464,7 +505,10 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use report_newheads(profile, chain_name, provider_id, block_height) instead with explicit profile parameter"
   @spec report_newheads(chain_name, provider_id, non_neg_integer()) :: :ok
   def report_newheads(chain_name, provider_id, block_height) do
-    IO.warn("ProviderPool.report_newheads/3 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_newheads/3 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_newheads("default", chain_name, provider_id, block_height)
   end
 
@@ -1203,7 +1247,10 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   @impl true
-  def handle_info({:block_height_update, {_profile, provider_id}, height, source, timestamp}, state) do
+  def handle_info(
+        {:block_height_update, {_profile, provider_id}, height, source, timestamp},
+        state
+      ) do
     # Update ETS height tracking
     sequence = get_current_sequence(state)
 

@@ -938,6 +938,9 @@ defmodule LassoWeb.Dashboard do
   attr(:selected_provider_metrics, :map, default: %{})
 
   def dashboard_tab_content(assigns) do
+    {center_x, center_y} = TopologyConfig.canvas_center()
+    assigns = assign(assigns, canvas_center: "#{center_x},#{center_y}")
+
     ~H"""
     <div class="relative flex h-full w-full">
       <!-- Main Network Topology Area -->
@@ -945,7 +948,7 @@ defmodule LassoWeb.Dashboard do
         class="flex-1 overflow-hidden"
         phx-hook="DraggableNetworkViewport"
         id="draggable-viewport"
-        data-canvas-center={"#{elem(TopologyConfig.canvas_center(), 0)},#{elem(TopologyConfig.canvas_center(), 1)}"}
+        data-canvas-center={@canvas_center}
       >
         <div class="h-full w-full" data-draggable-content>
           <div id="provider-request-animator" phx-hook="ProviderRequestAnimator" class="hidden"></div>
@@ -1038,25 +1041,27 @@ defmodule LassoWeb.Dashboard do
       <div class="p-6 pb-5 border-b border-gray-800 relative overflow-hidden">
         <% connected = Map.get(@chain_performance, :connected_providers, 0) %>
         <% total = Map.get(@chain_performance, :total_providers, 0) %>
+        <% is_healthy = connected == total and connected > 0 %>
+        <% is_down = connected == 0 %>
 
         <!-- Title row with status badge -->
         <div class="flex items-center justify-between mb-1.5 relative z-10">
           <h3 class="text-3xl font-bold text-white tracking-tight capitalize">{Helpers.get_chain_display_name(@selected_profile, @chain)}</h3>
           <div class={[
             "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium",
-            if(connected == total && connected > 0,
+            if(is_healthy,
               do: "bg-emerald-500/10 border-emerald-500/30 text-emerald-400",
-              else: if(connected == 0, do: "bg-red-500/10 border-red-500/30 text-red-400", else: "bg-yellow-500/10 border-yellow-500/30 text-yellow-400")
+              else: if(is_down, do: "bg-red-500/10 border-red-500/30 text-red-400", else: "bg-yellow-500/10 border-yellow-500/30 text-yellow-400")
             )
           ]}>
             <div class={[
               "h-1.5 w-1.5 rounded-full animate-pulse",
-              if(connected == total && connected > 0,
+              if(is_healthy,
                 do: "bg-emerald-400",
-                else: if(connected == 0, do: "bg-red-400", else: "bg-yellow-400")
+                else: if(is_down, do: "bg-red-400", else: "bg-yellow-400")
               )
             ]}></div>
-            <span>{if connected == total && connected > 0, do: "Healthy", else: if(connected == 0, do: "Down", else: "Degraded")}</span>
+            <span>{if is_healthy, do: "Healthy", else: if(is_down, do: "Down", else: "Degraded")}</span>
           </div>
         </div>
 
@@ -2211,8 +2216,11 @@ defmodule LassoWeb.Dashboard do
     provider_name =
       case assigns[:connections] do
         connections when is_list(connections) ->
-          case assigns[:last_decision] &&
-                 Enum.find(connections, &(&1.id == assigns.last_decision.provider_id)) do
+          connection =
+            assigns[:last_decision] &&
+              Enum.find(connections, &(&1.id == assigns.last_decision.provider_id))
+
+          case connection do
             %{name: name} -> name
             _ -> assigns[:last_decision] && assigns.last_decision.provider_id
           end

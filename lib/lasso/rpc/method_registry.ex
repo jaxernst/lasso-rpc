@@ -39,7 +39,8 @@ defmodule Lasso.RPC.MethodRegistry do
       "eth_estimateGas",
       "eth_getStorageAt",
       "eth_getTransactionCount",
-      "eth_getProof"  # EIP-1186 - archive nodes
+      # EIP-1186 - archive nodes
+      "eth_getProof"
     ],
 
     # Network/utility methods
@@ -89,7 +90,8 @@ defmodule Lasso.RPC.MethodRegistry do
 
     # Batch methods (provider-specific)
     batch: [
-      "eth_getBlockReceipts"  # Parity/Erigon/Alchemy enhanced
+      # Parity/Erigon/Alchemy enhanced
+      "eth_getBlockReceipts"
     ],
 
     # Debug methods (rarely supported, requires debug flag)
@@ -173,8 +175,10 @@ defmodule Lasso.RPC.MethodRegistry do
     case method_category(method) do
       cat when cat in [:core, :state, :network, :eip1559, :mempool] -> true
       cat when cat in [:debug, :trace, :local_only, :txpool] -> false
-      :eip4844 -> false  # New, conservative
-      :unknown -> false  # Conservative for unknown
+      # New, conservative
+      :eip4844 -> false
+      # Conservative for unknown
+      :unknown -> false
     end
   end
 end

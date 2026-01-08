@@ -6,7 +6,6 @@ defmodule Lasso.RPC.Transport do
   to enable transport-agnostic request routing and capability-aware selection.
   """
 
-
   @type channel :: term()
   @type rpc_request :: map()
   @type rpc_response :: map()

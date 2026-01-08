@@ -93,7 +93,14 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   """
   @spec validate_params(Channel.t(), String.t(), term()) :: :ok | {:error, term()}
   def validate_params(%Channel{} = channel, method, params) do
-    safe_validate_params?(channel.provider_id, method, params, channel.transport, channel.profile, channel.chain)
+    safe_validate_params?(
+      channel.provider_id,
+      method,
+      params,
+      channel.transport,
+      channel.profile,
+      channel.chain
+    )
   end
 
   # Private Implementation

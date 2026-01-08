@@ -20,7 +20,12 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
 
   use ExUnit.Case, async: false
 
-  alias Lasso.Core.Streaming.{UpstreamSubscriptionPool, ClientSubscriptionRegistry, StreamSupervisor}
+  alias Lasso.Core.Streaming.{
+    UpstreamSubscriptionPool,
+    ClientSubscriptionRegistry,
+    StreamSupervisor
+  }
+
   alias Lasso.Testing.MockWSProvider
 
   @default_profile "default"

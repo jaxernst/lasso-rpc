@@ -407,17 +407,13 @@ defmodule LassoWeb.CoreComponents do
         <button
           phx-click="switch_tab"
           phx-value-tab={tab.id}
-          class={[
-            "relative px-4 py-2 text-sm font-medium transition-colors duration-200",
-            if(@active_tab == tab.id,
-              do: "text-purple-400",
-              else: "text-gray-400 hover:text-gray-200"
-            )
-          ]}
+          class={["relative px-4 py-2 text-sm font-medium transition-colors duration-200", if(@active_tab == tab.id,
+    do: "text-purple-400",
+    else: "text-gray-400 hover:text-gray-200")]}
         >
           {tab.label}
           <%= if @active_tab == tab.id do %>
-            <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-400 rounded-full"></span>
+            <span class="absolute right-0 bottom-0 left-0 h-0.5 rounded-full bg-purple-400"></span>
           <% end %>
         </button>
       <% end %>

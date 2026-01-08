@@ -95,7 +95,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
   # Patterns indicating transient/retriable server errors
   # These are provider-specific errors that should trigger failover
   @transient_error_patterns [
-    "please retry",  # DRPC error code 19: "Temporary internal error. Please retry"
+    # DRPC error code 19: "Temporary internal error. Please retry"
+    "please retry",
     "temporary internal error",
     "try again",
     "service temporarily unavailable",
@@ -127,22 +128,27 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "maximum number of addresses",
     "max addresses",
     "too many addresses",
-    "specify less number of addresses",  # PublicNode
-    "specify an address",  # PublicNode
+    # PublicNode
+    "specify less number of addresses",
+    # PublicNode
+    "specify an address",
     # Block range constraints
     "block range exceeded",
     "max block range",
     "block range too large",
     "range too large",
     "range not supported",
-    "this range of parameters is not supported",  # PublicNode
+    # PublicNode
+    "this range of parameters is not supported",
     "exceeds maximum block range",
     "invalid block range",
     "max is 1k blocks",
     "range is too large",
     "blocks are not supported",
-    "ranges over",  # DRPC
-    "is limited to",  # 1RPC
+    # DRPC
+    "ranges over",
+    # 1RPC
+    "is limited to",
     # Archival/historical data
     "archive node required",
     "requires archival",
@@ -150,7 +156,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "archival not available",
     "historical data not supported",
     "pruned",
-    "missing trie node",  # Geth pruned data
+    # Geth pruned data
+    "missing trie node",
     # Feature availability
     "tracing not enabled",
     "debug not available",
@@ -178,7 +185,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "premium plan",
     "paid plan",
     "paid tier",
-    "timeout on the free tier",  # DRPC
+    # DRPC
+    "timeout on the free tier",
     "feature not enabled"
   ]
 

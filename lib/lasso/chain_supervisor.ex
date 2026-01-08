@@ -34,7 +34,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
   alias Lasso.RPC.{ProviderPool, TransportRegistry}
   alias Lasso.RPC.ProviderSupervisor
-  alias Lasso.Core.Streaming.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
+  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, UpstreamSubscriptionPool}
   alias Lasso.BlockSync
   alias Lasso.HealthProbe
 
@@ -107,8 +107,15 @@ defmodule Lasso.RPC.ChainSupervisor do
   @spec ensure_provider(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
   def ensure_provider(profile, chain_name, provider_config, opts \\ []) do
     with {:ok, chain_config} <- get_chain_config(profile, chain_name),
-         :ok <- ProviderPool.register_provider(profile, chain_name, provider_config.id, provider_config),
-         :ok <- start_provider_supervisor(profile, chain_name, chain_config, provider_config, opts),
+         :ok <-
+           ProviderPool.register_provider(
+             profile,
+             chain_name,
+             provider_config.id,
+             provider_config
+           ),
+         :ok <-
+           start_provider_supervisor(profile, chain_name, chain_config, provider_config, opts),
          :ok <-
            TransportRegistry.initialize_provider_channels(
              profile,
@@ -155,8 +162,11 @@ defmodule Lasso.RPC.ChainSupervisor do
 
     # Stop the per-provider supervisor (cascades WS then circuit breakers)
     case GenServer.whereis(provider_supervisor_via(profile, chain_name, provider_id)) do
-      nil -> :ok
-      pid -> DynamicSupervisor.terminate_child(provider_supervisors_name(profile, chain_name), pid)
+      nil ->
+        :ok
+
+      pid ->
+        DynamicSupervisor.terminate_child(provider_supervisors_name(profile, chain_name), pid)
     end
 
     # Close transport channels (idempotent)

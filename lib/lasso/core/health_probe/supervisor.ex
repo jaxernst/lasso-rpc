@@ -24,12 +24,14 @@ defmodule Lasso.HealthProbe.Supervisor do
     DynamicSupervisor.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
   end
 
-  def via(profile, chain), do: {:via, Registry, {Lasso.Registry, {:health_probe_supervisor, profile, chain}}}
+  def via(profile, chain),
+    do: {:via, Registry, {Lasso.Registry, {:health_probe_supervisor, profile, chain}}}
 
   @doc """
   Start a worker for a specific provider.
   """
-  def start_worker(profile, chain, provider_id, opts) when is_binary(profile) and is_binary(chain) and is_list(opts) do
+  def start_worker(profile, chain, provider_id, opts)
+      when is_binary(profile) and is_binary(chain) and is_list(opts) do
     spec = {Worker, {chain, profile, provider_id, opts}}
 
     case DynamicSupervisor.start_child(via(profile, chain), spec) do

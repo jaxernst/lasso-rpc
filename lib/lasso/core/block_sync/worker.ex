@@ -125,7 +125,8 @@ defmodule Lasso.BlockSync.Worker do
     status = %{
       mode: state.mode,
       ws_status: if(state.ws_strategy, do: WsStrategy.get_status(state.ws_strategy), else: nil),
-      http_status: if(state.http_strategy, do: HttpStrategy.get_status(state.http_strategy), else: nil),
+      http_status:
+        if(state.http_strategy, do: HttpStrategy.get_status(state.http_strategy), else: nil),
       config: state.config
     }
 
@@ -188,7 +189,10 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   # Handle incoming newHeads events from UpstreamSubscriptionManager via Registry.dispatch
-  def handle_info({:upstream_subscription_event, provider_id, {:newHeads}, payload, _received_at}, state)
+  def handle_info(
+        {:upstream_subscription_event, provider_id, {:newHeads}, payload, _received_at},
+        state
+      )
       when provider_id == state.provider_id and state.ws_strategy != nil do
     new_ws_state = WsStrategy.handle_new_head(state.ws_strategy, payload)
     {:noreply, %{state | ws_strategy: new_ws_state}}

@@ -480,7 +480,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       # max_reconnect_attempts: :infinity means infinite retries
       endpoint =
         %Endpoint{
-      profile: "default",
+          profile: "default",
           id: "ws_#{chain}_infinite",
           name: "Test WebSocket infinite",
           ws_url: "ws://test.local/ws",

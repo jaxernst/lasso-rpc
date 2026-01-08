@@ -112,7 +112,8 @@ defmodule Lasso.RPC.Selection do
             end)
           end)
 
-        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
+        ordered =
+          strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
 
         case List.first(ordered) do
           %Channel{provider_id: pid} ->
@@ -167,7 +168,8 @@ defmodule Lasso.RPC.Selection do
             end)
           end)
 
-        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
+        ordered =
+          strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
 
         case List.first(ordered) do
           %Channel{provider_id: pid, transport: transport} ->
@@ -346,7 +348,9 @@ defmodule Lasso.RPC.Selection do
       end
 
     # Strategy delegation: allow strategy modules to rank channels when available.
-    selection_ctx = SelectionContext.new(profile, chain, method, strategy: strategy, protocol: transport)
+    selection_ctx =
+      SelectionContext.new(profile, chain, method, strategy: strategy, protocol: transport)
+
     strategy_mod = StrategyRegistry.resolve(strategy)
     prepared_ctx = strategy_mod.prepare_context(selection_ctx)
 

@@ -77,7 +77,9 @@ defmodule LassoWeb.Components.DashboardComponents do
     else: "bg-gray-800/40 text-gray-300 hover:bg-gray-700/60")]}
                   >
                     <div>
-                      <div class="font-medium">{Helpers.get_chain_display_name(@selected_profile, chain.name)}</div>
+                      <div class="font-medium">
+                        {Helpers.get_chain_display_name(@selected_profile, chain.name)}
+                      </div>
                       <div class="text-gray-400">Chain ID: {chain.chain_id || "—"}</div>
                     </div>
                     <div class="text-xs text-gray-400">{length(chain.providers || [])} providers</div>
@@ -177,16 +179,25 @@ defmodule LassoWeb.Components.DashboardComponents do
       class="space-y-4"
     >
       <div class="text-sm font-medium text-gray-300">
-        Configure: <span class="text-purple-300">{Helpers.get_chain_display_name(@selected_profile, @selected_chain)}</span>
+        Configure:
+        <span class="text-purple-300">
+          {Helpers.get_chain_display_name(@selected_profile, @selected_chain)}
+        </span>
       </div>
-
+      
     <!-- Basic Chain Information -->
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2">
           <.form_field
             label="Chain Name"
             name="chain[name]"
-            value={Map.get(@form_data, :name, Helpers.get_chain_display_name(@selected_profile, @selected_chain))}
+            value={
+              Map.get(
+                @form_data,
+                :name,
+                Helpers.get_chain_display_name(@selected_profile, @selected_chain)
+              )
+            }
             placeholder="e.g., Ethereum Mainnet"
             phx-debounce="300"
           />

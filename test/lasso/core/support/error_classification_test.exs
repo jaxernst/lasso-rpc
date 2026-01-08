@@ -7,7 +7,10 @@ defmodule Lasso.RPC.ErrorClassificationTest do
   describe "categorize/2" do
     test "classifies LlamaRPC block range error as capability violation" do
       category =
-        ErrorClassification.categorize(-32_603, "eth_getLogs range is too large, max is 1k blocks")
+        ErrorClassification.categorize(
+          -32_603,
+          "eth_getLogs range is too large, max is 1k blocks"
+        )
 
       assert category == :capability_violation
     end
@@ -22,7 +25,9 @@ defmodule Lasso.RPC.ErrorClassificationTest do
 
     test "classifies PublicNode error code -32_701 as capability violation even without message" do
       # Provider-specific code requires ErrorClassifier with provider_id
-      %{category: category} = ErrorClassifier.classify(-32_701, nil, provider_id: "ethereum_publicnode")
+      %{category: category} =
+        ErrorClassifier.classify(-32_701, nil, provider_id: "ethereum_publicnode")
+
       assert category == :capability_violation
     end
 
@@ -60,7 +65,10 @@ defmodule Lasso.RPC.ErrorClassificationTest do
   describe "retriable?/2" do
     test "capability violations are retriable" do
       retriable =
-        ErrorClassification.retriable?(-32_603, "eth_getLogs range is too large, max is 1k blocks")
+        ErrorClassification.retriable?(
+          -32_603,
+          "eth_getLogs range is too large, max is 1k blocks"
+        )
 
       assert retriable == true
     end
@@ -75,7 +83,9 @@ defmodule Lasso.RPC.ErrorClassificationTest do
 
     test "PublicNode error code -32_701 is retriable even without message" do
       # Provider-specific code requires ErrorClassifier with provider_id
-      %{retriable?: retriable?} = ErrorClassifier.classify(-32_701, nil, provider_id: "ethereum_publicnode")
+      %{retriable?: retriable?} =
+        ErrorClassifier.classify(-32_701, nil, provider_id: "ethereum_publicnode")
+
       assert retriable? == true
     end
 
@@ -90,7 +100,9 @@ defmodule Lasso.RPC.ErrorClassificationTest do
     end
 
     test "result size violations ARE retriable (provider-specific limits, smart detection prevents exhaustion)" do
-      retriable = ErrorClassification.retriable?(-32_005, "query returned more than 10000 results")
+      retriable =
+        ErrorClassification.retriable?(-32_005, "query returned more than 10000 results")
+
       assert retriable == true
     end
 

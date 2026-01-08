@@ -56,7 +56,8 @@ defmodule Lasso.Config.Backend do
 
   Returns the profile specification or an error if not found.
   """
-  @callback load(state(), slug :: String.t()) :: {:ok, profile_spec()} | {:error, :not_found | term()}
+  @callback load(state(), slug :: String.t()) ::
+              {:ok, profile_spec()} | {:error, :not_found | term()}
 
   @doc """
   Save a profile configuration.

@@ -202,7 +202,12 @@ defmodule Lasso.Testing.MockProvider do
 
               {:error, reason} ->
                 # Failed to register with ChainSupervisor - cleanup ConfigStore
-                Lasso.Config.ConfigStore.unregister_provider_runtime("default", chain, provider_id)
+                Lasso.Config.ConfigStore.unregister_provider_runtime(
+                  "default",
+                  chain,
+                  provider_id
+                )
+
                 Plug.Cowboy.shutdown(provider_id)
                 {:error, {:registration_failed, reason}}
             end

@@ -105,7 +105,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
       # Setup provider with intermittent failures
       setup_providers([
-        %{id: "flaky", priority: 10, behavior: MockProviderBehavior.intermittent_failures(0.0), profile: profile}
+        %{
+          id: "flaky",
+          priority: 10,
+          behavior: MockProviderBehavior.intermittent_failures(0.0),
+          profile: profile
+        }
       ])
 
       # Attach telemetry collector BEFORE forcing circuit breaker open
@@ -596,7 +601,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
       # Setup provider with intermittent failures (70% success)
       setup_providers([
-        %{id: "flaky", priority: 10, behavior: MockProviderBehavior.intermittent_failures(0.7), profile: profile}
+        %{
+          id: "flaky",
+          priority: 10,
+          behavior: MockProviderBehavior.intermittent_failures(0.7),
+          profile: profile
+        }
       ])
 
       # Execute multiple requests
@@ -667,7 +677,12 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         }
 
       setup_providers([
-        %{id: "rate_limited", priority: 10, behavior: {:error, rate_limit_error}, profile: profile},
+        %{
+          id: "rate_limited",
+          priority: 10,
+          behavior: {:error, rate_limit_error},
+          profile: profile
+        },
         %{id: "healthy_backup", priority: 20, behavior: :healthy, profile: profile}
       ])
 
@@ -722,10 +737,20 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         }
 
       setup_providers([
-        %{id: "rate_limited_fast", priority: 10, behavior: {:error, rate_limit_error}, profile: profile}
+        %{
+          id: "rate_limited_fast",
+          priority: 10,
+          behavior: {:error, rate_limit_error},
+          profile: profile
+        }
       ])
 
-      CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "rate_limited_fast", :http)
+      CircuitBreakerHelper.ensure_circuit_breaker_started(
+        profile,
+        chain,
+        "rate_limited_fast",
+        :http
+      )
 
       # Execute 2 requests (rate limit threshold is 2, vs 5 for normal errors)
       for _ <- 1..2 do
@@ -814,9 +839,20 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       Process.sleep(300)
 
       # Verify both a and b are open, but c is still closed
-      CircuitBreakerHelper.assert_circuit_breaker_state({profile, chain, "provider_a", :http}, :open)
-      CircuitBreakerHelper.assert_circuit_breaker_state({profile, chain, "provider_b", :http}, :open)
-      CircuitBreakerHelper.assert_circuit_breaker_state({profile, chain, "provider_c", :http}, :closed)
+      CircuitBreakerHelper.assert_circuit_breaker_state(
+        {profile, chain, "provider_a", :http},
+        :open
+      )
+
+      CircuitBreakerHelper.assert_circuit_breaker_state(
+        {profile, chain, "provider_b", :http},
+        :open
+      )
+
+      CircuitBreakerHelper.assert_circuit_breaker_state(
+        {profile, chain, "provider_c", :http},
+        :closed
+      )
 
       # Request with priority strategy should use provider_c (only healthy one)
       {:ok, result, _ctx} =

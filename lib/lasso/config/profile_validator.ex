@@ -79,24 +79,22 @@ defmodule Lasso.Config.ProfileValidator do
   def validate(profile) when is_binary(profile) do
     trimmed = String.trim(profile)
 
-    cond do
-      trimmed == "" ->
-        {:error, :profile_empty, "Profile cannot be empty"}
+    if trimmed == "" do
+      {:error, :profile_empty, "Profile cannot be empty"}
+    else
+      # Check if profile exists in ConfigStore
+      case ConfigStore.get_profile(trimmed) do
+        {:ok, _meta} ->
+          {:ok, trimmed}
 
-      true ->
-        # Check if profile exists in ConfigStore
-        case ConfigStore.get_profile(trimmed) do
-          {:ok, _meta} ->
-            {:ok, trimmed}
+        {:error, :not_found} ->
+          {:error, :profile_not_found, "Profile '#{trimmed}' not found"}
 
-          {:error, :not_found} ->
-            {:error, :profile_not_found, "Profile '#{trimmed}' not found"}
-
-          {:error, reason} ->
-            # Handle other ConfigStore errors gracefully
-            Logger.warning("Profile validation failed for '#{trimmed}': #{inspect(reason)}")
-            {:error, :profile_not_found, "Profile '#{trimmed}' not found"}
-        end
+        {:error, reason} ->
+          # Handle other ConfigStore errors gracefully
+          Logger.warning("Profile validation failed for '#{trimmed}': #{inspect(reason)}")
+          {:error, :profile_not_found, "Profile '#{trimmed}' not found"}
+      end
     end
   end
 

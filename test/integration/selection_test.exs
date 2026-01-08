@@ -34,7 +34,9 @@ defmodule Lasso.RPC.SelectionTest do
       assert selected1 in ["provider_1", "provider_2", "provider_3"]
 
       # Select with exclusion
-      {:ok, selected2} = Selection.select_provider(profile, chain, "eth_blockNumber", exclude: [selected1])
+      {:ok, selected2} =
+        Selection.select_provider(profile, chain, "eth_blockNumber", exclude: [selected1])
+
       assert selected2 != selected1
       assert selected2 in ["provider_1", "provider_2", "provider_3"]
     end
@@ -47,7 +49,9 @@ defmodule Lasso.RPC.SelectionTest do
       ])
 
       # HTTP protocol should work
-      {:ok, selected} = Selection.select_provider(profile, chain, "eth_blockNumber", protocol: :http)
+      {:ok, selected} =
+        Selection.select_provider(profile, chain, "eth_blockNumber", protocol: :http)
+
       assert selected == "http_only"
     end
 
@@ -87,7 +91,9 @@ defmodule Lasso.RPC.SelectionTest do
       ])
 
       assert {:error, :no_providers_available} =
-               Selection.select_provider(profile, chain, "eth_blockNumber", exclude: ["provider_1"])
+               Selection.select_provider(profile, chain, "eth_blockNumber",
+                 exclude: ["provider_1"]
+               )
     end
 
     test "returns error for invalid chain" do
@@ -252,7 +258,9 @@ defmodule Lasso.RPC.SelectionTest do
       ])
 
       assert {:ok, %{metadata: metadata}} =
-               Selection.select_provider_with_metadata(profile, chain, "eth_blockNumber", protocol: :http)
+               Selection.select_provider_with_metadata(profile, chain, "eth_blockNumber",
+                 protocol: :http
+               )
 
       assert metadata.selected.protocol == :http
     end

@@ -43,7 +43,10 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
   end
 
   describe "basic subscription lifecycle" do
-    test "creates subscription entry and confirms synchronously", %{chain: chain, profile: profile} do
+    test "creates subscription entry and confirms synchronously", %{
+      chain: chain,
+      profile: profile
+    } do
       client_pid = self()
       key = {:newHeads}
 
@@ -100,7 +103,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
   describe "subscription confirmation" do
     test "processes successful confirmation and updates state", %{
       chain: chain,
-      provider: _provider, profile: profile
+      provider: _provider,
+      profile: profile
     } do
       client_pid = self()
       key = {:newHeads}
@@ -121,7 +125,11 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
   end
 
   describe "subscription events" do
-    test "receives and routes newHeads events", %{chain: chain, provider: provider, profile: profile} do
+    test "receives and routes newHeads events", %{
+      chain: chain,
+      provider: provider,
+      profile: profile
+    } do
       client_pid = self()
       key = {:newHeads}
 

@@ -21,8 +21,15 @@ defmodule Lasso.Discovery.Probes.Limits do
     :rate_limit
   ]
 
-  @type test_name :: :block_range | :address_count | :batch_requests | :block_params | :archive_support | :rate_limit
-  @type test_status :: :limited | :unlimited | :supported | :not_supported | :inconclusive | :skipped
+  @type test_name ::
+          :block_range
+          | :address_count
+          | :batch_requests
+          | :block_params
+          | :archive_support
+          | :rate_limit
+  @type test_status ::
+          :limited | :unlimited | :supported | :not_supported | :inconclusive | :skipped
   @type test_result :: %{
           status: test_status(),
           value: term() | nil,
@@ -119,18 +126,28 @@ defmodule Lasso.Discovery.Probes.Limits do
 
     case first_failure do
       nil ->
-        %{status: :unlimited, value: nil, recommendation: "No block range limit detected (tested up to 10000)"}
+        %{
+          status: :unlimited,
+          value: nil,
+          recommendation: "No block range limit detected (tested up to 10000)"
+        }
 
       limit ->
         # Refine with binary search
         prev_idx = Enum.find_index(test_ranges, &(&1 == limit)) - 1
         lower = if prev_idx >= 0, do: Enum.at(test_ranges, prev_idx), else: 0
         refined = binary_search_block_range(url, current_block, lower, limit, timeout)
-        %{status: :limited, value: refined, recommendation: "Set adapter_config: max_block_range: #{refined}"}
+
+        %{
+          status: :limited,
+          value: refined,
+          recommendation: "Set adapter_config: max_block_range: #{refined}"
+        }
     end
   end
 
-  defp binary_search_block_range(_url, _current_block, lower, upper, _timeout) when upper - lower <= 10 do
+  defp binary_search_block_range(_url, _current_block, lower, upper, _timeout)
+       when upper - lower <= 10 do
     lower
   end
 
@@ -139,7 +156,12 @@ defmodule Lasso.Discovery.Probes.Limits do
     from_block = current_block - mid
     to_block = current_block - 1
 
-    params = [%{"fromBlock" => TestParams.int_to_hex(from_block), "toBlock" => TestParams.int_to_hex(to_block)}]
+    params = [
+      %{
+        "fromBlock" => TestParams.int_to_hex(from_block),
+        "toBlock" => TestParams.int_to_hex(to_block)
+      }
+    ]
 
     case make_request(url, "eth_getLogs", params, timeout) do
       {:ok, %{"result" => _}} ->
@@ -191,10 +213,18 @@ defmodule Lasso.Discovery.Probes.Limits do
         %{status: :inconclusive, value: nil, recommendation: "Could not determine address limits"}
 
       max_addresses < 100 ->
-        %{status: :limited, value: max_addresses, recommendation: "Set adapter_config: max_addresses: #{max_addresses}"}
+        %{
+          status: :limited,
+          value: max_addresses,
+          recommendation: "Set adapter_config: max_addresses: #{max_addresses}"
+        }
 
       true ->
-        %{status: :unlimited, value: max_addresses, recommendation: "No address limit detected (tested up to 100)"}
+        %{
+          status: :unlimited,
+          value: max_addresses,
+          recommendation: "No address limit detected (tested up to 100)"
+        }
     end
   end
 
@@ -214,10 +244,18 @@ defmodule Lasso.Discovery.Probes.Limits do
 
     cond do
       max_size >= 100 ->
-        %{status: :supported, value: max_size, recommendation: "Batch requests supported (tested up to #{max_size})"}
+        %{
+          status: :supported,
+          value: max_size,
+          recommendation: "Batch requests supported (tested up to #{max_size})"
+        }
 
       max_size > 0 ->
-        %{status: :limited, value: max_size, recommendation: "Batch requests limited to ~#{max_size}"}
+        %{
+          status: :limited,
+          value: max_size,
+          recommendation: "Batch requests limited to ~#{max_size}"
+        }
 
       true ->
         %{status: :not_supported, value: nil, recommendation: "Batch requests not supported"}
@@ -298,10 +336,18 @@ defmodule Lasso.Discovery.Probes.Limits do
         # Block exists, test state query
         case make_request(url, "eth_getBalance", [TestParams.zero_address(), old_block], timeout) do
           {:ok, %{"result" => _}} ->
-            %{status: :supported, value: :full_archive, recommendation: "Full archive node support"}
+            %{
+              status: :supported,
+              value: :full_archive,
+              recommendation: "Full archive node support"
+            }
 
           _ ->
-            %{status: :supported, value: :partial_archive, recommendation: "Archive blocks but not archive state"}
+            %{
+              status: :supported,
+              value: :partial_archive,
+              recommendation: "Archive blocks but not archive state"
+            }
         end
 
       {:ok, %{"result" => nil}} ->
@@ -311,7 +357,11 @@ defmodule Lasso.Discovery.Probes.Limits do
         %{status: :not_supported, value: :non_archive, recommendation: "Not an archive node"}
 
       _ ->
-        %{status: :inconclusive, value: nil, recommendation: "Could not determine archive support"}
+        %{
+          status: :inconclusive,
+          value: nil,
+          recommendation: "Could not determine archive support"
+        }
     end
   end
 
@@ -339,7 +389,11 @@ defmodule Lasso.Discovery.Probes.Limits do
 
     duration = System.monotonic_time(:millisecond) - start_time
 
-    successful = Enum.count(results, fn {:ok, :ok} -> true; _ -> false end)
+    successful =
+      Enum.count(results, fn
+        {:ok, :ok} -> true
+        _ -> false
+      end)
 
     rate_limited =
       Enum.count(results, fn
@@ -348,13 +402,19 @@ defmodule Lasso.Discovery.Probes.Limits do
       end)
 
     success_rate = Float.round(successful / num_requests * 100, 1)
-    requests_per_second = if duration > 0, do: Float.round(num_requests / (duration / 1000), 2), else: 0
+
+    requests_per_second =
+      if duration > 0, do: Float.round(num_requests / (duration / 1000), 2), else: 0
 
     cond do
       rate_limited > 0 ->
         %{
           status: :limited,
-          value: %{rate_limited: rate_limited, success_rate: success_rate, rps: requests_per_second},
+          value: %{
+            rate_limited: rate_limited,
+            success_rate: success_rate,
+            rps: requests_per_second
+          },
           recommendation: "Rate limiting detected - #{rate_limited} requests throttled"
         }
 

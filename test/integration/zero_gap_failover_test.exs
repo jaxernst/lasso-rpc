@@ -26,7 +26,6 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
   @moduletag :integration
 
   describe "WebSocket subscription zero-gap guarantee" do
-
     test "no duplicate blocks during rapid provider switching", %{chain: chain} do
       profile = "default"
 
@@ -93,7 +92,8 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
       wait_for_subscription_active(profile, chain, {:newHeads})
 
       # Wait for upstream subscription to be fully established in Manager
-      selected_provider = wait_for_any_upstream_subscription_established(profile, chain, {:newHeads})
+      selected_provider =
+        wait_for_any_upstream_subscription_established(profile, chain, {:newHeads})
 
       # Send blocks out of order from selected provider: 300, 302, 301, 303
       MockWSProvider.send_block(chain, selected_provider, %{
@@ -101,24 +101,31 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
         "hash" => "0x#{Integer.to_string(300 * 1000, 16)}",
         "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
       })
+
       Process.sleep(50)
+
       MockWSProvider.send_block(chain, selected_provider, %{
         "number" => "0x12e",
         "hash" => "0x#{Integer.to_string(302 * 1000, 16)}",
         "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
       })
+
       Process.sleep(50)
+
       MockWSProvider.send_block(chain, selected_provider, %{
         "number" => "0x12d",
         "hash" => "0x#{Integer.to_string(301 * 1000, 16)}",
         "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
       })
+
       Process.sleep(50)
+
       MockWSProvider.send_block(chain, selected_provider, %{
         "number" => "0x12f",
         "hash" => "0x#{Integer.to_string(303 * 1000, 16)}",
         "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
       })
+
       Process.sleep(50)
 
       # Collect blocks
@@ -192,6 +199,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
       try do
         state = :sys.get_state(UpstreamSubscriptionPool.via(profile, chain))
         key_state = Map.get(state.keys, key)
+
         raise "Timeout waiting for subscription #{inspect(key)} to be active. Current state: #{inspect(key_state)}"
       catch
         :exit, reason ->
@@ -247,7 +255,9 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
         end)
 
       case matching_sub do
-        {{provider_id, ^key}, _} -> provider_id
+        {{provider_id, ^key}, _} ->
+          provider_id
+
         nil ->
           Process.sleep(50)
           wait_for_any_upstream_sub_loop(profile, chain, key, deadline)

@@ -7,6 +7,7 @@ defmodule Lasso.Application do
   require Logger
 
   alias Lasso.Config.ProfileValidator
+  alias Lasso.Config.{ChainConfig, ConfigStore}
 
   @impl true
   def start(_type, _args) do
@@ -148,8 +149,6 @@ defmodule Lasso.Application do
   # Private helper functions
 
   defp validate_all_providers_configured(profile_slugs) do
-    alias Lasso.Config.{ConfigStore, ChainConfig}
-
     profile_slugs
     |> Enum.flat_map(&collect_profile_validation_errors/1)
     |> case do
@@ -163,17 +162,17 @@ defmodule Lasso.Application do
   end
 
   defp collect_profile_validation_errors(profile) do
-    alias Lasso.Config.{ConfigStore, ChainConfig}
+    case ConfigStore.get_profile_chains(profile) do
+      {:ok, chains} ->
+        Enum.flat_map(chains, fn {chain_name, chain_config} ->
+          case ChainConfig.validate_no_unresolved_placeholders(chain_config) do
+            :ok -> []
+            {:error, {:unresolved_env_vars, providers}} -> [{profile, chain_name, providers}]
+          end
+        end)
 
-    with {:ok, chains} <- ConfigStore.get_profile_chains(profile) do
-      Enum.flat_map(chains, fn {chain_name, chain_config} ->
-        case ChainConfig.validate_no_unresolved_placeholders(chain_config) do
-          :ok -> []
-          {:error, {:unresolved_env_vars, providers}} -> [{profile, chain_name, providers}]
-        end
-      end)
-    else
-      _ -> []
+      _ ->
+        []
     end
   end
 

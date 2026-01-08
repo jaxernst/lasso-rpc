@@ -87,7 +87,9 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       # signal_recovery transitions open -> half_open
       # A successful call (or another signal_recovery) closes it fully
       state = CircuitBreaker.get_state(cb_id)
-      assert state.state in [:half_open, :closed], "Circuit should be in recovery after HealthProbe success"
+
+      assert state.state in [:half_open, :closed],
+             "Circuit should be in recovery after HealthProbe success"
 
       # Make a successful call to fully close the circuit
       if state.state == :half_open do
@@ -176,7 +178,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
       state = CircuitBreaker.get_state(cb_id)
       # State should be half_open after signal_recovery from open
-      assert state.state in [:half_open, :closed], "Expected half_open or closed, got: #{state.state}"
+      assert state.state in [:half_open, :closed],
+             "Expected half_open or closed, got: #{state.state}"
 
       # 4. Successful call from half_open closes it
       if state.state == :half_open do
@@ -230,7 +233,9 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       # Verify failure count is unchanged (health probe didn't reset it)
       state = CircuitBreaker.get_state(cb_id)
       assert state.state == :closed, "Circuit should still be closed"
-      assert state.failure_count == 3, "Failure count should remain at 3 (not reset by health probe)"
+
+      assert state.failure_count == 3,
+             "Failure count should remain at 3 (not reset by health probe)"
 
       # Record 2 more failures to reach threshold
       for _ <- 1..2, do: CircuitBreaker.record_failure(cb_id)
@@ -364,7 +369,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
       # Phase 4: HealthProbe continues probing (bypasses circuit)
       # and eventually detects recovery
-      Process.sleep(150)  # Wait for recovery timeout
+      # Wait for recovery timeout
+      Process.sleep(150)
 
       # HealthProbe detects recovery and signals recovery
       # This transitions open -> half_open
@@ -412,7 +418,8 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
         if rem(i, 2) == 0 do
           CircuitBreaker.record_failure(cb_id)
         else
-          CircuitBreaker.signal_recovery(cb_id)  # No-op when circuit is closed
+          # No-op when circuit is closed
+          CircuitBreaker.signal_recovery(cb_id)
         end
 
         Process.sleep(10)
@@ -421,7 +428,10 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       # Circuit should open because failures accumulated to threshold (5)
       # Health probe successes didn't reset the counter
       state = CircuitBreaker.get_state(cb_id)
-      assert state.state == :open, "Circuit should open when failures accumulate despite health probe successes"
+
+      assert state.state == :open,
+             "Circuit should open when failures accumulate despite health probe successes"
+
       assert state.failure_count == 5, "Should have accumulated 5 failures"
     end
 

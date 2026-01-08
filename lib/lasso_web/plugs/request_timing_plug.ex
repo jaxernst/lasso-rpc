@@ -77,9 +77,18 @@ defmodule LassoWeb.Plugs.RequestTimingPlug do
 
     # Log first batch request context as representative (avoid spamming logs)
     case conn.private[:lasso_request_contexts] do
-      nil -> :ok
-      [] -> :ok
-      [first_ctx | _rest] -> log_batch_with_timing(first_ctx, e2e_latency_ms, length(conn.private[:lasso_request_contexts]))
+      nil ->
+        :ok
+
+      [] ->
+        :ok
+
+      [first_ctx | _rest] ->
+        log_batch_with_timing(
+          first_ctx,
+          e2e_latency_ms,
+          length(conn.private[:lasso_request_contexts])
+        )
     end
 
     put_private(conn, :lasso_e2e_latency_ms, e2e_latency_ms)

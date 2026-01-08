@@ -75,7 +75,9 @@ defmodule Lasso.RPC.ChainSupervisorTest do
       # Use a unique chain name per run to avoid already_started collisions
       chain_name = "test_chain_" <> Integer.to_string(:erlang.unique_integer([:positive]))
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+
       assert Process.alive?(supervisor_pid)
 
       # Give time for async provider initialization
@@ -140,7 +142,8 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     test "starts provider connections asynchronously", %{chain_config: chain_config} do
       chain_name = "provider_management_test"
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
 
       # Give time for async startup to complete
       Process.sleep(300)
@@ -166,7 +169,8 @@ defmodule Lasso.RPC.ChainSupervisorTest do
 
       chain_name = "limited_providers_test"
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, limited_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, limited_config})
 
       # Give time for startup
       Process.sleep(300)
@@ -185,7 +189,9 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     test "provides comprehensive chain status", %{chain_config: chain_config} do
       chain_name = "status_test_chain"
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+
       Process.sleep(200)
 
       status = ChainSupervisor.get_chain_status(@test_profile, chain_name)
@@ -209,7 +215,9 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     test "tracks active providers", %{chain_config: chain_config} do
       chain_name = "active_providers_test"
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+
       Process.sleep(200)
 
       # Get active providers (may be empty due to mock setup)
@@ -227,7 +235,9 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     test "coordinates with child processes for integration", %{chain_config: chain_config} do
       chain_name = "integration_test_chain"
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+
       Process.sleep(200)
 
       # Verify child processes are started
@@ -236,7 +246,9 @@ defmodule Lasso.RPC.ChainSupervisorTest do
       assert length(children) >= 2
 
       # Verify process is registered (with profile in the key)
-      case GenServer.whereis({:via, Registry, {Lasso.Registry, {:chain_supervisor, @test_profile, chain_name}}}) do
+      case GenServer.whereis(
+             {:via, Registry, {Lasso.Registry, {:chain_supervisor, @test_profile, chain_name}}}
+           ) do
         nil -> flunk("Chain supervisor not registered")
         pid when is_pid(pid) -> assert Process.alive?(pid)
       end
@@ -248,7 +260,9 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     test "coordinates with ProviderPool for health monitoring", %{chain_config: chain_config} do
       chain_name = "provider_pool_test_chain"
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+
       Process.sleep(200)
 
       # Verify ProviderPool is accessible through the supervisor
@@ -292,7 +306,9 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     test "handles child process failures gracefully", %{chain_config: chain_config} do
       chain_name = "resilience_test_chain"
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+
       Process.sleep(200)
 
       # Get initial children
@@ -316,7 +332,9 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     test "handles configuration updates", %{chain_config: chain_config} do
       chain_name = "config_update_test"
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+
       Process.sleep(200)
 
       # Initial status should be available
@@ -332,7 +350,9 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     test "delegates subscription requests properly", %{chain_config: chain_config} do
       chain_name = "subscription_test_chain"
 
-      {:ok, supervisor_pid} = ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+      {:ok, supervisor_pid} =
+        ChainSupervisor.start_link({@test_profile, chain_name, chain_config})
+
       Process.sleep(200)
 
       # Test subscription-related functionality

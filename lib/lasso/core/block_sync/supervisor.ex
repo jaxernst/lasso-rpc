@@ -22,7 +22,8 @@ defmodule Lasso.BlockSync.Supervisor do
     DynamicSupervisor.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
   end
 
-  def via(profile, chain), do: {:via, Registry, {Lasso.Registry, {:block_sync_supervisor, profile, chain}}}
+  def via(profile, chain),
+    do: {:via, Registry, {Lasso.Registry, {:block_sync_supervisor, profile, chain}}}
 
   @doc """
   Start a worker for a specific provider.
@@ -65,7 +66,8 @@ defmodule Lasso.BlockSync.Supervisor do
   @doc """
   Start workers for a profile's providers in the chain.
   """
-  def start_all_workers(profile, chain, provider_ids) when is_binary(profile) and is_binary(chain) and is_list(provider_ids) do
+  def start_all_workers(profile, chain, provider_ids)
+      when is_binary(profile) and is_binary(chain) and is_list(provider_ids) do
     Logger.info("Starting BlockSync workers",
       chain: chain,
       profile: profile,

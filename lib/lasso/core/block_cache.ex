@@ -229,7 +229,11 @@ defmodule Lasso.Core.BlockCache do
     case normalize_block(raw_block, provider_id) do
       {:ok, block} ->
         # Store provider-specific data
-        :ets.insert(@table_name, {{:provider, chain, provider_id}, {block.number, block.received_at}})
+        :ets.insert(
+          @table_name,
+          {{:provider, chain, provider_id}, {block.number, block.received_at}}
+        )
+
         :ets.insert(@table_name, {{:provider_block, chain, provider_id}, block})
 
         # Update latest block if this is newer
