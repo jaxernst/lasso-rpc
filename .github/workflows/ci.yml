@@ -13,8 +13,8 @@ jobs:
 
     strategy:
       matrix:
-        elixir: ['1.17.3']
-        otp: ['26.2']
+        elixir: ["1.17.3"]
+        otp: ["26.2"]
 
     steps:
       - uses: actions/checkout@v4
@@ -57,8 +57,8 @@ jobs:
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: '1.17.3'
-          otp-version: '26.2'
+          elixir-version: "1.17.3"
+          otp-version: "26.2"
 
       - name: Restore dependencies cache
         uses: actions/cache@v3
@@ -86,8 +86,8 @@ jobs:
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: '1.17.3'
-          otp-version: '26.2'
+          elixir-version: "1.17.3"
+          otp-version: "26.2"
 
       - name: Restore dependencies cache
         uses: actions/cache@v3
