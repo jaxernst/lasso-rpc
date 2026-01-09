@@ -66,9 +66,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
   def handle_routing_decision(evt, socket, buffer_event_fn, update_chain_fn, update_provider_fn) do
     %{chain: chain, method: method, strategy: strategy, provider_id: pid, duration_ms: dur} = evt
 
-    unless chain in Map.get(socket.assigns, :profile_chains, []) do
-      socket
-    else
+    if chain in Map.get(socket.assigns, :profile_chains, []) do
       entry = %{
         ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
         ts_ms: System.system_time(:millisecond),
@@ -96,6 +94,8 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
       |> push_event("provider_request", %{provider_id: pid})
       |> maybe_update_chain(chain, update_chain_fn)
       |> maybe_update_provider(pid, update_provider_fn)
+    else
+      socket
     end
   end
 
@@ -107,15 +107,20 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
     if socket.assigns[:selected_provider] == provider_id, do: update_fn.(socket), else: socket
   end
 
-  def handle_provider_event(evt, socket, buffer_event_fn, fetch_connections_fn, update_chain_fn, update_provider_fn)
+  def handle_provider_event(
+        evt,
+        socket,
+        buffer_event_fn,
+        fetch_connections_fn,
+        update_chain_fn,
+        update_provider_fn
+      )
       when is_struct(evt, Provider.Healthy) or is_struct(evt, Provider.Unhealthy) or
              is_struct(evt, Provider.HealthCheckFailed) or is_struct(evt, Provider.WSConnected) or
              is_struct(evt, Provider.WSClosed) do
     {chain, pid, event_type, details, ts} = extract_provider_event_data(evt)
 
-    unless chain in Map.get(socket.assigns, :profile_chains, []) do
-      socket
-    else
+    if chain in Map.get(socket.assigns, :profile_chains, []) do
       entry = %{
         ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
         ts_ms: ts,
@@ -139,16 +144,27 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
       |> buffer_event_fn.(uev)
       |> maybe_refresh_provider(pid, fetch_connections_fn, update_provider_fn)
       |> maybe_update_chain(chain, update_chain_fn)
+    else
+      socket
     end
   end
 
   defp extract_provider_event_data(evt) do
     case evt do
-      %Provider.Healthy{chain: c, provider_id: p, ts: t} -> {c, p, :healthy, nil, t}
-      %Provider.Unhealthy{chain: c, provider_id: p, ts: t} -> {c, p, :unhealthy, nil, t}
-      %Provider.HealthCheckFailed{chain: c, provider_id: p, reason: r, ts: t} -> {c, p, :health_check_failed, %{reason: r}, t}
-      %Provider.WSConnected{chain: c, provider_id: p, ts: t} -> {c, p, :ws_connected, nil, t}
-      %Provider.WSClosed{chain: c, provider_id: p, code: code, reason: r, ts: t} -> {c, p, :ws_closed, %{code: code, reason: r}, t}
+      %Provider.Healthy{chain: c, provider_id: p, ts: t} ->
+        {c, p, :healthy, nil, t}
+
+      %Provider.Unhealthy{chain: c, provider_id: p, ts: t} ->
+        {c, p, :unhealthy, nil, t}
+
+      %Provider.HealthCheckFailed{chain: c, provider_id: p, reason: r, ts: t} ->
+        {c, p, :health_check_failed, %{reason: r}, t}
+
+      %Provider.WSConnected{chain: c, provider_id: p, ts: t} ->
+        {c, p, :ws_connected, nil, t}
+
+      %Provider.WSClosed{chain: c, provider_id: p, code: code, reason: r, ts: t} ->
+        {c, p, :ws_closed, %{code: code, reason: r}, t}
     end
   end
 
@@ -160,12 +176,16 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
     end
   end
 
-  def handle_circuit_breaker_event(event_data, socket, buffer_event_fn, update_chain_fn, update_provider_fn) do
+  def handle_circuit_breaker_event(
+        event_data,
+        socket,
+        buffer_event_fn,
+        update_chain_fn,
+        update_provider_fn
+      ) do
     %{chain: chain, provider_id: pid, transport: transport, new_state: new_state} = event_data
 
-    unless chain in Map.get(socket.assigns, :profile_chains, []) do
-      socket
-    else
+    if chain in Map.get(socket.assigns, :profile_chains, []) do
       ev =
         Helpers.as_event(:circuit_breaker,
           chain: chain,
@@ -188,6 +208,8 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
       |> buffer_event_fn.(ev)
       |> maybe_update_provider(pid, update_provider_fn)
       |> maybe_update_chain(chain, update_chain_fn)
+    else
+      socket
     end
   end
 
@@ -195,19 +217,21 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
   defp circuit_severity(:half_open), do: :warn
   defp circuit_severity(:open), do: :error
 
-  def handle_block_event(blk, socket, buffer_event_fn, update_chain_fn, update_provider_fn) when is_map(blk) do
+  def handle_block_event(blk, socket, buffer_event_fn, update_chain_fn, update_provider_fn)
+      when is_map(blk) do
     %{chain: chain, block_number: bn} = blk
 
-    unless chain in Map.get(socket.assigns, :profile_chains, []) do
-      socket
-    else
-      ev = Helpers.as_event(:chain, chain: chain, severity: :info, message: "block #{bn}", meta: blk)
+    if chain in Map.get(socket.assigns, :profile_chains, []) do
+      ev =
+        Helpers.as_event(:chain, chain: chain, severity: :info, message: "block #{bn}", meta: blk)
 
       socket
       |> update(:latest_blocks, &Map.put(&1, chain, bn))
       |> buffer_event_fn.(ev)
       |> maybe_update_chain(chain, update_chain_fn)
       |> maybe_update_provider(blk[:provider_id], update_provider_fn)
+    else
+      socket
     end
   end
 
