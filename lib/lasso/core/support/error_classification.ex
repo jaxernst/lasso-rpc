@@ -344,12 +344,27 @@ defmodule Lasso.Core.Support.ErrorClassification do
   # ===========================================================================
 
   # Group related codes for efficient compile-time matching
-  @jsonrpc_standard_codes [@parse_error, @invalid_request, @method_not_found,
-                            @invalid_params, @internal_error]
-  @lasso_custom_codes [@rate_limit_error, @network_error_code, @client_error_code,
-                       @server_error_code, @generic_server_error]
-  @eip1193_codes [@user_rejected, @unauthorized, @unsupported_method,
-                  @unsupported_chain, @chain_disconnected]
+  @jsonrpc_standard_codes [
+    @parse_error,
+    @invalid_request,
+    @method_not_found,
+    @invalid_params,
+    @internal_error
+  ]
+  @lasso_custom_codes [
+    @rate_limit_error,
+    @network_error_code,
+    @client_error_code,
+    @server_error_code,
+    @generic_server_error
+  ]
+  @eip1193_codes [
+    @user_rejected,
+    @unauthorized,
+    @unsupported_method,
+    @unsupported_chain,
+    @chain_disconnected
+  ]
 
   defp classify_by_code(code) do
     cond do

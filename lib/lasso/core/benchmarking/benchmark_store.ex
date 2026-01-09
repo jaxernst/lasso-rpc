@@ -91,7 +91,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets RPC method performance including percentiles for a provider in a profile.
   """
-  @spec get_rpc_method_performance_with_percentiles(profile(), chain_name(), provider_id(), method()) :: map() | nil
+  @spec get_rpc_method_performance_with_percentiles(
+          profile(),
+          chain_name(),
+          provider_id(),
+          method()
+        ) :: map() | nil
   def get_rpc_method_performance_with_percentiles(profile, chain_name, provider_id, method) do
     GenServer.call(
       __MODULE__,
@@ -234,7 +239,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       iex> BenchmarkStore.record_rpc_call("default", "ethereum", "infura_provider", "eth_getLogs", 150, :success)
       :ok
   """
-  @spec record_rpc_call(profile(), chain_name(), provider_id(), method(), number(), result()) :: :ok
+  @spec record_rpc_call(profile(), chain_name(), provider_id(), method(), number(), result()) ::
+          :ok
   def record_rpc_call(profile, chain_name, provider_id, method, duration_ms, result) do
     # Always capture both timestamps at the same moment
     monotonic_ts = System.monotonic_time(:millisecond)

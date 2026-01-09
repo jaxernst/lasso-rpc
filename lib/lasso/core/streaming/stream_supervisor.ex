@@ -22,7 +22,8 @@ defmodule Lasso.Core.Streaming.StreamSupervisor do
     DynamicSupervisor.init(strategy: :one_for_one)
   end
 
-  @spec ensure_coordinator(String.t(), String.t(), term(), keyword()) :: {:ok, pid()} | {:error, term()}
+  @spec ensure_coordinator(String.t(), String.t(), term(), keyword()) ::
+          {:ok, pid()} | {:error, term()}
   def ensure_coordinator(profile, chain, key, opts)
       when is_binary(profile) and is_binary(chain) do
     name = StreamCoordinator.via(profile, chain, key)

@@ -36,17 +36,38 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     fields = extract_status_fields(provider)
 
     cond do
-      rate_limited?(fields) -> :rate_limited
-      fields.circuit_state == :open -> :circuit_open
-      fields.circuit_state == :half_open -> :testing_recovery
-      ws_recovering?(fields) -> :recovering
-      fields.health_status == :healthy -> block_lag_to_status(fields.chain, fields.provider_id)
-      fields.health_status in [:unhealthy, :misconfigured, :degraded] -> :degraded
-      fields.consecutive_failures in 3..9 -> :degraded
-      fields.health_status == :connecting or fields.connection_status == :connecting -> :recovering
-      fields.connection_status == :connected -> block_lag_to_status(fields.chain, fields.provider_id)
-      fields.connection_status in [:disconnected, :rate_limited] -> :degraded
-      true -> :unknown
+      rate_limited?(fields) ->
+        :rate_limited
+
+      fields.circuit_state == :open ->
+        :circuit_open
+
+      fields.circuit_state == :half_open ->
+        :testing_recovery
+
+      ws_recovering?(fields) ->
+        :recovering
+
+      fields.health_status == :healthy ->
+        block_lag_to_status(fields.chain, fields.provider_id)
+
+      fields.health_status in [:unhealthy, :misconfigured, :degraded] ->
+        :degraded
+
+      fields.consecutive_failures in 3..9 ->
+        :degraded
+
+      fields.health_status == :connecting or fields.connection_status == :connecting ->
+        :recovering
+
+      fields.connection_status == :connected ->
+        block_lag_to_status(fields.chain, fields.provider_id)
+
+      fields.connection_status in [:disconnected, :rate_limited] ->
+        :degraded
+
+      true ->
+        :unknown
     end
   end
 

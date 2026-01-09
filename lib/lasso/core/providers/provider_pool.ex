@@ -1425,9 +1425,14 @@ defmodule Lasso.RPC.ProviderPool do
 
   defp filter_excluded(providers, filters) do
     case Map.get(filters, :exclude) do
-      nil -> providers
-      exclude_list when is_list(exclude_list) -> Enum.filter(providers, &(&1.id not in exclude_list))
-      _ -> providers
+      nil ->
+        providers
+
+      exclude_list when is_list(exclude_list) ->
+        Enum.filter(providers, &(&1.id not in exclude_list))
+
+      _ ->
+        providers
     end
   end
 

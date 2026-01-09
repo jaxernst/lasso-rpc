@@ -346,7 +346,13 @@ defmodule Lasso.RPC.Selection do
 
   # Channel building helpers
 
-  defp build_provider_channels(%{id: provider_id, config: config}, transport, profile, chain, method) do
+  defp build_provider_channels(
+         %{id: provider_id, config: config},
+         transport,
+         profile,
+         chain,
+         method
+       ) do
     transport
     |> transports_to_check()
     |> Enum.filter(fn t -> provider_supports_transport?(config, t) end)

@@ -91,7 +91,9 @@ defmodule Lasso.RPC.RequestOptions.Builder do
     profile = overrides[:profile] || params["profile"] || "default"
     strategy = resolve_strategy_from_map(params, overrides)
     provider_override = resolve_provider_from_map(params, overrides)
-    transport = resolve_transport(method, resolve_transport_preference_from_map(params, overrides))
+
+    transport =
+      resolve_transport(method, resolve_transport_preference_from_map(params, overrides))
 
     build_and_validate(
       %RequestOptions{

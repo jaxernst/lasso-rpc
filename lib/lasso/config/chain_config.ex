@@ -253,7 +253,8 @@ defmodule Lasso.Config.ChainConfig do
   @doc """
   Validates that a chain configuration has valid providers.
   """
-  @spec validate_chain_config(t()) :: :ok | {:error, :no_providers | :invalid_provider | :invalid_connection}
+  @spec validate_chain_config(t()) ::
+          :ok | {:error, :no_providers | :invalid_provider | :invalid_connection}
   def validate_chain_config(%__MODULE__{} = chain_config) do
     with :ok <- validate_providers(chain_config.providers) do
       validate_connection(chain_config.connection)
