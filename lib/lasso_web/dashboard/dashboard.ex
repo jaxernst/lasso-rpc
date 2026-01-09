@@ -58,13 +58,7 @@ defmodule LassoWeb.Dashboard do
         }
       end)
 
-    # Default to first available chain, or "ethereum" if it exists in the profile
-    default_metrics_chain =
-      cond do
-        Enum.any?(available_chains, &(&1.name == "ethereum")) -> "ethereum"
-        length(available_chains) > 0 -> hd(available_chains).name
-        true -> nil
-      end
+    default_metrics_chain = default_metrics_chain(available_chains)
 
     initial_state =
       socket
@@ -186,13 +180,7 @@ defmodule LassoWeb.Dashboard do
         }
       end)
 
-    # Reset metrics_selected_chain when switching profiles
-    default_metrics_chain =
-      cond do
-        Enum.any?(available_chains, &(&1.name == "ethereum")) -> "ethereum"
-        length(available_chains) > 0 -> hd(available_chains).name
-        true -> nil
-      end
+    default_metrics_chain = default_metrics_chain(available_chains)
 
     socket
     |> assign(:selected_profile, new_profile)
@@ -227,29 +215,15 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # WebSocket connection events - ProviderPool handles these, dashboard just ignores them
+  # WebSocket connection events - ProviderPool handles these, dashboard ignores them
   @impl true
-  def handle_info({:ws_reconnecting, _provider_id, _attempt}, socket) do
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:ws_connected, _provider_id, _connection_id}, socket) do
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:ws_disconnected, _provider_id, _error}, socket) do
+  def handle_info({ws_event, _provider_id, _extra}, socket)
+      when ws_event in [:ws_reconnecting, :ws_connected, :ws_disconnected, :connection_error] do
     {:noreply, socket}
   end
 
   @impl true
   def handle_info({:ws_closed, _provider_id, _code, _error}, socket) do
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:connection_error, _provider_id, _error}, socket) do
     {:noreply, socket}
   end
 
@@ -354,10 +328,8 @@ defmodule LassoWeb.Dashboard do
 
       message =
         case {reason, error_info} do
-          {:failure_threshold_exceeded, %{error_code: code, error_category: cat}} ->
-            "#{base_message} — #{format_error_code(code)} (#{cat})"
-
-          {:reopen_due_to_failure, %{error_code: code, error_category: cat}} ->
+          {r, %{error_code: code, error_category: cat}}
+          when r in [:failure_threshold_exceeded, :reopen_due_to_failure] ->
             "#{base_message} — #{format_error_code(code)} (#{cat})"
 
           {reason, _} ->
@@ -411,24 +383,9 @@ defmodule LassoWeb.Dashboard do
       socket =
         socket
         |> buffer_event(uev)
-        # Refresh provider data to show updated circuit state
         |> fetch_connections()
-
-      # Update provider panel if this event is for the currently selected provider
-      socket =
-        if socket.assigns[:selected_provider] == provider_id do
-          update_selected_provider_data(socket)
-        else
-          socket
-        end
-
-      # Update chain panel if this event is for the currently selected chain
-      socket =
-        if socket.assigns[:selected_chain] == chain do
-          update_selected_chain_metrics(socket)
-        else
-          socket
-        end
+        |> maybe_update_selected_provider(provider_id)
+        |> maybe_update_selected_chain(chain)
 
       {:noreply, socket}
     else
@@ -462,15 +419,10 @@ defmodule LassoWeb.Dashboard do
         meta: Map.drop(entry, [:ts, :ts_ms])
       )
 
-    socket = buffer_event(socket, uev)
-
-    # Update chain-specific metrics if this event is for the currently selected chain
     socket =
-      if socket.assigns[:selected_chain] == chain do
-        update_selected_chain_metrics(socket)
-      else
-        socket
-      end
+      socket
+      |> buffer_event(uev)
+      |> maybe_update_selected_chain(chain)
 
     {:noreply, socket}
   end
@@ -508,39 +460,15 @@ defmodule LassoWeb.Dashboard do
 
   # Live sync/block height updates from ProviderPool probes
   @impl true
-  def handle_info(
-        %{chain: _chain, provider_id: pid, block_height: _height} = _sync_update,
-        socket
-      ) do
-    # Update provider panel if this sync update is for the currently selected provider
-    socket =
-      if socket.assigns[:selected_provider] == pid do
-        socket
-        |> fetch_connections()
-        |> update_selected_provider_data()
-      else
-        socket
-      end
-
+  def handle_info(%{chain: _chain, provider_id: pid, block_height: _height}, socket) do
+    socket = maybe_refresh_selected_provider(socket, pid)
     {:noreply, socket}
   end
 
   # Real-time block updates from BlockCache (WebSocket newHeads)
   @impl true
-  def handle_info(
-        %{type: :block_update, provider_id: pid} = _block_update,
-        socket
-      ) do
-    # Update provider panel if this block update is for the currently selected provider
-    socket =
-      if socket.assigns[:selected_provider] == pid do
-        socket
-        |> fetch_connections()
-        |> update_selected_provider_data()
-      else
-        socket
-      end
-
+  def handle_info(%{type: :block_update, provider_id: pid}, socket) do
+    socket = maybe_refresh_selected_provider(socket, pid)
     {:noreply, socket}
   end
 
@@ -595,39 +523,10 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Chain configuration change notifications (still needed for updating available chains)
+  # Chain configuration changes - refresh available chains and connections
   @impl true
-  def handle_info({:chain_created, _chain_name, _chain_config}, socket) do
-    socket =
-      socket
-      |> refresh_available_chains()
-      |> fetch_connections()
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:chain_updated, _chain_name, _chain_config}, socket) do
-    socket =
-      socket
-      |> refresh_available_chains()
-      |> fetch_connections()
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:chain_deleted, _chain_name, _chain_config}, socket) do
-    socket =
-      socket
-      |> refresh_available_chains()
-      |> fetch_connections()
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:config_restored, _backup_path, _}, socket) do
+  def handle_info({config_event, _arg1, _arg2}, socket)
+      when config_event in [:chain_created, :chain_updated, :chain_deleted, :config_restored] do
     socket =
       socket
       |> refresh_available_chains()
@@ -1019,18 +918,18 @@ defmodule LassoWeb.Dashboard do
       </:collapsed_preview>
 
       <:body>
-        <%= if @selected_provider do %>
-          <.live_component
-            module={LassoWeb.Dashboard.Components.ProviderDetailsPanel}
-            id={"provider-details-#{@selected_provider}"}
-            provider_id={@selected_provider}
-            connections={@connections}
-            selected_profile={@selected_profile}
-            selected_provider_unified_events={@selected_provider_unified_events}
-            selected_provider_metrics={@selected_provider_metrics}
-          />
-        <% else %>
-          <%= if @selected_chain do %>
+        <%= cond do %>
+          <% @selected_provider -> %>
+            <.live_component
+              module={LassoWeb.Dashboard.Components.ProviderDetailsPanel}
+              id={"provider-details-#{@selected_provider}"}
+              provider_id={@selected_provider}
+              connections={@connections}
+              selected_profile={@selected_profile}
+              selected_provider_unified_events={@selected_provider_unified_events}
+              selected_provider_metrics={@selected_provider_metrics}
+            />
+          <% @selected_chain -> %>
             <.live_component
               module={LassoWeb.Dashboard.Components.ChainDetailsPanel}
               id={"chain-details-#{@selected_chain}"}
@@ -1044,9 +943,9 @@ defmodule LassoWeb.Dashboard do
               selected_chain_events={@selected_chain_events}
               selected_chain_unified_events={@selected_chain_unified_events}
               selected_chain_endpoints={@selected_chain_endpoints}
-              selected_chain_provider_events={assigns[:selected_chain_provider_events] || []}
+              selected_chain_provider_events={@selected_chain_provider_events}
             />
-          <% end %>
+          <% true -> %>
         <% end %>
       </:body>
     </.floating_window>
@@ -1081,22 +980,18 @@ defmodule LassoWeb.Dashboard do
 
     socket = assign(socket, :active_tab, Map.get(params, "tab", "overview"))
 
-    # Handle chain param to auto-select a chain
     socket =
       case Map.get(params, "chain") do
-        nil ->
-          socket
-
-        "" ->
-          socket
-
-        chain ->
+        chain when chain not in [nil, ""] ->
           socket
           |> assign(:selected_chain, chain)
           |> assign(:selected_provider, nil)
           |> assign(:details_collapsed, false)
           |> update_selected_chain_metrics()
           |> push_event("center_on_chain", %{chain: chain})
+
+        _ ->
+          socket
       end
 
     {:noreply, socket}
@@ -1136,39 +1031,21 @@ defmodule LassoWeb.Dashboard do
   end
 
   @impl true
-  def handle_event("select_chain", %{"chain" => ""}, socket) do
-    socket =
-      socket
-      |> assign(:selected_chain, nil)
-      |> assign(:details_collapsed, true)
-      |> update_selected_chain_metrics()
-
-    {:noreply, socket}
-  end
-
-  @impl true
   def handle_event("select_chain", %{"chain" => chain}, socket) do
     socket =
-      socket
-      |> assign(:selected_chain, chain)
-      |> assign(:selected_provider, nil)
-      |> assign(:details_collapsed, false)
-      |> update_selected_chain_metrics()
-
-    # Re-enable auto-centering to animate pan to the selected chain
-    socket =
-      if chain != "", do: push_event(socket, "center_on_chain", %{chain: chain}), else: socket
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("select_provider", %{"provider" => ""}, socket) do
-    socket =
-      socket
-      |> assign(:selected_provider, nil)
-      |> assign(:details_collapsed, true)
-      |> update_selected_provider_data()
+      if chain == "" do
+        socket
+        |> assign(:selected_chain, nil)
+        |> assign(:details_collapsed, true)
+        |> update_selected_chain_metrics()
+      else
+        socket
+        |> assign(:selected_chain, chain)
+        |> assign(:selected_provider, nil)
+        |> assign(:details_collapsed, false)
+        |> update_selected_chain_metrics()
+        |> push_event("center_on_chain", %{chain: chain})
+      end
 
     {:noreply, socket}
   end
@@ -1176,13 +1053,20 @@ defmodule LassoWeb.Dashboard do
   @impl true
   def handle_event("select_provider", %{"provider" => provider}, socket) do
     socket =
-      socket
-      |> assign(:selected_provider, provider)
-      |> assign(:selected_chain, nil)
-      |> assign(:details_collapsed, false)
-      |> fetch_connections()
-      |> update_selected_provider_data()
-      |> push_event("center_on_provider", %{provider: provider})
+      if provider == "" do
+        socket
+        |> assign(:selected_provider, nil)
+        |> assign(:details_collapsed, true)
+        |> update_selected_provider_data()
+      else
+        socket
+        |> assign(:selected_provider, provider)
+        |> assign(:selected_chain, nil)
+        |> assign(:details_collapsed, false)
+        |> fetch_connections()
+        |> update_selected_provider_data()
+        |> push_event("center_on_provider", %{provider: provider})
+      end
 
     {:noreply, socket}
   end
@@ -1252,9 +1136,15 @@ defmodule LassoWeb.Dashboard do
   defp format_reason(:manual_close), do: "manually closed"
   defp format_reason(reason), do: to_string(reason)
 
-  # Shared components
-
   # Helper functions
+
+  defp default_metrics_chain(available_chains) do
+    cond do
+      Enum.any?(available_chains, &(&1.name == "ethereum")) -> "ethereum"
+      available_chains != [] -> hd(available_chains).name
+      true -> nil
+    end
+  end
 
   defp refresh_available_chains(socket) do
     available_chains =
@@ -1267,6 +1157,12 @@ defmodule LassoWeb.Dashboard do
       end)
 
     assign(socket, :available_chains, available_chains)
+  end
+
+  defp average_field([], _extractor), do: nil
+
+  defp average_field(items, extractor) do
+    items |> Enum.map(extractor) |> Enum.sum() |> Kernel./(length(items))
   end
 
   defp buffer_event(socket, event) do
@@ -1356,6 +1252,32 @@ defmodule LassoWeb.Dashboard do
         |> assign(:selected_provider_events, provider_events)
         |> assign(:selected_provider_unified_events, provider_unified_events)
         |> assign(:selected_provider_metrics, provider_metrics)
+    end
+  end
+
+  defp maybe_update_selected_chain(socket, chain) do
+    if socket.assigns[:selected_chain] == chain do
+      update_selected_chain_metrics(socket)
+    else
+      socket
+    end
+  end
+
+  defp maybe_update_selected_provider(socket, provider_id) do
+    if socket.assigns[:selected_provider] == provider_id do
+      update_selected_provider_data(socket)
+    else
+      socket
+    end
+  end
+
+  defp maybe_refresh_selected_provider(socket, provider_id) do
+    if socket.assigns[:selected_provider] == provider_id do
+      socket
+      |> fetch_connections()
+      |> update_selected_provider_data()
+    else
+      socket
     end
   end
 
@@ -1457,7 +1379,6 @@ defmodule LassoWeb.Dashboard do
         end)
         |> Enum.reject(&is_nil/1)
 
-      # Calculate aggregates
       total_calls = Enum.reduce(method_stats, 0, fn stat, acc -> acc + stat.total_calls end)
 
       avg_latency =
@@ -1468,56 +1389,16 @@ defmodule LassoWeb.Dashboard do
             end)
 
           weighted_sum / total_calls
-        else
-          nil
         end
 
-      p50_latency =
-        if length(method_stats) > 0 do
-          method_stats
-          |> Enum.map(& &1.percentiles.p50)
-          |> Enum.sum()
-          |> Kernel./(length(method_stats))
-        else
-          nil
-        end
+      p50_latency = average_field(method_stats, & &1.percentiles.p50)
+      p95_latency = average_field(method_stats, & &1.percentiles.p95)
+      p99_latency = average_field(method_stats, & &1.percentiles.p99)
+      success_rate = average_field(method_stats, & &1.success_rate)
 
-      p95_latency =
-        if length(method_stats) > 0 do
-          method_stats
-          |> Enum.map(& &1.percentiles.p95)
-          |> Enum.sum()
-          |> Kernel./(length(method_stats))
-        else
-          nil
-        end
-
-      p99_latency =
-        if length(method_stats) > 0 do
-          method_stats
-          |> Enum.map(& &1.percentiles.p99)
-          |> Enum.sum()
-          |> Kernel./(length(method_stats))
-        else
-          nil
-        end
-
-      success_rate =
-        if length(method_stats) > 0 do
-          method_stats
-          |> Enum.map(& &1.success_rate)
-          |> Enum.sum()
-          |> Kernel./(length(method_stats))
-        else
-          nil
-        end
-
-      # Calculate variance/consistency (P99/P50 ratio)
       consistency_ratio =
         if p50_latency && p99_latency && p50_latency > 0 do
           p99_latency / p50_latency
-        else
-          nil
         end
 
       %{

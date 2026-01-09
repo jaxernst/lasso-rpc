@@ -1,57 +1,39 @@
 defmodule LassoWeb.Dashboard.ProviderConnection do
   @moduledoc """
-  Handles fetching and building provider connection data for the Dashboard.
-
-  This module encapsulates the logic for:
-  - Fetching provider status from ProviderPool
-  - Building provider connection maps with enriched data
-  - Calculating consensus heights and block sync information
-  - Deriving health status and circuit breaker states
+  Fetches and builds provider connection data for the Dashboard.
   """
 
   alias Lasso.Config.ConfigStore
   alias Lasso.RPC.{ChainState, ProviderPool}
   require Logger
 
-  @doc """
-  Fetches all provider connections for a given profile.
-  Returns enriched connection maps with status, health, and sync information.
-  """
   def fetch_connections(profile) do
     chains = ConfigStore.list_chains_for_profile(profile)
-
     provider_ids_by_chain = build_provider_ids_map(profile, chains)
     consensus_by_chain = build_consensus_map(chains, provider_ids_by_chain)
 
-    chains
-    |> Enum.flat_map(fn chain_name ->
-      consensus_height = Map.get(consensus_by_chain, chain_name)
-      provider_ids = Map.get(provider_ids_by_chain, chain_name, [])
-
-      case ProviderPool.get_status(profile, chain_name) do
-        {:ok, pool_status} ->
-          pool_status.providers
-          |> Enum.map(&build_provider_connection(&1, chain_name, consensus_height, provider_ids))
-
-        {:error, reason} ->
-          Logger.warning(
-            "Failed to get provider status for chain #{chain_name}: #{inspect(reason)}"
-          )
-
-          []
-      end
+    Enum.flat_map(chains, fn chain_name ->
+      fetch_chain_connections(profile, chain_name, provider_ids_by_chain, consensus_by_chain)
     end)
   end
 
-  @doc """
-  Builds a provider connection map from ProviderPool status data.
-  Enriches with derived fields like health status, circuit state, and block sync.
-  """
+  defp fetch_chain_connections(profile, chain_name, provider_ids_by_chain, consensus_by_chain) do
+    consensus_height = Map.get(consensus_by_chain, chain_name)
+    provider_ids = Map.get(provider_ids_by_chain, chain_name, [])
+
+    case ProviderPool.get_status(profile, chain_name) do
+      {:ok, pool_status} ->
+        Enum.map(pool_status.providers, &build_provider_connection(&1, chain_name, consensus_height, provider_ids))
+
+      {:error, reason} ->
+        Logger.warning("Failed to get provider status for chain #{chain_name}: #{inspect(reason)}")
+        []
+    end
+  end
+
   def build_provider_connection(provider_map, chain_name, consensus_height, provider_ids) do
     provider_type = derive_provider_type(provider_map.config)
-
-    {block_height, blocks_behind} =
-      calculate_block_sync(chain_name, provider_map.id, consensus_height, provider_ids)
+    {block_height, blocks_behind} = calculate_block_sync(chain_name, provider_map.id, consensus_height, provider_ids)
 
     %{
       id: provider_map.id,
@@ -63,14 +45,14 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
       circuit_state: derive_circuit_state(provider_map),
       http_circuit_state: provider_map.http_cb_state,
       ws_circuit_state: provider_map.ws_cb_state,
-      http_cb_error: Map.get(provider_map, :http_cb_error),
-      ws_cb_error: Map.get(provider_map, :ws_cb_error),
+      http_cb_error: provider_map[:http_cb_error],
+      ws_cb_error: provider_map[:ws_cb_error],
       consecutive_failures: provider_map.consecutive_failures,
       consecutive_successes: provider_map.consecutive_successes,
       last_error: provider_map.last_error,
-      http_rate_limited: Map.get(provider_map, :http_rate_limited, false),
-      ws_rate_limited: Map.get(provider_map, :ws_rate_limited, false),
-      rate_limit_remaining: Map.get(provider_map, :rate_limit_remaining, %{http: nil, ws: nil}),
+      http_rate_limited: provider_map[:http_rate_limited] || false,
+      ws_rate_limited: provider_map[:ws_rate_limited] || false,
+      rate_limit_remaining: provider_map[:rate_limit_remaining] || %{http: nil, ws: nil},
       is_in_cooldown: provider_map.is_in_cooldown,
       cooldown_until: provider_map.cooldown_until,
       reconnect_attempts: 0,
@@ -84,57 +66,44 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
     }
   end
 
-  # ============================================================================
-  # Private Helper Functions
-  # ============================================================================
-
   defp build_provider_ids_map(profile, chains) do
-    chains
-    |> Enum.map(fn chain_name ->
-      provider_ids =
+    Map.new(chains, fn chain_name ->
+      ids =
         case ProviderPool.get_status(profile, chain_name) do
           {:ok, pool_status} -> Enum.map(pool_status.providers, & &1.id)
           {:error, _} -> []
         end
 
-      {chain_name, provider_ids}
+      {chain_name, ids}
     end)
-    |> Enum.into(%{})
   end
 
   defp build_consensus_map(chains, provider_ids_by_chain) do
-    chains
-    |> Enum.map(fn chain_name ->
+    Map.new(chains, fn chain_name ->
       provider_ids = Map.get(provider_ids_by_chain, chain_name, [])
 
-      consensus =
+      height =
         case ChainState.consensus_height(chain_name, provider_ids) do
-          {:ok, height} -> height
+          {:ok, h} -> h
           {:error, _} -> nil
         end
 
-      {chain_name, consensus}
+      {chain_name, height}
     end)
-    |> Enum.into(%{})
   end
 
-  defp derive_circuit_state(provider_map) do
+  defp derive_circuit_state(%{http_cb_state: http, ws_cb_state: ws}) do
     cond do
-      provider_map.http_cb_state == :open or provider_map.ws_cb_state == :open ->
-        :open
-
-      provider_map.http_cb_state == :half_open or provider_map.ws_cb_state == :half_open ->
-        :half_open
-
-      true ->
-        :closed
+      http == :open or ws == :open -> :open
+      http == :half_open or ws == :half_open -> :half_open
+      true -> :closed
     end
   end
 
-  defp derive_provider_type(config) do
+  defp derive_provider_type(%{url: url, ws_url: ws_url}) do
     cond do
-      config.url && config.ws_url -> :both
-      config.ws_url -> :websocket
+      url && ws_url -> :both
+      ws_url -> :websocket
       true -> :http
     end
   end
@@ -149,7 +118,7 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
     provider_type in [:websocket, :both] and provider_map.ws_status == :healthy
   end
 
-  defp calculate_block_sync(_chain_name, _provider_id, nil, _provider_ids), do: {nil, nil}
+  defp calculate_block_sync(_, _, nil, _), do: {nil, nil}
 
   defp calculate_block_sync(chain_name, provider_id, consensus_height, provider_ids) do
     case ChainState.provider_lag(chain_name, provider_id, provider_ids) do
