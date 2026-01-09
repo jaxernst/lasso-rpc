@@ -46,7 +46,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
   @type t :: %__MODULE__{
           profile: String.t(),
-          chain: atom(),
+          chain: String.t(),
           provider_id: String.t(),
           parent: pid(),
           staleness_threshold_ms: non_neg_integer(),

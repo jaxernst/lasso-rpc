@@ -292,13 +292,13 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       end
 
     %{
-      provider_score: Float.round(provider_score || 0.0, 2),
+      provider_score: Float.round(provider_score, 2),
       p50_latency: p50,
       p95_latency: p95,
       success_rate: success_rate,
       calls_last_minute: calls_last_minute,
       rpc_stats: Map.get(real_time_stats, :rpc_stats, []),
-      anomalies: anomalies || [],
+      anomalies: anomalies,
       recent_activity_count: length(provider_events),
       pick_share_5m: pick_share
     }

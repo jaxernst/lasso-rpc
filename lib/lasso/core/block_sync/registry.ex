@@ -123,7 +123,6 @@ defmodule Lasso.BlockSync.Registry do
          {:ok, consensus} <- get_consensus_height(chain, freshness_ms) do
       {:ok, height - consensus}
     else
-      {:ok, _stale} -> {:error, :stale_data}
       false -> {:error, :stale_data}
       {:error, :not_found} -> {:error, :no_provider_data}
       {:error, :no_data} -> {:error, :no_consensus}

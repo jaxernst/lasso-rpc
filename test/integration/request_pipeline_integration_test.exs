@@ -714,14 +714,20 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           %RequestOptions{strategy: :priority, timeout_ms: 30_000}
         )
 
-      # Give circuit breaker time to open (rate limit threshold is 2)
-      Process.sleep(500)
+      # Wait for circuit breaker to open (rate limit threshold is 2)
+      # Use wait_for_circuit_breaker_state to handle async state updates
+      breaker_id = {profile, chain, "rate_limited", :http}
+
+      {:ok, _state} =
+        CircuitBreakerHelper.wait_for_circuit_breaker_state(
+          breaker_id,
+          fn state -> state.state == :open end,
+          timeout: 5_000,
+          interval: 50
+        )
 
       # Verify rate-limited provider's circuit is now open
-      CircuitBreakerHelper.assert_circuit_breaker_state(
-        {profile, chain, "rate_limited", :http},
-        :open
-      )
+      CircuitBreakerHelper.assert_circuit_breaker_state(breaker_id, :open)
     end
 
     test "rate limit error opens circuit breaker faster than normal errors", %{chain: chain} do

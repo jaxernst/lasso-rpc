@@ -64,7 +64,7 @@ defmodule Lasso.BlockSync.Worker do
 
   ## Client API
 
-  @spec start_link({atom(), String.t(), String.t()}) :: GenServer.on_start()
+  @spec start_link({String.t(), String.t(), String.t()}) :: GenServer.on_start()
   def start_link({chain, profile, provider_id}) when is_binary(profile) do
     GenServer.start_link(__MODULE__, {chain, profile, provider_id},
       name: via(chain, profile, provider_id)

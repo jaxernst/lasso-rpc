@@ -66,7 +66,15 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   # API called by UpstreamSubscriptionPool
 
-  @spec upstream_event(String.t(), String.t(), term(), String.t(), String.t(), term(), integer()) ::
+  @spec upstream_event(
+          String.t(),
+          String.t(),
+          term(),
+          String.t(),
+          String.t() | nil,
+          term(),
+          integer()
+        ) ::
           :ok
   def upstream_event(profile, chain, key, provider_id, upstream_id, payload, received_at)
       when is_binary(profile) and is_binary(chain) do

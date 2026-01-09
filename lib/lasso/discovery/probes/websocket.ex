@@ -247,8 +247,8 @@ defmodule Client do
     end
   end
 
-  @spec subscribe(pid(), list(), non_neg_integer(), boolean()) ::
-          {:ok, String.t(), term() | nil} | {:error, term()}
+  @spec subscribe(pid(), list(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, map()} | {:error, term()}
   def subscribe(pid, params, timeout, wait_for_event) do
     request_id = :rand.uniform(1_000_000)
 

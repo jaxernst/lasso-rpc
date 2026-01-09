@@ -42,7 +42,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @type t :: %__MODULE__{
           profile: String.t(),
-          chain: atom(),
+          chain: String.t(),
           provider_id: String.t(),
           parent: pid(),
           poll_interval_ms: non_neg_integer(),
