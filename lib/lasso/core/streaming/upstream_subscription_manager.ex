@@ -94,10 +94,12 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
 
   # Client API
 
+  @spec start_link({String.t(), String.t()}) :: GenServer.on_start()
   def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
     GenServer.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
   end
 
+  @spec via(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via(profile, chain) when is_binary(profile) and is_binary(chain) do
     {:via, Registry, {Lasso.Registry, {:upstream_sub_manager, profile, chain}}}
   end

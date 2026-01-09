@@ -19,6 +19,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionRegistry do
 
   Uses `:duplicate` keys to allow multiple consumers per subscription.
   """
+  @spec child_spec(term()) :: Supervisor.child_spec()
   def child_spec(_opts) do
     Registry.child_spec(
       keys: :duplicate,

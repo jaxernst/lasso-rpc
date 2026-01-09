@@ -64,12 +64,14 @@ defmodule Lasso.BlockSync.Worker do
 
   ## Client API
 
+  @spec start_link({atom(), String.t(), String.t()}) :: GenServer.on_start()
   def start_link({chain, profile, provider_id}) when is_binary(profile) do
     GenServer.start_link(__MODULE__, {chain, profile, provider_id},
       name: via(chain, profile, provider_id)
     )
   end
 
+  @spec via(atom(), String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via(chain, profile, provider_id) when is_binary(profile) do
     {:via, Registry, {Lasso.Registry, {:block_sync_worker, chain, profile, provider_id}}}
   end
@@ -77,6 +79,7 @@ defmodule Lasso.BlockSync.Worker do
   @doc """
   Get the current status of a worker.
   """
+  @spec get_status(atom(), String.t(), String.t()) :: map() | {:error, :not_running}
   def get_status(chain, profile, provider_id) when is_binary(profile) do
     GenServer.call(via(chain, profile, provider_id), :get_status)
   catch

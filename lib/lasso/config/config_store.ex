@@ -51,6 +51,7 @@ defmodule Lasso.Config.ConfigStore do
   (that's owned by Application). Profile loading happens after supervision tree
   starts via `load_all_profiles/0`.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end

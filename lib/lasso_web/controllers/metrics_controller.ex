@@ -10,6 +10,7 @@ defmodule LassoWeb.MetricsController do
   @doc """
   Returns comprehensive metrics for a specific chain.
   """
+  @spec metrics(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def metrics(conn, %{"chain" => chain_name}) do
     Logger.info("Metrics requested for chain: #{chain_name}")
     profile = "default"

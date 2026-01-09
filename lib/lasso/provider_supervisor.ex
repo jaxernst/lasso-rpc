@@ -109,6 +109,7 @@ defmodule Lasso.RPC.ProviderSupervisor do
     end
   end
 
+  @spec via_name(atom(), atom(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(profile, chain_name, provider_id) do
     {:via, Registry, {Lasso.Registry, {:provider_supervisor, profile, chain_name, provider_id}}}
   end

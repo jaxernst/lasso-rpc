@@ -107,6 +107,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   @doc """
   Execute an immediate poll (for use during initialization).
   """
+  @spec poll_now(t()) :: t()
   def poll_now(%__MODULE__{} = state) do
     execute_poll(state)
   end

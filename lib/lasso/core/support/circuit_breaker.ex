@@ -1074,6 +1074,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   Optionally accepts the error reason for proper classification and logging.
   If no reason is provided, defaults to a generic failure.
   """
+  @spec record_failure(tuple(), term()) :: :ok | {:error, :not_found}
   def record_failure(id, reason \\ :failure) do
     case GenServer.whereis(via_name(id)) do
       nil ->

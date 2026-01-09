@@ -155,6 +155,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @doc """
   Process an incoming newHeads event.
   """
+  @spec handle_new_head(t(), map()) :: t()
   def handle_new_head(%__MODULE__{} = state, payload) do
     process_new_head(state, payload)
   end
@@ -162,6 +163,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @doc """
   Handle subscription invalidation.
   """
+  @spec handle_invalidation(t(), term()) :: t()
   def handle_invalidation(%__MODULE__{} = state, reason) do
     Logger.debug("WS subscription invalidated",
       chain: state.chain,
@@ -178,6 +180,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @doc """
   Re-subscribe after connection recovery.
   """
+  @spec resubscribe(t()) :: {:ok, t()} | {:error, term()}
   def resubscribe(%__MODULE__{} = state) do
     case do_subscribe(state) do
       {:ok, new_state} ->

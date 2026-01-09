@@ -71,6 +71,7 @@ defmodule Lasso.Config.ChainValidator do
   @doc """
   Returns the map of canonical chain names to their chain IDs.
   """
+  @spec canonical_chains() :: %{String.t() => integer()}
   def canonical_chains, do: @canonical_chains
 
   @doc """

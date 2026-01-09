@@ -602,10 +602,12 @@ defmodule Lasso.RPC.TransportRegistry do
 
   Accepts optional profile as first argument (defaults to "default").
   """
+  @spec via_name(String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(chain_name) when is_binary(chain_name) do
     via_name("default", chain_name)
   end
 
+  @spec via_name(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(profile, chain_name) when is_binary(profile) and is_binary(chain_name) do
     {:via, Registry, {Lasso.Registry, {:transport_registry, profile, chain_name}}}
   end

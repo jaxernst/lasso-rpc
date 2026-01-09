@@ -87,6 +87,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       iex> Process.alive?(pid)
       true
   """
+  @spec start_link(Endpoint.t()) :: GenServer.on_start()
   def start_link(%Endpoint{} = endpoint) do
     GenServer.start_link(__MODULE__, endpoint, name: via_name(endpoint.id))
   end
@@ -99,6 +100,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       iex> Lasso.RPC.Transport.WebSocket.Connection.status("ethereum_ws")
       %{connected: true, endpoint_id: "ethereum_ws", reconnect_attempts: 0}
   """
+  @spec status(String.t()) :: map()
   def status(connection_id) do
     GenServer.call(via_name(connection_id), :status)
   end
@@ -131,6 +133,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   Returns {:ok, result} | {:error, reason}.
   """
+  @spec request(String.t(), String.t(), list() | map() | nil, non_neg_integer(), String.t() | nil) ::
+          {:ok, Response.Success.t()} | {:error, JError.t()}
   def request(connection_id, method, params, timeout_ms \\ 30_000, request_id \\ nil) do
     GenServer.call(
       via_name(connection_id),

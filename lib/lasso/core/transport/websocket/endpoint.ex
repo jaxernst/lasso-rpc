@@ -56,6 +56,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Endpoint do
         max_reconnect_attempts: :infinity
       }
   """
+  @spec new(map()) :: t()
   def new(attrs) do
     struct(__MODULE__, attrs)
   end
@@ -65,6 +66,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Endpoint do
 
   Returns `{:ok, endpoint}` if valid, `{:error, reason}` otherwise.
   """
+  @spec validate(t()) :: {:ok, t()} | {:error, String.t()}
   def validate(%__MODULE__{} = endpoint) do
     with {:ok, _} <- validate_base(endpoint),
          {:ok, _} <- validate_ws_specific(endpoint) do

@@ -194,6 +194,7 @@ defmodule Client do
     :event_listener
   ]
 
+  @spec start_link(String.t(), non_neg_integer()) :: {:ok, pid()} | {:error, term()}
   def start_link(url, timeout) do
     state = %__MODULE__{
       url: url,
@@ -216,6 +217,7 @@ defmodule Client do
     end
   end
 
+  @spec stop(pid()) :: :ok | nil
   def stop(pid) do
     if Process.alive?(pid) do
       WebSockex.cast(pid, :close)
@@ -224,6 +226,7 @@ defmodule Client do
     :exit, _ -> :ok
   end
 
+  @spec request(pid(), String.t(), list(), non_neg_integer()) :: {:ok, term()} | {:error, term()}
   def request(pid, method, params, timeout) do
     request_id = :rand.uniform(1_000_000)
 
@@ -244,6 +247,8 @@ defmodule Client do
     end
   end
 
+  @spec subscribe(pid(), list(), non_neg_integer(), boolean()) ::
+          {:ok, String.t(), term() | nil} | {:error, term()}
   def subscribe(pid, params, timeout, wait_for_event) do
     request_id = :rand.uniform(1_000_000)
 

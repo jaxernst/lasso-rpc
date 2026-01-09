@@ -2812,7 +2812,7 @@ defmodule LassoWeb.Dashboard do
       </div>
 
       <%= if Enum.empty?(@provider_metrics) do %>
-        <div class="backdrop-blur-lg rounded-xl border border-gray-700/60 border-dashed shadow-2xl overflow-hidden">
+        <div class="rounded-xl border border-gray-700/60 border-dashed bg-gray-900/20 shadow-2xl overflow-hidden">
           <div class="flex flex-col items-center justify-center py-16 px-8">
             <div class="relative mb-4">
               <div class="bg-gray-800/40 flex h-12 w-12 items-center justify-center rounded-lg">
@@ -2948,7 +2948,7 @@ defmodule LassoWeb.Dashboard do
       <h2 class="text-lg font-semibold mb-3 text-white">Method Performance Breakdown</h2>
 
       <%= if Enum.empty?(@method_metrics) do %>
-        <div class="backdrop-blur-lg rounded-xl border border-gray-700/60 border-dashed shadow-2xl overflow-hidden">
+        <div class="rounded-xl border border-gray-700/60 border-dashed bg-gray-900/20 shadow-2xl overflow-hidden">
           <div class="flex flex-col items-center justify-center py-16 px-8">
             <div class="relative mb-4">
               <div class="bg-gray-800/40 flex h-12 w-12 items-center justify-center rounded-lg">

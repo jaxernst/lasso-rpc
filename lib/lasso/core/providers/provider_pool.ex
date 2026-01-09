@@ -2059,11 +2059,13 @@ defmodule Lasso.RPC.ProviderPool do
   Accepts optional profile as first argument (defaults to "default").
   """
   @deprecated "Use via_name(profile, chain_name) instead with explicit profile parameter"
+  @spec via_name(String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(chain_name) when is_binary(chain_name) do
     IO.warn("ProviderPool.via_name/1 defaults to 'default' profile. Pass profile explicitly.")
     via_name("default", chain_name)
   end
 
+  @spec via_name(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(profile, chain_name) when is_binary(profile) and is_binary(chain_name) do
     {:via, Registry, {Lasso.Registry, {:provider_pool, profile, chain_name}}}
   end

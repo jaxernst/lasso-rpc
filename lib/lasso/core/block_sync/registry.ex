@@ -55,7 +55,8 @@ defmodule Lasso.BlockSync.Registry do
 
   Returns `{:ok, {height, timestamp, source, metadata}}` or `{:error, :not_found}`.
   """
-  @spec get_height(String.t(), String.t()) :: {:ok, {integer(), integer(), :ws | :http, map()}} | {:error, :not_found}
+  @spec get_height(String.t(), String.t()) ::
+          {:ok, {integer(), integer(), :ws | :http, map()}} | {:error, :not_found}
   def get_height(chain, provider_id) when is_binary(chain) and is_binary(provider_id) do
     case :ets.lookup(@table, {:height, chain, provider_id}) do
       [{_key, value}] -> {:ok, value}
@@ -74,7 +75,8 @@ defmodule Lasso.BlockSync.Registry do
 
   Returns `{:ok, height}` or `{:error, :no_data}`.
   """
-  @spec get_consensus_height(String.t(), non_neg_integer()) :: {:ok, integer()} | {:error, :no_data}
+  @spec get_consensus_height(String.t(), non_neg_integer()) ::
+          {:ok, integer()} | {:error, :no_data}
   def get_consensus_height(chain, freshness_ms \\ @default_freshness_ms)
       when is_binary(chain) do
     calculate_consensus(chain, nil, freshness_ms)
@@ -90,7 +92,8 @@ defmodule Lasso.BlockSync.Registry do
 
   Returns `{:ok, height}` or `{:error, :no_data}`.
   """
-  @spec get_consensus_height_filtered(String.t(), [String.t()] | nil, non_neg_integer()) :: {:ok, integer()} | {:error, :no_data}
+  @spec get_consensus_height_filtered(String.t(), [String.t()] | nil, non_neg_integer()) ::
+          {:ok, integer()} | {:error, :no_data}
   def get_consensus_height_filtered(chain, provider_ids, freshness_ms \\ @default_freshness_ms)
       when is_binary(chain) do
     calculate_consensus(chain, provider_ids, freshness_ms)
@@ -110,7 +113,8 @@ defmodule Lasso.BlockSync.Registry do
   - `{:error, :no_provider_data}` if provider has no height data
   - `{:error, :no_consensus}` if no consensus can be calculated
   """
-  @spec get_provider_lag(String.t(), String.t(), non_neg_integer()) :: {:ok, integer()} | {:error, :no_provider_data | :no_consensus | :stale_data}
+  @spec get_provider_lag(String.t(), String.t(), non_neg_integer()) ::
+          {:ok, integer()} | {:error, :no_provider_data | :no_consensus | :stale_data}
   def get_provider_lag(chain, provider_id, freshness_ms \\ @default_freshness_ms)
       when is_binary(chain) and is_binary(provider_id) do
     with {:ok, {height, timestamp, _source, _meta}} <- get_height(chain, provider_id),

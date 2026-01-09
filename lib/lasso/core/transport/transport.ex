@@ -108,6 +108,7 @@ defmodule Lasso.RPC.Transport do
   @doc """
   Generates a unique request ID for tracking purposes.
   """
+  @spec generate_request_id() :: String.t()
   def generate_request_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
