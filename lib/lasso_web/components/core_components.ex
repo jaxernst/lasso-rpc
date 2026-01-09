@@ -120,7 +120,11 @@ defmodule LassoWeb.CoreComponents do
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
-      class={["fixed top-2 right-2 z-50 mr-2 w-80 rounded-lg p-3 ring-1 sm:w-96", @kind == :info && "bg-emerald-50 fill-cyan-900 text-emerald-800 ring-emerald-500", @kind == :error && "bg-rose-50 fill-rose-900 text-rose-900 shadow-md ring-rose-500"]}
+      class={[
+        "fixed top-2 right-2 z-50 mr-2 w-80 rounded-lg p-3 ring-1 sm:w-96",
+        @kind == :info && "bg-emerald-50 fill-cyan-900 text-emerald-800 ring-emerald-500",
+        @kind == :error && "bg-rose-50 fill-rose-900 text-rose-900 shadow-md ring-rose-500"
+      ]}
       {@rest}
     >
       <p :if={@title} class="flex items-center gap-1.5 text-sm font-semibold leading-6">
@@ -351,14 +355,22 @@ defmodule LassoWeb.CoreComponents do
 
   def tab_switcher(assigns) do
     ~H"""
-    <div class={["bg-gray-900/50 border-gray-700/50 flex items-center space-x-1 rounded-xl border p-1.5 backdrop-blur-sm", @class]}>
+    <div class={[
+      "bg-gray-900/50 border-gray-700/50 flex items-center space-x-1 rounded-xl border p-1.5 backdrop-blur-sm",
+      @class
+    ]}>
       <%= for tab <- @tabs do %>
         <button
           phx-click="switch_tab"
           phx-value-tab={tab.id}
-          class={["relative flex items-center gap-2 overflow-hidden rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 sm:px-4", if(@active_tab == tab.id,
-    do: "shadow-purple-500/25 bg-gradient-to-r from-purple-600 to-purple-500 text-white shadow-lg",
-    else: "text-gray-300 hover:bg-gray-800/50 hover:text-white")]}
+          class={[
+            "relative flex items-center gap-2 overflow-hidden rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 sm:px-4",
+            if(@active_tab == tab.id,
+              do:
+                "shadow-purple-500/25 bg-gradient-to-r from-purple-600 to-purple-500 text-white shadow-lg",
+              else: "text-gray-300 hover:bg-gray-800/50 hover:text-white"
+            )
+          ]}
         >
           <%= if @active_tab == tab.id do %>
             <div class="from-purple-600/20 to-purple-500/20 absolute inset-0 rounded-lg bg-gradient-to-r">
@@ -407,9 +419,13 @@ defmodule LassoWeb.CoreComponents do
         <button
           phx-click="switch_tab"
           phx-value-tab={tab.id}
-          class={["relative px-4 py-2 text-sm font-medium transition-colors duration-200", if(@active_tab == tab.id,
-    do: "text-purple-400",
-    else: "text-gray-400 hover:text-gray-200")]}
+          class={[
+            "relative px-4 py-2 text-sm font-medium transition-colors duration-200",
+            if(@active_tab == tab.id,
+              do: "text-purple-400",
+              else: "text-gray-400 hover:text-gray-200"
+            )
+          ]}
         >
           {tab.label}
           <%= if @active_tab == tab.id do %>
