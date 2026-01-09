@@ -53,7 +53,6 @@ defmodule Lasso.Integration.DynamicProvidersTest do
 
     test "can add a provider dynamically", %{provider_config: config, test_id: test_id} do
       # Add provider
-      IO.puts("adding provider")
       assert {:ok, provider_id} = Providers.add_provider(@test_chain, config)
       assert provider_id == test_id
 
