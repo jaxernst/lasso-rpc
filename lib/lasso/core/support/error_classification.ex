@@ -95,7 +95,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
   # Patterns indicating transient/retriable server errors
   # These are provider-specific errors that should trigger failover
   @transient_error_patterns [
-    "please retry",  # DRPC error code 19: "Temporary internal error. Please retry"
+    # DRPC error code 19: "Temporary internal error. Please retry"
+    "please retry",
     "temporary internal error",
     "try again",
     "service temporarily unavailable",
@@ -127,22 +128,27 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "maximum number of addresses",
     "max addresses",
     "too many addresses",
-    "specify less number of addresses",  # PublicNode
-    "specify an address",  # PublicNode
+    # PublicNode
+    "specify less number of addresses",
+    # PublicNode
+    "specify an address",
     # Block range constraints
     "block range exceeded",
     "max block range",
     "block range too large",
     "range too large",
     "range not supported",
-    "this range of parameters is not supported",  # PublicNode
+    # PublicNode
+    "this range of parameters is not supported",
     "exceeds maximum block range",
     "invalid block range",
     "max is 1k blocks",
     "range is too large",
     "blocks are not supported",
-    "ranges over",  # DRPC
-    "is limited to",  # 1RPC
+    # DRPC
+    "ranges over",
+    # 1RPC
+    "is limited to",
     # Archival/historical data
     "archive node required",
     "requires archival",
@@ -150,7 +156,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "archival not available",
     "historical data not supported",
     "pruned",
-    "missing trie node",  # Geth pruned data
+    # Geth pruned data
+    "missing trie node",
     # Feature availability
     "tracing not enabled",
     "debug not available",
@@ -178,7 +185,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "premium plan",
     "paid plan",
     "paid tier",
-    "timeout on the free tier",  # DRPC
+    # DRPC
+    "timeout on the free tier",
     "feature not enabled"
   ]
 
@@ -335,34 +343,78 @@ defmodule Lasso.Core.Support.ErrorClassification do
   # Private: Code-Based Classification
   # ===========================================================================
 
+  # Group related codes for efficient compile-time matching
+  @jsonrpc_standard_codes [
+    @parse_error,
+    @invalid_request,
+    @method_not_found,
+    @invalid_params,
+    @internal_error
+  ]
+  @lasso_custom_codes [
+    @rate_limit_error,
+    @network_error_code,
+    @client_error_code,
+    @server_error_code,
+    @generic_server_error
+  ]
+  @eip1193_codes [
+    @user_rejected,
+    @unauthorized,
+    @unsupported_method,
+    @unsupported_chain,
+    @chain_disconnected
+  ]
+
   defp classify_by_code(code) do
     cond do
-      # Standard JSON-RPC 2.0 errors
-      code == @parse_error -> :parse_error
-      code == @invalid_request -> :invalid_request
-      code == @method_not_found -> :method_not_found
-      code == @invalid_params -> :invalid_params
-      code == @internal_error -> :internal_error
-      # Lasso custom error codes
-      code == @rate_limit_error -> :rate_limit
-      code == @network_error_code -> :network_error
-      code == @client_error_code -> :client_error
-      code == @server_error_code -> :server_error
-      code == @generic_server_error -> :server_error
-      # JSON-RPC server error range
-      code >= -32_099 and code <= -32_000 -> :server_error
-      # EIP-1193 provider errors
-      code == @user_rejected -> :user_error
-      code == @unauthorized -> :auth_error
-      code == @unsupported_method -> :method_error
-      code == @unsupported_chain -> :chain_error
-      code == @chain_disconnected -> :network_error
-      # HTTP status codes
-      code == 429 -> :rate_limit
-      code >= 500 and code <= 599 -> :server_error
-      code >= 400 and code <= 499 -> :client_error
-      # Unknown codes
+      code in @jsonrpc_standard_codes -> classify_jsonrpc_standard(code)
+      code in @lasso_custom_codes -> classify_lasso_error(code)
+      code in @eip1193_codes -> classify_eip1193_error(code)
+      jsonrpc_server_range?(code) -> :server_error
+      http_status_code?(code) -> classify_http_status(code)
       true -> :unknown_error
+    end
+  end
+
+  defp jsonrpc_server_range?(code), do: code >= -32_099 and code <= -32_000
+  defp http_status_code?(code), do: code >= 400 and code <= 599
+
+  defp classify_jsonrpc_standard(code) do
+    case code do
+      @parse_error -> :parse_error
+      @invalid_request -> :invalid_request
+      @method_not_found -> :method_not_found
+      @invalid_params -> :invalid_params
+      @internal_error -> :internal_error
+    end
+  end
+
+  defp classify_lasso_error(code) do
+    case code do
+      @rate_limit_error -> :rate_limit
+      @network_error_code -> :network_error
+      @client_error_code -> :client_error
+      @server_error_code -> :server_error
+      @generic_server_error -> :server_error
+    end
+  end
+
+  defp classify_eip1193_error(code) do
+    case code do
+      @user_rejected -> :user_error
+      @unauthorized -> :auth_error
+      @unsupported_method -> :method_error
+      @unsupported_chain -> :chain_error
+      @chain_disconnected -> :network_error
+    end
+  end
+
+  defp classify_http_status(code) do
+    cond do
+      code == 429 -> :rate_limit
+      code >= 500 -> :server_error
+      true -> :client_error
     end
   end
 

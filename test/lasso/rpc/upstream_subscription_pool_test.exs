@@ -20,7 +20,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
 
   use ExUnit.Case, async: false
 
-  alias Lasso.Core.Streaming.{UpstreamSubscriptionPool, ClientSubscriptionRegistry, StreamSupervisor}
+  alias Lasso.Core.Streaming.UpstreamSubscriptionPool
+
   alias Lasso.Testing.MockWSProvider
 
   @default_profile "default"
@@ -338,7 +339,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       receive do
         {:subscription_confirmed, _, _} ->
           # Check that transitioning_from is set
-          state = get_pool_state(chain)
+          _state = get_pool_state(chain)
           # Either transitioning_from is set OR deferred release already cleared it
           # Both are valid depending on timing
           :ok

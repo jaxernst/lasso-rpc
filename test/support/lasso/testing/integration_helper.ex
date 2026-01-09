@@ -355,7 +355,7 @@ defmodule Lasso.Testing.IntegrationHelper do
     end
   end
 
-  defp provider_registered?(chain, provider_id, profile \\ "default") do
+  defp provider_registered?(chain, provider_id, profile) do
     case Lasso.RPC.ProviderPool.get_status(profile, chain) do
       {:ok, status} ->
         # Check if provider exists in the providers list
@@ -380,7 +380,7 @@ defmodule Lasso.Testing.IntegrationHelper do
     end
   end
 
-  defp provider_health_available?(chain, provider_id, profile \\ "default") do
+  defp provider_health_available?(chain, provider_id, profile) do
     case Lasso.RPC.ProviderPool.get_status(profile, chain) do
       {:ok, status} ->
         # Find the provider and check if it has a health status

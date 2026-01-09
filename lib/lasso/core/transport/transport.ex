@@ -6,7 +6,6 @@ defmodule Lasso.RPC.Transport do
   to enable transport-agnostic request routing and capability-aware selection.
   """
 
-
   @type channel :: term()
   @type rpc_request :: map()
   @type rpc_response :: map()
@@ -109,6 +108,7 @@ defmodule Lasso.RPC.Transport do
   @doc """
   Generates a unique request ID for tracking purposes.
   """
+  @spec generate_request_id() :: String.t()
   def generate_request_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end

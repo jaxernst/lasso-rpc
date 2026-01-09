@@ -6,6 +6,7 @@ defmodule Lasso.Core.Support.FilterNormalizer do
   - Remove nil/empty values
   """
 
+  @spec normalize(map()) :: map()
   def normalize(%{} = filter) do
     filter
     |> prune_nil()

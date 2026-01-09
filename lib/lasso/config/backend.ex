@@ -56,7 +56,8 @@ defmodule Lasso.Config.Backend do
 
   Returns the profile specification or an error if not found.
   """
-  @callback load(state(), slug :: String.t()) :: {:ok, profile_spec()} | {:error, :not_found | term()}
+  @callback load(state(), slug :: String.t()) ::
+              {:ok, profile_spec()} | {:error, :not_found | term()}
 
   @doc """
   Save a profile configuration.
@@ -78,6 +79,7 @@ defmodule Lasso.Config.Backend do
   @doc """
   Get the configured backend module.
   """
+  @spec backend_module() :: module()
   def backend_module do
     Application.get_env(:lasso, :config_backend, Lasso.Config.Backend.File)
   end
@@ -85,6 +87,7 @@ defmodule Lasso.Config.Backend do
   @doc """
   Get the backend configuration options.
   """
+  @spec backend_config() :: keyword()
   def backend_config do
     Application.get_env(:lasso, :config_backend_config, profiles_dir: "config/profiles")
   end

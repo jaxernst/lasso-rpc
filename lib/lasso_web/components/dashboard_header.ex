@@ -1,4 +1,5 @@
 defmodule LassoWeb.Components.DashboardHeader do
+  @moduledoc "Dashboard header component with tab navigation."
   use Phoenix.Component
 
   attr(:active_tab, :string, required: true, doc: "currently active tab")
@@ -24,7 +25,10 @@ defmodule LassoWeb.Components.DashboardHeader do
     assigns = assign(assigns, :tabs, tabs)
 
     ~H"""
-    <div class={["relative z-20 flex-shrink-0 transition-all duration-500 ease-in-out", if(@active_tab == "docs", do: "", else: "border-gray-700/50 border-b")]}>
+    <div class={[
+      "relative z-20 flex-shrink-0 transition-all duration-500 ease-in-out",
+      if(@active_tab == "docs", do: "", else: "border-gray-700/50 border-b")
+    ]}>
       <div class="relative flex items-center justify-between px-6 py-3">
         <!-- Left: Logo -->
         <a href="/" class="group flex items-center gap-2">
@@ -63,9 +67,13 @@ defmodule LassoWeb.Components.DashboardHeader do
               <button
                 phx-click="switch_tab"
                 phx-value-tab={tab.id}
-                class={["relative px-3 py-2 text-sm font-medium transition-colors", if(@active_tab == tab.id,
-    do: "text-white",
-    else: "text-gray-400 hover:text-gray-200")]}
+                class={[
+                  "relative px-3 py-2 text-sm font-medium transition-colors",
+                  if(@active_tab == tab.id,
+                    do: "text-white",
+                    else: "text-gray-400 hover:text-gray-200"
+                  )
+                ]}
               >
                 {tab.label}
                 <%= if @active_tab == tab.id do %>

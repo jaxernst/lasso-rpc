@@ -88,6 +88,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     test "buffers events in :backfilling status", %{coordinator: pid} do
       # Force status to :backfilling by setting up failover context
       state = get_coordinator_state(pid)
+
       fake_context = %{
         old_provider_id: "p1",
         new_provider_id: "p2",
@@ -96,6 +97,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         event_buffer: [],
         attempt_count: 1
       }
+
       new_state = %{state | failover_status: :backfilling, failover_context: fake_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -115,6 +117,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     test "buffers events in :switching status", %{coordinator: pid} do
       # Force status to :switching
       state = get_coordinator_state(pid)
+
       fake_context = %{
         old_provider_id: "p1",
         new_provider_id: "p2",
@@ -123,6 +126,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         event_buffer: [],
         attempt_count: 1
       }
+
       new_state = %{state | failover_status: :switching, failover_context: fake_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -197,6 +201,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     test "ignores signal when status is :backfilling", %{coordinator: pid} do
       # Force status to :backfilling
       state = get_coordinator_state(pid)
+
       fake_context = %{
         old_provider_id: "p1",
         new_provider_id: "p2",
@@ -205,6 +210,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         event_buffer: [],
         attempt_count: 1
       }
+
       new_state = %{state | failover_status: :backfilling, failover_context: fake_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -227,6 +233,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     test "ignores signal when status is :switching", %{coordinator: pid} do
       # Force status to :switching
       state = get_coordinator_state(pid)
+
       fake_context = %{
         old_provider_id: "p1",
         new_provider_id: "p2",
@@ -235,6 +242,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         event_buffer: [],
         attempt_count: 1
       }
+
       new_state = %{state | failover_status: :switching, failover_context: fake_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -256,7 +264,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     setup do
       chain = "test_chain_#{:rand.uniform(999_999)}"
       key = {:newHeads}
-      opts = [primary_provider_id: "provider_1", max_failover_attempts: 2, failover_cooldown_ms: 1_000]
+
+      opts = [
+        primary_provider_id: "provider_1",
+        max_failover_attempts: 2,
+        failover_cooldown_ms: 1_000
+      ]
 
       {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
 
@@ -268,10 +281,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     test "enters degraded mode after max_failover_attempts", %{coordinator: pid} do
       # Build failure history that exceeds threshold
       state = get_coordinator_state(pid)
+
       failure_history = [
         %{provider_id: "p1", failed_at: now()},
         %{provider_id: "p2", failed_at: now()}
       ]
+
       new_state = %{state | failover_history: failure_history}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -293,9 +308,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     test "continues failover if under threshold", %{coordinator: pid} do
       # Build failure history under threshold
       state = get_coordinator_state(pid)
+
       failure_history = [
         %{provider_id: "p1", failed_at: now()}
       ]
+
       new_state = %{state | failover_history: failure_history}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -354,6 +371,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     test "buffer grows up to max_event_buffer", %{coordinator: pid} do
       # Force :backfilling status
       state = get_coordinator_state(pid)
+
       fake_context = %{
         old_provider_id: "p1",
         new_provider_id: "p2",
@@ -362,6 +380,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         event_buffer: [],
         attempt_count: 1
       }
+
       new_state = %{state | failover_status: :backfilling, failover_context: fake_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -389,9 +408,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         new_provider_id: "p2",
         backfill_task_ref: make_ref(),
         started_at: now(),
-        event_buffer: [event1, event2, event3],  # Buffer is full (max=3)
+        # Buffer is full (max=3)
+        event_buffer: [event1, event2, event3],
         attempt_count: 1
       }
+
       new_state = %{state | failover_status: :backfilling, failover_context: fake_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -430,6 +451,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         event_buffer: [event1, event2, event3],
         attempt_count: 1
       }
+
       new_state = %{state | failover_status: :switching, failover_context: fake_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -474,6 +496,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         event_buffer: [],
         attempt_count: 1
       }
+
       new_state = %{state | failover_status: :backfilling, failover_context: initial_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
@@ -495,8 +518,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       state = get_coordinator_state(pid)
 
       # The key assertion: still working with the NEW failover, not the old one
-      assert state.failover_context != nil, "Failover context should not be cleared by stale message"
-      assert state.failover_context.backfill_task_ref == new_ref, "Should still track new ref, not old"
+      assert state.failover_context != nil,
+             "Failover context should not be cleared by stale message"
+
+      assert state.failover_context.backfill_task_ref == new_ref,
+             "Should still track new ref, not old"
+
       assert state.failover_context.new_provider_id == "p3", "Should still track new provider p3"
 
       # Status may be :backfilling or :switching depending on timing - both are acceptable

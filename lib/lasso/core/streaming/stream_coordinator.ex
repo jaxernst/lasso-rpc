@@ -24,6 +24,27 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     StreamState
   }
 
+  defmodule BackfillContext do
+    @moduledoc false
+    defstruct [
+      :profile,
+      :chain,
+      :max_backfill,
+      :backfill_timeout,
+      :continuity_policy,
+      :excluded_providers
+    ]
+
+    @type t :: %__MODULE__{
+            profile: String.t(),
+            chain: String.t(),
+            max_backfill: non_neg_integer(),
+            backfill_timeout: non_neg_integer(),
+            continuity_policy: atom(),
+            excluded_providers: [String.t()]
+          }
+  end
+
   @type key :: {:newHeads} | {:logs, map()}
 
   # Circuit breaker defaults
@@ -32,17 +53,29 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   @max_event_buffer 100
   @degraded_mode_retry_delay_ms 30_000
 
+  @spec start_link({String.t(), String.t(), term(), keyword()}) :: GenServer.on_start()
   def start_link({profile, chain, key, opts})
       when is_binary(profile) and is_binary(chain) do
     GenServer.start_link(__MODULE__, {profile, chain, key, opts}, name: via(profile, chain, key))
   end
 
+  @spec via(String.t(), String.t(), term()) :: {:via, Registry, {atom(), tuple()}}
   def via(profile, chain, key) when is_binary(profile) and is_binary(chain) do
     {:via, Registry, {Lasso.Registry, {:stream_coordinator, profile, chain, key}}}
   end
 
   # API called by UpstreamSubscriptionPool
 
+  @spec upstream_event(
+          String.t(),
+          String.t(),
+          term(),
+          String.t(),
+          String.t() | nil,
+          term(),
+          integer()
+        ) ::
+          :ok
   def upstream_event(profile, chain, key, provider_id, upstream_id, payload, received_at)
       when is_binary(profile) and is_binary(chain) do
     GenServer.cast(
@@ -51,6 +84,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     )
   end
 
+  @spec provider_unhealthy(String.t(), String.t(), term(), String.t(), String.t()) :: :ok
   def provider_unhealthy(profile, chain, key, failed_id, proposed_new_id)
       when is_binary(profile) and is_binary(chain) do
     GenServer.cast(via(profile, chain, key), {:provider_unhealthy, failed_id, proposed_new_id})
@@ -294,20 +328,18 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       continuity_policy = state.continuity_policy
       stream_state = state.state
 
+      backfill_ctx = %BackfillContext{
+        profile: profile,
+        chain: chain,
+        max_backfill: max_backfill,
+        backfill_timeout: backfill_timeout,
+        continuity_policy: continuity_policy,
+        excluded_providers: [old_provider_id, new_provider_id]
+      }
+
       task =
         Task.async(fn ->
-          execute_backfill(
-            profile,
-            chain,
-            key,
-            new_provider_id,
-            stream_state,
-            max_backfill,
-            backfill_timeout,
-            continuity_policy,
-            [old_provider_id, new_provider_id]
-          )
-
+          execute_backfill(backfill_ctx, key, new_provider_id, stream_state)
           :backfill_complete
         end)
 
@@ -343,84 +375,46 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp execute_backfill(
-         profile,
-         chain,
-         key,
-         new_provider_id,
-         stream_state,
-         max_backfill,
-         backfill_timeout,
-         continuity_policy,
-         excluded_providers
-       ) do
-    try do
-      case key do
-        {:newHeads} ->
-          backfill_blocks(
-            profile,
-            chain,
-            key,
-            new_provider_id,
-            stream_state,
-            max_backfill,
-            backfill_timeout,
-            continuity_policy,
-            excluded_providers
-          )
+  defp execute_backfill(ctx, key, new_provider_id, stream_state) do
+    case key do
+      {:newHeads} ->
+        backfill_blocks(ctx, key, new_provider_id, stream_state)
 
-        {:logs, filter} ->
-          backfill_logs(
-            profile,
-            chain,
-            key,
-            filter,
-            new_provider_id,
-            stream_state,
-            max_backfill,
-            backfill_timeout,
-            continuity_policy,
-            excluded_providers
-          )
-      end
-    rescue
-      e ->
-        Logger.error("Backfill error: #{inspect(e)}", chain: chain, key: inspect(key))
-        :error
+      {:logs, filter} ->
+        backfill_logs(ctx, key, filter, new_provider_id, stream_state)
     end
+  rescue
+    e ->
+      Logger.error("Backfill error: #{inspect(e)}", chain: ctx.chain, key: inspect(key))
+      :error
   end
 
-  defp backfill_blocks(
-         profile,
-         chain,
-         key,
-         _new_ws_provider_id,
-         stream_state,
-         max_backfill,
-         backfill_timeout,
-         continuity_policy,
-         excluded_providers
-       ) do
+  defp backfill_blocks(ctx, key, _new_ws_provider_id, stream_state) do
     last = StreamState.last_block_num(stream_state)
 
     # Use decoupled HTTP provider selection for backfill
-    http_provider = pick_best_http_provider(profile, chain, excluded_providers)
-    head = fetch_head(chain, http_provider)
+    http_provider = pick_best_http_provider(ctx.profile, ctx.chain, ctx.excluded_providers)
+    head = fetch_head(ctx.chain, http_provider)
 
-    case ContinuityPolicy.needed_block_range(last, head, max_backfill, continuity_policy) do
+    case ContinuityPolicy.needed_block_range(
+           last,
+           head,
+           ctx.max_backfill,
+           ctx.continuity_policy
+         ) do
       {:none} ->
         :ok
 
       {:range, from_n, to_n} ->
-        telemetry_backfill_started(chain, from_n, to_n, http_provider)
+        telemetry_backfill_started(ctx.chain, from_n, to_n, http_provider)
 
         {:ok, blocks} =
-          GapFiller.ensure_blocks(chain, http_provider, from_n, to_n,
-            timeout_ms: backfill_timeout
+          GapFiller.ensure_blocks(ctx.chain, http_provider, from_n, to_n,
+            timeout_ms: ctx.backfill_timeout
           )
 
         # Send blocks to coordinator via cast
-        coordinator_pid = via(profile, chain, key)
+        coordinator_pid = via(ctx.profile, ctx.chain, key)
 
         Enum.each(blocks, fn block ->
           GenServer.cast(
@@ -429,26 +423,26 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           )
         end)
 
-        telemetry_backfill_completed(chain, from_n, to_n, length(blocks))
+        telemetry_backfill_completed(ctx.chain, from_n, to_n, length(blocks))
         :ok
 
       {:exceeded, from_n, to_n} ->
         Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
-          chain: chain,
+          chain: ctx.chain,
           key: inspect(key)
         )
 
-        case continuity_policy do
+        case ctx.continuity_policy do
           :best_effort ->
             # Fill what we can
-            telemetry_backfill_started(chain, from_n, to_n, http_provider)
+            telemetry_backfill_started(ctx.chain, from_n, to_n, http_provider)
 
             {:ok, blocks} =
-              GapFiller.ensure_blocks(chain, http_provider, from_n, to_n,
-                timeout_ms: backfill_timeout
+              GapFiller.ensure_blocks(ctx.chain, http_provider, from_n, to_n,
+                timeout_ms: ctx.backfill_timeout
               )
 
-            coordinator_pid = via(profile, chain, key)
+            coordinator_pid = via(ctx.profile, ctx.chain, key)
 
             Enum.each(blocks, fn block ->
               GenServer.cast(
@@ -457,7 +451,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
               )
             end)
 
-            telemetry_backfill_completed(chain, from_n, to_n, length(blocks))
+            telemetry_backfill_completed(ctx.chain, from_n, to_n, length(blocks))
             :ok
 
           :strict_abort ->
@@ -466,36 +460,30 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp backfill_logs(
-         profile,
-         chain,
-         key,
-         filter,
-         _new_ws_provider_id,
-         stream_state,
-         max_backfill,
-         backfill_timeout,
-         continuity_policy,
-         excluded_providers
-       ) do
+  defp backfill_logs(ctx, key, filter, _new_ws_provider_id, stream_state) do
     last = StreamState.last_log_block(stream_state) || StreamState.last_block_num(stream_state)
 
     # Use decoupled HTTP provider selection for backfill
-    http_provider = pick_best_http_provider(profile, chain, excluded_providers)
-    head = fetch_head(chain, http_provider)
+    http_provider = pick_best_http_provider(ctx.profile, ctx.chain, ctx.excluded_providers)
+    head = fetch_head(ctx.chain, http_provider)
 
-    case ContinuityPolicy.needed_block_range(last, head, max_backfill, continuity_policy) do
+    case ContinuityPolicy.needed_block_range(
+           last,
+           head,
+           ctx.max_backfill,
+           ctx.continuity_policy
+         ) do
       {:none} ->
         :ok
 
       {:range, from_n, to_n} ->
-        telemetry_backfill_started(chain, from_n, to_n, http_provider)
+        telemetry_backfill_started(ctx.chain, from_n, to_n, http_provider)
 
-        case GapFiller.ensure_logs(chain, http_provider, filter, from_n, to_n,
-               timeout_ms: backfill_timeout
+        case GapFiller.ensure_logs(ctx.chain, http_provider, filter, from_n, to_n,
+               timeout_ms: ctx.backfill_timeout
              ) do
           {:ok, logs} ->
-            coordinator_pid = via(profile, chain, key)
+            coordinator_pid = via(ctx.profile, ctx.chain, key)
 
             Enum.each(logs, fn log ->
               GenServer.cast(
@@ -504,7 +492,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
               )
             end)
 
-            telemetry_backfill_completed(chain, from_n, to_n, length(logs))
+            telemetry_backfill_completed(ctx.chain, from_n, to_n, length(logs))
             :ok
 
           {:error, reason} ->
@@ -514,18 +502,18 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       {:exceeded, from_n, to_n} ->
         Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
-          chain: chain,
+          chain: ctx.chain,
           key: inspect(key)
         )
 
         # For logs, best effort fill
-        telemetry_backfill_started(chain, from_n, to_n, http_provider)
+        telemetry_backfill_started(ctx.chain, from_n, to_n, http_provider)
 
-        case GapFiller.ensure_logs(chain, http_provider, filter, from_n, to_n,
-               timeout_ms: backfill_timeout
+        case GapFiller.ensure_logs(ctx.chain, http_provider, filter, from_n, to_n,
+               timeout_ms: ctx.backfill_timeout
              ) do
           {:ok, logs} ->
-            coordinator_pid = via(profile, chain, key)
+            coordinator_pid = via(ctx.profile, ctx.chain, key)
 
             Enum.each(logs, fn log ->
               GenServer.cast(
@@ -534,7 +522,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
               )
             end)
 
-            telemetry_backfill_completed(chain, from_n, to_n, length(logs))
+            telemetry_backfill_completed(ctx.chain, from_n, to_n, length(logs))
             :ok
 
           {:error, reason} ->

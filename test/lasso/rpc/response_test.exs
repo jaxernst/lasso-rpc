@@ -24,7 +24,8 @@ defmodule Lasso.RPC.ResponseTest do
     end
 
     test "parses error response with data field" do
-      raw = ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params","data":{"field":"value"}}})
+      raw =
+        ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params","data":{"field":"value"}}})
 
       assert {:ok, %Error{} = resp} = Response.from_bytes(raw)
       assert resp.error.code == -32602
@@ -95,7 +96,8 @@ defmodule Lasso.RPC.ResponseTest do
     end
 
     test "parses batch with mixed success and error" do
-      raw = ~s([{"jsonrpc":"2.0","id":1,"result":"ok"},{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Bad"}}])
+      raw =
+        ~s([{"jsonrpc":"2.0","id":1,"result":"ok"},{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Bad"}}])
 
       assert {:ok, %Batch{} = batch} = Response.from_batch_bytes(raw)
       assert [%Success{id: 1}, %Error{id: 2}] = batch.items
@@ -136,7 +138,9 @@ defmodule Lasso.RPC.ResponseTest do
     end
 
     test "extracts ID from Error" do
-      {:ok, resp} = Response.from_bytes(~s({"jsonrpc":"2.0","id":42,"error":{"code":-32600,"message":"Bad"}}))
+      {:ok, resp} =
+        Response.from_bytes(~s({"jsonrpc":"2.0","id":42,"error":{"code":-32600,"message":"Bad"}}))
+
       assert Response.id(resp) == 42
     end
 
@@ -269,7 +273,11 @@ defmodule Lasso.RPC.ResponseTest do
     end
 
     test "handles mixed success and error items" do
-      success = %Success{id: 1, jsonrpc: "2.0", raw_bytes: ~s({"jsonrpc":"2.0","id":1,"result":"ok"})}
+      success = %Success{
+        id: 1,
+        jsonrpc: "2.0",
+        raw_bytes: ~s({"jsonrpc":"2.0","id":1,"result":"ok"})
+      }
 
       error = %Error{
         id: 2,
@@ -292,7 +300,12 @@ defmodule Lasso.RPC.ResponseTest do
     test "counts success items" do
       items = [
         %Success{id: 1, jsonrpc: "2.0", raw_bytes: "{}"},
-        %Error{id: 2, jsonrpc: "2.0", error: Lasso.JSONRPC.Error.new(-32600, "Bad"), raw_bytes: nil},
+        %Error{
+          id: 2,
+          jsonrpc: "2.0",
+          error: Lasso.JSONRPC.Error.new(-32600, "Bad"),
+          raw_bytes: nil
+        },
         %Success{id: 3, jsonrpc: "2.0", raw_bytes: "{}"}
       ]
 
@@ -302,7 +315,12 @@ defmodule Lasso.RPC.ResponseTest do
 
     test "returns zero for all errors" do
       items = [
-        %Error{id: 1, jsonrpc: "2.0", error: Lasso.JSONRPC.Error.new(-32600, "Bad"), raw_bytes: nil}
+        %Error{
+          id: 1,
+          jsonrpc: "2.0",
+          error: Lasso.JSONRPC.Error.new(-32600, "Bad"),
+          raw_bytes: nil
+        }
       ]
 
       {:ok, batch} = Batch.build(items, [1])

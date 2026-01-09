@@ -55,7 +55,8 @@ defmodule Lasso.Config.RuntimeConfig do
   @doc """
   Gets all providers for a chain in priority order.
   """
-  @spec get_chain_providers(String.t(), String.t()) :: {:ok, [provider_config()]} | {:error, term()}
+  @spec get_chain_providers(String.t(), String.t()) ::
+          {:ok, [provider_config()]} | {:error, term()}
   def get_chain_providers(profile, chain_name) do
     case ConfigStore.get_providers(profile, chain_name) do
       {:ok, providers} ->

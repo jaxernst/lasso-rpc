@@ -39,14 +39,10 @@ defmodule Lasso.RPC.Providers.Adapters.Cloudflare do
   def supports_method?(method, _transport, _context) do
     category = MethodRegistry.method_category(method)
 
-    cond do
-      # Unsupported categories
-      category in [:debug, :trace, :filters, :txpool, :local_only, :mempool] ->
-        {:error, :method_unsupported}
-
-      # All other standard methods supported
-      true ->
-        :ok
+    if category in [:debug, :trace, :filters, :txpool, :local_only, :mempool] do
+      {:error, :method_unsupported}
+    else
+      :ok
     end
   end
 

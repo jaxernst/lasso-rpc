@@ -81,14 +81,17 @@ defmodule Lasso.Testing.MockWSProvider do
 
     # Ensure chain exists (auto-create if needed) and register provider
     with :ok <- ChainHelper.ensure_chain_exists(chain, profile: profile),
-         :ok <- Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
-         :ok <- Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
+         :ok <-
+           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
+         :ok <-
+           Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
       # Mark as healthy so it can be selected
       Lasso.RPC.ProviderPool.report_success(profile, chain, provider_id, nil)
 
       # Generate connection_id and broadcast ws_connected event
       # This is required by UpstreamSubscriptionManager to allow subscriptions
-      connection_id = "conn_mock_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
+      connection_id =
+        "conn_mock_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
 
       # Broadcast profile-scoped ws_connected event
       Phoenix.PubSub.broadcast(
@@ -256,7 +259,6 @@ defmodule Lasso.Testing.MockWSProvider do
 
     :ok
   end
-
 
   # GenServer callbacks
 

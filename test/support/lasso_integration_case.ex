@@ -117,23 +117,6 @@ defmodule Lasso.Test.LassoIntegrationCase do
         :ok
       end
 
-      @doc """
-      Sets up providers with enhanced synchronization.
-
-      This is a convenience wrapper that automatically uses the test's chain
-      and waits for providers to be fully ready.
-
-      ## Example
-
-          test "failover scenario", %{chain: chain} do
-            providers = setup_providers([
-              %{id: "primary", priority: 10},
-              %{id: "backup", priority: 20}
-            ])
-
-            # providers are guaranteed to be ready
-          end
-      """
       defp setup_providers(provider_specs, opts \\ []) do
         chain = Keyword.get(opts, :chain) || get_test_chain()
 
@@ -143,22 +126,6 @@ defmodule Lasso.Test.LassoIntegrationCase do
         provider_ids
       end
 
-      @doc """
-      Waits for a circuit breaker to open using TelemetrySync.
-
-      Convenience wrapper that uses the deterministic telemetry-based waiting.
-
-      ## Example
-
-          test "circuit breaker opens on failures", %{chain: chain} do
-            setup_providers([%{id: "failing", behavior: :always_fail}])
-
-            # Trigger failures...
-
-            wait_for_cb_open("failing", :http)
-            assert true
-          end
-      """
       defp wait_for_cb_open(provider_id, transport, timeout \\ 5_000) do
         case Lasso.Test.TelemetrySync.wait_for_circuit_breaker_open(
                provider_id,
@@ -170,9 +137,6 @@ defmodule Lasso.Test.LassoIntegrationCase do
         end
       end
 
-      @doc """
-      Waits for a circuit breaker to close.
-      """
       defp wait_for_cb_close(provider_id, transport, timeout \\ 5_000) do
         case Lasso.Test.TelemetrySync.wait_for_circuit_breaker_close(
                provider_id,
@@ -184,9 +148,6 @@ defmodule Lasso.Test.LassoIntegrationCase do
         end
       end
 
-      @doc """
-      Waits for a failover to complete.
-      """
       defp wait_for_failover(chain, key, timeout \\ 5_000) do
         case Lasso.Test.TelemetrySync.wait_for_failover_completed(chain, key, timeout) do
           {:ok, meta} -> meta
@@ -228,22 +189,6 @@ defmodule Lasso.Test.LassoIntegrationCase do
         end
       end
 
-      @doc """
-      Subscribes a test client to a subscription key.
-
-      Returns the subscription ID.
-
-      ## Example
-
-          test "subscription events", %{chain: chain} do
-            setup_providers([%{id: "ws1", priority: 100}])
-
-            sub_id = subscribe_test_client({:newHeads})
-
-            # Wait for events...
-            assert_receive {:subscription_event, %{"params" => %{"subscription" => ^sub_id}}}
-          end
-      """
       defp subscribe_test_client(key, client_pid \\ nil) do
         chain = get_test_chain()
         client_pid = client_pid || self()
@@ -254,63 +199,26 @@ defmodule Lasso.Test.LassoIntegrationCase do
         end
       end
 
-      @doc """
-      Unsubscribes a test client.
-      """
       defp unsubscribe_test_client(sub_id) do
         chain = get_test_chain()
         IntegrationHelper.unsubscribe_client(chain, sub_id)
       end
 
-      @doc """
-      Triggers a provider failover for testing.
-      """
       defp trigger_failover(provider_id, reason \\ :test_failure) do
         chain = get_test_chain()
         IntegrationHelper.trigger_provider_failover(chain, provider_id, reason)
       end
 
-      @doc """
-      Sends a block from a mock provider.
-
-      ## Example
-
-          send_mock_block("provider_id", %{
-            "number" => "0x100",
-            "hash" => "0xabc123"
-          })
-      """
       defp send_mock_block(provider_id, block_data) do
         chain = get_test_chain()
         MockWSProvider.send_block(chain, provider_id, block_data)
       end
 
-      @doc """
-      Sends a sequence of blocks from a mock provider.
-
-      ## Example
-
-          send_mock_block_sequence("provider_id", 100, 5)
-          # Sends blocks 100, 101, 102, 103, 104
-      """
       defp send_mock_block_sequence(provider_id, start_block, count) do
         chain = get_test_chain()
         IntegrationHelper.send_block_sequence(chain, provider_id, start_block, count)
       end
 
-      @doc """
-      Executes an RPC request via the pipeline.
-
-      Convenience wrapper for testing request execution.
-
-      Returns a 3-tuple with the result, error, and request context for observability.
-
-      ## Example
-
-          {:ok, block_num, ctx} = execute_rpc("eth_blockNumber", [])
-          assert is_binary(block_num)
-          assert ctx.selected_provider != nil
-      """
       defp execute_rpc(method, params, opts \\ []) do
         chain = Keyword.get(opts, :chain, get_test_chain())
 
@@ -325,16 +233,6 @@ defmodule Lasso.Test.LassoIntegrationCase do
         RequestPipeline.execute_via_channels(chain, method, params, request_opts)
       end
 
-      @doc """
-      Collects telemetry events for a duration.
-
-      Useful for asserting on multiple events.
-
-      ## Example
-
-          events = collect_telemetry([:lasso, :circuit_breaker, :open], timeout: 1000)
-          assert length(events) >= 2
-      """
       defp collect_telemetry(event_name, opts \\ []) do
         Lasso.Test.TelemetrySync.collect_events(event_name, opts)
       end

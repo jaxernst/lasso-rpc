@@ -276,13 +276,20 @@ defmodule Lasso.Config.Backend.File do
   defp parse_adapter_config(config_map) when is_map(config_map) do
     config_map
     |> Enum.map(fn {key, value} ->
-      atom_key = if is_binary(key), do: String.to_atom(key), else: key
+      atom_key = if is_binary(key), do: safe_to_existing_atom(key), else: key
       {atom_key, value}
     end)
     |> Enum.into(%{})
   end
 
   defp parse_adapter_config(_), do: nil
+
+  defp safe_to_existing_atom(string) do
+    String.to_existing_atom(string)
+  rescue
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+    ArgumentError -> String.to_atom(string)
+  end
 
   defp parse_connection(nil) do
     %ChainConfig.Connection{
@@ -441,10 +448,9 @@ defmodule Lasso.Config.Backend.File do
 
   defp generate_chains_yaml(chains_data) when is_map(chains_data) do
     chains_data
-    |> Enum.map(fn {chain_name, chain_config} ->
+    |> Enum.map_join("\n", fn {chain_name, chain_config} ->
       generate_chain_yaml(chain_name, chain_config)
     end)
-    |> Enum.join("\n")
   end
 
   defp generate_chains_yaml(_), do: ""
@@ -581,8 +587,7 @@ defmodule Lasso.Config.Backend.File do
 
   defp generate_providers_yaml(providers) do
     providers
-    |> Enum.map(&generate_provider_yaml/1)
-    |> Enum.join("")
+    |> Enum.map_join("", &generate_provider_yaml/1)
   end
 
   defp generate_provider_yaml(provider) do

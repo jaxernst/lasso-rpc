@@ -42,8 +42,13 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
         {:error, :method_unsupported}
 
       # Specific unsupported methods (filters)
-      method in ["eth_getLogs", "eth_newFilter", "eth_getFilterChanges",
-                 "eth_getFilterLogs", "eth_uninstallFilter"] ->
+      method in [
+        "eth_getLogs",
+        "eth_newFilter",
+        "eth_getFilterChanges",
+        "eth_getFilterLogs",
+        "eth_uninstallFilter"
+      ] ->
         {:error, :method_unsupported}
 
       # Subscriptions require WebSocket (handled by TransportPolicy)
@@ -99,20 +104,23 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
         current_block = Map.get(context, :current_block, :latest)
 
         if current_block == :latest do
-          :ok  # Can't validate without current block
+          # Can't validate without current block
+          :ok
         else
           age = current_block - block_num
 
           if age <= @max_archive_depth do
             :ok
           else
-            {:error, {:requires_archival,
+            {:error,
+             {:requires_archival,
               "Block is #{age} blocks old, PublicNode max: #{@max_archive_depth}"}}
           end
         end
 
       _ ->
-        :ok  # Can't parse, let provider decide
+        # Can't parse, let provider decide
+        :ok
     end
   end
 
@@ -189,8 +197,13 @@ defmodule Lasso.RPC.Providers.Adapters.PublicNode do
         "Aggressive rate limiting"
       ],
       unsupported_categories: [:debug, :trace, :filters, :txpool, :local_only, :eip4844],
-      unsupported_methods: ["eth_getLogs", "eth_newFilter", "eth_getFilterChanges",
-                            "eth_getFilterLogs", "eth_uninstallFilter"],
+      unsupported_methods: [
+        "eth_getLogs",
+        "eth_newFilter",
+        "eth_getFilterChanges",
+        "eth_getFilterLogs",
+        "eth_uninstallFilter"
+      ],
       conditional_support: %{
         "eth_call" => "Recent blocks only (~#{@max_archive_depth} block depth)",
         "eth_getBalance" => "Recent blocks only (~#{@max_archive_depth} block depth)",

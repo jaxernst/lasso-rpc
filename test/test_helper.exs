@@ -49,18 +49,6 @@ Mox.defmock(Lasso.RPC.HttpClientMock, for: Lasso.RPC.Transport.HTTP.Client)
 # Use mock WS client in tests for deterministic WSConnection behavior
 Application.put_env(:lasso, :ws_client_module, TestSupport.MockWSClient)
 
-# Load support modules
-Code.require_file("test/support/mock_http_client.ex")
-Code.require_file("test/support/mock_ws_client.ex")
-Code.require_file("test/support/failing_ws_client.ex")
-Code.require_file("test/support/failure_injector.ex")
-
-# Load new test infrastructure
-Code.require_file("test/support/telemetry_sync.ex")
-Code.require_file("test/support/eventually.ex")
-Code.require_file("test/support/circuit_breaker_helper.ex")
-Code.require_file("test/support/lasso_integration_case.ex")
-
 # Configure behavior-based HTTP client for integration tests
 # This routes HTTP RPC requests to MockHTTPProvider instances with rich behaviors
 Application.put_env(:lasso, :http_client, Lasso.Testing.BehaviorHttpClient)

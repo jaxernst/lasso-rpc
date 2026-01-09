@@ -248,7 +248,14 @@ defmodule Lasso.RPC.ProviderPoolTest do
           priority: 2
         })
 
-      :ok = ProviderPool.register_provider("default", chain, http_only_provider.id, http_only_provider)
+      :ok =
+        ProviderPool.register_provider(
+          "default",
+          chain,
+          http_only_provider.id,
+          http_only_provider
+        )
+
       Process.sleep(50)
 
       # Open HTTP CB
@@ -323,6 +330,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
       # Rate limit state should be recorded via RateLimitState
       assert provider_status.http_rate_limited == true,
              "http_rate_limited should be true from RateLimitState"
+
       assert provider_status.is_in_cooldown == true,
              "is_in_cooldown should be true"
     end
@@ -390,6 +398,7 @@ defmodule Lasso.RPC.ProviderPoolTest do
 
       {:ok, status_after} = ProviderPool.get_status("default", chain)
       provider_after = Enum.find(status_after.providers, &(&1.id == provider.id))
+
       assert provider_after.http_rate_limited == false,
              "Success should clear rate limit state"
     end

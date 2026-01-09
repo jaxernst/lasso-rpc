@@ -66,11 +66,6 @@
   # LiveView/Web Component Defensive Patterns
   # =============================================================================
   # UI components handle edge cases defensively for robustness
-  ~r"lib/lasso_web/components/chain_configuration_window.ex.*pattern_match",
-  ~r"lib/lasso_web/controllers/admin/chain_controller.ex.*pattern_match",
-  # Dialyzer incorrectly marks format_chain_response as unused due to type inference
-  # on the with/else path - the function is called from create/2 and update/2
-  ~r"lib/lasso_web/controllers/admin/chain_controller.ex.*unused_fun",
   ~r"lib/lasso_web/sockets/rpc_socket.ex.*pattern_match",
 
   # =============================================================================

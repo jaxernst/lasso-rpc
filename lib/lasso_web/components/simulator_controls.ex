@@ -1,4 +1,5 @@
 defmodule LassoWeb.Dashboard.Components.SimulatorControls do
+  @moduledoc "LiveView component for dashboard simulator controls."
   use LassoWeb, :live_component
   import LassoWeb.Components.FloatingWindow
   alias LassoWeb.Dashboard.Helpers
@@ -371,7 +372,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   def render(assigns) do
     # Determine status indicator state
     status =
-      if is_simulator_active(assigns.sim_stats, assigns.simulator_running) do
+      if simulator_active?(assigns.sim_stats, assigns.simulator_running) do
         :healthy
       else
         :info
@@ -392,7 +393,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         <:header>
           <.status_indicator
             status={@status}
-            animated={is_simulator_active(@sim_stats, @simulator_running)}
+            animated={simulator_active?(@sim_stats, @simulator_running)}
           />
           <div class="truncate text-xs font-medium text-white">
             RPC Load Test
@@ -520,9 +521,14 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
                 phx-click="toggle_chain_selection"
                 phx-value-chain={chain.name}
                 phx-target={@myself}
-                class={["text-[9px] rounded px-2 py-1 font-medium transition-all duration-200", if(chain.name in (@selected_chains || []),
-    do: "bg-sky-500/20 border border-sky-500 text-sky-300",
-    else: "border border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300")]}
+                class={[
+                  "text-[9px] rounded px-2 py-1 font-medium transition-all duration-200",
+                  if(chain.name in (@selected_chains || []),
+                    do: "bg-sky-500/20 border border-sky-500 text-sky-300",
+                    else:
+                      "border border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300"
+                  )
+                ]}
               >
                 {chain.display_name}
               </button>
@@ -546,9 +552,14 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
               phx-click="select_strategy"
               phx-value-strategy={strategy}
               phx-target={@myself}
-              class={["text-[10px] rounded-lg p-2 text-left transition-all duration-200", if(@selected_strategy == strategy,
-    do: "bg-purple-500/20 border border-purple-500 text-purple-300",
-    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50")]}
+              class={[
+                "text-[10px] rounded-lg p-2 text-left transition-all duration-200",
+                if(@selected_strategy == strategy,
+                  do: "bg-purple-500/20 border border-purple-500 text-purple-300",
+                  else:
+                    "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50"
+                )
+              ]}
             >
               <div class="font-medium">{icon} {label}</div>
             </button>
@@ -565,9 +576,14 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
               phx-click="set_rate"
               phx-value-rate={rate}
               phx-target={@myself}
-              class={["text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200", if(@request_rate == rate,
-    do: "bg-orange-500/20 border border-orange-500 text-orange-300",
-    else: "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-orange-400/50")]}
+              class={[
+                "text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200",
+                if(@request_rate == rate,
+                  do: "bg-orange-500/20 border border-orange-500 text-orange-300",
+                  else:
+                    "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-orange-400/50"
+                )
+              ]}
             >
               {rate} RPS
             </button>
@@ -651,7 +667,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   end
 
   # Helper functions
-  defp is_simulator_active(sim_stats, simulator_running) do
+  defp simulator_active?(sim_stats, simulator_running) do
     get_stat(sim_stats, :http, "inflight", 0) > 0 or
       get_stat(sim_stats, :ws, "open", 0) > 0 or simulator_running
   end
@@ -665,6 +681,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         Map.get(stats, key_string, default)
 
       %{^type => stats} when is_map(stats) ->
+        # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
         atom_key = if is_atom(key), do: key, else: String.to_atom(key)
         Map.get(stats, atom_key, default)
 

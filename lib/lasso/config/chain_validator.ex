@@ -71,6 +71,7 @@ defmodule Lasso.Config.ChainValidator do
   @doc """
   Returns the map of canonical chain names to their chain IDs.
   """
+  @spec canonical_chains() :: %{String.t() => integer()}
   def canonical_chains, do: @canonical_chains
 
   @doc """
@@ -148,7 +149,7 @@ defmodule Lasso.Config.ChainValidator do
   2. If canonical, `chain_id` in config must match expected value
   3. Custom chains must have a valid chain_id specified
   """
-  @spec validate_chain(String.t(), map() | ChainConfig.t()) :: :ok | {:error, term()}
+  @spec validate_chain(String.t(), map() | Lasso.Config.ChainConfig.t()) :: :ok | {:error, term()}
   def validate_chain(chain_name, %Lasso.Config.ChainConfig{} = config) do
     validate_chain(chain_name, %{chain_id: config.chain_id})
   end

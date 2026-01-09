@@ -317,12 +317,10 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "Fast-fail failover logic" do
     alias Lasso.JSONRPC.Error, as: JError
 
-    @pipeline Lasso.RPC.RequestPipeline
-
     @tag :pending
     test "should_fast_fail_error?/2 returns false when no channels remaining" do
       # TODO: Implement test for should_fast_fail_error? function
-      error = JError.new(-32_005, "Rate limit", category: :rate_limit, retriable?: true)
+      _error = JError.new(-32_005, "Rate limit", category: :rate_limit, retriable?: true)
       assert true
     end
 

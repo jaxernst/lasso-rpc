@@ -1,6 +1,7 @@
 defmodule LassoWeb.HealthController do
   use LassoWeb, :controller
 
+  @spec health(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def health(conn, _params) do
     # Calculate uptime in seconds since application start
     uptime_ms =

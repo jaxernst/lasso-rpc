@@ -56,12 +56,12 @@ defmodule LassoWeb.Components.LatencyHeatmap do
     ~H"""
     <div class="relative" id="latency-heatmap" phx-hook="HeatmapAnimation">
       <%= if @profile do %>
-        <div class="text-xs text-zinc-400 mb-2">
-          Profile: <%= @profile %> · Chain: <%= @chain_name %>
+        <div class="mb-2 text-xs text-zinc-400">
+          Profile: {@profile} · Chain: {@chain_name}
         </div>
       <% end %>
-
-      <!-- Subtle animations -->
+      
+    <!-- Subtle animations -->
       <style>
         @keyframes cell-glow {
           0%, 100% { filter: brightness(1); }
@@ -187,7 +187,11 @@ defmodule LassoWeb.Components.LatencyHeatmap do
                           <% cell_idx = row_idx * @method_count + col_idx %>
                           <% should_pulse = rem(cell_idx, 13) == 0 %>
                           <div
-                            class={["heatmap-cell font-mono flex h-10 w-16 items-center justify-center rounded-md text-xs font-semibold transition-all duration-200 hover:z-10 hover:scale-110", if(should_pulse and @is_live, do: "cell-pulse", else: ""), latency_cell_class(latency, thresholds)]}
+                            class={[
+                              "heatmap-cell font-mono flex h-10 w-16 items-center justify-center rounded-md text-xs font-semibold transition-all duration-200 hover:z-10 hover:scale-110",
+                              if(should_pulse and @is_live, do: "cell-pulse", else: ""),
+                              latency_cell_class(latency, thresholds)
+                            ]}
                             title={"#{provider.name} / #{method}: #{format_latency(latency)}"}
                           >
                             <%= if latency do %>
@@ -272,8 +276,7 @@ defmodule LassoWeb.Components.LatencyHeatmap do
         |> Enum.map(fn provider ->
           get_best_latency(provider.method_latencies, method, original_methods)
         end)
-        |> Enum.reject(&is_nil/1)
-        |> Enum.reject(&(&1 == 0))
+        |> Enum.reject(&(is_nil(&1) or &1 == 0))
 
       {method, calculate_thresholds(latencies)}
     end)

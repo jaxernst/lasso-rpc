@@ -1,26 +1,26 @@
 defmodule LassoWeb.Dashboard do
+  @moduledoc "Main dashboard LiveView for monitoring RPC chains and providers."
   use LassoWeb, :live_view
   require Logger
 
+  alias Lasso.Events.Provider
+  alias LassoWeb.Components.DashboardComponents
+  alias LassoWeb.Components.DashboardHeader
+  alias LassoWeb.Components.NetworkStatusLegend
+  alias LassoWeb.Dashboard.Components
   alias LassoWeb.NetworkTopology
   alias LassoWeb.TopologyConfig
 
   alias LassoWeb.Dashboard.{
+    Constants,
+    EndpointHelpers,
+    EventBuffer,
+    Formatting,
     Helpers,
     MetricsHelpers,
-    StatusHelpers,
-    EndpointHelpers,
-    Constants,
     Status,
-    EventBuffer,
-    Formatting
+    StatusHelpers
   }
-
-  alias LassoWeb.Dashboard.Components
-  alias LassoWeb.Components.DashboardHeader
-  alias LassoWeb.Components.NetworkStatusLegend
-  alias LassoWeb.Components.DashboardComponents
-  alias Lasso.Events.Provider
 
   @impl true
   def mount(params, session, socket) do
@@ -322,48 +322,46 @@ defmodule LassoWeb.Dashboard do
     # Filter out events for chains not in the selected profile
     profile_chains = Map.get(socket.assigns, :profile_chains, [])
 
-    if chain not in profile_chains do
-      {:noreply, socket}
-    else
+    if chain in profile_chains do
       entry = %{
-      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
-      ts_ms: System.system_time(:millisecond),
-      chain: chain,
-      method: method,
-      strategy: strategy,
-      provider_id: pid,
-      duration_ms: if(is_number(dur), do: round(dur), else: 0),
-      result: Map.get(evt, :result, :unknown),
-      failovers: Map.get(evt, :failover_count, 0)
-    }
-
-    socket =
-      update(socket, :routing_events, fn list ->
-        [entry | Enum.take(list, Constants.routing_events_limit() - 1)]
-      end)
-
-    # Unified events + client-side push
-    ev =
-      Helpers.as_event(:rpc,
+        ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+        ts_ms: System.system_time(:millisecond),
         chain: chain,
+        method: method,
+        strategy: strategy,
         provider_id: pid,
-        severity: if(entry.result == :error, do: :warn, else: :info),
-        message: "#{method} #{entry.result} (#{dur}ms)",
-        meta: Map.drop(entry, [:ts, :ts_ms])
-      )
+        duration_ms: if(is_number(dur), do: round(dur), else: 0),
+        result: Map.get(evt, :result, :unknown),
+        failovers: Map.get(evt, :failover_count, 0)
+      }
 
-    socket =
-      socket
-      |> buffer_event(ev)
-      |> push_event("provider_request", %{provider_id: pid})
+      socket =
+        update(socket, :routing_events, fn list ->
+          [entry | Enum.take(list, Constants.routing_events_limit() - 1)]
+        end)
 
-    # Update chain-specific metrics if this event is for the currently selected chain
-    socket =
-      if socket.assigns[:selected_chain] == chain do
-        update_selected_chain_metrics(socket)
-      else
+      # Unified events + client-side push
+      ev =
+        Helpers.as_event(:rpc,
+          chain: chain,
+          provider_id: pid,
+          severity: if(entry.result == :error, do: :warn, else: :info),
+          message: "#{method} #{entry.result} (#{dur}ms)",
+          meta: Map.drop(entry, [:ts, :ts_ms])
+        )
+
+      socket =
         socket
-      end
+        |> buffer_event(ev)
+        |> push_event("provider_request", %{provider_id: pid})
+
+      # Update chain-specific metrics if this event is for the currently selected chain
+      socket =
+        if socket.assigns[:selected_chain] == chain do
+          update_selected_chain_metrics(socket)
+        else
+          socket
+        end
 
       # Update provider-specific metrics if this event is for the currently selected provider
       socket =
@@ -373,6 +371,8 @@ defmodule LassoWeb.Dashboard do
           socket
         end
 
+      {:noreply, socket}
+    else
       {:noreply, socket}
     end
   end
@@ -405,33 +405,31 @@ defmodule LassoWeb.Dashboard do
     # Filter out events for chains not in the selected profile
     profile_chains = Map.get(socket.assigns, :profile_chains, [])
 
-    if chain not in profile_chains do
-      {:noreply, socket}
-    else
+    if chain in profile_chains do
       entry = %{
-      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
-      ts_ms: ts,
-      chain: chain,
-      provider_id: pid,
-      event: event,
-      details: details
-    }
-
-    socket =
-      update(socket, :provider_events, fn list ->
-        [entry | Enum.take(list, Constants.provider_events_limit() - 1)]
-      end)
-
-    uev =
-      Helpers.as_event(:provider,
+        ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+        ts_ms: ts,
         chain: chain,
         provider_id: pid,
-        severity: :info,
-        message: to_string(event),
-        meta: Map.drop(entry, [:ts, :ts_ms])
-      )
+        event: event,
+        details: details
+      }
 
-    socket = buffer_event(socket, uev)
+      socket =
+        update(socket, :provider_events, fn list ->
+          [entry | Enum.take(list, Constants.provider_events_limit() - 1)]
+        end)
+
+      uev =
+        Helpers.as_event(:provider,
+          chain: chain,
+          provider_id: pid,
+          severity: :info,
+          message: to_string(event),
+          meta: Map.drop(entry, [:ts, :ts_ms])
+        )
+
+      socket = buffer_event(socket, uev)
 
       # Update provider panel if this event is for the currently selected provider
       socket =
@@ -451,6 +449,8 @@ defmodule LassoWeb.Dashboard do
           socket
         end
 
+      {:noreply, socket}
+    else
       {:noreply, socket}
     end
   end
@@ -501,84 +501,82 @@ defmodule LassoWeb.Dashboard do
     # Filter out events for chains not in the selected profile
     profile_chains = Map.get(socket.assigns, :profile_chains, [])
 
-    if chain not in profile_chains do
-      {:noreply, socket}
-    else
+    if chain in profile_chains do
       # Extract error details if present (new format includes error info)
       error_info = Map.get(event_data, :error)
 
-    # Build message with error details when available
-    base_message = "circuit [#{transport}]: #{from_state} -> #{to_state}"
+      # Build message with error details when available
+      base_message = "circuit [#{transport}]: #{from_state} -> #{to_state}"
 
-    message =
-      case {reason, error_info} do
-        {:failure_threshold_exceeded, %{error_code: code, error_category: cat}} ->
-          "#{base_message} — #{format_error_code(code)} (#{cat})"
+      message =
+        case {reason, error_info} do
+          {:failure_threshold_exceeded, %{error_code: code, error_category: cat}} ->
+            "#{base_message} — #{format_error_code(code)} (#{cat})"
 
-        {:reopen_due_to_failure, %{error_code: code, error_category: cat}} ->
-          "#{base_message} — #{format_error_code(code)} (#{cat})"
+          {:reopen_due_to_failure, %{error_code: code, error_category: cat}} ->
+            "#{base_message} — #{format_error_code(code)} (#{cat})"
 
-        {reason, _} ->
-          "#{base_message} (#{format_reason(reason)})"
-      end
+          {reason, _} ->
+            "#{base_message} (#{format_reason(reason)})"
+        end
 
-    # Determine severity based on state transition
-    severity =
-      case to_state do
-        :open -> :error
-        :half_open -> :warn
-        :closed -> :info
-      end
+      # Determine severity based on state transition
+      severity =
+        case to_state do
+          :open -> :error
+          :half_open -> :warn
+          :closed -> :info
+        end
 
-    entry = %{
-      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
-      ts_ms: System.system_time(:millisecond),
-      chain: chain,
-      provider_id: provider_id,
-      event: message
-    }
-
-    socket =
-      update(socket, :provider_events, fn list ->
-        [entry | Enum.take(list, Constants.provider_events_limit() - 1)]
-      end)
-
-    # Include error details in meta for expanded view
-    meta_base = %{transport: transport, from: from_state, to: to_state, reason: reason}
-
-    meta =
-      if error_info do
-        Map.merge(meta_base, %{
-          error_code: error_info[:error_code],
-          error_category: error_info[:error_category],
-          error_message: error_info[:error_message]
-        })
-      else
-        meta_base
-      end
-
-    uev =
-      Helpers.as_event(:circuit,
+      entry = %{
+        ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+        ts_ms: System.system_time(:millisecond),
         chain: chain,
         provider_id: provider_id,
-        severity: severity,
-        message: message,
-        meta: meta
-      )
+        event: message
+      }
 
-    socket =
-      socket
-      |> buffer_event(uev)
-      # Refresh provider data to show updated circuit state
-      |> fetch_connections()
+      socket =
+        update(socket, :provider_events, fn list ->
+          [entry | Enum.take(list, Constants.provider_events_limit() - 1)]
+        end)
 
-    # Update provider panel if this event is for the currently selected provider
-    socket =
-      if socket.assigns[:selected_provider] == provider_id do
-        update_selected_provider_data(socket)
-      else
+      # Include error details in meta for expanded view
+      meta_base = %{transport: transport, from: from_state, to: to_state, reason: reason}
+
+      meta =
+        if error_info do
+          Map.merge(meta_base, %{
+            error_code: error_info[:error_code],
+            error_category: error_info[:error_category],
+            error_message: error_info[:error_message]
+          })
+        else
+          meta_base
+        end
+
+      uev =
+        Helpers.as_event(:circuit,
+          chain: chain,
+          provider_id: provider_id,
+          severity: severity,
+          message: message,
+          meta: meta
+        )
+
+      socket =
         socket
-      end
+        |> buffer_event(uev)
+        # Refresh provider data to show updated circuit state
+        |> fetch_connections()
+
+      # Update provider panel if this event is for the currently selected provider
+      socket =
+        if socket.assigns[:selected_provider] == provider_id do
+          update_selected_provider_data(socket)
+        else
+          socket
+        end
 
       # Update chain panel if this event is for the currently selected chain
       socket =
@@ -588,6 +586,8 @@ defmodule LassoWeb.Dashboard do
           socket
         end
 
+      {:noreply, socket}
+    else
       {:noreply, socket}
     end
   end
@@ -782,7 +782,10 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  def handle_info({:block_height_update, {profile, provider_id}, height, source, timestamp}, socket) do
+  def handle_info(
+        {:block_height_update, {profile, provider_id}, height, source, timestamp},
+        socket
+      ) do
     event = %{
       type: :block_height_update,
       profile: profile,
@@ -810,7 +813,8 @@ defmodule LassoWeb.Dashboard do
   end
 
   def handle_info(
-        {:health_probe_recovery, {profile, provider_id}, transport, old_state, _new_state, timestamp},
+        {:health_probe_recovery, {profile, provider_id}, transport, old_state, _new_state,
+         timestamp},
         socket
       ) do
     event = %{
@@ -829,7 +833,11 @@ defmodule LassoWeb.Dashboard do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-full w-full flex-col" phx-hook="ProfilePersistence" id="dashboard-profile-persistence">
+    <div
+      class="flex h-full w-full flex-col"
+      phx-hook="ProfilePersistence"
+      id="dashboard-profile-persistence"
+    >
       <!-- Hidden events buffer hook -->
       <div id="events-bus" class="hidden" phx-hook="EventsFeed" data-buffer-size="500"></div>
       <!-- Persistent hidden simulator control hook anchor -->
@@ -847,7 +855,7 @@ defmodule LassoWeb.Dashboard do
         profiles={@profiles}
         selected_profile={@selected_profile}
       />
-
+      
     <!-- Content Section -->
       <div class="grid-pattern animate-fade-in relative flex-1 overflow-hidden">
         <%= case @active_tab do %>
@@ -902,7 +910,8 @@ defmodule LassoWeb.Dashboard do
                 <div class="text-center p-8">
                   <div class="text-gray-500 mb-2">System metrics are disabled</div>
                   <div class="text-sm text-gray-600">
-                    Set <code class="bg-gray-800 px-1 rounded">LASSO_VM_METRICS_ENABLED=true</code> to enable
+                    Set <code class="bg-gray-800 px-1 rounded">LASSO_VM_METRICS_ENABLED=true</code>
+                    to enable
                   </div>
                 </div>
               </div>
@@ -938,6 +947,9 @@ defmodule LassoWeb.Dashboard do
   attr(:selected_provider_metrics, :map, default: %{})
 
   def dashboard_tab_content(assigns) do
+    {center_x, center_y} = TopologyConfig.canvas_center()
+    assigns = assign(assigns, canvas_center: "#{center_x},#{center_y}")
+
     ~H"""
     <div class="relative flex h-full w-full">
       <!-- Main Network Topology Area -->
@@ -945,7 +957,7 @@ defmodule LassoWeb.Dashboard do
         class="flex-1 overflow-hidden"
         phx-hook="DraggableNetworkViewport"
         id="draggable-viewport"
-        data-canvas-center={"#{elem(TopologyConfig.canvas_center(), 0)},#{elem(TopologyConfig.canvas_center(), 1)}"}
+        data-canvas-center={@canvas_center}
       >
         <div class="h-full w-full" data-draggable-content>
           <div id="provider-request-animator" phx-hook="ProviderRequestAnimator" class="hidden"></div>
@@ -960,7 +972,7 @@ defmodule LassoWeb.Dashboard do
           />
         </div>
       </div>
-
+      
     <!-- Simulator Controls (top-left) -->
       <.live_component
         module={Components.SimulatorControls}
@@ -992,7 +1004,6 @@ defmodule LassoWeb.Dashboard do
         selected_provider_unified_events={@selected_provider_unified_events}
         selected_provider_metrics={@selected_provider_metrics}
       />
-
     </div>
     """
   end
@@ -1033,188 +1044,295 @@ defmodule LassoWeb.Dashboard do
       )
 
     ~H"""
-    <div class="flex h-full flex-col text-gray-200 overflow-hidden" id={"chain-details-" <> @chain}>
+    <div class="flex h-full flex-col text-gray-200 overflow-hidden" id={"chain-details-#{@chain}"}>
       <!-- Hero Header -->
       <div class="p-6 pb-5 border-b border-gray-800 relative overflow-hidden">
         <% connected = Map.get(@chain_performance, :connected_providers, 0) %>
         <% total = Map.get(@chain_performance, :total_providers, 0) %>
-
-        <!-- Title row with status badge -->
+        <% is_healthy = connected == total and connected > 0 %>
+        <% is_down = connected == 0 %>
+        
+    <!-- Title row with status badge -->
         <div class="flex items-center justify-between mb-1.5 relative z-10">
-          <h3 class="text-3xl font-bold text-white tracking-tight capitalize">{Helpers.get_chain_display_name(@selected_profile, @chain)}</h3>
+          <h3 class="text-3xl font-bold text-white tracking-tight capitalize">
+            {Helpers.get_chain_display_name(@selected_profile, @chain)}
+          </h3>
           <div class={[
             "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium",
-            if(connected == total && connected > 0,
+            if(is_healthy,
               do: "bg-emerald-500/10 border-emerald-500/30 text-emerald-400",
-              else: if(connected == 0, do: "bg-red-500/10 border-red-500/30 text-red-400", else: "bg-yellow-500/10 border-yellow-500/30 text-yellow-400")
+              else:
+                if(is_down,
+                  do: "bg-red-500/10 border-red-500/30 text-red-400",
+                  else: "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
+                )
             )
           ]}>
             <div class={[
               "h-1.5 w-1.5 rounded-full animate-pulse",
-              if(connected == total && connected > 0,
+              if(is_healthy,
                 do: "bg-emerald-400",
-                else: if(connected == 0, do: "bg-red-400", else: "bg-yellow-400")
+                else: if(is_down, do: "bg-red-400", else: "bg-yellow-400")
               )
-            ]}></div>
-            <span>{if connected == total && connected > 0, do: "Healthy", else: if(connected == 0, do: "Down", else: "Degraded")}</span>
+            ]}>
+            </div>
+            <span>
+              {if is_healthy, do: "Healthy", else: if(is_down, do: "Down", else: "Degraded")}
+            </span>
           </div>
         </div>
-
-        <!-- Chain metadata -->
+        
+    <!-- Chain metadata -->
         <div class="flex items-center gap-3 text-sm mb-6 relative z-10">
-          <span class="text-gray-500">Chain ID <span class="font-mono text-gray-300">{Helpers.get_chain_id(@selected_profile, @chain)}</span></span>
+          <span class="text-gray-500">
+            Chain ID
+            <span class="font-mono text-gray-300">
+              {Helpers.get_chain_id(@selected_profile, @chain)}
+            </span>
+          </span>
           <span class="text-gray-400">·</span>
-          <span class="text-gray-500">Block <%= if @consensus_height do %><span class="font-mono text-emerald-400">{Formatting.format_number(@consensus_height)}</span><% else %><span class="text-gray-600">—</span><% end %></span>
+          <span class="text-gray-500">
+            Block
+            <%= if @consensus_height do %>
+              <span class="font-mono text-emerald-400">
+                {Formatting.format_number(@consensus_height)}
+              </span>
+            <% else %>
+              <span class="text-gray-600">—</span>
+            <% end %>
+          </span>
           <span class="text-gray-400">·</span>
           <span class={["text-gray-500", if(connected < total, do: "", else: "")]}>
             <span class={[
               "font-mono",
-              if(connected == total && connected > 0, do: "text-gray-300", else: if(connected == 0, do: "text-red-400", else: "text-yellow-400"))
-            ]}>{connected}/{total}</span> providers
+              if(connected == total && connected > 0,
+                do: "text-gray-300",
+                else: if(connected == 0, do: "text-red-400", else: "text-yellow-400")
+              )
+            ]}>
+              {connected}/{total}
+            </span>
+            providers
           </span>
         </div>
-
-        <!-- Endpoints (Primary Action) - All endpoint controls inside one hook container -->
-        <div id={"endpoint-config-#{@chain}"} phx-hook="TabSwitcher" phx-update="ignore" data-chain={@chain} data-chain-id={Helpers.get_chain_id(@selected_profile, @chain)} class="relative z-10">
+        
+    <!-- Endpoints (Primary Action) - All endpoint controls inside one hook container -->
+        <div
+          id={"endpoint-config-#{@chain}"}
+          phx-hook="TabSwitcher"
+          phx-update="ignore"
+          data-chain={@chain}
+          data-chain-id={Helpers.get_chain_id(@selected_profile, @chain)}
+          class="relative z-10"
+        >
           <div class="space-y-4">
-             <!-- Strategy Selector -->
-             <div>
-               <label class="text-xs font-semibold uppercase tracking-wider text-gray-500 block mb-3">Routing Strategy</label>
-               <div class="flex flex-wrap gap-2">
+            <!-- Strategy Selector -->
+            <div>
+              <label class="text-xs font-semibold uppercase tracking-wider text-gray-500 block mb-3">
+                Routing Strategy
+              </label>
+              <div class="flex flex-wrap gap-2">
                 <%= for strategy <- EndpointHelpers.available_strategies() do %>
                   <button
                     data-strategy={strategy}
                     class="px-3 py-1.5 rounded-md text-xs font-medium transition-all border border-gray-700 bg-gray-800/50 text-gray-400 hover:border-gray-600 hover:text-gray-300"
                   >
                     <%= case strategy do %>
-                      <% "fastest" -> %>⚡ Fastest
-                      <% "round-robin" -> %>🔄 Round Robin
-                      <% "latency-weighted" -> %>⚖️ Latency Weighted
-                      <% other -> %>{other}
+                      <% "fastest" -> %>
+                        ⚡ Fastest
+                      <% "round-robin" -> %>
+                        🔄 Round Robin
+                      <% "latency-weighted" -> %>
+                        ⚖️ Latency Weighted
+                      <% other -> %>
+                        {other}
                     <% end %>
                   </button>
                 <% end %>
-               </div>
-             </div>
-
-             <!-- Endpoint URLs -->
-             <div class="bg-black/20 border border-gray-700/50 rounded-xl overflow-hidden">
-               <!-- HTTP -->
-               <div class="flex items-stretch border-b border-gray-800/50" id="http-row">
-                  <div class="bg-gray-800/30 w-14 shrink-0 px-3 py-2 flex items-center justify-center border-r border-gray-800/50">
-                    <span class="text-[10px] font-bold text-gray-500 uppercase">HTTP</span>
-                  </div>
-                  <div class="flex-grow px-3 py-2 font-mono text-xs text-gray-300 flex items-center overflow-hidden whitespace-nowrap" id="endpoint-url">
-                    {EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
-                  </div>
-                  <button
-                    data-copy-text={EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
-                    class="px-4 py-2 hover:bg-indigo-500/20 hover:text-indigo-300 text-gray-500 border-l border-gray-800/50 transition-colors flex items-center justify-center group"
-                    title="Copy HTTP URL"
+              </div>
+            </div>
+            
+    <!-- Endpoint URLs -->
+            <div class="bg-black/20 border border-gray-700/50 rounded-xl overflow-hidden">
+              <!-- HTTP -->
+              <div class="flex items-stretch border-b border-gray-800/50" id="http-row">
+                <div class="bg-gray-800/30 w-14 shrink-0 px-3 py-2 flex items-center justify-center border-r border-gray-800/50">
+                  <span class="text-[10px] font-bold text-gray-500 uppercase">HTTP</span>
+                </div>
+                <div
+                  class="flex-grow px-3 py-2 font-mono text-xs text-gray-300 flex items-center overflow-hidden whitespace-nowrap"
+                  id="endpoint-url"
+                >
+                  {EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
+                </div>
+                <button
+                  data-copy-text={EndpointHelpers.get_strategy_http_url(@chain_endpoints, "fastest")}
+                  class="px-4 py-2 hover:bg-indigo-500/20 hover:text-indigo-300 text-gray-500 border-l border-gray-800/50 transition-colors flex items-center justify-center group"
+                  title="Copy HTTP URL"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="1.5"
+                    stroke="currentColor"
+                    class="w-4 h-4 group-hover:scale-110 transition-transform"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4 group-hover:scale-110 transition-transform">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
-                    </svg>
-                  </button>
-               </div>
-               <!-- WS -->
-               <div class="flex items-stretch" id="ws-row">
-                  <div class="bg-gray-800/30 w-14 shrink-0 px-3 py-2 flex items-center justify-center border-r border-gray-800/50">
-                    <span class="text-[10px] font-bold text-gray-500 uppercase">WS</span>
-                  </div>
-                  <div class="flex-grow px-3 py-2 font-mono text-xs text-gray-300 flex items-center overflow-hidden whitespace-nowrap" id="ws-endpoint-url">
-                    <%= if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do %>
-                      {EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
-                    <% else %>
-                      <span class="text-gray-600 italic">WebSocket not available</span>
-                    <% end %>
-                  </div>
-                  <button
-                     disabled={!Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1)}
-                     data-copy-text={
-                      if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do
-                        EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")
-                      else
-                        ""
-                      end
-                    }
-                    class="px-4 py-2 hover:bg-indigo-500/20 hover:text-indigo-300 text-gray-500 border-l border-gray-800/50 transition-colors flex items-center justify-center group disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
-                    title="Copy WebSocket URL"
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"
+                    />
+                  </svg>
+                </button>
+              </div>
+              <!-- WS -->
+              <div class="flex items-stretch" id="ws-row">
+                <div class="bg-gray-800/30 w-14 shrink-0 px-3 py-2 flex items-center justify-center border-r border-gray-800/50">
+                  <span class="text-[10px] font-bold text-gray-500 uppercase">WS</span>
+                </div>
+                <div
+                  class="flex-grow px-3 py-2 font-mono text-xs text-gray-300 flex items-center overflow-hidden whitespace-nowrap"
+                  id="ws-endpoint-url"
+                >
+                  <%= if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do %>
+                    {EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")}
+                  <% else %>
+                    <span class="text-gray-600 italic">WebSocket not available</span>
+                  <% end %>
+                </div>
+                <button
+                  disabled={
+                    !Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1)
+                  }
+                  data-copy-text={
+                    if Enum.any?(@chain_connections, &EndpointHelpers.provider_supports_websocket/1) do
+                      EndpointHelpers.get_strategy_ws_url(@chain_endpoints, "fastest")
+                    else
+                      ""
+                    end
+                  }
+                  class="px-4 py-2 hover:bg-indigo-500/20 hover:text-indigo-300 text-gray-500 border-l border-gray-800/50 transition-colors flex items-center justify-center group disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
+                  title="Copy WebSocket URL"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="1.5"
+                    stroke="currentColor"
+                    class="w-4 h-4 group-hover:scale-110 transition-transform"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4 group-hover:scale-110 transition-transform">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
-                    </svg>
-                  </button>
-               </div>
-             </div>
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
 
-             <div class="text-[11px] text-gray-500 pl-1" id="mode-description">
-               Routes to fastest provider based on real-time latency benchmarks
-             </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Metrics Strip -->
-      <div class="grid grid-cols-4 divide-x divide-gray-800 border-b border-gray-800 bg-gray-900/30">
-          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
-            <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Latency p50</div>
-            <div class="text-sm font-bold text-sky-400 font-mono">{if Map.get(@chain_performance, :p50_latency), do: "#{Map.get(@chain_performance, :p50_latency)}ms", else: "—"}</div>
-          </div>
-          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
-            <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Latency p95</div>
-            <div class="text-sm font-bold text-sky-400 font-mono">{if Map.get(@chain_performance, :p95_latency), do: "#{Map.get(@chain_performance, :p95_latency)}ms", else: "—"}</div>
-          </div>
-          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
-            <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Success</div>
-            <% success_rate = Map.get(@chain_performance, :success_rate, 0.0) %>
-            <div class={["text-sm font-bold font-mono", if(success_rate >= 95.0, do: "text-emerald-400", else: if(success_rate >= 80.0, do: "text-yellow-400", else: "text-red-400"))]}>
-              {if success_rate > 0, do: "#{success_rate}%", else: "—"}
+            <div class="text-[11px] text-gray-500 pl-1" id="mode-description">
+              Routes to fastest provider based on real-time latency benchmarks
             </div>
           </div>
-          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
-            <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">RPS</div>
-            <% rps = Map.get(@chain_performance, :rps, 0.0) %>
-            <div class="text-sm font-bold text-purple-400 font-mono">{if rps > 0, do: "#{rps}", else: "0"}</div>
-          </div>
+        </div>
       </div>
-
-      <!-- Scrollable Content: Traffic & More -->
-      <div class="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
-
-        <!-- Routing Decisions -->
-        <div>
-          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Routing Decisions</h4>
-          <div class="grid grid-cols-1 gap-4">
-             <.last_decision_card last_decision={@last_decision} connections={@connections} />
-
-             <!-- Traffic Distribution -->
-             <div class="bg-gray-800/20 border border-gray-800 rounded-lg p-4">
-               <div class="flex justify-between items-center mb-3">
-                 <div class="text-[11px] text-gray-400">Distribution (Last 5m)</div>
-                 <div class="text-[10px] text-gray-600 uppercase tracking-wide">Req Share</div>
-               </div>
-               <% decision_share = Map.get(@chain_performance, :decision_share, []) %>
-               <div class="space-y-2">
-                  <%= for {pid, pct} <- decision_share do %>
-                    <div class="group">
-                      <div class="flex items-center justify-between text-xs mb-1">
-                        <span class="text-gray-300 font-medium truncate max-w-[150px] group-hover:text-white transition-colors">{pid}</span>
-                        <span class="text-gray-500 font-mono group-hover:text-gray-400">{Helpers.to_float(pct) |> Float.round(1)}%</span>
-                      </div>
-                      <div class="w-full bg-gray-900 rounded-full h-1.5 overflow-hidden">
-                        <div class="bg-emerald-500/80 h-full rounded-full transition-all duration-500" style={"width: #{Helpers.to_float(pct) |> Float.round(1)}%"}></div>
-                      </div>
-                    </div>
-                  <% end %>
-                  <%= if Enum.empty?(decision_share) do %>
-                    <div class="text-xs text-gray-600 italic pt-2 pb-3 text-center">No traffic recorded recently</div>
-                  <% end %>
-               </div>
-             </div>
+      
+    <!-- Metrics Strip -->
+      <div class="grid grid-cols-4 divide-x divide-gray-800 border-b border-gray-800 bg-gray-900/30">
+        <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+          <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">
+            Latency p50
+          </div>
+          <div class="text-sm font-bold text-sky-400 font-mono">
+            {if Map.get(@chain_performance, :p50_latency),
+              do: "#{Map.get(@chain_performance, :p50_latency)}ms",
+              else: "—"}
           </div>
         </div>
-
+        <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+          <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">
+            Latency p95
+          </div>
+          <div class="text-sm font-bold text-sky-400 font-mono">
+            {if Map.get(@chain_performance, :p95_latency),
+              do: "#{Map.get(@chain_performance, :p95_latency)}ms",
+              else: "—"}
+          </div>
+        </div>
+        <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+          <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">
+            Success
+          </div>
+          <% success_rate = Map.get(@chain_performance, :success_rate, 0.0) %>
+          <div class={[
+            "text-sm font-bold font-mono",
+            if(success_rate >= 95.0,
+              do: "text-emerald-400",
+              else: if(success_rate >= 80.0, do: "text-yellow-400", else: "text-red-400")
+            )
+          ]}>
+            {if success_rate > 0, do: "#{success_rate}%", else: "—"}
+          </div>
+        </div>
+        <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+          <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">RPS</div>
+          <% rps = Map.get(@chain_performance, :rps, 0.0) %>
+          <div class="text-sm font-bold text-purple-400 font-mono">
+            {if rps > 0, do: "#{rps}", else: "0"}
+          </div>
+        </div>
+      </div>
+      
+    <!-- Scrollable Content: Traffic & More -->
+      <div class="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+        
+    <!-- Routing Decisions -->
+        <div>
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+            Routing Decisions
+          </h4>
+          <div class="grid grid-cols-1 gap-4">
+            <.last_decision_card last_decision={@last_decision} connections={@connections} />
+            
+    <!-- Traffic Distribution -->
+            <div class="bg-gray-800/20 border border-gray-800 rounded-lg p-4">
+              <div class="flex justify-between items-center mb-3">
+                <div class="text-[11px] text-gray-400">Distribution (Last 5m)</div>
+                <div class="text-[10px] text-gray-600 uppercase tracking-wide">Req Share</div>
+              </div>
+              <% decision_share = Map.get(@chain_performance, :decision_share, []) %>
+              <div class="space-y-2">
+                <%= for {pid, pct} <- decision_share do %>
+                  <div class="group">
+                    <div class="flex items-center justify-between text-xs mb-1">
+                      <span class="text-gray-300 font-medium truncate max-w-[150px] group-hover:text-white transition-colors">
+                        {pid}
+                      </span>
+                      <span class="text-gray-500 font-mono group-hover:text-gray-400">
+                        {Helpers.to_float(pct) |> Float.round(1)}%
+                      </span>
+                    </div>
+                    <div class="w-full bg-gray-900 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        class="bg-emerald-500/80 h-full rounded-full transition-all duration-500"
+                        style={"width: #{Helpers.to_float(pct) |> Float.round(1)}%"}
+                      >
+                      </div>
+                    </div>
+                  </div>
+                <% end %>
+                <%= if Enum.empty?(decision_share) do %>
+                  <div class="text-xs text-gray-600 italic pt-2 pb-3 text-center">
+                    No traffic recorded recently
+                  </div>
+                <% end %>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     """
@@ -1245,59 +1363,76 @@ defmodule LassoWeb.Dashboard do
       |> assign(:performance_metrics, Map.get(assigns, :selected_provider_metrics, %{}))
 
     ~H"""
-    <div class="flex h-full flex-col overflow-y-auto text-gray-200 overflow-hidden" data-provider-id={@provider}>
+    <div
+      class="flex h-full flex-col overflow-y-auto text-gray-200 overflow-hidden"
+      data-provider-id={@provider}
+    >
       <!-- HEADER -->
       <div class="flex gap-2 items-center border-b border-gray-800 p-6 pb-5 relative overflow-hidden">
-      <div class="w-full">
-        <!-- Title row with status badge -->
-        <div class="flex items-center w-full justify-between mb-1.5 relative z-10">
-          <h3 class="text-3xl font-bold text-white tracking-tight">
-            {if @provider_connection, do: @provider_connection.name, else: @provider}
-          </h3>
+        <div class="w-full">
+          <!-- Title row with status badge -->
+          <div class="flex items-center w-full justify-between mb-1.5 relative z-10">
+            <h3 class="text-3xl font-bold text-white tracking-tight">
+              {if @provider_connection, do: @provider_connection.name, else: @provider}
+            </h3>
 
-          <div class={[
-            "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium",
-            StatusHelpers.provider_status_badge_class(@provider_connection || %{})
-          ]}>
-          <div class={[
-            "h-1.5 w-1.5 rounded-full animate-pulse",
-            StatusHelpers.provider_status_indicator_class(@provider_connection || %{})
-          ]}></div>
-          <span>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
-        </div>
-        </div>
-
-        <!-- Provider metadata -->
-        <div class="flex items-center gap-2 text-sm mb-2 relative z-10">
-          <span class="text-gray-400">{if @provider_connection, do: "Chain ID: " <> Helpers.get_chain_id(@selected_profile, @provider_connection.chain || "unknown"), else: "Provider"}</span>
-          <%= if @provider_connection do %>
-            <span class="text-gray-300">·</span>
+            <div class={[
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium",
+              StatusHelpers.provider_status_badge_class(@provider_connection || %{})
+            ]}>
+              <div class={[
+                "h-1.5 w-1.5 rounded-full animate-pulse",
+                StatusHelpers.provider_status_indicator_class(@provider_connection || %{})
+              ]}>
+              </div>
+              <span>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
+            </div>
+          </div>
+          
+    <!-- Provider metadata -->
+          <div class="flex items-center gap-2 text-sm mb-2 relative z-10">
             <span class="text-gray-400">
-              <%= cond do %>
-                <% @provider_connection.url && @provider_connection.ws_url -> %>
-                  <span class="text-gray-400">HTTP + WS</span>
-                <% @provider_connection.ws_url -> %>
-                  <span class="text-gray-400">WS only</span>
-                <% true -> %>
-                  <span class="text-gray-400">HTTP only</span>
-              <% end %>
+              {if @provider_connection,
+                do:
+                  "Chain ID: #{Helpers.get_chain_id(@selected_profile, @provider_connection.chain || "unknown")}",
+                else: "Provider"}
             </span>
-          <% end %>
+            <%= if @provider_connection do %>
+              <span class="text-gray-300">·</span>
+              <span class="text-gray-400">
+                <%= cond do %>
+                  <% @provider_connection.url && @provider_connection.ws_url -> %>
+                    <span class="text-gray-400">HTTP + WS</span>
+                  <% @provider_connection.ws_url -> %>
+                    <span class="text-gray-400">WS only</span>
+                  <% true -> %>
+                    <span class="text-gray-400">HTTP only</span>
+                <% end %>
+              </span>
+            <% end %>
+          </div>
         </div>
-      </div>
       </div>
 
       <%= if @provider_connection do %>
         <!-- SYNC STATUS -->
         <div class="border-b border-gray-800 p-4">
-          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Sync Status</h4>
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+            Sync Status
+          </h4>
           <% block_height = Map.get(@provider_connection, :block_height) %>
           <% consensus_height = Map.get(@provider_connection, :consensus_height) %>
           <% blocks_behind = Map.get(@provider_connection, :blocks_behind, 0) || 0 %>
           <%= if block_height && consensus_height do %>
             <div class="flex items-center justify-between text-sm mb-2">
-              <span class="text-gray-400">Block Height: <span class="text-white font-mono">{Formatting.format_number(block_height)}</span></span>
-              <span class="text-gray-400">Consensus: <span class="text-white font-mono">{Formatting.format_number(consensus_height)}</span></span>
+              <span class="text-gray-400">
+                Block Height:
+                <span class="text-white font-mono">{Formatting.format_number(block_height)}</span>
+              </span>
+              <span class="text-gray-400">
+                Consensus:
+                <span class="text-white font-mono">{Formatting.format_number(consensus_height)}</span>
+              </span>
               <span class={[
                 "font-mono font-bold",
                 cond do
@@ -1315,7 +1450,10 @@ defmodule LassoWeb.Dashboard do
             </div>
             <!-- Progress bar visualization -->
             <div class="h-2 bg-gray-800 rounded-full overflow-hidden mb-2">
-              <% bar_width = if consensus_height > 0, do: min(100, (block_height / consensus_height) * 100), else: 100 %>
+              <% bar_width =
+                if consensus_height > 0,
+                  do: min(100, block_height / consensus_height * 100),
+                  else: 100 %>
               <div
                 class={[
                   "h-full rounded-full transition-all",
@@ -1339,18 +1477,28 @@ defmodule LassoWeb.Dashboard do
             <div class="text-sm text-gray-500">Block height data unavailable</div>
           <% end %>
         </div>
-
-        <!-- PERFORMANCE -->
+        
+    <!-- PERFORMANCE -->
         <div class="border-b border-gray-800 p-4">
-          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Performance</h4>
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+            Performance
+          </h4>
           <div class="grid grid-cols-4 gap-3">
             <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-800">
               <div class="text-[10px] text-gray-500 mb-1">p50</div>
-              <div class="text-lg font-bold text-white">{if Map.get(@performance_metrics, :p50_latency), do: "#{Map.get(@performance_metrics, :p50_latency)}ms", else: "—"}</div>
+              <div class="text-lg font-bold text-white">
+                {if Map.get(@performance_metrics, :p50_latency),
+                  do: "#{Map.get(@performance_metrics, :p50_latency)}ms",
+                  else: "—"}
+              </div>
             </div>
             <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-800">
               <div class="text-[10px] text-gray-500 mb-1">p95</div>
-              <div class="text-lg font-bold text-white">{if Map.get(@performance_metrics, :p95_latency), do: "#{Map.get(@performance_metrics, :p95_latency)}ms", else: "—"}</div>
+              <div class="text-lg font-bold text-white">
+                {if Map.get(@performance_metrics, :p95_latency),
+                  do: "#{Map.get(@performance_metrics, :p95_latency)}ms",
+                  else: "—"}
+              </div>
             </div>
             <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-800">
               <div class="text-[10px] text-gray-500 mb-1">Success</div>
@@ -1362,18 +1510,26 @@ defmodule LassoWeb.Dashboard do
                   success_rate >= 95.0 -> "text-yellow-400"
                   true -> "text-red-400"
                 end
-              ]}>{if success_rate > 0, do: "#{success_rate}%", else: "—"}</div>
+              ]}>
+                {if success_rate > 0, do: "#{success_rate}%", else: "—"}
+              </div>
             </div>
             <div class="bg-gray-800/50 rounded-lg p-3 text-center border border-gray-800">
               <div class="text-[10px] text-gray-500 mb-1">Traffic</div>
-              <div class="text-lg font-bold text-white">{(Map.get(@performance_metrics, :pick_share_5m, 0.0) || 0.0) |> Helpers.to_float() |> Float.round(1)}%</div>
+              <div class="text-lg font-bold text-white">
+                {(Map.get(@performance_metrics, :pick_share_5m, 0.0) || 0.0)
+                |> Helpers.to_float()
+                |> Float.round(1)}%
+              </div>
             </div>
           </div>
         </div>
-
-        <!-- CIRCUIT BREAKER -->
+        
+    <!-- CIRCUIT BREAKER -->
         <div class="border-b border-gray-800 p-4">
-          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Circuit Breaker</h4>
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+            Circuit Breaker
+          </h4>
           <div class="space-y-2">
             <!-- HTTP Circuit Breaker -->
             <% has_http = Map.get(@provider_connection, :url) != nil %>
@@ -1382,11 +1538,29 @@ defmodule LassoWeb.Dashboard do
                 <span class="w-10 text-xs text-gray-400">HTTP</span>
                 <div class="flex-1 flex items-center gap-1">
                   <% http_state = Map.get(@provider_connection, :http_circuit_state, :closed) %>
-                  <div class={["w-3 h-3 rounded-full border-2", if(http_state == :closed, do: "bg-emerald-500 border-emerald-400", else: "border-gray-600")]}></div>
+                  <div class={[
+                    "w-3 h-3 rounded-full border-2",
+                    if(http_state == :closed,
+                      do: "bg-emerald-500 border-emerald-400",
+                      else: "border-gray-600"
+                    )
+                  ]}>
+                  </div>
                   <div class="flex-1 h-0.5 bg-gray-700"></div>
-                  <div class={["w-3 h-3 rounded-full border-2", if(http_state == :half_open, do: "bg-yellow-500 border-yellow-400", else: "border-gray-600")]}></div>
+                  <div class={[
+                    "w-3 h-3 rounded-full border-2",
+                    if(http_state == :half_open,
+                      do: "bg-yellow-500 border-yellow-400",
+                      else: "border-gray-600"
+                    )
+                  ]}>
+                  </div>
                   <div class="flex-1 h-0.5 bg-gray-700"></div>
-                  <div class={["w-3 h-3 rounded-full border-2", if(http_state == :open, do: "bg-red-500 border-red-400", else: "border-gray-600")]}></div>
+                  <div class={[
+                    "w-3 h-3 rounded-full border-2",
+                    if(http_state == :open, do: "bg-red-500 border-red-400", else: "border-gray-600")
+                  ]}>
+                  </div>
                 </div>
                 <span class={[
                   "w-20 text-xs text-right",
@@ -1395,7 +1569,11 @@ defmodule LassoWeb.Dashboard do
                     :half_open -> "text-yellow-400"
                     :open -> "text-red-400"
                   end
-                ]}>{if http_state == :closed, do: "Connected", else: http_state |> to_string() |> String.replace("_", "-") |> String.capitalize()}</span>
+                ]}>
+                  {if http_state == :closed,
+                    do: "Connected",
+                    else: http_state |> to_string() |> String.replace("_", "-") |> String.capitalize()}
+                </span>
               </div>
               <div class="flex items-center gap-3 pb-3">
                 <span class="w-10"></span>
@@ -1409,8 +1587,8 @@ defmodule LassoWeb.Dashboard do
                 <span class="w-20"></span>
               </div>
             <% end %>
-
-            <!-- WS Circuit Breaker -->
+            
+    <!-- WS Circuit Breaker -->
             <% has_ws = Map.get(@provider_connection, :ws_url) != nil %>
             <%= if has_ws do %>
               <div class="flex items-center gap-3 mt-3">
@@ -1418,11 +1596,29 @@ defmodule LassoWeb.Dashboard do
                 <div class="flex-1 flex items-center gap-1">
                   <% ws_state = Map.get(@provider_connection, :ws_circuit_state, :closed) %>
                   <% ws_connected = Map.get(@provider_connection, :ws_connected, false) %>
-                  <div class={["w-3 h-3 rounded-full border-2", if(ws_state == :closed, do: "bg-emerald-500 border-emerald-400", else: "border-gray-600")]}></div>
+                  <div class={[
+                    "w-3 h-3 rounded-full border-2",
+                    if(ws_state == :closed,
+                      do: "bg-emerald-500 border-emerald-400",
+                      else: "border-gray-600"
+                    )
+                  ]}>
+                  </div>
                   <div class="flex-1 h-0.5 bg-gray-700"></div>
-                  <div class={["w-3 h-3 rounded-full border-2", if(ws_state == :half_open, do: "bg-yellow-500 border-yellow-400", else: "border-gray-600")]}></div>
+                  <div class={[
+                    "w-3 h-3 rounded-full border-2",
+                    if(ws_state == :half_open,
+                      do: "bg-yellow-500 border-yellow-400",
+                      else: "border-gray-600"
+                    )
+                  ]}>
+                  </div>
                   <div class="flex-1 h-0.5 bg-gray-700"></div>
-                  <div class={["w-3 h-3 rounded-full border-2", if(ws_state == :open, do: "bg-red-500 border-red-400", else: "border-gray-600")]}></div>
+                  <div class={[
+                    "w-3 h-3 rounded-full border-2",
+                    if(ws_state == :open, do: "bg-red-500 border-red-400", else: "border-gray-600")
+                  ]}>
+                  </div>
                 </div>
                 <span class={[
                   "w-20 text-xs text-right",
@@ -1453,122 +1649,150 @@ defmodule LassoWeb.Dashboard do
                 <span class="w-20"></span>
               </div>
             <% end %>
-
-            <!-- Failure/Success Counters -->
+            
+    <!-- Failure/Success Counters -->
             <div class="flex justify-between text-xs text-gray-400 pt-2 border-gray-800">
-              <span>Failures: <span class={if Map.get(@provider_connection, :consecutive_failures, 0) > 0, do: "text-red-400", else: "text-gray-300"}>{Map.get(@provider_connection, :consecutive_failures, 0)}/5</span> threshold</span>
-              <span>Successes: <span class="text-emerald-400">{Map.get(@provider_connection, :consecutive_successes, 0)}</span> consecutive</span>
+              <span>
+                Failures:
+                <span class={
+                  if Map.get(@provider_connection, :consecutive_failures, 0) > 0,
+                    do: "text-red-400",
+                    else: "text-gray-300"
+                }>
+                  {Map.get(@provider_connection, :consecutive_failures, 0)}/5
+                </span>
+                threshold
+              </span>
+              <span>
+                Successes:
+                <span class="text-emerald-400">
+                  {Map.get(@provider_connection, :consecutive_successes, 0)}
+                </span>
+                consecutive
+              </span>
             </div>
           </div>
         </div>
-
-        <!-- ISSUES (infrastructure only) -->
+        
+    <!-- ISSUES (infrastructure only) -->
         <div class="border-b border-gray-800 p-4">
           <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Issues</h4>
-          <%
-            # Build active alerts from current state (compact status indicators)
-            active_alerts = []
+          <% # Build active alerts from current state (compact status indicators)
+          active_alerts = []
 
-            # Circuit breaker alerts (most critical - show first)
-            http_cb = Map.get(@provider_connection, :http_circuit_state)
-            ws_cb = Map.get(@provider_connection, :ws_circuit_state)
-            http_cb_error = Map.get(@provider_connection, :http_cb_error)
-            ws_cb_error = Map.get(@provider_connection, :ws_cb_error)
+          # Circuit breaker alerts (most critical - show first)
+          http_cb = Map.get(@provider_connection, :http_circuit_state)
+          ws_cb = Map.get(@provider_connection, :ws_circuit_state)
+          http_cb_error = Map.get(@provider_connection, :http_cb_error)
+          ws_cb_error = Map.get(@provider_connection, :ws_cb_error)
 
-            active_alerts = if http_cb == :open do
+          active_alerts =
+            if http_cb == :open do
               error_detail = format_cb_error(http_cb_error)
               [{:error, "HTTP circuit OPEN", error_detail} | active_alerts]
             else
               active_alerts
             end
 
-            active_alerts = if ws_cb == :open do
+          active_alerts =
+            if ws_cb == :open do
               error_detail = format_cb_error(ws_cb_error)
               [{:error, "WS circuit OPEN", error_detail} | active_alerts]
             else
               active_alerts
             end
 
-            active_alerts = if http_cb == :half_open do
+          active_alerts =
+            if http_cb == :half_open do
               [{:warn, "HTTP circuit recovering", nil} | active_alerts]
             else
               active_alerts
             end
 
-            active_alerts = if ws_cb == :half_open do
+          active_alerts =
+            if ws_cb == :half_open do
               [{:warn, "WS circuit recovering", nil} | active_alerts]
             else
               active_alerts
             end
 
-            # Rate limit alerts
-            http_rate_limited = Map.get(@provider_connection, :http_rate_limited, false)
-            ws_rate_limited = Map.get(@provider_connection, :ws_rate_limited, false)
-            rate_limit_remaining = Map.get(@provider_connection, :rate_limit_remaining, %{})
+          # Rate limit alerts
+          http_rate_limited = Map.get(@provider_connection, :http_rate_limited, false)
+          ws_rate_limited = Map.get(@provider_connection, :ws_rate_limited, false)
+          rate_limit_remaining = Map.get(@provider_connection, :rate_limit_remaining, %{})
 
-            active_alerts =
-              cond do
-                http_rate_limited and ws_rate_limited ->
-                  http_sec = div(Map.get(rate_limit_remaining, :http, 0), 1000)
-                  ws_sec = div(Map.get(rate_limit_remaining, :ws, 0), 1000)
-                  [{:warn, "Rate limited (HTTP: #{http_sec}s, WS: #{ws_sec}s)", nil} | active_alerts]
-                http_rate_limited ->
-                  sec = div(Map.get(rate_limit_remaining, :http, 0), 1000)
-                  [{:warn, "HTTP rate limited (#{sec}s)", nil} | active_alerts]
-                ws_rate_limited ->
-                  sec = div(Map.get(rate_limit_remaining, :ws, 0), 1000)
-                  [{:warn, "WS rate limited (#{sec}s)", nil} | active_alerts]
-                true ->
-                  active_alerts
-              end
+          active_alerts =
+            cond do
+              http_rate_limited and ws_rate_limited ->
+                http_sec = div(Map.get(rate_limit_remaining, :http, 0), 1000)
+                ws_sec = div(Map.get(rate_limit_remaining, :ws, 0), 1000)
+                [{:warn, "Rate limited (HTTP: #{http_sec}s, WS: #{ws_sec}s)", nil} | active_alerts]
 
-            # Consecutive failures alert
-            failures = Map.get(@provider_connection, :consecutive_failures, 0)
-            active_alerts = if failures > 0 do
+              http_rate_limited ->
+                sec = div(Map.get(rate_limit_remaining, :http, 0), 1000)
+                [{:warn, "HTTP rate limited (#{sec}s)", nil} | active_alerts]
+
+              ws_rate_limited ->
+                sec = div(Map.get(rate_limit_remaining, :ws, 0), 1000)
+                [{:warn, "WS rate limited (#{sec}s)", nil} | active_alerts]
+
+              true ->
+                active_alerts
+            end
+
+          # Consecutive failures alert
+          failures = Map.get(@provider_connection, :consecutive_failures, 0)
+
+          active_alerts =
+            if failures > 0 do
               severity = if failures >= 3, do: :error, else: :warn
               [{severity, "#{failures} consecutive failures", nil} | active_alerts]
             else
               active_alerts
             end
 
-            # WS disconnected alert (when WS is supported but not connected and circuit isn't open)
-            has_ws = Map.get(@provider_connection, :ws_url) != nil
-            ws_connected = Map.get(@provider_connection, :ws_connected, false)
-            ws_circuit_ok = Map.get(@provider_connection, :ws_circuit_state) != :open
-            active_alerts = if has_ws and not ws_connected and ws_circuit_ok do
+          # WS disconnected alert (when WS is supported but not connected and circuit isn't open)
+          has_ws = Map.get(@provider_connection, :ws_url) != nil
+          ws_connected = Map.get(@provider_connection, :ws_connected, false)
+          ws_circuit_ok = Map.get(@provider_connection, :ws_circuit_state) != :open
+
+          active_alerts =
+            if has_ws and not ws_connected and ws_circuit_ok do
               [{:warn, "WebSocket disconnected", nil} | active_alerts]
             else
               active_alerts
             end
 
-            # Get event feed - filter for issues/events, not RPC successes
-            event_feed = @provider_unified_events
-              |> Enum.filter(fn e ->
-                kind = e[:kind]
-                severity = e[:severity]
-                # Include circuit events, provider events, and warn/error RPC events
-                kind in [:circuit, :provider, :error] or severity in [:warn, :error]
-              end)
-              |> Enum.take(15)
-          %>
-
-          <!-- Active Alerts (with error details for circuit breakers) -->
+          # Get event feed - filter for issues/events, not RPC successes
+          event_feed =
+            @provider_unified_events
+            |> Enum.filter(fn e ->
+              kind = e[:kind]
+              severity = e[:severity]
+              # Include circuit events, provider events, and warn/error RPC events
+              kind in [:circuit, :provider, :error] or severity in [:warn, :error]
+            end)
+            |> Enum.take(15) %>
+          
+    <!-- Active Alerts (with error details for circuit breakers) -->
           <%= if length(active_alerts) > 0 do %>
             <div class="space-y-2 mb-3">
               <%= for alert <- active_alerts do %>
-                <%
-                  {severity, message, error_detail} = alert
-                  border_class = case severity do
+                <% {severity, message, error_detail} = alert
+
+                border_class =
+                  case severity do
                     :error -> "border-l-red-500"
                     :warn -> "border-l-yellow-500"
                     _ -> "border-l-blue-500"
                   end
-                  dot_class = case severity do
+
+                dot_class =
+                  case severity do
                     :error -> "bg-red-500"
                     :warn -> "bg-yellow-500"
                     _ -> "bg-blue-500"
-                  end
-                %>
+                  end %>
                 <div class={["bg-gray-800/40 rounded-lg border-l-2 p-2", border_class]}>
                   <div class="flex items-center gap-2">
                     <div class={["w-2 h-2 rounded-full shrink-0", dot_class]}></div>
@@ -1597,19 +1821,22 @@ defmodule LassoWeb.Dashboard do
               <% end %>
             </div>
           <% end %>
-
-          <!-- Event Feed -->
+          
+    <!-- Event Feed -->
           <%= if length(event_feed) > 0 do %>
             <div class="max-h-64 overflow-y-auto space-y-1.5 pr-1">
               <%= for event <- event_feed do %>
-                <%
-                  severity_color = case event[:severity] do
+                <% severity_color =
+                  case event[:severity] do
                     :error -> "bg-red-500"
                     :warn -> "bg-yellow-500"
                     _ -> "bg-blue-500"
                   end
-                  time_ago = if event[:ts_ms] do
+
+                time_ago =
+                  if event[:ts_ms] do
                     diff_ms = System.system_time(:millisecond) - event[:ts_ms]
+
                     cond do
                       diff_ms < 60_000 -> "now"
                       diff_ms < 3_600_000 -> "#{div(diff_ms, 60_000)}m ago"
@@ -1619,28 +1846,45 @@ defmodule LassoWeb.Dashboard do
                     "—"
                   end
 
-                  # Format the message nicely
-                  raw_message = event[:message] || "Unknown event"
-                  display_message = format_event_message(raw_message)
-                  is_expandable = String.length(display_message) > 80 or has_event_details?(event)
-                  preview_message = if String.length(display_message) > 80 do
+                # Format the message nicely
+                raw_message = event[:message] || "Unknown event"
+                display_message = format_event_message(raw_message)
+                is_expandable = String.length(display_message) > 80 or has_event_details?(event)
+
+                preview_message =
+                  if String.length(display_message) > 80 do
                     String.slice(display_message, 0, 77) <> "..."
                   else
                     display_message
                   end
-                  event_id = "event-#{:erlang.phash2({event[:kind], event[:message], event[:ts_ms]})}"
-                %>
+
+                event_id = "event-#{:erlang.phash2({event[:kind], event[:message], event[:ts_ms]})}" %>
                 <%= if is_expandable do %>
-                  <details id={event_id} phx-hook="ExpandableDetails" class="group bg-gray-800/30 rounded-lg hover:bg-gray-800/50 transition-colors">
+                  <details
+                    id={event_id}
+                    phx-hook="ExpandableDetails"
+                    class="group bg-gray-800/30 rounded-lg hover:bg-gray-800/50 transition-colors"
+                  >
                     <summary class="p-2 cursor-pointer list-none">
                       <div class="flex items-start justify-between gap-2">
                         <div class="flex items-start gap-2 min-w-0 flex-1">
-                          <div class={["w-1.5 h-1.5 rounded-full mt-1.5 shrink-0", severity_color]}></div>
+                          <div class={["w-1.5 h-1.5 rounded-full mt-1.5 shrink-0", severity_color]}>
+                          </div>
                           <span class="text-xs text-gray-300 break-words">{preview_message}</span>
                         </div>
                         <div class="flex items-center gap-1 shrink-0">
-                          <svg class="w-3 h-3 text-gray-500 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                          <svg
+                            class="w-3 h-3 text-gray-500 transition-transform group-open:rotate-180"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M19 9l-7 7-7-7"
+                            />
                           </svg>
                           <span class="text-[10px] text-gray-500">{time_ago}</span>
                         </div>
@@ -1649,13 +1893,17 @@ defmodule LassoWeb.Dashboard do
                     <div class="px-2 pb-2 pt-1 ml-3.5 space-y-2">
                       <!-- Full message if truncated -->
                       <%= if String.length(display_message) > 80 do %>
-                        <div class="text-xs text-gray-300 break-words whitespace-pre-wrap">{display_message}</div>
+                        <div class="text-xs text-gray-300 break-words whitespace-pre-wrap">
+                          {display_message}
+                        </div>
                       <% end %>
                       <!-- Error details -->
                       <%= if get_in(event, [:meta, :error_code]) || get_in(event, [:meta, :error_message]) do %>
                         <div class="space-y-1.5">
                           <%= if get_in(event, [:meta, :error_message]) do %>
-                            <div class="text-[11px] text-red-400 break-words">{get_in(event, [:meta, :error_message])}</div>
+                            <div class="text-[11px] text-red-400 break-words">
+                              {get_in(event, [:meta, :error_message])}
+                            </div>
                           <% end %>
                           <div class="flex flex-wrap gap-1.5">
                             <%= if get_in(event, [:meta, :error_code]) do %>
@@ -1690,7 +1938,8 @@ defmodule LassoWeb.Dashboard do
                   <div class="bg-gray-800/30 rounded-lg p-2 hover:bg-gray-800/50 transition-colors">
                     <div class="flex items-start justify-between gap-2">
                       <div class="flex items-start gap-2 min-w-0 flex-1">
-                        <div class={["w-1.5 h-1.5 rounded-full mt-1.5 shrink-0", severity_color]}></div>
+                        <div class={["w-1.5 h-1.5 rounded-full mt-1.5 shrink-0", severity_color]}>
+                        </div>
                         <span class="text-xs text-gray-300">{display_message}</span>
                       </div>
                       <span class="text-[10px] text-gray-500 shrink-0">{time_ago}</span>
@@ -1708,23 +1957,34 @@ defmodule LassoWeb.Dashboard do
             <% end %>
           <% end %>
         </div>
-
-        <!-- METHOD PERFORMANCE -->
+        
+    <!-- METHOD PERFORMANCE -->
         <div class="p-4">
-          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Method Performance</h4>
+          <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+            Method Performance
+          </h4>
           <% rpc_stats = Map.get(@performance_metrics, :rpc_stats, []) %>
           <% max_calls = rpc_stats |> Enum.map(& &1.total_calls) |> Enum.max(fn -> 1 end) %>
           <%= if length(rpc_stats) > 0 do %>
             <div class="space-y-2">
               <%= for stat <- Enum.take(rpc_stats, 6) do %>
-                <% bar_width = if max_calls > 0, do: (stat.total_calls / max_calls) * 100, else: 0 %>
+                <% bar_width = if max_calls > 0, do: stat.total_calls / max_calls * 100, else: 0 %>
                 <div class="flex items-center gap-2 text-xs">
-                  <span class="w-28 text-gray-300 truncate font-mono" title={stat.method}>{stat.method}</span>
-                  <span class="w-16 text-gray-400">p50: {Helpers.to_float(stat.avg_duration_ms) |> Float.round(0)}ms</span>
+                  <span class="w-28 text-gray-300 truncate font-mono" title={stat.method}>
+                    {stat.method}
+                  </span>
+                  <span class="w-16 text-gray-400">
+                    p50: {Helpers.to_float(stat.avg_duration_ms) |> Float.round(0)}ms
+                  </span>
                   <span class={[
                     "w-12",
-                    if(stat.success_rate >= 0.99, do: "text-emerald-400", else: if(stat.success_rate >= 0.95, do: "text-yellow-400", else: "text-red-400"))
-                  ]}>{(Helpers.to_float(stat.success_rate) * 100) |> Float.round(1)}%</span>
+                    if(stat.success_rate >= 0.99,
+                      do: "text-emerald-400",
+                      else: if(stat.success_rate >= 0.95, do: "text-yellow-400", else: "text-red-400")
+                    )
+                  ]}>
+                    {(Helpers.to_float(stat.success_rate) * 100) |> Float.round(1)}%
+                  </span>
                   <div class="flex-1 bg-gray-800 rounded h-2">
                     <div class="bg-gray-600 h-2 rounded" style={"width: #{bar_width}%"}></div>
                   </div>
@@ -1790,7 +2050,7 @@ defmodule LassoWeb.Dashboard do
           "Profile Overview"
 
         assigns.selected_provider ->
-         "Provider Details"
+          "Provider Details"
 
         assigns.selected_chain ->
           "Chain Details"
@@ -1826,7 +2086,7 @@ defmodule LassoWeb.Dashboard do
     >
       <:header>
         <.status_indicator status={@status} />
-        <div class="truncate text-xs text-gray-300"><%= @title %></div>
+        <div class="truncate text-xs text-gray-300">{@title}</div>
       </:header>
 
       <:collapsed_preview>
@@ -1856,8 +2116,8 @@ defmodule LassoWeb.Dashboard do
               </div>
             </div>
           </div>
-
-          <!-- Recent Activity feed -->
+          
+    <!-- Recent Activity feed -->
           <div>
             <div class="text-[10px] text-gray-400 mb-1.5">
               Recent Activity
@@ -1869,15 +2129,24 @@ defmodule LassoWeb.Dashboard do
               style="overflow-anchor: none;"
             >
               <%= for e <- Enum.take(@routing_events, 100) do %>
-                <div data-event-id={e[:ts_ms]} class="text-[9px] text-gray-300 flex items-center gap-1 shrink-0">
+                <div
+                  data-event-id={e[:ts_ms]}
+                  class="text-[9px] text-gray-300 flex items-center gap-1 shrink-0"
+                >
                   <span class="text-purple-300">{e.chain}</span>
                   <span class="text-sky-300">{e.method}</span>
                   → <span class="text-emerald-300">{String.slice(e.provider_id, 0, 14)}…</span>
-                  <span class={["", if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")]}>
+                  <span class={[
+                    "",
+                    if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")
+                  ]}>
                     ({e[:duration_ms] || 0}ms)
                   </span>
                   <%= if (e[:failovers] || 0) > 0 do %>
-                    <span class="inline-flex items-center px-1 py-0.5 rounded text-[8px] text-orange-300 font-bold bg-orange-900/50" title={"#{e[:failovers]} failover(s)"}>
+                    <span
+                      class="inline-flex items-center px-1 py-0.5 rounded text-[8px] text-orange-300 font-bold bg-orange-900/50"
+                      title={"#{e[:failovers]} failover(s)"}
+                    >
                       ↻{e[:failovers]}
                     </span>
                   <% end %>
@@ -1996,7 +2265,6 @@ defmodule LassoWeb.Dashboard do
         {:noreply, put_flash(socket, :error, "Profile not found")}
     end
   end
-
 
   @impl true
   def handle_event("restore_profile", %{"profile" => profile_slug}, socket) do
@@ -2211,8 +2479,11 @@ defmodule LassoWeb.Dashboard do
     provider_name =
       case assigns[:connections] do
         connections when is_list(connections) ->
-          case assigns[:last_decision] &&
-                 Enum.find(connections, &(&1.id == assigns.last_decision.provider_id)) do
+          connection =
+            assigns[:last_decision] &&
+              Enum.find(connections, &(&1.id == assigns.last_decision.provider_id))
+
+          case connection do
             %{name: name} -> name
             _ -> assigns[:last_decision] && assigns.last_decision.provider_id
           end
@@ -2239,7 +2510,9 @@ defmodule LassoWeb.Dashboard do
             <div class="shrink-0 text-yellow-300 font-mono">{@last_decision.duration_ms}ms</div>
           </div>
           <div class="text-[11px] text-gray-400 flex items-center gap-2">
-            <span>strategy: <span class="text-purple-300">{Map.get(@last_decision, :strategy, "—")}</span></span>
+            <span>
+              strategy: <span class="text-purple-300">{Map.get(@last_decision, :strategy, "—")}</span>
+            </span>
           </div>
         </div>
       <% else %>
@@ -2302,7 +2575,8 @@ defmodule LassoWeb.Dashboard do
         chain_metrics = MetricsHelpers.get_chain_performance_metrics(socket.assigns, chain)
 
         # Get chain-specific endpoints
-        chain_endpoints = EndpointHelpers.get_chain_endpoints(socket.assigns.selected_profile, chain)
+        chain_endpoints =
+          EndpointHelpers.get_chain_endpoints(socket.assigns.selected_profile, chain)
 
         # Filter events for selected chain
         chain_events = Enum.filter(socket.assigns.routing_events, &(&1.chain == chain))
@@ -2355,8 +2629,8 @@ defmodule LassoWeb.Dashboard do
 
   defp fetch_connections(socket, profile \\ nil) do
     alias Lasso.Config.ConfigStore
-    alias Lasso.RPC.ProviderPool
     alias Lasso.RPC.ChainState
+    alias Lasso.RPC.ProviderPool
 
     # Get profile-scoped chains
     # Mount guarantees selected_profile is set
@@ -2401,107 +2675,12 @@ defmodule LassoWeb.Dashboard do
 
         case ProviderPool.get_status(profile, chain_name) do
           {:ok, pool_status} ->
-            # pool_status.providers is a list of provider maps
+            provider_ids = Map.get(provider_ids_by_chain, chain_name, [])
+
             pool_status.providers
-            |> Enum.map(fn provider_map ->
-              # Determine overall circuit state (if either transport is open, show open)
-              overall_circuit_state =
-                cond do
-                  provider_map.http_cb_state == :open or provider_map.ws_cb_state == :open ->
-                    :open
-
-                  provider_map.http_cb_state == :half_open or
-                      provider_map.ws_cb_state == :half_open ->
-                    :half_open
-
-                  true ->
-                    :closed
-                end
-
-              # Determine provider type based on configuration
-              provider_type =
-                cond do
-                  provider_map.config.url && provider_map.config.ws_url -> :both
-                  provider_map.config.ws_url -> :websocket
-                  true -> :http
-                end
-
-              # Check if WebSocket is connected (if provider supports WS)
-              ws_connected =
-                case provider_type do
-                  :websocket -> provider_map.ws_status == :healthy
-                  :both -> provider_map.ws_status == :healthy
-                  _ -> false
-                end
-
-              # Map HealthPolicy availability to dashboard health_status
-              # HealthPolicy uses: :up, :down, :limited, :misconfigured
-              # StatusHelpers expects: :healthy, :unhealthy, :rate_limited, :connecting, etc.
-              health_status =
-                case provider_map.availability do
-                  :up -> :healthy
-                  :down -> :unhealthy
-                  :limited -> :rate_limited
-                  :misconfigured -> :misconfigured
-                  # Fallback for any new states
-                  other -> other
-                end
-
-              # Get provider block height and lag from ChainState (using profile's providers for consensus)
-              provider_ids = Map.get(provider_ids_by_chain, chain_name, [])
-
-              {block_height, blocks_behind} =
-                case ChainState.provider_lag(chain_name, provider_map.id, provider_ids) do
-                  {:ok, lag} when is_integer(lag) and not is_nil(consensus_height) ->
-                    # lag is negative when behind (e.g., -5 means 5 blocks behind)
-                    # Convert to block_height and blocks_behind
-                    height = consensus_height + lag
-                    # blocks_behind is positive when behind
-                    {height, -lag}
-
-                  _ ->
-                    {nil, nil}
-                end
-
-              # Map to dashboard connection format
-              %{
-                id: provider_map.id,
-                chain: chain_name,
-                name: provider_map.name,
-                # For legacy compatibility
-                status: provider_map.status,
-                health_status: health_status,
-                type: provider_type,
-                circuit_state: overall_circuit_state,
-                http_circuit_state: provider_map.http_cb_state,
-                ws_circuit_state: provider_map.ws_cb_state,
-                # Circuit breaker errors (what caused the circuit to open)
-                http_cb_error: Map.get(provider_map, :http_cb_error),
-                ws_cb_error: Map.get(provider_map, :ws_cb_error),
-                consecutive_failures: provider_map.consecutive_failures,
-                consecutive_successes: provider_map.consecutive_successes,
-                last_error: provider_map.last_error,
-                # Rate limit state (from RateLimitState, auto-expires)
-                http_rate_limited: Map.get(provider_map, :http_rate_limited, false),
-                ws_rate_limited: Map.get(provider_map, :ws_rate_limited, false),
-                rate_limit_remaining:
-                  Map.get(provider_map, :rate_limit_remaining, %{http: nil, ws: nil}),
-                # Legacy cooldown fields for backwards compatibility
-                is_in_cooldown: provider_map.is_in_cooldown,
-                cooldown_until: provider_map.cooldown_until,
-                # Not tracked currently
-                reconnect_attempts: 0,
-                ws_connected: ws_connected,
-                # Would need to query UpstreamSubscriptionPool
-                subscriptions: 0,
-                url: provider_map.config.url,
-                ws_url: provider_map.config.ws_url,
-                # Block sync data
-                block_height: block_height,
-                consensus_height: consensus_height,
-                blocks_behind: blocks_behind
-              }
-            end)
+            |> Enum.map(
+              &build_provider_connection(&1, chain_name, consensus_height, provider_ids)
+            )
 
           {:error, reason} ->
             require Logger
@@ -2519,14 +2698,97 @@ defmodule LassoWeb.Dashboard do
     |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
   end
 
+  # Provider connection building helpers
+
+  defp build_provider_connection(provider_map, chain_name, consensus_height, provider_ids) do
+    alias Lasso.RPC.ChainState
+
+    provider_type = derive_provider_type(provider_map.config)
+
+    {block_height, blocks_behind} =
+      calculate_block_sync(chain_name, provider_map.id, consensus_height, provider_ids)
+
+    %{
+      id: provider_map.id,
+      chain: chain_name,
+      name: provider_map.name,
+      status: provider_map.status,
+      health_status: derive_health_status(provider_map.availability),
+      type: provider_type,
+      circuit_state: derive_circuit_state(provider_map),
+      http_circuit_state: provider_map.http_cb_state,
+      ws_circuit_state: provider_map.ws_cb_state,
+      http_cb_error: Map.get(provider_map, :http_cb_error),
+      ws_cb_error: Map.get(provider_map, :ws_cb_error),
+      consecutive_failures: provider_map.consecutive_failures,
+      consecutive_successes: provider_map.consecutive_successes,
+      last_error: provider_map.last_error,
+      http_rate_limited: Map.get(provider_map, :http_rate_limited, false),
+      ws_rate_limited: Map.get(provider_map, :ws_rate_limited, false),
+      rate_limit_remaining: Map.get(provider_map, :rate_limit_remaining, %{http: nil, ws: nil}),
+      is_in_cooldown: provider_map.is_in_cooldown,
+      cooldown_until: provider_map.cooldown_until,
+      reconnect_attempts: 0,
+      ws_connected: ws_connected?(provider_type, provider_map),
+      subscriptions: 0,
+      url: provider_map.config.url,
+      ws_url: provider_map.config.ws_url,
+      block_height: block_height,
+      consensus_height: consensus_height,
+      blocks_behind: blocks_behind
+    }
+  end
+
+  defp derive_circuit_state(provider_map) do
+    cond do
+      provider_map.http_cb_state == :open or provider_map.ws_cb_state == :open ->
+        :open
+
+      provider_map.http_cb_state == :half_open or provider_map.ws_cb_state == :half_open ->
+        :half_open
+
+      true ->
+        :closed
+    end
+  end
+
+  defp derive_provider_type(config) do
+    cond do
+      config.url && config.ws_url -> :both
+      config.ws_url -> :websocket
+      true -> :http
+    end
+  end
+
+  defp derive_health_status(:up), do: :healthy
+  defp derive_health_status(:down), do: :unhealthy
+  defp derive_health_status(:limited), do: :rate_limited
+  defp derive_health_status(:misconfigured), do: :misconfigured
+  defp derive_health_status(other), do: other
+
+  defp ws_connected?(provider_type, provider_map) do
+    provider_type in [:websocket, :both] and provider_map.ws_status == :healthy
+  end
+
+  defp calculate_block_sync(_chain_name, _provider_id, nil, _provider_ids), do: {nil, nil}
+
+  defp calculate_block_sync(chain_name, provider_id, consensus_height, provider_ids) do
+    alias Lasso.RPC.ChainState
+
+    case ChainState.provider_lag(chain_name, provider_id, provider_ids) do
+      {:ok, lag} when is_integer(lag) -> {consensus_height + lag, -lag}
+      _ -> {nil, nil}
+    end
+  end
+
   defp load_provider_metrics(socket) do
     chain_name = Map.get(socket.assigns, :metrics_selected_chain, "ethereum")
     # Mount guarantees selected_profile is set
     profile = socket.assigns.selected_profile
 
     try do
-      alias Lasso.Config.ConfigStore
       alias Lasso.Benchmarking.BenchmarkStore
+      alias Lasso.Config.ConfigStore
 
       case ConfigStore.get_providers(profile, chain_name) do
         {:ok, provider_configs} ->
@@ -2750,7 +3012,10 @@ defmodule LassoWeb.Dashboard do
   defp metrics_tab_content(assigns) do
     # Get chain config for the selected chain
     chain_config =
-      case Lasso.Config.ConfigStore.get_chain(assigns.selected_profile, assigns.metrics_selected_chain) do
+      case Lasso.Config.ConfigStore.get_chain(
+             assigns.selected_profile,
+             assigns.metrics_selected_chain
+           ) do
         {:ok, config} -> config
         {:error, _} -> %{chain_id: "Unknown"}
       end
@@ -2759,8 +3024,8 @@ defmodule LassoWeb.Dashboard do
 
     ~H"""
     <div class="h-full overflow-y-auto">
-     <div class="mx-auto max-w-7xl px-4 pb-4">
-      <div class="flex items-center justify-between mb-2 py-4">
+      <div class="mx-auto max-w-7xl px-4 pb-4">
+        <div class="flex items-center justify-between mb-2 py-4">
           <div class="flex gap-2 ">
             <%= for chain <- @available_chains do %>
               <button
@@ -2789,7 +3054,8 @@ defmodule LassoWeb.Dashboard do
         <%= if @metrics_loading do %>
           <div class="py-12">
             <div class=" text-center">
-              <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-sky-500 border-r-transparent"></div>
+              <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-sky-500 border-r-transparent">
+              </div>
               <p class="mt-4 text-gray-400">Loading metrics...</p>
             </div>
           </div>
@@ -2813,7 +3079,9 @@ defmodule LassoWeb.Dashboard do
       <div class="flex items-center justify-between mb-3 ">
         <h2 class="text-lg font-semibold flex items-center gap-2 text-white">
           <span>Provider Performance</span>
-          <span class="text-xs text-gray-500 font-normal">({length(@provider_metrics)} providers)</span>
+          <span class="text-xs text-gray-500 font-normal">
+            ({length(@provider_metrics)} providers)
+          </span>
         </h2>
         <%= if @metrics_last_updated do %>
           <div class="flex items-center gap-2 text-xs text-gray-500">
@@ -2826,7 +3094,7 @@ defmodule LassoWeb.Dashboard do
       </div>
 
       <%= if Enum.empty?(@provider_metrics) do %>
-        <div class="backdrop-blur-lg rounded-xl border border-gray-700/60 border-dashed shadow-2xl overflow-hidden">
+        <div class="rounded-xl border border-gray-700/60 border-dashed bg-gray-900/20 shadow-2xl overflow-hidden">
           <div class="flex flex-col items-center justify-center py-16 px-8">
             <div class="relative mb-4">
               <div class="bg-gray-800/40 flex h-12 w-12 items-center justify-center rounded-lg">
@@ -2906,13 +3174,19 @@ defmodule LassoWeb.Dashboard do
                       <% end %>
                     </td>
                     <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
-                      <%= if provider.p50_latency, do: "#{Formatting.safe_round(provider.p50_latency, 0)}ms", else: "—" %>
+                      {if provider.p50_latency,
+                        do: "#{Formatting.safe_round(provider.p50_latency, 0)}ms",
+                        else: "—"}
                     </td>
                     <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
-                      <%= if provider.p95_latency, do: "#{Formatting.safe_round(provider.p95_latency, 0)}ms", else: "—" %>
+                      {if provider.p95_latency,
+                        do: "#{Formatting.safe_round(provider.p95_latency, 0)}ms",
+                        else: "—"}
                     </td>
                     <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
-                      <%= if provider.p99_latency, do: "#{Formatting.safe_round(provider.p99_latency, 0)}ms", else: "—" %>
+                      {if provider.p99_latency,
+                        do: "#{Formatting.safe_round(provider.p99_latency, 0)}ms",
+                        else: "—"}
                     </td>
                     <td class="px-4 py-3 text-right">
                       <%= if provider.consistency_ratio do %>
@@ -2962,7 +3236,7 @@ defmodule LassoWeb.Dashboard do
       <h2 class="text-lg font-semibold mb-3 text-white">Method Performance Breakdown</h2>
 
       <%= if Enum.empty?(@method_metrics) do %>
-        <div class="backdrop-blur-lg rounded-xl border border-gray-700/60 border-dashed shadow-2xl overflow-hidden">
+        <div class="rounded-xl border border-gray-700/60 border-dashed bg-gray-900/20 shadow-2xl overflow-hidden">
           <div class="flex flex-col items-center justify-center py-16 px-8">
             <div class="relative mb-4">
               <div class="bg-gray-800/40 flex h-12 w-12 items-center justify-center rounded-lg">
@@ -3037,7 +3311,10 @@ defmodule LassoWeb.Dashboard do
                     <div class="flex-none flex items-center gap-2 text-[10px]">
                       <span class={[
                         "font-mono",
-                        if(provider_stat.success_rate >= 0.99, do: "text-emerald-400", else: "text-yellow-400")
+                        if(provider_stat.success_rate >= 0.99,
+                          do: "text-emerald-400",
+                          else: "text-yellow-400"
+                        )
                       ]}>
                         {Formatting.safe_round(provider_stat.success_rate * 100, 0)}%
                       </span>

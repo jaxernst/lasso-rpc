@@ -93,7 +93,7 @@ defmodule Lasso.Testing.BehaviorHttpClient do
   Returns {:ok, {:raw, bytes}} where bytes is JSON array of responses.
   """
   def batch_request(provider_config, requests, opts \\ []) do
-    provider_id = Map.get(provider_config, :id)
+    _provider_id = Map.get(provider_config, :id)
     is_mock = Map.get(provider_config, :__mock__, false)
 
     if is_mock do

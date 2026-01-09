@@ -15,10 +15,11 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   require Logger
 
   alias Lasso.Benchmarking.BenchmarkStore
-  alias LassoWeb.Dashboard.{Helpers, Constants}
+  alias LassoWeb.Dashboard.{Constants, Helpers}
   alias LassoWeb.Dashboard.Metrics.Calculations
 
   # ETS table name helpers (must match BenchmarkStore)
+  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   defp score_table_name(profile, chain_name), do: :"provider_scores_#{profile}_#{chain_name}"
 
   # ---------------------------------------------------------------------------
@@ -291,13 +292,13 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       end
 
     %{
-      provider_score: Float.round(provider_score || 0.0, 2),
+      provider_score: Float.round(provider_score, 2),
       p50_latency: p50,
       p95_latency: p95,
       success_rate: success_rate,
       calls_last_minute: calls_last_minute,
       rpc_stats: Map.get(real_time_stats, :rpc_stats, []),
-      anomalies: anomalies || [],
+      anomalies: anomalies,
       recent_activity_count: length(provider_events),
       pick_share_5m: pick_share
     }

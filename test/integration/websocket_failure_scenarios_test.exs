@@ -55,7 +55,9 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
     circuit_breaker_config = %{failure_threshold: 5, recovery_timeout: 200, success_threshold: 1}
 
     {:ok, _cb_pid} =
-      CircuitBreaker.start_link({{endpoint.profile, endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config})
+      CircuitBreaker.start_link(
+        {{endpoint.profile, endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config}
+      )
 
     # Start connection
     {:ok, pid} = Connection.start_link(endpoint)

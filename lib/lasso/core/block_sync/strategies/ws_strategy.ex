@@ -44,13 +44,28 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
     :subscription_status
   ]
 
+  @type t :: %__MODULE__{
+          profile: String.t(),
+          chain: String.t(),
+          provider_id: String.t(),
+          parent: pid(),
+          staleness_threshold_ms: non_neg_integer(),
+          staleness_timer_ref: reference() | nil,
+          status: atom(),
+          last_block_time: integer() | nil,
+          last_height: non_neg_integer() | nil,
+          subscription_status: atom()
+        }
+
   ## Strategy Callbacks
 
   @impl true
   def start(chain, provider_id, opts) do
     profile = Keyword.fetch!(opts, :profile)
     parent = Keyword.get(opts, :parent, self())
-    staleness_threshold = Keyword.get(opts, :staleness_threshold_ms, @default_staleness_threshold_ms)
+
+    staleness_threshold =
+      Keyword.get(opts, :staleness_threshold_ms, @default_staleness_threshold_ms)
 
     state = %__MODULE__{
       profile: profile,
@@ -78,7 +93,12 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   end
 
   @impl true
-  def stop(%__MODULE__{staleness_timer_ref: ref, profile: profile, chain: chain, provider_id: provider_id}) do
+  def stop(%__MODULE__{
+        staleness_timer_ref: ref,
+        profile: profile,
+        chain: chain,
+        provider_id: provider_id
+      }) do
     if ref, do: Process.cancel_timer(ref)
 
     # Release our subscription from the manager
@@ -107,13 +127,19 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   end
 
   @impl true
-  def handle_message({:upstream_subscription_event, provider_id, {:newHeads}, payload, _received_at}, state)
+  def handle_message(
+        {:upstream_subscription_event, provider_id, {:newHeads}, payload, _received_at},
+        state
+      )
       when provider_id == state.provider_id do
     new_state = process_new_head(state, payload)
     {:ok, new_state}
   end
 
-  def handle_message({:upstream_subscription_invalidated, provider_id, {:newHeads}, reason}, state)
+  def handle_message(
+        {:upstream_subscription_invalidated, provider_id, {:newHeads}, reason},
+        state
+      )
       when provider_id == state.provider_id do
     Logger.debug("WS subscription invalidated",
       chain: state.chain,
@@ -142,6 +168,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @doc """
   Process an incoming newHeads event.
   """
+  @spec handle_new_head(t(), map()) :: t()
   def handle_new_head(%__MODULE__{} = state, payload) do
     process_new_head(state, payload)
   end
@@ -149,6 +176,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @doc """
   Handle subscription invalidation.
   """
+  @spec handle_invalidation(t(), term()) :: t()
   def handle_invalidation(%__MODULE__{} = state, reason) do
     Logger.debug("WS subscription invalidated",
       chain: state.chain,
@@ -165,6 +193,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @doc """
   Re-subscribe after connection recovery.
   """
+  @spec resubscribe(t()) :: {:ok, t()} | {:error, term()}
   def resubscribe(%__MODULE__{} = state) do
     case do_subscribe(state) do
       {:ok, new_state} ->
@@ -292,7 +321,13 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
     # Check staleness at half the threshold interval
     check_interval = div(state.staleness_threshold_ms, 2)
-    ref = Process.send_after(state.parent, {:ws_strategy, :check_staleness, state.provider_id}, check_interval)
+
+    ref =
+      Process.send_after(
+        state.parent,
+        {:ws_strategy, :check_staleness, state.provider_id},
+        check_interval
+      )
 
     %{state | staleness_timer_ref: ref}
   end

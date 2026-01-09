@@ -14,7 +14,8 @@ defmodule Lasso.RPC.Providers.Adapters.Alchemy do
 
   @behaviour Lasso.RPC.ProviderAdapter
 
-  alias Lasso.RPC.{MethodRegistry, Providers.Generic, ChainState}
+  alias Lasso.RPC.{ChainState, MethodRegistry}
+  alias Lasso.RPC.Providers.Generic
 
   import Lasso.RPC.Providers.AdapterHelpers
 

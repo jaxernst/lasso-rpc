@@ -22,7 +22,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   require Logger
 
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.RPC.{TransportRegistry, Channel, Response}
+  alias Lasso.RPC.{Channel, Response, TransportRegistry}
 
   @default_poll_interval_ms 12_000
   @default_timeout_ms 3_000
@@ -39,6 +39,18 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     :last_height,
     :last_poll_time
   ]
+
+  @type t :: %__MODULE__{
+          profile: String.t(),
+          chain: String.t(),
+          provider_id: String.t(),
+          parent: pid(),
+          poll_interval_ms: non_neg_integer(),
+          timer_ref: reference() | nil,
+          consecutive_failures: non_neg_integer(),
+          last_height: non_neg_integer() | nil,
+          last_poll_time: integer() | nil
+        }
 
   ## Strategy Callbacks
 
@@ -107,6 +119,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   @doc """
   Execute an immediate poll (for use during initialization).
   """
+  @spec poll_now(t()) :: t()
   def poll_now(%__MODULE__{} = state) do
     execute_poll(state)
   end

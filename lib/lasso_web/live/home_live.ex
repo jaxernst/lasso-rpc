@@ -1,10 +1,10 @@
 defmodule LassoWeb.HomeLive do
   use LassoWeb, :live_view
-  alias LassoWeb.Components.DashboardHeader
-  alias LassoWeb.Components.LatencyHeatmap
-  alias LassoWeb.Components.LandingHeroGraphic
-  alias Lasso.Config.ConfigStore
   alias Lasso.Benchmarking.BenchmarkStore
+  alias Lasso.Config.ConfigStore
+  alias LassoWeb.Components.DashboardHeader
+  alias LassoWeb.Components.LandingHeroGraphic
+  alias LassoWeb.Components.LatencyHeatmap
 
   @impl true
   def mount(_params, _session, socket) do
@@ -23,7 +23,9 @@ defmodule LassoWeb.HomeLive do
 
     # Load initial heatmap data - use first available chain
     heatmap_chain = List.first(available_chains, "ethereum")
-    {heatmap_data, heatmap_methods, heatmap_live} = load_heatmap_data(default_profile, heatmap_chain)
+
+    {heatmap_data, heatmap_methods, heatmap_live} =
+      load_heatmap_data(default_profile, heatmap_chain)
 
     socket =
       socket
@@ -58,7 +60,12 @@ defmodule LassoWeb.HomeLive do
     Process.send_after(self(), :tick, 1000)
 
     # Try to get real data from the selected heatmap chain
-    real_calls = Lasso.Benchmarking.BenchmarkStore.get_recent_calls(socket.assigns.selected_profile, socket.assigns.heatmap_chain, 4)
+    real_calls =
+      Lasso.Benchmarking.BenchmarkStore.get_recent_calls(
+        socket.assigns.selected_profile,
+        socket.assigns.heatmap_chain,
+        4
+      )
 
     {new_decisions, is_live} =
       if length(real_calls) > 0 do

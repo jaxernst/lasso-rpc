@@ -28,8 +28,8 @@ defmodule Lasso.HealthProbe.Worker do
   require Logger
 
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.RPC.{TransportRegistry, Channel, Response}
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
+  alias Lasso.RPC.{Channel, Response, TransportRegistry}
 
   @default_probe_interval_ms 10_000
   @default_timeout_ms 5_000
@@ -77,12 +77,14 @@ defmodule Lasso.HealthProbe.Worker do
 
   ## Client API
 
+  @spec start_link({String.t(), String.t(), String.t(), keyword()}) :: GenServer.on_start()
   def start_link({chain, profile, provider_id, opts}) when is_binary(profile) do
     GenServer.start_link(__MODULE__, {chain, profile, provider_id, opts},
       name: via(chain, profile, provider_id)
     )
   end
 
+  @spec via(String.t(), String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via(chain, profile, provider_id) when is_binary(profile) do
     {:via, Registry, {Lasso.Registry, {:health_probe_worker, chain, profile, provider_id}}}
   end
@@ -90,6 +92,7 @@ defmodule Lasso.HealthProbe.Worker do
   @doc """
   Get the current status of a health probe worker.
   """
+  @spec get_status(atom(), String.t(), String.t()) :: map() | {:error, :not_running}
   def get_status(chain, profile, provider_id) when is_binary(profile) do
     GenServer.call(via(chain, profile, provider_id), :get_status)
   catch
@@ -196,9 +199,13 @@ defmodule Lasso.HealthProbe.Worker do
     old_state = %{
       consecutive_failures: old_consecutive_failures
     }
+
     new_state = %{
       consecutive_successes:
-        if(transport == :http, do: state.consecutive_successes, else: state.ws_consecutive_successes),
+        if(transport == :http,
+          do: state.consecutive_successes,
+          else: state.ws_consecutive_successes
+        ),
       status: :healthy
     }
 
@@ -455,50 +462,48 @@ defmodule Lasso.HealthProbe.Worker do
   defp do_ws_probe(chain, provider_id, timeout_ms) do
     # Use WSConnection.request directly - NOT through circuit breaker
     # The WSConnection uses the provider_id as the connection_id
-    try do
-      case WSConnection.request(provider_id, "eth_chainId", [], timeout_ms) do
-        {:ok, %Response.Success{} = response} ->
-          case Response.Success.decode_result(response) do
-            {:ok, "0x" <> hex} ->
-              {:ok, String.to_integer(hex, 16)}
+    case WSConnection.request(provider_id, "eth_chainId", [], timeout_ms) do
+      {:ok, %Response.Success{} = response} ->
+        case Response.Success.decode_result(response) do
+          {:ok, "0x" <> hex} ->
+            {:ok, String.to_integer(hex, 16)}
 
-            {:ok, result} ->
-              # Even if parsing fails, we got a response - provider is alive
-              {:ok, result}
+          {:ok, result} ->
+            # Even if parsing fails, we got a response - provider is alive
+            {:ok, result}
 
-            {:error, _} ->
-              # Decode failed but we got a response - provider is alive
-              {:ok, :parse_error}
-          end
+          {:error, _} ->
+            # Decode failed but we got a response - provider is alive
+            {:ok, :parse_error}
+        end
 
-        {:error, %{category: :rate_limit} = jerr} ->
-          # Rate limit errors should count as failures
-          {:error, jerr}
+      {:error, %{category: :rate_limit} = jerr} ->
+        # Rate limit errors should count as failures
+        {:error, jerr}
 
-        {:error, %{retriable?: true} = _jerr} ->
-          # Other retriable errors but connection worked - provider is reachable
-          {:ok, :error_response}
+      {:error, %{retriable?: true} = _jerr} ->
+        # Other retriable errors but connection worked - provider is reachable
+        {:ok, :error_response}
 
-        {:error, reason} ->
-          {:error, reason}
-      end
-    catch
-      :exit, {:noproc, _} ->
-        # WSConnection process not running
-        {:error, {:ws_not_connected, chain, provider_id}}
-
-      :exit, {:timeout, _} ->
-        {:error, {:ws_request_timeout, timeout_ms}}
-
-      kind, error ->
-        Logger.error("WS HealthProbe crashed",
-          chain: chain,
-          provider_id: provider_id,
-          error: Exception.format(kind, error, __STACKTRACE__)
-        )
-
-        {:error, {:exception, inspect({kind, error})}}
+      {:error, reason} ->
+        {:error, reason}
     end
+  catch
+    :exit, {:noproc, _} ->
+      # WSConnection process not running
+      {:error, {:ws_not_connected, chain, provider_id}}
+
+    :exit, {:timeout, _} ->
+      {:error, {:ws_request_timeout, timeout_ms}}
+
+    kind, error ->
+      Logger.error("WS HealthProbe crashed",
+        chain: chain,
+        provider_id: provider_id,
+        error: Exception.format(kind, error, __STACKTRACE__)
+      )
+
+      {:error, {:exception, inspect({kind, error})}}
   end
 
   # Capability checks
@@ -522,13 +527,11 @@ defmodule Lasso.HealthProbe.Worker do
   # Check if WS is currently connected (not just configured)
   defp ws_connected?(_chain, provider_id) do
     # Check if WSConnection process is alive and connected
-    try do
-      case WSConnection.status(provider_id) do
-        %{connected: true} -> true
-        _ -> false
-      end
-    catch
-      :exit, _ -> false
+    case WSConnection.status(provider_id) do
+      %{connected: true} -> true
+      _ -> false
     end
+  catch
+    :exit, _ -> false
   end
 end

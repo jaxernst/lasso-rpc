@@ -3,6 +3,7 @@ defmodule LassoWeb.ChainController do
 
   alias Lasso.Config.ConfigStore
 
+  @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def index(conn, _params) do
     all_chains = ConfigStore.get_all_chains()
 
@@ -19,6 +20,7 @@ defmodule LassoWeb.ChainController do
     json(conn, %{chains: chains})
   end
 
+  @spec status(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def status(conn, %{"chain_id" => _chain_id}) do
     json(conn, %{status: "not implemented"})
   end

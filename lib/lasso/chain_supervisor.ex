@@ -31,12 +31,12 @@ defmodule Lasso.RPC.ChainSupervisor do
   use Supervisor
   require Logger
 
+  alias Lasso.BlockSync
+  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, UpstreamSubscriptionPool}
+  alias Lasso.HealthProbe
+  alias Lasso.RPC.ProviderSupervisor
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
   alias Lasso.RPC.{ProviderPool, TransportRegistry}
-  alias Lasso.RPC.ProviderSupervisor
-  alias Lasso.Core.Streaming.{UpstreamSubscriptionPool, ClientSubscriptionRegistry}
-  alias Lasso.BlockSync
-  alias Lasso.HealthProbe
 
   @doc """
   Starts a ChainSupervisor for a specific profile and blockchain.
@@ -44,6 +44,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   The `profile` parameter isolates this chain's components from other profiles
   using the same blockchain. Registry keys include the profile for isolation.
   """
+  @spec start_link({String.t(), String.t(), map()}) :: Supervisor.on_start()
   def start_link({profile, chain_name, chain_config}) do
     Supervisor.start_link(__MODULE__, {profile, chain_name, chain_config},
       name: via_name(profile, chain_name)
@@ -53,30 +54,30 @@ defmodule Lasso.RPC.ChainSupervisor do
   @doc """
   Gets the status of all providers for a chain, including WebSocket connection information.
   """
+  @spec get_chain_status(String.t(), String.t()) :: map()
   def get_chain_status(profile, chain_name) do
-    try do
-      case ProviderPool.get_status(profile, chain_name) do
-        {:ok, status} ->
-          # Collect WebSocket connection status from WSConnection processes
-          ws_connections = collect_ws_connection_status(status.providers)
-          Map.put(status, :ws_connections, ws_connections)
+    case ProviderPool.get_status(profile, chain_name) do
+      {:ok, status} ->
+        # Collect WebSocket connection status from WSConnection processes
+        ws_connections = collect_ws_connection_status(status.providers)
+        Map.put(status, :ws_connections, ws_connections)
 
-        {:error, :not_found} ->
-          # ProviderPool process not found - chain not started
-          %{error: :chain_not_started}
+      {:error, :not_found} ->
+        # ProviderPool process not found - chain not started
+        %{error: :chain_not_started}
 
-        {:error, reason} ->
-          Logger.error("Failed to get chain status for #{chain_name}: #{reason}")
-          %{error: reason}
-      end
-    catch
-      :exit, {:noproc, _} -> %{error: :chain_not_started}
+      {:error, reason} ->
+        Logger.error("Failed to get chain status for #{chain_name}: #{reason}")
+        %{error: reason}
     end
+  catch
+    :exit, {:noproc, _} -> %{error: :chain_not_started}
   end
 
   @doc """
   Gets active provider connections for a chain.
   """
+  @spec get_active_providers(String.t(), String.t()) :: [String.t()]
   def get_active_providers(profile, chain_name) do
     ProviderPool.get_active_providers(profile, chain_name)
   end
@@ -107,8 +108,15 @@ defmodule Lasso.RPC.ChainSupervisor do
   @spec ensure_provider(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
   def ensure_provider(profile, chain_name, provider_config, opts \\ []) do
     with {:ok, chain_config} <- get_chain_config(profile, chain_name),
-         :ok <- ProviderPool.register_provider(profile, chain_name, provider_config.id, provider_config),
-         :ok <- start_provider_supervisor(profile, chain_name, chain_config, provider_config, opts),
+         :ok <-
+           ProviderPool.register_provider(
+             profile,
+             chain_name,
+             provider_config.id,
+             provider_config
+           ),
+         :ok <-
+           start_provider_supervisor(profile, chain_name, chain_config, provider_config, opts),
          :ok <-
            TransportRegistry.initialize_provider_channels(
              profile,
@@ -148,26 +156,35 @@ defmodule Lasso.RPC.ChainSupervisor do
   """
   @spec remove_provider(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def remove_provider(profile, chain_name, provider_id) do
-    # Stop BlockSync and HealthProbe workers for this provider
-    # Supervisors are siblings in the tree - use profile-scoped versions
-    BlockSync.Supervisor.stop_worker(profile, chain_name, provider_id)
-    HealthProbe.Supervisor.stop_worker(profile, chain_name, provider_id)
+    with :ok <- BlockSync.Supervisor.stop_worker(profile, chain_name, provider_id),
+         :ok <- HealthProbe.Supervisor.stop_worker(profile, chain_name, provider_id),
+         :ok <- stop_provider_supervisor(profile, chain_name, provider_id) do
+      # Close transport channels (idempotent)
+      TransportRegistry.close_channel(profile, chain_name, provider_id, :http)
+      TransportRegistry.close_channel(profile, chain_name, provider_id, :ws)
 
-    # Stop the per-provider supervisor (cascades WS then circuit breakers)
-    case GenServer.whereis(provider_supervisor_via(profile, chain_name, provider_id)) do
-      nil -> :ok
-      pid -> DynamicSupervisor.terminate_child(provider_supervisors_name(profile, chain_name), pid)
+      # Unregister from pool
+      :ok = ProviderPool.unregister_provider(profile, chain_name, provider_id)
+
+      Logger.info("Successfully removed provider #{provider_id} from #{chain_name}")
+      :ok
     end
+  end
 
-    # Close transport channels (idempotent)
-    TransportRegistry.close_channel(profile, chain_name, provider_id, :http)
-    TransportRegistry.close_channel(profile, chain_name, provider_id, :ws)
+  defp stop_provider_supervisor(profile, chain_name, provider_id) do
+    case GenServer.whereis(provider_supervisor_via(profile, chain_name, provider_id)) do
+      nil ->
+        :ok
 
-    # Unregister from pool
-    :ok = ProviderPool.unregister_provider(profile, chain_name, provider_id)
-
-    Logger.info("Successfully removed provider #{provider_id} from #{chain_name}")
-    :ok
+      pid ->
+        case DynamicSupervisor.terminate_child(
+               provider_supervisors_name(profile, chain_name),
+               pid
+             ) do
+          :ok -> :ok
+          {:error, _} = error -> error
+        end
+    end
   end
 
   # Supervisor callbacks

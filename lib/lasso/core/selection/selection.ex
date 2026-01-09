@@ -112,7 +112,8 @@ defmodule Lasso.RPC.Selection do
             end)
           end)
 
-        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
+        ordered =
+          strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
 
         case List.first(ordered) do
           %Channel{provider_id: pid} ->
@@ -167,7 +168,8 @@ defmodule Lasso.RPC.Selection do
             end)
           end)
 
-        ordered = strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
+        ordered =
+          strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
 
         case List.first(ordered) do
           %Channel{provider_id: pid, transport: transport} ->
@@ -273,47 +275,7 @@ defmodule Lasso.RPC.Selection do
 
     channels =
       provider_candidates
-      |> Enum.flat_map(fn %{id: provider_id, config: provider_config} ->
-        transports =
-          case transport do
-            :http -> [:http]
-            :ws -> [:ws]
-            _ -> [:http, :ws]
-          end
-
-        transports
-        |> Enum.flat_map(fn t ->
-          has_http? = is_binary(Map.get(provider_config, :url))
-          has_ws? = is_binary(Map.get(provider_config, :ws_url))
-
-          cond do
-            t == :http and not has_http? ->
-              []
-
-            t == :ws and not has_ws? ->
-              []
-
-            t == :ws and has_ws? ->
-              # WS channels are only cached when connected (TransportRegistry removes on disconnect)
-              case TransportRegistry.get_channel(profile, chain, provider_id, t,
-                     method: method,
-                     provider_config: provider_config
-                   ) do
-                {:ok, channel} -> [channel]
-                _ -> []
-              end
-
-            true ->
-              case TransportRegistry.get_channel(profile, chain, provider_id, t,
-                     method: method,
-                     provider_config: provider_config
-                   ) do
-                {:ok, channel} -> [channel]
-                _ -> []
-              end
-          end
-        end)
-      end)
+      |> Enum.flat_map(&build_provider_channels(&1, transport, profile, chain, method))
       |> Enum.reject(&is_nil/1)
 
     registry_duration_us = System.monotonic_time(:microsecond) - registry_start
@@ -346,7 +308,9 @@ defmodule Lasso.RPC.Selection do
       end
 
     # Strategy delegation: allow strategy modules to rank channels when available.
-    selection_ctx = SelectionContext.new(profile, chain, method, strategy: strategy, protocol: transport)
+    selection_ctx =
+      SelectionContext.new(profile, chain, method, strategy: strategy, protocol: transport)
+
     strategy_mod = StrategyRegistry.resolve(strategy)
     prepared_ctx = strategy_mod.prepare_context(selection_ctx)
 
@@ -380,8 +344,37 @@ defmodule Lasso.RPC.Selection do
 
   ## Private Functions
 
-  # Channel-specific strategy application has been superseded by strategy-provided
-  # rank_channels/4. Legacy branches removed.
+  # Channel building helpers
+
+  defp build_provider_channels(
+         %{id: provider_id, config: config},
+         transport,
+         profile,
+         chain,
+         method
+       ) do
+    transport
+    |> transports_to_check()
+    |> Enum.filter(fn t -> provider_supports_transport?(config, t) end)
+    |> Enum.flat_map(fn t -> fetch_channel(profile, chain, provider_id, t, method, config) end)
+  end
+
+  defp transports_to_check(:http), do: [:http]
+  defp transports_to_check(:ws), do: [:ws]
+  defp transports_to_check(_), do: [:http, :ws]
+
+  defp provider_supports_transport?(config, :http), do: is_binary(Map.get(config, :url))
+  defp provider_supports_transport?(config, :ws), do: is_binary(Map.get(config, :ws_url))
+
+  defp fetch_channel(profile, chain, provider_id, transport, method, provider_config) do
+    case TransportRegistry.get_channel(profile, chain, provider_id, transport,
+           method: method,
+           provider_config: provider_config
+         ) do
+      {:ok, channel} -> [channel]
+      _ -> []
+    end
+  end
 
   # Selection metadata helpers
 

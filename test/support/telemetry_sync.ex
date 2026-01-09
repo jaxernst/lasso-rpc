@@ -314,7 +314,7 @@ defmodule Lasso.Test.TelemetrySync do
   """
   @spec wait_for_circuit_breaker_open(String.t(), atom(), non_neg_integer()) ::
           {:ok, map()} | {:error, :timeout}
-  def wait_for_circuit_breaker_open(provider_id, transport, timeout \\ @default_timeout) do
+  def wait_for_circuit_breaker_open(provider_id, _transport, timeout \\ @default_timeout) do
     case wait_for_event(
            [:lasso, :circuit_breaker, :open],
            timeout: timeout,
@@ -334,7 +334,7 @@ defmodule Lasso.Test.TelemetrySync do
   """
   @spec wait_for_circuit_breaker_close(String.t(), atom(), non_neg_integer()) ::
           {:ok, map()} | {:error, :timeout}
-  def wait_for_circuit_breaker_close(provider_id, transport, timeout \\ @default_timeout) do
+  def wait_for_circuit_breaker_close(provider_id, _transport, timeout \\ @default_timeout) do
     case wait_for_event(
            [:lasso, :circuit_breaker, :close],
            timeout: timeout,
@@ -354,7 +354,7 @@ defmodule Lasso.Test.TelemetrySync do
   """
   @spec wait_for_circuit_breaker_half_open(String.t(), atom(), non_neg_integer()) ::
           {:ok, map()} | {:error, :timeout}
-  def wait_for_circuit_breaker_half_open(provider_id, transport, timeout \\ @default_timeout) do
+  def wait_for_circuit_breaker_half_open(provider_id, _transport, timeout \\ @default_timeout) do
     case wait_for_event(
            [:lasso, :circuit_breaker, :half_open],
            timeout: timeout,
@@ -574,7 +574,7 @@ defmodule Lasso.Test.TelemetrySync do
     matches_map and matches_predicate
   end
 
-  defp metadata_matches?(metadata, match_map) when match_map == %{}, do: true
+  defp metadata_matches?(_metadata, match_map) when match_map == %{}, do: true
 
   defp metadata_matches?(metadata, match_map) do
     Enum.all?(match_map, fn {key, expected_value} ->

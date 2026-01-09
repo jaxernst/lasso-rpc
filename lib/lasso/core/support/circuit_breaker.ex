@@ -9,8 +9,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   use GenServer
   require Logger
-  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Core.Support.ErrorNormalizer
+  alias Lasso.JSONRPC.Error, as: JError
 
   defstruct [
     :profile,
@@ -275,16 +275,14 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           }
           | {:error, term()}
   def get_state(id) do
-    try do
-      GenServer.call(via_name(id), :get_state, @state_timeout)
-    catch
-      :exit, {:timeout, _} ->
-        Logger.warning("Timeout getting circuit breaker state for #{inspect(id)}")
-        {:error, :timeout}
+    GenServer.call(via_name(id), :get_state, @state_timeout)
+  catch
+    :exit, {:timeout, _} ->
+      Logger.warning("Timeout getting circuit breaker state for #{inspect(id)}")
+      {:error, :timeout}
 
-      :exit, {:noproc, _} ->
-        {:error, :not_found}
-    end
+    :exit, {:noproc, _} ->
+      {:error, :not_found}
   end
 
   @doc """
@@ -1076,6 +1074,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   Optionally accepts the error reason for proper classification and logging.
   If no reason is provided, defaults to a generic failure.
   """
+  @spec record_failure(tuple(), term()) :: :ok | {:error, :not_found}
   def record_failure(id, reason \\ :failure) do
     case GenServer.whereis(via_name(id)) do
       nil ->

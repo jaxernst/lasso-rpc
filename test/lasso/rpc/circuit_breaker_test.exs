@@ -134,8 +134,11 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     # Rate limit error should use threshold of 2, not 5
     rate_limit_error = JError.new(-32_005, "Rate limited", category: :rate_limit)
 
-    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
-    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
@@ -179,8 +182,11 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         data: %{retry_after_ms: 2000}
       )
 
-    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
-    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
@@ -214,15 +220,20 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     rate_limit_error = JError.new(-32_005, "Rate limited", category: :rate_limit)
 
     # Should not open after 2 failures (needs 3 now)
-    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
-    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
     assert state.state == :closed, "Circuit should remain closed with custom threshold"
 
     # Should open after 3rd failure
-    assert {:executed, {:error, _}} = CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+    assert {:executed, {:error, _}} =
+             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
     assert state.state == :open
@@ -348,7 +359,9 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       assert CircuitBreaker.get_state(id).state == :half_open
 
       # Fail during half_open - should reopen and reschedule timer
-      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "still failing" end)
+      assert {:executed, {:exception, _}} =
+               CircuitBreaker.call(id, fn -> raise "still failing" end)
+
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :open
 

@@ -10,6 +10,8 @@ defmodule Lasso.Discovery.Probes.WebSocket do
 
   require Logger
 
+  alias Client
+
   @subscription_types ["newHeads", "logs", "newPendingTransactions"]
 
   @type ws_result :: %{
@@ -80,20 +82,20 @@ defmodule Lasso.Discovery.Probes.WebSocket do
   # Connection management using a simple GenServer wrapper around WebSockex
   defp connect(ws_url, timeout) do
     # Start our probe client
-    case Lasso.Discovery.Probes.WebSocket.Client.start_link(ws_url, timeout) do
+    case Client.start_link(ws_url, timeout) do
       {:ok, pid} -> {:ok, pid}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp disconnect(conn) do
-    Lasso.Discovery.Probes.WebSocket.Client.stop(conn)
+    Client.stop(conn)
   end
 
   defp test_connection_latency(conn, timeout) do
     start = System.monotonic_time(:millisecond)
 
-    case Lasso.Discovery.Probes.WebSocket.Client.request(conn, "eth_blockNumber", [], timeout) do
+    case Client.request(conn, "eth_blockNumber", [], timeout) do
       {:ok, _result} ->
         latency = System.monotonic_time(:millisecond) - start
         %{status: :ok, latency_ms: latency}
@@ -111,7 +113,7 @@ defmodule Lasso.Discovery.Probes.WebSocket do
         start = System.monotonic_time(:millisecond)
 
         result =
-          case Lasso.Discovery.Probes.WebSocket.Client.request(conn, method, [], timeout) do
+          case Client.request(conn, method, [], timeout) do
             {:ok, _} ->
               %{status: :supported, latency_ms: System.monotonic_time(:millisecond) - start}
 
@@ -138,12 +140,22 @@ defmodule Lasso.Discovery.Probes.WebSocket do
           end
 
         result =
-          case Lasso.Discovery.Probes.WebSocket.Client.subscribe(conn, params, timeout, subscription_wait) do
+          case Client.subscribe(
+                 conn,
+                 params,
+                 timeout,
+                 subscription_wait
+               ) do
             {:ok, %{subscription_id: sub_id, received_event: true}} ->
               %{status: :supported, subscription_id: sub_id, received_event: true}
 
             {:ok, %{subscription_id: sub_id, received_event: false}} ->
-              %{status: :supported, subscription_id: sub_id, received_event: false, note: "No event received within timeout"}
+              %{
+                status: :supported,
+                subscription_id: sub_id,
+                received_event: false,
+                note: "No event received within timeout"
+              }
 
             {:error, %{"code" => -32_601}} ->
               %{status: :unsupported, error: "Method not found"}
@@ -166,7 +178,7 @@ defmodule Lasso.Discovery.Probes.WebSocket do
   defp format_error(reason), do: inspect(reason)
 end
 
-defmodule Lasso.Discovery.Probes.WebSocket.Client do
+defmodule Client do
   @moduledoc false
   # Internal WebSocket client for probing
 
@@ -182,6 +194,7 @@ defmodule Lasso.Discovery.Probes.WebSocket.Client do
     :event_listener
   ]
 
+  @spec start_link(String.t(), non_neg_integer()) :: {:ok, pid()} | {:error, term()}
   def start_link(url, timeout) do
     state = %__MODULE__{
       url: url,
@@ -204,6 +217,7 @@ defmodule Lasso.Discovery.Probes.WebSocket.Client do
     end
   end
 
+  @spec stop(pid()) :: :ok | nil
   def stop(pid) do
     if Process.alive?(pid) do
       WebSockex.cast(pid, :close)
@@ -212,6 +226,7 @@ defmodule Lasso.Discovery.Probes.WebSocket.Client do
     :exit, _ -> :ok
   end
 
+  @spec request(pid(), String.t(), list(), non_neg_integer()) :: {:ok, term()} | {:error, term()}
   def request(pid, method, params, timeout) do
     request_id = :rand.uniform(1_000_000)
 
@@ -232,6 +247,8 @@ defmodule Lasso.Discovery.Probes.WebSocket.Client do
     end
   end
 
+  @spec subscribe(pid(), list(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, map()} | {:error, term()}
   def subscribe(pid, params, timeout, wait_for_event) do
     request_id = :rand.uniform(1_000_000)
 
@@ -302,7 +319,11 @@ defmodule Lasso.Discovery.Probes.WebSocket.Client do
       {:ok, %{"id" => id, "error" => error}} when is_integer(id) ->
         handle_error_response(id, error, state)
 
-      {:ok, %{"method" => "eth_subscription", "params" => %{"subscription" => sub_id, "result" => event}}} ->
+      {:ok,
+       %{
+         "method" => "eth_subscription",
+         "params" => %{"subscription" => sub_id, "result" => event}
+       }} ->
         handle_subscription_event(sub_id, event, state)
 
       {:ok, _other} ->
@@ -350,7 +371,8 @@ defmodule Lasso.Discovery.Probes.WebSocket.Client do
           {^id, from} when is_binary(result) ->
             send(from, {:subscription_created, id, result})
             # Keep event_listener so we can forward subscription events
-            {:ok, %{state | pending_subscription: nil, subscription_id: result, event_listener: from}}
+            {:ok,
+             %{state | pending_subscription: nil, subscription_id: result, event_listener: from}}
 
           _ ->
             {:ok, state}

@@ -25,19 +25,19 @@ defmodule LassoWeb.UI.FormComponents do
         placeholder="1"
       />
   """
-  attr :label, :string, required: true
-  attr :name, :string, required: true
-  attr :type, :string, default: "text"
-  attr :value, :any, default: ""
-  attr :placeholder, :string, default: ""
-  attr :class, :string, default: ""
-  attr :rest, :global, include: ~w(phx-debounce phx-change disabled required)
+  attr(:label, :string, required: true)
+  attr(:name, :string, required: true)
+  attr(:type, :string, default: "text")
+  attr(:value, :any, default: "")
+  attr(:placeholder, :string, default: "")
+  attr(:class, :string, default: "")
+  attr(:rest, :global, include: ~w(phx-debounce phx-change disabled required))
 
   def form_field(assigns) do
     ~H"""
     <div>
-      <label class="block text-[11px] mb-1 font-medium text-gray-400">
-        <%= @label %>
+      <label class="text-[11px] mb-1 block font-medium text-gray-400">
+        {@label}
       </label>
       <input
         type={@type}
@@ -66,11 +66,11 @@ defmodule LassoWeb.UI.FormComponents do
         placeholder="https://eth-mainnet.example.com"
       />
   """
-  attr :label, :string, required: true
-  attr :name, :string, required: true
-  attr :value, :any, default: ""
-  attr :placeholder, :string, default: ""
-  attr :rest, :global, include: ~w(phx-debounce phx-change disabled required)
+  attr(:label, :string, required: true)
+  attr(:name, :string, required: true)
+  attr(:value, :any, default: "")
+  attr(:placeholder, :string, default: "")
+  attr(:rest, :global, include: ~w(phx-debounce phx-change disabled required))
 
   def url_field(assigns) do
     ~H"""
@@ -98,11 +98,11 @@ defmodule LassoWeb.UI.FormComponents do
         placeholder="1"
       />
   """
-  attr :label, :string, required: true
-  attr :name, :string, required: true
-  attr :value, :any, default: ""
-  attr :placeholder, :string, default: ""
-  attr :rest, :global, include: ~w(phx-debounce phx-change disabled required min max step)
+  attr(:label, :string, required: true)
+  attr(:name, :string, required: true)
+  attr(:value, :any, default: "")
+  attr(:placeholder, :string, default: "")
+  attr(:rest, :global, include: ~w(phx-debounce phx-change disabled required min max step))
 
   def number_field(assigns) do
     ~H"""

@@ -78,7 +78,8 @@ defmodule Lasso.RPC.Channel do
   Returns a 3-tuple with the result/error, and the I/O latency in milliseconds.
   """
   @spec request(t(), map(), timeout()) ::
-          {:ok, term(), non_neg_integer()} | {:error, :unsupported_method | :timeout | term(), non_neg_integer()}
+          {:ok, term(), non_neg_integer()}
+          | {:error, :unsupported_method | :timeout | term(), non_neg_integer()}
   def request(%__MODULE__{} = channel, rpc_request, timeout \\ 30_000) do
     channel.transport_module.request(channel.raw_channel, rpc_request, timeout)
   end

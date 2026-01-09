@@ -45,6 +45,7 @@ defmodule LassoWeb.RPCController do
   @doc """
   Handle JSON-RPC requests for any supported chain.
   """
+  @spec rpc(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rpc(conn, %{"chain_id" => chain_id} = params) do
     case chain_id do
       nil ->
@@ -78,15 +79,19 @@ defmodule LassoWeb.RPCController do
     end
   end
 
+  @spec rpc_base(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rpc_base(conn, params) do
     rpc_with_strategy(conn, params, default_provider_strategy())
   end
 
+  @spec rpc_fastest(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rpc_fastest(conn, params) do
     rpc_with_strategy(conn, params, :fastest)
   end
 
+  @spec rpc_round_robin(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rpc_round_robin(conn, params), do: rpc_with_strategy(conn, params, :round_robin)
+  @spec rpc_latency_weighted(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rpc_latency_weighted(conn, params), do: rpc_with_strategy(conn, params, :latency_weighted)
 
   defp rpc_with_strategy(conn, params, strategy_atom) do
@@ -95,6 +100,7 @@ defmodule LassoWeb.RPCController do
     |> rpc(params)
   end
 
+  @spec rpc_provider_override(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rpc_provider_override(
         conn,
         %{"provider_id" => provider_id, "chain_id" => chain_id} = params

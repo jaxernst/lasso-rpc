@@ -30,7 +30,7 @@ defmodule Lasso.Discovery do
     * `:websocket` - WebSocket connection and subscription support
   """
 
-  alias Lasso.Discovery.Probes.{MethodSupport, Limits, WebSocket}
+  alias Lasso.Discovery.Probes.{Limits, MethodSupport, WebSocket}
 
   @available_probes [:methods, :limits, :websocket]
 

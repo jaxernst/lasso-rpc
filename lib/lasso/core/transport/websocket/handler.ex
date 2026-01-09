@@ -36,22 +36,26 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
 
   # WebSockex callbacks
 
+  @spec handle_connect(map(), map()) :: {:ok, map()}
   def handle_connect(_conn, state) do
     send(state.parent, {:ws_connected})
     {:ok, state}
   end
 
+  @spec handle_frame({:text, String.t()}, map()) :: {:ok, map()}
   def handle_frame({:text, message}, state) do
     received_at = System.monotonic_time(:microsecond)
     send(state.parent, {:ws_message, message, received_at})
     {:ok, state}
   end
 
+  @spec handle_frame({:ping, binary()}, map()) :: {:reply, {:pong, binary()}, map()}
   def handle_frame({:ping, payload}, state) do
     Logger.debug("Received ping, sending pong")
     {:reply, {:pong, payload}, state}
   end
 
+  @spec handle_frame({:pong, binary()}, map()) :: {:ok, map()}
   def handle_frame({:pong, _payload}, state) do
     Logger.debug("Received pong")
     {:ok, state}
@@ -60,6 +64,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
   # This fires for ALL disconnection events.
   # WebSockex embeds close frame info directly in the reason parameter,
   # so we extract it here and send a structured message to the parent.
+  @spec handle_disconnect(map(), map()) :: {:ok, map()}
   def handle_disconnect(%{reason: reason}, state) do
     disconnect_info =
       case reason do

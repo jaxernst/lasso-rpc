@@ -6,8 +6,8 @@ defmodule Lasso.RPC.StrategyContext do
   populate optional fields during their `prepare_context/1` implementation.
   """
 
-  alias Lasso.RPC.SelectionContext
   alias Lasso.Core.Benchmarking.Metrics
+  alias Lasso.RPC.SelectionContext
 
   # Fallback latency when no provider data exists
   @default_fallback_latency_ms 500.0
@@ -73,8 +73,6 @@ defmodule Lasso.RPC.StrategyContext do
     |> Enum.filter(&(is_number(&1) and &1 > 0))
     |> Enum.sort()
   end
-
-  defp median([]), do: @default_fallback_latency_ms
 
   defp median(sorted_list) do
     mid = div(length(sorted_list), 2)

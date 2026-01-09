@@ -19,7 +19,10 @@ defmodule Lasso.RPC.ProviderSupervisor do
   @spec start_link({profile, chain_name, map(), map()}) :: Supervisor.on_start()
   def start_link({profile, chain_name, chain_config, provider_config}) do
     name = via_name(profile, chain_name, provider_config.id)
-    Supervisor.start_link(__MODULE__, {profile, chain_name, chain_config, provider_config}, name: name)
+
+    Supervisor.start_link(__MODULE__, {profile, chain_name, chain_config, provider_config},
+      name: name
+    )
   end
 
   @impl true
@@ -43,7 +46,8 @@ defmodule Lasso.RPC.ProviderSupervisor do
       child = %{
         id: {:circuit_http, provider.id},
         start:
-          {CircuitBreaker, :start_link, [{{profile, chain_name, provider.id, :http}, circuit_config}]},
+          {CircuitBreaker, :start_link,
+           [{{profile, chain_name, provider.id, :http}, circuit_config}]},
         type: :worker,
         restart: :permanent,
         shutdown: 5_000
@@ -61,7 +65,9 @@ defmodule Lasso.RPC.ProviderSupervisor do
 
       child = %{
         id: {:circuit_ws, provider.id},
-        start: {CircuitBreaker, :start_link, [{{profile, chain_name, provider.id, :ws}, circuit_config}]},
+        start:
+          {CircuitBreaker, :start_link,
+           [{{profile, chain_name, provider.id, :ws}, circuit_config}]},
         type: :worker,
         restart: :permanent,
         shutdown: 5_000
@@ -103,7 +109,9 @@ defmodule Lasso.RPC.ProviderSupervisor do
     end
   end
 
-  def via_name(profile, chain_name, provider_id) do
+  @spec via_name(String.t(), String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
+  def via_name(profile, chain_name, provider_id)
+      when is_binary(profile) and is_binary(chain_name) and is_binary(provider_id) do
     {:via, Registry, {Lasso.Registry, {:provider_supervisor, profile, chain_name, provider_id}}}
   end
 end

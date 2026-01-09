@@ -113,6 +113,7 @@ defmodule Lasso.RPC.RequestContext do
   If :request_id is provided in opts, it will be used (typically from Phoenix's Plug.RequestId).
   Otherwise, a new request_id will be generated.
   """
+  @spec new(String.t(), String.t(), keyword()) :: t()
   def new(chain, method, opts \\ []) do
     request_id = Keyword.get(opts, :request_id) || generate_request_id()
 
@@ -143,6 +144,7 @@ defmodule Lasso.RPC.RequestContext do
   - timeout_ms: Per-attempt timeout in milliseconds
   - opts: The RequestOptions struct with routing configuration
   """
+  @spec set_execution_params(t(), map(), integer(), RequestOptions.t()) :: t()
   def set_execution_params(%__MODULE__{} = ctx, rpc_request, timeout_ms, %RequestOptions{} = opts)
       when is_map(rpc_request) and is_integer(timeout_ms) do
     %{ctx | rpc_request: rpc_request, timeout_ms: timeout_ms, opts: opts}
@@ -151,6 +153,7 @@ defmodule Lasso.RPC.RequestContext do
   @doc """
   Records the start of provider selection phase.
   """
+  @spec mark_selection_start(t()) :: t()
   def mark_selection_start(%__MODULE__{} = ctx) do
     %{ctx | selection_start: System.monotonic_time(:microsecond)}
   end
@@ -158,6 +161,7 @@ defmodule Lasso.RPC.RequestContext do
   @doc """
   Records provider selection completion with metadata.
   """
+  @spec mark_selection_end(t(), keyword()) :: t()
   def mark_selection_end(%__MODULE__{} = ctx, opts \\ []) do
     now = System.monotonic_time(:microsecond)
 
@@ -182,6 +186,7 @@ defmodule Lasso.RPC.RequestContext do
   @doc """
   Records the start of upstream request.
   """
+  @spec mark_upstream_start(t()) :: t()
   def mark_upstream_start(%__MODULE__{} = ctx) do
     %{ctx | upstream_start: System.monotonic_time(:microsecond)}
   end
@@ -193,6 +198,7 @@ defmodule Lasso.RPC.RequestContext do
   upstream_latency_ms should be set via set_upstream_latency/2 with the measured
   I/O time from the transport layer for accuracy.
   """
+  @spec mark_upstream_end(t()) :: t()
   def mark_upstream_end(%__MODULE__{} = ctx) do
     now = System.monotonic_time(:microsecond)
     %{ctx | upstream_end: now}
@@ -208,6 +214,7 @@ defmodule Lasso.RPC.RequestContext do
   Without accumulation, failover would inflate apparent Lasso overhead since
   failed provider I/O time would be attributed to Lasso instead of upstream.
   """
+  @spec add_upstream_latency(t(), number()) :: t()
   def add_upstream_latency(%__MODULE__{} = ctx, io_ms) when is_number(io_ms) do
     current = ctx.upstream_latency_ms || 0
     %{ctx | upstream_latency_ms: current + io_ms}
@@ -217,6 +224,7 @@ defmodule Lasso.RPC.RequestContext do
   Marks the start of request execution for duration tracking.
   Stores current monotonic time in milliseconds for later duration calculation.
   """
+  @spec mark_request_start(t()) :: t()
   def mark_request_start(%__MODULE__{} = ctx) do
     %{ctx | request_start_ms: System.monotonic_time(:millisecond)}
   end
@@ -225,8 +233,10 @@ defmodule Lasso.RPC.RequestContext do
   Calculates request duration from marked start time.
   Returns duration in milliseconds, or 0 if start was never marked.
   """
+  @spec get_duration(t()) :: non_neg_integer()
   def get_duration(%__MODULE__{request_start_ms: nil}), do: 0
 
+  @spec get_duration(t()) :: non_neg_integer()
   def get_duration(%__MODULE__{request_start_ms: start_ms}) do
     System.monotonic_time(:millisecond) - start_ms
   end
@@ -234,6 +244,7 @@ defmodule Lasso.RPC.RequestContext do
   @doc """
   Records successful result shape and calculates Lasso overhead.
   """
+  @spec record_success(t(), term()) :: t()
   def record_success(%__MODULE__{} = ctx, result) do
     now = System.monotonic_time(:microsecond)
     end_to_end_ms = (now - ctx.start_time) / 1000.0
@@ -261,6 +272,7 @@ defmodule Lasso.RPC.RequestContext do
   @doc """
   Records error shape and calculates Lasso overhead.
   """
+  @spec record_error(t(), term()) :: t()
   def record_error(%__MODULE__{} = ctx, error) do
     now = System.monotonic_time(:microsecond)
     end_to_end_ms = (now - ctx.start_time) / 1000.0
@@ -302,6 +314,7 @@ defmodule Lasso.RPC.RequestContext do
   @doc """
   Increment retry counter.
   """
+  @spec increment_retries(t()) :: t()
   def increment_retries(%__MODULE__{} = ctx) do
     %{ctx | retries: ctx.retries + 1}
   end
@@ -313,6 +326,7 @@ defmodule Lasso.RPC.RequestContext do
   across multiple providers, indicating a universal limitation rather than
   provider-specific issue.
   """
+  @spec track_error_category(t(), atom()) :: t()
   def track_error_category(%__MODULE__{} = ctx, category) when is_atom(category) do
     count = Map.get(ctx.repeated_error_categories, category, 0) + 1
     %{ctx | repeated_error_categories: Map.put(ctx.repeated_error_categories, category, count)}
@@ -321,6 +335,7 @@ defmodule Lasso.RPC.RequestContext do
   @doc """
   Get the count for a specific error category.
   """
+  @spec get_error_category_count(t(), atom()) :: non_neg_integer()
   def get_error_category_count(%__MODULE__{} = ctx, category) when is_atom(category) do
     Map.get(ctx.repeated_error_categories, category, 0)
   end
@@ -329,6 +344,7 @@ defmodule Lasso.RPC.RequestContext do
   Records the channel that successfully executed the request.
   Also updates selected_provider for backwards compatibility.
   """
+  @spec set_executed_channel(t(), Channel.t()) :: t()
   def set_executed_channel(%__MODULE__{} = ctx, %Channel{} = channel) do
     %{
       ctx

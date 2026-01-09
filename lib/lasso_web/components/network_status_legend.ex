@@ -25,7 +25,7 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-emerald-400"></div>
           <span>Healthy</span>
         </div>
-
+        
     <!-- Lagging Status -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"
@@ -34,7 +34,7 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-sky-400"></div>
           <span>Lagging</span>
         </div>
-
+        
     <!-- Recovering Status (covers both WS recovery and circuit half-open) -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"
@@ -43,7 +43,7 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-amber-400"></div>
           <span>Recovering</span>
         </div>
-
+        
     <!-- Degraded Status -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"
@@ -52,7 +52,7 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-orange-400"></div>
           <span>Degraded</span>
         </div>
-
+        
     <!-- Rate Limited Status -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"
@@ -61,7 +61,7 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
           <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-purple-400"></div>
           <span>Rate Limited</span>
         </div>
-
+        
     <!-- Circuit Open Status -->
         <div
           class="flex items-center space-x-1.5 text-xs text-gray-300"

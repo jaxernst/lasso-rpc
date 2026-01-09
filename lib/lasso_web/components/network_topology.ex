@@ -1,8 +1,9 @@
 defmodule LassoWeb.NetworkTopology do
+  @moduledoc "Network topology visualization component for RPC providers."
   use Phoenix.Component
 
-  alias LassoWeb.TopologyConfig
   alias Lasso.Config.ConfigStore
+  alias LassoWeb.TopologyConfig
 
   attr(:id, :string, required: true, doc: "unique identifier for the topology component")
   attr(:connections, :list, required: true, doc: "list of connection maps")
@@ -66,7 +67,7 @@ defmodule LassoWeb.NetworkTopology do
             <% end %>
           <% end %>
         <% end %>
-
+        
     <!-- Provider connection lines -->
         <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
           <%= for {connection, provider_data} <- chain_data.providers do %>
@@ -94,15 +95,21 @@ defmodule LassoWeb.NetworkTopology do
             </svg>
           <% end %>
         <% end %>
-
+        
     <!-- Chain nodes -->
         <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
           <% {x, y} = chain_data.position %>
           <% radius = chain_data.radius %>
           <div
-            class={["absolute z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-transform duration-200 hover:scale-110", if(@selected_chain == chain_name,
-    do: "ring-purple-400/30 border-purple-400 ring-4",
-    else: "border-gray-500 hover:border-gray-400"), "from-gray-800 to-gray-900"]}
+            class={[
+              "absolute z-10 -translate-x-1/2 -translate-y-1/2 transform",
+              "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-transform duration-200 hover:scale-110",
+              if(@selected_chain == chain_name,
+                do: "ring-purple-400/30 border-purple-400 ring-4",
+                else: "border-gray-500 hover:border-gray-400"
+              ),
+              "from-gray-800 to-gray-900"
+            ]}
             style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name, @profile_chains)} 0%, #111827 100%); " <>
               if(@selected_chain == chain_name,
                 do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
@@ -127,17 +134,24 @@ defmodule LassoWeb.NetworkTopology do
             </div>
           </div>
         <% end %>
-
+        
     <!-- Provider nodes -->
         <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
           <%= for {connection, provider_data} <- chain_data.providers do %>
             <% {x, y} = provider_data.position %>
             <% radius = provider_data.radius %>
             <div
-              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-transform duration-150 hover:scale-125", if(@selected_provider == connection.id,
-    do: "ring-purple-400/30 !border-purple-400 ring-2",
-    else: provider_border_class(connection)), if(@selected_provider != connection.id,
-    do: provider_status_bg_class(connection))]}
+              class={[
+                "z-5 absolute -translate-x-1/2 -translate-y-1/2 transform",
+                "flex cursor-pointer items-center justify-center rounded-full border-2 transition-transform duration-150 hover:scale-125",
+                if(@selected_provider == connection.id,
+                  do: "ring-purple-400/30 !border-purple-400 ring-2",
+                  else: provider_border_class(connection)
+                ),
+                if(@selected_provider != connection.id,
+                  do: provider_status_bg_class(connection)
+                )
+              ]}
               style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
                 if(@selected_provider == connection.id,
                   do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
@@ -156,7 +170,7 @@ defmodule LassoWeb.NetworkTopology do
                 style={"width: #{max(4, radius - 4)}px; height: #{max(4, radius - 4)}px;"}
               >
               </div>
-
+              
     <!-- WebSocket support indicator -->
               <%= if has_websocket_support?(connection) do %>
                 <div
@@ -168,7 +182,7 @@ defmodule LassoWeb.NetworkTopology do
                   </svg>
                 </div>
               <% end %>
-
+              
     <!-- Reconnect attempts indicator -->
               <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
                 <div class="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white shadow-md">
@@ -254,11 +268,11 @@ defmodule LassoWeb.NetworkTopology do
 
         cond do
           # L1 chains - check topology or fallback to known L1 patterns
-          is_l1_chain?(topology, chain_name) ->
+          l1_chain?(topology, chain_name) ->
             {Map.put(l1_acc, chain_name, connections), l2_acc, other_acc}
 
           # L2 chains - ONLY if parent chain exists in active chains
-          is_l2_with_active_parent?(topology, chain_name, active_chain_names) ->
+          l2_with_active_parent?(topology, chain_name, active_chain_names) ->
             {l1_acc, Map.put(l2_acc, chain_name, connections), other_acc}
 
           # Everything else (including L2s with missing parents) floats independently
@@ -271,12 +285,12 @@ defmodule LassoWeb.NetworkTopology do
   end
 
   # Check if chain is an L1 (from topology config only)
-  defp is_l1_chain?(%{category: :l1}, _chain_name), do: true
-  defp is_l1_chain?(_, _), do: false
+  defp l1_chain?(%{category: :l1}, _chain_name), do: true
+  defp l1_chain?(_, _), do: false
 
   # Check if chain is an L2 with an active parent chain
   # Parent must exist in the current set of active chains for connection to render
-  defp is_l2_with_active_parent?(
+  defp l2_with_active_parent?(
          %{category: category, parent: parent},
          _chain_name,
          active_chain_names
@@ -286,7 +300,7 @@ defmodule LassoWeb.NetworkTopology do
   end
 
   # Chains without topology config are not treated as L2s
-  defp is_l2_with_active_parent?(_, _, _), do: false
+  defp l2_with_active_parent?(_, _, _), do: false
 
   # Get the parent chain for an L2 (from topology config only)
   defp get_l2_parent(%{parent: parent}, _chain_name) when is_binary(parent), do: parent
@@ -641,8 +655,7 @@ defmodule LassoWeb.NetworkTopology do
         chain_name
         |> String.replace("_", " ")
         |> String.split(" ")
-        |> Enum.map(&String.capitalize/1)
-        |> Enum.join(" ")
+        |> Enum.map_join(" ", &String.capitalize/1)
     end
   end
 

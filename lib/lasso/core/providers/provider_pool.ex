@@ -14,9 +14,9 @@ defmodule Lasso.RPC.ProviderPool do
   use GenServer
   require Logger
 
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Events.Provider
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.RPC.{ChainState, RateLimitState}
 
   @type t :: %__MODULE__{
@@ -154,7 +154,10 @@ defmodule Lasso.RPC.ProviderPool do
   """
   @spec register_provider(profile, chain_name, provider_id, map()) :: :ok
   def register_provider(profile, chain_name, provider_id, provider_config) do
-    GenServer.call(via_name(profile, chain_name), {:register_provider, provider_id, provider_config})
+    GenServer.call(
+      via_name(profile, chain_name),
+      {:register_provider, provider_id, provider_config}
+    )
   end
 
   @doc """
@@ -174,7 +177,10 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use get_active_providers(profile, chain_name) instead with explicit profile parameter"
   @spec get_active_providers(chain_name) :: [provider_id]
   def get_active_providers(chain_name) do
-    IO.warn("ProviderPool.get_active_providers/1 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.get_active_providers/1 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     get_active_providers("default", chain_name)
   end
 
@@ -197,16 +203,14 @@ defmodule Lasso.RPC.ProviderPool do
 
   @spec get_status(profile, chain_name) :: {:ok, map()} | {:error, term()}
   def get_status(profile, chain_name) do
-    try do
-      GenServer.call(via_name(profile, chain_name), :get_status, @call_timeout)
-    catch
-      :exit, {:timeout, _} ->
-        Logger.warning("Timeout getting status for chain #{chain_name}")
-        {:error, :timeout}
+    GenServer.call(via_name(profile, chain_name), :get_status, @call_timeout)
+  catch
+    :exit, {:timeout, _} ->
+      Logger.warning("Timeout getting status for chain #{chain_name}")
+      {:error, :timeout}
 
-      :exit, {:noproc, _} ->
-        {:error, :not_found}
-    end
+    :exit, {:noproc, _} ->
+      {:error, :not_found}
   end
 
   @doc """
@@ -223,23 +227,24 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use list_candidates(profile, chain_name, filters) instead with explicit profile parameter"
   @spec list_candidates(chain_name, map()) :: [map()]
   def list_candidates(chain_name, filters \\ %{}) when is_map(filters) do
-    IO.warn("ProviderPool.list_candidates/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.list_candidates/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     list_candidates("default", chain_name, filters)
   end
 
   @spec list_candidates(profile, chain_name, map()) :: [map()]
   def list_candidates(profile, chain_name, filters) when is_binary(profile) and is_map(filters) do
-    try do
-      GenServer.call(via_name(profile, chain_name), {:list_candidates, filters}, @call_timeout)
-    catch
-      :exit, {:timeout, _} ->
-        Logger.warning("Timeout listing candidates for chain #{chain_name}")
-        # Return empty list on timeout (fail closed)
-        []
+    GenServer.call(via_name(profile, chain_name), {:list_candidates, filters}, @call_timeout)
+  catch
+    :exit, {:timeout, _} ->
+      Logger.warning("Timeout listing candidates for chain #{chain_name}")
+      # Return empty list on timeout (fail closed)
+      []
 
-      :exit, {:noproc, _} ->
-        []
-    end
+    :exit, {:noproc, _} ->
+      []
   end
 
   @doc """
@@ -251,14 +256,20 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use report_success(profile, chain_name, provider_id, transport) instead with explicit profile parameter"
   @spec report_success(chain_name, provider_id) :: :ok
   def report_success(chain_name, provider_id) do
-    IO.warn("ProviderPool.report_success/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_success/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_success("default", chain_name, provider_id, nil)
   end
 
   @deprecated "Use report_success(profile, chain_name, provider_id, transport) instead with explicit profile parameter"
   @spec report_success(chain_name, provider_id, :http | :ws | nil) :: :ok
   def report_success(chain_name, provider_id, transport) when transport in [:http, :ws, nil] do
-    IO.warn("ProviderPool.report_success/3 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_success/3 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_success("default", chain_name, provider_id, transport)
   end
 
@@ -276,7 +287,10 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use report_failure(profile, chain_name, provider_id, error, transport) instead with explicit profile parameter"
   @spec report_failure(chain_name, provider_id, term()) :: :ok
   def report_failure(chain_name, provider_id, error) do
-    IO.warn("ProviderPool.report_failure/3 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_failure/3 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_failure("default", chain_name, provider_id, error, nil)
   end
 
@@ -284,14 +298,20 @@ defmodule Lasso.RPC.ProviderPool do
   @spec report_failure(chain_name, provider_id, term(), :http | :ws | nil) :: :ok
   def report_failure(chain_name, provider_id, error, transport)
       when transport in [:http, :ws, nil] do
-    IO.warn("ProviderPool.report_failure/4 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_failure/4 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_failure("default", chain_name, provider_id, error, transport)
   end
 
   @spec report_failure(profile, chain_name, provider_id, term(), :http | :ws | nil) :: :ok
   def report_failure(profile, chain_name, provider_id, error, transport)
       when is_binary(profile) and transport in [:http, :ws, nil] do
-    GenServer.cast(via_name(profile, chain_name), {:report_failure, provider_id, error, transport})
+    GenServer.cast(
+      via_name(profile, chain_name),
+      {:report_failure, provider_id, error, transport}
+    )
   end
 
   @doc """
@@ -302,7 +322,10 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use unregister_provider(profile, chain_name, provider_id) instead with explicit profile parameter"
   @spec unregister_provider(chain_name, provider_id) :: :ok
   def unregister_provider(chain_name, provider_id) do
-    IO.warn("ProviderPool.unregister_provider/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.unregister_provider/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     unregister_provider("default", chain_name, provider_id)
   end
 
@@ -319,11 +342,15 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use get_provider_ws_pid(profile, chain_name, provider_id) instead with explicit profile parameter"
   @spec get_provider_ws_pid(chain_name, provider_id) :: {:ok, pid()} | {:error, :not_found}
   def get_provider_ws_pid(chain_name, provider_id) do
-    IO.warn("ProviderPool.get_provider_ws_pid/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.get_provider_ws_pid/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     get_provider_ws_pid("default", chain_name, provider_id)
   end
 
-  @spec get_provider_ws_pid(profile, chain_name, provider_id) :: {:ok, pid()} | {:error, :not_found}
+  @spec get_provider_ws_pid(profile, chain_name, provider_id) ::
+          {:ok, pid()} | {:error, :not_found}
   def get_provider_ws_pid(profile, chain_name, provider_id) do
     GenServer.call(via_name(profile, chain_name), {:get_provider_ws_pid, provider_id})
   end
@@ -357,7 +384,10 @@ defmodule Lasso.RPC.ProviderPool do
           {:ok, %{provider_id => %{http: non_neg_integer() | nil, ws: non_neg_integer() | nil}}}
           | {:error, term()}
   def get_recovery_times(chain_name, opts \\ []) do
-    IO.warn("ProviderPool.get_recovery_times/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.get_recovery_times/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     get_recovery_times("default", chain_name, opts)
   end
 
@@ -404,7 +434,10 @@ defmodule Lasso.RPC.ProviderPool do
   @spec get_min_recovery_time(chain_name, keyword()) ::
           {:ok, non_neg_integer() | nil} | {:error, term()}
   def get_min_recovery_time(chain_name, opts \\ []) do
-    IO.warn("ProviderPool.get_min_recovery_time/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.get_min_recovery_time/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     get_min_recovery_time("default", chain_name, opts)
   end
 
@@ -447,12 +480,16 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use report_probe_results(profile, chain_name, results) instead with explicit profile parameter"
   @spec report_probe_results(chain_name, [map()]) :: :ok
   def report_probe_results(chain_name, results) when is_list(results) do
-    IO.warn("ProviderPool.report_probe_results/2 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_probe_results/2 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_probe_results("default", chain_name, results)
   end
 
   @spec report_probe_results(profile, chain_name, [map()]) :: :ok
-  def report_probe_results(profile, chain_name, results) when is_binary(profile) and is_list(results) do
+  def report_probe_results(profile, chain_name, results)
+      when is_binary(profile) and is_list(results) do
     GenServer.cast(via_name(profile, chain_name), {:probe_results, results})
   end
 
@@ -464,7 +501,10 @@ defmodule Lasso.RPC.ProviderPool do
   @deprecated "Use report_newheads(profile, chain_name, provider_id, block_height) instead with explicit profile parameter"
   @spec report_newheads(chain_name, provider_id, non_neg_integer()) :: :ok
   def report_newheads(chain_name, provider_id, block_height) do
-    IO.warn("ProviderPool.report_newheads/3 defaults to 'default' profile. Pass profile explicitly.")
+    IO.warn(
+      "ProviderPool.report_newheads/3 defaults to 'default' profile. Pass profile explicitly."
+    )
+
     report_newheads("default", chain_name, provider_id, block_height)
   end
 
@@ -480,6 +520,7 @@ defmodule Lasso.RPC.ProviderPool do
   Note: ETS tables are chain-scoped (not profile-scoped) since sync data is global.
   """
   @spec table_name(chain_name) :: atom()
+  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   def table_name(chain_name), do: :"provider_pool_#{chain_name}"
 
   # GenServer callbacks
@@ -1203,7 +1244,10 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   @impl true
-  def handle_info({:block_height_update, {_profile, provider_id}, height, source, timestamp}, state) do
+  def handle_info(
+        {:block_height_update, {_profile, provider_id}, height, source, timestamp},
+        state
+      ) do
     # Update ETS height tracking
     sequence = get_current_sequence(state)
 
@@ -1284,107 +1328,112 @@ defmodule Lasso.RPC.ProviderPool do
   defp candidates_ready(state, filters) do
     max_lag_blocks = Map.get(filters, :max_lag_blocks)
     current_time = System.monotonic_time(:millisecond)
+    protocol = Map.get(filters, :protocol)
 
     state.active_providers
     |> Enum.map(&Map.get(state.providers, &1))
-    |> Enum.filter(fn p ->
-      # Check transport availability
-      transport_ok =
-        case Map.get(filters, :protocol) do
-          :http ->
-            transport_available?(p, :http, current_time)
-
-          :ws ->
-            transport_available?(p, :ws, current_time) and is_pid(ws_connection_pid(p.id))
-
-          :both ->
-            transport_available?(p, :http, current_time) and
-              transport_available?(p, :ws, current_time)
-
-          _ ->
-            transport_available?(p, :http, current_time) or
-              transport_available?(p, :ws, current_time)
-        end
-
-      # Check circuit breaker state
-      include_half_open = Map.get(filters, :include_half_open, false)
-
-      circuit_ok =
-        case Map.get(filters, :protocol) do
-          :http ->
-            cb_state = get_cb_state(state.circuit_states, p.id, :http)
-
-            if include_half_open do
-              cb_state != :open
-            else
-              cb_state == :closed
-            end
-
-          :ws ->
-            cb_state = get_cb_state(state.circuit_states, p.id, :ws)
-
-            if include_half_open do
-              cb_state != :open
-            else
-              cb_state == :closed
-            end
-
-          _ ->
-            # For :both or nil protocol, include provider if it has at least one viable transport
-            # A transport is viable if: 1) it's configured, 2) CB is not open (or half-open allowed)
-            http_state = get_cb_state(state.circuit_states, p.id, :http)
-            ws_state = get_cb_state(state.circuit_states, p.id, :ws)
-
-            # Check which transports are actually configured
-            has_http = is_binary(Map.get(p.config, :url))
-            has_ws = is_binary(Map.get(p.config, :ws_url))
-
-            if include_half_open do
-              # Include if at least one configured transport is not fully open
-              (has_http and http_state != :open) or (has_ws and ws_state != :open)
-            else
-              # Include if at least one configured transport has closed CB
-              (has_http and http_state == :closed) or (has_ws and ws_state == :closed)
-            end
-        end
-
-      # Check rate limit state (independent of circuit breaker)
-      # Rate limits auto-expire, so only exclude if exclude_rate_limited filter is set
-      exclude_rate_limited = Map.get(filters, :exclude_rate_limited, false)
-
-      rate_limit_ok =
-        if exclude_rate_limited do
-          case Map.get(filters, :protocol) do
-            :http ->
-              not transport_rate_limited?(state, p.id, :http, current_time)
-
-            :ws ->
-              not transport_rate_limited?(state, p.id, :ws, current_time)
-
-            :both ->
-              not transport_rate_limited?(state, p.id, :http, current_time) and
-                not transport_rate_limited?(state, p.id, :ws, current_time)
-
-            _ ->
-              # For nil protocol, include if at least one transport is not rate limited
-              not transport_rate_limited?(state, p.id, :http, current_time) or
-                not transport_rate_limited?(state, p.id, :ws, current_time)
-          end
-        else
-          # By default, include rate-limited providers (selection tiering handles preference)
-          true
-        end
-
-      transport_ok and circuit_ok and rate_limit_ok
-    end)
+    |> Enum.filter(&provider_passes_filters?(&1, state, filters, protocol, current_time))
     |> filter_by_lag(state.chain_name, max_lag_blocks)
-    |> Enum.filter(fn provider ->
-      case Map.get(filters, :exclude) do
-        nil -> true
-        exclude_list when is_list(exclude_list) -> provider.id not in exclude_list
-        _ -> true
+    |> filter_excluded(filters)
+  end
+
+  defp provider_passes_filters?(provider, state, filters, protocol, current_time) do
+    transport_ready?(provider, protocol, current_time) and
+      circuit_breaker_ready?(provider, state.circuit_states, protocol, filters) and
+      rate_limit_ok?(provider, state, protocol, current_time, filters)
+  end
+
+  defp transport_ready?(provider, protocol, current_time) do
+    case protocol do
+      :http ->
+        transport_available?(provider, :http, current_time)
+
+      :ws ->
+        transport_available?(provider, :ws, current_time) and
+          is_pid(ws_connection_pid(provider.id))
+
+      :both ->
+        transport_available?(provider, :http, current_time) or
+          (transport_available?(provider, :ws, current_time) and
+             is_pid(ws_connection_pid(provider.id)))
+
+      _ ->
+        transport_available?(provider, :http, current_time) or
+          transport_available?(provider, :ws, current_time)
+    end
+  end
+
+  defp circuit_breaker_ready?(provider, circuit_states, protocol, filters) do
+    include_half_open = Map.get(filters, :include_half_open, false)
+
+    case protocol do
+      :http ->
+        cb_ready?(get_cb_state(circuit_states, provider.id, :http), include_half_open)
+
+      :ws ->
+        cb_ready?(get_cb_state(circuit_states, provider.id, :ws), include_half_open)
+
+      _ ->
+        check_any_transport_cb_ready(provider, circuit_states, include_half_open)
+    end
+  end
+
+  defp cb_ready?(cb_state, include_half_open) do
+    if include_half_open, do: cb_state != :open, else: cb_state == :closed
+  end
+
+  defp check_any_transport_cb_ready(provider, circuit_states, include_half_open) do
+    # For :both or nil protocol, include provider if it has at least one viable transport
+    # A transport is viable if: 1) it's configured, 2) CB is not open (or half-open allowed)
+    http_state = get_cb_state(circuit_states, provider.id, :http)
+    ws_state = get_cb_state(circuit_states, provider.id, :ws)
+    has_http = is_binary(Map.get(provider.config, :url))
+    has_ws = is_binary(Map.get(provider.config, :ws_url))
+
+    if include_half_open do
+      # Include if at least one configured transport is not fully open
+      (has_http and http_state != :open) or (has_ws and ws_state != :open)
+    else
+      # Include if at least one configured transport has closed CB
+      (has_http and http_state == :closed) or (has_ws and ws_state == :closed)
+    end
+  end
+
+  defp rate_limit_ok?(provider, state, protocol, current_time, filters) do
+    if Map.get(filters, :exclude_rate_limited, false) do
+      case protocol do
+        :http ->
+          not transport_rate_limited?(state, provider.id, :http, current_time)
+
+        :ws ->
+          not transport_rate_limited?(state, provider.id, :ws, current_time)
+
+        :both ->
+          not transport_rate_limited?(state, provider.id, :http, current_time) and
+            not transport_rate_limited?(state, provider.id, :ws, current_time)
+
+        _ ->
+          # For nil protocol, include if at least one transport is not rate limited
+          not transport_rate_limited?(state, provider.id, :http, current_time) or
+            not transport_rate_limited?(state, provider.id, :ws, current_time)
       end
-    end)
+    else
+      # By default, include rate-limited providers (selection tiering handles preference)
+      true
+    end
+  end
+
+  defp filter_excluded(providers, filters) do
+    case Map.get(filters, :exclude) do
+      nil ->
+        providers
+
+      exclude_list when is_list(exclude_list) ->
+        Enum.filter(providers, &(&1.id not in exclude_list))
+
+      _ ->
+        providers
+    end
   end
 
   defp ws_connection_pid(provider_id) when is_binary(provider_id) do
@@ -1533,6 +1582,10 @@ defmodule Lasso.RPC.ProviderPool do
         state
 
       provider ->
+        # Report success to circuit breaker
+        cb_id = {state.profile, state.chain_name, provider_id, :http}
+        CircuitBreaker.signal_recovery(cb_id)
+
         updated =
           provider
           |> Map.put(:http_status, :healthy)
@@ -1553,6 +1606,10 @@ defmodule Lasso.RPC.ProviderPool do
         state
 
       provider ->
+        # Report success to circuit breaker
+        cb_id = {state.profile, state.chain_name, provider_id, :ws}
+        CircuitBreaker.signal_recovery(cb_id)
+
         updated =
           provider
           |> Map.put(:ws_status, :healthy)
@@ -1590,6 +1647,10 @@ defmodule Lasso.RPC.ProviderPool do
             # Provider stays healthy - RateLimitState is the authoritative source for rate limit status
             retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
 
+            # Report to circuit breaker (rate limit threshold is lower than other errors)
+            cb_id = {state.profile, state.chain_name, provider_id, transport}
+            CircuitBreaker.record_failure(cb_id, jerr)
+
             # Only update last_error for debugging - don't change health status
             updated =
               provider
@@ -1612,6 +1673,10 @@ defmodule Lasso.RPC.ProviderPool do
           true ->
             new_failures = provider.consecutive_failures + 1
             new_status = derive_failure_status(new_failures)
+
+            # Report to circuit breaker
+            cb_id = {state.profile, state.chain_name, provider_id, transport}
+            CircuitBreaker.record_failure(cb_id, jerr)
 
             updated =
               provider
@@ -2015,11 +2080,13 @@ defmodule Lasso.RPC.ProviderPool do
   Accepts optional profile as first argument (defaults to "default").
   """
   @deprecated "Use via_name(profile, chain_name) instead with explicit profile parameter"
+  @spec via_name(String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(chain_name) when is_binary(chain_name) do
     IO.warn("ProviderPool.via_name/1 defaults to 'default' profile. Pass profile explicitly.")
     via_name("default", chain_name)
   end
 
+  @spec via_name(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(profile, chain_name) when is_binary(profile) and is_binary(chain_name) do
     {:via, Registry, {Lasso.Registry, {:provider_pool, profile, chain_name}}}
   end

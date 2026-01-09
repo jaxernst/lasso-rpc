@@ -15,6 +15,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   use GenServer
   require Logger
 
+  @type profile :: String.t()
+  @type chain_name :: String.t()
+  @type provider_id :: String.t()
+  @type method :: String.t()
+  @type result :: :success | :error | :timeout | :network_error | :rate_limit | atom()
+
   # ~1 entry per second for 24 hours
   @max_entries_per_chain 86_400
   # 1 hour in milliseconds
@@ -27,6 +33,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Starts the BenchmarkStore GenServer.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -36,6 +43,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   Returns a list of providers sorted by average latency and success rate.
   """
+  @spec get_provider_leaderboard(profile(), chain_name()) :: [map()]
   def get_provider_leaderboard(profile, chain_name) do
     GenServer.call(__MODULE__, {:get_provider_leaderboard, profile, chain_name})
   end
@@ -43,6 +51,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets detailed metrics for a specific provider on a chain within a profile.
   """
+  @spec get_provider_metrics(profile(), chain_name(), provider_id()) :: map()
   def get_provider_metrics(profile, chain_name, provider_id) do
     GenServer.call(__MODULE__, {:get_provider_metrics, profile, chain_name, provider_id})
   end
@@ -50,6 +59,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets performance metrics for a specific RPC method across all providers in a profile.
   """
+  @spec get_rpc_method_performance(profile(), chain_name(), method()) :: map()
   def get_rpc_method_performance(profile, chain_name, method) do
     GenServer.call(__MODULE__, {:get_rpc_method_performance, profile, chain_name, method})
   end
@@ -57,6 +67,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets real-time benchmark statistics for dashboard display for a profile and chain.
   """
+  @spec get_realtime_stats(profile(), chain_name()) :: map()
   def get_realtime_stats(profile, chain_name) do
     GenServer.call(__MODULE__, {:get_realtime_stats, profile, chain_name})
   end
@@ -64,6 +75,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Manually triggers cleanup of old entries for a profile and chain.
   """
+  @spec cleanup_old_entries(profile(), chain_name()) :: :ok
   def cleanup_old_entries(profile, chain_name) do
     GenServer.cast(__MODULE__, {:cleanup_old_entries, profile, chain_name})
   end
@@ -71,6 +83,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Creates an hourly snapshot of performance data for persistence for a profile and chain.
   """
+  @spec create_hourly_snapshot(profile(), chain_name()) :: map()
   def create_hourly_snapshot(profile, chain_name) do
     GenServer.call(__MODULE__, {:create_hourly_snapshot, profile, chain_name})
   end
@@ -78,6 +91,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets RPC method performance including percentiles for a provider in a profile.
   """
+  @spec get_rpc_method_performance_with_percentiles(
+          profile(),
+          chain_name(),
+          provider_id(),
+          method()
+        ) :: map() | nil
   def get_rpc_method_performance_with_percentiles(profile, chain_name, provider_id, method) do
     GenServer.call(
       __MODULE__,
@@ -88,6 +107,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Clears all metrics for a specific profile and chain.
   """
+  @spec clear_chain_metrics(profile(), chain_name()) :: :ok
   def clear_chain_metrics(profile, chain_name) do
     GenServer.call(__MODULE__, {:clear_chain_metrics, profile, chain_name})
   end
@@ -95,6 +115,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets RPC performance metrics for a specific provider and method in a profile.
   """
+  @spec get_rpc_performance(profile(), chain_name(), provider_id(), method()) :: map()
   def get_rpc_performance(profile, chain_name, provider_id, method) do
     GenServer.call(__MODULE__, {:get_rpc_performance, profile, chain_name, provider_id, method})
   end
@@ -102,6 +123,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets error statistics for a specific provider and method in a profile.
   """
+  @spec get_error_stats(profile(), chain_name(), provider_id(), method()) :: map()
   def get_error_stats(profile, chain_name, provider_id, method) do
     GenServer.call(__MODULE__, {:get_error_stats, profile, chain_name, provider_id, method})
   end
@@ -109,6 +131,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets latency percentiles for a specific provider and method in a profile.
   """
+  @spec get_latency_percentiles(profile(), chain_name(), provider_id(), method()) :: map()
   def get_latency_percentiles(profile, chain_name, provider_id, method) do
     GenServer.call(
       __MODULE__,
@@ -119,6 +142,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets the overall score for a provider on a chain within a profile.
   """
+  @spec get_provider_score(profile(), chain_name(), provider_id()) :: float()
   def get_provider_score(profile, chain_name, provider_id) do
     GenServer.call(__MODULE__, {:get_provider_score, profile, chain_name, provider_id})
   end
@@ -126,6 +150,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets hourly statistics for a provider and method in a profile.
   """
+  @spec get_hourly_stats(profile(), chain_name(), provider_id(), method()) :: map()
   def get_hourly_stats(profile, chain_name, provider_id, method) do
     GenServer.call(__MODULE__, {:get_hourly_stats, profile, chain_name, provider_id, method})
   end
@@ -133,6 +158,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets recent RPC calls for display for a profile and chain.
   """
+  @spec get_recent_calls(profile(), chain_name(), non_neg_integer()) :: [map()]
   def get_recent_calls(profile, chain_name, limit \\ 10) do
     GenServer.call(__MODULE__, {:get_recent_calls, profile, chain_name, limit})
   end
@@ -140,6 +166,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Cleans up old metrics across all profiles and chains.
   """
+  @spec cleanup_old_metrics() :: :ok
   def cleanup_old_metrics do
     GenServer.cast(__MODULE__, :cleanup_old_metrics)
   end
@@ -147,6 +174,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets chain-wide statistics for a profile and chain.
   """
+  @spec get_chain_wide_stats(profile(), chain_name()) :: map()
   def get_chain_wide_stats(profile, chain_name) do
     GenServer.call(__MODULE__, {:get_chain_wide_stats, profile, chain_name})
   end
@@ -154,6 +182,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets real-time statistics for a provider in a profile.
   """
+  @spec get_real_time_stats(profile(), chain_name(), provider_id()) :: map()
   def get_real_time_stats(profile, chain_name, provider_id) do
     GenServer.call(__MODULE__, {:get_real_time_stats, profile, chain_name, provider_id})
   end
@@ -161,6 +190,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Detects performance anomalies for a provider in a profile.
   """
+  @spec detect_performance_anomalies(profile(), chain_name(), provider_id()) :: [map()]
   def detect_performance_anomalies(profile, chain_name, provider_id) do
     GenServer.call(__MODULE__, {:detect_performance_anomalies, profile, chain_name, provider_id})
   end
@@ -168,6 +198,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Creates a performance snapshot for a profile and chain.
   """
+  @spec create_performance_snapshot(profile(), chain_name()) :: map()
   def create_performance_snapshot(profile, chain_name) do
     GenServer.call(__MODULE__, {:create_performance_snapshot, profile, chain_name})
   end
@@ -175,6 +206,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets historical performance data for a profile and chain.
   """
+  @spec get_historical_performance(profile(), chain_name(), non_neg_integer()) :: list()
   def get_historical_performance(profile, chain_name, hours) do
     GenServer.call(__MODULE__, {:get_historical_performance, profile, chain_name, hours})
   end
@@ -182,6 +214,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @doc """
   Gets memory usage statistics.
   """
+  @spec get_memory_usage() :: map()
   def get_memory_usage do
     GenServer.call(__MODULE__, :get_memory_usage)
   end
@@ -206,6 +239,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       iex> BenchmarkStore.record_rpc_call("default", "ethereum", "infura_provider", "eth_getLogs", 150, :success)
       :ok
   """
+  @spec record_rpc_call(profile(), chain_name(), provider_id(), method(), number(), result()) ::
+          :ok
   def record_rpc_call(profile, chain_name, provider_id, method, duration_ms, result) do
     # Always capture both timestamps at the same moment
     monotonic_ts = System.monotonic_time(:millisecond)
@@ -435,10 +470,24 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
             }
 
           [] ->
-            %{total_calls: 0, success_calls: 0, error_calls: 0, success_rate: 0.0, avg_latency: 0, last_updated_ms: nil}
+            %{
+              total_calls: 0,
+              success_calls: 0,
+              error_calls: 0,
+              success_rate: 0.0,
+              avg_latency: 0,
+              last_updated_ms: nil
+            }
         end
       else
-        %{total_calls: 0, success_calls: 0, error_calls: 0, success_rate: 0.0, avg_latency: 0, last_updated_ms: nil}
+        %{
+          total_calls: 0,
+          success_calls: 0,
+          error_calls: 0,
+          success_rate: 0.0,
+          avg_latency: 0,
+          last_updated_ms: nil
+        }
       end
 
     {:reply, result, state}
@@ -521,7 +570,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         rpc_entries =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{pid, _method, type}, _successes, _total, _avg, _samples, _monotonic_updated, _system_updated} ->
+          |> Enum.filter(fn {{pid, _method, type}, _successes, _total, _avg, _samples,
+                             _monotonic_updated, _system_updated} ->
             pid == provider_id and type == :rpc
           end)
 
@@ -529,7 +579,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         if length(rpc_entries) > 0 do
           {total_successes, total_calls, weighted_avg_latency} =
             Enum.reduce(rpc_entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total,
-                                                      avg_duration, _samples, _monotonic_updated, _system_updated},
+                                                      avg_duration, _samples, _monotonic_updated,
+                                                      _system_updated},
                                                      {acc_successes, acc_total, acc_latency} ->
               {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total}
             end)
@@ -620,8 +671,11 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         # Look back 30 seconds to find recent activity
         lookback = current_time - 30_000
 
-        # Select entries newer than lookback (6-tuple: monotonic_ts, system_ts, provider_id, method, duration_ms, result)
-        match_spec = [{{:"$1", :"$2", :"$3", :"$4", :"$5", :"$6"}, [{:>, :"$2", lookback}], [:"$_"]}]
+        # Select entries newer than lookback
+        # 6-tuple: monotonic_ts, system_ts, provider_id, method, duration_ms, result
+        match_spec = [
+          {{:"$1", :"$2", :"$3", :"$4", :"$5", :"$6"}, [{:>, :"$2", lookback}], [:"$_"]}
+        ]
 
         try do
           :ets.select(rpc_table, match_spec)
@@ -664,18 +718,21 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         rpc_entries =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
+          |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples,
+                             _monotonic_updated, _system_updated} ->
             type == :rpc
           end)
 
         total_calls =
-          Enum.reduce(rpc_entries, 0, fn {_key, _successes, total, _avg, _samples, _monotonic_updated, _system_updated},
+          Enum.reduce(rpc_entries, 0, fn {_key, _successes, total, _avg, _samples,
+                                          _monotonic_updated, _system_updated},
                                          acc ->
             acc + total
           end)
 
         total_successes =
-          Enum.reduce(rpc_entries, 0, fn {_key, successes, _total, _avg, _samples, _monotonic_updated, _system_updated},
+          Enum.reduce(rpc_entries, 0, fn {_key, successes, _total, _avg, _samples,
+                                          _monotonic_updated, _system_updated},
                                          acc ->
             acc + successes
           end)
@@ -688,7 +745,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
           overall_success_rate: overall_success_rate,
           total_providers:
             rpc_entries
-            |> Enum.map(fn {{pid, _key, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
+            |> Enum.map(fn {{pid, _key, _type}, _stat1, _stat2, _stat3, _samples,
+                            _monotonic_updated, _system_updated} ->
               pid
             end)
             |> Enum.uniq()
@@ -713,7 +771,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         rpc_stats =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
+          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples,
+                             _monotonic_updated, _system_updated} ->
             pid == provider_id and type == :rpc
           end)
           |> Enum.map(fn {{_pid, method, _type}, successes, total, avg_duration, _samples,
@@ -776,7 +835,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         rpc_entries =
           score_table
           |> :ets.tab2list()
-          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
+          |> Enum.filter(fn {{pid, _key, type}, _stat1, _stat2, _stat3, _samples,
+                             _monotonic_updated, _system_updated} ->
             pid == provider_id and type == :rpc
           end)
 
@@ -1014,7 +1074,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     # Extract unique providers
     providers =
       all_entries
-      |> Enum.map(fn {{provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
+      |> Enum.map(fn {{provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples,
+                      _monotonic_updated, _system_updated} ->
         provider_id
       end)
       |> Enum.uniq()
@@ -1123,52 +1184,48 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   # Cleanup RPC table using monotonic timestamp (first field in 6-tuple)
   defp cleanup_rpc_table_by_monotonic_timestamp(table_name, cutoff_time) do
-    try do
-      # New 6-tuple format: {monotonic_ts, system_ts, provider_id, method, duration_ms, result}
-      # Match on monotonic_ts < cutoff_time
-      match_spec = [
-        {{:"$1", :"$2", :"$3", :"$4", :"$5", :"$6"}, [{:<, :"$1", cutoff_time}], [true]}
-      ]
+    # New 6-tuple format: {monotonic_ts, system_ts, provider_id, method, duration_ms, result}
+    # Match on monotonic_ts < cutoff_time
+    match_spec = [
+      {{:"$1", :"$2", :"$3", :"$4", :"$5", :"$6"}, [{:<, :"$1", cutoff_time}], [true]}
+    ]
 
-      old_entries = :ets.select(table_name, match_spec)
+    old_entries = :ets.select(table_name, match_spec)
 
-      Enum.each(old_entries, fn entry ->
-        :ets.delete_object(table_name, entry)
-      end)
+    Enum.each(old_entries, fn entry ->
+      :ets.delete_object(table_name, entry)
+    end)
 
-      Logger.debug("Cleaned up #{length(old_entries)} old RPC entries from #{table_name}")
-    rescue
-      e -> Logger.error("Error during RPC table cleanup: #{inspect(e)}")
-    end
+    Logger.debug("Cleaned up #{length(old_entries)} old RPC entries from #{table_name}")
+  rescue
+    e -> Logger.error("Error during RPC table cleanup: #{inspect(e)}")
   end
 
   # Cleanup score table using monotonic last_updated (6th field in 7-tuple)
   defp cleanup_score_table_by_monotonic_timestamp(score_table, cutoff_time) do
-    try do
-      # Get all entries and filter by monotonic_last_updated
-      all_entries = :ets.tab2list(score_table)
+    # Get all entries and filter by monotonic_last_updated
+    all_entries = :ets.tab2list(score_table)
 
-      old_entries =
-        all_entries
-        |> Enum.filter(fn
-          # 7-tuple format: monotonic_last_updated is 6th field
-          {{_provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples, monotonic_last_updated,
-           _system_last_updated} ->
-            monotonic_last_updated < cutoff_time
+    old_entries =
+      all_entries
+      |> Enum.filter(fn
+        # 7-tuple format: monotonic_last_updated is 6th field
+        {{_provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples, monotonic_last_updated,
+         _system_last_updated} ->
+          monotonic_last_updated < cutoff_time
 
-          _ ->
-            false
-        end)
-
-      # Remove old entries
-      Enum.each(old_entries, fn entry ->
-        :ets.delete_object(score_table, entry)
+        _ ->
+          false
       end)
 
-      Logger.debug("Cleaned up #{length(old_entries)} old score entries")
-    rescue
-      e -> Logger.error("Error during score table cleanup: #{inspect(e)}")
-    end
+    # Remove old entries
+    Enum.each(old_entries, fn entry ->
+      :ets.delete_object(score_table, entry)
+    end)
+
+    Logger.debug("Cleaned up #{length(old_entries)} old score entries")
+  rescue
+    e -> Logger.error("Error during score table cleanup: #{inspect(e)}")
   end
 
   defp calculate_leaderboard(profile, chain_name) do
@@ -1191,7 +1248,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     Enum.map(rpc_scores, fn {provider_id, entries} ->
       {total_successes, total_calls, weighted_avg_latency} =
         Enum.reduce(entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total,
-                                              avg_duration, _samples, _monotonic_updated, _system_updated},
+                                              avg_duration, _samples, _monotonic_updated,
+                                              _system_updated},
                                              {acc_successes, acc_total, acc_latency} ->
           {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total}
         end)
@@ -1218,7 +1276,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     rpc_metrics =
       score_table
       |> :ets.tab2list()
-      |> Enum.filter(fn {{pid, _method, type}, _successes, _total, _avg, _samples, _monotonic_updated, _system_updated} ->
+      |> Enum.filter(fn {{pid, _method, type}, _successes, _total, _avg, _samples,
+                         _monotonic_updated, _system_updated} ->
         pid == provider_id and type == :rpc
       end)
       |> Enum.map(fn {{_pid, method, _type}, successes, total, avg_duration, _samples,
@@ -1246,7 +1305,8 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     method_entries =
       score_table
       |> :ets.tab2list()
-      |> Enum.filter(fn {{_pid, m, type}, _successes, _total, _avg, _samples, _monotonic_updated, _system_updated} ->
+      |> Enum.filter(fn {{_pid, m, type}, _successes, _total, _avg, _samples, _monotonic_updated,
+                         _system_updated} ->
         type == :rpc and m == method
       end)
 
@@ -1277,17 +1337,20 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     providers =
       all_entries
-      |> Enum.map(fn {{provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
+      |> Enum.map(fn {{provider_id, _key, _type}, _stat1, _stat2, _stat3, _samples,
+                      _monotonic_updated, _system_updated} ->
         provider_id
       end)
       |> Enum.uniq()
 
     rpc_methods =
       all_entries
-      |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
+      |> Enum.filter(fn {{_pid, _key, type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated,
+                         _system_updated} ->
         type == :rpc
       end)
-      |> Enum.map(fn {{_pid, method, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated, _system_updated} ->
+      |> Enum.map(fn {{_pid, method, _type}, _stat1, _stat2, _stat3, _samples, _monotonic_updated,
+                      _system_updated} ->
         method
       end)
       |> Enum.uniq()
@@ -1313,6 +1376,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     success_rate * latency_factor * confidence_factor
   end
 
+  # credo:disable-for-lines:2 Credo.Check.Warning.UnsafeToAtom
   defp rpc_table_name(profile, chain), do: :"rpc_metrics_#{profile}_#{chain}"
   defp score_table_name(profile, chain), do: :"provider_scores_#{profile}_#{chain}"
 
@@ -1325,38 +1389,36 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   defp enforce_table_limits(table_name) do
-    try do
-      # Get current table size
-      current_size = :ets.info(table_name, :size)
+    # Get current table size
+    current_size = :ets.info(table_name, :size)
 
-      if current_size >= @max_entries_per_chain do
-        Logger.debug(
-          "Table #{table_name} at limit (#{current_size}/#{@max_entries_per_chain}), removing oldest entries"
-        )
+    if current_size >= @max_entries_per_chain do
+      Logger.debug(
+        "Table #{table_name} at limit (#{current_size}/#{@max_entries_per_chain}), removing oldest entries"
+      )
 
-        # Remove 10% of entries (oldest first) to make room
-        entries_to_remove = div(@max_entries_per_chain, 10)
+      # Remove 10% of entries (oldest first) to make room
+      entries_to_remove = div(@max_entries_per_chain, 10)
 
-        # Get oldest entries by timestamp (first element of tuple)
-        oldest_entries =
-          table_name
-          |> :ets.tab2list()
-          |> Enum.sort_by(fn {timestamp, _provider, _key, _stat, _result} -> timestamp end)
-          |> Enum.take(entries_to_remove)
+      # Get oldest entries by timestamp (first element of tuple)
+      oldest_entries =
+        table_name
+        |> :ets.tab2list()
+        |> Enum.sort_by(fn {timestamp, _provider, _key, _stat, _result} -> timestamp end)
+        |> Enum.take(entries_to_remove)
 
-        # Remove oldest entries
-        Enum.each(oldest_entries, fn entry ->
-          :ets.delete_object(table_name, entry)
-        end)
+      # Remove oldest entries
+      Enum.each(oldest_entries, fn entry ->
+        :ets.delete_object(table_name, entry)
+      end)
 
-        Logger.debug("Removed #{length(oldest_entries)} oldest entries from #{table_name}")
-      end
-    rescue
-      e ->
-        Logger.error("Error enforcing table limits for #{table_name}: #{inspect(e)}")
-    catch
-      :exit, reason ->
-        Logger.error("Table #{table_name} may not exist: #{inspect(reason)}")
+      Logger.debug("Removed #{length(oldest_entries)} oldest entries from #{table_name}")
     end
+  rescue
+    e ->
+      Logger.error("Error enforcing table limits for #{table_name}: #{inspect(e)}")
+  catch
+    :exit, reason ->
+      Logger.error("Table #{table_name} may not exist: #{inspect(reason)}")
   end
 end

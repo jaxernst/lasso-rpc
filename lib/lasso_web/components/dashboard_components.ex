@@ -22,10 +22,18 @@ defmodule LassoWeb.Components.DashboardComponents do
       |> assign_new(:selected_profile, fn -> "default" end)
 
     ~H"""
-    <div class={["pointer-events-none absolute top-4 left-4 z-40 transition-all duration-300", if(@chain_config_open,
-    do: if(@chain_config_collapsed, do: "h-12 w-80", else: "w-[28rem] h-[32rem]"),
-    else: "pointer-events-none h-12 w-80 scale-90 opacity-0")]}>
-      <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg", "transition-all duration-300", if(!@chain_config_open, do: "scale-90 opacity-0")]}>
+    <div class={[
+      "pointer-events-none absolute top-4 left-4 z-40 transition-all duration-300",
+      if(@chain_config_open,
+        do: if(@chain_config_collapsed, do: "h-12 w-80", else: "w-[28rem] h-[32rem]"),
+        else: "pointer-events-none h-12 w-80 scale-90 opacity-0"
+      )
+    ]}>
+      <div class={[
+        "border-gray-700/60 bg-gray-900/95 pointer-events-auto rounded-xl border shadow-2xl backdrop-blur-lg",
+        "transition-all duration-300",
+        if(!@chain_config_open, do: "scale-90 opacity-0")
+      ]}>
         <!-- Header / Collapsed State -->
         <div class="border-gray-700/50 flex items-center justify-between border-b px-4 py-2">
           <div class="flex min-w-0 items-center gap-2">
@@ -72,12 +80,18 @@ defmodule LassoWeb.Components.DashboardComponents do
                   <button
                     phx-click="select_config_chain"
                     phx-value-chain={chain.name}
-                    class={["flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs transition-colors", if(@config_selected_chain == chain.name,
-    do: "bg-purple-600/20 border-purple-600/40 border text-purple-200",
-    else: "bg-gray-800/40 text-gray-300 hover:bg-gray-700/60")]}
+                    class={[
+                      "flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs transition-colors",
+                      if(@config_selected_chain == chain.name,
+                        do: "bg-purple-600/20 border-purple-600/40 border text-purple-200",
+                        else: "bg-gray-800/40 text-gray-300 hover:bg-gray-700/60"
+                      )
+                    ]}
                   >
                     <div>
-                      <div class="font-medium">{Helpers.get_chain_display_name(@selected_profile, chain.name)}</div>
+                      <div class="font-medium">
+                        {Helpers.get_chain_display_name(@selected_profile, chain.name)}
+                      </div>
                       <div class="text-gray-400">Chain ID: {chain.chain_id || "—"}</div>
                     </div>
                     <div class="text-xs text-gray-400">{length(chain.providers || [])} providers</div>
@@ -177,16 +191,25 @@ defmodule LassoWeb.Components.DashboardComponents do
       class="space-y-4"
     >
       <div class="text-sm font-medium text-gray-300">
-        Configure: <span class="text-purple-300">{Helpers.get_chain_display_name(@selected_profile, @selected_chain)}</span>
+        Configure:
+        <span class="text-purple-300">
+          {Helpers.get_chain_display_name(@selected_profile, @selected_chain)}
+        </span>
       </div>
-
+      
     <!-- Basic Chain Information -->
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2">
           <.form_field
             label="Chain Name"
             name="chain[name]"
-            value={Map.get(@form_data, :name, Helpers.get_chain_display_name(@selected_profile, @selected_chain))}
+            value={
+              Map.get(
+                @form_data,
+                :name,
+                Helpers.get_chain_display_name(@selected_profile, @selected_chain)
+              )
+            }
             placeholder="e.g., Ethereum Mainnet"
             phx-debounce="300"
           />
@@ -235,9 +258,13 @@ defmodule LassoWeb.Components.DashboardComponents do
                   class="flex flex-1 items-center gap-2 text-left"
                 >
                   <svg
-                    class={["h-3 w-3 transition-transform", if(MapSet.member?(@expanded, idx),
-    do: "rotate-90 text-purple-300",
-    else: "text-gray-400")]}
+                    class={[
+                      "h-3 w-3 transition-transform",
+                      if(MapSet.member?(@expanded, idx),
+                        do: "rotate-90 text-purple-300",
+                        else: "text-gray-400"
+                      )
+                    ]}
                     viewBox="0 0 20 20"
                     fill="currentColor"
                   >

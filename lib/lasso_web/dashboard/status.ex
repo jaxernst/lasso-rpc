@@ -85,8 +85,8 @@ defmodule LassoWeb.Dashboard.Status do
   """
   def determine_status(%{status: :connected, metrics: metrics}) when is_map(metrics) do
     cond do
-      is_failing?(metrics) -> :failed
-      is_degraded?(metrics) -> :degraded
+      failing?(metrics) -> :failed
+      degraded?(metrics) -> :degraded
       true -> :connected
     end
   end
@@ -99,14 +99,14 @@ defmodule LassoWeb.Dashboard.Status do
 
   # Private helpers
 
-  defp is_degraded?(metrics) do
+  defp degraded?(metrics) do
     success_rate = Map.get(metrics, :success_rate, 100)
     p95_latency = Map.get(metrics, :p95_latency, 0)
 
     success_rate < 95 or (p95_latency && p95_latency > 1000)
   end
 
-  defp is_failing?(metrics) do
+  defp failing?(metrics) do
     success_rate = Map.get(metrics, :success_rate, 100)
     success_rate < 50
   end

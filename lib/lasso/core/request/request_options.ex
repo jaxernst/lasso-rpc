@@ -48,9 +48,8 @@ defmodule Lasso.RPC.RequestOptions do
   @spec validate(t, String.t()) :: :ok | {:error, String.t()}
   def validate(%__MODULE__{} = opts, method) when is_binary(method) do
     with :ok <- validate_strategy(opts.strategy),
-         :ok <- validate_transport(opts, method),
-         :ok <- validate_timeout(opts.timeout_ms) do
-      :ok
+         :ok <- validate_transport(opts, method) do
+      validate_timeout(opts.timeout_ms)
     end
   end
 

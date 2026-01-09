@@ -61,6 +61,7 @@ defmodule Lasso.Core.BlockCache do
 
   ## Client API
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -229,7 +230,11 @@ defmodule Lasso.Core.BlockCache do
     case normalize_block(raw_block, provider_id) do
       {:ok, block} ->
         # Store provider-specific data
-        :ets.insert(@table_name, {{:provider, chain, provider_id}, {block.number, block.received_at}})
+        :ets.insert(
+          @table_name,
+          {{:provider, chain, provider_id}, {block.number, block.received_at}}
+        )
+
         :ets.insert(@table_name, {{:provider_block, chain, provider_id}, block})
 
         # Update latest block if this is newer

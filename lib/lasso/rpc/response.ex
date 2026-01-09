@@ -173,7 +173,7 @@ defmodule Lasso.RPC.Response.Batch do
   mixed success/error items.
   """
 
-  alias Lasso.RPC.Response.{Success, Error}
+  alias Lasso.RPC.Response.{Error, Success}
 
   @enforce_keys [:items, :request_ids]
   defstruct [:items, :request_ids, :total_byte_size]

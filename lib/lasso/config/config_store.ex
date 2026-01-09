@@ -51,6 +51,7 @@ defmodule Lasso.Config.ConfigStore do
   (that's owned by Application). Profile loading happens after supervision tree
   starts via `load_all_profiles/0`.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -346,12 +347,14 @@ defmodule Lasso.Config.ConfigStore do
 
   @impl true
   def handle_call({:unregister_chain_runtime, profile, chain_name}, _from, state) do
-    with {:ok, _chain_config} <- get_chain(profile, chain_name) do
-      remove_chain_from_profile(profile, chain_name)
-      Logger.debug("Unregistered chain #{chain_name} from profile #{profile} (runtime)")
-      {:reply, :ok, state}
-    else
-      {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
+    case get_chain(profile, chain_name) do
+      {:ok, _chain_config} ->
+        remove_chain_from_profile(profile, chain_name)
+        Logger.debug("Unregistered chain #{chain_name} from profile #{profile} (runtime)")
+        {:reply, :ok, state}
+
+      {:error, :not_found} ->
+        {:reply, {:error, :chain_not_found}, state}
     end
   end
 

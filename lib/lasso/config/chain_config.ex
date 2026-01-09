@@ -31,6 +31,7 @@ defmodule Lasso.Config.ChainConfig do
   ]
 
   defmodule Provider do
+    @moduledoc "Configuration for an RPC provider."
     @derive Jason.Encoder
     @type t :: %__MODULE__{
             id: String.t(),
@@ -61,6 +62,7 @@ defmodule Lasso.Config.ChainConfig do
   end
 
   defmodule Connection do
+    @moduledoc "Connection settings for RPC providers."
     @type t :: %__MODULE__{
             heartbeat_interval: non_neg_integer(),
             reconnect_interval: non_neg_integer(),
@@ -75,6 +77,7 @@ defmodule Lasso.Config.ChainConfig do
   end
 
   defmodule Failover do
+    @moduledoc "Failover configuration for RPC provider selection."
     @type t :: %__MODULE__{
             max_backfill_blocks: non_neg_integer(),
             backfill_timeout: non_neg_integer(),
@@ -161,18 +164,22 @@ defmodule Lasso.Config.ChainConfig do
               size: :md
 
     @doc "Check if this chain is an L2"
+    @spec l2?(t()) :: boolean()
     def l2?(%__MODULE__{category: category}), do: category in [:l2]
 
     @doc "Check if this chain is a mainnet chain"
+    @spec mainnet?(t()) :: boolean()
     def mainnet?(%__MODULE__{network: network}), do: network == :mainnet
 
     @doc "Check if this chain is a testnet"
+    @spec testnet?(t()) :: boolean()
     def testnet?(%__MODULE__{network: network}), do: network in [:sepolia, :goerli, :holesky]
   end
 
   @doc """
   Gets a specific provider by ID.
   """
+  @spec get_provider_by_id(t(), String.t()) :: {:ok, Provider.t()} | {:error, :provider_not_found}
   def get_provider_by_id(chain_config, provider_id) do
     case Enum.find(chain_config.providers, &(&1.id == provider_id)) do
       nil -> {:error, :provider_not_found}
@@ -195,21 +202,26 @@ defmodule Lasso.Config.ChainConfig do
   end
 
   @doc "Substitutes ${VAR_NAME} patterns with environment variable values."
+  @spec substitute_env_vars(nil) :: nil
   def substitute_env_vars(nil), do: nil
 
+  @spec substitute_env_vars(String.t()) :: String.t()
   def substitute_env_vars(string) when is_binary(string) do
     Regex.replace(~r/\$\{([^}]+)\}/, string, fn _, var_name ->
       System.get_env(var_name) || "${#{var_name}}"
     end)
   end
 
+  @spec substitute_env_vars(any()) :: any()
   def substitute_env_vars(value), do: value
 
   @doc "Returns true if string contains unresolved ${VAR_NAME} placeholders."
+  @spec has_unresolved_placeholders?(String.t()) :: boolean()
   def has_unresolved_placeholders?(string) when is_binary(string) do
     string =~ ~r/\$\{[^}]+\}/
   end
 
+  @spec has_unresolved_placeholders?(any()) :: false
   def has_unresolved_placeholders?(_), do: false
 
   @doc "Validates that all provider URLs have resolved environment variables."
@@ -241,6 +253,8 @@ defmodule Lasso.Config.ChainConfig do
   @doc """
   Validates that a chain configuration has valid providers.
   """
+  @spec validate_chain_config(t()) ::
+          :ok | {:error, :no_providers | :invalid_provider | :invalid_connection}
   def validate_chain_config(%__MODULE__{} = chain_config) do
     with :ok <- validate_providers(chain_config.providers) do
       validate_connection(chain_config.connection)

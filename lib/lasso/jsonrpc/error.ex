@@ -94,9 +94,14 @@ defmodule Lasso.JSONRPC.Error do
       end
 
     # Auto-classify if not explicitly provided
-    category = Keyword.get(opts, :category) || ErrorClassification.categorize(normalized_code, message)
-    retriable? = Keyword.get(opts, :retriable?) || ErrorClassification.retriable?(normalized_code, message)
-    breaker_penalty? = Keyword.get(opts, :breaker_penalty?) || ErrorClassification.breaker_penalty?(category)
+    category =
+      Keyword.get(opts, :category) || ErrorClassification.categorize(normalized_code, message)
+
+    retriable? =
+      Keyword.get(opts, :retriable?) || ErrorClassification.retriable?(normalized_code, message)
+
+    breaker_penalty? =
+      Keyword.get(opts, :breaker_penalty?) || ErrorClassification.breaker_penalty?(category)
 
     %__MODULE__{
       code: normalized_code,

@@ -17,7 +17,12 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
       %{total_calls: 0} ->
         nil
 
-      %{avg_latency: latency, success_rate: success_rate, total_calls: total_calls, last_updated_ms: last_updated_ms} ->
+      %{
+        avg_latency: latency,
+        success_rate: success_rate,
+        total_calls: total_calls,
+        last_updated_ms: last_updated_ms
+      } ->
         confidence_score = calculate_confidence_score(total_calls, success_rate)
 
         %{
@@ -92,7 +97,12 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
       %{total_calls: 0} ->
         nil
 
-      %{avg_latency: latency, success_rate: success_rate, total_calls: total_calls, last_updated_ms: last_updated_ms} ->
+      %{
+        avg_latency: latency,
+        success_rate: success_rate,
+        total_calls: total_calls,
+        last_updated_ms: last_updated_ms
+      } ->
         %{
           latency_ms: latency,
           success_rate: success_rate,
@@ -162,10 +172,8 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
 
   # Private functions
 
-  defp score_table_name(profile, chain) do
-    # Match BenchmarkStore naming convention
-    :"provider_scores_#{profile}_#{chain}"
-  end
+  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+  defp score_table_name(profile, chain), do: :"provider_scores_#{profile}_#{chain}"
 
   defp table_exists?(table_name) do
     case :ets.whereis(table_name) do

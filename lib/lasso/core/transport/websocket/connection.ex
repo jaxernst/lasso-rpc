@@ -70,11 +70,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   use GenServer, restart: :permanent
   require Logger
 
-  alias Lasso.RPC.Transport.WebSocket.Endpoint
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.ErrorNormalizer
-  alias Lasso.RPC.Response
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.Response
+  alias Lasso.RPC.Transport.WebSocket.Endpoint
 
   # Client API
 
@@ -87,6 +87,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       iex> Process.alive?(pid)
       true
   """
+  @spec start_link(Endpoint.t()) :: GenServer.on_start()
   def start_link(%Endpoint{} = endpoint) do
     GenServer.start_link(__MODULE__, endpoint, name: via_name(endpoint.id))
   end
@@ -99,6 +100,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       iex> Lasso.RPC.Transport.WebSocket.Connection.status("ethereum_ws")
       %{connected: true, endpoint_id: "ethereum_ws", reconnect_attempts: 0}
   """
+  @spec status(String.t()) :: map()
   def status(connection_id) do
     GenServer.call(via_name(connection_id), :status)
   end
@@ -131,6 +133,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   Returns {:ok, result} | {:error, reason}.
   """
+  @spec request(String.t(), String.t(), list() | map() | nil, non_neg_integer(), String.t() | nil) ::
+          {:ok, Response.Success.t()} | {:error, JError.t()}
   def request(connection_id, method, params, timeout_ms \\ 30_000, request_id \\ nil) do
     GenServer.call(
       via_name(connection_id),
@@ -1080,20 +1084,18 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   # This wrapper catches those exits and converts them to {:error, reason} tuples
   # for consistent error handling.
   defp send_frame(connection, frame) do
-    try do
-      ws_client().send_frame(connection, frame)
-    catch
-      # Process is hung/unresponsive - :gen.call timed out (default 5s)
-      :exit, {:timeout, _call_info} ->
-        {:error, :timeout}
+    ws_client().send_frame(connection, frame)
+  catch
+    # Process is hung/unresponsive - :gen.call timed out (default 5s)
+    :exit, {:timeout, _call_info} ->
+      {:error, :timeout}
 
-      # Process died or noproc
-      :exit, {:noproc, _call_info} ->
-        {:error, :noproc}
+    # Process died or noproc
+    :exit, {:noproc, _call_info} ->
+      {:error, :noproc}
 
-      # Other exit reasons (process crash, etc.)
-      :exit, {reason, _call_info} ->
-        {:error, {:exit, reason}}
-    end
+    # Other exit reasons (process crash, etc.)
+    :exit, {reason, _call_info} ->
+      {:error, {:exit, reason}}
   end
 end

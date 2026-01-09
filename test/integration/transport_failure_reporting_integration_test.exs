@@ -4,7 +4,7 @@ defmodule Lasso.RPC.TransportFailureReportingIntegrationTest do
   @moduletag :integration
   @moduletag timeout: 10_000
 
-  alias Lasso.RPC.{RequestPipeline, ProviderPool, CircuitBreaker, RequestOptions}
+  alias Lasso.RPC.{RequestPipeline, ProviderPool, RequestOptions}
   alias Lasso.Test.{TelemetrySync, CircuitBreakerHelper}
 
   test "failures are reported with correct transport and gate HTTP only", %{chain: chain} do

@@ -59,10 +59,10 @@ defmodule Lasso.RPC.TransportRegistry do
   use GenServer
   require Logger
 
-  alias Lasso.RPC.Channel
   alias Lasso.Config.ConfigStore
-  alias Lasso.RPC.ProviderPool
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.Channel
+  alias Lasso.RPC.ProviderPool
 
   # ETS table for lockless channel lookups in hot path
   @channel_cache_table :transport_channel_cache
@@ -127,7 +127,8 @@ defmodule Lasso.RPC.TransportRegistry do
   @spec get_channel(profile, chain_name, provider_id, transport, keyword()) ::
           {:ok, Channel.t()} | {:error, term()}
   def get_channel(profile, chain_name, provider_id, transport, opts \\ [])
-      when is_binary(profile) and is_binary(chain_name) and is_binary(provider_id) and is_atom(transport) do
+      when is_binary(profile) and is_binary(chain_name) and is_binary(provider_id) and
+             is_atom(transport) do
     cache_key = {profile, chain_name, provider_id, transport}
 
     case :ets.lookup(@channel_cache_table, cache_key) do
@@ -205,7 +206,8 @@ defmodule Lasso.RPC.TransportRegistry do
   end
 
   @spec get_candidate_channels(profile, chain_name, map()) :: [Channel.t()]
-  def get_candidate_channels(profile, chain_name, filters) when is_binary(profile) and is_map(filters) do
+  def get_candidate_channels(profile, chain_name, filters)
+      when is_binary(profile) and is_map(filters) do
     GenServer.call(via_name(profile, chain_name), {:get_candidate_channels, filters})
   end
 
@@ -242,7 +244,8 @@ defmodule Lasso.RPC.TransportRegistry do
   # GenServer implementation
 
   @impl true
-  def init({profile, chain_name, _chain_config}) when is_binary(profile) and is_binary(chain_name) do
+  def init({profile, chain_name, _chain_config})
+      when is_binary(profile) and is_binary(chain_name) do
     state = %__MODULE__{
       profile: profile,
       chain_name: chain_name,
@@ -436,7 +439,14 @@ defmodule Lasso.RPC.TransportRegistry do
           {:ok, raw_channel} ->
             # Wrap in Channel struct
             channel =
-              Channel.new(state.profile, state.chain_name, provider_id, transport, raw_channel, transport_module)
+              Channel.new(
+                state.profile,
+                state.chain_name,
+                provider_id,
+                transport,
+                raw_channel,
+                transport_module
+              )
 
             # Store channel in GenServer state
             updated_channels =
@@ -592,10 +602,12 @@ defmodule Lasso.RPC.TransportRegistry do
 
   Accepts optional profile as first argument (defaults to "default").
   """
+  @spec via_name(String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(chain_name) when is_binary(chain_name) do
     via_name("default", chain_name)
   end
 
+  @spec via_name(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(profile, chain_name) when is_binary(profile) and is_binary(chain_name) do
     {:via, Registry, {Lasso.Registry, {:transport_registry, profile, chain_name}}}
   end

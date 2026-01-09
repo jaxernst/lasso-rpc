@@ -58,8 +58,6 @@ defmodule Lasso.Testing.MockHTTPProvider do
       id: provider_id,
       name: "Mock HTTP Provider #{provider_id}",
       url: "http://mock-#{provider_id}.test",
-      # Fake WS URL to pass protocol filter
-      ws_url: "ws://mock-#{provider_id}.test/ws",
       type: "test",
       priority: Map.get(spec, :priority, 100),
       # Mark as mock for routing
@@ -68,8 +66,10 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
     # Ensure chain exists and register provider
     with :ok <- ChainHelper.ensure_chain_exists(chain, profile: profile),
-         :ok <- Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
-         :ok <- Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
+         :ok <-
+           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
+         :ok <-
+           Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
       Logger.info("MockHTTPProvider: registered #{provider_id}, initializing channels...")
 
       result =
@@ -151,7 +151,6 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
     :ok
   end
-
 
   # Private helper to ensure circuit breaker exists
   defp ensure_circuit_breaker(profile, chain, provider_id, transport) do
