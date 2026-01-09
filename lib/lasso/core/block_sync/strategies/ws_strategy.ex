@@ -44,6 +44,19 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
     :subscription_status
   ]
 
+  @type t :: %__MODULE__{
+          profile: String.t(),
+          chain: atom(),
+          provider_id: String.t(),
+          parent: pid(),
+          staleness_threshold_ms: non_neg_integer(),
+          staleness_timer_ref: reference() | nil,
+          status: atom(),
+          last_block_time: integer() | nil,
+          last_height: non_neg_integer() | nil,
+          subscription_status: atom()
+        }
+
   ## Strategy Callbacks
 
   @impl true

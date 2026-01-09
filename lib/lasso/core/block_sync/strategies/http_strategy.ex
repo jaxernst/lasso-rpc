@@ -40,6 +40,18 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     :last_poll_time
   ]
 
+  @type t :: %__MODULE__{
+          profile: String.t(),
+          chain: atom(),
+          provider_id: String.t(),
+          parent: pid(),
+          poll_interval_ms: non_neg_integer(),
+          timer_ref: reference() | nil,
+          consecutive_failures: non_neg_integer(),
+          last_height: non_neg_integer() | nil,
+          last_poll_time: integer() | nil
+        }
+
   ## Strategy Callbacks
 
   @impl true
