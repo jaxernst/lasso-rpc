@@ -38,6 +38,7 @@ defmodule Lasso.Benchmarking.Persistence do
 
   @snapshots_dir System.get_env("LASSO_SNAPSHOTS_DIR") || "priv/benchmark_snapshots"
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -45,6 +46,7 @@ defmodule Lasso.Benchmarking.Persistence do
   @doc """
   Saves a performance snapshot to file storage.
   """
+  @spec save_snapshot(String.t(), String.t(), map()) :: :ok
   def save_snapshot(profile, chain_name, snapshot_data) do
     GenServer.cast(__MODULE__, {:save_snapshot, profile, chain_name, snapshot_data})
   end
@@ -52,6 +54,7 @@ defmodule Lasso.Benchmarking.Persistence do
   @doc """
   Loads historical snapshots for a profile and chain within a time range.
   """
+  @spec load_snapshots(String.t(), String.t(), non_neg_integer()) :: [map()]
   def load_snapshots(profile, chain_name, hours_back \\ 24) do
     GenServer.call(__MODULE__, {:load_snapshots, profile, chain_name, hours_back})
   end
@@ -59,6 +62,7 @@ defmodule Lasso.Benchmarking.Persistence do
   @doc """
   Gets a summary of available snapshot data.
   """
+  @spec get_snapshot_summary() :: map()
   def get_snapshot_summary do
     GenServer.call(__MODULE__, :get_summary)
   end
@@ -66,6 +70,7 @@ defmodule Lasso.Benchmarking.Persistence do
   @doc """
   Cleans up old snapshot files (older than specified days).
   """
+  @spec cleanup_old_snapshots(non_neg_integer()) :: :ok
   def cleanup_old_snapshots(days_to_keep \\ 7) do
     GenServer.cast(__MODULE__, {:cleanup_snapshots, days_to_keep})
   end
