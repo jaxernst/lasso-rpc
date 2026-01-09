@@ -38,9 +38,9 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     info: %{border: "border-l-blue-500", dot: "bg-blue-500", text: "text-blue-400"}
   }
 
-  attr :status, :atom, required: true, values: [:healthy, :degraded, :down, :unknown]
-  attr :label, :string, default: nil
-  attr :class, :string, default: ""
+  attr(:status, :atom, required: true, values: [:healthy, :degraded, :down, :unknown])
+  attr(:label, :string, default: nil)
+  attr(:class, :string, default: "")
 
   def status_badge(assigns) do
     styles = Map.get(@status_styles, assigns.status, @status_styles.unknown)
@@ -63,8 +63,8 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :title, :string, required: true
-  attr :class, :string, default: "mb-3"
+  attr(:title, :string, required: true)
+  attr(:class, :string, default: "mb-3")
 
   def section_header(assigns) do
     ~H"""
@@ -74,12 +74,12 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :class, :string, default: ""
+  attr(:class, :string, default: "")
 
   slot :metric, required: true do
-    attr :label, :string, required: true
-    attr :value, :string, required: true
-    attr :value_class, :string
+    attr(:label, :string, required: true)
+    attr(:value, :string, required: true)
+    attr(:value_class, :string)
   end
 
   def metrics_strip(assigns) do
@@ -103,13 +103,13 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :cols, :integer, default: 4
-  attr :class, :string, default: ""
+  attr(:cols, :integer, default: 4)
+  attr(:class, :string, default: "")
 
   slot :metric, required: true do
-    attr :label, :string, required: true
-    attr :value, :string, required: true
-    attr :value_class, :string
+    attr(:label, :string, required: true)
+    attr(:value, :string, required: true)
+    attr(:value_class, :string)
   end
 
   def metrics_grid(assigns) do
@@ -136,9 +136,9 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :class, :string, default: ""
-  attr :border, :boolean, default: true
-  slot :inner_block, required: true
+  attr(:class, :string, default: "")
+  attr(:border, :boolean, default: true)
+  slot(:inner_block, required: true)
 
   def panel_section(assigns) do
     ~H"""
@@ -148,10 +148,10 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :label, :string, required: true
-  attr :state, :atom, required: true, values: [:closed, :half_open, :open]
-  attr :connected, :boolean, default: nil
-  attr :class, :string, default: ""
+  attr(:label, :string, required: true)
+  attr(:state, :atom, required: true, values: [:closed, :half_open, :open])
+  attr(:connected, :boolean, default: nil)
+  attr(:class, :string, default: "")
 
   def circuit_breaker_row(assigns) do
     {status_text, status_class} = circuit_breaker_status(assigns.state, assigns.connected)
@@ -178,8 +178,8 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :active, :boolean, required: true
-  attr :color, :string, required: true
+  attr(:active, :boolean, required: true)
+  attr(:color, :string, required: true)
 
   defp circuit_dot(assigns) do
     active_class =
@@ -192,7 +192,10 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     assigns = assign(assigns, :active_class, active_class)
 
     ~H"""
-    <div class={["w-3 h-3 rounded-full border-2", if(@active, do: @active_class, else: "border-gray-600")]}>
+    <div class={[
+      "w-3 h-3 rounded-full border-2",
+      if(@active, do: @active_class, else: "border-gray-600")
+    ]}>
     </div>
     """
   end
@@ -208,7 +211,7 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     end
   end
 
-  attr :class, :string, default: ""
+  attr(:class, :string, default: "")
 
   def circuit_breaker_labels(assigns) do
     ~H"""
@@ -226,10 +229,10 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :severity, :atom, required: true, values: [:error, :warn, :info]
-  attr :message, :string, required: true
-  attr :detail, :map, default: nil
-  attr :class, :string, default: ""
+  attr(:severity, :atom, required: true, values: [:error, :warn, :info])
+  attr(:message, :string, required: true)
+  attr(:detail, :map, default: nil)
+  attr(:class, :string, default: "")
 
   def alert_item(assigns) do
     styles = Map.get(@severity_styles, assigns.severity, @severity_styles.info)
@@ -250,7 +253,7 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :detail, :map, required: true
+  attr(:detail, :map, required: true)
 
   defp alert_detail(assigns) do
     ~H"""
@@ -268,9 +271,9 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :value, :float, required: true
-  attr :status, :atom, default: :healthy, values: [:healthy, :degraded, :down]
-  attr :class, :string, default: ""
+  attr(:value, :float, required: true)
+  attr(:status, :atom, default: :healthy, values: [:healthy, :degraded, :down])
+  attr(:class, :string, default: "")
 
   def progress_bar(assigns) do
     styles = Map.get(@status_styles, assigns.status, @status_styles.healthy)
@@ -283,9 +286,9 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  attr :rank, :integer, required: true
-  attr :size, :atom, default: :normal, values: [:small, :normal]
-  attr :class, :string, default: ""
+  attr(:rank, :integer, required: true)
+  attr(:size, :atom, default: :normal, values: [:small, :normal])
+  attr(:class, :string, default: "")
 
   def rank_badge(assigns) do
     {size_class, rank_color} =
@@ -317,8 +320,8 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     """
   end
 
-  slot :inner_block, required: true
-  attr :class, :string, default: ""
+  slot(:inner_block, required: true)
+  attr(:class, :string, default: "")
 
   def empty_state(assigns) do
     ~H"""

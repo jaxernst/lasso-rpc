@@ -53,9 +53,9 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     """
   end
 
-  attr :provider_connection, :map, default: nil
-  attr :provider_id, :string, required: true
-  attr :selected_profile, :string, required: true
+  attr(:provider_connection, :map, default: nil)
+  attr(:provider_id, :string, required: true)
+  attr(:selected_profile, :string, required: true)
 
   defp provider_header(assigns) do
     conn = assigns.provider_connection || %{}
@@ -106,7 +106,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   defp get_chain_id_display(_, _), do: "Provider"
 
-  attr :provider_connection, :map, required: true
+  attr(:provider_connection, :map, required: true)
 
   defp sync_status_section(assigns) do
     block_height = Map.get(assigns.provider_connection, :block_height)
@@ -169,9 +169,11 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   defp sync_description(:down), do: "(significantly behind)"
 
   defp sync_progress(_, 0), do: 100
-  defp sync_progress(block_height, consensus_height), do: min(100, block_height / consensus_height * 100)
 
-  attr :performance_metrics, :map, required: true
+  defp sync_progress(block_height, consensus_height),
+    do: min(100, block_height / consensus_height * 100)
+
+  attr(:performance_metrics, :map, required: true)
 
   defp performance_section(assigns) do
     metrics = assigns.performance_metrics
@@ -208,7 +210,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   defp success_rate_color(rate) when rate >= 95.0, do: "text-yellow-400"
   defp success_rate_color(_), do: "text-red-400"
 
-  attr :provider_connection, :map, required: true
+  attr(:provider_connection, :map, required: true)
 
   defp circuit_breaker_section(assigns) do
     conn = assigns.provider_connection
@@ -257,8 +259,8 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     """
   end
 
-  attr :provider_connection, :map, required: true
-  attr :provider_unified_events, :list, required: true
+  attr(:provider_connection, :map, required: true)
+  attr(:provider_unified_events, :list, required: true)
 
   defp issues_section(assigns) do
     active_alerts = build_active_alerts(assigns.provider_connection)
@@ -309,7 +311,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     event[:kind] in [:circuit, :provider, :error] or event[:severity] in [:warn, :error]
   end
 
-  attr :event, :map, required: true
+  attr(:event, :map, required: true)
 
   defp event_feed_item(assigns) do
     event = assigns.event
@@ -323,7 +325,10 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       |> assign(:display_message, display_message)
       |> assign(:is_expandable, is_expandable)
       |> assign(:preview_message, truncate_message(display_message, 80))
-      |> assign(:event_id, "event-#{:erlang.phash2({event[:kind], event[:message], event[:ts_ms]})}")
+      |> assign(
+        :event_id,
+        "event-#{:erlang.phash2({event[:kind], event[:message], event[:ts_ms]})}"
+      )
 
     ~H"""
     <details
@@ -357,10 +362,10 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     """
   end
 
-  attr :severity_color, :string, required: true
-  attr :message, :string, required: true
-  attr :time_ago, :string, required: true
-  attr :expandable, :boolean, required: true
+  attr(:severity_color, :string, required: true)
+  attr(:message, :string, required: true)
+  attr(:time_ago, :string, required: true)
+  attr(:expandable, :boolean, required: true)
 
   defp event_row(assigns) do
     ~H"""
@@ -385,8 +390,8 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     """
   end
 
-  attr :event, :map, required: true
-  attr :display_message, :string, required: true
+  attr(:event, :map, required: true)
+  attr(:display_message, :string, required: true)
 
   defp event_details(assigns) do
     error_code = get_in(assigns.event, [:meta, :error_code])
@@ -412,17 +417,26 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       <div :if={@has_error_info} class="space-y-1.5">
         <div :if={@error_message} class="text-[11px] text-red-400 break-words">{@error_message}</div>
         <div class="flex flex-wrap gap-1.5">
-          <span :if={@error_code} class="px-1.5 py-0.5 rounded bg-red-900/30 text-red-400 text-[10px] font-mono">
+          <span
+            :if={@error_code}
+            class="px-1.5 py-0.5 rounded bg-red-900/30 text-red-400 text-[10px] font-mono"
+          >
             ERR {@error_code}
           </span>
-          <span :if={@error_category} class="px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-400 text-[10px]">
+          <span
+            :if={@error_category}
+            class="px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-400 text-[10px]"
+          >
             {@error_category}
           </span>
         </div>
       </div>
 
       <div class="flex flex-wrap gap-1">
-        <span :if={@event[:kind]} class="px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400">
+        <span
+          :if={@event[:kind]}
+          class="px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400"
+        >
           {@event[:kind] |> to_string() |> String.capitalize()}
         </span>
         <span :if={@transport} class="px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400">
@@ -455,7 +469,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   defp truncate_message(message, _), do: message
 
-  attr :performance_metrics, :map, required: true
+  attr(:performance_metrics, :map, required: true)
 
   defp method_performance_section(assigns) do
     rpc_stats = Map.get(assigns.performance_metrics, :rpc_stats, [])
@@ -480,8 +494,8 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     """
   end
 
-  attr :stat, :map, required: true
-  attr :max_calls, :integer, required: true
+  attr(:stat, :map, required: true)
+  attr(:max_calls, :integer, required: true)
 
   defp method_stat_row(assigns) do
     stat = assigns.stat
@@ -520,7 +534,10 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     ws_cb = Map.get(conn, :ws_circuit_state)
 
     alerts
-    |> maybe_add(http_cb == :open, {:error, "HTTP circuit OPEN", format_cb_error(conn[:http_cb_error])})
+    |> maybe_add(
+      http_cb == :open,
+      {:error, "HTTP circuit OPEN", format_cb_error(conn[:http_cb_error])}
+    )
     |> maybe_add(ws_cb == :open, {:error, "WS circuit OPEN", format_cb_error(conn[:ws_cb_error])})
     |> maybe_add(http_cb == :half_open, {:warn, "HTTP circuit recovering", nil})
     |> maybe_add(ws_cb == :half_open, {:warn, "WS circuit recovering", nil})

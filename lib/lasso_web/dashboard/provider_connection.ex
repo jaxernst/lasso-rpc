@@ -23,17 +23,25 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
 
     case ProviderPool.get_status(profile, chain_name) do
       {:ok, pool_status} ->
-        Enum.map(pool_status.providers, &build_provider_connection(&1, chain_name, consensus_height, provider_ids))
+        Enum.map(
+          pool_status.providers,
+          &build_provider_connection(&1, chain_name, consensus_height, provider_ids)
+        )
 
       {:error, reason} ->
-        Logger.warning("Failed to get provider status for chain #{chain_name}: #{inspect(reason)}")
+        Logger.warning(
+          "Failed to get provider status for chain #{chain_name}: #{inspect(reason)}"
+        )
+
         []
     end
   end
 
   def build_provider_connection(provider_map, chain_name, consensus_height, provider_ids) do
     provider_type = derive_provider_type(provider_map.config)
-    {block_height, blocks_behind} = calculate_block_sync(chain_name, provider_map.id, consensus_height, provider_ids)
+
+    {block_height, blocks_behind} =
+      calculate_block_sync(chain_name, provider_map.id, consensus_height, provider_ids)
 
     %{
       id: provider_map.id,

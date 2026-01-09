@@ -16,7 +16,10 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       |> assign(assigns)
       |> assign(:chain_connections, chain_connections)
       |> assign(:consensus_height, find_consensus_height(chain_connections))
-      |> assign(:last_decision, Helpers.get_last_decision(assigns[:selected_chain_events] || [], assigns.chain))
+      |> assign(
+        :last_decision,
+        Helpers.get_last_decision(assigns[:selected_chain_events] || [], assigns.chain)
+      )
 
     {:ok, socket}
   end
@@ -51,10 +54,10 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     """
   end
 
-  attr :chain, :string, required: true
-  attr :selected_profile, :string, required: true
-  attr :consensus_height, :integer, default: nil
-  attr :chain_metrics, :map, required: true
+  attr(:chain, :string, required: true)
+  attr(:selected_profile, :string, required: true)
+  attr(:consensus_height, :integer, default: nil)
+  attr(:chain_metrics, :map, required: true)
 
   defp chain_header(assigns) do
     connected = Map.get(assigns.chain_metrics, :connected_providers, 0)
@@ -80,7 +83,9 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       <div class="flex items-center gap-3 text-sm mb-6 relative z-10">
         <span class="text-gray-500">
           Chain ID
-          <span class="font-mono text-gray-300">{Helpers.get_chain_id(@selected_profile, @chain)}</span>
+          <span class="font-mono text-gray-300">
+            {Helpers.get_chain_id(@selected_profile, @chain)}
+          </span>
         </span>
         <span class="text-gray-400">·</span>
         <span class="text-gray-500">
@@ -107,7 +112,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   defp provider_count_color(0, _), do: "text-red-400"
   defp provider_count_color(_, _), do: "text-yellow-400"
 
-  attr :chain_metrics, :map, required: true
+  attr(:chain_metrics, :map, required: true)
 
   defp chain_metrics_strip(assigns) do
     metrics = assigns.chain_metrics
@@ -153,15 +158,19 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     "latency-weighted" => "⚖️"
   }
 
-  attr :chain, :string, required: true
-  attr :selected_profile, :string, required: true
-  attr :chain_connections, :list, required: true
-  attr :chain_endpoints, :map, required: true
+  attr(:chain, :string, required: true)
+  attr(:selected_profile, :string, required: true)
+  attr(:chain_connections, :list, required: true)
+  attr(:chain_endpoints, :map, required: true)
 
   defp endpoint_config_section(assigns) do
     has_ws = Enum.any?(assigns.chain_connections, &EndpointHelpers.provider_supports_websocket/1)
     http_url = EndpointHelpers.get_strategy_http_url(assigns.chain_endpoints, "fastest")
-    ws_url = if has_ws, do: EndpointHelpers.get_strategy_ws_url(assigns.chain_endpoints, "fastest"), else: nil
+
+    ws_url =
+      if has_ws,
+        do: EndpointHelpers.get_strategy_ws_url(assigns.chain_endpoints, "fastest"),
+        else: nil
 
     assigns =
       assigns
@@ -185,7 +194,10 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
               Routing Strategy
             </label>
             <div class="flex flex-wrap gap-2">
-              <.strategy_button :for={strategy <- EndpointHelpers.available_strategies()} strategy={strategy} />
+              <.strategy_button
+                :for={strategy <- EndpointHelpers.available_strategies()}
+                strategy={strategy}
+              />
             </div>
           </div>
 
@@ -216,7 +228,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     """
   end
 
-  attr :strategy, :string, required: true
+  attr(:strategy, :string, required: true)
 
   defp strategy_button(assigns) do
     assigns =
@@ -234,12 +246,12 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     """
   end
 
-  attr :id, :string, required: true
-  attr :label, :string, required: true
-  attr :url_id, :string, required: true
-  attr :url, :string, default: nil
-  attr :disabled, :boolean, default: false
-  attr :border, :boolean, default: false
+  attr(:id, :string, required: true)
+  attr(:label, :string, required: true)
+  attr(:url_id, :string, required: true)
+  attr(:url, :string, default: nil)
+  attr(:disabled, :boolean, default: false)
+  attr(:border, :boolean, default: false)
 
   defp endpoint_row(assigns) do
     ~H"""
@@ -266,9 +278,9 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     """
   end
 
-  attr :last_decision, :map, default: nil
-  attr :connections, :list, required: true
-  attr :chain_metrics, :map, required: true
+  attr(:last_decision, :map, default: nil)
+  attr(:connections, :list, required: true)
+  attr(:chain_metrics, :map, required: true)
 
   defp routing_decisions_section(assigns) do
     decision_share = Map.get(assigns.chain_metrics, :decision_share, [])
@@ -287,7 +299,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     """
   end
 
-  attr :decision_share, :list, required: true
+  attr(:decision_share, :list, required: true)
 
   defp distribution_card(assigns) do
     ~H"""
@@ -306,8 +318,8 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     """
   end
 
-  attr :provider_id, :string, required: true
-  attr :percentage, :any, required: true
+  attr(:provider_id, :string, required: true)
+  attr(:percentage, :any, required: true)
 
   defp distribution_row(assigns) do
     pct = Helpers.to_float(assigns.percentage) |> Float.round(1)
@@ -322,15 +334,18 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
         <span class="text-gray-500 font-mono group-hover:text-gray-400">{@pct}%</span>
       </div>
       <div class="w-full bg-gray-900 rounded-full h-1.5 overflow-hidden">
-        <div class="bg-emerald-500/80 h-full rounded-full transition-all duration-500" style={"width: #{@pct}%"}>
+        <div
+          class="bg-emerald-500/80 h-full rounded-full transition-all duration-500"
+          style={"width: #{@pct}%"}
+        >
         </div>
       </div>
     </div>
     """
   end
 
-  attr :last_decision, :map, default: nil
-  attr :connections, :list, default: []
+  attr(:last_decision, :map, default: nil)
+  attr(:connections, :list, default: [])
 
   defp last_decision_card(assigns) do
     provider_name = find_provider_name(assigns.connections, assigns.last_decision)

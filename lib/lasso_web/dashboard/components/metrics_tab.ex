@@ -10,7 +10,10 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
   @impl true
   def update(assigns, socket) do
     chain_config =
-      case Lasso.Config.ConfigStore.get_chain(assigns.selected_profile, assigns.metrics_selected_chain) do
+      case Lasso.Config.ConfigStore.get_chain(
+             assigns.selected_profile,
+             assigns.metrics_selected_chain
+           ) do
         {:ok, config} -> config
         {:error, _} -> %{chain_id: "Unknown"}
       end
@@ -60,10 +63,10 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
-  attr :chain, :map, required: true
-  attr :selected, :boolean, required: true
-  attr :chain_config, :map, required: true
-  attr :myself, :any, required: true
+  attr(:chain, :map, required: true)
+  attr(:selected, :boolean, required: true)
+  attr(:chain_config, :map, required: true)
+  attr(:myself, :any, required: true)
 
   defp chain_selector_button(assigns) do
     ~H"""
@@ -75,7 +78,8 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         "px-4 py-2 rounded-lg text-sm font-medium transition-all",
         if(@selected,
           do: "bg-sky-500/20 text-sky-300 border border-sky-500/50 shadow-md shadow-sky-500/10",
-          else: "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/50 hover:text-sky-300 hover:bg-gray-800/80"
+          else:
+            "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/50 hover:text-sky-300 hover:bg-gray-800/80"
         )
       ]}
     >
@@ -97,8 +101,8 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
-  attr :provider_metrics, :list, required: true
-  attr :metrics_last_updated, :any, default: nil
+  attr(:provider_metrics, :list, required: true)
+  attr(:metrics_last_updated, :any, default: nil)
 
   defp provider_performance_table(assigns) do
     ~H"""
@@ -106,11 +110,15 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold flex items-center gap-2 text-white">
           <span>Provider Performance</span>
-          <span class="text-xs text-gray-500 font-normal">({length(@provider_metrics)} providers)</span>
+          <span class="text-xs text-gray-500 font-normal">
+            ({length(@provider_metrics)} providers)
+          </span>
         </h2>
         <div :if={@metrics_last_updated} class="flex items-center gap-2 text-xs text-gray-500">
           <div class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
-          <span class="font-mono text-gray-400">{Calendar.strftime(@metrics_last_updated, "%H:%M:%S")}</span>
+          <span class="font-mono text-gray-400">
+            {Calendar.strftime(@metrics_last_updated, "%H:%M:%S")}
+          </span>
         </div>
       </div>
 
@@ -121,7 +129,10 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         </p>
       </DetailPanelComponents.empty_state>
 
-      <div :if={@provider_metrics != []} class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-sm overflow-hidden">
+      <div
+        :if={@provider_metrics != []}
+        class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-sm overflow-hidden"
+      >
         <div class="overflow-x-auto">
           <table class="w-full">
             <thead class="bg-gray-800/50 border-b border-gray-700/50">
@@ -152,9 +163,9 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
-  attr :provider, :map, required: true
-  attr :rank, :integer, required: true
-  attr :provider_metrics, :list, required: true
+  attr(:provider, :map, required: true)
+  attr(:rank, :integer, required: true)
+  attr(:provider_metrics, :list, required: true)
 
   defp provider_row(assigns) do
     ~H"""
@@ -164,7 +175,11 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       </td>
       <td class="px-4 py-3 font-medium text-white">{@provider.name}</td>
       <td class="px-4 py-3 text-right">
-        <.latency_bar :if={@provider.avg_latency} latency={@provider.avg_latency} provider_metrics={@provider_metrics} />
+        <.latency_bar
+          :if={@provider.avg_latency}
+          latency={@provider.avg_latency}
+          provider_metrics={@provider_metrics}
+        />
         <span :if={!@provider.avg_latency} class="text-gray-600">—</span>
       </td>
       <td class="px-4 py-3 text-right font-mono text-sm text-gray-300">
@@ -177,13 +192,19 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         {format_latency(@provider.p99_latency)}
       </td>
       <td class="px-4 py-3 text-right">
-        <span :if={@provider.consistency_ratio} class={["font-mono text-sm", Status.consistency_color(@provider.consistency_ratio)]}>
+        <span
+          :if={@provider.consistency_ratio}
+          class={["font-mono text-sm", Status.consistency_color(@provider.consistency_ratio)]}
+        >
           {Formatting.safe_round(@provider.consistency_ratio, 1)}x
         </span>
         <span :if={!@provider.consistency_ratio} class="text-gray-600">—</span>
       </td>
       <td class="px-4 py-3 text-right">
-        <span :if={@provider.success_rate} class={["font-mono text-sm", success_color(@provider.success_rate)]}>
+        <span
+          :if={@provider.success_rate}
+          class={["font-mono text-sm", success_color(@provider.success_rate)]}
+        >
           {Formatting.safe_round(@provider.success_rate * 100, 1)}%
         </span>
         <span :if={!@provider.success_rate} class="text-gray-600">—</span>
@@ -195,8 +216,8 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
-  attr :latency, :float, required: true
-  attr :provider_metrics, :list, required: true
+  attr(:latency, :float, required: true)
+  attr(:provider_metrics, :list, required: true)
 
   defp latency_bar(assigns) do
     ~H"""
@@ -220,7 +241,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
   defp success_color(rate) when rate >= 0.95, do: "text-yellow-400"
   defp success_color(_), do: "text-red-400"
 
-  attr :method_metrics, :list, required: true
+  attr(:method_metrics, :list, required: true)
 
   defp method_performance_breakdown(assigns) do
     ~H"""
@@ -241,14 +262,16 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
-  attr :method_data, :map, required: true
+  attr(:method_data, :map, required: true)
 
   defp method_card(assigns) do
     ~H"""
     <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-2xl p-4">
       <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-700/50">
         <h3 class="font-mono text-sm text-sky-400">{@method_data.method}</h3>
-        <span class="text-xs text-gray-500">{Formatting.format_number(@method_data.total_calls)} calls</span>
+        <span class="text-xs text-gray-500">
+          {Formatting.format_number(@method_data.total_calls)} calls
+        </span>
       </div>
       <div class="space-y-2">
         <.method_provider_row
@@ -262,12 +285,14 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
-  attr :provider_stat, :map, required: true
-  attr :rank, :integer, required: true
-  attr :providers, :list, required: true
+  attr(:provider_stat, :map, required: true)
+  attr(:rank, :integer, required: true)
+  attr(:providers, :list, required: true)
 
   defp method_provider_row(assigns) do
-    bar_width = Formatting.calculate_method_bar_width(assigns.provider_stat.avg_latency, assigns.providers)
+    bar_width =
+      Formatting.calculate_method_bar_width(assigns.provider_stat.avg_latency, assigns.providers)
+
     assigns = assign(assigns, :bar_width, bar_width)
 
     ~H"""
@@ -289,7 +314,10 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         </div>
       </div>
       <div class="flex-none flex items-center gap-2 text-[10px]">
-        <span class={["font-mono", if(@provider_stat.success_rate >= 0.99, do: "text-emerald-400", else: "text-yellow-400")]}>
+        <span class={[
+          "font-mono",
+          if(@provider_stat.success_rate >= 0.99, do: "text-emerald-400", else: "text-yellow-400")
+        ]}>
           {Formatting.safe_round(@provider_stat.success_rate * 100, 0)}%
         </span>
         <span class="text-gray-500">{Formatting.format_number(@provider_stat.total_calls)}</span>
