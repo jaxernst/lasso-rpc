@@ -156,29 +156,35 @@ defmodule Lasso.RPC.ChainSupervisor do
   """
   @spec remove_provider(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def remove_provider(profile, chain_name, provider_id) do
-    # Stop BlockSync and HealthProbe workers for this provider
-    # Supervisors are siblings in the tree - use profile-scoped versions
-    BlockSync.Supervisor.stop_worker(profile, chain_name, provider_id)
-    HealthProbe.Supervisor.stop_worker(profile, chain_name, provider_id)
+    with :ok <- BlockSync.Supervisor.stop_worker(profile, chain_name, provider_id),
+         :ok <- HealthProbe.Supervisor.stop_worker(profile, chain_name, provider_id),
+         :ok <- stop_provider_supervisor(profile, chain_name, provider_id) do
+      # Close transport channels (idempotent)
+      TransportRegistry.close_channel(profile, chain_name, provider_id, :http)
+      TransportRegistry.close_channel(profile, chain_name, provider_id, :ws)
 
-    # Stop the per-provider supervisor (cascades WS then circuit breakers)
+      # Unregister from pool
+      :ok = ProviderPool.unregister_provider(profile, chain_name, provider_id)
+
+      Logger.info("Successfully removed provider #{provider_id} from #{chain_name}")
+      :ok
+    end
+  end
+
+  defp stop_provider_supervisor(profile, chain_name, provider_id) do
     case GenServer.whereis(provider_supervisor_via(profile, chain_name, provider_id)) do
       nil ->
         :ok
 
       pid ->
-        DynamicSupervisor.terminate_child(provider_supervisors_name(profile, chain_name), pid)
+        case DynamicSupervisor.terminate_child(
+               provider_supervisors_name(profile, chain_name),
+               pid
+             ) do
+          :ok -> :ok
+          {:error, _} = error -> error
+        end
     end
-
-    # Close transport channels (idempotent)
-    TransportRegistry.close_channel(profile, chain_name, provider_id, :http)
-    TransportRegistry.close_channel(profile, chain_name, provider_id, :ws)
-
-    # Unregister from pool
-    :ok = ProviderPool.unregister_provider(profile, chain_name, provider_id)
-
-    Logger.info("Successfully removed provider #{provider_id} from #{chain_name}")
-    :ok
   end
 
   # Supervisor callbacks

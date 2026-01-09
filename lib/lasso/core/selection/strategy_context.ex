@@ -74,8 +74,6 @@ defmodule Lasso.RPC.StrategyContext do
     |> Enum.sort()
   end
 
-  defp median([]), do: @default_fallback_latency_ms
-
   defp median(sorted_list) do
     mid = div(length(sorted_list), 2)
 

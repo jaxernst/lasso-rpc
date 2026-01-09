@@ -124,16 +124,6 @@
                  ~r"lib/lasso/observability/",
                  # JSON-RPC Support
                  ~r"lib/lasso/jsonrpc/",
-                 # Supporting Infrastructure
-                 ~r"lib/lasso/core/chain_state.ex",
-                 ~r"lib/lasso/core/block_cache.ex",
-                 ~r"lib/lasso/core/events/",
-                 ~r"lib/lasso/core/support/dedupe_cache.ex",
-                 ~r"lib/lasso/core/support/filter_normalizer.ex",
-                 ~r"lib/lasso/core/support/process_registry.ex",
-                 ~r"lib/lasso/core/strategies/strategy_registry.ex",
-                 ~r"lib/lasso/core/benchmarking/benchmark_store_adapter.ex",
-                 ~r"lib/lasso/core/benchmarking/persistence.ex",
                  # Developer Tools
                  ~r"lib/mix/tasks/"
                ]

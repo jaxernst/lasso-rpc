@@ -32,7 +32,8 @@ defmodule Lasso.HealthProbe.Supervisor do
   @doc """
   Start a worker for a specific provider.
   """
-  @spec start_worker(String.t(), String.t(), String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
+  @spec start_worker(String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, pid()} | {:error, term()}
   def start_worker(profile, chain, provider_id, opts)
       when is_binary(profile) and is_binary(chain) and is_list(opts) do
     spec = {Worker, {chain, profile, provider_id, opts}}
@@ -64,14 +65,17 @@ defmodule Lasso.HealthProbe.Supervisor do
   @doc """
   Stop a worker for a specific provider.
   """
-  @spec stop_worker(String.t(), String.t(), String.t()) :: :ok | {:error, :not_found}
+  @spec stop_worker(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def stop_worker(profile, chain, provider_id) when is_binary(profile) and is_binary(chain) do
     case GenServer.whereis(Worker.via(chain, profile, provider_id)) do
       nil ->
         :ok
 
       pid ->
-        DynamicSupervisor.terminate_child(via(profile, chain), pid)
+        case DynamicSupervisor.terminate_child(via(profile, chain), pid) do
+          :ok -> :ok
+          {:error, _} = error -> error
+        end
     end
   end
 

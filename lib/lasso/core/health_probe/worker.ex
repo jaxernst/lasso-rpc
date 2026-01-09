@@ -84,7 +84,7 @@ defmodule Lasso.HealthProbe.Worker do
     )
   end
 
-  @spec via(atom(), String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
+  @spec via(String.t(), String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via(chain, profile, provider_id) when is_binary(profile) do
     {:via, Registry, {Lasso.Registry, {:health_probe_worker, chain, profile, provider_id}}}
   end
