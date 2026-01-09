@@ -486,11 +486,6 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManagerTest do
   end
 
   describe "stale subscription detection (race condition fix)" do
-    @moduledoc """
-    These tests verify the fix for the race condition where fast reconnects
-    could cause stale subscriptions to be reused, resulting in dropped events.
-    """
-
     test "detects stale subscription after fast reconnect and recreates", %{
       chain: chain,
       provider: provider,
@@ -615,12 +610,6 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManagerTest do
   end
 
   describe "subscription liveness monitoring (Issue #27)" do
-    @moduledoc """
-    Tests for detecting silent subscription expiration.
-    Provider-side WebSocket subscriptions can silently die while the connection stays alive.
-    These tests verify that stale subscriptions are detected and invalidated.
-    """
-
     test "subscription with events is not marked stale", %{
       chain: chain,
       provider: provider,
@@ -636,7 +625,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManagerTest do
       assert status.active_subscriptions[{provider, key}] != nil
 
       # Simulate an event arriving - this should reset staleness timer
-      [{manager_pid, _}] =
+      [{_manager_pid, _}] =
         Registry.lookup(Lasso.Registry, {:upstream_sub_manager, profile, chain})
 
       upstream_id = status.active_subscriptions[{provider, key}].upstream_id
@@ -692,7 +681,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManagerTest do
       profile: profile
     } do
       key = {:newHeads}
-      test_pid = self()
+      _test_pid = self()
 
       # Register to receive invalidation events
       UpstreamSubscriptionRegistry.register_consumer(profile, chain, provider, key)

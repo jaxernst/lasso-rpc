@@ -115,7 +115,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
     end
 
     @tag :skip
-    test "emits connection_failed event on connection failure", %{endpoint: endpoint} do
+    test "emits connection_failed event on connection failure", %{endpoint: _endpoint} do
       # Note: This test is skipped for Phase 0 as it requires special MockWSClient configuration
       # It will be properly tested in Phase 1-5 integration tests with full infrastructure
       :ok
@@ -152,7 +152,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
     end
 
     @tag :skip
-    test "emits reconnect_exhausted when max attempts reached", %{endpoint: endpoint} do
+    test "emits reconnect_exhausted when max attempts reached", %{endpoint: _endpoint} do
       # Note: This test is skipped for Phase 0 as it requires special failure scenarios
       # It will be properly tested in Phase 2 reconnection tests with full infrastructure
       :ok

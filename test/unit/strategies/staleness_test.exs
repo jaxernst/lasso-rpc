@@ -3,7 +3,28 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
 
   alias Lasso.RPC.Strategies.Fastest
   alias Lasso.RPC.Strategies.LatencyWeighted
-  alias Lasso.RPC.{SelectionContext, StrategyContext}
+  alias Lasso.RPC.SelectionContext
+
+  defmodule MockBatchMetricsBackend do
+    def batch_get_transport_performance(profile, chain, requests) do
+      Process.get(:batch_mock_fun).(profile, chain, requests)
+    end
+
+    def get_provider_performance(_profile, _chain, _provider_id, _method), do: nil
+
+    def get_method_performance(_profile, _chain, _method) do
+      []
+    end
+
+    def get_provider_transport_performance(_profile, _chain, _provider_id, _method, _transport),
+      do: nil
+
+    def get_method_transport_performance(_profile, _chain, _provider_id, _method, _transport),
+      do: []
+
+    def record_request(_profile, _chain, _provider_id, _method, _duration_ms, _result, _opts),
+      do: :ok
+  end
 
   describe "Fastest strategy staleness validation" do
     setup do
@@ -258,32 +279,7 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
 
   # Helper to stub batch metrics
   defp stub_batch_metrics(fun) do
-    # Store original backend
     original_backend = Application.get_env(:lasso, :metrics_backend)
-
-    defmodule MockBatchMetricsBackend do
-      def batch_get_transport_performance(profile, chain, requests) do
-        Process.get(:batch_mock_fun).(profile, chain, requests)
-      end
-
-      # Stub other required callbacks
-      def get_provider_performance(_profile, _chain, _provider_id, _method), do: nil
-
-      def get_method_performance(_profile, _chain, _method) do
-        # Return empty list for cold start baseline calculation
-        # This means cold start baseline will use default 500ms
-        []
-      end
-
-      def get_provider_transport_performance(_profile, _chain, _provider_id, _method, _transport),
-        do: nil
-
-      def get_method_transport_performance(_profile, _chain, _provider_id, _method, _transport),
-        do: []
-
-      def record_request(_profile, _chain, _provider_id, _method, _duration_ms, _result, _opts),
-        do: :ok
-    end
 
     Process.put(:batch_mock_fun, fun)
     Application.put_env(:lasso, :metrics_backend, MockBatchMetricsBackend)

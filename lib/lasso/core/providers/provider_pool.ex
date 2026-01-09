@@ -1353,9 +1353,9 @@ defmodule Lasso.RPC.ProviderPool do
           is_pid(ws_connection_pid(provider.id))
 
       :both ->
-        transport_available?(provider, :http, current_time) and
-          transport_available?(provider, :ws, current_time) and
-          is_pid(ws_connection_pid(provider.id))
+        transport_available?(provider, :http, current_time) or
+          (transport_available?(provider, :ws, current_time) and
+             is_pid(ws_connection_pid(provider.id)))
 
       _ ->
         transport_available?(provider, :http, current_time) or
@@ -1582,6 +1582,10 @@ defmodule Lasso.RPC.ProviderPool do
         state
 
       provider ->
+        # Report success to circuit breaker
+        cb_id = {state.profile, state.chain_name, provider_id, :http}
+        CircuitBreaker.signal_recovery(cb_id)
+
         updated =
           provider
           |> Map.put(:http_status, :healthy)
@@ -1602,6 +1606,10 @@ defmodule Lasso.RPC.ProviderPool do
         state
 
       provider ->
+        # Report success to circuit breaker
+        cb_id = {state.profile, state.chain_name, provider_id, :ws}
+        CircuitBreaker.signal_recovery(cb_id)
+
         updated =
           provider
           |> Map.put(:ws_status, :healthy)
@@ -1639,6 +1647,10 @@ defmodule Lasso.RPC.ProviderPool do
             # Provider stays healthy - RateLimitState is the authoritative source for rate limit status
             retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
 
+            # Report to circuit breaker (rate limit threshold is lower than other errors)
+            cb_id = {state.profile, state.chain_name, provider_id, transport}
+            CircuitBreaker.record_failure(cb_id, jerr)
+
             # Only update last_error for debugging - don't change health status
             updated =
               provider
@@ -1661,6 +1673,10 @@ defmodule Lasso.RPC.ProviderPool do
           true ->
             new_failures = provider.consecutive_failures + 1
             new_status = derive_failure_status(new_failures)
+
+            # Report to circuit breaker
+            cb_id = {state.profile, state.chain_name, provider_id, transport}
+            CircuitBreaker.record_failure(cb_id, jerr)
 
             updated =
               provider

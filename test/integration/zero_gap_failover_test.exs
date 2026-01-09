@@ -75,7 +75,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
     test "handles out-of-order blocks during failover", %{chain: chain} do
       profile = "default"
 
-      {:ok, [p1_id, _p2_id]} =
+      {:ok, [_p1_id, _p2_id]} =
         IntegrationHelper.setup_test_chain_with_providers(
           chain,
           [
@@ -140,7 +140,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
   end
 
   # Helper: Collect N subscription events with timeout
-  defp collect_blocks(count, opts \\ []) do
+  defp collect_blocks(count, opts) do
     timeout = Keyword.get(opts, :timeout, 5000)
     collect_blocks_recursive(count, timeout, [])
   end
@@ -159,7 +159,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
   end
 
   # Helper: Collect all available blocks until timeout
-  defp collect_all_blocks(opts \\ []) do
+  defp collect_all_blocks(opts) do
     timeout = Keyword.get(opts, :timeout, 100)
     collect_all_blocks_recursive(timeout, [])
   end

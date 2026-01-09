@@ -256,7 +256,7 @@ defmodule Lasso.Test.Eventually do
           Process.sleep(interval)
           poll_until_true(condition_fn, deadline, interval)
 
-        other ->
+        _other ->
           Process.sleep(interval)
           poll_until_true(condition_fn, deadline, interval)
       end
@@ -297,7 +297,7 @@ defmodule Lasso.Test.Eventually do
         {true, value} ->
           {:ok, value}
 
-        {false, value} ->
+        {false, _value} ->
           Process.sleep(interval)
           poll_with_value(condition_fn, deadline, interval)
       end

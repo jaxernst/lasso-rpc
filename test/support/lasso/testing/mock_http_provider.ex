@@ -58,8 +58,6 @@ defmodule Lasso.Testing.MockHTTPProvider do
       id: provider_id,
       name: "Mock HTTP Provider #{provider_id}",
       url: "http://mock-#{provider_id}.test",
-      # Fake WS URL to pass protocol filter
-      ws_url: "ws://mock-#{provider_id}.test/ws",
       type: "test",
       priority: Map.get(spec, :priority, 100),
       # Mark as mock for routing

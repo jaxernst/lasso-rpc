@@ -4,8 +4,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag :integration
   @moduletag timeout: 10_000
 
-  alias Lasso.RPC.{RequestPipeline, CircuitBreaker, RequestOptions, Response}
-  alias Lasso.Test.{TelemetrySync, CircuitBreakerHelper}
+  alias Lasso.RPC.{RequestPipeline, RequestOptions, Response}
+  alias Lasso.Test.CircuitBreakerHelper
   alias Lasso.Testing.MockProviderBehavior
 
   describe "circuit breaker coordination" do
@@ -692,7 +692,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
       # CRITICAL TEST: Request should automatically failover to healthy backup
       # The system is smart enough to retry within the same request when hitting rate limits
-      {:ok, result, ctx} =
+      {:ok, result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",

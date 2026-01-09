@@ -16,7 +16,7 @@ defmodule Lasso.RPC.SelectionTest do
 
   use Lasso.Test.LassoIntegrationCase
 
-  alias Lasso.RPC.{Selection, SelectionContext, ProviderPool}
+  alias Lasso.RPC.{Selection, SelectionContext}
   alias Lasso.Test.TelemetrySync
 
   describe "select_provider/3 - filter handling" do

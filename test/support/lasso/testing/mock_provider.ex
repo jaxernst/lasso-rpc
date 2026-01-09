@@ -176,46 +176,45 @@ defmodule Lasso.Testing.MockProvider do
           priority: Map.get(spec, :priority, 100)
         }
 
-        # Register with ConfigStore first (required for TransportRegistry)
-        case Lasso.Config.ConfigStore.register_provider_runtime("default", chain, provider_config) do
-          :ok ->
-            # Now register with ChainSupervisor/ProviderPool
-            case Lasso.Providers.add_provider(chain, provider_config) do
-              {:ok, ^provider_id} ->
-                # Monitor the test process - cleanup on exit
-                setup_cleanup_monitor(chain, provider_id, pid)
+        # Ensure chain exists before registering provider
+        profile = Map.get(spec, :profile, "default")
 
-                # Eagerly initialize HTTP channel for deterministic testing
-                case Lasso.RPC.TransportRegistry.get_channel("default", chain, provider_id, :http) do
-                  {:ok, _channel} ->
-                    Logger.debug("Started mock provider #{provider_id} at #{url} (channel ready)")
-                    {:ok, provider_id}
+        with :ok <- Lasso.Testing.ChainHelper.ensure_chain_exists(chain, profile: profile),
+             :ok <- Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
+             {:ok, ^provider_id} <- Lasso.Providers.add_provider(chain, provider_config) do
+          # Monitor the test process - cleanup on exit
+          setup_cleanup_monitor(chain, provider_id, pid)
 
-                  {:error, reason} ->
-                    Logger.warning(
-                      "Mock provider #{provider_id} started but channel initialization failed: #{inspect(reason)}"
-                    )
+          # Eagerly initialize HTTP channel for deterministic testing
+          case Lasso.RPC.TransportRegistry.get_channel(profile, chain, provider_id, :http) do
+            {:ok, _channel} ->
+              Logger.debug("Started mock provider #{provider_id} at #{url} (channel ready)")
+              {:ok, provider_id}
 
-                    # Still return success - channel will be created on first use
-                    {:ok, provider_id}
-                end
+            {:error, reason} ->
+              Logger.warning(
+                "Mock provider #{provider_id} started but channel initialization failed: #{inspect(reason)}"
+              )
 
-              {:error, reason} ->
-                # Failed to register with ChainSupervisor - cleanup ConfigStore
-                Lasso.Config.ConfigStore.unregister_provider_runtime(
-                  "default",
-                  chain,
-                  provider_id
-                )
-
-                Plug.Cowboy.shutdown(provider_id)
-                {:error, {:registration_failed, reason}}
-            end
-
-          {:error, reason} ->
+              # Still return success - channel will be created on first use
+              {:ok, provider_id}
+          end
+        else
+          {:error, {:config_store_registration_failed, reason}} ->
             # Failed to register with ConfigStore
             Plug.Cowboy.shutdown(provider_id)
             {:error, {:config_store_registration_failed, reason}}
+
+          {:error, reason} when reason in [:chain_not_found] ->
+            # Chain doesn't exist (shouldn't happen after ensure_chain_exists, but handle gracefully)
+            Plug.Cowboy.shutdown(provider_id)
+            {:error, {:config_store_registration_failed, reason}}
+
+          {:error, reason} ->
+            # Failed to register with ChainSupervisor - cleanup ConfigStore
+            Lasso.Config.ConfigStore.unregister_provider_runtime(profile, chain, provider_id)
+            Plug.Cowboy.shutdown(provider_id)
+            {:error, {:registration_failed, reason}}
         end
 
       {:error, reason} ->

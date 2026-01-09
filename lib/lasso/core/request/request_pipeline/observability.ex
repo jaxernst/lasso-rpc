@@ -169,6 +169,8 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         failover_reason,
         error_reason
       ) do
+    profile = ctx.opts.profile
+
     :telemetry.execute(
       [:lasso, :failover, :fast_fail],
       %{count: 1},
@@ -182,6 +184,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         failover_reason: failover_reason
       }
     )
+
+    # Report failure to ProviderPool (which will update circuit breaker)
+    jerr = JError.from(error_reason, provider_id: provider_id)
+    ProviderPool.report_failure(profile, ctx.chain, provider_id, jerr, transport)
 
     :ok
   end

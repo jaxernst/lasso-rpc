@@ -174,7 +174,7 @@ defmodule Lasso.Testing.TelemetrySyncTest do
 
     test "automatically detaches handler even on timeout" do
       event_name = [:test, :detach, :timeout]
-      handler_id = {TelemetrySync, make_ref(), System.unique_integer([:positive, :monotonic])}
+      _handler_id = {TelemetrySync, make_ref(), System.unique_integer([:positive, :monotonic])}
 
       {:ok, collector} = TelemetrySync.attach_collector(event_name)
 
