@@ -180,7 +180,8 @@ defmodule Lasso.Testing.MockProvider do
         profile = Map.get(spec, :profile, "default")
 
         with :ok <- Lasso.Testing.ChainHelper.ensure_chain_exists(chain, profile: profile),
-             :ok <- Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
+             :ok <-
+               Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
              {:ok, ^provider_id} <- Lasso.Providers.add_provider(chain, provider_config) do
           # Monitor the test process - cleanup on exit
           setup_cleanup_monitor(chain, provider_id, pid)
