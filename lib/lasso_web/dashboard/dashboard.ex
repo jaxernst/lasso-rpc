@@ -28,23 +28,16 @@ defmodule LassoWeb.Dashboard do
 
     socket = assign(socket, :active_tab, Map.get(params, "tab", "overview"))
 
-    # Profile context initialization
     profiles = ConfigStore.list_profiles()
     selected_profile = determine_initial_profile(params, session, profiles)
 
     if connected?(socket) do
-      # Profile-scoped subscriptions
       subscribe_profile_topics(selected_profile)
-
-      # Global subscriptions
       subscribe_global_topics()
 
-      # Subscribe to centralized VM metrics collector (if enabled)
       if Lasso.VMMetricsCollector.enabled?() do
         Lasso.VMMetricsCollector.subscribe()
       end
-
-      # Load metrics immediately on connection, then refresh periodically
       Process.send_after(self(), :load_metrics_on_connect, 0)
       Process.send_after(self(), :metrics_refresh, Constants.vm_metrics_interval())
     end

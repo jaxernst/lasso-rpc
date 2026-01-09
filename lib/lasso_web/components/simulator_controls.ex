@@ -35,71 +35,31 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           load_types: %{http: true, ws: true}
         })
       end)
-
-    # Handle specific updates from Dashboard forwarding
-    socket =
-      if Map.has_key?(assigns, :sim_stats) do
-        assign(socket, :sim_stats, assigns.sim_stats)
-      else
-        socket
-      end
-
-    socket =
-      if Map.has_key?(assigns, :recent_calls) do
-        assign(socket, :recent_calls, assigns.recent_calls)
-      else
-        socket
-      end
-
-    socket =
-      if Map.has_key?(assigns, :simulator_running) do
-        assign(socket, :simulator_running, assigns.simulator_running)
-      else
-        socket
-      end
-
-    # Recalculate simulator_running based on active_runs when it changes
-    socket =
-      if Map.has_key?(assigns, :active_runs) do
-        is_running = length(assigns.active_runs) > 0
-        assign(socket, :simulator_running, is_running)
-      else
-        socket
-      end
-
-    # Handle profile changes - reset chain selection when profile changes
-    socket =
-      if Map.has_key?(assigns, :selected_profile) do
-        old_profile = socket.assigns[:selected_profile]
-        new_profile = assigns.selected_profile
-
-        if old_profile != new_profile do
-          socket
-          |> assign(:selected_profile, new_profile)
-          |> assign(:selected_chains, [])
-          |> update_preview_text()
-        else
-          socket
-        end
-      else
-        socket
-      end
-
-    # Handle available_chains changes
-    socket =
-      if Map.has_key?(assigns, :available_chains) do
-        assign(socket, :available_chains, assigns.available_chains)
-      else
-        socket
-      end
-
-    # Always derive quick_run_config from current selected_profile
-    # This ensures it's always in sync without manual change tracking
-    socket =
-      assign(socket, :quick_run_config, get_default_run_config(socket.assigns.selected_profile))
+      |> maybe_update_simulator_running(assigns)
+      |> maybe_handle_profile_change(assigns)
+      |> then(&assign(&1, :quick_run_config, get_default_run_config(&1.assigns.selected_profile)))
 
     {:ok, socket}
   end
+
+  defp maybe_update_simulator_running(socket, %{active_runs: runs}) do
+    assign(socket, :simulator_running, length(runs) > 0)
+  end
+
+  defp maybe_update_simulator_running(socket, _assigns), do: socket
+
+  defp maybe_handle_profile_change(socket, %{selected_profile: new_profile}) do
+    if socket.assigns[:selected_profile] != new_profile do
+      socket
+      |> assign(:selected_profile, new_profile)
+      |> assign(:selected_chains, [])
+      |> update_preview_text()
+    else
+      socket
+    end
+  end
+
+  defp maybe_handle_profile_change(socket, _assigns), do: socket
 
   @impl true
   def handle_event("toggle_collapsed", _params, socket) do
@@ -690,13 +650,11 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     end
   end
 
-  # Run configuration helpers
   defp get_default_run_config(profile) do
     %{
       type: "custom",
       duration: 30_000,
       profile: profile,
-      # Default strategy to avoid undefined routes
       strategy: "round-robin",
       http: %{
         enabled: true,
@@ -704,20 +662,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         rps: 5,
         concurrency: 4
       },
-      ws: %{
-        enabled: true,
-        connections: 2,
-        topics: ["newHeads"]
-      }
+      ws: %{enabled: true, connections: 2, topics: ["newHeads"]}
     }
   end
 
   defp build_run_config(socket) do
-    load_types = socket.assigns.load_types
-    # Ensure strategy is valid or omit it to use default route
-    strategy = socket.assigns.selected_strategy
-    # Dashboard mount guarantees selected_profile is set
-    profile = socket.assigns.selected_profile
+    %{load_types: load_types, selected_strategy: strategy, selected_profile: profile} =
+      socket.assigns
 
     config = %{
       type: "custom",
@@ -730,28 +681,18 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         rps: socket.assigns.request_rate,
         concurrency: max(8, socket.assigns.request_rate)
       },
-      ws: %{
-        enabled: load_types.ws,
-        connections: 2,
-        topics: ["newHeads"]
-      }
+      ws: %{enabled: load_types.ws, connections: 2, topics: ["newHeads"]}
     }
 
-    # Only include strategy if it's a valid non-empty string
-    if is_binary(strategy) and String.length(strategy) > 0 do
-      Map.put(config, :strategy, strategy)
-    else
-      config
-    end
+    if is_binary(strategy) and strategy != "",
+      do: Map.put(config, :strategy, strategy),
+      else: config
   end
 
   defp get_selected_chains(socket) do
-    selected = socket.assigns.selected_chains || []
-
-    if length(selected) > 0 do
-      selected
-    else
-      Enum.map(socket.assigns.available_chains, & &1.name)
+    case socket.assigns.selected_chains || [] do
+      [] -> Enum.map(socket.assigns.available_chains, & &1.name)
+      selected -> selected
     end
   end
 

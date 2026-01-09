@@ -49,7 +49,6 @@ defmodule LassoWeb.Plugs.ProfileResolverPlug do
 
     case ProfileValidator.validate(profile_slug) do
       {:ok, validated_slug} ->
-        # Profile validated, now fetch metadata
         case ConfigStore.get_profile(validated_slug) do
           {:ok, profile_meta} ->
             conn
@@ -57,7 +56,6 @@ defmodule LassoWeb.Plugs.ProfileResolverPlug do
             |> assign(:profile, profile_meta)
 
           {:error, :not_found} ->
-            # This should not happen if validator passed, but handle defensively
             return_error(conn, :profile_not_found, "Profile '#{validated_slug}' not found")
         end
 
@@ -66,22 +64,21 @@ defmodule LassoWeb.Plugs.ProfileResolverPlug do
     end
   end
 
-  # Private helper to return error responses
   defp return_error(conn, error_type, message) do
-    http_status = ProfileValidator.error_to_http_status(error_type)
-    jsonrpc_code = ProfileValidator.error_to_jsonrpc_code(error_type)
+    {http_status, jsonrpc_code} = error_codes(error_type)
 
     conn
     |> put_status(http_status)
+    |> put_resp_content_type("application/json")
     |> Phoenix.Controller.json(%{
       jsonrpc: "2.0",
-      error: %{
-        code: jsonrpc_code,
-        message: message,
-        data: %{error_type: error_type}
-      },
+      error: %{code: jsonrpc_code, message: message, data: %{error_type: error_type}},
       id: nil
     })
     |> halt()
+  end
+
+  defp error_codes(error_type) do
+    {ProfileValidator.error_to_http_status(error_type), ProfileValidator.error_to_jsonrpc_code(error_type)}
   end
 end
