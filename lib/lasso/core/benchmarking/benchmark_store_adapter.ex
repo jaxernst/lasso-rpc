@@ -172,10 +172,8 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
 
   # Private functions
 
-  defp score_table_name(profile, chain) do
-    # Match BenchmarkStore naming convention
-    :"provider_scores_#{profile}_#{chain}"
-  end
+  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+  defp score_table_name(profile, chain), do: :"provider_scores_#{profile}_#{chain}"
 
   defp table_exists?(table_name) do
     case :ets.whereis(table_name) do

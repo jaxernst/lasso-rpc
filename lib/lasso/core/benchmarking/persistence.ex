@@ -166,29 +166,7 @@ defmodule Lasso.Benchmarking.Persistence do
             String.starts_with?(filename, "#{profile}_#{chain_name}_") and
               String.ends_with?(filename, ".json")
           end)
-          |> Enum.map(fn filename ->
-            filepath = Path.join(@snapshots_dir, filename)
-
-            case File.read(filepath) do
-              {:ok, content} ->
-                case Jason.decode(content) do
-                  {:ok, data} ->
-                    if Map.get(data, "timestamp", 0) >= cutoff_timestamp do
-                      {:ok, data}
-                    else
-                      nil
-                    end
-
-                  {:error, _} ->
-                    Logger.warning("Failed to decode snapshot file: #{filename}")
-                    nil
-                end
-
-              {:error, _} ->
-                Logger.warning("Failed to read snapshot file: #{filename}")
-                nil
-            end
-          end)
+          |> Enum.map(&load_snapshot_file(&1, cutoff_timestamp))
           |> Enum.filter(&(&1 != nil))
           |> Enum.map(fn {:ok, data} -> data end)
           |> Enum.sort_by(fn data -> Map.get(data, "timestamp", 0) end, :desc)
@@ -251,6 +229,30 @@ defmodule Lasso.Benchmarking.Persistence do
   end
 
   # Private functions
+
+  defp load_snapshot_file(filename, cutoff_timestamp) do
+    filepath = Path.join(@snapshots_dir, filename)
+
+    case File.read(filepath) do
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, data} ->
+            if Map.get(data, "timestamp", 0) >= cutoff_timestamp do
+              {:ok, data}
+            else
+              nil
+            end
+
+          {:error, _} ->
+            Logger.warning("Failed to decode snapshot file: #{filename}")
+            nil
+        end
+
+      {:error, _} ->
+        Logger.warning("Failed to read snapshot file: #{filename}")
+        nil
+    end
+  end
 
   defp extract_timestamp_from_filename(filename) do
     case String.split(filename, "_") do

@@ -60,8 +60,6 @@ defmodule Mix.Tasks.Lasso.Probe do
   """
 
   @valid_probes [:methods, :limits, :websocket]
-  @valid_levels [:critical, :standard, :full]
-  @valid_outputs [:table, :json]
 
   @impl Mix.Task
   def run(args) do
@@ -150,25 +148,37 @@ defmodule Mix.Tasks.Lasso.Probe do
     end
   end
 
-  defp parse_level(level_str) do
-    level = String.to_atom(level_str)
+  @level_map %{
+    "minimal" => :minimal,
+    "standard" => :standard,
+    "comprehensive" => :comprehensive
+  }
 
-    if level in @valid_levels do
-      level
-    else
-      Mix.shell().info("Invalid level '#{level_str}', using :standard")
-      :standard
+  @output_map %{
+    "table" => :table,
+    "json" => :json,
+    "verbose" => :verbose
+  }
+
+  defp parse_level(level_str) do
+    case Map.get(@level_map, level_str) do
+      nil ->
+        Mix.shell().info("Invalid level '#{level_str}', using :standard")
+        :standard
+
+      level ->
+        level
     end
   end
 
   defp parse_output(output_str) do
-    output = String.to_atom(output_str)
+    case Map.get(@output_map, output_str) do
+      nil ->
+        Mix.shell().info("Invalid output '#{output_str}', using :table")
+        :table
 
-    if output in @valid_outputs do
-      output
-    else
-      Mix.shell().info("Invalid output '#{output_str}', using :table")
-      :table
+      output ->
+        output
     end
   end
 

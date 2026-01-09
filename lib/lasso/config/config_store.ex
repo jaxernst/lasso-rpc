@@ -346,12 +346,14 @@ defmodule Lasso.Config.ConfigStore do
 
   @impl true
   def handle_call({:unregister_chain_runtime, profile, chain_name}, _from, state) do
-    with {:ok, _chain_config} <- get_chain(profile, chain_name) do
-      remove_chain_from_profile(profile, chain_name)
-      Logger.debug("Unregistered chain #{chain_name} from profile #{profile} (runtime)")
-      {:reply, :ok, state}
-    else
-      {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
+    case get_chain(profile, chain_name) do
+      {:ok, _chain_config} ->
+        remove_chain_from_profile(profile, chain_name)
+        Logger.debug("Unregistered chain #{chain_name} from profile #{profile} (runtime)")
+        {:reply, :ok, state}
+
+      {:error, :not_found} ->
+        {:reply, {:error, :chain_not_found}, state}
     end
   end
 

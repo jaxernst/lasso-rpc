@@ -372,7 +372,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   def render(assigns) do
     # Determine status indicator state
     status =
-      if is_simulator_active(assigns.sim_stats, assigns.simulator_running) do
+      if simulator_active?(assigns.sim_stats, assigns.simulator_running) do
         :healthy
       else
         :info
@@ -393,7 +393,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         <:header>
           <.status_indicator
             status={@status}
-            animated={is_simulator_active(@sim_stats, @simulator_running)}
+            animated={simulator_active?(@sim_stats, @simulator_running)}
           />
           <div class="truncate text-xs font-medium text-white">
             RPC Load Test
@@ -652,7 +652,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   end
 
   # Helper functions
-  defp is_simulator_active(sim_stats, simulator_running) do
+  defp simulator_active?(sim_stats, simulator_running) do
     get_stat(sim_stats, :http, "inflight", 0) > 0 or
       get_stat(sim_stats, :ws, "open", 0) > 0 or simulator_running
   end
@@ -666,6 +666,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         Map.get(stats, key_string, default)
 
       %{^type => stats} when is_map(stats) ->
+        # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
         atom_key = if is_atom(key), do: key, else: String.to_atom(key)
         Map.get(stats, atom_key, default)
 

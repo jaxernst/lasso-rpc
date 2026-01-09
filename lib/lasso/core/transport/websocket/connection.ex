@@ -1080,20 +1080,18 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   # This wrapper catches those exits and converts them to {:error, reason} tuples
   # for consistent error handling.
   defp send_frame(connection, frame) do
-    try do
-      ws_client().send_frame(connection, frame)
-    catch
-      # Process is hung/unresponsive - :gen.call timed out (default 5s)
-      :exit, {:timeout, _call_info} ->
-        {:error, :timeout}
+    ws_client().send_frame(connection, frame)
+  catch
+    # Process is hung/unresponsive - :gen.call timed out (default 5s)
+    :exit, {:timeout, _call_info} ->
+      {:error, :timeout}
 
-      # Process died or noproc
-      :exit, {:noproc, _call_info} ->
-        {:error, :noproc}
+    # Process died or noproc
+    :exit, {:noproc, _call_info} ->
+      {:error, :noproc}
 
-      # Other exit reasons (process crash, etc.)
-      :exit, {reason, _call_info} ->
-        {:error, {:exit, reason}}
-    end
+    # Other exit reasons (process crash, etc.)
+    :exit, {reason, _call_info} ->
+      {:error, {:exit, reason}}
   end
 end

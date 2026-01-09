@@ -255,11 +255,11 @@ defmodule LassoWeb.NetworkTopology do
 
         cond do
           # L1 chains - check topology or fallback to known L1 patterns
-          is_l1_chain?(topology, chain_name) ->
+          l1_chain?(topology, chain_name) ->
             {Map.put(l1_acc, chain_name, connections), l2_acc, other_acc}
 
           # L2 chains - ONLY if parent chain exists in active chains
-          is_l2_with_active_parent?(topology, chain_name, active_chain_names) ->
+          l2_with_active_parent?(topology, chain_name, active_chain_names) ->
             {l1_acc, Map.put(l2_acc, chain_name, connections), other_acc}
 
           # Everything else (including L2s with missing parents) floats independently
@@ -272,12 +272,12 @@ defmodule LassoWeb.NetworkTopology do
   end
 
   # Check if chain is an L1 (from topology config only)
-  defp is_l1_chain?(%{category: :l1}, _chain_name), do: true
-  defp is_l1_chain?(_, _), do: false
+  defp l1_chain?(%{category: :l1}, _chain_name), do: true
+  defp l1_chain?(_, _), do: false
 
   # Check if chain is an L2 with an active parent chain
   # Parent must exist in the current set of active chains for connection to render
-  defp is_l2_with_active_parent?(
+  defp l2_with_active_parent?(
          %{category: category, parent: parent},
          _chain_name,
          active_chain_names
@@ -287,7 +287,7 @@ defmodule LassoWeb.NetworkTopology do
   end
 
   # Chains without topology config are not treated as L2s
-  defp is_l2_with_active_parent?(_, _, _), do: false
+  defp l2_with_active_parent?(_, _, _), do: false
 
   # Get the parent chain for an L2 (from topology config only)
   defp get_l2_parent(%{parent: parent}, _chain_name) when is_binary(parent), do: parent

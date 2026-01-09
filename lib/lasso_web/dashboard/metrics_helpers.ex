@@ -19,6 +19,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   alias LassoWeb.Dashboard.Metrics.Calculations
 
   # ETS table name helpers (must match BenchmarkStore)
+  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   defp score_table_name(profile, chain_name), do: :"provider_scores_#{profile}_#{chain_name}"
 
   # ---------------------------------------------------------------------------

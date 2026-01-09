@@ -275,16 +275,14 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           }
           | {:error, term()}
   def get_state(id) do
-    try do
-      GenServer.call(via_name(id), :get_state, @state_timeout)
-    catch
-      :exit, {:timeout, _} ->
-        Logger.warning("Timeout getting circuit breaker state for #{inspect(id)}")
-        {:error, :timeout}
+    GenServer.call(via_name(id), :get_state, @state_timeout)
+  catch
+    :exit, {:timeout, _} ->
+      Logger.warning("Timeout getting circuit breaker state for #{inspect(id)}")
+      {:error, :timeout}
 
-      :exit, {:noproc, _} ->
-        {:error, :not_found}
-    end
+    :exit, {:noproc, _} ->
+      {:error, :not_found}
   end
 
   @doc """

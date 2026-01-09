@@ -53,6 +53,7 @@ defmodule Lasso.VMMetricsCollector do
 
   ## Client API
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -60,6 +61,7 @@ defmodule Lasso.VMMetricsCollector do
   @doc """
   Check if VM metrics collection is enabled.
   """
+  @spec enabled?() :: boolean()
   def enabled? do
     Application.get_env(:lasso, :vm_metrics_enabled, false)
   end
@@ -71,6 +73,7 @@ defmodule Lasso.VMMetricsCollector do
   The caller process will receive `{:vm_metrics_update, metrics}` messages
   at the configured collection interval.
   """
+  @spec subscribe(pid()) :: {:ok, map() | nil} | {:error, :disabled}
   def subscribe(pid \\ self()) do
     GenServer.call(__MODULE__, {:subscribe, pid})
   end
@@ -78,6 +81,7 @@ defmodule Lasso.VMMetricsCollector do
   @doc """
   Unsubscribe from metrics updates.
   """
+  @spec unsubscribe(pid()) :: :ok
   def unsubscribe(pid \\ self()) do
     GenServer.cast(__MODULE__, {:unsubscribe, pid})
   end
@@ -86,6 +90,7 @@ defmodule Lasso.VMMetricsCollector do
   Get the latest collected metrics without subscribing.
   Returns `nil` if no metrics have been collected yet or if disabled.
   """
+  @spec get_latest_metrics() :: map() | nil
   def get_latest_metrics do
     GenServer.call(__MODULE__, :get_latest_metrics)
   end

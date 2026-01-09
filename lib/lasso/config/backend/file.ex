@@ -276,13 +276,20 @@ defmodule Lasso.Config.Backend.File do
   defp parse_adapter_config(config_map) when is_map(config_map) do
     config_map
     |> Enum.map(fn {key, value} ->
-      atom_key = if is_binary(key), do: String.to_atom(key), else: key
+      atom_key = if is_binary(key), do: safe_to_existing_atom(key), else: key
       {atom_key, value}
     end)
     |> Enum.into(%{})
   end
 
   defp parse_adapter_config(_), do: nil
+
+  defp safe_to_existing_atom(string) do
+    String.to_existing_atom(string)
+  rescue
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+    ArgumentError -> String.to_atom(string)
+  end
 
   defp parse_connection(nil) do
     %ChainConfig.Connection{

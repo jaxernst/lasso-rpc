@@ -142,9 +142,11 @@ defmodule Lasso.RPC.MethodRegistry do
   }
 
   @doc "Returns all standard method categories"
+  @spec categories() :: %{atom() => [String.t()]}
   def categories, do: @standard_methods
 
   @doc "Returns flattened list of all standard methods"
+  @spec all_methods() :: [String.t()]
   def all_methods do
     @standard_methods
     |> Map.values()
@@ -153,9 +155,11 @@ defmodule Lasso.RPC.MethodRegistry do
   end
 
   @doc "Returns methods in a specific category"
+  @spec category_methods(atom()) :: [String.t()]
   def category_methods(category), do: Map.get(@standard_methods, category, [])
 
   @doc "Returns the category for a given method"
+  @spec method_category(String.t()) :: atom()
   def method_category(method) do
     Enum.find_value(@standard_methods, :unknown, fn {cat, methods} ->
       if method in methods, do: cat
@@ -171,6 +175,7 @@ defmodule Lasso.RPC.MethodRegistry do
   - Archive methods (debug, trace): Assume unsupported
   - Deprecated methods: Assume unsupported
   """
+  @spec default_support_assumption(String.t()) :: boolean()
   def default_support_assumption(method) do
     case method_category(method) do
       cat when cat in [:core, :state, :network, :eip1559, :mempool] -> true

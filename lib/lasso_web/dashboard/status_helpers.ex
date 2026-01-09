@@ -33,81 +33,59 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   - :unknown - Cannot determine (rare)
   """
   def determine_provider_status(provider) do
-    circuit_state = Map.get(provider, :circuit_state, :closed)
-    health_status = Map.get(provider, :health_status, :unknown)
-    connection_status = Map.get(provider, :status, :unknown)
-    consecutive_failures = Map.get(provider, :consecutive_failures, 0)
-    reconnect_attempts = Map.get(provider, :reconnect_attempts, 0)
-    ws_status = Map.get(provider, :ws_status)
-    chain = Map.get(provider, :chain)
-    provider_id = Map.get(provider, :id)
-    reconnect_grace_until = Map.get(provider, :reconnect_grace_until)
-
-    # Check rate limit state from RateLimitState (primary source, auto-expires)
-    http_rate_limited = Map.get(provider, :http_rate_limited, false)
-    ws_rate_limited = Map.get(provider, :ws_rate_limited, false)
-    is_rate_limited = http_rate_limited or ws_rate_limited
-
-    # Fallback to legacy is_in_cooldown for backwards compatibility
-    is_in_cooldown = Map.get(provider, :is_in_cooldown, false)
+    fields = extract_status_fields(provider)
 
     cond do
-      # 1. Rate limited (from RateLimitState) - highest priority, auto-expires
-      is_rate_limited or health_status == :rate_limited or is_in_cooldown ->
-        :rate_limited
+      rate_limited?(fields) -> :rate_limited
+      fields.circuit_state == :open -> :circuit_open
+      fields.circuit_state == :half_open -> :testing_recovery
+      ws_recovering?(fields) -> :recovering
+      fields.health_status == :healthy -> block_lag_to_status(fields.chain, fields.provider_id)
+      fields.health_status in [:unhealthy, :misconfigured, :degraded] -> :degraded
+      fields.consecutive_failures in 3..9 -> :degraded
+      fields.health_status == :connecting or fields.connection_status == :connecting -> :recovering
+      fields.connection_status == :connected -> block_lag_to_status(fields.chain, fields.provider_id)
+      fields.connection_status in [:disconnected, :rate_limited] -> :degraded
+      true -> :unknown
+    end
+  end
 
-      # 2. Circuit breaker is open - complete failure
-      circuit_state == :open ->
-        :circuit_open
+  defp extract_status_fields(provider) do
+    %{
+      circuit_state: Map.get(provider, :circuit_state, :closed),
+      health_status: Map.get(provider, :health_status, :unknown),
+      connection_status: Map.get(provider, :status, :unknown),
+      consecutive_failures: Map.get(provider, :consecutive_failures, 0),
+      chain: Map.get(provider, :chain),
+      provider_id: Map.get(provider, :id),
+      http_rate_limited: Map.get(provider, :http_rate_limited, false),
+      ws_rate_limited: Map.get(provider, :ws_rate_limited, false),
+      is_in_cooldown: Map.get(provider, :is_in_cooldown, false),
+      reconnect_attempts: Map.get(provider, :reconnect_attempts, 0),
+      ws_status: Map.get(provider, :ws_status),
+      reconnect_grace_until: Map.get(provider, :reconnect_grace_until)
+    }
+  end
 
-      # 3. Circuit breaker testing recovery
-      circuit_state == :half_open ->
-        :testing_recovery
+  defp rate_limited?(fields) do
+    fields.http_rate_limited or
+      fields.ws_rate_limited or
+      fields.health_status == :rate_limited or
+      fields.is_in_cooldown
+  end
 
-      # 4. WebSocket actively recovering or in grace period after reconnection
-      reconnect_attempts > 0 and
-          (ws_status in [:disconnected, :connecting] or in_reconnect_grace?(reconnect_grace_until)) ->
-        :recovering
+  defp ws_recovering?(fields) do
+    fields.reconnect_attempts > 0 and
+      (fields.ws_status in [:disconnected, :connecting] or
+         in_reconnect_grace?(fields.reconnect_grace_until))
+  end
 
-      # 5. Healthy - check block sync status
-      health_status == :healthy ->
-        case check_block_lag(chain, provider_id) do
-          :synced -> :healthy
-          :lagging -> :lagging
-          # Show degraded when block height polling is persistently failing
-          :degraded_no_data -> :degraded
-          # Fail-open: if no lag data (startup/transient), show as healthy
-          :unavailable -> :healthy
-        end
-
-      # 6. Degraded states (consolidated from unhealthy, unstable, misconfigured)
-      health_status in [:unhealthy, :misconfigured, :degraded] ->
-        :degraded
-
-      # Provider has significant failures but circuit not yet open
-      consecutive_failures >= 3 and consecutive_failures < 10 ->
-        :degraded
-
-      # 7. Initial connection states (only during startup)
-      health_status == :connecting or connection_status == :connecting ->
-        :recovering
-
-      # 8. Fallback to connection_status for compatibility
-      connection_status == :connected ->
-        # Double-check block lag even for legacy status
-        case check_block_lag(chain, provider_id) do
-          :synced -> :healthy
-          :lagging -> :lagging
-          :degraded_no_data -> :degraded
-          :unavailable -> :healthy
-        end
-
-      connection_status in [:disconnected, :rate_limited] ->
-        :degraded
-
-      # 9. Default fallback
-      true ->
-        :unknown
+  defp block_lag_to_status(chain, provider_id) do
+    case check_block_lag(chain, provider_id) do
+      :synced -> :healthy
+      :lagging -> :lagging
+      :degraded_no_data -> :degraded
+      :unavailable -> :healthy
     end
   end
 
@@ -326,7 +304,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   end
 
   @doc "Check if provider status is considered critical"
-  def is_critical_status?(provider) do
+  def critical_status?(provider) do
     determine_provider_status(provider) == :circuit_open
   end
 

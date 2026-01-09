@@ -44,6 +44,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   The `profile` parameter isolates this chain's components from other profiles
   using the same blockchain. Registry keys include the profile for isolation.
   """
+  @spec start_link({String.t(), String.t(), map()}) :: Supervisor.on_start()
   def start_link({profile, chain_name, chain_config}) do
     Supervisor.start_link(__MODULE__, {profile, chain_name, chain_config},
       name: via_name(profile, chain_name)
@@ -53,30 +54,30 @@ defmodule Lasso.RPC.ChainSupervisor do
   @doc """
   Gets the status of all providers for a chain, including WebSocket connection information.
   """
+  @spec get_chain_status(String.t(), String.t()) :: map()
   def get_chain_status(profile, chain_name) do
-    try do
-      case ProviderPool.get_status(profile, chain_name) do
-        {:ok, status} ->
-          # Collect WebSocket connection status from WSConnection processes
-          ws_connections = collect_ws_connection_status(status.providers)
-          Map.put(status, :ws_connections, ws_connections)
+    case ProviderPool.get_status(profile, chain_name) do
+      {:ok, status} ->
+        # Collect WebSocket connection status from WSConnection processes
+        ws_connections = collect_ws_connection_status(status.providers)
+        Map.put(status, :ws_connections, ws_connections)
 
-        {:error, :not_found} ->
-          # ProviderPool process not found - chain not started
-          %{error: :chain_not_started}
+      {:error, :not_found} ->
+        # ProviderPool process not found - chain not started
+        %{error: :chain_not_started}
 
-        {:error, reason} ->
-          Logger.error("Failed to get chain status for #{chain_name}: #{reason}")
-          %{error: reason}
-      end
-    catch
-      :exit, {:noproc, _} -> %{error: :chain_not_started}
+      {:error, reason} ->
+        Logger.error("Failed to get chain status for #{chain_name}: #{reason}")
+        %{error: reason}
     end
+  catch
+    :exit, {:noproc, _} -> %{error: :chain_not_started}
   end
 
   @doc """
   Gets active provider connections for a chain.
   """
+  @spec get_active_providers(String.t(), String.t()) :: [String.t()]
   def get_active_providers(profile, chain_name) do
     ProviderPool.get_active_providers(profile, chain_name)
   end

@@ -451,8 +451,12 @@ defmodule LassoWeb.RPCSocket do
 
   ## Routing parameter extraction
 
-  # Valid strategies that can appear in the path
-  @valid_strategies ~w(fastest round-robin latency-weighted)
+  # Map URL strategy strings to atoms (avoids String.to_atom)
+  @strategy_map %{
+    "fastest" => :fastest,
+    "round-robin" => :round_robin,
+    "latency-weighted" => :latency_weighted
+  }
 
   defp extract_routing_params(nil, _params), do: {nil, nil}
 
@@ -469,15 +473,18 @@ defmodule LassoWeb.RPCSocket do
       ["ws", "rpc", "provider", provider_id | _] ->
         {nil, provider_id}
 
-      # Pattern: ["ws", "rpc", strategy, _chain_id] where strategy is valid
-      ["ws", "rpc", strategy, _chain_id] when strategy in @valid_strategies ->
-        # Convert hyphenated URL strategy (round-robin) to underscored atom (:round_robin)
-        strategy_atom = strategy |> String.replace("-", "_") |> String.to_atom()
-        {strategy_atom, nil}
+      # Pattern: ["ws", "rpc", segment, _chain_id_or_provider]
+      # Could be strategy or chain_id - check if it's a known strategy
+      ["ws", "rpc", segment, next_segment] ->
+        case Map.get(@strategy_map, segment) do
+          nil ->
+            # Not a strategy, treat as ["ws", "rpc", chain_id, provider_id]
+            {nil, next_segment}
 
-      # Pattern: ["ws", "rpc", _chain_id, provider_id] - alternative provider override
-      ["ws", "rpc", _chain_id, provider_id] ->
-        {nil, provider_id}
+          strategy_atom ->
+            # Valid strategy
+            {strategy_atom, nil}
+        end
 
       # Pattern: ["ws", "rpc", _chain_id] - base endpoint
       ["ws", "rpc" | _] ->

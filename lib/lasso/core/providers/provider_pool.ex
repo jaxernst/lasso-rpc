@@ -203,16 +203,14 @@ defmodule Lasso.RPC.ProviderPool do
 
   @spec get_status(profile, chain_name) :: {:ok, map()} | {:error, term()}
   def get_status(profile, chain_name) do
-    try do
-      GenServer.call(via_name(profile, chain_name), :get_status, @call_timeout)
-    catch
-      :exit, {:timeout, _} ->
-        Logger.warning("Timeout getting status for chain #{chain_name}")
-        {:error, :timeout}
+    GenServer.call(via_name(profile, chain_name), :get_status, @call_timeout)
+  catch
+    :exit, {:timeout, _} ->
+      Logger.warning("Timeout getting status for chain #{chain_name}")
+      {:error, :timeout}
 
-      :exit, {:noproc, _} ->
-        {:error, :not_found}
-    end
+    :exit, {:noproc, _} ->
+      {:error, :not_found}
   end
 
   @doc """
@@ -238,17 +236,15 @@ defmodule Lasso.RPC.ProviderPool do
 
   @spec list_candidates(profile, chain_name, map()) :: [map()]
   def list_candidates(profile, chain_name, filters) when is_binary(profile) and is_map(filters) do
-    try do
-      GenServer.call(via_name(profile, chain_name), {:list_candidates, filters}, @call_timeout)
-    catch
-      :exit, {:timeout, _} ->
-        Logger.warning("Timeout listing candidates for chain #{chain_name}")
-        # Return empty list on timeout (fail closed)
-        []
+    GenServer.call(via_name(profile, chain_name), {:list_candidates, filters}, @call_timeout)
+  catch
+    :exit, {:timeout, _} ->
+      Logger.warning("Timeout listing candidates for chain #{chain_name}")
+      # Return empty list on timeout (fail closed)
+      []
 
-      :exit, {:noproc, _} ->
-        []
-    end
+    :exit, {:noproc, _} ->
+      []
   end
 
   @doc """
@@ -524,6 +520,7 @@ defmodule Lasso.RPC.ProviderPool do
   Note: ETS tables are chain-scoped (not profile-scoped) since sync data is global.
   """
   @spec table_name(chain_name) :: atom()
+  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   def table_name(chain_name), do: :"provider_pool_#{chain_name}"
 
   # GenServer callbacks
@@ -1331,107 +1328,107 @@ defmodule Lasso.RPC.ProviderPool do
   defp candidates_ready(state, filters) do
     max_lag_blocks = Map.get(filters, :max_lag_blocks)
     current_time = System.monotonic_time(:millisecond)
+    protocol = Map.get(filters, :protocol)
 
     state.active_providers
     |> Enum.map(&Map.get(state.providers, &1))
-    |> Enum.filter(fn p ->
-      # Check transport availability
-      transport_ok =
-        case Map.get(filters, :protocol) do
-          :http ->
-            transport_available?(p, :http, current_time)
-
-          :ws ->
-            transport_available?(p, :ws, current_time) and is_pid(ws_connection_pid(p.id))
-
-          :both ->
-            transport_available?(p, :http, current_time) and
-              transport_available?(p, :ws, current_time)
-
-          _ ->
-            transport_available?(p, :http, current_time) or
-              transport_available?(p, :ws, current_time)
-        end
-
-      # Check circuit breaker state
-      include_half_open = Map.get(filters, :include_half_open, false)
-
-      circuit_ok =
-        case Map.get(filters, :protocol) do
-          :http ->
-            cb_state = get_cb_state(state.circuit_states, p.id, :http)
-
-            if include_half_open do
-              cb_state != :open
-            else
-              cb_state == :closed
-            end
-
-          :ws ->
-            cb_state = get_cb_state(state.circuit_states, p.id, :ws)
-
-            if include_half_open do
-              cb_state != :open
-            else
-              cb_state == :closed
-            end
-
-          _ ->
-            # For :both or nil protocol, include provider if it has at least one viable transport
-            # A transport is viable if: 1) it's configured, 2) CB is not open (or half-open allowed)
-            http_state = get_cb_state(state.circuit_states, p.id, :http)
-            ws_state = get_cb_state(state.circuit_states, p.id, :ws)
-
-            # Check which transports are actually configured
-            has_http = is_binary(Map.get(p.config, :url))
-            has_ws = is_binary(Map.get(p.config, :ws_url))
-
-            if include_half_open do
-              # Include if at least one configured transport is not fully open
-              (has_http and http_state != :open) or (has_ws and ws_state != :open)
-            else
-              # Include if at least one configured transport has closed CB
-              (has_http and http_state == :closed) or (has_ws and ws_state == :closed)
-            end
-        end
-
-      # Check rate limit state (independent of circuit breaker)
-      # Rate limits auto-expire, so only exclude if exclude_rate_limited filter is set
-      exclude_rate_limited = Map.get(filters, :exclude_rate_limited, false)
-
-      rate_limit_ok =
-        if exclude_rate_limited do
-          case Map.get(filters, :protocol) do
-            :http ->
-              not transport_rate_limited?(state, p.id, :http, current_time)
-
-            :ws ->
-              not transport_rate_limited?(state, p.id, :ws, current_time)
-
-            :both ->
-              not transport_rate_limited?(state, p.id, :http, current_time) and
-                not transport_rate_limited?(state, p.id, :ws, current_time)
-
-            _ ->
-              # For nil protocol, include if at least one transport is not rate limited
-              not transport_rate_limited?(state, p.id, :http, current_time) or
-                not transport_rate_limited?(state, p.id, :ws, current_time)
-          end
-        else
-          # By default, include rate-limited providers (selection tiering handles preference)
-          true
-        end
-
-      transport_ok and circuit_ok and rate_limit_ok
-    end)
+    |> Enum.filter(&provider_passes_filters?(&1, state, filters, protocol, current_time))
     |> filter_by_lag(state.chain_name, max_lag_blocks)
-    |> Enum.filter(fn provider ->
-      case Map.get(filters, :exclude) do
-        nil -> true
-        exclude_list when is_list(exclude_list) -> provider.id not in exclude_list
-        _ -> true
+    |> filter_excluded(filters)
+  end
+
+  defp provider_passes_filters?(provider, state, filters, protocol, current_time) do
+    transport_ready?(provider, protocol, current_time) and
+      circuit_breaker_ready?(provider, state.circuit_states, protocol, filters) and
+      rate_limit_ok?(provider, state, protocol, current_time, filters)
+  end
+
+  defp transport_ready?(provider, protocol, current_time) do
+    case protocol do
+      :http ->
+        transport_available?(provider, :http, current_time)
+
+      :ws ->
+        transport_available?(provider, :ws, current_time) and
+          is_pid(ws_connection_pid(provider.id))
+
+      :both ->
+        transport_available?(provider, :http, current_time) and
+          transport_available?(provider, :ws, current_time) and
+          is_pid(ws_connection_pid(provider.id))
+
+      _ ->
+        transport_available?(provider, :http, current_time) or
+          transport_available?(provider, :ws, current_time)
+    end
+  end
+
+  defp circuit_breaker_ready?(provider, circuit_states, protocol, filters) do
+    include_half_open = Map.get(filters, :include_half_open, false)
+
+    case protocol do
+      :http ->
+        cb_ready?(get_cb_state(circuit_states, provider.id, :http), include_half_open)
+
+      :ws ->
+        cb_ready?(get_cb_state(circuit_states, provider.id, :ws), include_half_open)
+
+      _ ->
+        check_any_transport_cb_ready(provider, circuit_states, include_half_open)
+    end
+  end
+
+  defp cb_ready?(cb_state, include_half_open) do
+    if include_half_open, do: cb_state != :open, else: cb_state == :closed
+  end
+
+  defp check_any_transport_cb_ready(provider, circuit_states, include_half_open) do
+    # For :both or nil protocol, include provider if it has at least one viable transport
+    # A transport is viable if: 1) it's configured, 2) CB is not open (or half-open allowed)
+    http_state = get_cb_state(circuit_states, provider.id, :http)
+    ws_state = get_cb_state(circuit_states, provider.id, :ws)
+    has_http = is_binary(Map.get(provider.config, :url))
+    has_ws = is_binary(Map.get(provider.config, :ws_url))
+
+    if include_half_open do
+      # Include if at least one configured transport is not fully open
+      (has_http and http_state != :open) or (has_ws and ws_state != :open)
+    else
+      # Include if at least one configured transport has closed CB
+      (has_http and http_state == :closed) or (has_ws and ws_state == :closed)
+    end
+  end
+
+  defp rate_limit_ok?(provider, state, protocol, current_time, filters) do
+    if Map.get(filters, :exclude_rate_limited, false) do
+      case protocol do
+        :http ->
+          not transport_rate_limited?(state, provider.id, :http, current_time)
+
+        :ws ->
+          not transport_rate_limited?(state, provider.id, :ws, current_time)
+
+        :both ->
+          not transport_rate_limited?(state, provider.id, :http, current_time) and
+            not transport_rate_limited?(state, provider.id, :ws, current_time)
+
+        _ ->
+          # For nil protocol, include if at least one transport is not rate limited
+          not transport_rate_limited?(state, provider.id, :http, current_time) or
+            not transport_rate_limited?(state, provider.id, :ws, current_time)
       end
-    end)
+    else
+      # By default, include rate-limited providers (selection tiering handles preference)
+      true
+    end
+  end
+
+  defp filter_excluded(providers, filters) do
+    case Map.get(filters, :exclude) do
+      nil -> providers
+      exclude_list when is_list(exclude_list) -> Enum.filter(providers, &(&1.id not in exclude_list))
+      _ -> providers
+    end
   end
 
   defp ws_connection_pid(provider_id) when is_binary(provider_id) do

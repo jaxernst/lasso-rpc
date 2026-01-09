@@ -80,7 +80,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
   defstruct [
     :profile,
     :chain,
-    # %{{provider_id, sub_key} => %{upstream_id, connection_id, created_at, marked_for_teardown_at, last_event_at, staleness_timer_ref}}
+    # %{{provider_id, sub_key} => %{upstream_id, connection_id, created_at,
+    #                                 marked_for_teardown_at, last_event_at, staleness_timer_ref}}
     active_subscriptions: %{},
     # %{upstream_id => {provider_id, sub_key}} - reverse lookup for incoming events
     upstream_index: %{},

@@ -7,10 +7,12 @@ defmodule Lasso.Core.Streaming.StreamSupervisor do
 
   alias Lasso.Core.Streaming.StreamCoordinator
 
+  @spec start_link({String.t(), String.t()}) :: Supervisor.on_start()
   def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
     DynamicSupervisor.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
   end
 
+  @spec via(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via(profile, chain) when is_binary(profile) and is_binary(chain) do
     {:via, Registry, {Lasso.Registry, {:stream_supervisor, profile, chain}}}
   end
@@ -20,6 +22,7 @@ defmodule Lasso.Core.Streaming.StreamSupervisor do
     DynamicSupervisor.init(strategy: :one_for_one)
   end
 
+  @spec ensure_coordinator(String.t(), String.t(), term(), keyword()) :: {:ok, pid()} | {:error, term()}
   def ensure_coordinator(profile, chain, key, opts)
       when is_binary(profile) and is_binary(chain) do
     name = StreamCoordinator.via(profile, chain, key)
@@ -39,6 +42,7 @@ defmodule Lasso.Core.Streaming.StreamSupervisor do
     end
   end
 
+  @spec stop_coordinator(String.t(), String.t(), term()) :: :ok | {:error, :not_found}
   def stop_coordinator(profile, chain, key) when is_binary(profile) and is_binary(chain) do
     name = StreamCoordinator.via(profile, chain, key)
 

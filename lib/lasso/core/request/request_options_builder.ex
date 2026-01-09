@@ -39,84 +39,25 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   """
   @spec from_conn(Plug.Conn.t(), String.t(), override_opts) :: RequestOptions.t()
   def from_conn(%Plug.Conn{} = conn, method, overrides \\ []) when is_binary(method) do
-    # Profile (from ProfileResolverPlug or default)
     profile = Map.get(conn.assigns, :profile_slug, "default")
+    strategy = resolve_strategy_from_conn(conn, overrides)
+    provider_override = resolve_provider_from_conn(conn, overrides)
+    transport = resolve_transport(method, resolve_transport_preference_from_conn(conn, overrides))
 
-    # Strategy
-    strategy =
-      cond do
-        is_atom(overrides[:strategy]) ->
-          overrides[:strategy]
-
-        is_atom(conn.assigns[:provider_strategy]) ->
-          conn.assigns[:provider_strategy]
-
-        is_binary(conn.params["strategy"]) ->
-          parse_strategy(conn.params["strategy"]) || default_strategy()
-
-        true ->
-          default_strategy()
-      end
-
-    # Provider override
-    provider_override =
-      overrides[:provider_override] ||
-        header(conn, "x-lasso-provider") ||
-        conn.params["provider_override"] ||
-        conn.params["provider_id"]
-
-    # Transport preference (precedence: overrides > headers > params)
-    transport_header =
-      case header(conn, "x-lasso-transport") do
-        "http" -> :http
-        "ws" -> :ws
-        _ -> nil
-      end
-
-    transport_param =
-      case conn.params["transport"] do
-        "http" -> :http
-        "ws" -> :ws
-        _ -> nil
-      end
-
-    preference = overrides[:transport] || transport_header || transport_param
-
-    transport =
-      case MethodConstraints.required_transport_for(method) do
-        :ws -> :ws
-        _ -> preference
-      end
-
-    timeout_ms = overrides[:timeout_ms] || MethodPolicy.timeout_for(method)
-
-    # Get request_id from override, or fall back to Logger.metadata (set by Plug.RequestId)
-    request_id = overrides[:request_id] || Logger.metadata()[:request_id]
-    request_context = overrides[:request_context]
-
-    plug_start_time = RequestTimingPlug.get_start_time(conn)
-
-    opts =
+    build_and_validate(
       %RequestOptions{
         profile: profile,
         strategy: strategy,
         provider_override: provider_override,
         transport: transport,
         failover_on_override: overrides[:failover_on_override] || false,
-        timeout_ms: timeout_ms,
-        request_id: request_id,
-        plug_start_time: plug_start_time
-      }
-      |> put_request_context(request_context)
-
-    # Validate the constructed options
-    case RequestOptions.validate(opts, method) do
-      :ok ->
-        opts
-
-      {:error, reason} ->
-        raise ArgumentError, "Invalid RequestOptions: #{reason}"
-    end
+        timeout_ms: overrides[:timeout_ms] || MethodPolicy.timeout_for(method),
+        request_id: overrides[:request_id] || Logger.metadata()[:request_id],
+        plug_start_time: RequestTimingPlug.get_start_time(conn)
+      },
+      overrides[:request_context],
+      method
+    )
   end
 
   @doc """
@@ -147,68 +88,90 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   @spec from_map(map(), String.t(), override_opts) :: RequestOptions.t()
   def from_map(params, method, overrides \\ [])
       when is_map(params) and is_binary(method) do
-    # Profile (overrides > params > default)
     profile = overrides[:profile] || params["profile"] || "default"
+    strategy = resolve_strategy_from_map(params, overrides)
+    provider_override = resolve_provider_from_map(params, overrides)
+    transport = resolve_transport(method, resolve_transport_preference_from_map(params, overrides))
 
-    # Strategy (overrides > params > default)
-    strategy =
-      cond do
-        is_atom(overrides[:strategy]) ->
-          overrides[:strategy]
-
-        is_binary(params["strategy"]) ->
-          parse_strategy(params["strategy"]) || default_strategy()
-
-        true ->
-          default_strategy()
-      end
-
-    # Provider override
-    provider_override =
-      overrides[:provider_override] || params["provider_override"] || params["provider_id"]
-
-    # Transport
-    transport_param =
-      case params["transport"] do
-        "http" -> :http
-        "ws" -> :ws
-        "both" -> :both
-        _ -> nil
-      end
-
-    preference = overrides[:transport] || transport_param
-
-    transport =
-      case MethodConstraints.required_transport_for(method) do
-        :ws -> :ws
-        _ -> preference
-      end
-
-    timeout_ms = overrides[:timeout_ms] || MethodPolicy.timeout_for(method)
-    request_id = overrides[:request_id]
-    request_context = overrides[:request_context]
-
-    opts =
+    build_and_validate(
       %RequestOptions{
         profile: profile,
         strategy: strategy,
         provider_override: provider_override,
         transport: transport,
         failover_on_override: overrides[:failover_on_override] || false,
-        timeout_ms: timeout_ms,
-        request_id: request_id
-      }
-      |> put_request_context(request_context)
+        timeout_ms: overrides[:timeout_ms] || MethodPolicy.timeout_for(method),
+        request_id: overrides[:request_id]
+      },
+      overrides[:request_context],
+      method
+    )
+  end
 
-    # Validate the constructed options
-    case RequestOptions.validate(opts, method) do
-      :ok ->
-        opts
+  # Strategy resolution
 
-      {:error, reason} ->
-        raise ArgumentError, "Invalid RequestOptions: #{reason}"
+  defp resolve_strategy_from_conn(conn, overrides) do
+    overrides[:strategy] ||
+      conn.assigns[:provider_strategy] ||
+      parse_strategy(conn.params["strategy"]) ||
+      default_strategy()
+  end
+
+  defp resolve_strategy_from_map(params, overrides) do
+    overrides[:strategy] ||
+      parse_strategy(params["strategy"]) ||
+      default_strategy()
+  end
+
+  # Provider resolution
+
+  defp resolve_provider_from_conn(conn, overrides) do
+    overrides[:provider_override] ||
+      header(conn, "x-lasso-provider") ||
+      conn.params["provider_override"] ||
+      conn.params["provider_id"]
+  end
+
+  defp resolve_provider_from_map(params, overrides) do
+    overrides[:provider_override] || params["provider_override"] || params["provider_id"]
+  end
+
+  # Transport resolution
+
+  defp resolve_transport_preference_from_conn(conn, overrides) do
+    overrides[:transport] ||
+      parse_transport(header(conn, "x-lasso-transport")) ||
+      parse_transport(conn.params["transport"])
+  end
+
+  defp resolve_transport_preference_from_map(params, overrides) do
+    overrides[:transport] || parse_transport(params["transport"])
+  end
+
+  defp resolve_transport(method, preference) do
+    case MethodConstraints.required_transport_for(method) do
+      :ws -> :ws
+      _ -> preference
     end
   end
+
+  defp parse_transport("http"), do: :http
+  defp parse_transport("ws"), do: :ws
+  defp parse_transport("both"), do: :both
+  defp parse_transport(_), do: nil
+
+  # Finalization
+
+  defp build_and_validate(opts, request_context, method) do
+    opts = put_request_context(opts, request_context)
+
+    case RequestOptions.validate(opts, method) do
+      :ok -> opts
+      {:error, reason} -> raise ArgumentError, "Invalid RequestOptions: #{reason}"
+    end
+  end
+
+  # Utilities
 
   @spec header(Plug.Conn.t(), String.t()) :: String.t() | nil
   defp header(conn, key), do: conn |> Plug.Conn.get_req_header(key) |> List.first()
@@ -219,6 +182,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   defp parse_strategy("fastest"), do: :fastest
   defp parse_strategy("cheapest"), do: :cheapest
   defp parse_strategy("latency_weighted"), do: :latency_weighted
+  defp parse_strategy(nil), do: nil
   defp parse_strategy(_), do: nil
 
   @spec default_strategy() :: RequestOptions.strategy()
