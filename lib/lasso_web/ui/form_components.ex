@@ -44,10 +44,7 @@ defmodule LassoWeb.UI.FormComponents do
         name={@name}
         value={@value}
         placeholder={@placeholder}
-        class={[
-          "bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500",
-          @class
-        ]}
+        class={["bg-gray-800/80 border-gray-600/70 w-full rounded border px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500", @class]}
         {@rest}
       />
     </div>

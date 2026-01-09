@@ -101,15 +101,9 @@ defmodule LassoWeb.NetworkTopology do
           <% {x, y} = chain_data.position %>
           <% radius = chain_data.radius %>
           <div
-            class={[
-              "absolute z-10 -translate-x-1/2 -translate-y-1/2 transform",
-              "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-transform duration-200 hover:scale-110",
-              if(@selected_chain == chain_name,
-                do: "ring-purple-400/30 border-purple-400 ring-4",
-                else: "border-gray-500 hover:border-gray-400"
-              ),
-              "from-gray-800 to-gray-900"
-            ]}
+            class={["absolute z-10 -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-transform duration-200 hover:scale-110", if(@selected_chain == chain_name,
+    do: "ring-purple-400/30 border-purple-400 ring-4",
+    else: "border-gray-500 hover:border-gray-400"), "from-gray-800 to-gray-900"]}
             style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name, @profile_chains)} 0%, #111827 100%); " <>
               if(@selected_chain == chain_name,
                 do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
@@ -141,17 +135,10 @@ defmodule LassoWeb.NetworkTopology do
             <% {x, y} = provider_data.position %>
             <% radius = provider_data.radius %>
             <div
-              class={[
-                "z-5 absolute -translate-x-1/2 -translate-y-1/2 transform",
-                "flex cursor-pointer items-center justify-center rounded-full border-2 transition-transform duration-150 hover:scale-125",
-                if(@selected_provider == connection.id,
-                  do: "ring-purple-400/30 !border-purple-400 ring-2",
-                  else: provider_border_class(connection)
-                ),
-                if(@selected_provider != connection.id,
-                  do: provider_status_bg_class(connection)
-                )
-              ]}
+              class={["z-5 absolute -translate-x-1/2 -translate-y-1/2 transform", "flex cursor-pointer items-center justify-center rounded-full border-2 transition-transform duration-150 hover:scale-125", if(@selected_provider == connection.id,
+    do: "ring-purple-400/30 !border-purple-400 ring-2",
+    else: provider_border_class(connection)), if(@selected_provider != connection.id,
+    do: provider_status_bg_class(connection))]}
               style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
                 if(@selected_provider == connection.id,
                   do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",

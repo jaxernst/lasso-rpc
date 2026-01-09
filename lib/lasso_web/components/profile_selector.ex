@@ -80,12 +80,7 @@ defmodule LassoWeb.Components.ProfileSelector do
       <div
         id="profile-dropdown"
         phx-click-away={hide_dropdown()}
-        class={[
-          "absolute top-full right-0 mt-2 w-72",
-          "ring-black/50 rounded-lg border border-gray-700 bg-gray-900 shadow-xl ring-1",
-          "z-50 overflow-hidden",
-          "hidden"
-        ]}
+        class={["absolute top-full right-0 mt-2 w-72", "ring-black/50 rounded-lg border border-gray-700 bg-gray-900 shadow-xl ring-1", "z-50 overflow-hidden", "hidden"]}
       >
         <!-- Header -->
         <div class="bg-gray-900/50 border-b border-gray-800 px-3 py-2.5">
@@ -149,18 +144,11 @@ defmodule LassoWeb.Components.ProfileSelector do
     ~H"""
     <button
       phx-click={JS.push("select_profile", value: %{profile: @profile}) |> hide_dropdown()}
-      class={[
-        "flex w-full items-center gap-3 px-3 py-2.5 text-left",
-        "transition-colors hover:bg-gray-800",
-        @selected && "bg-purple-500/10"
-      ]}
+      class={["flex w-full items-center gap-3 px-3 py-2.5 text-left", "transition-colors hover:bg-gray-800", @selected && "bg-purple-500/10"]}
     >
       <!-- Layers icon -->
       <svg
-        class={[
-          "h-4 w-4 flex-none",
-          if(@selected, do: "text-purple-400", else: "text-gray-600 group-hover:text-gray-500")
-        ]}
+        class={["h-4 w-4 flex-none", if(@selected, do: "text-purple-400", else: "text-gray-600 group-hover:text-gray-500")]}
         fill="none"
         stroke="currentColor"
         viewBox="0 0 24 24"
@@ -174,10 +162,7 @@ defmodule LassoWeb.Components.ProfileSelector do
       </svg>
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <span class={[
-            "truncate text-sm font-medium",
-            if(@selected, do: "text-white", else: "text-gray-300")
-          ]}>
+          <span class={["truncate text-sm font-medium", if(@selected, do: "text-white", else: "text-gray-300")]}>
             {@data.name}
           </span>
           <%= if @selected do %>

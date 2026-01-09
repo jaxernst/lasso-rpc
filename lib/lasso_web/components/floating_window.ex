@@ -218,11 +218,7 @@ defmodule LassoWeb.Components.FloatingWindow do
 
   def window_frame(assigns) do
     ~H"""
-    <div class={[
-      "border-gray-700/60 bg-gray-900/95 pointer-events-auto overflow-hidden rounded-xl border shadow-2xl backdrop-blur-md transition-all duration-300",
-      if(@collapsed, do: @collapsed_size, else: @expanded_size),
-      @class
-    ]}>
+    <div class={["border-gray-700/60 bg-gray-900/95 pointer-events-auto overflow-hidden rounded-xl border shadow-2xl backdrop-blur-md transition-all duration-300", if(@collapsed, do: @collapsed_size, else: @expanded_size), @class]}>
       {render_slot(@inner_block)}
     </div>
     """
@@ -348,13 +344,7 @@ defmodule LassoWeb.Components.FloatingWindow do
     assigns = assign(assigns, :color_class, color_class)
 
     ~H"""
-    <div class={[
-      @size,
-      "flex-shrink-0 rounded-full",
-      @color_class,
-      if(@animated, do: "animate-pulse"),
-      @class
-    ]}>
+    <div class={[@size, "flex-shrink-0 rounded-full", @color_class, if(@animated, do: "animate-pulse"), @class]}>
     </div>
     """
   end
@@ -380,10 +370,7 @@ defmodule LassoWeb.Components.FloatingWindow do
       >
         <div class="flex items-center gap-2">
           <svg
-            class={[
-              "h-3 w-3 transition-transform",
-              if(@expanded, do: "rotate-90 text-sky-300", else: "text-gray-400")
-            ]}
+            class={["h-3 w-3 transition-transform", if(@expanded, do: "rotate-90 text-sky-300", else: "text-gray-400")]}
             viewBox="0 0 20 20"
             fill="currentColor"
           >

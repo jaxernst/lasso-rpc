@@ -187,11 +187,7 @@ defmodule LassoWeb.Components.LatencyHeatmap do
                           <% cell_idx = row_idx * @method_count + col_idx %>
                           <% should_pulse = rem(cell_idx, 13) == 0 %>
                           <div
-                            class={[
-                              "heatmap-cell font-mono flex h-10 w-16 items-center justify-center rounded-md text-xs font-semibold transition-all duration-200 hover:z-10 hover:scale-110",
-                              if(should_pulse and @is_live, do: "cell-pulse", else: ""),
-                              latency_cell_class(latency, thresholds)
-                            ]}
+                            class={["heatmap-cell font-mono flex h-10 w-16 items-center justify-center rounded-md text-xs font-semibold transition-all duration-200 hover:z-10 hover:scale-110", if(should_pulse and @is_live, do: "cell-pulse", else: ""), latency_cell_class(latency, thresholds)]}
                             title={"#{provider.name} / #{method}: #{format_latency(latency)}"}
                           >
                             <%= if latency do %>
