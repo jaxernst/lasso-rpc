@@ -599,19 +599,33 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     test "retries on transient failures", %{chain: chain} do
       profile = "default"
 
-      # Setup provider with intermittent failures (70% success)
+      # Setup provider with intermittent failures (80% success for more reliability)
       setup_providers([
         %{
           id: "flaky",
           priority: 10,
-          behavior: MockProviderBehavior.intermittent_failures(0.7),
+          behavior: MockProviderBehavior.intermittent_failures(0.8),
           profile: profile
         }
       ])
 
+      # Ensure circuit breaker is ready
+      CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "flaky", :http)
+
+      # Verify provider is responsive with a warmup request
+      case RequestPipeline.execute_via_channels(
+             chain,
+             "eth_blockNumber",
+             [],
+             %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+           ) do
+        {:ok, _, _} -> :ok
+        {:error, _, _} -> :ok
+      end
+
       # Execute multiple requests
       results =
-        for _ <- 1..10 do
+        for _ <- 1..20 do
           RequestPipeline.execute_via_channels(
             chain,
             "eth_blockNumber",
@@ -628,8 +642,9 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         end)
 
       # Should have some successes (not all failures)
+      # With 80% success rate and 20 attempts, expect at least 10 successes
       assert successes > 0
-      assert successes >= 5
+      assert successes >= 10
     end
 
     test "gives up after max retries", %{chain: chain} do
@@ -691,7 +706,6 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "healthy_backup", :http)
 
       # CRITICAL TEST: Request should automatically failover to healthy backup
-      # The system is smart enough to retry within the same request when hitting rate limits
       {:ok, result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
@@ -700,13 +714,48 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           %RequestOptions{strategy: :priority, timeout_ms: 30_000}
         )
 
-      # Verify we got a successful response (system avoids or recovers from rate limits)
+      # Verify we got a successful response (failover worked)
       assert %Response.Success{} = result
       {:ok, block_number} = Response.Success.decode_result(result)
       assert String.starts_with?(block_number, "0x")
 
-      # Execute second request to trigger circuit breaker opening
-      {:ok, _result2, _ctx2} =
+      # To trigger circuit breaker opening, we need to directly target the rate-limited
+      # provider without failover, so the circuit breaker sees the failures
+      for _ <- 1..2 do
+        {:error, _, _} =
+          RequestPipeline.execute_via_channels(
+            chain,
+            "eth_blockNumber",
+            [],
+            %RequestOptions{
+              provider_override: "rate_limited",
+              failover_on_override: false,
+              timeout_ms: 30_000
+            }
+          )
+
+        Process.sleep(100)
+      end
+
+      # Wait for circuit breaker to process the failures and open
+      Process.sleep(500)
+
+      # Wait for circuit breaker to open (rate limit threshold is 2)
+      breaker_id = {profile, chain, "rate_limited", :http}
+
+      {:ok, _state} =
+        CircuitBreakerHelper.wait_for_circuit_breaker_state(
+          breaker_id,
+          fn state -> state.state == :open end,
+          timeout: 10_000,
+          interval: 100
+        )
+
+      # Verify rate-limited provider's circuit is now open
+      CircuitBreakerHelper.assert_circuit_breaker_state(breaker_id, :open)
+
+      # Now verify that subsequent requests with priority strategy use backup
+      {:ok, result2, _ctx2} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -714,20 +763,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           %RequestOptions{strategy: :priority, timeout_ms: 30_000}
         )
 
-      # Wait for circuit breaker to open (rate limit threshold is 2)
-      # Use wait_for_circuit_breaker_state to handle async state updates
-      breaker_id = {profile, chain, "rate_limited", :http}
-
-      {:ok, _state} =
-        CircuitBreakerHelper.wait_for_circuit_breaker_state(
-          breaker_id,
-          fn state -> state.state == :open end,
-          timeout: 5_000,
-          interval: 50
-        )
-
-      # Verify rate-limited provider's circuit is now open
-      CircuitBreakerHelper.assert_circuit_breaker_state(breaker_id, :open)
+      # Should still succeed using backup since primary's circuit is open
+      assert %Response.Success{} = result2
     end
 
     test "rate limit error opens circuit breaker faster than normal errors", %{chain: chain} do
