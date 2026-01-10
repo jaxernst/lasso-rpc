@@ -38,6 +38,7 @@ defmodule LassoWeb.Dashboard do
       if Lasso.VMMetricsCollector.enabled?() do
         Lasso.VMMetricsCollector.subscribe()
       end
+
       Process.send_after(self(), :load_metrics_on_connect, 0)
       Process.send_after(self(), :metrics_refresh, Constants.vm_metrics_interval())
     end

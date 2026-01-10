@@ -13,7 +13,9 @@ defmodule LassoWeb.Components.DashboardHeader do
       %{id: "metrics", label: "Metrics"}
     ]
 
-    tabs = if assigns.vm_metrics_enabled, do: tabs ++ [%{id: "system", label: "System"}], else: tabs
+    tabs =
+      if assigns.vm_metrics_enabled, do: tabs ++ [%{id: "system", label: "System"}], else: tabs
+
     assigns = assign(assigns, :tabs, tabs)
 
     ~H"""

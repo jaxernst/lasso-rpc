@@ -79,6 +79,7 @@ defmodule LassoWeb.Plugs.ProfileResolverPlug do
   end
 
   defp error_codes(error_type) do
-    {ProfileValidator.error_to_http_status(error_type), ProfileValidator.error_to_jsonrpc_code(error_type)}
+    {ProfileValidator.error_to_http_status(error_type),
+     ProfileValidator.error_to_jsonrpc_code(error_type)}
   end
 end
