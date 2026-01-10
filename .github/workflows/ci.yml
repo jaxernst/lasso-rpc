@@ -25,15 +25,21 @@ jobs:
           elixir-version: ${{ matrix.elixir }}
           otp-version: ${{ matrix.otp }}
 
-      - name: Restore dependencies cache
+      - name: Cache dependencies
         uses: actions/cache@v3
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
+          path: deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-
+            ${{ runner.os }}-deps-
+
+      - name: Cache build
+        uses: actions/cache@v3
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-test-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-build-test-${{ matrix.otp }}-${{ matrix.elixir }}-
 
       - name: Install dependencies
         run: mix deps.get
@@ -65,15 +71,21 @@ jobs:
           elixir-version: ${{ matrix.elixir }}
           otp-version: ${{ matrix.otp }}
 
-      - name: Restore dependencies cache
+      - name: Cache dependencies
         uses: actions/cache@v3
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-integration-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
+          path: deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-integration-${{ matrix.otp }}-${{ matrix.elixir }}-
+            ${{ runner.os }}-deps-
+
+      - name: Cache build
+        uses: actions/cache@v3
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-test-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-build-test-${{ matrix.otp }}-${{ matrix.elixir }}-
 
       - name: Install dependencies
         run: mix deps.get
@@ -97,18 +109,27 @@ jobs:
           elixir-version: "1.18.4"
           otp-version: "28.0"
 
-      - name: Restore dependencies cache
+      - name: Cache dependencies
         uses: actions/cache@v3
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-lint-${{ hashFiles('**/mix.lock') }}
+          path: deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-lint-
+            ${{ runner.os }}-deps-
+
+      - name: Cache build
+        uses: actions/cache@v3
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-dev-28.0-1.18.4-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-build-dev-28.0-1.18.4-
 
       - name: Install dependencies
         run: mix deps.get
+
+      - name: Compile
+        run: mix compile
 
       - name: Run Credo
         run: mix credo --strict
@@ -126,26 +147,35 @@ jobs:
           elixir-version: "1.18.4"
           otp-version: "28.0"
 
-      - name: Restore dependencies cache
+      - name: Cache dependencies
         uses: actions/cache@v3
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-dialyzer-${{ hashFiles('**/mix.lock') }}
+          path: deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-dialyzer-
+            ${{ runner.os }}-deps-
 
-      - name: Restore PLT cache
+      - name: Cache build
+        uses: actions/cache@v3
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-dev-28.0-1.18.4-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-build-dev-28.0-1.18.4-
+
+      - name: Cache PLT
         uses: actions/cache@v3
         with:
           path: priv/plts
-          key: ${{ runner.os }}-plt-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-plt-28.0-1.18.4-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-plt-
+            ${{ runner.os }}-plt-28.0-1.18.4-
 
       - name: Install dependencies
         run: mix deps.get
+
+      - name: Compile
+        run: mix compile
 
       - name: Run Dialyzer
         run: mix dialyzer --format github
