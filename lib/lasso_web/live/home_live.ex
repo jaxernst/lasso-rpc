@@ -12,16 +12,13 @@ defmodule LassoWeb.HomeLive do
       Process.send_after(self(), :tick, 1000)
     end
 
-    # Use default profile for home page
     default_profile = "default"
 
     config_status = Lasso.Config.ConfigStore.status()
     base_url = URI.parse(LassoWeb.Endpoint.url()).authority
 
-    # Load available chains for default profile
     available_chains = ConfigStore.list_chains_for_profile(default_profile) |> Enum.sort()
 
-    # Load initial heatmap data - use first available chain
     heatmap_chain = List.first(available_chains, "ethereum")
 
     {heatmap_data, heatmap_methods, heatmap_live} =
@@ -59,7 +56,6 @@ defmodule LassoWeb.HomeLive do
   def handle_info(:tick, socket) do
     Process.send_after(self(), :tick, 1000)
 
-    # Try to get real data from the selected heatmap chain
     real_calls =
       Lasso.Benchmarking.BenchmarkStore.get_recent_calls(
         socket.assigns.selected_profile,
@@ -71,7 +67,6 @@ defmodule LassoWeb.HomeLive do
       if length(real_calls) > 0 do
         {real_calls, true}
       else
-        # Fallback to simulation
         {rotate_decisions(socket.assigns.routing_decisions), false}
       end
 
@@ -340,7 +335,7 @@ defmodule LassoWeb.HomeLive do
             <section
               id="hero-section"
               phx-hook="ScrollReveal"
-              class="min-h-[600px] relative translate-y-8 opacity-0 transition-all duration-1000 ease-out lg:min-h-[700px]"
+              class="min-h-[550px] relative translate-y-8 opacity-0 transition-all duration-1000 ease-out lg:min-h-[680px]"
             >
               <!-- Oversized graphic that bleeds beyond section (underlaps header via z-index) -->
               <div

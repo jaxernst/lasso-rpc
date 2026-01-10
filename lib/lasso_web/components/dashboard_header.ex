@@ -8,19 +8,13 @@ defmodule LassoWeb.Components.DashboardHeader do
   attr(:selected_profile, :string, default: nil, doc: "currently selected profile")
 
   def header(assigns) do
-    base_tabs = [
+    tabs = [
       %{id: "overview", label: "Dashboard"},
       %{id: "metrics", label: "Metrics"}
     ]
 
-    system_tab = %{id: "system", label: "System"}
-
     tabs =
-      if assigns.vm_metrics_enabled do
-        base_tabs ++ [system_tab]
-      else
-        base_tabs
-      end
+      if assigns.vm_metrics_enabled, do: tabs ++ [%{id: "system", label: "System"}], else: tabs
 
     assigns = assign(assigns, :tabs, tabs)
 
