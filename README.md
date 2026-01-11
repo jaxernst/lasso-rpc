@@ -4,7 +4,7 @@
 </h1>
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Release](https://img.shields.io/github/v/release/jaxernst/lasso-rpc?display_name=tag&sort=semver)](https://github.com/jaxernst/lasso-rpc/releases)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/jaxernst/lasso-rpc/releases)
 
 ### Smart RPC aggregation for consumer-grade blockchain apps.
 
@@ -273,43 +273,6 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 For security concerns, please review our [Security Policy](SECURITY.md).
 
 **To report a security vulnerability**, please email: **jaxernst@gmail.com** (do not open a public issue).
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-**Port already in use**
-
-```bash
-# Change the port in config/dev.exs or set PORT environment variable
-PORT=4001 mix phx.server
-```
-
-**Dependencies won't compile**
-
-```bash
-# Clean and reinstall
-mix deps.clean --all
-mix deps.get
-mix deps.compile
-```
-
-**Dashboard not loading**
-
-- Ensure assets are compiled: `mix assets.deploy` (or they auto-compile in dev)
-- Check that the server started successfully
-- Verify you're accessing `http://localhost:4000/dashboard`
-
-**Provider connection issues**
-
-- Check your network connectivity
-- Verify provider URLs in your profile configuration
-- Check circuit breaker status in the dashboard
-- Review logs for specific error messages
-
-For more help, see [docs/TESTING.md](docs/TESTING.md) or open a [GitHub issue](https://github.com/jaxernst/lasso-rpc/issues).
 
 ---
 
