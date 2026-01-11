@@ -313,10 +313,6 @@ For more help, see [docs/TESTING.md](docs/TESTING.md) or open a [GitHub issue](h
 
 ---
 
-Built by [jaxer.eth](https://farcaster.xyz/jaxer.eth)
-
----
-
 ## License
 
 Lasso RPC is licensed under **AGPL-3.0**.
@@ -326,3 +322,6 @@ Lasso RPC is licensed under **AGPL-3.0**.
 - ⚠️ If you run a modified version as a service, you must publish those modifications
 
 See [LICENSE.md](LICENSE.md) for full terms.
+
+--- 
+Built by [jaxer.eth](https://farcaster.xyz/jaxer.eth)
