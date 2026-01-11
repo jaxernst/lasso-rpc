@@ -1,36 +1,63 @@
-# Lasso RPC
+<h1 align="left">
+  <img src="priv/static/images/lasso-logo.png" alt="Lasso RPC Logo" width="45" style="margin-right: 10px; margin-top: 5px;">
+  Lasso RPC
+</h1>
 
-**Smart RPC aggregation for consumer-grade blockchain apps.**
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Release](https://img.shields.io/github/v/release/jaxernst/lasso-rpc?display_name=tag&sort=semver)](https://github.com/jaxernst/lasso-rpc/releases)
 
-Lasso is a smart proxy/router that turns a set of upstream RPCs (hosted providers + self-hosted nodes) into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
+### Smart RPC aggregation for consumer-grade blockchain apps.
 
-It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single, stable RPC surface area with explicit routing control (strategies, provider overrides, and profiles).
+Lasso is a smart proxy/router that turns your node infrastructure and RPC providers into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
 
-Route every request to the best available provider to handle that request, while configuring providers to match your application's needs. Leverage deep redundancy, expressive routing, and built-in observability to improve end-user UX without changing client code.
+It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single RPC API with expressive routing control (strategies, provider overrides, and profiles).
+
+Route every request to the best available provider to handle that request, while configuring providers to match your application's needs. Leverage deep redundancy, expressive routing, and built-in observability to improve UX while keeping your application code simple.
+
+**📊 [Live Dashboard](https://lasso-rpc.fly.dev/dashboard)** &nbsp;&nbsp;|&nbsp;&nbsp; **📖 [Architecture](docs/ARCHITECTURE.md)** &nbsp;&nbsp;|&nbsp;&nbsp; **🐛 [Report Bug](https://github.com/jaxernst/lasso-rpc/issues)** &nbsp;&nbsp;|&nbsp;&nbsp; **💡 [Request Feature](https://github.com/jaxernst/lasso-rpc/issues)**
+
+---
+
+## Table of Contents
+
+- [Why Lasso](#why-lasso)
+- [Features](#features)
+- [Endpoints](#endpoints)
+- [Quick Start](#quick-start)
+  - [Prerequisites](#prerequisites)
+  - [Local (recommended)](#local-recommended)
+  - [Docker](#docker)
+- [Try It](#try-it)
+- [Configuration](#configuration)
+- [How it works](#how-it-works)
+- [Built with Elixir/OTP](#built-with-elixirotp)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [Security](#security)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 ---
 
 ## Why Lasso
 
-Choosing a single RPC provider has real UX and reliability consequences, yet the tradeoffs (latency, uptime, quotas, features, cost, rate limits) are often opaque and shift over time. Performance varies by region, method, and hour; free tiers and API inconsistencies make a “one URL” setup brittle.
+Choosing a single RPC provider has real UX and reliability consequences, but the tradeoffs (latency, uptime, quotas, features, cost, rate limits) are opaque and shift over time. Performance varies by region, method, and hour, and API inconsistencies make a “one URL” setup brittle.
 
-Lasso makes the RPC layer programmable and resilient. It's a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that chain, method, and transport. You get redundancy without brittle application code, and you can scale throughput by adding providers instead of replatforming.
+Lasso makes the RPC layer programmable and resilient. It's designed to run as a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that chain, method, and transport. You get redundancy without brittle application code, and you can scale throughput by adding providers instead of replatforming.
 
-Designed for production workloads: from hot reads to archival queries and subscriptions, different providers excel at different tasks. Lasso lets you express those preferences and enforce them automatically.
+Different providers excel at different workloads (hot reads vs archival queries vs subscriptions). Lasso lets you express those preferences and enforce them automatically.
 
 ---
 
-What you get:
+## Features
 
-- Multi-provider, multi-chain, Ethereum JSON-RPC spec proxy for **HTTP + WebSocket**
-- Strategy routes (`fastest`, `round-robin`, `latency-weighted`) + provider override routes
-- Per-method latency benchmarking (w/ latency feedback for routing decisions)
-- Circuit breakers + retries + transport-aware failover
-- WebSocket subscriptions with multiplexing + subscription gap-filling
-- Profile isolation (dev/staging/prod, multi-tenant, experiments) with independent state/metrics/breakers
-- LiveView dashboard: aggregate provider status, routing decision breakdowns, issue logs, per-method latency metrics, provider health, RPC load testing, and more
-
-Live hosted public-provider dashboard: [lasso-rpc.fly.dev/dashboard](https://lasso-rpc.fly.dev/dashboard)
+- **Multi-provider, multi-chain** Ethereum JSON-RPC proxy for **HTTP + WebSocket**
+- **Routing strategies**: `fastest`, `round-robin`, `latency-weighted`, plus provider override routes
+- **Method-aware benchmarking**: latency tracked per **provider × method × transport**
+- **Resilience**: circuit breakers, retries, and transport-aware failover
+- **WebSocket subscriptions**: multiplexing with optional gap-filling via HTTP on upstream failure
+- **Profiles**: isolated configs/state/metrics (dev/staging/prod, multi-tenant, experiments)
+- **LiveView dashboard**: provider status, routing decisions, logs, latency metrics, and load testing
 
 ---
 
@@ -38,17 +65,17 @@ Live hosted public-provider dashboard: [lasso-rpc.fly.dev/dashboard](https://las
 
 HTTP (POST):
 
-- `/rpc/:chain_id` (default strategy)
-- `/rpc/fastest/:chain_id`
-- `/rpc/round-robin/:chain_id`
-- `/rpc/latency-weighted/:chain_id`
-- `/rpc/provider/:provider_id/:chain_id` (provider override)
+- `/rpc/:chain` (default strategy)
+- `/rpc/fastest/:chain`
+- `/rpc/round-robin/:chain`
+- `/rpc/latency-weighted/:chain`
+- `/rpc/provider/:provider_id/:chain` (provider override)
 
 WebSocket:
 
-- `/ws/rpc/:chain_id`
-- `/ws/rpc/:strategy/:chain_id`
-- `/ws/rpc/provider/:provider_id/:chain_id`
+- `/ws/rpc/:chain`
+- `/ws/rpc/:strategy/:chain`
+- `/ws/rpc/provider/:provider_id/:chain`
 
 Profiles (namespaced routing configs):
 
@@ -57,61 +84,42 @@ Profiles (namespaced routing configs):
 
 ---
 
-## Key Features
-
-### Profiles: isolated configs, isolated state
-
-Profiles are complete, isolated routing universes: providers, chains, rate limits, circuit breakers, metrics, and WS state do not bleed across profiles.
-
-Use them for:
-
-- dev/staging/prod
-- per-tenant configs
-- “try the new routing policy without wrecking prod”
-
-### Method-aware routing + real benchmarking
-
-- Benchmarks are recorded per **provider × method × transport**
-- Strategies can route differently for `eth_call` vs `eth_getLogs` vs `debug_*`
-
-### Failure handling that doesn’t lie
-
-- Per-provider, per-transport circuit breakers
-- Retries + failover across a ranked candidate list
-- Transport-aware routing (HTTP/WS are first-class, not an afterthought)
-
-### WebSocket subscriptions: multiplexing + continuity
-
-- Multiplex many client subscriptions onto fewer upstream subscriptions
-- On upstream failure, Lasso can switch providers and **gap-fill** missed blocks/events via HTTP
-
-### Observability built-in
-
-- LiveView dashboard: routing events, decision breakdowns, provider status, realtime method performance
-- Deep telemetry handlers with OpenTelemetry
-- Structured logs with request context
-- Optional client-visible metadata (`include_meta=headers|body`)
-
----
-
 ## Quick Start
+
+### Prerequisites
+
+- **Elixir**: 1.17+ (check with `elixir --version`)
+- **Erlang/OTP**: 26+ (check with `erl -version`)
+- **Node.js**: 18+ (for asset compilation)
 
 ### Local (recommended)
 
 ```bash
+# Clone the repository
 git clone https://github.com/jaxernst/lasso-rpc
 cd lasso-rpc
+
+# Install dependencies
 mix deps.get
+
+# Start the Phoenix server
 mix phx.server
 ```
 
-Dashboard: `http://localhost:4000/dashboard`
+The application will be available at `http://localhost:4000` and the dashboard at `http://localhost:4000/dashboard`.
+
+**Note**: The default profile includes free public providers (no API keys required), so you can start using it immediately.
 
 ### Docker
 
 ```bash
+# Run with Docker
 ./run-docker.sh
 ```
+
+The application will be available at `http://localhost:4000`.
+
+For production deployments, see the [Dockerfile](Dockerfile) for customization options.
 
 ---
 
@@ -130,7 +138,7 @@ wscat -c ws://localhost:4000/ws/rpc/ethereum
 > {"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
 ```
 
-Want routing metadata back:
+Return routing metadata with your request:
 
 ```bash
 curl -sS -X POST 'http://localhost:4000/rpc/ethereum?include_meta=headers' \
@@ -140,15 +148,17 @@ curl -sS -X POST 'http://localhost:4000/rpc/ethereum?include_meta=headers' \
 
 ---
 
-## Configuration (profiles)
+## Configuration
 
 Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and limits. `${ENV_VAR}` substitution is supported.
 
+For detailed configuration documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ### Ready to Use: Default Profile
 
-The included `default.yml` profile is configured free public providers (LlamaRPC, PublicNode, DRPC, 0xRPC, Merkle) and provides premium-provider performance and throughput. No API keys required—just `mix phx.server` and you have a working multi-provider RPC proxy for Ethereum and Base.
+The included `default.yml` profile is configured with free public providers (no API keys required). Start `mix phx.server` and you have a working multi-provider RPC proxy.
 
-Perfect for:
+Good for:
 
 - **Getting started** without setting up API keys
 - **Local development** with instant redundancy
@@ -203,16 +213,7 @@ Access it via:
 
 ---
 
-## Use Cases (real ones)
-
-- Run your own node, keep a paid provider as a fallback (and stop waking up to “provider outage” incidents).
-- Route `eth_getLogs` differently from “hot reads” so your indexer stops melting your cheapest endpoint.
-- Multiplex subscriptions so 10k clients don’t mean 10k upstream WebSockets.
-- Give every env/tenant a profile so you can debug + experiment without cross-contamination.
-
----
-
-## How it works (short version)
+## How it works
 
 Request pipeline:
 
@@ -222,50 +223,106 @@ Request pipeline:
 4. On failure: retry/failover
 5. Record benchmarking + telemetry
 
-If you want the details (supervision tree, BenchmarkStore, adapters, streaming internals), start here:
+For deeper implementation details (supervision tree, BenchmarkStore, adapters, streaming internals), start with:
 
-- `docs/ARCHITECTURE.md`
-
----
-
-## Why Elixir/OTP?
-
-Because this problem is basically “a million tiny concurrent state machines with strict fault isolation”.
-
-- OTP supervision trees keep failures local
-- BEAM processes are cheap enough to model everything as a process
-- ETS makes hot-path lookups fast without hand-rolled lock-free C++ nightmares
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---
 
+## Built with Elixir/OTP
+
+Lasso runs on the BEAM (Erlang VM) to take advantage of its strengths for high-concurrency, failure-prone networking systems.
+
+- **Massive concurrency**: lightweight processes and message passing make it natural to model per-request, per-provider, and per-connection workflows without shared-memory complexity.
+- **Fault isolation + self-healing**: OTP supervision trees keep failures contained and allow fast restarts, which is ideal when upstream providers are flaky or rate-limited.
+- **Distributed by design**: the runtime supports clustering and remote messaging, making it straightforward to scale Lasso horizontally and keep components decoupled.
+- **Fast in-memory state**: ETS provides efficient shared state for hot-path lookups (routing decisions, benchmarks, breaker state) without turning every read into a bottleneck.
+
 ---
 
-## Docs
+## Documentation
 
-- `docs/ARCHITECTURE.md` - System design + components
-- `docs/OBSERVABILITY.md` - Logging/metrics
-- `docs/TESTING.md` - Dev workflow
-- `docs/FUTURE_FEATURES.md` - Roadmap
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design + components
+- **[OBSERVABILITY.md](docs/OBSERVABILITY.md)** - Logging/metrics
+- **[TESTING.md](docs/TESTING.md)** - Dev workflow
+- **[FUTURE_FEATURES.md](docs/FUTURE_FEATURES.md)** - Roadmap
+- **[RPC_STANDARDS.md](docs/RPC_STANDARDS.md)** - RPC compliance details
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history
 
 ---
 
-## Community
+## Contributing
 
-Built by [@jaxernst](https://github.com/jaxernst).
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
 
-[Follow me on Farcaster for updates](https://farcaster.xyz/jaxer.eth)
+- Development setup
+- Code style and quality standards
+- Testing requirements
+- Pull request process
 
-- Issues and PRs welcome
-- For questions, open a GitHub issue
+**Before contributing**, please:
+
+1. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+2. Check existing [issues](https://github.com/jaxernst/lasso-rpc/issues) and [pull requests](https://github.com/jaxernst/lasso-rpc/pulls)
+3. For major changes, open an issue first to discuss your approach
+
+---
+
+## Security
+
+For security concerns, please review our [Security Policy](SECURITY.md).
+
+**To report a security vulnerability**, please email: **jaxernst@gmail.com** (do not open a public issue).
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**Port already in use**
+
+```bash
+# Change the port in config/dev.exs or set PORT environment variable
+PORT=4001 mix phx.server
+```
+
+**Dependencies won't compile**
+
+```bash
+# Clean and reinstall
+mix deps.clean --all
+mix deps.get
+mix deps.compile
+```
+
+**Dashboard not loading**
+
+- Ensure assets are compiled: `mix assets.deploy` (or they auto-compile in dev)
+- Check that the server started successfully
+- Verify you're accessing `http://localhost:4000/dashboard`
+
+**Provider connection issues**
+
+- Check your network connectivity
+- Verify provider URLs in your profile configuration
+- Check circuit breaker status in the dashboard
+- Review logs for specific error messages
+
+For more help, see [docs/TESTING.md](docs/TESTING.md) or open a [GitHub issue](https://github.com/jaxernst/lasso-rpc/issues).
+
+---
+
+Built by [jaxer.eth](https://farcaster.xyz/jaxer.eth)
 
 ---
 
 ## License
 
-Lasso is licensed under **AGPL-3.0**.
+Lasso RPC is licensed under **AGPL-3.0**.
 
-- You can self-host it freely
-- You can modify it
-- If you run a modified version as a service, you must publish those modifications
+- ✅ You can self-host it freely
+- ✅ You can modify it
+- ⚠️ If you run a modified version as a service, you must publish those modifications
 
-See `LICENSE.md` for full terms.
+See [LICENSE.md](LICENSE.md) for full terms.
