@@ -1,6 +1,6 @@
 defmodule LassoWeb.Components.DashboardHeader do
   @moduledoc "Dashboard header component with tab navigation."
-  use Phoenix.Component
+  use LassoWeb, :html
 
   attr(:active_tab, :string, required: true, doc: "currently active tab")
   attr(:vm_metrics_enabled, :boolean, default: true, doc: "whether VM metrics tab is enabled")
@@ -26,22 +26,11 @@ defmodule LassoWeb.Components.DashboardHeader do
       <div class="relative flex items-center justify-between px-6 py-3">
         <!-- Left: Logo -->
         <a href="/" class="group flex items-center gap-2">
-          <svg
-            class="h-6 w-6 transition-transform group-hover:rotate-6 group-hover:scale-110"
-            viewBox="0 0 24 24"
-            fill="none"
-          >
-            <path
-              d="M13 2L4 14h7v8l9-12h-7V2z"
-              fill="url(#lightning-gradient-header)"
-            />
-            <defs>
-              <linearGradient id="lightning-gradient-header" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#a78bfa" />
-                <stop offset="100%" stop-color="#7c3aed" />
-              </linearGradient>
-            </defs>
-          </svg>
+          <img
+            src={~p"/images/lasso-logo.png"}
+            alt="Lasso Logo"
+            class="h-8 w-8 transition-transform group-hover:rotate-6 group-hover:scale-110"
+          />
           <span class="text-2xl font-bold text-white">Lasso</span>
           <span class="text-[8px] text-emerald-400/90 flex -translate-y-1 items-center gap-1 font-medium">
             <span class="relative flex h-1.5 w-1.5">
