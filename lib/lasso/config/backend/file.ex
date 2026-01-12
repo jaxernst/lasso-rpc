@@ -554,25 +554,26 @@ defmodule Lasso.Config.Backend.File do
           do: yaml <> "      new_heads_timeout_ms: #{new_heads_timeout_ms}\n",
           else: yaml
 
-      if max_backfill_blocks || backfill_timeout_ms do
-        yaml = yaml <> "      failover:\n"
-
-        yaml =
-          if max_backfill_blocks,
-            do: yaml <> "        max_backfill_blocks: #{max_backfill_blocks}\n",
-            else: yaml
-
-        yaml =
-          if backfill_timeout_ms,
-            do: yaml <> "        backfill_timeout_ms: #{backfill_timeout_ms}\n",
-            else: yaml
-
-        yaml
-      else
-        yaml
-      end
+      append_failover_yaml(yaml, max_backfill_blocks, backfill_timeout_ms)
     else
       ""
+    end
+  end
+
+  defp append_failover_yaml(yaml, max_backfill_blocks, backfill_timeout_ms) do
+    if max_backfill_blocks || backfill_timeout_ms do
+      yaml = yaml <> "      failover:\n"
+
+      yaml =
+        if max_backfill_blocks,
+          do: yaml <> "        max_backfill_blocks: #{max_backfill_blocks}\n",
+          else: yaml
+
+      if backfill_timeout_ms,
+        do: yaml <> "        backfill_timeout_ms: #{backfill_timeout_ms}\n",
+        else: yaml
+    else
+      yaml
     end
   end
 

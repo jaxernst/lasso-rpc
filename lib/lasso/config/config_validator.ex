@@ -108,9 +108,9 @@ defmodule Lasso.Config.ConfigValidator do
   """
   @spec validate_websocket_settings(ChainConfig.Websocket.t()) :: :ok | {:error, term()}
   def validate_websocket_settings(websocket) do
-    with :ok <- validate_websocket_main(websocket),
-         :ok <- validate_websocket_failover(websocket.failover) do
-      :ok
+    case validate_websocket_main(websocket) do
+      :ok -> validate_websocket_failover(websocket.failover)
+      error -> error
     end
   end
 
