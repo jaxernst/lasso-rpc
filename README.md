@@ -150,9 +150,9 @@ curl -sS -X POST 'http://localhost:4000/rpc/ethereum?include_meta=headers' \
 
 ## Configuration
 
-Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and limits. `${ENV_VAR}` substitution is supported.
+Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and limits. `${ENV_VAR}` substitution is supported (and unresolved placeholders will fail startup).
 
-For detailed configuration documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For the **full configuration reference (all supported options + tuning notes)**, see `config/profiles/default.yml`.
 
 ### Ready to Use: Default Profile
 
@@ -169,21 +169,26 @@ Minimal example:
 
 ```yaml
 # config/profiles/default.yml
+---
 name: "Default"
 slug: "default"
 type: "standard"
-
+default_rps_limit: 100
+default_burst_limit: 500
+---
 chains:
   ethereum:
     chain_id: 1
     providers:
-      - id: "llamarpc"
+      - id: "ethereum_llamarpc"
+        name: "LlamaRPC"
         url: "https://eth.llamarpc.com"
         ws_url: "wss://eth.llamarpc.com"
 
-      - id: "alchemy"
-        url: "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-        ws_url: "wss://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+      - id: "ethereum_publicnode"
+        name: "PublicNode Ethereum"
+        url: "https://ethereum-rpc.publicnode.com"
+        ws_url: "wss://ethereum-rpc.publicnode.com"
 ```
 
 Multiple profiles:

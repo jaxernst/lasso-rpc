@@ -5,57 +5,163 @@ type: standard
 default_rps_limit: 100
 default_burst_limit: 500
 ---
+# ════════════════════════════════════════════════════════════════════════════
+# LASSO RPC PROFILE CONFIGURATION
+# ════════════════════════════════════════════════════════════════════════════
+#
+# This file is the canonical reference for all profile configuration options.
+#
+# ## Format
+# - Frontmatter (above): Profile metadata (name, slug, type, rate limits)
+# - Body (below): Per-chain configurations with providers and settings
+#
+# ## Environment Variables
+# - Provider URLs support `${ENV_VAR}` substitution
+# - Lasso will crash at startup if placeholders remain unresolved
+#
+# ## Profile Metadata Fields
+# - `name` (string, required): Display name for the profile
+# - `slug` (string, required): Must match filename (e.g., default.yml → slug: default)
+# - `type` (enum, required): free | standard | premium | byok
+# - `default_rps_limit` (int, required): Default per-client requests/second
+# - `default_burst_limit` (int, required): Default burst capacity
+#
+# ════════════════════════════════════════════════════════════════════════════
+
 chains:
+  # ──────────────────────────────────────────────────────────────────────────
+  # ETHEREUM MAINNET
+  # ──────────────────────────────────────────────────────────────────────────
   ethereum:
+    # Chain ID (EIP-155)
+    # Type: integer | Required
     chain_id: 1
+
+    # Display name
+    # Type: string | Optional | Default: <chain_key>
     name: "Ethereum Mainnet"
 
-    topology:
-      category: l1
-      network: mainnet
-      color: "#627EEA"
-      size: xl
-
-    # Provider health monitoring configuration
+    # ┌────────────────────────────────────────────────────────────────────────
+    # │ HEALTH MONITORING
+    # │ Controls provider health checks and lag detection thresholds.
+    # └────────────────────────────────────────────────────────────────────────
     monitoring:
-      probe_interval_ms: 12000 # 12s - block time
-      lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~60s)
-      new_heads_staleness_threshold_ms: 35000
+      # How often to probe providers with eth_chainId health checks.
+      # Recommendation: ~1x block time for L1, ~1.5x block time for L2.
+      # Type: integer (milliseconds) | Default: 12000 | Range: 1000-60000
+      probe_interval_ms: 12000
 
-    # Selection lag tolerance
+      # Block lag threshold before marking a provider as degraded.
+      # This triggers logging/alerting but does NOT exclude from selection.
+      # (See selection.max_lag_blocks for filtering threshold)
+      # Type: integer (blocks) | Default: 3 | Range: 1-100
+      lag_alert_threshold_blocks: 5
+
+    # ┌────────────────────────────────────────────────────────────────────────
+    # │ PROVIDER SELECTION
+    # │ Controls which providers are eligible for request routing.
+    # └────────────────────────────────────────────────────────────────────────
     selection:
+      # Maximum block lag before excluding a provider from selection.
+      # Providers further behind than this are not considered for routing.
+      # L1 recommendation: 1-2 blocks | L2 recommendation: 3-5 blocks
+      # Type: integer (blocks) | Default: nil (no filtering) | Range: 1-100
       max_lag_blocks: 1
 
-    connection:
-      heartbeat_interval: 10000
-      reconnect_interval: 5000
-      max_reconnect_attempts: 10
+    # ┌────────────────────────────────────────────────────────────────────────
+    # │ WEBSOCKET SUBSCRIPTIONS
+    # │ Controls WebSocket behavior for newHeads and subscription failover.
+    # └────────────────────────────────────────────────────────────────────────
+    websocket:
+      # Subscribe to newHeads for real-time block tracking.
+      # Enables lag detection and subscription gap-filling on failover.
+      # Can be overridden per-provider via provider.subscribe_new_heads.
+      # Type: boolean | Default: true
+      subscribe_new_heads: true
 
-    failover:
-      max_backfill_blocks: 100
-      backfill_timeout: 30000
-      enabled: true
+      # How long without a newHeads event before considering subscription stale.
+      # Should be > 2-3x expected block time to avoid false positives.
+      # Type: integer (milliseconds) | Default: 42000 | Range: 5000-120000
+      new_heads_timeout_ms: 35000
 
+      # Backfill configuration: When a subscription fails over to another provider,
+      # fetch missed blocks via HTTP to ensure no data loss during the transition.
+      # Example: Provider A dies at block 1002, Provider B starts at 1006.
+      # Backfill fetches blocks 1003-1005 via HTTP to fill the gap.
+      failover:
+        # Maximum missed blocks to fetch during failover.
+        # Limits gap-filling scope to prevent excessive HTTP requests on long outages.
+        # If gap exceeds this limit, backfill is skipped and gap is reported.
+        # Type: integer (blocks) | Default: 100 | Range: 1-1000
+        max_backfill_blocks: 100
+
+        # Timeout for fetching missed blocks via HTTP.
+        # Type: integer (milliseconds) | Default: 30000 | Range: 5000-120000
+        backfill_timeout_ms: 30000
+
+    # ┌────────────────────────────────────────────────────────────────────────
+    # │ UI TOPOLOGY (Dashboard visualization only)
+    # │ Metadata used by the network topology component for layout/styling.
+    # └────────────────────────────────────────────────────────────────────────
+    ui-topology:
+      category: l1           # l1 | l2 | sidechain | other
+      network: mainnet       # mainnet | sepolia | goerli | holesky
+      color: "#627EEA"       # Hex color for dashboard
+      size: xl               # sm | md | lg | xl
+
+    # ┌────────────────────────────────────────────────────────────────────────
+    # │ PROVIDERS
+    # │ Upstream RPC endpoints with priority-based routing.
+    # └────────────────────────────────────────────────────────────────────────
     providers:
+      # ──── Provider Entry ────
       - id: "ethereum_llamarpc"
-        name: "LlamaRPC"
-        priority: 2
-        type: "public"
-        url: "https://eth.llamarpc.com"
-        ws_url: "wss://eth.llamarpc.com"
-        api_key_required: false
+        # Unique identifier within this chain (required)
+        # Type: string
 
-      - id: "ethereum_drpc"
-        name: "DRPC Ethereum"
-        priority: 3
+        name: "LlamaRPC"
+        # Display name (required)
+        # Type: string
+
+        url: "https://eth.llamarpc.com"
+        # HTTP(S) JSON-RPC endpoint (required)
+        # Supports ${ENV_VAR} substitution
+        # Type: string (URL)
+
+        ws_url: "wss://eth.llamarpc.com"
+        # WebSocket endpoint for subscriptions (optional)
+        # Type: string (URL) | Default: nil
+
+        priority: 2
+        # Routing priority (lower = preferred)
+        # Type: integer | Default: 100 | Range: 1+
+
         type: "public"
-        url: "https://lb.drpc.live/ethereum/${DRPC_API_KEY}"
-        ws_url: "wss://lb.drpc.live/ethereum/${DRPC_API_KEY}"
+        # Provider classification (informational)
+        # Type: string | Default: "public"
+
         api_key_required: false
+        # UI hint indicating if API key is needed (informational)
+        # Type: boolean | Default: false
+
+        # region: "us-east"
+        # Geographic region (optional, informational)
+        # Type: string | Default: nil
+
+        # subscribe_new_heads: true
+        # Override chain-level subscribe_new_heads setting
+        # Type: boolean | Default: nil (uses chain setting)
+
+        # adapter_config:
+        #   # Provider-specific adapter tuning (optional, advanced)
+        #   # Fields vary by provider type - see docs/ADAPTERS.md
+        #   # Common examples:
+        #   max_block_range: 10000        # eth_getLogs block range limit
+        #   eth_get_logs_block_range: 10  # Alchemy-specific override
 
       - id: "ethereum_publicnode"
         name: "PublicNode Ethereum"
-        priority: 4
+        priority: 3
         type: "public"
         url: "https://ethereum-rpc.publicnode.com"
         ws_url: "wss://ethereum-rpc.publicnode.com"
@@ -63,49 +169,51 @@ chains:
 
       - id: "ethereum_merkle"
         name: "Merkle Ethereum"
-        priority: 5
+        priority: 4
         type: "public"
         url: "https://eth.merkle.io"
         api_key_required: false
 
       - id: "0xrpc_ethereum"
         name: "0xRPC Ethereum"
-        priority: 6
+        priority: 5
         type: "public"
         url: "https://0xrpc.io/eth"
         ws_url: "wss://0xrpc.io/eth"
         api_key_required: false
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # BASE MAINNET (L2)
+  # ──────────────────────────────────────────────────────────────────────────
   base:
     chain_id: 8453
     name: "Base Mainnet"
 
-    topology:
+    monitoring:
+      # L2s have faster block times - probe more frequently
+      probe_interval_ms: 3000  # 3s = ~1.5x block time (2s blocks)
+      lag_alert_threshold_blocks: 5
+
+    selection:
+      # More tolerant for L2 due to faster block times
+      max_lag_blocks: 5
+
+    websocket:
+      subscribe_new_heads: true
+      # Shorter timeout for L2 (faster blocks)
+      new_heads_timeout_ms: 20000
+
+      # Backfill missed blocks during subscription failover
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
       category: l2
-      parent: ethereum
+      parent: ethereum      # L2 parent chain
       network: mainnet
       color: "#0052FF"
       size: md
-
-    # Provider health monitoring configuration
-    monitoring:
-      probe_interval_ms: 3000 # 3s - probe every 1.5 blocks (2s block time)
-      lag_threshold_blocks: 5 # Exclude if provider is 5+ blocks behind (~10s)
-      new_heads_staleness_threshold_ms: 20000
-
-    # Per-method lag overrides for selection
-    selection:
-      max_lag_blocks: 5 # More tolerant for L2 (accounts for faster block times)
-
-    connection:
-      heartbeat_interval: 10000
-      reconnect_interval: 5000
-      max_reconnect_attempts: 10
-
-    failover:
-      max_backfill_blocks: 100
-      backfill_timeout: 30000
-      enabled: true
 
     providers:
       - id: "base_llamarpc"
@@ -131,10 +239,42 @@ chains:
         ws_url: "wss://base.publicnode.com"
         api_key_required: false
 
-      - id: "base_drpc"
-        name: "DRPC Base"
-        priority: 5
-        type: "public"
-        url: "https://lb.drpc.live/base/${DRPC_API_KEY}"
-        ws_url: "wss://lb.drpc.live/base/${DRPC_API_KEY}"
-        api_key_required: false
+# ════════════════════════════════════════════════════════════════════════════
+# CONFIGURATION NOTES
+# ════════════════════════════════════════════════════════════════════════════
+#
+# ## Tuning Guidelines
+#
+# ### L1 Chains (Ethereum)
+# - probe_interval_ms: 12000 (~1x block time)
+# - lag_alert_threshold_blocks: 3-5
+# - max_lag_blocks: 1-2
+# - new_heads_timeout_ms: 35000-42000 (~3x block time)
+#
+# ### L2 Chains (Base, Optimism, Arbitrum)
+# - probe_interval_ms: 3000-4000 (~1.5x block time)
+# - lag_alert_threshold_blocks: 5-10
+# - max_lag_blocks: 3-5
+# - new_heads_timeout_ms: 15000-20000 (~5-10x block time)
+#
+# ### Testnets
+# - Use more lenient thresholds (testnets are less reliable)
+# - Increase new_heads_timeout_ms by 50-100%
+# - Increase lag_alert_threshold_blocks
+#
+# ## Provider Adapter Configuration
+#
+# Some providers have specific limitations or optimizations. Use adapter_config
+# to tune provider-specific behavior:
+#
+# ### Alchemy
+#   adapter_config:
+#     eth_get_logs_block_range: 10  # Max block range for getLogs
+#
+# ### 1RPC, dRPC, LlamaRPC, Merkle
+#   adapter_config:
+#     max_block_range: 10000  # Generic block range limit
+#
+# See docs/ADAPTERS.md for complete provider-specific configuration options.
+#
+# ════════════════════════════════════════════════════════════════════════════

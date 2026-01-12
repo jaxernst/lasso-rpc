@@ -246,11 +246,10 @@ defmodule Lasso.Config.Backend.File do
       chain_id: chain_data["chain_id"],
       name: chain_data["name"] || chain_name,
       providers: parse_providers(chain_data["providers"] || []),
-      connection: parse_connection(chain_data["connection"]),
-      failover: parse_failover(chain_data["failover"]),
       selection: parse_selection(chain_data["selection"]),
       monitoring: parse_monitoring(chain_data["monitoring"]),
-      topology: parse_topology(chain_data["topology"])
+      websocket: parse_websocket(chain_data["websocket"], chain_data),
+      topology: parse_topology(chain_data["ui-topology"])
     }
   end
 
@@ -291,29 +290,37 @@ defmodule Lasso.Config.Backend.File do
     ArgumentError -> String.to_atom(string)
   end
 
-  defp parse_connection(nil) do
-    %ChainConfig.Connection{
-      heartbeat_interval: 30_000,
-      reconnect_interval: 5_000,
-      max_reconnect_attempts: 5
+  # Parse websocket config, with backwards compatibility for old structure
+  # Old structure had monitoring.subscribe_new_heads, monitoring.new_heads_staleness_threshold_ms
+  # and a separate failover section
+  defp parse_websocket(nil, chain_data) do
+    # Check for legacy config locations
+    monitoring = chain_data["monitoring"] || %{}
+    failover = chain_data["failover"] || %{}
+
+    %ChainConfig.Websocket{
+      subscribe_new_heads: Map.get(monitoring, "subscribe_new_heads", true),
+      new_heads_timeout_ms: Map.get(monitoring, "new_heads_staleness_threshold_ms", 42_000),
+      failover: parse_websocket_failover(failover)
     }
   end
 
-  defp parse_connection(connection_data) do
-    %ChainConfig.Connection{
-      heartbeat_interval: connection_data["heartbeat_interval"] || 30_000,
-      reconnect_interval: connection_data["reconnect_interval"] || 5_000,
-      max_reconnect_attempts: connection_data["max_reconnect_attempts"] || 5
+  defp parse_websocket(websocket_data, _chain_data) when is_map(websocket_data) do
+    %ChainConfig.Websocket{
+      subscribe_new_heads: Map.get(websocket_data, "subscribe_new_heads", true),
+      new_heads_timeout_ms: Map.get(websocket_data, "new_heads_timeout_ms", 42_000),
+      failover: parse_websocket_failover(websocket_data["failover"])
     }
   end
 
-  defp parse_failover(nil), do: %ChainConfig.Failover{}
+  defp parse_websocket_failover(nil), do: %ChainConfig.WebsocketFailover{}
 
-  defp parse_failover(failover_data) do
-    %ChainConfig.Failover{
+  defp parse_websocket_failover(failover_data) when is_map(failover_data) do
+    %ChainConfig.WebsocketFailover{
       max_backfill_blocks: Map.get(failover_data, "max_backfill_blocks", 100),
-      backfill_timeout: Map.get(failover_data, "backfill_timeout", 30_000),
-      enabled: Map.get(failover_data, "enabled", true)
+      backfill_timeout_ms:
+        Map.get(failover_data, "backfill_timeout_ms") ||
+          Map.get(failover_data, "backfill_timeout", 30_000)
     }
   end
 
@@ -330,10 +337,10 @@ defmodule Lasso.Config.Backend.File do
   defp parse_monitoring(monitoring_data) when is_map(monitoring_data) do
     %ChainConfig.Monitoring{
       probe_interval_ms: Map.get(monitoring_data, "probe_interval_ms", 12_000),
-      lag_threshold_blocks: Map.get(monitoring_data, "lag_threshold_blocks", 3),
-      new_heads_staleness_threshold_ms:
-        Map.get(monitoring_data, "new_heads_staleness_threshold_ms", 42_000),
-      subscribe_new_heads: Map.get(monitoring_data, "subscribe_new_heads", true)
+      # Support both new and legacy field names
+      lag_alert_threshold_blocks:
+        Map.get(monitoring_data, "lag_alert_threshold_blocks") ||
+          Map.get(monitoring_data, "lag_threshold_blocks", 3)
     }
   end
 
@@ -471,12 +478,6 @@ defmodule Lasso.Config.Backend.File do
         do: chain_yaml <> "    name: \"#{chain_config["name"]}\"\n",
         else: chain_yaml
 
-    # Add connection config if present
-    chain_yaml =
-      if chain_config["connection"],
-        do: chain_yaml <> generate_connection_yaml(chain_config["connection"]),
-        else: chain_yaml
-
     # Add monitoring config if present
     chain_yaml =
       if chain_config["monitoring"],
@@ -489,35 +490,17 @@ defmodule Lasso.Config.Backend.File do
         do: chain_yaml <> generate_selection_yaml(chain_config["selection"]),
         else: chain_yaml
 
+    # Add websocket config (converting from legacy failover/monitoring fields)
+    chain_yaml = chain_yaml <> generate_websocket_yaml(chain_config)
+
     # Add topology config if present
     chain_yaml =
-      if chain_config["topology"],
-        do: chain_yaml <> generate_topology_yaml(chain_config["topology"]),
+      if chain_config["ui-topology"],
+        do: chain_yaml <> generate_topology_yaml(chain_config["ui-topology"]),
         else: chain_yaml
 
     # Add providers
     chain_yaml <> "    providers:\n" <> providers_yaml
-  end
-
-  defp generate_connection_yaml(connection) do
-    yaml = "    connection:\n"
-
-    yaml =
-      if connection["heartbeat_interval"],
-        do: yaml <> "      heartbeat_interval: #{connection["heartbeat_interval"]}\n",
-        else: yaml
-
-    yaml =
-      if connection["reconnect_interval"],
-        do: yaml <> "      reconnect_interval: #{connection["reconnect_interval"]}\n",
-        else: yaml
-
-    yaml =
-      if connection["max_reconnect_attempts"],
-        do: yaml <> "      max_reconnect_attempts: #{connection["max_reconnect_attempts"]}\n",
-        else: yaml
-
-    yaml
   end
 
   defp generate_monitoring_yaml(monitoring) do
@@ -529,18 +512,68 @@ defmodule Lasso.Config.Backend.File do
         else: yaml
 
     yaml =
-      if monitoring["lag_threshold_blocks"],
-        do: yaml <> "      lag_threshold_blocks: #{monitoring["lag_threshold_blocks"]}\n",
-        else: yaml
-
-    yaml =
-      if monitoring["new_heads_staleness_threshold_ms"],
+      if monitoring["lag_threshold_blocks"] || monitoring["lag_alert_threshold_blocks"],
         do:
           yaml <>
-            "      new_heads_staleness_threshold_ms: #{monitoring["new_heads_staleness_threshold_ms"]}\n",
+            "      lag_alert_threshold_blocks: #{monitoring["lag_alert_threshold_blocks"] || monitoring["lag_threshold_blocks"]}\n",
         else: yaml
 
     yaml
+  end
+
+  defp generate_websocket_yaml(chain_config) do
+    monitoring = chain_config["monitoring"] || %{}
+    failover = chain_config["failover"] || %{}
+    websocket = chain_config["websocket"] || %{}
+
+    # Prefer new websocket config, fall back to legacy locations
+    subscribe_new_heads =
+      websocket["subscribe_new_heads"] || monitoring["subscribe_new_heads"]
+
+    new_heads_timeout_ms =
+      websocket["new_heads_timeout_ms"] || monitoring["new_heads_staleness_threshold_ms"]
+
+    max_backfill_blocks =
+      (websocket["failover"] || %{})["max_backfill_blocks"] || failover["max_backfill_blocks"]
+
+    backfill_timeout_ms =
+      (websocket["failover"] || %{})["backfill_timeout_ms"] ||
+        failover["backfill_timeout_ms"] || failover["backfill_timeout"]
+
+    # Only generate if there's something to write
+    if subscribe_new_heads || new_heads_timeout_ms || max_backfill_blocks || backfill_timeout_ms do
+      yaml = "    websocket:\n"
+
+      yaml =
+        if subscribe_new_heads != nil,
+          do: yaml <> "      subscribe_new_heads: #{subscribe_new_heads}\n",
+          else: yaml
+
+      yaml =
+        if new_heads_timeout_ms,
+          do: yaml <> "      new_heads_timeout_ms: #{new_heads_timeout_ms}\n",
+          else: yaml
+
+      if max_backfill_blocks || backfill_timeout_ms do
+        yaml = yaml <> "      failover:\n"
+
+        yaml =
+          if max_backfill_blocks,
+            do: yaml <> "        max_backfill_blocks: #{max_backfill_blocks}\n",
+            else: yaml
+
+        yaml =
+          if backfill_timeout_ms,
+            do: yaml <> "        backfill_timeout_ms: #{backfill_timeout_ms}\n",
+            else: yaml
+
+        yaml
+      else
+        yaml
+      end
+    else
+      ""
+    end
   end
 
   defp generate_selection_yaml(selection) do
@@ -555,7 +588,7 @@ defmodule Lasso.Config.Backend.File do
   end
 
   defp generate_topology_yaml(topology) do
-    yaml = "    topology:\n"
+    yaml = "    ui-topology:\n"
 
     yaml =
       if topology["category"],

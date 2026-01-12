@@ -767,8 +767,7 @@ defmodule Lasso.Config.ConfigStore do
   # Normalization helpers
 
   defp normalize_chain_config(chain_name, attrs) when is_map(attrs) do
-    connection_attrs = Map.get(attrs, :connection) || Map.get(attrs, "connection") || %{}
-    failover_attrs = Map.get(attrs, :failover) || Map.get(attrs, "failover") || %{}
+    websocket_attrs = Map.get(attrs, :websocket) || Map.get(attrs, "websocket") || %{}
     selection_attrs = Map.get(attrs, :selection) || Map.get(attrs, "selection")
     monitoring_attrs = Map.get(attrs, :monitoring) || Map.get(attrs, "monitoring") || %{}
     providers_attrs = Map.get(attrs, :providers) || Map.get(attrs, "providers") || []
@@ -777,31 +776,31 @@ defmodule Lasso.Config.ConfigStore do
       chain_id: Map.get(attrs, :chain_id) || Map.get(attrs, "chain_id"),
       name: Map.get(attrs, :name) || Map.get(attrs, "name") || chain_name,
       providers: Enum.map(providers_attrs, &normalize_provider_config/1),
-      connection: normalize_connection_config(connection_attrs),
-      failover: normalize_failover_config(failover_attrs),
+      websocket: normalize_websocket_config(websocket_attrs),
       selection: normalize_selection_config(selection_attrs),
       monitoring: normalize_monitoring_config(monitoring_attrs)
     }
   end
 
-  defp normalize_connection_config(attrs) when is_map(attrs) do
-    %ChainConfig.Connection{
-      heartbeat_interval:
-        Map.get(attrs, :heartbeat_interval) || Map.get(attrs, "heartbeat_interval") || 30_000,
-      reconnect_interval:
-        Map.get(attrs, :reconnect_interval) || Map.get(attrs, "reconnect_interval") || 5_000,
-      max_reconnect_attempts:
-        Map.get(attrs, :max_reconnect_attempts) || Map.get(attrs, "max_reconnect_attempts") || 5
+  defp normalize_websocket_config(attrs) when is_map(attrs) do
+    failover_attrs = Map.get(attrs, :failover) || Map.get(attrs, "failover") || %{}
+
+    %ChainConfig.Websocket{
+      subscribe_new_heads:
+        Map.get(attrs, :subscribe_new_heads) || Map.get(attrs, "subscribe_new_heads") || true,
+      new_heads_timeout_ms:
+        Map.get(attrs, :new_heads_timeout_ms) || Map.get(attrs, "new_heads_timeout_ms") ||
+          42_000,
+      failover: normalize_websocket_failover_config(failover_attrs)
     }
   end
 
-  defp normalize_failover_config(attrs) when is_map(attrs) do
-    %ChainConfig.Failover{
+  defp normalize_websocket_failover_config(attrs) when is_map(attrs) do
+    %ChainConfig.WebsocketFailover{
       max_backfill_blocks:
         Map.get(attrs, :max_backfill_blocks) || Map.get(attrs, "max_backfill_blocks") || 100,
-      backfill_timeout:
-        Map.get(attrs, :backfill_timeout) || Map.get(attrs, "backfill_timeout") || 30_000,
-      enabled: Map.get(attrs, :enabled) || Map.get(attrs, "enabled") || true
+      backfill_timeout_ms:
+        Map.get(attrs, :backfill_timeout_ms) || Map.get(attrs, "backfill_timeout_ms") || 30_000
     }
   end
 
@@ -817,12 +816,10 @@ defmodule Lasso.Config.ConfigStore do
     %ChainConfig.Monitoring{
       probe_interval_ms:
         Map.get(attrs, :probe_interval_ms) || Map.get(attrs, "probe_interval_ms") || 12_000,
-      lag_threshold_blocks:
-        Map.get(attrs, :lag_threshold_blocks) || Map.get(attrs, "lag_threshold_blocks") || 3,
-      new_heads_staleness_threshold_ms:
-        Map.get(attrs, :new_heads_staleness_threshold_ms) ||
-          Map.get(attrs, "new_heads_staleness_threshold_ms") ||
-          42_000
+      lag_alert_threshold_blocks:
+        Map.get(attrs, :lag_alert_threshold_blocks) ||
+          Map.get(attrs, "lag_alert_threshold_blocks") ||
+          Map.get(attrs, :lag_threshold_blocks) || Map.get(attrs, "lag_threshold_blocks") || 3
     }
   end
 

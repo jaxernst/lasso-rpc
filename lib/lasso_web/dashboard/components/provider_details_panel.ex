@@ -37,7 +37,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
       <div :if={@provider_connection}>
         <.sync_status_section provider_connection={@provider_connection} />
-        <.performance_section performance_metrics={@performance_metrics} />
+        <.performance_metrics_strip performance_metrics={@performance_metrics} />
         <.circuit_breaker_section provider_connection={@provider_connection} />
         <.issues_section
           provider_connection={@provider_connection}
@@ -175,7 +175,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   attr(:performance_metrics, :map, required: true)
 
-  defp performance_section(assigns) do
+  defp performance_metrics_strip(assigns) do
     metrics = assigns.performance_metrics
     success_rate = Map.get(metrics, :success_rate, 0.0)
 
@@ -188,15 +188,12 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       |> assign(:traffic, format_traffic(Map.get(metrics, :pick_share_5m, 0.0)))
 
     ~H"""
-    <DetailPanelComponents.panel_section>
-      <DetailPanelComponents.section_header title="Performance" />
-      <DetailPanelComponents.metrics_grid>
-        <:metric label="p50" value={@p50} />
-        <:metric label="p95" value={@p95} />
-        <:metric label="Success" value={@success_rate} value_class={@success_class} />
-        <:metric label="Traffic" value={@traffic} />
-      </DetailPanelComponents.metrics_grid>
-    </DetailPanelComponents.panel_section>
+    <DetailPanelComponents.metrics_strip>
+      <:metric label="Latency p50" value={@p50} />
+      <:metric label="Latency p95" value={@p95} />
+      <:metric label="Success" value={@success_rate} value_class={@success_class} />
+      <:metric label="Traffic" value={@traffic} />
+    </DetailPanelComponents.metrics_strip>
     """
   end
 

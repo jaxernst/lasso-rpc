@@ -3,7 +3,7 @@ defmodule LassoWeb.TopologyConfig do
   Centralized configuration for the network topology visualization.
 
   All layout constants and sizing rules are defined here for easy tweaking.
-  Chain-specific metadata (category, parent, color) comes from chains.yml topology config.
+  Chain-specific metadata (category, parent, color, size) comes from profile chain `ui-topology` config.
   """
 
   alias Lasso.Config.ChainConfig.Topology

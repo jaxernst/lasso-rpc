@@ -3,7 +3,7 @@ defmodule Lasso.Config.ChainConfig do
   Chain configuration data structures and validation.
 
   Defines the data structures used to represent profile chain configurations
-  including providers, connection settings, failover behavior, and monitoring.
+  including providers, websocket settings, failover behavior, and monitoring.
   """
 
   require Logger
@@ -12,10 +12,9 @@ defmodule Lasso.Config.ChainConfig do
           chain_id: non_neg_integer() | nil,
           name: String.t(),
           providers: [__MODULE__.Provider.t()],
-          connection: __MODULE__.Connection.t(),
-          failover: __MODULE__.Failover.t(),
           selection: __MODULE__.Selection.t() | nil,
           monitoring: __MODULE__.Monitoring.t(),
+          websocket: __MODULE__.Websocket.t(),
           topology: __MODULE__.Topology.t() | nil
         }
 
@@ -23,10 +22,9 @@ defmodule Lasso.Config.ChainConfig do
     :chain_id,
     :name,
     :providers,
-    :connection,
-    :failover,
     :selection,
     :monitoring,
+    :websocket,
     :topology
   ]
 
@@ -61,32 +59,41 @@ defmodule Lasso.Config.ChainConfig do
     ]
   end
 
-  defmodule Connection do
-    @moduledoc "Connection settings for RPC providers."
-    @type t :: %__MODULE__{
-            heartbeat_interval: non_neg_integer(),
-            reconnect_interval: non_neg_integer(),
-            max_reconnect_attempts: non_neg_integer()
-          }
+  defmodule WebsocketFailover do
+    @moduledoc """
+    Failover configuration for WebSocket subscriptions.
 
-    defstruct [
-      :heartbeat_interval,
-      :reconnect_interval,
-      :max_reconnect_attempts
-    ]
-  end
+    Controls gap-filling behavior when a subscription fails over to another provider.
+    """
 
-  defmodule Failover do
-    @moduledoc "Failover configuration for RPC provider selection."
     @type t :: %__MODULE__{
             max_backfill_blocks: non_neg_integer(),
-            backfill_timeout: non_neg_integer(),
-            enabled: boolean()
+            backfill_timeout_ms: non_neg_integer()
           }
 
     defstruct max_backfill_blocks: 100,
-              backfill_timeout: 30_000,
-              enabled: true
+              backfill_timeout_ms: 30_000
+  end
+
+  defmodule Websocket do
+    @moduledoc """
+    WebSocket subscription configuration.
+
+    Controls newHeads tracking for real-time block monitoring and
+    failover behavior when subscriptions lose connection.
+    """
+
+    alias Lasso.Config.ChainConfig.WebsocketFailover
+
+    @type t :: %__MODULE__{
+            subscribe_new_heads: boolean(),
+            new_heads_timeout_ms: non_neg_integer(),
+            failover: WebsocketFailover.t()
+          }
+
+    defstruct subscribe_new_heads: true,
+              new_heads_timeout_ms: 42_000,
+              failover: %WebsocketFailover{}
   end
 
   defmodule Selection do
@@ -110,28 +117,23 @@ defmodule Lasso.Config.ChainConfig do
 
     Controls the behavior of the integrated ProviderProbe system:
     - Probe frequency (how often to query eth_blockNumber)
-    - Lag detection thresholds (when to warn about providers falling behind)
-    - Monotonicity violation thresholds (detect unstable provider backends)
-    - Subscription staleness detection threshold
-    - NewHeads subscription behavior
+    - Lag detection thresholds (when to warn/alert about providers falling behind)
 
     These settings are chain-specific because chains have different:
     - Block times (Ethereum: 12s, Base: 2s, Polygon: 2s)
     - Reorg depths (Polygon is notorious for deep reorgs)
     - Operational requirements
+
+    Note: WebSocket-specific settings (newHeads subscriptions) are in the Websocket struct.
     """
 
     @type t :: %__MODULE__{
             probe_interval_ms: non_neg_integer(),
-            lag_threshold_blocks: non_neg_integer(),
-            new_heads_staleness_threshold_ms: non_neg_integer(),
-            subscribe_new_heads: boolean()
+            lag_alert_threshold_blocks: non_neg_integer()
           }
 
     defstruct probe_interval_ms: 12_000,
-              lag_threshold_blocks: 3,
-              new_heads_staleness_threshold_ms: 42_000,
-              subscribe_new_heads: true
+              lag_alert_threshold_blocks: 3
   end
 
   defmodule Topology do
@@ -190,13 +192,13 @@ defmodule Lasso.Config.ChainConfig do
   @doc """
   Determines if newHeads subscription should be enabled for a provider.
 
-  Provider-level setting overrides chain-level default from Monitoring.subscribe_new_heads.
+  Provider-level setting overrides chain-level default from Websocket.subscribe_new_heads.
   Returns true if the provider should subscribe to newHeads via WebSocket.
   """
   @spec should_subscribe_new_heads?(t(), Provider.t()) :: boolean()
   def should_subscribe_new_heads?(chain_config, provider) do
     case provider.subscribe_new_heads do
-      nil -> chain_config.monitoring.subscribe_new_heads
+      nil -> chain_config.websocket.subscribe_new_heads
       value when is_boolean(value) -> value
     end
   end
@@ -253,12 +255,9 @@ defmodule Lasso.Config.ChainConfig do
   @doc """
   Validates that a chain configuration has valid providers.
   """
-  @spec validate_chain_config(t()) ::
-          :ok | {:error, :no_providers | :invalid_provider | :invalid_connection}
+  @spec validate_chain_config(t()) :: :ok | {:error, :no_providers | :invalid_provider}
   def validate_chain_config(%__MODULE__{} = chain_config) do
-    with :ok <- validate_providers(chain_config.providers) do
-      validate_connection(chain_config.connection)
-    end
+    validate_providers(chain_config.providers)
   end
 
   defp validate_providers([]), do: {:error, :no_providers}
@@ -277,11 +276,4 @@ defmodule Lasso.Config.ChainConfig do
   end
 
   defp valid_provider?(_), do: false
-
-  defp validate_connection(%Connection{heartbeat_interval: hi, reconnect_interval: ri})
-       when is_integer(hi) and hi > 0 and is_integer(ri) and ri > 0 do
-    :ok
-  end
-
-  defp validate_connection(_), do: {:error, :invalid_connection}
 end

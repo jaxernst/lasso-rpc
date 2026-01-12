@@ -2052,7 +2052,7 @@ defmodule Lasso.RPC.ProviderPool do
     # Falls back to application config if chain not found
     case Lasso.Config.ConfigStore.get_chain(profile, chain) do
       {:ok, chain_config} ->
-        chain_config.monitoring.lag_threshold_blocks
+        chain_config.monitoring.lag_alert_threshold_blocks
 
       {:error, _} ->
         # Fallback to application config for backwards compatibility

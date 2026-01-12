@@ -22,8 +22,7 @@ defmodule Lasso.Config.ConfigValidator do
          :ok <- validate_chain_id(chain_config.chain_id),
          :ok <- validate_providers(chain_config.providers, skip_connectivity),
          :ok <- validate_provider_priorities(chain_config.providers),
-         :ok <- validate_connection_settings(chain_config.connection),
-         :ok <- validate_failover_settings(chain_config.failover) do
+         :ok <- validate_websocket_settings(chain_config.websocket) do
       :ok
     else
       {:error, reason} -> {:error, reason}
@@ -105,54 +104,45 @@ defmodule Lasso.Config.ConfigValidator do
   end
 
   @doc """
-  Validates connection settings are reasonable.
+  Validates websocket settings are reasonable.
   """
-  @spec validate_connection_settings(ChainConfig.Connection.t()) :: :ok | {:error, term()}
-  def validate_connection_settings(connection) do
+  @spec validate_websocket_settings(ChainConfig.Websocket.t()) :: :ok | {:error, term()}
+  def validate_websocket_settings(websocket) do
+    with :ok <- validate_websocket_main(websocket),
+         :ok <- validate_websocket_failover(websocket.failover) do
+      :ok
+    end
+  end
+
+  defp validate_websocket_main(websocket) do
     cond do
-      connection.heartbeat_interval < 1000 ->
-        {:error, :heartbeat_too_frequent}
+      not is_boolean(websocket.subscribe_new_heads) ->
+        {:error, :invalid_subscribe_new_heads}
 
-      connection.heartbeat_interval > 300_000 ->
-        {:error, :heartbeat_too_infrequent}
+      websocket.new_heads_timeout_ms < 5000 ->
+        {:error, :new_heads_timeout_too_short}
 
-      connection.reconnect_interval < 100 ->
-        {:error, :reconnect_too_frequent}
-
-      connection.reconnect_interval > 60_000 ->
-        {:error, :reconnect_too_infrequent}
-
-      connection.max_reconnect_attempts < 1 ->
-        {:error, :invalid_reconnect_attempts}
-
-      connection.max_reconnect_attempts > 100 ->
-        {:error, :too_many_reconnect_attempts}
+      websocket.new_heads_timeout_ms > 120_000 ->
+        {:error, :new_heads_timeout_too_long}
 
       true ->
         :ok
     end
   end
 
-  @doc """
-  Validates failover settings are reasonable.
-  """
-  @spec validate_failover_settings(ChainConfig.Failover.t()) :: :ok | {:error, term()}
-  def validate_failover_settings(failover) do
+  defp validate_websocket_failover(failover) do
     cond do
-      failover.max_backfill_blocks < 0 ->
+      failover.max_backfill_blocks < 1 ->
         {:error, :invalid_backfill_blocks}
 
       failover.max_backfill_blocks > 10_000 ->
         {:error, :backfill_blocks_too_large}
 
-      failover.backfill_timeout < 1000 ->
+      failover.backfill_timeout_ms < 5000 ->
         {:error, :backfill_timeout_too_short}
 
-      failover.backfill_timeout > 300_000 ->
+      failover.backfill_timeout_ms > 300_000 ->
         {:error, :backfill_timeout_too_long}
-
-      not is_boolean(failover.enabled) ->
-        {:error, :invalid_failover_enabled}
 
       true ->
         :ok
@@ -177,19 +167,13 @@ defmodule Lasso.Config.ConfigValidator do
   def format_error(:invalid_provider_structure), do: "Provider must have id, name, and url"
   def format_error(:invalid_priority_range), do: "Provider priorities must be >= 1"
   def format_error(:duplicate_priorities), do: "Provider priorities must be unique"
-  def format_error(:heartbeat_too_frequent), do: "Heartbeat interval must be >= 1000ms"
-  def format_error(:heartbeat_too_infrequent), do: "Heartbeat interval must be <= 300000ms"
-  def format_error(:reconnect_too_frequent), do: "Reconnect interval must be >= 100ms"
-  def format_error(:reconnect_too_infrequent), do: "Reconnect interval must be <= 60000ms"
-  def format_error(:invalid_reconnect_attempts), do: "Max reconnect attempts must be >= 1"
-  def format_error(:too_many_reconnect_attempts), do: "Max reconnect attempts must be <= 100"
-  def format_error(:cache_size_too_small), do: "Cache size must be >= 100"
-  def format_error(:cache_size_too_large), do: "Cache size must be <= 1000000"
-  def format_error(:invalid_backfill_blocks), do: "Max backfill blocks must be >= 0"
-  def format_error(:backfill_blocks_too_large), do: "Max backfill blocks should be <= 10000"
-  def format_error(:backfill_timeout_too_short), do: "Backfill timeout must be >= 1000ms"
-  def format_error(:backfill_timeout_too_long), do: "Backfill timeout must be <= 300000ms"
-  def format_error(:invalid_failover_enabled), do: "Failover enabled must be a boolean"
+  def format_error(:invalid_subscribe_new_heads), do: "subscribe_new_heads must be a boolean"
+  def format_error(:new_heads_timeout_too_short), do: "new_heads_timeout_ms must be >= 5000ms"
+  def format_error(:new_heads_timeout_too_long), do: "new_heads_timeout_ms must be <= 120000ms"
+  def format_error(:invalid_backfill_blocks), do: "max_backfill_blocks must be >= 1"
+  def format_error(:backfill_blocks_too_large), do: "max_backfill_blocks should be <= 10000"
+  def format_error(:backfill_timeout_too_short), do: "backfill_timeout_ms must be >= 5000ms"
+  def format_error(:backfill_timeout_too_long), do: "backfill_timeout_ms must be <= 300000ms"
 
   def format_error({:connectivity_failed, provider_id, reason}),
     do: "Provider #{provider_id} connectivity test failed: #{inspect(reason)}"
@@ -199,7 +183,7 @@ defmodule Lasso.Config.ConfigValidator do
   # Private functions
 
   defp validate_basic_structure(chain_config) do
-    required_fields = [:chain_id, :name, :providers, :connection, :failover]
+    required_fields = [:chain_id, :name, :providers, :websocket]
 
     missing_fields =
       Enum.filter(required_fields, fn field ->

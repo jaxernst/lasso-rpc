@@ -700,7 +700,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
   defp calculate_staleness_threshold(profile, chain) do
     case ConfigStore.get_chain(profile, chain) do
       {:ok, config} ->
-        config.monitoring.new_heads_staleness_threshold_ms
+        config.websocket.new_heads_timeout_ms
 
       _ ->
         @default_new_heads_staleness_threshold_ms

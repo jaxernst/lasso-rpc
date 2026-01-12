@@ -267,14 +267,14 @@ defmodule Lasso.BlockSync.Worker do
               {
                 ChainConfig.should_subscribe_new_heads?(chain_config, provider),
                 chain_config.monitoring.probe_interval_ms,
-                chain_config.monitoring.new_heads_staleness_threshold_ms
+                chain_config.websocket.new_heads_timeout_ms
               }
 
             {:error, _} ->
               {
-                chain_config.monitoring.subscribe_new_heads,
+                chain_config.websocket.subscribe_new_heads,
                 chain_config.monitoring.probe_interval_ms,
-                chain_config.monitoring.new_heads_staleness_threshold_ms
+                chain_config.websocket.new_heads_timeout_ms
               }
           end
 

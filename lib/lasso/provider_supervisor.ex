@@ -88,10 +88,7 @@ defmodule Lasso.RPC.ProviderSupervisor do
           name: provider.name,
           ws_url: url,
           chain_id: chain_config.chain_id,
-          chain_name: chain_name,
-          heartbeat_interval: chain_config.connection.heartbeat_interval,
-          reconnect_interval: chain_config.connection.reconnect_interval,
-          max_reconnect_attempts: chain_config.connection.max_reconnect_attempts
+          chain_name: chain_name
         }
 
         child = %{
