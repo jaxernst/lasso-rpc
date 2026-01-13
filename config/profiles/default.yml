@@ -54,7 +54,7 @@ chains:
       # Block lag threshold before marking a provider as degraded.
       # This triggers logging/alerting but does NOT exclude from selection.
       # (See selection.max_lag_blocks for filtering threshold)
-      # Type: integer (blocks) | Default: 3 | Range: 1-100
+      # Type: integer (blocks) | Default: 3
       lag_alert_threshold_blocks: 5
 
     # ┌────────────────────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ chains:
       # Maximum block lag before excluding a provider from selection.
       # Providers further behind than this are not considered for routing.
       # L1 recommendation: 1-2 blocks | L2 recommendation: 3-5 blocks
-      # Type: integer (blocks) | Default: nil (no filtering) | Range: 1-100
+      # Type: integer (blocks) | Default: nil (no filtering)
       max_lag_blocks: 1
 
     # ┌────────────────────────────────────────────────────────────────────────
@@ -104,10 +104,10 @@ chains:
     # │ Metadata used by the network topology component for layout/styling.
     # └────────────────────────────────────────────────────────────────────────
     ui-topology:
-      category: l1           # l1 | l2 | sidechain | other
-      network: mainnet       # mainnet | sepolia | goerli | holesky
-      color: "#627EEA"       # Hex color for dashboard
-      size: xl               # sm | md | lg | xl
+      category: l1 # l1 | l2 | sidechain | other
+      network: mainnet # mainnet | sepolia | goerli | holesky
+      color: "#627EEA" # Hex color for dashboard
+      size: xl # sm | md | lg | xl
 
     # ┌────────────────────────────────────────────────────────────────────────
     # │ PROVIDERS
@@ -115,34 +115,11 @@ chains:
     # └────────────────────────────────────────────────────────────────────────
     providers:
       # ──── Provider Entry ────
-      - id: "ethereum_llamarpc"
-        # Unique identifier within this chain (required)
-        # Type: string
-
+      - id: "ethereum_llamarpc" # Unique identifier within this chain (required)
         name: "LlamaRPC"
-        # Display name (required)
-        # Type: string
-
-        url: "https://eth.llamarpc.com"
-        # HTTP(S) JSON-RPC endpoint (required)
-        # Supports ${ENV_VAR} substitution
-        # Type: string (URL)
-
+        url: "https://eth.llamarpc.com" # HTTP(S) JSON-RPC endpoint (required)
         ws_url: "wss://eth.llamarpc.com"
-        # WebSocket endpoint for subscriptions (optional)
-        # Type: string (URL) | Default: nil
-
-        priority: 2
-        # Routing priority (lower = preferred)
-        # Type: integer | Default: 100 | Range: 1+
-
-        type: "public"
-        # Provider classification (informational)
-        # Type: string | Default: "public"
-
-        api_key_required: false
-        # UI hint indicating if API key is needed (informational)
-        # Type: boolean | Default: false
+        priority: 2 # Priority for priority-based selection (optional)
 
         # region: "us-east"
         # Geographic region (optional, informational)
@@ -162,25 +139,19 @@ chains:
       - id: "ethereum_publicnode"
         name: "PublicNode Ethereum"
         priority: 3
-        type: "public"
         url: "https://ethereum-rpc.publicnode.com"
         ws_url: "wss://ethereum-rpc.publicnode.com"
-        api_key_required: false
 
       - id: "ethereum_merkle"
         name: "Merkle Ethereum"
         priority: 4
-        type: "public"
         url: "https://eth.merkle.io"
-        api_key_required: false
 
       - id: "0xrpc_ethereum"
         name: "0xRPC Ethereum"
         priority: 5
-        type: "public"
         url: "https://0xrpc.io/eth"
         ws_url: "wss://0xrpc.io/eth"
-        api_key_required: false
 
   # ──────────────────────────────────────────────────────────────────────────
   # BASE MAINNET (L2)
@@ -191,7 +162,7 @@ chains:
 
     monitoring:
       # L2s have faster block times - probe more frequently
-      probe_interval_ms: 3000  # 3s = ~1.5x block time (2s blocks)
+      probe_interval_ms: 3000 # 3s = ~1.5x block time (2s blocks)
       lag_alert_threshold_blocks: 5
 
     selection:
@@ -210,7 +181,7 @@ chains:
 
     ui-topology:
       category: l2
-      parent: ethereum      # L2 parent chain
+      parent: ethereum # L2 parent chain
       network: mainnet
       color: "#0052FF"
       size: md
@@ -219,26 +190,19 @@ chains:
       - id: "base_llamarpc"
         name: "LlamaRPC Base"
         priority: 2
-        type: "public"
         url: "https://base.llamarpc.com"
         ws_url: "wss://base.llamarpc.com"
-        api_key_required: false
 
       - id: "base_official"
         name: "Base Official"
         priority: 3
-        type: "public"
         url: "https://mainnet.base.org"
-        api_key_required: false
 
       - id: "base_publicnode"
         name: "PublicNode Base"
         priority: 4
-        type: "public"
         url: "https://base.publicnode.com"
         ws_url: "wss://base.publicnode.com"
-        api_key_required: false
-
 # ════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION NOTES
 # ════════════════════════════════════════════════════════════════════════════

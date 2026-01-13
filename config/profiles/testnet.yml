@@ -11,7 +11,7 @@ chains:
     name: "Ethereum Sepolia"
 
     monitoring:
-      probe_interval_ms: 12000  # 12s - block time
+      probe_interval_ms: 12000 # 12s - block time
       # Testnets have less reliable validators - use lenient threshold
       lag_alert_threshold_blocks: 5
 
@@ -39,25 +39,21 @@ chains:
       - id: "ethereum_sepolia_publicnode"
         name: "PublicNode Ethereum Sepolia"
         priority: 1
-        type: "public"
         url: "https://ethereum-sepolia-rpc.publicnode.com"
         ws_url: "wss://ethereum-sepolia-rpc.publicnode.com"
-        api_key_required: false
 
       - id: "0xrpc_ethereum_sepolia"
         name: "0xRPC Ethereum Sepolia"
         priority: 2
-        type: "public"
         url: "https://0xrpc.io/sep"
         ws_url: "wss://0xrpc.io/sep"
-        api_key_required: false
 
   base_sepolia:
     chain_id: 84532
     name: "Base Sepolia"
 
     monitoring:
-      probe_interval_ms: 3000  # 3s - probe every 1.5 blocks (2s block time)
+      probe_interval_ms: 3000 # 3s - probe every 1.5 blocks (2s block time)
       # L2 testnet - even more lenient for unstable conditions
       lag_alert_threshold_blocks: 5
 
@@ -86,14 +82,10 @@ chains:
       - id: "base_official_sepolia"
         name: "Base Official Sepolia"
         priority: 1
-        type: "public"
         url: "https://sepolia.base.org"
-        api_key_required: false
 
       - id: "base_sepolia_publicnode"
         name: "Base Sepolia PublicNode"
         priority: 2
-        type: "public"
         url: "https://base-sepolia-rpc.publicnode.com"
         ws_url: "wss://base-sepolia-rpc.publicnode.com"
-        api_key_required: false
