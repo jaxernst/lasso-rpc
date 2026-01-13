@@ -15,14 +15,12 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       name: "Cloudflare Eth Test",
       url: "https://cloudflare-eth.com",
       ws_url: "wss://cloudflare-eth.com/ws",
-      type: "public",
       priority: 50
     },
     %{
       id: "ankr_test",
       name: "Ankr Test",
       url: "https://rpc.ankr.com/eth",
-      type: "public",
       priority: 60
     }
   ]

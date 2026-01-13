@@ -40,25 +40,19 @@ defmodule Lasso.RPC.ChainSupervisorTest do
           id: "test_provider_1",
           name: "Test Provider 1",
           url: "https://test1.example.com",
-          ws_url: "wss://test1.example.com/ws",
-          type: "public",
-          api_key_required: false
+          ws_url: "wss://test1.example.com/ws"
         },
         %Provider{
           id: "test_provider_2",
           name: "Test Provider 2",
           url: "https://test2.example.com",
-          ws_url: "wss://test2.example.com/ws",
-          type: "public",
-          api_key_required: false
+          ws_url: "wss://test2.example.com/ws"
         },
         %Provider{
           id: "test_provider_3",
           name: "Test Provider 3",
           url: "https://test3.example.com",
-          ws_url: "wss://test3.example.com/ws",
-          type: "public",
-          api_key_required: false
+          ws_url: "wss://test3.example.com/ws"
         }
       ]
     }

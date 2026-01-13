@@ -259,10 +259,8 @@ defmodule Lasso.Config.Backend.File do
         id: provider_data["id"],
         name: provider_data["name"],
         priority: provider_data["priority"] || 100,
-        type: provider_data["type"] || "public",
         url: ChainConfig.substitute_env_vars(provider_data["url"]),
         ws_url: ChainConfig.substitute_env_vars(provider_data["ws_url"]),
-        api_key_required: provider_data["api_key_required"] || false,
         region: provider_data["region"],
         adapter_config: parse_adapter_config(provider_data["adapter_config"]),
         subscribe_new_heads: provider_data["subscribe_new_heads"]
@@ -633,16 +631,10 @@ defmodule Lasso.Config.Backend.File do
         do: yaml <> "        priority: #{provider["priority"]}\n",
         else: yaml
 
-    yaml = if provider["type"], do: yaml <> "        type: \"#{provider["type"]}\"\n", else: yaml
     yaml = if provider["url"], do: yaml <> "        url: \"#{provider["url"]}\"\n", else: yaml
 
     yaml =
       if provider["ws_url"], do: yaml <> "        ws_url: \"#{provider["ws_url"]}\"\n", else: yaml
-
-    yaml =
-      if provider["api_key_required"] != nil,
-        do: yaml <> "        api_key_required: #{provider["api_key_required"]}\n",
-        else: yaml
 
     yaml =
       if provider["region"], do: yaml <> "        region: \"#{provider["region"]}\"\n", else: yaml

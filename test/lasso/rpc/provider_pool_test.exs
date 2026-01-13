@@ -50,10 +50,8 @@ defmodule Lasso.RPC.ProviderPoolTest do
           id: "test_provider",
           name: "Test Provider",
           priority: 1,
-          type: "public",
           url: "http://example",
           ws_url: "ws://example",
-          api_key_required: false,
           region: "us"
         },
         attrs

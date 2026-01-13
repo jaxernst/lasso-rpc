@@ -829,10 +829,7 @@ defmodule Lasso.Config.ConfigStore do
       name: Map.get(attrs, :name) || Map.get(attrs, "name"),
       url: Map.get(attrs, :url) || Map.get(attrs, "url"),
       ws_url: Map.get(attrs, :ws_url) || Map.get(attrs, "ws_url"),
-      type: Map.get(attrs, :type) || Map.get(attrs, "type") || "public",
       priority: Map.get(attrs, :priority) || Map.get(attrs, "priority") || 100,
-      api_key_required:
-        Map.get(attrs, :api_key_required) || Map.get(attrs, "api_key_required") || false,
       region: Map.get(attrs, :region) || Map.get(attrs, "region") || "global",
       adapter_config: Map.get(attrs, :adapter_config) || Map.get(attrs, "adapter_config"),
       __mock__: Map.get(attrs, :__mock__)

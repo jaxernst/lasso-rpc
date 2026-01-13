@@ -55,9 +55,7 @@ defmodule Lasso.Providers do
           name: String.t(),
           url: String.t(),
           ws_url: String.t() | nil,
-          type: String.t(),
           priority: integer(),
-          api_key_required: boolean() | nil,
           region: String.t() | nil
         }
 
@@ -92,7 +90,6 @@ defmodule Lasso.Providers do
         name: "New Provider",
         url: "https://rpc.example.com",
         ws_url: "wss://ws.example.com",
-        type: "public",
         priority: 100
       })
 
@@ -368,17 +365,14 @@ defmodule Lasso.Providers do
   end
 
   defp normalize_provider_config(attrs) when is_map(attrs) do
-    %{
-      id: Map.get(attrs, :id) || Map.get(attrs, "id"),
-      name: Map.get(attrs, :name) || Map.get(attrs, "name"),
-      url: Map.get(attrs, :url) || Map.get(attrs, "url"),
-      ws_url: Map.get(attrs, :ws_url) || Map.get(attrs, "ws_url"),
-      type: Map.get(attrs, :type) || Map.get(attrs, "type") || "public",
-      priority: Map.get(attrs, :priority) || Map.get(attrs, "priority") || 100,
-      api_key_required:
-        Map.get(attrs, :api_key_required) || Map.get(attrs, "api_key_required") || false,
-      region: Map.get(attrs, :region) || Map.get(attrs, "region") || "global"
-    }
+      %{
+        id: Map.get(attrs, :id) || Map.get(attrs, "id"),
+        name: Map.get(attrs, :name) || Map.get(attrs, "name"),
+        url: Map.get(attrs, :url) || Map.get(attrs, "url"),
+        ws_url: Map.get(attrs, :ws_url) || Map.get(attrs, "ws_url"),
+        priority: Map.get(attrs, :priority) || Map.get(attrs, "priority") || 100,
+        region: Map.get(attrs, :region) || Map.get(attrs, "region") || "global"
+      }
   end
 
   defp maybe_validate(provider_config, true) do
