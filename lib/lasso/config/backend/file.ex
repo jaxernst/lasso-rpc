@@ -607,9 +607,6 @@ defmodule Lasso.Config.Backend.File do
       if provider["ws_url"], do: yaml <> "        ws_url: \"#{provider["ws_url"]}\"\n", else: yaml
 
     yaml =
-      if provider["region"], do: yaml <> "        region: \"#{provider["region"]}\"\n", else: yaml
-
-    yaml =
       if provider["subscribe_new_heads"] != nil,
         do: yaml <> "        subscribe_new_heads: #{provider["subscribe_new_heads"]}\n",
         else: yaml
