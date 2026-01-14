@@ -15,7 +15,7 @@ defmodule LassoWeb.TopologyConfig do
 
   def canvas_width, do: 4000
   def canvas_height, do: 3000
-  def canvas_center, do: {div(canvas_width() * 9, 20), div(canvas_height(), 2)}
+  def canvas_center, do: {div(canvas_width() - 100, 2), div(canvas_height(), 2)}
 
   # ===========================================================================
   # Provider Orbital Configuration
@@ -30,17 +30,17 @@ defmodule LassoWeb.TopologyConfig do
   # Hexagonal Layout Configuration
   # ===========================================================================
 
-  def hex_spacing(_chain_count), do: 220
+  def hex_spacing(_chain_count), do: 250
 
   # ===========================================================================
   # Chain Size Configuration
   # ===========================================================================
 
-  def chain_radius(:xl, _provider_count), do: 90
-  def chain_radius(:lg, _provider_count), do: 75
-  def chain_radius(:md, _provider_count), do: 60
-  def chain_radius(:sm, _provider_count), do: 50
-  def chain_radius(nil, _provider_count), do: 55
+  def chain_radius(:xl, _provider_count), do: 100
+  def chain_radius(:lg, _provider_count), do: 87
+  def chain_radius(:md, _provider_count), do: 73
+  def chain_radius(:sm, _provider_count), do: 65
+  def chain_radius(nil, _provider_count), do: 59
 
   def provider_orbit_for_radius(chain_radius), do: chain_radius + provider_orbit_gap()
 

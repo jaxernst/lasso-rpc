@@ -104,8 +104,6 @@ chains:
     # │ Metadata used by the network topology component for layout/styling.
     # └────────────────────────────────────────────────────────────────────────
     ui-topology:
-      category: l1 # l1 | l2 | sidechain | other
-      network: mainnet # mainnet | sepolia | goerli | holesky
       color: "#627EEA" # Hex color for dashboard
       size: xl # sm | md | lg | xl
 
@@ -115,26 +113,17 @@ chains:
     # └────────────────────────────────────────────────────────────────────────
     providers:
       # ──── Provider Entry ────
-      - id: "ethereum_llamarpc" # Unique identifier within this chain (required)
-        name: "LlamaRPC"
-        url: "https://eth.llamarpc.com" # HTTP(S) JSON-RPC endpoint (required)
-        ws_url: "wss://eth.llamarpc.com"
-        priority: 2 # Priority for priority-based selection (optional)
 
-        # region: "us-east"
-        # Geographic region (optional, informational)
-        # Type: string | Default: nil
+      # subscribe_new_heads: true
+      # Override chain-level subscribe_new_heads setting
+      # Type: boolean | Default: nil (uses chain setting)
 
-        # subscribe_new_heads: true
-        # Override chain-level subscribe_new_heads setting
-        # Type: boolean | Default: nil (uses chain setting)
-
-        # adapter_config:
-        #   # Provider-specific adapter tuning (optional, advanced)
-        #   # Fields vary by provider type - see docs/ADAPTERS.md
-        #   # Common examples:
-        #   max_block_range: 10000        # eth_getLogs block range limit
-        #   eth_get_logs_block_range: 10  # Alchemy-specific override
+      # adapter_config:
+      #   # Provider-specific adapter tuning (optional, advanced)
+      #   # Fields vary by provider type - see docs/ADAPTERS.md
+      #   # Common examples:
+      #   max_block_range: 10000        # eth_getLogs block range limit
+      #   eth_get_logs_block_range: 10  # Alchemy-specific override
 
       - id: "ethereum_publicnode"
         name: "PublicNode Ethereum"
@@ -152,6 +141,22 @@ chains:
         priority: 5
         url: "https://0xrpc.io/eth"
         ws_url: "wss://0xrpc.io/eth"
+
+      - id: "ethereum_lava"
+        name: "Lava Ethereum"
+        priority: 6
+        url: "https://eth1.lava.build"
+
+      - id: "ethereum_mevblocker"
+        name: "MEV Blocker"
+        priority: 7
+        url: "https://rpc.mevblocker.io"
+
+      # NOTE: Providers removed due to lack of historical eth_getLogs support
+      # These providers can serve recent blocks but return null for historical
+      # logs, which breaks indexers like Ponder, Subgraph, etc.
+      # - BlockRazor (eth.blockrazor.xyz)
+      # - bloXroute Virginia (virginia.rpc.blxrbdn.com)
 
   # ──────────────────────────────────────────────────────────────────────────
   # BASE MAINNET (L2)
@@ -180,9 +185,6 @@ chains:
         backfill_timeout_ms: 30000
 
     ui-topology:
-      category: l2
-      parent: ethereum # L2 parent chain
-      network: mainnet
       color: "#0052FF"
       size: md
 
@@ -203,6 +205,75 @@ chains:
         priority: 4
         url: "https://base.publicnode.com"
         ws_url: "wss://base.publicnode.com"
+
+      - id: "base_drpc"
+        name: "dRPC Base"
+        priority: 5
+        url: "https://base.drpc.org"
+        ws_url: "wss://base.drpc.org"
+
+      - id: "base_lava"
+        name: "Lava Base"
+        priority: 6
+        url: "https://base.lava.build"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # ARBITRUM ONE (L2)
+  # ──────────────────────────────────────────────────────────────────────────
+  arbitrum:
+    chain_id: 42161
+    name: "Arbitrum One"
+
+    monitoring:
+      # Arbitrum has very fast blocks (~0.25s) - probe frequently
+      probe_interval_ms: 2000 # 2s = ~8x block time
+      lag_alert_threshold_blocks: 15
+
+    selection:
+      # More tolerant for L2 due to very fast block times
+      max_lag_blocks: 10
+
+    websocket:
+      subscribe_new_heads: true
+      # Shorter timeout for fast L2
+      new_heads_timeout_ms: 15000
+
+      # Backfill missed blocks during subscription failover
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#28A0F0"
+      size: md
+
+    providers:
+      - id: "arbitrum_drpc"
+        name: "dRPC Arbitrum"
+        priority: 2
+        url: "https://arbitrum.drpc.org"
+        ws_url: "wss://arbitrum.drpc.org"
+
+      - id: "arbitrum_lava"
+        name: "Lava Arbitrum"
+        priority: 3
+        url: "https://arb1.lava.build"
+
+      - id: "arbitrum_publicnode"
+        name: "PublicNode Arbitrum"
+        priority: 4
+        url: "https://arbitrum-one-rpc.publicnode.com"
+        ws_url: "wss://arbitrum-one-rpc.publicnode.com"
+
+      - id: "arbitrum_meowrpc"
+        name: "Meow RPC Arbitrum"
+        priority: 5
+        url: "https://arbitrum.meowrpc.com"
+
+      - id: "arbitrum_pocket"
+        name: "Pocket Network Arbitrum"
+        priority: 6
+        url: "https://arb-one.api.pocket.network"
 # ════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION NOTES
 # ════════════════════════════════════════════════════════════════════════════

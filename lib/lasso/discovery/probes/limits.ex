@@ -101,6 +101,8 @@ defmodule Lasso.Discovery.Probes.Limits do
   end
 
   # Block range limit test using binary search
+  # Uses a fake address filter to minimize results and test true block range limits
+  # (not result-size limits)
   defp test_block_range(url, current_block, timeout) do
     test_ranges = [100, 500, 1000, 2000, 5000, 10_000]
 
@@ -113,7 +115,10 @@ defmodule Lasso.Discovery.Probes.Limits do
         params = [
           %{
             "fromBlock" => TestParams.int_to_hex(from_block),
-            "toBlock" => TestParams.int_to_hex(to_block)
+            "toBlock" => TestParams.int_to_hex(to_block),
+            # Use fake address to minimize results and test block range limits
+            # (not result-size limits which trigger on high log counts)
+            "address" => "0x0000000000000000000000000000000000000001"
           }
         ]
 
@@ -159,7 +164,8 @@ defmodule Lasso.Discovery.Probes.Limits do
     params = [
       %{
         "fromBlock" => TestParams.int_to_hex(from_block),
-        "toBlock" => TestParams.int_to_hex(to_block)
+        "toBlock" => TestParams.int_to_hex(to_block),
+        "address" => "0x0000000000000000000000000000000000000001"
       }
     ]
 
@@ -334,19 +340,41 @@ defmodule Lasso.Discovery.Probes.Limits do
     case make_request(url, "eth_getBlockByNumber", [old_block, false], timeout) do
       {:ok, %{"result" => block}} when is_map(block) ->
         # Block exists, test state query
-        case make_request(url, "eth_getBalance", [TestParams.zero_address(), old_block], timeout) do
-          {:ok, %{"result" => _}} ->
+        state_result = make_request(url, "eth_getBalance", [TestParams.zero_address(), old_block], timeout)
+
+        # Test historical logs query (critical for indexers)
+        logs_result = make_request(url, "eth_getLogs", [
+          %{
+            "fromBlock" => old_block,
+            "toBlock" => old_block,
+            "address" => "0x0000000000000000000000000000000000000001"
+          }
+        ], timeout)
+
+        case {state_result, logs_result} do
+          # Full archive: both state and logs work
+          {{:ok, %{"result" => _}}, {:ok, %{"result" => logs}}} when is_list(logs) ->
             %{
               status: :supported,
               value: :full_archive,
               recommendation: "Full archive node support"
             }
 
+          # Partial archive: blocks work but state or logs don't
           _ ->
+            logs_work = match?({:ok, %{"result" => logs}} when is_list(logs), logs_result)
+            state_work = match?({:ok, %{"result" => _}}, state_result)
+
+            details = cond do
+              state_work and not logs_work -> "Archive state but not historical logs"
+              not state_work and logs_work -> "Historical logs but not archive state"
+              true -> "Archive blocks only (no state or logs)"
+            end
+
             %{
               status: :supported,
               value: :partial_archive,
-              recommendation: "Archive blocks but not archive state"
+              recommendation: details
             }
         end
 

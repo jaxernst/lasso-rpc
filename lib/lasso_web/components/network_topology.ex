@@ -71,7 +71,7 @@ defmodule LassoWeb.NetworkTopology do
             </svg>
           <% end %>
         <% end %>
-        
+
     <!-- Chain nodes -->
         <%= for {chain_name, chain_data} <- @hex_layout.chains do %>
           <% {x, y} = chain_data.position %>
@@ -110,7 +110,7 @@ defmodule LassoWeb.NetworkTopology do
             </div>
           </div>
         <% end %>
-        
+
     <!-- Provider nodes -->
         <%= for {chain_name, chain_data} <- @hex_layout.chains do %>
           <%= for {connection, provider_data} <- chain_data.providers do %>
@@ -146,7 +146,7 @@ defmodule LassoWeb.NetworkTopology do
                 style={"width: #{max(4, radius - 4)}px; height: #{max(4, radius - 4)}px;"}
               >
               </div>
-              
+
     <!-- WebSocket support indicator -->
               <%= if has_websocket_support?(connection) do %>
                 <div
@@ -158,7 +158,7 @@ defmodule LassoWeb.NetworkTopology do
                   </svg>
                 </div>
               <% end %>
-              
+
     <!-- Reconnect attempts indicator -->
               <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
                 <div class="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white shadow-md">
@@ -267,7 +267,55 @@ defmodule LassoWeb.NetworkTopology do
         Map.put(acc, chain_name, chain_data)
       end)
 
-    %{chains: positioned_chains}
+    # Calculate centroid of all chain positions and center the layout
+    {centroid_x, centroid_y} = calculate_layout_centroid(positioned_chains)
+    offset_x = center_x - centroid_x
+    offset_y = center_y - centroid_y
+
+    # Apply offset to all chain and provider positions
+    centered_chains =
+      positioned_chains
+      |> Enum.map(fn {chain_name, chain_data} ->
+        {chain_x, chain_y} = chain_data.position
+        adjusted_chain_x = chain_x + offset_x
+        adjusted_chain_y = chain_y + offset_y
+
+        # Adjust provider positions relative to the chain
+        adjusted_providers =
+          Enum.map(chain_data.providers, fn {connection, provider_data} ->
+            {provider_x, provider_y} = provider_data.position
+            adjusted_provider_x = provider_x + offset_x
+            adjusted_provider_y = provider_y + offset_y
+
+            {connection,
+             Map.put(provider_data, :position, {adjusted_provider_x, adjusted_provider_y})}
+          end)
+
+        adjusted_chain_data =
+          chain_data
+          |> Map.put(:position, {adjusted_chain_x, adjusted_chain_y})
+          |> Map.put(:providers, adjusted_providers)
+
+        {chain_name, adjusted_chain_data}
+      end)
+      |> Enum.into(%{})
+
+    %{chains: centered_chains}
+  end
+
+  defp calculate_layout_centroid(positioned_chains) do
+    if map_size(positioned_chains) == 0 do
+      {0, 0}
+    else
+      {sum_x, sum_y, count} =
+        positioned_chains
+        |> Enum.reduce({0, 0, 0}, fn {_chain_name, chain_data}, {acc_x, acc_y, acc_count} ->
+          {x, y} = chain_data.position
+          {acc_x + x, acc_y + y, acc_count + 1}
+        end)
+
+      {sum_x / count, sum_y / count}
+    end
   end
 
   defp get_profile_chain_configs(profile) do

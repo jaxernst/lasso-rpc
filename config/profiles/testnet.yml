@@ -1,5 +1,5 @@
 ---
-name: Lasso Public Testnet
+name: Lasso Public Testnets
 slug: testnet
 type: standard
 default_rps_limit: 100
@@ -30,10 +30,8 @@ chains:
         backfill_timeout_ms: 30000
 
     ui-topology:
-      category: l1
-      network: sepolia
       color: "#7A8AB5"
-      size: md
+      size: lg
 
     providers:
       - id: "ethereum_sepolia_publicnode"
@@ -47,6 +45,11 @@ chains:
         priority: 2
         url: "https://0xrpc.io/sep"
         ws_url: "wss://0xrpc.io/sep"
+
+      - id: "ethereum_sepolia_tenderly"
+        name: "Tenderly Ethereum Sepolia"
+        priority: 3
+        url: "https://gateway.tenderly.co/public/sepolia"
 
   base_sepolia:
     chain_id: 84532
@@ -72,11 +75,8 @@ chains:
         backfill_timeout_ms: 30000
 
     ui-topology:
-      category: l2
-      parent: ethereum_sepolia
-      network: sepolia
       color: "#4A6BB2"
-      size: sm
+      size: md
 
     providers:
       - id: "base_official_sepolia"
@@ -89,3 +89,67 @@ chains:
         priority: 2
         url: "https://base-sepolia-rpc.publicnode.com"
         ws_url: "wss://base-sepolia-rpc.publicnode.com"
+
+      - id: "base_sepolia_drpc"
+        name: "dRPC Base Sepolia"
+        priority: 3
+        url: "https://base-sepolia.drpc.org"
+        ws_url: "wss://base-sepolia.drpc.org"
+
+      - id: "base_sepolia_nodies"
+        name: "Nodies Base Sepolia"
+        priority: 4
+        url: "https://base-sepolia-public.nodies.app"
+        adapter_config:
+          max_block_range: 500
+
+  arbitrum_sepolia:
+    chain_id: 421614
+    name: "Arbitrum Sepolia"
+
+    monitoring:
+      # Arbitrum L2 testnet - very fast blocks (~0.25s)
+      probe_interval_ms: 2000 # 2s - probe every 8 blocks
+      # L2 testnet - lenient threshold for unstable conditions
+      lag_alert_threshold_blocks: 20
+
+    selection:
+      # Very tolerant for L2 testnet (fast blocks + testnet instability)
+      max_lag_blocks: 15
+
+    websocket:
+      subscribe_new_heads: true
+      # L2 testnet - lenient timeout for unstable conditions
+      new_heads_timeout_ms: 20000
+
+      # Backfill missed blocks during subscription failover
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#5A9FCF"
+      size: md
+
+    providers:
+      - id: "arbitrum_sepolia_publicnode"
+        name: "PublicNode Arbitrum Sepolia"
+        priority: 1
+        url: "https://arbitrum-sepolia-rpc.publicnode.com"
+        ws_url: "wss://arbitrum-sepolia-rpc.publicnode.com"
+
+      - id: "arbitrum_sepolia_official"
+        name: "Arbitrum Sepolia Official"
+        priority: 2
+        url: "https://sepolia-rollup.arbitrum.io/rpc"
+
+      - id: "arbitrum_sepolia_drpc"
+        name: "dRPC Arbitrum Sepolia"
+        priority: 3
+        url: "https://arbitrum-sepolia.drpc.org"
+        ws_url: "wss://arbitrum-sepolia.drpc.org"
+
+      - id: "arbitrum_sepolia_tenderly"
+        name: "Tenderly Arbitrum Sepolia"
+        priority: 4
+        url: "https://arbitrum-sepolia.gateway.tenderly.co"
