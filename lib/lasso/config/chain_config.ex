@@ -37,7 +37,6 @@ defmodule Lasso.Config.ChainConfig do
             priority: non_neg_integer(),
             url: String.t(),
             ws_url: String.t() | nil,
-            region: String.t() | nil,
             adapter_config: %{atom() => any()} | nil,
             subscribe_new_heads: boolean() | nil
           }
@@ -48,7 +47,6 @@ defmodule Lasso.Config.ChainConfig do
       :priority,
       :url,
       :ws_url,
-      :region,
       :adapter_config,
       :subscribe_new_heads,
       :__mock__
@@ -136,42 +134,18 @@ defmodule Lasso.Config.ChainConfig do
     @moduledoc """
     Chain topology metadata for dashboard visualization.
 
-    Used by the network topology component to:
-    - Categorize chains (L1, L2 optimistic, L2 ZK, sidechain)
-    - Establish parent-child relationships for connection lines
-    - Determine display size and color
-    - Group by network (mainnet vs testnets)
+    Used by the network topology component to determine display size and color.
     """
 
-    @type category :: :l1 | :l2 | :sidechain | :other
-    @type network :: :mainnet | :sepolia | :goerli | :holesky
     @type size :: :sm | :md | :lg | :xl
 
     @type t :: %__MODULE__{
-            category: category(),
-            parent: String.t() | nil,
-            network: network(),
             color: String.t(),
             size: size()
           }
 
-    defstruct category: :other,
-              parent: nil,
-              network: :mainnet,
-              color: "#6B7280",
+    defstruct color: "#6B7280",
               size: :md
-
-    @doc "Check if this chain is an L2"
-    @spec l2?(t()) :: boolean()
-    def l2?(%__MODULE__{category: category}), do: category in [:l2]
-
-    @doc "Check if this chain is a mainnet chain"
-    @spec mainnet?(t()) :: boolean()
-    def mainnet?(%__MODULE__{network: network}), do: network == :mainnet
-
-    @doc "Check if this chain is a testnet"
-    @spec testnet?(t()) :: boolean()
-    def testnet?(%__MODULE__{network: network}), do: network in [:sepolia, :goerli, :holesky]
   end
 
   @doc """

@@ -261,7 +261,6 @@ defmodule Lasso.Config.Backend.File do
         priority: provider_data["priority"] || 100,
         url: ChainConfig.substitute_env_vars(provider_data["url"]),
         ws_url: ChainConfig.substitute_env_vars(provider_data["ws_url"]),
-        region: provider_data["region"],
         adapter_config: parse_adapter_config(provider_data["adapter_config"]),
         subscribe_new_heads: provider_data["subscribe_new_heads"]
       }
@@ -346,24 +345,10 @@ defmodule Lasso.Config.Backend.File do
 
   defp parse_topology(topology_data) when is_map(topology_data) do
     %ChainConfig.Topology{
-      category: parse_topology_category(Map.get(topology_data, "category")),
-      parent: Map.get(topology_data, "parent"),
-      network: parse_topology_network(Map.get(topology_data, "network")),
       color: Map.get(topology_data, "color", "#6B7280"),
       size: parse_topology_size(Map.get(topology_data, "size"))
     }
   end
-
-  defp parse_topology_category("l1"), do: :l1
-  defp parse_topology_category("l2"), do: :l2
-  defp parse_topology_category("sidechain"), do: :sidechain
-  defp parse_topology_category(_), do: :other
-
-  defp parse_topology_network("mainnet"), do: :mainnet
-  defp parse_topology_network("sepolia"), do: :sepolia
-  defp parse_topology_network("goerli"), do: :goerli
-  defp parse_topology_network("holesky"), do: :holesky
-  defp parse_topology_network(_), do: :mainnet
 
   defp parse_topology_size("sm"), do: :sm
   defp parse_topology_size("md"), do: :md
@@ -588,21 +573,6 @@ defmodule Lasso.Config.Backend.File do
 
   defp generate_topology_yaml(topology) do
     yaml = "    ui-topology:\n"
-
-    yaml =
-      if topology["category"],
-        do: yaml <> "      category: #{topology["category"]}\n",
-        else: yaml
-
-    yaml =
-      if topology["parent"],
-        do: yaml <> "      parent: #{topology["parent"]}\n",
-        else: yaml
-
-    yaml =
-      if topology["network"],
-        do: yaml <> "      network: #{topology["network"]}\n",
-        else: yaml
 
     yaml =
       if topology["color"],
