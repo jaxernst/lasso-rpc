@@ -636,6 +636,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             {:ok, %{state: :open}} ->
               CircuitBreakerHelper.reset_to_closed(breaker_id)
               Process.sleep(50)
+
             _ ->
               :ok
           end
