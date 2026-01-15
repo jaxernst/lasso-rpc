@@ -40,17 +40,45 @@ chains:
         priority: 1
         url: "https://ethereum-sepolia-rpc.publicnode.com"
         ws_url: "wss://ethereum-sepolia-rpc.publicnode.com"
+        archival: true
 
-      - id: "0xrpc_ethereum_sepolia"
-        name: "0xRPC Ethereum Sepolia"
+      # Removed: 0xRPC - domain (0xrpc.io) does not resolve DNS
+      # - id: "0xrpc_ethereum_sepolia"
+      #   name: "0xRPC Ethereum Sepolia"
+      #   priority: 2
+      #   url: "https://0xrpc.io/sep"
+      #   ws_url: "wss://0xrpc.io/sep"
+
+      - id: "ethereum_sepolia_1rpc"
+        name: "1RPC Ethereum Sepolia"
         priority: 2
-        url: "https://0xrpc.io/sep"
-        ws_url: "wss://0xrpc.io/sep"
+        url: "https://1rpc.io/sepolia"
+        archival: true
+
+      - id: "ethereum_sepolia_nodies"
+        name: "Nodies Ethereum Sepolia"
+        priority: 3
+        url: "https://ethereum-sepolia-public.nodies.app"
+        archival: true
+
+      - id: "ethereum_sepolia_onfinality"
+        name: "OnFinality Ethereum Sepolia"
+        priority: 4
+        url: "https://eth-sepolia.api.onfinality.io/public"
+        archival: true
+
+      # Removed: Tatum - rate limit too restrictive (5 requests per minute)
+      # - id: "ethereum_sepolia_tatum"
+      #   name: "Tatum Ethereum Sepolia"
+      #   priority: 5
+      #   url: "https://ethereum-sepolia.gateway.tatum.io"
+      #   archival: false
 
       - id: "ethereum_sepolia_tenderly"
         name: "Tenderly Ethereum Sepolia"
-        priority: 3
+        priority: 6
         url: "https://gateway.tenderly.co/public/sepolia"
+        archival: true
 
   base_sepolia:
     chain_id: 84532
@@ -85,23 +113,27 @@ chains:
         name: "Base Official Sepolia"
         priority: 1
         url: "https://sepolia.base.org"
+        archival: true
 
       - id: "base_sepolia_publicnode"
         name: "Base Sepolia PublicNode"
         priority: 2
         url: "https://base-sepolia-rpc.publicnode.com"
         ws_url: "wss://base-sepolia-rpc.publicnode.com"
+        archival: true
 
       - id: "base_sepolia_drpc"
         name: "dRPC Base Sepolia"
         priority: 3
         url: "https://base-sepolia.drpc.org"
         ws_url: "wss://base-sepolia.drpc.org"
+        archival: true
 
       - id: "base_sepolia_nodies"
         name: "Nodies Base Sepolia"
         priority: 4
         url: "https://base-sepolia-public.nodies.app"
+        archival: true
         adapter_config:
           max_block_range: 500
 
@@ -140,19 +172,23 @@ chains:
         priority: 1
         url: "https://arbitrum-sepolia-rpc.publicnode.com"
         ws_url: "wss://arbitrum-sepolia-rpc.publicnode.com"
+        archival: true
 
       - id: "arbitrum_sepolia_official"
         name: "Arbitrum Sepolia Official"
         priority: 2
         url: "https://sepolia-rollup.arbitrum.io/rpc"
+        archival: true
 
       - id: "arbitrum_sepolia_drpc"
         name: "dRPC Arbitrum Sepolia"
         priority: 3
         url: "https://arbitrum-sepolia.drpc.org"
         ws_url: "wss://arbitrum-sepolia.drpc.org"
+        archival: true
 
       - id: "arbitrum_sepolia_tenderly"
         name: "Tenderly Arbitrum Sepolia"
         priority: 4
         url: "https://arbitrum-sepolia.gateway.tenderly.co"
+        archival: true

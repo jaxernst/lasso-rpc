@@ -141,14 +141,14 @@ chains:
         priority: 2
         url: "https://eth.drpc.org"
         ws_url: "wss://eth.drpc.org"
-        archival: false
+        archival: true
 
       - id: "ethereum_publicnode"
         name: "PublicNode Ethereum"
         priority: 3
         url: "https://ethereum-rpc.publicnode.com"
         ws_url: "wss://ethereum-rpc.publicnode.com"
-        archival: false
+        archival: true
 
       # Temporarily disable: Uses a proxied backend with some nodes using PHE and some not (create inconsistency in log responses)
       # - id: "ethereum_merkle"
@@ -156,23 +156,88 @@ chains:
       #   priority: 4
       #   url: "https://eth.merkle.io"
 
-      - id: "0xrpc_ethereum"
-        name: "0xRPC Ethereum"
-        priority: 5
-        url: "https://0xrpc.io/eth"
-        ws_url: "wss://0xrpc.io/eth"
-        archival: false
+      # Removed: 0xRPC - domain (0xrpc.io) does not resolve DNS
+      # - id: "0xrpc_ethereum"
+      #   name: "0xRPC Ethereum"
+      #   priority: 5
+      #   url: "https://0xrpc.io/eth"
+      #   ws_url: "wss://0xrpc.io/eth"
+      #   archival: false
+
+      - id: "ethereum_1rpc"
+        name: "1RPC Ethereum"
+        priority: 4
+        url: "https://1rpc.io/eth"
+        archival: true
+
+      # Mixed backend with some nodes using PHE and some not (create inconsistency in log responses)
+      # - id: "ethereum_llamarpc"
+      #   name: "LlamaRPC Ethereum"
+      #   priority: 5
+      #   url: "https://eth.llamarpc.com"
+      #   ws_url: "wss://eth.llamarpc.com"
+      #   archival: true
+
+      - id: "ethereum_blockpi"
+        name: "BlockPI Ethereum"
+        priority: 7
+        url: "https://ethereum.public.blockpi.network/v1/rpc/public"
+        archival: true
+
+      - id: "ethereum_nodies"
+        name: "Nodies Ethereum"
+        priority: 8
+        url: "https://ethereum-public.nodies.app"
+        archival: true
+
+      - id: "ethereum_omniatech"
+        name: "Omniatech Ethereum"
+        priority: 9
+        url: "https://endpoints.omniatech.io/v1/eth/mainnet/public"
+        archival: true
+
+      - id: "ethereum_onfinality"
+        name: "OnFinality Ethereum"
+        priority: 10
+        url: "https://eth.api.onfinality.io/public"
+        archival: true
+
+      - id: "ethereum_flashbots"
+        name: "Flashbots Ethereum"
+        priority: 11
+        url: "https://rpc.flashbots.net"
+        archival: true
+
+      # Removed: Tatum - rate limit too restrictive (5 requests per minute)
+      # - id: "ethereum_tatum"
+      #   name: "Tatum Ethereum"
+      #   priority: 12
+      #   url: "https://ethereum-mainnet.gateway.tatum.io"
+      #   archival: false
+
+      - id: "ethereum_bloxroute"
+        name: "bloXroute Ethereum"
+        priority: 13
+        url: "https://eth.rpc.blxrbdn.com"
+        archival: true
+
+      - id: "ethereum_nownodes"
+        name: "NOWNodes Ethereum"
+        priority: 14
+        url: "https://public-eth.nownodes.io"
+        archival: true
 
       - id: "ethereum_lava"
         name: "Lava Ethereum"
-        priority: 6
+        priority: 15
         url: "https://eth1.lava.build"
-        archival: false
+        archival: true
 
       - id: "ethereum_mevblocker"
         name: "MEV Blocker"
-        priority: 7
+        priority: 16
         url: "https://rpc.mevblocker.io"
+        archival: true
 
       # NOTE: Providers removed due to lack of historical eth_getLogs support
       # These providers can serve recent blocks but return null for historical
@@ -218,28 +283,33 @@ chains:
         priority: 2
         url: "https://base.llamarpc.com"
         ws_url: "wss://base.llamarpc.com"
+        archival: true
 
       - id: "base_official"
         name: "Base Official"
         priority: 3
         url: "https://mainnet.base.org"
+        archival: true
 
       - id: "base_publicnode"
         name: "PublicNode Base"
         priority: 4
         url: "https://base.publicnode.com"
         ws_url: "wss://base.publicnode.com"
+        archival: true
 
       - id: "base_drpc"
         name: "dRPC Base"
         priority: 5
         url: "https://base.drpc.org"
         ws_url: "wss://base.drpc.org"
+        archival: true
 
       - id: "base_lava"
         name: "Lava Base"
         priority: 6
         url: "https://base.lava.build"
+        archival: true
 
   # ──────────────────────────────────────────────────────────────────────────
   # ARBITRUM ONE (L2)
@@ -279,27 +349,32 @@ chains:
         priority: 2
         url: "https://arbitrum.drpc.org"
         ws_url: "wss://arbitrum.drpc.org"
+        archival: true
 
       - id: "arbitrum_lava"
         name: "Lava Arbitrum"
         priority: 3
         url: "https://arb1.lava.build"
+        archival: true
 
       - id: "arbitrum_publicnode"
         name: "PublicNode Arbitrum"
         priority: 4
         url: "https://arbitrum-one-rpc.publicnode.com"
         ws_url: "wss://arbitrum-one-rpc.publicnode.com"
+        archival: true
 
       - id: "arbitrum_meowrpc"
         name: "Meow RPC Arbitrum"
         priority: 5
         url: "https://arbitrum.meowrpc.com"
+        archival: true
 
       - id: "arbitrum_pocket"
         name: "Pocket Network Arbitrum"
         priority: 6
         url: "https://arb-one.api.pocket.network"
+        archival: true
 # ════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION NOTES
 # ════════════════════════════════════════════════════════════════════════════
