@@ -623,9 +623,24 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         {:error, _, _} -> :ok
       end
 
-      # Execute multiple requests
+      breaker_id = {profile, chain, "flaky", :http}
+
+      # Execute multiple requests, resetting circuit breaker if it opens
+      # to prevent it from blocking all subsequent requests
       results =
         for _ <- 1..20 do
+          # Check if circuit breaker opened and reset if needed
+          # This allows us to test retry behavior without circuit breaker
+          # permanently blocking requests due to early consecutive failures
+          case CircuitBreakerHelper.get_circuit_breaker_state(breaker_id) do
+            {:ok, %{state: :open}} ->
+              CircuitBreakerHelper.reset_to_closed(breaker_id)
+              Process.sleep(50)
+
+            _ ->
+              :ok
+          end
+
           RequestPipeline.execute_via_channels(
             chain,
             "eth_blockNumber",

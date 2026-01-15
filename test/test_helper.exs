@@ -224,15 +224,13 @@ defmodule TestHelper do
     end
   end
 
-  def create_test_provider_config(id, priority \\ 1, type \\ "test") do
+  def create_test_provider_config(id, priority \\ 1) do
     %{
       id: id,
       name: "Test Provider #{id}",
       priority: priority,
-      type: type,
       url: "https://#{id}.example.com",
-      ws_url: "wss://#{id}.example.com/ws",
-      api_key_required: false
+      ws_url: "wss://#{id}.example.com/ws"
     }
   end
 

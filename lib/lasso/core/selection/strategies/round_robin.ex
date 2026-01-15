@@ -6,10 +6,8 @@ defmodule Lasso.RPC.Strategies.RoundRobin do
   alias Lasso.RPC.ProviderPool
 
   @impl true
-  def prepare_context(selection) do
-    base_ctx = Lasso.RPC.StrategyContext.new(selection)
-    profile = selection.profile
-    chain = selection.chain
+  def prepare_context(profile, chain, _method, timeout) do
+    base_ctx = Lasso.RPC.StrategyContext.new(chain, timeout)
 
     total_requests =
       case ProviderPool.get_status(profile, chain) do

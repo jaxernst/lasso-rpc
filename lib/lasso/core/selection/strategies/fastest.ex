@@ -12,8 +12,8 @@ defmodule Lasso.RPC.Strategies.Fastest do
   @min_success_rate 0.9
 
   @impl true
-  def prepare_context(selection) do
-    base_ctx = StrategyContext.new(selection)
+  def prepare_context(profile, chain, method, timeout) do
+    base_ctx = StrategyContext.new(chain, timeout)
 
     min_calls = Application.get_env(:lasso, :fastest_min_calls, @min_calls)
     min_success_rate = Application.get_env(:lasso, :fastest_min_success_rate, @min_success_rate)
@@ -21,9 +21,9 @@ defmodule Lasso.RPC.Strategies.Fastest do
     # Calculate fallback latency for providers with no data
     fallback_latency =
       StrategyContext.calculate_fallback_latency(
-        selection.profile,
-        selection.chain,
-        selection.method
+        profile,
+        chain,
+        method
       )
 
     %{
@@ -31,7 +31,6 @@ defmodule Lasso.RPC.Strategies.Fastest do
       | freshness_cutoff_ms: base_ctx.freshness_cutoff_ms || @freshness_cutoff_ms,
         min_calls: base_ctx.min_calls || min_calls,
         min_success_rate: base_ctx.min_success_rate || min_success_rate,
-        chain: selection.chain,
         cold_start_baseline: fallback_latency
     }
   end

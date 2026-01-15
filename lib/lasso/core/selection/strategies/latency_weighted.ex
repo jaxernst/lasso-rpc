@@ -26,15 +26,15 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
   @default_explore_floor 0.05
 
   @impl true
-  def prepare_context(selection) do
-    base = StrategyContext.new(selection)
+  def prepare_context(profile, chain, method, timeout) do
+    base = StrategyContext.new(chain, timeout)
 
     # Calculate fallback latency for providers with no data
     fallback_latency =
       StrategyContext.calculate_fallback_latency(
-        selection.profile,
-        selection.chain,
-        selection.method
+        profile,
+        chain,
+        method
       )
 
     # Return base StrategyContext with populated optional fields

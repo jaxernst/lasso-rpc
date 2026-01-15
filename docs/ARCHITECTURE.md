@@ -41,6 +41,8 @@ chains:
         ws_url: "wss://eth.llamarpc.com"
 ```
 
+For the complete, up-to-date profile configuration reference (including all supported options and tuning notes), see `config/profiles/default.yml`.
+
 ### Profile-Scoped Supervision
 
 Each `(profile, chain)` pair runs in an isolated supervision tree:

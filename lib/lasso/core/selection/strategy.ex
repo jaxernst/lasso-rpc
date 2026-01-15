@@ -10,7 +10,7 @@ defmodule Lasso.RPC.Strategy do
   `choose/3` is required in the unified API.
   """
 
-  alias Lasso.RPC.{Channel, SelectionContext, StrategyContext}
+  alias Lasso.RPC.{Channel, StrategyContext}
 
   @type candidate :: %{
           required(:id) => String.t(),
@@ -28,7 +28,12 @@ defmodule Lasso.RPC.Strategy do
   Implementations should return a map that will be passed to `choose/3`.
   The `base_ctx` contains common fields like `:chain`, `:now_ms`, `:timeout`.
   """
-  @callback prepare_context(selection :: SelectionContext.t()) :: StrategyContext.t()
+  @callback prepare_context(
+              profile :: String.t(),
+              chain :: String.t(),
+              method :: String.t(),
+              timeout :: non_neg_integer()
+            ) :: StrategyContext.t()
 
   @doc """
   Rank eligible channels for a request. Returns the channels ordered from most

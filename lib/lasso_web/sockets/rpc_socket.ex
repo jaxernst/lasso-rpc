@@ -240,15 +240,17 @@ defmodule LassoWeb.RPCSocket do
     # Extract lasso_meta preference (notify or nil - inline mode removed)
     {lasso_meta_mode, _clean_request} = extract_lasso_meta(request)
 
+    # Normalize params to list (JSON-RPC params can be null)
+    params_list = params || []
+
     # Create request context for observability
     ctx =
-      RequestContext.new(state.chain, method,
-        params_present: params != nil and params != [],
+      RequestContext.new(state.chain, method, params_list,
         transport: :ws,
         strategy: default_provider_strategy()
       )
 
-    case handle_rpc_method(method, params || [], state, ctx) do
+    case handle_rpc_method(method, params_list, state, ctx) do
       {:ok, result, new_state, updated_ctx} ->
         Observability.log_request_completed(updated_ctx)
 

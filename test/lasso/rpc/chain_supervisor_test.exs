@@ -12,7 +12,7 @@ defmodule Lasso.RPC.ChainSupervisorTest do
 
   alias Lasso.RPC.ChainSupervisor
   alias Lasso.Config.ChainConfig
-  alias Lasso.Config.ChainConfig.{Provider, Connection, Failover}
+  alias Lasso.Config.ChainConfig.{Provider, Websocket, WebsocketFailover, Monitoring}
 
   setup do
     # Mock the HTTP client for provider operations
@@ -26,40 +26,33 @@ defmodule Lasso.RPC.ChainSupervisorTest do
     chain_config = %ChainConfig{
       chain_id: 1,
       name: "ethereum",
-      connection: %Connection{
-        heartbeat_interval: 30_000,
-        reconnect_interval: 5000,
-        max_reconnect_attempts: 3
-      },
-      failover: %Failover{
-        enabled: true,
-        max_backfill_blocks: 100,
-        backfill_timeout: 30_000
+      monitoring: %Monitoring{},
+      websocket: %Websocket{
+        subscribe_new_heads: true,
+        new_heads_timeout_ms: 42_000,
+        failover: %WebsocketFailover{
+          max_backfill_blocks: 100,
+          backfill_timeout_ms: 30_000
+        }
       },
       providers: [
         %Provider{
           id: "test_provider_1",
           name: "Test Provider 1",
           url: "https://test1.example.com",
-          ws_url: "wss://test1.example.com/ws",
-          type: "public",
-          api_key_required: false
+          ws_url: "wss://test1.example.com/ws"
         },
         %Provider{
           id: "test_provider_2",
           name: "Test Provider 2",
           url: "https://test2.example.com",
-          ws_url: "wss://test2.example.com/ws",
-          type: "public",
-          api_key_required: false
+          ws_url: "wss://test2.example.com/ws"
         },
         %Provider{
           id: "test_provider_3",
           name: "Test Provider 3",
           url: "https://test3.example.com",
-          ws_url: "wss://test3.example.com/ws",
-          type: "public",
-          api_key_required: false
+          ws_url: "wss://test3.example.com/ws"
         }
       ]
     }
@@ -101,15 +94,14 @@ defmodule Lasso.RPC.ChainSupervisorTest do
         # Invalid
         name: "",
         providers: [],
-        connection: %Connection{
-          heartbeat_interval: 30_000,
-          reconnect_interval: 5000,
-          max_reconnect_attempts: 3
-        },
-        failover: %Failover{
-          enabled: true,
-          max_backfill_blocks: 100,
-          backfill_timeout: 30_000
+        monitoring: %Monitoring{},
+        websocket: %Websocket{
+          subscribe_new_heads: true,
+          new_heads_timeout_ms: 42_000,
+          failover: %WebsocketFailover{
+            max_backfill_blocks: 100,
+            backfill_timeout_ms: 30_000
+          }
         }
       }
 

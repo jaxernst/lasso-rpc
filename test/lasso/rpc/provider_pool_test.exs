@@ -50,11 +50,8 @@ defmodule Lasso.RPC.ProviderPoolTest do
           id: "test_provider",
           name: "Test Provider",
           priority: 1,
-          type: "public",
           url: "http://example",
-          ws_url: "ws://example",
-          api_key_required: false,
-          region: "us"
+          ws_url: "ws://example"
         },
         attrs
       )
@@ -62,8 +59,8 @@ defmodule Lasso.RPC.ProviderPoolTest do
   end
 
   test "EMA updates on success and failure, cooldown on rate limit" do
-    p1 = provider_struct(%{id: "p1", name: "P1", priority: 1, region: "us"})
-    p2 = provider_struct(%{id: "p2", name: "P2", priority: 2, region: "us"})
+    p1 = provider_struct(%{id: "p1", name: "P1", priority: 1})
+    p2 = provider_struct(%{id: "p2", name: "P2", priority: 2})
     chain_config = base_chain_config([p1, p2])
 
     {:ok, _pid} = ProviderPool.start_link({"testnet", chain_config})

@@ -44,7 +44,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "uses provided RequestContext" do
-      custom_ctx = RequestContext.new("ethereum", "eth_call", strategy: :fastest)
+      custom_ctx = RequestContext.new("ethereum", "eth_call", [], strategy: :fastest)
 
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
@@ -121,7 +121,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       ctx = extract_context(result)
       assert ctx.chain == "ethereum"
       assert ctx.method == "eth_getBalance"
-      assert ctx.params_present == true
+      assert ctx.params == ["0x123", "latest"]
     end
   end
 
@@ -258,7 +258,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
         )
 
       ctx = extract_context(result)
-      assert ctx.params_present == true
+      assert ctx.params == ["0xabcd", "latest"]
     end
 
     test "handles nil params" do
@@ -270,7 +270,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
         })
 
       ctx = extract_context(result)
-      assert ctx.params_present == false
+      assert ctx.params == nil
     end
   end
 

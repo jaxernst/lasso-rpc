@@ -38,13 +38,16 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
         consensus_height={@consensus_height}
         chain_metrics={@selected_chain_metrics}
       />
-      <.chain_metrics_strip chain_metrics={@selected_chain_metrics} />
+
       <.endpoint_config_section
         chain={@chain}
         selected_profile={@selected_profile}
         chain_connections={@chain_connections}
         chain_endpoints={@selected_chain_endpoints}
       />
+
+      <.chain_metrics_strip chain_metrics={@selected_chain_metrics} />
+
       <.routing_decisions_section
         last_decision={@last_decision}
         connections={@connections}
@@ -72,7 +75,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       |> assign(:provider_count_class, provider_count_color(connected, total))
 
     ~H"""
-    <div class="p-6 pb-5 border-b border-gray-800 relative overflow-hidden">
+    <div class="px-6 pt-6 border-gray-800 relative overflow-hidden">
       <div class="flex items-center justify-between mb-1.5 relative z-10">
         <h3 class="text-3xl font-bold text-white tracking-tight capitalize">
           {Helpers.get_chain_display_name(@selected_profile, @chain)}
@@ -80,7 +83,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
         <DetailPanelComponents.status_badge status={@status} />
       </div>
 
-      <div class="flex items-center gap-3 text-sm mb-6 relative z-10">
+      <div class="flex items-center gap-3 text-sm relative z-10">
         <span class="text-gray-500">
           Chain ID
           <span class="font-mono text-gray-300">
@@ -179,7 +182,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       |> assign(:ws_url, ws_url)
 
     ~H"""
-    <div class="p-6 border-b border-gray-800">
+    <div class="px-6 py-8 border-b border-gray-800">
       <div
         id={"endpoint-config-#{@chain}"}
         phx-hook="TabSwitcher"

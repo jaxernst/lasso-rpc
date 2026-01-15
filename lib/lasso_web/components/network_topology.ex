@@ -1,8 +1,15 @@
 defmodule LassoWeb.NetworkTopology do
-  @moduledoc "Network topology visualization component for RPC providers."
+  @moduledoc """
+  Network topology visualization component for RPC providers.
+
+  Displays chains and their providers in a hexagonal packed layout for even
+  spacing and visual consistency. Chains are positioned in a spiral pattern
+  starting from the center, with providers orbiting each chain node.
+  """
   use Phoenix.Component
 
   alias Lasso.Config.ConfigStore
+  alias LassoWeb.Dashboard.StatusHelpers
   alias LassoWeb.TopologyConfig
 
   attr(:id, :string, required: true, doc: "unique identifier for the topology component")
@@ -25,51 +32,20 @@ defmodule LassoWeb.NetworkTopology do
     assigns =
       assigns
       |> assign(:chains, group_connections_by_chain(assigns.connections))
-      |> assign(:spiral_layout, calculate_spiral_layout(assigns.connections, profile))
+      |> assign(:hex_layout, calculate_hexagonal_layout(assigns.connections, profile))
       |> assign(:profile_chains, get_profile_chain_configs(profile))
 
     ~H"""
     <div class={["relative h-full w-full overflow-hidden", @class]}>
-      <!-- Hierarchical orbital network layout -->
+      <!-- Hexagonal packed network layout -->
       <div
         class="relative cursor-default"
         data-network-canvas
         style="width: 4000px; height: 3000px;"
         phx-click="deselect_all"
       >
-        <!-- Parent -> Child Connection lines (L1 to L2s) -->
-        <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
-          <%= if parent_name = Map.get(chain_data, :parent) do %>
-            <%= if parent_data = Map.get(@spiral_layout.chains, parent_name) do %>
-              <% {line_start_x, line_start_y, line_end_x, line_end_y} =
-                calculate_connection_line_with_variance(
-                  parent_data.position,
-                  chain_data.position,
-                  parent_data.radius,
-                  chain_data.radius,
-                  chain_name
-                ) %>
-              <svg
-                class="pointer-events-none absolute z-0"
-                style="left: 0; top: 0; width: 100%; height: 100%;"
-              >
-                <line
-                  x1={line_start_x}
-                  y1={line_start_y}
-                  x2={line_end_x}
-                  y2={line_end_y}
-                  stroke={TopologyConfig.l1_l2_line_color()}
-                  stroke-width={TopologyConfig.l1_l2_line_width()}
-                  opacity={TopologyConfig.l1_l2_line_opacity()}
-                  stroke-dasharray={TopologyConfig.l1_l2_line_dash()}
-                />
-              </svg>
-            <% end %>
-          <% end %>
-        <% end %>
-        
-    <!-- Provider connection lines -->
-        <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
+        <!-- Provider connection lines -->
+        <%= for {chain_name, chain_data} <- @hex_layout.chains do %>
           <%= for {connection, provider_data} <- chain_data.providers do %>
             <% {line_start_x, line_start_y, line_end_x, line_end_y} =
               calculate_connection_line_with_variance(
@@ -97,7 +73,7 @@ defmodule LassoWeb.NetworkTopology do
         <% end %>
         
     <!-- Chain nodes -->
-        <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
+        <%= for {chain_name, chain_data} <- @hex_layout.chains do %>
           <% {x, y} = chain_data.position %>
           <% radius = chain_data.radius %>
           <div
@@ -136,7 +112,7 @@ defmodule LassoWeb.NetworkTopology do
         <% end %>
         
     <!-- Provider nodes -->
-        <%= for {chain_name, chain_data} <- @spiral_layout.chains do %>
+        <%= for {chain_name, chain_data} <- @hex_layout.chains do %>
           <%= for {connection, provider_data} <- chain_data.providers do %>
             <% {x, y} = provider_data.position %>
             <% radius = provider_data.radius %>
@@ -199,50 +175,149 @@ defmodule LassoWeb.NetworkTopology do
     """
   end
 
-  # Helper functions for network topology
+  defp generate_hex_spiral_coordinates(1), do: [{0, 0}]
+
+  defp generate_hex_spiral_coordinates(count) when count > 1 do
+    rings_needed = calculate_rings_needed(count - 1)
+
+    ring_coords = Enum.flat_map(1..rings_needed, &generate_ring_coordinates/1)
+    Enum.take([{0, 0} | ring_coords], count)
+  end
+
+  defp generate_ring_coordinates(ring) do
+    directions = [{1, 0}, {0, 1}, {-1, 1}, {-1, 0}, {0, -1}, {1, -1}]
+    start_pos = {0, -ring}
+
+    for {dq, dr} <- directions,
+        _step <- 1..ring,
+        reduce: {start_pos, []} do
+      {{q, r}, coords} ->
+        {
+          {q + dq, r + dr},
+          coords ++ [{q, r}]
+        }
+    end
+    |> elem(1)
+  end
+
+  defp calculate_rings_needed(remaining) when remaining <= 0, do: 0
+
+  defp calculate_rings_needed(remaining) do
+    calculate_rings_needed(remaining, 1)
+  end
+
+  defp calculate_rings_needed(remaining, ring) when remaining <= 0, do: ring - 1
+
+  defp calculate_rings_needed(remaining, ring) do
+    hexes_in_ring = 6 * ring
+    calculate_rings_needed(remaining - hexes_in_ring, ring + 1)
+  end
+
+  defp axial_to_pixel(q, r, spacing) do
+    x = spacing * (3.0 / 2.0 * q)
+    y = spacing * (:math.sqrt(3.0) * r + :math.sqrt(3.0) / 2.0 * q)
+    {x, y}
+  end
+
+  defp order_chains_for_hex_layout(chains) do
+    chains
+    |> Map.keys()
+    |> Enum.sort_by(&:erlang.phash2/1)
+  end
 
   defp group_connections_by_chain(connections) do
     connections
     |> Enum.group_by(&extract_chain_from_connection(&1))
   end
 
-  defp calculate_spiral_layout(connections, profile) do
+  defp calculate_hexagonal_layout(connections, profile) do
     chains = group_connections_by_chain(connections)
     {center_x, center_y} = TopologyConfig.canvas_center()
 
-    # Layout configuration from centralized TopologyConfig
-    config = %{
-      l2_orbit_min: TopologyConfig.l2_orbit_min(),
-      l2_orbit_max: TopologyConfig.l2_orbit_max(),
-      provider_radius: TopologyConfig.provider_node_radius(),
-      angle_spread: TopologyConfig.angle_spread(),
-      other_chain_orbit: TopologyConfig.other_chain_orbit(),
-      chain_angle_variance: TopologyConfig.chain_angle_variance(),
-      chain_distance_variance: TopologyConfig.chain_distance_variance()
-    }
-
-    # Get chain configs for the current profile
     all_chain_configs = get_profile_chain_configs(profile)
+    chain_names = order_chains_for_hex_layout(chains)
 
-    # Categorize chains using topology config from profile
-    {l1_chains, l2_chains, other_chains} = categorize_chains_by_config(chains, all_chain_configs)
+    hex_coords = generate_hex_spiral_coordinates(length(chain_names))
+    spacing = TopologyConfig.hex_spacing(map_size(chains))
 
-    # Build hierarchical structure with parent-child relationships
     positioned_chains =
-      build_orbital_structure(
-        l1_chains,
-        l2_chains,
-        other_chains,
-        center_x,
-        center_y,
-        config,
-        all_chain_configs
-      )
+      chain_names
+      |> Enum.zip(hex_coords)
+      |> Enum.reduce(%{}, fn {chain_name, {q, r}}, acc ->
+        chain_connections = Map.get(chains, chain_name)
 
-    %{chains: positioned_chains}
+        {hex_x, hex_y} = axial_to_pixel(q, r, spacing)
+        chain_x = center_x + hex_x
+        chain_y = center_y + hex_y
+
+        topology = get_chain_topology(chain_name, all_chain_configs)
+        chain_radius = calculate_chain_radius_from_config(topology, length(chain_connections))
+
+        chain_data =
+          build_chain_node(
+            chain_name,
+            chain_connections,
+            chain_x,
+            chain_y,
+            chain_radius,
+            TopologyConfig.provider_orbit_for_radius(chain_radius),
+            TopologyConfig.provider_node_radius()
+          )
+
+        Map.put(acc, chain_name, chain_data)
+      end)
+
+    # Calculate centroid of all chain positions and center the layout
+    {centroid_x, centroid_y} = calculate_layout_centroid(positioned_chains)
+    offset_x = center_x - centroid_x
+    offset_y = center_y - centroid_y
+
+    # Apply offset to all chain and provider positions
+    centered_chains =
+      positioned_chains
+      |> Enum.map(fn {chain_name, chain_data} ->
+        {chain_x, chain_y} = chain_data.position
+        adjusted_chain_x = chain_x + offset_x
+        adjusted_chain_y = chain_y + offset_y
+
+        # Adjust provider positions relative to the chain
+        adjusted_providers =
+          Enum.map(chain_data.providers, fn {connection, provider_data} ->
+            {provider_x, provider_y} = provider_data.position
+            adjusted_provider_x = provider_x + offset_x
+            adjusted_provider_y = provider_y + offset_y
+
+            {connection,
+             Map.put(provider_data, :position, {adjusted_provider_x, adjusted_provider_y})}
+          end)
+
+        adjusted_chain_data =
+          chain_data
+          |> Map.put(:position, {adjusted_chain_x, adjusted_chain_y})
+          |> Map.put(:providers, adjusted_providers)
+
+        {chain_name, adjusted_chain_data}
+      end)
+      |> Enum.into(%{})
+
+    %{chains: centered_chains}
   end
 
-  # Get chain configs for the selected profile
+  defp calculate_layout_centroid(positioned_chains) do
+    if map_size(positioned_chains) == 0 do
+      {0, 0}
+    else
+      {sum_x, sum_y, count} =
+        positioned_chains
+        |> Enum.reduce({0, 0, 0}, fn {_chain_name, chain_data}, {acc_x, acc_y, acc_count} ->
+          {x, y} = chain_data.position
+          {acc_x + x, acc_y + y, acc_count + 1}
+        end)
+
+      {sum_x / count, sum_y / count}
+    end
+  end
+
   defp get_profile_chain_configs(profile) do
     case ConfigStore.get_profile_chains(profile) do
       {:ok, chains} -> chains
@@ -250,63 +325,6 @@ defmodule LassoWeb.NetworkTopology do
     end
   end
 
-  # Categorize chains using topology config from profile
-  # Returns {l1_chains, l2_chains, other_chains} where each is a map of chain_name => connections
-  #
-  # Key design decisions:
-  # - L2s are only placed in l2_chains if their parent chain EXISTS in the active chains
-  # - This ensures testnets (e.g., base_sepolia) don't connect to mainnet (ethereum)
-  # - L2s with missing parents float independently in other_chains
-  defp categorize_chains_by_config(chains, all_chain_configs) do
-    active_chain_names = Map.keys(chains)
-
-    # Categorize based on topology config
-    {l1_chains, l2_chains, other_chains} =
-      Enum.reduce(chains, {%{}, %{}, %{}}, fn {chain_name, connections},
-                                              {l1_acc, l2_acc, other_acc} ->
-        topology = get_chain_topology(chain_name, all_chain_configs)
-
-        cond do
-          # L1 chains - check topology or fallback to known L1 patterns
-          l1_chain?(topology, chain_name) ->
-            {Map.put(l1_acc, chain_name, connections), l2_acc, other_acc}
-
-          # L2 chains - ONLY if parent chain exists in active chains
-          l2_with_active_parent?(topology, chain_name, active_chain_names) ->
-            {l1_acc, Map.put(l2_acc, chain_name, connections), other_acc}
-
-          # Everything else (including L2s with missing parents) floats independently
-          true ->
-            {l1_acc, l2_acc, Map.put(other_acc, chain_name, connections)}
-        end
-      end)
-
-    {l1_chains, l2_chains, other_chains}
-  end
-
-  # Check if chain is an L1 (from topology config only)
-  defp l1_chain?(%{category: :l1}, _chain_name), do: true
-  defp l1_chain?(_, _), do: false
-
-  # Check if chain is an L2 with an active parent chain
-  # Parent must exist in the current set of active chains for connection to render
-  defp l2_with_active_parent?(
-         %{category: category, parent: parent},
-         _chain_name,
-         active_chain_names
-       )
-       when category in [:l2] and is_binary(parent) do
-    parent in active_chain_names
-  end
-
-  # Chains without topology config are not treated as L2s
-  defp l2_with_active_parent?(_, _, _), do: false
-
-  # Get the parent chain for an L2 (from topology config only)
-  defp get_l2_parent(%{parent: parent}, _chain_name) when is_binary(parent), do: parent
-  defp get_l2_parent(_, _), do: nil
-
-  # Get topology config for a chain, returns nil if not configured
   defp get_chain_topology(chain_name, all_chain_configs) do
     case Map.get(all_chain_configs, chain_name) do
       %{topology: topology} when not is_nil(topology) -> topology
@@ -314,175 +332,11 @@ defmodule LassoWeb.NetworkTopology do
     end
   end
 
-  # Build the orbital structure with L1 chains at center, L2s orbiting their parents
-  defp build_orbital_structure(
-         l1_chains,
-         l2_chains,
-         other_chains,
-         center_x,
-         center_y,
-         config,
-         all_chain_configs
-       ) do
-    positioned = %{}
-
-    # 1. Position L1 chains (spread around center if multiple)
-    positioned =
-      l1_chains
-      |> Map.to_list()
-      |> Enum.with_index()
-      |> Enum.reduce(positioned, fn {{chain_name, chain_connections}, idx}, acc ->
-        total_l1s = map_size(l1_chains)
-
-        # If single L1, place at center. If multiple, spread them out
-        {chain_x, chain_y} =
-          if total_l1s == 1 do
-            {center_x, center_y}
-          else
-            # Spread L1s in a circle around center using configurable distance
-            angle = idx * config.angle_spread / total_l1s
-            l1_spread = TopologyConfig.l1_spread_distance()
-            {center_x + l1_spread * :math.cos(angle), center_y + l1_spread * :math.sin(angle)}
-          end
-
-        topology = get_chain_topology(chain_name, all_chain_configs)
-        chain_radius = calculate_chain_radius_from_config(topology, length(chain_connections))
-
-        chain_data =
-          build_chain_node(
-            chain_name,
-            chain_connections,
-            chain_x,
-            chain_y,
-            chain_radius,
-            TopologyConfig.provider_orbit_for_radius(chain_radius),
-            config.provider_radius
-          )
-
-        Map.put(acc, chain_name, chain_data)
-      end)
-
-    # 2. Position L2 chains in orbital pattern around their parent L1
-    # First, group L2s by their parent to assign per-parent indices
-    # Note: All L2s in l2_chains are guaranteed to have an existing parent (checked in categorization)
-    l2s_by_parent =
-      l2_chains
-      |> Map.to_list()
-      |> Enum.group_by(fn {chain_name, _conns} ->
-        topology = get_chain_topology(chain_name, all_chain_configs)
-        get_l2_parent(topology, chain_name)
-      end)
-
-    positioned =
-      Enum.reduce(l2s_by_parent, positioned, fn {parent_name, sibling_chains}, acc ->
-        # Get parent position (default to center if parent not found)
-        {parent_x, parent_y} =
-          case Map.get(acc, parent_name) do
-            %{position: pos} -> pos
-            _ -> {center_x, center_y}
-          end
-
-        sibling_count = length(sibling_chains)
-
-        # Position each sibling with its index within this parent's orbit
-        sibling_chains
-        |> Enum.with_index()
-        |> Enum.reduce(acc, fn {{chain_name, chain_connections}, sibling_idx}, inner_acc ->
-          topology = get_chain_topology(chain_name, all_chain_configs)
-
-          # Calculate orbital position using sibling index for even distribution
-          # Use seed-based offset to add variety when there's only 1 sibling
-          seed = :erlang.phash2(chain_name, 1000)
-
-          # Base angle includes configurable offset plus seed-based variance
-          # This prevents single L2s from always pointing straight up
-          # ±90° based on chain name
-          seed_angle_offset = (seed / 1000 - 0.5) * :math.pi()
-
-          base_angle =
-            TopologyConfig.l2_base_angle_offset() +
-              seed_angle_offset +
-              sibling_idx * config.angle_spread / max(1, sibling_count)
-
-          angle_variance = (seed / 1000 - 0.5) * config.chain_angle_variance
-          distance_variance = (seed / 1000 - 0.5) * config.chain_distance_variance
-
-          final_angle = base_angle + angle_variance
-
-          orbit_distance =
-            config.l2_orbit_min +
-              (config.l2_orbit_max - config.l2_orbit_min) * (seed / 1000) +
-              distance_variance
-
-          chain_x = parent_x + orbit_distance * :math.cos(final_angle)
-          chain_y = parent_y + orbit_distance * :math.sin(final_angle)
-
-          chain_radius = calculate_chain_radius_from_config(topology, length(chain_connections))
-
-          chain_data =
-            build_chain_node(
-              chain_name,
-              chain_connections,
-              chain_x,
-              chain_y,
-              chain_radius,
-              TopologyConfig.provider_orbit_for_radius(chain_radius),
-              config.provider_radius
-            )
-
-          # Store parent info for connection line drawing
-          chain_data = Map.put(chain_data, :parent, parent_name)
-
-          Map.put(inner_acc, chain_name, chain_data)
-        end)
-      end)
-
-    # 3. Position other chains in outer orbital ring
-    positioned =
-      other_chains
-      |> Map.to_list()
-      |> Enum.with_index()
-      |> Enum.reduce(positioned, fn {{chain_name, chain_connections}, idx}, acc ->
-        total_others = map_size(other_chains)
-
-        # Outer orbital positioning
-        base_angle = idx * config.angle_spread / max(1, total_others)
-        seed = :erlang.phash2(chain_name, 1000)
-        angle_variance = (seed / 1000 - 0.5) * :math.pi() / 3
-
-        final_angle = base_angle + angle_variance
-        orbit_distance = config.other_chain_orbit + (seed / 1000 - 0.5) * 100
-
-        chain_x = center_x + orbit_distance * :math.cos(final_angle)
-        chain_y = center_y + orbit_distance * :math.sin(final_angle)
-
-        topology = get_chain_topology(chain_name, all_chain_configs)
-        chain_radius = calculate_chain_radius_from_config(topology, length(chain_connections))
-
-        chain_data =
-          build_chain_node(
-            chain_name,
-            chain_connections,
-            chain_x,
-            chain_y,
-            chain_radius,
-            TopologyConfig.provider_orbit_for_radius(chain_radius),
-            config.provider_radius
-          )
-
-        Map.put(acc, chain_name, chain_data)
-      end)
-
-    positioned
-  end
-
-  # Calculate chain radius from topology config
   defp calculate_chain_radius_from_config(topology, provider_count) do
     size = if topology, do: Map.get(topology, :size), else: nil
     TopologyConfig.chain_radius(size, provider_count)
   end
 
-  # Build a chain node with its orbiting providers
   defp build_chain_node(
          _chain_name,
          chain_connections,
@@ -494,63 +348,41 @@ defmodule LassoWeb.NetworkTopology do
        ) do
     provider_count = length(chain_connections)
 
-    # Provider orbit is already adjusted for size via TopologyConfig.provider_orbit_for_size
-    adjusted_provider_orbit = provider_orbit
-
     providers =
       chain_connections
       |> Enum.with_index()
       |> Enum.map(fn {connection, provider_index} ->
-        # Calculate provider orbital position
-        base_angle =
-          case provider_count do
-            1 ->
-              # Single provider - use deterministic but varied position
-              seed = :erlang.phash2(connection.id, 1000)
-              seed / 1000 * 2 * :math.pi()
+        base_angle = calculate_provider_base_angle(provider_count, provider_index, connection.id)
 
-            2 ->
-              # Two providers - opposite sides
-              case provider_index do
-                # Right
-                0 -> 0
-                # Left
-                1 -> :math.pi()
-              end
-
-            _ ->
-              # Multiple providers - even distribution
-              base = 2 * :math.pi() * provider_index / provider_count
-              # Start from top
-              base - :math.pi() / 2
-          end
-
-        # Add controlled randomness for organic look (configurable in TopologyConfig)
         seed = :erlang.phash2(connection.id, 1000)
-        angle_variance = (seed / 1000 - 0.5) * TopologyConfig.provider_angle_variance()
-        radius_variance = (seed / 1000 - 0.5) * TopologyConfig.provider_distance_variance()
+        variance_factor = seed / 1000 - 0.5
+        angle_variance = variance_factor * TopologyConfig.provider_angle_variance()
+        radius_variance = variance_factor * TopologyConfig.provider_distance_variance()
 
         final_angle = base_angle + angle_variance
-        final_radius = adjusted_provider_orbit + radius_variance
+        final_radius = provider_orbit + radius_variance
 
         provider_x = x + final_radius * :math.cos(final_angle)
         provider_y = y + final_radius * :math.sin(final_angle)
 
-        {connection,
-         %{
-           position: {provider_x, provider_y},
-           radius: provider_radius
-         }}
+        {connection, %{position: {provider_x, provider_y}, radius: provider_radius}}
       end)
 
-    %{
-      position: {x, y},
-      radius: chain_radius,
-      providers: providers
-    }
+    %{position: {x, y}, radius: chain_radius, providers: providers}
   end
 
-  # Calculate connection line with pseudo-random length variance
+  defp calculate_provider_base_angle(1, _index, connection_id) do
+    seed = :erlang.phash2(connection_id, 1000)
+    seed / 1000 * 2 * :math.pi()
+  end
+
+  defp calculate_provider_base_angle(2, 0, _connection_id), do: 0
+  defp calculate_provider_base_angle(2, 1, _connection_id), do: :math.pi()
+
+  defp calculate_provider_base_angle(count, index, _connection_id) do
+    2 * :math.pi() * index / count - :math.pi() / 2
+  end
+
   defp calculate_connection_line_with_variance(
          {chain_x, chain_y},
          {provider_x, provider_y},
@@ -558,33 +390,24 @@ defmodule LassoWeb.NetworkTopology do
          provider_radius,
          _seed_key
        ) do
-    # Calculate direction vector
     dx = provider_x - chain_x
     dy = provider_y - chain_y
     distance = :math.sqrt(dx * dx + dy * dy)
 
     if distance > 0 do
-      # Normalize direction
       norm_dx = dx / distance
       norm_dy = dy / distance
 
-      # Calculate start point (edge of chain circle)
       start_x = chain_x + norm_dx * chain_radius
       start_y = chain_y + norm_dy * chain_radius
-
-      # Calculate end point (edge of provider circle) - extend all the way to provider edge
       end_x = provider_x - norm_dx * provider_radius
       end_y = provider_y - norm_dy * provider_radius
 
       {start_x, start_y, end_x, end_y}
     else
-      # Fallback for zero distance
       {chain_x, chain_y, provider_x, provider_y}
     end
   end
-
-  # Use centralized StatusHelpers for all provider status colors
-  alias LassoWeb.Dashboard.StatusHelpers
 
   defp provider_line_color(connection) do
     connection
@@ -618,40 +441,22 @@ defmodule LassoWeb.NetworkTopology do
     |> Map.get(:dot)
   end
 
-  # Helper to check if a provider supports WebSocket connections
-  defp has_websocket_support?(connection) do
-    # Check if the connection has WebSocket support based on type or ws_url
-    case Map.get(connection, :type) do
-      :websocket ->
-        true
+  defp has_websocket_support?(%{type: type}) when type in [:websocket, :both], do: true
+  defp has_websocket_support?(%{type: :http}), do: false
+  defp has_websocket_support?(%{ws_url: ws_url}) when is_binary(ws_url) and ws_url != "", do: true
+  defp has_websocket_support?(_), do: false
 
-      :both ->
-        true
-
-      :http ->
-        false
-
-      _ ->
-        # Fallback: check if ws_url is present and not nil
-        ws_url = Map.get(connection, :ws_url)
-        is_binary(ws_url) and String.length(ws_url) > 0
-    end
-  end
-
-  # Get chain color from topology config, with fallback to defaults
   defp chain_color(chain_name, profile_chains) do
     topology = get_chain_topology(chain_name, profile_chains)
     TopologyConfig.chain_color(topology, chain_name)
   end
 
-  # Get display name from profile chain config, with fallback
   defp get_chain_display_name(chain_name, profile_chains) do
     case Map.get(profile_chains, chain_name) do
       %{name: display_name} when is_binary(display_name) ->
         display_name
 
       _ ->
-        # Fallback: convert chain_name to title case
         chain_name
         |> String.replace("_", " ")
         |> String.split(" ")
@@ -659,7 +464,6 @@ defmodule LassoWeb.NetworkTopology do
     end
   end
 
-  # Get chain ID display from profile chain config
   defp get_chain_id_display(chain_name, profile_chains) do
     case Map.get(profile_chains, chain_name) do
       %{chain_id: chain_id} when is_integer(chain_id) ->
