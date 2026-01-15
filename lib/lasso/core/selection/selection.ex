@@ -18,8 +18,8 @@ defmodule Lasso.RPC.Selection do
   require Logger
 
   alias Lasso.RPC.{
-    Channel,
     ChainState,
+    Channel,
     ProviderPool,
     RequestAnalysis,
     SelectionFilters,

@@ -80,20 +80,22 @@ defmodule Lasso.RPC.RequestAnalysis do
   defp archival_block?(nil, _opts), do: false
 
   defp archival_block?("0x" <> hex, opts) do
-    with {block_num, ""} <- Integer.parse(hex, 16) do
-      case Keyword.get(opts, :consensus_height) do
-        nil ->
-          # Conservative: assume archival when consensus height is unknown
-          true
+    case Integer.parse(hex, 16) do
+      {block_num, ""} ->
+        case Keyword.get(opts, :consensus_height) do
+          nil ->
+            # Conservative: assume archival when consensus height is unknown
+            true
 
-        consensus_height ->
-          default_threshold = ChainConfig.Selection.default_archival_threshold()
-          threshold = Keyword.get(opts, :archival_threshold, default_threshold)
-          age = consensus_height - block_num
-          age > threshold
-      end
-    else
-      _ -> false
+          consensus_height ->
+            default_threshold = ChainConfig.Selection.default_archival_threshold()
+            threshold = Keyword.get(opts, :archival_threshold, default_threshold)
+            age = consensus_height - block_num
+            age > threshold
+        end
+
+      _ ->
+        false
     end
   end
 
