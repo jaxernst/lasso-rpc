@@ -6,8 +6,8 @@ defmodule Lasso.RPC.Strategies.Priority do
   alias Lasso.Config.ConfigStore
 
   @impl true
-  def prepare_context(selection) do
-    Lasso.RPC.StrategyContext.new(selection)
+  def prepare_context(_profile, chain, _method, timeout) do
+    Lasso.RPC.StrategyContext.new(chain, timeout)
   end
 
   @doc """

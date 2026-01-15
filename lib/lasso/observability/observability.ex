@@ -115,7 +115,7 @@ defmodule Lasso.RPC.Observability do
       chain: ctx.chain,
       transport: to_string(ctx.transport),
       jsonrpc_method: ctx.method,
-      params_present: ctx.params_present
+      params_present: ctx.params != [] and not is_nil(ctx.params)
     }
 
     # Add optional fields

@@ -7,7 +7,6 @@ defmodule Lasso.RPC.StrategyContext do
   """
 
   alias Lasso.Core.Benchmarking.Metrics
-  alias Lasso.RPC.SelectionContext
 
   # Fallback latency when no provider data exists
   @default_fallback_latency_ms 500.0
@@ -38,14 +37,14 @@ defmodule Lasso.RPC.StrategyContext do
         }
 
   @doc """
-  Builds the base strategy context from a validated selection context.
+  Builds the base strategy context.
   """
-  @spec new(SelectionContext.t()) :: t()
-  def new(%SelectionContext{} = selection) do
+  @spec new(String.t(), non_neg_integer()) :: t()
+  def new(chain, timeout) when is_binary(chain) and is_integer(timeout) do
     %__MODULE__{
-      chain: selection.chain,
+      chain: chain,
       now_ms: System.monotonic_time(:millisecond),
-      timeout: selection.timeout
+      timeout: timeout
     }
   end
 

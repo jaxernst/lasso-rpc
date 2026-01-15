@@ -242,8 +242,7 @@ defmodule LassoWeb.RPCSocket do
 
     # Create request context for observability
     ctx =
-      RequestContext.new(state.chain, method,
-        params_present: params != nil and params != [],
+      RequestContext.new(state.chain, method, params,
         transport: :ws,
         strategy: default_provider_strategy()
       )

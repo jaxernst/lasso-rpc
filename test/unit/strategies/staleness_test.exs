@@ -3,7 +3,6 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
 
   alias Lasso.RPC.Strategies.Fastest
   alias Lasso.RPC.Strategies.LatencyWeighted
-  alias Lasso.RPC.SelectionContext
 
   defmodule MockBatchMetricsBackend do
     def batch_get_transport_performance(profile, chain, requests) do
@@ -28,18 +27,15 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
 
   describe "Fastest strategy staleness validation" do
     setup do
-      # Create test selection and context
-      selection = %SelectionContext{
-        profile: "test",
-        chain: "ethereum",
-        method: "eth_blockNumber",
-        timeout: 5000
-      }
+      # Test parameters
+      profile = "test"
+      chain = "ethereum"
+      method = "eth_blockNumber"
+      timeout = 5000
 
-      ctx = Fastest.prepare_context(selection)
+      ctx = Fastest.prepare_context(profile, chain, method, timeout)
 
-      {:ok,
-       ctx: ctx, profile: selection.profile, chain: selection.chain, method: selection.method}
+      {:ok, ctx: ctx, profile: profile, chain: chain, method: method}
     end
 
     test "provider with fresh metrics (< 10min) gets normal latency score", %{
@@ -155,17 +151,15 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
 
   describe "LatencyWeighted strategy staleness validation" do
     setup do
-      selection = %SelectionContext{
-        profile: "test",
-        chain: "ethereum",
-        method: "eth_blockNumber",
-        timeout: 5000
-      }
+      # Test parameters
+      profile = "test"
+      chain = "ethereum"
+      method = "eth_blockNumber"
+      timeout = 5000
 
-      ctx = LatencyWeighted.prepare_context(selection)
+      ctx = LatencyWeighted.prepare_context(profile, chain, method, timeout)
 
-      {:ok,
-       ctx: ctx, profile: selection.profile, chain: selection.chain, method: selection.method}
+      {:ok, ctx: ctx, profile: profile, chain: chain, method: method}
     end
 
     test "fresh metrics get normal weight calculation", %{

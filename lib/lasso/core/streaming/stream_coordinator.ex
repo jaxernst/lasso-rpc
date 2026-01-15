@@ -15,8 +15,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   alias Lasso.RPC.{
     ChainState,
     RequestOptions,
-    Selection,
-    SelectionContext
+    Selection
   }
 
   alias Lasso.Core.Streaming.{
@@ -723,11 +722,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp pick_next_provider(state, excluded) do
     case Selection.select_provider(
-           SelectionContext.new(state.profile, state.chain, "eth_subscribe",
-             strategy: :priority,
-             protocol: :ws,
-             exclude: excluded
-           )
+           state.profile,
+           state.chain,
+           "eth_subscribe",
+           strategy: :priority,
+           protocol: :ws,
+           exclude: excluded
          ) do
       {:ok, provider_id} -> {:ok, provider_id}
       _ -> {:error, :no_providers}
@@ -737,11 +737,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp pick_best_http_provider(profile, chain, excluded) do
     # Select best available HTTP provider for backfill (decoupled from WS selection)
     case Selection.select_provider(
-           SelectionContext.new(profile, chain, "eth_getBlockByNumber",
-             strategy: :fastest,
-             protocol: :http,
-             exclude: excluded
-           )
+           profile,
+           chain,
+           "eth_getBlockByNumber",
+           strategy: :fastest,
+           protocol: :http,
+           exclude: excluded
          ) do
       {:ok, provider_id} -> provider_id
       _ -> List.first(excluded) || "default"

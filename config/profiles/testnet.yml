@@ -17,7 +17,7 @@ chains:
 
     selection:
       max_lag_blocks: 1
-      # archival_threshold: 1000  # ~3.3 hours (1000 * 12s blocks)
+      archival_threshold: 128  # ~25 minutes (128 * 12s blocks)
 
     websocket:
       subscribe_new_heads: true
@@ -64,7 +64,7 @@ chains:
     selection:
       # More tolerant for L2 testnet (accounts for faster blocks + instability)
       max_lag_blocks: 5
-      archival_threshold: 1800 # ~1 hour (1800 * 2s blocks)
+      archival_threshold: 750  # ~25 minutes (750 * 2s blocks)
 
     websocket:
       subscribe_new_heads: true
@@ -118,7 +118,7 @@ chains:
     selection:
       # Very tolerant for L2 testnet (fast blocks + testnet instability)
       max_lag_blocks: 15
-      archival_threshold: 14400 # ~1 hour (14400 * 0.25s blocks)
+      archival_threshold: 6000  # ~25 minutes (6000 * 0.25s blocks)
 
     websocket:
       subscribe_new_heads: true

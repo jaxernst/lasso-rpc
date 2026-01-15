@@ -20,8 +20,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
   alias Lasso.RPC.{
     Channel,
-    Selection,
-    SelectionContext
+    Selection
   }
 
   alias Lasso.Core.Streaming.{
@@ -621,11 +620,12 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
   defp pick_next_provider(state, failed_provider_id) do
     case Selection.select_provider(
-           SelectionContext.new(state.profile, state.chain, "eth_subscribe",
-             strategy: :priority,
-             protocol: :ws,
-             exclude: [failed_provider_id]
-           )
+           state.profile,
+           state.chain,
+           "eth_subscribe",
+           strategy: :priority,
+           protocol: :ws,
+           exclude: [failed_provider_id]
          ) do
       {:ok, provider} -> provider
       _ -> failed_provider_id

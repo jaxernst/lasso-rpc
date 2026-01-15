@@ -17,7 +17,15 @@ defmodule Lasso.RPC.Selection do
 
   require Logger
 
-  alias Lasso.RPC.{Channel, ProviderPool, SelectionContext, TransportRegistry}
+  alias Lasso.RPC.{
+    Channel,
+    ChainState,
+    ProviderPool,
+    RequestAnalysis,
+    SelectionFilters,
+    TransportRegistry
+  }
+
   alias Lasso.RPC.Strategies.Registry, as: StrategyRegistry
   # Selection should be transport-policy agnostic. Transport constraints
   # should be provided by the caller via opts.
@@ -26,11 +34,11 @@ defmodule Lasso.RPC.Selection do
   Picks the best provider using simple parameters.
 
   Options:
-  - :strategy => :fastest | :cheapest | :priority | :round_robin (default from config)
+  - :params => [term()] (RPC params for request analysis, default [])
+  - :strategy => :fastest | :cheapest | :priority | :round_robin (default :cheapest)
   - :protocol => :http | :ws | :both (default :both)
-  - :exclude => [provider_id]
+  - :exclude => [provider_id] (default [])
   - :timeout => ms (default 30_000)
-  - :region_filter => String.t() | nil
 
   Returns {:ok, provider_id} or {:error, reason}
   """
@@ -38,72 +46,42 @@ defmodule Lasso.RPC.Selection do
           {:ok, String.t()} | {:error, term()}
   def select_provider(profile, chain, method, opts \\ [])
       when is_binary(profile) and is_binary(chain) and is_binary(method) do
-    ctx = SelectionContext.new(profile, chain, method, opts)
-    select_provider(ctx)
-  end
+    params = Keyword.get(opts, :params, [])
+    strategy = Keyword.get(opts, :strategy, :cheapest)
+    protocol = Keyword.get(opts, :protocol, :both)
+    exclude = Keyword.get(opts, :exclude, [])
+    timeout = Keyword.get(opts, :timeout, 30_000)
 
-  @doc """
-  Picks the best provider using a SelectionContext (backward compatibility).
-
-  Returns {:ok, provider_id} or {:error, reason}
-  """
-  @spec select_provider(SelectionContext.t()) :: {:ok, String.t()} | {:error, term()}
-  def select_provider(%SelectionContext{} = ctx) do
-    with {:ok, validated_ctx} <- SelectionContext.validate(ctx) do
-      do_select_provider(validated_ctx)
-    end
-  end
-
-  @doc """
-  Picks the best provider and returns enriched selection metadata for observability.
-
-  Returns {:ok, %{provider_id: String.t(), metadata: map()}} or {:error, reason}
-
-  Metadata includes:
-  - candidates: list of candidate provider IDs considered
-  - selected: selected provider with protocol
-  - reason: selection reason (e.g., "fastest_method_latency")
-  - cb_state: circuit breaker state of selected provider
-  """
-  @spec select_provider_with_metadata(String.t(), String.t(), String.t(), keyword()) ::
-          {:ok, %{provider_id: String.t(), metadata: map()}} | {:error, term()}
-  def select_provider_with_metadata(profile, chain, method, opts \\ [])
-      when is_binary(profile) and is_binary(chain) and is_binary(method) do
-    ctx = SelectionContext.new(profile, chain, method, opts)
-
-    with {:ok, validated_ctx} <- SelectionContext.validate(ctx) do
-      do_select_provider_with_metadata(validated_ctx)
-    end
+    do_select_provider(profile, chain, method, params, strategy, protocol, exclude, timeout)
   end
 
   # Private implementation
 
-  defp do_select_provider(%SelectionContext{} = ctx) do
-    max_lag_blocks = get_max_lag(ctx.profile, ctx.chain)
-    filters = %{exclude: ctx.exclude, protocol: ctx.protocol, max_lag_blocks: max_lag_blocks}
-    candidates = ProviderPool.list_candidates(ctx.profile, ctx.chain, filters)
+  defp do_select_provider(profile, chain, method, params, strategy, protocol, exclude, timeout) do
+    filters = build_selection_filters(profile, chain, method, params, exclude, protocol)
+    candidates = ProviderPool.list_candidates(profile, chain, filters)
 
     case candidates do
       [] ->
         {:error, :no_providers_available}
 
       _ ->
-        strategy_mod = StrategyRegistry.resolve(ctx.strategy)
-        prepared_ctx = strategy_mod.prepare_context(ctx)
+        strategy_mod = StrategyRegistry.resolve(strategy)
+        prepared_ctx = strategy_mod.prepare_context(profile, chain, method, timeout)
 
         channels =
           candidates
           |> Enum.flat_map(fn %{id: provider_id, config: provider_config} ->
             transports =
-              case ctx.protocol do
+              case protocol do
                 :http -> [:http]
                 :ws -> [:ws]
                 :both -> [:http, :ws]
               end
 
             Enum.flat_map(transports, fn t ->
-              case TransportRegistry.get_channel(ctx.profile, ctx.chain, provider_id, t,
-                     method: ctx.method,
+              case TransportRegistry.get_channel(profile, chain, provider_id, t,
+                     method: method,
                      provider_config: provider_config
                    ) do
                 {:ok, ch} -> [ch]
@@ -113,81 +91,19 @@ defmodule Lasso.RPC.Selection do
           end)
 
         ordered =
-          strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
+          strategy_mod.rank_channels(channels, method, prepared_ctx, profile, chain)
 
         case List.first(ordered) do
           %Channel{provider_id: pid} ->
             :telemetry.execute([:lasso, :selection, :success], %{count: 1}, %{
-              chain: ctx.chain,
-              method: ctx.method,
-              strategy: ctx.strategy,
-              protocol: ctx.protocol,
+              chain: chain,
+              method: method,
+              strategy: strategy,
+              protocol: protocol,
               provider_id: pid
             })
 
             {:ok, pid}
-
-          _ ->
-            {:error, :no_providers_available}
-        end
-    end
-  end
-
-  defp do_select_provider_with_metadata(%SelectionContext{} = ctx) do
-    max_lag_blocks = get_max_lag(ctx.profile, ctx.chain)
-    filters = %{exclude: ctx.exclude, protocol: ctx.protocol, max_lag_blocks: max_lag_blocks}
-    candidates = ProviderPool.list_candidates(ctx.profile, ctx.chain, filters)
-
-    case candidates do
-      [] ->
-        {:error, :no_providers_available}
-
-      _ ->
-        candidate_ids = Enum.map(candidates, & &1.id)
-        strategy_mod = StrategyRegistry.resolve(ctx.strategy)
-        prepared_ctx = strategy_mod.prepare_context(ctx)
-
-        channels =
-          candidates
-          |> Enum.flat_map(fn %{id: provider_id, config: provider_config} ->
-            transports =
-              case ctx.protocol do
-                :http -> [:http]
-                :ws -> [:ws]
-                :both -> [:http, :ws]
-              end
-
-            Enum.flat_map(transports, fn t ->
-              case TransportRegistry.get_channel(ctx.profile, ctx.chain, provider_id, t,
-                     method: ctx.method,
-                     provider_config: provider_config
-                   ) do
-                {:ok, ch} -> [ch]
-                _ -> []
-              end
-            end)
-          end)
-
-        ordered =
-          strategy_mod.rank_channels(channels, ctx.method, prepared_ctx, ctx.profile, ctx.chain)
-
-        case List.first(ordered) do
-          %Channel{provider_id: pid, transport: transport} ->
-            metadata = %{
-              candidates: candidate_ids,
-              selected: %{id: pid, protocol: transport},
-              reason: build_selection_reason(ctx.strategy)
-            }
-
-            :telemetry.execute([:lasso, :selection, :success], %{count: 1}, %{
-              chain: ctx.chain,
-              method: ctx.method,
-              strategy: ctx.strategy,
-              protocol: transport,
-              provider_id: pid
-            })
-
-            {:ok, %{provider_id: pid, metadata: metadata}}
 
           _ ->
             {:error, :no_providers_available}
@@ -219,13 +135,9 @@ defmodule Lasso.RPC.Selection do
     transport = Keyword.get(opts, :transport, :both)
     exclude = Keyword.get(opts, :exclude, [])
     limit = Keyword.get(opts, :limit, 1000)
-
-    # Always include half-open providers for recovery opportunities.
-    # Half-open channels are deprioritized (ranked after closed) but not excluded.
-    # This allows half-open circuits to recover when closed-circuit channels fail.
     include_half_open = Keyword.get(opts, :include_half_open, true)
+    params = Keyword.get(opts, :params, [])
 
-    # Caller is responsible for policy. Do not force WS here; rely on opts.transport.
     pool_protocol =
       case transport do
         :http -> :http
@@ -233,18 +145,31 @@ defmodule Lasso.RPC.Selection do
         _ -> nil
       end
 
-    max_lag_blocks = get_max_lag(profile, chain)
+    # Analyze request to determine archival requirements
+    archival_threshold = get_archival_threshold(profile, chain)
+    consensus_height = get_consensus_height(chain)
 
-    pool_filters = %{
-      protocol: pool_protocol,
-      exclude: exclude,
-      include_half_open: include_half_open,
-      max_lag_blocks: max_lag_blocks
-    }
+    requirements =
+      Lasso.RPC.RequestAnalysis.analyze(
+        method,
+        params,
+        consensus_height: consensus_height,
+        archival_threshold: archival_threshold
+      )
+
+    pool_filters =
+      SelectionFilters.new(
+        protocol: pool_protocol,
+        exclude: exclude,
+        include_half_open: include_half_open,
+        max_lag_blocks: get_max_lag(profile, chain),
+        requires_archival: requirements.requires_archival
+      )
 
     # Instrument ProviderPool.list_candidates call time
     pool_start = System.monotonic_time(:microsecond)
     provider_candidates = ProviderPool.list_candidates(profile, chain, pool_filters)
+
     pool_duration_us = System.monotonic_time(:microsecond) - pool_start
 
     :telemetry.execute(
@@ -252,8 +177,6 @@ defmodule Lasso.RPC.Selection do
       %{duration_us: pool_duration_us, candidate_count: length(provider_candidates)},
       %{chain: chain, method: method, strategy: strategy}
     )
-
-    require Logger
 
     # Build circuit state lookup map: {provider_id, transport} => :closed | :half_open
     # Use defensive access in case circuit_state field is missing or nil
@@ -308,11 +231,9 @@ defmodule Lasso.RPC.Selection do
       end
 
     # Strategy delegation: allow strategy modules to rank channels when available.
-    selection_ctx =
-      SelectionContext.new(profile, chain, method, strategy: strategy, protocol: transport)
-
     strategy_mod = StrategyRegistry.resolve(strategy)
-    prepared_ctx = strategy_mod.prepare_context(selection_ctx)
+    timeout = Keyword.get(opts, :timeout, 30_000)
+    prepared_ctx = strategy_mod.prepare_context(profile, chain, method, timeout)
 
     ordered_channels =
       strategy_mod.rank_channels(capable_channels, method, prepared_ctx, profile, chain)
@@ -376,18 +297,6 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  # Selection metadata helpers
-
-  defp build_selection_reason(strategy) do
-    case strategy do
-      :fastest -> "fastest_method_latency"
-      :cheapest -> "cost_optimized"
-      :priority -> "static_priority"
-      :round_robin -> "round_robin_rotation"
-      :latency_weighted -> "latency_weighted_balancing"
-    end
-  end
-
   # Configuration helper: Get max lag threshold for a specific profile/chain
   # Returns nil if no lag filtering should be applied
   # Configuration precedence (highest to lowest):
@@ -411,5 +320,42 @@ defmodule Lasso.RPC.Selection do
     # Returns nil if not configured (no lag filtering)
     Application.get_env(:lasso, :selection, [])
     |> Keyword.get(:max_lag_blocks)
+  end
+
+  defp get_archival_threshold(profile, chain) do
+    case Lasso.Config.ConfigStore.get_chain(profile, chain) do
+      {:ok, %{selection: %{archival_threshold: threshold}}} when is_integer(threshold) ->
+        threshold
+
+      _ ->
+        Lasso.Config.ChainConfig.Selection.default_archival_threshold()
+    end
+  end
+
+  defp get_consensus_height(chain) do
+    case ChainState.consensus_height(chain) do
+      {:ok, height} -> height
+      {:error, _} -> nil
+    end
+  end
+
+  defp build_selection_filters(profile, chain, method, params, exclude, protocol) do
+    archival_threshold = get_archival_threshold(profile, chain)
+    consensus_height = get_consensus_height(chain)
+
+    requirements =
+      RequestAnalysis.analyze(
+        method,
+        params,
+        consensus_height: consensus_height,
+        archival_threshold: archival_threshold
+      )
+
+    SelectionFilters.new(
+      exclude: exclude,
+      protocol: protocol,
+      max_lag_blocks: get_max_lag(profile, chain),
+      requires_archival: requirements.requires_archival
+    )
   end
 end

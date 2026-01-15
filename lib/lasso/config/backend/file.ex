@@ -262,10 +262,17 @@ defmodule Lasso.Config.Backend.File do
         url: ChainConfig.substitute_env_vars(provider_data["url"]),
         ws_url: ChainConfig.substitute_env_vars(provider_data["ws_url"]),
         adapter_config: parse_adapter_config(provider_data["adapter_config"]),
-        subscribe_new_heads: provider_data["subscribe_new_heads"]
+        subscribe_new_heads: provider_data["subscribe_new_heads"],
+        archival: parse_archival(provider_data["archival"])
       }
     end)
   end
+
+  defp parse_archival(nil), do: true
+  defp parse_archival(value) when is_boolean(value), do: value
+  defp parse_archival("true"), do: true
+  defp parse_archival("false"), do: false
+  defp parse_archival(_), do: true
 
   defp parse_adapter_config(nil), do: nil
 
@@ -324,8 +331,11 @@ defmodule Lasso.Config.Backend.File do
   defp parse_selection(nil), do: nil
 
   defp parse_selection(selection_data) when is_map(selection_data) do
+    default_threshold = ChainConfig.Selection.default_archival_threshold()
+
     %ChainConfig.Selection{
-      max_lag_blocks: Map.get(selection_data, "max_lag_blocks")
+      max_lag_blocks: Map.get(selection_data, "max_lag_blocks"),
+      archival_threshold: Map.get(selection_data, "archival_threshold", default_threshold)
     }
   end
 

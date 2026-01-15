@@ -16,7 +16,7 @@ defmodule Lasso.RPC.SelectionTest do
 
   use Lasso.Test.LassoIntegrationCase
 
-  alias Lasso.RPC.{Selection, SelectionContext}
+  alias Lasso.RPC.Selection
   alias Lasso.Test.TelemetrySync
 
   describe "select_provider/3 - filter handling" do
@@ -104,98 +104,6 @@ defmodule Lasso.RPC.SelectionTest do
     end
   end
 
-  describe "select_provider/1 - context validation" do
-    test "returns error for empty chain name" do
-      ctx = %SelectionContext{
-        profile: "default",
-        chain: "",
-        method: "eth_blockNumber",
-        strategy: :priority,
-        protocol: :http,
-        exclude: [],
-        metrics: Lasso.Core.Benchmarking.Metrics,
-        timeout: 30_000
-      }
-
-      assert {:error, "Chain name is required"} = Selection.select_provider(ctx)
-    end
-
-    test "returns error for empty method name" do
-      ctx = %SelectionContext{
-        profile: "default",
-        chain: "ethereum",
-        method: "",
-        strategy: :priority,
-        protocol: :http,
-        exclude: [],
-        metrics: Lasso.Core.Benchmarking.Metrics,
-        timeout: 30_000
-      }
-
-      assert {:error, "Method name is required"} = Selection.select_provider(ctx)
-    end
-
-    test "returns error for invalid strategy" do
-      ctx = %SelectionContext{
-        profile: "default",
-        chain: "ethereum",
-        method: "eth_blockNumber",
-        strategy: :invalid_strategy,
-        protocol: :http,
-        exclude: [],
-        metrics: Lasso.Core.Benchmarking.Metrics,
-        timeout: 30_000
-      }
-
-      assert {:error, "Invalid strategy: " <> _} = Selection.select_provider(ctx)
-    end
-
-    test "returns error for invalid protocol" do
-      ctx = %SelectionContext{
-        profile: "default",
-        chain: "ethereum",
-        method: "eth_blockNumber",
-        strategy: :priority,
-        protocol: :invalid_protocol,
-        exclude: [],
-        metrics: Lasso.Core.Benchmarking.Metrics,
-        timeout: 30_000
-      }
-
-      assert {:error, "Invalid protocol: " <> _} = Selection.select_provider(ctx)
-    end
-
-    test "returns error for non-list exclude" do
-      ctx = %SelectionContext{
-        profile: "default",
-        chain: "ethereum",
-        method: "eth_blockNumber",
-        strategy: :priority,
-        protocol: :http,
-        exclude: "not_a_list",
-        metrics: Lasso.Core.Benchmarking.Metrics,
-        timeout: 30_000
-      }
-
-      assert {:error, "Exclude must be a list of provider IDs"} = Selection.select_provider(ctx)
-    end
-
-    test "returns error for non-positive timeout" do
-      ctx = %SelectionContext{
-        profile: "default",
-        chain: "ethereum",
-        method: "eth_blockNumber",
-        strategy: :priority,
-        protocol: :http,
-        exclude: [],
-        metrics: Lasso.Core.Benchmarking.Metrics,
-        timeout: -1
-      }
-
-      assert {:error, "Timeout must be positive"} = Selection.select_provider(ctx)
-    end
-  end
-
   describe "select_provider/3 - telemetry" do
     test "emits telemetry on successful selection", %{chain: chain} do
       profile = "default"
@@ -224,53 +132,63 @@ defmodule Lasso.RPC.SelectionTest do
     end
   end
 
-  describe "select_provider_with_metadata/3" do
-    test "returns metadata with candidate list", %{chain: chain} do
+  describe "select_channels/4 - archival filtering" do
+    test "excludes non-archival providers for historical eth_getLogs requests", %{chain: chain} do
+      profile = "default"
+
+      # Setup providers with archival: false
+      setup_providers([
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile, archival: false},
+        %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile, archival: false}
+      ])
+
+      # Historical eth_getLogs request (block 12369621 is from 2021)
+      params = [%{"fromBlock" => "0xBCEE25", "toBlock" => "0xBCEE25"}]
+
+      # Should return empty list - no archival providers available
+      channels = Selection.select_channels(profile, chain, "eth_getLogs", params: params)
+
+      assert channels == []
+    end
+
+    test "includes archival providers for historical eth_getLogs requests", %{chain: chain} do
+      profile = "default"
+
+      # Setup one archival and one non-archival provider
+      setup_providers([
+        %{id: "archival", priority: 10, behavior: :healthy, profile: profile, archival: true},
+        %{id: "non_archival", priority: 20, behavior: :healthy, profile: profile, archival: false}
+      ])
+
+      # Historical eth_getLogs request
+      params = [%{"fromBlock" => "0xBCEE25", "toBlock" => "0xBCEE25"}]
+
+      # Should return only the archival provider
+      channels = Selection.select_channels(profile, chain, "eth_getLogs", params: params)
+
+      assert length(channels) == 1
+      channel = hd(channels)
+      assert channel.provider_id == "archival"
+    end
+
+    test "includes all providers for recent eth_getLogs requests", %{chain: chain} do
       profile = "default"
 
       setup_providers([
-        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile},
-        %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile}
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile, archival: false},
+        %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile, archival: true}
       ])
 
-      assert {:ok, %{provider_id: selected, metadata: metadata}} =
-               Selection.select_provider_with_metadata(profile, chain, "eth_blockNumber")
+      # Recent request using "latest"
+      params = [%{"fromBlock" => "latest", "toBlock" => "latest"}]
 
-      # Verify metadata structure
-      assert is_list(metadata.candidates)
-      assert length(metadata.candidates) == 2
-      assert "provider_1" in metadata.candidates
-      assert "provider_2" in metadata.candidates
+      # Should return both providers - archival not required
+      channels = Selection.select_channels(profile, chain, "eth_getLogs", params: params)
 
-      # Verify selected provider info
-      assert metadata.selected.id == selected
-      assert metadata.selected.protocol in [:http, :ws, :both]
-
-      # Verify selection reason is provided
-      assert is_binary(metadata.reason)
-    end
-
-    test "includes correct protocol in metadata", %{chain: chain} do
-      profile = "default"
-
-      setup_providers([
-        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile}
-      ])
-
-      assert {:ok, %{metadata: metadata}} =
-               Selection.select_provider_with_metadata(profile, chain, "eth_blockNumber",
-                 protocol: :http
-               )
-
-      assert metadata.selected.protocol == :http
-    end
-
-    test "returns error when no providers available", %{chain: chain} do
-      profile = "default"
-      # Don't setup any providers
-
-      assert {:error, :no_providers_available} =
-               Selection.select_provider_with_metadata(profile, chain, "eth_blockNumber")
+      assert length(channels) == 2
+      provider_ids = Enum.map(channels, & &1.provider_id)
+      assert "provider_1" in provider_ids
+      assert "provider_2" in provider_ids
     end
   end
 end

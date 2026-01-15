@@ -100,7 +100,7 @@ defmodule Lasso.RPC.RequestPipeline do
     ctx = RequestContext.set_execution_params(ctx, rpc_request, opts.timeout_ms, opts)
 
     # Build channel source based on options (unifies override vs normal selection)
-    channel_source = build_channel_source(chain, method, opts)
+    channel_source = build_channel_source(opts)
 
     # Execute the pipeline
     execute_pipeline(channel_source, ctx)
@@ -123,6 +123,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     # Get channels from the source
     ctx = RequestContext.mark_selection_start(ctx)
+
     channels = get_channels_from_source(channel_source, ctx)
 
     ctx =
@@ -149,29 +150,25 @@ defmodule Lasso.RPC.RequestPipeline do
   defp get_channels_from_source(channel_source, ctx), do: channel_source.(ctx)
 
   # Builds a function that returns channels to try, unifying override vs normal selection
-  @spec build_channel_source(chain(), method(), RequestOptions.t()) :: channel_source()
-  defp build_channel_source(
-         chain,
-         method,
-         %RequestOptions{provider_override: nil, profile: profile} = opts
-       ) do
+  # Params are extracted from RequestContext - no need to pass separately (prevents closure footgun)
+  @spec build_channel_source(RequestOptions.t()) :: channel_source()
+  defp build_channel_source(%RequestOptions{provider_override: nil, profile: profile} = opts) do
     # Normal selection: get best channels via Selection module
-    fn _ctx ->
+    fn %RequestContext{chain: chain, method: method, params: params} = _ctx ->
       Selection.select_channels(profile, chain, method,
         strategy: opts.strategy,
         transport: opts.transport || :both,
-        limit: @max_channel_candidates
+        limit: @max_channel_candidates,
+        params: params
       )
     end
   end
 
   defp build_channel_source(
-         chain,
-         method,
          %RequestOptions{provider_override: provider_id, profile: profile} = opts
        ) do
     # Provider override: get channels for specific provider, optionally with failover
-    fn _ctx ->
+    fn %RequestContext{chain: chain, method: method, params: params} = _ctx ->
       primary_channels = get_provider_channels(profile, chain, provider_id, opts.transport)
 
       if opts.failover_on_override do
@@ -181,7 +178,8 @@ defmodule Lasso.RPC.RequestPipeline do
             strategy: opts.strategy,
             transport: :both,
             exclude: [provider_id],
-            limit: @max_channel_candidates
+            limit: @max_channel_candidates,
+            params: params
           )
 
         primary_channels ++ failover_channels
@@ -503,8 +501,7 @@ defmodule Lasso.RPC.RequestPipeline do
   @spec initialize_context(chain(), method(), params(), RequestOptions.t()) :: RequestContext.t()
   defp initialize_context(chain, method, params, opts) do
     opts.request_context ||
-      RequestContext.new(chain, method,
-        params_present: params != [] and not is_nil(params),
+      RequestContext.new(chain, method, params,
         transport: opts.transport || :http,
         strategy: opts.strategy,
         request_id: opts.request_id,

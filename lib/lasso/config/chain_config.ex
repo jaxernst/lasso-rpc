@@ -38,7 +38,8 @@ defmodule Lasso.Config.ChainConfig do
             url: String.t(),
             ws_url: String.t() | nil,
             adapter_config: %{atom() => any()} | nil,
-            subscribe_new_heads: boolean() | nil
+            subscribe_new_heads: boolean() | nil,
+            archival: boolean()
           }
 
     defstruct [
@@ -49,7 +50,8 @@ defmodule Lasso.Config.ChainConfig do
       :ws_url,
       :adapter_config,
       :subscribe_new_heads,
-      :__mock__
+      :__mock__,
+      archival: true
     ]
   end
 
@@ -92,17 +94,38 @@ defmodule Lasso.Config.ChainConfig do
 
   defmodule Selection do
     @moduledoc """
-    Provider selection configuration for lag-aware routing.
+    Provider selection configuration for lag-aware routing and archival detection.
 
     Controls how Lasso filters providers based on block height lag to ensure
-    consistent blockchain state when routing requests.
+    consistent blockchain state when routing requests, and determines when a
+    block is considered "archival" (requiring historical data support).
+
+    ## Archival Threshold
+
+    The archival threshold determines how many blocks behind the current head
+    a request must target before it's considered "archival" (requiring historical
+    data support). Default is 128 blocks (~25 minutes on Ethereum), which represents
+    a reasonable boundary between recent and historical data.
+
+    For comparison:
+    - Ethereum mainnet: ~25 min at 12s blocks
+    - Base/Optimism: ~4 min at 2s blocks
+    - Polygon: ~4 min at 2s blocks
     """
 
+    @default_archival_threshold 128
+
     @type t :: %__MODULE__{
-            max_lag_blocks: non_neg_integer() | nil
+            max_lag_blocks: non_neg_integer() | nil,
+            archival_threshold: non_neg_integer()
           }
 
-    defstruct max_lag_blocks: nil
+    defstruct max_lag_blocks: nil,
+              archival_threshold: @default_archival_threshold
+
+    @doc "Returns the default archival threshold (blocks behind head to consider archival)."
+    @spec default_archival_threshold() :: non_neg_integer()
+    def default_archival_threshold, do: @default_archival_threshold
   end
 
   defmodule Monitoring do

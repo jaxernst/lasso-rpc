@@ -17,7 +17,7 @@ defmodule Lasso.RPC.ProviderPool do
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Events.Provider
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{ChainState, RateLimitState}
+  alias Lasso.RPC.{ChainState, RateLimitState, SelectionFilters}
 
   @type t :: %__MODULE__{
           profile: profile(),
@@ -234,13 +234,17 @@ defmodule Lasso.RPC.ProviderPool do
     list_candidates("default", chain_name, filters)
   end
 
-  @spec list_candidates(profile, chain_name, map()) :: [map()]
+  @spec list_candidates(profile, chain_name, SelectionFilters.t() | map()) :: [map()]
+  def list_candidates(profile, chain_name, %SelectionFilters{} = filters)
+      when is_binary(profile) do
+    list_candidates(profile, chain_name, SelectionFilters.to_map(filters))
+  end
+
   def list_candidates(profile, chain_name, filters) when is_binary(profile) and is_map(filters) do
     GenServer.call(via_name(profile, chain_name), {:list_candidates, filters}, @call_timeout)
   catch
     :exit, {:timeout, _} ->
       Logger.warning("Timeout listing candidates for chain #{chain_name}")
-      # Return empty list on timeout (fail closed)
       []
 
     :exit, {:noproc, _} ->
@@ -1326,14 +1330,14 @@ defmodule Lasso.RPC.ProviderPool do
 
   @spec candidates_ready(t(), map()) :: [ProviderState.t()]
   defp candidates_ready(state, filters) do
-    max_lag_blocks = Map.get(filters, :max_lag_blocks)
-    current_time = System.monotonic_time(:millisecond)
     protocol = Map.get(filters, :protocol)
+    current_time = System.monotonic_time(:millisecond)
 
     state.active_providers
     |> Enum.map(&Map.get(state.providers, &1))
     |> Enum.filter(&provider_passes_filters?(&1, state, filters, protocol, current_time))
-    |> filter_by_lag(state.chain_name, max_lag_blocks)
+    |> filter_by_lag(state.chain_name, Map.get(filters, :max_lag_blocks))
+    |> filter_by_archival(Map.get(filters, :requires_archival))
     |> filter_excluded(filters)
   end
 
@@ -1498,6 +1502,14 @@ defmodule Lasso.RPC.ProviderPool do
 
     filtered
   end
+
+  defp filter_by_archival(providers, true) do
+    Enum.filter(providers, fn provider ->
+      Map.get(provider.config, :archival, true) != false
+    end)
+  end
+
+  defp filter_by_archival(providers, _), do: providers
 
   # Check if transport is configured (circuit breaker handles availability)
   defp transport_available?(provider, :http, _now_ms) do

@@ -60,6 +60,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
       url: "http://mock-#{provider_id}.test",
       type: "test",
       priority: Map.get(spec, :priority, 100),
+      archival: Map.get(spec, :archival, true),
       # Mark as mock for routing
       __mock__: true
     }
