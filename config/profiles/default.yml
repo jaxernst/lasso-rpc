@@ -148,13 +148,14 @@ chains:
         priority: 3
         url: "https://ethereum-rpc.publicnode.com"
         ws_url: "wss://ethereum-rpc.publicnode.com"
-        archival: true
+        archival: false # PHE: Returns blocks but not historical logs (inverted index error)
 
       # Temporarily disable: Uses a proxied backend with some nodes using PHE and some not (create inconsistency in log responses)
-      # - id: "ethereum_merkle"
-      #   name: "Merkle Ethereum"
-      #   priority: 4
-      #   url: "https://eth.merkle.io"
+      - id: "ethereum_merkle"
+        name: "Merkle Ethereum"
+        priority: 4
+        url: "https://eth.merkle.io"
+        archival: false # Mixed PHE nodes - default to false to avoid inverted index errors
 
       # Removed: 0xRPC - domain (0xrpc.io) does not resolve DNS
       # - id: "0xrpc_ethereum"
@@ -168,15 +169,15 @@ chains:
         name: "1RPC Ethereum"
         priority: 4
         url: "https://1rpc.io/eth"
-        archival: true
+        archival: false # PHE: Returns blocks but returns empty array for historical logs
 
       # Mixed backend with some nodes using PHE and some not (create inconsistency in log responses)
-      # - id: "ethereum_llamarpc"
-      #   name: "LlamaRPC Ethereum"
-      #   priority: 5
-      #   url: "https://eth.llamarpc.com"
-      #   ws_url: "wss://eth.llamarpc.com"
-      #   archival: true
+      - id: "ethereum_llamarpc"
+        name: "LlamaRPC Ethereum"
+        priority: 5
+        url: "https://eth.llamarpc.com"
+        ws_url: "wss://eth.llamarpc.com"
+        archival: false # Mixed PHE nodes - default to false to avoid inverted index errors
 
       - id: "ethereum_blockpi"
         name: "BlockPI Ethereum"
@@ -194,7 +195,7 @@ chains:
         name: "Omniatech Ethereum"
         priority: 9
         url: "https://endpoints.omniatech.io/v1/eth/mainnet/public"
-        archival: true
+        archival: false # PHE: Returns blocks but not historical logs (inverted index error)
 
       - id: "ethereum_onfinality"
         name: "OnFinality Ethereum"
@@ -219,7 +220,7 @@ chains:
         name: "bloXroute Ethereum"
         priority: 13
         url: "https://eth.rpc.blxrbdn.com"
-        archival: true
+        archival: false # PHE: eth_getLogs method not available for historical blocks
 
       - id: "ethereum_nownodes"
         name: "NOWNodes Ethereum"
@@ -231,19 +232,13 @@ chains:
         name: "Lava Ethereum"
         priority: 15
         url: "https://eth1.lava.build"
-        archival: true
+        archival: false # Mixed PHE nodes
 
       - id: "ethereum_mevblocker"
         name: "MEV Blocker"
         priority: 16
         url: "https://rpc.mevblocker.io"
         archival: true
-
-      # NOTE: Providers removed due to lack of historical eth_getLogs support
-      # These providers can serve recent blocks but return null for historical
-      # logs, which breaks indexers like Ponder, Subgraph, etc.
-      # - BlockRazor (eth.blockrazor.xyz)
-      # - bloXroute Virginia (virginia.rpc.blxrbdn.com)
 
   # ──────────────────────────────────────────────────────────────────────────
   # BASE MAINNET (L2)

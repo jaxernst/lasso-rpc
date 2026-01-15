@@ -17,7 +17,7 @@ chains:
 
     selection:
       max_lag_blocks: 1
-      archival_threshold: 128  # ~25 minutes (128 * 12s blocks)
+      archival_threshold: 128 # ~25 minutes (128 * 12s blocks)
 
     websocket:
       subscribe_new_heads: true
@@ -40,7 +40,7 @@ chains:
         priority: 1
         url: "https://ethereum-sepolia-rpc.publicnode.com"
         ws_url: "wss://ethereum-sepolia-rpc.publicnode.com"
-        archival: true
+        archival: false # PHE: Returns blocks but not historical logs (inverted index error)
 
       # Removed: 0xRPC - domain (0xrpc.io) does not resolve DNS
       # - id: "0xrpc_ethereum_sepolia"
@@ -53,7 +53,7 @@ chains:
         name: "1RPC Ethereum Sepolia"
         priority: 2
         url: "https://1rpc.io/sepolia"
-        archival: true
+        archival: false # PHE: Returns blocks but returns empty array for historical logs
 
       - id: "ethereum_sepolia_nodies"
         name: "Nodies Ethereum Sepolia"
@@ -92,7 +92,7 @@ chains:
     selection:
       # More tolerant for L2 testnet (accounts for faster blocks + instability)
       max_lag_blocks: 5
-      archival_threshold: 750  # ~25 minutes (750 * 2s blocks)
+      archival_threshold: 750 # ~25 minutes (750 * 2s blocks)
 
     websocket:
       subscribe_new_heads: true
@@ -150,7 +150,7 @@ chains:
     selection:
       # Very tolerant for L2 testnet (fast blocks + testnet instability)
       max_lag_blocks: 15
-      archival_threshold: 6000  # ~25 minutes (6000 * 0.25s blocks)
+      archival_threshold: 6000 # ~25 minutes (6000 * 0.25s blocks)
 
     websocket:
       subscribe_new_heads: true
