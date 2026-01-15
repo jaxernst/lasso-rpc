@@ -455,14 +455,22 @@ defmodule LassoWeb.Dashboard do
   # Live sync/block height updates from ProviderPool probes
   @impl true
   def handle_info(%{chain: _chain, provider_id: pid, block_height: _height}, socket) do
-    socket = maybe_refresh_selected_provider(socket, pid)
+    socket =
+      socket
+      |> schedule_connection_refresh()
+      |> maybe_refresh_selected_provider(pid)
+
     {:noreply, socket}
   end
 
   # Real-time block updates from BlockCache (WebSocket newHeads)
   @impl true
   def handle_info(%{type: :block_update, provider_id: pid}, socket) do
-    socket = maybe_refresh_selected_provider(socket, pid)
+    socket =
+      socket
+      |> schedule_connection_refresh()
+      |> maybe_refresh_selected_provider(pid)
+
     {:noreply, socket}
   end
 
@@ -545,13 +553,12 @@ defmodule LassoWeb.Dashboard do
     events = [event | Map.get(socket.assigns, :events, [])] |> Enum.take(100)
     socket = assign(socket, :events, events)
 
-    # If a provider is selected and this update is for the current profile,
-    # update the connections list and provider panel data in real-time
+    # Refresh connections for all providers to update statuses in real-time
     socket =
-      if socket.assigns[:selected_provider] && profile == socket.assigns[:selected_profile] do
+      if profile == socket.assigns[:selected_profile] do
         socket
-        |> fetch_connections()
-        |> update_selected_provider_data()
+        |> schedule_connection_refresh()
+        |> maybe_refresh_selected_provider(provider_id)
       else
         socket
       end
@@ -574,7 +581,14 @@ defmodule LassoWeb.Dashboard do
     }
 
     events = [event | Map.get(socket.assigns, :events, [])] |> Enum.take(100)
-    {:noreply, assign(socket, :events, events)}
+
+    socket =
+      socket
+      |> assign(:events, events)
+      |> schedule_connection_refresh()
+      |> maybe_refresh_selected_provider(provider_id)
+
+    {:noreply, socket}
   end
 
   @impl true
