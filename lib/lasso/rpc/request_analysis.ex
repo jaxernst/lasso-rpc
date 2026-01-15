@@ -112,7 +112,8 @@ defmodule Lasso.RPC.RequestAnalysis do
 
   defp extract_block_range(_method, _params), do: nil
 
-  defp extract_address_count("eth_getLogs", [%{"address" => addresses}]) when is_list(addresses) do
+  defp extract_address_count("eth_getLogs", [%{"address" => addresses}])
+       when is_list(addresses) do
     length(addresses)
   end
 

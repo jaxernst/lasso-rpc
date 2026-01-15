@@ -340,16 +340,23 @@ defmodule Lasso.Discovery.Probes.Limits do
     case make_request(url, "eth_getBlockByNumber", [old_block, false], timeout) do
       {:ok, %{"result" => block}} when is_map(block) ->
         # Block exists, test state query
-        state_result = make_request(url, "eth_getBalance", [TestParams.zero_address(), old_block], timeout)
+        state_result =
+          make_request(url, "eth_getBalance", [TestParams.zero_address(), old_block], timeout)
 
         # Test historical logs query (critical for indexers)
-        logs_result = make_request(url, "eth_getLogs", [
-          %{
-            "fromBlock" => old_block,
-            "toBlock" => old_block,
-            "address" => "0x0000000000000000000000000000000000000001"
-          }
-        ], timeout)
+        logs_result =
+          make_request(
+            url,
+            "eth_getLogs",
+            [
+              %{
+                "fromBlock" => old_block,
+                "toBlock" => old_block,
+                "address" => "0x0000000000000000000000000000000000000001"
+              }
+            ],
+            timeout
+          )
 
         case {state_result, logs_result} do
           # Full archive: both state and logs work
@@ -365,11 +372,12 @@ defmodule Lasso.Discovery.Probes.Limits do
             logs_work = match?({:ok, %{"result" => logs}} when is_list(logs), logs_result)
             state_work = match?({:ok, %{"result" => _}}, state_result)
 
-            details = cond do
-              state_work and not logs_work -> "Archive state but not historical logs"
-              not state_work and logs_work -> "Historical logs but not archive state"
-              true -> "Archive blocks only (no state or logs)"
-            end
+            details =
+              cond do
+                state_work and not logs_work -> "Archive state but not historical logs"
+                not state_work and logs_work -> "Historical logs but not archive state"
+                true -> "Archive blocks only (no state or logs)"
+              end
 
             %{
               status: :supported,

@@ -71,7 +71,7 @@ defmodule LassoWeb.NetworkTopology do
             </svg>
           <% end %>
         <% end %>
-
+        
     <!-- Chain nodes -->
         <%= for {chain_name, chain_data} <- @hex_layout.chains do %>
           <% {x, y} = chain_data.position %>
@@ -110,7 +110,7 @@ defmodule LassoWeb.NetworkTopology do
             </div>
           </div>
         <% end %>
-
+        
     <!-- Provider nodes -->
         <%= for {chain_name, chain_data} <- @hex_layout.chains do %>
           <%= for {connection, provider_data} <- chain_data.providers do %>
@@ -146,7 +146,7 @@ defmodule LassoWeb.NetworkTopology do
                 style={"width: #{max(4, radius - 4)}px; height: #{max(4, radius - 4)}px;"}
               >
               </div>
-
+              
     <!-- WebSocket support indicator -->
               <%= if has_websocket_support?(connection) do %>
                 <div
@@ -158,7 +158,7 @@ defmodule LassoWeb.NetworkTopology do
                   </svg>
                 </div>
               <% end %>
-
+              
     <!-- Reconnect attempts indicator -->
               <%= if Map.get(connection, :reconnect_attempts, 0) > 0 do %>
                 <div class="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white shadow-md">
