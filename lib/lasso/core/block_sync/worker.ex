@@ -3,17 +3,27 @@ defmodule Lasso.BlockSync.Worker do
   Per-provider GenServer that orchestrates block sync strategies.
 
   Each provider gets one Worker that:
-  1. Determines which strategy to use (WS, HTTP, or both)
-  2. Starts appropriate strategies based on config
-  3. Handles WS → HTTP fallback when WS degrades
-  4. Reports heights and health to BlockSync.Registry
+  1. Always runs HTTP polling as the reliable baseline for block height
+  2. Optionally runs WS subscription for real-time enhancements
+  3. Reports heights to BlockSync.Registry
+
+  ## Design Philosophy
+
+  HTTP polling is the baseline for ALL providers because:
+  - Predictable observation delay (poll_interval_ms is known)
+  - Enables accurate optimistic lag calculation
+  - WS subscriptions can go stale unpredictably (upstream cleanup, network issues)
+
+  WS subscriptions are an optional enhancement that provides:
+  - Real-time block notifications when healthy
+  - Tighter monitoring and faster staleness detection
+  - Support for subscription gap-filling on failover
 
   ## State Machine
 
-  The Worker operates in one of three modes:
-  - `:ws_only` - WS subscription active and healthy
-  - `:ws_with_http` - WS degraded/stale, HTTP fallback running
-  - `:http_only` - WS unavailable or disabled by config
+  The Worker operates in one of two modes:
+  - `:http_only` - HTTP polling only (WS unavailable or disabled)
+  - `:http_with_ws` - HTTP polling + WS subscription (WS is enhancement)
 
   ## Configuration
 
@@ -21,7 +31,7 @@ defmodule Lasso.BlockSync.Worker do
   - Per-provider override: `provider.subscribe_new_heads`
   - Per-chain default: `monitoring.subscribe_new_heads`
 
-  If `subscribe_new_heads: false`, Worker runs HTTP-only mode.
+  If `subscribe_new_heads: false` or no WS capability, Worker runs HTTP-only mode.
   """
 
   use GenServer
@@ -33,7 +43,7 @@ defmodule Lasso.BlockSync.Worker do
 
   @reconnect_delay_ms 5_000
 
-  @type mode :: :ws_only | :ws_with_http | :http_only
+  @type mode :: :http_only | :http_with_ws
   @type config :: %{
           subscribe_new_heads: boolean(),
           poll_interval_ms: pos_integer(),
@@ -291,7 +301,7 @@ defmodule Lasso.BlockSync.Worker do
         # Fallback defaults
         %{
           subscribe_new_heads: has_ws_capability?(profile, chain, provider_id),
-          poll_interval_ms: 12_000,
+          poll_interval_ms: 15_000,
           staleness_threshold_ms: 35_000
         }
     end
@@ -305,17 +315,40 @@ defmodule Lasso.BlockSync.Worker do
     end
   end
 
+  # Always start HTTP polling as baseline, then optionally add WS
   defp start_strategies(state) do
+    # Step 1: Always start HTTP polling (the reliable baseline)
+    state = start_http_baseline(state)
+
+    # Step 2: Optionally add WS subscription as enhancement
     if state.config.subscribe_new_heads do
-      # Start WS strategy
-      start_ws_strategy(state)
+      add_ws_enhancement(state)
     else
-      # HTTP only mode
-      start_http_only(state)
+      state
     end
   end
 
-  defp start_ws_strategy(state) do
+  # Start HTTP polling - this runs for ALL providers
+  defp start_http_baseline(state) do
+    http_opts = [
+      profile: state.profile,
+      parent: self(),
+      poll_interval_ms: state.config.poll_interval_ms
+    ]
+
+    {:ok, http_state} = HttpStrategy.start(state.chain, state.provider_id, http_opts)
+
+    Logger.debug("HTTP baseline started",
+      chain: state.chain,
+      provider_id: state.provider_id,
+      poll_interval_ms: state.config.poll_interval_ms
+    )
+
+    %{state | mode: :http_only, http_strategy: http_state}
+  end
+
+  # Add WS subscription as an enhancement (HTTP keeps running)
+  defp add_ws_enhancement(state) do
     ws_opts = [
       profile: state.profile,
       parent: self(),
@@ -324,113 +357,59 @@ defmodule Lasso.BlockSync.Worker do
 
     case WsStrategy.start(state.chain, state.provider_id, ws_opts) do
       {:ok, ws_state} ->
-        Logger.debug("WS strategy started",
+        Logger.debug("WS enhancement started",
           chain: state.chain,
           provider_id: state.provider_id
         )
 
-        %{state | mode: :ws_only, ws_strategy: ws_state, ws_retry_count: 0}
+        %{state | mode: :http_with_ws, ws_strategy: ws_state, ws_retry_count: 0}
 
       {:error, :connection_unknown} ->
-        # Connection state not yet available - use short retry delay
+        # Connection state not yet available - schedule retry
         Logger.debug("WS connection state unknown, will retry shortly",
           chain: state.chain,
           provider_id: state.provider_id
         )
 
-        start_http_fallback_with_quick_retry(state)
+        Process.send_after(self(), :attempt_ws_reconnect, 1_000)
+        state
 
       {:error, reason} ->
-        Logger.warning("WS strategy failed to start, falling back to HTTP",
+        Logger.warning("WS enhancement failed to start, HTTP baseline continues",
           chain: state.chain,
           provider_id: state.provider_id,
           reason: inspect(reason)
         )
 
-        start_http_fallback(%{state | ws_retry_count: state.ws_retry_count + 1})
+        # Schedule WS reconnect attempt - HTTP keeps running
+        schedule_ws_reconnect(state.ws_retry_count)
+        %{state | ws_retry_count: state.ws_retry_count + 1}
     end
   end
 
-  defp start_http_only(state) do
-    http_opts = [
-      profile: state.profile,
-      parent: self(),
-      poll_interval_ms: state.config.poll_interval_ms
-    ]
-
-    {:ok, http_state} = HttpStrategy.start(state.chain, state.provider_id, http_opts)
-
-    Logger.debug("HTTP strategy started (WS disabled)",
-      chain: state.chain,
-      provider_id: state.provider_id
-    )
-
-    %{state | mode: :http_only, http_strategy: http_state}
-  end
-
-  defp start_http_fallback(state) do
-    http_opts = [
-      profile: state.profile,
-      parent: self(),
-      poll_interval_ms: state.config.poll_interval_ms
-    ]
-
-    {:ok, http_state} = HttpStrategy.start(state.chain, state.provider_id, http_opts)
-
-    Logger.info("Started HTTP fallback for WS provider",
-      chain: state.chain,
-      provider_id: state.provider_id
-    )
-
-    # Schedule WS reconnect attempt
-    schedule_ws_reconnect(state.ws_retry_count)
-
-    %{state | mode: :ws_with_http, http_strategy: http_state}
-  end
-
-  # Quick retry for connection_unknown - connection state arrives shortly
-  defp start_http_fallback_with_quick_retry(state) do
-    http_opts = [
-      profile: state.profile,
-      parent: self(),
-      poll_interval_ms: state.config.poll_interval_ms
-    ]
-
-    {:ok, http_state} = HttpStrategy.start(state.chain, state.provider_id, http_opts)
-
-    # Short delay (1 second) for connection_unknown since state should arrive soon
-    Process.send_after(self(), :attempt_ws_reconnect, 1_000)
-
-    %{state | mode: :ws_with_http, http_strategy: http_state, ws_retry_count: 0}
-  end
-
+  # WS status changes - HTTP keeps running regardless
   defp handle_strategy_status(state, :ws, :active) do
-    # WS recovered, stop HTTP fallback if running
-    if state.mode == :ws_with_http and state.http_strategy do
-      HttpStrategy.stop(state.http_strategy)
+    # WS is now active - just update mode, HTTP keeps running
+    Logger.debug("WS enhancement active",
+      chain: state.chain,
+      provider_id: state.provider_id
+    )
 
-      Logger.info("WS recovered, stopping HTTP fallback",
-        chain: state.chain,
-        provider_id: state.provider_id
-      )
-
-      %{state | mode: :ws_only, http_strategy: nil, ws_retry_count: 0}
-    else
-      %{state | ws_retry_count: 0}
-    end
+    %{state | mode: :http_with_ws, ws_retry_count: 0}
   end
 
   defp handle_strategy_status(state, :ws, status) when status in [:stale, :failed, :degraded] do
-    # WS degraded, start HTTP fallback if not already running
-    if state.mode == :ws_only and state.http_strategy == nil do
-      start_http_fallback(state)
-    else
-      state
-    end
+    # WS degraded - log it but HTTP keeps providing reliable data
+    Logger.info("WS enhancement #{status}, HTTP baseline continues",
+      chain: state.chain,
+      provider_id: state.provider_id
+    )
+
+    state
   end
 
   defp handle_strategy_status(state, :http, :degraded) do
-    Logger.warning("HTTP polling degraded",
+    Logger.warning("HTTP baseline degraded",
       chain: state.chain,
       provider_id: state.provider_id
     )
@@ -439,7 +418,7 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp handle_strategy_status(state, :http, :healthy) do
-    Logger.debug("HTTP polling recovered",
+    Logger.debug("HTTP baseline recovered",
       chain: state.chain,
       provider_id: state.provider_id
     )
@@ -452,17 +431,18 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp handle_ws_reconnected(state) do
-    if state.config.subscribe_new_heads and state.mode in [:ws_with_http, nil] do
+    # Try to (re)establish WS enhancement - HTTP keeps running
+    if state.config.subscribe_new_heads do
       case state.ws_strategy do
         nil ->
-          # Start fresh WS strategy
-          start_ws_strategy(state)
+          # Start fresh WS strategy as enhancement
+          add_ws_enhancement(state)
 
         ws_state ->
           # Re-subscribe existing strategy
           case WsStrategy.resubscribe(ws_state) do
             {:ok, new_ws_state} ->
-              %{state | ws_strategy: new_ws_state, ws_retry_count: 0}
+              %{state | mode: :http_with_ws, ws_strategy: new_ws_state, ws_retry_count: 0}
 
             {:error, _} ->
               schedule_ws_reconnect(state.ws_retry_count)
@@ -475,22 +455,30 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp handle_ws_disconnected(state) do
+    # WS disconnected - HTTP keeps running, just log it
     if state.ws_strategy do
-      # WS disconnected, start HTTP fallback
-      start_http_fallback(state)
-    else
-      state
+      Logger.info("WS enhancement disconnected, HTTP baseline continues",
+        chain: state.chain,
+        provider_id: state.provider_id
+      )
+
+      # Schedule reconnect attempt
+      schedule_ws_reconnect(state.ws_retry_count)
     end
+
+    state
   end
 
   defp handle_manager_restarted(state) do
-    if state.ws_strategy and state.mode in [:ws_only, :ws_with_http] do
+    # Try to re-establish WS enhancement - HTTP keeps running
+    if state.ws_strategy and state.mode == :http_with_ws do
       case WsStrategy.resubscribe(state.ws_strategy) do
         {:ok, new_ws_state} ->
           %{state | ws_strategy: new_ws_state}
 
         {:error, _} ->
-          start_http_fallback(state)
+          schedule_ws_reconnect(state.ws_retry_count)
+          %{state | ws_retry_count: state.ws_retry_count + 1}
       end
     else
       state
@@ -498,7 +486,8 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp attempt_ws_reconnect(state) do
-    if state.config.subscribe_new_heads and state.mode == :ws_with_http do
+    # Try to add/restore WS enhancement - HTTP keeps running
+    if state.config.subscribe_new_heads and state.ws_strategy == nil do
       ws_opts = [
         profile: state.profile,
         parent: self(),
@@ -507,25 +496,21 @@ defmodule Lasso.BlockSync.Worker do
 
       case WsStrategy.start(state.chain, state.provider_id, ws_opts) do
         {:ok, ws_state} ->
-          Logger.info("WS reconnected successfully",
+          Logger.info("WS enhancement reconnected",
             chain: state.chain,
             provider_id: state.provider_id
           )
 
-          # WS recovered - stop HTTP fallback
-          if state.http_strategy, do: HttpStrategy.stop(state.http_strategy)
-
-          %{state | mode: :ws_only, ws_strategy: ws_state, http_strategy: nil, ws_retry_count: 0}
+          %{state | mode: :http_with_ws, ws_strategy: ws_state, ws_retry_count: 0}
 
         {:error, reason} ->
-          Logger.debug("WS reconnect attempt failed, will retry",
+          Logger.debug("WS enhancement reconnect failed, will retry",
             chain: state.chain,
             provider_id: state.provider_id,
             reason: inspect(reason),
             retry_count: state.ws_retry_count + 1
           )
 
-          # Schedule another attempt
           schedule_ws_reconnect(state.ws_retry_count)
           %{state | ws_retry_count: state.ws_retry_count + 1}
       end

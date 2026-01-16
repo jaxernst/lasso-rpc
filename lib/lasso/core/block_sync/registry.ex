@@ -9,6 +9,7 @@ defmodule Lasso.BlockSync.Registry do
 
   Keys are tuples for efficient lookups:
   - `{:height, chain, provider_id}` => `{height, timestamp_ms, source, metadata}`
+  - `{:block_time, chain}` => `%BlockTimeMeasurement{}`
 
   ## Freshness
 
@@ -21,6 +22,8 @@ defmodule Lasso.BlockSync.Registry do
 
   use GenServer
   require Logger
+
+  alias Lasso.Core.BlockSync.BlockTimeMeasurement
 
   @table :block_sync_registry
   @default_freshness_ms 30_000
@@ -47,6 +50,10 @@ defmodule Lasso.BlockSync.Registry do
       when is_binary(chain) and is_binary(provider_id) and is_integer(height) do
     timestamp = System.system_time(:millisecond)
     :ets.insert(@table, {{:height, chain, provider_id}, {height, timestamp, source, metadata}})
+
+    # Update block time measurement (tracks max height seen across all providers)
+    update_block_time(chain, height)
+
     :ok
   end
 
@@ -184,6 +191,45 @@ defmodule Lasso.BlockSync.Registry do
   @spec clear_chain(String.t()) :: :ok
   def clear_chain(chain) when is_binary(chain) do
     :ets.match_delete(@table, {{:height, chain, :_}, :_})
+    :ets.delete(@table, {:block_time, chain})
+    :ok
+  end
+
+  ## Block Time Measurement
+
+  @doc """
+  Get the dynamically measured block time for a chain.
+
+  Returns the measured block time if enough samples have been collected,
+  otherwise returns nil.
+  """
+  @spec get_block_time_ms(String.t()) :: non_neg_integer() | nil
+  def get_block_time_ms(chain) when is_binary(chain) do
+    case :ets.lookup(@table, {:block_time, chain}) do
+      [{{:block_time, ^chain}, measurement}] ->
+        BlockTimeMeasurement.get_block_time_ms(measurement, nil)
+
+      [] ->
+        nil
+    end
+  end
+
+  @doc """
+  Record a consensus height observation for block time measurement.
+
+  Should be called whenever the consensus height changes to track
+  inter-block timing.
+  """
+  @spec update_block_time(String.t(), non_neg_integer()) :: :ok
+  def update_block_time(chain, height) when is_binary(chain) and is_integer(height) do
+    measurement =
+      case :ets.lookup(@table, {:block_time, chain}) do
+        [{{:block_time, ^chain}, m}] -> m
+        [] -> %BlockTimeMeasurement{}
+      end
+
+    updated = BlockTimeMeasurement.record(measurement, height)
+    :ets.insert(@table, {{:block_time, chain}, updated})
     :ok
   end
 

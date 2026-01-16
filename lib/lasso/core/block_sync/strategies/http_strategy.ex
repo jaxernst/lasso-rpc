@@ -24,7 +24,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.RPC.{Channel, Response, TransportRegistry}
 
-  @default_poll_interval_ms 12_000
+  @default_poll_interval_ms 15_000
   @default_timeout_ms 3_000
   @max_consecutive_failures 3
 
