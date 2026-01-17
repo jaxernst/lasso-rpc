@@ -815,7 +815,7 @@ defmodule Lasso.Config.ConfigStore do
   defp normalize_monitoring_config(attrs) when is_map(attrs) do
     %ChainConfig.Monitoring{
       probe_interval_ms:
-        Map.get(attrs, :probe_interval_ms) || Map.get(attrs, "probe_interval_ms") || 12_000,
+        Map.get(attrs, :probe_interval_ms) || Map.get(attrs, "probe_interval_ms") || 15_000,
       lag_alert_threshold_blocks:
         Map.get(attrs, :lag_alert_threshold_blocks) ||
           Map.get(attrs, "lag_alert_threshold_blocks") ||

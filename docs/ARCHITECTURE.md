@@ -2,7 +2,7 @@
 
 ## System Overview
 
-Lasso RPC is an Elixir/OTP application that provides intelligent RPC provider orchestration and routing for blockchain applications. Built on the BEAM VM, Lasso delivers production-grade fault tolerance, massive concurrency, and self-healing capabilities.
+Elixir/OTP application providing RPC provider orchestration and routing for blockchain applications.
 
 ### Core Capabilities
 
@@ -18,7 +18,7 @@ Lasso RPC is an Elixir/OTP application that provides intelligent RPC provider or
 
 ## Profile System Architecture
 
-Lasso implements multi-tenancy through profiles, where each profile represents an isolated routing configuration with independent chains, providers, and rate limits.
+Multi-tenancy via profiles: isolated routing configurations with independent chains, providers, and rate limits.
 
 ### Profile Structure
 
@@ -41,15 +41,11 @@ chains:
         ws_url: "wss://eth.llamarpc.com"
 ```
 
-For the complete, up-to-date profile configuration reference (including all supported options and tuning notes), see `config/profiles/default.yml`.
+See `config/profiles/default.yml` for complete configuration reference.
 
 ### Profile-Scoped Supervision
 
-Each `(profile, chain)` pair runs in an isolated supervision tree:
-
-- **Complete isolation**: Independent circuit breakers, metrics, provider state
-- **No resource sharing**: Providers in different profiles don't share connections
-- **Independent lifecycle**: Profiles can be started/stopped without affecting others
+Each `(profile, chain)` pair runs in an isolated supervision tree with independent circuit breakers, metrics, and provider state.
 
 ### URL Routing
 
@@ -157,7 +153,7 @@ Lasso.Application
 
 ## Transport-Agnostic Request Pipeline
 
-Lasso routes JSON-RPC requests across both HTTP and WebSocket transports based on real-time performance.
+Routes JSON-RPC requests across HTTP and WebSocket transports based on real-time performance.
 
 ### Request Flow
 
@@ -197,7 +193,7 @@ Record metrics per provider+transport+method
 
 ## WebSocket Subscription Management
 
-Lasso provides WebSocket subscriptions with multiplexing and automatic failover.
+WebSocket subscriptions with multiplexing and automatic failover.
 
 ### Architecture
 
@@ -220,83 +216,159 @@ StreamCoordinator (per-subscription key)
 
 ### Multiplexing
 
-**Example**: 100 clients subscribe to `eth_subscribe("newHeads")`
-
-- **Without multiplexing**: 100 upstream WebSocket subscriptions
-- **With Lasso**: 1 upstream subscription shared across all clients
+100 clients subscribing to `eth_subscribe("newHeads")` share a single upstream subscription.
 
 ### Failover with Gap-Filling
 
-When a provider fails mid-stream:
+On provider failure mid-stream:
 
 1. StreamCoordinator detects failure
-2. Computes gap from `last_seen_block` to current head
-3. HTTP backfill via GapFiller fetches missed blocks
+2. Computes gap: `last_seen_block` to current head
+3. GapFiller backfills missed blocks via HTTP
 4. Injects backfilled events into stream
-5. Subscribes to new provider and continues
+5. Subscribes to new provider
 
-Result: Clients see continuous event stream with no gaps.
+Clients receive continuous event stream without gaps.
 
 ---
 
 ## Block Height Monitoring
 
-Lasso tracks blockchain state through two mechanisms:
+Lasso tracks blockchain state using HTTP polling as a reliable baseline with optional WebSocket enhancement.
 
-### BlockSync System
+### BlockSync System Architecture
+
+**Dual-Strategy Design:**
+
+**HTTP Baseline** (Always Running):
+- Bounded observation delay (`probe_interval_ms`)
+- Enables optimistic lag calculation with known staleness
+- Resilient to WebSocket failures
+
+**WebSocket Enhancement** (Optional):
+- Sub-second block notifications when healthy
+- Degrades gracefully to HTTP on failure
+
+HTTP polling provides predictable observation delay, enabling fair lag comparison across providers. WebSocket subscriptions can stale unpredictably (network issues, rate limits, provider cleanup), causing unbounded observation delay.
+
+### BlockSync Components
 
 **BlockSync.Worker** (`Lasso.Core.BlockSync.Worker`)
 
-- Tracks block heights from passive traffic
-- Periodic `eth_blockNumber` queries
-- Stores in centralized ETS registry
+Per-provider GenServer managing block height tracking:
+
+```
+┌─────────────────────────────────────┐
+│      BlockSync.Worker               │
+├─────────────────────────────────────┤
+│  HTTP: eth_blockNumber polling      │
+│  WS (optional): newHeads events     │
+└─────────────────────────────────────┘
+           ↓
+    BlockSync.Registry (ETS)
+```
+
+**Operating Modes**:
+- `:http_only` - HTTP polling only
+- `:http_with_ws` - HTTP + WebSocket enhancement
 
 **BlockSync.Registry** (`Lasso.Core.BlockSync.Registry`)
 
-- Centralized block height source per (profile, chain)
-- <1ms lookups via ETS
-- Used for consensus height calculations
+Centralized ETS-based block height storage:
+
+```elixir
+# Registry key structure
+{:height, chain, provider_id} => {height, timestamp, source, metadata}
+
+# Example
+{:height, "arbitrum", "drpc"} => {421_535_503, 1736894871234, :http, %{latency_ms: 45}}
+```
+
+- Single source of truth for height data
+- Both HTTP and WS write to same key (last write wins)
+- <1ms lookups for lag calculations
+- Supports consensus height derivation
+
+### Dynamic Block Time Measurement
+
+**BlockTimeMeasurement** (`Lasso.Core.BlockSync.BlockTimeMeasurement`)
+
+Derives per-chain block intervals using Exponential Moving Average (EMA) for optimistic lag calculation:
+
+```elixir
+@ema_alpha 0.15        # Adapts in ~10-15 samples
+@min_block_time_ms 50  # Floor: filters multi-provider convergence noise
+@max_block_time_ms 60_000  # Ceiling: rejects chain halts
+@min_samples 5         # Warmup threshold
+```
+
+**Algorithm**:
+1. On height update: calculate `interval = elapsed_ms / blocks_advanced`
+2. If `min <= interval <= max`: update EMA
+3. After 5 samples: prefer dynamic measurement over config
+
+EMA adapts to variable block production (e.g., Arbitrum's 100ms-5s range) while smoothing noise.
+
+### Optimistic Lag Calculation
+
+Compensates for observation delay on fast chains to prevent false lag detection.
+
+**Algorithm**:
+```elixir
+elapsed_ms = now - timestamp
+block_time_ms = Registry.get_block_time_ms(chain) || config.block_time_ms
+staleness_credit = min(div(elapsed_ms, block_time_ms), div(30_000, block_time_ms))
+optimistic_height = height + staleness_credit
+optimistic_lag = optimistic_height - consensus_height
+```
+
+**Example** (Arbitrum - 250ms blocks, 2s poll):
+```
+reported_height: 421,535,503
+consensus_height: 421,535,511
+raw_lag: -8 blocks
+
+elapsed: 2000ms → credit: 2000/250 = 8 blocks
+optimistic_height: 421,535,503 + 8 = 421,535,511
+optimistic_lag: 0 blocks
+```
+
+Bounded observation delay from HTTP polling enables accurate credit calculation. The 30s cap prevents runaway values on stale connections.
 
 ### Health Probing
 
 **HealthProbe.Worker** (`Lasso.Core.HealthProbe.Worker`)
 
-- Per-provider periodic probes (configurable interval)
-- Sends `eth_blockNumber` to each provider
-- Reports results to ProviderPool
-- Fire-and-forget (non-blocking)
+Per-provider health monitoring independent of BlockSync:
 
-**Configuration** (per-chain in profile YAML):
+- Periodic `eth_chainId` probes (health check + version detection)
+- Bypasses circuit breakers to detect recovery
+- Reports to ProviderPool
 
+**Configuration**:
 ```yaml
 chains:
   ethereum:
+    block_time_ms: 12000  # Optimistic lag calculation
     monitoring:
-      probe_interval_ms: 12000 # 12s (mainnet block time)
+      probe_interval_ms: 12000  # HTTP baseline polling
+      lag_alert_threshold_blocks: 5
 ```
 
 ---
 
 ## Provider Selection
 
-Selection strategies determine which provider serves each request.
-
 ### Available Strategies
 
 **:fastest** (default)
-
-- Selects provider with lowest latency for specific method
-- Based on passive benchmarking via BenchmarkStore
+- Lowest latency provider for method (passive benchmarking via BenchmarkStore)
 
 **:latency_weighted**
-
-- Weighted random selection based on latency scores
-- Prevents overloading single "fastest" provider
+- Weighted random selection by latency scores
 
 **:round_robin**
-
-- Rotates through healthy providers
-- Simple load balancing
+- Simple rotation through healthy providers
 
 ### Selection API
 
@@ -329,14 +401,14 @@ Selection strategies determine which provider serves each request.
 
 ## Circuit Breaker System
 
-Per-provider, per-transport circuit breakers prevent cascade failures.
+Per-provider, per-transport circuit breakers.
 
 ### State Machine
 
-**:closed** → **:open**: After `failure_threshold` consecutive failures
-**:open** → **:half_open**: After `recovery_timeout` expires
-**:half_open** → **:closed**: After `success_threshold` consecutive successes
-**:half_open** → **:open**: On any failure
+- **:closed** → **:open**: After `failure_threshold` consecutive failures
+- **:open** → **:half_open**: After `recovery_timeout`
+- **:half_open** → **:closed**: After `success_threshold` consecutive successes
+- **:half_open** → **:open**: On any failure
 
 ### Configuration
 
@@ -357,11 +429,9 @@ config :lasso, :circuit_breaker,
 
 ## Request Observability
 
-Comprehensive request tracking with minimal overhead.
-
 ### RequestContext Lifecycle
 
-Every RPC request tracked through:
+RPC requests tracked via:
 
 ```elixir
 %RequestContext{
@@ -439,17 +509,14 @@ X-Lasso-Meta: eyJ2ZXJzaW9u... (base64url JSON)
 
 ## Provider Adapter System
 
-Provider adapters validate requests before sending upstream, preventing rejections and unnecessary failovers.
+Adapters validate requests before sending upstream to prevent rejections and unnecessary failovers.
 
-### Design
+### Lazy Parameter Validation
 
-**Lazy Parameter Validation**:
-
-1. Filter by method support (build candidate list)
-2. Selection returns ordered channels
+1. Filter candidates by method support
+2. Select ordered channels
 3. Validate params for selected channel
-4. Failover on validation failure
-5. Repeat until success
+4. On validation failure: failover to next channel
 
 ### Adapter Behavior
 
@@ -478,20 +545,18 @@ providers:
 
 ### Current Adapters
 
-- **Alchemy**: Block range validation for `eth_getLogs`
+- **Alchemy**: `eth_getLogs` block range validation
 - **PublicNode**: Address count limits (HTTP: 25, WS: 20)
-- **LlamaRPC**: Block range limits (1000 blocks)
-- **Merkle**: Block range limits (1000 blocks)
+- **LlamaRPC/Merkle**: 1000 block range limit
+- **DRPC/1RPC**: Rate/parameter limit detection
 - **Cloudflare**: No restrictions
-- **DRPC**: Rate limit detection
-- **1RPC**: Parameter limit detection
-- **Generic**: Fallback for unknown providers
+- **Generic**: Fallback adapter
 
 ---
 
 ## Error Classification
 
-Composable error categorization where adapters can override provider-specific codes.
+Composable error categorization with provider-specific overrides.
 
 ### Classification Flow
 
@@ -532,10 +597,9 @@ end
 
 ### ConfigStore
 
-ETS-based configuration cache:
+ETS-based configuration cache for fast lookups:
 
 ```elixir
-# Fast lookups (no file I/O)
 {:ok, chain_config} = ConfigStore.get_chain(profile, "ethereum")
 {:ok, provider_config} = ConfigStore.get_provider(profile, "ethereum", "alchemy")
 ```
@@ -556,7 +620,7 @@ ETS-based configuration cache:
 
 ## JSON-RPC Compatibility
 
-Lasso works as drop-in replacement for existing RPC URLs:
+Drop-in replacement for existing RPC URLs.
 
 ### Supported Transports
 
@@ -608,12 +672,10 @@ Lasso works as drop-in replacement for existing RPC URLs:
 
 ## Summary
 
-Lasso's architecture delivers:
+Core architectural properties:
 
-✅ **Multi-profile isolation** - Complete independence per routing configuration
-✅ **Transport-agnostic routing** - Unified pipeline across HTTP and WebSocket
-✅ **WebSocket multiplexing** - Orders of magnitude connection reduction
-✅ **Comprehensive observability** - Complete visibility into routing decisions
-✅ **Massive concurrency** - BEAM VM's lightweight processes enable thousands of concurrent connections
-
-This architecture scales from single self-hosted instances to globally distributed networks.
+- **Multi-profile isolation**: Independent supervision trees per (profile, chain)
+- **Transport-agnostic routing**: Unified pipeline across HTTP and WebSocket
+- **WebSocket multiplexing**: N:1 client-to-upstream subscription ratio
+- **Request observability**: Structured logging with optional client metadata
+- **BEAM concurrency**: 10,000+ concurrent requests via lightweight processes

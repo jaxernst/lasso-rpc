@@ -11,6 +11,7 @@ defmodule Lasso.Config.ChainConfig do
   @type t :: %__MODULE__{
           chain_id: non_neg_integer() | nil,
           name: String.t(),
+          block_time_ms: non_neg_integer() | nil,
           providers: [__MODULE__.Provider.t()],
           selection: __MODULE__.Selection.t() | nil,
           monitoring: __MODULE__.Monitoring.t(),
@@ -21,6 +22,7 @@ defmodule Lasso.Config.ChainConfig do
   defstruct [
     :chain_id,
     :name,
+    :block_time_ms,
     :providers,
     :selection,
     :monitoring,
@@ -149,7 +151,7 @@ defmodule Lasso.Config.ChainConfig do
             lag_alert_threshold_blocks: non_neg_integer()
           }
 
-    defstruct probe_interval_ms: 12_000,
+    defstruct probe_interval_ms: 15_000,
               lag_alert_threshold_blocks: 3
   end
 

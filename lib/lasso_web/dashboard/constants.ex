@@ -32,9 +32,9 @@ defmodule LassoWeb.Dashboard.Constants do
   def recent_blocks_limit, do: 20
 
   # Provider list limits
-  def routing_events_limit, do: 100
-  def provider_events_limit, do: 100
-  def client_events_limit, do: 100
+  def routing_events_limit, do: 200
+  def provider_events_limit, do: 200
+  def client_events_limit, do: 200
 
   # Performance thresholds
   def consistency_excellent, do: 2.0
