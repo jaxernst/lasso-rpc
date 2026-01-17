@@ -8,6 +8,8 @@ erl_crash.dump
 
 # Static assets that will be built in container
 priv/static/
+!priv/static/images/
+!priv/static/images/**
 
 # Local environment files
 .env*

@@ -67,11 +67,14 @@ ENV PHX_SERVER=true
 
 # Copy built release from builder stage
 COPY --from=builder /app/_build/prod/rel/lasso ./
-# Copy config/chains.yml for runtime (fallback if no volume mounted)
-COPY --from=builder /app/config/chains.yml ./config/chains.yml
+# Copy config/profiles for runtime (seeded to /data/config/profiles by entrypoint if needed)
+COPY --from=builder /app/config/profiles ./config/profiles
+# Copy entrypoint script
+COPY deployment/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Expose port
 EXPOSE 4000
 
-# Start the Phoenix application using the release script
-CMD ["/app/bin/lasso", "start"]
+# Use entrypoint script to handle profile seeding before starting the app
+ENTRYPOINT ["/app/entrypoint.sh"]

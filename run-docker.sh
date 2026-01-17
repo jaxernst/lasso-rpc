@@ -33,5 +33,15 @@ echo "🔌 RPC Endpoint: http://localhost:4000/rpc/fastest/ethereum"
 echo ""
 echo "Press Ctrl+C to stop the server"
 
+# Generate SECRET_KEY_BASE if not set
+if [ -z "$SECRET_KEY_BASE" ]; then
+    echo "Generating SECRET_KEY_BASE..."
+    SECRET_KEY_BASE=$(openssl rand -base64 48)
+fi
+
 # Run the container
-docker run --rm -p 4000:4000 --name lasso-rpc lasso-rpc
+docker run --rm \
+    -p 4000:4000 \
+    -e SECRET_KEY_BASE="$SECRET_KEY_BASE" \
+    --name lasso-rpc \
+    lasso-rpc
