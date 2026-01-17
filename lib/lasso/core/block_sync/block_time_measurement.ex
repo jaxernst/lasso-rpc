@@ -70,11 +70,12 @@ defmodule Lasso.Core.BlockSync.BlockTimeMeasurement do
           # Valid interval - update EMA
           new_ema = update_ema(state.ema_ms, interval)
 
-          %{state |
-            ema_ms: new_ema,
-            sample_count: state.sample_count + 1,
-            last_height: height,
-            last_mono_ms: now
+          %{
+            state
+            | ema_ms: new_ema,
+              sample_count: state.sample_count + 1,
+              last_height: height,
+              last_mono_ms: now
           }
         else
           # Invalid interval (too fast or too slow) - skip but update tracking
@@ -122,6 +123,7 @@ defmodule Lasso.Core.BlockSync.BlockTimeMeasurement do
 
   # Update EMA with new sample
   defp update_ema(nil, interval), do: interval * 1.0
+
   defp update_ema(current_ema, interval) do
     current_ema * (1 - @ema_alpha) + interval * @ema_alpha
   end

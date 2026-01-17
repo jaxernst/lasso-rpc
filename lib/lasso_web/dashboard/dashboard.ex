@@ -616,7 +616,7 @@ defmodule LassoWeb.Dashboard do
         profiles={@profiles}
         selected_profile={@selected_profile}
       />
-
+      
     <!-- Content Section -->
       <div class="grid-pattern animate-fade-in relative flex-1 overflow-hidden">
         <%= case @active_tab do %>
@@ -735,7 +735,7 @@ defmodule LassoWeb.Dashboard do
           />
         </div>
       </div>
-
+      
     <!-- Simulator Controls (top-left) -->
       <.live_component
         module={Components.SimulatorControls}
@@ -881,7 +881,7 @@ defmodule LassoWeb.Dashboard do
               </div>
             </div>
           </div>
-
+          
     <!-- Recent Activity feed -->
           <div>
             <div class="text-[10px] text-gray-400 mb-1.5">
