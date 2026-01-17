@@ -14,7 +14,7 @@ It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single RP
 
 Route every request to the best available provider to handle that request, while configuring providers to match your application's needs. Leverage deep redundancy, expressive routing, and built-in observability to improve UX while keeping your application code simple.
 
-**📊 [Live Dashboard](https://lasso-rpc.fly.dev/dashboard)** &nbsp;&nbsp;|&nbsp;&nbsp; **📖 [Architecture](docs/ARCHITECTURE.md)** &nbsp;&nbsp;|&nbsp;&nbsp; **🐛 [Report Bug](https://github.com/jaxernst/lasso-rpc/issues)** &nbsp;&nbsp;|&nbsp;&nbsp; **💡 [Request Feature](https://github.com/jaxernst/lasso-rpc/issues)**
+**📊 [Live Hosted Dashboard](https://lasso-rpc.fly.dev/dashboard)** &nbsp;&nbsp;|&nbsp;&nbsp; **📖 [Architecture](docs/ARCHITECTURE.md)** &nbsp;&nbsp;|&nbsp;&nbsp; **🐛 [Report Bug](https://github.com/jaxernst/lasso-rpc/issues)** &nbsp;&nbsp;|&nbsp;&nbsp; **💡 [Request Feature](https://github.com/jaxernst/lasso-rpc/issues)**
 
 ---
 
@@ -258,7 +258,7 @@ Lasso runs on the BEAM (Erlang VM) to take advantage of its strengths for high-c
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
+Contributions welcome! Please see [Contributing Guide](CONTRIBUTING.md) for details on:
 
 - Development setup
 - Code style and quality standards
@@ -277,17 +277,13 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 For security concerns, please review our [Security Policy](SECURITY.md).
 
-**To report a security vulnerability**, please email: **jaxernst@gmail.com** (do not open a public issue).
-
 ---
 
-## License
+## License: AGPL-3.0
 
-Lasso RPC is licensed under **AGPL-3.0**.
-
-- ✅ You can self-host it freely
-- ✅ You can modify it
-- ⚠️ If you run a modified version as a service, you must publish those modifications
+- self-host it freely to make your RPCs better
+- modify it to make Lasso better
+- ⚠️ If you run a modified version as a service, you must publish your modifications
 
 See [LICENSE.md](LICENSE.md) for full terms.
 
