@@ -5,6 +5,9 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   use LassoWeb, :live_component
 
+  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+  alias Lasso.Config.ConfigStore
+  alias Lasso.RPC.ChainState
   alias LassoWeb.Components.DetailPanelComponents
   alias LassoWeb.Dashboard.{Formatting, Helpers, StatusHelpers}
 
@@ -109,16 +112,31 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   attr(:provider_connection, :map, required: true)
 
   defp sync_status_section(assigns) do
-    block_height = Map.get(assigns.provider_connection, :block_height)
-    consensus_height = Map.get(assigns.provider_connection, :consensus_height)
-    blocks_behind = Map.get(assigns.provider_connection, :blocks_behind, 0) || 0
-    sync_status = sync_status_level(blocks_behind)
+    conn = assigns.provider_connection
+    block_height = Map.get(conn, :block_height)
+    consensus_height = Map.get(conn, :consensus_height)
+    chain = Map.get(conn, :chain)
+    provider_id = Map.get(conn, :id)
+
+    # Calculate optimistic lag to account for HTTP polling delay
+    {optimistic_lag, raw_lag} = calculate_optimistic_lag_for_display(chain, provider_id)
+
+    # Use optimistic lag for status, fall back to raw blocks_behind if unavailable
+    effective_lag =
+      case optimistic_lag do
+        nil -> Map.get(conn, :blocks_behind, 0) || 0
+        lag -> abs(min(0, lag))
+      end
+
+    sync_status = sync_status_level(effective_lag)
 
     assigns =
       assigns
       |> assign(:block_height, block_height)
       |> assign(:consensus_height, consensus_height)
-      |> assign(:blocks_behind, blocks_behind)
+      |> assign(:effective_lag, effective_lag)
+      |> assign(:raw_lag, raw_lag)
+      |> assign(:optimistic_lag, optimistic_lag)
       |> assign(:sync_status, sync_status)
 
     ~H"""
@@ -135,7 +153,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
             <span class="text-white font-mono">{Formatting.format_number(@consensus_height)}</span>
           </span>
           <span class={["font-mono font-bold", sync_color(@sync_status)]}>
-            {sync_label(@blocks_behind)}
+            {sync_label(@optimistic_lag, @effective_lag)}
           </span>
         </div>
         <DetailPanelComponents.progress_bar
@@ -152,6 +170,54 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     """
   end
 
+  # Calculate optimistic lag for display purposes.
+  # Credits providers for blocks that likely arrived since last observation.
+  # With HTTP baseline always running, the registry has fresh data.
+  defp calculate_optimistic_lag_for_display(chain, provider_id)
+       when is_binary(chain) and is_binary(provider_id) do
+    with {:ok, {height, timestamp, _source, _meta}} <-
+           BlockSyncRegistry.get_height(chain, provider_id),
+         {:ok, consensus} <- ChainState.consensus_height(chain) do
+      block_time_ms = get_block_time_ms(chain)
+      now = System.system_time(:millisecond)
+      elapsed_ms = now - timestamp
+      raw_lag = height - consensus
+
+      staleness_credit =
+        if block_time_ms > 0 do
+          div(elapsed_ms, block_time_ms)
+        else
+          0
+        end
+
+      # Cap at 30s worth to prevent runaway values
+      max_credit = div(30_000, max(block_time_ms, 1))
+      capped_credit = min(staleness_credit, max_credit)
+
+      optimistic_height = height + capped_credit
+      optimistic_lag = optimistic_height - consensus
+
+      {optimistic_lag, raw_lag}
+    else
+      _ -> {nil, nil}
+    end
+  end
+
+  defp calculate_optimistic_lag_for_display(_, _), do: {nil, nil}
+
+  defp get_block_time_ms(chain) do
+    case ConfigStore.list_profiles_for_chain(chain) do
+      [profile | _] ->
+        case ConfigStore.get_chain(profile, chain) do
+          {:ok, config} -> config.block_time_ms || 12_000
+          _ -> 12_000
+        end
+
+      [] ->
+        12_000
+    end
+  end
+
   defp sync_status_level(blocks_behind) when blocks_behind <= 2, do: :healthy
   defp sync_status_level(blocks_behind) when blocks_behind <= 10, do: :degraded
   defp sync_status_level(_), do: :down
@@ -160,9 +226,17 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   defp sync_color(:degraded), do: "text-yellow-400"
   defp sync_color(:down), do: "text-red-400"
 
-  defp sync_label(blocks_behind) when blocks_behind >= 0 and blocks_behind <= 2, do: "Synced"
-  defp sync_label(blocks_behind) when blocks_behind > 2, do: "-#{blocks_behind}"
-  defp sync_label(blocks_behind) when blocks_behind < 0, do: "+#{abs(blocks_behind)}"
+  defp sync_label(optimistic_lag, _effective_lag) when is_integer(optimistic_lag) do
+    cond do
+      optimistic_lag >= -2 -> "Synced"
+      optimistic_lag < 0 -> "#{optimistic_lag}"
+      true -> "+#{optimistic_lag}"
+    end
+  end
+
+  defp sync_label(nil, effective_lag) when effective_lag <= 2, do: "Synced"
+  defp sync_label(nil, effective_lag) when effective_lag > 2, do: "-#{effective_lag}"
+  defp sync_label(nil, _), do: "—"
 
   defp sync_description(:healthy), do: "(within range)"
   defp sync_description(:degraded), do: "(slightly behind)"

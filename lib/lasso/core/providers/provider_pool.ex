@@ -1336,7 +1336,7 @@ defmodule Lasso.RPC.ProviderPool do
     state.active_providers
     |> Enum.map(&Map.get(state.providers, &1))
     |> Enum.filter(&provider_passes_filters?(&1, state, filters, protocol, current_time))
-    |> filter_by_lag(state.chain_name, Map.get(filters, :max_lag_blocks))
+    |> filter_by_lag(state.profile, state.chain_name, Map.get(filters, :max_lag_blocks))
     |> filter_by_archival(Map.get(filters, :requires_archival))
     |> filter_excluded(filters)
   end
@@ -1464,36 +1464,36 @@ defmodule Lasso.RPC.ProviderPool do
 
   defp normalize_circuit_state(_), do: %{http: :closed, ws: :closed}
 
-  # Lag-based filtering: Excludes providers that are too far behind best known block height
-  # Implements fail-open behavior: if lag data unavailable, include the provider
-  defp filter_by_lag(providers, _chain, nil), do: providers
+  # Lag-based filtering using optimistic lag calculation.
+  # Optimistic lag accounts for observation delay on HTTP providers to prevent
+  # unfair exclusion on fast chains (e.g., Arbitrum with 0.25s blocks).
+  # Implements fail-open behavior: if lag data unavailable, include the provider.
+  defp filter_by_lag(providers, _profile, _chain, nil), do: providers
 
-  defp filter_by_lag(providers, chain, max_lag_blocks) when is_integer(max_lag_blocks) do
+  defp filter_by_lag(providers, profile, chain, max_lag_blocks) when is_integer(max_lag_blocks) do
+    block_time_ms = get_block_time_ms(profile, chain)
+
     filtered =
       Enum.reduce(providers, [], fn provider, included ->
-        case ChainState.provider_lag(chain, provider.id) do
-          {:ok, lag} when lag >= -max_lag_blocks ->
-            # Provider is within acceptable lag threshold (negative lag = blocks behind)
-            # lag >= -max_lag_blocks means provider is at most max_lag_blocks behind
+        case calculate_optimistic_lag(chain, provider.id, block_time_ms) do
+          {:ok, optimistic_lag, _raw_lag} when optimistic_lag >= -max_lag_blocks ->
             [provider | included]
 
-          {:ok, lag} ->
-            # Provider is lagging beyond threshold - exclude it
+          {:ok, optimistic_lag, raw_lag} ->
             Logger.debug(
-              "Excluded provider #{provider.id} from selection: lag=#{lag} blocks (threshold: -#{max_lag_blocks})"
+              "Excluded provider #{provider.id} from selection: " <>
+                "optimistic_lag=#{optimistic_lag}, raw_lag=#{raw_lag} (threshold: -#{max_lag_blocks})"
             )
 
             included
 
           {:error, _reason} ->
-            # Lag data unavailable - fail open (include provider)
             [provider | included]
         end
       end)
 
     filtered = Enum.reverse(filtered)
 
-    # Warn if ALL providers were excluded due to lag
     if providers != [] and filtered == [] do
       Logger.warning(
         "All #{length(providers)} providers for #{chain} excluded due to lag (threshold: -#{max_lag_blocks} blocks)"
@@ -1501,6 +1501,83 @@ defmodule Lasso.RPC.ProviderPool do
     end
 
     filtered
+  end
+
+  # Calculate optimistic lag that accounts for observation delay.
+  # Credits providers for blocks that likely arrived since last observation.
+  #
+  # With HTTP baseline always running (see BlockSync.Worker), the registry
+  # always has reasonably fresh data. The 30s cap prevents runaway values.
+  defp calculate_optimistic_lag(chain, provider_id, block_time_ms) do
+    alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+
+    with {:ok, {height, timestamp, _source, _meta}} <-
+           BlockSyncRegistry.get_height(chain, provider_id),
+         {:ok, consensus} <- ChainState.consensus_height(chain) do
+      now = System.system_time(:millisecond)
+      elapsed_ms = now - timestamp
+      raw_lag = height - consensus
+
+      staleness_credit =
+        if block_time_ms > 0 do
+          div(elapsed_ms, block_time_ms)
+        else
+          0
+        end
+
+      # Cap credit to prevent runaway values (~30s worth)
+      max_credit = div(30_000, max(block_time_ms, 1))
+      capped_credit = min(staleness_credit, max_credit)
+
+      optimistic_height = height + capped_credit
+      optimistic_lag = optimistic_height - consensus
+
+      emit_lag_telemetry(chain, provider_id, raw_lag, optimistic_lag, capped_credit, elapsed_ms)
+
+      {:ok, optimistic_lag, raw_lag}
+    else
+      {:error, :not_found} -> {:error, :no_provider_data}
+      {:error, :no_data} -> {:error, :no_consensus}
+      error -> error
+    end
+  end
+
+  defp get_block_time_ms(profile, chain) do
+    # Prefer dynamic measurement over config
+    case Lasso.BlockSync.Registry.get_block_time_ms(chain) do
+      ms when is_integer(ms) and ms > 0 ->
+        ms
+
+      _ ->
+        # Fall back to config, then default
+        case Lasso.Config.ConfigStore.get_chain(profile, chain) do
+          {:ok, config} -> config.block_time_ms || 12_000
+          _ -> 12_000
+        end
+    end
+  end
+
+  defp emit_lag_telemetry(
+         chain,
+         provider_id,
+         raw_lag,
+         optimistic_lag,
+         staleness_credit,
+         elapsed_ms
+       ) do
+    :telemetry.execute(
+      [:lasso, :selection, :lag_calculation],
+      %{
+        raw_lag: raw_lag,
+        optimistic_lag: optimistic_lag,
+        staleness_credit: staleness_credit,
+        elapsed_ms: elapsed_ms
+      },
+      %{
+        chain: chain,
+        provider_id: provider_id
+      }
+    )
   end
 
   defp filter_by_archival(providers, true) do

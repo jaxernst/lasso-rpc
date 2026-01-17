@@ -4,6 +4,8 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   Enhanced with comprehensive status classification logic including block sync validation.
   """
 
+  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+  alias Lasso.Config.ConfigStore
   alias Lasso.RPC.ChainState
 
   # Configuration: maximum blocks a provider can lag behind before showing as "syncing"
@@ -113,6 +115,10 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   @doc """
   Check if a provider is lagging behind the best known block height.
 
+  Uses optimistic lag calculation to fairly evaluate HTTP providers on fast chains.
+  Optimistic lag credits providers for blocks that likely arrived since the last poll,
+  preventing unfair "lagging" status on chains like Arbitrum (0.25s blocks).
+
   Returns:
   - :synced - Within acceptable lag threshold
   - :lagging - Beyond lag threshold
@@ -122,22 +128,17 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   def check_block_lag(chain, provider_id) when is_binary(chain) and is_binary(provider_id) do
     threshold = lag_threshold_blocks()
 
-    # If threshold is 0, disable lag checking (always return :synced)
     if threshold == 0 do
       :synced
     else
-      case ChainState.provider_lag(chain, provider_id) do
-        {:ok, lag} when lag >= -threshold ->
-          # Lag is within threshold (negative lag = blocks behind)
-          # lag >= -10 means provider is at most 10 blocks behind
+      case calculate_optimistic_lag(chain, provider_id) do
+        {:ok, optimistic_lag} when optimistic_lag >= -threshold ->
           :synced
 
-        {:ok, _lag} ->
-          # Provider is lagging beyond threshold
+        {:ok, _optimistic_lag} ->
           :lagging
 
         {:error, _reason} ->
-          # No lag data - check if HTTP polling is persistently failing
           case check_block_height_source_status(chain, provider_id) do
             :polling_failing -> :degraded_no_data
             _ -> :unavailable
@@ -147,6 +148,62 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   end
 
   def check_block_lag(_chain, _provider_id), do: :unavailable
+
+  # Calculate optimistic lag that accounts for observation delay.
+  #
+  # With HTTP baseline always running (see BlockSync.Worker), the registry
+  # always has reasonably fresh data. This formula credits providers for
+  # blocks that likely arrived since the last observation.
+  #
+  # The 30s cap prevents runaway values in edge cases.
+  defp calculate_optimistic_lag(chain, provider_id) do
+    with {:ok, {height, timestamp, _source, _meta}} <-
+           BlockSyncRegistry.get_height(chain, provider_id),
+         {:ok, consensus} <- ChainState.consensus_height(chain) do
+      block_time_ms = get_block_time_ms(chain)
+      now = System.system_time(:millisecond)
+      elapsed_ms = now - timestamp
+
+      staleness_credit =
+        if block_time_ms > 0 do
+          div(elapsed_ms, block_time_ms)
+        else
+          0
+        end
+
+      # Cap credit at ~30s worth to prevent runaway values
+      max_credit = div(30_000, max(block_time_ms, 1))
+      capped_credit = min(staleness_credit, max_credit)
+
+      optimistic_height = height + capped_credit
+      {:ok, optimistic_height - consensus}
+    else
+      {:error, :not_found} -> {:error, :no_provider_data}
+      {:error, :no_data} -> {:error, :no_consensus}
+      error -> error
+    end
+  end
+
+  # Get block_time_ms for a chain. Prefers dynamic measurement, falls back to config.
+  defp get_block_time_ms(chain) do
+    case BlockSyncRegistry.get_block_time_ms(chain) do
+      ms when is_integer(ms) and ms > 0 ->
+        ms
+
+      _ ->
+        # Fall back to config
+        case ConfigStore.list_profiles_for_chain(chain) do
+          [profile | _] ->
+            case ConfigStore.get_chain(profile, chain) do
+              {:ok, config} -> config.block_time_ms || 12_000
+              _ -> 12_000
+            end
+
+          [] ->
+            12_000
+        end
+    end
+  end
 
   @doc """
   Check the status of block height tracking for a provider.
