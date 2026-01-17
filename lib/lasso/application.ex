@@ -45,17 +45,16 @@ defmodule Lasso.Application do
         # Pool size tuned for typical RPC proxy workloads:
         # - size: max connections per pool (per unique host)
         # - count: number of independent pools for parallel access
-        # For shared-cpu instances, keep this modest to avoid scheduler overhead
         {Finch,
          name: Lasso.Finch,
          pools: %{
            :default => [
-             size: 200,
-             count: 5,
-             pool_max_idle_time: :timer.seconds(60),
+             size: 30,
+             count: 3,
+             pool_max_idle_time: :timer.seconds(30),
              conn_opts: [
                timeout: 30_000,
-               idle_timeout: 60_000
+               idle_timeout: 30_000
              ]
            ]
          }},

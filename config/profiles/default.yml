@@ -41,6 +41,9 @@ chains:
     # Type: string | Optional | Default: <chain_key>
     name: "Ethereum Mainnet"
 
+    # (Optional) Average block time in milliseconds, supplements optimistic lag calculation.
+    block_time_ms: 12000
+
     # ┌────────────────────────────────────────────────────────────────────────
     # │ HEALTH MONITORING
     # │ Controls provider health checks and lag detection thresholds.
@@ -246,10 +249,11 @@ chains:
   base:
     chain_id: 8453
     name: "Base Mainnet"
+    block_time_ms: 2000
 
     monitoring:
       # L2s have faster block times - probe more frequently
-      probe_interval_ms: 3000 # 3s = ~1.5x block time (2s blocks)
+      probe_interval_ms: 5000 # 5s = ~2.5x block time (2s blocks)
       lag_alert_threshold_blocks: 5
 
     selection:
@@ -312,9 +316,9 @@ chains:
   arbitrum:
     chain_id: 42161
     name: "Arbitrum One"
+    block_time_ms: 250
 
     monitoring:
-      # Arbitrum has very fast blocks (~0.25s) - probe frequently
       probe_interval_ms: 2000 # 2s = ~8x block time
       lag_alert_threshold_blocks: 15
 
@@ -358,6 +362,7 @@ chains:
         url: "https://arbitrum-one-rpc.publicnode.com"
         ws_url: "wss://arbitrum-one-rpc.publicnode.com"
         archival: true
+        subscribe_new_heads: false
 
       - id: "arbitrum_meowrpc"
         name: "Meow RPC Arbitrum"
