@@ -234,18 +234,18 @@ Clients receive continuous event stream without gaps.
 
 ## Block Height Monitoring
 
-Lasso tracks blockchain state using HTTP polling as a reliable baseline with optional WebSocket enhancement.
+Lasso tracks blockchain state using HTTP polling as a reliable foundation with optional WebSocket subscription.
 
 ### BlockSync System Architecture
 
 **Dual-Strategy Design:**
 
-**HTTP Baseline** (Always Running):
+**HTTP Polling** (Always Running):
 - Bounded observation delay (`probe_interval_ms`)
 - Enables optimistic lag calculation with known staleness
 - Resilient to WebSocket failures
 
-**WebSocket Enhancement** (Optional):
+**WebSocket Subscription** (Optional):
 - Sub-second block notifications when healthy
 - Degrades gracefully to HTTP on failure
 
@@ -270,7 +270,7 @@ Per-provider GenServer managing block height tracking:
 
 **Operating Modes**:
 - `:http_only` - HTTP polling only
-- `:http_with_ws` - HTTP + WebSocket enhancement
+- `:http_with_ws` - HTTP + WebSocket subscription
 
 **BlockSync.Registry** (`Lasso.Core.BlockSync.Registry`)
 
@@ -351,7 +351,7 @@ chains:
   ethereum:
     block_time_ms: 12000  # Optimistic lag calculation
     monitoring:
-      probe_interval_ms: 12000  # HTTP baseline polling
+      probe_interval_ms: 12000  # HTTP polling interval
       lag_alert_threshold_blocks: 5
 ```
 

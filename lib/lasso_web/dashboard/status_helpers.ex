@@ -151,7 +151,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
 
   # Calculate optimistic lag that accounts for observation delay.
   #
-  # With HTTP baseline always running (see BlockSync.Worker), the registry
+  # With HTTP polling always running (see BlockSync.Worker), the registry
   # always has reasonably fresh data. This formula credits providers for
   # blocks that likely arrived since the last observation.
   #

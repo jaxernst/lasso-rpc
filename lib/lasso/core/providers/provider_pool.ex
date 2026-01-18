@@ -1506,7 +1506,7 @@ defmodule Lasso.RPC.ProviderPool do
   # Calculate optimistic lag that accounts for observation delay.
   # Credits providers for blocks that likely arrived since last observation.
   #
-  # With HTTP baseline always running (see BlockSync.Worker), the registry
+  # With HTTP polling always running (see BlockSync.Worker), the registry
   # always has reasonably fresh data. The 30s cap prevents runaway values.
   defp calculate_optimistic_lag(chain, provider_id, block_time_ms) do
     alias Lasso.BlockSync.Registry, as: BlockSyncRegistry

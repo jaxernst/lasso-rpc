@@ -3,18 +3,18 @@ defmodule Lasso.BlockSync.Worker do
   Per-provider GenServer that orchestrates block sync strategies.
 
   Each provider gets one Worker that:
-  1. Always runs HTTP polling as the reliable baseline for block height
-  2. Optionally runs WS subscription for real-time enhancements
+  1. Always runs HTTP polling for reliable block height tracking
+  2. Optionally runs WS subscription for real-time updates
   3. Reports heights to BlockSync.Registry
 
   ## Design Philosophy
 
-  HTTP polling is the baseline for ALL providers because:
+  HTTP polling is the foundation for ALL providers because:
   - Predictable observation delay (poll_interval_ms is known)
   - Enables accurate optimistic lag calculation
   - WS subscriptions can go stale unpredictably (upstream cleanup, network issues)
 
-  WS subscriptions are an optional enhancement that provides:
+  WS subscriptions are an optional real-time layer that provides:
   - Real-time block notifications when healthy
   - Tighter monitoring and faster staleness detection
   - Support for subscription gap-filling on failover
@@ -23,7 +23,7 @@ defmodule Lasso.BlockSync.Worker do
 
   The Worker operates in one of two modes:
   - `:http_only` - HTTP polling only (WS unavailable or disabled)
-  - `:http_with_ws` - HTTP polling + WS subscription (WS is enhancement)
+  - `:http_with_ws` - HTTP polling + WS subscription (real-time layer)
 
   ## Configuration
 
@@ -216,7 +216,8 @@ defmodule Lasso.BlockSync.Worker do
       when provider_id == state.provider_id and state.ws_strategy != nil do
     new_ws_state = WsStrategy.handle_invalidation(state.ws_strategy, reason)
     state = %{state | ws_strategy: new_ws_state}
-    state = handle_strategy_status(state, :ws, :failed)
+    # Note: WsStrategy.handle_invalidation already sends {:status, :ws, :failed} to parent
+    # which will be handled by handle_info({:status, ...}) below
     {:noreply, state}
   end
 
@@ -315,21 +316,21 @@ defmodule Lasso.BlockSync.Worker do
     end
   end
 
-  # Always start HTTP polling as baseline, then optionally add WS
+  # Always start HTTP polling, then optionally add WS subscription
   defp start_strategies(state) do
-    # Step 1: Always start HTTP polling (the reliable baseline)
-    state = start_http_baseline(state)
+    # Step 1: Always start HTTP polling (the reliable foundation)
+    state = start_http_polling(state)
 
-    # Step 2: Optionally add WS subscription as enhancement
+    # Step 2: Optionally add WS subscription for real-time updates
     if state.config.subscribe_new_heads do
-      add_ws_enhancement(state)
+      add_ws_subscription(state)
     else
       state
     end
   end
 
   # Start HTTP polling - this runs for ALL providers
-  defp start_http_baseline(state) do
+  defp start_http_polling(state) do
     http_opts = [
       profile: state.profile,
       parent: self(),
@@ -338,7 +339,7 @@ defmodule Lasso.BlockSync.Worker do
 
     {:ok, http_state} = HttpStrategy.start(state.chain, state.provider_id, http_opts)
 
-    Logger.debug("HTTP baseline started",
+    Logger.debug("HTTP polling started",
       chain: state.chain,
       provider_id: state.provider_id,
       poll_interval_ms: state.config.poll_interval_ms
@@ -347,8 +348,8 @@ defmodule Lasso.BlockSync.Worker do
     %{state | mode: :http_only, http_strategy: http_state}
   end
 
-  # Add WS subscription as an enhancement (HTTP keeps running)
-  defp add_ws_enhancement(state) do
+  # Add WS subscription for real-time updates (HTTP keeps running)
+  defp add_ws_subscription(state) do
     ws_opts = [
       profile: state.profile,
       parent: self(),
@@ -357,11 +358,6 @@ defmodule Lasso.BlockSync.Worker do
 
     case WsStrategy.start(state.chain, state.provider_id, ws_opts) do
       {:ok, ws_state} ->
-        Logger.debug("WS enhancement started",
-          chain: state.chain,
-          provider_id: state.provider_id
-        )
-
         %{state | mode: :http_with_ws, ws_strategy: ws_state, ws_retry_count: 0}
 
       {:error, :connection_unknown} ->
@@ -375,7 +371,7 @@ defmodule Lasso.BlockSync.Worker do
         state
 
       {:error, reason} ->
-        Logger.warning("WS enhancement failed to start, HTTP baseline continues",
+        Logger.warning("WS subscription failed to start, HTTP polling continues",
           chain: state.chain,
           provider_id: state.provider_id,
           reason: inspect(reason)
@@ -390,7 +386,7 @@ defmodule Lasso.BlockSync.Worker do
   # WS status changes - HTTP keeps running regardless
   defp handle_strategy_status(state, :ws, :active) do
     # WS is now active - just update mode, HTTP keeps running
-    Logger.debug("WS enhancement active",
+    Logger.debug("WS subscription active",
       chain: state.chain,
       provider_id: state.provider_id
     )
@@ -400,7 +396,7 @@ defmodule Lasso.BlockSync.Worker do
 
   defp handle_strategy_status(state, :ws, status) when status in [:stale, :failed, :degraded] do
     # WS degraded - log it but HTTP keeps providing reliable data
-    Logger.info("WS enhancement #{status}, HTTP baseline continues",
+    Logger.info("WS subscription #{status}, HTTP polling continues",
       chain: state.chain,
       provider_id: state.provider_id
     )
@@ -409,7 +405,7 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp handle_strategy_status(state, :http, :degraded) do
-    Logger.warning("HTTP baseline degraded",
+    Logger.warning("HTTP polling degraded",
       chain: state.chain,
       provider_id: state.provider_id
     )
@@ -418,7 +414,7 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp handle_strategy_status(state, :http, :healthy) do
-    Logger.debug("HTTP baseline recovered",
+    Logger.debug("HTTP polling recovered",
       chain: state.chain,
       provider_id: state.provider_id
     )
@@ -431,12 +427,12 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp handle_ws_reconnected(state) do
-    # Try to (re)establish WS enhancement - HTTP keeps running
+    # Try to (re)establish WS subscription - HTTP keeps running
     if state.config.subscribe_new_heads do
       case state.ws_strategy do
         nil ->
-          # Start fresh WS strategy as enhancement
-          add_ws_enhancement(state)
+          # Start fresh WS subscription
+          add_ws_subscription(state)
 
         ws_state ->
           # Re-subscribe existing strategy
@@ -457,7 +453,7 @@ defmodule Lasso.BlockSync.Worker do
   defp handle_ws_disconnected(state) do
     # WS disconnected - HTTP keeps running, just log it
     if state.ws_strategy do
-      Logger.info("WS enhancement disconnected, HTTP baseline continues",
+      Logger.info("WS subscription disconnected, HTTP polling continues",
         chain: state.chain,
         provider_id: state.provider_id
       )
@@ -470,7 +466,7 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp handle_manager_restarted(state) do
-    # Try to re-establish WS enhancement - HTTP keeps running
+    # Try to re-establish WS subscription - HTTP keeps running
     if state.ws_strategy and state.mode == :http_with_ws do
       case WsStrategy.resubscribe(state.ws_strategy) do
         {:ok, new_ws_state} ->
@@ -486,7 +482,7 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp attempt_ws_reconnect(state) do
-    # Try to add/restore WS enhancement - HTTP keeps running
+    # Try to add/restore WS subscription - HTTP keeps running
     if state.config.subscribe_new_heads and state.ws_strategy == nil do
       ws_opts = [
         profile: state.profile,
@@ -496,7 +492,7 @@ defmodule Lasso.BlockSync.Worker do
 
       case WsStrategy.start(state.chain, state.provider_id, ws_opts) do
         {:ok, ws_state} ->
-          Logger.info("WS enhancement reconnected",
+          Logger.info("WS subscription reconnected",
             chain: state.chain,
             provider_id: state.provider_id
           )
@@ -504,7 +500,7 @@ defmodule Lasso.BlockSync.Worker do
           %{state | mode: :http_with_ws, ws_strategy: ws_state, ws_retry_count: 0}
 
         {:error, reason} ->
-          Logger.debug("WS enhancement reconnect failed, will retry",
+          Logger.debug("WS subscription reconnect failed, will retry",
             chain: state.chain,
             provider_id: state.provider_id,
             reason: inspect(reason),

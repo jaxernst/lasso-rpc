@@ -469,17 +469,10 @@ defmodule Lasso.RPC.TransportRegistry do
 
           {:error, reason} ->
             # Don't spam logs for missing transport configs (expected for HTTP-only/WS-only providers)
-            case reason do
-              :no_ws_config ->
-                Logger.debug("Provider #{provider_id} does not have WebSocket configured")
-
-              :no_http_config ->
-                Logger.debug("Provider #{provider_id} does not have HTTP configured")
-
-              _ ->
-                Logger.warning(
-                  "Failed to create #{transport} channel for provider #{provider_id}: #{inspect(reason)}"
-                )
+            unless reason in [:no_ws_config, :no_http_config] do
+              Logger.warning(
+                "Failed to create #{transport} channel for provider #{provider_id}: #{inspect(reason)}"
+              )
             end
 
             {:error, reason}

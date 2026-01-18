@@ -172,7 +172,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   # Calculate optimistic lag for display purposes.
   # Credits providers for blocks that likely arrived since last observation.
-  # With HTTP baseline always running, the registry has fresh data.
+  # With HTTP polling always running, the registry has fresh data.
   defp calculate_optimistic_lag_for_display(chain, provider_id)
        when is_binary(chain) and is_binary(provider_id) do
     with {:ok, {height, timestamp, _source, _meta}} <-
