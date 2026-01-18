@@ -194,12 +194,6 @@ chains:
         url: "https://ethereum-public.nodies.app"
         archival: true
 
-      - id: "ethereum_omniatech"
-        name: "Omniatech Ethereum"
-        priority: 9
-        url: "https://endpoints.omniatech.io/v1/eth/mainnet/public"
-        archival: false # PHE: Returns blocks but not historical logs (inverted index error)
-
       - id: "ethereum_onfinality"
         name: "OnFinality Ethereum"
         priority: 10
