@@ -220,8 +220,9 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
           status: status
         )
 
-        new_state = %{state | status: :active, subscription_status: status}
-        send(state.parent, {:status, state.provider_id, :ws, :active})
+        # Keep :connecting status until first block is received
+        # This prevents false staleness detection during grace period
+        new_state = %{state | status: :connecting, subscription_status: status}
         {:ok, new_state}
 
       {:error, reason} ->
@@ -245,6 +246,9 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
     # Report to parent
     send(state.parent, {:block_height, state.provider_id, height, metadata})
 
+    # Detect first block arrival
+    first_block = state.last_block_time == nil
+
     # Update state
     new_state = %{
       state
@@ -253,9 +257,28 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
         last_height: height
     }
 
-    # If we were stale, notify that we're active again
-    if state.status == :stale do
-      send(state.parent, {:status, state.provider_id, :ws, :active})
+    # Notify parent on status transitions
+    cond do
+      first_block ->
+        Logger.debug("WS subscription active (first block received)",
+          chain: state.chain,
+          provider_id: state.provider_id,
+          height: height
+        )
+
+        send(state.parent, {:status, state.provider_id, :ws, :active})
+
+      state.status == :stale ->
+        Logger.debug("WS subscription recovered from stale",
+          chain: state.chain,
+          provider_id: state.provider_id,
+          height: height
+        )
+
+        send(state.parent, {:status, state.provider_id, :ws, :active})
+
+      true ->
+        :ok
     end
 
     new_state
@@ -284,7 +307,8 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   defp check_staleness(state) do
     case state.last_block_time do
       nil ->
-        # Never received a block, might still be connecting
+        # Never received a block
+        # Only mark stale if :active (skip during :connecting to respect grace period)
         if state.status == :active do
           mark_stale(state)
         else

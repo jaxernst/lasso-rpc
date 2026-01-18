@@ -385,12 +385,7 @@ defmodule Lasso.BlockSync.Worker do
 
   # WS status changes - HTTP keeps running regardless
   defp handle_strategy_status(state, :ws, :active) do
-    # WS is now active - just update mode, HTTP keeps running
-    Logger.debug("WS subscription active",
-      chain: state.chain,
-      provider_id: state.provider_id
-    )
-
+    # WS is now active (first block received) - just update mode, HTTP keeps running
     %{state | mode: :http_with_ws, ws_retry_count: 0}
   end
 
