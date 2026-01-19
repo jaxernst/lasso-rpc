@@ -36,10 +36,7 @@ defmodule Lasso.Config.ConfigStore do
 
   @type profile_meta :: %{
           slug: String.t(),
-          name: String.t(),
-          type: :free | :standard | :premium | :byok,
-          default_rps_limit: pos_integer(),
-          default_burst_limit: pos_integer()
+          name: String.t()
         }
 
   ## Public API - Profile Operations
@@ -487,10 +484,7 @@ defmodule Lasso.Config.ConfigStore do
   defp store_profile(spec) do
     meta = %{
       slug: spec.slug,
-      name: spec.name,
-      type: spec.type,
-      default_rps_limit: spec.default_rps_limit,
-      default_burst_limit: spec.default_burst_limit
+      name: spec.name
     }
 
     :ets.insert(@config_table, {{:profile, spec.slug, :meta}, meta})

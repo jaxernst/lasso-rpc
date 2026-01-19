@@ -1,9 +1,6 @@
 ---
 name: Lasso Public Testnets
 slug: testnet
-type: standard
-default_rps_limit: 100
-default_burst_limit: 500
 ---
 chains:
   ethereum_sepolia:

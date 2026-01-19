@@ -1,8 +1,5 @@
 ---
 name: Test Default
 slug: default
-type: standard
-default_rps_limit: 1000
-default_burst_limit: 5000
 ---
 chains: {}  # Empty - tests register chains dynamically

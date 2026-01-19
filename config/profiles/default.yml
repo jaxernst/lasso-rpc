@@ -1,32 +1,11 @@
 ---
 name: Lasso Public
 slug: default
-type: standard
-default_rps_limit: 100
-default_burst_limit: 500
 ---
-# ════════════════════════════════════════════════════════════════════════════
-# LASSO RPC PROFILE CONFIGURATION
-# ════════════════════════════════════════════════════════════════════════════
-#
-# This file is the canonical reference for all profile configuration options.
-#
-# ## Format
-# - Frontmatter (above): Profile metadata (name, slug, type, rate limits)
-# - Body (below): Per-chain configurations with providers and settings
-#
-# ## Environment Variables
-# - Provider URLs support `${ENV_VAR}` substitution
-# - Lasso will crash at startup if placeholders remain unresolved
-#
-# ## Profile Metadata Fields
-# - `name` (string, required): Display name for the profile
-# - `slug` (string, required): Must match filename (e.g., default.yml → slug: default)
-# - `type` (enum, required): free | standard | premium | byok
-# - `default_rps_limit` (int, required): Default per-client requests/second
-# - `default_burst_limit` (int, required): Default burst capacity
-#
-# ════════════════════════════════════════════════════════════════════════════
+# Lasso RPC Profile Configuration
+# Frontmatter: Profile metadata (name, slug)
+# Body: Per-chain configurations with providers
+# Provider URLs support ${ENV_VAR} substitution (unresolved vars crash at startup)
 
 chains:
   # ──────────────────────────────────────────────────────────────────────────
@@ -44,100 +23,37 @@ chains:
     # (Optional) Average block time in milliseconds, supplements optimistic lag calculation.
     block_time_ms: 12000
 
-    # ┌────────────────────────────────────────────────────────────────────────
-    # │ HEALTH MONITORING
-    # │ Controls provider health checks and lag detection thresholds.
-    # └────────────────────────────────────────────────────────────────────────
+    # Health monitoring: Probe intervals and lag detection
     monitoring:
-      # How often to probe providers with eth_chainId health checks.
-      # Recommendation: ~1x block time for L1, ~1.5x block time for L2.
-      # Type: integer (milliseconds) | Default: 12000 | Range: 1000-60000
-      probe_interval_ms: 12000
+      probe_interval_ms: 12000 # Health check frequency (~1x block time for L1)
+      lag_alert_threshold_blocks: 5 # Log warning when provider lags this many blocks
 
-      # Block lag threshold before marking a provider as degraded.
-      # This triggers logging/alerting but does NOT exclude from selection.
-      # (See selection.max_lag_blocks for filtering threshold)
-      # Type: integer (blocks) | Default: 3
-      lag_alert_threshold_blocks: 5
-
-    # ┌────────────────────────────────────────────────────────────────────────
-    # │ PROVIDER SELECTION
-    # │ Controls which providers are eligible for request routing.
-    # └────────────────────────────────────────────────────────────────────────
+    # Provider selection: Eligibility filtering
     selection:
-      # Maximum block lag before excluding a provider from selection.
-      # Providers further behind than this are not considered for routing.
-      # L1 recommendation: 1-2 blocks | L2 recommendation: 3-5 blocks
-      # Type: integer (blocks) | Default: nil (no filtering)
-      max_lag_blocks: 1
+      max_lag_blocks: 1 # Exclude providers lagging more than this (L1: 1-2, L2: 3-5)
+      archival_threshold: 128 # Blocks before considering data "archival" (~25 min on Ethereum)
 
-      # Block age threshold for archival data filtering.
-      # Requests for blocks older than this are routed only to archival providers.
-      # L1 recommendation: 128 blocks (~25 minutes on Ethereum with 12s blocks)
-      # Type: integer (blocks) | Default: 128
-      archival_threshold: 128
-
-    # ┌────────────────────────────────────────────────────────────────────────
-    # │ WEBSOCKET SUBSCRIPTIONS
-    # │ Controls WebSocket behavior for newHeads and subscription failover.
-    # └────────────────────────────────────────────────────────────────────────
+    # WebSocket subscriptions: newHeads tracking and failover
     websocket:
-      # Subscribe to newHeads for real-time block tracking.
-      # Enables lag detection and subscription gap-filling on failover.
-      # Can be overridden per-provider via provider.subscribe_new_heads.
-      # Type: boolean | Default: true
-      subscribe_new_heads: true
+      subscribe_new_heads: true # Subscribe to newHeads for real-time block tracking
+      new_heads_timeout_ms: 35000 # Timeout before marking subscription stale (~3x block time)
 
-      # How long without a newHeads event before considering subscription stale.
-      # Should be > 2-3x expected block time to avoid false positives.
-      # Type: integer (milliseconds) | Default: 42000 | Range: 5000-120000
-      new_heads_timeout_ms: 35000
-
-      # Backfill configuration: When a subscription fails over to another provider,
-      # fetch missed blocks via HTTP to ensure no data loss during the transition.
-      # Example: Provider A dies at block 1002, Provider B starts at 1006.
-      # Backfill fetches blocks 1003-1005 via HTTP to fill the gap.
+      # Backfill missed blocks during failover to prevent gaps
       failover:
-        # Maximum missed blocks to fetch during failover.
-        # Limits gap-filling scope to prevent excessive HTTP requests on long outages.
-        # If gap exceeds this limit, backfill is skipped and gap is reported.
-        # Type: integer (blocks) | Default: 100 | Range: 1-1000
-        max_backfill_blocks: 100
+        max_backfill_blocks: 100 # Max blocks to fetch via HTTP during failover
+        backfill_timeout_ms: 30000 # Timeout for backfill requests
 
-        # Timeout for fetching missed blocks via HTTP.
-        # Type: integer (milliseconds) | Default: 30000 | Range: 5000-120000
-        backfill_timeout_ms: 30000
-
-    # ┌────────────────────────────────────────────────────────────────────────
-    # │ UI TOPOLOGY (Dashboard visualization only)
-    # │ Metadata used by the network topology component for layout/styling.
-    # └────────────────────────────────────────────────────────────────────────
+    # UI topology: Dashboard visualization for the chain node
     ui-topology:
-      color: "#627EEA" # Hex color for dashboard
+      color: "#627EEA"
       size: xl # sm | md | lg | xl
 
-    # ┌────────────────────────────────────────────────────────────────────────
-    # │ PROVIDERS
-    # │ Upstream RPC endpoints with priority-based routing.
-    # └────────────────────────────────────────────────────────────────────────
+    # Providers: Upstream RPC endpoints with priority-based routing
     providers:
-      # ──── Provider Entry ────
-
-      # subscribe_new_heads: true
-      # Override chain-level subscribe_new_heads setting
-      # Type: boolean | Default: nil (uses chain setting)
-
-      # archival: true
-      # Whether provider supports historical/archival data queries
-      # Set to false for providers with limited archive depth
-      # Type: boolean | Default: true
-
-      # adapter_config:
-      #   # Provider-specific adapter tuning (optional, advanced)
-      #   # Fields vary by provider type - see docs/ADAPTERS.md
-      #   # Common examples:
-      #   max_block_range: 10000        # eth_getLogs block range limit
-      #   eth_get_logs_block_range: 10  # Alchemy-specific override
+      # Per-provider overrides:
+      # - subscribe_new_heads: true/false (overrides chain-level setting)
+      # - archival: true/false (supports historical data, default: true)
+      # - adapter_config: {} (provider-specific tuning, see docs/ADAPTERS.md)
 
       - id: "ethereum_drpc"
         name: "dRPC Ethereum"
@@ -246,22 +162,16 @@ chains:
     block_time_ms: 2000
 
     monitoring:
-      # L2s have faster block times - probe more frequently
-      probe_interval_ms: 5000 # 5s = ~2.5x block time (2s blocks)
+      probe_interval_ms: 5000 # ~2.5x block time for L2
       lag_alert_threshold_blocks: 5
 
     selection:
-      # More tolerant for L2 due to faster block times
-      max_lag_blocks: 5
-      # L2 recommendation: 750 blocks (~25 minutes on Base with 2s blocks)
-      archival_threshold: 750
+      max_lag_blocks: 5 # More tolerant for L2
+      archival_threshold: 750 # ~25 min on Base (2s blocks)
 
     websocket:
       subscribe_new_heads: true
-      # Shorter timeout for L2 (faster blocks)
-      new_heads_timeout_ms: 20000
-
-      # Backfill missed blocks during subscription failover
+      new_heads_timeout_ms: 20000 # Shorter for L2
       failover:
         max_backfill_blocks: 100
         backfill_timeout_ms: 30000
@@ -313,21 +223,16 @@ chains:
     block_time_ms: 250
 
     monitoring:
-      probe_interval_ms: 2000 # 2s = ~8x block time
+      probe_interval_ms: 2000 # ~8x block time for fast L2
       lag_alert_threshold_blocks: 15
 
     selection:
-      # More tolerant for L2 due to very fast block times
-      max_lag_blocks: 10
-      # L2 recommendation: 6000 blocks (~25 minutes on Arbitrum with 0.25s blocks)
-      archival_threshold: 6000
+      max_lag_blocks: 10 # More tolerant for fast L2
+      archival_threshold: 6000 # ~25 min on Arbitrum (0.25s blocks)
 
     websocket:
       subscribe_new_heads: true
-      # Shorter timeout for fast L2
-      new_heads_timeout_ms: 15000
-
-      # Backfill missed blocks during subscription failover
+      new_heads_timeout_ms: 15000 # Shorter for fast L2
       failover:
         max_backfill_blocks: 100
         backfill_timeout_ms: 30000
@@ -369,42 +274,9 @@ chains:
         priority: 6
         url: "https://arb-one.api.pocket.network"
         archival: true
-# ════════════════════════════════════════════════════════════════════════════
-# CONFIGURATION NOTES
-# ════════════════════════════════════════════════════════════════════════════
+# Tuning guidelines:
+# L1: probe_interval_ms ~12s, max_lag_blocks 1-2, new_heads_timeout_ms ~35-42s
+# L2: probe_interval_ms ~3-4s, max_lag_blocks 3-5, new_heads_timeout_ms ~15-20s
+# Testnets: Use more lenient thresholds
 #
-# ## Tuning Guidelines
-#
-# ### L1 Chains (Ethereum)
-# - probe_interval_ms: 12000 (~1x block time)
-# - lag_alert_threshold_blocks: 3-5
-# - max_lag_blocks: 1-2
-# - new_heads_timeout_ms: 35000-42000 (~3x block time)
-#
-# ### L2 Chains (Base, Optimism, Arbitrum)
-# - probe_interval_ms: 3000-4000 (~1.5x block time)
-# - lag_alert_threshold_blocks: 5-10
-# - max_lag_blocks: 3-5
-# - new_heads_timeout_ms: 15000-20000 (~5-10x block time)
-#
-# ### Testnets
-# - Use more lenient thresholds (testnets are less reliable)
-# - Increase new_heads_timeout_ms by 50-100%
-# - Increase lag_alert_threshold_blocks
-#
-# ## Provider Adapter Configuration
-#
-# Some providers have specific limitations or optimizations. Use adapter_config
-# to tune provider-specific behavior:
-#
-# ### Alchemy
-#   adapter_config:
-#     eth_get_logs_block_range: 10  # Max block range for getLogs
-#
-# ### 1RPC, dRPC, LlamaRPC, Merkle
-#   adapter_config:
-#     max_block_range: 10000  # Generic block range limit
-#
-# See docs/ADAPTERS.md for complete provider-specific configuration options.
-#
-# ════════════════════════════════════════════════════════════════════════════
+# Provider adapter_config: See docs/ADAPTERS.md for provider-specific options

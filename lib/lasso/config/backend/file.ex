@@ -10,9 +10,6 @@ defmodule Lasso.Config.Backend.File do
       ---
       name: Production
       slug: production
-      type: standard
-      default_rps_limit: 500
-      default_burst_limit: 1000
       ---
       chains:
         ethereum:
@@ -198,9 +195,6 @@ defmodule Lasso.Config.Backend.File do
            %{
              slug: meta["slug"],
              name: meta["name"],
-             type: parse_profile_type(meta["type"]),
-             default_rps_limit: meta["default_rps_limit"] || 100,
-             default_burst_limit: meta["default_burst_limit"] || 500,
              chains: chains
            }}
         end
@@ -221,9 +215,6 @@ defmodule Lasso.Config.Backend.File do
        %{
          slug: slug,
          name: yaml_data["name"] || "Default Profile",
-         type: :standard,
-         default_rps_limit: yaml_data["default_rps_limit"] || 100,
-         default_burst_limit: yaml_data["default_burst_limit"] || 500,
          chains: chains
        }}
     end
@@ -373,12 +364,6 @@ defmodule Lasso.Config.Backend.File do
   defp parse_topology_size("xl"), do: :xl
   defp parse_topology_size(_), do: :md
 
-  defp parse_profile_type("free"), do: :free
-  defp parse_profile_type("standard"), do: :standard
-  defp parse_profile_type("premium"), do: :premium
-  defp parse_profile_type("byok"), do: :byok
-  defp parse_profile_type(_), do: :standard
-
   defp validate_slug_matches_filename(%{slug: slug}, path) do
     expected_slug = path |> Path.basename(".yml")
 
@@ -444,9 +429,6 @@ defmodule Lasso.Config.Backend.File do
     ---
     name: Default
     slug: default
-    type: standard
-    default_rps_limit: 100
-    default_burst_limit: 500
     ---
     chains:
     #{generate_chains_yaml(yaml_data["chains"])}

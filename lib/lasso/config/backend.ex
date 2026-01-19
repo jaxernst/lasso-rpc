@@ -15,18 +15,12 @@ defmodule Lasso.Config.Backend do
   A profile_spec is a map containing:
   - `:slug` - Unique identifier (used in URLs)
   - `:name` - Human-readable display name
-  - `:type` - Profile type (:free | :standard | :premium | :byok)
-  - `:default_rps_limit` - Default requests per second limit
-  - `:default_burst_limit` - Default burst limit
   - `:chains` - Map of chain_name => chain configuration
   """
 
   @type profile_spec :: %{
           slug: String.t(),
           name: String.t(),
-          type: :free | :standard | :premium | :byok,
-          default_rps_limit: pos_integer(),
-          default_burst_limit: pos_integer(),
           chains: %{String.t() => map()}
         }
 
