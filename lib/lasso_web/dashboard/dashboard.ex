@@ -3,7 +3,8 @@ defmodule LassoWeb.Dashboard do
   use LassoWeb, :live_view
   require Logger
 
-  alias Lasso.Events.Provider
+  alias Lasso.Events.{Provider, RoutingDecision}
+  alias LassoWeb.Components.ClusterStatus
   alias LassoWeb.Components.DashboardComponents
   alias LassoWeb.Components.DashboardHeader
   alias LassoWeb.Components.NetworkStatusLegend
@@ -32,7 +33,7 @@ defmodule LassoWeb.Dashboard do
 
     if connected?(socket) do
       subscribe_profile_topics(selected_profile)
-      subscribe_global_topics()
+      subscribe_global_topics(selected_profile)
 
       if Lasso.VMMetricsCollector.enabled?() do
         Lasso.VMMetricsCollector.subscribe()
@@ -40,6 +41,7 @@ defmodule LassoWeb.Dashboard do
 
       Process.send_after(self(), :load_metrics_on_connect, 0)
       Process.send_after(self(), :metrics_refresh, Constants.vm_metrics_interval())
+      Process.send_after(self(), :expire_dedup, 60_000)
     end
 
     # Transform profile's chain names into map structures for the UI
@@ -88,9 +90,28 @@ defmodule LassoWeb.Dashboard do
       |> assign(:metrics_loading, true)
       |> assign(:metrics_last_updated, nil)
       |> assign(:vm_metrics_enabled, Lasso.VMMetricsCollector.enabled?())
+      |> assign(:event_dedup, LassoWeb.Dashboard.EventDedup.new())
+      |> assign(:metrics_task, nil)
+      |> assign(:metrics_stale, false)
+      |> assign(:metrics_coverage, %{responding: 1, total: 1})
       |> fetch_connections(selected_profile)
 
     {:ok, initial_state}
+  end
+
+  @impl true
+  def terminate(_reason, socket) do
+    # Clean up PubSub subscriptions to prevent orphaned subscriptions
+    if profile = socket.assigns[:selected_profile] do
+      unsubscribe_profile_topics(profile)
+      unsubscribe_global_topics(profile)
+    end
+
+    if Lasso.VMMetricsCollector.enabled?() do
+      Lasso.VMMetricsCollector.unsubscribe()
+    end
+
+    :ok
   end
 
   defp determine_initial_profile(params, session, profiles) do
@@ -123,22 +144,42 @@ defmodule LassoWeb.Dashboard do
     end
   end
 
-  defp subscribe_global_topics do
+  defp subscribe_global_topics(profile) do
     alias Lasso.Config.ConfigStore
 
     Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "routing:decisions")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "clients:events")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_changes")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_updates")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "dashboard:event_buffer")
+
+    # Subscribe to profile-scoped routing decisions (cluster-safe)
+    Phoenix.PubSub.subscribe(Lasso.PubSub, RoutingDecision.topic(profile))
 
     # Global block_sync/health_probe for cross-profile aggregation
     ConfigStore.list_chains()
     |> Enum.each(fn chain ->
       Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{chain}")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{chain}")
+    end)
+  end
+
+  defp unsubscribe_global_topics(profile) do
+    alias Lasso.Config.ConfigStore
+
+    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "sync:updates")
+    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "block_cache:updates")
+    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "clients:events")
+    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "chain_config_changes")
+    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "chain_config_updates")
+    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "dashboard:event_buffer")
+    Phoenix.PubSub.unsubscribe(Lasso.PubSub, RoutingDecision.topic(profile))
+
+    ConfigStore.list_chains()
+    |> Enum.each(fn chain ->
+      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "block_sync:#{chain}")
+      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "health_probe:#{chain}")
     end)
   end
 
@@ -164,6 +205,10 @@ defmodule LassoWeb.Dashboard do
 
     unsubscribe_profile_topics(old_profile)
     subscribe_profile_topics(new_profile)
+
+    # Re-subscribe to profile-scoped routing decisions
+    Phoenix.PubSub.unsubscribe(Lasso.PubSub, RoutingDecision.topic(old_profile))
+    Phoenix.PubSub.subscribe(Lasso.PubSub, RoutingDecision.topic(new_profile))
 
     available_chains =
       ConfigStore.list_chains_for_profile(new_profile)
@@ -221,7 +266,47 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Routing decision feed (real or synthetic)
+  # Routing decision feed - typed RoutingDecision struct (cluster-aware)
+  @impl true
+  def handle_info(%RoutingDecision{} = evt, socket) do
+    # Check for duplicate events across cluster nodes
+    case LassoWeb.Dashboard.EventDedup.check_and_add(socket.assigns.event_dedup, evt) do
+      {:ok, new_dedup} ->
+        # Convert struct to map for existing handlers
+        evt_map = %{
+          ts: evt.ts,
+          ts_ms: evt.ts,
+          chain: evt.chain,
+          method: evt.method,
+          strategy: evt.strategy,
+          provider_id: evt.provider_id,
+          transport: evt.transport,
+          duration_ms: evt.duration_ms,
+          result: evt.result,
+          failover_count: evt.failover_count,
+          failovers: evt.failover_count,
+          source_node: evt.source_node,
+          source_region: evt.source_region
+        }
+
+        socket =
+          MessageHandlers.handle_routing_decision(
+            evt_map,
+            assign(socket, :event_dedup, new_dedup),
+            &buffer_event/2,
+            &update_selected_chain_metrics/1,
+            &update_selected_provider_data/1
+          )
+
+        {:noreply, socket}
+
+      {:duplicate, _dedup} ->
+        # Silently drop duplicate event from another cluster node
+        {:noreply, socket}
+    end
+  end
+
+  # Routing decision feed - legacy map format (for backwards compatibility)
   @impl true
   def handle_info(
         %{
@@ -234,7 +319,7 @@ defmodule LassoWeb.Dashboard do
         } = evt,
         socket
       )
-      when is_map(evt) do
+      when is_map(evt) and not is_struct(evt) do
     socket =
       MessageHandlers.handle_routing_decision(
         evt,
@@ -430,25 +515,95 @@ defmodule LassoWeb.Dashboard do
   # Load metrics immediately after socket connects
   @impl true
   def handle_info(:load_metrics_on_connect, socket) do
-    socket = load_provider_metrics(socket)
+    send(self(), :refresh_cluster_metrics)
     {:noreply, socket}
   end
 
   # Provider metrics refresh
   @impl true
   def handle_info(:metrics_refresh, socket) do
-    socket = load_provider_metrics(socket)
+    send(self(), :refresh_cluster_metrics)
     Process.send_after(self(), :metrics_refresh, 30_000)
     {:noreply, socket}
   end
 
+  # Async cluster metrics refresh
+  @impl true
+  def handle_info(:refresh_cluster_metrics, socket) do
+    if socket.assigns.metrics_task do
+      # Task already running
+      {:noreply, socket}
+    else
+      profile = socket.assigns.selected_profile
+      chain = socket.assigns.metrics_selected_chain
+
+      task =
+        Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn ->
+          fetch_cluster_metrics(profile, chain)
+        end)
+
+      {:noreply, assign(socket, :metrics_task, task)}
+    end
+  end
+
+  # Handle async task completion
+  @impl true
+  def handle_info({ref, result}, socket)
+      when is_reference(ref) and is_map_key(socket.assigns, :metrics_task) do
+    if socket.assigns.metrics_task && socket.assigns.metrics_task.ref == ref do
+      Process.demonitor(ref, [:flush])
+
+      socket =
+        case result do
+          %{provider_metrics: metrics, method_metrics: methods, coverage: cov, stale: stale} ->
+            socket
+            |> assign(:provider_metrics, metrics)
+            |> assign(:method_metrics, methods)
+            |> assign(:metrics_loading, false)
+            |> assign(:metrics_last_updated, DateTime.utc_now())
+            |> assign(:metrics_coverage, %{
+              responding: cov.responding,
+              total: cov.total
+            })
+            |> assign(:metrics_stale, stale)
+            |> assign(:metrics_task, nil)
+
+          _ ->
+            assign(socket, :metrics_task, nil)
+        end
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Handle async task crash
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, socket)
+      when is_reference(ref) and is_map_key(socket.assigns, :metrics_task) do
+    if socket.assigns.metrics_task && socket.assigns.metrics_task.ref == ref do
+      socket
+      |> assign(:metrics_stale, true)
+      |> assign(:metrics_task, nil)
+      |> then(&{:noreply, &1})
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Event deduplication cleanup
+  @impl true
+  def handle_info(:expire_dedup, socket) do
+    dedup = LassoWeb.Dashboard.EventDedup.expire_old(socket.assigns.event_dedup)
+    Process.send_after(self(), :expire_dedup, 60_000)
+    {:noreply, assign(socket, :event_dedup, dedup)}
+  end
+
   @impl true
   def handle_info({:metrics_chain_selected, chain}, socket) do
-    socket =
-      socket
-      |> assign(:metrics_selected_chain, chain)
-      |> load_provider_metrics()
-
+    socket = assign(socket, :metrics_selected_chain, chain)
+    send(self(), :refresh_cluster_metrics)
     {:noreply, socket}
   end
 
@@ -681,6 +836,13 @@ defmodule LassoWeb.Dashboard do
             <% end %>
         <% end %>
       </div>
+
+      <!-- Fixed cluster status indicator -->
+      <ClusterStatus.fixed_cluster_status
+        responding={@metrics_coverage.responding}
+        total={@metrics_coverage.total}
+        stale={@metrics_stale}
+      />
     </div>
     """
   end
@@ -1314,68 +1476,62 @@ defmodule LassoWeb.Dashboard do
     |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
   end
 
-  defp load_provider_metrics(socket) do
-    chain_name = Map.get(socket.assigns, :metrics_selected_chain, "ethereum")
-    # Mount guarantees selected_profile is set
-    profile = socket.assigns.selected_profile
+  defp fetch_cluster_metrics(profile, chain_name) do
+    alias Lasso.Config.ConfigStore
+    alias LassoWeb.Dashboard.ClusterMetricsCache
 
-    try do
-      alias Lasso.Benchmarking.BenchmarkStore
-      alias Lasso.Config.ConfigStore
+    case ConfigStore.get_providers(profile, chain_name) do
+      {:ok, provider_configs} ->
+        # Fetch from cluster cache
+        %{data: provider_leaderboard, coverage: coverage, stale: stale} =
+          ClusterMetricsCache.get_provider_leaderboard(profile, chain_name)
 
-      case ConfigStore.get_providers(profile, chain_name) do
-        {:ok, provider_configs} ->
-          provider_leaderboard = BenchmarkStore.get_provider_leaderboard(profile, chain_name)
-          realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_name)
+        %{data: realtime_stats} = ClusterMetricsCache.get_realtime_stats(profile, chain_name)
 
-          # Get all RPC methods we have data for
-          rpc_methods = Map.get(realtime_stats, :rpc_methods, [])
-          provider_ids = Enum.map(provider_configs, & &1.id)
+        # Get all RPC methods we have data for
+        rpc_methods = Map.get(realtime_stats, :rpc_methods, [])
+        provider_ids = Enum.map(provider_configs, & &1.id)
 
-          # Collect detailed metrics by provider
-          provider_metrics =
-            collect_provider_metrics(
-              profile,
-              chain_name,
-              provider_ids,
-              provider_configs,
-              provider_leaderboard,
-              rpc_methods
-            )
+        # Collect detailed metrics by provider
+        provider_metrics =
+          collect_provider_metrics_cached(
+            profile,
+            chain_name,
+            provider_ids,
+            provider_configs,
+            provider_leaderboard,
+            rpc_methods
+          )
 
-          # Collect method-level metrics for comparison
-          method_metrics =
-            collect_method_metrics(
-              profile,
-              chain_name,
-              provider_ids,
-              provider_configs,
-              rpc_methods
-            )
+        # Collect method-level metrics for comparison
+        method_metrics =
+          collect_method_metrics_cached(
+            profile,
+            chain_name,
+            provider_ids,
+            provider_configs,
+            rpc_methods
+          )
 
-          socket
-          |> assign(:metrics_loading, false)
-          |> assign(:provider_metrics, provider_metrics)
-          |> assign(:method_metrics, method_metrics)
-          |> assign(:metrics_last_updated, DateTime.utc_now())
+        %{
+          provider_metrics: provider_metrics,
+          method_metrics: method_metrics,
+          coverage: coverage,
+          stale: stale
+        }
 
-        {:error, :not_found} ->
-          # Chain not configured in this profile - return empty metrics
-          socket
-          |> assign(:metrics_loading, false)
-          |> assign(:provider_metrics, [])
-          |> assign(:method_metrics, [])
-          |> assign(:metrics_last_updated, DateTime.utc_now())
-      end
-    rescue
-      error ->
-        require Logger
-        Logger.error("Failed to load provider metrics: #{inspect(error)}")
-        assign(socket, :metrics_loading, false)
+      {:error, :not_found} ->
+        # Chain not configured in this profile - return empty metrics
+        %{
+          provider_metrics: [],
+          method_metrics: [],
+          coverage: %{responding: 1, total: 1},
+          stale: false
+        }
     end
   end
 
-  defp collect_provider_metrics(
+  defp collect_provider_metrics_cached(
          profile,
          chain_name,
          provider_ids,
@@ -1383,23 +1539,26 @@ defmodule LassoWeb.Dashboard do
          leaderboard,
          rpc_methods
        ) do
-    alias Lasso.Benchmarking.BenchmarkStore
+    alias LassoWeb.Dashboard.ClusterMetricsCache
 
     provider_ids
     |> Enum.map(fn provider_id ->
       config = Enum.find(provider_configs, &(&1.id == provider_id))
       leaderboard_entry = Enum.find(leaderboard, &(&1.provider_id == provider_id))
 
-      # Get aggregate stats across all methods
+      # Get aggregate stats across all methods using cache
       method_stats =
         rpc_methods
         |> Enum.map(fn method ->
-          BenchmarkStore.get_rpc_method_performance_with_percentiles(
-            profile,
-            chain_name,
-            provider_id,
-            method
-          )
+          %{data: data} =
+            ClusterMetricsCache.get_rpc_method_performance(
+              profile,
+              chain_name,
+              provider_id,
+              method
+            )
+
+          data
         end)
         |> Enum.reject(&is_nil/1)
 
@@ -1443,8 +1602,14 @@ defmodule LassoWeb.Dashboard do
     |> Enum.sort_by(&(&1.avg_latency || 999_999))
   end
 
-  defp collect_method_metrics(profile, chain_name, provider_ids, provider_configs, rpc_methods) do
-    alias Lasso.Benchmarking.BenchmarkStore
+  defp collect_method_metrics_cached(
+         profile,
+         chain_name,
+         provider_ids,
+         provider_configs,
+         rpc_methods
+       ) do
+    alias LassoWeb.Dashboard.ClusterMetricsCache
 
     rpc_methods
     |> Enum.map(fn method ->
@@ -1453,16 +1618,16 @@ defmodule LassoWeb.Dashboard do
         |> Enum.map(fn provider_id ->
           config = Enum.find(provider_configs, &(&1.id == provider_id))
 
-          case BenchmarkStore.get_rpc_method_performance_with_percentiles(
+          case ClusterMetricsCache.get_rpc_method_performance(
                  profile,
                  chain_name,
                  provider_id,
                  method
                ) do
-            nil ->
+            %{data: nil} ->
               nil
 
-            stats ->
+            %{data: stats} ->
               %{
                 provider_id: provider_id,
                 provider_name: if(config, do: config.name, else: provider_id),

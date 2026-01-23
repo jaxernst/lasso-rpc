@@ -57,7 +57,9 @@ defmodule Lasso.MixProject do
       {:telemetry_metrics, "~> 0.6"},
       {:telemetry_poller, "~> 1.0"},
       {:mox, "~> 1.0", only: :test},
-      {:cors_plug, "~> 3.0"}
+      {:cors_plug, "~> 3.0"},
+      {:libcluster, "~> 3.3"},
+      {:local_cluster, "~> 1.2", only: [:test]}
     ]
   end
 

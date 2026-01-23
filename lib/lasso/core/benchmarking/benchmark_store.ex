@@ -220,6 +220,30 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @doc """
+  Returns call counts per provider within the specified time window.
+
+  Used for RPS calculation in cluster metrics aggregation. Uses ETS match spec
+  for efficient querying without full table scan.
+
+  ## Parameters
+    - `profile`: The routing profile name
+    - `chain_name`: The blockchain name
+    - `window_seconds`: Time window in seconds (default: 60)
+
+  ## Returns
+    Map of provider_id to call count: `%{String.t() => non_neg_integer()}`
+
+  ## Examples
+
+      iex> BenchmarkStore.get_calls_in_window("default", "ethereum", 60)
+      %{"infura" => 150, "alchemy" => 200}
+  """
+  @spec get_calls_in_window(profile(), chain_name(), pos_integer()) :: %{String.t() => non_neg_integer()}
+  def get_calls_in_window(profile, chain_name, window_seconds \\ 60) do
+    GenServer.call(__MODULE__, {:get_calls_in_window, profile, chain_name, window_seconds})
+  end
+
+  @doc """
   Records an RPC call performance metric with dual timestamps.
 
   Timestamps are captured at the moment this function is called, ensuring
@@ -938,6 +962,42 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     }
 
     {:reply, result, state}
+  end
+
+  @impl true
+  def handle_call({:get_calls_in_window, profile, chain_name, window_seconds}, _from, state) do
+    key = {profile, chain_name}
+
+    result =
+      if Map.has_key?(state.rpc_tables, key) do
+        rpc_table = rpc_table_name(profile, chain_name)
+        cutoff = System.monotonic_time(:millisecond) - window_seconds * 1_000
+
+        # Match spec: select provider_id from records where monotonic_ts > cutoff
+        # Pattern: {monotonic_ts, _system_ts, provider_id, _method, _duration, _result}
+        match_spec = [
+          {
+            {:"$1", :_, :"$2", :_, :_, :_},
+            [{:>, :"$1", cutoff}],
+            [:"$2"]
+          }
+        ]
+
+        case :ets.info(rpc_table) do
+          :undefined ->
+            %{}
+
+          _ ->
+            :ets.select(rpc_table, match_spec)
+            |> Enum.frequencies()
+        end
+      else
+        %{}
+      end
+
+    {:reply, result, state}
+  rescue
+    ArgumentError -> {:reply, %{}, state}
   end
 
   @impl true

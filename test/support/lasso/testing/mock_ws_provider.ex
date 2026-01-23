@@ -195,7 +195,7 @@ defmodule Lasso.Testing.MockWSProvider do
       # Send blocks from backup
       MockWSProvider.send_block_sequence(chain, "backup", 1005, 5)
   """
-  def simulate_provider_failure(chain, provider_id, reason \\ :test_failure) do
+  def simulate_provider_failure(chain, provider_id, reason \\ :test_failure, profile \\ "default") do
     # Emit the same WSDisconnected event that real WS connections emit
     event = %Lasso.Events.Provider.WSDisconnected{
       ts: System.system_time(:millisecond),
@@ -206,7 +206,7 @@ defmodule Lasso.Testing.MockWSProvider do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      Lasso.Events.Provider.topic(chain),
+      Lasso.Events.Provider.topic(profile, chain),
       event
     )
 

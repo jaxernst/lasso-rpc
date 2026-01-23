@@ -1,0 +1,27 @@
+## Erlang Distribution Configuration
+
+# Network tick time (heartbeat interval between nodes)
+# Default: 60 seconds. Decrease for faster partition detection.
+# Increase for flaky networks to avoid spurious disconnects.
+-kernel net_ticktime 60
+
+# Prevent overlapping partitions (OTP 25+)
+# Ensures proper cluster state during network flaps
+-kernel prevent_overlapping_partitions true
+
+# Connection timeout for distributed Erlang
+# Default is 'once' meaning nodes try to reconnect once on disconnect
+# libcluster handles reconnection logic, so 'once' is safe
+-kernel dist_auto_connect once
+
+# Scheduler configuration for optimal concurrency
++S <%= System.schedulers_online() %>:<%= System.schedulers_online() %>
+
+# Enable SMP (Symmetric Multi-Processing)
+-smp auto
+
+# Increase atom table size for larger deployments
++t 1048576
+
+# Increase max processes (default is 262144)
++P 1048576

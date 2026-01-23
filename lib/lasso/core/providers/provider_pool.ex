@@ -967,7 +967,7 @@ defmodule Lasso.RPC.ProviderPool do
           |> Map.put(:last_health_check, System.system_time(:millisecond))
 
         event_details = %{code: code, reason: jerr.message}
-        publish_provider_event(state.chain_name, provider_id, :ws_closed, event_details)
+        publish_provider_event(state.profile, state.chain_name, provider_id, :ws_closed, event_details)
 
         new_state = put_provider_and_refresh(state, provider_id, updated)
         {:noreply, new_state}
@@ -990,7 +990,7 @@ defmodule Lasso.RPC.ProviderPool do
           |> Map.put(:last_health_check, System.system_time(:millisecond))
 
         event_details = %{reason: jerr.message}
-        publish_provider_event(state.chain_name, provider_id, :ws_closed, event_details)
+        publish_provider_event(state.profile, state.chain_name, provider_id, :ws_closed, event_details)
 
         new_state = put_provider_and_refresh(state, provider_id, updated)
         {:noreply, new_state}
@@ -1320,7 +1320,7 @@ defmodule Lasso.RPC.ProviderPool do
         # Schedule grace period cleanup
         Process.send_after(self(), {:clear_reconnect_grace, provider_id}, grace_period_ms)
 
-        publish_provider_event(state.chain_name, provider_id, :ws_connected, %{})
+        publish_provider_event(state.profile, state.chain_name, provider_id, :ws_connected, %{})
         new_state = put_provider_and_refresh(state, provider_id, updated)
         {:noreply, new_state}
     end
@@ -1786,7 +1786,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   defp maybe_emit_became_healthy(state, provider_id, provider) do
     if provider.status != :healthy do
-      publish_provider_event(state.chain_name, provider_id, :healthy, %{})
+      publish_provider_event(state.profile, state.chain_name, provider_id, :healthy, %{})
       state
     else
       state
@@ -1857,7 +1857,7 @@ defmodule Lasso.RPC.ProviderPool do
                 "Provider #{provider_id} marked as unhealthy after #{updated_provider.consecutive_failures} failures"
               )
 
-              publish_provider_event(state.chain_name, provider_id, :unhealthy, %{})
+              publish_provider_event(state.profile, state.chain_name, provider_id, :unhealthy, %{})
 
               :telemetry.execute([:lasso, :provider, :status], %{count: 1}, %{
                 chain: state.chain_name,
@@ -1956,7 +1956,7 @@ defmodule Lasso.RPC.ProviderPool do
     end
   end
 
-  defp publish_provider_event(chain_name, provider_id, event, details) do
+  defp publish_provider_event(profile, chain_name, provider_id, event, details) do
     ts = System.system_time(:millisecond)
 
     typed =
@@ -1985,7 +1985,7 @@ defmodule Lasso.RPC.ProviderPool do
           }
       end
 
-    Phoenix.PubSub.broadcast(Lasso.PubSub, Provider.topic(chain_name), typed)
+    Phoenix.PubSub.broadcast(Lasso.PubSub, Provider.topic(profile, chain_name), typed)
   end
 
   # Updates circuit state for a specific provider and transport

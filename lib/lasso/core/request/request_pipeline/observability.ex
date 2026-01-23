@@ -9,11 +9,15 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   - Add new monitoring dimensions
   - Test observability in isolation
   - Maintain consistent event structure
+
+  Events are published to profile-scoped PubSub topics to support multi-tenant
+  dashboard subscriptions without cross-tenant data leakage.
   """
 
   require Logger
 
   alias Lasso.Core.Benchmarking.Metrics
+  alias Lasso.Events.RoutingDecision
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.{Channel, ProviderPool, RequestContext}
 
@@ -50,8 +54,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     ProviderPool.report_success(profile, ctx.chain, provider_id, transport)
 
-    # Publish routing decision for dashboard/analytics
+    # Publish routing decision for dashboard/analytics (profile-scoped)
     publish_routing_decision(
+      ctx.request_id,
+      profile,
       ctx.chain,
       method,
       strategy,
@@ -107,8 +113,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     # Record failure with transport dimension
     record_rpc_failure(profile, ctx.chain, provider_id, method, reason, duration_ms, transport)
 
-    # Publish routing decision
+    # Publish routing decision (profile-scoped)
     publish_routing_decision(
+      ctx.request_id,
+      profile,
       ctx.chain,
       method,
       strategy,
@@ -317,6 +325,8 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   @spec publish_routing_decision(
           String.t(),
           String.t(),
+          String.t(),
+          String.t(),
           atom(),
           String.t(),
           atom(),
@@ -325,6 +335,8 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
           non_neg_integer()
         ) :: :ok | {:error, term()}
   defp publish_routing_decision(
+         request_id,
+         profile,
          chain,
          method,
          strategy,
@@ -334,20 +346,24 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
          result,
          failovers
        ) do
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
-      "routing:decisions",
-      %{
-        ts: System.system_time(:millisecond),
+    event =
+      RoutingDecision.new(
+        request_id: request_id,
+        profile: profile,
         chain: chain,
         method: method,
-        strategy: to_string(strategy),
+        strategy: strategy,
         provider_id: provider_id,
         transport: transport,
         duration_ms: duration_ms,
         result: result,
         failover_count: failovers
-      }
+      )
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      RoutingDecision.topic(profile),
+      event
     )
   end
 

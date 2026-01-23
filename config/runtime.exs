@@ -43,6 +43,21 @@ vm_metrics_enabled =
 
 config :lasso, :vm_metrics_enabled, vm_metrics_enabled
 
+# Clustering configuration (optional - only enabled when CLUSTER_NODE_BASENAME is set)
+if dns_query = System.get_env("CLUSTER_DNS_QUERY") do
+  config :libcluster,
+    topologies: [
+      dns: [
+        strategy: Cluster.Strategy.DNSPoll,
+        config: [
+          polling_interval: 5_000,
+          query: dns_query,
+          node_basename: System.fetch_env!("CLUSTER_NODE_BASENAME")
+        ]
+      ]
+    ]
+end
+
 if config_env() == :prod do
   # Get port from environment variable (internal port the app listens on)
   port = String.to_integer(System.get_env("PORT") || "4000")

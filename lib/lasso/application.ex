@@ -35,8 +35,21 @@ defmodule Lasso.Application do
         # Start PubSub for real-time messaging
         {Phoenix.PubSub, name: Lasso.PubSub},
 
+        # Start libcluster supervisor for node discovery (if configured)
+        {Cluster.Supervisor,
+         [
+           Application.get_env(:libcluster, :topologies, []),
+           [name: Lasso.ClusterSupervisor]
+         ]},
+
+        # Start cluster monitor for node connection telemetry
+        Lasso.ClusterMonitor,
+
         # Start event buffer for dashboard event batching
         LassoWeb.Dashboard.EventBuffer,
+
+        # Start cluster metrics cache for aggregated dashboard data
+        LassoWeb.Dashboard.ClusterMetricsCache,
 
         # Start Telemetry supervisor for metrics and monitoring
         Lasso.Telemetry,

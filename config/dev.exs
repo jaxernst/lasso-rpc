@@ -1,10 +1,11 @@
 import Config
 
 # For development, we configure the endpoint to listen on all interfaces
+# PORT env var allows running multiple nodes locally for cluster testing
 config :lasso, LassoWeb.Endpoint,
   http: [
     ip: {127, 0, 0, 1},
-    port: 4000,
+    port: String.to_integer(System.get_env("PORT") || "4000"),
     protocol_options: [
       max_connections: 1000,
       idle_timeout: 60_000
@@ -22,7 +23,7 @@ config :lasso, LassoWeb.Endpoint,
 # Enhanced logging for development debugging
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
-  level: :debug,
+  level: :info,
   metadata: :all
 
 # Filter out Phoenix LiveView "HANDLE EVENT" debug logs
