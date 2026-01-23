@@ -593,7 +593,12 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       # Send request that won't complete
       _task =
         Task.async(fn ->
-          Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 5_000)
+          Connection.request(
+            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            "eth_blockNumber",
+            [],
+            5_000
+          )
         end)
 
       # Wait a bit for request to be tracked

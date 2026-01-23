@@ -145,7 +145,13 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           String.t() | nil
         ) ::
           {:ok, Response.Success.t()} | {:error, JError.t()}
-  def request({profile, chain, provider_id}, method, params, timeout_ms \\ 30_000, request_id \\ nil) do
+  def request(
+        {profile, chain, provider_id},
+        method,
+        params,
+        timeout_ms \\ 30_000,
+        request_id \\ nil
+      ) do
     GenServer.call(
       via_name(profile, chain, provider_id),
       {:request, method, params, timeout_ms, request_id},

@@ -25,7 +25,11 @@ defmodule LassoWeb.NetworkTopology do
   )
 
   attr(:class, :string, default: "", doc: "additional CSS classes")
-  attr(:preview_mode, :boolean, default: false, doc: "when true, shows nodes in disabled preview state")
+
+  attr(:preview_mode, :boolean,
+    default: false,
+    doc: "when true, shows nodes in disabled preview state"
+  )
 
   def nodes_display(assigns) do
     profile = assigns[:selected_profile] || "default"
@@ -81,10 +85,17 @@ defmodule LassoWeb.NetworkTopology do
             class={[
               "absolute z-10 -translate-x-1/2 -translate-y-1/2 transform",
               "flex items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-transform duration-200",
-              if(@preview_mode, do: "cursor-default grayscale-[30%]", else: "cursor-pointer hover:scale-110"),
+              if(@preview_mode,
+                do: "cursor-default grayscale-[30%]",
+                else: "cursor-pointer hover:scale-110"
+              ),
               if(@selected_chain == chain_name and not @preview_mode,
                 do: "ring-purple-400/30 border-purple-400 ring-4",
-                else: if(@preview_mode, do: "border-gray-600", else: "border-gray-500 hover:border-gray-400")
+                else:
+                  if(@preview_mode,
+                    do: "border-gray-600",
+                    else: "border-gray-500 hover:border-gray-400"
+                  )
               ),
               "from-gray-800 to-gray-900"
             ]}
@@ -122,10 +133,14 @@ defmodule LassoWeb.NetworkTopology do
               class={[
                 "z-5 absolute -translate-x-1/2 -translate-y-1/2 transform",
                 "flex items-center justify-center rounded-full border-2 transition-transform duration-150",
-                if(@preview_mode, do: "cursor-default grayscale-[30%]", else: "cursor-pointer hover:scale-125"),
+                if(@preview_mode,
+                  do: "cursor-default grayscale-[30%]",
+                  else: "cursor-pointer hover:scale-125"
+                ),
                 if(@selected_provider == connection.id and not @preview_mode,
                   do: "ring-purple-400/30 !border-purple-400 ring-2",
-                  else: if(@preview_mode, do: "border-gray-600", else: provider_border_class(connection))
+                  else:
+                    if(@preview_mode, do: "border-gray-600", else: provider_border_class(connection))
                 ),
                 if(@selected_provider != connection.id and not @preview_mode,
                   do: provider_status_bg_class(connection)

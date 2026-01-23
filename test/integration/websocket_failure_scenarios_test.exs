@@ -254,7 +254,12 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       # Send request that won't complete
       task =
         Task.async(fn ->
-          Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 15_000)
+          Connection.request(
+            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            "eth_blockNumber",
+            [],
+            15_000
+          )
         end)
 
       # Wait longer to ensure request is tracked in pending map
@@ -302,7 +307,12 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       tasks =
         for i <- 1..3 do
           Task.async(fn ->
-            Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber_#{i}", [], 15_000)
+            Connection.request(
+              {endpoint.profile, endpoint.chain_name, endpoint.id},
+              "eth_blockNumber_#{i}",
+              [],
+              15_000
+            )
           end)
         end
 
@@ -348,7 +358,15 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
 
       # Send request with longer timeout
       start_time = System.monotonic_time(:millisecond)
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 10_000)
+
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          10_000
+        )
+
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should succeed after delay
@@ -375,7 +393,13 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       TestSupport.MockWSClient.set_response_delay(ws_state.connection, 10_000)
 
       # Send request with shorter timeout
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 1_000)
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          1_000
+        )
 
       # Should timeout - could be {:error, :timeout} or error tuple
       case result do
@@ -443,7 +467,14 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       # Rapid cycles with requests interspersed
       for i <- 1..3 do
         # Send request
-        result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+        result =
+          Connection.request(
+            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            "eth_blockNumber",
+            [],
+            2_000
+          )
+
         assert match?({:ok, _}, result)
 
         # Disconnect
@@ -459,7 +490,14 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       end
 
       # Final request should work
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          2_000
+        )
+
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)

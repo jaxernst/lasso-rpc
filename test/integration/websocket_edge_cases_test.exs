@@ -105,7 +105,12 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       # Start request in background
       task =
         Task.async(fn ->
-          Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 5_000)
+          Connection.request(
+            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            "eth_blockNumber",
+            [],
+            5_000
+          )
         end)
 
       # Give request time to be registered
@@ -220,7 +225,12 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       # Start request
       task =
         Task.async(fn ->
-          Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 5_000)
+          Connection.request(
+            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            "eth_blockNumber",
+            [],
+            5_000
+          )
         end)
 
       # Wait for request to be registered
@@ -311,7 +321,14 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       assert Process.alive?(pid)
 
       # Should still accept new requests
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          2_000
+        )
+
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
@@ -332,7 +349,12 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       # Send a normal request
       task =
         Task.async(fn ->
-          Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+          Connection.request(
+            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            "eth_blockNumber",
+            [],
+            2_000
+          )
         end)
 
       # Request should complete normally
@@ -421,7 +443,14 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       assert Process.alive?(pid)
 
       # Should still work for valid requests
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          2_000
+        )
+
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
@@ -479,7 +508,12 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       tasks =
         for _i <- 1..3 do
           Task.async(fn ->
-            Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 500)
+            Connection.request(
+              {endpoint.profile, endpoint.chain_name, endpoint.id},
+              "eth_blockNumber",
+              [],
+              500
+            )
           end)
         end
 
@@ -496,7 +530,15 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       # (we can't directly inspect pending_requests map without internal access,
       # but we can verify the connection still works)
       TestSupport.MockWSClient.set_response_delay(ws_state.connection, 0)
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          2_000
+        )
+
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
@@ -525,7 +567,12 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       tasks =
         for _i <- 1..3 do
           Task.async(fn ->
-            Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 5_000)
+            Connection.request(
+              {endpoint.profile, endpoint.chain_name, endpoint.id},
+              "eth_blockNumber",
+              [],
+              5_000
+            )
           end)
         end
 

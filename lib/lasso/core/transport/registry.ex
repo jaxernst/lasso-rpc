@@ -423,6 +423,7 @@ defmodule Lasso.RPC.TransportRegistry do
           |> Keyword.put(:provider_id, provider_id)
           |> Keyword.put(:profile, state.profile)
           |> Keyword.put(:chain, state.chain_name)
+
         # Only attempt to open channels that are actually configured
         case transport do
           :http ->

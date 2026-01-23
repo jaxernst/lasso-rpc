@@ -497,8 +497,11 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     recent = Enum.filter(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
 
     case length(recent) do
-      0 -> nil
-      total -> Float.round((total - Enum.count(recent, &(&1[:result] == :error))) * 100.0 / total, 1)
+      0 ->
+        nil
+
+      total ->
+        Float.round((total - Enum.count(recent, &(&1[:result] == :error))) * 100.0 / total, 1)
     end
   end
 

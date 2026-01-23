@@ -43,7 +43,9 @@ defmodule Lasso.RPC.Transports.WebSocket do
          )}
 
       ws_url ->
-        case GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, profile, chain, provider_id}}}) do
+        case GenServer.whereis(
+               {:via, Registry, {Lasso.Registry, {:ws_conn, profile, chain, provider_id}}}
+             ) do
           nil ->
             {:error,
              JError.new(-32_000, "WebSocket connection not available",
@@ -95,7 +97,13 @@ defmodule Lasso.RPC.Transports.WebSocket do
     io_start_us = System.monotonic_time(:microsecond)
 
     result =
-      case WSConnection.request({profile, chain, provider_id}, method, params, timeout, request_id) do
+      case WSConnection.request(
+             {profile, chain, provider_id},
+             method,
+             params,
+             timeout,
+             request_id
+           ) do
         {:ok, result} ->
           {:ok, result}
 

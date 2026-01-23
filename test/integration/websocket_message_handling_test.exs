@@ -94,7 +94,13 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
 
       # Send request
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          2_000
+        )
 
       # Should receive successful response
       assert match?({:ok, _}, result)
@@ -202,7 +208,13 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       TestSupport.MockWSClient.set_response_mode(ws_state.connection, :error)
 
       # Send request that will get error response
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          2_000
+        )
 
       # Should receive error response
       assert match?({:error, %{code: _}}, result)
@@ -266,7 +278,14 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       assert Process.alive?(pid)
 
       # Should still be able to send new requests
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          2_000
+        )
+
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
@@ -292,7 +311,15 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
 
       # Send request with short timeout
       start_time = System.monotonic_time(:millisecond)
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 500)
+
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          500
+        )
+
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should timeout
@@ -328,7 +355,13 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       TestSupport.MockWSClient.set_response_delay(ws_state.connection, 1_500)
 
       # Send request with short timeout
-      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 500)
+      result =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          500
+        )
 
       # Should timeout
       assert match?({:error, _}, result)
@@ -343,7 +376,15 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
 
       # Should be able to send new request
       TestSupport.MockWSClient.set_response_delay(ws_state.connection, 0)
-      result2 = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+
+      result2 =
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          2_000
+        )
+
       assert match?({:ok, _}, result2)
 
       cleanup_connection(endpoint)
@@ -378,7 +419,12 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       # Send request
       task =
         Task.async(fn ->
-          Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
+          Connection.request(
+            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            "eth_blockNumber",
+            [],
+            2_000
+          )
         end)
 
       # Should emit sent event
@@ -431,7 +477,12 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       # Send request with short timeout
       task =
         Task.async(fn ->
-          Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 500)
+          Connection.request(
+            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            "eth_blockNumber",
+            [],
+            500
+          )
         end)
 
       # Should emit timeout event
