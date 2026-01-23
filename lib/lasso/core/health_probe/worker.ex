@@ -251,10 +251,10 @@ defmodule Lasso.HealthProbe.Worker do
 
   defp execute_ws_probe(%__MODULE__{} = state) do
     # Re-check WS availability on each probe since connections can come and go
-    if ws_connected?(state.chain, state.provider_id) do
+    if ws_connected?(state.profile, state.chain, state.provider_id) do
       start_time = System.monotonic_time(:millisecond)
 
-      result = do_ws_probe(state.chain, state.provider_id, state.timeout_ms)
+      result = do_ws_probe(state.profile, state.chain, state.provider_id, state.timeout_ms)
       latency_ms = System.monotonic_time(:millisecond) - start_time
       now = System.system_time(:millisecond)
 
@@ -459,10 +459,9 @@ defmodule Lasso.HealthProbe.Worker do
   # WS probe implementation
   # Uses WSConnection.request directly (bypasses circuit breaker)
 
-  defp do_ws_probe(chain, provider_id, timeout_ms) do
+  defp do_ws_probe(profile, chain, provider_id, timeout_ms) do
     # Use WSConnection.request directly - NOT through circuit breaker
-    # The WSConnection uses the provider_id as the connection_id
-    case WSConnection.request(provider_id, "eth_chainId", [], timeout_ms) do
+    case WSConnection.request({profile, chain, provider_id}, "eth_chainId", [], timeout_ms) do
       {:ok, %Response.Success{} = response} ->
         case Response.Success.decode_result(response) do
           {:ok, "0x" <> hex} ->
@@ -525,9 +524,9 @@ defmodule Lasso.HealthProbe.Worker do
   end
 
   # Check if WS is currently connected (not just configured)
-  defp ws_connected?(_chain, provider_id) do
+  defp ws_connected?(profile, chain, provider_id) do
     # Check if WSConnection process is alive and connected
-    case WSConnection.status(provider_id) do
+    case WSConnection.status(profile, chain, provider_id) do
       %{connected: true} -> true
       _ -> false
     end

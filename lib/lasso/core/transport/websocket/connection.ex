@@ -89,7 +89,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   """
   @spec start_link(Endpoint.t()) :: GenServer.on_start()
   def start_link(%Endpoint{} = endpoint) do
-    GenServer.start_link(__MODULE__, endpoint, name: via_name(endpoint.id))
+    GenServer.start_link(__MODULE__, endpoint,
+      name: via_name(endpoint.profile, endpoint.chain_name, endpoint.id)
+    )
   end
 
   @doc """
@@ -97,12 +99,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   ## Examples
 
-      iex> Lasso.RPC.Transport.WebSocket.Connection.status("ethereum_ws")
+      iex> Lasso.RPC.Transport.WebSocket.Connection.status("default", "ethereum", "ethereum_ws")
       %{connected: true, endpoint_id: "ethereum_ws", reconnect_attempts: 0}
   """
-  @spec status(String.t()) :: map()
-  def status(connection_id) do
-    GenServer.call(via_name(connection_id), :status)
+  @spec status(String.t(), String.t(), String.t()) :: map()
+  def status(profile, chain, provider_id) do
+    GenServer.call(via_name(profile, chain, provider_id), :status)
   end
 
   # Server Callbacks
@@ -131,13 +133,27 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   @doc """
   Performs a unary JSON-RPC request over the WebSocket connection with response correlation.
 
+  The connection is identified by `{profile, chain, provider_id}` tuple.
+
   Returns {:ok, result} | {:error, reason}.
   """
-  @spec request(String.t(), String.t(), list() | map() | nil, non_neg_integer(), String.t() | nil) ::
+  @spec request(
+          {String.t(), String.t(), String.t()},
+          String.t(),
+          list() | map() | nil,
+          non_neg_integer(),
+          String.t() | nil
+        ) ::
           {:ok, Response.Success.t()} | {:error, JError.t()}
-  def request(connection_id, method, params, timeout_ms \\ 30_000, request_id \\ nil) do
+  def request(
+        {profile, chain, provider_id},
+        method,
+        params,
+        timeout_ms \\ 30_000,
+        request_id \\ nil
+      ) do
     GenServer.call(
-      via_name(connection_id),
+      via_name(profile, chain, provider_id),
       {:request, method, params, timeout_ms, request_id},
       timeout_ms + 2_000
     )
@@ -1062,8 +1078,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     "conn_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
   end
 
-  defp via_name(connection_id) do
-    {:via, Registry, {Lasso.Registry, {:ws_conn, connection_id}}}
+  defp via_name(profile, chain, provider_id) do
+    {:via, Registry, {Lasso.Registry, {:ws_conn, profile, chain, provider_id}}}
   end
 
   defp ws_client do

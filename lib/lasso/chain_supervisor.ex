@@ -59,7 +59,7 @@ defmodule Lasso.RPC.ChainSupervisor do
     case ProviderPool.get_status(profile, chain_name) do
       {:ok, status} ->
         # Collect WebSocket connection status from WSConnection processes
-        ws_connections = collect_ws_connection_status(status.providers)
+        ws_connections = collect_ws_connection_status(profile, chain_name, status.providers)
         Map.put(status, :ws_connections, ws_connections)
 
       {:error, :not_found} ->
@@ -272,10 +272,10 @@ defmodule Lasso.RPC.ChainSupervisor do
   end
 
   # Collects WebSocket connection status from WSConnection processes
-  defp collect_ws_connection_status(providers) when is_list(providers) do
+  defp collect_ws_connection_status(profile, chain, providers) when is_list(providers) do
     Enum.map(providers, fn provider ->
       try do
-        case WSConnection.status(provider.id) do
+        case WSConnection.status(profile, chain, provider.id) do
           status when is_map(status) ->
             %{
               id: provider.id,
@@ -319,7 +319,7 @@ defmodule Lasso.RPC.ChainSupervisor do
     end)
   end
 
-  defp collect_ws_connection_status(_), do: []
+  defp collect_ws_connection_status(_profile, _chain, _), do: []
 
   # Dynamic provider management helpers
 

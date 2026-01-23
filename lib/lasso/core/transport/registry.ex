@@ -417,7 +417,13 @@ defmodule Lasso.RPC.TransportRegistry do
     case provider_config_result do
       {:ok, provider_config} ->
         transport_module = get_transport_module(transport)
-        channel_opts = Keyword.put(opts, :provider_id, provider_id)
+
+        channel_opts =
+          opts
+          |> Keyword.put(:provider_id, provider_id)
+          |> Keyword.put(:profile, state.profile)
+          |> Keyword.put(:chain, state.chain_name)
+
         # Only attempt to open channels that are actually configured
         case transport do
           :http ->

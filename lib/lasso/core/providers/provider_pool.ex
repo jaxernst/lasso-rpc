@@ -1342,24 +1342,24 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   defp provider_passes_filters?(provider, state, filters, protocol, current_time) do
-    transport_ready?(provider, protocol, current_time) and
+    transport_ready?(provider, state.profile, state.chain_name, protocol, current_time) and
       circuit_breaker_ready?(provider, state.circuit_states, protocol, filters) and
       rate_limit_ok?(provider, state, protocol, current_time, filters)
   end
 
-  defp transport_ready?(provider, protocol, current_time) do
+  defp transport_ready?(provider, profile, chain, protocol, current_time) do
     case protocol do
       :http ->
         transport_available?(provider, :http, current_time)
 
       :ws ->
         transport_available?(provider, :ws, current_time) and
-          is_pid(ws_connection_pid(provider.id))
+          is_pid(ws_connection_pid(profile, chain, provider.id))
 
       :both ->
         transport_available?(provider, :http, current_time) or
           (transport_available?(provider, :ws, current_time) and
-             is_pid(ws_connection_pid(provider.id)))
+             is_pid(ws_connection_pid(profile, chain, provider.id)))
 
       _ ->
         transport_available?(provider, :http, current_time) or
@@ -1440,8 +1440,9 @@ defmodule Lasso.RPC.ProviderPool do
     end
   end
 
-  defp ws_connection_pid(provider_id) when is_binary(provider_id) do
-    GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, provider_id}}})
+  defp ws_connection_pid(profile, chain, provider_id)
+       when is_binary(profile) and is_binary(chain) and is_binary(provider_id) do
+    GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, profile, chain, provider_id}}})
   end
 
   @spec get_cb_state(circuit_states(), provider_id(), :http | :ws) :: circuit_state()

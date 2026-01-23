@@ -40,7 +40,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
 
     on_exit(fn ->
       # Clean up WebSocket connection
-      cleanup_ws_connection(endpoint.id)
+      cleanup_ws_connection(endpoint)
       # Clean up circuit breaker
       cleanup_circuit_breaker(endpoint.chain_name, endpoint.id)
       # Clean up application config
@@ -51,8 +51,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
     %{endpoint: endpoint}
   end
 
-  defp cleanup_ws_connection(connection_id) do
-    case GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, connection_id}}}) do
+  defp cleanup_ws_connection(endpoint) do
+    ws_key = {:ws_conn, endpoint.profile, endpoint.chain_name, endpoint.id}
+
+    case GenServer.whereis({:via, Registry, {Lasso.Registry, ws_key}}) do
       nil -> :ok
       pid -> catch_exit(GenServer.stop(pid, :normal))
     end
@@ -173,7 +175,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
 
       # Send a request
       Task.async(fn ->
-        Connection.request(endpoint.id, "eth_blockNumber", [], 5_000)
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          5_000
+        )
       end)
 
       {:ok, _measurements, metadata} = TelemetrySync.await_event(sent_collector, timeout: 2_000)
@@ -200,7 +207,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
       # Send request in background
       _task =
         Task.async(fn ->
-          Connection.request(endpoint.id, "eth_blockNumber", [], 5_000)
+          Connection.request(
+            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            "eth_blockNumber",
+            [],
+            5_000
+          )
         end)
 
       {:ok, measurements, metadata} =
@@ -232,7 +244,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
 
       # Send request with short timeout
       Task.async(fn ->
-        Connection.request(endpoint.id, "eth_blockNumber", [], 100)
+        Connection.request(
+          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          "eth_blockNumber",
+          [],
+          100
+        )
       end)
 
       {:ok, measurements, metadata} =
