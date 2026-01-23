@@ -25,6 +25,7 @@ defmodule LassoWeb.NetworkTopology do
   )
 
   attr(:class, :string, default: "", doc: "additional CSS classes")
+  attr(:preview_mode, :boolean, default: false, doc: "when true, shows nodes in disabled preview state")
 
   def nodes_display(assigns) do
     profile = assigns[:selected_profile] || "default"
@@ -79,18 +80,19 @@ defmodule LassoWeb.NetworkTopology do
           <div
             class={[
               "absolute z-10 -translate-x-1/2 -translate-y-1/2 transform",
-              "flex cursor-pointer items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-transform duration-200 hover:scale-110",
-              if(@selected_chain == chain_name,
+              "flex items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-transform duration-200",
+              if(@preview_mode, do: "cursor-default grayscale-[30%]", else: "cursor-pointer hover:scale-110"),
+              if(@selected_chain == chain_name and not @preview_mode,
                 do: "ring-purple-400/30 border-purple-400 ring-4",
-                else: "border-gray-500 hover:border-gray-400"
+                else: if(@preview_mode, do: "border-gray-600", else: "border-gray-500 hover:border-gray-400")
               ),
               "from-gray-800 to-gray-900"
             ]}
             style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_color(chain_name, @profile_chains)} 0%, #111827 100%); " <>
-              if(@selected_chain == chain_name,
+              if(@selected_chain == chain_name and not @preview_mode,
                 do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
                 else: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.2), inset 0 0 15px rgba(0, 0, 0, 0.3);")}
-            phx-click={@on_chain_select}
+            phx-click={if @preview_mode, do: nil, else: @on_chain_select}
             phx-value-chain={chain_name}
             phx-value-highlight={chain_name}
             data-chain={chain_name}
@@ -119,20 +121,21 @@ defmodule LassoWeb.NetworkTopology do
             <div
               class={[
                 "z-5 absolute -translate-x-1/2 -translate-y-1/2 transform",
-                "flex cursor-pointer items-center justify-center rounded-full border-2 transition-transform duration-150 hover:scale-125",
-                if(@selected_provider == connection.id,
+                "flex items-center justify-center rounded-full border-2 transition-transform duration-150",
+                if(@preview_mode, do: "cursor-default grayscale-[30%]", else: "cursor-pointer hover:scale-125"),
+                if(@selected_provider == connection.id and not @preview_mode,
                   do: "ring-purple-400/30 !border-purple-400 ring-2",
-                  else: provider_border_class(connection)
+                  else: if(@preview_mode, do: "border-gray-600", else: provider_border_class(connection))
                 ),
-                if(@selected_provider != connection.id,
+                if(@selected_provider != connection.id and not @preview_mode,
                   do: provider_status_bg_class(connection)
                 )
               ]}
               style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
-                if(@selected_provider == connection.id,
+                if(@selected_provider == connection.id and not @preview_mode,
                   do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
                   else: "box-shadow: 0 0 4px rgba(255, 255, 255, 0.15);")}
-              phx-click={@on_provider_select}
+              phx-click={if @preview_mode, do: nil, else: @on_provider_select}
               phx-value-provider={connection.id}
               phx-value-highlight={connection.id}
               title={connection.name}

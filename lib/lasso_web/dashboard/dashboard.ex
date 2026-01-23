@@ -616,7 +616,7 @@ defmodule LassoWeb.Dashboard do
         profiles={@profiles}
         selected_profile={@selected_profile}
       />
-      
+
     <!-- Content Section -->
       <div class="grid-pattern animate-fade-in relative flex-1 overflow-hidden">
         <%= case @active_tab do %>
@@ -735,7 +735,7 @@ defmodule LassoWeb.Dashboard do
           />
         </div>
       </div>
-      
+
     <!-- Simulator Controls (top-left) -->
       <.live_component
         module={Components.SimulatorControls}
@@ -794,6 +794,7 @@ defmodule LassoWeb.Dashboard do
 
   def floating_details_window(assigns) do
     import LassoWeb.Components.FloatingWindow
+    alias LassoWeb.Components.DetailPanelComponents
 
     # Calculate system metrics
     total_connections = length(assigns.connections)
@@ -812,7 +813,7 @@ defmodule LassoWeb.Dashboard do
     title =
       cond do
         assigns.details_collapsed ->
-          "Profile Overview"
+          "Routing Profile"
 
         assigns.selected_provider ->
           "Provider Details"
@@ -821,7 +822,7 @@ defmodule LassoWeb.Dashboard do
           "Chain Details"
 
         true ->
-          "Profile Overview"
+          "Routing Profile"
       end
 
     # Determine if toggle should be enabled (only when chain or provider is selected)
@@ -832,6 +833,13 @@ defmodule LassoWeb.Dashboard do
         nil
       end
 
+    # Get profile display name
+    profile_display_name =
+      case Lasso.Config.ConfigStore.get_profile(assigns.selected_profile) do
+        {:ok, meta} -> meta.name
+        _ -> assigns.selected_profile
+      end
+
     assigns =
       assigns
       |> assign(:total_connections, total_connections)
@@ -840,6 +848,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:status, status)
       |> assign(:title, title)
       |> assign(:on_toggle, on_toggle)
+      |> assign(:profile_display_name, profile_display_name)
 
     ~H"""
     <.floating_window
@@ -855,38 +864,45 @@ defmodule LassoWeb.Dashboard do
       </:header>
 
       <:collapsed_preview>
-        <div class="space-y-3 p-3">
-          <!-- System metrics grid -->
-          <div class="grid grid-cols-4 gap-3 bg-gray-800/40 rounded-md p-3">
-            <div>
-              <div class="text-[10px] tracking-wide text-gray-400">Providers</div>
-              <div class="text-sm font-semibold text-white">
-                <span class="text-emerald-300">{@total_connections}</span>
-              </div>
-            </div>
-            <div>
-              <div class="text-[10px] uppercase tracking-wide text-gray-400">Chains</div>
-              <div class="text-sm font-semibold text-purple-300">{@total_chains}</div>
-            </div>
-            <div>
-              <div class="text-[10px] text-gray-400">RPC/s</div>
-              <div class="text-xs font-medium text-sky-300">
-                {MetricsHelpers.rpc_calls_per_second(@routing_events)}
-              </div>
-            </div>
-            <div>
-              <div class="text-[10px] text-gray-400">Failovers (1m)</div>
-              <div class="text-xs font-medium text-yellow-300">
-                {MetricsHelpers.failovers_last_minute(@routing_events)}
-              </div>
+        <div class="space-y-3">
+          <div class="px-5 pt-5 pb-1">
+            <h3 class="text-2xl font-bold leading-none text-white tracking-tight capitalize">
+              {@profile_display_name}
+            </h3>
+            <div class="text-sm text-gray-500 mt-0.5">
+              <span class="text-gray-300">{@total_connections}</span>
+              providers · <span class="text-gray-300">{@total_chains}</span>
+              chains
             </div>
           </div>
-          
-    <!-- Recent Activity feed -->
-          <div>
-            <div class="text-[10px] text-gray-400 mb-1.5">
+
+          <DetailPanelComponents.metrics_strip class="border-y border-gray-800">
+            <:metric
+              label="RPS"
+              value={format_rps(MetricsHelpers.rpc_calls_per_second(@routing_events))}
+              value_class="text-sky-400"
+            />
+            <:metric
+              label="Success"
+              value={format_success_rate(MetricsHelpers.success_rate_percent(@routing_events))}
+              value_class={success_rate_class(MetricsHelpers.success_rate_percent(@routing_events))}
+            />
+            <:metric
+              label="Latency"
+              value={format_latency(MetricsHelpers.avg_latency_ms(@routing_events))}
+              value_class="text-purple-400"
+            />
+            <:metric
+              label="Failovers"
+              value={format_failovers(MetricsHelpers.failovers_last_minute(@routing_events))}
+              value_class="text-yellow-300"
+            />
+          </DetailPanelComponents.metrics_strip>
+
+          <div class="px-5 pb-4">
+            <h4 class="text-xs font-semibold text-gray-500 mb-2">
               Recent Activity
-            </div>
+            </h4>
             <div
               id="recent-activity-feed"
               phx-hook="ActivityFeed"
@@ -918,7 +934,7 @@ defmodule LassoWeb.Dashboard do
                 </div>
               <% end %>
               <%= if length(@routing_events) == 0 do %>
-                <div class="text-[9px] text-gray-500">No recent activity</div>
+                <div class="text-[10px] text-gray-600">Waiting for requests...</div>
               <% end %>
             </div>
           </div>
@@ -1475,4 +1491,22 @@ defmodule LassoWeb.Dashboard do
     |> Enum.reject(&is_nil/1)
     |> Enum.sort_by(& &1.total_calls, :desc)
   end
+
+  # Formatting helpers for metrics display
+  defp format_success_rate(nil), do: "—"
+  defp format_success_rate(rate), do: "#{rate}%"
+
+  defp success_rate_class(nil), do: "text-gray-500"
+  defp success_rate_class(rate) when rate >= 99.0, do: "text-emerald-400"
+  defp success_rate_class(rate) when rate >= 95.0, do: "text-yellow-400"
+  defp success_rate_class(_), do: "text-red-400"
+
+  defp format_rps(rps) when rps == 0 or rps == 0.0, do: "0/s"
+  defp format_rps(rps), do: "#{rps}/s"
+
+  defp format_latency(nil), do: "—"
+  defp format_latency(ms), do: "#{ms}ms"
+
+  defp format_failovers(0), do: "0/min"
+  defp format_failovers(n), do: "#{n}/min"
 end
