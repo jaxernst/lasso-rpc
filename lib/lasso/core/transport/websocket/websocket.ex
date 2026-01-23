@@ -18,6 +18,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
   # Channel represents a WebSocket connection
   @type channel :: %{
+          profile: String.t(),
+          chain: String.t(),
           ws_url: String.t(),
           provider_id: String.t(),
           connection_pid: pid(),
@@ -29,6 +31,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
   @impl true
   def open(provider_config, opts \\ []) do
     provider_id = Keyword.get(opts, :provider_id, Map.get(provider_config, :id, "unknown"))
+    profile = Keyword.get(opts, :profile, Map.get(provider_config, :profile))
+    chain = Keyword.get(opts, :chain, Map.get(provider_config, :chain))
 
     case get_ws_url(provider_config) do
       nil ->
@@ -39,9 +43,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
          )}
 
       ws_url ->
-        # For now, we'll use the existing WSConnection via the provider_id
-        # In a full implementation, we would start a dedicated connection pool here
-        case GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, provider_id}}}) do
+        case GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, profile, chain, provider_id}}}) do
           nil ->
             {:error,
              JError.new(-32_000, "WebSocket connection not available",
@@ -51,6 +53,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
           connection_pid when is_pid(connection_pid) ->
             channel = %{
+              profile: profile,
+              chain: chain,
               ws_url: ws_url,
               provider_id: provider_id,
               connection_pid: connection_pid,
@@ -81,7 +85,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
   @impl true
   def request(channel, rpc_request, timeout \\ 30_000) do
-    %{provider_id: provider_id} = channel
+    %{profile: profile, chain: chain, provider_id: provider_id} = channel
 
     method = Map.get(rpc_request, "method")
     params = Map.get(rpc_request, "params", [])
@@ -91,7 +95,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
     io_start_us = System.monotonic_time(:microsecond)
 
     result =
-      case WSConnection.request(provider_id, method, params, timeout, request_id) do
+      case WSConnection.request({profile, chain, provider_id}, method, params, timeout, request_id) do
         {:ok, result} ->
           {:ok, result}
 
@@ -123,14 +127,14 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
   @impl true
   def subscribe(channel, rpc_request, handler_pid) when is_pid(handler_pid) do
-    %{provider_id: provider_id, connection_pid: _connection_pid} = channel
+    %{profile: profile, chain: chain, provider_id: provider_id} = channel
 
     method = Map.get(rpc_request, "method")
     params = Map.get(rpc_request, "params", [])
 
     case method do
       "eth_subscribe" ->
-        case WSConnection.request(provider_id, method, params, 30_000) do
+        case WSConnection.request({profile, chain, provider_id}, method, params, 30_000) do
           {:ok, %Response.Success{} = response} ->
             case Response.Success.decode_result(response) do
               {:ok, subscription_id} ->

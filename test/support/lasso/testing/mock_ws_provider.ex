@@ -65,7 +65,7 @@ defmodule Lasso.Testing.MockWSProvider do
       GenServer.start_link(
         __MODULE__,
         {chain, spec},
-        name: {:via, Registry, {Lasso.Registry, {:ws_conn, provider_id}}}
+        name: {:via, Registry, {Lasso.Registry, {:ws_conn, profile, chain, provider_id}}}
       )
 
     # Create provider config
@@ -116,8 +116,8 @@ defmodule Lasso.Testing.MockWSProvider do
   Sends a subscription request to the mock provider.
   Used internally by WSConnection.
   """
-  def send_message(provider_id, message) do
-    case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
+  def send_message(profile \\ @test_profile, chain, provider_id, message) do
+    case Registry.lookup(Lasso.Registry, {:ws_conn, profile, chain, provider_id}) do
       [{pid, _}] -> GenServer.cast(pid, {:send_message, message})
       [] -> {:error, :not_found}
     end
@@ -126,8 +126,10 @@ defmodule Lasso.Testing.MockWSProvider do
   @doc """
   Sends a mock newHeads block to all subscribers.
   """
-  def send_block(chain, provider_id, block_header) when is_map(block_header) do
-    case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
+  def send_block(chain, provider_id, block_header, opts \\ []) when is_map(block_header) do
+    profile = Keyword.get(opts, :profile, @test_profile)
+
+    case Registry.lookup(Lasso.Registry, {:ws_conn, profile, chain, provider_id}) do
       [{pid, _}] -> GenServer.cast(pid, {:broadcast_block, chain, block_header})
       [] -> {:error, :not_found}
     end
@@ -140,13 +142,19 @@ defmodule Lasso.Testing.MockWSProvider do
   """
   def send_block_sequence(chain, provider_id, start_block, count, opts \\ []) do
     delay_ms = Keyword.get(opts, :delay_ms, 10)
+    profile = Keyword.get(opts, :profile, @test_profile)
 
     Enum.each(start_block..(start_block + count - 1), fn block_num ->
-      send_block(chain, provider_id, %{
-        "number" => "0x" <> String.downcase(Integer.to_string(block_num, 16)),
-        "hash" => "0x" <> String.downcase(Integer.to_string(block_num * 1000, 16)),
-        "timestamp" => "0x" <> String.downcase(Integer.to_string(:os.system_time(:second), 16))
-      })
+      send_block(
+        chain,
+        provider_id,
+        %{
+          "number" => "0x" <> String.downcase(Integer.to_string(block_num, 16)),
+          "hash" => "0x" <> String.downcase(Integer.to_string(block_num * 1000, 16)),
+          "timestamp" => "0x" <> String.downcase(Integer.to_string(:os.system_time(:second), 16))
+        },
+        profile: profile
+      )
 
       if delay_ms > 0 do
         Process.sleep(delay_ms)
@@ -159,8 +167,8 @@ defmodule Lasso.Testing.MockWSProvider do
   @doc """
   Simulates a disconnect by stopping the mock provider.
   """
-  def simulate_disconnect(chain, provider_id) do
-    stop_mock(chain, provider_id)
+  def simulate_disconnect(chain, provider_id, opts \\ []) do
+    stop_mock(chain, provider_id, opts)
   end
 
   @doc """
@@ -212,8 +220,10 @@ defmodule Lasso.Testing.MockWSProvider do
   @doc """
   Sends a mock log event to all log subscribers.
   """
-  def send_log(chain, provider_id, log) when is_map(log) do
-    case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
+  def send_log(chain, provider_id, log, opts \\ []) when is_map(log) do
+    profile = Keyword.get(opts, :profile, @test_profile)
+
+    case Registry.lookup(Lasso.Registry, {:ws_conn, profile, chain, provider_id}) do
       [{pid, _}] -> GenServer.cast(pid, {:broadcast_log, chain, log})
       [] -> {:error, :not_found}
     end
@@ -222,26 +232,14 @@ defmodule Lasso.Testing.MockWSProvider do
   @doc """
   Stops a mock WebSocket provider.
   """
-  def stop_mock(chain, provider_id) do
-    # Get profile from the running process state before stopping
-    profile =
-      case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
-        [{pid, _}] when is_pid(pid) ->
-          try do
-            GenServer.call(pid, :get_profile, 100)
-          catch
-            _, _ -> @test_profile
-          end
-
-        _ ->
-          @test_profile
-      end
+  def stop_mock(chain, provider_id, opts \\ []) do
+    profile = Keyword.get(opts, :profile, @test_profile)
 
     # Remove from ConfigStore
     Lasso.Config.ConfigStore.unregister_provider_runtime(profile, chain, provider_id)
 
     # Stop the GenServer
-    case Registry.lookup(Lasso.Registry, {:ws_conn, provider_id}) do
+    case Registry.lookup(Lasso.Registry, {:ws_conn, profile, chain, provider_id}) do
       [{pid, _}] ->
         if Process.alive?(pid) do
           try do
@@ -540,7 +538,7 @@ defmodule Lasso.Testing.MockWSProvider do
   defp setup_cleanup(profile, chain, provider_id) do
     ExUnit.Callbacks.on_exit({:cleanup_mock_ws, provider_id}, fn ->
       Logger.debug("Test cleanup: stopping mock WS provider #{provider_id}")
-      stop_mock(chain, provider_id)
+      stop_mock(chain, provider_id, profile: profile)
 
       # Clean up circuit breakers
       for transport <- [:http, :ws] do

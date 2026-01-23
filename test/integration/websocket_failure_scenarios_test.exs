@@ -66,15 +66,17 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
 
   defp cleanup_connection(endpoint) do
     # Clean up WebSocket connection
-    case GenServer.whereis({:via, Registry, {Lasso.Registry, {:ws_conn, endpoint.id}}}) do
+    ws_key = {:ws_conn, endpoint.profile, endpoint.chain_name, endpoint.id}
+
+    case GenServer.whereis({:via, Registry, {Lasso.Registry, ws_key}}) do
       nil -> :ok
       pid when is_pid(pid) -> if Process.alive?(pid), do: GenServer.stop(pid, :normal)
     end
 
     # Clean up circuit breaker
-    case GenServer.whereis(
-           {:via, Registry, {Lasso.Registry, {:circuit_breaker, "#{endpoint.id}:ws"}}}
-         ) do
+    cb_id = "#{endpoint.profile}:#{endpoint.chain_name}:#{endpoint.id}:ws"
+
+    case GenServer.whereis({:via, Registry, {Lasso.Registry, {:circuit_breaker, cb_id}}}) do
       nil -> :ok
       pid when is_pid(pid) -> if Process.alive?(pid), do: GenServer.stop(pid, :normal)
     end
@@ -252,7 +254,7 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       # Send request that won't complete
       task =
         Task.async(fn ->
-          Connection.request(endpoint.id, "eth_blockNumber", [], 15_000)
+          Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 15_000)
         end)
 
       # Wait longer to ensure request is tracked in pending map
@@ -300,7 +302,7 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       tasks =
         for i <- 1..3 do
           Task.async(fn ->
-            Connection.request(endpoint.id, "eth_blockNumber_#{i}", [], 15_000)
+            Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber_#{i}", [], 15_000)
           end)
         end
 
@@ -346,7 +348,7 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
 
       # Send request with longer timeout
       start_time = System.monotonic_time(:millisecond)
-      result = Connection.request(endpoint.id, "eth_blockNumber", [], 10_000)
+      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 10_000)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should succeed after delay
@@ -373,7 +375,7 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       TestSupport.MockWSClient.set_response_delay(ws_state.connection, 10_000)
 
       # Send request with shorter timeout
-      result = Connection.request(endpoint.id, "eth_blockNumber", [], 1_000)
+      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 1_000)
 
       # Should timeout - could be {:error, :timeout} or error tuple
       case result do
@@ -419,7 +421,7 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       end
 
       # Should remain stable
-      status = Connection.status(endpoint.id)
+      status = Connection.status(endpoint.profile, endpoint.chain_name, endpoint.id)
       assert status.connected == true
 
       cleanup_connection(endpoint)
@@ -441,7 +443,7 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       # Rapid cycles with requests interspersed
       for i <- 1..3 do
         # Send request
-        result = Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+        result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
         assert match?({:ok, _}, result)
 
         # Disconnect
@@ -457,7 +459,7 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       end
 
       # Final request should work
-      result = Connection.request(endpoint.id, "eth_blockNumber", [], 2_000)
+      result = Connection.request({endpoint.profile, endpoint.chain_name, endpoint.id}, "eth_blockNumber", [], 2_000)
       assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
@@ -493,7 +495,7 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       assert match?({:error, :timeout}, result)
 
       # Status should show not connected
-      status = Connection.status(endpoint.id)
+      status = Connection.status(endpoint.profile, endpoint.chain_name, endpoint.id)
       assert status.connected == false
 
       cleanup_connection(endpoint)
@@ -603,8 +605,8 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       assert meta1.reconnect_attempt == 1
 
       # Both should be operational
-      status1 = Connection.status(endpoint1.id)
-      status2 = Connection.status(endpoint2.id)
+      status1 = Connection.status(endpoint1.profile, endpoint1.chain_name, endpoint1.id)
+      status2 = Connection.status(endpoint2.profile, endpoint2.chain_name, endpoint2.id)
       assert status1.connected == true
       assert status2.connected == true
 
