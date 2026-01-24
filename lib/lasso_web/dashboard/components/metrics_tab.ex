@@ -18,18 +18,56 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         {:error, _} -> %{chain_id: "Unknown"}
       end
 
+    # Extract available regions from provider metrics
+    available_regions = extract_available_regions(assigns.provider_metrics)
+
+    # Preserve selected_region if already set and still valid, otherwise default to "all"
+    current_region = socket.assigns[:selected_region] || "all"
+
+    selected_region =
+      if current_region == "all" or current_region in available_regions do
+        current_region
+      else
+        "all"
+      end
+
     socket =
       socket
       |> assign(assigns)
       |> assign(:chain_config, chain_config)
+      |> assign(:available_regions, available_regions)
+      |> assign(:selected_region, selected_region)
 
     {:ok, socket}
   end
 
+  defp extract_available_regions(provider_metrics) when is_list(provider_metrics) do
+    provider_metrics
+    |> Enum.flat_map(fn provider ->
+      case Map.get(provider, :latency_by_region) do
+        regions when is_list(regions) ->
+          Enum.map(regions, & &1.region)
+
+        _ ->
+          []
+      end
+    end)
+    |> Enum.uniq()
+    |> Enum.reject(&(&1 in [nil, "unknown"]))
+    |> Enum.sort()
+  end
+
+  defp extract_available_regions(_), do: []
+
   @impl true
   def handle_event("select_metrics_chain", %{"chain" => chain}, socket) do
     send(self(), {:metrics_chain_selected, chain})
-    {:noreply, socket}
+    {:noreply, assign(socket, :selected_region, "all")}
+  end
+
+  @impl true
+  def handle_event("select_region", %{"region" => region}, socket) do
+    {:noreply, assign(socket, :selected_region, region)}
   end
 
   @impl true
@@ -55,6 +93,9 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
           <.provider_performance_table
             provider_metrics={@provider_metrics}
             metrics_last_updated={@metrics_last_updated}
+            available_regions={@available_regions}
+            selected_region={@selected_region}
+            myself={@myself}
           />
           <.method_performance_breakdown method_metrics={@method_metrics} />
         </div>
@@ -103,15 +144,22 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
 
   attr(:provider_metrics, :list, required: true)
   attr(:metrics_last_updated, :any, default: nil)
+  attr(:available_regions, :list, default: [])
+  attr(:selected_region, :string, default: "all")
+  attr(:myself, :any, required: true)
 
   defp provider_performance_table(assigns) do
+    # Filter and transform metrics based on selected region
+    filtered_metrics = filter_metrics_by_region(assigns.provider_metrics, assigns.selected_region)
+    assigns = assign(assigns, :filtered_metrics, filtered_metrics)
+
     ~H"""
     <section>
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold flex items-center gap-2 text-white">
           <span>Provider Performance</span>
           <span class="text-xs text-gray-500 font-normal">
-            ({length(@provider_metrics)} providers)
+            ({length(@filtered_metrics)} providers)
           </span>
         </h2>
         <div :if={@metrics_last_updated} class="flex items-center gap-2 text-xs text-gray-500">
@@ -122,15 +170,26 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         </div>
       </div>
 
-      <DetailPanelComponents.empty_state :if={@provider_metrics == []}>
+      <.region_filter_pills
+        :if={@available_regions != []}
+        available_regions={@available_regions}
+        selected_region={@selected_region}
+        myself={@myself}
+      />
+
+      <DetailPanelComponents.empty_state :if={@filtered_metrics == []}>
         <p class="text-sm font-medium text-gray-400 mb-1">No metrics available</p>
         <p class="text-xs text-gray-600">
-          No provider metrics recorded in the last 24 hours. Metrics will appear as requests flow through your RPC endpoints.
+          <%= if @selected_region != "all" do %>
+            No provider metrics for region {@selected_region}. Try selecting "All Regions" or a different region.
+          <% else %>
+            No provider metrics recorded in the last 24 hours. Metrics will appear as requests flow through your RPC endpoints.
+          <% end %>
         </p>
       </DetailPanelComponents.empty_state>
 
       <div
-        :if={@provider_metrics != []}
+        :if={@filtered_metrics != []}
         class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-sm overflow-hidden"
       >
         <div class="overflow-x-auto">
@@ -150,10 +209,10 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
             </thead>
             <tbody class="divide-y divide-gray-700/30">
               <.provider_row
-                :for={{provider, index} <- Enum.with_index(@provider_metrics, 1)}
+                :for={{provider, index} <- Enum.with_index(@filtered_metrics, 1)}
                 provider={provider}
                 rank={index}
-                provider_metrics={@provider_metrics}
+                provider_metrics={@filtered_metrics}
               />
             </tbody>
           </table>
@@ -161,6 +220,88 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       </div>
     </section>
     """
+  end
+
+  attr(:available_regions, :list, required: true)
+  attr(:selected_region, :string, required: true)
+  attr(:myself, :any, required: true)
+
+  defp region_filter_pills(assigns) do
+    ~H"""
+    <div class="flex flex-wrap gap-2 mb-4">
+      <button
+        phx-click="select_region"
+        phx-value-region="all"
+        phx-target={@myself}
+        class={[
+          "px-3 py-1.5 rounded-full text-sm font-medium transition-all",
+          if(@selected_region == "all",
+            do: "bg-sky-500/20 text-sky-300 border border-sky-500/50",
+            else: "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/30"
+          )
+        ]}
+      >
+        All Regions
+      </button>
+      <button
+        :for={region <- @available_regions}
+        phx-click="select_region"
+        phx-value-region={region}
+        phx-target={@myself}
+        class={[
+          "px-3 py-1.5 rounded-full text-sm font-medium transition-all",
+          if(@selected_region == region,
+            do: "bg-sky-500/20 text-sky-300 border border-sky-500/50",
+            else: "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/30"
+          )
+        ]}
+      >
+        {region}
+      </button>
+    </div>
+    """
+  end
+
+  defp filter_metrics_by_region(provider_metrics, "all"), do: provider_metrics
+
+  defp filter_metrics_by_region(provider_metrics, region) do
+    provider_metrics
+    |> Enum.map(fn provider ->
+      case Map.get(provider, :latency_by_region) do
+        regions when is_list(regions) ->
+          region_data = Enum.find(regions, fn r -> r.region == region end)
+
+          if region_data do
+            provider
+            |> Map.put(:avg_latency, region_data.avg)
+            |> Map.put(:p50_latency, region_data.p50)
+            |> Map.put(:p95_latency, region_data.p95)
+            |> Map.put(:p99_latency, region_data.p99)
+            |> update_consistency_ratio()
+          else
+            nil
+          end
+
+        _ ->
+          nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.sort_by(&(&1.avg_latency || 999_999))
+  end
+
+  defp update_consistency_ratio(provider) do
+    p50 = Map.get(provider, :p50_latency)
+    p99 = Map.get(provider, :p99_latency)
+
+    consistency_ratio =
+      if p50 && p99 && p50 > 0 do
+        p99 / p50
+      else
+        nil
+      end
+
+    Map.put(provider, :consistency_ratio, consistency_ratio)
   end
 
   attr(:provider, :map, required: true)

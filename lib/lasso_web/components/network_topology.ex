@@ -5,6 +5,8 @@ defmodule LassoWeb.NetworkTopology do
   Displays chains and their providers in a hexagonal packed layout for even
   spacing and visual consistency. Chains are positioned in a spiral pattern
   starting from the center, with providers orbiting each chain node.
+
+  Includes cluster-aware aggregate health badges per Section 7.2 of CLUSTERING_SPEC_V1.
   """
   use Phoenix.Component
 
@@ -17,6 +19,12 @@ defmodule LassoWeb.NetworkTopology do
   attr(:selected_chain, :string, default: nil, doc: "currently selected chain")
   attr(:selected_provider, :string, default: nil, doc: "currently selected provider")
   attr(:selected_profile, :string, default: nil, doc: "currently selected profile")
+
+  attr(:cluster_circuit_states, :map,
+    default: %{},
+    doc: "cluster-wide circuit states for worst-case aggregation"
+  )
+
   attr(:on_chain_select, :string, default: "select_chain", doc: "event name for chain selection")
 
   attr(:on_provider_select, :string,
@@ -34,10 +42,19 @@ defmodule LassoWeb.NetworkTopology do
   def nodes_display(assigns) do
     profile = assigns[:selected_profile] || "default"
 
+    # Merge worst-case cluster circuit states into connections for pessimistic status display
+    connections =
+      merge_worst_case_circuit_states(
+        assigns.connections,
+        assigns[:cluster_circuit_states] || %{}
+      )
+
+    chains = group_connections_by_chain(connections)
+
     assigns =
       assigns
-      |> assign(:chains, group_connections_by_chain(assigns.connections))
-      |> assign(:hex_layout, calculate_hexagonal_layout(assigns.connections, profile))
+      |> assign(:chains, chains)
+      |> assign(:hex_layout, calculate_hexagonal_layout(connections, profile))
       |> assign(:profile_chains, get_profile_chain_configs(profile))
 
     ~H"""
@@ -185,7 +202,8 @@ defmodule LassoWeb.NetworkTopology do
                   </span>
                 </div>
               <% end %>
-            </div>
+
+                </div>
           <% end %>
         <% end %>
       </div>
@@ -490,5 +508,51 @@ defmodule LassoWeb.NetworkTopology do
       _ ->
         chain_name
     end
+  end
+
+  # Merge worst-case circuit states from cluster into each connection
+  # This ensures the network topology shows pessimistic status when nodes disagree
+  defp merge_worst_case_circuit_states(connections, cluster_circuit_states)
+       when map_size(cluster_circuit_states) == 0 do
+    connections
+  end
+
+  defp merge_worst_case_circuit_states(connections, cluster_circuit_states) do
+    Enum.map(connections, fn conn ->
+      provider_id = conn.id
+
+      # Collect all circuit states for this provider across all regions
+      provider_circuits =
+        cluster_circuit_states
+        |> Enum.filter(fn {{pid, _region}, _circuit} -> pid == provider_id end)
+        |> Enum.map(fn {{_pid, _region}, circuit} -> circuit end)
+
+      if provider_circuits == [] do
+        conn
+      else
+        # Compute worst-case for HTTP and WS separately
+        http_worst = worst_circuit_state_from_list(provider_circuits, :http)
+        ws_worst = worst_circuit_state_from_list(provider_circuits, :ws)
+
+        # Overall circuit state is the worst of HTTP and WS
+        overall_worst = worst_of_two_states(http_worst, ws_worst)
+
+        conn
+        |> Map.put(:circuit_state, overall_worst)
+        |> Map.put(:http_circuit_state, http_worst)
+        |> Map.put(:ws_circuit_state, ws_worst)
+      end
+    end)
+  end
+
+  defp worst_circuit_state_from_list(circuits, transport) do
+    circuits
+    |> Enum.map(&Map.get(&1, transport, :closed))
+    |> Enum.reduce(:closed, &worst_of_two_states/2)
+  end
+
+  defp worst_of_two_states(a, b) do
+    priority = %{open: 1, half_open: 2, closed: 3}
+    if Map.get(priority, a, 3) < Map.get(priority, b, 3), do: a, else: b
   end
 end

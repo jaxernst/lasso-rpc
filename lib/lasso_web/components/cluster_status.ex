@@ -65,19 +65,19 @@ defmodule LassoWeb.Components.ClusterStatus do
   attr :class, :string, default: ""
 
   def cluster_badge(assigns) do
-    cluster_info = Lasso.ClusterMonitor.get_cluster_info()
+    topology = get_topology_info()
 
     status =
       cond do
-        not cluster_info.enabled -> :disabled
-        cluster_info.nodes_connected == 0 -> :standalone
-        cluster_info.nodes_total == cluster_info.nodes_connected + 1 -> :healthy
+        not topology.enabled -> :disabled
+        topology.coverage.connected == 1 -> :standalone
+        topology.coverage.responding == topology.coverage.connected -> :healthy
         true -> :degraded
       end
 
     assigns =
       assigns
-      |> assign(:cluster_info, cluster_info)
+      |> assign(:topology, topology)
       |> assign(:status, status)
 
     ~H"""
@@ -90,14 +90,27 @@ defmodule LassoWeb.Components.ClusterStatus do
           <% :standalone -> %>
             1 node
           <% _ -> %>
-            <%= @cluster_info.nodes_total %> nodes
-            <%= if length(@cluster_info.regions) > 1 do %>
-              · <%= length(@cluster_info.regions) %> regions
+            <%= @topology.coverage.connected %> nodes
+            <%= if length(@topology.regions) > 1 do %>
+              · <%= length(@topology.regions) %> regions
             <% end %>
         <% end %>
       </span>
     </div>
     """
+  end
+
+  defp get_topology_info do
+    try do
+      topology = Lasso.Cluster.Topology.get_topology()
+      %{
+        enabled: true,
+        coverage: topology.coverage,
+        regions: topology.regions
+      }
+    catch
+      :exit, _ -> %{enabled: false, coverage: %{connected: 1, responding: 1}, regions: []}
+    end
   end
 
   @doc """

@@ -5,23 +5,75 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   use LassoWeb, :live_component
 
   alias LassoWeb.Components.DetailPanelComponents
+  alias LassoWeb.Components.RegionSelector
   alias LassoWeb.Dashboard.{EndpointHelpers, Formatting, Helpers}
 
   @impl true
   def update(assigns, socket) do
-    chain_connections = Enum.filter(assigns.connections, &(&1.chain == assigns.chain))
+    chain = assigns.chain
+    chain_connections = Enum.filter(assigns.connections, &(&1.chain == chain))
+
+    # Get live provider metrics from aggregator
+    live_provider_metrics = assigns[:live_provider_metrics] || %{}
+
+    # Cached metrics
+    aggregate_cached = assigns[:selected_chain_metrics] || %{}
+
+    # Regions come from aggregator's cluster-wide tracking (single source of truth)
+    available_regions = assigns[:available_regions] || []
+
+    selected_region = socket.assigns[:chain_metrics_region] || "aggregate"
+    chain_events = assigns[:selected_chain_events] || []
+
+    # Use aggregate cached metrics as fallback
+    cached_fallback = aggregate_cached
+
+    # Compute metrics from live data with cached fallback
+    filtered_metrics =
+      compute_filtered_chain_metrics(
+        selected_region,
+        live_provider_metrics,
+        chain,
+        cached_fallback
+      )
+
+    # Get region-specific decision to prevent flickering
+    filtered_decision = get_region_decision(chain_events, chain, selected_region)
 
     socket =
       socket
       |> assign(assigns)
       |> assign(:chain_connections, chain_connections)
       |> assign(:consensus_height, find_consensus_height(chain_connections))
-      |> assign(
-        :last_decision,
-        Helpers.get_last_decision(assigns[:selected_chain_events] || [], assigns.chain)
-      )
+      |> assign(:chain_events, chain_events)
+      |> assign(:available_regions, available_regions)
+      |> assign(:show_region_tabs, length(available_regions) > 1)
+      |> assign(:live_provider_metrics, live_provider_metrics)
+      |> assign(:aggregate_cached, aggregate_cached)
+      |> assign_new(:chain_metrics_region, fn -> "aggregate" end)
+      |> assign(:filtered_chain_metrics, filtered_metrics)
+      |> assign(:filtered_last_decision, filtered_decision)
 
     {:ok, socket}
+  end
+
+  @impl true
+  def handle_event("select_chain_region", %{"region" => region}, socket) do
+    live_provider_metrics = socket.assigns[:live_provider_metrics] || %{}
+    aggregate_cached = socket.assigns[:aggregate_cached] || %{}
+    chain = socket.assigns.chain
+    chain_events = socket.assigns[:chain_events] || []
+
+    filtered_metrics =
+      compute_filtered_chain_metrics(region, live_provider_metrics, chain, aggregate_cached)
+
+    socket =
+      socket
+      |> assign(:chain_metrics_region, region)
+      |> assign(:filtered_chain_metrics, filtered_metrics)
+      |> assign(:filtered_last_decision, get_region_decision(chain_events, chain, region))
+
+    {:noreply, socket}
   end
 
   defp find_consensus_height(connections) do
@@ -36,7 +88,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
         chain={@chain}
         selected_profile={@selected_profile}
         consensus_height={@consensus_height}
-        chain_metrics={@selected_chain_metrics}
+        chain_metrics={@filtered_chain_metrics}
       />
 
       <.endpoint_config_section
@@ -46,12 +98,23 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
         chain_endpoints={@selected_chain_endpoints}
       />
 
-      <.chain_metrics_strip chain_metrics={@selected_chain_metrics} />
+      <div :if={@show_region_tabs} class="mt-4">
+        <RegionSelector.region_selector
+          id="chain-region-selector"
+          regions={@available_regions}
+          selected={@chain_metrics_region}
+          show_aggregate={true}
+          target={@myself}
+          event="select_chain_region"
+        />
+      </div>
+
+      <.chain_metrics_strip chain_metrics={@filtered_chain_metrics} />
 
       <.routing_decisions_section
-        last_decision={@last_decision}
+        last_decision={@filtered_last_decision}
         connections={@connections}
-        chain_metrics={@selected_chain_metrics}
+        chain_metrics={@filtered_chain_metrics}
       />
     </div>
     """
@@ -130,12 +193,15 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       |> assign(:rps, format_rps(Map.get(metrics, :rps, 0.0)))
 
     ~H"""
-    <DetailPanelComponents.metrics_strip>
-      <:metric label="Latency p50" value={@p50} />
-      <:metric label="Latency p95" value={@p95} />
-      <:metric label="Success" value={@success} value_class={@success_class} />
-      <:metric label="RPS" value={@rps} value_class="text-purple-400" />
-    </DetailPanelComponents.metrics_strip>
+    <DetailPanelComponents.panel_section border={false} class="px-6">
+      <DetailPanelComponents.section_header title="Performance" />
+      <DetailPanelComponents.metrics_strip class="border-x rounded">
+        <:metric label="Latency p50" value={@p50} />
+        <:metric label="Latency p95" value={@p95} />
+        <:metric label="Success" value={@success} value_class={@success_class} />
+        <:metric label="RPS" value={@rps} value_class="text-purple-400" />
+      </DetailPanelComponents.metrics_strip>
+    </DetailPanelComponents.panel_section>
     """
   end
 
@@ -182,7 +248,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       |> assign(:ws_url, ws_url)
 
     ~H"""
-    <div class="px-6 py-8 border-b border-gray-800">
+    <div class="px-6 py-8 border-gray-800">
       <div
         id={"endpoint-config-#{@chain}"}
         phx-hook="TabSwitcher"
@@ -290,7 +356,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     assigns = assign(assigns, :decision_share, decision_share)
 
     ~H"""
-    <div class="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+    <div class="flex-1 overflow-y-auto px-6 space-y-6 custom-scrollbar">
       <div>
         <DetailPanelComponents.section_header title="Routing Decisions" />
         <div class="grid grid-cols-1 gap-4">
@@ -389,4 +455,173 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   end
 
   defp find_provider_name(_, decision), do: decision.provider_id
+
+  defp compute_filtered_chain_metrics("aggregate", live_provider_metrics, chain, cached_metrics) do
+    chain_providers_with_ids =
+      live_provider_metrics
+      |> Enum.filter(fn {_pid, metrics} -> metrics[:chain] == chain end)
+
+    chain_providers =
+      chain_providers_with_ids
+      |> Enum.map(fn {_pid, metrics} -> metrics[:aggregate] || %{} end)
+
+    if chain_providers != [] do
+      total_calls = Enum.reduce(chain_providers, 0, fn p, acc -> acc + (p[:total_calls] || 0) end)
+
+      total_successes =
+        Enum.reduce(chain_providers, 0, fn p, acc ->
+          calls = p[:total_calls] || 0
+          rate = p[:success_rate] || 0
+          acc + calls * rate / 100
+        end)
+
+      success_rate =
+        if total_calls > 0, do: Float.round(total_successes / total_calls * 100, 1), else: nil
+
+      p50_latency = compute_weighted_latency(chain_providers, :p50_latency)
+      p95_latency = compute_weighted_latency(chain_providers, :p95_latency)
+
+      rps =
+        Enum.reduce(chain_providers, 0.0, fn p, acc ->
+          acc + (p[:events_per_second] || 0.0)
+        end)
+
+      decision_share = compute_decision_share(chain_providers_with_ids, :aggregate, total_calls)
+
+      %{
+        success_rate: success_rate || cached_metrics[:success_rate],
+        p50_latency: p50_latency || cached_metrics[:p50_latency],
+        p95_latency: p95_latency || cached_metrics[:p95_latency],
+        rps: if(rps > 0, do: Float.round(rps, 1), else: cached_metrics[:rps] || 0),
+        decision_share:
+          if(decision_share != [],
+            do: decision_share,
+            else: cached_metrics[:decision_share] || []
+          ),
+        connected_providers: length(chain_providers),
+        total_providers: length(chain_providers)
+      }
+    else
+      # No live data, use cached
+      cached_metrics
+    end
+  end
+
+  defp compute_filtered_chain_metrics(
+         selected_region,
+         live_provider_metrics,
+         chain,
+         cached_metrics
+       ) do
+    chain_providers_with_ids =
+      live_provider_metrics
+      |> Enum.filter(fn {_pid, metrics} -> metrics[:chain] == chain end)
+
+    region_providers_with_ids =
+      chain_providers_with_ids
+      |> Enum.map(fn {provider_id, metrics} ->
+        by_region = metrics[:by_region] || %{}
+
+        case Map.get(by_region, selected_region) do
+          nil -> nil
+          region_data -> {provider_id, region_data}
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    region_providers = Enum.map(region_providers_with_ids, fn {_pid, data} -> data end)
+
+    if region_providers != [] do
+      total_calls =
+        Enum.reduce(region_providers, 0, fn p, acc -> acc + (p[:total_calls] || 0) end)
+
+      total_successes =
+        Enum.reduce(region_providers, 0, fn p, acc ->
+          calls = p[:total_calls] || 0
+          rate = p[:success_rate] || 0
+          acc + calls * rate / 100
+        end)
+
+      success_rate =
+        if total_calls > 0, do: Float.round(total_successes / total_calls * 100, 1), else: nil
+
+      p50_latency = compute_weighted_latency(region_providers, :p50_latency)
+      p95_latency = compute_weighted_latency(region_providers, :p95_latency)
+
+      rps =
+        Enum.reduce(region_providers, 0.0, fn p, acc ->
+          acc + (p[:events_per_second] || 0.0)
+        end)
+
+      decision_share = compute_decision_share(region_providers_with_ids, :region, total_calls)
+
+      %{
+        success_rate: success_rate || cached_metrics[:success_rate],
+        p50_latency: p50_latency || cached_metrics[:p50_latency],
+        p95_latency: p95_latency || cached_metrics[:p95_latency],
+        rps: if(rps > 0, do: Float.round(rps, 1), else: cached_metrics[:rps] || 0),
+        decision_share:
+          if(decision_share != [],
+            do: decision_share,
+            else: cached_metrics[:decision_share] || []
+          ),
+        connected_providers: length(region_providers),
+        total_providers: length(chain_providers_with_ids)
+      }
+    else
+      # No live data for this region, use cached metrics
+      cached_metrics
+    end
+  end
+
+  defp compute_decision_share(providers_with_ids, mode, total_calls) when total_calls > 0 do
+    providers_with_ids
+    |> Enum.map(fn {provider_id, data} ->
+      calls =
+        case mode do
+          :aggregate -> (data[:aggregate] || %{})[:total_calls] || 0
+          :region -> data[:total_calls] || 0
+        end
+
+      pct = if total_calls > 0, do: Float.round(calls / total_calls * 100, 1), else: 0.0
+      {provider_id, pct}
+    end)
+    |> Enum.filter(fn {_pid, pct} -> pct > 0 end)
+    |> Enum.sort_by(fn {_pid, pct} -> pct end, :desc)
+  end
+
+  defp compute_decision_share(_, _, _), do: []
+
+  defp compute_weighted_latency(providers, field) do
+    with_data =
+      providers
+      |> Enum.filter(fn p -> p[field] != nil and (p[:total_calls] || 0) > 0 end)
+
+    if with_data != [] do
+      total_calls = Enum.reduce(with_data, 0, fn p, acc -> acc + (p[:total_calls] || 0) end)
+
+      weighted_sum =
+        Enum.reduce(with_data, 0, fn p, acc ->
+          acc + (p[field] || 0) * (p[:total_calls] || 0)
+        end)
+
+      if total_calls > 0, do: round(weighted_sum / total_calls), else: nil
+    else
+      nil
+    end
+  end
+
+  # Find the most recent decision for a specific region
+  # This prevents flickering when events from other regions push old events off the list
+  defp get_region_decision(events, chain, "aggregate") do
+    # For aggregate, return the most recent decision for this chain
+    Enum.find(events, fn e -> e[:chain] == chain end)
+  end
+
+  defp get_region_decision(events, chain, region) do
+    # For specific region, find most recent decision FROM that region
+    Enum.find(events, fn e ->
+      e[:chain] == chain and e[:source_region] == region
+    end)
+  end
 end

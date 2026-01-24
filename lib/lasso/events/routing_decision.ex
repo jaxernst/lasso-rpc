@@ -48,7 +48,7 @@ defmodule Lasso.Events.RoutingDecision do
       request_id: attrs[:request_id],
       profile: attrs[:profile] || "default",
       source_node: node(),
-      source_region: System.get_env("CLUSTER_REGION") || "unknown",
+      source_region: Application.get_env(:lasso, :cluster_region) || "unknown",
       chain: attrs[:chain],
       method: attrs[:method],
       strategy: to_string(attrs[:strategy]),

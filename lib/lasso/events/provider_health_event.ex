@@ -44,7 +44,7 @@ defmodule Lasso.Events.ProviderHealthEvent do
       ts: attrs[:ts] || System.system_time(:millisecond),
       profile: attrs[:profile] || "default",
       source_node: node(),
-      source_region: System.get_env("CLUSTER_REGION") || "unknown",
+      source_region: Application.get_env(:lasso, :cluster_region) || "unknown",
       chain: attrs[:chain],
       provider_id: attrs[:provider_id],
       transport: attrs[:transport],

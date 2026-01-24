@@ -42,14 +42,11 @@ defmodule Lasso.Application do
            [name: Lasso.ClusterSupervisor]
          ]},
 
-        # Start cluster monitor for node connection telemetry
-        Lasso.ClusterMonitor,
+        # Task supervisor for async operations (needed by Topology)
+        {Task.Supervisor, name: Lasso.TaskSupervisor},
 
-        # Start event buffer for dashboard event batching
-        LassoWeb.Dashboard.EventBuffer,
-
-        # Start cluster metrics cache for aggregated dashboard data
-        LassoWeb.Dashboard.ClusterMetricsCache,
+        # Cluster topology - single source of truth for cluster membership
+        Lasso.Cluster.Topology,
 
         # Start Telemetry supervisor for metrics and monitoring
         Lasso.Telemetry,
@@ -87,8 +84,16 @@ defmodule Lasso.Application do
         # Add a local Registry for dynamic process names (high-cardinality)
         {Registry, keys: :unique, name: Lasso.Registry, partitions: System.schedulers_online()},
 
-        # Start Task.Supervisor for async operations
-        {Task.Supervisor, name: Lasso.TaskSupervisor},
+        # Registry for dashboard event stream lookup
+        {Registry, keys: :unique, name: Lasso.Dashboard.StreamRegistry},
+
+        # DynamicSupervisor for per-profile event stream processes
+        {DynamicSupervisor,
+         name: Lasso.Dashboard.StreamSupervisor,
+         strategy: :one_for_one},
+
+        # Metrics store for cached cluster-wide metrics
+        LassoWeb.Dashboard.MetricsStore,
 
         # Start block cache for real-time block data from WebSocket subscriptions
         Lasso.Core.BlockCache,

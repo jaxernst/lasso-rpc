@@ -43,6 +43,23 @@ vm_metrics_enabled =
 
 config :lasso, :vm_metrics_enabled, vm_metrics_enabled
 
+# Cluster region identification
+# If not explicitly set, generate a random region ID for this node
+# This ensures each node has a unique identifier for dashboard region views
+cluster_region =
+  case System.get_env("CLUSTER_REGION") do
+    nil ->
+      random_id = :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
+      region = "node-#{random_id}"
+      System.put_env("CLUSTER_REGION", region)
+      region
+
+    region ->
+      region
+  end
+
+config :lasso, :cluster_region, cluster_region
+
 # Clustering configuration (optional - only enabled when CLUSTER_NODE_BASENAME is set)
 if dns_query = System.get_env("CLUSTER_DNS_QUERY") do
   config :libcluster,

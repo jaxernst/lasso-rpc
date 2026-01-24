@@ -10,8 +10,8 @@ defmodule LassoWeb.HealthController do
 
     uptime_seconds = div(uptime_ms, 1000)
 
-    # Get cluster state
-    cluster_info = Lasso.ClusterMonitor.get_cluster_info()
+    # Get cluster state from Topology
+    topology = get_topology_info()
 
     health_status = %{
       status: "healthy",
@@ -19,26 +19,40 @@ defmodule LassoWeb.HealthController do
       uptime_seconds: uptime_seconds,
       version: Application.spec(:lasso, :vsn) |> to_string(),
       cluster: %{
-        enabled: cluster_info.enabled,
-        nodes_connected: cluster_info.nodes_connected,
-        nodes_total: cluster_info.nodes_total,
-        regions: cluster_info.regions,
-        status: determine_cluster_status(cluster_info)
+        enabled: topology.enabled,
+        nodes_connected: topology.coverage.connected,
+        nodes_responding: topology.coverage.responding,
+        nodes_total: topology.coverage.expected,
+        regions: topology.regions,
+        status: determine_cluster_status(topology)
       }
     }
 
     json(conn, health_status)
   end
 
-  defp determine_cluster_status(info) do
+  defp get_topology_info do
+    try do
+      topology = Lasso.Cluster.Topology.get_topology()
+      %{
+        enabled: true,
+        coverage: topology.coverage,
+        regions: topology.regions
+      }
+    catch
+      :exit, _ -> %{enabled: false, coverage: %{connected: 1, responding: 1, expected: 1}, regions: []}
+    end
+  end
+
+  defp determine_cluster_status(topology) do
     cond do
-      not info.enabled ->
+      not topology.enabled ->
         "standalone"
 
-      info.nodes_connected + 1 >= info.nodes_total ->
+      topology.coverage.responding >= topology.coverage.connected ->
         "healthy"
 
-      info.nodes_connected + 1 >= div(info.nodes_total, 2) ->
+      topology.coverage.responding >= div(topology.coverage.connected, 2) ->
         "degraded"
 
       true ->

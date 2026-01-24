@@ -76,7 +76,9 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
         provider_id: pid,
         duration_ms: if(is_number(dur), do: round(dur), else: 0),
         result: Map.get(evt, :result, :unknown),
-        failovers: Map.get(evt, :failover_count, 0)
+        failovers: Map.get(evt, :failover_count, 0),
+        source_node: Map.get(evt, :source_node),
+        source_region: Map.get(evt, :source_region)
       }
 
       ev =
@@ -235,7 +237,56 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
     end
   end
 
-  def handle_events_batch(events, socket) do
-    update(socket, :events, &(events ++ &1))
+  def handle_events_batch(socket, events) do
+    # Transform RoutingDecision-style events for routing_events display
+    routing_entries = transform_to_routing_entries(events, socket.assigns.profile_chains)
+
+    socket
+    |> update(:events, &(events ++ &1))
+    |> update(:routing_events, &(routing_entries ++ Enum.take(&1, Constants.routing_events_limit() - length(routing_entries))))
   end
+
+  def handle_events_snapshot(socket, events) do
+    # Transform RoutingDecision-style events for routing_events display
+    routing_entries = transform_to_routing_entries(events, socket.assigns.profile_chains)
+
+    socket
+    |> assign(:events, events)
+    |> assign(:routing_events, routing_entries)
+  end
+
+  defp transform_to_routing_entries(events, profile_chains) do
+    events
+    |> Enum.filter(fn e ->
+      # Only include events that are routing decisions for this profile's chains
+      Map.has_key?(e, :method) and Map.get(e, :chain) in profile_chains
+    end)
+    |> Enum.map(fn e ->
+      %{
+        ts: format_time(Map.get(e, :ts)),
+        ts_ms: normalize_timestamp(Map.get(e, :ts)),
+        chain: Map.get(e, :chain),
+        method: Map.get(e, :method),
+        strategy: Map.get(e, :strategy),
+        provider_id: Map.get(e, :provider_id),
+        duration_ms: Map.get(e, :duration_ms, 0),
+        result: Map.get(e, :result, :unknown),
+        failovers: Map.get(e, :failover_count, 0),
+        source_node: Map.get(e, :source_node),
+        source_region: Map.get(e, :source_region)
+      }
+    end)
+  end
+
+  defp format_time(ts) when is_integer(ts) do
+    ts
+    |> DateTime.from_unix!(:millisecond)
+    |> DateTime.to_time()
+    |> to_string()
+  end
+
+  defp format_time(_), do: DateTime.utc_now() |> DateTime.to_time() |> to_string()
+
+  defp normalize_timestamp(ts) when is_integer(ts), do: ts
+  defp normalize_timestamp(_), do: System.system_time(:millisecond)
 end

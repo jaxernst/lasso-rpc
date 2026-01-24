@@ -76,6 +76,8 @@ defmodule LassoWeb.Components.DetailPanelComponents do
 
   attr(:class, :string, default: "")
 
+  slot(:header)
+
   slot :metric, required: true do
     attr(:label, :string, required: true)
     attr(:value, :string, required: true)
@@ -84,21 +86,24 @@ defmodule LassoWeb.Components.DetailPanelComponents do
 
   def metrics_strip(assigns) do
     ~H"""
-    <div class={[
-      "grid divide-x divide-gray-800 border-b border-gray-800 bg-gray-900/30",
-      "grid-cols-#{length(@metric)}",
-      @class
-    ]}>
-      <%= for metric <- @metric do %>
-        <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
-          <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">
-            {metric.label}
+    <div>
+      {render_slot(@header)}
+      <div class={[
+        "grid divide-x divide-gray-800 border-gray-800 border-y",
+        "grid-cols-#{length(@metric)}",
+        @class
+      ]}>
+        <%= for metric <- @metric do %>
+          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+            <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">
+              {metric.label}
+            </div>
+            <div class={["text-sm font-bold font-mono", metric[:value_class] || "text-sky-400"]}>
+              {metric.value}
+            </div>
           </div>
-          <div class={["text-sm font-bold font-mono", metric[:value_class] || "text-sky-400"]}>
-            {metric.value}
-          </div>
-        </div>
-      <% end %>
+        <% end %>
+      </div>
     </div>
     """
   end
