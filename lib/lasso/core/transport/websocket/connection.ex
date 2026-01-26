@@ -76,6 +76,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.WebSocket.Endpoint
 
+  # Connection must stay up for this long before we consider it "stable"
+  # and reset reconnect_attempts. Prevents thrashing when providers
+  # drop connections immediately after connect.
+  @connection_stability_ms 5_000
+
   # Client API
 
   @doc """
@@ -121,6 +126,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       pending_requests: %{},
       heartbeat_ref: nil,
       reconnect_ref: nil,
+      # Timer that fires after connection is stable - only then do we reset reconnect_attempts
+      # This prevents thrashing when providers drop connections immediately after connect
+      stability_timer_ref: nil,
       # Unique ID per connection instance, regenerated on each reconnect
       # Used by UpstreamSubscriptionManager to detect stale subscriptions
       connection_id: nil
@@ -161,93 +169,18 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   @impl true
   def handle_continue(:connect, state) do
-    ws_connection_pid = self()
+    breaker_id = {state.profile, state.chain_name, state.endpoint.id, :ws}
 
-    case CircuitBreaker.call({state.profile, state.chain_name, state.endpoint.id, :ws}, fn ->
-           connect_to_websocket(state.endpoint, ws_connection_pid)
-         end) do
-      # Circuit breaker executed the function - examine the result
-      {:executed, {:ok, connection}} ->
-        state = %{state | connection: connection}
-        # success path continues via {:ws_connected}
-        {:noreply, state}
-
-      {:executed, {:error, %JError{} = jerr}} ->
-        Logger.error(
-          "Failed to connect to #{state.endpoint.name} (WebSocket): #{jerr.message} (code=#{inspect(jerr.code)})"
-        )
-
-        # Emit telemetry event
-        :telemetry.execute(
-          [:lasso, :websocket, :connection_failed],
-          %{},
-          %{
-            provider_id: state.endpoint.id,
-            chain: state.chain_name,
-            error_code: jerr.code,
-            error_message: jerr.message,
-            retriable: jerr.retriable?,
-            will_reconnect: jerr.retriable?
-          }
-        )
-
-        Phoenix.PubSub.broadcast(
-          Lasso.PubSub,
-          "ws:conn:#{state.profile}:#{state.chain_name}",
-          {:connection_error, state.endpoint.id, jerr}
-        )
-
-        state =
-          if jerr.retriable? do
-            schedule_reconnect(state)
-          else
-            state
-          end
-
-        {:noreply, state}
-
-      {:executed, {:error, other}} ->
-        Logger.debug("Connection function returned error: #{inspect(other)}")
-
-        jerr = JError.from(other, provider_id: state.endpoint.id)
-
-        # Emit telemetry event
-        :telemetry.execute(
-          [:lasso, :websocket, :connection_failed],
-          %{},
-          %{
-            provider_id: state.endpoint.id,
-            chain: state.chain_name,
-            error_code: jerr.code,
-            error_message: jerr.message,
-            retriable: jerr.retriable?,
-            will_reconnect: jerr.retriable?
-          }
-        )
-
-        Phoenix.PubSub.broadcast(
-          Lasso.PubSub,
-          "ws:conn:#{state.profile}:#{state.chain_name}",
-          {:connection_error, state.endpoint.id, jerr}
-        )
-
-        state =
-          if jerr.retriable? do
-            schedule_reconnect(state)
-          else
-            state
-          end
-
-        {:noreply, state}
-
-      # Circuit breaker rejected execution
-      {:rejected, :circuit_open} ->
+    # Check circuit state manually instead of using CircuitBreaker.call
+    # This prevents successful connections from resetting the failure count,
+    # allowing disconnect failures to accumulate for "accept then drop" patterns
+    case CircuitBreaker.get_state(breaker_id) do
+      %{state: :open} ->
         Logger.debug("Circuit breaker open for #{state.endpoint.id}, skipping connect attempt")
 
         jerr =
           JError.new(-32_000, "Circuit open", provider_id: state.endpoint.id, retriable?: true)
 
-        # Emit telemetry event
         :telemetry.execute(
           [:lasso, :websocket, :connection_failed],
           %{},
@@ -267,20 +200,41 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           {:connection_error, state.endpoint.id, jerr}
         )
 
-        # Try again later (uses existing backoff)
         state = schedule_reconnect(state)
         {:noreply, state}
 
-      {:rejected, reason} ->
-        Logger.debug("Circuit breaker rejected: #{inspect(reason)}")
+      %{state: cb_state} when cb_state in [:closed, :half_open] ->
+        # Circuit is closed or half-open - attempt connection
+        do_connect(state, breaker_id)
 
-        jerr =
-          JError.new(-32_000, "Circuit breaker: #{reason}",
-            provider_id: state.endpoint.id,
-            retriable?: true
-          )
+      {:error, _reason} ->
+        # Circuit breaker not found or error - attempt connection anyway
+        do_connect(state, breaker_id)
+    end
+  end
 
-        # Emit telemetry event
+  # Attempt WebSocket connection without going through CircuitBreaker.call
+  # This ensures successful connections don't reset the failure count
+  defp do_connect(state, breaker_id) do
+    ws_connection_pid = self()
+
+    case connect_to_websocket(state.endpoint, ws_connection_pid) do
+      {:ok, connection} ->
+        # Success - don't report to circuit breaker yet!
+        # Recovery will be signaled when connection proves stable (5s)
+        state = %{state | connection: connection}
+        {:noreply, state}
+
+      {:error, %JError{} = jerr} ->
+        Logger.error(
+          "Failed to connect to #{state.endpoint.name} (WebSocket): #{jerr.message} (code=#{inspect(jerr.code)})"
+        )
+
+        # Record connection failure to circuit breaker
+        if jerr.breaker_penalty? do
+          CircuitBreaker.record_failure(breaker_id, jerr)
+        end
+
         :telemetry.execute(
           [:lasso, :websocket, :connection_failed],
           %{},
@@ -289,8 +243,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
             chain: state.chain_name,
             error_code: jerr.code,
             error_message: jerr.message,
-            retriable: true,
-            will_reconnect: true
+            retriable: jerr.retriable?,
+            will_reconnect: jerr.retriable?
           }
         )
 
@@ -300,7 +254,51 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           {:connection_error, state.endpoint.id, jerr}
         )
 
-        state = schedule_reconnect(state)
+        state =
+          if jerr.retriable? do
+            schedule_reconnect(state)
+          else
+            state
+          end
+
+        {:noreply, state}
+
+      {:error, other} ->
+        Logger.debug("Connection function returned error: #{inspect(other)}")
+
+        jerr = JError.from(other, provider_id: state.endpoint.id)
+
+        # Record connection failure to circuit breaker
+        if jerr.breaker_penalty? do
+          CircuitBreaker.record_failure(breaker_id, jerr)
+        end
+
+        :telemetry.execute(
+          [:lasso, :websocket, :connection_failed],
+          %{},
+          %{
+            provider_id: state.endpoint.id,
+            chain: state.chain_name,
+            error_code: jerr.code,
+            error_message: jerr.message,
+            retriable: jerr.retriable?,
+            will_reconnect: jerr.retriable?
+          }
+        )
+
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.profile}:#{state.chain_name}",
+          {:connection_error, state.endpoint.id, jerr}
+        )
+
+        state =
+          if jerr.retriable? do
+            schedule_reconnect(state)
+          else
+            state
+          end
+
         {:noreply, state}
     end
   end
@@ -380,7 +378,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   @impl true
   def handle_info({:ws_connected}, state) do
-    CircuitBreaker.signal_recovery({state.profile, state.chain_name, state.endpoint.id, :ws})
+    # NOTE: We intentionally do NOT call signal_recovery here.
+    # Recovery is signaled only after the connection proves stable (see {:connection_stable}).
+    # This allows circuit breaker failures to accumulate when providers accept connections
+    # but immediately drop them (e.g., dRPC connection limits).
 
     # Generate new connection_id for this connection instance
     # This allows consumers to detect when subscriptions are stale (from previous connection)
@@ -397,8 +398,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       }
     )
 
-    # Now reset the state for next potential disconnect/reconnect cycle
-    state = %{state | connected: true, reconnect_attempts: 0, connection_id: connection_id}
+    # Mark as connected but DON'T reset reconnect_attempts yet.
+    # Schedule stability timer - only reset attempts after connection proves stable.
+    # This prevents thrashing when providers drop connections immediately after connect.
+    state = %{state | connected: true, connection_id: connection_id}
 
     # Cancel any pending reconnect timer (stale) now that we're connected
     state =
@@ -408,6 +411,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       else
         state
       end
+
+    # Schedule stability check - reconnect_attempts will reset when this fires
+    state = schedule_stability_check(state)
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
@@ -458,7 +464,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   def handle_info({:ws_disconnect, :close_frame, code, reason}, state) do
-    # Cancel heartbeat to prevent race condition
+    # Cancel timers to prevent race conditions
+    state = cancel_stability_timer(state)
+
     state =
       if state.heartbeat_ref do
         Process.cancel_timer(state.heartbeat_ref)
@@ -475,9 +483,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         transport: :ws
       )
 
-    # Graceful codes: 1000 = normal, 1001 = going away, 1013 = try again later
-    graceful_codes = [1000, 1001, 1013]
-    is_graceful = code in graceful_codes
+    # Graceful codes that don't warrant circuit breaker penalty:
+    # 1000 = normal closure, 1001 = going away, 1012 = service restart
+    # Note: 1013 (try again later) is NOT graceful - it indicates rate limiting
+    is_graceful = graceful_close_code?(code)
 
     # Only log warnings for non-graceful closes or when active traffic was interrupted
     if had_pending or not is_graceful do
@@ -512,8 +521,19 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     )
 
     # Circuit breaker penalty: penalize if had active traffic OR non-graceful close
+    # Non-graceful disconnects (especially 1008 Policy Violation) often indicate
+    # the provider is rejecting our connections (rate limit, connection limit)
     should_penalize = had_pending or not is_graceful
     jerr_with_penalty = %{jerr | breaker_penalty?: should_penalize and jerr.breaker_penalty?}
+
+    # Record failure to circuit breaker so it can open after repeated disconnects
+    # This prevents hammering providers that accept connections but immediately drop them
+    if should_penalize do
+      CircuitBreaker.record_failure(
+        {state.profile, state.chain_name, state.endpoint.id, :ws},
+        jerr_with_penalty
+      )
+    end
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
@@ -527,7 +547,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   # Handle unexpected disconnects (network errors, crashes, abrupt TCP close)
   def handle_info({:ws_disconnect, :error, reason}, state) do
-    # Cancel heartbeat to prevent race condition
+    # Cancel timers to prevent race conditions
+    state = cancel_stability_timer(state)
+
     state =
       if state.heartbeat_ref do
         Process.cancel_timer(state.heartbeat_ref)
@@ -570,6 +592,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
     # Unexpected disconnects always warrant circuit breaker penalty
     jerr_with_penalty = %{jerr | breaker_penalty?: true}
+
+    # Record failure to circuit breaker - unexpected disconnects are always penalized
+    CircuitBreaker.record_failure(
+      {state.profile, state.chain_name, state.endpoint.id, :ws},
+      jerr_with_penalty
+    )
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
@@ -694,20 +722,42 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     {:noreply, state, {:continue, :connect}}
   end
 
+  # Connection has been stable for the grace period - now safe to reset reconnect_attempts
+  # and signal recovery to the circuit breaker
+  def handle_info({:connection_stable}, %{connected: true} = state) do
+    Logger.debug(
+      "Connection stable, resetting reconnect attempts (provider: #{state.endpoint.id})"
+    )
+
+    # Signal recovery to circuit breaker only after connection proves stable
+    # This prevents premature recovery when providers accept connections but immediately drop them
+    CircuitBreaker.signal_recovery({state.profile, state.chain_name, state.endpoint.id, :ws})
+
+    {:noreply, %{state | reconnect_attempts: 0, stability_timer_ref: nil}}
+  end
+
+  # Connection was lost before stability timer fired - ignore
+  def handle_info({:connection_stable}, state) do
+    {:noreply, %{state | stability_timer_ref: nil}}
+  end
+
   @impl true
   def terminate(reason, state) do
     Logger.info(
       "Terminating WebSocket connection #{state.endpoint.id}, reason: #{inspect(reason)}"
     )
 
-    # Clean up heartbeat timer
+    # Clean up timers
     if state.heartbeat_ref do
       Process.cancel_timer(state.heartbeat_ref)
     end
 
-    # Clean up reconnect timer
     if state.reconnect_ref do
       Process.cancel_timer(state.reconnect_ref)
+    end
+
+    if state.stability_timer_ref do
+      Process.cancel_timer(state.stability_timer_ref)
     end
 
     # Notify of disconnection via typed events
@@ -813,6 +863,21 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
     ref = Process.send_after(self(), {:heartbeat}, state.endpoint.heartbeat_interval)
     %{state | heartbeat_ref: ref}
+  end
+
+  defp schedule_stability_check(state) do
+    state = cancel_stability_timer(state)
+    ref = Process.send_after(self(), {:connection_stable}, @connection_stability_ms)
+    %{state | stability_timer_ref: ref}
+  end
+
+  defp cancel_stability_timer(state) do
+    if state.stability_timer_ref do
+      Process.cancel_timer(state.stability_timer_ref)
+      %{state | stability_timer_ref: nil}
+    else
+      state
+    end
   end
 
   defp schedule_reconnect_with_circuit_check(state) do
@@ -1071,6 +1136,22 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+
+  # WebSocket close codes that indicate graceful/expected disconnection
+  # These should NOT trigger circuit breaker penalties:
+  # - 1000: Normal closure (clean shutdown)
+  # - 1001: Going away (server shutting down, browser navigating away)
+  # - 1012: Service restart (server restarting, will be back soon)
+  #
+  # Close codes that SHOULD trigger penalties (not in this list):
+  # - 1002: Protocol error
+  # - 1003: Unsupported data (sometimes used for rate limits)
+  # - 1006: Abnormal closure (no close frame received)
+  # - 1008: Policy violation (often rate limit or connection limit exceeded)
+  # - 1011: Server error
+  # - 1013: Try again later (explicit rate limiting)
+  defp graceful_close_code?(code) when code in [1000, 1001, 1012], do: true
+  defp graceful_close_code?(_code), do: false
 
   # Generate unique connection ID for tracking connection instances
   # Used to detect stale subscriptions after reconnect
