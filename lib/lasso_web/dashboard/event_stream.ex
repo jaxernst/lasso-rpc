@@ -5,23 +5,38 @@ defmodule LassoWeb.Dashboard.EventStream do
   Subscribes to routing decisions, circuit events, block sync events, and topology
   changes via PubSub. Pre-computes metrics and broadcasts batched updates to subscribers.
 
+  ## Architecture
+
+  EventStream acts as an aggregation layer between raw PubSub events and Dashboard
+  LiveViews. This reduces PubSub subscription count from O(chains × dashboards) to
+  O(chains) by having one EventStream per profile subscribe to all topics, then
+  fan out to Dashboard subscribers via direct process messaging.
+
+  For circuit and block events, EventStream broadcasts both:
+  - Processed state updates (for cluster-wide state tracking)
+  - Raw events (for UI event feed display)
+
   ## Usage
 
-      # Ensure stream is running for a profile
       {:ok, _pid} = EventStream.ensure_started("default")
-
-      # Subscribe to receive updates (typically in LiveView mount)
       EventStream.subscribe("default")
 
-      # Handle messages in LiveView:
-      # {:metrics_snapshot, %{metrics: metrics}}
-      # {:metrics_update, %{metrics: changed_metrics}}
-      # {:events_batch, %{events: events}}
-      # {:events_snapshot, %{events: recent_events}}
-      # {:cluster_update, %{connected: n, responding: n, regions: [...]}}
-      # {:circuit_update, %{provider_id: id, region: region, circuit: circuit_info}}
-      # {:block_update, %{provider_id: id, region: region, height: h, lag: lag}}
-      # {:region_added, %{region: region}}
+  ## Messages Sent to Subscribers
+
+  On subscribe (initial state):
+  - `{:dashboard_snapshot, %{metrics, circuits, health_counters, cluster, events}}`
+
+  Ongoing updates:
+  - `{:metrics_update, %{metrics: provider_metrics}}` - batched routing metrics
+  - `{:events_batch, %{events: [...]}}` - batched routing events for feed
+  - `{:cluster_update, %{connected, responding, regions, last_update}}` - topology changes
+  - `{:region_added, %{region: region}}` - new region discovered
+  - `{:heartbeat, %{ts: timestamp}}` - keepalive (every 2s)
+  - `{:health_pulse, %{provider_id, region, counters}}` - provider health updates
+  - `{:circuit_update, %{provider_id, region, circuit}}` - circuit state changes
+  - `{:circuit_breaker_event, event_data}` - raw circuit event for UI feed
+  - `{:block_update, %{provider_id, region, height, lag}}` - block height state
+  - `{:block_height_update, {profile, provider_id}, height, source, ts}` - raw block event
   """
 
   use GenServer, restart: :transient
@@ -230,16 +245,17 @@ defmodule LassoWeb.Dashboard.EventStream do
     end
   end
 
-  # Circuit breaker events - process immediately
+  # Circuit breaker events - process immediately, broadcast both state and raw event
   def handle_info({:circuit_breaker_event, event_data}, state) do
     state = update_circuit_state(state, event_data)
     broadcast_circuit_update(state, event_data)
+    broadcast_to_subscribers(state, {:circuit_breaker_event, event_data})
     {:noreply, state}
   end
 
-  # Block height updates - process immediately
+  # Block height updates - process immediately, broadcast both state and raw event
   def handle_info(
-        {:block_height_update, {profile, provider_id}, height, source, timestamp},
+        {:block_height_update, {profile, provider_id}, height, source, timestamp} = raw_event,
         state
       ) do
     region = get_region_for_source(source, state)
@@ -251,6 +267,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     if chain do
       state = update_block_height(state, provider_id, chain, region, height, source, timestamp)
       broadcast_block_update(state, provider_id, region, height, chain)
+      broadcast_to_subscribers(state, raw_event)
       {:noreply, state}
     else
       {:noreply, state}

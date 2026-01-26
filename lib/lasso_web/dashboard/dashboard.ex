@@ -149,46 +149,29 @@ defmodule LassoWeb.Dashboard do
 
     chains = ConfigStore.list_chains_for_profile(profile)
 
+    # Only subscribe to topics NOT handled by EventStream
+    # EventStream handles: circuit:events, block_sync (and forwards raw events)
+    # Removed: ws:conn (handlers were no-ops)
     for chain <- chains do
       Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{profile}:#{chain}")
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events:#{profile}:#{chain}")
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{profile}:#{chain}")
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{profile}:#{chain}")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain}")
     end
   end
 
   defp subscribe_global_topics(_profile) do
-    alias Lasso.Config.ConfigStore
-
     Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "clients:events")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_changes")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_updates")
-
-    # Global block_sync/health_probe for cross-profile aggregation
-    ConfigStore.list_chains()
-    |> Enum.each(fn chain ->
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{chain}")
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{chain}")
-    end)
   end
 
   defp unsubscribe_global_topics(_profile) do
-    alias Lasso.Config.ConfigStore
-
     Phoenix.PubSub.unsubscribe(Lasso.PubSub, "sync:updates")
     Phoenix.PubSub.unsubscribe(Lasso.PubSub, "block_cache:updates")
     Phoenix.PubSub.unsubscribe(Lasso.PubSub, "clients:events")
     Phoenix.PubSub.unsubscribe(Lasso.PubSub, "chain_config_changes")
     Phoenix.PubSub.unsubscribe(Lasso.PubSub, "chain_config_updates")
-
-    ConfigStore.list_chains()
-    |> Enum.each(fn chain ->
-      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "block_sync:#{chain}")
-      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "health_probe:#{chain}")
-    end)
   end
 
   defp unsubscribe_profile_topics(profile) do
@@ -196,11 +179,10 @@ defmodule LassoWeb.Dashboard do
 
     chains = ConfigStore.list_chains_for_profile(profile)
 
+    # Only unsubscribe from topics we directly subscribe to
+    # EventStream handles: circuit:events, block_sync
     for chain <- chains do
       Phoenix.PubSub.unsubscribe(Lasso.PubSub, "provider_pool:events:#{profile}:#{chain}")
-      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "circuit:events:#{profile}:#{chain}")
-      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "ws:conn:#{profile}:#{chain}")
-      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "block_sync:#{profile}:#{chain}")
       Phoenix.PubSub.unsubscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain}")
     end
   end
@@ -255,48 +237,12 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  @impl true
-  def handle_info({:connection_event, _event_type, _connection_id, _data}, socket) do
-    socket = schedule_connection_refresh(socket)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:connection_status_changed, _connection_id, _connection_data}, socket) do
-    socket = schedule_connection_refresh(socket)
-    {:noreply, socket}
-  end
-
-  # WebSocket connection events - ProviderPool handles these, dashboard ignores them
-  @impl true
-  def handle_info({ws_event, _provider_id, _extra}, socket)
-      when ws_event in [:ws_reconnecting, :ws_connected, :ws_disconnected, :connection_error] do
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:ws_closed, _provider_id, _code, _error}, socket) do
-    {:noreply, socket}
-  end
-
   # Batched events from EventStream
   @impl true
   def handle_info({:events_batch, %{events: events}}, socket) do
     socket =
       socket
       |> MessageHandlers.handle_events_batch(events)
-      |> refresh_selected_chain_events()
-      |> mark_not_stale()
-
-    {:noreply, socket}
-  end
-
-  # Initial events snapshot on subscribe
-  @impl true
-  def handle_info({:events_snapshot, %{events: events}}, socket) do
-    socket =
-      socket
-      |> MessageHandlers.handle_events_snapshot(events)
       |> refresh_selected_chain_events()
       |> mark_not_stale()
 
@@ -720,16 +666,6 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Legacy individual snapshot handlers (kept for backwards compatibility)
-  def handle_info({:metrics_snapshot, %{metrics: provider_metrics}}, socket) do
-    socket =
-      socket
-      |> assign(:live_provider_metrics, provider_metrics)
-      |> mark_not_stale()
-
-    {:noreply, socket}
-  end
-
   def handle_info({:metrics_update, %{metrics: changed_metrics}}, socket) do
     live_metrics = Map.merge(socket.assigns.live_provider_metrics, changed_metrics)
 
@@ -741,10 +677,6 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  def handle_info({:circuits_snapshot, %{circuits: circuit_states}}, socket) do
-    {:noreply, assign(socket, :cluster_circuit_states, circuit_states)}
-  end
-
   def handle_info(
         {:circuit_update, %{provider_id: provider_id, region: region, circuit: circuit}},
         socket
@@ -752,10 +684,6 @@ defmodule LassoWeb.Dashboard do
     key = {provider_id, region}
     circuits = Map.put(socket.assigns.cluster_circuit_states, key, circuit)
     {:noreply, assign(socket, :cluster_circuit_states, circuits)}
-  end
-
-  def handle_info({:health_counters_snapshot, %{counters: counters}}, socket) do
-    {:noreply, assign(socket, :cluster_health_counters, counters)}
   end
 
   def handle_info(
