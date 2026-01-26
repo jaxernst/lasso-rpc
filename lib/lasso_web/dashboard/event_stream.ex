@@ -167,9 +167,6 @@ defmodule LassoWeb.Dashboard.EventStream do
       Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{profile}:#{chain}")
     end
 
-    # Get initial cluster state from Topology
-    cluster_state = fetch_cluster_state()
-
     # Start tick timer
     schedule_tick()
 
@@ -178,10 +175,16 @@ defmodule LassoWeb.Dashboard.EventStream do
     {:ok,
      %__MODULE__{
        profile: profile,
-       cluster_state: cluster_state,
+       cluster_state: default_cluster_state(),
        last_tick: now,
        last_heartbeat: now - @heartbeat_interval_ms
-     }}
+     }, {:continue, :fetch_cluster_state}}
+  end
+
+  @impl true
+  def handle_continue(:fetch_cluster_state, state) do
+    cluster_state = fetch_cluster_state()
+    {:noreply, %{state | cluster_state: cluster_state}}
   end
 
   # Tick handler
@@ -332,19 +335,21 @@ defmodule LassoWeb.Dashboard.EventStream do
     Process.monitor(pid)
     subscribers = MapSet.put(state.subscribers, pid)
 
-    # Send current state immediately (map payloads)
-    send(pid, {:metrics_snapshot, %{metrics: state.provider_metrics}})
-    send(pid, {:circuits_snapshot, %{circuits: state.circuit_states}})
-    send(pid, {:health_counters_snapshot, %{counters: state.health_counters}})
-    send(pid, {:cluster_update, state.cluster_state})
-
-    # Send recent events from windows (convert structs to maps for Access)
+    # Send current state as a single batched snapshot (reduces message copies 5x -> 1x)
     recent_events =
       state.event_windows
       |> get_recent_events(100)
       |> Enum.map(&struct_to_map/1)
 
-    send(pid, {:events_snapshot, %{events: recent_events}})
+    snapshot = %{
+      metrics: state.provider_metrics,
+      circuits: state.circuit_states,
+      health_counters: state.health_counters,
+      cluster: state.cluster_state,
+      events: recent_events
+    }
+
+    send(pid, {:dashboard_snapshot, snapshot})
 
     {:reply, :ok, %{state | subscribers: subscribers}}
   end

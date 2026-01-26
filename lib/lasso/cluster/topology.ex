@@ -31,6 +31,7 @@ defmodule Lasso.Cluster.Topology do
   @region_discovery_backoff_base_ms 200
   @region_rediscovery_interval_ms 60_000
   @health_check_timeout_ms 5_000
+  @disconnected_node_cleanup_ms 24 * 60 * 60 * 1_000
 
   @type node_state ::
           :connected | :discovering | :responding | :ready | :unresponsive | :disconnected
@@ -179,6 +180,7 @@ defmodule Lasso.Cluster.Topology do
       |> maybe_health_check(now)
       |> maybe_reconcile(now)
       |> maybe_rediscover_unknown_regions(now)
+      |> cleanup_stale_disconnected_nodes(now)
 
     schedule_tick()
     {:noreply, %{state | last_tick: now}}
@@ -519,6 +521,40 @@ defmodule Lasso.Cluster.Topology do
     end
   end
 
+  defp cleanup_stale_disconnected_nodes(state, now) do
+    cutoff = now - @disconnected_node_cleanup_ms
+
+    stale_nodes =
+      state.nodes
+      |> Enum.filter(fn {_node, info} ->
+        info.state == :disconnected and (info.connected_at || 0) < cutoff
+      end)
+      |> Enum.map(fn {node, _} -> node end)
+
+    if stale_nodes == [] do
+      state
+    else
+      Logger.info("[Topology] Removing #{length(stale_nodes)} stale disconnected nodes")
+
+      nodes = Map.drop(state.nodes, stale_nodes)
+
+      regions =
+        Enum.reduce(stale_nodes, state.regions, fn node, acc ->
+          case Map.get(state.nodes, node) do
+            %{region: region} when region != "unknown" ->
+              Map.update(acc, region, [], &List.delete(&1, node))
+
+            _ ->
+              acc
+          end
+        end)
+        |> Enum.reject(fn {_region, nodes} -> nodes == [] end)
+        |> Map.new()
+
+      %{state | nodes: nodes, regions: regions}
+    end
+  end
+
   defp start_health_check(state) do
     node_list = get_connected_nodes_internal(state)
 
@@ -594,7 +630,17 @@ defmodule Lasso.Cluster.Topology do
 
       nil ->
         # No region configured, use node name as fallback
-        region = node |> Atom.to_string() |> String.split("@") |> List.first() || "unknown"
+        region =
+          node
+          |> Atom.to_string()
+          |> String.split("@")
+          |> List.first()
+          |> case do
+            nil -> "unknown"
+            "" -> "unknown"
+            r -> r
+          end
+
         {:region_discovered, node, region}
     end
   end
