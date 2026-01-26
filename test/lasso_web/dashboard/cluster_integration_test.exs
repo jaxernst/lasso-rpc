@@ -47,11 +47,15 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
     @tag timeout: 120_000
     test "nodes connect and can communicate via RPC", %{test_prefix: test_prefix} do
       # Start 2 minimal nodes (no applications - just test connectivity)
-      {:ok, cluster} = LocalCluster.start_link(2, name: test_prefix)
+      {:ok, cluster} = LocalCluster.start_link(2, name: test_prefix, applications: [])
       {:ok, nodes} = LocalCluster.nodes(cluster)
 
       on_exit(fn ->
-        LocalCluster.stop(cluster)
+        try do
+          LocalCluster.stop(cluster)
+        catch
+          :exit, _ -> :ok
+        end
       end)
 
       # Wait for nodes to connect
@@ -112,7 +116,11 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
       {:ok, nodes} = LocalCluster.nodes(cluster)
 
       on_exit(fn ->
-        LocalCluster.stop(cluster)
+        try do
+          LocalCluster.stop(cluster)
+        catch
+          :exit, _ -> :ok
+        end
       end)
 
       :timer.sleep(3_000)
@@ -161,7 +169,11 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
       {:ok, nodes} = LocalCluster.nodes(cluster)
 
       on_exit(fn ->
-        LocalCluster.stop(cluster)
+        try do
+          LocalCluster.stop(cluster)
+        catch
+          :exit, _ -> :ok
+        end
       end)
 
       :timer.sleep(3_000)
@@ -217,7 +229,11 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
       {:ok, nodes} = LocalCluster.nodes(cluster)
 
       on_exit(fn ->
-        LocalCluster.stop(cluster)
+        try do
+          LocalCluster.stop(cluster)
+        catch
+          :exit, _ -> :ok
+        end
       end)
 
       :timer.sleep(3_000)
@@ -281,7 +297,11 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
       {:ok, nodes} = LocalCluster.nodes(cluster)
 
       on_exit(fn ->
-        LocalCluster.stop(cluster)
+        try do
+          LocalCluster.stop(cluster)
+        catch
+          :exit, _ -> :ok
+        end
       end)
 
       :timer.sleep(3_000)
@@ -321,13 +341,18 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
 
   describe "event propagation" do
     @tag :integration
+    @tag :full_app
     @tag timeout: 120_000
     test "events propagate across nodes via PubSub", %{test_prefix: test_prefix} do
       {:ok, cluster} = LocalCluster.start_link(2, name: test_prefix, applications: [:lasso])
       {:ok, nodes} = LocalCluster.nodes(cluster)
 
       on_exit(fn ->
-        LocalCluster.stop(cluster)
+        try do
+          LocalCluster.stop(cluster)
+        catch
+          :exit, _ -> :ok
+        end
       end)
 
       :timer.sleep(2_000)

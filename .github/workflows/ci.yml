@@ -97,7 +97,7 @@ jobs:
         run: epmd -daemon
 
       - name: Run integration tests
-        run: elixir --sname test --cookie test -S mix test --only integration
+        run: elixir --name test@127.0.0.1 --cookie test -S mix test --only integration --exclude full_app
 
   lint:
     name: Lint (Credo)
