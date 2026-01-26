@@ -93,11 +93,8 @@ jobs:
       - name: Compile
         run: mix compile
 
-      - name: Start epmd
-        run: epmd -daemon
-
       - name: Run integration tests
-        run: elixir --name test@127.0.0.1 --cookie test -S mix test --only integration --exclude full_app
+        run: mix test --only integration
 
   lint:
     name: Lint (Credo)

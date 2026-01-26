@@ -292,7 +292,9 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     :exit, _ -> length(Node.list()) + 1
   end
 
-  defp aggregate_results(:get_provider_leaderboard, results) do
+  # Made public for testing - these are pure functions with no side effects
+  @doc false
+  def aggregate_results(:get_provider_leaderboard, results) do
     results
     |> List.flatten()
     |> Enum.group_by(& &1.provider_id)
@@ -321,7 +323,8 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     |> Enum.sort_by(& &1.score, :desc)
   end
 
-  defp aggregate_results(:get_realtime_stats, results) do
+  @doc false
+  def aggregate_results(:get_realtime_stats, results) do
     valid_results = Enum.reject(results, &is_nil/1)
 
     aggregated =
@@ -340,7 +343,8 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     })
   end
 
-  defp aggregate_results(:get_rpc_method_performance_with_percentiles, results) do
+  @doc false
+  def aggregate_results(:get_rpc_method_performance_with_percentiles, results) do
     valid_results = Enum.reject(results, &is_nil/1)
 
     case valid_results do
@@ -355,11 +359,13 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     end
   end
 
-  defp aggregate_results(_function, results) do
+  @doc false
+  def aggregate_results(_function, results) do
     List.first(results)
   end
 
-  defp aggregate_provider_entries(provider_id, entries, total_node_count) do
+  @doc false
+  def aggregate_provider_entries(provider_id, entries, total_node_count) do
     total_calls = entries |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
 
     latency_by_region =
@@ -386,7 +392,8 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     }
   end
 
-  defp weighted_average(entries, field, total_weight) do
+  @doc false
+  def weighted_average(entries, field, total_weight) do
     entries
     |> Enum.map(fn entry ->
       calls = Map.get(entry, :total_calls, 0)
