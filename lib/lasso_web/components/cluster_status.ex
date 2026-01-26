@@ -141,15 +141,14 @@ defmodule LassoWeb.Components.ClusterStatus do
     assigns = assign(assigns, :status, compute_status(assigns.responding, assigns.total))
 
     ~H"""
-    <div class="fixed bottom-4 left-4 z-40 flex items-center gap-2">
+    <div class="fixed bottom-2 left-2 z-40 flex items-center gap-2">
       <div class={[
         "flex items-center gap-2 px-3 py-2 rounded-lg text-sm",
-        "bg-gray-900/90 backdrop-blur border border-gray-700/50",
         "transition-colors duration-200"
       ]}>
         <span class={["h-2 w-2 rounded-full", status_color(@status)]}></span>
         <span class="text-gray-300">
-          <span class={status_text_color(@status)}><%= @responding %></span>/{@total} nodes reporting
+          <span class={status_text_color(@status)}><%= @responding %></span>/{@total} Lasso nodes reporting
         </span>
         <%= if @responding < @total do %>
           <span class="text-amber-400">⚠</span>
@@ -157,7 +156,7 @@ defmodule LassoWeb.Components.ClusterStatus do
       </div>
 
       <%= if @stale do %>
-        <div class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm bg-gray-900/90 backdrop-blur border border-gray-700/50">
+        <div class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm">
           <svg class="h-3 w-3 animate-spin text-yellow-500/70" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4">
             </circle>

@@ -1647,8 +1647,6 @@ defmodule LassoWeb.Dashboard do
          leaderboard,
          rpc_methods
        ) do
-    leaderboard = leaderboard || []
-
     provider_ids
     |> Enum.map(fn provider_id ->
       config = Enum.find(provider_configs, &(&1.id == provider_id))
