@@ -25,8 +25,9 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     selected_region = socket.assigns[:chain_metrics_region] || "aggregate"
     chain_events = assigns[:selected_chain_events] || []
 
-    # Use aggregate cached metrics as fallback
-    cached_fallback = aggregate_cached
+    # Only use cached aggregate metrics when viewing aggregate
+    # For per-region views, don't fall back to aggregate - show empty if no data
+    cached_fallback = if selected_region == "aggregate", do: aggregate_cached, else: %{}
 
     # Compute metrics from live data with cached fallback
     filtered_metrics =
@@ -66,12 +67,15 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     chain_events = socket.assigns[:chain_events] || []
     chain_connections = socket.assigns[:chain_connections] || []
 
+    # Only use cached aggregate metrics when viewing aggregate
+    cached_fallback = if region == "aggregate", do: aggregate_cached, else: %{}
+
     filtered_metrics =
       compute_filtered_chain_metrics(
         region,
         live_provider_metrics,
         chain,
-        aggregate_cached,
+        cached_fallback,
         chain_connections
       )
 

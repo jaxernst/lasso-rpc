@@ -651,14 +651,18 @@ defmodule LassoWeb.Dashboard do
 
   # EventStream messages (new map payload format)
 
-  # Batched snapshot on subscribe (reduces 5 messages -> 1)
+  # Batched snapshot on subscribe
   def handle_info({:dashboard_snapshot, snapshot}, socket) do
+    cluster = snapshot.cluster
+
     socket =
       socket
       |> assign(:live_provider_metrics, snapshot.metrics)
       |> assign(:cluster_circuit_states, snapshot.circuits)
       |> assign(:cluster_health_counters, snapshot.health_counters)
-      |> assign(:cluster_status, snapshot.cluster)
+      |> assign(:cluster_status, cluster)
+      |> assign(:available_regions, cluster.regions || [])
+      |> assign(:metrics_coverage, %{responding: cluster.responding, total: cluster.connected})
       |> MessageHandlers.handle_events_snapshot(snapshot.events)
       |> refresh_selected_chain_events()
       |> mark_not_stale()
