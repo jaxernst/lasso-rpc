@@ -13,6 +13,64 @@ Elixir/OTP application providing RPC provider orchestration and routing for bloc
 - **Circuit breaker protection**: Per-provider, per-transport breakers prevent cascade failures
 - **Method-specific benchmarking**: Passive latency measurement per-chain, per-method, per-transport
 - **Request observability**: Structured logging with optional client-visible metadata
+- **Cluster aggregation**: Optional BEAM clustering for aggregated observability across geo-distributed nodes
+
+---
+
+## Geo-Distributed Proxy Design
+
+Lasso is designed for geo-distributed deployments where each node operates independently while optionally sharing observability data.
+
+### Deployment Model
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Application (US-East)                                       │
+│ └─> Lasso Node (US-East)                                   │
+│     └─> Routes to fastest providers for this region        │
+├─────────────────────────────────────────────────────────────┤
+│ Application (EU-West)                                       │
+│ └─> Lasso Node (EU-West)                                   │
+│     └─> Routes to fastest providers for this region        │
+├─────────────────────────────────────────────────────────────┤
+│ Cluster Aggregation (optional)                              │
+│ ├─> Topology monitoring (node health across regions)       │
+│ ├─> Regional metrics aggregation for dashboard             │
+│ └─> No impact on routing hot path                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Principles
+
+**Independent Node Operation**
+- Each Lasso node runs a complete, isolated supervision tree
+- Routing decisions are based on local latency measurements only
+- No cluster consensus or coordination in the request hot path
+- A single node works standalone without clustering
+
+**Regional Latency Awareness**
+- Passive benchmarking reveals which providers are fastest from each region
+- Applications connect to their nearest Lasso node for region-optimized routing
+- Provider performance varies significantly by geography
+
+**Observability-First Clustering**
+- Clustering aggregates metrics for dashboards and operational visibility
+- View the cluster as a unified whole or drill into individual regions
+- Identify providers struggling in specific regions
+- No routing impact: clustering is purely for observability
+
+### Configuration
+
+**Single node (default)**: No additional configuration needed.
+
+**Multi-node cluster**:
+```bash
+# Enable clustering with DNS-based node discovery
+export CLUSTER_DNS_QUERY="lasso.internal"
+
+# Identify this node's region for dashboard grouping
+export CLUSTER_REGION="us-east-1"
+```
 
 ---
 
@@ -69,9 +127,15 @@ The supervision tree is profile-scoped for complete isolation:
 Lasso.Application
 ├── Phoenix.PubSub
 ├── Finch (HTTP pool)
+├── Cluster.Supervisor (libcluster node discovery)
+├── Task.Supervisor (async operations)
+├── Lasso.Cluster.Topology (cluster membership & health)
 ├── Lasso.Core.Benchmarking.BenchmarkStore
 ├── Lasso.Core.Benchmarking.Persistence
 ├── Lasso.Config.ConfigStore
+├── LassoWeb.Dashboard.MetricsStore (cluster-wide metrics cache)
+├── Lasso.Dashboard.StreamSupervisor (DynamicSupervisor)
+│   └── EventStream {profile} (real-time dashboard aggregation)
 ├── ProfileChainSupervisor (DynamicSupervisor)
 │   └── ChainSupervisor {profile, chain}
 │       ├── ProviderPool
@@ -148,6 +212,81 @@ Lasso.Application
 **ClientSubscriptionRegistry** (`Lasso.Core.Streaming.ClientSubscriptionRegistry`)
 
 - Registry for fan-out of subscription events to connected clients
+
+---
+
+## Cluster Topology & Aggregation
+
+When BEAM clustering is enabled, Lasso nodes form a topology-aware cluster for aggregated observability.
+
+### Topology Module
+
+**Topology** (`Lasso.Cluster.Topology`)
+
+Single source of truth for cluster membership and node health:
+
+```
+Lasso.Cluster.Topology (GenServer)
+├── :net_kernel.monitor_nodes/1  (only subscriber in codebase)
+├── Periodic health checks (15s intervals via :rpc.multicall)
+├── Region discovery with retry/backoff
+└── PubSub broadcasts → "cluster:topology"
+```
+
+All cluster-aware modules subscribe to the `"cluster:topology"` PubSub topic rather than monitoring nodes directly.
+
+**Node Lifecycle States:**
+
+| State | Description |
+|-------|-------------|
+| `:connected` | Erlang distribution connection established |
+| `:discovering` | Region identification via RPC in progress |
+| `:responding` | Passes health checks, region known |
+| `:ready` | Responding and application fully started |
+| `:unresponsive` | Connected but failing health checks (3+ failures) |
+| `:disconnected` | Previously connected, now offline |
+
+### Dashboard Event Streaming
+
+**EventStream** (`LassoWeb.Dashboard.EventStream`)
+
+Per-profile GenServer aggregating real-time events for dashboard LiveViews:
+
+- Subscribes to: topology changes, routing decisions, circuit events, block sync
+- Batches events (50ms intervals, max 100 per batch)
+- Computes per-provider metrics grouped by region
+- Broadcasts to LiveView subscribers
+
+**Subscriber Messages:**
+- `{:metrics_update, %{metrics: provider_metrics}}`
+- `{:events_batch, %{events: recent_events}}`
+- `{:cluster_update, %{connected: n, responding: n, regions: [...]}}`
+- `{:circuit_update, %{provider_id: id, region: region, circuit: state}}`
+
+### Cluster-Wide Metrics
+
+**MetricsStore** (`LassoWeb.Dashboard.MetricsStore`)
+
+Caches aggregated metrics from all cluster nodes using stale-while-revalidate:
+
+```elixir
+# Queries all responding nodes, aggregates results
+MetricsStore.get_provider_leaderboard("default", "ethereum")
+# => %{data: [...], coverage: %{responding: 3, total: 3}, stale: false}
+```
+
+- **Cache TTL**: 15 seconds
+- **RPC timeout**: 5 seconds
+- **Invalidation**: Automatic on node connect/disconnect
+- **Aggregation**: Weighted averages by call volume across nodes
+
+### Regional Awareness
+
+Each node reports its region via `CLUSTER_REGION` environment variable. Metrics are tracked per `{provider_id, region}` enabling:
+
+- Regional latency comparison in dashboard
+- Region-specific circuit breaker state visibility
+- Traffic distribution analysis across regions
 
 ---
 
@@ -674,8 +813,10 @@ Drop-in replacement for existing RPC URLs.
 
 Core architectural properties:
 
+- **Geo-distributed proxy**: Each node routes independently based on local latency measurements
 - **Multi-profile isolation**: Independent supervision trees per (profile, chain)
 - **Transport-agnostic routing**: Unified pipeline across HTTP and WebSocket
 - **WebSocket multiplexing**: N:1 client-to-upstream subscription ratio
+- **Cluster aggregation**: Optional BEAM clustering for unified observability without routing impact
 - **Request observability**: Structured logging with optional client metadata
 - **BEAM concurrency**: 10,000+ concurrent requests via lightweight processes

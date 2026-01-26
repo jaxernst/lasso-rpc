@@ -27,6 +27,7 @@ Route every request to the best available provider to handle that request, while
   - [Prerequisites](#prerequisites)
   - [Local (recommended)](#local-recommended)
   - [Docker](#docker)
+  - [Multi-Node Deployment (Cluster)](#multi-node-deployment-cluster)
 - [Try It](#try-it)
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
@@ -41,9 +42,11 @@ Route every request to the best available provider to handle that request, while
 
 ## Why Lasso
 
-Choosing a single RPC provider has real UX and reliability consequences, but the tradeoffs (latency, uptime, quotas, features, cost, rate limits) are opaque and shift over time. Performance varies by region, method, and hour, and API inconsistencies make a “one URL” setup brittle.
+Choosing a single RPC provider has real UX and reliability consequences, but the tradeoffs (latency, uptime, quotas, features, cost, rate limits) are opaque and shift over time. Performance varies by region, method, and hour, and API inconsistencies make a "one URL" setup brittle.
 
-Lasso makes the RPC layer programmable and resilient. It's designed to run as a distributed proxy that sits in front of a configurable set of RPC providers, continuously measures real latencies and health, and routes each call to the best option for that chain, method, and transport. You get redundancy without brittle application code, and you can scale throughput by adding providers instead of replatforming.
+Lasso makes the RPC layer programmable and resilient. It's designed to run as a **geo-distributed proxy** where RPC requests are routed to the closest Lasso node. Each node independently measures real latencies and health, routing each call to the best provider for that region, chain, method, and transport. You get redundancy without brittle application code, and you can scale throughput by adding providers instead of replatforming.
+
+For multi-region deployments, Lasso nodes form a cluster that aggregates observability data across all regions—giving you unified visibility into provider performance and health without adding latency to the routing hot path.
 
 Different providers excel at different workloads (hot reads vs archival queries vs subscriptions). Lasso lets you express those preferences and enforce them automatically.
 
@@ -57,7 +60,8 @@ Different providers excel at different workloads (hot reads vs archival queries 
 - **Resilience**: circuit breakers, retries, and transport-aware failover
 - **WebSocket subscriptions**: multiplexing with optional gap-filling via HTTP on upstream failure
 - **Profiles**: isolated configs/state/metrics (dev/staging/prod, multi-tenant, experiments)
-- **LiveView dashboard**: provider status, routing decisions, logs, latency metrics, and load testing
+- **Cluster aggregation**: optional BEAM clustering aggregates metrics across geo-distributed nodes with regional drill-down
+- **LiveView dashboard**: provider status, routing decisions, latency metrics, and cluster-wide observability
 
 ---
 
@@ -120,6 +124,30 @@ The application will be available at `http://localhost:4000` and the dashboard a
 The application will be available at `http://localhost:4000`.
 
 For production deployments, see the [Dockerfile](Dockerfile) for customization options.
+
+### Multi-Node Deployment (Cluster)
+
+For geo-distributed deployments with aggregated observability:
+
+```bash
+# Node 1 (us-east)
+export CLUSTER_REGION=us-east
+export CLUSTER_DNS_QUERY="lasso.internal"
+mix phx.server
+
+# Node 2 (eu-west)
+export CLUSTER_REGION=eu-west
+export CLUSTER_DNS_QUERY="lasso.internal"
+mix phx.server
+```
+
+This enables:
+- Nodes discover each other via DNS
+- Dashboard aggregates metrics across all regions
+- Drill down by region to compare provider performance
+- Each node makes independent routing decisions based on local latency
+
+**Note:** Clustering is optional. A single node works great standalone.
 
 ---
 
