@@ -438,6 +438,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp cleanup_stale_data(state) do
     now = System.system_time(:millisecond)
     cutoff = now - @window_duration_ms
+    stale_cutoff = now - @stale_block_height_ms
 
     new_windows =
       state.event_windows
@@ -447,14 +448,28 @@ defmodule LassoWeb.Dashboard.EventStream do
       |> Enum.reject(fn {_, events} -> events == [] end)
       |> Map.new()
 
-    block_cutoff = now - @stale_block_height_ms
-
     new_heights =
       state.block_heights
-      |> Enum.reject(fn {_, %{timestamp: ts}} -> ts < block_cutoff end)
+      |> Enum.reject(fn {_, %{timestamp: ts}} -> ts < stale_cutoff end)
       |> Map.new()
 
-    %{state | event_windows: new_windows, block_heights: new_heights}
+    new_circuit_states =
+      state.circuit_states
+      |> Enum.reject(fn {_, %{updated_at: ts}} -> ts < stale_cutoff end)
+      |> Map.new()
+
+    active_provider_regions =
+      new_windows
+      |> Map.keys()
+      |> Enum.map(fn {provider_id, _chain, region} -> {provider_id, region} end)
+      |> MapSet.new()
+
+    new_health_counters =
+      state.health_counters
+      |> Enum.filter(fn {key, _} -> MapSet.member?(active_provider_regions, key) end)
+      |> Map.new()
+
+    %{state | event_windows: new_windows, block_heights: new_heights, circuit_states: new_circuit_states, health_counters: new_health_counters}
     |> recompute_all_metrics()
   end
 

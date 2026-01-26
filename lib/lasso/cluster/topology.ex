@@ -382,9 +382,17 @@ defmodule Lasso.Cluster.Topology do
 
       Map.has_key?(state.discovery_refs, ref) ->
         node = Map.get(state.discovery_refs, ref)
+        Logger.warning("[Topology] Discovery task crashed for #{node}: #{inspect(reason)}")
         pending = Map.delete(state.pending_discoveries, node)
         refs = Map.delete(state.discovery_refs, ref)
-        {:noreply, %{state | pending_discoveries: pending, discovery_refs: refs}}
+
+        nodes =
+          case Map.get(state.nodes, node) do
+            %{state: :discovering} = info -> Map.put(state.nodes, node, %{info | state: :connected})
+            _ -> state.nodes
+          end
+
+        {:noreply, %{state | pending_discoveries: pending, discovery_refs: refs, nodes: nodes}}
 
       true ->
         {:noreply, state}
