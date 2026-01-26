@@ -56,6 +56,7 @@ defmodule Lasso.Cluster.Topology do
             self_region: "unknown",
             health_check_task: nil,
             pending_discoveries: %{},
+            discovery_refs: %{},
             last_tick: 0,
             last_health_check_start: 0,
             last_health_check_complete: 0,
@@ -124,6 +125,14 @@ defmodule Lasso.Cluster.Topology do
     GenServer.call(__MODULE__, :get_self_region)
   end
 
+  @doc """
+  Returns node info for a specific remote node, or nil if not tracked.
+  """
+  @spec get_node_info(node()) :: node_info() | nil
+  def get_node_info(target_node) do
+    GenServer.call(__MODULE__, {:get_node_info, target_node})
+  end
+
   # Server Implementation
 
   @impl true
@@ -166,7 +175,6 @@ defmodule Lasso.Cluster.Topology do
       |> maybe_health_check(now)
       |> maybe_reconcile(now)
       |> maybe_rediscover_unknown_regions(now)
-      |> cleanup_stale_discoveries()
 
     schedule_tick()
     {:noreply, %{state | last_tick: now}}
@@ -198,6 +206,7 @@ defmodule Lasso.Cluster.Topology do
     # Start async region discovery
     task = start_region_discovery(node)
     pending = Map.put(state.pending_discoveries, node, task)
+    refs = Map.put(state.discovery_refs, task.ref, node)
 
     # Broadcast with coverage so dashboard updates immediately
     coverage = compute_coverage(nodes)
@@ -211,7 +220,7 @@ defmodule Lasso.Cluster.Topology do
 
     emit_telemetry(:node_connected, %{node: node})
 
-    {:noreply, %{state | nodes: nodes, pending_discoveries: pending}}
+    {:noreply, %{state | nodes: nodes, pending_discoveries: pending, discovery_refs: refs}}
   end
 
   # Node disconnected
@@ -227,7 +236,7 @@ defmodule Lasso.Cluster.Topology do
         updated_info = %{node_info | state: :disconnected}
         nodes = Map.put(state.nodes, node, updated_info)
         regions = compute_regions(nodes, state.self_region)
-        pending = cancel_discovery(state.pending_discoveries, node)
+        {pending, refs} = cancel_discovery(state.pending_discoveries, state.discovery_refs, node)
 
         coverage = compute_coverage(nodes)
 
@@ -240,7 +249,7 @@ defmodule Lasso.Cluster.Topology do
 
         emit_telemetry(:node_disconnected, %{node: node})
 
-        {:noreply, %{state | nodes: nodes, regions: regions, pending_discoveries: pending}}
+        {:noreply, %{state | nodes: nodes, regions: regions, pending_discoveries: pending, discovery_refs: refs}}
     end
   end
 
@@ -274,7 +283,8 @@ defmodule Lasso.Cluster.Topology do
       end
 
     pending = Map.delete(state.pending_discoveries, node)
-    {:noreply, %{state | pending_discoveries: pending}}
+    refs = Map.delete(state.discovery_refs, ref)
+    {:noreply, %{state | pending_discoveries: pending, discovery_refs: refs}}
   end
 
   # Region discovery failed
@@ -296,29 +306,27 @@ defmodule Lasso.Cluster.Topology do
       end
 
     pending = Map.delete(state.pending_discoveries, node)
-    {:noreply, %{state | pending_discoveries: pending}}
+    refs = Map.delete(state.discovery_refs, ref)
+    {:noreply, %{state | pending_discoveries: pending, discovery_refs: refs}}
   end
 
   # Health check completed
   @impl true
-  def handle_info({ref, {:health_check_complete, results, bad_nodes}}, state)
+  def handle_info({ref, {:health_check_complete, node_list, results, bad_nodes}}, state)
       when is_reference(ref) do
     Process.demonitor(ref, [:flush])
 
     now = now()
-    bad_set = MapSet.new(bad_nodes)
 
-    # Also add badrpc responses to bad set
-    badrpc_nodes =
-      results
-      |> Enum.with_index()
-      |> Enum.filter(fn {result, _} -> match?({:badrpc, _}, result) end)
-      |> Enum.map(fn {_, idx} ->
-        state.nodes |> Map.keys() |> Enum.at(idx)
+    # Properly correlate results with nodes by zipping (node_list was captured at RPC call time)
+    all_bad =
+      Enum.zip(node_list, results)
+      |> Enum.flat_map(fn
+        {node, {:badrpc, _}} -> [node]
+        _ -> []
       end)
-      |> Enum.reject(&is_nil/1)
-
-    all_bad = MapSet.union(bad_set, MapSet.new(badrpc_nodes))
+      |> Kernel.++(bad_nodes)
+      |> MapSet.new()
 
     old_nodes = state.nodes
 
@@ -372,13 +380,11 @@ defmodule Lasso.Cluster.Topology do
         Logger.warning("[Topology] Health check task crashed: #{inspect(reason)}")
         {:noreply, %{state | health_check_task: nil, last_health_check_complete: now()}}
 
-      Map.values(state.pending_discoveries) |> Enum.any?(&(&1.ref == ref)) ->
-        pending =
-          state.pending_discoveries
-          |> Enum.reject(fn {_, task} -> task.ref == ref end)
-          |> Map.new()
-
-        {:noreply, %{state | pending_discoveries: pending}}
+      Map.has_key?(state.discovery_refs, ref) ->
+        node = Map.get(state.discovery_refs, ref)
+        pending = Map.delete(state.pending_discoveries, node)
+        refs = Map.delete(state.discovery_refs, ref)
+        {:noreply, %{state | pending_discoveries: pending, discovery_refs: refs}}
 
       true ->
         {:noreply, state}
@@ -411,12 +417,7 @@ defmodule Lasso.Cluster.Topology do
 
   @impl true
   def handle_call(:get_connected_nodes, _from, state) do
-    connected =
-      state.nodes
-      |> Enum.filter(fn {_node, info} -> info.state not in [:disconnected] end)
-      |> Enum.map(fn {node, _} -> node end)
-
-    {:reply, connected, state}
+    {:reply, get_connected_nodes_internal(state), state}
   end
 
   @impl true
@@ -434,6 +435,11 @@ defmodule Lasso.Cluster.Topology do
     {:reply, state.self_region, state}
   end
 
+  @impl true
+  def handle_call({:get_node_info, target_node}, _from, state) do
+    {:reply, Map.get(state.nodes, target_node), state}
+  end
+
   # Private helpers
 
   defp schedule_tick do
@@ -441,12 +447,11 @@ defmodule Lasso.Cluster.Topology do
   end
 
   defp maybe_health_check(state, now) do
-    if now - state.last_health_check_complete >= @health_check_interval_ms do
-      if is_nil(state.health_check_task) do
-        start_health_check(%{state | last_health_check_start: now})
-      else
-        state
-      end
+    time_elapsed = now - state.last_health_check_complete >= @health_check_interval_ms
+    no_task_running = is_nil(state.health_check_task)
+
+    if time_elapsed and no_task_running do
+      start_health_check(%{state | last_health_check_start: now})
     else
       state
     end
@@ -473,53 +478,34 @@ defmodule Lasso.Cluster.Topology do
         end)
         |> Enum.map(fn {node, _} -> node end)
 
-      if unknown_nodes != [] do
+      state = %{state | last_region_rediscovery: now}
+
+      if unknown_nodes == [] do
+        state
+      else
         Logger.debug("[Topology] Retrying region discovery for #{length(unknown_nodes)} nodes")
 
-        Enum.reduce(unknown_nodes, %{state | last_region_rediscovery: now}, fn node, acc ->
+        Enum.reduce(unknown_nodes, state, fn node, acc ->
           task = start_region_discovery(node)
           pending = Map.put(acc.pending_discoveries, node, task)
+          refs = Map.put(acc.discovery_refs, task.ref, node)
           nodes = Map.update!(acc.nodes, node, fn info -> %{info | state: :discovering} end)
-          %{acc | pending_discoveries: pending, nodes: nodes}
+          %{acc | pending_discoveries: pending, discovery_refs: refs, nodes: nodes}
         end)
-      else
-        %{state | last_region_rediscovery: now}
       end
     end
   end
 
-  defp cleanup_stale_discoveries(state) do
-    # Remove discoveries for tasks that have crashed/exited
-    pending =
-      state.pending_discoveries
-      |> Enum.reject(fn {_node, task} ->
-        Process.info(task.pid) == nil
-      end)
-      |> Map.new()
-
-    %{state | pending_discoveries: pending}
-  end
-
   defp start_health_check(state) do
-    nodes = get_connected_nodes_internal(state)
+    node_list = get_connected_nodes_internal(state)
 
-    if nodes == [] do
+    if node_list == [] do
       %{state | last_health_check_complete: now()}
     else
       task =
         Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn ->
-          inner_task =
-            Task.async(fn ->
-              :rpc.multicall(nodes, Node, :self, [], 3_000)
-            end)
-
-          case Task.yield(inner_task, @health_check_timeout_ms) || Task.shutdown(inner_task) do
-            {:ok, {results, bad_nodes}} ->
-              {:health_check_complete, results, bad_nodes}
-
-            nil ->
-              {:health_check_timeout}
-          end
+          {results, bad_nodes} = :rpc.multicall(node_list, Node, :self, [], @health_check_timeout_ms)
+          {:health_check_complete, node_list, results, bad_nodes}
         end)
 
       %{state | health_check_task: task}
@@ -535,25 +521,18 @@ defmodule Lasso.Cluster.Topology do
       |> Enum.map(fn {node, _} -> node end)
       |> MapSet.new()
 
-    # Find nodes that appeared without nodeup
     missing_from_tracking = MapSet.difference(actual_nodes, tracked_connected)
-
-    # Find nodes that disappeared without nodedown
     extra_in_tracking = MapSet.difference(tracked_connected, actual_nodes)
 
-    state =
-      Enum.reduce(missing_from_tracking, state, fn node, acc ->
-        Logger.warning("[Topology] Reconciliation: discovered untracked node #{node}")
-        send(self(), {:nodeup, node, []})
-        acc
-      end)
+    for node <- missing_from_tracking do
+      Logger.warning("[Topology] Reconciliation: discovered untracked node #{node}")
+      send(self(), {:nodeup, node, []})
+    end
 
-    state =
-      Enum.reduce(extra_in_tracking, state, fn node, acc ->
-        Logger.warning("[Topology] Reconciliation: node #{node} no longer in Node.list()")
-        send(self(), {:nodedown, node, []})
-        acc
-      end)
+    for node <- extra_in_tracking do
+      Logger.warning("[Topology] Reconciliation: node #{node} no longer in Node.list()")
+      send(self(), {:nodedown, node, []})
+    end
 
     state
   end
@@ -589,14 +568,14 @@ defmodule Lasso.Cluster.Topology do
     end
   end
 
-  defp cancel_discovery(pending_discoveries, node) do
+  defp cancel_discovery(pending_discoveries, discovery_refs, node) do
     case Map.get(pending_discoveries, node) do
       nil ->
-        pending_discoveries
+        {pending_discoveries, discovery_refs}
 
       task ->
         Task.shutdown(task, :brutal_kill)
-        Map.delete(pending_discoveries, node)
+        {Map.delete(pending_discoveries, node), Map.delete(discovery_refs, task.ref)}
     end
   end
 
@@ -624,25 +603,18 @@ defmodule Lasso.Cluster.Topology do
   end
 
   defp compute_coverage(nodes) do
-    node_list = Map.values(nodes)
+    {connected, responding, unresponsive, disconnected} =
+      nodes
+      |> Map.values()
+      |> Enum.reduce({0, 0, [], []}, fn info, {conn, resp, unr, disc} ->
+        case info.state do
+          :disconnected -> {conn, resp, unr, [info.node | disc]}
+          :unresponsive -> {conn + 1, resp, [info.node | unr], disc}
+          state when state in [:responding, :ready] -> {conn + 1, resp + 1, unr, disc}
+          _ -> {conn + 1, resp, unr, disc}
+        end
+      end)
 
-    connected =
-      Enum.count(node_list, fn info -> info.state not in [:disconnected] end)
-
-    responding =
-      Enum.count(node_list, fn info -> info.state in [:responding, :ready] end)
-
-    unresponsive =
-      node_list
-      |> Enum.filter(fn info -> info.state == :unresponsive end)
-      |> Enum.map(fn info -> info.node end)
-
-    disconnected =
-      node_list
-      |> Enum.filter(fn info -> info.state == :disconnected end)
-      |> Enum.map(fn info -> info.node end)
-
-    # +1 for self node
     %{
       expected: connected + 1,
       connected: connected + 1,
@@ -693,11 +665,8 @@ defmodule Lasso.Cluster.Topology do
   end
 
   defp generate_node_id do
-    node()
-    |> Atom.to_string()
-    |> String.split("@")
-    |> List.first()
-    |> Kernel.||("local")
+    # Use full node name for uniqueness across cluster nodes
+    node() |> Atom.to_string()
   end
 
   defp now do

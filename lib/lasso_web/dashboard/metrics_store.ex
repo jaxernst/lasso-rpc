@@ -20,6 +20,8 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   @cache_ttl_ms 15_000
   @refresh_timeout_ms 5_000
   @min_calls_threshold 10
+  @cache_cleanup_interval_ms 60_000
+  @cache_max_age_ms 300_000
 
   @type coverage :: %{
           responding: non_neg_integer(),
@@ -93,14 +95,18 @@ defmodule LassoWeb.Dashboard.MetricsStore do
 
   @impl true
   def init(_opts) do
-    # Subscribe to topology changes for cache invalidation
     Phoenix.PubSub.subscribe(Lasso.PubSub, "cluster:topology")
+    schedule_cache_cleanup()
 
     initial_node_count = get_node_count()
 
     Logger.info("[MetricsStore] Started with #{initial_node_count} nodes")
 
     {:ok, %__MODULE__{last_known_node_count: initial_node_count}}
+  end
+
+  defp schedule_cache_cleanup do
+    Process.send_after(self(), :cleanup_cache, @cache_cleanup_interval_ms)
   end
 
   @impl true
@@ -135,24 +141,20 @@ defmodule LassoWeb.Dashboard.MetricsStore do
         {:reply, result, state}
 
       nil ->
+        # Cache miss: trigger async refresh instead of blocking
         emit_cache_telemetry(:miss, key)
-        {data, coverage} = fetch_fn.()
+        state = maybe_trigger_refresh(state, key, fetch_fn)
 
-        new_cache =
-          Map.put(state.cache, key, %{
-            data: data,
-            coverage: coverage,
-            cached_at: now
-          })
-
+        # Return empty defaults so callers don't need nil checks
         result = %{
-          data: data,
-          coverage: coverage,
-          cached_at: now,
-          stale: false
+          data: empty_default_for(key),
+          coverage: %{responding: 0, total: 0},
+          cached_at: nil,
+          stale: false,
+          loading: true
         }
 
-        {:reply, result, %{state | cache: new_cache}}
+        {:reply, result, state}
     end
   end
 
@@ -182,6 +184,8 @@ defmodule LassoWeb.Dashboard.MetricsStore do
 
     new_refreshing = MapSet.delete(state.refreshing, key)
 
+    Phoenix.PubSub.broadcast(Lasso.PubSub, "metrics_store:refresh", {:cache_refreshed, key})
+
     {:noreply, %{state | cache: new_cache, refreshing: new_refreshing}}
   end
 
@@ -190,6 +194,20 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     Logger.warning("[MetricsStore] Refresh failed for #{inspect(key)}: #{inspect(reason)}")
     new_refreshing = MapSet.delete(state.refreshing, key)
     {:noreply, %{state | refreshing: new_refreshing}}
+  end
+
+  @impl true
+  def handle_info(:cleanup_cache, state) do
+    now = System.monotonic_time(:millisecond)
+    cutoff = now - @cache_max_age_ms
+
+    new_cache =
+      state.cache
+      |> Enum.reject(fn {_key, %{cached_at: ts}} -> ts < cutoff end)
+      |> Map.new()
+
+    schedule_cache_cleanup()
+    {:noreply, %{state | cache: new_cache}}
   end
 
   # Private helpers
@@ -216,9 +234,9 @@ defmodule LassoWeb.Dashboard.MetricsStore do
         try do
           {data, coverage} = fetch_fn.()
           send(parent, {:refresh_complete, key, data, coverage})
-        rescue
-          e ->
-            send(parent, {:refresh_failed, key, e})
+        catch
+          kind, reason ->
+            send(parent, {:refresh_failed, key, {kind, reason}})
         end
       end)
 
@@ -314,11 +332,9 @@ defmodule LassoWeb.Dashboard.MetricsStore do
 
   defp aggregate_results(:get_realtime_stats, results) do
     valid_results = Enum.reject(results, &is_nil/1)
-    node_count = length(valid_results)
 
     aggregated =
-      valid_results
-      |> Enum.reduce(%{rpc_methods: [], providers: [], total_entries: 0}, fn stats, acc ->
+      Enum.reduce(valid_results, %{rpc_methods: [], providers: [], total_entries: 0}, fn stats, acc ->
         %{
           rpc_methods: Enum.uniq(acc.rpc_methods ++ Map.get(stats, :rpc_methods, [])),
           providers: Enum.uniq(acc.providers ++ Map.get(stats, :providers, [])),
@@ -327,7 +343,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
       end)
 
     Map.merge(aggregated, %{
-      node_count: node_count,
+      node_count: length(valid_results),
       last_updated: System.system_time(:millisecond)
     })
   end
@@ -354,36 +370,6 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   defp aggregate_provider_entries(provider_id, entries, total_node_count) do
     total_calls = entries |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
 
-    weighted_score =
-      entries
-      |> Enum.map(fn entry ->
-        calls = Map.get(entry, :total_calls, 0)
-        score = Map.get(entry, :score, 0.0)
-        score * calls
-      end)
-      |> Enum.sum()
-      |> safe_divide(total_calls)
-
-    weighted_success_rate =
-      entries
-      |> Enum.map(fn entry ->
-        calls = Map.get(entry, :total_calls, 0)
-        rate = Map.get(entry, :success_rate, 0.0)
-        rate * calls
-      end)
-      |> Enum.sum()
-      |> safe_divide(total_calls)
-
-    weighted_latency =
-      entries
-      |> Enum.map(fn entry ->
-        calls = Map.get(entry, :total_calls, 0)
-        latency = Map.get(entry, :avg_latency_ms, 0.0)
-        latency * calls
-      end)
-      |> Enum.sum()
-      |> safe_divide(total_calls)
-
     latency_by_region =
       entries
       |> Enum.map(fn entry ->
@@ -399,54 +385,42 @@ defmodule LassoWeb.Dashboard.MetricsStore do
 
     %{
       provider_id: provider_id,
-      score: weighted_score,
+      score: weighted_average(entries, :score, total_calls),
       total_calls: total_calls,
-      success_rate: weighted_success_rate,
-      avg_latency_ms: weighted_latency,
+      success_rate: weighted_average(entries, :success_rate, total_calls),
+      avg_latency_ms: weighted_average(entries, :avg_latency_ms, total_calls),
       node_count: total_node_count,
       latency_by_region: latency_by_region
     }
   end
 
-  defp aggregate_method_performance(results) do
-    results_with_sufficient_calls =
-      Enum.filter(results, fn r ->
-        Map.get(r, :total_calls, 0) >= @min_calls_threshold
-      end)
+  defp weighted_average(entries, field, total_weight) do
+    entries
+    |> Enum.map(fn entry ->
+      calls = Map.get(entry, :total_calls, 0)
+      value = Map.get(entry, field, 0.0)
+      value * calls
+    end)
+    |> Enum.sum()
+    |> safe_divide(total_weight)
+  end
 
+  defp aggregate_method_performance(results) do
     base_results =
-      if results_with_sufficient_calls == [], do: results, else: results_with_sufficient_calls
+      case Enum.filter(results, &(Map.get(&1, :total_calls, 0) >= @min_calls_threshold)) do
+        [] -> results
+        filtered -> filtered
+      end
 
     total_calls = base_results |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
-
-    weighted_success_rate =
-      base_results
-      |> Enum.map(fn r ->
-        calls = Map.get(r, :total_calls, 0)
-        rate = Map.get(r, :success_rate, 0.0)
-        rate * calls
-      end)
-      |> Enum.sum()
-      |> safe_divide(total_calls)
-
-    weighted_duration =
-      base_results
-      |> Enum.map(fn r ->
-        calls = Map.get(r, :total_calls, 0)
-        duration = Map.get(r, :avg_duration_ms, 0.0)
-        duration * calls
-      end)
-      |> Enum.sum()
-      |> safe_divide(total_calls)
-
     first = List.first(base_results)
 
     %{
       provider_id: Map.get(first, :provider_id),
       method: Map.get(first, :method),
-      success_rate: weighted_success_rate,
+      success_rate: weighted_average(base_results, :success_rate, total_calls),
       total_calls: total_calls,
-      avg_duration_ms: weighted_duration,
+      avg_duration_ms: weighted_average(base_results, :avg_duration_ms, total_calls),
       percentiles: Map.get(first, :percentiles, %{}),
       node_count: length(results),
       percentiles_note: "Percentiles from single node (not averaged)"
@@ -479,14 +453,11 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     )
   end
 
-  defp extract_cache_key_context(key) do
-    case key do
-      {:provider_leaderboard, profile, chain} -> {profile, chain}
-      {:realtime_stats, profile, chain} -> {profile, chain}
-      {:method_perf, profile, chain, _provider_id, _method} -> {profile, chain}
-      _ -> {"unknown", "unknown"}
-    end
+  defp extract_cache_key_context(key) when is_tuple(key) and tuple_size(key) >= 3 do
+    {elem(key, 1), elem(key, 2)}
   end
+
+  defp extract_cache_key_context(_), do: {"unknown", "unknown"}
 
   defp extract_telemetry_context(args) do
     case args do
@@ -494,4 +465,14 @@ defmodule LassoWeb.Dashboard.MetricsStore do
       _ -> {"unknown", "unknown"}
     end
   end
+
+  defp empty_default_for({:provider_leaderboard, _, _}), do: []
+
+  defp empty_default_for({:realtime_stats, _, _}) do
+    %{rpc_methods: [], providers: [], total_entries: 0, node_count: 0}
+  end
+
+  defp empty_default_for({:method_perf, _, _, _, _}), do: nil
+
+  defp empty_default_for(_), do: nil
 end

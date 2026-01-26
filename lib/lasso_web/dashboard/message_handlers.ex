@@ -279,10 +279,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
   end
 
   defp format_time(ts) when is_integer(ts) do
-    ts
-    |> DateTime.from_unix!(:millisecond)
-    |> DateTime.to_time()
-    |> to_string()
+    ts |> DateTime.from_unix!(:millisecond) |> DateTime.to_time() |> to_string()
   end
 
   defp format_time(_), do: DateTime.utc_now() |> DateTime.to_time() |> to_string()

@@ -64,7 +64,7 @@ defmodule LassoWeb.Components.DetailPanelComponents do
   end
 
   attr(:title, :string, required: true)
-  attr(:class, :string, default: "mb-3")
+  attr(:class, :string, default: "mb-4")
 
   def section_header(assigns) do
     ~H"""

@@ -104,6 +104,7 @@ defmodule LassoWeb.Dashboard do
       # Real-time aggregator state
       |> assign(:live_provider_metrics, %{})
       |> assign(:cluster_circuit_states, %{})
+      |> assign(:cluster_health_counters, %{})
       |> assign(:cluster_block_heights, %{})
       |> assign(:available_regions, [])
       |> fetch_connections(selected_profile)
@@ -733,6 +734,16 @@ defmodule LassoWeb.Dashboard do
     {:noreply, assign(socket, :cluster_circuit_states, circuits)}
   end
 
+  def handle_info({:health_counters_snapshot, %{counters: counters}}, socket) do
+    {:noreply, assign(socket, :cluster_health_counters, counters)}
+  end
+
+  def handle_info({:health_pulse, %{provider_id: provider_id, region: region, counters: counters}}, socket) do
+    key = {provider_id, region}
+    health_counters = Map.put(socket.assigns.cluster_health_counters, key, counters)
+    {:noreply, assign(socket, :cluster_health_counters, health_counters)}
+  end
+
   def handle_info({:cluster_update, cluster_state}, socket) do
     socket =
       socket
@@ -817,6 +828,7 @@ defmodule LassoWeb.Dashboard do
               selected_provider_metrics={@selected_provider_metrics}
               live_provider_metrics={@live_provider_metrics}
               cluster_circuit_states={@cluster_circuit_states}
+              cluster_health_counters={@cluster_health_counters}
               cluster_block_heights={@cluster_block_heights}
               available_regions={@available_regions}
             />
@@ -892,6 +904,7 @@ defmodule LassoWeb.Dashboard do
   attr(:selected_provider_metrics, :map, default: %{})
   attr(:live_provider_metrics, :map, default: %{})
   attr(:cluster_circuit_states, :map, default: %{})
+  attr(:cluster_health_counters, :map, default: %{})
   attr(:cluster_block_heights, :map, default: %{})
   attr(:available_regions, :list, default: [])
 
@@ -955,6 +968,7 @@ defmodule LassoWeb.Dashboard do
         selected_provider_metrics={@selected_provider_metrics}
         live_provider_metrics={@live_provider_metrics}
         cluster_circuit_states={@cluster_circuit_states}
+        cluster_health_counters={@cluster_health_counters}
         cluster_block_heights={@cluster_block_heights}
         available_regions={@available_regions}
       />
@@ -984,6 +998,7 @@ defmodule LassoWeb.Dashboard do
   attr(:selected_provider_metrics, :map, default: %{})
   attr(:live_provider_metrics, :map, default: %{})
   attr(:cluster_circuit_states, :map, default: %{})
+  attr(:cluster_health_counters, :map, default: %{})
   attr(:cluster_block_heights, :map, default: %{})
   attr(:available_regions, :list, default: [])
 
@@ -1149,6 +1164,7 @@ defmodule LassoWeb.Dashboard do
               selected_provider_metrics={@selected_provider_metrics}
               live_provider_metrics={@live_provider_metrics}
               cluster_circuit_states={@cluster_circuit_states}
+              cluster_health_counters={@cluster_health_counters}
               cluster_block_heights={@cluster_block_heights}
               available_regions={@available_regions}
             />
@@ -1610,6 +1626,8 @@ defmodule LassoWeb.Dashboard do
          leaderboard,
          rpc_methods
        ) do
+    leaderboard = leaderboard || []
+
     provider_ids
     |> Enum.map(fn provider_id ->
       config = Enum.find(provider_configs, &(&1.id == provider_id))

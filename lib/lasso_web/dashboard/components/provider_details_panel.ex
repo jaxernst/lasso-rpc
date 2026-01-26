@@ -32,6 +32,9 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     # Get circuit states from aggregator
     cluster_circuits = assigns[:cluster_circuit_states] || %{}
 
+    # Get health counters (consecutive failures/successes) from aggregator
+    cluster_health_counters = assigns[:cluster_health_counters] || %{}
+
     # Events for the provider
     events = assigns[:selected_provider_unified_events] || []
 
@@ -43,6 +46,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       |> assign(:show_region_tabs, length(available_regions) > 1)
       |> assign(:live_metrics, live_metrics)
       |> assign(:cluster_circuits, cluster_circuits)
+      |> assign(:cluster_health_counters, cluster_health_counters)
       |> assign(:events, events)
       |> assign_new(:selected_region, fn -> "aggregate" end)
       |> compute_region_data()
@@ -65,6 +69,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     provider_connection = socket.assigns.provider_connection
     live_metrics = socket.assigns[:live_metrics]
     cluster_circuits = socket.assigns[:cluster_circuits] || %{}
+    cluster_health_counters = socket.assigns[:cluster_health_counters] || %{}
     cluster_block_heights = socket.assigns[:cluster_block_heights] || %{}
     events = socket.assigns[:events] || []
     provider_id = socket.assigns.provider_id
@@ -98,6 +103,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         region_data,
         provider_connection,
         cluster_circuits,
+        cluster_health_counters,
         provider_id,
         available_regions
       )
@@ -112,9 +118,14 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     |> assign(:filtered_events, filtered_events)
   end
 
-  defp get_cached_fallback(assigns, _region) do
-    # Use aggregate cached metrics as fallback for all regions
+  defp get_cached_fallback(assigns, "aggregate") do
+    # Only use cached aggregate metrics when viewing aggregate
     assigns[:selected_provider_metrics] || %{}
+  end
+
+  defp get_cached_fallback(_assigns, _region) do
+    # For per-region views, don't fall back to aggregate - show empty if no data
+    %{}
   end
 
   defp get_region_data(nil, _selected_region), do: %{}
@@ -228,13 +239,18 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     p50 = if live_calls > 0, do: region_data[:p50_latency], else: cached_metrics[:p50_latency]
     p95 = if live_calls > 0, do: region_data[:p95_latency], else: cached_metrics[:p95_latency]
 
+    # RPC stats: prefer live region-specific data if available
+    live_rpc_stats = region_data[:rpc_stats] || []
+    cached_rpc_stats = cached_metrics[:rpc_stats] || []
+    rpc_stats = if live_rpc_stats != [], do: live_rpc_stats, else: cached_rpc_stats
+
     %{
       success_rate: success_rate,
       p50_latency: p50,
       p95_latency: p95,
       pick_share_5m: region_data[:traffic_pct] || cached_metrics[:pick_share_5m],
       calls_last_minute: max(live_calls, cached_calls),
-      rpc_stats: cached_metrics[:rpc_stats] || []
+      rpc_stats: rpc_stats
     }
   end
 
@@ -243,6 +259,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          _region_data,
          provider_connection,
          cluster_circuits,
+         _cluster_health_counters,
          provider_id,
          available_regions
        ) do
@@ -262,22 +279,14 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     cond do
       total_regions <= 1 ->
         # Single node cluster - show single-node view
-        # Use circuit data if available, otherwise fall back to local conn
-        circuit =
-          case provider_circuits do
-            [{_region, c}] -> c
-            _ -> %{}
-          end
-
+        # Use local connection counters (always available for local node)
         %{
           mode: :single,
-          http_state: circuit[:http] || Map.get(conn, :http_circuit_state, :closed),
-          ws_state: circuit[:ws] || Map.get(conn, :ws_circuit_state, :closed),
+          http_state: Map.get(conn, :http_circuit_state, :closed),
+          ws_state: Map.get(conn, :ws_circuit_state, :closed),
           ws_connected: Map.get(conn, :ws_connected, false),
-          consecutive_failures:
-            circuit[:consecutive_failures] || Map.get(conn, :consecutive_failures, 0),
-          consecutive_successes:
-            circuit[:consecutive_successes] || Map.get(conn, :consecutive_successes, 0),
+          consecutive_failures: Map.get(conn, :consecutive_failures, 0),
+          consecutive_successes: Map.get(conn, :consecutive_successes, 0),
           has_http: has_http,
           has_ws: has_ws
         }
@@ -308,22 +317,25 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          _region_data,
          provider_connection,
          cluster_circuits,
+         cluster_health_counters,
          provider_id,
          _available_regions
        ) do
     conn = provider_connection || %{}
     live_circuit = Map.get(cluster_circuits, {provider_id, selected_region}, %{})
+    health_counters = Map.get(cluster_health_counters, {provider_id, selected_region}, %{})
 
-    # For per-region view, prefer live circuit data from that specific node
+    # For per-region view, use health counters from that region (via health pulse)
+    # Fall back to local connection data if no remote data available
     %{
       mode: :single,
       http_state: live_circuit[:http] || Map.get(conn, :http_circuit_state, :closed),
       ws_state: live_circuit[:ws] || Map.get(conn, :ws_circuit_state, :closed),
       ws_connected: live_circuit[:ws_connected] || Map.get(conn, :ws_connected, false),
       consecutive_failures:
-        live_circuit[:consecutive_failures] || Map.get(conn, :consecutive_failures, 0),
+        health_counters[:consecutive_failures] || Map.get(conn, :consecutive_failures, 0),
       consecutive_successes:
-        live_circuit[:consecutive_successes] || Map.get(conn, :consecutive_successes, 0),
+        health_counters[:consecutive_successes] || Map.get(conn, :consecutive_successes, 0),
       has_http: Map.get(conn, :url) != nil,
       has_ws: Map.get(conn, :ws_url) != nil
     }
@@ -377,8 +389,8 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         </div>
 
         <div class="px-2">
-          <.sync_status_section sync_data={@sync_data} />
           <.performance_metrics_strip metrics_data={@metrics_data} />
+          <.sync_status_section sync_data={@sync_data} />
           <.circuit_breaker_section circuit_data={@circuit_data} />
 
           <.issues_section
@@ -458,7 +470,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   defp sync_status_section(assigns) do
     ~H"""
-    <DetailPanelComponents.panel_section border={false} class="pt-6">
+    <DetailPanelComponents.panel_section border={false} class="pb-2">
       <DetailPanelComponents.section_header title="Sync Status" />
       <div :if={@sync_data.block_height && @sync_data.consensus_height}>
         <div class="flex items-center justify-between text-sm mb-2">
@@ -521,7 +533,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       |> assign(:traffic, format_traffic(Map.get(metrics, :pick_share_5m)))
 
     ~H"""
-    <DetailPanelComponents.panel_section border={false} class="pt-1">
+    <DetailPanelComponents.panel_section border={false} class="pt-4 pb-2">
       <DetailPanelComponents.section_header title="Performance" />
       <DetailPanelComponents.metrics_strip class="border-x rounded">
         <:metric label="Latency p50" value={@p50} />
@@ -539,8 +551,11 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   defp circuit_breaker_section(assigns) do
     ~H"""
-    <DetailPanelComponents.panel_section :if={@circuit_data.has_http || @circuit_data.has_ws}>
-      <DetailPanelComponents.section_header title="Circuit Breaker" />
+    <DetailPanelComponents.panel_section
+      :if={@circuit_data.has_http || @circuit_data.has_ws}
+      border={false}
+    >
+      <DetailPanelComponents.section_header title="Circuit Breaker" class="pb-[18px]" />
       <.unified_circuit_view circuit_data={@circuit_data} />
     </DetailPanelComponents.panel_section>
     """
@@ -608,7 +623,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         />
       </div>
 
-      <div :if={!@is_aggregate} class="flex justify-between text-xs text-gray-400 pt-2">
+      <div :if={!@is_aggregate} class="flex justify-between text-xs text-gray-500 pt-2">
         <span>
           Failures: <span class={@failures_class}>{@failures}/5</span> threshold
         </span>
@@ -675,6 +690,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         </span>
       </div>
       <.circuit_breaker_labels_with_counts
+        :if={@is_aggregate}
         counts={@counts}
         total={@total}
         is_aggregate={@is_aggregate}
@@ -710,6 +726,9 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   attr(:is_aggregate, :boolean, default: false)
 
   defp circuit_breaker_labels_with_counts(assigns) do
+    counts = assigns.counts || %{}
+    assigns = assign(assigns, :counts, counts)
+
     ~H"""
     <div class="flex items-center gap-3 pb-1">
       <span class="w-10"></span>
@@ -764,7 +783,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       |> assign(:has_content, has_content)
 
     ~H"""
-    <DetailPanelComponents.panel_section>
+    <DetailPanelComponents.panel_section border={false}>
       <DetailPanelComponents.section_header title="Issues" />
 
       <div :if={length(@active_alerts) > 0} class="space-y-2 mb-3">

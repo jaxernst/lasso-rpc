@@ -6,7 +6,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
 
   alias LassoWeb.Components.DetailPanelComponents
   alias LassoWeb.Components.RegionSelector
-  alias LassoWeb.Dashboard.{EndpointHelpers, Formatting, Helpers}
+  alias LassoWeb.Dashboard.{EndpointHelpers, Formatting, Helpers, StatusHelpers}
 
   @impl true
   def update(assigns, socket) do
@@ -34,7 +34,8 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
         selected_region,
         live_provider_metrics,
         chain,
-        cached_fallback
+        cached_fallback,
+        chain_connections
       )
 
     # Get region-specific decision to prevent flickering
@@ -63,9 +64,10 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     aggregate_cached = socket.assigns[:aggregate_cached] || %{}
     chain = socket.assigns.chain
     chain_events = socket.assigns[:chain_events] || []
+    chain_connections = socket.assigns[:chain_connections] || []
 
     filtered_metrics =
-      compute_filtered_chain_metrics(region, live_provider_metrics, chain, aggregate_cached)
+      compute_filtered_chain_metrics(region, live_provider_metrics, chain, aggregate_cached, chain_connections)
 
     socket =
       socket
@@ -456,7 +458,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
 
   defp find_provider_name(_, decision), do: decision.provider_id
 
-  defp compute_filtered_chain_metrics("aggregate", live_provider_metrics, chain, cached_metrics) do
+  defp compute_filtered_chain_metrics("aggregate", live_provider_metrics, chain, cached_metrics, chain_connections) do
     chain_providers_with_ids =
       live_provider_metrics
       |> Enum.filter(fn {_pid, metrics} -> metrics[:chain] == chain end)
@@ -464,6 +466,9 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     chain_providers =
       chain_providers_with_ids
       |> Enum.map(fn {_pid, metrics} -> metrics[:aggregate] || %{} end)
+
+    # Provider counts from actual health status (not just providers with live data)
+    {connected_providers, total_providers} = count_providers_by_health(chain_connections)
 
     if chain_providers != [] do
       total_calls = Enum.reduce(chain_providers, 0, fn p, acc -> acc + (p[:total_calls] || 0) end)
@@ -498,12 +503,15 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
             do: decision_share,
             else: cached_metrics[:decision_share] || []
           ),
-        connected_providers: length(chain_providers),
-        total_providers: length(chain_providers)
+        connected_providers: connected_providers,
+        total_providers: total_providers
       }
     else
-      # No live data, use cached
-      cached_metrics
+      # No live data, use cached but with accurate provider counts from connections
+      Map.merge(cached_metrics, %{
+        connected_providers: connected_providers,
+        total_providers: total_providers
+      })
     end
   end
 
@@ -511,7 +519,8 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
          selected_region,
          live_provider_metrics,
          chain,
-         cached_metrics
+         cached_metrics,
+         chain_connections
        ) do
     chain_providers_with_ids =
       live_provider_metrics
@@ -530,6 +539,10 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       |> Enum.reject(&is_nil/1)
 
     region_providers = Enum.map(region_providers_with_ids, fn {_pid, data} -> data end)
+
+    # Provider counts always show cluster-wide health (not region-filtered)
+    # The region tabs filter metrics only, not the header health display
+    {connected_providers, total_providers} = count_providers_by_health(chain_connections)
 
     if region_providers != [] do
       total_calls =
@@ -565,13 +578,27 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
             do: decision_share,
             else: cached_metrics[:decision_share] || []
           ),
-        connected_providers: length(region_providers),
-        total_providers: length(chain_providers_with_ids)
+        connected_providers: connected_providers,
+        total_providers: total_providers
       }
     else
-      # No live data for this region, use cached metrics
-      cached_metrics
+      # No live data for this region, use cached metrics with cluster-wide provider counts
+      Map.merge(cached_metrics, %{
+        connected_providers: connected_providers,
+        total_providers: total_providers
+      })
     end
+  end
+
+  defp count_providers_by_health(chain_connections) do
+    total = length(chain_connections)
+
+    connected =
+      Enum.count(chain_connections, fn provider ->
+        StatusHelpers.determine_provider_status(provider) in [:healthy, :recovering, :lagging]
+      end)
+
+    {connected, total}
   end
 
   defp compute_decision_share(providers_with_ids, mode, total_calls) when total_calls > 0 do

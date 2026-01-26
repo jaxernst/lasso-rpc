@@ -873,6 +873,10 @@ defmodule Lasso.RPC.ProviderPool do
   def handle_cast({:probe_results, results}, state) do
     # Process ALL results in batch (avoid race conditions)
     state = apply_probe_batch(state, results)
+
+    # Broadcast health pulse for dashboard cluster sync
+    broadcast_health_pulses(state, results)
+
     {:noreply, state}
   end
 
@@ -2162,6 +2166,42 @@ defmodule Lasso.RPC.ProviderPool do
       %{lag_blocks: lag},
       %{chain: chain, provider_id: provider_id}
     )
+  end
+
+  defp broadcast_health_pulses(state, results) do
+    region = get_local_region()
+    ts = System.system_time(:millisecond)
+    topic = "block_sync:#{state.profile}:#{state.chain_name}"
+
+    for result <- results do
+      case Map.get(state.providers, result.provider_id) do
+        %{consecutive_failures: failures, consecutive_successes: successes} ->
+          msg =
+            {:provider_health_pulse,
+             %{
+               profile: state.profile,
+               chain: state.chain_name,
+               provider_id: result.provider_id,
+               region: region,
+               consecutive_failures: failures,
+               consecutive_successes: successes,
+               ts: ts
+             }}
+
+          Phoenix.PubSub.broadcast(Lasso.PubSub, topic, msg)
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
+  defp get_local_region do
+    try do
+      Lasso.Cluster.Topology.get_self_region()
+    catch
+      :exit, _ -> Application.get_env(:lasso, :cluster_region) || "unknown"
+    end
   end
 
   @doc """

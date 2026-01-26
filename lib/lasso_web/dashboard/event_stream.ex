@@ -44,6 +44,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   @cleanup_interval_ms 30_000
   @stale_block_height_ms 300_000
   @seen_request_id_ttl_ms 120_000
+  @max_seen_request_ids 50_000
   @heartbeat_interval_ms 2_000
 
   defstruct [
@@ -59,6 +60,8 @@ defmodule LassoWeb.Dashboard.EventStream do
     circuit_states: %{},
     block_heights: %{},
     consensus_heights: %{},
+    # Health counters per {provider_id, region}
+    health_counters: %{},
     # Cluster state (from Topology)
     cluster_state: %{
       connected: 1,
@@ -238,7 +241,7 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   # Block height updates - process immediately
   def handle_info({:block_height_update, {profile, provider_id}, height, source, timestamp}, state) do
-    region = state.cluster_state.regions |> List.first() || get_self_region()
+    region = get_region_for_source(source, state)
 
     chain =
       find_chain_for_provider(state, provider_id) ||
@@ -251,6 +254,21 @@ defmodule LassoWeb.Dashboard.EventStream do
     else
       {:noreply, state}
     end
+  end
+
+  def handle_info({:provider_health_pulse, %{provider_id: pid, region: region} = data}, state) do
+    key = {pid, region}
+
+    health_data = %{
+      consecutive_failures: data.consecutive_failures,
+      consecutive_successes: data.consecutive_successes,
+      ts: data.ts
+    }
+
+    health_counters = Map.put(get_health_counters(state), key, health_data)
+    broadcast_to_subscribers(state, {:health_pulse, %{provider_id: pid, region: region, counters: health_data}})
+
+    {:noreply, %{state | health_counters: health_counters}}
   end
 
   # Topology events - health update
@@ -268,21 +286,9 @@ defmodule LassoWeb.Dashboard.EventStream do
     {:noreply, %{state | cluster_state: cluster_state}}
   end
 
-  # Topology events - node connected (coverage included)
-  def handle_info({:topology_event, %{event: :node_connected, coverage: coverage}}, state) do
-    cluster_state = %{
-      state.cluster_state
-      | connected: coverage.connected,
-        responding: coverage.responding,
-        last_update: now()
-    }
-
-    broadcast_to_subscribers(state, {:cluster_update, cluster_state})
-    {:noreply, %{state | cluster_state: cluster_state}}
-  end
-
-  # Topology events - node disconnected (coverage included)
-  def handle_info({:topology_event, %{event: :node_disconnected, coverage: coverage}}, state) do
+  # Topology events - node connected/disconnected (coverage included)
+  def handle_info({:topology_event, %{event: event, coverage: coverage}}, state)
+      when event in [:node_connected, :node_disconnected] do
     cluster_state = %{
       state.cluster_state
       | connected: coverage.connected,
@@ -327,6 +333,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     # Send current state immediately (map payloads)
     send(pid, {:metrics_snapshot, %{metrics: state.provider_metrics}})
     send(pid, {:circuits_snapshot, %{circuits: state.circuit_states}})
+    send(pid, {:health_counters_snapshot, %{counters: get_health_counters(state)}})
     send(pid, {:cluster_update, state.cluster_state})
 
     # Send recent events from windows (convert structs to maps for Access)
@@ -369,18 +376,13 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   defp process_batch(state) do
-    events =
-      state.pending_events
-      |> Enum.reverse()
-      |> Enum.uniq_by(& &1.request_id)
+    events = Enum.reverse(state.pending_events)
 
-    # Add events to windows
-    state = Enum.reduce(events, state, &add_event_to_window/2)
+    state =
+      events
+      |> Enum.reduce(state, &add_event_to_window/2)
+      |> recompute_all_metrics()
 
-    # Recompute metrics
-    state = recompute_all_metrics(state)
-
-    # Broadcast updates
     broadcast_metrics_update(state)
     broadcast_events_batch(state, events)
 
@@ -390,13 +392,8 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp add_event_to_window(event, state) do
     key = {event.provider_id, event.chain, event.source_region}
     window = Map.get(state.event_windows, key, [])
-
-    if Enum.any?(window, &(&1.request_id == event.request_id)) do
-      state
-    else
-      new_window = [event | window] |> Enum.take(@max_events_per_key)
-      %{state | event_windows: Map.put(state.event_windows, key, new_window)}
-    end
+    new_window = [event | window] |> Enum.take(@max_events_per_key)
+    %{state | event_windows: Map.put(state.event_windows, key, new_window)}
   end
 
   defp maybe_cleanup(state, now) do
@@ -424,7 +421,18 @@ defmodule LassoWeb.Dashboard.EventStream do
       |> Enum.reject(fn {_id, ts} -> ts < cutoff end)
       |> Map.new()
 
+    seen = maybe_truncate_seen_ids(seen, now)
+
     %{state | seen_request_ids: seen}
+  end
+
+  defp maybe_truncate_seen_ids(seen, _now) when map_size(seen) <= @max_seen_request_ids, do: seen
+
+  defp maybe_truncate_seen_ids(seen, _now) do
+    seen
+    |> Enum.sort_by(fn {_id, ts} -> ts end, :desc)
+    |> Enum.take(@max_seen_request_ids)
+    |> Map.new()
   end
 
   defp cleanup_stale_data(state) do
@@ -493,11 +501,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   defp compute_provider_metrics(provider_id, all_events, _windows, chain_totals, state) do
-    chain =
-      case all_events do
-        [first | _] -> first.chain
-        [] -> nil
-      end
+    chain = all_events |> List.first() |> then(&(&1 && &1.chain))
 
     events_by_region = Enum.group_by(all_events, & &1.source_region)
 
@@ -516,7 +520,8 @@ defmodule LassoWeb.Dashboard.EventStream do
           events_per_second: length(events) / (@window_duration_ms / 1000),
           block_height: get_block_height(state, provider_id, chain, region),
           block_lag: get_block_lag(state, provider_id, chain, region),
-          circuit: get_circuit_state(state, provider_id, region)
+          circuit: get_circuit_state(state, provider_id, region),
+          rpc_stats: compute_method_stats(events)
         }
 
         {region, metrics}
@@ -543,7 +548,8 @@ defmodule LassoWeb.Dashboard.EventStream do
       events_per_second: length(all_events) / (@window_duration_ms / 1000),
       block_height: get_max_block_height(state, provider_id, chain),
       block_lag: get_worst_block_lag(state, provider_id, chain),
-      regions_reporting: Map.keys(by_region)
+      regions_reporting: Map.keys(by_region),
+      rpc_stats: compute_method_stats(all_events)
     }
 
     %{
@@ -553,6 +559,26 @@ defmodule LassoWeb.Dashboard.EventStream do
       by_region: by_region,
       updated_at: System.system_time(:millisecond)
     }
+  end
+
+  defp compute_method_stats(events) do
+    events
+    |> Enum.group_by(& &1.method)
+    |> Enum.map(fn {method, method_events} ->
+      total = length(method_events)
+      successes = Enum.count(method_events, &(&1.result == :success))
+      durations = Enum.map(method_events, & &1.duration_ms)
+      avg_duration = if total > 0, do: Enum.sum(durations) / total, else: 0.0
+
+      %{
+        method: method,
+        total_calls: total,
+        success_rate: if(total > 0, do: successes / total, else: 0.0),
+        avg_duration_ms: avg_duration
+      }
+    end)
+    |> Enum.sort_by(& &1.total_calls, :desc)
+    |> Enum.take(10)
   end
 
   defp compute_success_rate([]), do: 0.0
@@ -572,14 +598,8 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   defp compute_percentile(events, p) do
     durations = events |> Enum.map(& &1.duration_ms) |> Enum.sort()
-    len = length(durations)
-
-    if len > 0 do
-      index = max(0, round(len * p / 100) - 1)
-      Enum.at(durations, index)
-    else
-      nil
-    end
+    index = max(0, round(length(durations) * p / 100) - 1)
+    Enum.at(durations, index)
   end
 
   # Block height helpers
@@ -759,7 +779,8 @@ defmodule LassoWeb.Dashboard.EventStream do
         events_per_second: 0.0,
         block_height: nil,
         block_lag: nil,
-        regions_reporting: []
+        regions_reporting: [],
+        rpc_stats: []
       },
       by_region: %{},
       updated_at: 0
@@ -801,6 +822,19 @@ defmodule LassoWeb.Dashboard.EventStream do
     end
   end
 
+  defp get_region_for_source(source, _state) when is_atom(source) do
+    try do
+      case Lasso.Cluster.Topology.get_node_info(source) do
+        %{region: region} when is_binary(region) and region != "unknown" -> region
+        _ -> get_self_region()
+      end
+    catch
+      :exit, _ -> get_self_region()
+    end
+  end
+
+  defp get_region_for_source(_source, _state), do: get_self_region()
+
   defp default_cluster_state do
     %{connected: 1, responding: 1, regions: [], last_update: now()}
   end
@@ -808,4 +842,6 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp now do
     System.monotonic_time(:millisecond)
   end
+
+  defp get_health_counters(%{health_counters: counters}), do: counters
 end

@@ -88,7 +88,9 @@ Self-hosted operators              + Multi-tenant isolation
 
 ## Cloud Phases (lasso-cloud) - ⏳ PENDING
 
-> **Note for AI Agent**: These phases should be implemented in the lasso-cloud repository after the OSS clustering docs have been copied over. The OSS work provides the foundation; Cloud phases add multi-tenant isolation.
+> **Full Implementation Guide**: [CLOUD_CLUSTERING.md](./CLOUD_CLUSTERING.md)
+>
+> **Note for AI Agent**: These phases should be implemented in the lasso-cloud repository after the OSS clustering docs have been copied over. The CLOUD_CLUSTERING.md document contains detailed implementation guidance with accurate file paths cross-referenced against the actual lasso-cloud codebase.
 
 ### Prerequisites
 
@@ -111,127 +113,48 @@ grep -r "account_id\|api_key_id\|current_account" lib/ --include="*.ex" | grep -
 
 **Purpose**: Add multi-tenant isolation so Cloud users only see their own traffic.
 
-- [ ] **Add account_id to Cloud's RequestOptions**
-  - File: `lib/lasso/core/request/request_options.ex` (Cloud fork)
-  - Add fields: `account_id: nil`, `api_key_id: nil`
-  - These fields exist ONLY in Cloud fork, not in OSS
+**Key Files** (see [CLOUD_CLUSTERING.md](./CLOUD_CLUSTERING.md) for full implementation):
+- `lib/lasso_cloud/observability/account_events.ex` - Create new module for account-scoped publishing
+- `lib/lasso/core/request/request_pipeline/observability.ex` - Wire up account-aware publishing
+- `lib/lasso_web/dashboard/event_subscription.ex` - Replace with account-aware version
 
-- [ ] **Thread account_id from auth plug**
-  - File: `lib/lasso_cloud/rpc/request_options_builder.ex`
-  - Extract from `conn.assigns[:current_account][:id]`
-  - Pass through RequestOptions → RequestContext
-
-- [ ] **Create Cloud event publishing wrapper**
-  - File: `lib/lasso_cloud/observability/account_events.ex` (create new)
-  - Wraps OSS event publishing
-  - Adds account-scoped topic publication
-
-  ```elixir
-  defmodule LassoCloud.Observability.AccountEvents do
-    @moduledoc "Enriches OSS events with account attribution for Cloud."
-
-    def publish_with_account(event, account_id) do
-      # Call OSS publisher (profile-scoped)
-      Lasso.Observability.publish_routing_decision(event)
-
-      # Cloud addition: also publish to account topic
-      enriched = Map.put(event, :account_id, account_id)
-      Phoenix.PubSub.broadcast(
-        Lasso.PubSub,
-        "routing:decisions:#{event.profile}:account:#{account_id}",
-        enriched
-      )
-    end
-  end
-  ```
-
-- [ ] **Replace EventSubscription with account-aware version**
-  - File: `lib/lasso_web/dashboard/event_subscription.ex` (replace OSS version)
-  - Default to account-scoped topics
-  - Add admin toggle for profile-scoped view
-
-  ```elixir
-  defmodule LassoWeb.Dashboard.EventSubscription do
-    @moduledoc "Account-aware event subscription for Cloud."
-
-    def subscribe(socket, profile) do
-      if show_all_events?(socket) do
-        "routing:decisions:#{profile}"
-      else
-        account_id = socket.assigns.current_account.id
-        "routing:decisions:#{profile}:account:#{account_id}"
-      end
-    end
-
-    defp show_all_events?(socket) do
-      socket.assigns[:show_all_events] == true and
-        is_admin?(socket.assigns[:current_account])
-    end
-  end
-  ```
+**Tasks:**
+- [ ] Create `LassoCloud.Observability.AccountEvents` module
+- [ ] Thread account_id from RequestContext to event publishing
+- [ ] Update EventSubscription to use account-scoped topics
+- [ ] Test cross-account isolation
 
 **Exit Criteria:**
 - [ ] Account-scoped events publish to `routing:decisions:{profile}:account:{account_id}`
 - [ ] Profile-scoped events still publish to `routing:decisions:{profile}` (for operators)
 - [ ] Dashboard defaults to account-scoped subscription
-- [ ] Cloud users only see their own account's events
-- [ ] OSS event structs unchanged - account_id added only at publish time
+- [ ] No cross-account data leakage
 
 ### Phase 7: Multi-Tenant Dashboard UX (Cloud) ⏳
 
 **Purpose**: Provide appropriate default views for Cloud users vs operators.
 
-- [ ] **Implement "My App" default view**
-  - Default view for logged-in Cloud users
-  - Shows only account's requests in activity feed
-  - Account-scoped metrics (my RPS, my success rate)
+**Key Files** (see [CLOUD_CLUSTERING.md](./CLOUD_CLUSTERING.md) for full implementation):
+- `lib/lasso_web/dashboard/dashboard.ex` - Add view mode toggle
+- `config/runtime.exs` - Per-profile sample rates
 
-- [ ] **Implement "Profile Benchmark" toggle**
-  - Admin-only toggle to see profile-wide data
-  - Label clearly as "Shared profile benchmark"
-  - Shows aggregate metrics across all accounts using profile
-
-- [ ] **Add toggle UI in dashboard**
-  - File: `lib/lasso_web/live/dashboard/dashboard.ex` (Cloud fork)
-  - Add "My App" / "Profile Benchmark" toggle
-  - Persist preference (URL param or session)
-
-- [ ] **Update dashboard to handle view switching**
-  - Resubscribe to appropriate topics on toggle
-  - Clear and reload events on switch
-  - Show appropriate metrics based on view
-
-- [ ] **Implement per-profile sample rates**
-  - File: `config/runtime.exs` (Cloud)
-  - Allow different sample rates per profile
-  - Higher rates for BYOK (low traffic), lower for shared free (high traffic)
-
-- [ ] **Handle BYOK profile UX**
-  - BYOK profiles: "My App" = "Profile Benchmark" (same data)
-  - Hide toggle for BYOK profiles (no distinction needed)
+**Tasks:**
+- [ ] Add "My App" / "Profile Benchmark" toggle (operators only)
+- [ ] Implement view mode switching with topic resubscription
+- [ ] Handle BYOK profiles (hide toggle)
+- [ ] Add per-profile sample rate configuration
 
 **Exit Criteria:**
 - [ ] Logged-in users see "My App" view by default
-- [ ] Admin toggle switches to "Profile Benchmark" view
-- [ ] View switch resubscribes to correct topics
+- [ ] Operators can toggle to "Profile Benchmark" view
 - [ ] BYOK users don't see confusing toggle
 - [ ] Per-profile sample rates configurable
 
 ---
 
-## Cloud Extension Patterns
+## Cloud Architecture Summary
 
-### How Cloud Extends OSS
-
-Cloud extends OSS through **replacement and enrichment**, not modification:
-
-| Component | Strategy | Notes |
-|-----------|----------|-------|
-| `event_subscription.ex` | **Replace** | Different subscription logic |
-| `observability.ex` | **Wrap** | Add account topic, call OSS for profile topic |
-| `request_options.ex` | **Extend** | Add account_id field in Cloud fork |
-| `dashboard.ex` | **Extend** | Add "My App" / "Profile Benchmark" toggle |
-| Event structs | **Use as-is** | Add account_id at publish time, not in struct |
+See [CLOUD_CLUSTERING.md](./CLOUD_CLUSTERING.md) for complete details.
 
 ### Topic Hierarchy
 
@@ -246,14 +169,19 @@ Account-Scoped Topics (Cloud default UX):
 └── routing:decisions:{profile}:account:{account_id}
 ```
 
-### Automatic Scoping Model (Cloud)
-
-Cloud dashboards apply **automatic scoping** based on metric type:
+### Scoping Model
 
 | Metric Type | Scope | Example |
 |-------------|-------|---------|
 | Activity/traffic metrics | Account-scoped | Activity feed, RPS, success rate |
 | Infrastructure health | Profile-scoped | Provider topology, circuit breakers |
+
+### Existing Cloud Infrastructure (Already Works ✅)
+
+- Account threading via `APIKeyAuthPlug` → `conn.assigns[:current_account]`
+- Rate limiting: `"account:{account_id}:profile:{profile_slug}"`
+- CU metering: Records by subscription_id (tied to account)
+- WebSocket: account_id stored in socket state
 
 ---
 
@@ -308,8 +236,8 @@ config :lasso, :event_sampling,
 ## Related Documents
 
 - [DASHBOARD_CLUSTER_ARCHITECTURE_V2.md](./DASHBOARD_CLUSTER_ARCHITECTURE_V2.md) - Authoritative OSS architecture
+- [CLOUD_CLUSTERING.md](./CLOUD_CLUSTERING.md) - Cloud multi-tenancy implementation guide
 - [REALTIME_METRICS_ARCHITECTURE_V2.md](./REALTIME_METRICS_ARCHITECTURE_V2.md) - Real-time metrics design
 - [CLUSTERING_OPERATIONS_GUIDE.md](./CLUSTERING_OPERATIONS_GUIDE.md) - Operational runbooks
 - [CLUSTERING_TEST_GUIDE.md](./CLUSTERING_TEST_GUIDE.md) - Testing procedures
 - [PUBSUB_EVENTS.md](./PUBSUB_EVENTS.md) - Event schemas and topics
-- [CLUSTERING_SPEC_V1.md](./CLUSTERING_SPEC_V1.md) - Historical reference (contains additional Cloud context)

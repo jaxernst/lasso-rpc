@@ -44,7 +44,7 @@ defmodule Lasso.Events.ProviderHealthEvent do
       ts: attrs[:ts] || System.system_time(:millisecond),
       profile: attrs[:profile] || "default",
       source_node: node(),
-      source_region: Application.get_env(:lasso, :cluster_region) || "unknown",
+      source_region: get_source_region(),
       chain: attrs[:chain],
       provider_id: attrs[:provider_id],
       transport: attrs[:transport],
@@ -53,6 +53,18 @@ defmodule Lasso.Events.ProviderHealthEvent do
       reason: attrs[:reason],
       latency_ms: attrs[:latency_ms]
     }
+  end
+
+  defp get_source_region do
+    case Application.get_env(:lasso, :cluster_region) do
+      region when is_binary(region) and region != "" -> region
+      _ -> generate_node_id()
+    end
+  end
+
+  defp generate_node_id do
+    # Use full node name for uniqueness across cluster nodes
+    node() |> Atom.to_string()
   end
 
   @doc """

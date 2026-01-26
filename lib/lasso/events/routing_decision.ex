@@ -48,7 +48,7 @@ defmodule Lasso.Events.RoutingDecision do
       request_id: attrs[:request_id],
       profile: attrs[:profile] || "default",
       source_node: node(),
-      source_region: Application.get_env(:lasso, :cluster_region) || "unknown",
+      source_region: get_source_region(),
       chain: attrs[:chain],
       method: attrs[:method],
       strategy: to_string(attrs[:strategy]),
@@ -58,6 +58,18 @@ defmodule Lasso.Events.RoutingDecision do
       result: attrs[:result],
       failover_count: attrs[:failover_count] || 0
     }
+  end
+
+  defp get_source_region do
+    case Application.get_env(:lasso, :cluster_region) do
+      region when is_binary(region) and region != "" -> region
+      _ -> generate_node_id()
+    end
+  end
+
+  defp generate_node_id do
+    # Use full node name for uniqueness across cluster nodes
+    node() |> Atom.to_string()
   end
 
   @doc """
