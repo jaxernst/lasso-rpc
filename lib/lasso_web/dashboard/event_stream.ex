@@ -2,15 +2,8 @@ defmodule LassoWeb.Dashboard.EventStream do
   @moduledoc """
   Real-time event aggregation and broadcast for dashboard LiveViews.
 
-  Subscribes to routing decisions, circuit events, and block sync events.
-  Pre-computes metrics and broadcasts batched updates to subscribers.
-
-  Key differences from ClusterEventAggregator:
-  - Subscribes to `Lasso.Cluster.Topology` via PubSub instead of net_kernel
-  - No region discovery RPC (receives from Topology events)
-  - O(1) batch size tracking
-  - Request ID deduplication built-in with TTL
-  - Handles topology events for immediate coverage updates
+  Subscribes to routing decisions, circuit events, block sync events, and topology
+  changes via PubSub. Pre-computes metrics and broadcasts batched updates to subscribers.
 
   ## Usage
 
@@ -34,6 +27,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   use GenServer, restart: :transient
   require Logger
 
+  alias Lasso.Cluster.Topology
   alias Lasso.Config.ConfigStore
   alias Lasso.Events.RoutingDecision
 
@@ -269,7 +263,7 @@ defmodule LassoWeb.Dashboard.EventStream do
       ts: data.ts
     }
 
-    health_counters = Map.put(get_health_counters(state), key, health_data)
+    health_counters = Map.put(state.health_counters, key, health_data)
 
     broadcast_to_subscribers(
       state,
@@ -341,7 +335,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     # Send current state immediately (map payloads)
     send(pid, {:metrics_snapshot, %{metrics: state.provider_metrics}})
     send(pid, {:circuits_snapshot, %{circuits: state.circuit_states}})
-    send(pid, {:health_counters_snapshot, %{counters: get_health_counters(state)}})
+    send(pid, {:health_counters_snapshot, %{counters: state.health_counters}})
     send(pid, {:cluster_update, state.cluster_state})
 
     # Send recent events from windows (convert structs to maps for Access)
@@ -830,49 +824,41 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   defp fetch_cluster_state do
-    try do
-      case Lasso.Cluster.Topology.get_coverage() do
-        coverage when is_map(coverage) ->
-          %{
-            connected: coverage.connected,
-            responding: coverage.responding,
-            regions: Lasso.Cluster.Topology.get_regions(),
-            last_update: now()
-          }
+    case Topology.get_coverage() do
+      coverage when is_map(coverage) ->
+        %{
+          connected: coverage.connected,
+          responding: coverage.responding,
+          regions: Topology.get_regions(),
+          last_update: now()
+        }
 
-        _ ->
-          default_cluster_state()
-      end
-    catch
-      :exit, _ -> default_cluster_state()
+      _ ->
+        default_cluster_state()
     end
+  catch
+    :exit, _ -> default_cluster_state()
   end
 
   defp fetch_regions do
-    try do
-      Lasso.Cluster.Topology.get_regions()
-    catch
-      :exit, _ -> []
-    end
+    Topology.get_regions()
+  catch
+    :exit, _ -> []
   end
 
   defp get_self_region do
-    try do
-      Lasso.Cluster.Topology.get_self_region()
-    catch
-      :exit, _ -> Application.get_env(:lasso, :cluster_region) || "unknown"
-    end
+    Topology.get_self_region()
+  catch
+    :exit, _ -> Application.get_env(:lasso, :cluster_region) || "unknown"
   end
 
   defp get_region_for_source(source, _state) when is_atom(source) do
-    try do
-      case Lasso.Cluster.Topology.get_node_info(source) do
-        %{region: region} when is_binary(region) and region != "unknown" -> region
-        _ -> get_self_region()
-      end
-    catch
-      :exit, _ -> get_self_region()
+    case Topology.get_node_info(source) do
+      %{region: region} when is_binary(region) and region != "unknown" -> region
+      _ -> get_self_region()
     end
+  catch
+    :exit, _ -> get_self_region()
   end
 
   defp get_region_for_source(_source, _state), do: get_self_region()
@@ -884,6 +870,4 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp now do
     System.monotonic_time(:millisecond)
   end
-
-  defp get_health_counters(%{health_counters: counters}), do: counters
 end

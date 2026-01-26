@@ -56,16 +56,16 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     # Publish routing decision for dashboard/analytics (profile-scoped)
     publish_routing_decision(
-      ctx.request_id,
-      profile,
-      ctx.chain,
-      method,
-      strategy,
-      provider_id,
-      transport,
-      duration_ms,
-      :success,
-      ctx.retries
+      request_id: ctx.request_id,
+      profile: profile,
+      chain: ctx.chain,
+      method: method,
+      strategy: strategy,
+      provider_id: provider_id,
+      transport: transport,
+      duration_ms: duration_ms,
+      result: :success,
+      failovers: ctx.retries
     )
 
     # Emit telemetry for observability stack
@@ -115,16 +115,16 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     # Publish routing decision (profile-scoped)
     publish_routing_decision(
-      ctx.request_id,
-      profile,
-      ctx.chain,
-      method,
-      strategy,
-      provider_id,
-      transport,
-      duration_ms,
-      :error,
-      ctx.retries
+      request_id: ctx.request_id,
+      profile: profile,
+      chain: ctx.chain,
+      method: method,
+      strategy: strategy,
+      provider_id: provider_id,
+      transport: transport,
+      duration_ms: duration_ms,
+      result: :error,
+      failovers: ctx.retries
     )
 
     # Emit telemetry
@@ -322,47 +322,25 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
   # Private helpers
 
-  @spec publish_routing_decision(
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          atom(),
-          String.t(),
-          atom(),
-          non_neg_integer(),
-          atom(),
-          non_neg_integer()
-        ) :: :ok | {:error, term()}
-  defp publish_routing_decision(
-         request_id,
-         profile,
-         chain,
-         method,
-         strategy,
-         provider_id,
-         transport,
-         duration_ms,
-         result,
-         failovers
-       ) do
+  @spec publish_routing_decision(keyword()) :: :ok | {:error, term()}
+  defp publish_routing_decision(opts) do
     event =
       RoutingDecision.new(
-        request_id: request_id,
-        profile: profile,
-        chain: chain,
-        method: method,
-        strategy: strategy,
-        provider_id: provider_id,
-        transport: transport,
-        duration_ms: duration_ms,
-        result: result,
-        failover_count: failovers
+        request_id: opts[:request_id],
+        profile: opts[:profile],
+        chain: opts[:chain],
+        method: opts[:method],
+        strategy: opts[:strategy],
+        provider_id: opts[:provider_id],
+        transport: opts[:transport],
+        duration_ms: opts[:duration_ms],
+        result: opts[:result],
+        failover_count: opts[:failovers]
       )
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      RoutingDecision.topic(profile),
+      RoutingDecision.topic(opts[:profile]),
       event
     )
   end

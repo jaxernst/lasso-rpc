@@ -276,39 +276,33 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       |> Enum.filter(fn {{pid, _region}, _circuit} -> pid == provider_id end)
       |> Enum.map(fn {{_pid, region}, circuit} -> {region, circuit} end)
 
-    cond do
-      total_regions <= 1 ->
-        # Single node cluster - show single-node view
-        # Use local connection counters (always available for local node)
-        %{
-          mode: :single,
-          http_state: Map.get(conn, :http_circuit_state, :closed),
-          ws_state: Map.get(conn, :ws_circuit_state, :closed),
-          ws_connected: Map.get(conn, :ws_connected, false),
-          consecutive_failures: Map.get(conn, :consecutive_failures, 0),
-          consecutive_successes: Map.get(conn, :consecutive_successes, 0),
-          has_http: has_http,
-          has_ws: has_ws
-        }
+    if total_regions <= 1 do
+      %{
+        mode: :single,
+        http_state: Map.get(conn, :http_circuit_state, :closed),
+        ws_state: Map.get(conn, :ws_circuit_state, :closed),
+        ws_connected: Map.get(conn, :ws_connected, false),
+        consecutive_failures: Map.get(conn, :consecutive_failures, 0),
+        consecutive_successes: Map.get(conn, :consecutive_successes, 0),
+        has_http: has_http,
+        has_ws: has_ws
+      }
+    else
+      http_counts =
+        count_circuit_states_with_default(provider_circuits, :http, available_regions)
 
-      true ->
-        # Multiple regions - show aggregate view
-        # Build counts from available circuit data, defaulting missing regions to :closed
-        http_counts =
-          count_circuit_states_with_default(provider_circuits, :http, available_regions)
+      ws_counts = count_circuit_states_with_default(provider_circuits, :ws, available_regions)
 
-        ws_counts = count_circuit_states_with_default(provider_circuits, :ws, available_regions)
-
-        %{
-          mode: :aggregate,
-          region_count: total_regions,
-          http_counts: http_counts,
-          ws_counts: ws_counts,
-          has_http: has_http,
-          has_ws: has_ws,
-          http_worst: worst_circuit_state(http_counts),
-          ws_worst: worst_circuit_state(ws_counts)
-        }
+      %{
+        mode: :aggregate,
+        region_count: total_regions,
+        http_counts: http_counts,
+        ws_counts: ws_counts,
+        has_http: has_http,
+        has_ws: has_ws,
+        http_worst: worst_circuit_state(http_counts),
+        ws_worst: worst_circuit_state(ws_counts)
+      }
     end
   end
 

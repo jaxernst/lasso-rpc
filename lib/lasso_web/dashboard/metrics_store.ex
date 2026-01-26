@@ -5,17 +5,14 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   Uses stale-while-revalidate pattern: returns cached data immediately
   while triggering background refresh when TTL expires.
 
-  Subscribes to topology changes and invalidates cache entries when
-  cluster membership changes significantly.
-
-  Key changes from ClusterMetricsCache:
-  - Uses Topology.get_responding_nodes() instead of Node.list()
-  - Subscribes to cluster:topology for cache invalidation
-  - Delegates coverage queries to Topology module
+  Subscribes to topology changes via PubSub and invalidates cache entries
+  when cluster membership changes.
   """
 
   use GenServer
   require Logger
+
+  alias Lasso.Cluster.Topology
 
   @cache_ttl_ms 15_000
   @refresh_timeout_ms 5_000
@@ -277,28 +274,22 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   end
 
   defp get_responding_nodes do
-    try do
-      Lasso.Cluster.Topology.get_responding_nodes()
-    catch
-      :exit, _ -> Node.list()
-    end
+    Topology.get_responding_nodes()
+  catch
+    :exit, _ -> Node.list()
   end
 
   defp get_topology_coverage do
-    try do
-      Lasso.Cluster.Topology.get_coverage()
-    catch
-      :exit, _ -> %{connected: length(Node.list()) + 1, responding: 1}
-    end
+    Topology.get_coverage()
+  catch
+    :exit, _ -> %{connected: length(Node.list()) + 1, responding: 1}
   end
 
   defp get_node_count do
-    try do
-      coverage = Lasso.Cluster.Topology.get_coverage()
-      coverage.connected
-    catch
-      :exit, _ -> length(Node.list()) + 1
-    end
+    coverage = Topology.get_coverage()
+    coverage.connected
+  catch
+    :exit, _ -> length(Node.list()) + 1
   end
 
   defp aggregate_results(:get_provider_leaderboard, results) do

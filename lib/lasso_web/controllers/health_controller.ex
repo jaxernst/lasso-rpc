@@ -32,18 +32,16 @@ defmodule LassoWeb.HealthController do
   end
 
   defp get_topology_info do
-    try do
-      topology = Lasso.Cluster.Topology.get_topology()
+    topology = Lasso.Cluster.Topology.get_topology()
 
-      %{
-        enabled: true,
-        coverage: topology.coverage,
-        regions: topology.regions
-      }
-    catch
-      :exit, _ ->
-        %{enabled: false, coverage: %{connected: 1, responding: 1, expected: 1}, regions: []}
-    end
+    %{
+      enabled: true,
+      coverage: topology.coverage,
+      regions: topology.regions
+    }
+  catch
+    :exit, _ ->
+      %{enabled: false, coverage: %{connected: 1, responding: 1, expected: 1}, regions: []}
   end
 
   defp determine_cluster_status(topology) do

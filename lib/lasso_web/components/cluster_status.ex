@@ -19,7 +19,6 @@ defmodule LassoWeb.Components.ClusterStatus do
   attr(:show_label, :boolean, default: true)
 
   def coverage_indicator(assigns) do
-    # Support both direct attrs and coverage map
     {responding, total} =
       case assigns do
         %{coverage: %{responding: r, total: t}} -> {r, t}
@@ -27,19 +26,11 @@ defmodule LassoWeb.Components.ClusterStatus do
         _ -> {1, 1}
       end
 
-    status =
-      cond do
-        responding == total -> :healthy
-        responding >= div(total, 2) + 1 -> :degraded
-        responding > 0 -> :critical
-        true -> :offline
-      end
-
     assigns =
       assigns
       |> assign(:responding, responding)
       |> assign(:total, total)
-      |> assign(:status, status)
+      |> assign(:status, compute_status(responding, total))
 
     ~H"""
     <span class={["inline-flex items-center gap-1.5 text-xs", @class]}>
@@ -101,17 +92,15 @@ defmodule LassoWeb.Components.ClusterStatus do
   end
 
   defp get_topology_info do
-    try do
-      topology = Lasso.Cluster.Topology.get_topology()
+    topology = Lasso.Cluster.Topology.get_topology()
 
-      %{
-        enabled: true,
-        coverage: topology.coverage,
-        regions: topology.regions
-      }
-    catch
-      :exit, _ -> %{enabled: false, coverage: %{connected: 1, responding: 1}, regions: []}
-    end
+    %{
+      enabled: true,
+      coverage: topology.coverage,
+      regions: topology.regions
+    }
+  catch
+    :exit, _ -> %{enabled: false, coverage: %{connected: 1, responding: 1}, regions: []}
   end
 
   @doc """
@@ -149,15 +138,7 @@ defmodule LassoWeb.Components.ClusterStatus do
   attr(:stale, :boolean, default: false)
 
   def fixed_cluster_status(assigns) do
-    status =
-      cond do
-        assigns.responding == assigns.total -> :healthy
-        assigns.responding >= div(assigns.total, 2) + 1 -> :degraded
-        assigns.responding > 0 -> :critical
-        true -> :offline
-      end
-
-    assigns = assign(assigns, :status, status)
+    assigns = assign(assigns, :status, compute_status(assigns.responding, assigns.total))
 
     ~H"""
     <div class="fixed bottom-4 left-4 z-40 flex items-center gap-2">
@@ -195,6 +176,15 @@ defmodule LassoWeb.Components.ClusterStatus do
   end
 
   # Private helpers
+
+  defp compute_status(responding, total) do
+    cond do
+      responding == total -> :healthy
+      responding >= div(total, 2) + 1 -> :degraded
+      responding > 0 -> :critical
+      true -> :offline
+    end
+  end
 
   defp status_color(:healthy), do: "bg-emerald-500"
   defp status_color(:degraded), do: "bg-yellow-500"

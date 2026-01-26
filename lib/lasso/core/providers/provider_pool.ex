@@ -2217,11 +2217,9 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   defp get_local_region do
-    try do
-      Lasso.Cluster.Topology.get_self_region()
-    catch
-      :exit, _ -> Application.get_env(:lasso, :cluster_region) || "unknown"
-    end
+    Lasso.Cluster.Topology.get_self_region()
+  catch
+    :exit, _ -> Application.get_env(:lasso, :cluster_region) || "unknown"
   end
 
   @doc """
