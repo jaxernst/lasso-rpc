@@ -728,7 +728,10 @@ defmodule LassoWeb.Dashboard do
     {:noreply, assign(socket, :cluster_circuit_states, circuit_states)}
   end
 
-  def handle_info({:circuit_update, %{provider_id: provider_id, region: region, circuit: circuit}}, socket) do
+  def handle_info(
+        {:circuit_update, %{provider_id: provider_id, region: region, circuit: circuit}},
+        socket
+      ) do
     key = {provider_id, region}
     circuits = Map.put(socket.assigns.cluster_circuit_states, key, circuit)
     {:noreply, assign(socket, :cluster_circuit_states, circuits)}
@@ -738,7 +741,10 @@ defmodule LassoWeb.Dashboard do
     {:noreply, assign(socket, :cluster_health_counters, counters)}
   end
 
-  def handle_info({:health_pulse, %{provider_id: provider_id, region: region, counters: counters}}, socket) do
+  def handle_info(
+        {:health_pulse, %{provider_id: provider_id, region: region, counters: counters}},
+        socket
+      ) do
     key = {provider_id, region}
     health_counters = Map.put(socket.assigns.cluster_health_counters, key, counters)
     {:noreply, assign(socket, :cluster_health_counters, health_counters)}
@@ -767,7 +773,10 @@ defmodule LassoWeb.Dashboard do
     {:noreply, assign(socket, :available_regions, regions)}
   end
 
-  def handle_info({:block_update, %{provider_id: provider_id, region: region, height: height, lag: lag}}, socket) do
+  def handle_info(
+        {:block_update, %{provider_id: provider_id, region: region, height: height, lag: lag}},
+        socket
+      ) do
     key = {provider_id, region}
     heights = Map.put(socket.assigns.cluster_block_heights, key, %{height: height, lag: lag})
     {:noreply, assign(socket, :cluster_block_heights, heights)}
@@ -1454,7 +1463,10 @@ defmodule LassoWeb.Dashboard do
           EndpointHelpers.get_chain_endpoints(socket.assigns.selected_profile, chain)
 
         chain_events = Enum.filter(socket.assigns.routing_events, &(&1.chain == chain))
-        chain_unified_events = Enum.filter(socket.assigns.events, fn e -> Map.get(e, :chain) == chain end)
+
+        chain_unified_events =
+          Enum.filter(socket.assigns.events, fn e -> Map.get(e, :chain) == chain end)
+
         chain_provider_events = Enum.filter(socket.assigns.provider_events, &(&1.chain == chain))
 
         socket
@@ -1475,10 +1487,14 @@ defmodule LassoWeb.Dashboard do
 
   defp do_refresh_chain_events(socket) do
     case socket.assigns[:selected_chain] do
-      nil -> socket
+      nil ->
+        socket
+
       chain ->
         chain_events = Enum.filter(socket.assigns.routing_events, &(&1.chain == chain))
-        chain_unified_events = Enum.filter(socket.assigns.events, fn e -> Map.get(e, :chain) == chain end)
+
+        chain_unified_events =
+          Enum.filter(socket.assigns.events, fn e -> Map.get(e, :chain) == chain end)
 
         socket
         |> assign(:selected_chain_events, chain_events)
@@ -1488,10 +1504,15 @@ defmodule LassoWeb.Dashboard do
 
   defp do_refresh_provider_events(socket) do
     case socket.assigns[:selected_provider] do
-      nil -> socket
+      nil ->
+        socket
+
       provider_id ->
-        provider_events = Enum.filter(socket.assigns.routing_events, &(&1.provider_id == provider_id))
-        provider_unified_events = Enum.filter(socket.assigns.events, fn e -> Map.get(e, :provider_id) == provider_id end)
+        provider_events =
+          Enum.filter(socket.assigns.routing_events, &(&1.provider_id == provider_id))
+
+        provider_unified_events =
+          Enum.filter(socket.assigns.events, fn e -> Map.get(e, :provider_id) == provider_id end)
 
         socket
         |> assign(:selected_provider_events, provider_events)

@@ -12,11 +12,11 @@ defmodule LassoWeb.Components.ClusterStatus do
       <.coverage_indicator responding={2} total={3} />
       <.coverage_indicator coverage={%{responding: 2, total: 3}} />
   """
-  attr :responding, :integer, default: nil
-  attr :total, :integer, default: nil
-  attr :coverage, :map, default: nil
-  attr :class, :string, default: ""
-  attr :show_label, :boolean, default: true
+  attr(:responding, :integer, default: nil)
+  attr(:total, :integer, default: nil)
+  attr(:coverage, :map, default: nil)
+  attr(:class, :string, default: "")
+  attr(:show_label, :boolean, default: true)
 
   def coverage_indicator(assigns) do
     # Support both direct attrs and coverage map
@@ -50,9 +50,9 @@ defmodule LassoWeb.Components.ClusterStatus do
       </span>
       <span class="text-gray-400">
         <%= if @show_label do %>
-          <span class={status_text_color(@status)}><%= @responding %></span>/<%= @total %> nodes
+          <span class={status_text_color(@status)}><%= @responding %></span>/{@total} nodes
         <% else %>
-          <span class={status_text_color(@status)}><%= @responding %></span>/<%= @total %>
+          <span class={status_text_color(@status)}><%= @responding %></span>/{@total}
         <% end %>
       </span>
     </span>
@@ -62,7 +62,7 @@ defmodule LassoWeb.Components.ClusterStatus do
   @doc """
   Renders cluster info in a compact badge format.
   """
-  attr :class, :string, default: ""
+  attr(:class, :string, default: "")
 
   def cluster_badge(assigns) do
     topology = get_topology_info()
@@ -90,9 +90,9 @@ defmodule LassoWeb.Components.ClusterStatus do
           <% :standalone -> %>
             1 node
           <% _ -> %>
-            <%= @topology.coverage.connected %> nodes
+            {@topology.coverage.connected} nodes
             <%= if length(@topology.regions) > 1 do %>
-              · <%= length(@topology.regions) %> regions
+              · {length(@topology.regions)} regions
             <% end %>
         <% end %>
       </span>
@@ -103,6 +103,7 @@ defmodule LassoWeb.Components.ClusterStatus do
   defp get_topology_info do
     try do
       topology = Lasso.Cluster.Topology.get_topology()
+
       %{
         enabled: true,
         coverage: topology.coverage,
@@ -116,8 +117,8 @@ defmodule LassoWeb.Components.ClusterStatus do
   @doc """
   Renders a stale data warning when cached data is being refreshed.
   """
-  attr :stale, :boolean, required: true
-  attr :class, :string, default: ""
+  attr(:stale, :boolean, required: true)
+  attr(:class, :string, default: "")
 
   def stale_indicator(assigns) do
     ~H"""
@@ -143,9 +144,9 @@ defmodule LassoWeb.Components.ClusterStatus do
   Renders a fixed-position cluster status indicator in bottom-left corner.
   Per spec Section 4.2: Global fixed indicator for cluster health awareness.
   """
-  attr :responding, :integer, required: true
-  attr :total, :integer, required: true
-  attr :stale, :boolean, default: false
+  attr(:responding, :integer, required: true)
+  attr(:total, :integer, required: true)
+  attr(:stale, :boolean, default: false)
 
   def fixed_cluster_status(assigns) do
     status =
@@ -167,7 +168,7 @@ defmodule LassoWeb.Components.ClusterStatus do
       ]}>
         <span class={["h-2 w-2 rounded-full", status_color(@status)]}></span>
         <span class="text-gray-300">
-          <span class={status_text_color(@status)}><%= @responding %></span>/<%= @total %> nodes reporting
+          <span class={status_text_color(@status)}><%= @responding %></span>/{@total} nodes reporting
         </span>
         <%= if @responding < @total do %>
           <span class="text-amber-400">⚠</span>

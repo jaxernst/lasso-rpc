@@ -88,9 +88,7 @@ defmodule Lasso.Application do
         {Registry, keys: :unique, name: Lasso.Dashboard.StreamRegistry},
 
         # DynamicSupervisor for per-profile event stream processes
-        {DynamicSupervisor,
-         name: Lasso.Dashboard.StreamSupervisor,
-         strategy: :one_for_one},
+        {DynamicSupervisor, name: Lasso.Dashboard.StreamSupervisor, strategy: :one_for_one},
 
         # Metrics store for cached cluster-wide metrics
         LassoWeb.Dashboard.MetricsStore,

@@ -238,7 +238,9 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       iex> BenchmarkStore.get_calls_in_window("default", "ethereum", 60)
       %{"infura" => 150, "alchemy" => 200}
   """
-  @spec get_calls_in_window(profile(), chain_name(), pos_integer()) :: %{String.t() => non_neg_integer()}
+  @spec get_calls_in_window(profile(), chain_name(), pos_integer()) :: %{
+          String.t() => non_neg_integer()
+        }
   def get_calls_in_window(profile, chain_name, window_seconds \\ 60) do
     GenServer.call(__MODULE__, {:get_calls_in_window, profile, chain_name, window_seconds})
   end

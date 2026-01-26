@@ -227,7 +227,8 @@ defmodule LassoWeb.Dashboard.EventStream do
 
         {:noreply, state}
       else
-        {:noreply, %{state | pending_events: pending, pending_count: count, seen_request_ids: seen}}
+        {:noreply,
+         %{state | pending_events: pending, pending_count: count, seen_request_ids: seen}}
       end
     end
   end
@@ -240,7 +241,10 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   # Block height updates - process immediately
-  def handle_info({:block_height_update, {profile, provider_id}, height, source, timestamp}, state) do
+  def handle_info(
+        {:block_height_update, {profile, provider_id}, height, source, timestamp},
+        state
+      ) do
     region = get_region_for_source(source, state)
 
     chain =
@@ -266,7 +270,11 @@ defmodule LassoWeb.Dashboard.EventStream do
     }
 
     health_counters = Map.put(get_health_counters(state), key, health_data)
-    broadcast_to_subscribers(state, {:health_pulse, %{provider_id: pid, region: region, counters: health_data}})
+
+    broadcast_to_subscribers(
+      state,
+      {:health_pulse, %{provider_id: pid, region: region, counters: health_data}}
+    )
 
     {:noreply, %{state | health_counters: health_counters}}
   end
@@ -469,7 +477,13 @@ defmodule LassoWeb.Dashboard.EventStream do
       |> Enum.filter(fn {key, _} -> MapSet.member?(active_provider_regions, key) end)
       |> Map.new()
 
-    %{state | event_windows: new_windows, block_heights: new_heights, circuit_states: new_circuit_states, health_counters: new_health_counters}
+    %{
+      state
+      | event_windows: new_windows,
+        block_heights: new_heights,
+        circuit_states: new_circuit_states,
+        health_counters: new_health_counters
+    }
     |> recompute_all_metrics()
   end
 
@@ -499,12 +513,19 @@ defmodule LassoWeb.Dashboard.EventStream do
     provider_metrics =
       events_by_provider
       |> Enum.map(fn {provider_id, events} ->
-        metrics = compute_provider_metrics(provider_id, events, fresh_windows, chain_totals, state)
+        metrics =
+          compute_provider_metrics(provider_id, events, fresh_windows, chain_totals, state)
+
         {provider_id, metrics}
       end)
       |> Map.new()
 
-    %{state | event_windows: fresh_windows, chain_totals: chain_totals, provider_metrics: provider_metrics}
+    %{
+      state
+      | event_windows: fresh_windows,
+        chain_totals: chain_totals,
+        provider_metrics: provider_metrics
+    }
   end
 
   defp compute_chain_totals(windows) do
@@ -758,13 +779,19 @@ defmodule LassoWeb.Dashboard.EventStream do
 
     circuit = get_circuit_state(state, provider_id, region)
 
-    broadcast_to_subscribers(state, {:circuit_update, %{provider_id: provider_id, region: region, circuit: circuit}})
+    broadcast_to_subscribers(
+      state,
+      {:circuit_update, %{provider_id: provider_id, region: region, circuit: circuit}}
+    )
   end
 
   defp broadcast_block_update(state, provider_id, region, height, chain) do
     lag = get_block_lag(state, provider_id, chain, region)
 
-    broadcast_to_subscribers(state, {:block_update, %{provider_id: provider_id, region: region, height: height, lag: lag}})
+    broadcast_to_subscribers(
+      state,
+      {:block_update, %{provider_id: provider_id, region: region, height: height, lag: lag}}
+    )
   end
 
   defp broadcast_to_subscribers(state, message) do

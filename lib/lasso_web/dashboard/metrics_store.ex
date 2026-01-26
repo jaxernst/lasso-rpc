@@ -334,7 +334,8 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     valid_results = Enum.reject(results, &is_nil/1)
 
     aggregated =
-      Enum.reduce(valid_results, %{rpc_methods: [], providers: [], total_entries: 0}, fn stats, acc ->
+      Enum.reduce(valid_results, %{rpc_methods: [], providers: [], total_entries: 0}, fn stats,
+                                                                                         acc ->
         %{
           rpc_methods: Enum.uniq(acc.rpc_methods ++ Map.get(stats, :rpc_methods, [])),
           providers: Enum.uniq(acc.providers ++ Map.get(stats, :providers, [])),
@@ -428,7 +429,9 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   end
 
   defp safe_divide(_numerator, 0), do: 0.0
-  defp safe_divide(numerator, denominator) when is_number(denominator), do: numerator / denominator
+
+  defp safe_divide(numerator, denominator) when is_number(denominator),
+    do: numerator / denominator
 
   defp emit_cache_telemetry(result, key) do
     {profile, chain} = extract_cache_key_context(key)

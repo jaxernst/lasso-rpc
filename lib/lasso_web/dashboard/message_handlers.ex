@@ -243,7 +243,11 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
 
     socket
     |> update(:events, &(events ++ &1))
-    |> update(:routing_events, &(routing_entries ++ Enum.take(&1, Constants.routing_events_limit() - length(routing_entries))))
+    |> update(
+      :routing_events,
+      &(routing_entries ++
+          Enum.take(&1, Constants.routing_events_limit() - length(routing_entries)))
+    )
   end
 
   def handle_events_snapshot(socket, events) do

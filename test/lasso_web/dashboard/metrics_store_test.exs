@@ -92,7 +92,12 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
       aggregated = aggregate_results(:get_realtime_stats, results)
 
       assert aggregated.total_calls == 250
-      assert Enum.sort(aggregated.rpc_methods) == ["eth_blockNumber", "eth_call", "eth_getBalance"]
+
+      assert Enum.sort(aggregated.rpc_methods) == [
+               "eth_blockNumber",
+               "eth_call",
+               "eth_getBalance"
+             ]
     end
 
     test "handles nil results" do
@@ -217,6 +222,7 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
         %{score: 90},
         %{score: 80}
       ]
+
       nodes = [:node1, :node2, :node3]
       bad_nodes = []
 

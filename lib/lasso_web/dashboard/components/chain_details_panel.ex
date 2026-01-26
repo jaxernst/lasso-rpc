@@ -67,7 +67,13 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     chain_connections = socket.assigns[:chain_connections] || []
 
     filtered_metrics =
-      compute_filtered_chain_metrics(region, live_provider_metrics, chain, aggregate_cached, chain_connections)
+      compute_filtered_chain_metrics(
+        region,
+        live_provider_metrics,
+        chain,
+        aggregate_cached,
+        chain_connections
+      )
 
     socket =
       socket
@@ -458,7 +464,13 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
 
   defp find_provider_name(_, decision), do: decision.provider_id
 
-  defp compute_filtered_chain_metrics("aggregate", live_provider_metrics, chain, cached_metrics, chain_connections) do
+  defp compute_filtered_chain_metrics(
+         "aggregate",
+         live_provider_metrics,
+         chain,
+         cached_metrics,
+         chain_connections
+       ) do
     chain_providers_with_ids =
       live_provider_metrics
       |> Enum.filter(fn {_pid, metrics} -> metrics[:chain] == chain end)

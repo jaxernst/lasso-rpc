@@ -202,8 +202,7 @@ defmodule LassoWeb.NetworkTopology do
                   </span>
                 </div>
               <% end %>
-
-                </div>
+            </div>
           <% end %>
         <% end %>
       </div>

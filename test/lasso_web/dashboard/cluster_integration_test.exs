@@ -76,7 +76,14 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
 
       # Record some data locally
       for _ <- 1..10 do
-        BenchmarkStore.record_rpc_call(profile, chain, "provider_local", "eth_blockNumber", 100, :success)
+        BenchmarkStore.record_rpc_call(
+          profile,
+          chain,
+          "provider_local",
+          "eth_blockNumber",
+          100,
+          :success
+        )
       end
 
       :timer.sleep(100)
@@ -93,7 +100,9 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
     @tag :integration
     @tag :full_app
     @tag timeout: 120_000
-    test "aggregates provider metrics across multiple nodes (full app)", %{test_prefix: test_prefix} do
+    test "aggregates provider metrics across multiple nodes (full app)", %{
+      test_prefix: test_prefix
+    } do
       # NOTE: This test requires full application to start on remote nodes
       # which needs config files to be accessible. May be skipped in CI.
       nodes = LocalCluster.start_nodes(test_prefix, 2, applications: [:lasso])
@@ -116,7 +125,12 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
           # App started, run the full test
           for _ <- 1..10 do
             :rpc.call(node1, BenchmarkStore, :record_rpc_call, [
-              profile, chain, "provider_a", "eth_blockNumber", 100, :success
+              profile,
+              chain,
+              "provider_a",
+              "eth_blockNumber",
+              100,
+              :success
             ])
           end
 
@@ -136,7 +150,9 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
     @tag :integration
     @tag :full_app
     @tag timeout: 120_000
-    test "realtime stats aggregate call counts across nodes (full app)", %{test_prefix: test_prefix} do
+    test "realtime stats aggregate call counts across nodes (full app)", %{
+      test_prefix: test_prefix
+    } do
       nodes = LocalCluster.start_nodes(test_prefix, 2, applications: [:lasso])
 
       on_exit(fn ->
@@ -156,7 +172,12 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
         pid when is_pid(pid) ->
           for _ <- 1..5 do
             :rpc.call(node1, BenchmarkStore, :record_rpc_call, [
-              profile, chain, "provider_b", "eth_getBalance", 50, :success
+              profile,
+              chain,
+              "provider_b",
+              "eth_getBalance",
+              50,
+              :success
             ])
           end
 
@@ -208,16 +229,22 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
           for node <- nodes do
             for _ <- 1..3 do
               :rpc.call(node, BenchmarkStore, :record_rpc_call, [
-                profile, chain, "provider_c", "eth_chainId", 80, :success
+                profile,
+                chain,
+                "provider_c",
+                "eth_chainId",
+                80,
+                :success
               ])
             end
           end
 
           :timer.sleep(100)
 
-          task = Task.async(fn ->
-            :rpc.call(node1, MetricsStore, :get_provider_leaderboard, [profile, chain])
-          end)
+          task =
+            Task.async(fn ->
+              :rpc.call(node1, MetricsStore, :get_provider_leaderboard, [profile, chain])
+            end)
 
           LocalCluster.stop_nodes([node2])
           :timer.sleep(500)
@@ -262,7 +289,12 @@ defmodule LassoWeb.Dashboard.ClusterIntegrationTest do
 
           for _ <- 1..5 do
             :rpc.call(node1, BenchmarkStore, :record_rpc_call, [
-              profile, chain, "provider_d", "eth_getBlockByNumber", 120, :success
+              profile,
+              chain,
+              "provider_d",
+              "eth_getBlockByNumber",
+              120,
+              :success
             ])
           end
 

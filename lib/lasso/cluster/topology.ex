@@ -32,7 +32,8 @@ defmodule Lasso.Cluster.Topology do
   @region_rediscovery_interval_ms 60_000
   @health_check_timeout_ms 5_000
 
-  @type node_state :: :connected | :discovering | :responding | :ready | :unresponsive | :disconnected
+  @type node_state ::
+          :connected | :discovering | :responding | :ready | :unresponsive | :disconnected
 
   @type node_info :: %{
           node: node(),
@@ -160,7 +161,9 @@ defmodule Lasso.Cluster.Topology do
       last_health_check_complete: now()
     }
 
-    Logger.info("[Topology] Started with #{map_size(initial_nodes)} nodes, region: #{self_region}")
+    Logger.info(
+      "[Topology] Started with #{map_size(initial_nodes)} nodes, region: #{self_region}"
+    )
 
     {:ok, state}
   end
@@ -249,7 +252,14 @@ defmodule Lasso.Cluster.Topology do
 
         emit_telemetry(:node_disconnected, %{node: node})
 
-        {:noreply, %{state | nodes: nodes, regions: regions, pending_discoveries: pending, discovery_refs: refs}}
+        {:noreply,
+         %{
+           state
+           | nodes: nodes,
+             regions: regions,
+             pending_discoveries: pending,
+             discovery_refs: refs
+         }}
     end
   end
 
@@ -289,7 +299,8 @@ defmodule Lasso.Cluster.Topology do
 
   # Region discovery failed
   @impl true
-  def handle_info({ref, {:region_discovery_failed, node, reason}}, state) when is_reference(ref) do
+  def handle_info({ref, {:region_discovery_failed, node, reason}}, state)
+      when is_reference(ref) do
     Process.demonitor(ref, [:flush])
     Logger.warning("[Topology] Region discovery failed for #{node}: #{inspect(reason)}")
 
@@ -388,8 +399,11 @@ defmodule Lasso.Cluster.Topology do
 
         nodes =
           case Map.get(state.nodes, node) do
-            %{state: :discovering} = info -> Map.put(state.nodes, node, %{info | state: :connected})
-            _ -> state.nodes
+            %{state: :discovering} = info ->
+              Map.put(state.nodes, node, %{info | state: :connected})
+
+            _ ->
+              state.nodes
           end
 
         {:noreply, %{state | pending_discoveries: pending, discovery_refs: refs, nodes: nodes}}
@@ -512,7 +526,9 @@ defmodule Lasso.Cluster.Topology do
     else
       task =
         Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn ->
-          {results, bad_nodes} = :rpc.multicall(node_list, Node, :self, [], @health_check_timeout_ms)
+          {results, bad_nodes} =
+            :rpc.multicall(node_list, Node, :self, [], @health_check_timeout_ms)
+
           {:health_check_complete, node_list, results, bad_nodes}
         end)
 
@@ -561,7 +577,13 @@ defmodule Lasso.Cluster.Topology do
     # Small delay before first attempt (node may not be fully ready)
     if retries == @region_discovery_max_retries, do: Process.sleep(100)
 
-    case :rpc.call(node, Application, :get_env, [:lasso, :cluster_region], @region_discovery_timeout_ms) do
+    case :rpc.call(
+           node,
+           Application,
+           :get_env,
+           [:lasso, :cluster_region],
+           @region_discovery_timeout_ms
+         ) do
       region when is_binary(region) ->
         {:region_discovered, node, region}
 
