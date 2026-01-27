@@ -398,8 +398,20 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
   describe "aggregate_provider_entries/3" do
     test "computes aggregate metrics from multiple entries" do
       entries_for_aggregates = [
-        %{provider_id: "p1", total_calls: 100, score: 90.0, success_rate: 95.0, avg_latency_ms: 50.0},
-        %{provider_id: "p1", total_calls: 100, score: 80.0, success_rate: 85.0, avg_latency_ms: 60.0}
+        %{
+          provider_id: "p1",
+          total_calls: 100,
+          score: 90.0,
+          success_rate: 95.0,
+          avg_latency_ms: 50.0
+        },
+        %{
+          provider_id: "p1",
+          total_calls: 100,
+          score: 80.0,
+          success_rate: 85.0,
+          avg_latency_ms: 60.0
+        }
       ]
 
       all_entries = entries_for_aggregates

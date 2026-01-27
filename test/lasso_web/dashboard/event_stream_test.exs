@@ -135,7 +135,11 @@ defmodule LassoWeb.Dashboard.EventStreamTest do
       stale_cutoff = now - 300_000
 
       circuit_states = %{
-        {"provider-1", "us-east"} => %{http: :closed, ws: :closed, updated_at: stale_cutoff - 1000},
+        {"provider-1", "us-east"} => %{
+          http: :closed,
+          ws: :closed,
+          updated_at: stale_cutoff - 1000
+        },
         {"provider-2", "us-east"} => %{http: :open, ws: :closed, updated_at: now - 1000}
       }
 
