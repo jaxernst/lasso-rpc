@@ -76,11 +76,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.WebSocket.Endpoint
 
-  # Connection must stay up for this long before we consider it "stable"
-  # and reset reconnect_attempts. Prevents thrashing when providers
-  # drop connections immediately after connect.
-  @connection_stability_ms 5_000
-
   # Client API
 
   @doc """
@@ -420,8 +415,17 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         state
       end
 
-    # Schedule stability check - reconnect_attempts will reset when this fires
-    state = schedule_stability_check(state)
+    # Handle stability based on configured stability_ms:
+    # - If 0, consider connection immediately stable (useful for tests)
+    # - Otherwise, schedule stability check timer
+    state =
+      if state.endpoint.stability_ms == 0 do
+        # Immediate stability - reset attempts and signal recovery now
+        CircuitBreaker.signal_recovery({state.profile, state.chain_name, state.endpoint.id, :ws})
+        %{state | reconnect_attempts: 0, connection_stable: true}
+      else
+        schedule_stability_check(state)
+      end
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
@@ -787,7 +791,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     # This prevents premature recovery when providers accept connections but immediately drop them
     CircuitBreaker.signal_recovery({state.profile, state.chain_name, state.endpoint.id, :ws})
 
-    {:noreply, %{state | reconnect_attempts: 0, stability_timer_ref: nil, connection_stable: true}}
+    {:noreply,
+     %{state | reconnect_attempts: 0, stability_timer_ref: nil, connection_stable: true}}
   end
 
   # Connection was lost before stability timer fired - ignore
@@ -1035,7 +1040,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   defp schedule_stability_check(state) do
     state = cancel_stability_timer(state)
-    ref = Process.send_after(self(), {:connection_stable}, @connection_stability_ms)
+    ref = Process.send_after(self(), {:connection_stable}, state.endpoint.stability_ms)
     %{state | stability_timer_ref: ref}
   end
 

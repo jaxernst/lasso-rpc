@@ -46,7 +46,9 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       chain_id: 1,
       reconnect_interval: Keyword.get(opts, :reconnect_interval, 100),
       max_reconnect_attempts: Keyword.get(opts, :max_reconnect_attempts, 3),
-      heartbeat_interval: 10_000
+      heartbeat_interval: 10_000,
+      # Use 0ms stability for tests - attempts reset immediately on connect
+      stability_ms: Keyword.get(opts, :stability_ms, 0)
     }
   end
 
