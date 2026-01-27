@@ -68,8 +68,17 @@ defmodule Lasso.Events.RoutingDecision do
   end
 
   defp generate_node_id do
-    # Use full node name for uniqueness across cluster nodes
-    node() |> Atom.to_string()
+    # Extract hostname portion (after @) for region identification
+    # Must match Topology.generate_node_id/0 and BenchmarkStore.extract_region_from_node/0
+    node()
+    |> Atom.to_string()
+    |> String.split("@")
+    |> List.last()
+    |> case do
+      nil -> "unknown"
+      "" -> "unknown"
+      region -> region
+    end
   end
 
   @doc """

@@ -629,12 +629,13 @@ defmodule Lasso.Cluster.Topology do
         discover_region_with_retry(node, retries - 1, min(delay * 2, 2000))
 
       nil ->
-        # No region configured, use node name as fallback
+        # No region configured, use hostname portion (after @) as fallback
+        # Must match generate_node_id/0 and BenchmarkStore.extract_region_from_node/0
         region =
           node
           |> Atom.to_string()
           |> String.split("@")
-          |> List.first()
+          |> List.last()
           |> case do
             nil -> "unknown"
             "" -> "unknown"
@@ -742,8 +743,17 @@ defmodule Lasso.Cluster.Topology do
   end
 
   defp generate_node_id do
-    # Use full node name for uniqueness across cluster nodes
-    node() |> Atom.to_string()
+    # Extract hostname portion (after @) for region identification
+    # Must match BenchmarkStore.extract_region_from_node/0 for consistent region filtering
+    node()
+    |> Atom.to_string()
+    |> String.split("@")
+    |> List.last()
+    |> case do
+      nil -> "unknown"
+      "" -> "unknown"
+      region -> region
+    end
   end
 
   defp now do

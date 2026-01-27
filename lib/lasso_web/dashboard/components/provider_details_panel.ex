@@ -383,14 +383,18 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         </div>
 
         <div class="px-2">
-          <.performance_metrics_strip metrics_data={@metrics_data} />
           <.sync_status_section sync_data={@sync_data} />
+          <.performance_metrics_strip metrics_data={@metrics_data} />
           <.circuit_breaker_section circuit_data={@circuit_data} />
+
+          <hr class="border-gray-800 mt-2 -mx-2" />
 
           <.issues_section
             provider_connection={@provider_connection}
             provider_unified_events={@filtered_events}
           />
+
+          <hr class="border-gray-800 mt-2 -mx-2" />
 
           <.method_performance_section metrics_data={@metrics_data} />
         </div>
@@ -527,7 +531,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       |> assign(:traffic, format_traffic(Map.get(metrics, :pick_share_5m)))
 
     ~H"""
-    <DetailPanelComponents.panel_section border={false} class="pt-4 pb-2">
+    <DetailPanelComponents.panel_section border={false} class="pt-1 pb-2">
       <DetailPanelComponents.section_header title="Performance" />
       <DetailPanelComponents.metrics_strip class="border-x rounded">
         <:metric label="Latency p50" value={@p50} />
@@ -798,7 +802,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         </div>
       </div>
 
-      <div :if={!@has_content} class="text-xs text-gray-500 text-center pt-2 pb-3">
+      <div :if={!@has_content} class="text-xs text-gray-500 text-center pt-2 pb-6">
         No issues detected
       </div>
     </DetailPanelComponents.panel_section>
@@ -825,7 +829,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         <.method_stat_row :for={stat <- @rpc_stats} stat={stat} max_calls={@max_calls} />
         <div class="text-[10px] text-gray-600 text-right mt-2">(calls)</div>
       </div>
-      <div :if={@rpc_stats == []} class="text-xs text-gray-500 text-center py-2">
+      <div :if={@rpc_stats == []} class="text-xs text-gray-500 text-center py-2 pb-6">
         No recent method data
       </div>
     </DetailPanelComponents.panel_section>

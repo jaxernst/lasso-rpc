@@ -2,19 +2,24 @@ defmodule LassoWeb.Dashboard.EventStream do
   @moduledoc """
   Real-time event aggregation and broadcast for dashboard LiveViews.
 
-  Subscribes to routing decisions, circuit events, block sync events, and topology
-  changes via PubSub. Pre-computes metrics and broadcasts batched updates to subscribers.
+  Consolidates all dashboard-relevant PubSub subscriptions into a single GenServer per
+  profile, eliminating O(chains × dashboards) subscription explosion in favor of O(chains)
+  subscriptions per profile with direct process messaging to subscribers.
 
-  ## Architecture
+  ## PubSub Topics Subscribed (per profile)
 
-  EventStream acts as an aggregation layer between raw PubSub events and Dashboard
-  LiveViews. This reduces PubSub subscription count from O(chains × dashboards) to
-  O(chains) by having one EventStream per profile subscribe to all topics, then
-  fan out to Dashboard subscribers via direct process messaging.
+  Per-chain topics:
+  - `circuit:events:{profile}:{chain}` - circuit breaker state changes
+  - `block_sync:{profile}:{chain}` - block height updates from probes
+  - `provider_pool:events:{profile}:{chain}` - provider health events
+  - `health_probe:{profile}:{chain}` - health probe recovery events
 
-  For circuit and block events, EventStream broadcasts both:
-  - Processed state updates (for cluster-wide state tracking)
-  - Raw events (for UI event feed display)
+  Global topics:
+  - `cluster:topology` - cluster membership changes
+  - `routing_decision:{profile}` - RPC routing decisions
+  - `sync:updates` - sync status updates
+  - `block_cache:updates` - block cache updates
+  - `clients:events` - client connection events
 
   ## Usage
 
@@ -26,17 +31,24 @@ defmodule LassoWeb.Dashboard.EventStream do
   On subscribe (initial state):
   - `{:dashboard_snapshot, %{metrics, circuits, health_counters, cluster, events}}`
 
-  Ongoing updates:
+  Processed updates (state tracking):
   - `{:metrics_update, %{metrics: provider_metrics}}` - batched routing metrics
-  - `{:events_batch, %{events: [...]}}` - batched routing events for feed
   - `{:cluster_update, %{connected, responding, regions, last_update}}` - topology changes
+  - `{:circuit_update, %{provider_id, region, circuit}}` - circuit state changes
+  - `{:health_pulse, %{provider_id, region, counters}}` - health counter updates
+  - `{:block_update, %{provider_id, region, height, lag}}` - block height state
   - `{:region_added, %{region: region}}` - new region discovered
   - `{:heartbeat, %{ts: timestamp}}` - keepalive (every 2s)
-  - `{:health_pulse, %{provider_id, region, counters}}` - provider health updates
-  - `{:circuit_update, %{provider_id, region, circuit}}` - circuit state changes
-  - `{:circuit_breaker_event, event_data}` - raw circuit event for UI feed
-  - `{:block_update, %{provider_id, region, height, lag}}` - block height state
+
+  Forwarded events (for UI display):
+  - `{:events_batch, %{events: [...]}}` - batched routing events
+  - `{:circuit_breaker_event, event_data}` - raw circuit event
   - `{:block_height_update, {profile, provider_id}, height, source, ts}` - raw block event
+  - `{:provider_event, evt}` - provider health events (Healthy, Unhealthy, etc.)
+  - `{:health_probe_recovery, ...}` - health probe recovery
+  - `{:sync_update, evt}` - sync status update
+  - `{:block_cache_update, evt}` - block cache update
+  - `{:client_event, evt}` - client connection event
   """
 
   use GenServer, restart: :transient
@@ -180,7 +192,16 @@ defmodule LassoWeb.Dashboard.EventStream do
     for chain <- chains do
       Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events:#{profile}:#{chain}")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{profile}:#{chain}")
+      # Provider health events (Healthy, Unhealthy, WSConnected, etc.)
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{profile}:#{chain}")
+      # Health probe recovery events
+      Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain}")
     end
+
+    # Global topics (not chain-specific)
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "clients:events")
 
     # Start tick timer
     schedule_tick()
@@ -333,6 +354,41 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   # Ignore other topology events
   def handle_info({:topology_event, _}, state) do
+    {:noreply, state}
+  end
+
+  # Provider health events - forward to subscribers
+  def handle_info(evt, state)
+      when is_struct(evt, Lasso.Events.Provider.Healthy) or
+             is_struct(evt, Lasso.Events.Provider.Unhealthy) or
+             is_struct(evt, Lasso.Events.Provider.HealthCheckFailed) or
+             is_struct(evt, Lasso.Events.Provider.WSConnected) or
+             is_struct(evt, Lasso.Events.Provider.WSClosed) do
+    broadcast_to_subscribers(state, {:provider_event, evt})
+    {:noreply, state}
+  end
+
+  # Health probe recovery - forward to subscribers
+  def handle_info({:health_probe_recovery, _key, _transport, _old, _new, _ts} = evt, state) do
+    broadcast_to_subscribers(state, evt)
+    {:noreply, state}
+  end
+
+  # Sync updates - forward to subscribers
+  def handle_info(%{chain: _, provider_id: _, block_height: _} = evt, state) do
+    broadcast_to_subscribers(state, {:sync_update, evt})
+    {:noreply, state}
+  end
+
+  # Block cache updates - forward to subscribers
+  def handle_info(%{type: :block_update, provider_id: _} = evt, state) do
+    broadcast_to_subscribers(state, {:block_cache_update, evt})
+    {:noreply, state}
+  end
+
+  # Client events - forward to subscribers
+  def handle_info(%{ts: _, event: _, chain: _, transport: _} = evt, state) do
+    broadcast_to_subscribers(state, {:client_event, evt})
     {:noreply, state}
   end
 
