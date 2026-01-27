@@ -148,9 +148,18 @@ defmodule LassoWeb.Components.ClusterStatus do
       ]}>
         <span class={["h-2 w-2 rounded-full", status_color(@status)]}></span>
         <span class="text-gray-300">
-          <span class={status_text_color(@status)}><%= @responding %></span>/{@total} Lasso nodes reporting
+          <%= if @total == 1 do %>
+            <%= if @responding == 1 do %>
+              <span class={status_text_color(@status)}>Standalone node</span>
+            <% else %>
+              <span class={status_text_color(@status)}>Standalone node</span>
+              <span class="text-gray-500">· offline</span>
+            <% end %>
+          <% else %>
+            <span class={status_text_color(@status)}><%= @responding %></span>/{@total} cluster nodes reporting
+          <% end %>
         </span>
-        <%= if @responding < @total do %>
+        <%= if @total > 1 and @responding < @total do %>
           <span class="text-amber-400">⚠</span>
         <% end %>
       </div>

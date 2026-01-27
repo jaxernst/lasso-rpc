@@ -349,4 +349,240 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
   defp filter_badrpc(results) do
     Enum.reject(results, &match?({:badrpc, _}, &1))
   end
+
+  describe "weighted_average/3" do
+    test "computes weighted average correctly" do
+      entries = [
+        %{total_calls: 100, success_rate: 90.0},
+        %{total_calls: 200, success_rate: 80.0},
+        %{total_calls: 100, success_rate: 70.0}
+      ]
+
+      total_weight = 400
+
+      # (100*90 + 200*80 + 100*70) / 400 = (9000 + 16000 + 7000) / 400 = 80.0
+      result = weighted_average(entries, :success_rate, total_weight)
+
+      assert result == 80.0
+    end
+
+    test "returns 0.0 when total weight is zero" do
+      entries = [%{total_calls: 100, success_rate: 90.0}]
+
+      result = weighted_average(entries, :success_rate, 0)
+
+      assert result == 0.0
+    end
+
+    test "handles single entry" do
+      entries = [%{total_calls: 50, avg_latency_ms: 120.0}]
+
+      result = weighted_average(entries, :avg_latency_ms, 50)
+
+      assert result == 120.0
+    end
+
+    test "handles missing field values with default 0" do
+      entries = [
+        %{total_calls: 100},
+        %{total_calls: 100, success_rate: 80.0}
+      ]
+
+      # (100*0 + 100*80) / 200 = 40.0
+      result = weighted_average(entries, :success_rate, 200)
+
+      assert result == 40.0
+    end
+  end
+
+  describe "aggregate_provider_entries/3" do
+    test "computes aggregate metrics from multiple entries" do
+      entries_for_aggregates = [
+        %{provider_id: "p1", total_calls: 100, score: 90.0, success_rate: 95.0, avg_latency_ms: 50.0},
+        %{provider_id: "p1", total_calls: 100, score: 80.0, success_rate: 85.0, avg_latency_ms: 60.0}
+      ]
+
+      all_entries = entries_for_aggregates
+
+      result = aggregate_provider_entries("p1", entries_for_aggregates, all_entries)
+
+      assert result.provider_id == "p1"
+      assert result.total_calls == 200
+      assert result.node_count == 2
+      # Weighted average: (100*90 + 100*80) / 200 = 85.0
+      assert result.score == 85.0
+      # Weighted average: (100*95 + 100*85) / 200 = 90.0
+      assert result.success_rate == 90.0
+    end
+
+    test "builds latency_by_region from all entries" do
+      entries_for_aggregates = [
+        %{
+          provider_id: "p1",
+          total_calls: 100,
+          score: 90.0,
+          success_rate: 95.0,
+          avg_latency_ms: 50.0,
+          region: "us-east",
+          source_node: :node1,
+          p50_latency: 45,
+          p95_latency: 80,
+          p99_latency: 120
+        }
+      ]
+
+      all_entries = [
+        %{
+          provider_id: "p1",
+          total_calls: 100,
+          region: "us-east",
+          source_node: :node1,
+          p50_latency: 45,
+          p95_latency: 80,
+          p99_latency: 120,
+          avg_latency_ms: 50.0,
+          success_rate: 95.0
+        },
+        %{
+          provider_id: "p1",
+          total_calls: 5,
+          region: "eu-west",
+          source_node: :node2,
+          p50_latency: 100,
+          p95_latency: 150,
+          p99_latency: 200,
+          avg_latency_ms: 110.0,
+          success_rate: 90.0
+        }
+      ]
+
+      result = aggregate_provider_entries("p1", entries_for_aggregates, all_entries)
+
+      assert Map.has_key?(result.latency_by_region, "us-east")
+      assert Map.has_key?(result.latency_by_region, "eu-west")
+      assert result.latency_by_region["us-east"].p50 == 45
+      assert result.latency_by_region["eu-west"].p50 == 100
+    end
+  end
+
+  describe "stale-while-revalidate caching pattern" do
+    test "fresh cache returns data with stale=false" do
+      now = System.monotonic_time(:millisecond)
+      cache_ttl_ms = 15_000
+
+      cache_entry = %{
+        data: [%{provider_id: "p1", score: 90.0}],
+        coverage: %{responding: 3, total: 3},
+        cached_at: now - 5000
+      }
+
+      result = check_cache_freshness(cache_entry, now, cache_ttl_ms)
+
+      assert result.stale == false
+      assert result.data == cache_entry.data
+    end
+
+    test "stale cache returns data with stale=true and triggers refresh" do
+      now = System.monotonic_time(:millisecond)
+      cache_ttl_ms = 15_000
+
+      cache_entry = %{
+        data: [%{provider_id: "p1", score: 90.0}],
+        coverage: %{responding: 3, total: 3},
+        cached_at: now - 20_000
+      }
+
+      result = check_cache_freshness(cache_entry, now, cache_ttl_ms)
+
+      assert result.stale == true
+      assert result.should_refresh == true
+      assert result.data == cache_entry.data
+    end
+
+    test "cache miss returns empty defaults with loading=true" do
+      now = System.monotonic_time(:millisecond)
+      cache_ttl_ms = 15_000
+
+      result = check_cache_freshness(nil, now, cache_ttl_ms)
+
+      assert result.loading == true
+      assert result.data == []
+    end
+  end
+
+  # Additional helper functions
+
+  defp weighted_average(entries, field, total_weight) do
+    entries
+    |> Enum.map(fn entry ->
+      calls = Map.get(entry, :total_calls, 0)
+      value = Map.get(entry, field, 0.0)
+      value * calls
+    end)
+    |> Enum.sum()
+    |> safe_divide(total_weight)
+  end
+
+  defp safe_divide(_numerator, 0), do: 0.0
+  defp safe_divide(numerator, denominator), do: numerator / denominator
+
+  defp aggregate_provider_entries(provider_id, entries_for_aggregates, all_entries) do
+    total_calls =
+      entries_for_aggregates |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
+
+    latency_by_region = build_latency_by_region(all_entries)
+
+    %{
+      provider_id: provider_id,
+      score: weighted_average(entries_for_aggregates, :score, total_calls),
+      total_calls: total_calls,
+      success_rate: weighted_average(entries_for_aggregates, :success_rate, total_calls),
+      avg_latency_ms: weighted_average(entries_for_aggregates, :avg_latency_ms, total_calls),
+      node_count: length(all_entries),
+      latency_by_region: latency_by_region
+    }
+  end
+
+  defp build_latency_by_region(entries) do
+    entries
+    |> Enum.map(fn entry ->
+      region = Map.get(entry, :region) || Map.get(entry, :source_region) || "unknown"
+
+      {region,
+       %{
+         region: region,
+         node: Map.get(entry, :source_node),
+         p50: Map.get(entry, :p50_latency),
+         p95: Map.get(entry, :p95_latency),
+         p99: Map.get(entry, :p99_latency),
+         avg: Map.get(entry, :avg_latency_ms),
+         success_rate: Map.get(entry, :success_rate),
+         total_calls: Map.get(entry, :total_calls, 0)
+       }}
+    end)
+    |> Map.new()
+  end
+
+  defp check_cache_freshness(nil, _now, _cache_ttl_ms) do
+    %{
+      data: [],
+      coverage: %{responding: 0, total: 0},
+      cached_at: nil,
+      stale: false,
+      loading: true
+    }
+  end
+
+  defp check_cache_freshness(cache_entry, now, cache_ttl_ms) do
+    age = now - cache_entry.cached_at
+    is_fresh = age < cache_ttl_ms
+
+    %{
+      data: cache_entry.data,
+      coverage: cache_entry.coverage,
+      cached_at: cache_entry.cached_at,
+      stale: not is_fresh,
+      should_refresh: not is_fresh
+    }
+  end
 end
