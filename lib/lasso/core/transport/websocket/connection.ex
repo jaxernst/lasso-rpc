@@ -116,6 +116,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   @impl true
   def init(%Endpoint{} = endpoint) do
+    # Trap exits so we receive :EXIT messages from linked WebSockex processes
+    # This ensures we handle disconnects even if WebSockex crashes abnormally
+    Process.flag(:trap_exit, true)
+
     state = %{
       endpoint: endpoint,
       profile: endpoint.profile,
@@ -129,6 +133,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       # Timer that fires after connection is stable - only then do we reset reconnect_attempts
       # This prevents thrashing when providers drop connections immediately after connect
       stability_timer_ref: nil,
+      # Whether the connection has proven stable (survived the stability window)
+      # Disconnects before stability are always penalized to prevent thrashing
+      connection_stable: false,
       # Unique ID per connection instance, regenerated on each reconnect
       # Used by UpstreamSubscriptionManager to detect stale subscriptions
       connection_id: nil
@@ -368,6 +375,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   def handle_call(:status, _from, state) do
     status = %{
       connected: state.connected,
+      connection_stable: state.connection_stable,
       endpoint_id: state.endpoint.id,
       reconnect_attempts: state.reconnect_attempts,
       pending_requests: map_size(state.pending_requests)
@@ -464,6 +472,15 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   def handle_info({:ws_disconnect, :close_frame, code, reason}, state) do
+    Logger.debug("Connection received ws_disconnect close_frame",
+      provider_id: state.endpoint.id,
+      code: code,
+      reason: inspect(reason)
+    )
+
+    # Capture stability before canceling timer
+    was_stable = state.connection_stable
+
     # Cancel timers to prevent race conditions
     state = cancel_stability_timer(state)
 
@@ -483,27 +500,30 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         transport: :ws
       )
 
-    # Graceful codes that don't warrant circuit breaker penalty:
+    # Graceful codes that don't warrant circuit breaker penalty (when connection was stable):
     # 1000 = normal closure, 1001 = going away, 1012 = service restart
     # Note: 1013 (try again later) is NOT graceful - it indicates rate limiting
     is_graceful = graceful_close_code?(code)
 
-    # Only log warnings for non-graceful closes or when active traffic was interrupted
-    if had_pending or not is_graceful do
+    # Determine if this disconnect warrants circuit breaker penalty:
+    # 1. Always penalize if connection wasn't stable (dropped before proving reliable)
+    # 2. Penalize if had pending requests (interrupted active traffic)
+    # 3. Penalize if non-graceful close code
+    should_penalize = not was_stable or had_pending or not is_graceful
+
+    if should_penalize do
       Logger.warning(
         "WebSocket closed: code=#{code}, reason=#{inspect(reason)}, " <>
-          "had_active_traffic=#{had_pending} (provider: #{state.endpoint.id})"
+          "was_stable=#{was_stable}, had_active_traffic=#{had_pending} (provider: #{state.endpoint.id})"
       )
     else
-      Logger.debug(
-        "WebSocket closed gracefully while idle: code=#{code} (provider: #{state.endpoint.id})"
-      )
+      Logger.info("WebSocket closed: code=#{code} (provider: #{state.endpoint.id})")
     end
 
     # Clean up any pending requests
     pending_count = map_size(state.pending_requests)
     state = cleanup_pending_requests(state, jerr)
-    state = %{state | connected: false, connection: nil}
+    state = %{state | connected: false, connection: nil, connection_stable: false}
 
     # Emit telemetry event
     :telemetry.execute(
@@ -515,25 +535,33 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         reason: reason,
         code: code,
         had_active_traffic: had_pending,
+        was_stable: was_stable,
         unexpected: not is_graceful,
         pending_request_count: pending_count
       }
     )
 
-    # Circuit breaker penalty: penalize if had active traffic OR non-graceful close
-    # Non-graceful disconnects (especially 1008 Policy Violation) often indicate
-    # the provider is rejecting our connections (rate limit, connection limit)
-    should_penalize = had_pending or not is_graceful
     jerr_with_penalty = %{jerr | breaker_penalty?: should_penalize and jerr.breaker_penalty?}
 
-    # Record failure to circuit breaker so it can open after repeated disconnects
+    # Record failure to circuit breaker synchronously when penalizing
     # This prevents hammering providers that accept connections but immediately drop them
-    if should_penalize do
-      CircuitBreaker.record_failure(
-        {state.profile, state.chain_name, state.endpoint.id, :ws},
-        jerr_with_penalty
-      )
-    end
+    circuit_state =
+      if should_penalize do
+        breaker_id = {state.profile, state.chain_name, state.endpoint.id, :ws}
+
+        case CircuitBreaker.record_failure_sync(breaker_id, jerr_with_penalty) do
+          {:ok, state} -> state
+          {:error, _} -> :closed
+        end
+      else
+        :closed
+      end
+
+    Logger.debug("Circuit breaker state after close frame",
+      provider_id: state.endpoint.id,
+      circuit_state: circuit_state,
+      was_penalized: should_penalize
+    )
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
@@ -547,66 +575,92 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   # Handle unexpected disconnects (network errors, crashes, abrupt TCP close)
   def handle_info({:ws_disconnect, :error, reason}, state) do
-    # Cancel timers to prevent race conditions
-    state = cancel_stability_timer(state)
+    Logger.debug("Connection received ws_disconnect error",
+      provider_id: state.endpoint.id,
+      reason: inspect(reason)
+    )
 
-    state =
-      if state.heartbeat_ref do
-        Process.cancel_timer(state.heartbeat_ref)
-        %{state | heartbeat_ref: nil}
-      else
-        state
-      end
+    try do
+      # Cancel timers to prevent race conditions
+      state = cancel_stability_timer(state)
 
-    had_pending = map_size(state.pending_requests) > 0
+      state =
+        if state.heartbeat_ref do
+          Process.cancel_timer(state.heartbeat_ref)
+          %{state | heartbeat_ref: nil}
+        else
+          state
+        end
 
-    jerr =
-      ErrorNormalizer.normalize({:ws_disconnect, reason},
-        provider_id: state.endpoint.id,
-        transport: :ws
+      had_pending = map_size(state.pending_requests) > 0
+
+      jerr =
+        ErrorNormalizer.normalize({:ws_disconnect, reason},
+          provider_id: state.endpoint.id,
+          transport: :ws
+        )
+
+      Logger.warning(
+        "WebSocket disconnected unexpectedly: #{inspect(reason)}, " <>
+          "was_stable=false, had_active_traffic=#{had_pending} (provider: #{state.endpoint.id})"
       )
 
-    Logger.warning(
-      "WebSocket disconnected unexpectedly: #{inspect(reason)}, " <>
-        "had_active_traffic=#{had_pending} (provider: #{state.endpoint.id})"
-    )
+      # Clean up any pending requests
+      pending_count = map_size(state.pending_requests)
+      state = cleanup_pending_requests(state, jerr)
+      state = %{state | connected: false, connection: nil, connection_stable: false}
 
-    # Clean up any pending requests
-    pending_count = map_size(state.pending_requests)
-    state = cleanup_pending_requests(state, jerr)
-    state = %{state | connected: false, connection: nil}
+      # Emit telemetry event
+      :telemetry.execute(
+        [:lasso, :websocket, :disconnected],
+        %{},
+        %{
+          provider_id: state.endpoint.id,
+          chain: state.chain_name,
+          reason: reason,
+          had_active_traffic: had_pending,
+          was_stable: false,
+          unexpected: true,
+          pending_request_count: pending_count
+        }
+      )
 
-    # Emit telemetry event
-    :telemetry.execute(
-      [:lasso, :websocket, :disconnected],
-      %{},
-      %{
+      # Unexpected disconnects always warrant circuit breaker penalty
+      jerr_with_penalty = %{jerr | breaker_penalty?: true}
+
+      Logger.debug("Recording circuit breaker failure (sync)",
         provider_id: state.endpoint.id,
-        chain: state.chain_name,
-        reason: reason,
-        had_active_traffic: had_pending,
-        unexpected: true,
-        pending_request_count: pending_count
-      }
-    )
+        breaker_penalty: jerr_with_penalty.breaker_penalty?
+      )
 
-    # Unexpected disconnects always warrant circuit breaker penalty
-    jerr_with_penalty = %{jerr | breaker_penalty?: true}
+      # Record failure to circuit breaker synchronously
+      # This ensures the circuit state is updated before we schedule reconnect
+      breaker_id = {state.profile, state.chain_name, state.endpoint.id, :ws}
 
-    # Record failure to circuit breaker - unexpected disconnects are always penalized
-    CircuitBreaker.record_failure(
-      {state.profile, state.chain_name, state.endpoint.id, :ws},
-      jerr_with_penalty
-    )
+      circuit_state =
+        case CircuitBreaker.record_failure_sync(breaker_id, jerr_with_penalty) do
+          {:ok, state} -> state
+          {:error, _} -> :closed
+        end
 
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
-      "ws:conn:#{state.profile}:#{state.chain_name}",
-      {:ws_disconnected, state.endpoint.id, jerr_with_penalty}
-    )
+      Logger.debug("Circuit breaker state after disconnect",
+        provider_id: state.endpoint.id,
+        circuit_state: circuit_state
+      )
 
-    state = schedule_reconnect_with_circuit_check(state)
-    {:noreply, state}
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        "ws:conn:#{state.profile}:#{state.chain_name}",
+        {:ws_disconnected, state.endpoint.id, jerr_with_penalty}
+      )
+
+      state = schedule_reconnect_with_circuit_check(state)
+      {:noreply, state}
+    rescue
+      e ->
+        Logger.error("Error in ws_disconnect error handler: #{inspect(e)}")
+        reraise e, __STACKTRACE__
+    end
   end
 
   def handle_info(
@@ -733,12 +787,126 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     # This prevents premature recovery when providers accept connections but immediately drop them
     CircuitBreaker.signal_recovery({state.profile, state.chain_name, state.endpoint.id, :ws})
 
-    {:noreply, %{state | reconnect_attempts: 0, stability_timer_ref: nil}}
+    {:noreply, %{state | reconnect_attempts: 0, stability_timer_ref: nil, connection_stable: true}}
   end
 
   # Connection was lost before stability timer fired - ignore
   def handle_info({:connection_stable}, state) do
     {:noreply, %{state | stability_timer_ref: nil}}
+  end
+
+  # Handle EXIT from linked WebSockex process
+  # This catches cases where WebSockex exits before or after sending :ws_disconnect
+  # Without this, we might miss disconnects entirely if WebSockex crashes
+  def handle_info({:EXIT, pid, reason}, %{connection: pid, connected: true} = state) do
+    Logger.debug("WebSockex process exited",
+      provider_id: state.endpoint.id,
+      reason: inspect(reason)
+    )
+
+    # Check if we've already handled this disconnect via :ws_disconnect message
+    # If connected is still true, we haven't processed the disconnect yet
+    # This is a safety net - process the disconnect now
+    was_stable = state.connection_stable
+
+    # Cancel timers
+    state = cancel_stability_timer(state)
+
+    state =
+      if state.heartbeat_ref do
+        Process.cancel_timer(state.heartbeat_ref)
+        %{state | heartbeat_ref: nil}
+      else
+        state
+      end
+
+    had_pending = map_size(state.pending_requests) > 0
+
+    jerr =
+      ErrorNormalizer.normalize({:ws_exit, reason},
+        provider_id: state.endpoint.id,
+        transport: :ws
+      )
+
+    Logger.warning(
+      "WebSockex exited unexpectedly (via :EXIT): #{inspect(reason)}, " <>
+        "was_stable=#{was_stable}, had_active_traffic=#{had_pending} (provider: #{state.endpoint.id})"
+    )
+
+    # Clean up pending requests
+    pending_count = map_size(state.pending_requests)
+    state = cleanup_pending_requests(state, jerr)
+    state = %{state | connected: false, connection: nil, connection_stable: false}
+
+    :telemetry.execute(
+      [:lasso, :websocket, :disconnected],
+      %{},
+      %{
+        provider_id: state.endpoint.id,
+        chain: state.chain_name,
+        reason: {:exit, reason},
+        had_active_traffic: had_pending,
+        was_stable: was_stable,
+        unexpected: true,
+        pending_request_count: pending_count
+      }
+    )
+
+    # Always penalize circuit breaker for unexpected exits
+    jerr_with_penalty = %{jerr | breaker_penalty?: true}
+    breaker_id = {state.profile, state.chain_name, state.endpoint.id, :ws}
+
+    circuit_state =
+      case CircuitBreaker.record_failure_sync(breaker_id, jerr_with_penalty) do
+        {:ok, cb_state} -> cb_state
+        {:error, _} -> :closed
+      end
+
+    Logger.debug("Circuit breaker state after WebSockex exit",
+      provider_id: state.endpoint.id,
+      circuit_state: circuit_state
+    )
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:conn:#{state.profile}:#{state.chain_name}",
+      {:ws_disconnected, state.endpoint.id, jerr_with_penalty}
+    )
+
+    state = schedule_reconnect_with_circuit_check(state)
+    {:noreply, state}
+  end
+
+  # Handle EXIT from WebSockex when we already know we're disconnected
+  # This can happen if the :ws_disconnect message was processed first
+  def handle_info({:EXIT, pid, reason}, %{connection: pid, connected: false} = state) do
+    Logger.debug("WebSockex process exited (already disconnected)",
+      provider_id: state.endpoint.id,
+      reason: inspect(reason)
+    )
+
+    # Already disconnected, just clear the connection reference
+    {:noreply, %{state | connection: nil}}
+  end
+
+  # Handle supervisor shutdown signals - propagate cleanly
+  def handle_info({:EXIT, _from, :shutdown}, state) do
+    {:stop, :shutdown, state}
+  end
+
+  def handle_info({:EXIT, _from, {:shutdown, reason}}, state) do
+    {:stop, {:shutdown, reason}, state}
+  end
+
+  # Handle EXIT from an old WebSockex process (different pid than current connection)
+  # This can happen during rapid reconnection cycles
+  def handle_info({:EXIT, _pid, reason}, state) do
+    Logger.debug("Received EXIT from old/unknown process",
+      provider_id: state.endpoint.id,
+      reason: inspect(reason)
+    )
+
+    {:noreply, state}
   end
 
   @impl true

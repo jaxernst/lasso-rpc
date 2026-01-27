@@ -369,16 +369,69 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
      }}
   end
 
-  # Connection established - track connection state for subscription validation
+  # Connection established - track connection state and invalidate stale subscriptions
+  # This handles the race condition where ws_connected arrives before ws_disconnected,
+  # leaving subscriptions orphaned with old connection_ids
   def handle_info({:ws_connected, provider_id, connection_id}, state) do
+    # Find any subscriptions with a different (stale) connection_id
+    stale_subs =
+      Enum.filter(state.active_subscriptions, fn {{prov_id, _sub_key}, info} ->
+        prov_id == provider_id and info.connection_id != connection_id
+      end)
+
+    # Invalidate stale subscriptions before updating connection state
+    {new_subs, new_index} =
+      if stale_subs == [] do
+        {state.active_subscriptions, state.upstream_index}
+      else
+        Logger.debug("Invalidating stale subscriptions on new connection",
+          chain: state.chain,
+          provider_id: provider_id,
+          new_connection_id: connection_id,
+          stale_count: length(stale_subs)
+        )
+
+        # Cancel timers and notify consumers
+        Enum.each(stale_subs, fn {{prov_id, sub_key}, info} ->
+          if info.staleness_timer_ref, do: Process.cancel_timer(info.staleness_timer_ref)
+
+          UpstreamSubscriptionRegistry.dispatch(
+            state.profile,
+            state.chain,
+            prov_id,
+            sub_key,
+            {:upstream_subscription_invalidated, prov_id, sub_key, :connection_replaced}
+          )
+        end)
+
+        # Remove stale subscriptions
+        subs =
+          Enum.reduce(stale_subs, state.active_subscriptions, fn {key, _}, acc ->
+            Map.delete(acc, key)
+          end)
+
+        index =
+          Enum.reduce(stale_subs, state.upstream_index, fn {_key, info}, acc ->
+            Map.delete(acc, info.upstream_id)
+          end)
+
+        {subs, index}
+      end
+
+    # Update connection state
     conn_state = %{
       connection_id: connection_id,
       status: :connected,
       connected_at: System.monotonic_time(:millisecond)
     }
 
-    new_connection_states = Map.put(state.connection_states, provider_id, conn_state)
-    {:noreply, %{state | connection_states: new_connection_states}}
+    {:noreply,
+     %{
+       state
+       | connection_states: Map.put(state.connection_states, provider_id, conn_state),
+         active_subscriptions: new_subs,
+         upstream_index: new_index
+     }}
   end
 
   # Connection lost - invalidate subscriptions and update state

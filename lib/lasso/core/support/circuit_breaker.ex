@@ -454,6 +454,12 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
+  def handle_call({:report_external_sync, outcome}, _from, state) do
+    new_state = classify_and_update_state_for_report(outcome, state)
+    {:reply, new_state.state, new_state}
+  end
+
+  @impl true
   def handle_cast({:report, _token, result}, state) do
     # Normalize transport 3-tuples to 2-tuples at the boundary
     # Circuit breaker only needs success/failure, not I/O timing
@@ -1069,7 +1075,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   def record_success(id), do: signal_recovery(id)
 
   @doc """
-  Record a failed operation for the circuit breaker.
+  Record a failed operation for the circuit breaker (async).
 
   Optionally accepts the error reason for proper classification and logging.
   If no reason is provided, defaults to a generic failure.
@@ -1083,6 +1089,29 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       _pid ->
         GenServer.cast(via_name(id), {:report_external, {:error, reason}})
         :ok
+    end
+  end
+
+  @doc """
+  Record a failed operation for the circuit breaker (synchronous).
+
+  Returns the circuit state after recording the failure (:closed, :open, or :half_open).
+  Use this when you need to know the circuit state immediately after recording.
+  """
+  @spec record_failure_sync(tuple(), term(), timeout()) ::
+          {:ok, :closed | :open | :half_open} | {:error, :not_found | :timeout}
+  def record_failure_sync(id, reason \\ :failure, timeout \\ 5_000) do
+    case GenServer.whereis(via_name(id)) do
+      nil ->
+        {:error, :not_found}
+
+      _pid ->
+        try do
+          state = GenServer.call(via_name(id), {:report_external_sync, {:error, reason}}, timeout)
+          {:ok, state}
+        catch
+          :exit, {:timeout, _} -> {:error, :timeout}
+        end
     end
   end
 

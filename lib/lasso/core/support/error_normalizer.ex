@@ -484,6 +484,20 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
+  # WebSocket process exited (via :EXIT message from linked process)
+  def normalize({:ws_exit, reason}, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+
+    JError.new(-32_000, "WebSocket process exited: #{inspect(reason)}",
+      provider_id: provider_id,
+      source: :transport,
+      transport: :ws,
+      category: :network_error,
+      retriable?: true,
+      breaker_penalty?: true
+    )
+  end
+
   # Health check context wrapper
   def normalize({:health_check, error}, opts) do
     opts

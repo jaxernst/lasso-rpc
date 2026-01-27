@@ -338,10 +338,27 @@ defmodule Lasso.HealthProbe.Worker do
   # WS probe success/failure handlers
 
   defp handle_ws_probe_success(state, latency_ms, now) do
-    # Signal to WS circuit breaker that provider is reachable
-    # Circuit breaker decides whether to use this signal based on its state
+    # Signal recovery to circuit breaker ONLY if connection has proven stable.
+    # This prevents interference during connection thrashing where:
+    # 1. Connection establishes briefly
+    # 2. Probe succeeds
+    # 3. Recovery signal resets failure count
+    # 4. Connection drops
+    # 5. Circuit never opens because failures keep resetting
+    #
+    # By checking connection_stable, we only signal recovery for connections
+    # that have survived the stability window (5s), indicating genuine health.
     cb_id = {state.profile, state.chain, state.provider_id, :ws}
-    CircuitBreaker.signal_recovery(cb_id)
+
+    case WSConnection.status(state.profile, state.chain, state.provider_id) do
+      %{connection_stable: true} ->
+        CircuitBreaker.signal_recovery(cb_id)
+
+      _ ->
+        # Connection not stable yet - don't signal recovery
+        # Circuit breaker will recover naturally when connection proves stable
+        :ok
+    end
 
     new_consecutive_successes = state.ws_consecutive_successes + 1
     was_failing = state.ws_consecutive_failures >= @max_consecutive_failures_before_warn
