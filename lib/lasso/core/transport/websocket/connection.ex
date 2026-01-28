@@ -420,8 +420,13 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     # - Otherwise, schedule stability check timer
     state =
       if state.endpoint.stability_ms == 0 do
-        # Immediate stability - reset attempts and signal recovery now
-        CircuitBreaker.signal_recovery({state.profile, state.chain_name, state.endpoint.id, :ws})
+        # Immediate stability - broadcast event (HealthProbe will signal circuit breaker recovery)
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          "ws:conn:#{state.profile}:#{state.chain_name}",
+          {:ws_stable, state.endpoint.id}
+        )
+
         %{state | reconnect_attempts: 0, connection_stable: true}
       else
         schedule_stability_check(state)
@@ -800,15 +805,17 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   # Connection has been stable for the grace period - now safe to reset reconnect_attempts
-  # and signal recovery to the circuit breaker
+  # Broadcast stability event (HealthProbe will signal circuit breaker recovery)
   def handle_info({:connection_stable}, %{connected: true} = state) do
     Logger.debug(
       "Connection stable, resetting reconnect attempts (provider: #{state.endpoint.id})"
     )
 
-    # Signal recovery to circuit breaker only after connection proves stable
-    # This prevents premature recovery when providers accept connections but immediately drop them
-    CircuitBreaker.signal_recovery({state.profile, state.chain_name, state.endpoint.id, :ws})
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:conn:#{state.profile}:#{state.chain_name}",
+      {:ws_stable, state.endpoint.id}
+    )
 
     {:noreply,
      %{state | reconnect_attempts: 0, stability_timer_ref: nil, connection_stable: true}}

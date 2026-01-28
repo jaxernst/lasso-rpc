@@ -51,7 +51,8 @@ defmodule Lasso.HealthProbe.Worker do
           ws_consecutive_successes: non_neg_integer(),
           ws_last_probe_time: integer() | nil,
           ws_last_latency_ms: non_neg_integer() | nil,
-          has_ws: boolean()
+          has_ws: boolean(),
+          ws_connection_stable: boolean()
         }
 
   defstruct [
@@ -72,7 +73,9 @@ defmodule Lasso.HealthProbe.Worker do
     :ws_consecutive_successes,
     :ws_last_probe_time,
     :ws_last_latency_ms,
-    :has_ws
+    :has_ws,
+    # WS connection stability (updated via PubSub)
+    :ws_connection_stable
   ]
 
   ## Client API
@@ -111,6 +114,12 @@ defmodule Lasso.HealthProbe.Worker do
     has_http = has_http_capability?(profile, chain, provider_id)
     has_ws = has_ws_capability?(profile, chain, provider_id)
 
+    # Subscribe to WS connection events for this provider
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{profile}:#{chain}")
+
+    # Check initial WS stability (handles case where connection already stable at startup)
+    ws_stable = get_initial_ws_stability(profile, chain, provider_id)
+
     state = %__MODULE__{
       chain: chain,
       profile: profile,
@@ -129,7 +138,8 @@ defmodule Lasso.HealthProbe.Worker do
       ws_consecutive_successes: 0,
       ws_last_probe_time: nil,
       ws_last_latency_ms: nil,
-      has_ws: has_ws
+      has_ws: has_ws,
+      ws_connection_stable: ws_stable
     }
 
     if has_http or has_ws do
@@ -186,6 +196,32 @@ defmodule Lasso.HealthProbe.Worker do
     {:noreply, state}
   end
 
+  # WS connection stability achieved - signal recovery to circuit breaker
+  def handle_info({:ws_stable, provider_id}, state) when provider_id == state.provider_id do
+    cb_id = {state.profile, state.chain, state.provider_id, :ws}
+    CircuitBreaker.signal_recovery(cb_id)
+    {:noreply, %{state | ws_connection_stable: true}}
+  end
+
+  # WS connected - stability not proven yet
+  def handle_info({:ws_connected, provider_id, _conn_id}, state)
+      when provider_id == state.provider_id do
+    {:noreply, %{state | ws_connection_stable: false}}
+  end
+
+  # WS disconnected - reset stability
+  def handle_info({:ws_disconnected, provider_id, _error}, state)
+      when provider_id == state.provider_id do
+    {:noreply, %{state | ws_connection_stable: false}}
+  end
+
+  # WS closed - reset stability
+  def handle_info({:ws_closed, provider_id, _code, _error}, state)
+      when provider_id == state.provider_id do
+    {:noreply, %{state | ws_connection_stable: false}}
+  end
+
+  # Ignore events for other providers and unrelated messages
   def handle_info(_msg, state) do
     {:noreply, state}
   end
@@ -346,18 +382,12 @@ defmodule Lasso.HealthProbe.Worker do
     # 4. Connection drops
     # 5. Circuit never opens because failures keep resetting
     #
-    # By checking connection_stable, we only signal recovery for connections
-    # that have survived the stability window (5s), indicating genuine health.
+    # We use locally cached ws_connection_stable (updated via PubSub) instead of
+    # querying WSConnection.status/3, avoiding cross-process synchronous calls.
     cb_id = {state.profile, state.chain, state.provider_id, :ws}
 
-    case WSConnection.status(state.profile, state.chain, state.provider_id) do
-      %{connection_stable: true} ->
-        CircuitBreaker.signal_recovery(cb_id)
-
-      _ ->
-        # Connection not stable yet - don't signal recovery
-        # Circuit breaker will recover naturally when connection proves stable
-        :ok
+    if state.ws_connection_stable do
+      CircuitBreaker.signal_recovery(cb_id)
     end
 
     new_consecutive_successes = state.ws_consecutive_successes + 1
@@ -523,6 +553,15 @@ defmodule Lasso.HealthProbe.Worker do
   end
 
   # Capability checks
+
+  defp get_initial_ws_stability(profile, chain, provider_id) do
+    case WSConnection.status(profile, chain, provider_id) do
+      %{connection_stable: true} -> true
+      _ -> false
+    end
+  catch
+    :exit, _ -> false
+  end
 
   defp has_http_capability?(profile, chain, provider_id) do
     case TransportRegistry.get_channel(profile, chain, provider_id, :http) do
