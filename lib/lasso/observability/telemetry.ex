@@ -144,6 +144,57 @@ defmodule Lasso.Telemetry do
         tags: [:chain_name, :from_provider, :to_provider, :reason]
       ),
 
+      # Cluster node events
+      counter("lasso.cluster.node.connected.count",
+        event_name: [:lasso, :cluster, :node, :connected],
+        description: "Cluster nodes connected",
+        tags: [:node, :region]
+      ),
+      counter("lasso.cluster.node.disconnected.count",
+        event_name: [:lasso, :cluster, :node, :disconnected],
+        description: "Cluster nodes disconnected",
+        tags: [:node]
+      ),
+      last_value("lasso.cluster.node.count",
+        event_name: [:lasso, :cluster, :node, :connected],
+        measurement: :node_count,
+        description: "Current cluster node count"
+      ),
+
+      # Dashboard cluster metrics cache
+      counter("lasso_web.dashboard.cache.count",
+        event_name: [:lasso_web, :dashboard, :cache],
+        description: "Dashboard cluster metrics cache operations",
+        tags: [:result, :profile, :chain]
+      ),
+
+      # Dashboard cluster RPC calls
+      distribution("lasso_web.dashboard.cluster_rpc.duration",
+        event_name: [:lasso_web, :dashboard, :cluster_rpc],
+        measurement: :duration_ms,
+        unit: {:native, :millisecond},
+        description: "Dashboard cluster RPC call duration",
+        tags: [:profile, :chain],
+        reporter_options: [
+          buckets: [50, 100, 250, 500, 1000, 2000, 5000]
+        ]
+      ),
+      counter("lasso_web.dashboard.cluster_rpc.node_count",
+        event_name: [:lasso_web, :dashboard, :cluster_rpc],
+        measurement: :node_count,
+        description: "Cluster nodes contacted for dashboard metrics"
+      ),
+      counter("lasso_web.dashboard.cluster_rpc.success_count",
+        event_name: [:lasso_web, :dashboard, :cluster_rpc],
+        measurement: :success_count,
+        description: "Successful node responses for dashboard metrics"
+      ),
+      counter("lasso_web.dashboard.cluster_rpc.bad_count",
+        event_name: [:lasso_web, :dashboard, :cluster_rpc],
+        measurement: :bad_count,
+        description: "Failed node responses for dashboard metrics"
+      ),
+
       # VM metrics
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),

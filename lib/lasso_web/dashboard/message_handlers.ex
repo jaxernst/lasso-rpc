@@ -4,7 +4,6 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
   """
 
   import Phoenix.Component, only: [assign: 3, update: 3]
-  import Phoenix.LiveView, only: [push_event: 3]
   alias Lasso.Events.Provider
   alias LassoWeb.Dashboard.{Constants, Helpers}
 
@@ -63,48 +62,8 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
     Enum.reduce(events, socket, &buffer_fn.(&2, &1))
   end
 
-  def handle_routing_decision(evt, socket, buffer_event_fn, update_chain_fn, update_provider_fn) do
-    %{chain: chain, method: method, strategy: strategy, provider_id: pid, duration_ms: dur} = evt
-
-    if chain in Map.get(socket.assigns, :profile_chains, []) do
-      entry = %{
-        ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
-        ts_ms: System.system_time(:millisecond),
-        chain: chain,
-        method: method,
-        strategy: strategy,
-        provider_id: pid,
-        duration_ms: if(is_number(dur), do: round(dur), else: 0),
-        result: Map.get(evt, :result, :unknown),
-        failovers: Map.get(evt, :failover_count, 0)
-      }
-
-      ev =
-        Helpers.as_event(:rpc,
-          chain: chain,
-          provider_id: pid,
-          severity: if(entry.result == :error, do: :warn, else: :info),
-          message: "#{method} #{entry.result} (#{dur}ms)",
-          meta: Map.drop(entry, [:ts, :ts_ms])
-        )
-
-      socket
-      |> update(:routing_events, &[entry | Enum.take(&1, Constants.routing_events_limit() - 1)])
-      |> buffer_event_fn.(ev)
-      |> push_event("provider_request", %{provider_id: pid})
-      |> maybe_update_chain(chain, update_chain_fn)
-      |> maybe_update_provider(pid, update_provider_fn)
-    else
-      socket
-    end
-  end
-
   defp maybe_update_chain(socket, chain, update_fn) do
     if socket.assigns[:selected_chain] == chain, do: update_fn.(socket), else: socket
-  end
-
-  defp maybe_update_provider(socket, provider_id, update_fn) do
-    if socket.assigns[:selected_provider] == provider_id, do: update_fn.(socket), else: socket
   end
 
   def handle_provider_event(
@@ -176,66 +135,57 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
     end
   end
 
-  def handle_circuit_breaker_event(
-        event_data,
-        socket,
-        buffer_event_fn,
-        update_chain_fn,
-        update_provider_fn
-      ) do
-    %{chain: chain, provider_id: pid, transport: transport, new_state: new_state} = event_data
+  def handle_events_batch(socket, events) do
+    # Transform RoutingDecision-style events for routing_events display
+    routing_entries = transform_to_routing_entries(events, socket.assigns.profile_chains)
 
-    if chain in Map.get(socket.assigns, :profile_chains, []) do
-      ev =
-        Helpers.as_event(:circuit_breaker,
-          chain: chain,
-          provider_id: pid,
-          transport: transport,
-          severity: circuit_severity(new_state),
-          message: "#{transport} circuit #{new_state}",
-          meta: %{
-            transport: transport,
-            new_state: new_state,
-            old_state: event_data[:old_state],
-            reason: event_data[:reason],
-            error_code: get_in(event_data, [:error, :code]),
-            error_category: get_in(event_data, [:error, :category]),
-            error_message: get_in(event_data, [:error, :message])
-          }
-        )
-
-      socket
-      |> buffer_event_fn.(ev)
-      |> maybe_update_provider(pid, update_provider_fn)
-      |> maybe_update_chain(chain, update_chain_fn)
-    else
-      socket
-    end
+    socket
+    |> update(:events, &(events ++ &1))
+    |> update(
+      :routing_events,
+      &(routing_entries ++
+          Enum.take(&1, Constants.routing_events_limit() - length(routing_entries)))
+    )
   end
 
-  defp circuit_severity(:closed), do: :info
-  defp circuit_severity(:half_open), do: :warn
-  defp circuit_severity(:open), do: :error
+  def handle_events_snapshot(socket, events) do
+    # Transform RoutingDecision-style events for routing_events display
+    routing_entries = transform_to_routing_entries(events, socket.assigns.profile_chains)
 
-  def handle_block_event(blk, socket, buffer_event_fn, update_chain_fn, update_provider_fn)
-      when is_map(blk) do
-    %{chain: chain, block_number: bn} = blk
-
-    if chain in Map.get(socket.assigns, :profile_chains, []) do
-      ev =
-        Helpers.as_event(:chain, chain: chain, severity: :info, message: "block #{bn}", meta: blk)
-
-      socket
-      |> update(:latest_blocks, &Map.put(&1, chain, bn))
-      |> buffer_event_fn.(ev)
-      |> maybe_update_chain(chain, update_chain_fn)
-      |> maybe_update_provider(blk[:provider_id], update_provider_fn)
-    else
-      socket
-    end
+    socket
+    |> assign(:events, events)
+    |> assign(:routing_events, routing_entries)
   end
 
-  def handle_events_batch(events, socket) do
-    update(socket, :events, &(events ++ &1))
+  defp transform_to_routing_entries(events, profile_chains) do
+    events
+    |> Enum.filter(fn e ->
+      # Only include events that are routing decisions for this profile's chains
+      Map.has_key?(e, :method) and Map.get(e, :chain) in profile_chains
+    end)
+    |> Enum.map(fn e ->
+      %{
+        ts: format_time(Map.get(e, :ts)),
+        ts_ms: normalize_timestamp(Map.get(e, :ts)),
+        chain: Map.get(e, :chain),
+        method: Map.get(e, :method),
+        strategy: Map.get(e, :strategy),
+        provider_id: Map.get(e, :provider_id),
+        duration_ms: Map.get(e, :duration_ms, 0),
+        result: Map.get(e, :result, :unknown),
+        failovers: Map.get(e, :failover_count, 0),
+        source_node: Map.get(e, :source_node),
+        source_node_id: Map.get(e, :source_node_id)
+      }
+    end)
   end
+
+  defp format_time(ts) when is_integer(ts) do
+    ts |> DateTime.from_unix!(:millisecond) |> DateTime.to_time() |> to_string()
+  end
+
+  defp format_time(_), do: DateTime.utc_now() |> DateTime.to_time() |> to_string()
+
+  defp normalize_timestamp(ts) when is_integer(ts), do: ts
+  defp normalize_timestamp(_), do: System.system_time(:millisecond)
 end

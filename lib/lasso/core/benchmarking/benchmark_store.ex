@@ -220,6 +220,32 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @doc """
+  Returns call counts per provider within the specified time window.
+
+  Used for RPS calculation in cluster metrics aggregation. Uses ETS match spec
+  for efficient querying without full table scan.
+
+  ## Parameters
+    - `profile`: The routing profile name
+    - `chain_name`: The blockchain name
+    - `window_seconds`: Time window in seconds (default: 60)
+
+  ## Returns
+    Map of provider_id to call count: `%{String.t() => non_neg_integer()}`
+
+  ## Examples
+
+      iex> BenchmarkStore.get_calls_in_window("default", "ethereum", 60)
+      %{"infura" => 150, "alchemy" => 200}
+  """
+  @spec get_calls_in_window(profile(), chain_name(), pos_integer()) :: %{
+          String.t() => non_neg_integer()
+        }
+  def get_calls_in_window(profile, chain_name, window_seconds \\ 60) do
+    GenServer.call(__MODULE__, {:get_calls_in_window, profile, chain_name, window_seconds})
+  end
+
+  @doc """
   Records an RPC call performance metric with dual timestamps.
 
   Timestamps are captured at the moment this function is called, ensuring
@@ -941,6 +967,42 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
+  def handle_call({:get_calls_in_window, profile, chain_name, window_seconds}, _from, state) do
+    key = {profile, chain_name}
+
+    result =
+      if Map.has_key?(state.rpc_tables, key) do
+        rpc_table = rpc_table_name(profile, chain_name)
+        cutoff = System.monotonic_time(:millisecond) - window_seconds * 1_000
+
+        # Match spec: select provider_id from records where monotonic_ts > cutoff
+        # Pattern: {monotonic_ts, _system_ts, provider_id, _method, _duration, _result}
+        match_spec = [
+          {
+            {:"$1", :_, :"$2", :_, :_, :_},
+            [{:>, :"$1", cutoff}],
+            [:"$2"]
+          }
+        ]
+
+        case :ets.info(rpc_table) do
+          :undefined ->
+            %{}
+
+          _ ->
+            :ets.select(rpc_table, match_spec)
+            |> Enum.frequencies()
+        end
+      else
+        %{}
+      end
+
+    {:reply, result, state}
+  rescue
+    ArgumentError -> {:reply, %{}, state}
+  end
+
+  @impl true
   def handle_call(
         {:get_rpc_performance_with_percentiles, profile, chain_name, provider_id, method},
         _from,
@@ -1002,6 +1064,9 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         success_rate = if total > 0, do: successes / total, else: 0.0
         percentiles = calculate_percentiles(recent_latencies)
 
+        # Include source node ID for cluster-aware aggregation
+        node_id = Application.get_env(:lasso, :node_id) || extract_node_id_from_node()
+
         %{
           provider_id: provider_id,
           method: method,
@@ -1009,7 +1074,9 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
           total_calls: total,
           avg_duration_ms: avg_duration,
           percentiles: percentiles,
-          last_updated: sys_ts
+          last_updated: sys_ts,
+          source_node_id: node_id,
+          source_node: node()
         }
 
       [] ->
@@ -1017,15 +1084,15 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     end
   end
 
-  defp calculate_percentiles(latencies) when length(latencies) < 2 do
-    # Not enough data for meaningful percentiles
-    case latencies do
-      [single] -> %{p50: single, p90: single, p95: single, p99: single}
-      [] -> %{p50: 0, p90: 0, p95: 0, p99: 0}
-    end
+  defp calculate_percentiles([]) do
+    %{p50: 0, p90: 0, p95: 0, p99: 0}
   end
 
-  defp calculate_percentiles(latencies) do
+  defp calculate_percentiles([single]) do
+    %{p50: single, p90: single, p95: single, p99: single}
+  end
+
+  defp calculate_percentiles(latencies) when is_list(latencies) do
     sorted = Enum.sort(latencies)
     count = length(sorted)
 
@@ -1246,16 +1313,28 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     # Calculate overall scores for each provider based on RPC latency metrics
     Enum.map(rpc_scores, fn {provider_id, entries} ->
-      {total_successes, total_calls, weighted_avg_latency} =
-        Enum.reduce(entries, {0, 0, 0.0}, fn {{_pid, _method, _type}, successes, total,
-                                              avg_duration, _samples, _monotonic_updated,
-                                              _system_updated},
-                                             {acc_successes, acc_total, acc_latency} ->
-          {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total}
+      {total_successes, total_calls, weighted_avg_latency, samples_acc} =
+        Enum.reduce(entries, {0, 0, 0.0, []}, fn {{_pid, _method, _type}, successes, total,
+                                                  avg_duration, samples, _monotonic_updated,
+                                                  _system_updated},
+                                                 {acc_successes, acc_total, acc_latency,
+                                                  acc_samples} ->
+          # Prepend samples list (O(1)) instead of append (O(n))
+          {acc_successes + successes, acc_total + total, acc_latency + avg_duration * total,
+           [samples | acc_samples]}
         end)
+
+      # Flatten once at the end (O(n) total instead of O(n²))
+      all_samples = List.flatten(samples_acc)
 
       success_rate = if total_calls > 0, do: total_successes / total_calls, else: 0.0
       avg_latency = if total_calls > 0, do: weighted_avg_latency / total_calls, else: 0.0
+
+      # Compute percentiles from all latency samples for this provider
+      percentiles = calculate_percentiles(all_samples)
+
+      # Include source node ID for cluster-aware aggregation
+      node_id = Application.get_env(:lasso, :node_id) || extract_node_id_from_node()
 
       %{
         provider_id: provider_id,
@@ -1263,7 +1342,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         total_successes: total_successes,
         success_rate: success_rate,
         avg_latency_ms: avg_latency,
-        score: calculate_rpc_provider_score(success_rate, avg_latency, total_calls)
+        p50_latency: percentiles.p50,
+        p95_latency: percentiles.p95,
+        p99_latency: percentiles.p99,
+        score: calculate_rpc_provider_score(success_rate, avg_latency, total_calls),
+        source_node_id: node_id,
+        source_node: node()
       }
     end)
     |> Enum.sort_by(& &1.score, :desc)
@@ -1361,6 +1445,19 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       total_entries: length(all_entries),
       last_updated: System.system_time(:millisecond)
     }
+  end
+
+  # Extract node ID from Erlang node name, matching Topology's fallback logic
+  defp extract_node_id_from_node do
+    node()
+    |> Atom.to_string()
+    |> String.split("@")
+    |> List.last()
+    |> case do
+      nil -> "unknown"
+      "" -> "unknown"
+      id -> id
+    end
   end
 
   defp calculate_rpc_provider_score(success_rate, avg_latency_ms, total_calls) do

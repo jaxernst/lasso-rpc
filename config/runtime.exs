@@ -43,6 +43,41 @@ vm_metrics_enabled =
 
 config :lasso, :vm_metrics_enabled, vm_metrics_enabled
 
+# Port configuration (runtime override for all environments)
+# Allows running multiple instances locally: PORT=4001 iex -S mix phx.server
+if port = System.get_env("PORT") do
+  config :lasso, LassoWeb.Endpoint, http: [port: String.to_integer(port)]
+end
+
+# Node identity label
+# Unique identifier for this node instance, used for state partitioning (circuit breakers,
+# metrics) via {provider_id, node_id} keys. Each node in a cluster MUST have a distinct value.
+# Convention: use geographic region names (e.g., "us-east-1", "iad") when deploying one node
+# per region, but any unique string works.
+node_id =
+  System.get_env("LASSO_NODE_ID") ||
+    "node-" <> (:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower))
+
+config :lasso, :node_id, node_id
+
+# Clustering configuration (optional)
+# Requires both CLUSTER_DNS_QUERY and CLUSTER_NODE_BASENAME to be set
+# Example: CLUSTER_DNS_QUERY=myapp.internal CLUSTER_NODE_BASENAME=myapp
+with dns_query when is_binary(dns_query) <- System.get_env("CLUSTER_DNS_QUERY"),
+     node_basename when is_binary(node_basename) <- System.get_env("CLUSTER_NODE_BASENAME") do
+  config :libcluster,
+    topologies: [
+      dns: [
+        strategy: Cluster.Strategy.DNSPoll,
+        config: [
+          polling_interval: 5_000,
+          query: dns_query,
+          node_basename: node_basename
+        ]
+      ]
+    ]
+end
+
 if config_env() == :prod do
   # Get port from environment variable (internal port the app listens on)
   port = String.to_integer(System.get_env("PORT") || "4000")
@@ -66,9 +101,4 @@ if config_env() == :prod do
     # URL config is for external access - use HTTPS and standard port (443 is omitted from URLs)
     url: [host: host, scheme: scheme],
     secret_key_base: secret_key_base
-
-  # Optional: surface Fly region to the app for tagging
-  if System.get_env("FLY_REGION") do
-    config :lasso, :region, System.get_env("FLY_REGION")
-  end
 end

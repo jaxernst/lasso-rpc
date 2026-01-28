@@ -873,6 +873,10 @@ defmodule Lasso.RPC.ProviderPool do
   def handle_cast({:probe_results, results}, state) do
     # Process ALL results in batch (avoid race conditions)
     state = apply_probe_batch(state, results)
+
+    # Broadcast health pulse for dashboard cluster sync
+    broadcast_health_pulses(state, results)
+
     {:noreply, state}
   end
 
@@ -967,7 +971,14 @@ defmodule Lasso.RPC.ProviderPool do
           |> Map.put(:last_health_check, System.system_time(:millisecond))
 
         event_details = %{code: code, reason: jerr.message}
-        publish_provider_event(state.chain_name, provider_id, :ws_closed, event_details)
+
+        publish_provider_event(
+          state.profile,
+          state.chain_name,
+          provider_id,
+          :ws_closed,
+          event_details
+        )
 
         new_state = put_provider_and_refresh(state, provider_id, updated)
         {:noreply, new_state}
@@ -990,7 +1001,14 @@ defmodule Lasso.RPC.ProviderPool do
           |> Map.put(:last_health_check, System.system_time(:millisecond))
 
         event_details = %{reason: jerr.message}
-        publish_provider_event(state.chain_name, provider_id, :ws_closed, event_details)
+
+        publish_provider_event(
+          state.profile,
+          state.chain_name,
+          provider_id,
+          :ws_closed,
+          event_details
+        )
 
         new_state = put_provider_and_refresh(state, provider_id, updated)
         {:noreply, new_state}
@@ -1320,7 +1338,7 @@ defmodule Lasso.RPC.ProviderPool do
         # Schedule grace period cleanup
         Process.send_after(self(), {:clear_reconnect_grace, provider_id}, grace_period_ms)
 
-        publish_provider_event(state.chain_name, provider_id, :ws_connected, %{})
+        publish_provider_event(state.profile, state.chain_name, provider_id, :ws_connected, %{})
         new_state = put_provider_and_refresh(state, provider_id, updated)
         {:noreply, new_state}
     end
@@ -1786,7 +1804,7 @@ defmodule Lasso.RPC.ProviderPool do
 
   defp maybe_emit_became_healthy(state, provider_id, provider) do
     if provider.status != :healthy do
-      publish_provider_event(state.chain_name, provider_id, :healthy, %{})
+      publish_provider_event(state.profile, state.chain_name, provider_id, :healthy, %{})
       state
     else
       state
@@ -1857,7 +1875,13 @@ defmodule Lasso.RPC.ProviderPool do
                 "Provider #{provider_id} marked as unhealthy after #{updated_provider.consecutive_failures} failures"
               )
 
-              publish_provider_event(state.chain_name, provider_id, :unhealthy, %{})
+              publish_provider_event(
+                state.profile,
+                state.chain_name,
+                provider_id,
+                :unhealthy,
+                %{}
+              )
 
               :telemetry.execute([:lasso, :provider, :status], %{count: 1}, %{
                 chain: state.chain_name,
@@ -1956,7 +1980,7 @@ defmodule Lasso.RPC.ProviderPool do
     end
   end
 
-  defp publish_provider_event(chain_name, provider_id, event, details) do
+  defp publish_provider_event(profile, chain_name, provider_id, event, details) do
     ts = System.system_time(:millisecond)
 
     typed =
@@ -1985,7 +2009,7 @@ defmodule Lasso.RPC.ProviderPool do
           }
       end
 
-    Phoenix.PubSub.broadcast(Lasso.PubSub, Provider.topic(chain_name), typed)
+    Phoenix.PubSub.broadcast(Lasso.PubSub, Provider.topic(profile, chain_name), typed)
   end
 
   # Updates circuit state for a specific provider and transport
@@ -2162,6 +2186,38 @@ defmodule Lasso.RPC.ProviderPool do
       %{lag_blocks: lag},
       %{chain: chain, provider_id: provider_id}
     )
+  end
+
+  defp broadcast_health_pulses(state, results) do
+    node_id = get_local_node_id()
+    ts = System.system_time(:millisecond)
+    topic = "block_sync:#{state.profile}:#{state.chain_name}"
+
+    for result <- results do
+      case Map.get(state.providers, result.provider_id) do
+        %{consecutive_failures: failures, consecutive_successes: successes} ->
+          msg =
+            {:provider_health_pulse,
+             %{
+               profile: state.profile,
+               chain: state.chain_name,
+               provider_id: result.provider_id,
+               node_id: node_id,
+               consecutive_failures: failures,
+               consecutive_successes: successes,
+               ts: ts
+             }}
+
+          Phoenix.PubSub.broadcast(Lasso.PubSub, topic, msg)
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
+  defp get_local_node_id do
+    Lasso.Cluster.Topology.get_self_node_id()
   end
 
   @doc """

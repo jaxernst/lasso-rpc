@@ -18,36 +18,91 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         {:error, _} -> %{chain_id: "Unknown"}
       end
 
+    # Prefer cluster node IDs from topology (authoritative), fall back to extracting from metrics
+    cluster_node_ids = assigns[:cluster_node_ids] || []
+    metrics_node_ids = extract_available_node_ids(assigns.provider_metrics)
+
+    # Merge both sources: cluster node IDs are authoritative, but include any additional from metrics
+    available_node_ids =
+      (cluster_node_ids ++ metrics_node_ids)
+      |> Enum.uniq()
+      |> Enum.reject(&(&1 in [nil, "unknown"]))
+      |> Enum.sort()
+
+    # Only show node tabs when there are multiple nodes (single node = no point in tabs)
+    show_node_tabs = length(available_node_ids) > 1
+
+    # Preserve selected_node_id if already set and still valid, otherwise default to "all"
+    current_node_id = socket.assigns[:selected_node_id] || "all"
+
+    selected_node_id =
+      if current_node_id == "all" or current_node_id in available_node_ids do
+        current_node_id
+      else
+        "all"
+      end
+
     socket =
       socket
       |> assign(assigns)
       |> assign(:chain_config, chain_config)
+      |> assign(:available_node_ids, available_node_ids)
+      |> assign(:selected_node_id, selected_node_id)
+      |> assign(:show_node_tabs, show_node_tabs)
 
     {:ok, socket}
   end
 
+  defp extract_available_node_ids(provider_metrics) when is_list(provider_metrics) do
+    provider_metrics
+    |> Enum.flat_map(fn provider ->
+      case Map.get(provider, :latency_by_node) do
+        nodes when is_map(nodes) ->
+          Map.keys(nodes)
+
+        _ ->
+          []
+      end
+    end)
+    |> Enum.uniq()
+    |> Enum.reject(&(&1 in [nil, "unknown"]))
+    |> Enum.sort()
+  end
+
+  defp extract_available_node_ids(_), do: []
+
   @impl true
   def handle_event("select_metrics_chain", %{"chain" => chain}, socket) do
     send(self(), {:metrics_chain_selected, chain})
-    {:noreply, socket}
+    {:noreply, assign(socket, :selected_node_id, "all")}
+  end
+
+  @impl true
+  def handle_event("select_node_id", %{"node-id" => node_id}, socket) do
+    {:noreply, assign(socket, :selected_node_id, node_id)}
   end
 
   @impl true
   def render(assigns) do
     ~H"""
     <div class="h-full overflow-y-auto">
-      <div class="mx-auto max-w-7xl px-4 pb-4">
-        <div class="flex items-center justify-between mb-2 py-4">
-          <div class="flex gap-2">
-            <.chain_selector_button
-              :for={chain <- @available_chains}
-              chain={chain}
-              selected={chain.name == @metrics_selected_chain}
-              chain_config={@chain_config}
-              myself={@myself}
-            />
-          </div>
+      <div class="mx-auto max-w-7xl px-4 py-6">
+        <div class={["flex gap-2", if(@show_node_tabs, do: "mb-4", else: "mb-6")]}>
+          <.chain_selector_button
+            :for={chain <- @available_chains}
+            chain={chain}
+            selected={chain.name == @metrics_selected_chain}
+            chain_config={@chain_config}
+            myself={@myself}
+          />
         </div>
+
+        <.node_view_tabs
+          :if={@show_node_tabs}
+          available_node_ids={@available_node_ids}
+          selected_node_id={@selected_node_id}
+          myself={@myself}
+        />
 
         <.loading_state :if={@metrics_loading} />
 
@@ -55,10 +110,62 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
           <.provider_performance_table
             provider_metrics={@provider_metrics}
             metrics_last_updated={@metrics_last_updated}
+            available_node_ids={@available_node_ids}
+            selected_node_id={@selected_node_id}
+            show_node_filter={false}
+            myself={@myself}
           />
-          <.method_performance_breakdown method_metrics={@method_metrics} />
+          <.method_performance_breakdown
+            method_metrics={@method_metrics}
+            selected_node_id={@selected_node_id}
+          />
         </div>
       </div>
+    </div>
+    """
+  end
+
+  attr(:available_node_ids, :list, required: true)
+  attr(:selected_node_id, :string, required: true)
+  attr(:myself, :any, required: true)
+
+  defp node_view_tabs(assigns) do
+    ~H"""
+    <div class="flex items-center gap-1 mb-8 text-sm">
+      <span class="text-xs text-gray-500 uppercase tracking-wide mr-2">Viewing</span>
+      <button
+        phx-click="select_node_id"
+        phx-value-region="all"
+        phx-target={@myself}
+        class={[
+          "px-3 py-1 border rounded-full transition-all",
+          if(@selected_node_id == "all",
+            do: "border-gray-700 border bg-gray-800/50 text-white",
+            else: "border-gray-700/0 text-gray-400 hover:text-gray-300"
+          )
+        ]}
+      >
+        all nodes
+        <span :if={length(@available_node_ids) > 0} class="text-gray-500">
+          ({length(@available_node_ids)})
+        </span>
+      </button>
+
+      <button
+        :for={nid <- @available_node_ids}
+        phx-click="select_node_id"
+        phx-value-node-id={nid}
+        phx-target={@myself}
+        class={[
+          "px-3 py-1 border rounded-full transition-all",
+          if(@selected_node_id == nid,
+            do: "border-gray-700 border bg-gray-800/50 text-white",
+            else: "border-gray-700/0 text-gray-400 hover:text-gray-300"
+          )
+        ]}
+      >
+        {nid}
+      </button>
     </div>
     """
   end
@@ -103,15 +210,24 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
 
   attr(:provider_metrics, :list, required: true)
   attr(:metrics_last_updated, :any, default: nil)
+  attr(:available_node_ids, :list, default: [])
+  attr(:selected_node_id, :string, default: "all")
+  attr(:show_node_filter, :boolean, default: true)
+  attr(:myself, :any, required: true)
 
   defp provider_performance_table(assigns) do
+    filtered_metrics =
+      filter_metrics_by_node_id(assigns.provider_metrics, assigns.selected_node_id)
+
+    assigns = assign(assigns, :filtered_metrics, filtered_metrics)
+
     ~H"""
     <section>
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold flex items-center gap-2 text-white">
           <span>Provider Performance</span>
           <span class="text-xs text-gray-500 font-normal">
-            ({length(@provider_metrics)} providers)
+            ({length(@filtered_metrics)} providers)
           </span>
         </h2>
         <div :if={@metrics_last_updated} class="flex items-center gap-2 text-xs text-gray-500">
@@ -122,15 +238,26 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         </div>
       </div>
 
-      <DetailPanelComponents.empty_state :if={@provider_metrics == []}>
+      <.node_filter_pills
+        :if={@show_node_filter and @available_node_ids != []}
+        available_node_ids={@available_node_ids}
+        selected_node_id={@selected_node_id}
+        myself={@myself}
+      />
+
+      <DetailPanelComponents.empty_state :if={@filtered_metrics == []}>
         <p class="text-sm font-medium text-gray-400 mb-1">No metrics available</p>
         <p class="text-xs text-gray-600">
-          No provider metrics recorded in the last 24 hours. Metrics will appear as requests flow through your RPC endpoints.
+          <%= if @selected_node_id != "all" do %>
+            No provider metrics for node <span class="font-mono">{@selected_node_id}</span>. Try selecting "all nodes" or a different node.
+          <% else %>
+            No provider metrics recorded in the last 24 hours. Metrics will appear as requests flow through your RPC endpoints.
+          <% end %>
         </p>
       </DetailPanelComponents.empty_state>
 
       <div
-        :if={@provider_metrics != []}
+        :if={@filtered_metrics != []}
         class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-sm overflow-hidden"
       >
         <div class="overflow-x-auto">
@@ -150,10 +277,10 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
             </thead>
             <tbody class="divide-y divide-gray-700/30">
               <.provider_row
-                :for={{provider, index} <- Enum.with_index(@provider_metrics, 1)}
+                :for={{provider, index} <- Enum.with_index(@filtered_metrics, 1)}
                 provider={provider}
                 rank={index}
-                provider_metrics={@provider_metrics}
+                provider_metrics={@filtered_metrics}
               />
             </tbody>
           </table>
@@ -161,6 +288,91 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       </div>
     </section>
     """
+  end
+
+  attr(:available_node_ids, :list, required: true)
+  attr(:selected_node_id, :string, required: true)
+  attr(:myself, :any, required: true)
+
+  defp node_filter_pills(assigns) do
+    ~H"""
+    <div class="flex flex-wrap gap-2 mb-4">
+      <button
+        phx-click="select_node_id"
+        phx-value-node-id="all"
+        phx-target={@myself}
+        class={[
+          "px-3 py-1.5 rounded-full text-sm font-medium transition-all",
+          if(@selected_node_id == "all",
+            do: "bg-sky-500/20 text-sky-300 border border-sky-500/50",
+            else: "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/30"
+          )
+        ]}
+      >
+        All Nodes
+      </button>
+      <button
+        :for={nid <- @available_node_ids}
+        phx-click="select_node_id"
+        phx-value-node-id={nid}
+        phx-target={@myself}
+        class={[
+          "px-3 py-1.5 rounded-full text-sm font-medium transition-all",
+          if(@selected_node_id == nid,
+            do: "bg-sky-500/20 text-sky-300 border border-sky-500/50",
+            else: "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/30"
+          )
+        ]}
+      >
+        {nid}
+      </button>
+    </div>
+    """
+  end
+
+  defp filter_metrics_by_node_id(provider_metrics, "all"), do: provider_metrics
+
+  defp filter_metrics_by_node_id(provider_metrics, node_id) do
+    provider_metrics
+    |> Enum.map(fn provider ->
+      case Map.get(provider, :latency_by_node) do
+        nodes when is_map(nodes) and map_size(nodes) > 0 ->
+          node_data = Map.get(nodes, node_id)
+
+          if node_data && node_data[:avg] do
+            provider
+            |> Map.put(:avg_latency, node_data[:avg])
+            |> Map.put(:p50_latency, node_data[:p50])
+            |> Map.put(:p95_latency, node_data[:p95])
+            |> Map.put(:p99_latency, node_data[:p99])
+            |> Map.put(:success_rate, node_data[:success_rate])
+            |> Map.put(:total_calls, node_data[:total_calls])
+            |> Map.put(:node_filtered, true)
+            |> update_consistency_ratio()
+          else
+            nil
+          end
+
+        _ ->
+          nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.sort_by(&(&1.avg_latency || 999_999))
+  end
+
+  defp update_consistency_ratio(provider) do
+    p50 = Map.get(provider, :p50_latency)
+    p99 = Map.get(provider, :p99_latency)
+
+    consistency_ratio =
+      if p50 && p99 && p50 > 0 do
+        p99 / p50
+      else
+        nil
+      end
+
+    Map.put(provider, :consistency_ratio, consistency_ratio)
   end
 
   attr(:provider, :map, required: true)
@@ -242,24 +454,79 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
   defp success_color(_), do: "text-red-400"
 
   attr(:method_metrics, :list, required: true)
+  attr(:selected_node_id, :string, default: "all")
 
   defp method_performance_breakdown(assigns) do
+    filtered_metrics =
+      filter_method_metrics_by_node_id(assigns.method_metrics, assigns.selected_node_id)
+
+    assigns = assign(assigns, :filtered_metrics, filtered_metrics)
+
     ~H"""
     <section>
-      <h2 class="text-lg font-semibold mb-3 text-white">Method Performance Breakdown</h2>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold text-white">Method Performance Breakdown</h2>
+      </div>
 
-      <DetailPanelComponents.empty_state :if={@method_metrics == []}>
+      <DetailPanelComponents.empty_state :if={@filtered_metrics == []}>
         <p class="text-sm font-medium text-gray-400 mb-1">No method metrics available</p>
         <p class="text-xs text-gray-600">
-          No method performance data recorded in the last 24 hours. Method breakdowns will appear as RPC calls are made.
+          <%= if @selected_node_id != "all" do %>
+            No method metrics for this node. Try selecting "all nodes" to see aggregate data.
+          <% else %>
+            No method performance data recorded in the last 24 hours. Method breakdowns will appear as RPC calls are made.
+          <% end %>
         </p>
       </DetailPanelComponents.empty_state>
 
-      <div :if={@method_metrics != []} class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <.method_card :for={method_data <- @method_metrics} method_data={method_data} />
+      <div :if={@filtered_metrics != []} class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <.method_card :for={method_data <- @filtered_metrics} method_data={method_data} />
       </div>
     </section>
     """
+  end
+
+  defp filter_method_metrics_by_node_id(method_metrics, "all"), do: method_metrics
+
+  defp filter_method_metrics_by_node_id(method_metrics, node_id) do
+    method_metrics
+    |> Enum.map(fn method_data ->
+      filtered_providers =
+        method_data.providers
+        |> Enum.map(fn provider ->
+          case Map.get(provider, :stats_by_node) do
+            stats when is_list(stats) and stats != [] ->
+              node_stats = Enum.find(stats, fn s -> s.node_id == node_id end)
+
+              if node_stats && node_stats.avg_duration_ms do
+                provider
+                |> Map.put(:avg_latency, node_stats.avg_duration_ms)
+                |> Map.put(:success_rate, node_stats.success_rate)
+                |> Map.put(:total_calls, node_stats.total_calls)
+                |> Map.put(:p50_latency, get_in(node_stats, [:percentiles, :p50]))
+                |> Map.put(:p95_latency, get_in(node_stats, [:percentiles, :p95]))
+                |> Map.put(:p99_latency, get_in(node_stats, [:percentiles, :p99]))
+              else
+                nil
+              end
+
+            _ ->
+              nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.sort_by(&(&1.avg_latency || 999_999))
+
+      if filtered_providers == [] do
+        nil
+      else
+        total_calls =
+          Enum.reduce(filtered_providers, 0, fn p, acc -> acc + (p.total_calls || 0) end)
+
+        %{method_data | providers: filtered_providers, total_calls: total_calls}
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
   end
 
   attr(:method_data, :map, required: true)

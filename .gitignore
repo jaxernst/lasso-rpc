@@ -41,3 +41,6 @@ lasso-*.tar
 .env
 deployment/.env.production
 deployment/.env.staging
+
+# Internal working docs (keep local, don't commit)
+/docs/internal/

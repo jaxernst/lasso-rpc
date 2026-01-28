@@ -1,6 +1,7 @@
 import Config
 
-# For development, we configure the endpoint to listen on all interfaces
+# Development endpoint configuration
+# PORT can be overridden at runtime via env var (handled in runtime.exs)
 config :lasso, LassoWeb.Endpoint,
   http: [
     ip: {127, 0, 0, 1},
@@ -22,7 +23,7 @@ config :lasso, LassoWeb.Endpoint,
 # Enhanced logging for development debugging
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
-  level: :debug,
+  level: :info,
   metadata: :all
 
 # Filter out Phoenix LiveView "HANDLE EVENT" debug logs

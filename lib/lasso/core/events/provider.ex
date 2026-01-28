@@ -16,10 +16,12 @@ defmodule Lasso.Events.Provider do
   @provider_topic_prefix "provider_pool:events:"
 
   @doc """
-  Returns the per-chain PubSub topic for provider events.
+  Returns the profile-scoped PubSub topic for provider events.
   """
-  @spec topic(String.t()) :: String.t()
-  def topic(chain) when is_binary(chain), do: @provider_topic_prefix <> chain
+  @spec topic(String.t(), String.t()) :: String.t()
+  def topic(profile, chain) when is_binary(profile) and is_binary(chain) do
+    "#{@provider_topic_prefix}#{profile}:#{chain}"
+  end
 
   defmodule Healthy do
     @moduledoc "Event indicating a provider is healthy."
