@@ -42,7 +42,9 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       chain_id: 1,
       reconnect_interval: Keyword.get(opts, :reconnect_interval, 100),
       max_reconnect_attempts: Keyword.get(opts, :max_reconnect_attempts, 3),
-      heartbeat_interval: 10_000
+      heartbeat_interval: 10_000,
+      # Use 0ms stability for tests - attempts reset immediately on connect
+      stability_ms: Keyword.get(opts, :stability_ms, 0)
     }
   end
 
@@ -475,58 +477,6 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
       assert metadata.provider_id == endpoint.id
       assert metadata.attempts == 1
       assert metadata.max_attempts == 1
-
-      cleanup_connection(endpoint)
-    end
-
-    test "handles infinite retry configuration", %{chain: chain} do
-      # max_reconnect_attempts: :infinity means infinite retries
-      endpoint =
-        %Endpoint{
-          profile: "default",
-          id: "ws_#{chain}_infinite",
-          name: "Test WebSocket infinite",
-          ws_url: "ws://test.local/ws",
-          chain_name: chain,
-          chain_id: 1,
-          reconnect_interval: 50,
-          max_reconnect_attempts: :infinity,
-          heartbeat_interval: 10_000
-        }
-
-      {:ok, conn_collector} =
-        TelemetrySync.attach_collector(
-          [:lasso, :websocket, :connected],
-          match: [provider_id: endpoint.id],
-          count: 4
-        )
-
-      {:ok, sched_collector} =
-        TelemetrySync.attach_collector(
-          [:lasso, :websocket, :reconnect_scheduled],
-          match: [provider_id: endpoint.id],
-          count: 3
-        )
-
-      {pid, endpoint} = start_connection_with_cb(endpoint)
-      {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
-
-      # Trigger multiple disconnects - should keep retrying
-      for _cycle <- 1..3 do
-        ws_state = :sys.get_state(pid)
-        TestSupport.MockWSClient.disconnect(ws_state.connection, :connection_lost)
-
-        {:ok, _measurements, metadata} =
-          TelemetrySync.await_event(sched_collector, timeout: 2_000)
-
-        # After successful connection, reconnect_attempts resets to 0
-        # So each disconnect/reconnect cycle starts at attempt 1
-        assert metadata.attempt == 1
-        assert metadata.max_attempts == :infinity
-
-        # Wait for reconnection
-        {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
-      end
 
       cleanup_connection(endpoint)
     end

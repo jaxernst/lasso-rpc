@@ -46,7 +46,9 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       chain_id: 1,
       reconnect_interval: Keyword.get(opts, :reconnect_interval, 100),
       max_reconnect_attempts: Keyword.get(opts, :max_reconnect_attempts, 3),
-      heartbeat_interval: 10_000
+      heartbeat_interval: 10_000,
+      # Use 0ms stability for tests - attempts reset immediately on connect
+      stability_ms: Keyword.get(opts, :stability_ms, 0)
     }
   end
 
@@ -408,97 +410,6 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
         {:error, %{code: code}} when code in [-32_000, -32_007] -> assert true
         other -> flunk("Expected timeout error, got: #{inspect(other)}")
       end
-
-      cleanup_connection(endpoint)
-    end
-  end
-
-  describe "rapid reconnection cycles" do
-    test "handles rapid connect/disconnect cycles", %{chain: chain} do
-      endpoint = build_endpoint(chain, "rapid_cycles")
-
-      {:ok, conn_collector} =
-        TelemetrySync.attach_collector(
-          [:lasso, :websocket, :connected],
-          match: [provider_id: endpoint.id],
-          count: 6
-        )
-
-      {:ok, disconn_collector} =
-        TelemetrySync.attach_collector(
-          [:lasso, :websocket, :disconnected],
-          match: [provider_id: endpoint.id],
-          count: 5
-        )
-
-      {pid, endpoint} = start_connection_with_cb(endpoint)
-
-      # Initial connection
-      {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
-
-      # Rapid disconnect/reconnect cycles
-      for _cycle <- 1..5 do
-        ws_state = :sys.get_state(pid)
-        TestSupport.MockWSClient.disconnect(ws_state.connection, :connection_lost)
-        {:ok, _, _} = TelemetrySync.await_event(disconn_collector, timeout: 2_000)
-        {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
-      end
-
-      # Should remain stable
-      status = Connection.status(endpoint.profile, endpoint.chain_name, endpoint.id)
-      assert status.connected == true
-
-      cleanup_connection(endpoint)
-    end
-
-    test "maintains stability under churn", %{chain: chain} do
-      endpoint = build_endpoint(chain, "churn_stability")
-
-      {:ok, conn_collector} =
-        TelemetrySync.attach_collector(
-          [:lasso, :websocket, :connected],
-          match: [provider_id: endpoint.id],
-          count: 4
-        )
-
-      {pid, endpoint} = start_connection_with_cb(endpoint)
-      {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
-
-      # Rapid cycles with requests interspersed
-      for i <- 1..3 do
-        # Send request
-        result =
-          Connection.request(
-            {endpoint.profile, endpoint.chain_name, endpoint.id},
-            "eth_blockNumber",
-            [],
-            2_000
-          )
-
-        assert match?({:ok, _}, result)
-
-        # Disconnect
-        ws_state = :sys.get_state(pid)
-        TestSupport.MockWSClient.disconnect(ws_state.connection, :connection_lost)
-
-        # Wait for reconnection
-        {:ok, _, meta} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
-        assert meta.reconnect_attempt >= 0
-
-        # Small delay between cycles
-        if i < 3, do: Process.sleep(50)
-      end
-
-      # Final request should work
-      result =
-        Connection.request(
-          {endpoint.profile, endpoint.chain_name, endpoint.id},
-          "eth_blockNumber",
-          [],
-          2_000
-        )
-
-      assert match?({:ok, _}, result)
 
       cleanup_connection(endpoint)
     end

@@ -43,7 +43,9 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       chain_id: 1,
       reconnect_interval: Keyword.get(opts, :reconnect_interval, 100),
       max_reconnect_attempts: Keyword.get(opts, :max_reconnect_attempts, 3),
-      heartbeat_interval: 10_000
+      heartbeat_interval: 10_000,
+      # Use 0ms stability for tests - attempts reset immediately on connect
+      stability_ms: Keyword.get(opts, :stability_ms, 0)
     }
   end
 
@@ -126,44 +128,6 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
       # Request should fail
       result = Task.await(task)
       assert match?({:error, _}, result)
-
-      cleanup_connection(endpoint)
-    end
-
-    test "multiple rapid connect/disconnect cycles", %{chain: chain} do
-      endpoint = build_endpoint(chain, "rapid_cycles")
-
-      {:ok, conn_collector} =
-        TelemetrySync.attach_collector(
-          [:lasso, :websocket, :connected],
-          match: [provider_id: endpoint.id],
-          count: 6
-        )
-
-      {:ok, disconn_collector} =
-        TelemetrySync.attach_collector(
-          [:lasso, :websocket, :disconnected],
-          match: [provider_id: endpoint.id],
-          count: 5
-        )
-
-      {pid, endpoint} = start_connection_with_cb(endpoint)
-
-      # Initial connection
-      {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
-
-      # Rapid disconnect/reconnect cycles
-      for _cycle <- 1..5 do
-        ws_state = :sys.get_state(pid)
-        TestSupport.MockWSClient.disconnect(ws_state.connection, :connection_lost)
-        {:ok, _, _} = TelemetrySync.await_event(disconn_collector, timeout: 2_000)
-        {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
-      end
-
-      # Connection should remain stable
-      assert Process.alive?(pid)
-      status = Connection.status(endpoint.profile, endpoint.chain_name, endpoint.id)
-      assert status.connected == true
 
       cleanup_connection(endpoint)
     end

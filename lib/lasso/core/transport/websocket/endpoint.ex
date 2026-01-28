@@ -17,7 +17,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Endpoint do
           ws_url: String.t(),
           reconnect_interval: non_neg_integer(),
           heartbeat_interval: non_neg_integer(),
-          max_reconnect_attempts: non_neg_integer() | :infinity
+          max_reconnect_attempts: non_neg_integer() | :infinity,
+          # How long connection must stay up before considered "stable"
+          # Only after stability is reconnect_attempts reset and recovery signaled
+          stability_ms: non_neg_integer()
         }
 
   defstruct [
@@ -31,7 +34,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Endpoint do
     # WebSocket specific fields
     reconnect_interval: 5_000,
     heartbeat_interval: 15_000,
-    max_reconnect_attempts: :infinity
+    max_reconnect_attempts: :infinity,
+    stability_ms: 5_000
   ]
 
   @doc """

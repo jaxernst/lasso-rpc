@@ -66,6 +66,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
   # so we extract it here and send a structured message to the parent.
   @spec handle_disconnect(map(), map()) :: {:ok, map()}
   def handle_disconnect(%{reason: reason}, state) do
+    Logger.debug("WebSockex handle_disconnect called",
+      provider_id: state.endpoint.id,
+      reason: inspect(reason)
+    )
+
     disconnect_info =
       case reason do
         # Remote close frame with code and message
