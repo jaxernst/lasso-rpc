@@ -19,7 +19,6 @@ defmodule LassoWeb.Dashboard.EventStream do
   - `routing_decision:{profile}` - RPC routing decisions
   - `sync:updates:{profile}` - sync status updates
   - `block_cache:updates:{profile}` - block cache updates
-  - `clients:events:{profile}` - client connection events
 
   ## Usage
 
@@ -48,7 +47,6 @@ defmodule LassoWeb.Dashboard.EventStream do
   - `{:health_probe_recovery, ...}` - health probe recovery
   - `{:sync_update, evt}` - sync status update
   - `{:block_cache_update, evt}` - block cache update
-  - `{:client_event, evt}` - client connection event
   """
 
   use GenServer, restart: :transient
@@ -201,7 +199,6 @@ defmodule LassoWeb.Dashboard.EventStream do
     # Profile-scoped global topics
     Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates:#{profile}")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates:#{profile}")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "clients:events:#{profile}")
 
     # Start tick timer
     schedule_tick()
@@ -390,12 +387,6 @@ defmodule LassoWeb.Dashboard.EventStream do
   # Block cache updates - forward to subscribers
   def handle_info(%{type: :block_update, provider_id: _} = evt, state) do
     broadcast_to_subscribers(state, {:block_cache_update, evt})
-    {:noreply, state}
-  end
-
-  # Client events - forward to subscribers
-  def handle_info(%{ts: _, event: _, chain: _, transport: _} = evt, state) do
-    broadcast_to_subscribers(state, {:client_event, evt})
     {:noreply, state}
   end
 

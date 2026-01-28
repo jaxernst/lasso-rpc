@@ -539,10 +539,6 @@ defmodule Lasso.RPC.ProviderPool do
     Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{profile}:#{chain_name}")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain_name}")
 
-    # Also subscribe to legacy topics for backward compatibility during migration
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
-
     # Create ETS table for sync state and lag tracking
     # ETS table is chain-scoped (shared across profiles) since sync data is global
     table =

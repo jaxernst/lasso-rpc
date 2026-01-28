@@ -16,7 +16,7 @@ defmodule Lasso.RPC.HttpInclusionWithWsDisconnectIntegrationTest do
     # Simulate WS closed event for the provider using the tuple form
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:conn:#{chain}",
+      "ws:conn:#{profile}:#{chain}",
       {:ws_closed, "dual", 1006, %Lasso.JSONRPC.Error{message: "test", code: -32_000}}
     )
 

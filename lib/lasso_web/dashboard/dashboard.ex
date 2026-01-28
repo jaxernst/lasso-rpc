@@ -73,7 +73,6 @@ defmodule LassoWeb.Dashboard do
       |> assign(:selected_provider, nil)
       |> assign(:routing_events, [])
       |> assign(:provider_events, [])
-      |> assign(:client_events, [])
       |> assign(:latest_blocks, [])
       |> assign(:events, [])
       |> assign(:vm_metrics, %{})
@@ -151,15 +150,11 @@ defmodule LassoWeb.Dashboard do
   end
 
   defp subscribe_global_topics(_profile) do
-    # Only config topics remain here - all others consolidated in EventStream:
-    # - sync:updates, block_cache:updates, clients:events -> EventStream
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_changes")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_updates")
+    :ok
   end
 
   defp unsubscribe_global_topics(_profile) do
-    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "chain_config_changes")
-    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "chain_config_updates")
+    :ok
   end
 
   defp unsubscribe_profile_topics(_profile) do
@@ -241,39 +236,6 @@ defmodule LassoWeb.Dashboard do
         &update_selected_chain_metrics/1,
         &update_selected_provider_data/1
       )
-
-    {:noreply, socket}
-  end
-
-  # Client connection events forwarded from EventStream
-  @impl true
-  def handle_info(
-        {:client_event, %{ts: _t, event: ev, chain: chain, transport: transport} = msg},
-        socket
-      ) do
-    entry = %{
-      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
-      ts_ms: System.system_time(:millisecond),
-      chain: chain,
-      transport: transport,
-      event: ev,
-      ip: Map.get(msg, :remote_ip) || Map.get(msg, "remote_ip")
-    }
-
-    socket =
-      update(socket, :client_events, fn list ->
-        [entry | Enum.take(list, Constants.client_events_limit() - 1)]
-      end)
-
-    uev =
-      Helpers.as_event(:client,
-        chain: chain,
-        severity: :debug,
-        message: "client #{ev} via #{transport}",
-        meta: Map.drop(entry, [:ts, :ts_ms])
-      )
-
-    socket = buffer_event(socket, uev)
 
     {:noreply, socket}
   end
@@ -537,30 +499,6 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  @impl true
-  def handle_info({:chain_config_deleted, message}, socket) do
-    socket =
-      socket
-      |> fetch_connections()
-      |> push_event("show_notification", %{message: message, type: "warning"})
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:chain_config_test_results, results}, socket) do
-    socket = push_event(socket, "show_test_results", %{results: results})
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info({:chain_config_notification, type, message}, socket) do
-    socket =
-      push_event(socket, "show_notification", %{message: message, type: Atom.to_string(type)})
-
-    {:noreply, socket}
-  end
-
   # Chain configuration changes - refresh available chains and connections
   @impl true
   def handle_info({config_event, _arg1, _arg2}, socket)
@@ -743,7 +681,6 @@ defmodule LassoWeb.Dashboard do
               connections={@connections}
               routing_events={@routing_events}
               provider_events={@provider_events}
-              client_events={@client_events}
               latest_blocks={@latest_blocks}
               events={@events}
               selected_chain={@selected_chain}
@@ -820,7 +757,6 @@ defmodule LassoWeb.Dashboard do
   attr(:connections, :list)
   attr(:routing_events, :list)
   attr(:provider_events, :list)
-  attr(:client_events, :list)
   attr(:latest_blocks, :list)
   attr(:events, :list)
   attr(:selected_chain, :string)
