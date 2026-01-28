@@ -475,6 +475,14 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     {:noreply, state}
   end
 
+  def handle_info({:ws_disconnect, :close_frame, _code, _reason}, %{connected: false} = state) do
+    Logger.debug("Ignoring ws_disconnect close_frame (already disconnected)",
+      provider_id: state.endpoint.id
+    )
+
+    {:noreply, state}
+  end
+
   def handle_info({:ws_disconnect, :close_frame, code, reason}, state) do
     Logger.debug("Connection received ws_disconnect close_frame",
       provider_id: state.endpoint.id,
@@ -578,6 +586,14 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   # Handle unexpected disconnects (network errors, crashes, abrupt TCP close)
+  def handle_info({:ws_disconnect, :error, _reason}, %{connected: false} = state) do
+    Logger.debug("Ignoring ws_disconnect error (already disconnected)",
+      provider_id: state.endpoint.id
+    )
+
+    {:noreply, state}
+  end
+
   def handle_info({:ws_disconnect, :error, reason}, state) do
     Logger.debug("Connection received ws_disconnect error",
       provider_id: state.endpoint.id,
@@ -585,6 +601,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     )
 
     try do
+      # Capture stability before canceling timer
+      was_stable = state.connection_stable
+
       # Cancel timers to prevent race conditions
       state = cancel_stability_timer(state)
 
@@ -606,7 +625,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
       Logger.warning(
         "WebSocket disconnected unexpectedly: #{inspect(reason)}, " <>
-          "was_stable=false, had_active_traffic=#{had_pending} (provider: #{state.endpoint.id})"
+          "was_stable=#{was_stable}, had_active_traffic=#{had_pending} (provider: #{state.endpoint.id})"
       )
 
       # Clean up any pending requests
@@ -1055,7 +1074,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   defp schedule_reconnect_with_circuit_check(state) do
     case CircuitBreaker.get_state({state.profile, state.chain_name, state.endpoint.id, :ws}) do
-      :open ->
+      %{state: :open} ->
         # Circuit is open - use longer delay before next reconnect attempt
         Logger.debug("Circuit breaker open for #{state.endpoint.id}, delaying reconnect")
 
