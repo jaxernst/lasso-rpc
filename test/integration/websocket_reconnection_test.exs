@@ -480,7 +480,6 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
 
       cleanup_connection(endpoint)
     end
-
   end
 
   describe "state management" do
