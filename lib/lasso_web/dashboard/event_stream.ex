@@ -14,12 +14,12 @@ defmodule LassoWeb.Dashboard.EventStream do
   - `provider_pool:events:{profile}:{chain}` - provider health events
   - `health_probe:{profile}:{chain}` - health probe recovery events
 
-  Global topics:
+  Profile-scoped global topics:
   - `cluster:topology` - cluster membership changes
   - `routing_decision:{profile}` - RPC routing decisions
-  - `sync:updates` - sync status updates
-  - `block_cache:updates` - block cache updates
-  - `clients:events` - client connection events
+  - `sync:updates:{profile}` - sync status updates
+  - `block_cache:updates:{profile}` - block cache updates
+  - `clients:events:{profile}` - client connection events
 
   ## Usage
 
@@ -198,10 +198,10 @@ defmodule LassoWeb.Dashboard.EventStream do
       Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain}")
     end
 
-    # Global topics (not chain-specific)
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "clients:events")
+    # Profile-scoped global topics
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates:#{profile}")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates:#{profile}")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "clients:events:#{profile}")
 
     # Start tick timer
     schedule_tick()
