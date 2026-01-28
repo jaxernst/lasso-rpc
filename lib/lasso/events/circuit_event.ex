@@ -56,24 +56,7 @@ defmodule Lasso.Events.CircuitEvent do
   end
 
   defp get_source_region do
-    case Application.get_env(:lasso, :cluster_region) do
-      region when is_binary(region) and region != "" -> region
-      _ -> generate_node_id()
-    end
-  end
-
-  defp generate_node_id do
-    # Extract hostname portion (after @) for region identification
-    # Must match Topology.generate_node_id/0 and BenchmarkStore.extract_region_from_node/0
-    node()
-    |> Atom.to_string()
-    |> String.split("@")
-    |> List.last()
-    |> case do
-      nil -> "unknown"
-      "" -> "unknown"
-      region -> region
-    end
+    Lasso.Cluster.Topology.get_self_region()
   end
 
   @doc """

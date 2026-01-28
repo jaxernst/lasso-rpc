@@ -926,17 +926,13 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   defp get_self_region do
     Topology.get_self_region()
-  catch
-    :exit, _ -> Application.get_env(:lasso, :cluster_region) || "unknown"
   end
 
   defp get_region_for_source(source, _state) when is_atom(source) do
     case Topology.get_node_info(source) do
-      %{region: region} when is_binary(region) and region != "unknown" -> region
+      %{region: region} when is_binary(region) -> region
       _ -> get_self_region()
     end
-  catch
-    :exit, _ -> get_self_region()
   end
 
   defp get_region_for_source(_source, _state), do: get_self_region()

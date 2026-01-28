@@ -43,25 +43,26 @@ vm_metrics_enabled =
 
 config :lasso, :vm_metrics_enabled, vm_metrics_enabled
 
-# Cluster region identification
-# If not explicitly set, generate a random region ID for this node
-# This ensures each node has a unique identifier for dashboard region views
-cluster_region =
-  case System.get_env("CLUSTER_REGION") do
-    nil ->
-      random_id = :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
-      region = "node-#{random_id}"
-      System.put_env("CLUSTER_REGION", region)
-      region
+# Port configuration (runtime override for all environments)
+# Allows running multiple instances locally: PORT=4001 iex -S mix phx.server
+if port = System.get_env("PORT") do
+  config :lasso, LassoWeb.Endpoint, http: [port: String.to_integer(port)]
+end
 
-    region ->
-      region
-  end
+# Cluster region identification
+# Used for dashboard region views and metrics aggregation
+# If not set, generates a stable random ID for this node instance
+cluster_region =
+  System.get_env("CLUSTER_REGION") ||
+    "node-" <> (:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower))
 
 config :lasso, :cluster_region, cluster_region
 
-# Clustering configuration (optional - only enabled when CLUSTER_NODE_BASENAME is set)
-if dns_query = System.get_env("CLUSTER_DNS_QUERY") do
+# Clustering configuration (optional)
+# Requires both CLUSTER_DNS_QUERY and CLUSTER_NODE_BASENAME to be set
+# Example: CLUSTER_DNS_QUERY=myapp.internal CLUSTER_NODE_BASENAME=myapp
+with dns_query when is_binary(dns_query) <- System.get_env("CLUSTER_DNS_QUERY"),
+     node_basename when is_binary(node_basename) <- System.get_env("CLUSTER_NODE_BASENAME") do
   config :libcluster,
     topologies: [
       dns: [
@@ -69,7 +70,7 @@ if dns_query = System.get_env("CLUSTER_DNS_QUERY") do
         config: [
           polling_interval: 5_000,
           query: dns_query,
-          node_basename: System.fetch_env!("CLUSTER_NODE_BASENAME")
+          node_basename: node_basename
         ]
       ]
     ]

@@ -143,8 +143,10 @@ defmodule Lasso.Cluster.Topology do
     # Subscribe to node events - ONLY module that does this
     :net_kernel.monitor_nodes(true, node_type: :visible)
 
-    # Determine self region
-    self_region = Application.get_env(:lasso, :cluster_region) || generate_node_id()
+    # Determine self region (set by runtime.exs, fallback for test env)
+    self_region =
+      Application.get_env(:lasso, :cluster_region) ||
+        "node-" <> (:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower))
 
     # Initial node discovery
     initial_nodes = build_initial_node_map()
@@ -629,8 +631,7 @@ defmodule Lasso.Cluster.Topology do
         discover_region_with_retry(node, retries - 1, min(delay * 2, 2000))
 
       nil ->
-        # No region configured, use hostname portion (after @) as fallback
-        # Must match generate_node_id/0 and BenchmarkStore.extract_region_from_node/0
+        # Remote node has no region configured; extract hostname as fallback
         region =
           node
           |> Atom.to_string()
@@ -740,20 +741,6 @@ defmodule Lasso.Cluster.Topology do
       %{count: 1},
       metadata
     )
-  end
-
-  defp generate_node_id do
-    # Extract hostname portion (after @) for region identification
-    # Must match BenchmarkStore.extract_region_from_node/0 for consistent region filtering
-    node()
-    |> Atom.to_string()
-    |> String.split("@")
-    |> List.last()
-    |> case do
-      nil -> "unknown"
-      "" -> "unknown"
-      region -> region
-    end
   end
 
   defp now do

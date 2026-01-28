@@ -996,7 +996,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
          from: from,
          to: to,
          reason: reason,
-         error: error_info
+         error: error_info,
+         source_region: Lasso.Cluster.Topology.get_self_region(),
+         source_node: node()
        }}
 
     Phoenix.PubSub.broadcast(Lasso.PubSub, "circuit:events:#{profile}:#{chain}", event)

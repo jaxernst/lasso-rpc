@@ -187,13 +187,11 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         {:ok, _status} ->
           # Update entry with new provider, but track old for cleanup
           # We stay registered for old provider until coordinator confirms
-          updated_entry = %{
+          updated_entry =
             entry
-            | primary_provider_id: new_provider_id,
-              status: :active,
-              # Track old provider for deferred cleanup
-              transitioning_from: old_provider_id
-          }
+            |> Map.put(:primary_provider_id, new_provider_id)
+            |> Map.put(:status, :active)
+            |> Map.put(:transitioning_from, old_provider_id)
 
           new_state = %{state | keys: Map.put(state.keys, key, updated_entry)}
 

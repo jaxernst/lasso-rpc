@@ -9,8 +9,18 @@ defmodule Lasso.MixProject do
       start_permanent: Mix.env() == :prod,
       listeners: [Phoenix.CodeReloader],
       elixirc_paths: elixirc_paths(Mix.env()),
+      releases: releases(),
       deps: deps(),
       dialyzer: dialyzer()
+    ]
+  end
+
+  defp releases do
+    [
+      lasso: [
+        include_executables_for: [:unix],
+        applications: [runtime_tools: :permanent]
+      ]
     ]
   end
 

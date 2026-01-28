@@ -319,17 +319,15 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     live_circuit = Map.get(cluster_circuits, {provider_id, selected_region}, %{})
     health_counters = Map.get(cluster_health_counters, {provider_id, selected_region}, %{})
 
-    # For per-region view, use health counters from that region (via health pulse)
-    # Fall back to local connection data if no remote data available
+    # For per-region view, only use cluster data for that region
+    # Default to :closed (healthy) when no data exists - don't fall back to local node state
     %{
       mode: :single,
-      http_state: live_circuit[:http] || Map.get(conn, :http_circuit_state, :closed),
-      ws_state: live_circuit[:ws] || Map.get(conn, :ws_circuit_state, :closed),
-      ws_connected: live_circuit[:ws_connected] || Map.get(conn, :ws_connected, false),
-      consecutive_failures:
-        health_counters[:consecutive_failures] || Map.get(conn, :consecutive_failures, 0),
-      consecutive_successes:
-        health_counters[:consecutive_successes] || Map.get(conn, :consecutive_successes, 0),
+      http_state: live_circuit[:http] || :closed,
+      ws_state: live_circuit[:ws] || :closed,
+      ws_connected: live_circuit[:ws_connected] || false,
+      consecutive_failures: health_counters[:consecutive_failures] || 0,
+      consecutive_successes: health_counters[:consecutive_successes] || 0,
       has_http: Map.get(conn, :url) != nil,
       has_ws: Map.get(conn, :ws_url) != nil
     }
@@ -497,7 +495,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       </div>
       <div
         :if={!@sync_data.block_height || !@sync_data.consensus_height}
-        class="text-sm text-gray-600 py-2"
+        class="text-sm text-gray-600 pt-2 pb-6"
       >
         Block height data unavailable
       </div>

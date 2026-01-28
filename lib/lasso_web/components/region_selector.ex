@@ -53,8 +53,8 @@ defmodule LassoWeb.Components.RegionSelector do
   defp render_tabs(assigns) do
     ~H"""
     <div class="flex items-stretch border-gray-800" id={@id}>
-      <div class="flex-1 min-w-0 overflow-x-auto">
-        <div class="flex flex-nowrap flex-shrink-0">
+      <div class="flex-1 min-w-0 flex items-stretch">
+        <div class="flex flex-nowrap flex-shrink-0 overflow-x-auto">
           <button
             :if={@show_aggregate}
             phx-click={@event}
@@ -98,6 +98,8 @@ defmodule LassoWeb.Components.RegionSelector do
             />
           </button>
         </div>
+
+        <div class="flex-1 border-b border-gray-800"></div>
       </div>
       <div
         :if={@show_count}
