@@ -10,17 +10,15 @@ defmodule Lasso.Cluster.TopologyTest do
     test "counts connected nodes correctly, excluding self" do
       nodes = %{
         :node1 => %{node: :node1, state: :responding, region: "us-east"},
-        :node2 => %{node: :node2, state: :ready, region: "eu-west"},
+        :node2 => %{node: :node2, state: :responding, region: "eu-west"},
         :node3 => %{node: :node3, state: :connected, region: "unknown"}
       }
 
       coverage = compute_coverage(nodes)
 
-      # expected = connected + 1 (self)
       assert coverage.expected == 4
-      # connected = all non-disconnected + 1 (self)
       assert coverage.connected == 4
-      # responding = only :responding/:ready states + 1 (self)
+      # :responding states + 1 (self)
       assert coverage.responding == 3
       assert coverage.unresponsive == []
       assert coverage.disconnected == []
@@ -37,7 +35,7 @@ defmodule Lasso.Cluster.TopologyTest do
 
       # connected = non-disconnected + self = 2 + 1 = 3
       assert coverage.connected == 3
-      # responding = responding/ready + self = 1 + 1 = 2
+      # responding + self = 1 + 1 = 2
       assert coverage.responding == 2
       assert coverage.unresponsive == [:node2]
       assert coverage.disconnected == [:node3]
@@ -136,7 +134,7 @@ defmodule Lasso.Cluster.TopologyTest do
     test "groups nodes by node_id, excluding disconnected" do
       nodes = %{
         :node1 => %{node: :node1, state: :responding, node_id: "us-east"},
-        :node2 => %{node: :node2, state: :ready, node_id: "us-east"},
+        :node2 => %{node: :node2, state: :responding, node_id: "us-east"},
         :node3 => %{node: :node3, state: :connected, node_id: "eu-west"},
         :node4 => %{node: :node4, state: :disconnected, node_id: "ap-south"}
       }
@@ -203,7 +201,7 @@ defmodule Lasso.Cluster.TopologyTest do
         case info.state do
           :disconnected -> {conn, resp, unr, [info.node | disc]}
           :unresponsive -> {conn + 1, resp, [info.node | unr], disc}
-          state when state in [:responding, :ready] -> {conn + 1, resp + 1, unr, disc}
+          :responding -> {conn + 1, resp + 1, unr, disc}
           _ -> {conn + 1, resp, unr, disc}
         end
       end)

@@ -248,7 +248,6 @@ defmodule LassoWeb.Dashboard.EventStream do
     else
       now = now()
 
-      # Emergency cleanup if map grows too large before scheduled cleanup
       seen =
         if map_size(state.seen_request_ids) >= @max_seen_request_ids * 1.5 do
           cleanup_seen_request_ids(state.seen_request_ids, now)
