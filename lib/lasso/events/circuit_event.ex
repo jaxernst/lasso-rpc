@@ -3,6 +3,12 @@ defmodule Lasso.Events.CircuitEvent do
   Typed struct for circuit breaker state change events.
 
   Published to profile-scoped PubSub topics for dashboard updates.
+
+  ## Event Source Fields
+
+  - `source_node` - Erlang node atom (e.g., `:"lasso@iad.internal"`), opaque identifier
+  - `source_node_id` - Human-readable node identity label (e.g., `"iad"`, `"us-east-1"`),
+    set via `LASSO_NODE_ID` env var. Used for state partitioning and dashboard filtering.
   """
 
   @type state :: :closed | :open | :half_open
@@ -11,7 +17,7 @@ defmodule Lasso.Events.CircuitEvent do
           ts: pos_integer(),
           profile: String.t(),
           source_node: node(),
-          source_region: String.t(),
+          source_node_id: String.t(),
           chain: String.t(),
           provider_id: String.t(),
           transport: atom(),
@@ -25,7 +31,7 @@ defmodule Lasso.Events.CircuitEvent do
     :ts,
     :profile,
     :source_node,
-    :source_region,
+    :source_node_id,
     :chain,
     :provider_id,
     :transport,
@@ -44,7 +50,7 @@ defmodule Lasso.Events.CircuitEvent do
       ts: attrs[:ts] || System.system_time(:millisecond),
       profile: attrs[:profile] || "default",
       source_node: node(),
-      source_region: get_source_region(),
+      source_node_id: get_source_node_id(),
       chain: attrs[:chain],
       provider_id: attrs[:provider_id],
       transport: attrs[:transport],
@@ -55,16 +61,8 @@ defmodule Lasso.Events.CircuitEvent do
     }
   end
 
-  defp get_source_region do
-    case Application.get_env(:lasso, :cluster_region) do
-      region when is_binary(region) and region != "" -> region
-      _ -> generate_node_id()
-    end
-  end
-
-  defp generate_node_id do
-    # Use full node name for uniqueness across cluster nodes
-    node() |> Atom.to_string()
+  defp get_source_node_id do
+    Lasso.Cluster.Topology.get_self_node_id()
   end
 
   @doc """

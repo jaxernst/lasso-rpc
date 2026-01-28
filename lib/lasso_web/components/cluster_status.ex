@@ -3,6 +3,7 @@ defmodule LassoWeb.Components.ClusterStatus do
   Components for displaying cluster status and coverage indicators.
   """
   use Phoenix.Component
+  require Logger
 
   @doc """
   Renders a coverage indicator showing how many nodes contributed to the data.
@@ -100,7 +101,14 @@ defmodule LassoWeb.Components.ClusterStatus do
       regions: topology.regions
     }
   catch
-    :exit, _ -> %{enabled: false, coverage: %{connected: 1, responding: 1}, regions: []}
+    :exit, reason ->
+      case reason do
+        {:noproc, _} -> :ok
+        {:timeout, _} -> :ok
+        _ -> Logger.warning("[ClusterStatus] Failed to get topology: #{inspect(reason)}")
+      end
+
+      %{enabled: false, coverage: %{connected: 1, responding: 1}, regions: []}
   end
 
   @doc """
@@ -148,9 +156,18 @@ defmodule LassoWeb.Components.ClusterStatus do
       ]}>
         <span class={["h-2 w-2 rounded-full", status_color(@status)]}></span>
         <span class="text-gray-300">
-          <span class={status_text_color(@status)}><%= @responding %></span>/{@total} Lasso nodes reporting
+          <%= if @total == 1 do %>
+            <%= if @responding == 1 do %>
+              <span class={status_text_color(@status)}>Standalone node</span>
+            <% else %>
+              <span class={status_text_color(@status)}>Standalone node</span>
+              <span class="text-gray-500">· offline</span>
+            <% end %>
+          <% else %>
+            <span class={status_text_color(@status)}><%= @responding %></span>/{@total} cluster nodes reporting
+          <% end %>
         </span>
-        <%= if @responding < @total do %>
+        <%= if @total > 1 and @responding < @total do %>
           <span class="text-amber-400">⚠</span>
         <% end %>
       </div>

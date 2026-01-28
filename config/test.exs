@@ -44,6 +44,7 @@ config :phoenix, :plug_init_mode, :runtime
 
 config :lasso,
   environment: :test,
+  node_id: "test-node",
   backend_config: [
     backend: Lasso.Config.Backend.File,
     config: [

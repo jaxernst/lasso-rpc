@@ -43,17 +43,20 @@ Lasso is designed for geo-distributed deployments where each node operates indep
 ### Key Principles
 
 **Independent Node Operation**
+
 - Each Lasso node runs a complete, isolated supervision tree
 - Routing decisions are based on local latency measurements only
 - No cluster consensus or coordination in the request hot path
 - A single node works standalone without clustering
 
 **Regional Latency Awareness**
+
 - Passive benchmarking reveals which providers are fastest from each region
 - Applications connect to their nearest Lasso node for region-optimized routing
 - Provider performance varies significantly by geography
 
 **Observability-First Clustering**
+
 - Clustering aggregates metrics for dashboards and operational visibility
 - View the cluster as a unified whole or drill into individual regions
 - Identify providers struggling in specific regions
@@ -64,12 +67,13 @@ Lasso is designed for geo-distributed deployments where each node operates indep
 **Single node (default)**: No additional configuration needed.
 
 **Multi-node cluster**:
+
 ```bash
 # Enable clustering with DNS-based node discovery
 export CLUSTER_DNS_QUERY="lasso.internal"
 
-# Identify this node's region for dashboard grouping
-export CLUSTER_REGION="us-east-1"
+# Unique identifier for this node (typically a region name for geo-distributed deployments)
+export LASSO_NODE_ID="us-east-1"
 ```
 
 ---
@@ -237,14 +241,13 @@ All cluster-aware modules subscribe to the `"cluster:topology"` PubSub topic rat
 
 **Node Lifecycle States:**
 
-| State | Description |
-|-------|-------------|
-| `:connected` | Erlang distribution connection established |
-| `:discovering` | Region identification via RPC in progress |
-| `:responding` | Passes health checks, region known |
-| `:ready` | Responding and application fully started |
+| State           | Description                                       |
+| --------------- | ------------------------------------------------- |
+| `:connected`    | Erlang distribution connection established        |
+| `:discovering`  | Region identification via RPC in progress         |
+| `:responding`   | Passes health checks, region known                |
 | `:unresponsive` | Connected but failing health checks (3+ failures) |
-| `:disconnected` | Previously connected, now offline |
+| `:disconnected` | Previously connected, now offline                 |
 
 ### Dashboard Event Streaming
 
@@ -258,6 +261,7 @@ Per-profile GenServer aggregating real-time events for dashboard LiveViews:
 - Broadcasts to LiveView subscribers
 
 **Subscriber Messages:**
+
 - `{:metrics_update, %{metrics: provider_metrics}}`
 - `{:events_batch, %{events: recent_events}}`
 - `{:cluster_update, %{connected: n, responding: n, regions: [...]}}`
@@ -280,13 +284,9 @@ MetricsStore.get_provider_leaderboard("default", "ethereum")
 - **Invalidation**: Automatic on node connect/disconnect
 - **Aggregation**: Weighted averages by call volume across nodes
 
-### Regional Awareness
+### Node Identity
 
-Each node reports its region via `CLUSTER_REGION` environment variable. Metrics are tracked per `{provider_id, region}` enabling:
-
-- Regional latency comparison in dashboard
-- Region-specific circuit breaker state visibility
-- Traffic distribution analysis across regions
+Each node has a unique `LASSO_NODE_ID` (convention: use geographic region names like `"us-east-1"`). State is partitioned by `{provider_id, node_id}` keys for per-node latency comparison, circuit breaker visibility, and traffic analysis.
 
 ---
 
@@ -380,11 +380,13 @@ Lasso tracks blockchain state using HTTP polling as a reliable foundation with o
 **Dual-Strategy Design:**
 
 **HTTP Polling** (Always Running):
+
 - Bounded observation delay (`probe_interval_ms`)
 - Enables optimistic lag calculation with known staleness
 - Resilient to WebSocket failures
 
 **WebSocket Subscription** (Optional):
+
 - Sub-second block notifications when healthy
 - Degrades gracefully to HTTP on failure
 
@@ -408,6 +410,7 @@ Per-provider GenServer managing block height tracking:
 ```
 
 **Operating Modes**:
+
 - `:http_only` - HTTP polling only
 - `:http_with_ws` - HTTP + WebSocket subscription
 
@@ -442,6 +445,7 @@ Derives per-chain block intervals using Exponential Moving Average (EMA) for opt
 ```
 
 **Algorithm**:
+
 1. On height update: calculate `interval = elapsed_ms / blocks_advanced`
 2. If `min <= interval <= max`: update EMA
 3. After 5 samples: prefer dynamic measurement over config
@@ -453,6 +457,7 @@ EMA adapts to variable block production (e.g., Arbitrum's 100ms-5s range) while 
 Compensates for observation delay on fast chains to prevent false lag detection.
 
 **Algorithm**:
+
 ```elixir
 elapsed_ms = now - timestamp
 block_time_ms = Registry.get_block_time_ms(chain) || config.block_time_ms
@@ -462,6 +467,7 @@ optimistic_lag = optimistic_height - consensus_height
 ```
 
 **Example** (Arbitrum - 250ms blocks, 2s poll):
+
 ```
 reported_height: 421,535,503
 consensus_height: 421,535,511
@@ -485,12 +491,13 @@ Per-provider health monitoring independent of BlockSync:
 - Reports to ProviderPool
 
 **Configuration**:
+
 ```yaml
 chains:
   ethereum:
-    block_time_ms: 12000  # Optimistic lag calculation
+    block_time_ms: 12000 # Optimistic lag calculation
     monitoring:
-      probe_interval_ms: 12000  # HTTP polling interval
+      probe_interval_ms: 12000 # HTTP polling interval
       lag_alert_threshold_blocks: 5
 ```
 
@@ -501,12 +508,15 @@ chains:
 ### Available Strategies
 
 **:fastest** (default)
+
 - Lowest latency provider for method (passive benchmarking via BenchmarkStore)
 
 **:latency_weighted**
+
 - Weighted random selection by latency scores
 
 **:round_robin**
+
 - Simple rotation through healthy providers
 
 ### Selection API

@@ -20,7 +20,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     aggregate_cached = assigns[:selected_chain_metrics] || %{}
 
     # Regions come from aggregator's cluster-wide tracking (single source of truth)
-    available_regions = assigns[:available_regions] || []
+    available_node_ids = assigns[:available_node_ids] || []
 
     selected_region = socket.assigns[:chain_metrics_region] || "aggregate"
     chain_events = assigns[:selected_chain_events] || []
@@ -48,8 +48,8 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       |> assign(:chain_connections, chain_connections)
       |> assign(:consensus_height, find_consensus_height(chain_connections))
       |> assign(:chain_events, chain_events)
-      |> assign(:available_regions, available_regions)
-      |> assign(:show_region_tabs, length(available_regions) > 1)
+      |> assign(:available_node_ids, available_node_ids)
+      |> assign(:show_region_tabs, length(available_node_ids) > 1)
       |> assign(:live_provider_metrics, live_provider_metrics)
       |> assign(:aggregate_cached, aggregate_cached)
       |> assign_new(:chain_metrics_region, fn -> "aggregate" end)
@@ -113,7 +113,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       <div :if={@show_region_tabs} class="mt-4">
         <RegionSelector.region_selector
           id="chain-region-selector"
-          regions={@available_regions}
+          regions={@available_node_ids}
           selected={@chain_metrics_region}
           show_aggregate={true}
           target={@myself}
@@ -662,9 +662,9 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   end
 
   defp get_region_decision(events, chain, region) do
-    # For specific region, find most recent decision FROM that region
+    # For specific region, find most recent decision FROM that node
     Enum.find(events, fn e ->
-      e[:chain] == chain and e[:source_region] == region
+      e[:chain] == chain and e[:source_node_id] == region
     end)
   end
 end

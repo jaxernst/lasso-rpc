@@ -307,17 +307,32 @@ defmodule LassoWeb.Dashboard.MetricsStore do
       if entries_with_sufficient_calls == [] do
         total_calls = entries |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
 
+        # Compute actual metrics from available data (even if below threshold)
+        # This ensures consistency between aggregate and per-region views
+        success_rate =
+          if total_calls > 0,
+            do: weighted_average(entries, :success_rate, total_calls),
+            else: 0.0
+
+        avg_latency_ms =
+          if total_calls > 0,
+            do: weighted_average(entries, :avg_latency_ms, total_calls),
+            else: 0.0
+
+        latency_by_node = build_latency_by_node(entries)
+
         %{
           provider_id: provider_id,
           score: 0.0,
           total_calls: total_calls,
-          success_rate: 0.0,
-          avg_latency_ms: 0.0,
+          success_rate: success_rate,
+          avg_latency_ms: avg_latency_ms,
           node_count: length(entries),
-          cold_start: true
+          cold_start: true,
+          latency_by_node: latency_by_node
         }
       else
-        aggregate_provider_entries(provider_id, entries_with_sufficient_calls, length(entries))
+        aggregate_provider_entries(provider_id, entries_with_sufficient_calls, entries)
       end
     end)
     |> Enum.sort_by(& &1.score, :desc)
@@ -327,20 +342,28 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   def aggregate_results(:get_realtime_stats, results) do
     valid_results = Enum.reject(results, &is_nil/1)
 
+    # Use MapSets for O(1) union instead of O(n²) list concatenation
     aggregated =
-      Enum.reduce(valid_results, %{rpc_methods: [], providers: [], total_entries: 0}, fn stats,
-                                                                                         acc ->
-        %{
-          rpc_methods: Enum.uniq(acc.rpc_methods ++ Map.get(stats, :rpc_methods, [])),
-          providers: Enum.uniq(acc.providers ++ Map.get(stats, :providers, [])),
-          total_entries: acc.total_entries + Map.get(stats, :total_entries, 0)
-        }
-      end)
+      Enum.reduce(
+        valid_results,
+        %{rpc_methods: MapSet.new(), providers: MapSet.new(), total_entries: 0},
+        fn stats, acc ->
+          %{
+            rpc_methods:
+              MapSet.union(acc.rpc_methods, MapSet.new(Map.get(stats, :rpc_methods, []))),
+            providers: MapSet.union(acc.providers, MapSet.new(Map.get(stats, :providers, []))),
+            total_entries: acc.total_entries + Map.get(stats, :total_entries, 0)
+          }
+        end
+      )
 
-    Map.merge(aggregated, %{
+    %{
+      rpc_methods: MapSet.to_list(aggregated.rpc_methods),
+      providers: MapSet.to_list(aggregated.providers),
+      total_entries: aggregated.total_entries,
       node_count: length(valid_results),
       last_updated: System.system_time(:millisecond)
-    })
+    }
   end
 
   @doc false
@@ -352,7 +375,20 @@ defmodule LassoWeb.Dashboard.MetricsStore do
         nil
 
       [single] ->
-        Map.put(single, :node_count, 1)
+        stats_by_node = [
+          %{
+            node_id: Map.get(single, :source_node_id) || "unknown",
+            node: Map.get(single, :source_node),
+            avg_duration_ms: Map.get(single, :avg_duration_ms),
+            success_rate: Map.get(single, :success_rate),
+            total_calls: Map.get(single, :total_calls, 0),
+            percentiles: Map.get(single, :percentiles, %{})
+          }
+        ]
+
+        single
+        |> Map.put(:node_count, 1)
+        |> Map.put(:stats_by_node, stats_by_node)
 
       multiple ->
         aggregate_method_performance(multiple)
@@ -365,31 +401,41 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   end
 
   @doc false
-  def aggregate_provider_entries(provider_id, entries, total_node_count) do
-    total_calls = entries |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
+  def aggregate_provider_entries(provider_id, entries_for_aggregates, all_entries) do
+    total_calls =
+      entries_for_aggregates |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
 
-    latency_by_region =
-      entries
-      |> Enum.map(fn entry ->
-        %{
-          region: Map.get(entry, :region) || Map.get(entry, :source_region) || "unknown",
-          node: Map.get(entry, :source_node),
-          p50: Map.get(entry, :p50_latency),
-          p95: Map.get(entry, :p95_latency),
-          p99: Map.get(entry, :p99_latency),
-          avg: Map.get(entry, :avg_latency_ms)
-        }
-      end)
+    latency_by_node = build_latency_by_node(all_entries)
 
     %{
       provider_id: provider_id,
-      score: weighted_average(entries, :score, total_calls),
+      score: weighted_average(entries_for_aggregates, :score, total_calls),
       total_calls: total_calls,
-      success_rate: weighted_average(entries, :success_rate, total_calls),
-      avg_latency_ms: weighted_average(entries, :avg_latency_ms, total_calls),
-      node_count: total_node_count,
-      latency_by_region: latency_by_region
+      success_rate: weighted_average(entries_for_aggregates, :success_rate, total_calls),
+      avg_latency_ms: weighted_average(entries_for_aggregates, :avg_latency_ms, total_calls),
+      node_count: length(all_entries),
+      latency_by_node: latency_by_node
     }
+  end
+
+  defp build_latency_by_node(entries) do
+    entries
+    |> Enum.map(fn entry ->
+      node_id = Map.get(entry, :source_node_id) || "unknown"
+
+      {node_id,
+       %{
+         node_id: node_id,
+         node: Map.get(entry, :source_node),
+         p50: Map.get(entry, :p50_latency),
+         p95: Map.get(entry, :p95_latency),
+         p99: Map.get(entry, :p99_latency),
+         avg: Map.get(entry, :avg_latency_ms),
+         success_rate: Map.get(entry, :success_rate),
+         total_calls: Map.get(entry, :total_calls, 0)
+       }}
+    end)
+    |> Map.new()
   end
 
   @doc false
@@ -414,6 +460,19 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     total_calls = base_results |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
     first = List.first(base_results)
 
+    stats_by_node =
+      results
+      |> Enum.map(fn entry ->
+        %{
+          node_id: Map.get(entry, :source_node_id) || "unknown",
+          node: Map.get(entry, :source_node),
+          avg_duration_ms: Map.get(entry, :avg_duration_ms),
+          success_rate: Map.get(entry, :success_rate),
+          total_calls: Map.get(entry, :total_calls, 0),
+          percentiles: Map.get(entry, :percentiles, %{})
+        }
+      end)
+
     %{
       provider_id: Map.get(first, :provider_id),
       method: Map.get(first, :method),
@@ -422,7 +481,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
       avg_duration_ms: weighted_average(base_results, :avg_duration_ms, total_calls),
       percentiles: Map.get(first, :percentiles, %{}),
       node_count: length(results),
-      percentiles_note: "Percentiles from single node (not averaged)"
+      stats_by_node: stats_by_node
     }
   end
 

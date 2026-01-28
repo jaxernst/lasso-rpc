@@ -3,7 +3,6 @@ defmodule LassoWeb.Dashboard do
   use LassoWeb, :live_view
   require Logger
 
-  alias Lasso.Events.Provider
   alias LassoWeb.Components.ClusterStatus
   alias LassoWeb.Components.DashboardComponents
   alias LassoWeb.Components.DashboardHeader
@@ -106,7 +105,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:cluster_circuit_states, %{})
       |> assign(:cluster_health_counters, %{})
       |> assign(:cluster_block_heights, %{})
-      |> assign(:available_regions, [])
+      |> assign(:available_node_ids, [])
       |> fetch_connections(selected_profile)
 
     {:ok, initial_state}
@@ -144,47 +143,28 @@ defmodule LassoWeb.Dashboard do
     end
   end
 
-  defp subscribe_profile_topics(profile) do
-    alias Lasso.Config.ConfigStore
-
-    chains = ConfigStore.list_chains_for_profile(profile)
-
-    # Only subscribe to topics NOT handled by EventStream
-    # EventStream handles: circuit:events, block_sync (and forwards raw events)
-    # Removed: ws:conn (handlers were no-ops)
-    for chain <- chains do
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{profile}:#{chain}")
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain}")
-    end
+  defp subscribe_profile_topics(_profile) do
+    # All per-chain subscriptions now consolidated in EventStream:
+    # - circuit:events, block_sync, provider_pool:events, health_probe
+    # This reduces per-LiveView subscriptions from O(chains) to O(1)
+    :ok
   end
 
   defp subscribe_global_topics(_profile) do
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "clients:events")
+    # Only config topics remain here - all others consolidated in EventStream:
+    # - sync:updates, block_cache:updates, clients:events -> EventStream
     Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_changes")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "chain_config_updates")
   end
 
   defp unsubscribe_global_topics(_profile) do
-    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "sync:updates")
-    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "block_cache:updates")
-    Phoenix.PubSub.unsubscribe(Lasso.PubSub, "clients:events")
     Phoenix.PubSub.unsubscribe(Lasso.PubSub, "chain_config_changes")
     Phoenix.PubSub.unsubscribe(Lasso.PubSub, "chain_config_updates")
   end
 
-  defp unsubscribe_profile_topics(profile) do
-    alias Lasso.Config.ConfigStore
-
-    chains = ConfigStore.list_chains_for_profile(profile)
-
-    # Only unsubscribe from topics we directly subscribe to
-    # EventStream handles: circuit:events, block_sync
-    for chain <- chains do
-      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "provider_pool:events:#{profile}:#{chain}")
-      Phoenix.PubSub.unsubscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain}")
-    end
+  defp unsubscribe_profile_topics(_profile) do
+    # All per-chain subscriptions now consolidated in EventStream
+    :ok
   end
 
   defp switch_profile(socket, new_profile) do
@@ -226,7 +206,7 @@ defmodule LassoWeb.Dashboard do
     |> assign(:live_provider_metrics, %{})
     |> assign(:cluster_circuit_states, %{})
     |> assign(:cluster_block_heights, %{})
-    |> assign(:available_regions, [])
+    |> assign(:available_node_ids, [])
     |> fetch_connections(new_profile)
     |> push_event("persist_profile", %{profile: new_profile})
   end
@@ -249,13 +229,9 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
+  # Provider health events forwarded from EventStream
   @impl true
-  def handle_info(evt, socket)
-      when is_struct(evt, Provider.Healthy) or
-             is_struct(evt, Provider.Unhealthy) or
-             is_struct(evt, Provider.HealthCheckFailed) or
-             is_struct(evt, Provider.WSConnected) or
-             is_struct(evt, Provider.WSClosed) do
+  def handle_info({:provider_event, evt}, socket) do
     socket =
       MessageHandlers.handle_provider_event(
         evt,
@@ -269,10 +245,12 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Client connection events
+  # Client connection events forwarded from EventStream
   @impl true
-  def handle_info(%{ts: _t, event: ev, chain: chain, transport: transport} = msg, socket)
-      when is_map(msg) do
+  def handle_info(
+        {:client_event, %{ts: _t, event: ev, chain: chain, transport: transport} = msg},
+        socket
+      ) do
     entry = %{
       ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
       ts_ms: System.system_time(:millisecond),
@@ -531,9 +509,9 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Live sync/block height updates from ProviderPool probes
+  # Live sync/block height updates forwarded from EventStream
   @impl true
-  def handle_info(%{chain: _chain, provider_id: pid, block_height: _height}, socket) do
+  def handle_info({:sync_update, %{provider_id: pid}}, socket) do
     socket =
       socket
       |> schedule_connection_refresh()
@@ -542,9 +520,9 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Real-time block updates from BlockCache (WebSocket newHeads)
+  # Real-time block updates forwarded from EventStream
   @impl true
-  def handle_info(%{type: :block_update, provider_id: pid}, socket) do
+  def handle_info({:block_cache_update, %{provider_id: pid}}, socket) do
     socket =
       socket
       |> schedule_connection_refresh()
@@ -661,7 +639,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:cluster_circuit_states, snapshot.circuits)
       |> assign(:cluster_health_counters, snapshot.health_counters)
       |> assign(:cluster_status, cluster)
-      |> assign(:available_regions, cluster.regions || [])
+      |> assign(:available_node_ids, cluster.node_ids || [])
       |> assign(:metrics_coverage, %{responding: cluster.responding, total: cluster.connected})
       |> MessageHandlers.handle_events_snapshot(snapshot.events)
       |> refresh_selected_chain_events()
@@ -682,19 +660,19 @@ defmodule LassoWeb.Dashboard do
   end
 
   def handle_info(
-        {:circuit_update, %{provider_id: provider_id, region: region, circuit: circuit}},
+        {:circuit_update, %{provider_id: provider_id, node_id: node_id, circuit: circuit}},
         socket
       ) do
-    key = {provider_id, region}
+    key = {provider_id, node_id}
     circuits = Map.put(socket.assigns.cluster_circuit_states, key, circuit)
     {:noreply, assign(socket, :cluster_circuit_states, circuits)}
   end
 
   def handle_info(
-        {:health_pulse, %{provider_id: provider_id, region: region, counters: counters}},
+        {:health_pulse, %{provider_id: provider_id, node_id: node_id, counters: counters}},
         socket
       ) do
-    key = {provider_id, region}
+    key = {provider_id, node_id}
     health_counters = Map.put(socket.assigns.cluster_health_counters, key, counters)
     {:noreply, assign(socket, :cluster_health_counters, health_counters)}
   end
@@ -706,7 +684,7 @@ defmodule LassoWeb.Dashboard do
         responding: cluster_state.responding,
         total: cluster_state.connected
       })
-      |> assign(:available_regions, cluster_state.regions)
+      |> assign(:available_node_ids, cluster_state.node_ids)
       |> mark_not_stale()
 
     {:noreply, socket}
@@ -717,16 +695,16 @@ defmodule LassoWeb.Dashboard do
     {:noreply, mark_not_stale(socket)}
   end
 
-  def handle_info({:region_added, %{region: region}}, socket) do
-    regions = [region | socket.assigns.available_regions] |> Enum.uniq()
-    {:noreply, assign(socket, :available_regions, regions)}
+  def handle_info({:node_id_added, %{node_id: node_id}}, socket) do
+    node_ids = [node_id | socket.assigns.available_node_ids] |> Enum.uniq()
+    {:noreply, assign(socket, :available_node_ids, node_ids)}
   end
 
   def handle_info(
-        {:block_update, %{provider_id: provider_id, region: region, height: height, lag: lag}},
+        {:block_update, %{provider_id: provider_id, node_id: node_id, height: height, lag: lag}},
         socket
       ) do
-    key = {provider_id, region}
+    key = {provider_id, node_id}
     heights = Map.put(socket.assigns.cluster_block_heights, key, %{height: height, lag: lag})
     {:noreply, assign(socket, :cluster_block_heights, heights)}
   end
@@ -788,7 +766,7 @@ defmodule LassoWeb.Dashboard do
               cluster_circuit_states={@cluster_circuit_states}
               cluster_health_counters={@cluster_health_counters}
               cluster_block_heights={@cluster_block_heights}
-              available_regions={@available_regions}
+              available_node_ids={@available_node_ids}
             />
           <% "metrics" -> %>
             <.live_component
@@ -801,6 +779,7 @@ defmodule LassoWeb.Dashboard do
               method_metrics={@method_metrics}
               metrics_loading={@metrics_loading}
               metrics_last_updated={@metrics_last_updated}
+              cluster_node_ids={@available_node_ids}
             />
           <% "benchmarks" -> %>
             <DashboardComponents.benchmarks_tab_content />
@@ -864,7 +843,7 @@ defmodule LassoWeb.Dashboard do
   attr(:cluster_circuit_states, :map, default: %{})
   attr(:cluster_health_counters, :map, default: %{})
   attr(:cluster_block_heights, :map, default: %{})
-  attr(:available_regions, :list, default: [])
+  attr(:available_node_ids, :list, default: [])
 
   def dashboard_tab_content(assigns) do
     {center_x, center_y} = TopologyConfig.canvas_center()
@@ -928,7 +907,7 @@ defmodule LassoWeb.Dashboard do
         cluster_circuit_states={@cluster_circuit_states}
         cluster_health_counters={@cluster_health_counters}
         cluster_block_heights={@cluster_block_heights}
-        available_regions={@available_regions}
+        available_node_ids={@available_node_ids}
       />
     </div>
     """
@@ -958,7 +937,7 @@ defmodule LassoWeb.Dashboard do
   attr(:cluster_circuit_states, :map, default: %{})
   attr(:cluster_health_counters, :map, default: %{})
   attr(:cluster_block_heights, :map, default: %{})
-  attr(:available_regions, :list, default: [])
+  attr(:available_node_ids, :list, default: [])
 
   def floating_details_window(assigns) do
     import LassoWeb.Components.FloatingWindow
@@ -1124,7 +1103,7 @@ defmodule LassoWeb.Dashboard do
               cluster_circuit_states={@cluster_circuit_states}
               cluster_health_counters={@cluster_health_counters}
               cluster_block_heights={@cluster_block_heights}
-              available_regions={@available_regions}
+              available_node_ids={@available_node_ids}
             />
           <% @selected_chain -> %>
             <.live_component
@@ -1144,7 +1123,7 @@ defmodule LassoWeb.Dashboard do
               live_provider_metrics={@live_provider_metrics}
               cluster_circuit_states={@cluster_circuit_states}
               cluster_block_heights={@cluster_block_heights}
-              available_regions={@available_regions}
+              available_node_ids={@available_node_ids}
             />
           <% true -> %>
         <% end %>
@@ -1639,10 +1618,9 @@ defmodule LassoWeb.Dashboard do
           p99_latency / p50_latency
         end
 
-      # Get latency_by_region from leaderboard entry (cluster-aggregated data)
-      latency_by_region =
+      latency_by_node =
         if leaderboard_entry do
-          Map.get(leaderboard_entry, :latency_by_region, [])
+          Map.get(leaderboard_entry, :latency_by_node, [])
         else
           []
         end
@@ -1659,7 +1637,7 @@ defmodule LassoWeb.Dashboard do
         consistency_ratio: consistency_ratio,
         score: if(leaderboard_entry, do: leaderboard_entry.score, else: nil),
         method_count: length(method_stats),
-        latency_by_region: latency_by_region
+        latency_by_node: latency_by_node
       }
     end)
     |> Enum.reject(&(&1.total_calls == 0))
@@ -1698,7 +1676,8 @@ defmodule LassoWeb.Dashboard do
                 p95_latency: stats.percentiles.p95,
                 p99_latency: stats.percentiles.p99,
                 success_rate: stats.success_rate,
-                total_calls: stats.total_calls
+                total_calls: stats.total_calls,
+                stats_by_node: Map.get(stats, :stats_by_node, [])
               }
           end
         end)

@@ -175,7 +175,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
         result: Map.get(e, :result, :unknown),
         failovers: Map.get(e, :failover_count, 0),
         source_node: Map.get(e, :source_node),
-        source_region: Map.get(e, :source_region)
+        source_node_id: Map.get(e, :source_node_id)
       }
     end)
   end

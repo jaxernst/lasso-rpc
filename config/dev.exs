@@ -1,11 +1,11 @@
 import Config
 
-# For development, we configure the endpoint to listen on all interfaces
-# PORT env var allows running multiple nodes locally for cluster testing
+# Development endpoint configuration
+# PORT can be overridden at runtime via env var (handled in runtime.exs)
 config :lasso, LassoWeb.Endpoint,
   http: [
     ip: {127, 0, 0, 1},
-    port: String.to_integer(System.get_env("PORT") || "4000"),
+    port: 4000,
     protocol_options: [
       max_connections: 1000,
       idle_timeout: 60_000

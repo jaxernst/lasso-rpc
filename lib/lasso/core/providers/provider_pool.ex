@@ -2189,7 +2189,7 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   defp broadcast_health_pulses(state, results) do
-    region = get_local_region()
+    node_id = get_local_node_id()
     ts = System.system_time(:millisecond)
     topic = "block_sync:#{state.profile}:#{state.chain_name}"
 
@@ -2202,7 +2202,7 @@ defmodule Lasso.RPC.ProviderPool do
                profile: state.profile,
                chain: state.chain_name,
                provider_id: result.provider_id,
-               region: region,
+               node_id: node_id,
                consecutive_failures: failures,
                consecutive_successes: successes,
                ts: ts
@@ -2216,10 +2216,8 @@ defmodule Lasso.RPC.ProviderPool do
     end
   end
 
-  defp get_local_region do
-    Lasso.Cluster.Topology.get_self_region()
-  catch
-    :exit, _ -> Application.get_env(:lasso, :cluster_region) || "unknown"
+  defp get_local_node_id do
+    Lasso.Cluster.Topology.get_self_node_id()
   end
 
   @doc """
