@@ -270,10 +270,10 @@ defmodule Lasso.RPC.ProviderPoolTest do
   end
 
   # Helper to simulate circuit breaker events
-  defp send_cb_event(chain, provider_id, transport, from, to) do
+  defp send_cb_event(chain, provider_id, transport, from, to, profile \\ "default") do
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "circuit:events",
+      "circuit:events:#{profile}:#{chain}",
       {:circuit_breaker_event,
        %{
          chain: chain,

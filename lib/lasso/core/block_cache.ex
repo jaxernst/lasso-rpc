@@ -18,8 +18,8 @@ defmodule Lasso.Core.BlockCache do
       # Get all provider heights for consensus calculation
       heights = BlockCache.get_all_provider_heights("ethereum")
 
-      # Subscribe to real-time updates
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates")
+      # Subscribe to real-time updates for a profile
+      Phoenix.PubSub.subscribe(Lasso.PubSub, BlockCache.pubsub_topic("default"))
 
   ## Data Format
 
@@ -39,7 +39,7 @@ defmodule Lasso.Core.BlockCache do
   require Logger
 
   @table_name :lasso_block_cache
-  @pubsub_topic "block_cache:updates"
+  @pubsub_topic_base "block_cache:updates"
 
   # Data freshness window (15 seconds)
   @freshness_window_ms 15_000
@@ -73,18 +73,18 @@ defmodule Lasso.Core.BlockCache do
   def table_name, do: @table_name
 
   @doc """
-  Get the PubSub topic for subscribing to block updates.
+  Get the PubSub topic for subscribing to block updates for a specific profile.
   """
-  @spec pubsub_topic() :: String.t()
-  def pubsub_topic, do: @pubsub_topic
+  @spec pubsub_topic(String.t()) :: String.t()
+  def pubsub_topic(profile), do: "#{@pubsub_topic_base}:#{profile}"
 
   @doc """
   Store a new block from a provider's newHeads subscription.
-  Broadcasts update via PubSub.
+  Broadcasts update via PubSub to the profile-scoped topic.
   """
-  @spec put_block(chain(), provider_id(), map()) :: :ok
-  def put_block(chain, provider_id, raw_block) do
-    GenServer.cast(__MODULE__, {:put_block, chain, provider_id, raw_block})
+  @spec put_block(String.t(), chain(), provider_id(), map()) :: :ok
+  def put_block(profile, chain, provider_id, raw_block) do
+    GenServer.cast(__MODULE__, {:put_block, profile, chain, provider_id, raw_block})
   end
 
   @doc """
@@ -226,7 +226,7 @@ defmodule Lasso.Core.BlockCache do
   end
 
   @impl true
-  def handle_cast({:put_block, chain, provider_id, raw_block}, state) do
+  def handle_cast({:put_block, profile, chain, provider_id, raw_block}, state) do
     case normalize_block(raw_block, provider_id) do
       {:ok, block} ->
         # Store provider-specific data
@@ -244,8 +244,8 @@ defmodule Lasso.Core.BlockCache do
           :ets.insert(@table_name, {{:latest, chain}, block})
         end
 
-        # Broadcast update
-        Phoenix.PubSub.broadcast(Lasso.PubSub, @pubsub_topic, %{
+        # Broadcast update to profile-scoped topic
+        Phoenix.PubSub.broadcast(Lasso.PubSub, pubsub_topic(profile), %{
           type: :block_update,
           chain: chain,
           provider_id: provider_id,

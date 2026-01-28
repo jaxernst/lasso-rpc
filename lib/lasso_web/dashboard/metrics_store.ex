@@ -181,8 +181,6 @@ defmodule LassoWeb.Dashboard.MetricsStore do
 
     new_refreshing = MapSet.delete(state.refreshing, key)
 
-    Phoenix.PubSub.broadcast(Lasso.PubSub, "metrics_store:refresh", {:cache_refreshed, key})
-
     {:noreply, %{state | cache: new_cache, refreshing: new_refreshing}}
   end
 

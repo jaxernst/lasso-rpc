@@ -539,10 +539,6 @@ defmodule Lasso.RPC.ProviderPool do
     Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{profile}:#{chain_name}")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain_name}")
 
-    # Also subscribe to legacy topics for backward compatibility during migration
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{chain_name}")
-
     # Create ETS table for sync state and lag tracking
     # ETS table is chain-scoped (shared across profiles) since sync data is global
     table =
@@ -904,7 +900,7 @@ defmodule Lasso.RPC.ProviderPool do
         )
 
         # Broadcast sync update for dashboard live updates
-        Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates", %{
+        Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates:#{state.profile}", %{
           chain: state.chain_name,
           provider_id: provider_id,
           block_height: block_height,
@@ -1284,7 +1280,7 @@ defmodule Lasso.RPC.ProviderPool do
         lag = height - consensus_height
         :ets.insert(state.table, {{:provider_lag, state.chain_name, provider_id}, lag})
 
-        Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates", %{
+        Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates:#{state.profile}", %{
           chain: state.chain_name,
           provider_id: provider_id,
           block_height: height,
@@ -2132,7 +2128,7 @@ defmodule Lasso.RPC.ProviderPool do
             )
 
             # Broadcast sync update for dashboard live updates
-            Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates", %{
+            Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates:#{state.profile}", %{
               chain: state.chain_name,
               provider_id: result.provider_id,
               block_height: result.block_height,
