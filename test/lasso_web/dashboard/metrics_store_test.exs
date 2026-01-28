@@ -427,7 +427,7 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
       assert result.success_rate == 90.0
     end
 
-    test "builds latency_by_region from all entries" do
+    test "builds latency_by_node from all entries" do
       entries_for_aggregates = [
         %{
           provider_id: "p1",
@@ -435,7 +435,7 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
           score: 90.0,
           success_rate: 95.0,
           avg_latency_ms: 50.0,
-          region: "us-east",
+          source_node_id: "us-east",
           source_node: :node1,
           p50_latency: 45,
           p95_latency: 80,
@@ -447,7 +447,7 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
         %{
           provider_id: "p1",
           total_calls: 100,
-          region: "us-east",
+          source_node_id: "us-east",
           source_node: :node1,
           p50_latency: 45,
           p95_latency: 80,
@@ -458,7 +458,7 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
         %{
           provider_id: "p1",
           total_calls: 5,
-          region: "eu-west",
+          source_node_id: "eu-west",
           source_node: :node2,
           p50_latency: 100,
           p95_latency: 150,
@@ -470,10 +470,10 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
 
       result = aggregate_provider_entries("p1", entries_for_aggregates, all_entries)
 
-      assert Map.has_key?(result.latency_by_region, "us-east")
-      assert Map.has_key?(result.latency_by_region, "eu-west")
-      assert result.latency_by_region["us-east"].p50 == 45
-      assert result.latency_by_region["eu-west"].p50 == 100
+      assert Map.has_key?(result.latency_by_node, "us-east")
+      assert Map.has_key?(result.latency_by_node, "eu-west")
+      assert result.latency_by_node["us-east"].p50 == 45
+      assert result.latency_by_node["eu-west"].p50 == 100
     end
   end
 
@@ -542,7 +542,7 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
     total_calls =
       entries_for_aggregates |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
 
-    latency_by_region = build_latency_by_region(all_entries)
+    latency_by_node = build_latency_by_node(all_entries)
 
     %{
       provider_id: provider_id,
@@ -551,18 +551,18 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
       success_rate: weighted_average(entries_for_aggregates, :success_rate, total_calls),
       avg_latency_ms: weighted_average(entries_for_aggregates, :avg_latency_ms, total_calls),
       node_count: length(all_entries),
-      latency_by_region: latency_by_region
+      latency_by_node: latency_by_node
     }
   end
 
-  defp build_latency_by_region(entries) do
+  defp build_latency_by_node(entries) do
     entries
     |> Enum.map(fn entry ->
-      region = Map.get(entry, :region) || Map.get(entry, :source_region) || "unknown"
+      node_id = Map.get(entry, :source_node_id) || "unknown"
 
-      {region,
+      {node_id,
        %{
-         region: region,
+         node_id: node_id,
          node: Map.get(entry, :source_node),
          p50: Map.get(entry, :p50_latency),
          p95: Map.get(entry, :p95_latency),

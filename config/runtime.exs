@@ -49,14 +49,16 @@ if port = System.get_env("PORT") do
   config :lasso, LassoWeb.Endpoint, http: [port: String.to_integer(port)]
 end
 
-# Cluster region identification
-# Used for dashboard region views and metrics aggregation
-# If not set, generates a stable random ID for this node instance
-cluster_region =
-  System.get_env("CLUSTER_REGION") ||
+# Node identity label
+# Unique identifier for this node instance, used for state partitioning (circuit breakers,
+# metrics) via {provider_id, node_id} keys. Each node in a cluster MUST have a distinct value.
+# Convention: use geographic region names (e.g., "us-east-1", "iad") when deploying one node
+# per region, but any unique string works.
+node_id =
+  System.get_env("LASSO_NODE_ID") ||
     "node-" <> (:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower))
 
-config :lasso, :cluster_region, cluster_region
+config :lasso, :node_id, node_id
 
 # Clustering configuration (optional)
 # Requires both CLUSTER_DNS_QUERY and CLUSTER_NODE_BASENAME to be set
@@ -99,9 +101,4 @@ if config_env() == :prod do
     # URL config is for external access - use HTTPS and standard port (443 is omitted from URLs)
     url: [host: host, scheme: scheme],
     secret_key_base: secret_key_base
-
-  # Optional: surface Fly region to the app for tagging
-  if System.get_env("FLY_REGION") do
-    config :lasso, :region, System.get_env("FLY_REGION")
-  end
 end

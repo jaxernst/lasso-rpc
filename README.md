@@ -131,20 +131,21 @@ For geo-distributed deployments with aggregated observability:
 
 ```bash
 # Node 1 (us-east)
-export CLUSTER_REGION=us-east
+export LASSO_NODE_ID=us-east
 export CLUSTER_DNS_QUERY="lasso.internal"
 mix phx.server
 
 # Node 2 (eu-west)
-export CLUSTER_REGION=eu-west
+export LASSO_NODE_ID=eu-west
 export CLUSTER_DNS_QUERY="lasso.internal"
 mix phx.server
 ```
 
 This enables:
+
 - Nodes discover each other via DNS
-- Dashboard aggregates metrics across all regions
-- Drill down by region to compare provider performance
+- Dashboard aggregates metrics across all lasso nodes (multi-region)
+- Drill down by node/region to compare provider performance
 - Each node makes independent routing decisions based on local latency
 
 **Note:** Clustering is optional. A single node works great standalone.

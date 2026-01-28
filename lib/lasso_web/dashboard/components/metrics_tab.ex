@@ -18,26 +18,26 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         {:error, _} -> %{chain_id: "Unknown"}
       end
 
-    # Prefer cluster regions from topology (authoritative), fall back to extracting from metrics
-    cluster_regions = assigns[:cluster_regions] || []
-    metrics_regions = extract_available_regions(assigns.provider_metrics)
+    # Prefer cluster node IDs from topology (authoritative), fall back to extracting from metrics
+    cluster_node_ids = assigns[:cluster_node_ids] || []
+    metrics_node_ids = extract_available_node_ids(assigns.provider_metrics)
 
-    # Merge both sources: cluster regions are authoritative, but include any additional from metrics
-    available_regions =
-      (cluster_regions ++ metrics_regions)
+    # Merge both sources: cluster node IDs are authoritative, but include any additional from metrics
+    available_node_ids =
+      (cluster_node_ids ++ metrics_node_ids)
       |> Enum.uniq()
       |> Enum.reject(&(&1 in [nil, "unknown"]))
       |> Enum.sort()
 
-    # Only show region tabs when there are multiple nodes (single node = no point in tabs)
-    show_region_tabs = length(available_regions) > 1
+    # Only show node tabs when there are multiple nodes (single node = no point in tabs)
+    show_node_tabs = length(available_node_ids) > 1
 
-    # Preserve selected_region if already set and still valid, otherwise default to "all"
-    current_region = socket.assigns[:selected_region] || "all"
+    # Preserve selected_node_id if already set and still valid, otherwise default to "all"
+    current_node_id = socket.assigns[:selected_node_id] || "all"
 
-    selected_region =
-      if current_region == "all" or current_region in available_regions do
-        current_region
+    selected_node_id =
+      if current_node_id == "all" or current_node_id in available_node_ids do
+        current_node_id
       else
         "all"
       end
@@ -46,19 +46,19 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       socket
       |> assign(assigns)
       |> assign(:chain_config, chain_config)
-      |> assign(:available_regions, available_regions)
-      |> assign(:selected_region, selected_region)
-      |> assign(:show_region_tabs, show_region_tabs)
+      |> assign(:available_node_ids, available_node_ids)
+      |> assign(:selected_node_id, selected_node_id)
+      |> assign(:show_node_tabs, show_node_tabs)
 
     {:ok, socket}
   end
 
-  defp extract_available_regions(provider_metrics) when is_list(provider_metrics) do
+  defp extract_available_node_ids(provider_metrics) when is_list(provider_metrics) do
     provider_metrics
     |> Enum.flat_map(fn provider ->
-      case Map.get(provider, :latency_by_region) do
-        regions when is_map(regions) ->
-          Map.keys(regions)
+      case Map.get(provider, :latency_by_node) do
+        nodes when is_map(nodes) ->
+          Map.keys(nodes)
 
         _ ->
           []
@@ -69,17 +69,17 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     |> Enum.sort()
   end
 
-  defp extract_available_regions(_), do: []
+  defp extract_available_node_ids(_), do: []
 
   @impl true
   def handle_event("select_metrics_chain", %{"chain" => chain}, socket) do
     send(self(), {:metrics_chain_selected, chain})
-    {:noreply, assign(socket, :selected_region, "all")}
+    {:noreply, assign(socket, :selected_node_id, "all")}
   end
 
   @impl true
-  def handle_event("select_region", %{"region" => region}, socket) do
-    {:noreply, assign(socket, :selected_region, region)}
+  def handle_event("select_node_id", %{"node-id" => node_id}, socket) do
+    {:noreply, assign(socket, :selected_node_id, node_id)}
   end
 
   @impl true
@@ -87,7 +87,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     ~H"""
     <div class="h-full overflow-y-auto">
       <div class="mx-auto max-w-7xl px-4 py-6">
-        <div class={["flex gap-2", if(@show_region_tabs, do: "mb-4", else: "mb-6")]}>
+        <div class={["flex gap-2", if(@show_node_tabs, do: "mb-4", else: "mb-6")]}>
           <.chain_selector_button
             :for={chain <- @available_chains}
             chain={chain}
@@ -97,10 +97,10 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
           />
         </div>
 
-        <.region_view_tabs
-          :if={@show_region_tabs}
-          available_regions={@available_regions}
-          selected_region={@selected_region}
+        <.node_view_tabs
+          :if={@show_node_tabs}
+          available_node_ids={@available_node_ids}
+          selected_node_id={@selected_node_id}
           myself={@myself}
         />
 
@@ -110,14 +110,14 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
           <.provider_performance_table
             provider_metrics={@provider_metrics}
             metrics_last_updated={@metrics_last_updated}
-            available_regions={@available_regions}
-            selected_region={@selected_region}
-            show_region_filter={false}
+            available_node_ids={@available_node_ids}
+            selected_node_id={@selected_node_id}
+            show_node_filter={false}
             myself={@myself}
           />
           <.method_performance_breakdown
             method_metrics={@method_metrics}
-            selected_region={@selected_region}
+            selected_node_id={@selected_node_id}
           />
         </div>
       </div>
@@ -125,46 +125,46 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
-  attr(:available_regions, :list, required: true)
-  attr(:selected_region, :string, required: true)
+  attr(:available_node_ids, :list, required: true)
+  attr(:selected_node_id, :string, required: true)
   attr(:myself, :any, required: true)
 
-  defp region_view_tabs(assigns) do
+  defp node_view_tabs(assigns) do
     ~H"""
     <div class="flex items-center gap-1 mb-8 text-sm">
       <span class="text-xs text-gray-500 uppercase tracking-wide mr-2">Viewing</span>
       <button
-        phx-click="select_region"
+        phx-click="select_node_id"
         phx-value-region="all"
         phx-target={@myself}
         class={[
           "px-3 py-1 border rounded-full transition-all",
-          if(@selected_region == "all",
+          if(@selected_node_id == "all",
             do: "border-gray-700 border bg-gray-800/50 text-white",
             else: "border-gray-700/0 text-gray-400 hover:text-gray-300"
           )
         ]}
       >
         all nodes
-        <span :if={length(@available_regions) > 0} class="text-gray-500">
-          ({length(@available_regions)})
+        <span :if={length(@available_node_ids) > 0} class="text-gray-500">
+          ({length(@available_node_ids)})
         </span>
       </button>
 
       <button
-        :for={region <- @available_regions}
-        phx-click="select_region"
-        phx-value-region={region}
+        :for={nid <- @available_node_ids}
+        phx-click="select_node_id"
+        phx-value-node-id={nid}
         phx-target={@myself}
         class={[
           "px-3 py-1 border rounded-full transition-all",
-          if(@selected_region == region,
+          if(@selected_node_id == nid,
             do: "border-gray-700 border bg-gray-800/50 text-white",
             else: "border-gray-700/0 text-gray-400 hover:text-gray-300"
           )
         ]}
       >
-        {region}
+        {nid}
       </button>
     </div>
     """
@@ -210,13 +210,13 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
 
   attr(:provider_metrics, :list, required: true)
   attr(:metrics_last_updated, :any, default: nil)
-  attr(:available_regions, :list, default: [])
-  attr(:selected_region, :string, default: "all")
-  attr(:show_region_filter, :boolean, default: true)
+  attr(:available_node_ids, :list, default: [])
+  attr(:selected_node_id, :string, default: "all")
+  attr(:show_node_filter, :boolean, default: true)
   attr(:myself, :any, required: true)
 
   defp provider_performance_table(assigns) do
-    filtered_metrics = filter_metrics_by_region(assigns.provider_metrics, assigns.selected_region)
+    filtered_metrics = filter_metrics_by_node_id(assigns.provider_metrics, assigns.selected_node_id)
     assigns = assign(assigns, :filtered_metrics, filtered_metrics)
 
     ~H"""
@@ -236,18 +236,18 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         </div>
       </div>
 
-      <.region_filter_pills
-        :if={@show_region_filter and @available_regions != []}
-        available_regions={@available_regions}
-        selected_region={@selected_region}
+      <.node_filter_pills
+        :if={@show_node_filter and @available_node_ids != []}
+        available_node_ids={@available_node_ids}
+        selected_node_id={@selected_node_id}
         myself={@myself}
       />
 
       <DetailPanelComponents.empty_state :if={@filtered_metrics == []}>
         <p class="text-sm font-medium text-gray-400 mb-1">No metrics available</p>
         <p class="text-xs text-gray-600">
-          <%= if @selected_region != "all" do %>
-            No provider metrics for node <span class="font-mono">{@selected_region}</span>. Try selecting "all nodes" or a different node.
+          <%= if @selected_node_id != "all" do %>
+            No provider metrics for node <span class="font-mono">{@selected_node_id}</span>. Try selecting "all nodes" or a different node.
           <% else %>
             No provider metrics recorded in the last 24 hours. Metrics will appear as requests flow through your RPC endpoints.
           <% end %>
@@ -288,67 +288,64 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
-  attr(:available_regions, :list, required: true)
-  attr(:selected_region, :string, required: true)
+  attr(:available_node_ids, :list, required: true)
+  attr(:selected_node_id, :string, required: true)
   attr(:myself, :any, required: true)
 
-  defp region_filter_pills(assigns) do
+  defp node_filter_pills(assigns) do
     ~H"""
     <div class="flex flex-wrap gap-2 mb-4">
       <button
-        phx-click="select_region"
-        phx-value-region="all"
+        phx-click="select_node_id"
+        phx-value-node-id="all"
         phx-target={@myself}
         class={[
           "px-3 py-1.5 rounded-full text-sm font-medium transition-all",
-          if(@selected_region == "all",
+          if(@selected_node_id == "all",
             do: "bg-sky-500/20 text-sky-300 border border-sky-500/50",
             else: "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/30"
           )
         ]}
       >
-        All Regions
+        All Nodes
       </button>
       <button
-        :for={region <- @available_regions}
-        phx-click="select_region"
-        phx-value-region={region}
+        :for={nid <- @available_node_ids}
+        phx-click="select_node_id"
+        phx-value-node-id={nid}
         phx-target={@myself}
         class={[
           "px-3 py-1.5 rounded-full text-sm font-medium transition-all",
-          if(@selected_region == region,
+          if(@selected_node_id == nid,
             do: "bg-sky-500/20 text-sky-300 border border-sky-500/50",
             else: "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/30"
           )
         ]}
       >
-        {region}
+        {nid}
       </button>
     </div>
     """
   end
 
-  defp filter_metrics_by_region(provider_metrics, "all"), do: provider_metrics
+  defp filter_metrics_by_node_id(provider_metrics, "all"), do: provider_metrics
 
-  defp filter_metrics_by_region(provider_metrics, region) do
-    # Filter to only providers with complete per-region data
-    # Returns empty list if no per-region data exists (shows empty state)
+  defp filter_metrics_by_node_id(provider_metrics, node_id) do
     provider_metrics
     |> Enum.map(fn provider ->
-      case Map.get(provider, :latency_by_region) do
-        regions when is_map(regions) and map_size(regions) > 0 ->
-          # O(1) lookup instead of O(n) Enum.find
-          region_data = Map.get(regions, region)
+      case Map.get(provider, :latency_by_node) do
+        nodes when is_map(nodes) and map_size(nodes) > 0 ->
+          node_data = Map.get(nodes, node_id)
 
-          if region_data && region_data[:avg] do
+          if node_data && node_data[:avg] do
             provider
-            |> Map.put(:avg_latency, region_data[:avg])
-            |> Map.put(:p50_latency, region_data[:p50])
-            |> Map.put(:p95_latency, region_data[:p95])
-            |> Map.put(:p99_latency, region_data[:p99])
-            |> Map.put(:success_rate, region_data[:success_rate])
-            |> Map.put(:total_calls, region_data[:total_calls])
-            |> Map.put(:region_filtered, true)
+            |> Map.put(:avg_latency, node_data[:avg])
+            |> Map.put(:p50_latency, node_data[:p50])
+            |> Map.put(:p95_latency, node_data[:p95])
+            |> Map.put(:p99_latency, node_data[:p99])
+            |> Map.put(:success_rate, node_data[:success_rate])
+            |> Map.put(:total_calls, node_data[:total_calls])
+            |> Map.put(:node_filtered, true)
             |> update_consistency_ratio()
           else
             nil
@@ -455,11 +452,11 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
   defp success_color(_), do: "text-red-400"
 
   attr(:method_metrics, :list, required: true)
-  attr(:selected_region, :string, default: "all")
+  attr(:selected_node_id, :string, default: "all")
 
   defp method_performance_breakdown(assigns) do
     filtered_metrics =
-      filter_method_metrics_by_region(assigns.method_metrics, assigns.selected_region)
+      filter_method_metrics_by_node_id(assigns.method_metrics, assigns.selected_node_id)
 
     assigns = assign(assigns, :filtered_metrics, filtered_metrics)
 
@@ -472,7 +469,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       <DetailPanelComponents.empty_state :if={@filtered_metrics == []}>
         <p class="text-sm font-medium text-gray-400 mb-1">No method metrics available</p>
         <p class="text-xs text-gray-600">
-          <%= if @selected_region != "all" do %>
+          <%= if @selected_node_id != "all" do %>
             No method metrics for this node. Try selecting "all nodes" to see aggregate data.
           <% else %>
             No method performance data recorded in the last 24 hours. Method breakdowns will appear as RPC calls are made.
@@ -487,29 +484,26 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
-  defp filter_method_metrics_by_region(method_metrics, "all"), do: method_metrics
+  defp filter_method_metrics_by_node_id(method_metrics, "all"), do: method_metrics
 
-  defp filter_method_metrics_by_region(method_metrics, region) do
-    # Filter to only methods/providers with per-region data
-    # Returns empty list if no per-region data exists (shows empty state)
+  defp filter_method_metrics_by_node_id(method_metrics, node_id) do
     method_metrics
     |> Enum.map(fn method_data ->
       filtered_providers =
         method_data.providers
         |> Enum.map(fn provider ->
-          case Map.get(provider, :stats_by_region) do
+          case Map.get(provider, :stats_by_node) do
             stats when is_list(stats) and stats != [] ->
-              region_stats = Enum.find(stats, fn s -> s.region == region end)
+              node_stats = Enum.find(stats, fn s -> s.node_id == node_id end)
 
-              # Only include if we have meaningful per-region data
-              if region_stats && region_stats.avg_duration_ms do
+              if node_stats && node_stats.avg_duration_ms do
                 provider
-                |> Map.put(:avg_latency, region_stats.avg_duration_ms)
-                |> Map.put(:success_rate, region_stats.success_rate)
-                |> Map.put(:total_calls, region_stats.total_calls)
-                |> Map.put(:p50_latency, get_in(region_stats, [:percentiles, :p50]))
-                |> Map.put(:p95_latency, get_in(region_stats, [:percentiles, :p95]))
-                |> Map.put(:p99_latency, get_in(region_stats, [:percentiles, :p99]))
+                |> Map.put(:avg_latency, node_stats.avg_duration_ms)
+                |> Map.put(:success_rate, node_stats.success_rate)
+                |> Map.put(:total_calls, node_stats.total_calls)
+                |> Map.put(:p50_latency, get_in(node_stats, [:percentiles, :p50]))
+                |> Map.put(:p95_latency, get_in(node_stats, [:percentiles, :p95]))
+                |> Map.put(:p99_latency, get_in(node_stats, [:percentiles, :p99]))
               else
                 nil
               end

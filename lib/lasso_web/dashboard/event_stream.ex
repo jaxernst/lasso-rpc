@@ -279,15 +279,15 @@ defmodule LassoWeb.Dashboard.EventStream do
         {:block_height_update, {profile, provider_id}, height, source, timestamp} = raw_event,
         state
       ) do
-    region = get_region_for_source(source, state)
+    node_id = get_node_id_for_source(source, state)
 
     chain =
       find_chain_for_provider(state, provider_id) ||
         find_chain_from_config(profile, provider_id)
 
     if chain do
-      state = update_block_height(state, provider_id, chain, region, height, source, timestamp)
-      broadcast_block_update(state, provider_id, region, height, chain)
+      state = update_block_height(state, provider_id, chain, node_id, height, source, timestamp)
+      broadcast_block_update(state, provider_id, node_id, height, chain)
       broadcast_to_subscribers(state, raw_event)
       {:noreply, state}
     else
@@ -295,8 +295,8 @@ defmodule LassoWeb.Dashboard.EventStream do
     end
   end
 
-  def handle_info({:provider_health_pulse, %{provider_id: pid, region: region} = data}, state) do
-    key = {pid, region}
+  def handle_info({:provider_health_pulse, %{provider_id: pid, node_id: node_id} = data}, state) do
+    key = {pid, node_id}
 
     health_data = %{
       consecutive_failures: data.consecutive_failures,
@@ -308,7 +308,7 @@ defmodule LassoWeb.Dashboard.EventStream do
 
     broadcast_to_subscribers(
       state,
-      {:health_pulse, %{provider_id: pid, region: region, counters: health_data}}
+      {:health_pulse, %{provider_id: pid, node_id: node_id, counters: health_data}}
     )
 
     {:noreply, %{state | health_counters: health_counters}}
@@ -316,12 +316,12 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   # Topology events - health update
   def handle_info({:topology_event, %{event: :health_update, coverage: coverage}}, state) do
-    regions = fetch_regions()
+    node_ids = fetch_node_ids()
 
     cluster_state = %{
       connected: coverage.connected,
       responding: coverage.responding,
-      regions: regions,
+      node_ids: node_ids,
       last_update: now()
     }
 
@@ -343,12 +343,12 @@ defmodule LassoWeb.Dashboard.EventStream do
     {:noreply, %{state | cluster_state: cluster_state}}
   end
 
-  # Topology events - region discovered
-  def handle_info({:topology_event, %{event: :region_discovered, node_info: node_info}}, state) do
-    regions = [node_info.region | state.cluster_state.regions] |> Enum.uniq()
-    cluster_state = %{state.cluster_state | regions: regions}
+  # Topology events - node ID discovered
+  def handle_info({:topology_event, %{event: :node_id_discovered, node_info: node_info}}, state) do
+    node_ids = [node_info.node_id | state.cluster_state.node_ids] |> Enum.uniq()
+    cluster_state = %{state.cluster_state | node_ids: node_ids}
 
-    broadcast_to_subscribers(state, {:region_added, %{region: node_info.region}})
+    broadcast_to_subscribers(state, {:node_id_added, %{node_id: node_info.node_id}})
     {:noreply, %{state | cluster_state: cluster_state}}
   end
 
@@ -470,7 +470,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   defp add_event_to_window(event, state) do
-    key = {event.provider_id, event.chain, event.source_region}
+    key = {event.provider_id, event.chain, event.source_node_id}
     window = Map.get(state.event_windows, key, [])
     new_window = [event | window] |> Enum.take(@max_events_per_key)
     %{state | event_windows: Map.put(state.event_windows, key, new_window)}
@@ -611,7 +611,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp compute_provider_metrics(provider_id, all_events, _windows, chain_totals, state) do
     chain = all_events |> List.first() |> then(&(&1 && &1.chain))
 
-    events_by_region = Enum.group_by(all_events, & &1.source_region)
+    events_by_region = Enum.group_by(all_events, & &1.source_node_id)
 
     by_region =
       events_by_region
@@ -800,12 +800,12 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp update_circuit_state(state, event_data) do
     %{provider_id: provider_id, transport: transport, to: to_state} = event_data
 
-    region =
-      Map.get(event_data, :source_region) ||
-        state.cluster_state.regions |> List.first() ||
-        get_self_region()
+    node_id =
+      Map.get(event_data, :source_node_id) ||
+        state.cluster_state.node_ids |> List.first() ||
+        get_self_node_id()
 
-    key = {provider_id, region}
+    key = {provider_id, node_id}
     current = Map.get(state.circuit_states, key, %{http: :closed, ws: :closed, updated_at: 0})
 
     updated =
@@ -818,8 +818,8 @@ defmodule LassoWeb.Dashboard.EventStream do
     %{state | circuit_states: Map.put(state.circuit_states, key, updated)}
   end
 
-  defp get_circuit_state(state, provider_id, region) do
-    Map.get(state.circuit_states, {provider_id, region}, %{http: :closed, ws: :closed})
+  defp get_circuit_state(state, provider_id, node_id) do
+    Map.get(state.circuit_states, {provider_id, node_id}, %{http: :closed, ws: :closed})
   end
 
   # Broadcasting
@@ -844,25 +844,25 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp broadcast_circuit_update(state, event_data) do
     %{provider_id: provider_id} = event_data
 
-    region =
-      Map.get(event_data, :source_region) ||
-        state.cluster_state.regions |> List.first() ||
-        get_self_region()
+    node_id =
+      Map.get(event_data, :source_node_id) ||
+        state.cluster_state.node_ids |> List.first() ||
+        get_self_node_id()
 
-    circuit = get_circuit_state(state, provider_id, region)
+    circuit = get_circuit_state(state, provider_id, node_id)
 
     broadcast_to_subscribers(
       state,
-      {:circuit_update, %{provider_id: provider_id, region: region, circuit: circuit}}
+      {:circuit_update, %{provider_id: provider_id, node_id: node_id, circuit: circuit}}
     )
   end
 
-  defp broadcast_block_update(state, provider_id, region, height, chain) do
-    lag = get_block_lag(state, provider_id, chain, region)
+  defp broadcast_block_update(state, provider_id, node_id, height, chain) do
+    lag = get_block_lag(state, provider_id, chain, node_id)
 
     broadcast_to_subscribers(
       state,
-      {:block_update, %{provider_id: provider_id, region: region, height: height, lag: lag}}
+      {:block_update, %{provider_id: provider_id, node_id: node_id, height: height, lag: lag}}
     )
   end
 
@@ -907,7 +907,7 @@ defmodule LassoWeb.Dashboard.EventStream do
         %{
           connected: coverage.connected,
           responding: coverage.responding,
-          regions: Topology.get_regions(),
+          node_ids: Topology.get_node_ids(),
           last_update: now()
         }
 
@@ -918,27 +918,27 @@ defmodule LassoWeb.Dashboard.EventStream do
     :exit, _ -> default_cluster_state()
   end
 
-  defp fetch_regions do
-    Topology.get_regions()
+  defp fetch_node_ids do
+    Topology.get_node_ids()
   catch
     :exit, _ -> []
   end
 
-  defp get_self_region do
-    Topology.get_self_region()
+  defp get_self_node_id do
+    Topology.get_self_node_id()
   end
 
-  defp get_region_for_source(source, _state) when is_atom(source) do
+  defp get_node_id_for_source(source, _state) when is_atom(source) do
     case Topology.get_node_info(source) do
-      %{region: region} when is_binary(region) -> region
-      _ -> get_self_region()
+      %{node_id: node_id} when is_binary(node_id) -> node_id
+      _ -> get_self_node_id()
     end
   end
 
-  defp get_region_for_source(_source, _state), do: get_self_region()
+  defp get_node_id_for_source(_source, _state), do: get_self_node_id()
 
   defp default_cluster_state do
-    %{connected: 1, responding: 1, regions: [], last_update: now()}
+    %{connected: 1, responding: 1, node_ids: [], last_update: now()}
   end
 
   defp now do

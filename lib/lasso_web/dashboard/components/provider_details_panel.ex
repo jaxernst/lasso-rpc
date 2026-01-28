@@ -27,7 +27,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     live_metrics = Map.get(live_provider_metrics, provider_id)
 
     # Regions come from aggregator's cluster-wide tracking (single source of truth)
-    available_regions = assigns[:available_regions] || []
+    available_node_ids = assigns[:available_node_ids] || []
 
     # Get circuit states from aggregator
     cluster_circuits = assigns[:cluster_circuit_states] || %{}
@@ -42,8 +42,8 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       socket
       |> assign(assigns)
       |> assign(:provider_connection, provider_connection)
-      |> assign(:available_regions, available_regions)
-      |> assign(:show_region_tabs, length(available_regions) > 1)
+      |> assign(:available_node_ids, available_node_ids)
+      |> assign(:show_region_tabs, length(available_node_ids) > 1)
       |> assign(:live_metrics, live_metrics)
       |> assign(:cluster_circuits, cluster_circuits)
       |> assign(:cluster_health_counters, cluster_health_counters)
@@ -95,7 +95,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
     metrics_data = compute_metrics_data(region_data, cached_fallback)
 
-    available_regions = socket.assigns[:available_regions] || []
+    available_node_ids = socket.assigns[:available_node_ids] || []
 
     circuit_data =
       compute_circuit_data(
@@ -105,7 +105,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         cluster_circuits,
         cluster_health_counters,
         provider_id,
-        available_regions
+        available_node_ids
       )
 
     filtered_events = filter_events_by_region(events, selected_region)
@@ -261,14 +261,14 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          cluster_circuits,
          _cluster_health_counters,
          provider_id,
-         available_regions
+         available_node_ids
        ) do
     conn = provider_connection || %{}
     has_http = Map.get(conn, :url) != nil
     has_ws = Map.get(conn, :ws_url) != nil
 
-    # Use available_regions as the total node count (not just providers with circuit data)
-    total_regions = length(available_regions)
+    # Use available_node_ids as the total node count (not just providers with circuit data)
+    total_regions = length(available_node_ids)
 
     # Collect all circuit states for this provider across all regions
     provider_circuits =
@@ -289,9 +289,9 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       }
     else
       http_counts =
-        count_circuit_states_with_default(provider_circuits, :http, available_regions)
+        count_circuit_states_with_default(provider_circuits, :http, available_node_ids)
 
-      ws_counts = count_circuit_states_with_default(provider_circuits, :ws, available_regions)
+      ws_counts = count_circuit_states_with_default(provider_circuits, :ws, available_node_ids)
 
       %{
         mode: :aggregate,
@@ -313,7 +313,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          cluster_circuits,
          cluster_health_counters,
          provider_id,
-         _available_regions
+         _available_node_ids
        ) do
     conn = provider_connection || %{}
     live_circuit = Map.get(cluster_circuits, {provider_id, selected_region}, %{})
@@ -333,7 +333,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     }
   end
 
-  defp count_circuit_states_with_default(provider_circuits, transport, available_regions) do
+  defp count_circuit_states_with_default(provider_circuits, transport, available_node_ids) do
     # Build a map of region -> circuit state
     circuit_by_region =
       provider_circuits
@@ -341,7 +341,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       |> Enum.into(%{})
 
     # Count states, defaulting missing regions to :closed
-    available_regions
+    available_node_ids
     |> Enum.map(fn region -> Map.get(circuit_by_region, region, :closed) end)
     |> Enum.frequencies()
   end
@@ -371,7 +371,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         <div :if={@show_region_tabs} class="mt-4">
           <RegionSelector.region_selector
             id="provider-region-selector"
-            regions={@available_regions}
+            regions={@available_node_ids}
             selected={@selected_region}
             show_aggregate={true}
             target={@myself}
@@ -1248,7 +1248,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   defp filter_events_by_region(events, region) do
     Enum.filter(events, fn event ->
-      event[:source_region] == region or event[:source_region] == nil
+      event[:source_node_id] == region or event[:source_node_id] == nil
     end)
   end
 end

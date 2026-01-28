@@ -118,56 +118,56 @@ defmodule Lasso.Cluster.TopologyTest do
     end
   end
 
-  describe "region discovery" do
-    test "extracts region from node name when config not available" do
-      # Node format: name@hostname where hostname becomes region fallback
-      region = extract_region_from_node(:"lasso@us-east-1.example.com")
-      assert region == "us-east-1.example.com"
+  describe "node ID discovery" do
+    test "extracts node_id from node name when config not available" do
+      # Node format: name@hostname where hostname becomes node_id fallback
+      node_id = extract_node_id_from_node(:"lasso@us-east-1.example.com")
+      assert node_id == "us-east-1.example.com"
     end
 
     test "returns hostname portion for nodes without @ separator" do
-      # Nodes without @ use the full name as the region identifier
-      region = extract_region_from_node(:simple_name)
-      assert region == "simple_name"
+      # Nodes without @ use the full name as the node_id identifier
+      node_id = extract_node_id_from_node(:simple_name)
+      assert node_id == "simple_name"
     end
   end
 
-  describe "compute_regions/2" do
-    test "groups nodes by region, excluding disconnected" do
+  describe "compute_node_ids/2" do
+    test "groups nodes by node_id, excluding disconnected" do
       nodes = %{
-        :node1 => %{node: :node1, state: :responding, region: "us-east"},
-        :node2 => %{node: :node2, state: :ready, region: "us-east"},
-        :node3 => %{node: :node3, state: :connected, region: "eu-west"},
-        :node4 => %{node: :node4, state: :disconnected, region: "ap-south"}
+        :node1 => %{node: :node1, state: :responding, node_id: "us-east"},
+        :node2 => %{node: :node2, state: :ready, node_id: "us-east"},
+        :node3 => %{node: :node3, state: :connected, node_id: "eu-west"},
+        :node4 => %{node: :node4, state: :disconnected, node_id: "ap-south"}
       }
 
-      regions = compute_regions(nodes, "local")
+      node_ids = compute_node_ids(nodes, "local")
 
       # Should have us-east (2 nodes), eu-west (1 node), and local (self)
-      assert Map.has_key?(regions, "us-east")
-      assert Map.has_key?(regions, "eu-west")
-      assert Map.has_key?(regions, "local")
+      assert Map.has_key?(node_ids, "us-east")
+      assert Map.has_key?(node_ids, "eu-west")
+      assert Map.has_key?(node_ids, "local")
       # ap-south excluded because node4 is disconnected
-      refute Map.has_key?(regions, "ap-south")
+      refute Map.has_key?(node_ids, "ap-south")
 
-      assert length(regions["us-east"]) == 2
-      assert length(regions["eu-west"]) == 1
+      assert length(node_ids["us-east"]) == 2
+      assert length(node_ids["eu-west"]) == 1
     end
 
-    test "includes self region even with no nodes" do
+    test "includes self node_id even with no nodes" do
       nodes = %{}
 
-      regions = compute_regions(nodes, "self-region")
+      node_ids = compute_node_ids(nodes, "self-node-id")
 
-      assert Map.has_key?(regions, "self-region")
-      assert regions["self-region"] == []
+      assert Map.has_key?(node_ids, "self-node-id")
+      assert node_ids["self-node-id"] == []
     end
   end
 
   describe "reconciliation" do
     test "detects nodes present in Node.list but not tracked" do
       tracked_nodes = %{
-        :known_node => %{node: :known_node, state: :responding, region: "us-east"}
+        :known_node => %{node: :known_node, state: :responding, node_id: "us-east"}
       }
 
       actual_nodes = MapSet.new([:known_node, :unknown_node])
@@ -243,7 +243,7 @@ defmodule Lasso.Cluster.TopologyTest do
     %{info | state: new_state, last_response: now, consecutive_failures: 0}
   end
 
-  defp extract_region_from_node(node) do
+  defp extract_node_id_from_node(node) do
     node
     |> Atom.to_string()
     |> String.split("@")
@@ -251,15 +251,15 @@ defmodule Lasso.Cluster.TopologyTest do
     |> case do
       nil -> "unknown"
       "" -> "unknown"
-      r -> r
+      id -> id
     end
   end
 
-  defp compute_regions(nodes, self_region) do
+  defp compute_node_ids(nodes, self_node_id) do
     nodes
     |> Enum.filter(fn {_node, info} -> info.state not in [:disconnected] end)
-    |> Enum.group_by(fn {_node, info} -> info.region end, fn {node, _} -> node end)
-    |> Map.put_new(self_region, [])
+    |> Enum.group_by(fn {_node, info} -> info.node_id end, fn {node, _} -> node end)
+    |> Map.put_new(self_node_id, [])
   end
 
   defp find_reconciliation_diff(tracked_nodes, actual_nodes) do

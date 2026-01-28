@@ -4,8 +4,8 @@ defmodule Lasso.Cluster.Topology do
 
   Tracks node lifecycle through explicit states:
   - **:connected**: Node has established Erlang distribution connection
-  - **:discovering**: Region discovery in progress
-  - **:responding**: Node responds to RPC health checks, region known
+  - **:discovering**: Node ID discovery in progress
+  - **:responding**: Node responds to RPC health checks, node ID known
   - **:ready**: Responding AND application is fully started
   - **:unresponsive**: Connected but failing health checks
   - **:disconnected**: Previously connected, now down
@@ -15,6 +15,12 @@ defmodule Lasso.Cluster.Topology do
 
   This is the ONLY module that subscribes to `:net_kernel.monitor_nodes/1`.
   All other modules receive node events via PubSub from Topology.
+
+  ## Node Identity
+
+  Each cluster node has a unique `node_id` (set via `LASSO_NODE_ID` env var) used for
+  state partitioning. This is distinct from the Erlang node atom. Convention is to use
+  geographic region names when deploying one node per region, but any unique string works.
   """
 
   use GenServer
@@ -26,10 +32,10 @@ defmodule Lasso.Cluster.Topology do
   @tick_interval_ms 500
   @health_check_interval_ms 15_000
   @reconcile_interval_ms 30_000
-  @region_discovery_timeout_ms 2_000
-  @region_discovery_max_retries 5
-  @region_discovery_backoff_base_ms 200
-  @region_rediscovery_interval_ms 60_000
+  @node_id_discovery_timeout_ms 2_000
+  @node_id_discovery_max_retries 5
+  @node_id_discovery_backoff_base_ms 200
+  @node_id_rediscovery_interval_ms 60_000
   @health_check_timeout_ms 5_000
   @disconnected_node_cleanup_ms 24 * 60 * 60 * 1_000
 
@@ -38,7 +44,7 @@ defmodule Lasso.Cluster.Topology do
 
   @type node_info :: %{
           node: node(),
-          region: String.t(),
+          node_id: String.t(),
           state: node_state(),
           connected_at: integer() | nil,
           last_response: integer() | nil,
@@ -54,8 +60,8 @@ defmodule Lasso.Cluster.Topology do
         }
 
   defstruct nodes: %{},
-            regions: %{},
-            self_region: "unknown",
+            node_ids: %{},
+            self_node_id: "unknown",
             health_check_task: nil,
             pending_discoveries: %{},
             discovery_refs: %{},
@@ -63,7 +69,7 @@ defmodule Lasso.Cluster.Topology do
             last_health_check_start: 0,
             last_health_check_complete: 0,
             last_reconcile: 0,
-            last_region_rediscovery: 0
+            last_node_id_rediscovery: 0
 
   # Client API
 
@@ -77,9 +83,9 @@ defmodule Lasso.Cluster.Topology do
   """
   @spec get_topology() :: %{
           nodes: [node_info()],
-          regions: [String.t()],
+          node_ids: [String.t()],
           self_node: node(),
-          self_region: String.t(),
+          self_node_id: String.t(),
           coverage: coverage()
         }
   def get_topology do
@@ -95,11 +101,11 @@ defmodule Lasso.Cluster.Topology do
   end
 
   @doc """
-  Returns list of known regions.
+  Returns list of known node IDs in the cluster.
   """
-  @spec get_regions() :: [String.t()]
-  def get_regions do
-    GenServer.call(__MODULE__, :get_regions)
+  @spec get_node_ids() :: [String.t()]
+  def get_node_ids do
+    GenServer.call(__MODULE__, :get_node_ids)
   end
 
   @doc """
@@ -121,11 +127,11 @@ defmodule Lasso.Cluster.Topology do
   end
 
   @doc """
-  Returns the region for the current node.
+  Returns the node ID for the current node.
   """
-  @spec get_self_region() :: String.t()
-  def get_self_region do
-    GenServer.call(__MODULE__, :get_self_region)
+  @spec get_self_node_id() :: String.t()
+  def get_self_node_id do
+    GenServer.call(__MODULE__, :get_self_node_id)
   end
 
   @doc """
@@ -143,10 +149,7 @@ defmodule Lasso.Cluster.Topology do
     # Subscribe to node events - ONLY module that does this
     :net_kernel.monitor_nodes(true, node_type: :visible)
 
-    # Determine self region (set by runtime.exs, fallback for test env)
-    self_region =
-      Application.get_env(:lasso, :cluster_region) ||
-        "node-" <> (:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower))
+    self_node_id = Application.fetch_env!(:lasso, :node_id)
 
     # Initial node discovery
     initial_nodes = build_initial_node_map()
@@ -158,15 +161,15 @@ defmodule Lasso.Cluster.Topology do
     send(self(), :immediate_health_check)
 
     state = %__MODULE__{
-      self_region: self_region,
+      self_node_id: self_node_id,
       nodes: initial_nodes,
-      regions: compute_regions(initial_nodes, self_region),
+      node_ids: compute_node_ids(initial_nodes, self_node_id),
       last_tick: now(),
       last_health_check_complete: now()
     }
 
     Logger.info(
-      "[Topology] Started with #{map_size(initial_nodes)} nodes, region: #{self_region}"
+      "[Topology] Started with #{map_size(initial_nodes)} nodes, node_id: #{self_node_id}"
     )
 
     {:ok, state}
@@ -181,7 +184,7 @@ defmodule Lasso.Cluster.Topology do
       state
       |> maybe_health_check(now)
       |> maybe_reconcile(now)
-      |> maybe_rediscover_unknown_regions(now)
+      |> maybe_rediscover_unknown_node_ids(now)
       |> cleanup_stale_disconnected_nodes(now)
 
     schedule_tick()
@@ -202,7 +205,7 @@ defmodule Lasso.Cluster.Topology do
 
     node_info = %{
       node: node,
-      region: "unknown",
+      node_id: "unknown",
       state: :discovering,
       connected_at: now(),
       last_response: nil,
@@ -211,8 +214,8 @@ defmodule Lasso.Cluster.Topology do
 
     nodes = Map.put(state.nodes, node, node_info)
 
-    # Start async region discovery
-    task = start_region_discovery(node)
+    # Start async node ID discovery
+    task = start_node_id_discovery(node)
     pending = Map.put(state.pending_discoveries, node, task)
     refs = Map.put(state.discovery_refs, task.ref, node)
 
@@ -243,7 +246,7 @@ defmodule Lasso.Cluster.Topology do
       node_info ->
         updated_info = %{node_info | state: :disconnected}
         nodes = Map.put(state.nodes, node, updated_info)
-        regions = compute_regions(nodes, state.self_region)
+        node_ids = compute_node_ids(nodes, state.self_node_id)
         {pending, refs} = cancel_discovery(state.pending_discoveries, state.discovery_refs, node)
 
         coverage = compute_coverage(nodes)
@@ -261,16 +264,16 @@ defmodule Lasso.Cluster.Topology do
          %{
            state
            | nodes: nodes,
-             regions: regions,
+             node_ids: node_ids,
              pending_discoveries: pending,
              discovery_refs: refs
          }}
     end
   end
 
-  # Region discovery completed successfully
+  # Node ID discovery completed successfully
   @impl true
-  def handle_info({ref, {:region_discovered, node, region}}, state) when is_reference(ref) do
+  def handle_info({ref, {:node_id_discovered, node, node_id}}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
 
     state =
@@ -280,21 +283,21 @@ defmodule Lasso.Cluster.Topology do
 
         node_info ->
           new_state = if node_info.state == :discovering, do: :connected, else: node_info.state
-          updated_info = %{node_info | region: region, state: new_state}
+          updated_info = %{node_info | node_id: node_id, state: new_state}
           nodes = Map.put(state.nodes, node, updated_info)
-          regions = compute_regions(nodes, state.self_region)
+          node_ids = compute_node_ids(nodes, state.self_node_id)
 
           broadcast_topology_event(%{
-            event: :region_discovered,
+            event: :node_id_discovered,
             node: node,
             node_info: updated_info
           })
 
-          emit_telemetry(:region_discovered, %{node: node, region: region})
+          emit_telemetry(:node_id_discovered, %{node: node, node_id: node_id})
 
-          Logger.debug("[Topology] Region discovered for #{node}: #{region}")
+          Logger.debug("[Topology] Node ID discovered for #{node}: #{node_id}")
 
-          %{state | nodes: nodes, regions: regions}
+          %{state | nodes: nodes, node_ids: node_ids}
       end
 
     pending = Map.delete(state.pending_discoveries, node)
@@ -302,14 +305,14 @@ defmodule Lasso.Cluster.Topology do
     {:noreply, %{state | pending_discoveries: pending, discovery_refs: refs}}
   end
 
-  # Region discovery failed
+  # Node ID discovery failed
   @impl true
-  def handle_info({ref, {:region_discovery_failed, node, reason}}, state)
+  def handle_info({ref, {:node_id_discovery_failed, node, reason}}, state)
       when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-    Logger.warning("[Topology] Region discovery failed for #{node}: #{inspect(reason)}")
+    Logger.warning("[Topology] Node ID discovery failed for #{node}: #{inspect(reason)}")
 
-    emit_telemetry(:region_discovery_failed, %{node: node, reason: reason})
+    emit_telemetry(:node_id_discovery_failed, %{node: node, reason: reason})
 
     state =
       case Map.get(state.nodes, node) do
@@ -423,9 +426,9 @@ defmodule Lasso.Cluster.Topology do
   def handle_call(:get_topology, _from, state) do
     result = %{
       nodes: Map.values(state.nodes),
-      regions: Map.keys(state.regions),
+      node_ids: Map.keys(state.node_ids),
       self_node: node(),
-      self_region: state.self_region,
+      self_node_id: state.self_node_id,
       coverage: compute_coverage(state.nodes)
     }
 
@@ -438,8 +441,8 @@ defmodule Lasso.Cluster.Topology do
   end
 
   @impl true
-  def handle_call(:get_regions, _from, state) do
-    {:reply, Map.keys(state.regions), state}
+  def handle_call(:get_node_ids, _from, state) do
+    {:reply, Map.keys(state.node_ids), state}
   end
 
   @impl true
@@ -458,8 +461,8 @@ defmodule Lasso.Cluster.Topology do
   end
 
   @impl true
-  def handle_call(:get_self_region, _from, state) do
-    {:reply, state.self_region, state}
+  def handle_call(:get_self_node_id, _from, state) do
+    {:reply, state.self_node_id, state}
   end
 
   @impl true
@@ -492,28 +495,28 @@ defmodule Lasso.Cluster.Topology do
     end
   end
 
-  defp maybe_rediscover_unknown_regions(state, now) do
-    if now - state.last_region_rediscovery < @region_rediscovery_interval_ms do
+  defp maybe_rediscover_unknown_node_ids(state, now) do
+    if now - state.last_node_id_rediscovery < @node_id_rediscovery_interval_ms do
       state
     else
       unknown_nodes =
         state.nodes
         |> Enum.filter(fn {node, info} ->
-          info.region == "unknown" and
+          info.node_id == "unknown" and
             info.state in [:connected, :responding, :ready] and
             not Map.has_key?(state.pending_discoveries, node)
         end)
         |> Enum.map(fn {node, _} -> node end)
 
-      state = %{state | last_region_rediscovery: now}
+      state = %{state | last_node_id_rediscovery: now}
 
       if unknown_nodes == [] do
         state
       else
-        Logger.debug("[Topology] Retrying region discovery for #{length(unknown_nodes)} nodes")
+        Logger.debug("[Topology] Retrying node ID discovery for #{length(unknown_nodes)} nodes")
 
         Enum.reduce(unknown_nodes, state, fn node, acc ->
-          task = start_region_discovery(node)
+          task = start_node_id_discovery(node)
           pending = Map.put(acc.pending_discoveries, node, task)
           refs = Map.put(acc.discovery_refs, task.ref, node)
           nodes = Map.update!(acc.nodes, node, fn info -> %{info | state: :discovering} end)
@@ -540,20 +543,20 @@ defmodule Lasso.Cluster.Topology do
 
       nodes = Map.drop(state.nodes, stale_nodes)
 
-      regions =
-        Enum.reduce(stale_nodes, state.regions, fn node, acc ->
+      node_ids =
+        Enum.reduce(stale_nodes, state.node_ids, fn node, acc ->
           case Map.get(state.nodes, node) do
-            %{region: region} when region != "unknown" ->
-              Map.update(acc, region, [], &List.delete(&1, node))
+            %{node_id: nid} when nid != "unknown" ->
+              Map.update(acc, nid, [], &List.delete(&1, node))
 
             _ ->
               acc
           end
         end)
-        |> Enum.reject(fn {_region, nodes} -> nodes == [] end)
+        |> Enum.reject(fn {_node_id, nodes} -> nodes == [] end)
         |> Map.new()
 
-      %{state | nodes: nodes, regions: regions}
+      %{state | nodes: nodes, node_ids: node_ids}
     end
   end
 
@@ -600,39 +603,39 @@ defmodule Lasso.Cluster.Topology do
     state
   end
 
-  defp start_region_discovery(node) do
+  defp start_node_id_discovery(node) do
     Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn ->
-      discover_region_with_retry(node, @region_discovery_max_retries)
+      discover_node_id_with_retry(node, @node_id_discovery_max_retries)
     end)
   end
 
-  defp discover_region_with_retry(node, retries, delay \\ @region_discovery_backoff_base_ms)
+  defp discover_node_id_with_retry(node, retries, delay \\ @node_id_discovery_backoff_base_ms)
 
-  defp discover_region_with_retry(node, 0, _delay) do
-    {:region_discovery_failed, node, :max_retries}
+  defp discover_node_id_with_retry(node, 0, _delay) do
+    {:node_id_discovery_failed, node, :max_retries}
   end
 
-  defp discover_region_with_retry(node, retries, delay) do
+  defp discover_node_id_with_retry(node, retries, delay) do
     # Small delay before first attempt (node may not be fully ready)
-    if retries == @region_discovery_max_retries, do: Process.sleep(100)
+    if retries == @node_id_discovery_max_retries, do: Process.sleep(100)
 
     case :rpc.call(
            node,
            Application,
            :get_env,
-           [:lasso, :cluster_region],
-           @region_discovery_timeout_ms
+           [:lasso, :node_id],
+           @node_id_discovery_timeout_ms
          ) do
-      region when is_binary(region) ->
-        {:region_discovered, node, region}
+      node_id when is_binary(node_id) ->
+        {:node_id_discovered, node, node_id}
 
       {:badrpc, _reason} ->
         Process.sleep(delay)
-        discover_region_with_retry(node, retries - 1, min(delay * 2, 2000))
+        discover_node_id_with_retry(node, retries - 1, min(delay * 2, 2000))
 
       nil ->
-        # Remote node has no region configured; extract hostname as fallback
-        region =
+        # Remote node has no node_id configured; extract hostname as fallback
+        node_id =
           node
           |> Atom.to_string()
           |> String.split("@")
@@ -640,10 +643,10 @@ defmodule Lasso.Cluster.Topology do
           |> case do
             nil -> "unknown"
             "" -> "unknown"
-            r -> r
+            id -> id
           end
 
-        {:region_discovered, node, region}
+        {:node_id_discovered, node, node_id}
     end
   end
 
@@ -664,7 +667,7 @@ defmodule Lasso.Cluster.Topology do
       {node,
        %{
          node: node,
-         region: "unknown",
+         node_id: "unknown",
          state: :connected,
          connected_at: now(),
          last_response: nil,
@@ -674,11 +677,11 @@ defmodule Lasso.Cluster.Topology do
     |> Map.new()
   end
 
-  defp compute_regions(nodes, self_region) do
+  defp compute_node_ids(nodes, self_node_id) do
     nodes
     |> Enum.filter(fn {_node, info} -> info.state not in [:disconnected] end)
-    |> Enum.group_by(fn {_node, info} -> info.region end, fn {node, _} -> node end)
-    |> Map.put_new(self_region, [])
+    |> Enum.group_by(fn {_node, info} -> info.node_id end, fn {node, _} -> node end)
+    |> Map.put_new(self_node_id, [])
   end
 
   defp compute_coverage(nodes) do

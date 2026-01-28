@@ -997,7 +997,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
          to: to,
          reason: reason,
          error: error_info,
-         source_region: Lasso.Cluster.Topology.get_self_region(),
+         source_node_id: Lasso.Cluster.Topology.get_self_node_id(),
          source_node: node()
        }}
 

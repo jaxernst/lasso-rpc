@@ -87,7 +87,7 @@ defmodule LassoWeb.Dashboard.EventStreamTest do
             result: :success,
             duration_ms: 100,
             ts: System.system_time(:millisecond),
-            source_region: "us-east"
+            source_node_id: "us-east"
           }
 
           new_pending = [event | p]

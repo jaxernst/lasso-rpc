@@ -319,8 +319,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
             do: weighted_average(entries, :avg_latency_ms, total_calls),
             else: 0.0
 
-        # Build latency_by_region from ALL entries even in cold start
-        latency_by_region = build_latency_by_region(entries)
+        latency_by_node = build_latency_by_node(entries)
 
         %{
           provider_id: provider_id,
@@ -330,11 +329,9 @@ defmodule LassoWeb.Dashboard.MetricsStore do
           avg_latency_ms: avg_latency_ms,
           node_count: length(entries),
           cold_start: true,
-          latency_by_region: latency_by_region
+          latency_by_node: latency_by_node
         }
       else
-        # Use ALL entries for latency_by_region (per-node breakdown)
-        # but entries_with_sufficient_calls for aggregate metrics
         aggregate_provider_entries(provider_id, entries_with_sufficient_calls, entries)
       end
     end)
@@ -378,10 +375,9 @@ defmodule LassoWeb.Dashboard.MetricsStore do
         nil
 
       [single] ->
-        # Build stats_by_region for single-node case so per-node filtering works
-        stats_by_region = [
+        stats_by_node = [
           %{
-            region: Map.get(single, :region) || Map.get(single, :source_region) || "unknown",
+            node_id: Map.get(single, :source_node_id) || "unknown",
             node: Map.get(single, :source_node),
             avg_duration_ms: Map.get(single, :avg_duration_ms),
             success_rate: Map.get(single, :success_rate),
@@ -392,7 +388,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
 
         single
         |> Map.put(:node_count, 1)
-        |> Map.put(:stats_by_region, stats_by_region)
+        |> Map.put(:stats_by_node, stats_by_node)
 
       multiple ->
         aggregate_method_performance(multiple)
@@ -409,8 +405,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     total_calls =
       entries_for_aggregates |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
 
-    # Use ALL entries for per-region breakdown (includes nodes with fewer calls)
-    latency_by_region = build_latency_by_region(all_entries)
+    latency_by_node = build_latency_by_node(all_entries)
 
     %{
       provider_id: provider_id,
@@ -419,19 +414,18 @@ defmodule LassoWeb.Dashboard.MetricsStore do
       success_rate: weighted_average(entries_for_aggregates, :success_rate, total_calls),
       avg_latency_ms: weighted_average(entries_for_aggregates, :avg_latency_ms, total_calls),
       node_count: length(all_entries),
-      latency_by_region: latency_by_region
+      latency_by_node: latency_by_node
     }
   end
 
-  defp build_latency_by_region(entries) do
-    # Build as a map keyed by region for O(1) lookups in dashboard filtering
+  defp build_latency_by_node(entries) do
     entries
     |> Enum.map(fn entry ->
-      region = Map.get(entry, :region) || Map.get(entry, :source_region) || "unknown"
+      node_id = Map.get(entry, :source_node_id) || "unknown"
 
-      {region,
+      {node_id,
        %{
-         region: region,
+         node_id: node_id,
          node: Map.get(entry, :source_node),
          p50: Map.get(entry, :p50_latency),
          p95: Map.get(entry, :p95_latency),
@@ -466,12 +460,11 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     total_calls = base_results |> Enum.map(&Map.get(&1, :total_calls, 0)) |> Enum.sum()
     first = List.first(base_results)
 
-    # Build per-region stats for method metrics (similar to latency_by_region for providers)
-    stats_by_region =
+    stats_by_node =
       results
       |> Enum.map(fn entry ->
         %{
-          region: Map.get(entry, :region) || Map.get(entry, :source_region) || "unknown",
+          node_id: Map.get(entry, :source_node_id) || "unknown",
           node: Map.get(entry, :source_node),
           avg_duration_ms: Map.get(entry, :avg_duration_ms),
           success_rate: Map.get(entry, :success_rate),
@@ -488,7 +481,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
       avg_duration_ms: weighted_average(base_results, :avg_duration_ms, total_calls),
       percentiles: Map.get(first, :percentiles, %{}),
       node_count: length(results),
-      stats_by_region: stats_by_region
+      stats_by_node: stats_by_node
     }
   end
 
