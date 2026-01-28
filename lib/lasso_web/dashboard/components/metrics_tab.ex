@@ -216,7 +216,9 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
   attr(:myself, :any, required: true)
 
   defp provider_performance_table(assigns) do
-    filtered_metrics = filter_metrics_by_node_id(assigns.provider_metrics, assigns.selected_node_id)
+    filtered_metrics =
+      filter_metrics_by_node_id(assigns.provider_metrics, assigns.selected_node_id)
+
     assigns = assign(assigns, :filtered_metrics, filtered_metrics)
 
     ~H"""
