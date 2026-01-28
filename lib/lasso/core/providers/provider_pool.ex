@@ -1012,6 +1012,9 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   @impl true
+  def handle_info({:ws_stable, _provider_id}, state), do: {:noreply, state}
+
+  @impl true
   def handle_info({:ws_reconnecting, provider_id, attempt}, state) do
     case Map.get(state.providers, provider_id) do
       nil ->

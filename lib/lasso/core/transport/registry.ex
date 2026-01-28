@@ -376,6 +376,9 @@ defmodule Lasso.RPC.TransportRegistry do
   end
 
   @impl true
+  def handle_info({:ws_stable, _provider_id}, state), do: {:noreply, state}
+
+  @impl true
   def handle_info({_event, _provider_id, _jerr}, state), do: {:noreply, state}
 
   # Private helper for ws_connected handling
