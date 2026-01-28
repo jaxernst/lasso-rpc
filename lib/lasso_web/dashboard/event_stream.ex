@@ -247,7 +247,15 @@ defmodule LassoWeb.Dashboard.EventStream do
       {:noreply, state}
     else
       now = now()
-      seen = Map.put(state.seen_request_ids, event.request_id, now)
+
+      # Emergency cleanup if map grows too large before scheduled cleanup
+      seen =
+        if map_size(state.seen_request_ids) >= @max_seen_request_ids * 1.5 do
+          cleanup_seen_request_ids(state.seen_request_ids, now)
+        else
+          state.seen_request_ids
+        end
+        |> Map.put(event.request_id, now)
 
       pending = [event | state.pending_events]
       count = state.pending_count + 1
@@ -938,7 +946,10 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp get_node_id_for_source(_source, _state), do: get_self_node_id()
 
   defp default_cluster_state do
-    %{connected: 1, responding: 1, node_ids: [], last_update: now()}
+    self_node_id = get_self_node_id()
+    %{connected: 1, responding: 1, node_ids: [self_node_id], last_update: now()}
+  catch
+    :exit, _ -> %{connected: 1, responding: 1, node_ids: ["unknown"], last_update: now()}
   end
 
   defp now do

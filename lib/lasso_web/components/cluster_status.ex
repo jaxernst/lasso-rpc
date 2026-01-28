@@ -100,7 +100,15 @@ defmodule LassoWeb.Components.ClusterStatus do
       regions: topology.regions
     }
   catch
-    :exit, _ -> %{enabled: false, coverage: %{connected: 1, responding: 1}, regions: []}
+    :exit, reason ->
+      # Log specific exit reasons for debugging, but don't fail component rendering
+      case reason do
+        {:noproc, _} -> :ok
+        {:timeout, _} -> :ok
+        _ -> require Logger; Logger.warning("[ClusterStatus] Failed to get topology: #{inspect(reason)}")
+      end
+
+      %{enabled: false, coverage: %{connected: 1, responding: 1}, regions: []}
   end
 
   @doc """

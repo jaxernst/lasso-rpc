@@ -246,7 +246,6 @@ All cluster-aware modules subscribe to the `"cluster:topology"` PubSub topic rat
 | `:connected`    | Erlang distribution connection established        |
 | `:discovering`  | Region identification via RPC in progress         |
 | `:responding`   | Passes health checks, region known                |
-| `:ready`        | Responding and application fully started          |
 | `:unresponsive` | Connected but failing health checks (3+ failures) |
 | `:disconnected` | Previously connected, now offline                 |
 

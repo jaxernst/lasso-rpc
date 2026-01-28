@@ -6,7 +6,6 @@ defmodule Lasso.Cluster.Topology do
   - **:connected**: Node has established Erlang distribution connection
   - **:discovering**: Node ID discovery in progress
   - **:responding**: Node responds to RPC health checks, node ID known
-  - **:ready**: Responding AND application is fully started
   - **:unresponsive**: Connected but failing health checks
   - **:disconnected**: Previously connected, now down
 
@@ -40,7 +39,7 @@ defmodule Lasso.Cluster.Topology do
   @disconnected_node_cleanup_ms 24 * 60 * 60 * 1_000
 
   @type node_state ::
-          :connected | :discovering | :responding | :ready | :unresponsive | :disconnected
+          :connected | :discovering | :responding | :unresponsive | :disconnected
 
   @type node_info :: %{
           node: node(),
@@ -454,7 +453,7 @@ defmodule Lasso.Cluster.Topology do
   def handle_call(:get_responding_nodes, _from, state) do
     responding =
       state.nodes
-      |> Enum.filter(fn {_node, info} -> info.state in [:responding, :ready] end)
+      |> Enum.filter(fn {_node, info} -> info.state == :responding end)
       |> Enum.map(fn {node, _} -> node end)
 
     {:reply, responding, state}
@@ -503,7 +502,7 @@ defmodule Lasso.Cluster.Topology do
         state.nodes
         |> Enum.filter(fn {node, info} ->
           info.node_id == "unknown" and
-            info.state in [:connected, :responding, :ready] and
+            info.state in [:connected, :responding] and
             not Map.has_key?(state.pending_discoveries, node)
         end)
         |> Enum.map(fn {node, _} -> node end)
@@ -641,8 +640,8 @@ defmodule Lasso.Cluster.Topology do
           |> String.split("@")
           |> List.last()
           |> case do
-            nil -> "unknown"
-            "" -> "unknown"
+            nil -> "unknown-#{node}"
+            "" -> "unknown-#{node}"
             id -> id
           end
 
@@ -692,7 +691,7 @@ defmodule Lasso.Cluster.Topology do
         case info.state do
           :disconnected -> {conn, resp, unr, [info.node | disc]}
           :unresponsive -> {conn + 1, resp, [info.node | unr], disc}
-          state when state in [:responding, :ready] -> {conn + 1, resp + 1, unr, disc}
+          :responding -> {conn + 1, resp + 1, unr, disc}
           _ -> {conn + 1, resp, unr, disc}
         end
       end)
