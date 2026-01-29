@@ -40,10 +40,12 @@ defmodule Lasso.RPC.EnvelopeParser do
   @type envelope :: %{
           jsonrpc: String.t(),
           id: integer() | String.t() | nil,
-          type: :result | :error,
+          type: :result | :error | :notification,
           error: map() | nil,
           result_offset: non_neg_integer() | nil,
-          raw_bytes: binary()
+          raw_bytes: binary(),
+          method: String.t() | nil,
+          params: map() | nil
         }
 
   @type parse_result :: {:ok, envelope()} | {:error, atom()}
@@ -63,20 +65,69 @@ defmodule Lasso.RPC.EnvelopeParser do
 
   Returns envelope metadata including the byte offset where the result value starts,
   allowing the raw bytes to be passed through without re-encoding.
+
+  Notifications (messages with "method" key) are fully decoded since they require
+  access to method and params fields.
   """
   @spec parse(binary()) :: parse_result()
   def parse(json_bytes) when is_binary(json_bytes) do
     scan_range = min(@scan_limit, byte_size(json_bytes))
     chunk = binary_part(json_bytes, 0, scan_range)
 
-    with {:ok, type, value_offset} <- find_result_or_error(chunk),
-         {:ok, id} <- extract_id(chunk),
-         {:ok, jsonrpc} <- extract_jsonrpc(chunk) do
-      build_envelope(type, value_offset, id, jsonrpc, json_bytes)
+    case find_result_or_error(chunk) do
+      {:ok, type, value_offset} ->
+        with {:ok, id} <- extract_id(chunk),
+             {:ok, jsonrpc} <- extract_jsonrpc(chunk) do
+          build_envelope(type, value_offset, id, jsonrpc, json_bytes)
+        end
+
+      :notification ->
+        parse_notification(json_bytes)
+
+      {:error, _} = err ->
+        err
     end
   end
 
   def parse(_), do: {:error, :invalid_input}
+
+  # Parse a notification message via full JSON decode.
+  # Notifications are server-push messages with method/params, not responses.
+  defp parse_notification(json_bytes) do
+    case Jason.decode(json_bytes) do
+      {:ok, %{"method" => method, "params" => params}} ->
+        {:ok,
+         %{
+           type: :notification,
+           method: method,
+           params: params,
+           jsonrpc: "2.0",
+           id: nil,
+           error: nil,
+           result_offset: nil,
+           raw_bytes: json_bytes
+         }}
+
+      {:ok, %{"method" => method}} ->
+        {:ok,
+         %{
+           type: :notification,
+           method: method,
+           params: %{},
+           jsonrpc: "2.0",
+           id: nil,
+           error: nil,
+           result_offset: nil,
+           raw_bytes: json_bytes
+         }}
+
+      {:ok, _} ->
+        {:error, :invalid_notification}
+
+      {:error, _} ->
+        {:error, :decode_failed}
+    end
+  end
 
   @doc """
   Parse JSON-RPC batch response without parsing individual result values.
@@ -369,7 +420,7 @@ defmodule Lasso.RPC.EnvelopeParser do
   # --- Private: Key Detection ---
 
   # Find "result": or "error": key in the envelope (handles any key order)
-  # Rejects notifications (messages with "method" key) since they are not responses.
+  # Detects notifications (messages with "method" key) since they are not responses.
   # Per JSON-RPC 2.0 spec: responses have result/error, notifications have method.
   defp find_result_or_error(chunk) do
     # Check for "method" key first - if present, this is a notification, not a response.
@@ -377,7 +428,7 @@ defmodule Lasso.RPC.EnvelopeParser do
     # The nested "result" inside params would otherwise be incorrectly matched.
     case find_key_value_start(chunk, "\"method\"") do
       {:ok, _offset} ->
-        {:error, :not_a_response}
+        :notification
 
       :nomatch ->
         find_result_or_error_key(chunk)

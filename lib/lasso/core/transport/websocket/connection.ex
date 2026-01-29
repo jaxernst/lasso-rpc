@@ -456,6 +456,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       {:ok, %Response.Error{id: id, error: jerr}} ->
         handle_response_error(id, jerr, state)
 
+      {:ok, %Response.Notification{} = notification} ->
+        handle_notification(notification, state)
+
       {:error, _parse_reason} ->
         handle_non_response_message(raw_bytes, state)
     end
@@ -1009,6 +1012,28 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     end
   end
 
+  defp handle_notification(%Response.Notification{method: "eth_subscription"} = notification, state) do
+    sub_id = Response.Notification.subscription_id(notification)
+    payload = Response.Notification.result(notification)
+    received_at = System.monotonic_time(:millisecond)
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "ws:subs:#{state.profile}:#{state.chain_name}",
+      {:subscription_event, state.endpoint.id, sub_id, payload, received_at}
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_notification(%Response.Notification{method: method}, state) do
+    Logger.debug("Received unhandled notification method: #{method}",
+      provider_id: state.endpoint.id
+    )
+
+    {:noreply, state}
+  end
+
   defp handle_non_response_message(raw_bytes, state) do
     case Jason.decode(raw_bytes) do
       {:ok, decoded} ->
@@ -1259,30 +1284,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     end
   end
 
-  defp handle_websocket_message(
-         %{
-           "method" => "eth_subscription",
-           "params" => %{"subscription" => sub_id, "result" => payload}
-         },
-         state
-       ) do
-    received_at = System.monotonic_time(:millisecond)
-
-    :telemetry.execute(
-      [:lasso, :ws, :message, :received],
-      %{count: 1},
-      %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :subscription}
-    )
-
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
-      "ws:subs:#{state.profile}:#{state.chain_name}",
-      {:subscription_event, state.endpoint.id, sub_id, payload, received_at}
-    )
-
-    {:ok, state}
-  end
-
   # Provider-emitted JSON-RPC error without correlation id -> treat as connection-level
   defp handle_websocket_message(
          %{"jsonrpc" => "2.0", "error" => %{"code" => code, "message" => msg}} = message,
@@ -1317,20 +1318,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp handle_websocket_message(message, state) do
-    # Handle other RPC responses (unknown IDs, unexpected messages, etc)
     Logger.debug("Received unexpected message from #{state.endpoint.id}: #{inspect(message)}")
-
-    :telemetry.execute(
-      [
-        :lasso,
-        :ws,
-        :message,
-        :received
-      ],
-      %{count: 1},
-      %{chain: state.chain_name, provider_id: state.endpoint.id, event_type: :other}
-    )
-
     {:ok, state}
   end
 

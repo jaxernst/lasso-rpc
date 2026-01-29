@@ -152,8 +152,8 @@ defmodule Lasso.VMMetricsCollector do
         }
       end
 
-    # Schedule first collection (even if disabled, to maintain subscriber list)
-    schedule_collection()
+    # Only schedule collection if enabled (lazy collection)
+    # Collection starts when first subscriber joins
     schedule_cleanup()
 
     {:ok, state}
@@ -164,8 +164,14 @@ defmodule Lasso.VMMetricsCollector do
     # Monitor subscriber so we can clean up when it dies
     ref = Process.monitor(pid)
 
+    was_empty = map_size(state.subscribers) == 0
     new_subscribers = Map.put(state.subscribers, pid, ref)
     new_state = %{state | subscribers: new_subscribers}
+
+    # Start collection timer if this is the first subscriber and enabled (lazy collection)
+    if was_empty and state.enabled do
+      schedule_collection()
+    end
 
     # Return latest metrics immediately if available
     {:reply, {:ok, state.latest_metrics}, new_state}
@@ -184,9 +190,10 @@ defmodule Lasso.VMMetricsCollector do
 
   @impl true
   def handle_info(:collect_metrics, %{enabled: false} = state) do
-    # When disabled, just broadcast empty metrics to maintain subscriber expectations
+    # When disabled, broadcast empty metrics to subscribers (if any)
     broadcast_metrics(state.subscribers, %{enabled: false})
-    schedule_collection()
+    # Only reschedule if we have subscribers (lazy collection)
+    if map_size(state.subscribers) > 0, do: schedule_collection()
     {:noreply, state}
   end
 
@@ -210,7 +217,8 @@ defmodule Lasso.VMMetricsCollector do
       )
     end
 
-    schedule_collection()
+    # Only reschedule if we have subscribers (lazy collection)
+    if map_size(state.subscribers) > 0, do: schedule_collection()
     {:noreply, %{new_state | latest_metrics: metrics}}
   end
 
