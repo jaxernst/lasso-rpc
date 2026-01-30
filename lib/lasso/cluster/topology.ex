@@ -28,7 +28,7 @@ defmodule Lasso.Cluster.Topology do
   @topology_topic "cluster:topology"
 
   # Timing configuration
-  @tick_interval_ms 500
+  @tick_interval_ms 1_000
   @health_check_interval_ms 15_000
   @reconcile_interval_ms 30_000
   @node_id_discovery_timeout_ms 2_000

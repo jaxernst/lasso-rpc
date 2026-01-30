@@ -69,7 +69,10 @@ defmodule Lasso.MixProject do
       {:mox, "~> 1.0", only: :test},
       {:cors_plug, "~> 3.0"},
       {:libcluster, "~> 3.3"},
-      {:local_cluster, "~> 2.0", only: [:test]}
+      {:local_cluster, "~> 2.0", only: [:test]},
+      {:recon, "~> 2.5"},
+      {:observer_cli, "~> 1.7"},
+      {:eflambe, "~> 0.3", only: :dev}
     ]
   end
 

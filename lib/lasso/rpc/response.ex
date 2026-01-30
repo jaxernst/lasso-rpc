@@ -165,6 +165,70 @@ defmodule Lasso.RPC.Response.Error do
   end
 end
 
+defmodule Lasso.RPC.Response.Notification do
+  @moduledoc """
+  Represents a JSON-RPC notification (server-initiated message without request ID).
+
+  Used for subscription events like `eth_subscription`. Notifications are
+  server-push messages that don't correspond to a client request.
+
+  ## Example
+
+      %Notification{
+        method: "eth_subscription",
+        params: %{
+          "subscription" => "0x1234...",
+          "result" => %{"blockNumber" => "0x1b4", ...}
+        }
+      }
+  """
+
+  @enforce_keys [:method, :params]
+  defstruct [:method, :params, :raw_bytes]
+
+  @type t :: %__MODULE__{
+          method: String.t(),
+          params: map(),
+          raw_bytes: binary() | nil
+        }
+
+  @doc """
+  Create a Notification from a parsed envelope.
+  """
+  @spec from_envelope(map()) :: t()
+  def from_envelope(%{method: method, params: params, raw_bytes: raw_bytes}) do
+    %__MODULE__{
+      method: method,
+      params: params,
+      raw_bytes: raw_bytes
+    }
+  end
+
+  @doc """
+  Extract the subscription ID from an eth_subscription notification.
+
+  Returns `nil` if not an eth_subscription or params structure is unexpected.
+  """
+  @spec subscription_id(t()) :: String.t() | nil
+  def subscription_id(%__MODULE__{method: "eth_subscription", params: %{"subscription" => id}}) do
+    id
+  end
+
+  def subscription_id(_), do: nil
+
+  @doc """
+  Extract the result payload from an eth_subscription notification.
+
+  Returns `nil` if not an eth_subscription or params structure is unexpected.
+  """
+  @spec result(t()) :: term() | nil
+  def result(%__MODULE__{method: "eth_subscription", params: %{"result" => result}}) do
+    result
+  end
+
+  def result(_), do: nil
+end
+
 defmodule Lasso.RPC.Response.Batch do
   @moduledoc """
   Represents a batch JSON-RPC response containing multiple items.
@@ -314,6 +378,7 @@ defmodule Lasso.RPC.Response do
 
   - `Success` - Successful response with raw bytes for passthrough
   - `Error` - Error response (fully parsed)
+  - `Notification` - Server-initiated notification (e.g., eth_subscription events)
   - `Batch` - Batch response containing multiple Success/Error items
 
   ## Usage
@@ -326,15 +391,19 @@ defmodule Lasso.RPC.Response do
         {:ok, %Response.Error{} = resp} ->
           # Handle error normally
           handle_error(conn, resp)
+
+        {:ok, %Response.Notification{} = notif} ->
+          # Handle subscription event
+          handle_subscription(notif.method, notif.params)
       end
   """
 
   alias Lasso.RPC.EnvelopeParser
 
   # Re-export submodule structs for convenience
-  alias __MODULE__.{Success, Error, Batch}
+  alias __MODULE__.{Success, Error, Notification, Batch}
 
-  @type t :: Success.t() | Error.t() | Batch.t()
+  @type t :: Success.t() | Error.t() | Notification.t() | Batch.t()
   @type id :: integer() | String.t() | nil
   @type parse_result :: {:ok, t()} | {:error, term()}
 
@@ -342,6 +411,7 @@ defmodule Lasso.RPC.Response do
   Parse raw response bytes into a structured Response type.
 
   Uses envelope-only parsing to extract metadata without parsing the result.
+  Notifications (messages with "method" key) are fully decoded.
 
   ## Examples
 
@@ -350,6 +420,9 @@ defmodule Lasso.RPC.Response do
 
       iex> from_bytes(~s({"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid"}}))
       {:ok, %Response.Error{id: 1, error: %JError{code: -32600, ...}}}
+
+      iex> from_bytes(~s({"jsonrpc":"2.0","method":"eth_subscription","params":{...}}))
+      {:ok, %Response.Notification{method: "eth_subscription", params: %{...}}}
   """
   @spec from_bytes(binary()) :: parse_result()
   def from_bytes(raw_bytes) when is_binary(raw_bytes) do
@@ -359,6 +432,9 @@ defmodule Lasso.RPC.Response do
 
       {:ok, %{type: :error} = envelope} ->
         {:ok, Error.from_envelope(envelope)}
+
+      {:ok, %{type: :notification} = envelope} ->
+        {:ok, Notification.from_envelope(envelope)}
 
       {:error, reason} ->
         {:error, reason}

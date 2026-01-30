@@ -56,11 +56,12 @@ defmodule LassoWeb.Dashboard.EventStream do
   alias Lasso.Config.ConfigStore
   alias Lasso.Events.RoutingDecision
 
-  @batch_interval_ms 50
+  @batch_interval_ms 175
   @max_batch_size 100
   @window_duration_ms 60_000
   @max_events_per_key 200
   @cleanup_interval_ms 30_000
+  @seen_ids_cleanup_interval_ms 5_000
   @stale_block_height_ms 300_000
   @seen_request_id_ttl_ms 120_000
   @max_seen_request_ids 50_000
@@ -94,8 +95,11 @@ defmodule LassoWeb.Dashboard.EventStream do
     last_tick: 0,
     last_cleanup: 0,
     last_heartbeat: 0,
+    last_seen_ids_cleanup: 0,
     # Deduplication
-    seen_request_ids: %{}
+    seen_request_ids: %{},
+    # Tick scheduling - only tick when subscribers exist
+    tick_scheduled: false
   ]
 
   # Client API
@@ -200,9 +204,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates:#{profile}")
     Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates:#{profile}")
 
-    # Start tick timer
-    schedule_tick()
-
+    # Don't start tick timer until subscribers join (lazy ticking)
     now = now()
 
     {:ok,
@@ -210,7 +212,8 @@ defmodule LassoWeb.Dashboard.EventStream do
        profile: profile,
        cluster_state: default_cluster_state(),
        last_tick: now,
-       last_heartbeat: now - @heartbeat_interval_ms
+       last_heartbeat: now - @heartbeat_interval_ms,
+       tick_scheduled: false
      }, {:continue, :fetch_cluster_state}}
   end
 
@@ -225,14 +228,18 @@ defmodule LassoWeb.Dashboard.EventStream do
   def handle_info(:tick, state) do
     now = now()
 
+    # Mark tick as not scheduled before processing (so schedule_tick can reschedule)
+    state = %{state | tick_scheduled: false}
+
     state =
       state
       |> maybe_process_batch()
       |> maybe_cleanup(now)
-      |> cleanup_seen_request_ids(now)
+      |> maybe_cleanup_seen_request_ids(now)
       |> maybe_send_heartbeat(now)
 
-    schedule_tick()
+    # Only reschedule if we have subscribers
+    state = schedule_tick(state)
     {:noreply, %{state | last_tick: now}}
   end
 
@@ -278,9 +285,9 @@ defmodule LassoWeb.Dashboard.EventStream do
     {:noreply, state}
   end
 
-  # Block height updates - process immediately, broadcast both state and raw event
+  # Block height updates - only broadcast when height actually changes
   def handle_info(
-        {:block_height_update, {profile, provider_id}, height, source, timestamp} = raw_event,
+        {:block_height_update, {profile, provider_id}, height, source, timestamp},
         state
       ) do
     node_id = get_node_id_for_source(source, state)
@@ -290,10 +297,14 @@ defmodule LassoWeb.Dashboard.EventStream do
         find_chain_from_config(profile, provider_id)
 
     if chain do
-      state = update_block_height(state, provider_id, chain, node_id, height, source, timestamp)
-      broadcast_block_update(state, provider_id, node_id, height, chain)
-      broadcast_to_subscribers(state, raw_event)
-      {:noreply, state}
+      case update_block_height(state, provider_id, chain, node_id, height, source, timestamp) do
+        {:unchanged, state} ->
+          {:noreply, state}
+
+        {:changed, state} ->
+          broadcast_block_update(state, provider_id, node_id, height, chain)
+          {:noreply, state}
+      end
     else
       {:noreply, state}
     end
@@ -404,6 +415,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   @impl true
   def handle_call({:subscribe, pid}, _from, state) do
     Process.monitor(pid)
+    was_empty = MapSet.size(state.subscribers) == 0
     subscribers = MapSet.put(state.subscribers, pid)
 
     # Send current state as a single batched snapshot (reduces message copies 5x -> 1x)
@@ -422,7 +434,12 @@ defmodule LassoWeb.Dashboard.EventStream do
 
     send(pid, {:dashboard_snapshot, snapshot})
 
-    {:reply, :ok, %{state | subscribers: subscribers}}
+    state = %{state | subscribers: subscribers}
+
+    # Start tick timer if this is the first subscriber (lazy ticking)
+    state = if was_empty, do: schedule_tick(state), else: state
+
+    {:reply, :ok, state}
   end
 
   def handle_call({:get_provider_metrics, provider_id}, _from, state) do
@@ -441,8 +458,13 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   # Private helpers
 
-  defp schedule_tick do
-    Process.send_after(self(), :tick, @batch_interval_ms)
+  defp schedule_tick(state) do
+    if MapSet.size(state.subscribers) > 0 and not state.tick_scheduled do
+      Process.send_after(self(), :tick, @batch_interval_ms)
+      %{state | tick_scheduled: true}
+    else
+      state
+    end
   end
 
   defp maybe_process_batch(state) do
@@ -486,6 +508,14 @@ defmodule LassoWeb.Dashboard.EventStream do
     if now - state.last_heartbeat >= @heartbeat_interval_ms do
       broadcast_to_subscribers(state, {:heartbeat, %{ts: now}})
       %{state | last_heartbeat: now}
+    else
+      state
+    end
+  end
+
+  defp maybe_cleanup_seen_request_ids(state, now) do
+    if now - state.last_seen_ids_cleanup >= @seen_ids_cleanup_interval_ms do
+      cleanup_seen_request_ids(%{state | last_seen_ids_cleanup: now}, now)
     else
       state
     end
@@ -736,18 +766,24 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp update_block_height(state, provider_id, chain, region, height, source, timestamp) do
     key = {provider_id, chain, region}
 
-    block_heights =
-      Map.put(state.block_heights, key, %{
-        height: height,
-        timestamp: timestamp,
-        source: source
-      })
+    case Map.get(state.block_heights, key) do
+      %{height: ^height} ->
+        {:unchanged, state}
 
-    consensus = compute_consensus_height(block_heights, chain, region)
-    consensus_key = {chain, region}
-    consensus_heights = Map.put(state.consensus_heights, consensus_key, consensus)
+      _ ->
+        block_heights =
+          Map.put(state.block_heights, key, %{
+            height: height,
+            timestamp: timestamp,
+            source: source
+          })
 
-    %{state | block_heights: block_heights, consensus_heights: consensus_heights}
+        consensus = compute_consensus_height(block_heights, chain, region)
+        consensus_key = {chain, region}
+        consensus_heights = Map.put(state.consensus_heights, consensus_key, consensus)
+
+        {:changed, %{state | block_heights: block_heights, consensus_heights: consensus_heights}}
+    end
   end
 
   defp compute_consensus_height(block_heights, chain, region) do
