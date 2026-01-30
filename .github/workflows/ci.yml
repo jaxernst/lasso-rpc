@@ -51,50 +51,7 @@ jobs:
         run: mix format --check-formatted
 
       - name: Run tests
-        run: mix test
-
-  integration-test:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        elixir: ["1.18.4"]
-        otp: ["28.0"]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: ${{ matrix.elixir }}
-          otp-version: ${{ matrix.otp }}
-
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: deps
-          key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-deps-
-
-      - name: Cache build
-        uses: actions/cache@v3
-        with:
-          path: _build
-          key: ${{ runner.os }}-build-test-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-build-test-${{ matrix.otp }}-${{ matrix.elixir }}-
-
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Compile
-        run: mix compile
-
-      - name: Run integration tests
-        run: mix test --only integration
+        run: mix test --include integration
 
   lint:
     name: Lint (Credo)
