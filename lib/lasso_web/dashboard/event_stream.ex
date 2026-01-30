@@ -66,6 +66,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   @seen_request_id_ttl_ms 120_000
   @max_seen_request_ids 50_000
   @heartbeat_interval_ms 2_000
+  @idle_timeout_ms 30_000
 
   defstruct [
     :profile,
@@ -99,7 +100,9 @@ defmodule LassoWeb.Dashboard.EventStream do
     # Deduplication
     seen_request_ids: %{},
     # Tick scheduling - only tick when subscribers exist
-    tick_scheduled: false
+    tick_scheduled: false,
+    # Idle termination - timer ref for delayed shutdown when no subscribers
+    idle_timer_ref: nil
   ]
 
   # Client API
@@ -403,7 +406,27 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   # Subscriber died
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    {:noreply, %{state | subscribers: MapSet.delete(state.subscribers, pid)}}
+    new_subscribers = MapSet.delete(state.subscribers, pid)
+    state = %{state | subscribers: new_subscribers}
+
+    state =
+      if MapSet.size(new_subscribers) == 0 do
+        schedule_idle_termination(state)
+      else
+        state
+      end
+
+    {:noreply, state}
+  end
+
+  # Idle termination check - terminate if still no subscribers
+  def handle_info(:check_idle_termination, state) do
+    if MapSet.size(state.subscribers) == 0 do
+      Logger.info("[EventStream] No subscribers for #{state.profile}, terminating")
+      {:stop, :normal, state}
+    else
+      {:noreply, %{state | idle_timer_ref: nil}}
+    end
   end
 
   # Ignore unknown messages
@@ -415,6 +438,10 @@ defmodule LassoWeb.Dashboard.EventStream do
   @impl true
   def handle_call({:subscribe, pid}, _from, state) do
     Process.monitor(pid)
+
+    # Cancel any pending idle termination
+    state = cancel_idle_termination(state)
+
     was_empty = MapSet.size(state.subscribers) == 0
     subscribers = MapSet.put(state.subscribers, pid)
 
@@ -453,7 +480,17 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   @impl true
   def handle_cast({:unsubscribe, pid}, state) do
-    {:noreply, %{state | subscribers: MapSet.delete(state.subscribers, pid)}}
+    new_subscribers = MapSet.delete(state.subscribers, pid)
+    state = %{state | subscribers: new_subscribers}
+
+    state =
+      if MapSet.size(new_subscribers) == 0 do
+        schedule_idle_termination(state)
+      else
+        state
+      end
+
+    {:noreply, state}
   end
 
   # Private helpers
@@ -465,6 +502,20 @@ defmodule LassoWeb.Dashboard.EventStream do
     else
       state
     end
+  end
+
+  defp schedule_idle_termination(state) do
+    # Cancel any existing timer first
+    state = cancel_idle_termination(state)
+    ref = Process.send_after(self(), :check_idle_termination, @idle_timeout_ms)
+    %{state | idle_timer_ref: ref}
+  end
+
+  defp cancel_idle_termination(%{idle_timer_ref: nil} = state), do: state
+
+  defp cancel_idle_termination(%{idle_timer_ref: ref} = state) do
+    Process.cancel_timer(ref)
+    %{state | idle_timer_ref: nil}
   end
 
   defp maybe_process_batch(state) do
