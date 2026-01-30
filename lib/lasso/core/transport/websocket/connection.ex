@@ -1012,7 +1012,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     end
   end
 
-  defp handle_notification(%Response.Notification{method: "eth_subscription"} = notification, state) do
+  defp handle_notification(
+         %Response.Notification{method: "eth_subscription"} = notification,
+         state
+       ) do
     sub_id = Response.Notification.subscription_id(notification)
     payload = Response.Notification.result(notification)
     received_at = System.monotonic_time(:millisecond)
