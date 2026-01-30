@@ -3,7 +3,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
   Integration tests for HealthProbe system.
 
   Tests the full integration between:
-  - HealthProbe.Worker
+  - HealthProbe.BatchCoordinator
   - CircuitBreaker
   - BlockSync.HttpStrategy
   - TransportRegistry
@@ -572,10 +572,10 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
   defp cleanup_chain(chain) do
     profile = "default"
 
-    # Stop HealthProbe supervisor if running
-    if pid = GenServer.whereis(HealthProbe.Supervisor.via(profile, chain)) do
+    # Stop HealthProbe coordinator if running
+    if pid = GenServer.whereis(HealthProbe.BatchCoordinator.via(profile, chain)) do
       try do
-        DynamicSupervisor.stop(pid, :normal, 1000)
+        GenServer.stop(pid, :normal, 1000)
       catch
         :exit, _ -> :ok
       end

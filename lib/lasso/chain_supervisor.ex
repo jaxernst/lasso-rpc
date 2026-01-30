@@ -4,7 +4,7 @@ defmodule Lasso.RPC.ChainSupervisor do
 
   This supervisor manages provider connections for a specific (profile, chain) pair.
   Multiple profiles can use the same chain, each with independent provider pools,
-  transport registries, and block sync/health probe workers.
+  transport registries, and block sync/health probe coordinators.
 
   ## Architecture
 
@@ -13,7 +13,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   ├── ProviderPool (Health & Performance Tracking)
   ├── TransportRegistry (Transport Channel Management)
   ├── BlockSync.Supervisor (Block Height Tracking)
-  ├── HealthProbe.Supervisor (Provider Health Probing)
+  ├── HealthProbe.BatchCoordinator (Provider Health Probing)
   ├── DynamicSupervisor (Per-Provider Supervisors)
   │   ├── ProviderSupervisor (Provider 1)
   │   └── ProviderSupervisor (Provider 2)
@@ -23,9 +23,8 @@ defmodule Lasso.RPC.ChainSupervisor do
   └── StreamSupervisor
   ```
 
-  BlockSync and HealthProbe supervisors are profile-scoped children of this
-  supervisor, ensuring proper restart semantics and eliminating cross-tree
-  coordination complexity.
+  BlockSync.Supervisor and HealthProbe.BatchCoordinator are profile-scoped
+  children of this supervisor, ensuring proper restart semantics.
   """
 
   use Supervisor
@@ -33,7 +32,7 @@ defmodule Lasso.RPC.ChainSupervisor do
 
   alias Lasso.BlockSync
   alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, UpstreamSubscriptionPool}
-  alias Lasso.HealthProbe
+  alias Lasso.HealthProbe.BatchCoordinator, as: HealthProbeCoordinator
   alias Lasso.RPC.ProviderSupervisor
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
   alias Lasso.RPC.{ProviderPool, TransportRegistry}
@@ -124,10 +123,9 @@ defmodule Lasso.RPC.ChainSupervisor do
              provider_config.id,
              provider_config
            ) do
-      # Start BlockSync and HealthProbe workers for the new provider
-      # Supervisors are siblings in the tree - guaranteed to be up
+      # Start BlockSync worker and add provider to HealthProbe coordinator
       BlockSync.Supervisor.start_worker(profile, chain_name, provider_config.id)
-      HealthProbe.Supervisor.start_worker(profile, chain_name, provider_config.id)
+      HealthProbeCoordinator.add_provider(profile, chain_name, provider_config.id)
 
       :ok
     else
@@ -157,7 +155,7 @@ defmodule Lasso.RPC.ChainSupervisor do
   @spec remove_provider(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def remove_provider(profile, chain_name, provider_id) do
     with :ok <- BlockSync.Supervisor.stop_worker(profile, chain_name, provider_id),
-         :ok <- HealthProbe.Supervisor.stop_worker(profile, chain_name, provider_id),
+         :ok <- HealthProbeCoordinator.remove_provider(profile, chain_name, provider_id),
          :ok <- stop_provider_supervisor(profile, chain_name, provider_id) do
       # Close transport channels (idempotent)
       TransportRegistry.close_channel(profile, chain_name, provider_id, :http)
@@ -198,9 +196,9 @@ defmodule Lasso.RPC.ChainSupervisor do
       # Start TransportRegistry for transport-agnostic channel management
       {TransportRegistry, {profile, chain_name, chain_config}},
 
-      # Profile-scoped BlockSync and HealthProbe supervisors
+      # Profile-scoped BlockSync supervisor and HealthProbe coordinator
       {BlockSync.Supervisor, {profile, chain_name}},
-      {HealthProbe.Supervisor, {profile, chain_name}},
+      {HealthProbeCoordinator, {profile, chain_name, [], []}},
 
       # Per-provider supervisor manager (Registry-based name for profile isolation)
       {DynamicSupervisor,
@@ -239,11 +237,13 @@ defmodule Lasso.RPC.ChainSupervisor do
       chain: chain_name
     )
 
-    # Start BlockSync and HealthProbe workers for this profile's providers
-    # These supervisors are siblings in the supervision tree (guaranteed to be up)
+    # Start BlockSync workers and add providers to HealthProbe coordinator
     provider_ids = Enum.map(chain_config.providers, & &1.id)
     BlockSync.Supervisor.start_all_workers(profile, chain_name, provider_ids)
-    HealthProbe.Supervisor.start_all_workers(profile, chain_name, provider_ids)
+
+    Enum.each(provider_ids, fn provider_id ->
+      HealthProbeCoordinator.add_provider(profile, chain_name, provider_id)
+    end)
   end
 
   # Private functions
