@@ -135,7 +135,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       <span class="text-xs text-gray-500 uppercase tracking-wide mr-2">Viewing</span>
       <button
         phx-click="select_node_id"
-        phx-value-region="all"
+        phx-value-node-id="all"
         phx-target={@myself}
         class={[
           "px-3 py-1 border rounded-full transition-all",
