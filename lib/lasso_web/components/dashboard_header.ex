@@ -29,7 +29,7 @@ defmodule LassoWeb.Components.DashboardHeader do
           <img
             src={~p"/images/lasso-logo.png"}
             alt="Lasso Logo"
-            class="h-8 w-8 transition-transform group-hover:rotate-6 group-hover:scale-110"
+            class="h-[18px] mt-1 w-auto transition-transform group-hover:rotate-6 group-hover:scale-110"
           />
           <span class="text-2xl font-bold text-white">Lasso</span>
           <span class="text-[8px] text-emerald-400/90 flex -translate-y-1 items-center gap-1 font-medium">
