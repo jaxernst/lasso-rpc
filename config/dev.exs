@@ -23,14 +23,11 @@ config :lasso, LassoWeb.Endpoint,
 # Enhanced logging for development debugging
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
-  level: :info,
+  level: :debug,
   metadata: :all
 
-# Filter out Phoenix LiveView "HANDLE EVENT" debug logs
-config :logger,
-  compile_time_purge_matching: [
-    [module: Phoenix.LiveView, level_lower_than: :info]
-  ]
+# Silence LiveView debug logs (MOUNT, HANDLE EVENT, Replied, etc.)
+config :phoenix_live_view, log: false
 
 # Reduce Phoenix debug log spam (only log at info level)
 # This removes "Processing with", "Parameters:", "Pipelines:" debug logs
