@@ -58,7 +58,8 @@ defmodule LassoWeb do
   def live_view do
     quote do
       use Phoenix.LiveView,
-        layout: {LassoWeb.Layouts, :app}
+        layout: {LassoWeb.Layouts, :app},
+        log: false
 
       unquote(html_helpers())
     end

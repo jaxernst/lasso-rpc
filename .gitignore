@@ -28,6 +28,9 @@ lasso-*.tar
 # Generated assets (compiled from source)
 /priv/static/assets/
 
+# Dialyzer PLTs
+/priv/plts/
+
 # Benchmark snapshots (generated data)
 /priv/benchmark_snapshots/
 

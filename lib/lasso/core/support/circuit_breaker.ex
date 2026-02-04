@@ -391,13 +391,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
       :open ->
         if should_attempt_recovery?(state) do
-          Logger.info("Circuit breaker #{state.provider_id} attempting recovery")
-
           # Cancel proactive recovery timer since we're transitioning via traffic
           cancel_recovery_timer(state.recovery_timer_ref)
 
           :telemetry.execute([:lasso, :circuit_breaker, :half_open], %{count: 1}, %{
-            provider_id: state.provider_id
+            chain: state.chain,
+            provider_id: state.provider_id,
+            transport: state.transport,
+            from_state: :open,
+            to_state: :half_open,
+            reason: :attempt_recovery
           })
 
           publish_circuit_event(
@@ -486,10 +489,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   @impl true
   def handle_cast(:open, state) do
-    Logger.warning("Circuit breaker #{state.provider_id} (#{state.transport}) manually opened")
-
     :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
-      provider_id: state.provider_id
+      chain: state.chain,
+      provider_id: state.provider_id,
+      transport: state.transport,
+      from_state: state.state,
+      to_state: :open,
+      reason: :manual_open
     })
 
     publish_circuit_event(
@@ -518,10 +524,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   @impl true
   def handle_cast(:close, state) do
-    Logger.info("Circuit breaker #{state.provider_id} (#{state.transport}) manually closed")
-
     :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
-      provider_id: state.provider_id
+      chain: state.chain,
+      provider_id: state.provider_id,
+      transport: state.transport,
+      from_state: state.state,
+      to_state: :closed,
+      reason: :manual_close
     })
 
     publish_circuit_event(
@@ -557,14 +566,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   def handle_info(:attempt_proactive_recovery, state) do
     case state.state do
       :open ->
-        Logger.info(
-          "Circuit breaker #{state.provider_id} (#{state.transport}) proactive recovery attempt"
-        )
-
         :telemetry.execute([:lasso, :circuit_breaker, :proactive_recovery], %{count: 1}, %{
+          chain: state.chain,
           provider_id: state.provider_id,
           transport: state.transport,
-          chain: state.chain
+          from_state: :open,
+          to_state: :half_open,
+          reason: :proactive_recovery
         })
 
         publish_circuit_event(
@@ -702,15 +710,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
       :open ->
         # Received a success while open (e.g., external report). Transition to half_open
-        Logger.info(
-          "Circuit breaker #{state.provider_id} (#{state.transport}) attempting recovery from success report"
-        )
-
         # Cancel proactive recovery timer since we're transitioning out of open
         cancel_recovery_timer(state.recovery_timer_ref)
 
         :telemetry.execute([:lasso, :circuit_breaker, :half_open], %{count: 1}, %{
-          provider_id: state.provider_id
+          chain: state.chain,
+          provider_id: state.provider_id,
+          transport: state.transport,
+          from_state: :open,
+          to_state: :half_open,
+          reason: :recovery_attempt
         })
 
         publish_circuit_event(
@@ -726,12 +735,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         new_success_count = 1
 
         if new_success_count >= effective_threshold do
-          Logger.info(
-            "Circuit breaker #{state.provider_id} (#{state.transport}) recovered from success report, closing"
-          )
-
           :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
-            provider_id: state.provider_id
+            chain: state.chain,
+            provider_id: state.provider_id,
+            transport: state.transport,
+            from_state: :open,
+            to_state: :closed,
+            reason: :recovered
           })
 
           publish_circuit_event(
@@ -773,12 +783,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         new_success_count = state.success_count + 1
 
         if new_success_count >= effective_threshold do
-          Logger.info(
-            "Circuit breaker #{state.provider_id} (#{state.transport}) recovered, closing"
-          )
-
           :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
-            provider_id: state.provider_id
+            chain: state.chain,
+            provider_id: state.provider_id,
+            transport: state.transport,
+            from_state: :half_open,
+            to_state: :closed,
+            reason: :recovered
           })
 
           publish_circuit_event(
@@ -830,7 +841,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         state.recovery_timeout
       end
 
-    # Reduce log verbosity: only log code and category, not full error struct
+    # Format error summary for logging (only used in specific cases below)
     error_summary =
       if is_struct(error, JError) do
         "#{error.code} (#{error.category})"
@@ -838,25 +849,39 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         inspect(error)
       end
 
-    Logger.warning(
-      "Circuit breaker #{state.provider_id} (#{state.transport}) failure #{new_failure_count}/#{threshold}: #{error_summary}"
+    # Emit telemetry for all failures (metrics capture)
+    :telemetry.execute(
+      [:lasso, :circuit_breaker, :failure],
+      %{count: 1},
+      %{
+        chain: state.chain,
+        provider_id: state.provider_id,
+        transport: state.transport,
+        error_category: error_category,
+        circuit_state: state.state
+      }
     )
 
     case state.state do
       :closed ->
-        if new_failure_count >= threshold do
-          Logger.error(
-            "Circuit breaker #{state.provider_id} (#{state.transport}) opening after #{new_failure_count} failures" <>
-              if(
-                error_category == :rate_limit and
-                  adjusted_recovery_timeout != state.recovery_timeout,
-                do: " (recovery timeout adjusted to #{div(adjusted_recovery_timeout, 1000)}s)",
-                else: ""
-              )
+        # Log first failure at debug level (useful for debugging, filtered in production)
+        if new_failure_count == 1 do
+          Logger.debug(
+            "Circuit breaker #{state.provider_id} (#{state.transport}) first failure: #{error_summary}"
           )
+        end
 
+        if new_failure_count >= threshold do
           :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
-            provider_id: state.provider_id
+            chain: state.chain,
+            provider_id: state.provider_id,
+            transport: state.transport,
+            from_state: :closed,
+            to_state: :open,
+            reason: :failure_threshold_exceeded,
+            error_category: error_category,
+            failure_count: new_failure_count,
+            recovery_timeout_ms: adjusted_recovery_timeout
           })
 
           publish_circuit_event(
@@ -891,13 +916,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         end
 
       :half_open ->
-        # Half-open state fails, go back to open
-        Logger.error(
-          "Circuit breaker #{state.provider_id} (#{state.transport}) re-opening after recovery attempt failed"
-        )
-
         :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
-          provider_id: state.provider_id
+          chain: state.chain,
+          provider_id: state.provider_id,
+          transport: state.transport,
+          from_state: :half_open,
+          to_state: :open,
+          reason: :reopen_due_to_failure,
+          error_category: error_category,
+          failure_count: new_failure_count,
+          recovery_timeout_ms: state.recovery_timeout
         })
 
         publish_circuit_event(

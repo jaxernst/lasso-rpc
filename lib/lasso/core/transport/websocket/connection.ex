@@ -1264,20 +1264,23 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp cleanup_pending_requests(state, error) do
-    if map_size(state.pending_requests) > 0 do
-      Logger.debug(
-        "Cleaning up #{map_size(state.pending_requests)} pending requests due to disconnect"
+    pending_count = map_size(state.pending_requests)
+
+    if pending_count > 0 do
+      # Emit telemetry for production visibility (metrics)
+      :telemetry.execute(
+        [:lasso, :websocket, :pending_cleanup],
+        %{count: 1, pending_count: pending_count},
+        %{provider_id: state.endpoint.id}
       )
 
-      Enum.each(state.pending_requests, fn {id, req_info} ->
+      # Single aggregate log instead of per-request
+      Logger.debug("Cleaning up #{pending_count} pending requests due to disconnect",
+        provider: state.endpoint.id
+      )
+
+      Enum.each(state.pending_requests, fn {_id, req_info} ->
         Process.cancel_timer(req_info.timer)
-
-        Logger.debug("Failing pending WS request due to disconnect",
-          provider: state.endpoint.id,
-          method: req_info.method,
-          request_id: id
-        )
-
         GenServer.reply(req_info.from, {:error, error})
       end)
 

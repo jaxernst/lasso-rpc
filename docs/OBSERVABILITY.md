@@ -575,6 +575,110 @@ defmodule MyApp.Observability do
 end
 ```
 
+---
+
+## TelemetryLogger
+
+`Lasso.TelemetryLogger` bridges telemetry events to structured logs for production debugging. It attaches to events at application startup and logs at appropriate severity levels.
+
+### Configuration
+
+```elixir
+config :lasso, Lasso.TelemetryLogger,
+  enabled: true,
+  log_slow_requests: true,
+  log_failovers: true,
+  log_circuit_breaker: true
+```
+
+### Attached Handlers
+
+| Event | Log Level | Description |
+|-------|-----------|-------------|
+| `[:lasso, :failover, :fast_fail]` | WARNING | Provider failover triggered |
+| `[:lasso, :failover, :circuit_open]` | WARNING | Circuit breaker blocked request |
+| `[:lasso, :failover, :degraded_mode]` | WARNING | Entered degraded mode (trying half-open circuits) |
+| `[:lasso, :failover, :degraded_success]` | INFO | Recovered via degraded mode |
+| `[:lasso, :failover, :exhaustion]` | ERROR | All providers exhausted |
+| `[:lasso, :request, :slow]` | WARNING | Request took >2000ms |
+| `[:lasso, :request, :very_slow]` | ERROR | Request took >4000ms |
+| `[:lasso, :circuit_breaker, :open]` | WARNING | Circuit breaker opened |
+| `[:lasso, :circuit_breaker, :close]` | INFO | Circuit breaker closed (recovered) |
+| `[:lasso, :circuit_breaker, :half_open]` | INFO | Circuit breaker testing recovery |
+| `[:lasso, :circuit_breaker, :proactive_recovery]` | INFO | Circuit breaker proactive recovery |
+
+### Logging Architecture
+
+State transition logs use a single-source-of-truth pattern:
+
+- **TelemetryLogger** handles all state transition logging via telemetry handlers
+- **CircuitBreaker** only logs context not available in telemetry metadata:
+  - First failure (debug level)
+  - Opening after threshold exceeded (warning, includes failure count)
+  - Re-opening after failed recovery (error)
+
+---
+
+## Metrics Reference
+
+Metrics defined in `Lasso.Telemetry.metrics/0` for LiveDashboard and reporters.
+
+### Circuit Breaker Metrics
+
+| Metric | Type | Tags | Description |
+|--------|------|------|-------------|
+| `lasso.circuit_breaker.admit.latency` | Distribution | chain, provider_id, transport, decision | Admission call latency |
+| `lasso.circuit_breaker.admit.count` | Counter | chain, provider_id, transport, decision | Admission decisions |
+| `lasso.circuit_breaker.open.count` | Counter | chain, provider_id, transport, reason | Circuit openings |
+| `lasso.circuit_breaker.close.count` | Counter | chain, provider_id, transport, reason | Circuit closings |
+| `lasso.circuit_breaker.half_open.count` | Counter | chain, provider_id, transport, reason | Half-open transitions |
+| `lasso.circuit_breaker.proactive_recovery.count` | Counter | chain, provider_id, transport | Proactive recovery attempts |
+| `lasso.circuit_breaker.failure.count` | Counter | chain, provider_id, transport, error_category, circuit_state | Failures by category and state |
+
+### RPC Request Metrics
+
+| Metric | Type | Tags | Description |
+|--------|------|------|-------------|
+| `lasso.rpc.request.duration` | Distribution | chain, method, provider_id, transport, status | End-to-end request duration |
+| `lasso.rpc.request.count` | Counter | chain, method, provider_id, transport, status | Request count |
+
+### Transport Metrics
+
+| Metric | Type | Tags | Description |
+|--------|------|------|-------------|
+| `lasso.http.request.io.latency` | Distribution | provider_id, method | HTTP I/O time |
+| `lasso.ws.request.io.latency` | Distribution | provider_id, method | WebSocket I/O time |
+| `lasso.websocket.connected.count` | Counter | provider_id, chain | WebSocket connections |
+| `lasso.websocket.disconnected.count` | Counter | provider_id, chain, unexpected | WebSocket disconnections |
+| `lasso.websocket.request.duration` | Distribution | provider_id, method, status | WebSocket request duration |
+| `lasso.websocket.pending_cleanup.count` | Counter | provider_id | Pending request cleanups on disconnect |
+| `lasso.websocket.pending_cleanup.pending_count` | Summary | - | Pending requests cleaned up per disconnect |
+
+### Failover Metrics
+
+| Metric | Type | Tags | Description |
+|--------|------|------|-------------|
+| `lasso.failover.fast_fail.count` | Counter | chain, provider_id, transport, error_category | Provider failovers |
+| `lasso.failover.circuit_open.count` | Counter | chain, provider_id, transport | Requests skipped (circuit open) |
+| `lasso.failover.degraded_mode.count` | Counter | chain | Degraded mode entries |
+| `lasso.failover.degraded_success.count` | Counter | chain, provider_id, transport | Degraded mode recoveries |
+| `lasso.failover.exhaustion.count` | Counter | chain | All providers exhausted |
+
+### Provider & Streaming Metrics
+
+| Metric | Type | Tags | Description |
+|--------|------|------|-------------|
+| `lasso.provider.status.count` | Counter | chain, provider_id, status | Provider status changes |
+| `lasso.stream.dropped_event.count` | Counter | chain, reason | Events dropped in degraded mode |
+| `lasso.upstream_subscriptions.orphaned_event.count` | Counter | chain | Orphaned subscription events |
+
+### Cluster Metrics
+
+| Metric | Type | Tags | Description |
+|--------|------|------|-------------|
+| `lasso.cluster.topology.node_connected.count` | Counter | node | Cluster node connections |
+| `lasso.cluster.topology.node_disconnected.count` | Counter | node | Cluster node disconnections |
+
 ## Troubleshooting
 
 ### No Logs Appearing
