@@ -340,7 +340,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       # (This is an implementation detail but ensures cleanup is working)
     end
 
-    test "failed half_open recovery reschedules proactive timer" do
+    test "failed half_open recovery reschedules proactive timer with backoff" do
       id = {"default", "test_chain", "cb_proactive_5", :http}
 
       {:ok, _pid} =
@@ -358,16 +358,78 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       Process.sleep(120)
       assert CircuitBreaker.get_state(id).state == :half_open
 
-      # Fail during half_open - should reopen and reschedule timer
+      # Fail during half_open - should reopen and reschedule timer with 2x backoff
       assert {:executed, {:exception, _}} =
                CircuitBreaker.call(id, fn -> raise "still failing" end)
 
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :open
 
-      # Wait for second proactive recovery
-      Process.sleep(120)
+      # Second recovery uses 2x backoff (160ms + jitter), so wait longer
+      Process.sleep(200)
       assert CircuitBreaker.get_state(id).state == :half_open
+    end
+
+    test "consecutive_open_count increments on half_open -> open and resets on close" do
+      id = {"default", "test_chain", "cb_open_count", :http}
+
+      {:ok, pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 1, recovery_timeout: 60, success_threshold: 1}}
+        )
+
+      # Open the circuit
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Check internal state - consecutive_open_count should be 0
+      internal = :sys.get_state(pid)
+      assert internal.consecutive_open_count == 0
+
+      # Wait for proactive recovery -> half_open
+      Process.sleep(90)
+      assert CircuitBreaker.get_state(id).state == :half_open
+
+      # Fail during half_open -> reopen (consecutive_open_count should be 1)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "fail" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+      internal = :sys.get_state(pid)
+      assert internal.consecutive_open_count == 1
+
+      # Wait for second recovery (2x backoff: 120ms + jitter)
+      Process.sleep(160)
+      assert CircuitBreaker.get_state(id).state == :half_open
+
+      # Succeed -> close (consecutive_open_count resets to 0)
+      assert {:executed, {:ok, :ok}} = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :closed
+      internal = :sys.get_state(pid)
+      assert internal.consecutive_open_count == 0
+    end
+
+    test "backoff caps at max_recovery_timeout" do
+      id = {"default", "test_chain", "cb_backoff_cap", :http}
+
+      {:ok, pid} =
+        CircuitBreaker.start_link(
+          {id,
+           %{
+             failure_threshold: 1,
+             recovery_timeout: 100,
+             success_threshold: 1,
+             max_recovery_timeout: 300
+           }}
+        )
+
+      # Simulate high consecutive_open_count via :sys.replace_state
+      :sys.replace_state(pid, fn state -> %{state | consecutive_open_count: 10} end)
+
+      internal = :sys.get_state(pid)
+      # 2^min(10,4) = 16, 100 * 16 = 1600, capped at 300
+      assert internal.max_recovery_timeout == 300
     end
 
     test "manual open schedules proactive recovery timer" do
@@ -389,6 +451,93 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       # Wait for proactive recovery
       Process.sleep(120)
       assert CircuitBreaker.get_state(id).state == :half_open
+    end
+
+    test "traffic respects backed-off deadline" do
+      id = {"default", "test_chain", "cb_backoff_gate", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 1, recovery_timeout: 80, success_threshold: 1}}
+        )
+
+      # Open the circuit
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Wait for recovery, transition to half_open
+      Process.sleep(120)
+      assert CircuitBreaker.get_state(id).state == :half_open
+
+      # Fail to reopen — backoff = 2x = ~160ms + jitter
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "still bad" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # At ~80ms the base timeout would have passed, but backed-off deadline should block
+      Process.sleep(80)
+      assert {:rejected, :circuit_open} = CircuitBreaker.call(id, fn -> :ok end)
+
+      # Wait until backed-off deadline passes (~180ms total from reopen, generous margin)
+      Process.sleep(120)
+      result = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
+      assert match?({:executed, {:ok, :ok}}, result)
+    end
+
+    test "stale timer message is ignored" do
+      id = {"default", "test_chain", "cb_stale_timer", :http}
+
+      {:ok, pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 1, recovery_timeout: 200, success_threshold: 1}}
+        )
+
+      # Open the circuit (gen becomes 1)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Manually close (bumps gen wouldn't normally happen here, but timer is cancelled)
+      CircuitBreaker.close(id)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :closed
+
+      # Deliver a stale timer message with old gen (1)
+      send(pid, {:attempt_proactive_recovery, 1})
+      Process.sleep(20)
+
+      # Should still be closed — stale message was ignored
+      assert CircuitBreaker.get_state(id).state == :closed
+    end
+
+    test "get_recovery_time_remaining returns accurate value under backoff" do
+      id = {"default", "test_chain", "cb_remaining_backoff", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id, %{failure_threshold: 1, recovery_timeout: 100, success_threshold: 1}}
+        )
+
+      # Open the circuit
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # Wait for recovery, transition to half_open
+      Process.sleep(130)
+      assert CircuitBreaker.get_state(id).state == :half_open
+
+      # Fail to reopen with backoff (2x = ~200ms + jitter)
+      assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "fail" end)
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+
+      # get_recovery_time_remaining should reflect the backed-off delay, not the base 100ms
+      remaining = CircuitBreaker.get_recovery_time_remaining(id)
+      assert is_integer(remaining)
+      # Should be > 100ms (the base timeout) since we just reopened with 2x backoff
+      assert remaining > 100, "Expected remaining #{remaining} > 100 (base timeout)"
     end
   end
 end

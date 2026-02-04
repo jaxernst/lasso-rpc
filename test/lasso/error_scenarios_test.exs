@@ -131,7 +131,7 @@ defmodule Lasso.ErrorScenariosTest do
           last_failure ->
             current_time = System.monotonic_time(:millisecond)
 
-            if current_time - last_failure >= timeout_ms do
+            if current_time - last_failure >= timeout_ms + div(timeout_ms, 20) + 5 do
               :ok
             else
               # Wait a bit and try again

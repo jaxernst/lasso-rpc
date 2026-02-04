@@ -5,6 +5,20 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   Implements the circuit breaker pattern to prevent cascade failures
   when providers are experiencing issues. Provides automatic recovery
   and configurable failure thresholds.
+
+  ## Recovery Mechanics
+
+  When a circuit opens, a `recovery_deadline_ms` (monotonic timestamp) is set.
+  Both proactive timer recovery and traffic-triggered recovery are gated by
+  this deadline. The deadline is fixed for the duration of the open episode —
+  additional failures while open do not extend it.
+
+  On reopen (half_open → open), the deadline is computed with exponential
+  backoff from the configured base recovery timeout. Rate-limit errors with
+  retry-after headers use the retry-after value directly instead of backing off.
+
+  Backoff schedule: base_recovery_timeout × 2^min(consecutive_reopens, 4),
+  capped at `max_recovery_timeout` (default 10 minutes).
   """
 
   use GenServer
@@ -18,30 +32,24 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     :provider_id,
     :transport,
     :failure_threshold,
-    :recovery_timeout,
+    :base_recovery_timeout,
     :success_threshold,
-    # Category-specific failure thresholds
     :category_thresholds,
-    # :closed, :open, :half_open
     :state,
     :failure_count,
     :last_failure_time,
     :success_count,
     :config,
-    # Number of in-flight attempts currently admitted while half-open
     inflight_count: 0,
-    # Max parallel attempts allowed during half-open (default: 3)
-    # This prevents thundering herd while allowing reasonable probe traffic
     half_open_max_inflight: 3,
-    # Error category that caused circuit to open (for category-specific recovery)
-    # Rate limits have known recovery times, so 1 success is sufficient
     opened_by_category: nil,
-    # Timer reference for proactive recovery (automatically transitions open -> half_open)
-    # Ensures circuits don't stay open forever when excluded from selection
     recovery_timer_ref: nil,
-    # The error that caused the circuit to open (for dashboard display)
-    # Stored as a map with :code, :category, :message keys
-    last_open_error: nil
+    last_open_error: nil,
+    consecutive_open_count: 0,
+    max_recovery_timeout: 600_000,
+    recovery_deadline_ms: nil,
+    effective_recovery_delay: nil,
+    recovery_timer_gen: 0
   ]
 
   @type profile :: String.t()
@@ -54,13 +62,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           chain: chain,
           provider_id: provider_id,
           failure_threshold: non_neg_integer(),
-          recovery_timeout: non_neg_integer(),
+          base_recovery_timeout: non_neg_integer(),
           success_threshold: non_neg_integer(),
           state: breaker_state,
           failure_count: non_neg_integer(),
           last_failure_time: integer() | nil,
           success_count: non_neg_integer(),
-          config: map()
+          config: map(),
+          recovery_deadline_ms: integer() | nil,
+          effective_recovery_delay: non_neg_integer() | nil,
+          recovery_timer_gen: non_neg_integer()
         }
 
   @doc """
@@ -310,17 +321,11 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @spec get_recovery_time_remaining(breaker_id) :: non_neg_integer() | nil
   def get_recovery_time_remaining(breaker_id) do
     case get_state(breaker_id) do
-      %{state: :open, last_failure_time: last_failure} when not is_nil(last_failure) ->
-        # Get recovery timeout from state
+      %{state: :open} ->
         try do
           case GenServer.call(via_name(breaker_id), :get_recovery_timeout, @state_timeout) do
-            {:ok, recovery_timeout} ->
-              current_time = System.monotonic_time(:millisecond)
-              time_remaining = last_failure + recovery_timeout - current_time
-              max(0, time_remaining)
-
-            _ ->
-              nil
+            {:ok, remaining} -> remaining
+            _ -> nil
           end
         catch
           :exit, _ -> nil
@@ -368,7 +373,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       provider_id: provider_id,
       transport: transport,
       failure_threshold: Map.get(config, :failure_threshold, 5),
-      recovery_timeout: Map.get(config, :recovery_timeout, 60_000),
+      base_recovery_timeout: Map.get(config, :recovery_timeout, 60_000),
       success_threshold: Map.get(config, :success_threshold, 2),
       category_thresholds: category_thresholds,
       half_open_max_inflight: half_open_max_inflight,
@@ -377,7 +382,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       failure_count: 0,
       last_failure_time: nil,
       success_count: 0,
-      config: config
+      config: config,
+      max_recovery_timeout: Map.get(config, :max_recovery_timeout, 600_000)
     }
 
     {:ok, state}
@@ -400,7 +406,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             transport: state.transport,
             from_state: :open,
             to_state: :half_open,
-            reason: :attempt_recovery
+            reason: :attempt_recovery,
+            consecutive_open_count: state.consecutive_open_count
           })
 
           publish_circuit_event(
@@ -418,7 +425,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             | state: :half_open,
               last_failure_time: state.last_failure_time || now_ms,
               inflight_count: 1,
-              recovery_timer_ref: nil
+              recovery_timer_ref: nil,
+              recovery_timer_gen: state.recovery_timer_gen + 1
           }
 
           {:reply, {:allow, :half_open}, new_state}
@@ -453,7 +461,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   @impl true
   def handle_call(:get_recovery_timeout, _from, state) do
-    {:reply, {:ok, state.recovery_timeout}, state}
+    remaining =
+      case state.recovery_deadline_ms do
+        nil -> 0
+        deadline -> max(0, deadline - System.monotonic_time(:millisecond))
+      end
+
+    {:reply, {:ok, remaining}, state}
   end
 
   @impl true
@@ -508,15 +522,21 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       state.chain
     )
 
-    # Cancel any existing timer and schedule new one
     cancel_recovery_timer(state.recovery_timer_ref)
-    timer_ref = schedule_recovery_timer(state.recovery_timeout)
+    delay = state.base_recovery_timeout
+    delay_with_jitter = add_jitter(delay)
+    new_gen = state.recovery_timer_gen + 1
+    now = System.monotonic_time(:millisecond)
+    timer_ref = schedule_recovery_timer(delay_with_jitter, new_gen)
 
     new_state = %{
       state
       | state: :open,
-        last_failure_time: System.monotonic_time(:millisecond),
-        recovery_timer_ref: timer_ref
+        last_failure_time: now,
+        recovery_timer_ref: timer_ref,
+        recovery_timer_gen: new_gen,
+        recovery_deadline_ms: now + delay_with_jitter,
+        effective_recovery_delay: delay
     }
 
     {:noreply, new_state}
@@ -554,16 +574,18 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         last_failure_time: nil,
         opened_by_category: nil,
         recovery_timer_ref: nil,
-        last_open_error: nil
+        last_open_error: nil,
+        consecutive_open_count: 0,
+        recovery_deadline_ms: nil,
+        effective_recovery_delay: nil
     }
 
     {:noreply, new_state}
   end
 
-  # Proactive recovery: automatically transition open -> half_open after recovery_timeout
-  # This ensures circuits don't stay open forever when excluded from selection
   @impl true
-  def handle_info(:attempt_proactive_recovery, state) do
+  def handle_info({:attempt_proactive_recovery, gen}, state)
+      when gen == state.recovery_timer_gen do
     case state.state do
       :open ->
         :telemetry.execute([:lasso, :circuit_breaker, :proactive_recovery], %{count: 1}, %{
@@ -572,7 +594,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           transport: state.transport,
           from_state: :open,
           to_state: :half_open,
-          reason: :proactive_recovery
+          reason: :proactive_recovery,
+          consecutive_open_count: state.consecutive_open_count
         })
 
         publish_circuit_event(
@@ -596,7 +619,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         {:noreply, new_state}
 
       other_state ->
-        # Circuit already recovered or closed (e.g., via probe success or manual intervention)
         Logger.debug(
           "Circuit breaker #{state.provider_id} (#{state.transport}) proactive recovery skipped, " <>
             "already in #{other_state} state"
@@ -604,6 +626,11 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
         {:noreply, %{state | recovery_timer_ref: nil}}
     end
+  end
+
+  @impl true
+  def handle_info({:attempt_proactive_recovery, _stale_gen}, state) do
+    {:noreply, state}
   end
 
   # Private functions
@@ -719,7 +746,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           transport: state.transport,
           from_state: :open,
           to_state: :half_open,
-          reason: :recovery_attempt
+          reason: :recovery_attempt,
+          consecutive_open_count: state.consecutive_open_count
         })
 
         publish_circuit_event(
@@ -762,7 +790,10 @@ defmodule Lasso.Core.Support.CircuitBreaker do
               last_failure_time: nil,
               opened_by_category: nil,
               recovery_timer_ref: nil,
-              last_open_error: nil
+              last_open_error: nil,
+              consecutive_open_count: 0,
+              recovery_deadline_ms: nil,
+              effective_recovery_delay: nil
           }
 
           {:reply, {:ok, result}, new_state}
@@ -809,7 +840,10 @@ defmodule Lasso.Core.Support.CircuitBreaker do
               success_count: 0,
               last_failure_time: nil,
               opened_by_category: nil,
-              last_open_error: nil
+              last_open_error: nil,
+              consecutive_open_count: 0,
+              recovery_deadline_ms: nil,
+              effective_recovery_delay: nil
           }
 
           {:reply, {:ok, result}, new_state}
@@ -833,12 +867,11 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     error_category = if is_struct(error, JError), do: error.category, else: :unknown_error
     threshold = Map.get(state.category_thresholds, error_category, state.failure_threshold)
 
-    # For rate limit errors, extract retry-after to adjust recovery timeout
     adjusted_recovery_timeout =
       if error_category == :rate_limit and is_struct(error, JError) do
-        extract_retry_after(error) || state.recovery_timeout
+        extract_retry_after(error) || state.base_recovery_timeout
       else
-        state.recovery_timeout
+        state.base_recovery_timeout
       end
 
     # Format error summary for logging (only used in specific cases below)
@@ -895,17 +928,21 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             error
           )
 
-          # Schedule proactive recovery timer
-          timer_ref = schedule_recovery_timer(adjusted_recovery_timeout)
+          delay = adjusted_recovery_timeout
+          delay_with_jitter = add_jitter(delay)
+          new_gen = state.recovery_timer_gen + 1
+          timer_ref = schedule_recovery_timer(delay_with_jitter, new_gen)
 
           new_state = %{
             state
             | state: :open,
               failure_count: new_failure_count,
               last_failure_time: current_time,
-              recovery_timeout: adjusted_recovery_timeout,
               opened_by_category: error_category,
               recovery_timer_ref: timer_ref,
+              recovery_timer_gen: new_gen,
+              recovery_deadline_ms: current_time + delay_with_jitter,
+              effective_recovery_delay: delay,
               last_open_error: extract_error_info(error)
           }
 
@@ -916,6 +953,15 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         end
 
       :half_open ->
+        new_consecutive_open_count = state.consecutive_open_count + 1
+
+        new_state_for_backoff = %{state | consecutive_open_count: new_consecutive_open_count}
+        delay = compute_reopen_delay(new_state_for_backoff, error, error_category)
+        delay_with_jitter = add_jitter(delay)
+        new_gen = state.recovery_timer_gen + 1
+        now = System.monotonic_time(:millisecond)
+        timer_ref = schedule_recovery_timer(delay_with_jitter, new_gen)
+
         :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
           chain: state.chain,
           provider_id: state.provider_id,
@@ -925,7 +971,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           reason: :reopen_due_to_failure,
           error_category: error_category,
           failure_count: new_failure_count,
-          recovery_timeout_ms: state.recovery_timeout
+          recovery_timeout_ms: delay,
+          consecutive_open_count: new_consecutive_open_count
         })
 
         publish_circuit_event(
@@ -939,9 +986,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           error
         )
 
-        # Schedule proactive recovery timer for the re-opened circuit
-        timer_ref = schedule_recovery_timer(state.recovery_timeout)
-
         new_state = %{
           state
           | state: :open,
@@ -949,7 +993,12 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             last_failure_time: current_time,
             success_count: 0,
             recovery_timer_ref: timer_ref,
-            last_open_error: extract_error_info(error)
+            recovery_timer_gen: new_gen,
+            recovery_deadline_ms: now + delay_with_jitter,
+            effective_recovery_delay: delay,
+            last_open_error: extract_error_info(error),
+            consecutive_open_count: new_consecutive_open_count,
+            opened_by_category: error_category
         }
 
         {:reply, {:error, :circuit_reopening}, new_state}
@@ -968,23 +1017,34 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   defp should_attempt_recovery?(state) do
-    case state.last_failure_time do
-      nil ->
-        true
-
-      last_failure ->
-        current_time = System.monotonic_time(:millisecond)
-        current_time - last_failure >= state.recovery_timeout
+    case state.recovery_deadline_ms do
+      nil -> true
+      deadline -> System.monotonic_time(:millisecond) >= deadline
     end
   end
 
-  # Schedule proactive recovery timer with jitter to prevent thundering herd
-  # Returns the timer reference for later cancellation
-  defp schedule_recovery_timer(recovery_timeout) do
-    # Add 5% jitter to prevent synchronized recovery attempts across multiple circuits
-    jitter_ms = :rand.uniform(max(1, div(recovery_timeout, 20)))
-    delay_ms = recovery_timeout + jitter_ms
-    Process.send_after(self(), :attempt_proactive_recovery, delay_ms)
+  defp compute_reopen_delay(state, error, error_category) do
+    explicit_retry_after =
+      if error_category == :rate_limit and is_struct(error, JError) do
+        extract_retry_after(error)
+      end
+
+    if explicit_retry_after do
+      min(explicit_retry_after, state.max_recovery_timeout)
+    else
+      base = state.base_recovery_timeout
+      multiplier = trunc(:math.pow(2, min(state.consecutive_open_count, 4)))
+      min(base * multiplier, state.max_recovery_timeout)
+    end
+  end
+
+  defp add_jitter(delay_ms) do
+    jitter_ms = :rand.uniform(max(1, div(delay_ms, 20)))
+    delay_ms + jitter_ms
+  end
+
+  defp schedule_recovery_timer(delay_ms, gen) do
+    Process.send_after(self(), {:attempt_proactive_recovery, gen}, delay_ms)
   end
 
   # Cancel an existing recovery timer (safe to call with nil)

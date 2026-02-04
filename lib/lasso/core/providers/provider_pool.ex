@@ -109,7 +109,9 @@ defmodule Lasso.RPC.ProviderPool do
       :last_error,
       # WebSocket reconnection tracking
       reconnect_attempts: 0,
-      reconnect_grace_until: nil
+      reconnect_grace_until: nil,
+      # Monotonic timestamp of last "marked as unhealthy" log (for suppression)
+      last_unhealthy_log_at: nil
     ]
   end
 
@@ -1865,25 +1867,43 @@ defmodule Lasso.RPC.ProviderPool do
               |> put_provider_and_refresh(provider_id, updated_provider)
               |> increment_failure_stats()
 
-            if updated_provider.status == :unhealthy and provider.status != :unhealthy do
-              Logger.warning(
-                "Provider #{provider_id} marked as unhealthy after #{updated_provider.consecutive_failures} failures"
-              )
+            new_state =
+              if updated_provider.status == :unhealthy and provider.status != :unhealthy do
+                now = System.monotonic_time(:millisecond)
 
-              publish_provider_event(
-                state.profile,
-                state.chain_name,
-                provider_id,
-                :unhealthy,
-                %{}
-              )
+                should_log =
+                  is_nil(provider.last_unhealthy_log_at) or
+                    now - provider.last_unhealthy_log_at > 300_000
 
-              :telemetry.execute([:lasso, :provider, :status], %{count: 1}, %{
-                chain: state.chain_name,
-                provider_id: provider_id,
-                status: :unhealthy
-              })
-            end
+                updated_with_log =
+                  if should_log do
+                    Logger.warning(
+                      "Provider #{provider_id} marked as unhealthy after #{updated_provider.consecutive_failures} failures"
+                    )
+
+                    %{updated_provider | last_unhealthy_log_at: now}
+                  else
+                    updated_provider
+                  end
+
+                publish_provider_event(
+                  state.profile,
+                  state.chain_name,
+                  provider_id,
+                  :unhealthy,
+                  %{}
+                )
+
+                :telemetry.execute([:lasso, :provider, :status], %{count: 1}, %{
+                  chain: state.chain_name,
+                  provider_id: provider_id,
+                  status: :unhealthy
+                })
+
+                put_provider_and_refresh(new_state, provider_id, updated_with_log)
+              else
+                new_state
+              end
 
             new_state
         end

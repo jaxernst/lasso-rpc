@@ -39,6 +39,7 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
   @max_consecutive_failures_before_warn 3
   @max_probe_backoff_ms 30_000
   @jitter_percent 0.2
+  @recovery_success_threshold 2
 
   @type provider_state :: %{
           provider_id: String.t(),
@@ -502,25 +503,35 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
     new_consecutive_successes = provider.consecutive_successes + 1
     was_failing = provider.consecutive_failures >= @max_consecutive_failures_before_warn
 
-    if was_failing do
-      Logger.info("HealthProbe: HTTP recovered",
-        chain: state.chain,
-        provider_id: provider.provider_id,
-        latency_ms: latency_ms,
-        after_failures: provider.consecutive_failures
-      )
+    if was_failing and new_consecutive_successes < @recovery_success_threshold do
+      %{
+        provider
+        | consecutive_successes: new_consecutive_successes,
+          last_probe_time: now,
+          last_probe_monotonic: System.monotonic_time(:millisecond),
+          last_latency_ms: latency_ms
+      }
+    else
+      if was_failing do
+        Logger.info("HealthProbe: HTTP recovered",
+          chain: state.chain,
+          provider_id: provider.provider_id,
+          latency_ms: latency_ms,
+          after_failures: provider.consecutive_failures
+        )
 
-      broadcast_recovery(state, provider, :http, provider.consecutive_failures)
+        broadcast_recovery(state, provider, :http, provider.consecutive_failures)
+      end
+
+      %{
+        provider
+        | consecutive_failures: 0,
+          consecutive_successes: new_consecutive_successes,
+          last_probe_time: now,
+          last_probe_monotonic: System.monotonic_time(:millisecond),
+          last_latency_ms: latency_ms
+      }
     end
-
-    %{
-      provider
-      | consecutive_failures: 0,
-        consecutive_successes: new_consecutive_successes,
-        last_probe_time: now,
-        last_probe_monotonic: System.monotonic_time(:millisecond),
-        last_latency_ms: latency_ms
-    }
   end
 
   defp handle_http_probe_failure(provider, state, reason, latency_ms, now) do
@@ -560,25 +571,35 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
     new_consecutive_successes = provider.ws_consecutive_successes + 1
     was_failing = provider.ws_consecutive_failures >= @max_consecutive_failures_before_warn
 
-    if was_failing do
-      Logger.info("HealthProbe: WS recovered",
-        chain: state.chain,
-        provider_id: provider.provider_id,
-        latency_ms: latency_ms,
-        after_failures: provider.ws_consecutive_failures
-      )
+    if was_failing and new_consecutive_successes < @recovery_success_threshold do
+      %{
+        provider
+        | ws_consecutive_successes: new_consecutive_successes,
+          ws_last_probe_time: now,
+          ws_last_probe_monotonic: System.monotonic_time(:millisecond),
+          ws_last_latency_ms: latency_ms
+      }
+    else
+      if was_failing do
+        Logger.info("HealthProbe: WS recovered",
+          chain: state.chain,
+          provider_id: provider.provider_id,
+          latency_ms: latency_ms,
+          after_failures: provider.ws_consecutive_failures
+        )
 
-      broadcast_recovery(state, provider, :ws, provider.ws_consecutive_failures)
+        broadcast_recovery(state, provider, :ws, provider.ws_consecutive_failures)
+      end
+
+      %{
+        provider
+        | ws_consecutive_failures: 0,
+          ws_consecutive_successes: new_consecutive_successes,
+          ws_last_probe_time: now,
+          ws_last_probe_monotonic: System.monotonic_time(:millisecond),
+          ws_last_latency_ms: latency_ms
+      }
     end
-
-    %{
-      provider
-      | ws_consecutive_failures: 0,
-        ws_consecutive_successes: new_consecutive_successes,
-        ws_last_probe_time: now,
-        ws_last_probe_monotonic: System.monotonic_time(:millisecond),
-        ws_last_latency_ms: latency_ms
-    }
   end
 
   defp handle_ws_probe_failure(provider, state, reason, latency_ms, now) do
