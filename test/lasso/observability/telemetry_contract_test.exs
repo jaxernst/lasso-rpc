@@ -117,9 +117,8 @@ defmodule Lasso.Observability.TelemetryContractTest do
       Process.sleep(20)
       assert CircuitBreaker.get_state(id).state == :open
 
-      # Backdate last_failure_time so should_attempt_recovery? returns true on next call
       :sys.replace_state(pid, fn state ->
-        %{state | last_failure_time: System.monotonic_time(:millisecond) - 6_000}
+        %{state | recovery_deadline_ms: System.monotonic_time(:millisecond) - 1}
       end)
 
       {:ok, collector} =

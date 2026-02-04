@@ -371,7 +371,9 @@ defmodule Lasso.BlockSync.Worker do
         state
 
       {:error, reason} ->
-        Logger.warning("WS subscription failed to start, HTTP polling continues",
+        level = if state.ws_retry_count > 0, do: :debug, else: :warning
+
+        Logger.log(level, "WS subscription failed to start, HTTP polling continues",
           chain: state.chain,
           provider_id: state.provider_id,
           reason: inspect(reason)
@@ -389,8 +391,16 @@ defmodule Lasso.BlockSync.Worker do
     %{state | mode: :http_with_ws, ws_retry_count: 0}
   end
 
-  defp handle_strategy_status(state, :ws, status) when status in [:stale, :failed, :degraded] do
-    # WS degraded - log it but HTTP keeps providing reliable data
+  defp handle_strategy_status(state, :ws, :failed) do
+    Logger.debug("WS subscription failed, HTTP polling continues",
+      chain: state.chain,
+      provider_id: state.provider_id
+    )
+
+    state
+  end
+
+  defp handle_strategy_status(state, :ws, status) when status in [:stale, :degraded] do
     Logger.info("WS subscription #{status}, HTTP polling continues",
       chain: state.chain,
       provider_id: state.provider_id

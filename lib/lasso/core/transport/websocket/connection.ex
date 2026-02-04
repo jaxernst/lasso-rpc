@@ -76,6 +76,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.WebSocket.Endpoint
 
+  @reconnect_log_threshold 5
+
   # Client API
 
   @doc """
@@ -798,7 +800,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   def handle_info({:reconnect}, state) do
-    Logger.info(
+    Logger.log(
+      reconnect_log_level(state.reconnect_attempts),
       "Reconnecting to #{state.endpoint.name} (attempt #{state.reconnect_attempts}, provider: #{state.endpoint.id})"
     )
 
@@ -1160,7 +1163,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
         jitter = if delay > 0, do: :rand.uniform(1000), else: 0
 
-        Logger.info(
+        Logger.log(
+          reconnect_log_level(state.reconnect_attempts),
           "Scheduling reconnect for #{state.endpoint.name} (attempt #{state.reconnect_attempts + 1}) in #{delay + jitter}ms"
         )
 
@@ -1199,7 +1203,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
         jitter = if delay > 0, do: :rand.uniform(1000), else: 0
 
-        Logger.info(
+        Logger.log(
+          reconnect_log_level(state.reconnect_attempts),
           "Scheduling reconnect for #{state.endpoint.name} (attempt #{state.reconnect_attempts + 1}/#{max_attempts}) in #{delay + jitter}ms"
         )
 
@@ -1350,6 +1355,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   # Used to detect stale subscriptions after reconnect
   defp generate_connection_id do
     "conn_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
+  end
+
+  defp reconnect_log_level(attempts) do
+    if attempts < @reconnect_log_threshold, do: :info, else: :debug
   end
 
   defp via_name(profile, chain, provider_id) do
