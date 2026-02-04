@@ -71,32 +71,32 @@ defmodule Lasso.TelemetryLogger do
   defp build_handlers do
     [
       # Failover events
-      {[:lasso, :failover, :fast_fail], "#{@handler_id_prefix}_fast_fail", &handle_fast_fail/4,
-       :log_failovers},
+      {[:lasso, :failover, :fast_fail], "#{@handler_id_prefix}_fast_fail",
+       &__MODULE__.handle_fast_fail/4, :log_failovers},
       {[:lasso, :failover, :circuit_open], "#{@handler_id_prefix}_circuit_open",
-       &handle_circuit_open/4, :log_failovers},
+       &__MODULE__.handle_circuit_open/4, :log_failovers},
       {[:lasso, :failover, :degraded_mode], "#{@handler_id_prefix}_degraded_mode",
-       &handle_degraded_mode/4, :log_failovers},
+       &__MODULE__.handle_degraded_mode/4, :log_failovers},
       {[:lasso, :failover, :degraded_success], "#{@handler_id_prefix}_degraded_success",
-       &handle_degraded_success/4, :log_failovers},
-      {[:lasso, :failover, :exhaustion], "#{@handler_id_prefix}_exhaustion", &handle_exhaustion/4,
-       :log_failovers},
+       &__MODULE__.handle_degraded_success/4, :log_failovers},
+      {[:lasso, :failover, :exhaustion], "#{@handler_id_prefix}_exhaustion",
+       &__MODULE__.handle_exhaustion/4, :log_failovers},
 
       # Slow request events
-      {[:lasso, :request, :slow], "#{@handler_id_prefix}_slow_request", &handle_slow_request/4,
-       :log_slow_requests},
+      {[:lasso, :request, :slow], "#{@handler_id_prefix}_slow_request",
+       &__MODULE__.handle_slow_request/4, :log_slow_requests},
       {[:lasso, :request, :very_slow], "#{@handler_id_prefix}_very_slow_request",
-       &handle_very_slow_request/4, :log_slow_requests},
+       &__MODULE__.handle_very_slow_request/4, :log_slow_requests},
 
       # Circuit breaker events
-      {[:lasso, :circuit_breaker, :open], "#{@handler_id_prefix}_cb_open", &handle_cb_open/4,
-       :log_circuit_breaker},
-      {[:lasso, :circuit_breaker, :close], "#{@handler_id_prefix}_cb_close", &handle_cb_close/4,
-       :log_circuit_breaker},
+      {[:lasso, :circuit_breaker, :open], "#{@handler_id_prefix}_cb_open",
+       &__MODULE__.handle_cb_open/4, :log_circuit_breaker},
+      {[:lasso, :circuit_breaker, :close], "#{@handler_id_prefix}_cb_close",
+       &__MODULE__.handle_cb_close/4, :log_circuit_breaker},
       {[:lasso, :circuit_breaker, :half_open], "#{@handler_id_prefix}_cb_half_open",
-       &handle_cb_half_open/4, :log_circuit_breaker},
+       &__MODULE__.handle_cb_half_open/4, :log_circuit_breaker},
       {[:lasso, :circuit_breaker, :proactive_recovery], "#{@handler_id_prefix}_cb_recovery",
-       &handle_cb_recovery/4, :log_circuit_breaker}
+       &__MODULE__.handle_cb_recovery/4, :log_circuit_breaker}
     ]
   end
 
@@ -156,11 +156,23 @@ defmodule Lasso.TelemetryLogger do
   # Circuit breaker handlers
 
   def handle_cb_open(_event, _measurements, metadata, _config) do
-    Logger.warning("Circuit opened: #{metadata.provider_id}:#{metadata.transport}",
-      chain: metadata.chain,
-      from: metadata.from_state,
-      to: metadata.to_state,
-      reason: metadata.reason
+    extra =
+      case metadata do
+        %{failure_count: count, error_category: cat} ->
+          [failure_count: count, error_category: cat]
+
+        _ ->
+          []
+      end
+
+    Logger.warning(
+      "Circuit opened: #{metadata.provider_id}:#{metadata.transport}",
+      [
+        chain: metadata.chain,
+        from: metadata.from_state,
+        to: metadata.to_state,
+        reason: metadata.reason
+      ] ++ extra
     )
   end
 

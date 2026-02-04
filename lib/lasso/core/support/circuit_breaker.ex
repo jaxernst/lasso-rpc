@@ -391,8 +391,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
       :open ->
         if should_attempt_recovery?(state) do
-          Logger.info("Circuit breaker #{state.provider_id} attempting recovery")
-
           # Cancel proactive recovery timer since we're transitioning via traffic
           cancel_recovery_timer(state.recovery_timer_ref)
 
@@ -491,8 +489,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   @impl true
   def handle_cast(:open, state) do
-    Logger.warning("Circuit breaker #{state.provider_id} (#{state.transport}) manually opened")
-
     :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
       chain: state.chain,
       provider_id: state.provider_id,
@@ -528,8 +524,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   @impl true
   def handle_cast(:close, state) do
-    Logger.info("Circuit breaker #{state.provider_id} (#{state.transport}) manually closed")
-
     :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
       chain: state.chain,
       provider_id: state.provider_id,
@@ -572,10 +566,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   def handle_info(:attempt_proactive_recovery, state) do
     case state.state do
       :open ->
-        Logger.info(
-          "Circuit breaker #{state.provider_id} (#{state.transport}) proactive recovery attempt"
-        )
-
         :telemetry.execute([:lasso, :circuit_breaker, :proactive_recovery], %{count: 1}, %{
           chain: state.chain,
           provider_id: state.provider_id,
@@ -720,10 +710,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
       :open ->
         # Received a success while open (e.g., external report). Transition to half_open
-        Logger.info(
-          "Circuit breaker #{state.provider_id} (#{state.transport}) attempting recovery from success report"
-        )
-
         # Cancel proactive recovery timer since we're transitioning out of open
         cancel_recovery_timer(state.recovery_timer_ref)
 
@@ -749,10 +735,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         new_success_count = 1
 
         if new_success_count >= effective_threshold do
-          Logger.info(
-            "Circuit breaker #{state.provider_id} (#{state.transport}) recovered from success report, closing"
-          )
-
           :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
             chain: state.chain,
             provider_id: state.provider_id,
@@ -801,10 +783,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         new_success_count = state.success_count + 1
 
         if new_success_count >= effective_threshold do
-          Logger.info(
-            "Circuit breaker #{state.provider_id} (#{state.transport}) recovered, closing"
-          )
-
           :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
             chain: state.chain,
             provider_id: state.provider_id,
@@ -894,16 +872,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         end
 
         if new_failure_count >= threshold do
-          Logger.error(
-            "Circuit breaker #{state.provider_id} (#{state.transport}) opening after #{new_failure_count} failures" <>
-              if(
-                error_category == :rate_limit and
-                  adjusted_recovery_timeout != state.recovery_timeout,
-                do: " (recovery timeout adjusted to #{div(adjusted_recovery_timeout, 1000)}s)",
-                else: ""
-              )
-          )
-
           :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
             chain: state.chain,
             provider_id: state.provider_id,
@@ -948,11 +916,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         end
 
       :half_open ->
-        # Half-open state fails, go back to open
-        Logger.error(
-          "Circuit breaker #{state.provider_id} (#{state.transport}) re-opening after recovery attempt failed"
-        )
-
         :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
           chain: state.chain,
           provider_id: state.provider_id,
