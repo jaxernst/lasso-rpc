@@ -226,7 +226,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
         {:ok, new_state}
 
       {:error, reason} ->
-        Logger.warning("WS subscription failed",
+        Logger.debug("WS subscription failed",
           chain: state.chain,
           provider_id: state.provider_id,
           reason: inspect(reason)
