@@ -26,7 +26,10 @@ defmodule Lasso.TelemetryLogger do
   - `[:lasso, :failover, :exhaustion]` - All providers exhausted
   - `[:lasso, :request, :slow]` - Request took >2000ms
   - `[:lasso, :request, :very_slow]` - Request took >4000ms
-  - `[:lasso, :circuit_breaker, :state_change]` - Circuit breaker state transition
+  - `[:lasso, :circuit_breaker, :open]` - Circuit breaker opened
+  - `[:lasso, :circuit_breaker, :close]` - Circuit breaker closed (recovered)
+  - `[:lasso, :circuit_breaker, :half_open]` - Circuit breaker half-open transition
+  - `[:lasso, :circuit_breaker, :proactive_recovery]` - Circuit breaker proactive recovery attempt
   """
 
   require Logger
@@ -86,8 +89,14 @@ defmodule Lasso.TelemetryLogger do
        &handle_very_slow_request/4, :log_slow_requests},
 
       # Circuit breaker events
-      {[:lasso, :circuit_breaker, :state_change], "#{@handler_id_prefix}_cb_state_change",
-       &handle_circuit_breaker_state_change/4, :log_circuit_breaker}
+      {[:lasso, :circuit_breaker, :open], "#{@handler_id_prefix}_cb_open", &handle_cb_open/4,
+       :log_circuit_breaker},
+      {[:lasso, :circuit_breaker, :close], "#{@handler_id_prefix}_cb_close", &handle_cb_close/4,
+       :log_circuit_breaker},
+      {[:lasso, :circuit_breaker, :half_open], "#{@handler_id_prefix}_cb_half_open",
+       &handle_cb_half_open/4, :log_circuit_breaker},
+      {[:lasso, :circuit_breaker, :proactive_recovery], "#{@handler_id_prefix}_cb_recovery",
+       &handle_cb_recovery/4, :log_circuit_breaker}
     ]
   end
 
@@ -146,20 +155,34 @@ defmodule Lasso.TelemetryLogger do
 
   # Circuit breaker handlers
 
-  def handle_circuit_breaker_state_change(_event, _measurements, metadata, _config) do
-    level = circuit_breaker_log_level(metadata.old_state, metadata.new_state)
-
-    Logger.log(
-      level,
-      "Circuit #{metadata.provider_id}: #{metadata.old_state} -> #{metadata.new_state}"
+  def handle_cb_open(_event, _measurements, metadata, _config) do
+    Logger.warning("Circuit opened: #{metadata.provider_id}:#{metadata.transport}",
+      chain: metadata.chain,
+      from: metadata.from_state,
+      to: metadata.to_state,
+      reason: metadata.reason
     )
   end
 
-  # Circuit breaker state transitions and their severity
-  defp circuit_breaker_log_level(_old, :open), do: :warning
-  defp circuit_breaker_log_level(:open, :half_open), do: :info
-  defp circuit_breaker_log_level(_old, :closed), do: :info
-  defp circuit_breaker_log_level(_, _), do: :debug
+  def handle_cb_close(_event, _measurements, metadata, _config) do
+    Logger.info("Circuit closed: #{metadata.provider_id}:#{metadata.transport}",
+      chain: metadata.chain,
+      reason: metadata.reason
+    )
+  end
+
+  def handle_cb_half_open(_event, _measurements, metadata, _config) do
+    Logger.info("Circuit half-open: #{metadata.provider_id}:#{metadata.transport}",
+      chain: metadata.chain,
+      reason: metadata.reason
+    )
+  end
+
+  def handle_cb_recovery(_event, _measurements, metadata, _config) do
+    Logger.info("Circuit proactive recovery: #{metadata.provider_id}:#{metadata.transport}",
+      chain: metadata.chain
+    )
+  end
 
   # Configuration helpers
 

@@ -1076,11 +1076,7 @@ defmodule Lasso.RPC.ProviderPool do
              to in [:closed, :open, :half_open] do
     # Only handle circuit breaker events for THIS chain
     if event_chain == state.chain_name or is_nil(event_chain) do
-      Logger.info(
-        "ProviderPool[#{state.chain_name}]: CB event #{provider_id}:#{transport} #{from} -> #{to}"
-      )
-
-      # Update circuit states
+      # Update circuit states (TelemetryLogger handles state transition logging)
       new_circuit_states = update_circuit_state(state.circuit_states, provider_id, transport, to)
 
       # Update recovery times cache when circuit opens or transitions

@@ -37,6 +37,8 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
   @tick_interval_ms 200
   @default_timeout_ms 5_000
   @max_consecutive_failures_before_warn 3
+  @max_probe_backoff_ms 30_000
+  @jitter_percent 0.2
 
   @type provider_state :: %{
           provider_id: String.t(),
@@ -44,12 +46,14 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
           consecutive_failures: non_neg_integer(),
           consecutive_successes: non_neg_integer(),
           last_probe_time: integer() | nil,
+          last_probe_monotonic: integer() | nil,
           last_latency_ms: non_neg_integer() | nil,
           has_http: boolean(),
           # WS probe state
           ws_consecutive_failures: non_neg_integer(),
           ws_consecutive_successes: non_neg_integer(),
           ws_last_probe_time: integer() | nil,
+          ws_last_probe_monotonic: integer() | nil,
           ws_last_latency_ms: non_neg_integer() | nil,
           has_ws: boolean(),
           ws_connection_stable: boolean()
@@ -328,11 +332,13 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
       consecutive_failures: 0,
       consecutive_successes: 0,
       last_probe_time: nil,
+      last_probe_monotonic: nil,
       last_latency_ms: nil,
       has_http: has_http,
       ws_consecutive_failures: 0,
       ws_consecutive_successes: 0,
       ws_last_probe_time: nil,
+      ws_last_probe_monotonic: nil,
       ws_last_latency_ms: nil,
       has_ws: has_ws,
       ws_connection_stable: ws_stable
@@ -378,13 +384,66 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
           state
 
         provider ->
+          # Apply backoff logic - always advances round-robin for fairness
+          # but may skip individual transport probes based on backoff
           updated_provider =
             provider
-            |> execute_http_probe(state)
-            |> execute_ws_probe(state)
+            |> maybe_execute_http_probe(state)
+            |> maybe_execute_ws_probe(state)
 
           %{state | providers: Map.put(state.providers, provider_id, updated_provider)}
       end
+    end
+  end
+
+  # Backoff helpers
+
+  defp maybe_execute_http_probe(%{has_http: false} = provider, _state), do: provider
+
+  defp maybe_execute_http_probe(provider, state) do
+    if should_skip_probe?(provider.consecutive_failures, provider.last_probe_monotonic) do
+      provider
+    else
+      execute_http_probe(provider, state)
+    end
+  end
+
+  defp maybe_execute_ws_probe(%{has_ws: false} = provider, _state), do: provider
+
+  defp maybe_execute_ws_probe(provider, state) do
+    if should_skip_probe?(provider.ws_consecutive_failures, provider.ws_last_probe_monotonic) do
+      provider
+    else
+      execute_ws_probe(provider, state)
+    end
+  end
+
+  defp should_skip_probe?(consecutive_failures, last_probe_monotonic) do
+    if consecutive_failures == 0 do
+      false
+    else
+      backoff_ms = calculate_backoff_with_jitter(consecutive_failures)
+      now = System.monotonic_time(:millisecond)
+      time_since = now - (last_probe_monotonic || now)
+      time_since < backoff_ms
+    end
+  end
+
+  defp calculate_backoff_with_jitter(consecutive_failures) when consecutive_failures <= 1, do: 0
+
+  defp calculate_backoff_with_jitter(consecutive_failures) do
+    base = 2_000
+    # Exponential backoff: 2s, 4s, 8s, 16s, capped at 30s
+    base_backoff =
+      min(@max_probe_backoff_ms, base * round(:math.pow(2, min(consecutive_failures - 2, 4))))
+
+    # Add ±20% jitter to avoid synchronized probe storms
+    jitter_range = round(base_backoff * @jitter_percent)
+
+    if jitter_range > 0 do
+      base_backoff + :rand.uniform(jitter_range * 2 + 1) - jitter_range - 1
+    else
+      base_backoff
     end
   end
 
@@ -459,6 +518,7 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
       | consecutive_failures: 0,
         consecutive_successes: new_consecutive_successes,
         last_probe_time: now,
+        last_probe_monotonic: System.monotonic_time(:millisecond),
         last_latency_ms: latency_ms
     }
   end
@@ -483,6 +543,7 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
       | consecutive_failures: new_consecutive_failures,
         consecutive_successes: 0,
         last_probe_time: now,
+        last_probe_monotonic: System.monotonic_time(:millisecond),
         last_latency_ms: latency_ms
     }
   end
@@ -515,6 +576,7 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
       | ws_consecutive_failures: 0,
         ws_consecutive_successes: new_consecutive_successes,
         ws_last_probe_time: now,
+        ws_last_probe_monotonic: System.monotonic_time(:millisecond),
         ws_last_latency_ms: latency_ms
     }
   end
@@ -539,6 +601,7 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
       | ws_consecutive_failures: new_consecutive_failures,
         ws_consecutive_successes: 0,
         ws_last_probe_time: now,
+        ws_last_probe_monotonic: System.monotonic_time(:millisecond),
         ws_last_latency_ms: latency_ms
     }
   end
