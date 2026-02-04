@@ -20,14 +20,11 @@ config :lasso, LassoWeb.Endpoint,
     tailwind: {Tailwind, :install_and_run, [:lasso, ~w(--watch)]}
   ]
 
-# Enhanced logging for development debugging
+# Development logging (set to :debug when actively debugging)
 config :logger, :console,
   format: {Lasso.Logger.ChainFormatter, :format},
-  level: :debug,
+  level: :info,
   metadata: :all
-
-# Silence LiveView debug logs (MOUNT, HANDLE EVENT, Replied, etc.)
-config :phoenix_live_view, log: false
 
 # Reduce Phoenix debug log spam (only log at info level)
 # This removes "Processing with", "Parameters:", "Pipelines:" debug logs
