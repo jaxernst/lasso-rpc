@@ -14,12 +14,11 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   additional failures while open do not extend it.
 
   On reopen (half_open → open), the deadline is computed with exponential
-  backoff based on the previous episode's delay (not the configured base).
-  Rate-limit errors with retry-after headers use the retry-after value as
-  the reopen delay instead of backing off.
+  backoff from the configured base recovery timeout. Rate-limit errors with
+  retry-after headers use the retry-after value directly instead of backing off.
 
-  Backoff schedule: delay × 2^min(consecutive_reopens, 4), capped at
-  `max_recovery_timeout` (default 10 minutes).
+  Backoff schedule: base_recovery_timeout × 2^min(consecutive_reopens, 4),
+  capped at `max_recovery_timeout` (default 10 minutes).
   """
 
   use GenServer
@@ -1033,7 +1032,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     if explicit_retry_after do
       min(explicit_retry_after, state.max_recovery_timeout)
     else
-      base = state.effective_recovery_delay || state.base_recovery_timeout
+      base = state.base_recovery_timeout
       multiplier = trunc(:math.pow(2, min(state.consecutive_open_count, 4)))
       min(base * multiplier, state.max_recovery_timeout)
     end
