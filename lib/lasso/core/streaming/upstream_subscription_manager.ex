@@ -74,7 +74,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
           active_subscriptions: map(),
           upstream_index: map(),
           connection_states: map(),
-          new_heads_staleness_threshold_ms: pos_integer() | nil
+          new_heads_staleness_threshold_ms: pos_integer() | nil,
+          orphan_event_count: non_neg_integer()
         }
 
   defstruct [
@@ -89,7 +90,9 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
     # Used to detect stale subscriptions after reconnect
     connection_states: %{},
     # Staleness threshold in ms (read from chain config's new_heads_staleness_threshold_ms)
-    new_heads_staleness_threshold_ms: nil
+    new_heads_staleness_threshold_ms: nil,
+    # Counter for rate-limiting orphan event logging
+    orphan_event_count: 0
   ]
 
   # Client API
@@ -295,16 +298,20 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionManager do
         {:noreply, state}
 
       nil ->
-        # Orphaned subscription event
-        Logger.debug("Received event for unknown subscription",
-          chain: state.chain,
-          provider_id: provider_id,
-          upstream_id: upstream_id,
-          active_subscription_count: map_size(state.active_subscriptions)
-        )
+        # Orphaned subscription event - telemetry already emitted below
+        orphan_count = state.orphan_event_count + 1
+
+        # Rate-limit logging (first + every 100th)
+        if orphan_count == 1 or rem(orphan_count, 100) == 0 do
+          Logger.debug("Orphaned subscription events",
+            chain: state.chain,
+            provider_id: provider_id,
+            count: orphan_count
+          )
+        end
 
         emit_telemetry(:orphaned_event, state.chain, provider_id, nil)
-        {:noreply, state}
+        {:noreply, %{state | orphan_event_count: orphan_count}}
 
       _mismatch ->
         # Provider mismatch in index - shouldn't happen

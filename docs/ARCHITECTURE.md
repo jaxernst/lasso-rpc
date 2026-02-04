@@ -501,6 +501,25 @@ chains:
       lag_alert_threshold_blocks: 5
 ```
 
+### Health Probe Backoff
+
+Health probes implement exponential backoff for degraded providers to reduce probe load:
+
+| Consecutive Failures | Backoff |
+|---------------------|---------|
+| 0-1 | 0 (probe normally) |
+| 2 | 2 seconds |
+| 3 | 4 seconds |
+| 4 | 8 seconds |
+| 5 | 16 seconds |
+| 6+ | 30 seconds (capped) |
+
+- Backoff uses monotonic time to avoid wall-clock jump issues
+- ±20% jitter prevents synchronized probe storms across providers
+- Backoff resets immediately on success
+- HTTP and WebSocket probes track backoff independently
+- Round-robin advancement is unaffected (only the individual probe may be skipped)
+
 ---
 
 ## Provider Selection
@@ -573,6 +592,27 @@ config :lasso, :circuit_breaker,
 - Selection excludes providers with open breakers
 - Automatic recovery probing in half-open state
 - Telemetry events for state transitions
+
+### Telemetry Schema
+
+All circuit breaker events use consistent metadata:
+
+| Event | Required Metadata | Optional Metadata |
+|-------|-------------------|-------------------|
+| `[:lasso, :circuit_breaker, :open]` | chain, provider_id, transport, from_state, to_state, reason | error_category, failure_count, recovery_timeout_ms |
+| `[:lasso, :circuit_breaker, :close]` | chain, provider_id, transport, from_state, to_state, reason | - |
+| `[:lasso, :circuit_breaker, :half_open]` | chain, provider_id, transport, from_state, to_state, reason | - |
+| `[:lasso, :circuit_breaker, :proactive_recovery]` | chain, provider_id, transport, from_state, to_state, reason | - |
+| `[:lasso, :circuit_breaker, :failure]` | chain, provider_id, transport, error_category, circuit_state | - |
+
+**Reason values:**
+
+- `:failure_threshold_exceeded` - Opened due to consecutive failures
+- `:reopen_due_to_failure` - Re-opened from half_open after failure
+- `:recovered` - Closed after successful recovery
+- `:attempt_recovery` - Transitioning to half_open to test recovery
+- `:proactive_recovery` - Timer-based recovery attempt
+- `:manual_open` / `:manual_close` - Manual intervention
 
 ---
 

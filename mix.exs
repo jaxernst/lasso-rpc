@@ -78,7 +78,8 @@ defmodule Lasso.MixProject do
 
   defp dialyzer do
     [
-      # Suppress known false positives from opaque type internals
+      plt_core_path: "priv/plts/core.plt",
+      plt_local_path: "priv/plts/local.plt",
       ignore_warnings: ".dialyzer_ignore.exs",
       list_unused_filters: true
     ]

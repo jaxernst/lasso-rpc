@@ -136,7 +136,15 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       :degraded ->
         # Circuit breaker triggered, drop events
-        Logger.warning("Dropping event in degraded mode",
+        # Emit telemetry for production visibility (metrics)
+        :telemetry.execute(
+          [:lasso, :stream, :dropped_event],
+          %{count: 1},
+          %{chain: state.chain, reason: :degraded_mode}
+        )
+
+        # Downgrade to DEBUG (filtered in production)
+        Logger.debug("Dropping event in degraded mode",
           chain: state.chain,
           key: inspect(state.key)
         )

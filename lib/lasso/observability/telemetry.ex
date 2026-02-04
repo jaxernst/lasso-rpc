@@ -99,11 +99,36 @@ defmodule Lasso.Telemetry do
         tags: [:chain, :method, :provider_id, :transport, :status]
       ),
 
-      # Circuit breaker state changes
-      counter("lasso.circuit_breaker.state_change.count",
-        event_name: [:lasso, :circuit_breaker, :state_change],
-        description: "Circuit breaker state transitions",
-        tags: [:provider_id, :old_state, :new_state]
+      # Circuit breaker state changes (individual events for each transition type)
+      counter("lasso.circuit_breaker.open.count",
+        event_name: [:lasso, :circuit_breaker, :open],
+        description: "Circuit breaker openings",
+        tags: [:chain, :provider_id, :transport, :reason]
+      ),
+      counter("lasso.circuit_breaker.close.count",
+        event_name: [:lasso, :circuit_breaker, :close],
+        description: "Circuit breaker closings",
+        tags: [:chain, :provider_id, :transport, :reason]
+      ),
+      counter("lasso.circuit_breaker.half_open.count",
+        event_name: [:lasso, :circuit_breaker, :half_open],
+        description: "Circuit breaker half-open transitions",
+        tags: [:chain, :provider_id, :transport, :reason]
+      ),
+      counter("lasso.circuit_breaker.proactive_recovery.count",
+        event_name: [:lasso, :circuit_breaker, :proactive_recovery],
+        description: "Circuit breaker proactive recovery attempts",
+        tags: [:chain, :provider_id, :transport]
+      ),
+      counter("lasso.circuit_breaker.failure.count",
+        event_name: [:lasso, :circuit_breaker, :failure],
+        description: "Circuit breaker failures by category and state",
+        tags: [:chain, :provider_id, :transport, :error_category, :circuit_state]
+      ),
+      counter("lasso.circuit_breaker.timeout.count",
+        event_name: [:lasso, :circuit_breaker, :timeout],
+        description: "Circuit breaker request timeouts",
+        tags: [:chain, :provider_id, :transport]
       ),
 
       # WebSocket connection events
@@ -131,34 +156,75 @@ defmodule Lasso.Telemetry do
       ),
 
       # Provider health metrics
-      counter("lasso.provider.health_change.count",
-        event_name: [:lasso, :provider, :health_change],
-        description: "Provider health status changes",
-        tags: [:provider_id, :old_status, :new_status]
+      counter("lasso.provider.status.count",
+        event_name: [:lasso, :provider, :status],
+        description: "Provider status changes",
+        tags: [:chain, :provider_id, :status]
       ),
 
-      # Failover events
-      counter("lasso.failover.count",
-        event_name: [:lasso, :failover, :triggered],
-        description: "Failover events triggered",
-        tags: [:chain_name, :from_provider, :to_provider, :reason]
+      # Failover events (individual counters for each type)
+      counter("lasso.failover.fast_fail.count",
+        event_name: [:lasso, :failover, :fast_fail],
+        description: "Provider failovers triggered",
+        tags: [:chain, :provider_id, :transport, :error_category]
+      ),
+      counter("lasso.failover.circuit_open.count",
+        event_name: [:lasso, :failover, :circuit_open],
+        description: "Requests skipped due to open circuit",
+        tags: [:chain, :provider_id, :transport]
+      ),
+      counter("lasso.failover.degraded_mode.count",
+        event_name: [:lasso, :failover, :degraded_mode],
+        description: "Degraded mode entries (trying half-open circuits)",
+        tags: [:chain]
+      ),
+      counter("lasso.failover.degraded_success.count",
+        event_name: [:lasso, :failover, :degraded_success],
+        description: "Successful recoveries via degraded mode",
+        tags: [:chain, :provider_id, :transport]
+      ),
+      counter("lasso.failover.exhaustion.count",
+        event_name: [:lasso, :failover, :exhaustion],
+        description: "All providers exhausted",
+        tags: [:chain]
       ),
 
-      # Cluster node events
-      counter("lasso.cluster.node.connected.count",
-        event_name: [:lasso, :cluster, :node, :connected],
+      # Cluster topology events
+      counter("lasso.cluster.topology.node_connected.count",
+        event_name: [:lasso, :cluster, :topology, :node_connected],
         description: "Cluster nodes connected",
-        tags: [:node, :region]
+        tags: [:node]
       ),
-      counter("lasso.cluster.node.disconnected.count",
-        event_name: [:lasso, :cluster, :node, :disconnected],
+      counter("lasso.cluster.topology.node_disconnected.count",
+        event_name: [:lasso, :cluster, :topology, :node_disconnected],
         description: "Cluster nodes disconnected",
         tags: [:node]
       ),
-      last_value("lasso.cluster.node.count",
-        event_name: [:lasso, :cluster, :node, :connected],
-        measurement: :node_count,
-        description: "Current cluster node count"
+
+      # Dropped events in degraded mode
+      counter("lasso.stream.dropped_event.count",
+        event_name: [:lasso, :stream, :dropped_event],
+        description: "Events dropped in degraded mode",
+        tags: [:chain, :reason]
+      ),
+
+      # WebSocket pending cleanup
+      counter("lasso.websocket.pending_cleanup.count",
+        event_name: [:lasso, :websocket, :pending_cleanup],
+        description: "WebSocket pending request cleanups",
+        tags: [:provider_id]
+      ),
+      summary("lasso.websocket.pending_cleanup.pending_count",
+        event_name: [:lasso, :websocket, :pending_cleanup],
+        measurement: :pending_count,
+        description: "Number of pending requests cleaned up per disconnect"
+      ),
+
+      # Orphaned subscription events
+      counter("lasso.upstream_subscriptions.orphaned_event.count",
+        event_name: [:lasso, :upstream_subscriptions, :orphaned_event],
+        description: "Orphaned subscription events received",
+        tags: [:chain]
       ),
 
       # Dashboard cluster metrics cache

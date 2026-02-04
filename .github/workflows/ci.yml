@@ -134,5 +134,8 @@ jobs:
       - name: Compile
         run: mix compile
 
+      - name: Create PLT directory
+        run: mkdir -p priv/plts
+
       - name: Run Dialyzer
         run: mix dialyzer --format github
