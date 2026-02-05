@@ -152,66 +152,24 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
        ) do
     conn = provider_connection || %{}
     chain = Map.get(conn, :chain)
-
     chain_consensus = compute_chain_consensus(cluster_block_heights, chain, connections)
 
-    # Get block height data based on mode
     {block_height, block_lag, consensus_height} =
-      if selected_region == "aggregate" do
-        provider_heights =
-          cluster_block_heights
-          |> Enum.filter(fn {{pid, _region}, _data} -> pid == provider_id end)
-          |> Enum.map(fn {{_pid, _region}, data} -> data end)
+      resolve_block_heights(
+        selected_region,
+        region_data,
+        conn,
+        cluster_block_heights,
+        provider_id,
+        chain_consensus
+      )
 
-        if provider_heights != [] do
-          max_height =
-            provider_heights
-            |> Enum.map(& &1[:height])
-            |> Enum.reject(&is_nil/1)
-            |> Enum.max(fn -> nil end)
-
-          min_lag =
-            provider_heights
-            |> Enum.map(& &1[:lag])
-            |> Enum.reject(&is_nil/1)
-            |> Enum.min(fn -> 0 end)
-
-          consensus =
-            chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
-
-          {max_height, min_lag, consensus}
-        else
-          {
-            region_data[:block_height] || Map.get(conn, :block_height),
-            region_data[:block_lag] || 0,
-            chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
-          }
-        end
-      else
-        region_height_data = Map.get(cluster_block_heights, {provider_id, selected_region}, %{})
-
-        {
-          region_height_data[:height] || region_data[:block_height] ||
-            Map.get(conn, :block_height),
-          region_height_data[:lag] || region_data[:block_lag] || 0,
-          chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
-        }
-      end
-
-    # Calculate optimistic lag for better UX
     {optimistic_lag, _raw_lag} =
-      if selected_region == "aggregate" do
-        calculate_optimistic_lag(chain, provider_id)
-      else
-        {nil, nil}
-      end
+      if selected_region == "aggregate",
+        do: calculate_optimistic_lag(chain, provider_id),
+        else: {nil, nil}
 
-    effective_lag =
-      cond do
-        is_integer(block_lag) and block_lag > 0 -> block_lag
-        optimistic_lag != nil -> abs(min(0, optimistic_lag))
-        true -> Map.get(conn, :blocks_behind, 0) || 0
-      end
+    effective_lag = resolve_effective_lag(block_lag, optimistic_lag, conn)
 
     %{
       block_height: block_height,
@@ -221,6 +179,61 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       sync_status: sync_status_level(effective_lag),
       mode: if(selected_region == "aggregate", do: :aggregate, else: :region)
     }
+  end
+
+  defp resolve_block_heights(
+         "aggregate",
+         region_data,
+         conn,
+         cluster_block_heights,
+         provider_id,
+         chain_consensus
+       ) do
+    provider_heights =
+      cluster_block_heights
+      |> Enum.filter(fn {{pid, _region}, _data} -> pid == provider_id end)
+      |> Enum.map(fn {{_pid, _region}, data} -> data end)
+
+    consensus =
+      chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
+
+    if provider_heights != [] do
+      max_height =
+        provider_heights |> Enum.map(& &1[:height]) |> Enum.reject(&is_nil/1) |> Enum.max(fn -> nil end)
+
+      min_lag =
+        provider_heights |> Enum.map(& &1[:lag]) |> Enum.reject(&is_nil/1) |> Enum.min(fn -> 0 end)
+
+      {max_height, min_lag, consensus}
+    else
+      {region_data[:block_height] || Map.get(conn, :block_height), region_data[:block_lag] || 0,
+       consensus}
+    end
+  end
+
+  defp resolve_block_heights(
+         selected_region,
+         region_data,
+         conn,
+         cluster_block_heights,
+         provider_id,
+         chain_consensus
+       ) do
+    region_height_data = Map.get(cluster_block_heights, {provider_id, selected_region}, %{})
+
+    {
+      region_height_data[:height] || region_data[:block_height] || Map.get(conn, :block_height),
+      region_height_data[:lag] || region_data[:block_lag] || 0,
+      chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
+    }
+  end
+
+  defp resolve_effective_lag(block_lag, optimistic_lag, conn) do
+    cond do
+      is_integer(block_lag) and block_lag > 0 -> block_lag
+      optimistic_lag != nil -> abs(min(0, optimistic_lag))
+      true -> Map.get(conn, :blocks_behind, 0) || 0
+    end
   end
 
   defp compute_chain_consensus(cluster_block_heights, chain, connections)
