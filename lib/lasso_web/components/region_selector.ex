@@ -10,6 +10,7 @@ defmodule LassoWeb.Components.RegionSelector do
   """
   use Phoenix.Component
 
+  alias LassoWeb.Dashboard.Formatting
   alias Phoenix.LiveView.JS
 
   attr(:id, :string, required: true)
@@ -91,7 +92,7 @@ defmodule LassoWeb.Components.RegionSelector do
               )
             ]}
           >
-            {region}
+            {Formatting.format_region_name(region)}
             <span
               :if={region in @regions_with_issues}
               class="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-red-500"
@@ -161,7 +162,7 @@ defmodule LassoWeb.Components.RegionSelector do
             ]}
           >
             <span class="capitalize">
-              {if @selected == "aggregate", do: "Select region...", else: @selected}
+              {if @selected == "aggregate", do: "Select region...", else: Formatting.format_region_name(@selected)}
             </span>
             <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -229,7 +230,7 @@ defmodule LassoWeb.Components.RegionSelector do
           region in @regions_with_issues && region != @selected && "text-red-400"
         ]}
       >
-        <span>{region}</span>
+        <span>{Formatting.format_region_name(region)}</span>
         <div class="flex items-center gap-2">
           <span
             :if={region in @regions_with_issues}

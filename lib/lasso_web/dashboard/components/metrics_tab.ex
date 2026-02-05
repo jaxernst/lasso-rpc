@@ -5,7 +5,8 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
   use LassoWeb, :live_component
 
   alias LassoWeb.Components.DetailPanelComponents
-  alias LassoWeb.Dashboard.{Formatting, Status}
+  alias LassoWeb.Dashboard.Formatting
+  alias LassoWeb.Dashboard.Status
 
   @impl true
   def update(assigns, socket) do
@@ -26,7 +27,6 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     available_node_ids =
       (cluster_node_ids ++ metrics_node_ids)
       |> Enum.uniq()
-      |> Enum.reject(&(&1 in [nil, "unknown"]))
       |> Enum.sort()
 
     # Only show node tabs when there are multiple nodes (single node = no point in tabs)
@@ -65,7 +65,6 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       end
     end)
     |> Enum.uniq()
-    |> Enum.reject(&(&1 in [nil, "unknown"]))
     |> Enum.sort()
   end
 
@@ -164,7 +163,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
           )
         ]}
       >
-        {nid}
+        {Formatting.format_region_name(nid)}
       </button>
     </div>
     """
@@ -324,7 +323,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
           )
         ]}
       >
-        {nid}
+        {Formatting.format_region_name(nid)}
       </button>
     </div>
     """

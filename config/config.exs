@@ -128,5 +128,19 @@ config :logger, :console,
     :lag_threshold_blocks
   ]
 
+# Region display name mapping (lowercase prefix before first dash -> display name)
+config :lasso, :region_display_names, %{
+  "sjc" => "San Jose",
+  "iad" => "Washington DC",
+  "ord" => "Chicago",
+  "lax" => "Los Angeles",
+  "ewr" => "Newark",
+  "ams" => "Amsterdam",
+  "lhr" => "London",
+  "nrt" => "Tokyo",
+  "sin" => "Singapore",
+  "syd" => "Sydney"
+}
+
 # Environment specific configs
 import_config "#{config_env()}.exs"

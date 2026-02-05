@@ -84,13 +84,16 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     regions_with_issues = find_regions_with_issues(cluster_circuits, provider_id)
 
     # Compute derived data (with cached fallback for metrics)
+    connections = socket.assigns[:connections] || []
+
     sync_data =
       compute_sync_data(
         selected_region,
         region_data,
         provider_connection,
         cluster_block_heights,
-        provider_id
+        provider_id,
+        connections
       )
 
     metrics_data = compute_metrics_data(region_data, cached_fallback)
@@ -144,22 +147,23 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          region_data,
          provider_connection,
          cluster_block_heights,
-         provider_id
+         provider_id,
+         connections
        ) do
     conn = provider_connection || %{}
     chain = Map.get(conn, :chain)
 
+    chain_consensus = compute_chain_consensus(cluster_block_heights, chain, connections)
+
     # Get block height data based on mode
     {block_height, block_lag, consensus_height} =
       if selected_region == "aggregate" do
-        # Aggregate mode: find highest block height across all regions for this provider
         provider_heights =
           cluster_block_heights
           |> Enum.filter(fn {{pid, _region}, _data} -> pid == provider_id end)
           |> Enum.map(fn {{_pid, _region}, data} -> data end)
 
         if provider_heights != [] do
-          # Take highest block height and lowest lag (best case from any node)
           max_height =
             provider_heights
             |> Enum.map(& &1[:height])
@@ -172,25 +176,23 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
             |> Enum.reject(&is_nil/1)
             |> Enum.min(fn -> 0 end)
 
-          consensus = region_data[:consensus_height] || Map.get(conn, :consensus_height)
+          consensus = chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
           {max_height, min_lag, consensus}
         else
-          # Fall back to local data
           {
             region_data[:block_height] || Map.get(conn, :block_height),
             region_data[:block_lag] || 0,
-            region_data[:consensus_height] || Map.get(conn, :consensus_height)
+            chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
           }
         end
       else
-        # Per-region mode: use region-specific data from cluster_block_heights
         region_height_data = Map.get(cluster_block_heights, {provider_id, selected_region}, %{})
 
         {
           region_height_data[:height] || region_data[:block_height] ||
             Map.get(conn, :block_height),
           region_height_data[:lag] || region_data[:block_lag] || 0,
-          region_data[:consensus_height] || Map.get(conn, :consensus_height)
+          chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
         }
       end
 
@@ -218,6 +220,21 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       mode: if(selected_region == "aggregate", do: :aggregate, else: :region)
     }
   end
+
+  defp compute_chain_consensus(cluster_block_heights, chain, connections)
+       when is_binary(chain) do
+    chain_provider_ids =
+      connections
+      |> Enum.filter(&(&1.chain == chain))
+      |> MapSet.new(& &1.id)
+
+    cluster_block_heights
+    |> Enum.filter(fn {{pid, _node}, _} -> pid in chain_provider_ids end)
+    |> Enum.map(fn {_, %{height: h}} -> h end)
+    |> Enum.max(fn -> nil end)
+  end
+
+  defp compute_chain_consensus(_, _, _), do: nil
 
   defp compute_metrics_data(region_data, cached_metrics) do
     # Prefer live data for real-time metrics, fall back to cached
