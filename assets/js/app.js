@@ -10,6 +10,9 @@ import * as LassoSim from "./lasso_simulator";
 // Dynamic mesh visualization for hero graphic
 import { HeroMesh } from "./hero_mesh";
 
+// 3D globe visualization
+import GlobeRenderer from "./hero_globe";
+
 // Collapsible Section Hook
 const CollapsibleSection = {
   mounted() {
@@ -1293,78 +1296,82 @@ const ParallaxBackground = {
   },
 };
 
-// Hero Parallax Hook - Dynamic mesh visualization with parallax and interactive effects
-// Uses HeroMesh module for real-time connection line recalculation during parallax
-const HeroParallax = {
+// Hero Globe Hook - 3D globe with slow auto-rotation + scroll-driven boost
+// Scroll adds rotation (spins faster) and shifts tilt southward
+const HeroGlobe = {
   mounted() {
+    const canvas = this.el.querySelector("#globe-canvas");
+    if (!canvas) return;
+
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReducedMotion) {
+      canvas.style.opacity = "0.3";
+      return;
+    }
+
+    // Scroll maps to this much extra Y-rotation (radians)
+    this.SCROLL_ROTATION_RANGE = -3.0;
+    // Scroll shifts tilt from 0 to this value (positive = look more southern)
+    this.SCROLL_TILT_RANGE = 0.85;
+
+    this.globe = new GlobeRenderer(canvas, {
+      initialRotation: 2.9,
+      initialTilt: -0.35,
+      autoRotateSpeed: 0.00008,
+      xOffset: 0.82,
+      yOffset: 0.65,
+      radiusScale: 0.55,
+    });
+
     this.scrollContainer = document.getElementById("main-scroll-container");
-
-    if (!this.scrollContainer) {
-      console.warn("HeroParallax: Could not find main-scroll-container");
-      return;
-    }
-
-    // Find the SVG element
-    this.svg = this.el.querySelector("#hero-mesh-svg");
-    if (!this.svg) {
-      console.warn("HeroParallax: Could not find hero-mesh-svg");
-      return;
-    }
-
-    // Initialize the dynamic mesh system
-    this.mesh = new HeroMesh(this.el, this.svg, this.scrollContainer);
-
-    // Container-level parallax (vertical stickiness)
-    this.containerConfig = {
-      verticalMultiplier: 0.17,
-    };
-
-    this.lastScrolled = 0;
     this.rafId = null;
 
     this.handleScroll = () => {
-      const scrolled = this.scrollContainer.scrollTop;
-
-      if (this.rafId) {
-        cancelAnimationFrame(this.rafId);
-      }
-
+      if (this.rafId) return;
       this.rafId = requestAnimationFrame(() => {
-        this.lastScrolled = scrolled;
-        // Container-level vertical parallax (makes the whole graphic "sticky")
-        const containerY = scrolled * this.containerConfig.verticalMultiplier;
-        this.el.style.transform = `translateY(${containerY}px)`;
+        const scrollTop = this.scrollContainer
+          ? this.scrollContainer.scrollTop
+          : window.scrollY;
+        const maxScroll = this.scrollContainer
+          ? this.scrollContainer.scrollHeight - this.scrollContainer.clientHeight
+          : document.documentElement.scrollHeight - window.innerHeight;
+
+        const progress = maxScroll > 0
+          ? Math.min(1, Math.max(0, scrollTop / maxScroll))
+          : 0;
+
+        const eased = progress < 0.5
+          ? 2 * progress * progress
+          : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+        this.globe.setScrollOffset(
+          eased * this.SCROLL_ROTATION_RANGE,
+          eased * this.SCROLL_TILT_RANGE,
+        );
+
+        const fadeStart = window.innerHeight * 0.4;
+        const fadeEnd = window.innerHeight * 2.0;
+        const opacity = scrollTop < fadeStart
+          ? 1
+          : Math.max(0, 1 - (scrollTop - fadeStart) / (fadeEnd - fadeStart));
+        this.el.style.opacity = opacity;
+
         this.rafId = null;
       });
     };
 
-    this.scrollContainer.addEventListener("scroll", this.handleScroll, {
-      passive: true,
-    });
-
-    // Initial call
+    if (this.scrollContainer) {
+      this.scrollContainer.addEventListener("scroll", this.handleScroll, { passive: true });
+    }
     this.handleScroll();
   },
 
-  updated() {
-    // Re-apply container transform after LiveView patches
-    if (this.scrollContainer && this.el) {
-      const containerY =
-        this.lastScrolled * this.containerConfig.verticalMultiplier;
-      this.el.style.transform = `translateY(${containerY}px)`;
-    }
-  },
-
   destroyed() {
+    if (this.globe) this.globe.destroy();
     if (this.scrollContainer) {
       this.scrollContainer.removeEventListener("scroll", this.handleScroll);
     }
-    if (this.rafId) {
-      cancelAnimationFrame(this.rafId);
-    }
-    if (this.mesh) {
-      this.mesh.destroy();
-    }
+    if (this.rafId) cancelAnimationFrame(this.rafId);
   },
 };
 
@@ -1399,7 +1406,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     TabSwitcher: EndpointSelector,
     ScrollReveal,
     ParallaxBackground,
-    HeroParallax,
+    HeroGlobe,
     ExpandableDetails,
     HeatmapAnimation,
     ProfilePersistence,
