@@ -199,10 +199,16 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
     if provider_heights != [] do
       max_height =
-        provider_heights |> Enum.map(& &1[:height]) |> Enum.reject(&is_nil/1) |> Enum.max(fn -> nil end)
+        provider_heights
+        |> Enum.map(& &1[:height])
+        |> Enum.reject(&is_nil/1)
+        |> Enum.max(fn -> nil end)
 
       min_lag =
-        provider_heights |> Enum.map(& &1[:lag]) |> Enum.reject(&is_nil/1) |> Enum.min(fn -> 0 end)
+        provider_heights
+        |> Enum.map(& &1[:lag])
+        |> Enum.reject(&is_nil/1)
+        |> Enum.min(fn -> 0 end)
 
       {max_height, min_lag, consensus}
     else
