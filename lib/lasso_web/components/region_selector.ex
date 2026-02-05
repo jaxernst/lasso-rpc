@@ -162,7 +162,9 @@ defmodule LassoWeb.Components.RegionSelector do
             ]}
           >
             <span class="capitalize">
-              {if @selected == "aggregate", do: "Select region...", else: Formatting.format_region_name(@selected)}
+              {if @selected == "aggregate",
+                do: "Select region...",
+                else: Formatting.format_region_name(@selected)}
             </span>
             <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path

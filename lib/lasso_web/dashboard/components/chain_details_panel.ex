@@ -46,7 +46,10 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       socket
       |> assign(assigns)
       |> assign(:chain_connections, chain_connections)
-      |> assign(:consensus_height, find_consensus_height(chain_connections, assigns[:cluster_block_heights] || %{}))
+      |> assign(
+        :consensus_height,
+        find_consensus_height(chain_connections, assigns[:cluster_block_heights] || %{})
+      )
       |> assign(:chain_events, chain_events)
       |> assign(:available_node_ids, available_node_ids)
       |> assign(:show_region_tabs, length(available_node_ids) > 1)
@@ -97,7 +100,8 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       |> Enum.map(fn {_, %{height: h}} -> h end)
       |> Enum.max(fn -> nil end)
 
-    realtime_max || Enum.find_value(chain_connections, fn conn -> Map.get(conn, :consensus_height) end)
+    realtime_max ||
+      Enum.find_value(chain_connections, fn conn -> Map.get(conn, :consensus_height) end)
   end
 
   @impl true

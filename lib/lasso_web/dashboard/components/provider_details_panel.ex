@@ -176,7 +176,9 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
             |> Enum.reject(&is_nil/1)
             |> Enum.min(fn -> 0 end)
 
-          consensus = chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
+          consensus =
+            chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
+
           {max_height, min_lag, consensus}
         else
           {

@@ -150,5 +150,4 @@ defmodule LassoWeb.Components.ClusterStatus do
   defp status_text_color(:degraded), do: "text-yellow-400"
   defp status_text_color(:critical), do: "text-red-400"
   defp status_text_color(:offline), do: "text-gray-500"
-
 end
