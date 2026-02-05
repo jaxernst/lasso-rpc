@@ -1026,7 +1026,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     self_node_id = get_self_node_id()
     %{connected: 1, responding: 1, node_ids: [self_node_id], last_update: now()}
   catch
-    :exit, _ -> %{connected: 1, responding: 1, node_ids: ["unknown"], last_update: now()}
+    :exit, _ -> %{connected: 1, responding: 1, node_ids: [], last_update: now()}
   end
 
   defp now do

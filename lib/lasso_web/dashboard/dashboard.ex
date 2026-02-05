@@ -97,7 +97,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:vm_metrics_enabled, Lasso.VMMetricsCollector.enabled?())
       |> assign(:metrics_task, nil)
       |> assign(:metrics_stale, false)
-      |> assign(:metrics_coverage, %{responding: 1, total: 1})
+      |> assign(:metrics_coverage, nil)
       |> assign(:last_cluster_update, System.system_time(:millisecond))
       # Real-time aggregator state
       |> assign(:live_provider_metrics, %{})
@@ -456,8 +456,10 @@ defmodule LassoWeb.Dashboard do
 
     # In single-node mode (total == 1), staleness doesn't apply since there's
     # no cluster to be out of sync with
+    coverage = socket.assigns.metrics_coverage
+
     stale =
-      socket.assigns.metrics_coverage.total > 1 and
+      coverage != nil and coverage.total > 1 and
         time_since_update > @staleness_threshold_ms
 
     schedule_staleness_check()
@@ -745,6 +747,7 @@ defmodule LassoWeb.Dashboard do
       
     <!-- Fixed cluster status indicator -->
       <ClusterStatus.fixed_cluster_status
+        :if={@metrics_coverage}
         responding={@metrics_coverage.responding}
         total={@metrics_coverage.total}
         stale={@metrics_stale}

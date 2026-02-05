@@ -678,7 +678,9 @@ defmodule Lasso.Cluster.Topology do
 
   defp compute_node_ids(nodes, self_node_id) do
     nodes
-    |> Enum.filter(fn {_node, info} -> info.state not in [:disconnected] end)
+    |> Enum.filter(fn {_node, info} ->
+      info.state not in [:disconnected] and info.node_id != "unknown"
+    end)
     |> Enum.group_by(fn {_node, info} -> info.node_id end, fn {node, _} -> node end)
     |> Map.put_new(self_node_id, [])
   end

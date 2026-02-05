@@ -89,4 +89,32 @@ defmodule LassoWeb.Dashboard.Formatting do
   def safe_round(value, _precision) when is_integer(value), do: value
   def safe_round(value, precision) when is_float(value), do: Float.round(value, precision)
   def safe_round(nil, _precision), do: nil
+
+  @doc """
+  Formats a raw node/region ID into a human-readable display name.
+
+  Extracts the lowercase prefix before the first dash and looks it up
+  in the `:region_display_names` config. Returns the original string
+  if no mapping is found.
+
+  ## Examples
+
+      iex> Formatting.format_region_name("Sjc-080713ea67e778")
+      "San Jose"
+
+      iex> Formatting.format_region_name("unknown-region")
+      "unknown-region"
+  """
+  def format_region_name(region) when is_binary(region) do
+    prefix =
+      region
+      |> String.downcase()
+      |> String.split("-", parts: 2)
+      |> List.first()
+
+    display_names = Application.get_env(:lasso, :region_display_names, %{})
+    Map.get(display_names, prefix, region)
+  end
+
+  def format_region_name(region), do: region
 end
