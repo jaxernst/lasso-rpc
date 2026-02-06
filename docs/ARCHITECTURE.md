@@ -830,10 +830,15 @@ Drop-in replacement for existing RPC URLs.
 - `eth_subscribe("logs", filter)`
 - `eth_unsubscribe(subscription_id)`
 
+**Batch Requests** (HTTP):
+
+- JSON-RPC batch arrays supported (up to 50 requests per batch, configurable)
+- Per-item routing and error handling
+- Responses preserve request order
+
 **Not yet supported**:
 
 - Write methods: `eth_sendRawTransaction`, `eth_sendTransaction`
-- Batch requests (planned)
 
 ---
 

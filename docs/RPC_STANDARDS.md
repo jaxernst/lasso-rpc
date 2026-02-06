@@ -452,4 +452,4 @@ config :lasso, :subscriptions,
 
 ---
 
-**Last Updated:** October 1, 2025
+**Last Updated:** February 2026
