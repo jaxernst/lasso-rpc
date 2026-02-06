@@ -283,12 +283,20 @@ class GlobeRenderer {
     this.lastSpawn = 0;
     this.providerPingFlashes = {};
 
-    this.landPoints = LAND_DOTS.map(([lat, lng]) => latLngTo3D(lat, lng, 1.0));
+    const landSet = new Set(LAND_DOTS.map(([lat, lng]) => lat + "," + lng));
 
-    this.graticuleDots = [];
-    for (let lat = -85; lat <= 85; lat += 1.8) {
-      for (let lng = -180; lng < 180; lng += 1.8) {
-        this.graticuleDots.push(latLngTo3D(lat, lng, 1.0));
+    this.globeDots = [];
+    for (let lat = -84.5; lat <= 85; lat += 1.5) {
+      const cosLat = Math.cos((lat * Math.PI) / 180);
+      const rawStep = Math.min(1.5 / Math.max(cosLat, 0.01), 5.0);
+      const nLng = Math.max(20, Math.round(360 / rawStep));
+      const lngStep = 360 / nLng;
+      for (let i = 0; i < nLng; i++) {
+        const rawLng = Math.round((-180 + i * rawStep) * 100) / 100;
+        this.globeDots.push({
+          pos: latLngTo3D(lat, -180 + i * lngStep, 1.0),
+          land: landSet.has(lat + "," + rawLng),
+        });
       }
     }
 
@@ -438,8 +446,7 @@ class GlobeRenderer {
 
     this.drawAtmosphere(ctx);
     this.drawGlobeBase(ctx);
-    this.drawGraticule(ctx);
-    this.drawLandDots(ctx);
+    this.drawGlobeDots(ctx);
     this.drawHubLink(ctx);
     this.drawArcs(ctx);
     this.drawNodes(ctx);
@@ -475,36 +482,30 @@ class GlobeRenderer {
     ctx.stroke();
   }
 
-  drawGraticule(ctx) {
-    const dotR = this.radius / 800;
-    for (const p of this.graticuleDots) {
-      const proj = this.project(p);
-      if (!proj.visible) continue;
-      const depth = Math.max(0, 1 - proj.z / 0.35);
-      const alpha = 0.06 * depth * depth;
-      const size = Math.max(0.3, dotR * proj.scale);
-      ctx.beginPath();
-      ctx.arc(proj.x, proj.y, size, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(55, 65, 100, ${alpha})`;
-      ctx.fill();
-    }
-  }
-
-  drawLandDots(ctx) {
+  drawGlobeDots(ctx) {
     const baseR = this.radius / 500;
 
-    for (const p of this.landPoints) {
-      const proj = this.project(p);
+    for (const dot of this.globeDots) {
+      const proj = this.project(dot.pos);
       if (!proj.visible) continue;
 
-      const depthFactor = Math.max(0, 1 - proj.z / 0.35);
-      const alpha = 0.2 + 0.7 * depthFactor * depthFactor;
-      const size = Math.max(0.4, baseR * proj.scale);
+      const depth = Math.max(0, 1 - proj.z / 0.35);
 
-      ctx.beginPath();
-      ctx.arc(proj.x, proj.y, size, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(160, 175, 210, ${alpha})`;
-      ctx.fill();
+      if (dot.land) {
+        const alpha = 0.2 + 0.7 * depth * depth;
+        const size = Math.max(0.4, baseR * proj.scale);
+        ctx.beginPath();
+        ctx.arc(proj.x, proj.y, size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(160, 175, 210, ${alpha})`;
+        ctx.fill();
+      } else {
+        const alpha = 0.06 * depth * depth;
+        const size = Math.max(0.3, baseR * 0.6 * proj.scale);
+        ctx.beginPath();
+        ctx.arc(proj.x, proj.y, size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(55, 65, 100, ${alpha})`;
+        ctx.fill();
+      }
     }
   }
 
