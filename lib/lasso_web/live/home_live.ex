@@ -13,7 +13,6 @@ defmodule LassoWeb.HomeLive do
 
     default_profile = "default"
 
-    config_status = Lasso.Config.ConfigStore.status()
     base_url = URI.parse(LassoWeb.Endpoint.url()).authority
 
     available_chains = ConfigStore.list_chains_for_profile(default_profile) |> Enum.sort()
@@ -28,7 +27,7 @@ defmodule LassoWeb.HomeLive do
       |> assign(:page_title, "Lasso RPC")
       |> assign(
         :page_description,
-        "Smart RPC aggregation for consumer grade blockchain apps"
+        "Smart RPC routing layer for bulletproof blockchain apps"
       )
       |> assign(:base_url, base_url)
       |> assign(:active_tab, "docs")
@@ -36,9 +35,6 @@ defmodule LassoWeb.HomeLive do
       |> assign(:routing_decisions, initial_decisions())
       |> assign(:provider_health, initial_health())
       |> assign(:metrics, %{latency: 42, success_rate: 99.9})
-      |> assign(:total_endpoints, Map.get(config_status, :total_providers, 0))
-      |> assign(:total_providers, Map.get(config_status, :total_providers, 0))
-      |> assign(:total_strategies, 3)
       |> assign(:available_chains, available_chains)
       |> assign(:is_live, false)
       |> assign(:selected_profile, default_profile)
@@ -315,7 +311,7 @@ defmodule LassoWeb.HomeLive do
       <div class="pointer-events-none fixed inset-0 z-0 overflow-hidden">
         <div
           data-parallax-speed="0.05"
-          class="-left-[10%] -top-[10%] h-[300px] w-[300px] bg-purple-500/10 blur-[100px] absolute rounded-full transition-transform will-change-transform sm:h-[500px] sm:w-[500px]"
+          class="-left-[10%] -top-[10%] h-[300px] w-[300px] bg-purple-400/5 blur-[100px] absolute rounded-full transition-transform will-change-transform sm:h-[500px] sm:w-[500px]"
         >
         </div>
         <div
@@ -328,7 +324,7 @@ defmodule LassoWeb.HomeLive do
           phx-hook="HeroGlobe"
           phx-update="ignore"
           class="absolute inset-0 will-change-transform"
-          style="mask-image: radial-gradient(ellipse 80% 80% at 78% 65%, black 20%, transparent 60%); -webkit-mask-image: radial-gradient(ellipse 80% 80% at 78% 65%, black 20%, transparent 60%);"
+          style="mask-image: radial-gradient(ellipse 80% 80% at 82% 65%, black 20%, transparent 60%); -webkit-mask-image: radial-gradient(ellipse 80% 80% at 82% 65%, black 20%, transparent 60%);"
         >
           <canvas id="globe-canvas" class="h-full w-full"></canvas>
         </div>
@@ -351,30 +347,30 @@ defmodule LassoWeb.HomeLive do
                 <div class="animate-fade-in-up space-y-8">
                   <div class="space-y-5 lg:space-y-8">
                     <h1 class="text-balance leading-[1.1] text-3xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
-                      Smart RPC aggregation for
+                      The smart RPC routing layer for
                       <span class="bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
-                        consumer grade
+                        bulletproof
                       </span>
                       blockchain apps.
                     </h1>
 
                     <div class="flex flex-wrap gap-3">
-                      <div class="border-purple-500/15 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
-                        <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                      <div class=" bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                        <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 rounded-full">
                         </span>
-                        {@total_endpoints} live RPC endpoints
+                        Geodistributed RPC routing
                       </div>
 
-                      <div class="border-purple-500/15 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
-                        <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                      <div class=" bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                        <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 rounded-full">
                         </span>
-                        {@total_providers} node providers
+                        Node infra fault tolerance
                       </div>
 
-                      <div class="border-purple-500/15 bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
-                        <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 animate-pulse rounded-full">
+                      <div class=" bg-gray-900/60 text-white/90 inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium backdrop-blur-sm">
+                        <span class="bg-emerald-400/90 shadow-[0_0_0_3px_rgba(16,185,129,0.35)] inline-flex h-2 w-2 rounded-full">
                         </span>
-                        {@total_strategies} configurable routing strategies
+                        Configurable routing strategies
                       </div>
                     </div>
 
@@ -430,8 +426,8 @@ defmodule LassoWeb.HomeLive do
                     </a>
                   </div>
 
-                  <div class="flex flex-wrap items-center gap-3 pt-2 text-sm font-medium tracking-tight text-gray-400">
-                    <span class="flex items-center gap-1.5">
+                  <div class="flex flex-wrap items-center gap-x-6 gap-y-2 pt-2 text-sm font-medium tracking-tight text-gray-400">
+                    <span class="inline-flex items-center gap-1.5">
                       <svg
                         class="h-4 w-4 text-emerald-500"
                         fill="none"
@@ -446,10 +442,10 @@ defmodule LassoWeb.HomeLive do
                         >
                         </path>
                       </svg>
-                      HTTP + WebSocket endpoints
+                      Drop-in Ethereum JSON-RPC proxy
                     </span>
-                    <span class="h-1 w-1 rounded-full bg-gray-700"></span>
-                    <span class="flex items-center gap-1.5">
+
+                    <span class="inline-flex items-center gap-1.5">
                       <svg
                         class="h-4 w-4 text-emerald-500"
                         fill="none"
@@ -464,10 +460,9 @@ defmodule LassoWeb.HomeLive do
                         >
                         </path>
                       </svg>
-                      Ethereum JSON-RPC superset
+                      HTTP + WebSocket
                     </span>
-                    <span class="h-1 w-1 rounded-full bg-gray-700"></span>
-                    <span class="flex items-center gap-1.5">
+                    <span class="inline-flex items-center gap-1.5">
                       <svg
                         class="h-4 w-4 text-emerald-500"
                         fill="none"
@@ -482,7 +477,7 @@ defmodule LassoWeb.HomeLive do
                         >
                         </path>
                       </svg>
-                      Automatic failover + redundancy
+                      Any EVM chain
                     </span>
                   </div>
                 </div>
