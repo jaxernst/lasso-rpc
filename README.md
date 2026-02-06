@@ -6,7 +6,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/jaxernst/lasso-rpc/releases)
 
-### Smart RPC aggregation for consumer-grade blockchain apps.
+### Smart RPC aggregation for builting fault tolerant and performant blockchain apps.
 
 Lasso is a smart proxy/router that turns your node infrastructure and RPC providers into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
 
