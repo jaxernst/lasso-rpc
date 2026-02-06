@@ -43,7 +43,7 @@ defmodule Lasso.Cluster.Topology do
 
   @type node_info :: %{
           node: node(),
-          node_id: String.t(),
+          node_id: String.t() | nil,
           state: node_state(),
           connected_at: integer() | nil,
           last_response: integer() | nil,
@@ -54,13 +54,14 @@ defmodule Lasso.Cluster.Topology do
           expected: non_neg_integer(),
           connected: non_neg_integer(),
           responding: non_neg_integer(),
+          identified: non_neg_integer(),
           unresponsive: [node()],
           disconnected: [node()]
         }
 
   defstruct nodes: %{},
             node_ids: %{},
-            self_node_id: "unknown",
+            self_node_id: nil,
             health_check_task: nil,
             pending_discoveries: %{},
             discovery_refs: %{},
@@ -127,10 +128,20 @@ defmodule Lasso.Cluster.Topology do
 
   @doc """
   Returns the node ID for the current node.
+  Reads from persistent_term (set at application boot) — no GenServer call needed.
+  """
+  @spec self_node_id() :: String.t()
+  def self_node_id do
+    :persistent_term.get({__MODULE__, :self_node_id})
+  end
+
+  @doc """
+  Returns the node ID for the current node.
+  Delegates to `self_node_id/0`.
   """
   @spec get_self_node_id() :: String.t()
   def get_self_node_id do
-    GenServer.call(__MODULE__, :get_self_node_id)
+    self_node_id()
   end
 
   @doc """
@@ -149,6 +160,16 @@ defmodule Lasso.Cluster.Topology do
     :net_kernel.monitor_nodes(true, node_type: :visible)
 
     self_node_id = Application.fetch_env!(:lasso, :node_id)
+
+    unless is_binary(self_node_id) and byte_size(self_node_id) > 0 do
+      raise "node_id must be a non-empty string, got: #{inspect(self_node_id)}"
+    end
+
+    # Idempotent persistent_term set (avoids unnecessary global GC on supervisor restart)
+    case :persistent_term.get({__MODULE__, :self_node_id}, nil) do
+      ^self_node_id -> :ok
+      _ -> :persistent_term.put({__MODULE__, :self_node_id}, self_node_id)
+    end
 
     # Initial node discovery
     initial_nodes = build_initial_node_map()
@@ -204,7 +225,7 @@ defmodule Lasso.Cluster.Topology do
 
     node_info = %{
       node: node,
-      node_id: "unknown",
+      node_id: nil,
       state: :discovering,
       connected_at: now(),
       last_response: nil,
@@ -212,6 +233,7 @@ defmodule Lasso.Cluster.Topology do
     }
 
     nodes = Map.put(state.nodes, node, node_info)
+    node_ids = compute_node_ids(nodes, state.self_node_id)
 
     # Start async node ID discovery
     task = start_node_id_discovery(node)
@@ -225,12 +247,14 @@ defmodule Lasso.Cluster.Topology do
       event: :node_connected,
       node: node,
       node_info: node_info,
-      coverage: coverage
+      coverage: coverage,
+      node_ids: Map.keys(node_ids)
     })
 
     emit_telemetry(:node_connected, %{node: node})
 
-    {:noreply, %{state | nodes: nodes, pending_discoveries: pending, discovery_refs: refs}}
+    {:noreply,
+     %{state | nodes: nodes, node_ids: node_ids, pending_discoveries: pending, discovery_refs: refs}}
   end
 
   # Node disconnected
@@ -254,7 +278,8 @@ defmodule Lasso.Cluster.Topology do
           event: :node_disconnected,
           node: node,
           node_info: updated_info,
-          coverage: coverage
+          coverage: coverage,
+          node_ids: Map.keys(node_ids)
         })
 
         emit_telemetry(:node_disconnected, %{node: node})
@@ -289,7 +314,8 @@ defmodule Lasso.Cluster.Topology do
           broadcast_topology_event(%{
             event: :node_id_discovered,
             node: node,
-            node_info: updated_info
+            node_info: updated_info,
+            node_ids: Map.keys(node_ids)
           })
 
           emit_telemetry(:node_id_discovered, %{node: node, node_id: node_id})
@@ -369,14 +395,16 @@ defmodule Lasso.Cluster.Topology do
       end)
       |> Map.new()
 
-    broadcast_health_update(old_nodes, nodes)
+    node_ids = compute_node_ids(nodes, state.self_node_id)
+    broadcast_health_update(old_nodes, nodes, node_ids)
 
     emit_telemetry(:health_check_complete, %{
       total: map_size(nodes),
       bad_count: MapSet.size(all_bad)
     })
 
-    {:noreply, %{state | nodes: nodes, health_check_task: nil, last_health_check_complete: now}}
+    {:noreply,
+     %{state | nodes: nodes, node_ids: node_ids, health_check_task: nil, last_health_check_complete: now}}
   end
 
   # Health check timed out
@@ -461,7 +489,7 @@ defmodule Lasso.Cluster.Topology do
 
   @impl true
   def handle_call(:get_self_node_id, _from, state) do
-    {:reply, state.self_node_id, state}
+    {:reply, self_node_id(), state}
   end
 
   @impl true
@@ -501,7 +529,7 @@ defmodule Lasso.Cluster.Topology do
       unknown_nodes =
         state.nodes
         |> Enum.filter(fn {node, info} ->
-          info.node_id == "unknown" and
+          is_nil(info.node_id) and
             info.state in [:connected, :responding] and
             not Map.has_key?(state.pending_discoveries, node)
         end)
@@ -545,7 +573,7 @@ defmodule Lasso.Cluster.Topology do
       node_ids =
         Enum.reduce(stale_nodes, state.node_ids, fn node, acc ->
           case Map.get(state.nodes, node) do
-            %{node_id: nid} when nid != "unknown" ->
+            %{node_id: nid} when not is_nil(nid) ->
               Map.update(acc, nid, [], &List.delete(&1, node))
 
             _ ->
@@ -633,8 +661,7 @@ defmodule Lasso.Cluster.Topology do
         discover_node_id_with_retry(node, retries - 1, min(delay * 2, 2000))
 
       nil ->
-        # Remote node has no node_id configured; extract hostname as fallback
-        node_id =
+        fallback =
           node
           |> Atom.to_string()
           |> String.split("@")
@@ -645,7 +672,11 @@ defmodule Lasso.Cluster.Topology do
             id -> id
           end
 
-        {:node_id_discovered, node, node_id}
+        Logger.warning(
+          "[Topology] Node #{node} has no node_id configured, using fallback: #{fallback}"
+        )
+
+        {:node_id_discovered, node, fallback}
     end
   end
 
@@ -666,7 +697,7 @@ defmodule Lasso.Cluster.Topology do
       {node,
        %{
          node: node,
-         node_id: "unknown",
+         node_id: nil,
          state: :connected,
          connected_at: now(),
          last_response: nil,
@@ -678,21 +709,31 @@ defmodule Lasso.Cluster.Topology do
 
   defp compute_node_ids(nodes, self_node_id) do
     nodes
-    |> Enum.filter(fn {_node, info} -> info.state not in [:disconnected] end)
+    |> Enum.filter(fn {_node, info} ->
+      info.state not in [:disconnected] and not is_nil(info.node_id)
+    end)
     |> Enum.group_by(fn {_node, info} -> info.node_id end, fn {node, _} -> node end)
     |> Map.put_new(self_node_id, [])
   end
 
   defp compute_coverage(nodes) do
-    {connected, responding, unresponsive, disconnected} =
+    {connected, responding, identified, unresponsive, disconnected} =
       nodes
       |> Map.values()
-      |> Enum.reduce({0, 0, [], []}, fn info, {conn, resp, unr, disc} ->
+      |> Enum.reduce({0, 0, 0, [], []}, fn info, {conn, resp, ident, unr, disc} ->
         case info.state do
-          :disconnected -> {conn, resp, unr, [info.node | disc]}
-          :unresponsive -> {conn + 1, resp, [info.node | unr], disc}
-          :responding -> {conn + 1, resp + 1, unr, disc}
-          _ -> {conn + 1, resp, unr, disc}
+          :disconnected ->
+            {conn, resp, ident, unr, [info.node | disc]}
+
+          :unresponsive ->
+            {conn + 1, resp, if(info.node_id, do: ident + 1, else: ident), [info.node | unr],
+             disc}
+
+          :responding ->
+            {conn + 1, resp + 1, if(info.node_id, do: ident + 1, else: ident), unr, disc}
+
+          _ ->
+            {conn + 1, resp, if(info.node_id, do: ident + 1, else: ident), unr, disc}
         end
       end)
 
@@ -700,6 +741,7 @@ defmodule Lasso.Cluster.Topology do
       expected: connected + 1,
       connected: connected + 1,
       responding: responding + 1,
+      identified: identified + 1,
       unresponsive: unresponsive,
       disconnected: disconnected
     }
@@ -715,7 +757,7 @@ defmodule Lasso.Cluster.Topology do
     Phoenix.PubSub.broadcast(Lasso.PubSub, @topology_topic, {:topology_event, payload})
   end
 
-  defp broadcast_health_update(old_nodes, new_nodes) do
+  defp broadcast_health_update(old_nodes, new_nodes, node_ids) do
     changes =
       new_nodes
       |> Enum.filter(fn {node, new_info} ->
@@ -732,7 +774,8 @@ defmodule Lasso.Cluster.Topology do
       broadcast_topology_event(%{
         event: :health_update,
         changes: changes,
-        coverage: coverage
+        coverage: coverage,
+        node_ids: Map.keys(node_ids)
       })
     end
   end

@@ -14,6 +14,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     socket =
       socket
       |> assign(assigns)
+      |> assign_new(:profile_name, fn -> "default" end)
+      |> assign_new(:rps_limit, fn -> 10 end)
       |> assign_new(:selected_profile, fn -> "default" end)
       |> assign_new(:sim_stats, fn ->
         %{http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0}, ws: %{open: 0}}
@@ -356,7 +358,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
             animated={simulator_active?(@sim_stats, @simulator_running)}
           />
           <div class="truncate text-xs font-medium text-white">
-            RPC Load Test
+            RPC Request Tester
           </div>
         </:header>
 
@@ -364,7 +366,9 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <.collapsed_content
             sim_stats={@sim_stats}
             simulator_running={@simulator_running}
-            preview_text={@preview_text}
+            available_chains={@available_chains}
+            rps_limit={@rps_limit}
+            profile_name={@profile_name}
             myself={@myself}
           />
         </:collapsed_preview>
@@ -376,6 +380,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
             selected_chains={@selected_chains}
             selected_strategy={@selected_strategy}
             request_rate={@request_rate}
+            rps_limit={@rps_limit}
             load_types={@load_types}
             simulator_running={@simulator_running}
             myself={@myself}
@@ -389,18 +394,19 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   defp collapsed_content(assigns) do
     ~H"""
     <div class="space-y-2 px-3 py-2">
-      <!-- Quick Run Controls -->
       <%= if not @simulator_running do %>
         <div class="flex items-center justify-between">
-          <div class="text-[10px] text-gray-400">
-            {@preview_text}
+          <div class="flex items-center gap-1 text-[10px] text-gray-400">
+            <span class="text-gray-300">{@profile_name}</span>
+            <span class="text-gray-400">&middot;</span>
+            <span class="text-gray-300">{@rps_limit} RPS limit</span>
           </div>
           <button
             phx-click="quick_start"
             phx-target={@myself}
             class="bg-emerald-600/20 border-emerald-500/40 text-[10px] rounded border px-2 py-0.5 font-medium text-emerald-300 transition-all duration-200 hover:bg-emerald-600/30"
           >
-            Start
+            Run
           </button>
         </div>
       <% else %>
@@ -453,7 +459,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     <div class="space-y-4 p-4">
       <!-- Header Section -->
       <div class="flex items-center justify-between">
-        <h3 class="text-xs font-semibold text-white">Configure Test Run</h3>
+        <h3 class="text-xs font-semibold text-white">Simulation Config</h3>
         <%= if @simulator_running do %>
           <div class="flex items-center gap-1">
             <.status_indicator status={:healthy} animated={true} size="h-2 w-2" />
@@ -465,7 +471,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     <!-- Chain Selection -->
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <label class="text-[10px] font-medium text-gray-400">Target Chains</label>
+          <label class="text-[10px] font-medium text-gray-400">Chains</label>
           <button
             phx-click="select_all_chains"
             phx-target={@myself}
@@ -532,17 +538,24 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         <label class="text-[10px] font-medium text-gray-400">Request Rate</label>
         <div class="flex gap-2">
           <%= for rate <- [5, 15, 30] do %>
+            <% allowed = rate <= @rps_limit %>
             <button
-              phx-click="set_rate"
+              phx-click={allowed && "set_rate"}
               phx-value-rate={rate}
               phx-target={@myself}
+              disabled={!allowed}
               class={[
                 "text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200",
-                if(@request_rate == rate,
-                  do: "bg-orange-500/20 border border-orange-500 text-orange-300",
-                  else:
+                cond do
+                  !allowed ->
+                    "border-gray-700/40 bg-gray-800/20 border text-gray-600 cursor-not-allowed"
+
+                  @request_rate == rate ->
+                    "bg-orange-500/20 border border-orange-500 text-orange-300"
+
+                  true ->
                     "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-orange-400/50"
-                )
+                end
               ]}
             >
               {rate} RPS
@@ -553,7 +566,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       
     <!-- Live Statistics -->
       <div class="bg-gray-800/40 space-y-3 rounded-lg p-3">
-        <div class="text-xs font-medium text-gray-300">Live Statistics</div>
+        <div class="text-xs font-medium text-gray-300">Live Metrics</div>
 
         <.metrics_grid cols={3} class="gap-2">
           <.metric_card
@@ -607,7 +620,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
             <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M8 5v14l11-7z" />
             </svg>
-            <span>Start Load Test</span>
+            <span>Run Simulation</span>
           </button>
         <% else %>
           <button
@@ -618,7 +631,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
             <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
             </svg>
-            <span>Stop Load Test</span>
+            <span>Stop</span>
           </button>
         <% end %>
       </div>
@@ -696,11 +709,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     end
   end
 
-  defp get_preview_text(params) do
-    strategy = Map.get(params, :strategy, "round-robin")
-    chains = Map.get(params, :chains, [])
-    _load_types = Map.get(params, :load_types, %{http: true, ws: true})
-
+  defp get_preview_text(%{strategy: strategy, chains: chains}) do
     strategy_label =
       case strategy do
         "round-robin" -> "Round Robin"
@@ -723,8 +732,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     preview_text =
       get_preview_text(%{
         strategy: socket.assigns.selected_strategy,
-        chains: socket.assigns.selected_chains,
-        load_types: socket.assigns.load_types
+        chains: socket.assigns.selected_chains
       })
 
     assign(socket, :preview_text, preview_text)

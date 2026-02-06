@@ -1064,9 +1064,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         success_rate = if total > 0, do: successes / total, else: 0.0
         percentiles = calculate_percentiles(recent_latencies)
 
-        # Include source node ID for cluster-aware aggregation
-        node_id = Application.get_env(:lasso, :node_id) || extract_node_id_from_node()
-
         %{
           provider_id: provider_id,
           method: method,
@@ -1075,7 +1072,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
           avg_duration_ms: avg_duration,
           percentiles: percentiles,
           last_updated: sys_ts,
-          source_node_id: node_id,
+          source_node_id: Lasso.Cluster.Topology.self_node_id(),
           source_node: node()
         }
 
@@ -1333,9 +1330,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       # Compute percentiles from all latency samples for this provider
       percentiles = calculate_percentiles(all_samples)
 
-      # Include source node ID for cluster-aware aggregation
-      node_id = Application.get_env(:lasso, :node_id) || extract_node_id_from_node()
-
       %{
         provider_id: provider_id,
         total_calls: total_calls,
@@ -1346,7 +1340,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
         p95_latency: percentiles.p95,
         p99_latency: percentiles.p99,
         score: calculate_rpc_provider_score(success_rate, avg_latency, total_calls),
-        source_node_id: node_id,
+        source_node_id: Lasso.Cluster.Topology.self_node_id(),
         source_node: node()
       }
     end)
@@ -1445,19 +1439,6 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
       total_entries: length(all_entries),
       last_updated: System.system_time(:millisecond)
     }
-  end
-
-  # Extract node ID from Erlang node name, matching Topology's fallback logic
-  defp extract_node_id_from_node do
-    node()
-    |> Atom.to_string()
-    |> String.split("@")
-    |> List.last()
-    |> case do
-      nil -> "unknown"
-      "" -> "unknown"
-      id -> id
-    end
   end
 
   defp calculate_rpc_provider_score(success_rate, avg_latency_ms, total_calls) do

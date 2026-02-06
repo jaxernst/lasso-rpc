@@ -54,11 +54,17 @@ end
 # metrics) via {provider_id, node_id} keys. Each node in a cluster MUST have a distinct value.
 # Convention: use geographic region names (e.g., "us-east-1", "iad") when deploying one node
 # per region, but any unique string works.
-node_id =
-  System.get_env("LASSO_NODE_ID") ||
-    "node-" <> (:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower))
+node_id = System.get_env("LASSO_NODE_ID")
 
-config :lasso, :node_id, node_id
+if config_env() == :prod and is_nil(node_id) do
+  raise """
+  LASSO_NODE_ID is required in production.
+
+  Set it to a stable, unique identifier for this node instance.
+  """
+end
+
+config :lasso, :node_id, node_id || "local"
 
 # Clustering configuration (optional)
 # Requires both CLUSTER_DNS_QUERY and CLUSTER_NODE_BASENAME to be set

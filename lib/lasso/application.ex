@@ -14,6 +14,9 @@ defmodule Lasso.Application do
     # Store application start time for uptime calculation
     Application.put_env(:lasso, :start_time, System.monotonic_time(:millisecond))
 
+    node_id = Application.fetch_env!(:lasso, :node_id)
+    :persistent_term.put({Lasso.Cluster.Topology, :self_node_id}, node_id)
+
     # Create ETS tables owned by Application process (never dies).
     # These tables survive GenServer restarts and provide stable storage.
 
