@@ -14,11 +14,11 @@ It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single RP
 
 Route every request to the best available provider to handle that request, while configuring providers to match your application's needs. Leverage deep redundancy, expressive routing, and built-in observability to improve UX while keeping your application code simple.
 
-[See it Live](https://lasso.sh)
+### [See it Live](https://lasso.sh)
 
 ---
 
-**🐛 [Docs](https://github.com/jaxernst/lasso-rpc/docs)** 
+**🐛 [Docs](docs/)** 
 **🐛 [Report Bug](https://github.com/jaxernst/lasso-rpc/issues)** 
 **💡 [Request Feature](https://github.com/jaxernst/lasso-rpc/issues)**
 
