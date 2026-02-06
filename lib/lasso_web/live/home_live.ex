@@ -349,7 +349,11 @@ defmodule LassoWeb.HomeLive do
                     <h1 class="text-balance leading-[1.1] text-3xl font-bold tracking-tight text-white sm:text-5xl lg:text-[3.5rem]">
                       The smart RPC routing layer for
                       <span class="bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
-                        bulletproof
+                        fast
+                      </span>
+                      and
+                      <span class="bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
+                        resilient
                       </span>
                       blockchain apps.
                     </h1>
