@@ -180,12 +180,17 @@ defmodule Lasso.Cluster.Topology do
     # Trigger immediate health check
     send(self(), :immediate_health_check)
 
+    boot = now()
+
     state = %__MODULE__{
       self_node_id: self_node_id,
       nodes: initial_nodes,
       node_ids: compute_node_ids(initial_nodes, self_node_id),
-      last_tick: now(),
-      last_health_check_complete: now()
+      last_tick: boot,
+      last_health_check_start: boot,
+      last_health_check_complete: boot,
+      last_reconcile: boot - @reconcile_interval_ms,
+      last_node_id_rediscovery: boot - @node_id_rediscovery_interval_ms
     }
 
     Logger.info(
