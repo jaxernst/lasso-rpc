@@ -254,7 +254,13 @@ defmodule Lasso.Cluster.Topology do
     emit_telemetry(:node_connected, %{node: node})
 
     {:noreply,
-     %{state | nodes: nodes, node_ids: node_ids, pending_discoveries: pending, discovery_refs: refs}}
+     %{
+       state
+       | nodes: nodes,
+         node_ids: node_ids,
+         pending_discoveries: pending,
+         discovery_refs: refs
+     }}
   end
 
   # Node disconnected
@@ -404,7 +410,13 @@ defmodule Lasso.Cluster.Topology do
     })
 
     {:noreply,
-     %{state | nodes: nodes, node_ids: node_ids, health_check_task: nil, last_health_check_complete: now}}
+     %{
+       state
+       | nodes: nodes,
+         node_ids: node_ids,
+         health_check_task: nil,
+         last_health_check_complete: now
+     }}
   end
 
   # Health check timed out
