@@ -6,7 +6,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/jaxernst/lasso-rpc/releases)
 
-### The smart RPC layer for serious onchain applications.
+### Smart RPC aggregation for builting fault tolerant and performant blockchain apps.
 
 Lasso is a smart proxy/router that turns your node infrastructure and RPC providers into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
 
@@ -14,7 +14,13 @@ It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single RP
 
 Route every request to the best available provider to handle that request, while configuring providers to match your application's needs. Leverage deep redundancy, expressive routing, and built-in observability to improve UX while keeping your application code simple.
 
-**📊 [Live Hosted Dashboard](https://lasso-rpc.fly.dev/dashboard)** &nbsp;&nbsp;|&nbsp;&nbsp; **📖 [Architecture](docs/ARCHITECTURE.md)** &nbsp;&nbsp;|&nbsp;&nbsp; **🐛 [Report Bug](https://github.com/jaxernst/lasso-rpc/issues)** &nbsp;&nbsp;|&nbsp;&nbsp; **💡 [Request Feature](https://github.com/jaxernst/lasso-rpc/issues)**
+### [See it Live](https://lasso.sh)
+
+---
+
+**🐛 [Docs](docs/)**
+**🐛 [Report Bug](https://github.com/jaxernst/lasso-rpc/issues)**
+**💡 [Request Feature](https://github.com/jaxernst/lasso-rpc/issues)**
 
 ---
 
