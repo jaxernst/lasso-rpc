@@ -1,4 +1,5 @@
 ---
+name: health-check
 description: Run comprehensive health check on Lasso RPC codebase (compile, warnings, tests, static analysis)
 ---
 
@@ -24,7 +25,7 @@ mix compile --warnings-as-errors
 mix test --exclude battle --exclude slow --max-failures 5
 ```
 
-**Expected:** All tests pass. Max runtime ~30 seconds.
+**Expected:** All tests pass.
 
 **If failures:** Report first 5 failures with file:line references.
 
@@ -48,35 +49,16 @@ mix dialyzer
 
 ## Output Format
 
-Provide a clear, actionable summary:
-
 ```
-🏥 LASSO RPC HEALTH CHECK
+LASSO RPC HEALTH CHECK
 ========================
 
-✅ Compilation: PASS (0 warnings)
-✅ Tests: PASS (142/142 passed in 28.3s)
-✅ Credo: PASS (0 issues)
-⚠️  Dialyzer: 3 warnings
+Compilation: PASS/FAIL (N warnings)
+Tests: PASS/FAIL (N/N passed in Xs)
+Credo: PASS/FAIL (N issues)
+Dialyzer: PASS/FAIL (N warnings)
 
 DETAILS:
 --------
-Dialyzer warnings:
-  1. lib/lasso/core/transport/transport.ex:10 - unused alias HTTP
-  2. lib/lasso/core/transport/transport.ex:10 - unused alias WebSocket
-  3. lib/lasso/core/transport/websocket/websocket.ex:169 - unused function generate_request_id/0
-
-RECOMMENDATION: Run /code-cleanup to fix these issues automatically.
+[details for any failures]
 ```
-
-## When to Use
-
-- Before committing changes
-- After major refactoring
-- When starting work for the day
-- Before creating a PR
-- As a pre-push git hook
-
-## Success Criteria
-
-All checks pass with zero warnings/errors. If any check fails, provide clear next steps for resolution.
