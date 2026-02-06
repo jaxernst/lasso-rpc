@@ -3,7 +3,6 @@ defmodule LassoWeb.HomeLive do
   alias Lasso.Benchmarking.BenchmarkStore
   alias Lasso.Config.ConfigStore
   alias LassoWeb.Components.DashboardHeader
-  alias LassoWeb.Components.LandingHeroGraphic
   alias LassoWeb.Components.LatencyHeatmap
 
   @impl true
@@ -324,6 +323,15 @@ defmodule LassoWeb.HomeLive do
           class="-right-[10%] top-[20%] h-[400px] w-[400px] bg-blue-500/10 blur-[120px] absolute rounded-full transition-transform will-change-transform sm:h-[600px] sm:w-[600px]"
         >
         </div>
+        <div
+          id="hero-globe-container"
+          phx-hook="HeroGlobe"
+          phx-update="ignore"
+          class="absolute inset-0 will-change-transform"
+          style="mask-image: radial-gradient(ellipse 80% 80% at 78% 65%, black 20%, transparent 60%); -webkit-mask-image: radial-gradient(ellipse 80% 80% at 78% 65%, black 20%, transparent 60%);"
+        >
+          <canvas id="globe-canvas" class="h-full w-full"></canvas>
+        </div>
       </div>
 
       <div class="relative z-10 flex min-h-full flex-col">
@@ -337,17 +345,6 @@ defmodule LassoWeb.HomeLive do
               phx-hook="ScrollReveal"
               class="min-h-[550px] relative translate-y-8 opacity-0 transition-all duration-1000 ease-out lg:min-h-[680px]"
             >
-              <!-- Oversized graphic that bleeds beyond section (underlaps header via z-index) -->
-              <div
-                id="hero-parallax-graphic"
-                phx-hook="HeroParallax"
-                class="-right-[30%] -top-[15%] -bottom-[30%] pointer-events-none absolute inset-0 overflow-visible will-change-transform lg:-right-[20%] lg:-top-[25%] lg:-bottom-[40%]"
-              >
-                <LandingHeroGraphic.graphic
-                  routing_decisions={@routing_decisions}
-                  is_live={@is_live}
-                />
-              </div>
               
     <!-- Content overlay -->
               <div class="relative z-10 grid items-center gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:gap-16">
