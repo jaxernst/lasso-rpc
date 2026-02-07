@@ -143,19 +143,19 @@ defmodule LassoWeb.Dashboard.Helpers do
   def get_strategy_description(strategy) do
     case strategy do
       "fastest" ->
-        "Routes to the provider with lowest average latency based on real-time benchmarks"
-
-      "leaderboard" ->
-        "Uses racing-based performance scores to select the best provider"
+        "Routes all requests to the single fastest provider — best suited for low-volume, latency-sensitive calls"
 
       "priority" ->
         "Routes by configured provider priority order"
 
       "round-robin" ->
-        "Distributes load evenly across all available providers"
+        "Distributes requests evenly across all available providers — good for general purpose workloads"
+
+      "latency-weighted" ->
+        "Load balanced favoring faster providers — good for high-throughput workloads like indexing and backfilling"
 
       _ ->
-        "Smart routing based on performance metrics"
+        "Strategy-based routing"
     end
   end
 end

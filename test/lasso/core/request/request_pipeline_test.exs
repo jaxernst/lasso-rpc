@@ -137,17 +137,6 @@ defmodule Lasso.RPC.RequestPipelineTest do
       assert_result_valid(result)
     end
 
-    test "accepts :cheapest strategy" do
-      result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
-          strategy: :cheapest,
-          timeout_ms: 30_000
-        })
-
-      assert_result_valid(result)
-    end
-
     test "accepts :priority strategy" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{

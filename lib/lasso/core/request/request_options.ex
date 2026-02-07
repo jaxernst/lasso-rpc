@@ -8,12 +8,12 @@ defmodule Lasso.RPC.RequestOptions do
 
   alias Lasso.Config.MethodConstraints
 
-  @type strategy :: :fastest | :cheapest | :priority | :round_robin | :latency_weighted
+  @type strategy :: :fastest | :priority | :round_robin | :latency_weighted
   @type transport :: :http | :ws | :both | nil
 
   @enforce_keys [:timeout_ms]
   defstruct profile: "default",
-            strategy: :cheapest,
+            strategy: :round_robin,
             provider_override: nil,
             transport: nil,
             failover_on_override: false,
@@ -54,13 +54,13 @@ defmodule Lasso.RPC.RequestOptions do
   end
 
   defp validate_strategy(strategy)
-       when strategy in [:fastest, :cheapest, :priority, :round_robin, :latency_weighted],
+       when strategy in [:fastest, :priority, :round_robin, :latency_weighted],
        do: :ok
 
   defp validate_strategy(strategy),
     do:
       {:error,
-       "Invalid strategy: #{inspect(strategy)}. Must be one of: :fastest, :cheapest, :priority, :round_robin, :latency_weighted"}
+       "Invalid strategy: #{inspect(strategy)}. Must be one of: :fastest, :priority, :round_robin, :latency_weighted"}
 
   defp validate_transport(%__MODULE__{transport: transport}, method) do
     required = MethodConstraints.required_transport_for(method)

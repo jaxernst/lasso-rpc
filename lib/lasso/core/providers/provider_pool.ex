@@ -118,7 +118,7 @@ defmodule Lasso.RPC.ProviderPool do
   @type profile :: String.t()
   @type chain_name :: String.t()
   @type provider_id :: String.t()
-  @type strategy :: :priority | :round_robin | :fastest | :cheapest | :latency_weighted
+  @type strategy :: :priority | :round_robin | :fastest | :latency_weighted
   # Note: :rate_limited is NOT a health status - rate limits are tracked via RateLimitState
   @type health_status ::
           :healthy

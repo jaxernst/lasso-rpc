@@ -182,13 +182,12 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   defp parse_strategy("priority"), do: :priority
   defp parse_strategy("round_robin"), do: :round_robin
   defp parse_strategy("fastest"), do: :fastest
-  defp parse_strategy("cheapest"), do: :cheapest
   defp parse_strategy("latency_weighted"), do: :latency_weighted
   defp parse_strategy(nil), do: nil
   defp parse_strategy(_), do: nil
 
   @spec default_strategy() :: RequestOptions.strategy()
-  defp default_strategy, do: Application.get_env(:lasso, :provider_selection_strategy, :cheapest)
+  defp default_strategy, do: Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
 
   @spec put_request_context(RequestOptions.t(), any()) :: RequestOptions.t()
   defp put_request_context(%RequestOptions{} = o, nil), do: o
