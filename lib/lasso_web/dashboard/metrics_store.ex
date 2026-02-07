@@ -375,7 +375,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
       [single] ->
         stats_by_node = [
           %{
-            node_id: Map.get(single, :source_node_id) || "unknown",
+            node_id: Map.get(single, :source_node_id) || "unidentified",
             node: Map.get(single, :source_node),
             avg_duration_ms: Map.get(single, :avg_duration_ms),
             success_rate: Map.get(single, :success_rate),
@@ -419,7 +419,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   defp build_latency_by_node(entries) do
     entries
     |> Enum.map(fn entry ->
-      node_id = Map.get(entry, :source_node_id) || "unknown"
+      node_id = Map.get(entry, :source_node_id) || "unidentified"
 
       {node_id,
        %{
@@ -462,7 +462,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
       results
       |> Enum.map(fn entry ->
         %{
-          node_id: Map.get(entry, :source_node_id) || "unknown",
+          node_id: Map.get(entry, :source_node_id) || "unidentified",
           node: Map.get(entry, :source_node),
           avg_duration_ms: Map.get(entry, :avg_duration_ms),
           success_rate: Map.get(entry, :success_rate),

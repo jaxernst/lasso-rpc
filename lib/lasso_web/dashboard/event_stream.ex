@@ -87,7 +87,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     cluster_state: %{
       connected: 1,
       responding: 1,
-      regions: [],
+      node_ids: [],
       last_update: 0
     },
     # Subscriber management
@@ -333,9 +333,10 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   # Topology events - health update
-  def handle_info({:topology_event, %{event: :health_update, coverage: coverage}}, state) do
-    node_ids = fetch_node_ids()
-
+  def handle_info(
+        {:topology_event, %{event: :health_update, coverage: coverage, node_ids: node_ids}},
+        state
+      ) do
     cluster_state = %{
       connected: coverage.connected,
       responding: coverage.responding,
@@ -347,14 +348,17 @@ defmodule LassoWeb.Dashboard.EventStream do
     {:noreply, %{state | cluster_state: cluster_state}}
   end
 
-  # Topology events - node connected/disconnected (coverage included)
-  def handle_info({:topology_event, %{event: event, coverage: coverage}}, state)
+  # Topology events - node connected/disconnected (coverage and node_ids included)
+  def handle_info(
+        {:topology_event, %{event: event, coverage: coverage, node_ids: node_ids}},
+        state
+      )
       when event in [:node_connected, :node_disconnected] do
     cluster_state = %{
-      state.cluster_state
-      | connected: coverage.connected,
-        responding: coverage.responding,
-        last_update: now()
+      connected: coverage.connected,
+      responding: coverage.responding,
+      node_ids: node_ids,
+      last_update: now()
     }
 
     broadcast_to_subscribers(state, {:cluster_update, cluster_state})
@@ -362,8 +366,11 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   # Topology events - node ID discovered
-  def handle_info({:topology_event, %{event: :node_id_discovered, node_info: node_info}}, state) do
-    node_ids = [node_info.node_id | state.cluster_state.node_ids] |> Enum.uniq()
+  def handle_info(
+        {:topology_event,
+         %{event: :node_id_discovered, node_info: node_info, node_ids: node_ids}},
+        state
+      ) do
     cluster_state = %{state.cluster_state | node_ids: node_ids}
 
     broadcast_to_subscribers(state, {:node_id_added, %{node_id: node_info.node_id}})
@@ -1003,14 +1010,8 @@ defmodule LassoWeb.Dashboard.EventStream do
     :exit, _ -> default_cluster_state()
   end
 
-  defp fetch_node_ids do
-    Topology.get_node_ids()
-  catch
-    :exit, _ -> []
-  end
-
   defp get_self_node_id do
-    Topology.get_self_node_id()
+    Topology.self_node_id()
   end
 
   defp get_node_id_for_source(source, _state) when is_atom(source) do
@@ -1026,7 +1027,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     self_node_id = get_self_node_id()
     %{connected: 1, responding: 1, node_ids: [self_node_id], last_update: now()}
   catch
-    :exit, _ -> %{connected: 1, responding: 1, node_ids: ["unknown"], last_update: now()}
+    :exit, _ -> %{connected: 1, responding: 1, node_ids: [], last_update: now()}
   end
 
   defp now do

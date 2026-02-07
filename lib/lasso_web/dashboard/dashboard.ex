@@ -97,7 +97,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:vm_metrics_enabled, Lasso.VMMetricsCollector.enabled?())
       |> assign(:metrics_task, nil)
       |> assign(:metrics_stale, false)
-      |> assign(:metrics_coverage, %{responding: 1, total: 1})
+      |> assign(:metrics_coverage, nil)
       |> assign(:last_cluster_update, System.system_time(:millisecond))
       # Real-time aggregator state
       |> assign(:live_provider_metrics, %{})
@@ -105,6 +105,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:cluster_health_counters, %{})
       |> assign(:cluster_block_heights, %{})
       |> assign(:available_node_ids, [])
+      |> load_profile_meta()
       |> fetch_connections(selected_profile)
 
     {:ok, initial_state}
@@ -162,6 +163,22 @@ defmodule LassoWeb.Dashboard do
     :ok
   end
 
+  defp load_profile_meta(socket) do
+    alias Lasso.Config.ConfigStore
+
+    profile = socket.assigns.selected_profile
+
+    profile_meta =
+      case ConfigStore.get_profile(profile) do
+        {:ok, meta} -> meta
+        _ -> %{name: profile, rps_limit: 10, burst_limit: 20}
+      end
+
+    socket
+    |> assign(:profile_display_name, profile_meta.name)
+    |> assign(:effective_rps_limit, profile_meta.rps_limit)
+  end
+
   defp switch_profile(socket, new_profile) do
     alias Lasso.Config.ConfigStore
 
@@ -202,6 +219,7 @@ defmodule LassoWeb.Dashboard do
     |> assign(:cluster_circuit_states, %{})
     |> assign(:cluster_block_heights, %{})
     |> assign(:available_node_ids, [])
+    |> load_profile_meta()
     |> fetch_connections(new_profile)
     |> push_event("persist_profile", %{profile: new_profile})
   end
@@ -456,8 +474,10 @@ defmodule LassoWeb.Dashboard do
 
     # In single-node mode (total == 1), staleness doesn't apply since there's
     # no cluster to be out of sync with
+    coverage = socket.assigns.metrics_coverage
+
     stale =
-      socket.assigns.metrics_coverage.total > 1 and
+      coverage != nil and coverage.total > 1 and
         time_since_update > @staleness_threshold_ms
 
     schedule_staleness_check()
@@ -699,6 +719,8 @@ defmodule LassoWeb.Dashboard do
               selected_provider_events={@selected_provider_events}
               selected_provider_unified_events={@selected_provider_unified_events}
               selected_provider_metrics={@selected_provider_metrics}
+              profile_display_name={@profile_display_name}
+              effective_rps_limit={@effective_rps_limit}
               live_provider_metrics={@live_provider_metrics}
               cluster_circuit_states={@cluster_circuit_states}
               cluster_health_counters={@cluster_health_counters}
@@ -745,6 +767,7 @@ defmodule LassoWeb.Dashboard do
       
     <!-- Fixed cluster status indicator -->
       <ClusterStatus.fixed_cluster_status
+        :if={@metrics_coverage}
         responding={@metrics_coverage.responding}
         total={@metrics_coverage.total}
         stale={@metrics_stale}
@@ -775,6 +798,8 @@ defmodule LassoWeb.Dashboard do
   attr(:selected_provider_events, :list, default: [])
   attr(:selected_provider_unified_events, :list, default: [])
   attr(:selected_provider_metrics, :map, default: %{})
+  attr(:profile_display_name, :string, default: "default")
+  attr(:effective_rps_limit, :integer, default: 10)
   attr(:live_provider_metrics, :map, default: %{})
   attr(:cluster_circuit_states, :map, default: %{})
   attr(:cluster_health_counters, :map, default: %{})
@@ -815,12 +840,15 @@ defmodule LassoWeb.Dashboard do
         id="simulator-controls"
         available_chains={@available_chains}
         selected_profile={@selected_profile}
+        profile_name={@profile_display_name}
+        rps_limit={@effective_rps_limit}
       />
 
       <NetworkStatusLegend.legend />
 
       <.floating_details_window
         selected_profile={@selected_profile}
+        profile_display_name={@profile_display_name}
         selected_chain={@selected_chain}
         selected_provider={@selected_provider}
         details_collapsed={@details_collapsed}
@@ -851,6 +879,7 @@ defmodule LassoWeb.Dashboard do
 
   # Floating details window wrapper (pinned top-right)
   attr(:selected_profile, :string)
+  attr(:profile_display_name, :string)
   attr(:selected_chain, :string)
   attr(:selected_provider, :string)
   attr(:details_collapsed, :boolean)
@@ -916,13 +945,6 @@ defmodule LassoWeb.Dashboard do
         nil
       end
 
-    # Get profile display name
-    profile_display_name =
-      case Lasso.Config.ConfigStore.get_profile(assigns.selected_profile) do
-        {:ok, meta} -> meta.name
-        _ -> assigns.selected_profile
-      end
-
     assigns =
       assigns
       |> assign(:total_connections, total_connections)
@@ -931,7 +953,6 @@ defmodule LassoWeb.Dashboard do
       |> assign(:status, status)
       |> assign(:title, title)
       |> assign(:on_toggle, on_toggle)
-      |> assign(:profile_display_name, profile_display_name)
 
     ~H"""
     <.floating_window

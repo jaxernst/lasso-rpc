@@ -9,9 +9,9 @@ defmodule Lasso.Cluster.TopologyTest do
   describe "compute_coverage/1" do
     test "counts connected nodes correctly, excluding self" do
       nodes = %{
-        :node1 => %{node: :node1, state: :responding, region: "us-east"},
-        :node2 => %{node: :node2, state: :responding, region: "eu-west"},
-        :node3 => %{node: :node3, state: :connected, region: "unknown"}
+        :node1 => %{node: :node1, state: :responding, node_id: "us-east"},
+        :node2 => %{node: :node2, state: :responding, node_id: "eu-west"},
+        :node3 => %{node: :node3, state: :connected, node_id: nil}
       }
 
       coverage = compute_coverage(nodes)
@@ -20,15 +20,17 @@ defmodule Lasso.Cluster.TopologyTest do
       assert coverage.connected == 4
       # :responding states + 1 (self)
       assert coverage.responding == 3
+      # identified: 2 remote with node_id + 1 self
+      assert coverage.identified == 3
       assert coverage.unresponsive == []
       assert coverage.disconnected == []
     end
 
     test "tracks unresponsive and disconnected nodes separately" do
       nodes = %{
-        :node1 => %{node: :node1, state: :responding, region: "us-east"},
-        :node2 => %{node: :node2, state: :unresponsive, region: "eu-west"},
-        :node3 => %{node: :node3, state: :disconnected, region: "ap-south"}
+        :node1 => %{node: :node1, state: :responding, node_id: "us-east"},
+        :node2 => %{node: :node2, state: :unresponsive, node_id: "eu-west"},
+        :node3 => %{node: :node3, state: :disconnected, node_id: "ap-south"}
       }
 
       coverage = compute_coverage(nodes)
@@ -37,6 +39,8 @@ defmodule Lasso.Cluster.TopologyTest do
       assert coverage.connected == 3
       # responding + self = 1 + 1 = 2
       assert coverage.responding == 2
+      # identified: 2 remote with node_id + 1 self
+      assert coverage.identified == 3
       assert coverage.unresponsive == [:node2]
       assert coverage.disconnected == [:node3]
     end
@@ -50,18 +54,35 @@ defmodule Lasso.Cluster.TopologyTest do
       assert coverage.expected == 1
       assert coverage.connected == 1
       assert coverage.responding == 1
+      assert coverage.identified == 1
       assert coverage.unresponsive == []
       assert coverage.disconnected == []
+    end
+
+    test "counts identified correctly with nil node_ids" do
+      nodes = %{
+        :node1 => %{node: :node1, state: :responding, node_id: "us-east"},
+        :node2 => %{node: :node2, state: :responding, node_id: nil},
+        :node3 => %{node: :node3, state: :connected, node_id: nil}
+      }
+
+      coverage = compute_coverage(nodes)
+
+      # 3 remote connected + 1 self
+      assert coverage.connected == 4
+      # 2 responding + 1 self
+      assert coverage.responding == 3
+      # 1 remote with node_id + 1 self
+      assert coverage.identified == 2
     end
   end
 
   describe "state transitions on health check failures" do
     test "node becomes unresponsive after 3 consecutive failures" do
-      # Simulate the health check result processing logic
       node_info = %{
         node: :test_node,
         state: :responding,
-        region: "us-east",
+        node_id: "us-east",
         consecutive_failures: 0,
         last_response: System.monotonic_time(:millisecond)
       }
@@ -86,7 +107,7 @@ defmodule Lasso.Cluster.TopologyTest do
       node_info = %{
         node: :test_node,
         state: :unresponsive,
-        region: "us-east",
+        node_id: "us-east",
         consecutive_failures: 5,
         last_response: nil
       }
@@ -103,7 +124,7 @@ defmodule Lasso.Cluster.TopologyTest do
       node_info = %{
         node: :test_node,
         state: :disconnected,
-        region: "us-east",
+        node_id: "us-east",
         consecutive_failures: 0,
         last_response: nil
       }
@@ -131,12 +152,13 @@ defmodule Lasso.Cluster.TopologyTest do
   end
 
   describe "compute_node_ids/2" do
-    test "groups nodes by node_id, excluding disconnected" do
+    test "groups nodes by node_id, excluding disconnected and nil node_ids" do
       nodes = %{
         :node1 => %{node: :node1, state: :responding, node_id: "us-east"},
         :node2 => %{node: :node2, state: :responding, node_id: "us-east"},
         :node3 => %{node: :node3, state: :connected, node_id: "eu-west"},
-        :node4 => %{node: :node4, state: :disconnected, node_id: "ap-south"}
+        :node4 => %{node: :node4, state: :disconnected, node_id: "ap-south"},
+        :node5 => %{node: :node5, state: :discovering, node_id: nil}
       }
 
       node_ids = compute_node_ids(nodes, "local")
@@ -147,6 +169,8 @@ defmodule Lasso.Cluster.TopologyTest do
       assert Map.has_key?(node_ids, "local")
       # ap-south excluded because node4 is disconnected
       refute Map.has_key?(node_ids, "ap-south")
+      # nil excluded (node5 has nil node_id)
+      refute Map.has_key?(node_ids, nil)
 
       assert length(node_ids["us-east"]) == 2
       assert length(node_ids["eu-west"]) == 1
@@ -159,6 +183,32 @@ defmodule Lasso.Cluster.TopologyTest do
 
       assert Map.has_key?(node_ids, "self-node-id")
       assert node_ids["self-node-id"] == []
+    end
+
+    test "excludes nodes with nil node_id" do
+      nodes = %{
+        :node1 => %{node: :node1, state: :connected, node_id: nil},
+        :node2 => %{node: :node2, state: :responding, node_id: "us-east"}
+      }
+
+      node_ids = compute_node_ids(nodes, "local")
+
+      assert Map.keys(node_ids) |> Enum.sort() == ["local", "us-east"]
+      refute Map.has_key?(node_ids, nil)
+    end
+  end
+
+  describe "self_node_id/0" do
+    test "reads from persistent_term" do
+      # persistent_term is set by Application.start before tests run
+      node_id = Lasso.Cluster.Topology.self_node_id()
+      assert is_binary(node_id)
+      assert byte_size(node_id) > 0
+    end
+
+    test "matches get_self_node_id/0" do
+      assert Lasso.Cluster.Topology.self_node_id() ==
+               Lasso.Cluster.Topology.get_self_node_id()
     end
   end
 
@@ -178,8 +228,8 @@ defmodule Lasso.Cluster.TopologyTest do
 
     test "detects tracked nodes no longer in Node.list" do
       tracked_nodes = %{
-        :stale_node => %{node: :stale_node, state: :responding, region: "us-east"},
-        :current_node => %{node: :current_node, state: :responding, region: "eu-west"}
+        :stale_node => %{node: :stale_node, state: :responding, node_id: "us-east"},
+        :current_node => %{node: :current_node, state: :responding, node_id: "eu-west"}
       }
 
       actual_nodes = MapSet.new([:current_node])
@@ -194,15 +244,23 @@ defmodule Lasso.Cluster.TopologyTest do
   # Helper functions that mirror the internal logic
 
   defp compute_coverage(nodes) do
-    {connected, responding, unresponsive, disconnected} =
+    {connected, responding, identified, unresponsive, disconnected} =
       nodes
       |> Map.values()
-      |> Enum.reduce({0, 0, [], []}, fn info, {conn, resp, unr, disc} ->
+      |> Enum.reduce({0, 0, 0, [], []}, fn info, {conn, resp, ident, unr, disc} ->
         case info.state do
-          :disconnected -> {conn, resp, unr, [info.node | disc]}
-          :unresponsive -> {conn + 1, resp, [info.node | unr], disc}
-          :responding -> {conn + 1, resp + 1, unr, disc}
-          _ -> {conn + 1, resp, unr, disc}
+          :disconnected ->
+            {conn, resp, ident, unr, [info.node | disc]}
+
+          :unresponsive ->
+            {conn + 1, resp, if(info.node_id, do: ident + 1, else: ident), [info.node | unr],
+             disc}
+
+          :responding ->
+            {conn + 1, resp + 1, if(info.node_id, do: ident + 1, else: ident), unr, disc}
+
+          _ ->
+            {conn + 1, resp, if(info.node_id, do: ident + 1, else: ident), unr, disc}
         end
       end)
 
@@ -210,6 +268,7 @@ defmodule Lasso.Cluster.TopologyTest do
       expected: connected + 1,
       connected: connected + 1,
       responding: responding + 1,
+      identified: identified + 1,
       unresponsive: unresponsive,
       disconnected: disconnected
     }
@@ -247,15 +306,17 @@ defmodule Lasso.Cluster.TopologyTest do
     |> String.split("@")
     |> List.last()
     |> case do
-      nil -> "unknown"
-      "" -> "unknown"
+      nil -> "unknown-#{node}"
+      "" -> "unknown-#{node}"
       id -> id
     end
   end
 
   defp compute_node_ids(nodes, self_node_id) do
     nodes
-    |> Enum.filter(fn {_node, info} -> info.state not in [:disconnected] end)
+    |> Enum.filter(fn {_node, info} ->
+      info.state not in [:disconnected] and not is_nil(info.node_id)
+    end)
     |> Enum.group_by(fn {_node, info} -> info.node_id end, fn {node, _} -> node end)
     |> Map.put_new(self_node_id, [])
   end
