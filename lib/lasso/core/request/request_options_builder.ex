@@ -187,7 +187,8 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   defp parse_strategy(_), do: nil
 
   @spec default_strategy() :: RequestOptions.strategy()
-  defp default_strategy, do: Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
+  defp default_strategy,
+    do: Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
 
   @spec put_request_context(RequestOptions.t(), any()) :: RequestOptions.t()
   defp put_request_context(%RequestOptions{} = o, nil), do: o
