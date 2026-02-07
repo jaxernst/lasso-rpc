@@ -282,11 +282,14 @@ Lasso runs on the BEAM (Erlang VM) to take advantage of its strengths for high-c
 
 ## Documentation
 
+- **[CONFIGURATION.md](docs/CONFIGURATION.md)** - Profile YAML reference, strategies, adapters
+- **[API_REFERENCE.md](docs/API_REFERENCE.md)** - HTTP/WebSocket endpoints, headers, errors
+- **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Production deployment, clustering, env vars
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design + components
 - **[OBSERVABILITY.md](docs/OBSERVABILITY.md)** - Logging/metrics
+- **[RPC_STANDARDS.md](docs/RPC_STANDARDS.md)** - RPC compliance details
 - **[TESTING.md](docs/TESTING.md)** - Dev workflow
 - **[FUTURE_FEATURES.md](docs/FUTURE_FEATURES.md)** - Roadmap
-- **[RPC_STANDARDS.md](docs/RPC_STANDARDS.md)** - RPC compliance details
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history
 
 ---
