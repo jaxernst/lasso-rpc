@@ -804,7 +804,7 @@ const DraggableNetworkViewport = {
 // Endpoint Selector Hook for Chain Details
 const EndpointSelector = {
   mounted() {
-    this.selectedStrategy = "fastest"; // default strategy
+    this.selectedStrategy = "round-robin"; // default strategy
     this.selectedProvider = null; // no provider selected by default
     this.mode = "strategy"; // 'strategy' or 'provider'
     this.selectedProviderSupportsWs = false; // default to false
@@ -861,6 +861,7 @@ const EndpointSelector = {
     // Use chain name (string like "ethereum", "base") not chain_id (numeric)
     this.chain = this.el.getAttribute("data-chain") || this.chain || "ethereum";
     this.chainId = this.el.getAttribute("data-chain-id") || this.chainId || "1";
+    this.profile = this.el.getAttribute("data-profile") || this.profile || "default";
   },
 
   detectActiveSelection() {
@@ -1006,26 +1007,25 @@ const EndpointSelector = {
       let newHttpUrl, newWsUrl;
       let showWsRow = true;
 
+      const profile = this.profile;
+
       if (this.mode === "strategy" && this.selectedStrategy) {
-        // Strategy mode: /rpc/{strategy}/{chain}
-        newHttpUrl = `${baseUrl}/rpc/${this.selectedStrategy}/${chain}`;
-        newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/${this.selectedStrategy}/${chain}`;
+        newHttpUrl = `${baseUrl}/rpc/profile/${profile}/${this.selectedStrategy}/${chain}`;
+        newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/profile/${profile}/${this.selectedStrategy}/${chain}`;
         showWsRow = true;
       } else if (this.mode === "provider" && this.selectedProvider) {
-        // Provider mode: /rpc/provider/{provider_id}/{chain}
-        newHttpUrl = `${baseUrl}/rpc/provider/${this.selectedProvider}/${chain}`;
+        newHttpUrl = `${baseUrl}/rpc/profile/${profile}/provider/${this.selectedProvider}/${chain}`;
 
         if (this.selectedProviderSupportsWs) {
-          newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/provider/${this.selectedProvider}/${chain}`;
+          newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/profile/${profile}/provider/${this.selectedProvider}/${chain}`;
           showWsRow = true;
         } else {
           newWsUrl = "";
           showWsRow = false;
         }
       } else {
-        // Default fallback
-        newHttpUrl = `${baseUrl}/rpc/fastest/${chain}`;
-        newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/fastest/${chain}`;
+        newHttpUrl = `${baseUrl}/rpc/profile/${profile}/${chain}`;
+        newWsUrl = `${wsProtocol}//${wsHost}/ws/rpc/profile/${profile}/${chain}`;
         showWsRow = true;
       }
 
@@ -1075,12 +1075,12 @@ const EndpointSelector = {
 
     if (this.mode === "strategy" && this.selectedStrategy) {
       const descriptions = {
-        fastest:
-          "Routes to the fastest provider based on real-time latency benchmarks (good for low-volume high-priority RPC calls)",
         "round-robin":
-          "Distributes requests evenly across all available providers (good for general purpose RPC calls)",
+          "Distributes requests evenly across all available providers — good for general purpose workloads",
         "latency-weighted":
-          "Load balanced selection favoring faster providers, maximizing throughput (good for indexing + backfilling tasks)",
+          "Load balanced favoring faster providers — good for high-throughput workloads like indexing and backfilling",
+        fastest:
+          "Routes all requests to the single fastest provider — best suited for low-volume, latency-sensitive calls",
       };
       descriptionEl.textContent =
         descriptions[this.selectedStrategy] || "Strategy-based routing";
@@ -1088,7 +1088,7 @@ const EndpointSelector = {
       descriptionEl.textContent = `Direct connection to ${this.selectedProvider} (bypasses routing strategies)`;
     } else {
       descriptionEl.textContent =
-        "Routes to the fastest provider based on real-time latency benchmarks";
+        "Distributes requests evenly across all available providers";
     }
   },
 };

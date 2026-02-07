@@ -228,15 +228,9 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   defp success_color(_), do: "text-red-400"
 
   @strategy_labels %{
-    "fastest" => "Fastest",
-    "round-robin" => "Round Robin",
-    "latency-weighted" => "Latency Weighted"
-  }
-
-  @strategy_icons %{
-    "fastest" => "⚡",
-    "round-robin" => "🔄",
-    "latency-weighted" => "⚖️"
+    "round-robin" => "Load Balanced",
+    "latency-weighted" => "Latency Weighted",
+    "fastest" => "Fastest"
   }
 
   attr(:chain, :string, required: true)
@@ -267,6 +261,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
         phx-update="ignore"
         data-chain={@chain}
         data-chain-id={Helpers.get_chain_id(@selected_profile, @chain)}
+        data-profile={@selected_profile}
         class="relative z-10"
       >
         <div class="space-y-4">
@@ -301,7 +296,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
           </div>
 
           <div class="text-[11px] text-gray-500 pl-1" id="mode-description">
-            Routes to fastest provider based on real-time latency benchmarks
+            Distributes requests evenly across all available providers
           </div>
         </div>
       </div>
@@ -314,7 +309,6 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   defp strategy_button(assigns) do
     assigns =
       assigns
-      |> assign(:icon, Map.get(@strategy_icons, assigns.strategy, ""))
       |> assign(:label, Map.get(@strategy_labels, assigns.strategy, assigns.strategy))
 
     ~H"""
@@ -322,7 +316,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       data-strategy={@strategy}
       class="px-3 py-1.5 rounded-md text-xs font-medium transition-all border border-gray-700 bg-gray-800/50 text-gray-400 hover:border-gray-600 hover:text-gray-300"
     >
-      {@icon} {@label}
+      {@label}
     </button>
     """
   end

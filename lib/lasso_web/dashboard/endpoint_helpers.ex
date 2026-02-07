@@ -10,7 +10,7 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   require Logger
 
   # Available routing strategies (must match router.ex and endpoint.ex)
-  @available_strategies ["fastest", "round-robin", "latency-weighted"]
+  @available_strategies ["round-robin", "latency-weighted", "fastest"]
 
   @doc """
   Returns list of available routing strategies.
@@ -113,9 +113,9 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   defp extract_chain_name(_), do: "ethereum"
 
   # Strategy display names
-  defp strategy_display_name("fastest"), do: "Fastest"
-  defp strategy_display_name("round-robin"), do: "Round Robin"
+  defp strategy_display_name("round-robin"), do: "Load Balanced"
   defp strategy_display_name("latency-weighted"), do: "Latency Weighted"
+  defp strategy_display_name("fastest"), do: "Fastest"
   defp strategy_display_name(other), do: other |> String.replace("-", " ") |> String.capitalize()
 
   # Strategy icons
@@ -125,16 +125,16 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   defp strategy_icon(_), do: "🎯"
 
   # Strategy descriptions
-  defp strategy_description("fastest") do
-    "Routes to the fastest provider based on real-time latency benchmarks (good for low-volume high-priority RPC calls)"
-  end
-
   defp strategy_description("round-robin") do
-    "Distributes requests evenly across all available providers (good for general purpose RPC calls)"
+    "Distributes requests evenly across all available providers — good for general purpose workloads"
   end
 
   defp strategy_description("latency-weighted") do
-    "Load balanced selection favoring faster providers, maximizing throughput (good for indexing + backfilling tasks)"
+    "Load balanced favoring faster providers — good for high-throughput workloads like indexing and backfilling"
+  end
+
+  defp strategy_description("fastest") do
+    "Routes all requests to the single fastest provider — best suited for low-volume, latency-sensitive calls"
   end
 
   defp strategy_description(_), do: "Strategy-based routing"

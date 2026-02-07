@@ -35,7 +35,7 @@ defmodule Lasso.RPC.Selection do
 
   Options:
   - :params => [term()] (RPC params for request analysis, default [])
-  - :strategy => :fastest | :cheapest | :priority | :round_robin (default :cheapest)
+  - :strategy => :fastest | :priority | :round_robin | :latency_weighted (default :round_robin)
   - :protocol => :http | :ws | :both (default :both)
   - :exclude => [provider_id] (default [])
   - :timeout => ms (default 30_000)
@@ -47,7 +47,7 @@ defmodule Lasso.RPC.Selection do
   def select_provider(profile, chain, method, opts \\ [])
       when is_binary(profile) and is_binary(chain) and is_binary(method) do
     params = Keyword.get(opts, :params, [])
-    strategy = Keyword.get(opts, :strategy, :cheapest)
+    strategy = Keyword.get(opts, :strategy, :round_robin)
     protocol = Keyword.get(opts, :protocol, :both)
     exclude = Keyword.get(opts, :exclude, [])
     timeout = Keyword.get(opts, :timeout, 30_000)
@@ -120,7 +120,7 @@ defmodule Lasso.RPC.Selection do
   health, and performance metrics to return ordered candidate channels.
 
   Options:
-  - :strategy => :fastest | :cheapest | :priority | :round_robin
+  - :strategy => :fastest | :priority | :round_robin | :latency_weighted
   - :transport => :http | :ws | :both (default :both)
   - :exclude => [provider_id]
   - :limit => integer (maximum channels to return)
