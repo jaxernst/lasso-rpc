@@ -138,24 +138,4 @@ defmodule LassoWeb.Dashboard.Helpers do
       meta: Keyword.get(opts, :meta, %{})
     }
   end
-
-  @doc "Get strategy description"
-  def get_strategy_description(strategy) do
-    case strategy do
-      "fastest" ->
-        "Routes all requests to the single fastest provider — best suited for low-volume, latency-sensitive calls"
-
-      "priority" ->
-        "Routes by configured provider priority order"
-
-      "round-robin" ->
-        "Distributes requests evenly across all available providers — good for general purpose workloads"
-
-      "latency-weighted" ->
-        "Load balanced favoring faster providers — good for high-throughput workloads like indexing and backfilling"
-
-      _ ->
-        "Strategy-based routing"
-    end
-  end
 end

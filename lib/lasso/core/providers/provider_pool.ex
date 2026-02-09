@@ -493,10 +493,38 @@ defmodule Lasso.RPC.ProviderPool do
     report_probe_results("default", chain_name, results)
   end
 
+  @deprecated "Use update_probe_health/5 instead"
   @spec report_probe_results(profile, chain_name, [map()]) :: :ok
   def report_probe_results(profile, chain_name, results)
       when is_binary(profile) and is_list(results) do
     GenServer.cast(via_name(profile, chain_name), {:probe_results, results})
+  end
+
+  @doc """
+  Updates a provider's health status based on probe results.
+
+  This is called by BatchCoordinator to report individual probe outcomes.
+  Only updates ProviderPool health state (http_status/ws_status) — does NOT
+  interact with CircuitBreaker (avoids double-reporting).
+
+  Probe success transitions :connecting → :healthy. For providers already in
+  a live-traffic-derived state, probe success only updates last_health_check.
+  Probe failure transitions :connecting → :degraded/:unhealthy based on
+  consecutive failures.
+  """
+  @spec update_probe_health(
+          profile,
+          chain_name,
+          provider_id,
+          :http | :ws,
+          :success | {:failure, term()}
+        ) :: :ok
+  def update_probe_health(profile, chain_name, provider_id, transport, result)
+      when is_binary(profile) and transport in [:http, :ws] do
+    GenServer.cast(
+      via_name(profile, chain_name),
+      {:update_probe_health, provider_id, transport, result}
+    )
   end
 
   @doc """
@@ -927,6 +955,55 @@ defmodule Lasso.RPC.ProviderPool do
 
   def handle_cast({:report_failure, provider_id, error, nil}, state),
     do: {:noreply, update_provider_failure(state, provider_id, error)}
+
+  @impl true
+  def handle_cast({:update_probe_health, provider_id, transport, result}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        status_field = if transport == :http, do: :http_status, else: :ws_status
+        current_transport_status = Map.get(provider, status_field)
+        now = System.system_time(:millisecond)
+
+        updated =
+          case result do
+            :success ->
+              if current_transport_status == :connecting do
+                provider
+                |> Map.put(status_field, :healthy)
+                |> Map.put(:consecutive_successes, provider.consecutive_successes + 1)
+                |> Map.put(:consecutive_failures, 0)
+                |> Map.put(:last_health_check, now)
+                |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
+              else
+                Map.put(provider, :last_health_check, now)
+              end
+
+            {:failure, reason} ->
+              new_failures = provider.consecutive_failures + 1
+              new_status = if new_failures >= @failure_threshold, do: :unhealthy, else: :degraded
+
+              if current_transport_status == :connecting do
+                provider
+                |> Map.put(status_field, new_status)
+                |> Map.put(:consecutive_failures, new_failures)
+                |> Map.put(:consecutive_successes, 0)
+                |> Map.put(:last_error, reason)
+                |> Map.put(:last_health_check, now)
+                |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
+              else
+                provider
+                |> Map.put(:last_error, reason)
+                |> Map.put(:last_health_check, now)
+              end
+          end
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
 
   # Async recovery time update from background Task (spawned in update_recovery_time_for_circuit)
   @impl true
@@ -1751,10 +1828,6 @@ defmodule Lasso.RPC.ProviderPool do
             # Rate limits are temporary backpressure, not provider health issues
             # Provider stays healthy - RateLimitState is the authoritative source for rate limit status
             retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
-
-            # Report to circuit breaker (rate limit threshold is lower than other errors)
-            cb_id = {state.profile, state.chain_name, provider_id, transport}
-            CircuitBreaker.record_failure(cb_id, jerr)
 
             # Only update last_error for debugging - don't change health status
             updated =

@@ -31,8 +31,8 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
   require Logger
 
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.RPC.{Channel, ProviderPool, Response, TransportRegistry}
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
-  alias Lasso.RPC.{Channel, Response, TransportRegistry}
 
   @tick_interval_ms 200
   @default_timeout_ms 5_000
@@ -500,6 +500,14 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
     cb_id = {state.profile, state.chain, provider.provider_id, :http}
     CircuitBreaker.signal_recovery(cb_id)
 
+    ProviderPool.update_probe_health(
+      state.profile,
+      state.chain,
+      provider.provider_id,
+      :http,
+      :success
+    )
+
     new_consecutive_successes = provider.consecutive_successes + 1
     was_failing = provider.consecutive_failures >= @max_consecutive_failures_before_warn
 
@@ -535,8 +543,13 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
   end
 
   defp handle_http_probe_failure(provider, state, reason, latency_ms, now) do
-    cb_id = {state.profile, state.chain, provider.provider_id, :http}
-    CircuitBreaker.record_failure(cb_id, reason)
+    ProviderPool.update_probe_health(
+      state.profile,
+      state.chain,
+      provider.provider_id,
+      :http,
+      {:failure, reason}
+    )
 
     new_consecutive_failures = provider.consecutive_failures + 1
 
@@ -567,6 +580,14 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
     if provider.ws_connection_stable do
       CircuitBreaker.signal_recovery(cb_id)
     end
+
+    ProviderPool.update_probe_health(
+      state.profile,
+      state.chain,
+      provider.provider_id,
+      :ws,
+      :success
+    )
 
     new_consecutive_successes = provider.ws_consecutive_successes + 1
     was_failing = provider.ws_consecutive_failures >= @max_consecutive_failures_before_warn
@@ -603,8 +624,13 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
   end
 
   defp handle_ws_probe_failure(provider, state, reason, latency_ms, now) do
-    cb_id = {state.profile, state.chain, provider.provider_id, :ws}
-    CircuitBreaker.record_failure(cb_id, reason)
+    ProviderPool.update_probe_health(
+      state.profile,
+      state.chain,
+      provider.provider_id,
+      :ws,
+      {:failure, reason}
+    )
 
     new_consecutive_failures = provider.ws_consecutive_failures + 1
 

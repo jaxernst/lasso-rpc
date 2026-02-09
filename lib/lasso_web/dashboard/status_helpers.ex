@@ -149,14 +149,16 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
 
   def check_block_lag(_chain, _provider_id), do: :unavailable
 
-  # Calculate optimistic lag that accounts for observation delay.
-  #
-  # With HTTP polling always running (see BlockSync.Worker), the registry
-  # always has reasonably fresh data. This formula credits providers for
-  # blocks that likely arrived since the last observation.
-  #
-  # The 30s cap prevents runaway values in edge cases.
-  defp calculate_optimistic_lag(chain, provider_id) do
+  @doc """
+  Calculate optimistic lag that accounts for observation delay.
+
+  With HTTP polling always running (see BlockSync.Worker), the registry
+  always has reasonably fresh data. This formula credits providers for
+  blocks that likely arrived since the last observation.
+
+  The 30s cap prevents runaway values in edge cases.
+  """
+  def calculate_optimistic_lag(chain, provider_id) do
     with {:ok, {height, timestamp, _source, _meta}} <-
            BlockSyncRegistry.get_height(chain, provider_id),
          {:ok, consensus} <- ChainState.consensus_height(chain) do
@@ -184,8 +186,10 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     end
   end
 
-  # Get block_time_ms for a chain. Prefers dynamic measurement, falls back to config.
-  defp get_block_time_ms(chain) do
+  @doc """
+  Get block_time_ms for a chain. Prefers dynamic measurement, falls back to config.
+  """
+  def get_block_time_ms(chain) do
     case BlockSyncRegistry.get_block_time_ms(chain) do
       ms when is_integer(ms) and ms > 0 ->
         ms

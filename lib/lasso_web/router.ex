@@ -39,7 +39,6 @@ defmodule LassoWeb.Router do
 
     # Chain endpoints
     get("/chains", ChainController, :index)
-    get("/chains/:chain_id/status", ChainController, :status)
   end
 
   # HTTP JSON-RPC endpoints

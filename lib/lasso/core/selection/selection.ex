@@ -179,7 +179,6 @@ defmodule Lasso.RPC.Selection do
     )
 
     # Build circuit state lookup map: {provider_id, transport} => :closed | :half_open
-    # Use defensive access in case circuit_state field is missing or nil
     circuit_state_map =
       provider_candidates
       |> Enum.flat_map(fn %{id: provider_id} = candidate ->
@@ -190,6 +189,12 @@ defmodule Lasso.RPC.Selection do
           {{provider_id, :ws}, Map.get(cs, :ws, :closed)}
         ]
       end)
+      |> Map.new()
+
+    # Build rate limit lookup map: provider_id => %{http: bool, ws: bool}
+    rate_limit_map =
+      provider_candidates
+      |> Enum.map(fn %{id: id, rate_limited: rl} -> {id, rl} end)
       |> Map.new()
 
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
@@ -249,7 +254,17 @@ defmodule Lasso.RPC.Selection do
 
     tiered_channels = closed_channels ++ half_open_channels
 
-    tiered_channels |> Enum.take(limit)
+    # Rate-limit tiering: deprioritize rate-limited channels (tried last, not excluded).
+    # Final order: closed+not-rl, closed+rl, half-open+not-rl, half-open+rl
+    {not_rate_limited, rate_limited} =
+      Enum.split_with(tiered_channels, fn channel ->
+        rl = Map.get(rate_limit_map, channel.provider_id, %{http: false, ws: false})
+        not Map.get(rl, channel.transport, false)
+      end)
+
+    final_channels = not_rate_limited ++ rate_limited
+
+    final_channels |> Enum.take(limit)
   end
 
   @doc """
