@@ -15,7 +15,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       socket
       |> assign(assigns)
       |> assign_new(:profile_name, fn -> "default" end)
-      |> assign_new(:rps_limit, fn -> 10 end)
+      |> assign_new(:rps_limit, fn -> nil end)
       |> assign_new(:selected_profile, fn -> "default" end)
       |> assign_new(:sim_stats, fn ->
         %{http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0}, ws: %{open: 0}}
@@ -398,8 +398,10 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-1 text-[10px] text-gray-400">
             <span class="text-gray-300">{@profile_name}</span>
-            <span class="text-gray-400">&middot;</span>
-            <span class="text-gray-300">{@rps_limit} RPS limit</span>
+            <%= if @rps_limit do %>
+              <span class="text-gray-400">&middot;</span>
+              <span class="text-gray-300">{@rps_limit} RPS limit</span>
+            <% end %>
           </div>
           <button
             phx-click="quick_start"
@@ -538,7 +540,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         <label class="text-[10px] font-medium text-gray-400">Request Rate</label>
         <div class="flex gap-2">
           <%= for rate <- [5, 15, 30] do %>
-            <% allowed = rate <= @rps_limit %>
+            <% allowed = is_nil(@rps_limit) or rate <= @rps_limit %>
             <button
               phx-click={allowed && "set_rate"}
               phx-value-rate={rate}

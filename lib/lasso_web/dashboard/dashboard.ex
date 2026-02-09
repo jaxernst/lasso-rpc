@@ -171,12 +171,12 @@ defmodule LassoWeb.Dashboard do
     profile_meta =
       case ConfigStore.get_profile(profile) do
         {:ok, meta} -> meta
-        _ -> %{name: profile, rps_limit: 10, burst_limit: 20}
+        _ -> %{name: profile}
       end
 
     socket
     |> assign(:profile_display_name, profile_meta.name)
-    |> assign(:effective_rps_limit, profile_meta.rps_limit)
+    |> assign(:effective_rps_limit, Map.get(profile_meta, :rps_limit))
   end
 
   defp switch_profile(socket, new_profile) do
@@ -799,7 +799,7 @@ defmodule LassoWeb.Dashboard do
   attr(:selected_provider_unified_events, :list, default: [])
   attr(:selected_provider_metrics, :map, default: %{})
   attr(:profile_display_name, :string, default: "default")
-  attr(:effective_rps_limit, :integer, default: 10)
+  attr(:effective_rps_limit, :integer, default: nil)
   attr(:live_provider_metrics, :map, default: %{})
   attr(:cluster_circuit_states, :map, default: %{})
   attr(:cluster_health_counters, :map, default: %{})
