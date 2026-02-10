@@ -17,13 +17,13 @@ defmodule Lasso.Testing.TelemetrySync do
       {:ok, collector} = TelemetrySync.attach_collector([:lasso, :request, :completed])
 
       # Now execute the action that generates telemetry
-      {:ok, result, _ctx} = RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [], %Lasso.RPC.RequestOptions{strategy: :round_robin, timeout_ms: 30_000})
+      {:ok, result, _ctx} = RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [], %Lasso.RPC.RequestOptions{strategy: :load_balanced, timeout_ms: 30_000})
 
       # Wait for the event we collected
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1000)
 
       # INCORRECT: Execute first, attach second
-      {:ok, result, _ctx} = RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [], %Lasso.RPC.RequestOptions{strategy: :round_robin, timeout_ms: 30_000})
+      {:ok, result, _ctx} = RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [], %Lasso.RPC.RequestOptions{strategy: :load_balanced, timeout_ms: 30_000})
       {:ok, collector} = TelemetrySync.attach_collector([:lasso, :request, :completed])
       TelemetrySync.await_event(collector, timeout: 1000)  # Always times out!
   """
@@ -187,7 +187,7 @@ defmodule Lasso.Testing.TelemetrySync do
               chain,
               "eth_blockNumber",
               [],
-              %Lasso.RPC.RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+              %Lasso.RPC.RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
             )
           end,
           match: [method: "eth_blockNumber"],
@@ -229,7 +229,7 @@ defmodule Lasso.Testing.TelemetrySync do
           chain,
           "eth_blockNumber",
           [],
-          %Lasso.RPC.RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %Lasso.RPC.RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector)

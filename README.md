@@ -61,7 +61,7 @@ Different providers excel at different workloads (hot reads vs archival queries 
 ## Features
 
 - **Multi-provider, multi-chain** Ethereum JSON-RPC proxy for **HTTP + WebSocket**
-- **Routing strategies**: `fastest`, `round-robin`, `latency-weighted`, plus provider override routes
+- **Routing strategies**: `fastest`, `load-balanced`, `latency-weighted`, plus provider override routes
 - **Method-aware benchmarking**: latency tracked per **provider × method × transport**
 - **Resilience**: circuit breakers, retries, and transport-aware failover
 - **WebSocket subscriptions**: multiplexing with optional gap-filling via HTTP on upstream failure
@@ -77,7 +77,7 @@ HTTP (POST):
 
 - `/rpc/:chain` (default strategy)
 - `/rpc/fastest/:chain`
-- `/rpc/round-robin/:chain`
+- `/rpc/load-balanced/:chain`
 - `/rpc/latency-weighted/:chain`
 - `/rpc/provider/:provider_id/:chain` (provider override)
 

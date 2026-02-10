@@ -150,6 +150,106 @@ defmodule Lasso.RPC.ProviderPoolProbeHealthTest do
       assert provider.http_status == old_status
     end
 
+    test "probe success recovers :unhealthy to :degraded (graduated step)" do
+      p = provider_struct(%{id: "probe_grad_1", name: "P1"})
+      chain_config = base_chain_config([p])
+      chain = "probe_health_test_grad_1"
+
+      {:ok, _pid} = ProviderPool.start_link({"default", chain, chain_config})
+      :ok = ProviderPool.register_provider("default", chain, p.id, p)
+
+      # First get to :healthy via probe
+      ProviderPool.update_probe_health("default", chain, p.id, :http, :success)
+      Process.sleep(50)
+
+      # Drive to :unhealthy via live traffic failures (threshold is 3)
+      for _ <- 1..3 do
+        ProviderPool.report_failure("default", chain, p.id, {:network_error, "timeout"}, :http)
+        Process.sleep(20)
+      end
+
+      {:ok, status} = ProviderPool.get_status("default", chain)
+      provider = Enum.find(status.providers, &(&1.id == p.id))
+      assert provider.http_status == :unhealthy
+
+      # Probe success should graduate :unhealthy → :degraded (not straight to :healthy)
+      ProviderPool.update_probe_health("default", chain, p.id, :http, :success)
+      Process.sleep(50)
+
+      {:ok, status} = ProviderPool.get_status("default", chain)
+      provider = Enum.find(status.providers, &(&1.id == p.id))
+      assert provider.http_status == :degraded
+    end
+
+    test "second probe success completes recovery :degraded to :healthy" do
+      p = provider_struct(%{id: "probe_grad_2", name: "P1"})
+      chain_config = base_chain_config([p])
+      chain = "probe_health_test_grad_2"
+
+      {:ok, _pid} = ProviderPool.start_link({"default", chain, chain_config})
+      :ok = ProviderPool.register_provider("default", chain, p.id, p)
+
+      # Get to :healthy via probe
+      ProviderPool.update_probe_health("default", chain, p.id, :http, :success)
+      Process.sleep(50)
+
+      # Drive to :unhealthy via live traffic failures
+      for _ <- 1..3 do
+        ProviderPool.report_failure("default", chain, p.id, {:network_error, "timeout"}, :http)
+        Process.sleep(20)
+      end
+
+      {:ok, status} = ProviderPool.get_status("default", chain)
+      provider = Enum.find(status.providers, &(&1.id == p.id))
+      assert provider.http_status == :unhealthy
+
+      # First probe: :unhealthy → :degraded
+      ProviderPool.update_probe_health("default", chain, p.id, :http, :success)
+      Process.sleep(50)
+
+      {:ok, status} = ProviderPool.get_status("default", chain)
+      provider = Enum.find(status.providers, &(&1.id == p.id))
+      assert provider.http_status == :degraded
+
+      # Second probe: :degraded → :healthy
+      ProviderPool.update_probe_health("default", chain, p.id, :http, :success)
+      Process.sleep(50)
+
+      {:ok, status} = ProviderPool.get_status("default", chain)
+      provider = Enum.find(status.providers, &(&1.id == p.id))
+      assert provider.http_status == :healthy
+      assert provider.consecutive_failures == 0
+    end
+
+    test "probe success recovers :degraded to :healthy (single step)" do
+      p = provider_struct(%{id: "probe_deg_1", name: "P1"})
+      chain_config = base_chain_config([p])
+      chain = "probe_health_test_deg_1"
+
+      {:ok, _pid} = ProviderPool.start_link({"default", chain, chain_config})
+      :ok = ProviderPool.register_provider("default", chain, p.id, p)
+
+      # Get to :healthy via probe
+      ProviderPool.update_probe_health("default", chain, p.id, :http, :success)
+      Process.sleep(50)
+
+      # Drive to :degraded via 1 live traffic failure
+      ProviderPool.report_failure("default", chain, p.id, {:network_error, "timeout"}, :http)
+      Process.sleep(50)
+
+      {:ok, status} = ProviderPool.get_status("default", chain)
+      provider = Enum.find(status.providers, &(&1.id == p.id))
+      assert provider.http_status == :degraded
+
+      # Probe success recovers :degraded → :healthy directly
+      ProviderPool.update_probe_health("default", chain, p.id, :http, :success)
+      Process.sleep(50)
+
+      {:ok, status} = ProviderPool.get_status("default", chain)
+      provider = Enum.find(status.providers, &(&1.id == p.id))
+      assert provider.http_status == :healthy
+    end
+
     test "probe failure from :connecting transitions to :degraded (probes resolve stuck state only)" do
       p = provider_struct(%{id: "probe_multi_fail", name: "P1"})
       chain_config = base_chain_config([p])

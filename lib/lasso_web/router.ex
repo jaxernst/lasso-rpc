@@ -48,7 +48,8 @@ defmodule LassoWeb.Router do
     # Legacy endpoints (no profile slug - uses "default" profile)
     # Strategy-specific endpoints
     post("/fastest/:chain_id", RPCController, :rpc_fastest)
-    post("/round-robin/:chain_id", RPCController, :rpc_round_robin)
+    post("/load-balanced/:chain_id", RPCController, :rpc_load_balanced)
+    post("/round-robin/:chain_id", RPCController, :rpc_load_balanced)
     post("/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
 
     # Provider override endpoints
@@ -62,7 +63,8 @@ defmodule LassoWeb.Router do
     scope "/profile/:profile" do
       # Strategy-specific endpoints
       post("/fastest/:chain_id", RPCController, :rpc_fastest)
-      post("/round-robin/:chain_id", RPCController, :rpc_round_robin)
+      post("/load-balanced/:chain_id", RPCController, :rpc_load_balanced)
+      post("/round-robin/:chain_id", RPCController, :rpc_load_balanced)
       post("/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
 
       # Provider override endpoints

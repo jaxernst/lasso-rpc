@@ -36,7 +36,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Verify request succeeded (using backup)
@@ -63,7 +63,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             "eth_blockNumber",
             [],
             %RequestOptions{
-              strategy: :round_robin,
+              strategy: :load_balanced,
               timeout_ms: 30_000,
               provider_override: "failing_provider"
             }
@@ -92,7 +92,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "failing_provider",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -137,7 +137,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "flaky",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -169,7 +169,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "flaky",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -237,7 +237,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Request should succeed via backup - now returns Response.Success
@@ -269,7 +269,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "backup",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -296,7 +296,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "preferred",
             failover_on_override: true,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -324,7 +324,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # In a real scenario with provider-specific adapter logic:
@@ -346,7 +346,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Execute with nil params
@@ -355,7 +355,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           nil,
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Both should succeed
@@ -386,7 +386,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "provider",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -415,7 +415,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "slow",
             failover_on_override: false,
             timeout_ms: 100,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -438,7 +438,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "nonexistent",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -462,7 +462,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{transport: :http, timeout_ms: 30_000, strategy: :round_robin}
+          %RequestOptions{transport: :http, timeout_ms: 30_000, strategy: :load_balanced}
         )
 
       # Execute with WS transport override (if supported)
@@ -502,7 +502,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Wait for start event
@@ -547,7 +547,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Verify telemetry shows success
@@ -582,7 +582,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "failing",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -618,7 +618,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Should have emitted at least one start event

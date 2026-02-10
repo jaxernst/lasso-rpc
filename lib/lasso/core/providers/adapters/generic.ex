@@ -18,12 +18,21 @@ defmodule Lasso.RPC.Providers.Generic do
 
   alias Lasso.JSONRPC.Error, as: JError
 
+  import Lasso.RPC.Providers.AdapterHelpers
+
   # Capability Validation (Permissive - assumes all methods supported)
 
   @impl true
   def supports_method?(_method, _transport, _ctx), do: :ok
 
   @impl true
+  def validate_params("eth_getLogs", params, _transport, ctx) do
+    case get_adapter_config(ctx, :max_block_range, nil) do
+      nil -> :ok
+      limit -> validate_block_range(params, ctx, limit)
+    end
+  end
+
   def validate_params(_method, _params, _transport, _ctx), do: :ok
 
   # Normalization (Standard JSON-RPC 2.0)

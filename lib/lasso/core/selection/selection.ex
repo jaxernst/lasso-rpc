@@ -35,7 +35,7 @@ defmodule Lasso.RPC.Selection do
 
   Options:
   - :params => [term()] (RPC params for request analysis, default [])
-  - :strategy => :fastest | :priority | :round_robin | :latency_weighted (default :round_robin)
+  - :strategy => :fastest | :priority | :load_balanced | :latency_weighted (default :load_balanced)
   - :protocol => :http | :ws | :both (default :both)
   - :exclude => [provider_id] (default [])
   - :timeout => ms (default 30_000)
@@ -47,7 +47,7 @@ defmodule Lasso.RPC.Selection do
   def select_provider(profile, chain, method, opts \\ [])
       when is_binary(profile) and is_binary(chain) and is_binary(method) do
     params = Keyword.get(opts, :params, [])
-    strategy = Keyword.get(opts, :strategy, :round_robin)
+    strategy = Keyword.get(opts, :strategy, :load_balanced)
     protocol = Keyword.get(opts, :protocol, :both)
     exclude = Keyword.get(opts, :exclude, [])
     timeout = Keyword.get(opts, :timeout, 30_000)
@@ -120,7 +120,7 @@ defmodule Lasso.RPC.Selection do
   health, and performance metrics to return ordered candidate channels.
 
   Options:
-  - :strategy => :fastest | :priority | :round_robin | :latency_weighted
+  - :strategy => :fastest | :priority | :load_balanced | :latency_weighted
   - :transport => :http | :ws | :both (default :both)
   - :exclude => [provider_id]
   - :limit => integer (maximum channels to return)
@@ -131,7 +131,7 @@ defmodule Lasso.RPC.Selection do
   @spec select_channels(String.t(), String.t(), String.t(), keyword()) :: [Channel.t()]
   def select_channels(profile, chain, method, opts \\ [])
       when is_binary(profile) and is_binary(chain) and is_binary(method) do
-    strategy = Keyword.get(opts, :strategy, :round_robin)
+    strategy = Keyword.get(opts, :strategy, :load_balanced)
     transport = Keyword.get(opts, :transport, :both)
     exclude = Keyword.get(opts, :exclude, [])
     limit = Keyword.get(opts, :limit, 1000)
@@ -243,9 +243,27 @@ defmodule Lasso.RPC.Selection do
     ordered_channels =
       strategy_mod.rank_channels(capable_channels, method, prepared_ctx, profile, chain)
 
-    # Tiered selection: partition by circuit state to deprioritize half-open channels.
-    # Closed-circuit channels come first (healthy), half-open channels come last (recovering).
-    # Within each tier, the strategy's ranking is preserved (maintains randomization for round-robin).
+    # Health-based tiering: reorder providers by circuit breaker state and rate limit status.
+    #
+    # The 4-tier system ensures healthy providers receive traffic first while allowing
+    # recovering providers to gradually reintegrate:
+    #
+    # 1. Tier 1: Closed circuit + not rate-limited (preferred)
+    # 2. Tier 2: Closed circuit + rate-limited
+    # 3. Tier 3: Half-open circuit + not rate-limited
+    # 4. Tier 4: Half-open circuit + rate-limited
+    #
+    # Open-circuit providers are filtered out earlier in the pipeline.
+    #
+    # Within each tier, the strategy's ranking is preserved. For example, with
+    # load-balanced strategy, Tier 1 providers remain shuffled relative to each other,
+    # but all Tier 1 providers come before any Tier 2 providers.
+    #
+    # This tiering explains why traffic may be concentrated on certain providers even
+    # with load-balanced: if only one provider is in Tier 1, it receives all traffic
+    # that succeeds, with lower tiers acting as fallbacks.
+
+    # Step 1: Split by circuit breaker state
     {closed_channels, half_open_channels} =
       Enum.split_with(ordered_channels, fn channel ->
         cb_state = Map.get(circuit_state_map, {channel.provider_id, channel.transport}, :closed)
@@ -254,7 +272,7 @@ defmodule Lasso.RPC.Selection do
 
     tiered_channels = closed_channels ++ half_open_channels
 
-    # Rate-limit tiering: deprioritize rate-limited channels (tried last, not excluded).
+    # Step 2: Within each circuit tier, split by rate limit status
     # Final order: closed+not-rl, closed+rl, half-open+not-rl, half-open+rl
     {not_rate_limited, rate_limited} =
       Enum.split_with(tiered_channels, fn channel ->

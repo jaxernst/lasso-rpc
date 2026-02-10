@@ -23,7 +23,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       |> assign_new(:sim_collapsed, fn -> true end)
       |> assign_new(:simulator_running, fn -> false end)
       |> assign_new(:selected_chains, fn -> [] end)
-      |> assign_new(:selected_strategy, fn -> "round-robin" end)
+      |> assign_new(:selected_strategy, fn -> "load-balanced" end)
       |> assign_new(:request_rate, fn -> 5 end)
       |> assign_new(:run_duration, fn -> 30 end)
       |> assign_new(:load_types, fn -> %{http: true, ws: true} end)
@@ -32,7 +32,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       |> assign_new(:active_runs, fn -> [] end)
       |> assign_new(:preview_text, fn ->
         get_preview_text(%{
-          strategy: "round-robin",
+          strategy: "load-balanced",
           chains: [],
           load_types: %{http: true, ws: true}
         })
@@ -512,7 +512,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         <label class="text-[10px] font-medium text-gray-400">Routing Strategy</label>
         <div class="grid grid-cols-2 gap-1">
           <%= for {strategy, label, icon} <- [
-            {"round-robin", "Round Robin", "🔄"},
+            {"load-balanced", "Load Balanced", "🔄"},
             {"fastest", "Fastest", "⚡"},
             {"latency-weighted", "Latency Weighted", "⚖️"}
           ] do %>
@@ -670,7 +670,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       type: "custom",
       duration: 30_000,
       profile: profile,
-      strategy: "round-robin",
+      strategy: "load-balanced",
       http: %{
         enabled: true,
         methods: ["eth_blockNumber", "eth_getBalance"],
@@ -714,10 +714,10 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   defp get_preview_text(%{strategy: strategy, chains: chains}) do
     strategy_label =
       case strategy do
-        "round-robin" -> "Round Robin"
+        "load-balanced" -> "Load Balanced"
         "fastest" -> "Fastest"
         "latency-weighted" -> "Latency Weighted"
-        _ -> "Round Robin"
+        _ -> "Load Balanced"
       end
 
     chains_text =

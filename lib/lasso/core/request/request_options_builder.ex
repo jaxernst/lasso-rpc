@@ -66,7 +66,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   Useful for CLI tools, internal services, or tests that don't have a Plug.Conn.
 
   ## Options (precedence: overrides > params > defaults)
-  - `:strategy` - Strategy atom (default: from app config)
+  - `:strategy` - Strategy atom (:load_balanced, :fastest, :latency_weighted, :priority)
   - `:provider_override` / `:provider_id` - Force specific provider
   - `:transport` - Transport preference (:http, :ws, :both)
   - `:failover_on_override` - Retry on other providers if override fails (default: false)
@@ -180,7 +180,8 @@ defmodule Lasso.RPC.RequestOptions.Builder do
 
   @spec parse_strategy(String.t()) :: RequestOptions.strategy() | nil
   defp parse_strategy("priority"), do: :priority
-  defp parse_strategy("round_robin"), do: :round_robin
+  defp parse_strategy("load_balanced"), do: :load_balanced
+  defp parse_strategy("round_robin"), do: :load_balanced
   defp parse_strategy("fastest"), do: :fastest
   defp parse_strategy("latency_weighted"), do: :latency_weighted
   defp parse_strategy(nil), do: nil
@@ -188,7 +189,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
 
   @spec default_strategy() :: RequestOptions.strategy()
   defp default_strategy,
-    do: Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
+    do: Application.get_env(:lasso, :provider_selection_strategy, :load_balanced)
 
   @spec put_request_context(RequestOptions.t(), any()) :: RequestOptions.t()
   defp put_request_context(%RequestOptions{} = o, nil), do: o

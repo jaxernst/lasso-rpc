@@ -1,5 +1,26 @@
 defmodule Lasso.RPC.Strategies.Fastest do
-  @moduledoc "Choose fastest provider using method-specific latency scores with quality filters."
+  @moduledoc """
+  Choose fastest provider using method-specific latency scores with quality filters.
+
+  Ranks providers by measured latency (ascending). Latency is tracked per provider,
+  per method, per transport, allowing method-specific optimization.
+
+  ## Staleness Handling
+
+  Metrics older than 10 minutes are considered stale and treated as cold start.
+  This prevents routing decisions based on outdated performance data.
+
+  ## Health Interaction
+
+  Strategy ranking is applied first, then health-based tiering reorders providers
+  by circuit breaker state and rate limit status. A fast provider with a half-open
+  circuit will be deprioritized below any closed-circuit provider.
+
+  ## Configuration
+
+  - `FASTEST_MIN_CALLS`: Minimum calls for stable metrics (default: 3)
+  - `FASTEST_MIN_SUCCESS_RATE`: Minimum success rate filter (default: 0.9)
+  """
 
   @behaviour Lasso.RPC.Strategy
 

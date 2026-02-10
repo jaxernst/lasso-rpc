@@ -18,11 +18,12 @@ function parseArgs(argv) {
   const args = argv.slice(2);
   const opts = {
     url:
-      process.env.RPC_URL || "http://localhost:4000/rpc/round-robin/ethereum",
+      process.env.RPC_URL || "http://localhost:4000/rpc/load-balanced/ethereum",
     host: process.env.HOST || null, // base host URL
     chains: process.env.CHAINS || null, // comma-separated chain names
-    strategy: process.env.STRATEGY || "round-robin", // routing strategy
+    strategy: process.env.STRATEGY || "load-balanced", // routing strategy
     profile: process.env.PROFILE || null, // profile name (e.g., "default", "testnet")
+    apiKey: process.env.API_KEY || null, // API key for authentication
     concurrency: Number(process.env.CONCURRENCY) || 16,
     duration: Number(process.env.DURATION) || 30, // seconds
     rampUpDuration: Number(process.env.RAMP_UP_DURATION) || null, // seconds (defaults to 10s or 20% of duration, whichever is smaller)
@@ -58,6 +59,11 @@ function parseArgs(argv) {
       case "--profile":
       case "-p":
         opts.profile = String(next());
+        i++;
+        break;
+      case "--api-key":
+      case "-k":
+        opts.apiKey = String(next());
         i++;
         break;
       case "--concurrency":
@@ -115,16 +121,18 @@ function printHelpAndExit() {
   console.log(
     `Usage: node scripts/rpc_load_test.mjs [options]\n\n` +
       `Options:\n` +
-      `  -u, --url <url>           RPC endpoint (default: http://localhost:4000/rpc/round-robin/ethereum)\n` +
+      `  -u, --url <url>           RPC endpoint (default: http://localhost:4000/rpc/load-balanced/ethereum)\n` +
       `                             (ignored if --chains is used)\n` +
       `  --host <url>              Base host URL (default: http://localhost:4000)\n` +
       `                             (used with --chains)\n` +
       `  --chains <list>           Comma-separated chain names (e.g., "ethereum,base")\n` +
       `                             If specified, tests all chains in parallel\n` +
-      `  -s, --strategy <name>     Routing strategy: round-robin, fastest, latency-weighted\n` +
-      `                             (default: round-robin, used with --chains)\n` +
+      `  -s, --strategy <name>     Routing strategy: load-balanced, fastest, latency-weighted\n` +
+      `                             (default: load-balanced, used with --chains)\n` +
       `  -p, --profile <name>      Profile name (e.g., "default", "testnet")\n` +
       `                             If not specified, uses legacy routes (default profile)\n` +
+      `  -k, --api-key <key>       API key for authentication (lasso_...)\n` +
+      `                             Can also be set via API_KEY environment variable\n` +
       `  -c, --concurrency <n>     Concurrent workers per chain (default: 16)\n` +
       `  -d, --duration <sec>      Test duration seconds (default: 30)\n` +
       `  --ramp-up <sec>           Ramp-up duration seconds (default: 10s or 20% of duration, whichever is smaller)\n` +
@@ -209,13 +217,17 @@ function data_balanceOf(address) {
 // -----------------------------
 // Bootstrap dynamic context
 // -----------------------------
-async function rpc(url, body, timeoutMs) {
+async function rpc(url, body, timeoutMs, apiKey = null) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const headers = { "content-type": "application/json" };
+    if (apiKey) {
+      headers["x-lasso-api-key"] = apiKey;
+    }
     const res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -248,14 +260,14 @@ async function rpc(url, body, timeoutMs) {
   }
 }
 
-async function getLatestBlockNumber(url, timeoutMs) {
+async function getLatestBlockNumber(url, timeoutMs, apiKey = null) {
   const body = { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] };
-  const { ok, json } = await rpc(url, body, timeoutMs);
+  const { ok, json } = await rpc(url, body, timeoutMs, apiKey);
   if (!ok || !json || !json.result) return null;
   return Number(BigInt(json.result));
 }
 
-async function getBlockByNumber(url, num, fullTx = false, timeoutMs = 10000) {
+async function getBlockByNumber(url, num, fullTx = false, timeoutMs = 10000, apiKey = null) {
   const param = typeof num === "string" ? num : toHex(num);
   const body = {
     jsonrpc: "2.0",
@@ -263,7 +275,7 @@ async function getBlockByNumber(url, num, fullTx = false, timeoutMs = 10000) {
     method: "eth_getBlockByNumber",
     params: [param, Boolean(fullTx)],
   };
-  const { ok, json } = await rpc(url, body, timeoutMs);
+  const { ok, json } = await rpc(url, body, timeoutMs, apiKey);
   if (!ok || !json) return null;
   return json.result || null;
 }
@@ -272,11 +284,12 @@ async function findRecentTxHash(
   url,
   startNumber,
   searchBack = 20,
-  timeoutMs = 10000
+  timeoutMs = 10000,
+  apiKey = null
 ) {
   let n = startNumber;
   for (let i = 0; i < searchBack && n >= 0; i++, n--) {
-    const block = await getBlockByNumber(url, n, false, timeoutMs);
+    const block = await getBlockByNumber(url, n, false, timeoutMs, apiKey);
     if (
       block &&
       Array.isArray(block.transactions) &&
@@ -286,16 +299,16 @@ async function findRecentTxHash(
     }
   }
   // Fallback: latest block (hash) even if no tx, txHash undefined
-  const latest = await getBlockByNumber(url, "latest", false, timeoutMs);
+  const latest = await getBlockByNumber(url, "latest", false, timeoutMs, apiKey);
   return { txHash: undefined, blockHash: latest && latest.hash };
 }
 
-async function bootstrapContext(url, timeoutMs) {
-  const latestNum = await getLatestBlockNumber(url, timeoutMs);
+async function bootstrapContext(url, timeoutMs, apiKey = null) {
+  const latestNum = await getLatestBlockNumber(url, timeoutMs, apiKey);
   if (latestNum == null) {
     return { latestNumber: 0, txHash: undefined, blockHash: undefined };
   }
-  const found = await findRecentTxHash(url, latestNum, 30, timeoutMs);
+  const found = await findRecentTxHash(url, latestNum, 30, timeoutMs, apiKey);
   return {
     latestNumber: latestNum,
     txHash: found.txHash,
@@ -469,9 +482,9 @@ function parseChains(chainsCsv) {
 // -----------------------------
 // Load generation (single chain)
 // -----------------------------
-async function runSingleChain(url, chainName, rpsLimit) {
+async function runSingleChain(url, chainName, rpsLimit, apiKey = null) {
   const prefix = chainName ? `[${chainName}] ` : "";
-  const ctx = await bootstrapContext(url, options.timeout);
+  const ctx = await bootstrapContext(url, options.timeout, apiKey);
   const ctxRef = {
     latestNumber: ctx.latestNumber,
     txHash: ctx.txHash,
@@ -595,7 +608,7 @@ async function runSingleChain(url, chainName, rpsLimit) {
       params: methodDef.params(),
     };
     const t0 = nowNs();
-    const res = await rpc(url, body, options.timeout);
+    const res = await rpc(url, body, options.timeout, apiKey);
     const dtMs = nsToMs(nowNs() - t0);
 
     windowReq++;
@@ -772,7 +785,7 @@ async function run() {
       const url = buildChainUrl(host, options.strategy, chain, options.profile);
       const rpsLimit = chainRates.get(chain) || options.rpsLimit || null;
       try {
-        return await runSingleChain(url, chain, rpsLimit);
+        return await runSingleChain(url, chain, rpsLimit, options.apiKey);
       } catch (err) {
         console.error(`[${chain}] Fatal error:`, err.message);
         return {
@@ -872,7 +885,7 @@ async function run() {
         const afterRpc = pathParts.slice(rpcIndex + 1);
         
         // Determine if there's a strategy (check if first part is a valid strategy)
-        const validStrategies = ["round-robin", "fastest", "latency-weighted"];
+        const validStrategies = ["load-balanced", "fastest", "latency-weighted"];
         let strategy = null;
         let chain = null;
         
@@ -897,7 +910,8 @@ async function run() {
     const result = await runSingleChain(
       testUrl,
       chainName,
-      options.rpsLimit
+      options.rpsLimit,
+      options.apiKey
     );
 
     console.log("\n=== Summary ===");

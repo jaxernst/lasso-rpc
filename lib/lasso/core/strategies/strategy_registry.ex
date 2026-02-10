@@ -6,13 +6,13 @@ defmodule Lasso.RPC.Strategies.Registry do
   scattering case statements across the codebase.
   """
 
-  @type strategy :: :fastest | :round_robin | :latency_weighted
+  @type strategy :: :fastest | :load_balanced | :round_robin | :latency_weighted
 
   @doc """
   Resolve a strategy atom to its implementation module.
 
   Returns the module implementing the Strategy behavior for the given strategy atom.
-  Falls back to RoundRobin strategy if unknown strategy is provided.
+  Falls back to LoadBalanced strategy if unknown strategy is provided.
 
   The default registry can be overridden via:
 
@@ -26,13 +26,13 @@ defmodule Lasso.RPC.Strategies.Registry do
       Lasso.RPC.Strategies.Fastest
 
       iex> StrategyRegistry.resolve(:unknown)
-      Lasso.RPC.Strategies.RoundRobin
+      Lasso.RPC.Strategies.LoadBalanced
 
   """
   @spec resolve(strategy) :: module()
   def resolve(strategy) when is_atom(strategy) do
     registry = Application.get_env(:lasso, :strategy_registry, default_registry())
-    Map.get(registry, strategy, Lasso.RPC.Strategies.RoundRobin)
+    Map.get(registry, strategy, Lasso.RPC.Strategies.LoadBalanced)
   end
 
   @spec strategy_atoms() :: [atom()]
@@ -44,7 +44,8 @@ defmodule Lasso.RPC.Strategies.Registry do
   @spec default_registry() :: %{strategy => module()}
   def default_registry do
     %{
-      round_robin: Lasso.RPC.Strategies.RoundRobin,
+      load_balanced: Lasso.RPC.Strategies.LoadBalanced,
+      round_robin: Lasso.RPC.Strategies.LoadBalanced,
       fastest: Lasso.RPC.Strategies.Fastest,
       latency_weighted: Lasso.RPC.Strategies.LatencyWeighted
     }

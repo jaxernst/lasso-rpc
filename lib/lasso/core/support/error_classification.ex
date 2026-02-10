@@ -266,6 +266,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @spec breaker_penalty?(atom()) :: boolean()
   def breaker_penalty?(:capability_violation), do: false
   def breaker_penalty?(:rate_limit), do: false
+  def breaker_penalty?(:client_error), do: false
   def breaker_penalty?(_category), do: true
 
   @doc """

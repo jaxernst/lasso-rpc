@@ -700,9 +700,9 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
 
           {:ok, %Response.Error{error: jerror} = _error, _io_ms} ->
             if jerror.category == :rate_limit do
-              {:error, jerror}
+              {:ok, :rate_limited}
             else
-              {:ok, :error_response}
+              {:error, jerror}
             end
 
           {:error, reason, _io_ms} ->
@@ -739,11 +739,8 @@ defmodule Lasso.HealthProbe.BatchCoordinator do
             {:ok, :parse_error}
         end
 
-      {:error, %{category: :rate_limit} = jerr} ->
-        {:error, jerr}
-
-      {:error, %{retriable?: true} = _jerr} ->
-        {:ok, :error_response}
+      {:error, %{category: :rate_limit}} ->
+        {:ok, :rate_limited}
 
       {:error, reason} ->
         {:error, reason}

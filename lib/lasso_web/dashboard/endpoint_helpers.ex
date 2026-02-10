@@ -10,7 +10,7 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   require Logger
 
   # Available routing strategies (must match router.ex and endpoint.ex)
-  @available_strategies ["round-robin", "latency-weighted", "fastest"]
+  @available_strategies ["load-balanced", "latency-weighted", "fastest"]
 
   @doc """
   Returns list of available routing strategies.
@@ -113,19 +113,19 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   defp extract_chain_name(_), do: "ethereum"
 
   @doc "Get display name for a strategy"
-  def strategy_display_name("round-robin"), do: "Load Balanced"
+  def strategy_display_name("load-balanced"), do: "Load Balanced"
   def strategy_display_name("latency-weighted"), do: "Latency Weighted"
   def strategy_display_name("fastest"), do: "Fastest"
   def strategy_display_name(other), do: other |> String.replace("-", " ") |> String.capitalize()
 
   # Strategy icons
   defp strategy_icon("fastest"), do: "⚡"
-  defp strategy_icon("round-robin"), do: "🔄"
+  defp strategy_icon("load-balanced"), do: "🔄"
   defp strategy_icon("latency-weighted"), do: "⚖️"
   defp strategy_icon(_), do: "🎯"
 
   @doc "Get description for a strategy"
-  def strategy_description("round-robin") do
+  def strategy_description("load-balanced") do
     "Distributes requests evenly across all available providers — good for general purpose workloads"
   end
 
