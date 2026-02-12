@@ -7,12 +7,6 @@ import { LiveSocket } from "phoenix_live_view";
 // Enhanced Simulator module
 import * as LassoSim from "./lasso_simulator";
 
-// Dynamic mesh visualization for hero graphic
-import { HeroMesh } from "./hero_mesh";
-
-// Globe visualization for hero
-import { GlobeRenderer } from "./hero_globe";
-
 // Collapsible Section Hook
 const CollapsibleSection = {
   mounted() {
@@ -1101,54 +1095,6 @@ const ProviderRequestAnimator = {
   },
 };
 
-// Scroll Reveal Hook
-const ScrollReveal = {
-  mounted() {
-    this.revealed = false;
-
-    // Check if we should reveal immediately (if already visible or near top)
-    // But usually we trust the observer.
-
-    this.observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            this.reveal();
-            this.observer.unobserve(this.el);
-          }
-        });
-      },
-      {
-        root: null,
-        threshold: 0.1,
-        rootMargin: "0px 0px -50px 0px",
-      }
-    );
-    this.observer.observe(this.el);
-  },
-
-  updated() {
-    // LiveView might have reset the classes to the server-side state (hidden).
-    // If we have already revealed this element, we must force it back to visible.
-    if (this.revealed) {
-      this.el.classList.remove("opacity-0", "translate-y-8");
-      this.el.classList.add("opacity-100", "translate-y-0");
-    }
-  },
-
-  reveal() {
-    this.revealed = true;
-    this.el.classList.remove("opacity-0", "translate-y-8");
-    this.el.classList.add("opacity-100", "translate-y-0");
-  },
-
-  destroyed() {
-    if (this.observer) {
-      this.observer.disconnect();
-    }
-  },
-};
-
 // Expandable Details Hook - preserves open state across LiveView updates
 const ExpandableDetails = {
   mounted() {
@@ -1199,178 +1145,6 @@ const ExpandableDetails = {
   },
 };
 
-// Heatmap Animation Hook - adds dynamic cell highlighting effects
-const HeatmapAnimation = {
-  mounted() {
-    this.cells = [];
-    this.highlightInterval = null;
-
-    // Start random highlight effect when live
-    this.startHighlightEffect();
-  },
-
-  updated() {
-    // Refresh cell references and restart effect
-    this.startHighlightEffect();
-  },
-
-  startHighlightEffect() {
-    // Clear existing interval
-    if (this.highlightInterval) {
-      clearInterval(this.highlightInterval);
-    }
-
-    // Get all heatmap cells
-    this.cells = Array.from(this.el.querySelectorAll(".heatmap-cell"));
-
-    if (this.cells.length === 0) return;
-
-    // Random highlight every 800-1500ms
-    this.highlightInterval = setInterval(() => {
-      this.highlightRandomCell();
-    }, 800 + Math.random() * 700);
-  },
-
-  highlightRandomCell() {
-    if (this.cells.length === 0) return;
-
-    const cell = this.cells[Math.floor(Math.random() * this.cells.length)];
-
-    // Add a quick flash effect
-    cell.style.transition = "filter 0.15s ease-out, transform 0.15s ease-out";
-    cell.style.filter = "brightness(1.4)";
-    cell.style.transform = "scale(1.05)";
-
-    // Reset after flash
-    setTimeout(() => {
-      cell.style.filter = "";
-      cell.style.transform = "";
-    }, 150);
-  },
-
-  destroyed() {
-    if (this.highlightInterval) {
-      clearInterval(this.highlightInterval);
-    }
-  },
-};
-
-// Parallax Background Hook
-const ParallaxBackground = {
-  mounted() {
-    this.ticking = false;
-
-    this.handleScroll = () => {
-      if (!this.ticking) {
-        window.requestAnimationFrame(() => {
-          const scrolled = this.el.scrollTop;
-          const blobs = this.el.querySelectorAll("[data-parallax-speed]");
-
-          blobs.forEach((blob) => {
-            const speed = parseFloat(blob.dataset.parallaxSpeed);
-            // Move UP as we scroll down to create depth (background moves slower than foreground)
-            // Since foreground moves at 1px/px, background should move at (1-speed)px/px or similar.
-            // But these are fixed elements. They don't move at all by default.
-            // To make them look like they are "far away", they should move slightly opposite to scroll direction
-            // or slightly WITH scroll direction?
-            // If they are "background", they should move upwards but slower than the content.
-            // Content moves up at speed equal to scroll.
-            // If we want them to appear "behind", they should move up slower.
-            // Since they are FIXED, they effectively move with the camera (0 movement relative to viewport).
-            // To make them look like background, we need to push them UP as we scroll down.
-            const yPos = -(scrolled * speed);
-            blob.style.transform = `translate3d(0, ${yPos}px, 0)`;
-          });
-
-          this.ticking = false;
-        });
-
-        this.ticking = true;
-      }
-    };
-
-    this.el.addEventListener("scroll", this.handleScroll);
-  },
-  destroyed() {
-    this.el.removeEventListener("scroll", this.handleScroll);
-  },
-};
-
-// Hero Parallax Hook - Dynamic mesh visualization with parallax and interactive effects
-// Uses HeroMesh module for real-time connection line recalculation during parallax
-const HeroParallax = {
-  mounted() {
-    this.scrollContainer = document.getElementById("main-scroll-container");
-
-    if (!this.scrollContainer) {
-      console.warn("HeroParallax: Could not find main-scroll-container");
-      return;
-    }
-
-    // Find the SVG element
-    this.svg = this.el.querySelector("#hero-mesh-svg");
-    if (!this.svg) {
-      console.warn("HeroParallax: Could not find hero-mesh-svg");
-      return;
-    }
-
-    // Initialize the dynamic mesh system
-    this.mesh = new HeroMesh(this.el, this.svg, this.scrollContainer);
-
-    // Container-level parallax (vertical stickiness)
-    this.containerConfig = {
-      verticalMultiplier: 0.17,
-    };
-
-    this.lastScrolled = 0;
-    this.rafId = null;
-
-    this.handleScroll = () => {
-      const scrolled = this.scrollContainer.scrollTop;
-
-      if (this.rafId) {
-        cancelAnimationFrame(this.rafId);
-      }
-
-      this.rafId = requestAnimationFrame(() => {
-        this.lastScrolled = scrolled;
-        // Container-level vertical parallax (makes the whole graphic "sticky")
-        const containerY = scrolled * this.containerConfig.verticalMultiplier;
-        this.el.style.transform = `translateY(${containerY}px)`;
-        this.rafId = null;
-      });
-    };
-
-    this.scrollContainer.addEventListener("scroll", this.handleScroll, {
-      passive: true,
-    });
-
-    // Initial call
-    this.handleScroll();
-  },
-
-  updated() {
-    // Re-apply container transform after LiveView patches
-    if (this.scrollContainer && this.el) {
-      const containerY =
-        this.lastScrolled * this.containerConfig.verticalMultiplier;
-      this.el.style.transform = `translateY(${containerY}px)`;
-    }
-  },
-
-  destroyed() {
-    if (this.scrollContainer) {
-      this.scrollContainer.removeEventListener("scroll", this.handleScroll);
-    }
-    if (this.rafId) {
-      cancelAnimationFrame(this.rafId);
-    }
-    if (this.mesh) {
-      this.mesh.destroy();
-    }
-  },
-};
-
 // Profile Persistence Hook - saves selected profile to sessionStorage
 const ProfilePersistence = {
   mounted() {
@@ -1382,88 +1156,6 @@ const ProfilePersistence = {
     if (stored) {
       this.pushEvent("restore_profile", { profile: stored });
     }
-  },
-};
-
-// Hero Globe Hook - 3D globe with slow auto-rotation + scroll-driven boost
-const HeroGlobe = {
-  mounted() {
-    const canvas = this.el.querySelector("#globe-canvas");
-    if (!canvas) return;
-
-    const prefersReducedMotion = window.matchMedia(
-      "(prefers-reduced-motion: reduce)"
-    ).matches;
-    if (prefersReducedMotion) {
-      canvas.style.opacity = "0.3";
-      return;
-    }
-
-    this.SCROLL_ROTATION_RANGE = -3.0;
-    this.SCROLL_TILT_RANGE = 0.88;
-
-    this.globe = new GlobeRenderer(canvas, {
-      initialRotation: 2.9,
-      initialTilt: -0.5,
-      autoRotateSpeed: 0.00012,
-      xOffset: 0.82,
-      yOffset: 0.65,
-      radiusScale: 0.55,
-    });
-
-    this.scrollContainer = document.getElementById("main-scroll-container");
-    this.rafId = null;
-
-    this.handleScroll = () => {
-      if (this.rafId) return;
-      this.rafId = requestAnimationFrame(() => {
-        const scrollTop = this.scrollContainer
-          ? this.scrollContainer.scrollTop
-          : window.scrollY;
-        const maxScroll = this.scrollContainer
-          ? this.scrollContainer.scrollHeight -
-            this.scrollContainer.clientHeight
-          : document.documentElement.scrollHeight - window.innerHeight;
-
-        const progress =
-          maxScroll > 0 ? Math.min(1, Math.max(0, scrollTop / maxScroll)) : 0;
-
-        const eased =
-          progress < 0.5
-            ? 2 * progress * progress
-            : 1 - Math.pow(-2 * progress + 2, 2) / 2;
-
-        this.globe.setScrollOffset(
-          eased * this.SCROLL_ROTATION_RANGE,
-          eased * this.SCROLL_TILT_RANGE
-        );
-
-        const fadeStart = window.innerHeight * 0.4;
-        const fadeEnd = window.innerHeight * 2.0;
-        const opacity =
-          scrollTop < fadeStart
-            ? 1
-            : Math.max(0, 1 - (scrollTop - fadeStart) / (fadeEnd - fadeStart));
-        this.el.style.opacity = opacity;
-
-        this.rafId = null;
-      });
-    };
-
-    if (this.scrollContainer) {
-      this.scrollContainer.addEventListener("scroll", this.handleScroll, {
-        passive: true,
-      });
-    }
-    this.handleScroll();
-  },
-
-  destroyed() {
-    if (this.globe) this.globe.destroy();
-    if (this.scrollContainer) {
-      this.scrollContainer.removeEventListener("scroll", this.handleScroll);
-    }
-    if (this.rafId) cancelAnimationFrame(this.rafId);
   },
 };
 
@@ -1482,13 +1174,8 @@ let liveSocket = new LiveSocket("/live", Socket, {
     ActivityFeed,
     ProviderRequestAnimator,
     TabSwitcher: EndpointSelector,
-    ScrollReveal,
-    ParallaxBackground,
-    HeroParallax,
     ExpandableDetails,
-    HeatmapAnimation,
     ProfilePersistence,
-    HeroGlobe,
   },
 });
 
