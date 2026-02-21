@@ -52,7 +52,7 @@ defmodule Lasso.RPC.TransportRegistry do
 
   ## Not Responsible For
 
-  - Provider health/availability (see ProviderPool)
+  - Provider health/availability (see CandidateListing + :lasso_instance_state ETS)
   - Provider selection strategy (see Selection)
   """
 
@@ -62,7 +62,6 @@ defmodule Lasso.RPC.TransportRegistry do
   alias Lasso.Config.ConfigStore
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.Channel
-  alias Lasso.RPC.ProviderPool
 
   # ETS table for lockless channel lookups in hot path
   @channel_cache_table :transport_channel_cache
@@ -413,7 +412,7 @@ defmodule Lasso.RPC.TransportRegistry do
         _ ->
           case ConfigStore.get_provider(state.profile, state.chain_name, provider_id) do
             {:ok, _} = ok -> ok
-            _ -> get_provider_config_from_pool(state.profile, state.chain_name, provider_id)
+            _ -> get_provider_config_from_store(state.profile, state.chain_name, provider_id)
           end
       end
 
@@ -493,16 +492,10 @@ defmodule Lasso.RPC.TransportRegistry do
     end
   end
 
-  defp get_provider_config_from_pool(profile, chain_name, provider_id) do
-    case ProviderPool.get_status(profile, chain_name) do
-      {:ok, status} ->
-        case Enum.find(status.providers, fn p -> p.id == provider_id end) do
-          nil -> {:error, :provider_not_found}
-          provider -> {:ok, Map.get(provider, :config, %{})}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+  defp get_provider_config_from_store(profile, chain_name, provider_id) do
+    case ConfigStore.get_provider(profile, chain_name, provider_id) do
+      {:error, :not_found} -> {:error, :provider_not_found}
+      result -> result
     end
   end
 

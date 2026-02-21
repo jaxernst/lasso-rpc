@@ -89,8 +89,8 @@ defmodule LassoWeb.RPCController do
     rpc_with_strategy(conn, params, :fastest)
   end
 
-  @spec rpc_round_robin(Plug.Conn.t(), map()) :: Plug.Conn.t()
-  def rpc_round_robin(conn, params), do: rpc_with_strategy(conn, params, :round_robin)
+  @spec rpc_load_balanced(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def rpc_load_balanced(conn, params), do: rpc_with_strategy(conn, params, :load_balanced)
   @spec rpc_latency_weighted(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rpc_latency_weighted(conn, params), do: rpc_with_strategy(conn, params, :latency_weighted)
 
@@ -385,11 +385,13 @@ defmodule LassoWeb.RPCController do
 
     cond do
       MethodConstraints.ws_only?(method) ->
+        ws_path = "/ws" <> conn.request_path
+
         {:error,
          JError.new(
            -32_601,
            "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
-           data: %{websocket_url: "/socket/websocket"}
+           data: %{websocket_url: ws_path}
          )}
 
       MethodConstraints.disallowed?(method) ->
@@ -445,7 +447,8 @@ defmodule LassoWeb.RPCController do
     case conn.assigns[:provider_strategy] do
       nil ->
         case params["strategy"] do
-          "round_robin" -> :round_robin
+          "load_balanced" -> :load_balanced
+          "round_robin" -> :load_balanced
           "fastest" -> :fastest
           "latency_weighted" -> :latency_weighted
           _ -> default_provider_strategy()

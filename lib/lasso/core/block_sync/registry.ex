@@ -16,8 +16,8 @@ defmodule Lasso.BlockSync.Registry do
   Heights older than `freshness_threshold_ms` are ignored when calculating
   consensus. This ensures stale data doesn't pollute routing decisions.
 
-  Note: Health metrics (latency, success/failure) are tracked by ProviderPool,
-  not here. This module focuses solely on block height tracking.
+  Health metrics (latency, success/failure) are tracked in :lasso_instance_state ETS.
+  This module focuses solely on block height tracking.
   """
 
   use GenServer

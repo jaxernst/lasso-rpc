@@ -127,8 +127,9 @@ providers:
     ws_url: "wss://eth.llamarpc.com"
     archival: true
     subscribe_new_heads: true
-    adapter_config:
-      eth_get_logs_block_range: 1000
+    capabilities:
+      limits:
+        max_block_range: 1000
 ```
 
 | Field | Type | Required | Description |
@@ -140,7 +141,7 @@ providers:
 | `ws_url` | string | No | WebSocket RPC endpoint URL. Required for subscriptions |
 | `archival` | boolean | No | Whether this provider serves historical data (default: true) |
 | `subscribe_new_heads` | boolean | No | Override chain-level `subscribe_new_heads` for this provider |
-| `adapter_config` | map | No | Provider-specific tuning (see Adapters below) |
+| `capabilities` | map | No | Provider capabilities (see Capabilities below) |
 
 *At least one of `url` or `ws_url` is required.
 
@@ -163,7 +164,7 @@ Strategies control how providers are selected for each request. Set via URL path
 |----------|----------|-------------|
 | **Priority** | `/rpc/:chain` | Select by `priority` field (lowest first). Default strategy |
 | **Fastest** | `/rpc/fastest/:chain` | Lowest latency provider for the method (passive benchmarking) |
-| **Round Robin** | `/rpc/round-robin/:chain` | Rotate through healthy providers |
+| **Load Balanced** | `/rpc/load-balanced/:chain` | Distribute requests across healthy providers with health-aware tiering |
 | **Latency Weighted** | `/rpc/latency-weighted/:chain` | Weighted random selection by latency scores |
 
 ### When to Use Each Strategy
@@ -172,9 +173,22 @@ Strategies control how providers are selected for each request. Set via URL path
 
 **Fastest** — Optimal latency. Benchmarks are tracked per provider, per method, per transport. Best for latency-sensitive reads. May concentrate load on one provider.
 
-**Round Robin** — Even distribution. Spreads load across all healthy providers. Good for throughput maximization and avoiding rate limits.
+**Load Balanced** — Even distribution with health-aware tiering. Spreads load across all healthy providers, deprioritizing those with tripped circuit breakers or rate limits. Good for throughput maximization and avoiding rate limits.
 
 **Latency Weighted** — Balanced approach. Routes more traffic to faster providers while still using slower ones. Prevents single-provider concentration while favoring performance.
+
+### Health-Based Tiering
+
+All strategies are subject to health-based tiering after initial ranking. The pipeline reorders providers into 4 tiers based on circuit breaker state and rate limit status:
+
+1. **Tier 1**: Closed circuit + not rate-limited (preferred)
+2. **Tier 2**: Closed circuit + rate-limited
+3. **Tier 3**: Half-open circuit + not rate-limited
+4. **Tier 4**: Half-open circuit + rate-limited
+
+Open-circuit providers are excluded entirely. Within each tier, the strategy's original ranking is preserved.
+
+This ensures healthy providers receive traffic first while allowing recovering providers to gradually reintegrate. See [ROUTING.md](ROUTING.md#health-based-tiering) for detailed behavior and examples.
 
 ### Provider Override
 
@@ -184,23 +198,35 @@ Route directly to a specific provider, bypassing strategy selection:
 POST /rpc/provider/:provider_id/:chain
 ```
 
-## Adapter Configuration
+## Provider Capabilities
 
-Adapters validate requests before sending upstream. Override adapter defaults per-provider:
+Capabilities declare what a provider supports and its limits. Validated at boot time.
 
 ```yaml
-adapter_config:
-  eth_get_logs_block_range: 50   # Override Alchemy's default (10)
+capabilities:
+  unsupported_categories: [debug, trace]
+  unsupported_methods: [eth_getLogs]
+  limits:
+    max_block_range: 10000
+    max_block_age: 1000
+    block_age_methods: [eth_call, eth_getBalance]
+  error_rules:
+    - code: 35
+      category: capability_violation
+    - message_contains: "timeout on the free tier"
+      category: rate_limit
 ```
 
-| Adapter | Provider | Key Constraints |
-|---------|----------|-----------------|
-| Alchemy | Alchemy | `eth_getLogs` block range (default: 10) |
-| PublicNode | PublicNode | Address count limits (HTTP: 25, WS: 20) |
-| LlamaRPC | LlamaRPC, Merkle | 1000 block range limit |
-| DRPC | dRPC | Rate/parameter limit detection |
-| 1RPC | 1RPC | Rate/parameter limit detection |
-| Generic | All others | No restrictions (fallback) |
+| Field | Type | Description |
+|-------|------|-------------|
+| `unsupported_categories` | list | Method categories this provider doesn't support (e.g., `debug`, `trace`) |
+| `unsupported_methods` | list | Specific methods this provider doesn't support |
+| `limits.max_block_range` | integer | Max block range for `eth_getLogs` |
+| `limits.max_block_age` | integer | Max block age for state methods (pruned provider) |
+| `limits.block_age_methods` | list | Methods subject to `max_block_age` limit |
+| `error_rules` | list | Provider-specific error classification overrides (first match wins) |
+
+When `capabilities` is omitted, defaults to permissive (only `local_only` methods blocked, no limits).
 
 ## BYOK (Bring Your Own Keys)
 
@@ -273,5 +299,5 @@ config :lasso, :circuit_breaker,
 ### Default Strategy
 
 ```elixir
-config :lasso, :provider_selection_strategy, :round_robin
+config :lasso, :provider_selection_strategy, :load_balanced
 ```

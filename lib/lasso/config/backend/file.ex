@@ -10,6 +10,8 @@ defmodule Lasso.Config.Backend.File do
       ---
       name: Production
       slug: production
+      rps_limit: 500
+      burst_limit: 1000
       ---
       chains:
         ethereum:
@@ -38,6 +40,7 @@ defmodule Lasso.Config.Backend.File do
   require Logger
 
   alias Lasso.Config.ChainConfig
+  alias Lasso.RPC.Providers.Capabilities
 
   @type state :: %{
           profiles_dir: String.t(),
@@ -195,6 +198,10 @@ defmodule Lasso.Config.Backend.File do
            %{
              slug: meta["slug"],
              name: meta["name"],
+             logo: meta["logo"],
+             rps_limit: meta["rps_limit"] || meta["default_rps_limit"] || 100,
+             burst_limit: meta["burst_limit"] || meta["default_burst_limit"] || 500,
+             unlisted: meta["unlisted"] == true,
              chains: chains
            }}
         end
@@ -215,6 +222,10 @@ defmodule Lasso.Config.Backend.File do
        %{
          slug: slug,
          name: yaml_data["name"] || "Default Profile",
+         logo: nil,
+         rps_limit: yaml_data["rps_limit"] || yaml_data["default_rps_limit"] || 100,
+         burst_limit: yaml_data["burst_limit"] || yaml_data["default_burst_limit"] || 500,
+         unlisted: yaml_data["unlisted"] == true,
          chains: chains
        }}
     end
@@ -247,16 +258,20 @@ defmodule Lasso.Config.Backend.File do
 
   defp parse_providers(providers_data) do
     Enum.map(providers_data, fn provider_data ->
-      %ChainConfig.Provider{
+      provider = %ChainConfig.Provider{
         id: provider_data["id"],
         name: provider_data["name"],
         priority: provider_data["priority"] || 100,
         url: ChainConfig.substitute_env_vars(provider_data["url"]),
         ws_url: ChainConfig.substitute_env_vars(provider_data["ws_url"]),
-        adapter_config: parse_adapter_config(provider_data["adapter_config"]),
+        capabilities: parse_capabilities(provider_data["capabilities"]),
         subscribe_new_heads: parse_subscribe_new_heads(provider_data["subscribe_new_heads"]),
-        archival: parse_archival(provider_data["archival"])
+        archival: parse_archival(provider_data["archival"]),
+        sharing_mode: parse_sharing_mode(provider_data["sharing_mode"])
       }
+
+      Capabilities.validate!(provider.id, provider.capabilities)
+      provider
     end)
   end
 
@@ -272,25 +287,74 @@ defmodule Lasso.Config.Backend.File do
   defp parse_archival("false"), do: false
   defp parse_archival(_), do: true
 
-  defp parse_adapter_config(nil), do: nil
+  defp parse_sharing_mode("isolated"), do: :isolated
+  defp parse_sharing_mode(_), do: :auto
 
-  defp parse_adapter_config(config_map) when is_map(config_map) do
-    config_map
-    |> Enum.map(fn {key, value} ->
-      atom_key = if is_binary(key), do: safe_to_existing_atom(key), else: key
-      {atom_key, value}
-    end)
-    |> Enum.into(%{})
+  defp parse_capabilities(nil), do: nil
+
+  defp parse_capabilities(caps) when is_map(caps) do
+    caps
+    |> atomize_keys()
+    |> maybe_atomize_list(:unsupported_categories)
+    |> maybe_stringify_list(:unsupported_methods)
+    |> maybe_parse_limits()
+    |> maybe_parse_error_rules()
   end
 
-  defp parse_adapter_config(_), do: nil
+  defp parse_capabilities(_), do: nil
 
-  defp safe_to_existing_atom(string) do
-    String.to_existing_atom(string)
-  rescue
-    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-    ArgumentError -> String.to_atom(string)
+  defp atomize_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {safe_to_atom(k), v} end)
   end
+
+  defp safe_to_atom(k) when is_atom(k), do: k
+  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+  defp safe_to_atom(k) when is_binary(k), do: String.to_atom(k)
+
+  defp maybe_atomize_list(map, key) do
+    case Map.get(map, key) do
+      nil -> map
+      list when is_list(list) -> Map.put(map, key, Enum.map(list, &safe_to_atom/1))
+      _ -> map
+    end
+  end
+
+  defp maybe_stringify_list(map, key) do
+    case Map.get(map, key) do
+      nil -> map
+      list when is_list(list) -> Map.put(map, key, Enum.map(list, &to_string/1))
+      _ -> map
+    end
+  end
+
+  defp maybe_parse_limits(%{limits: limits} = map) when is_map(limits) do
+    parsed =
+      limits
+      |> atomize_keys()
+      |> maybe_stringify_list(:block_age_methods)
+
+    Map.put(map, :limits, parsed)
+  end
+
+  defp maybe_parse_limits(map), do: map
+
+  defp maybe_parse_error_rules(%{error_rules: rules} = map) when is_list(rules) do
+    parsed =
+      Enum.map(rules, fn rule ->
+        rule
+        |> atomize_keys()
+        |> then(fn r ->
+          case Map.get(r, :category) do
+            cat when is_binary(cat) -> Map.put(r, :category, safe_to_atom(cat))
+            _ -> r
+          end
+        end)
+      end)
+
+    Map.put(map, :error_rules, parsed)
+  end
+
+  defp maybe_parse_error_rules(map), do: map
 
   # Parse websocket config, with backwards compatibility for old structure
   # Old structure had monitoring.subscribe_new_heads, monitoring.new_heads_staleness_threshold_ms
@@ -429,6 +493,8 @@ defmodule Lasso.Config.Backend.File do
     ---
     name: Default
     slug: default
+    rps_limit: 100
+    burst_limit: 500
     ---
     chains:
     #{generate_chains_yaml(yaml_data["chains"])}

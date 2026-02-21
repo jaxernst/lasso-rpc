@@ -89,4 +89,16 @@ defmodule LassoWeb.Dashboard.Formatting do
   def safe_round(value, _precision) when is_integer(value), do: value
   def safe_round(value, precision) when is_float(value), do: Float.round(value, precision)
   def safe_round(nil, _precision), do: nil
+
+  def format_latency(nil), do: "—"
+  def format_latency(ms) when is_float(ms), do: "#{round(ms)}ms"
+  def format_latency(ms), do: "#{ms}ms"
+
+  def format_rps(rps) when rps == 0 or rps == 0.0, do: "0"
+  def format_rps(rps), do: "#{rps}"
+
+  def success_rate_color(nil), do: "text-gray-500"
+  def success_rate_color(rate) when rate >= 99.0, do: "text-emerald-400"
+  def success_rate_color(rate) when rate >= 95.0, do: "text-yellow-400"
+  def success_rate_color(_), do: "text-red-400"
 end

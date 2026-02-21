@@ -93,7 +93,8 @@ defmodule Lasso.Discovery.ErrorClassifier do
     String.contains?(msg, "block range") or
       String.contains?(msg, "range limit") or
       String.contains?(msg, "too many blocks") or
-      String.contains?(msg, "exceed") or
+      (String.contains?(msg, "exceed") and
+         (String.contains?(msg, "block") or String.contains?(msg, "range"))) or
       (String.contains?(msg, "max") and String.contains?(msg, "block"))
   end
 

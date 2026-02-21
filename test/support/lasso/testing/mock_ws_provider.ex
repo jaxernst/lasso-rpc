@@ -11,7 +11,7 @@ defmodule Lasso.Testing.MockWSProvider do
   - ✅ Responds to eth_subscribe with subscription confirmations
   - ✅ Sends mock subscription events (newHeads, logs)
   - ✅ Handles eth_unsubscribe
-  - ✅ Integrates with ProviderPool and UpstreamSubscriptionPool
+  - ✅ Integrates with Catalog and InstanceSubscriptionManager
   - ✅ Automatic cleanup on test exit
 
   ## Usage
@@ -60,14 +60,6 @@ defmodule Lasso.Testing.MockWSProvider do
     provider_id = Map.get(spec, :id) || raise "Mock WS provider requires :id field"
     profile = Map.get(spec, :profile, @test_profile)
 
-    # Start the mock WS connection GenServer with the WSConnection-compatible name
-    {:ok, pid} =
-      GenServer.start_link(
-        __MODULE__,
-        {chain, spec},
-        name: {:via, Registry, {Lasso.Registry, {:ws_conn, profile, chain, provider_id}}}
-      )
-
     # Create provider config
     provider_config = %{
       id: provider_id,
@@ -82,22 +74,51 @@ defmodule Lasso.Testing.MockWSProvider do
     # Ensure chain exists (auto-create if needed) and register provider
     with :ok <- ChainHelper.ensure_chain_exists(chain, profile: profile),
          :ok <-
-           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
-         :ok <-
-           Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
-      # Mark as healthy so it can be selected
-      Lasso.RPC.ProviderPool.report_success(profile, chain, provider_id, nil)
+           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config) do
+      # Rebuild catalog so the new provider is visible
+      Lasso.Providers.Catalog.build_from_config()
+      instance_id = instance_id_for(profile, chain, provider_id)
+
+      # Start the mock WS connection GenServer with the shared WSConnection registry key
+      {:ok, _pid} =
+        GenServer.start_link(
+          __MODULE__,
+          {chain, spec},
+          name: {:via, Registry, {Lasso.Registry, ws_instance_key(instance_id)}}
+        )
+
+      # Mark as healthy in ETS
+      :ets.insert(:lasso_instance_state, {
+        {:health, instance_id},
+        %{
+          status: :healthy,
+          http_status: :healthy,
+          ws_status: :healthy,
+          consecutive_failures: 0,
+          consecutive_successes: 1,
+          last_error: nil,
+          last_health_check: System.monotonic_time(:millisecond)
+        }
+      })
+
+      # Start InstanceSubscriptionManager for this instance (if not already running).
+      # Must happen BEFORE ws_connected broadcast so the manager receives it.
+      start_instance_subscription_manager(chain, instance_id)
 
       # Generate connection_id and broadcast ws_connected event
-      # This is required by UpstreamSubscriptionManager to allow subscriptions
       connection_id =
         "conn_mock_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
 
-      # Broadcast profile-scoped ws_connected event
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
         "ws:conn:#{profile}:#{chain}",
         {:ws_connected, provider_id, connection_id}
+      )
+
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        "ws:conn:instance:#{instance_id}",
+        {:ws_connected, instance_id, connection_id}
       )
 
       # Set up cleanup callback
@@ -107,7 +128,6 @@ defmodule Lasso.Testing.MockWSProvider do
       {:ok, provider_id}
     else
       {:error, reason} ->
-        GenServer.stop(pid)
         {:error, {:registration_failed, reason}}
     end
   end
@@ -117,7 +137,10 @@ defmodule Lasso.Testing.MockWSProvider do
   Used internally by WSConnection.
   """
   def send_message(profile \\ @test_profile, chain, provider_id, message) do
-    case Registry.lookup(Lasso.Registry, {:ws_conn, profile, chain, provider_id}) do
+    case Registry.lookup(
+           Lasso.Registry,
+           ws_instance_key(instance_id_for(profile, chain, provider_id))
+         ) do
       [{pid, _}] -> GenServer.cast(pid, {:send_message, message})
       [] -> {:error, :not_found}
     end
@@ -129,7 +152,10 @@ defmodule Lasso.Testing.MockWSProvider do
   def send_block(chain, provider_id, block_header, opts \\ []) when is_map(block_header) do
     profile = Keyword.get(opts, :profile, @test_profile)
 
-    case Registry.lookup(Lasso.Registry, {:ws_conn, profile, chain, provider_id}) do
+    case Registry.lookup(
+           Lasso.Registry,
+           ws_instance_key(instance_id_for(profile, chain, provider_id))
+         ) do
       [{pid, _}] -> GenServer.cast(pid, {:broadcast_block, chain, block_header})
       [] -> {:error, :not_found}
     end
@@ -223,7 +249,10 @@ defmodule Lasso.Testing.MockWSProvider do
   def send_log(chain, provider_id, log, opts \\ []) when is_map(log) do
     profile = Keyword.get(opts, :profile, @test_profile)
 
-    case Registry.lookup(Lasso.Registry, {:ws_conn, profile, chain, provider_id}) do
+    case Registry.lookup(
+           Lasso.Registry,
+           ws_instance_key(instance_id_for(profile, chain, provider_id))
+         ) do
       [{pid, _}] -> GenServer.cast(pid, {:broadcast_log, chain, log})
       [] -> {:error, :not_found}
     end
@@ -234,12 +263,28 @@ defmodule Lasso.Testing.MockWSProvider do
   """
   def stop_mock(chain, provider_id, opts \\ []) do
     profile = Keyword.get(opts, :profile, @test_profile)
+    instance_id = instance_id_for(profile, chain, provider_id)
 
     # Remove from ConfigStore
     Lasso.Config.ConfigStore.unregister_provider_runtime(profile, chain, provider_id)
 
-    # Stop the GenServer
-    case Registry.lookup(Lasso.Registry, {:ws_conn, profile, chain, provider_id}) do
+    # Stop the InstanceSubscriptionManager if running
+    case Registry.lookup(Lasso.Registry, {:instance_sub_manager, instance_id}) do
+      [{pid, _}] ->
+        if Process.alive?(pid),
+          do:
+            (try do
+               GenServer.stop(pid)
+             catch
+               _, _ -> :ok
+             end)
+
+      [] ->
+        :ok
+    end
+
+    # Stop the mock WS GenServer
+    case Registry.lookup(Lasso.Registry, ws_instance_key(instance_id)) do
       [{pid, _}] ->
         if Process.alive?(pid) do
           try do
@@ -522,12 +567,13 @@ defmodule Lasso.Testing.MockWSProvider do
 
   defp send_subscription_event(profile, chain, provider_id, subscription_id, payload) do
     received_at = System.monotonic_time(:millisecond)
+    instance_id = instance_id_for(profile, chain, provider_id)
 
-    # Broadcast profile-scoped subscription event
+    # Broadcast instance-scoped subscription event
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:subs:#{profile}:#{chain}",
-      {:subscription_event, provider_id, subscription_id, payload, received_at}
+      "ws:subs:instance:#{instance_id}",
+      {:subscription_event, instance_id, subscription_id, payload, received_at}
     )
   end
 
@@ -536,20 +582,53 @@ defmodule Lasso.Testing.MockWSProvider do
   end
 
   defp setup_cleanup(profile, chain, provider_id) do
+    instance_id = instance_id_for(profile, chain, provider_id)
+
     ExUnit.Callbacks.on_exit({:cleanup_mock_ws, provider_id}, fn ->
       Logger.debug("Test cleanup: stopping mock WS provider #{provider_id}")
       stop_mock(chain, provider_id, profile: profile)
 
-      # Clean up circuit breakers
-      for transport <- [:http, :ws] do
-        breaker_id = {profile, chain, provider_id, transport}
-
-        try do
-          Lasso.Core.Support.CircuitBreaker.close(breaker_id)
-        catch
-          :exit, _ -> :ok
+      if instance_id do
+        for transport <- [:http, :ws] do
+          try do
+            Lasso.Core.Support.CircuitBreaker.close({instance_id, transport})
+          catch
+            :exit, _ -> :ok
+          end
         end
+
+        :ets.delete(:lasso_instance_state, {:health, instance_id})
       end
     end)
+  end
+
+  defp start_instance_subscription_manager(chain, instance_id) do
+    case Registry.lookup(Lasso.Registry, {:instance_sub_manager, instance_id}) do
+      [{_pid, _}] ->
+        :ok
+
+      [] ->
+        case Lasso.Core.Streaming.InstanceSubscriptionManager.start_link({chain, instance_id}) do
+          {:ok, _pid} ->
+            :ok
+
+          {:error, {:already_started, _pid}} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "Failed to start InstanceSubscriptionManager for #{instance_id}: #{inspect(reason)}"
+            )
+
+            :ok
+        end
+    end
+  end
+
+  defp ws_instance_key(instance_id), do: {:ws_conn_instance, instance_id}
+
+  defp instance_id_for(profile, chain, provider_id) do
+    Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id) ||
+      "#{chain}:#{provider_id}"
   end
 end

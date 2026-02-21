@@ -4,62 +4,11 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
   """
 
   import Phoenix.Component, only: [assign: 3, update: 3]
-  alias Lasso.Events.Provider
+  alias Lasso.Events.{Provider, Subscription}
   alias LassoWeb.Dashboard.{Constants, Helpers}
 
-  def handle_connection_status_update(connections, socket, buffer_event_fn) do
-    prev_by_id = socket.assigns |> Map.get(:connections, []) |> Map.new(&{&1.id, &1})
-
-    diff_events =
-      connections
-      |> Enum.flat_map(fn conn ->
-        case Map.get(prev_by_id, conn.id) do
-          nil -> []
-          prev -> build_connection_diff_events(conn, prev)
-        end
-      end)
-
-    socket
-    |> assign(:connections, connections)
-    |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
-    |> buffer_events(diff_events, buffer_event_fn)
-  end
-
-  defp build_connection_diff_events(conn, prev) do
-    status_event = build_status_change_event(conn, prev)
-    reconnect_event = build_reconnect_event(conn, prev)
-    Enum.reject([status_event, reconnect_event], &is_nil/1)
-  end
-
-  defp build_status_change_event(conn, prev) do
-    if conn.status != prev.status do
-      Helpers.as_event(:provider,
-        chain: conn.chain,
-        provider_id: conn.id,
-        severity: if(conn.status == :connected, do: :info, else: :warn),
-        message: "status #{prev.status} -> #{conn.status}",
-        meta: %{name: conn.name}
-      )
-    end
-  end
-
-  defp build_reconnect_event(conn, prev) do
-    prev_attempts = Map.get(prev, :reconnect_attempts, 0)
-    attempts = Map.get(conn, :reconnect_attempts, 0)
-
-    if attempts > prev_attempts do
-      Helpers.as_event(:provider,
-        chain: conn.chain,
-        provider_id: conn.id,
-        severity: :warn,
-        message: "reconnect attempt #{attempts}",
-        meta: %{delta: attempts - prev_attempts}
-      )
-    end
-  end
-
-  defp buffer_events(socket, events, buffer_fn) do
-    Enum.reduce(events, socket, &buffer_fn.(&2, &1))
+  def valid_provider?(socket, provider_id) do
+    Enum.any?(socket.assigns[:connections] || [], &(&1.id == provider_id))
   end
 
   defp maybe_update_chain(socket, chain, update_fn) do
@@ -76,10 +25,11 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
       )
       when is_struct(evt, Provider.Healthy) or is_struct(evt, Provider.Unhealthy) or
              is_struct(evt, Provider.HealthCheckFailed) or is_struct(evt, Provider.WSConnected) or
-             is_struct(evt, Provider.WSClosed) do
+             is_struct(evt, Provider.WSClosed) or is_struct(evt, Provider.WSDisconnected) do
     {chain, pid, event_type, details, ts} = extract_provider_event_data(evt)
 
-    if chain in Map.get(socket.assigns, :profile_chains, []) do
+    if chain in Map.get(socket.assigns, :profile_chains, []) and
+         valid_provider?(socket, pid) do
       entry = %{
         ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
         ts_ms: ts,
@@ -124,6 +74,9 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
 
       %Provider.WSClosed{chain: c, provider_id: p, code: code, reason: r, ts: t} ->
         {c, p, :ws_closed, %{code: code, reason: r}, t}
+
+      %Provider.WSDisconnected{chain: c, provider_id: p, reason: r, ts: t} ->
+        {c, p, :ws_disconnected, %{reason: r}, t}
     end
   end
 
@@ -136,16 +89,15 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
   end
 
   def handle_events_batch(socket, events) do
-    # Transform RoutingDecision-style events for routing_events display
     routing_entries = transform_to_routing_entries(events, socket.assigns.profile_chains)
 
     socket
-    |> update(:events, &(events ++ &1))
-    |> update(
-      :routing_events,
-      &(routing_entries ++
-          Enum.take(&1, Constants.routing_events_limit() - length(routing_entries)))
-    )
+    |> update(:events, fn existing ->
+      Enum.take(events ++ existing, Constants.routing_events_limit())
+    end)
+    |> update(:routing_events, fn existing ->
+      Enum.take(routing_entries ++ existing, Constants.routing_events_limit())
+    end)
   end
 
   def handle_events_snapshot(socket, events) do
@@ -158,27 +110,117 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
   end
 
   defp transform_to_routing_entries(events, profile_chains) do
+    profile_chains_set = MapSet.new(profile_chains)
+
     events
     |> Enum.filter(fn e ->
-      # Only include events that are routing decisions for this profile's chains
-      Map.has_key?(e, :method) and Map.get(e, :chain) in profile_chains
+      # Include routing-decision style events with either atom or string keys.
+      # Be tolerant of chain field shapes to avoid dropping valid HTTP events.
+      method = normalize_string(field(e, :method))
+      chain = normalize_string(field(e, :chain))
+
+      is_binary(method) and is_binary(chain) and
+        (MapSet.size(profile_chains_set) == 0 or MapSet.member?(profile_chains_set, chain))
     end)
     |> Enum.map(fn e ->
+      chain = normalize_string(field(e, :chain))
+      method = normalize_string(field(e, :method))
+
       %{
-        ts: format_time(Map.get(e, :ts)),
-        ts_ms: normalize_timestamp(Map.get(e, :ts)),
-        chain: Map.get(e, :chain),
-        method: Map.get(e, :method),
-        strategy: Map.get(e, :strategy),
-        provider_id: Map.get(e, :provider_id),
-        duration_ms: Map.get(e, :duration_ms, 0),
-        result: Map.get(e, :result, :unknown),
-        failovers: Map.get(e, :failover_count, 0),
-        source_node: Map.get(e, :source_node),
-        source_node_id: Map.get(e, :source_node_id)
+        ts: format_time(field(e, :ts)),
+        ts_ms: normalize_timestamp(field(e, :ts)),
+        chain: chain,
+        method: method,
+        strategy: field(e, :strategy),
+        provider_id: field(e, :provider_id),
+        duration_ms: field(e, :duration_ms) || 0,
+        result: field(e, :result) || :unknown,
+        failovers: field(e, :failover_count) || 0,
+        source_node: field(e, :source_node),
+        source_node_id: field(e, :source_node_id)
       }
     end)
   end
+
+  defp field(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp normalize_string(value) when is_binary(value), do: value
+  defp normalize_string(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_string(_), do: nil
+
+  def handle_subscription_event(evt, socket, buffer_event_fn) do
+    {chain, provider_id, event_kind, sub_type, details, ts} =
+      extract_subscription_event_data(evt)
+
+    if chain in Map.get(socket.assigns, :profile_chains, []) do
+      entry = %{
+        type: :ws_lifecycle,
+        ts: format_time(ts),
+        ts_ms: ts,
+        chain: chain,
+        provider_id: provider_id,
+        event: event_kind,
+        subscription_type: sub_type,
+        details: details
+      }
+
+      uev =
+        Helpers.as_event(:subscription,
+          chain: chain,
+          provider_id: provider_id,
+          severity: subscription_event_severity(event_kind),
+          message: subscription_event_label(event_kind, sub_type),
+          meta: details
+        )
+
+      socket
+      |> update(:routing_events, &[entry | Enum.take(&1, Constants.routing_events_limit() - 1)])
+      |> buffer_event_fn.(uev)
+    else
+      socket
+    end
+  end
+
+  defp extract_subscription_event_data(%Subscription.Established{} = evt) do
+    {evt.chain, evt.provider_id, :subscription_established, evt.subscription_type, %{}, evt.ts}
+  end
+
+  defp extract_subscription_event_data(%Subscription.Failed{} = evt) do
+    {evt.chain, evt.provider_id, :subscription_failed, evt.subscription_type,
+     %{reason: evt.reason}, evt.ts}
+  end
+
+  defp extract_subscription_event_data(%Subscription.Failover{} = evt) do
+    {evt.chain, evt.to_provider_id, :subscription_failover, evt.subscription_type,
+     %{from_provider_id: evt.from_provider_id, to_provider_id: evt.to_provider_id}, evt.ts}
+  end
+
+  defp extract_subscription_event_data(%Subscription.Stale{} = evt) do
+    {evt.chain, evt.provider_id, :subscription_stale, evt.subscription_type,
+     %{stale_duration_ms: evt.stale_duration_ms}, evt.ts}
+  end
+
+  defp subscription_event_severity(:subscription_established), do: :info
+  defp subscription_event_severity(:subscription_failed), do: :error
+  defp subscription_event_severity(:subscription_failover), do: :warn
+  defp subscription_event_severity(:subscription_stale), do: :warn
+
+  defp subscription_event_label(event_kind, sub_type) do
+    type_str = subscription_type_label(sub_type)
+
+    case event_kind do
+      :subscription_established -> "subscribed #{type_str}"
+      :subscription_failed -> "subscribe failed #{type_str}"
+      :subscription_failover -> "failover #{type_str}"
+      :subscription_stale -> "stale #{type_str}"
+    end
+  end
+
+  defp subscription_type_label(:new_heads), do: "newHeads"
+  defp subscription_type_label(:logs), do: "logs"
+  defp subscription_type_label(_), do: "unknown"
 
   defp format_time(ts) when is_integer(ts) do
     ts |> DateTime.from_unix!(:millisecond) |> DateTime.to_time() |> to_string()

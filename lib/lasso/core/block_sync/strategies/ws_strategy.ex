@@ -2,39 +2,33 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @moduledoc """
   WebSocket subscription strategy for block sync.
 
-  Subscribes to `newHeads` via UpstreamSubscriptionManager and reports:
+  Subscribes to `newHeads` via InstanceSubscriptionManager and reports:
   - Block heights with rich metadata (hash, timestamp)
   - Status changes (active, stale, failed)
 
   ## Staleness Detection
 
   If no newHeads events are received within `staleness_threshold_ms`, the
-  strategy reports itself as stale. The Worker can then start HTTP fallback.
-
-  ## Messages sent to parent
-
-  - `{:block_height, height, %{hash: h, timestamp: ts, parent_hash: ph}}`
-  - `{:status, :active | :stale | :failed}`
+  strategy reports itself as stale. The Worker can then continue HTTP fallback.
 
   ## Events received
 
-  Events come via Registry dispatch from UpstreamSubscriptionManager:
-  - `{:upstream_subscription_event, provider_id, {:newHeads}, payload, received_at}`
-  - `{:upstream_subscription_invalidated, provider_id, {:newHeads}, reason}`
+  Events come via InstanceSubscriptionRegistry dispatch:
+  - `{:instance_subscription_event, instance_id, {:newHeads}, payload, received_at}`
+  - `{:instance_subscription_invalidated, instance_id, {:newHeads}, reason}`
   """
 
   @behaviour Lasso.BlockSync.Strategy
 
   require Logger
 
-  alias Lasso.Core.Streaming.UpstreamSubscriptionManager
+  alias Lasso.Core.Streaming.{InstanceSubscriptionManager, InstanceSubscriptionRegistry}
 
   @default_staleness_threshold_ms 35_000
 
   defstruct [
-    :profile,
+    :instance_id,
     :chain,
-    :provider_id,
     :parent,
     :staleness_threshold_ms,
     :staleness_timer_ref,
@@ -45,9 +39,8 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   ]
 
   @type t :: %__MODULE__{
-          profile: String.t(),
+          instance_id: String.t(),
           chain: String.t(),
-          provider_id: String.t(),
           parent: pid(),
           staleness_threshold_ms: non_neg_integer(),
           staleness_timer_ref: reference() | nil,
@@ -60,17 +53,15 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   ## Strategy Callbacks
 
   @impl true
-  def start(chain, provider_id, opts) do
-    profile = Keyword.fetch!(opts, :profile)
+  def start(chain, instance_id, opts) do
     parent = Keyword.get(opts, :parent, self())
 
     staleness_threshold =
       Keyword.get(opts, :staleness_threshold_ms, @default_staleness_threshold_ms)
 
     state = %__MODULE__{
-      profile: profile,
+      instance_id: instance_id,
       chain: chain,
-      provider_id: provider_id,
       parent: parent,
       staleness_threshold_ms: staleness_threshold,
       staleness_timer_ref: nil,
@@ -80,10 +71,8 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
       subscription_status: :pending
     }
 
-    # Attempt to subscribe
     case do_subscribe(state) do
       {:ok, new_state} ->
-        # Start staleness timer
         new_state = schedule_staleness_check(new_state)
         {:ok, new_state}
 
@@ -95,14 +84,12 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @impl true
   def stop(%__MODULE__{
         staleness_timer_ref: ref,
-        profile: profile,
-        chain: chain,
-        provider_id: provider_id
+        instance_id: instance_id
       }) do
     if ref, do: Process.cancel_timer(ref)
 
-    # Release our subscription from the manager
-    UpstreamSubscriptionManager.release_subscription(profile, chain, provider_id, {:newHeads})
+    InstanceSubscriptionManager.release_subscription(instance_id, {:newHeads})
+    InstanceSubscriptionRegistry.unregister_consumer(instance_id, {:newHeads})
 
     :ok
   end
@@ -127,32 +114,6 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   end
 
   @impl true
-  def handle_message(
-        {:upstream_subscription_event, provider_id, {:newHeads}, payload, _received_at},
-        state
-      )
-      when provider_id == state.provider_id do
-    new_state = process_new_head(state, payload)
-    {:ok, new_state}
-  end
-
-  def handle_message(
-        {:upstream_subscription_invalidated, provider_id, {:newHeads}, reason},
-        state
-      )
-      when provider_id == state.provider_id do
-    Logger.debug("WS subscription invalidated",
-      chain: state.chain,
-      provider_id: provider_id,
-      reason: inspect(reason)
-    )
-
-    new_state = %{state | status: :failed, subscription_status: :invalidated}
-    send(state.parent, {:status, state.provider_id, :ws, :failed})
-
-    {:ok, new_state}
-  end
-
   def handle_message(:check_staleness, state) do
     new_state = check_staleness(state)
     new_state = schedule_staleness_check(new_state)
@@ -163,36 +124,27 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
     {:ok, state}
   end
 
-  ## Public API (for Worker to call when it receives WS events)
+  ## Public API (for Worker)
 
-  @doc """
-  Process an incoming newHeads event.
-  """
   @spec handle_new_head(t(), map()) :: t()
   def handle_new_head(%__MODULE__{} = state, payload) do
     process_new_head(state, payload)
   end
 
-  @doc """
-  Handle subscription invalidation.
-  """
   @spec handle_invalidation(t(), term()) :: t()
   def handle_invalidation(%__MODULE__{} = state, reason) do
     Logger.debug("WS subscription invalidated",
       chain: state.chain,
-      provider_id: state.provider_id,
+      instance_id: state.instance_id,
       reason: inspect(reason)
     )
 
     new_state = %{state | status: :failed, subscription_status: :invalidated}
-    send(state.parent, {:status, state.provider_id, :ws, :failed})
+    send(state.parent, {:status, state.instance_id, :ws, :failed})
 
     new_state
   end
 
-  @doc """
-  Re-subscribe after connection recovery.
-  """
   @spec resubscribe(t()) :: {:ok, t()} | {:error, term()}
   def resubscribe(%__MODULE__{} = state) do
     case do_subscribe(state) do
@@ -207,49 +159,41 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   ## Private Functions
 
   defp do_subscribe(state) do
-    case UpstreamSubscriptionManager.ensure_subscription(
-           state.profile,
-           state.chain,
-           state.provider_id,
-           {:newHeads}
-         ) do
+    # Register in InstanceSubscriptionRegistry so Worker receives events
+    InstanceSubscriptionRegistry.register_consumer(state.instance_id, {:newHeads})
+
+    case InstanceSubscriptionManager.ensure_subscription(state.instance_id, {:newHeads}) do
       {:ok, status} ->
         Logger.debug("WS newHeads subscription registered",
           chain: state.chain,
-          provider_id: state.provider_id,
+          instance_id: state.instance_id,
           status: status
         )
 
-        # Keep :connecting status until first block is received
-        # This prevents false staleness detection during grace period
         new_state = %{state | status: :connecting, subscription_status: status}
         {:ok, new_state}
 
       {:error, reason} ->
         Logger.debug("WS subscription failed",
           chain: state.chain,
-          provider_id: state.provider_id,
+          instance_id: state.instance_id,
           reason: inspect(reason)
         )
 
-        send(state.parent, {:status, state.provider_id, :ws, :failed})
+        InstanceSubscriptionRegistry.unregister_consumer(state.instance_id, {:newHeads})
+        send(state.parent, {:status, state.instance_id, :ws, :failed})
         {:error, reason}
     end
   end
 
   defp process_new_head(state, payload) do
     now = System.system_time(:millisecond)
-
-    # Parse block data from payload
     {height, metadata} = parse_block_payload(payload)
 
-    # Report to parent
-    send(state.parent, {:block_height, state.provider_id, height, metadata})
+    send(state.parent, {:block_height, state.instance_id, height, metadata})
 
-    # Detect first block arrival
     first_block = state.last_block_time == nil
 
-    # Update state
     new_state = %{
       state
       | status: :active,
@@ -257,25 +201,24 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
         last_height: height
     }
 
-    # Notify parent on status transitions
     cond do
       first_block ->
         Logger.debug("WS subscription active (first block received)",
           chain: state.chain,
-          provider_id: state.provider_id,
+          instance_id: state.instance_id,
           height: height
         )
 
-        send(state.parent, {:status, state.provider_id, :ws, :active})
+        send(state.parent, {:status, state.instance_id, :ws, :active})
 
       state.status == :stale ->
         Logger.debug("WS subscription recovered from stale",
           chain: state.chain,
-          provider_id: state.provider_id,
+          instance_id: state.instance_id,
           height: height
         )
 
-        send(state.parent, {:status, state.provider_id, :ws, :active})
+        send(state.parent, {:status, state.instance_id, :ws, :active})
 
       true ->
         :ok
@@ -307,8 +250,6 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   defp check_staleness(state) do
     case state.last_block_time do
       nil ->
-        # Never received a block
-        # Only mark stale if :active (skip during :connecting to respect grace period)
         if state.status == :active do
           mark_stale(state)
         else
@@ -329,11 +270,11 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   defp mark_stale(state) do
     Logger.warning("WS subscription stale (no events)",
       chain: state.chain,
-      provider_id: state.provider_id,
+      instance_id: state.instance_id,
       threshold_ms: state.staleness_threshold_ms
     )
 
-    send(state.parent, {:status, state.provider_id, :ws, :stale})
+    send(state.parent, {:status, state.instance_id, :ws, :stale})
 
     %{state | status: :stale}
   end
@@ -343,13 +284,12 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
       Process.cancel_timer(state.staleness_timer_ref)
     end
 
-    # Check staleness at half the threshold interval
     check_interval = div(state.staleness_threshold_ms, 2)
 
     ref =
       Process.send_after(
         state.parent,
-        {:ws_strategy, :check_staleness, state.provider_id},
+        {:ws_strategy, :check_staleness, state.instance_id},
         check_interval
       )
 

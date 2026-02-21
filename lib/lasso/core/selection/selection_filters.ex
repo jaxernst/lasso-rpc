@@ -2,7 +2,7 @@ defmodule Lasso.RPC.SelectionFilters do
   @moduledoc """
   Type-safe filter parameters for provider selection.
 
-  Encapsulates all filtering criteria used by ProviderPool.list_candidates/3
+  Encapsulates all filtering criteria used by CandidateListing.list_candidates/3
   and Selection module to ensure consistent handling across the codebase.
   """
 
@@ -76,7 +76,7 @@ defmodule Lasso.RPC.SelectionFilters do
   end
 
   @doc """
-  Converts the filters struct to a map for ProviderPool compatibility.
+  Converts the filters struct to a map for CandidateListing compatibility.
   """
   @spec to_map(t()) :: map()
   def to_map(%__MODULE__{} = filters) do

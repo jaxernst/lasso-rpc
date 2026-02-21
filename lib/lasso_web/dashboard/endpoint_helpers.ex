@@ -112,11 +112,10 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   defp extract_chain_name(%{chain: chain}) when is_binary(chain), do: chain
   defp extract_chain_name(_), do: "ethereum"
 
-  # Strategy display names
-  defp strategy_display_name("round-robin"), do: "Load Balanced"
-  defp strategy_display_name("latency-weighted"), do: "Latency Weighted"
-  defp strategy_display_name("fastest"), do: "Fastest"
-  defp strategy_display_name(other), do: other |> String.replace("-", " ") |> String.capitalize()
+  def strategy_display_name("round-robin"), do: "Load Balanced"
+  def strategy_display_name("latency-weighted"), do: "Latency Weighted"
+  def strategy_display_name("fastest"), do: "Fastest"
+  def strategy_display_name(other), do: other |> String.replace("-", " ") |> String.capitalize()
 
   # Strategy icons
   defp strategy_icon("fastest"), do: "⚡"

@@ -60,7 +60,7 @@
   ~r"lib/lasso/core/streaming/stream_coordinator.ex.*pattern_match",
 
   # Upstream subscription error handling
-  ~r"lib/lasso/core/streaming/upstream_subscription_manager.ex.*pattern_match",
+  ~r"lib/lasso/core/streaming/instance_subscription_manager.ex.*pattern_match",
 
   # =============================================================================
   # LiveView/Web Component Defensive Patterns

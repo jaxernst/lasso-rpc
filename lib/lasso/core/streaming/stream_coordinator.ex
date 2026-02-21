@@ -11,6 +11,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   require Logger
 
   alias Lasso.Core.Support.{ContinuityPolicy, GapFiller}
+  alias Lasso.Events.Subscription
 
   alias Lasso.RPC.{
     ChainState,
@@ -371,6 +372,14 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         end
 
       telemetry_failover_initiated(state.chain, state.key, old_provider_id, new_provider_id)
+
+      broadcast_subscription_event(state, %Subscription.Failover{
+        ts: System.system_time(:millisecond),
+        chain: state.chain,
+        subscription_type: Subscription.subscription_type(state.key),
+        from_provider_id: old_provider_id,
+        to_provider_id: new_provider_id
+      })
 
       {:noreply,
        %{
@@ -805,6 +814,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp decode_hex(_), do: 0
 
   # Telemetry helpers
+
+  defp broadcast_subscription_event(state, event) do
+    topic = Subscription.topic(state.profile, state.chain)
+    Phoenix.PubSub.broadcast(Lasso.PubSub, topic, event)
+  end
 
   defp telemetry_failover_initiated(chain, key, old_id, new_id) do
     :telemetry.execute([:lasso, :subs, :failover, :initiated], %{count: 1}, %{

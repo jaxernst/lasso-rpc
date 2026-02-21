@@ -210,36 +210,29 @@ defmodule Lasso.Config.ProfileIsolationTest do
   end
 
   describe "Circuit breaker isolation" do
-    test "circuit breaker failures in profile_a don't affect profile_b" do
-      provider_id = "cb_test_provider"
+    test "circuit breaker failures on instance_a don't affect instance_b" do
+      # With shared provider architecture, CBs are keyed by {instance_id, transport}.
+      # Different instances (different URLs) have independent circuit breakers.
+      cb_id_a = {"isolation_instance_a", :http}
+      cb_id_b = {"isolation_instance_b", :http}
 
-      # Create circuit breaker IDs for both profiles
-      cb_id_a = {@profile_a, @test_chain, provider_id, :http}
-      cb_id_b = {@profile_b, @test_chain, provider_id, :http}
-
-      # Start circuit breakers for both profiles
       cb_config = %{failure_threshold: 2, recovery_timeout: 1000, success_threshold: 1}
       {:ok, _} = CircuitBreaker.start_link({cb_id_a, cb_config})
       {:ok, _} = CircuitBreaker.start_link({cb_id_b, cb_config})
 
-      # Record failures in profile_a (should open circuit)
       CircuitBreaker.record_failure(cb_id_a)
       CircuitBreaker.record_failure(cb_id_a)
       Process.sleep(50)
 
-      # Check states
       state_a = CircuitBreaker.get_state(cb_id_a)
       state_b = CircuitBreaker.get_state(cb_id_b)
 
-      # Circuit in profile_a should be open due to failures
       assert state_a.state == :open
-      # Circuit in profile_b should still be closed (unaffected)
       assert state_b.state == :closed
       assert state_b.failure_count == 0
 
-      # Cleanup
-      key_a = "#{@profile_a}:#{@test_chain}:#{provider_id}:http"
-      key_b = "#{@profile_b}:#{@test_chain}:#{provider_id}:http"
+      key_a = "isolation_instance_a:http"
+      key_b = "isolation_instance_b:http"
 
       case GenServer.whereis({:via, Registry, {Lasso.Registry, {:circuit_breaker, key_a}}}) do
         nil -> :ok

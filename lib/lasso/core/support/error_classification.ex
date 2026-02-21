@@ -40,8 +40,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
   - `:unknown_error` - Unclassified error (fallback category)
 
   **Circuit breaker penalty**:
-  - All categories count against circuit breaker EXCEPT `:capability_violation`
+  - All categories count against circuit breaker EXCEPT `:capability_violation` and `:rate_limit`
   - Capability violations represent permanent constraints, not transient failures
+  - Rate limits are temporary backpressure handled by RateLimitState tiering, not circuit breakers
   """
 
   # ===========================================================================
@@ -89,7 +90,10 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "request count exceeded",
     "maximum requests",
     "credits quota",
-    "requests per second"
+    "requests per second",
+    "compute units",
+    "cannot fulfill request",
+    "timeout on the free tier"
   ]
 
   # Patterns indicating transient/retriable server errors
@@ -185,8 +189,6 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "premium plan",
     "paid plan",
     "paid tier",
-    # DRPC
-    "timeout on the free tier",
     "feature not enabled"
   ]
 
@@ -264,6 +266,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
   """
   @spec breaker_penalty?(atom()) :: boolean()
   def breaker_penalty?(:capability_violation), do: false
+  def breaker_penalty?(:requires_archival), do: false
+  def breaker_penalty?(:rate_limit), do: false
+  def breaker_penalty?(:client_error), do: false
   def breaker_penalty?(_category), do: true
 
   @doc """
@@ -302,6 +307,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   def retriable_for_category?(:server_error), do: true
   def retriable_for_category?(:auth_error), do: true
   def retriable_for_category?(:capability_violation), do: true
+  def retriable_for_category?(:requires_archival), do: true
   def retriable_for_category?(:method_not_found), do: true
   def retriable_for_category?(:method_error), do: true
   def retriable_for_category?(:internal_error), do: true
@@ -366,11 +372,19 @@ defmodule Lasso.Core.Support.ErrorClassification do
     @chain_disconnected
   ]
 
+  @provider_specific_codes %{
+    30 => :rate_limit,
+    35 => :capability_violation,
+    -32_046 => :rate_limit,
+    -32_701 => :capability_violation
+  }
+
   defp classify_by_code(code) do
     cond do
       code in @jsonrpc_standard_codes -> classify_jsonrpc_standard(code)
       code in @lasso_custom_codes -> classify_lasso_error(code)
       code in @eip1193_codes -> classify_eip1193_error(code)
+      Map.has_key?(@provider_specific_codes, code) -> @provider_specific_codes[code]
       jsonrpc_server_range?(code) -> :server_error
       http_status_code?(code) -> classify_http_status(code)
       true -> :unknown_error

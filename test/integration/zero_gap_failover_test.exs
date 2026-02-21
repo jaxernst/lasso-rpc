@@ -20,7 +20,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
 
   use Lasso.Test.LassoIntegrationCase, async: false
 
-  alias Lasso.Core.Streaming.{UpstreamSubscriptionManager, UpstreamSubscriptionPool}
+  alias Lasso.Core.Streaming.UpstreamSubscriptionPool
   alias Lasso.Testing.{IntegrationHelper, MockWSProvider}
 
   @moduletag :integration
@@ -29,7 +29,6 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
     test "no duplicate blocks during rapid provider switching", %{chain: chain} do
       profile = "default"
 
-      # Setup: Two providers
       {:ok, [p1_id, p2_id]} =
         IntegrationHelper.setup_test_chain_with_providers(
           chain,
@@ -40,34 +39,24 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
           provider_type: :ws
         )
 
-      # Subscribe client
       client_pid = self()
       {:ok, _sub_id} = IntegrationHelper.subscribe_client(chain, client_pid, {:newHeads}, profile)
 
-      # Wait for subscription to be active
       wait_for_subscription_active(profile, chain, {:newHeads})
 
-      # Both providers send the same block numbers (simulating overlap during failover)
       MockWSProvider.send_block_sequence(chain, p1_id, 200, 5, delay_ms: 30)
       MockWSProvider.send_block_sequence(chain, p2_id, 200, 5, delay_ms: 30)
 
-      # Wait for blocks to arrive (deduplication will reduce 10 to ~5)
       Process.sleep(1000)
 
-      # Collect whatever blocks arrived
       blocks = collect_all_blocks(timeout: 100)
-
-      # Extract block numbers
       block_numbers = Enum.map(blocks, &extract_block_number/1)
 
-      # GUARANTEE: No duplicates (deduplication works)
       unique_blocks = Enum.uniq(block_numbers)
 
-      # May not receive all 10 blocks due to dedup, but should have no duplicates in what we got
       assert length(unique_blocks) == length(block_numbers),
              "Duplicate blocks detected during rapid switching: #{inspect(block_numbers)}"
 
-      # Should have received blocks from the expected range
       assert Enum.all?(block_numbers, fn n -> n >= 200 and n <= 204 end),
              "Received out-of-range blocks: #{inspect(block_numbers)}"
     end
@@ -88,14 +77,11 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
       client_pid = self()
       {:ok, _sub_id} = IntegrationHelper.subscribe_client(chain, client_pid, {:newHeads}, profile)
 
-      # Wait for subscription to be active
       wait_for_subscription_active(profile, chain, {:newHeads})
 
-      # Wait for upstream subscription to be fully established in Manager
       selected_provider =
         wait_for_any_upstream_subscription_established(profile, chain, {:newHeads})
 
-      # Send blocks out of order from selected provider: 300, 302, 301, 303
       MockWSProvider.send_block(chain, selected_provider, %{
         "number" => "0x12c",
         "hash" => "0x#{Integer.to_string(300 * 1000, 16)}",
@@ -128,18 +114,15 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
 
       Process.sleep(50)
 
-      # Collect blocks
       blocks = collect_blocks(4, timeout: 2000)
 
       block_numbers = Enum.map(blocks, &extract_block_number/1) |> Enum.sort()
 
-      # GUARANTEE: All blocks received, client can reorder if needed
       assert block_numbers == [300, 301, 302, 303],
              "Missing blocks during out-of-order delivery: #{inspect(block_numbers)}"
     end
   end
 
-  # Helper: Collect N subscription events with timeout
   defp collect_blocks(count, opts) do
     timeout = Keyword.get(opts, :timeout, 5000)
     collect_blocks_recursive(count, timeout, [])
@@ -158,7 +141,6 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
     end
   end
 
-  # Helper: Collect all available blocks until timeout
   defp collect_all_blocks(opts) do
     timeout = Keyword.get(opts, :timeout, 100)
     collect_all_blocks_recursive(timeout, [])
@@ -175,7 +157,6 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
     end
   end
 
-  # Helper: Extract block number from block data
   defp extract_block_number(%{"number" => hex_number}) when is_binary(hex_number) do
     hex_number
     |> String.replace_prefix("0x", "")
@@ -188,7 +169,6 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
     raise "Cannot extract block number from: #{inspect(block)}"
   end
 
-  # Helper: Wait for subscription to be active
   defp wait_for_subscription_active(profile, chain, key, timeout \\ 3000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     wait_for_sub_loop(profile, chain, key, deadline)
@@ -227,45 +207,39 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
 
   defp wait_for_any_upstream_subscription_established(profile, chain, key, timeout \\ 3000) do
     deadline = System.monotonic_time(:millisecond) + timeout
-    wait_for_any_upstream_sub_loop(profile, chain, key, deadline)
+    wait_for_active_subscription_loop(profile, chain, key, deadline)
   end
 
-  defp wait_for_any_upstream_sub_loop(profile, chain, key, deadline) do
+  defp wait_for_active_subscription_loop(profile, chain, key, deadline) do
     if System.monotonic_time(:millisecond) > deadline do
-      manager_state = :sys.get_state(UpstreamSubscriptionManager.via(profile, chain))
+      try do
+        pool_state = :sys.get_state(UpstreamSubscriptionPool.via(profile, chain))
 
-      raise """
-      Timeout waiting for any upstream subscription for #{inspect(key)}
-
-      Active subscriptions: #{inspect(manager_state.active_subscriptions)}
-      Upstream index: #{inspect(manager_state.upstream_index)}
-      """
+        raise """
+        Timeout waiting for upstream subscription for #{inspect(key)}
+        Pool keys: #{inspect(pool_state.keys)}
+        """
+      catch
+        :exit, reason ->
+          raise "Timeout waiting for subscription #{inspect(key)} - Pool not running: #{inspect(reason)}"
+      end
     end
 
     try do
-      manager_state = :sys.get_state(UpstreamSubscriptionManager.via(profile, chain))
+      pool_state = :sys.get_state(UpstreamSubscriptionPool.via(profile, chain))
 
-      matching_sub =
-        Enum.find(manager_state.active_subscriptions, fn
-          {{_provider_id, ^key}, %{upstream_id: upstream_id}} when is_binary(upstream_id) ->
-            Map.has_key?(manager_state.upstream_index, upstream_id)
+      case Map.get(pool_state.keys, key) do
+        %{status: :active, primary_provider_id: pid} when not is_nil(pid) ->
+          pid
 
-          _ ->
-            false
-        end)
-
-      case matching_sub do
-        {{provider_id, ^key}, _} ->
-          provider_id
-
-        nil ->
+        _ ->
           Process.sleep(50)
-          wait_for_any_upstream_sub_loop(profile, chain, key, deadline)
+          wait_for_active_subscription_loop(profile, chain, key, deadline)
       end
     catch
       :exit, _ ->
         Process.sleep(50)
-        wait_for_any_upstream_sub_loop(profile, chain, key, deadline)
+        wait_for_active_subscription_loop(profile, chain, key, deadline)
     end
   end
 end

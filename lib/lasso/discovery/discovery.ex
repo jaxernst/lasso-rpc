@@ -67,8 +67,12 @@ defmodule Lasso.Discovery do
     results =
       probes
       |> Enum.filter(&(&1 in @available_probes))
-      |> Enum.reduce(%{}, fn probe, acc ->
-        result = run_probe(probe, url, opts)
+      |> Task.async_stream(
+        fn probe -> {probe, run_probe(probe, url, opts)} end,
+        timeout: :infinity,
+        ordered: false
+      )
+      |> Enum.reduce(%{}, fn {:ok, {probe, result}}, acc ->
         Map.put(acc, probe, result)
       end)
 
@@ -138,12 +142,12 @@ defmodule Lasso.Discovery do
   def available_probes, do: @available_probes
 
   @doc """
-  Generates adapter configuration recommendations based on probe results.
+  Generates capabilities configuration recommendations based on probe results.
 
-  Returns a map suitable for use in provider adapter configuration.
+  Returns a map suitable for use in provider capabilities configuration.
   """
-  @spec generate_adapter_config(probe_results()) :: map()
-  def generate_adapter_config(results) do
+  @spec generate_capabilities_config(probe_results()) :: map()
+  def generate_capabilities_config(results) do
     config = %{}
 
     config =
@@ -165,7 +169,7 @@ defmodule Lasso.Discovery do
         unsupported = MethodSupport.find_unsupported_methods(results.methods, blocked)
 
         config
-        |> Map.put(:blocked_categories, blocked)
+        |> Map.put(:unsupported_categories, blocked)
         |> Map.put(:unsupported_methods, unsupported)
       else
         config

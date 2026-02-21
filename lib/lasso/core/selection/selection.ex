@@ -3,12 +3,12 @@ defmodule Lasso.RPC.Selection do
   Unified provider selection module that handles all provider picking logic.
 
   This module provides a single interface for selecting providers across
-  different protocols (HTTP vs WS) and fallback strategies. It first tries
-  to use the ProviderPool for intelligent selection, then falls back to
-  ConfigStore-based selection if the pool is unavailable.
+  different protocols (HTTP vs WS) and fallback strategies. It uses
+  CandidateListing for ETS-backed health-aware selection, then falls back to
+  ConfigStore-based selection if the catalog is unavailable.
 
   Selection strategies:
-  - Pool-based (preferred): Uses ProviderPool health and performance data
+  - Catalog-based (preferred): Uses CandidateListing health and performance data
   - Config-based (fallback): Uses static configuration priority ordering
 
   This eliminates the need for channels/controllers to load configuration
@@ -17,10 +17,11 @@ defmodule Lasso.RPC.Selection do
 
   require Logger
 
+  alias Lasso.Providers.CandidateListing
+
   alias Lasso.RPC.{
     ChainState,
     Channel,
-    ProviderPool,
     RequestAnalysis,
     SelectionFilters,
     TransportRegistry
@@ -35,7 +36,7 @@ defmodule Lasso.RPC.Selection do
 
   Options:
   - :params => [term()] (RPC params for request analysis, default [])
-  - :strategy => :fastest | :priority | :round_robin | :latency_weighted (default :round_robin)
+  - :strategy => :fastest | :priority | :load_balanced | :latency_weighted (default :load_balanced)
   - :protocol => :http | :ws | :both (default :both)
   - :exclude => [provider_id] (default [])
   - :timeout => ms (default 30_000)
@@ -47,7 +48,7 @@ defmodule Lasso.RPC.Selection do
   def select_provider(profile, chain, method, opts \\ [])
       when is_binary(profile) and is_binary(chain) and is_binary(method) do
     params = Keyword.get(opts, :params, [])
-    strategy = Keyword.get(opts, :strategy, :round_robin)
+    strategy = Keyword.get(opts, :strategy, :load_balanced)
     protocol = Keyword.get(opts, :protocol, :both)
     exclude = Keyword.get(opts, :exclude, [])
     timeout = Keyword.get(opts, :timeout, 30_000)
@@ -59,7 +60,7 @@ defmodule Lasso.RPC.Selection do
 
   defp do_select_provider(profile, chain, method, params, strategy, protocol, exclude, timeout) do
     filters = build_selection_filters(profile, chain, method, params, exclude, protocol)
-    candidates = ProviderPool.list_candidates(profile, chain, filters)
+    candidates = CandidateListing.list_candidates(profile, chain, filters)
 
     case candidates do
       [] ->
@@ -120,7 +121,7 @@ defmodule Lasso.RPC.Selection do
   health, and performance metrics to return ordered candidate channels.
 
   Options:
-  - :strategy => :fastest | :priority | :round_robin | :latency_weighted
+  - :strategy => :fastest | :priority | :load_balanced | :latency_weighted
   - :transport => :http | :ws | :both (default :both)
   - :exclude => [provider_id]
   - :limit => integer (maximum channels to return)
@@ -131,7 +132,7 @@ defmodule Lasso.RPC.Selection do
   @spec select_channels(String.t(), String.t(), String.t(), keyword()) :: [Channel.t()]
   def select_channels(profile, chain, method, opts \\ [])
       when is_binary(profile) and is_binary(chain) and is_binary(method) do
-    strategy = Keyword.get(opts, :strategy, :round_robin)
+    strategy = Keyword.get(opts, :strategy, :load_balanced)
     transport = Keyword.get(opts, :transport, :both)
     exclude = Keyword.get(opts, :exclude, [])
     limit = Keyword.get(opts, :limit, 1000)
@@ -166,9 +167,9 @@ defmodule Lasso.RPC.Selection do
         requires_archival: requirements.requires_archival
       )
 
-    # Instrument ProviderPool.list_candidates call time
+    # Instrument CandidateListing.list_candidates call time
     pool_start = System.monotonic_time(:microsecond)
-    provider_candidates = ProviderPool.list_candidates(profile, chain, pool_filters)
+    provider_candidates = CandidateListing.list_candidates(profile, chain, pool_filters)
 
     pool_duration_us = System.monotonic_time(:microsecond) - pool_start
 
@@ -179,7 +180,6 @@ defmodule Lasso.RPC.Selection do
     )
 
     # Build circuit state lookup map: {provider_id, transport} => :closed | :half_open
-    # Use defensive access in case circuit_state field is missing or nil
     circuit_state_map =
       provider_candidates
       |> Enum.flat_map(fn %{id: provider_id} = candidate ->
@@ -190,6 +190,12 @@ defmodule Lasso.RPC.Selection do
           {{provider_id, :ws}, Map.get(cs, :ws, :closed)}
         ]
       end)
+      |> Map.new()
+
+    # Build rate limit lookup map: provider_id => %{http: bool, ws: bool}
+    rate_limit_map =
+      provider_candidates
+      |> Enum.map(fn %{id: id, rate_limited: rl} -> {id, rl} end)
       |> Map.new()
 
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
@@ -238,9 +244,27 @@ defmodule Lasso.RPC.Selection do
     ordered_channels =
       strategy_mod.rank_channels(capable_channels, method, prepared_ctx, profile, chain)
 
-    # Tiered selection: partition by circuit state to deprioritize half-open channels.
-    # Closed-circuit channels come first (healthy), half-open channels come last (recovering).
-    # Within each tier, the strategy's ranking is preserved (maintains randomization for round-robin).
+    # Health-based tiering: reorder providers by circuit breaker state and rate limit status.
+    #
+    # The 4-tier system ensures healthy providers receive traffic first while allowing
+    # recovering providers to gradually reintegrate:
+    #
+    # 1. Tier 1: Closed circuit + not rate-limited (preferred)
+    # 2. Tier 2: Closed circuit + rate-limited
+    # 3. Tier 3: Half-open circuit + not rate-limited
+    # 4. Tier 4: Half-open circuit + rate-limited
+    #
+    # Open-circuit providers are filtered out earlier in the pipeline.
+    #
+    # Within each tier, the strategy's ranking is preserved. For example, with
+    # load-balanced strategy, Tier 1 providers remain shuffled relative to each other,
+    # but all Tier 1 providers come before any Tier 2 providers.
+    #
+    # This tiering explains why traffic may be concentrated on certain providers even
+    # with load-balanced: if only one provider is in Tier 1, it receives all traffic
+    # that succeeds, with lower tiers acting as fallbacks.
+
+    # Step 1: Split by circuit breaker state
     {closed_channels, half_open_channels} =
       Enum.split_with(ordered_channels, fn channel ->
         cb_state = Map.get(circuit_state_map, {channel.provider_id, channel.transport}, :closed)
@@ -249,7 +273,17 @@ defmodule Lasso.RPC.Selection do
 
     tiered_channels = closed_channels ++ half_open_channels
 
-    tiered_channels |> Enum.take(limit)
+    # Step 2: Within each circuit tier, split by rate limit status
+    # Final order: closed+not-rl, closed+rl, half-open+not-rl, half-open+rl
+    {not_rate_limited, rate_limited} =
+      Enum.split_with(tiered_channels, fn channel ->
+        rl = Map.get(rate_limit_map, channel.provider_id, %{http: false, ws: false})
+        not Map.get(rl, channel.transport, false)
+      end)
+
+    final_channels = not_rate_limited ++ rate_limited
+
+    final_channels |> Enum.take(limit)
   end
 
   @doc """

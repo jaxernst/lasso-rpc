@@ -13,7 +13,7 @@ defmodule Lasso.Events.Provider do
   - provider_id: provider identifier (string)
   """
 
-  @provider_topic_prefix "provider_pool:events:"
+  @provider_topic_prefix "provider:events:"
 
   @doc """
   Returns the profile-scoped PubSub topic for provider events.
