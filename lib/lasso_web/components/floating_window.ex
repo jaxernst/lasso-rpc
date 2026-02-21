@@ -97,9 +97,7 @@ defmodule LassoWeb.Components.FloatingWindow do
     attr(:class, :string)
   end
 
-  slot :collapsed_preview, required: false do
-    attr(:class, :string)
-  end
+  slot(:collapsed_preview, required: false)
 
   slot :body, required: false do
     attr(:class, :string)
@@ -110,21 +108,6 @@ defmodule LassoWeb.Components.FloatingWindow do
   end
 
   def floating_window(assigns) do
-    # Calculate arrow direction based on window position
-    {collapsed_arrow, expanded_arrow} =
-      case assigns.position do
-        :top_left -> {"↘", "↖"}
-        :top_right -> {"↙", "↗"}
-        :bottom_left -> {"↗", "↙"}
-        :bottom_right -> {"↖", "↘"}
-        :center -> {"↙", "↗"}
-      end
-
-    assigns =
-      assigns
-      |> assign(:collapsed_arrow, collapsed_arrow)
-      |> assign(:expanded_arrow, expanded_arrow)
-
     ~H"""
     <.window_container id={@id} position={@position} z_index={@z_index} class={@class}>
       <.window_frame
@@ -137,34 +120,27 @@ defmodule LassoWeb.Components.FloatingWindow do
           collapsed={@collapsed}
           on_toggle={@on_toggle}
           on_toggle_target={@on_toggle_target}
-          collapsed_arrow={@collapsed_arrow}
-          expanded_arrow={@expanded_arrow}
+          collapsed_arrow={collapsed_arrow(@position)}
+          expanded_arrow={expanded_arrow(@position)}
         >
           {render_slot(@header)}
         </.window_header>
         
     <!-- Collapsed preview content -->
         <%= if @collapsed and @collapsed_preview != [] do %>
-          <% class = get_in(List.first(@collapsed_preview), [:attrs, :class]) || "" %>
-          <div class={class}>
-            {render_slot(@collapsed_preview)}
-          </div>
+          {render_slot(@collapsed_preview)}
         <% end %>
-        
-    <!-- Body (only when expanded) -->
-        <%= unless @collapsed do %>
-          <%= if @body != [] do %>
-            <.window_body>
-              {render_slot(@body)}
-            </.window_body>
-          <% end %>
-          
-    <!-- Footer (optional) -->
-          <%= if @footer != [] do %>
-            <.window_footer>
-              {render_slot(@footer)}
-            </.window_footer>
-          <% end %>
+
+        <%= if !@collapsed and @body != [] do %>
+          <.window_body>
+            {render_slot(@body)}
+          </.window_body>
+        <% end %>
+
+        <%= if !@collapsed and @footer != [] do %>
+          <.window_footer>
+            {render_slot(@footer)}
+          </.window_footer>
         <% end %>
       </.window_frame>
     </.window_container>
@@ -186,21 +162,10 @@ defmodule LassoWeb.Components.FloatingWindow do
   slot(:inner_block, required: true)
 
   def window_container(assigns) do
-    position_class =
-      case assigns.position do
-        :top_left -> "top-4 left-4"
-        :top_right -> "top-4 right-4"
-        :bottom_left -> "bottom-4 left-4"
-        :bottom_right -> "bottom-4 right-4"
-        :center -> "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
-      end
-
-    assigns = assign(assigns, :position_class, position_class)
-
     ~H"""
     <div
       id={@id <> "-container"}
-      class={["pointer-events-none absolute", @position_class, @z_index, @class]}
+      class={["pointer-events-none absolute", position_class(@position), @z_index, @class]}
     >
       {render_slot(@inner_block)}
     </div>
@@ -302,19 +267,8 @@ defmodule LassoWeb.Components.FloatingWindow do
   slot(:inner_block, required: true)
 
   def window_section(assigns) do
-    border_class =
-      case assigns.border do
-        :none -> ""
-        :top -> "border-t border-gray-700/50"
-        :bottom -> "border-b border-gray-700/50"
-        :both -> "border-y border-gray-700/50"
-        :all -> "border border-gray-700/50 rounded-lg"
-      end
-
-    assigns = assign(assigns, :border_class, border_class)
-
     ~H"""
-    <div class={[@border_class, "p-4", @class]}>
+    <div class={[border_class(@border), "p-4", @class]}>
       <%= if @title do %>
         <h4 class="mb-3 text-sm font-semibold text-gray-300">{@title}</h4>
       <% end %>
@@ -336,22 +290,11 @@ defmodule LassoWeb.Components.FloatingWindow do
   attr(:class, :string, default: "")
 
   def status_indicator(assigns) do
-    color_class =
-      case assigns.status do
-        :healthy -> "bg-emerald-400"
-        :degraded -> "bg-yellow-400"
-        :error -> "bg-red-400"
-        :warning -> "bg-orange-400"
-        :info -> "bg-sky-400"
-      end
-
-    assigns = assign(assigns, :color_class, color_class)
-
     ~H"""
     <div class={[
       @size,
       "flex-shrink-0 rounded-full",
-      @color_class,
+      status_color(@status),
       if(@animated, do: "animate-pulse"),
       @class
     ]}>
@@ -429,18 +372,8 @@ defmodule LassoWeb.Components.FloatingWindow do
   slot(:inner_block, required: true)
 
   def metrics_grid(assigns) do
-    grid_cols =
-      case assigns.cols do
-        2 -> "grid-cols-2"
-        3 -> "grid-cols-3"
-        4 -> "grid-cols-2 md:grid-cols-4"
-        _ -> "grid-cols-2 md:grid-cols-4"
-      end
-
-    assigns = assign(assigns, :grid_cols, grid_cols)
-
     ~H"""
-    <div class={["grid gap-3", @grid_cols, @class]}>
+    <div class={["grid gap-3", grid_cols(@cols), @class]}>
       {render_slot(@inner_block)}
     </div>
     """
@@ -484,19 +417,52 @@ defmodule LassoWeb.Components.FloatingWindow do
   slot(:inner_block, required: true)
 
   def action_group(assigns) do
-    align_class =
-      case assigns.align do
-        :left -> "justify-start"
-        :right -> "justify-end"
-        :between -> "justify-between"
-      end
-
-    assigns = assign(assigns, :align_class, align_class)
-
     ~H"""
-    <div class={["flex items-center gap-2", @align_class, @class]}>
+    <div class={["flex items-center gap-2", align_class(@align), @class]}>
       {render_slot(@inner_block)}
     </div>
     """
   end
+
+  # Private helpers for computed class values — used directly in HEEx templates
+  # to avoid `assign/3` which marks computed values as "changed" and produces
+  # redundant WebSocket diffs on every re-render.
+
+  defp position_class(:top_left), do: "top-4 left-4"
+  defp position_class(:top_right), do: "top-4 right-4"
+  defp position_class(:bottom_left), do: "bottom-4 left-4"
+  defp position_class(:bottom_right), do: "bottom-4 right-4"
+  defp position_class(:center), do: "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+
+  defp collapsed_arrow(:top_left), do: "↘"
+  defp collapsed_arrow(:top_right), do: "↙"
+  defp collapsed_arrow(:bottom_left), do: "↗"
+  defp collapsed_arrow(:bottom_right), do: "↖"
+  defp collapsed_arrow(:center), do: "↙"
+
+  defp expanded_arrow(:top_left), do: "↖"
+  defp expanded_arrow(:top_right), do: "↗"
+  defp expanded_arrow(:bottom_left), do: "↙"
+  defp expanded_arrow(:bottom_right), do: "↘"
+  defp expanded_arrow(:center), do: "↗"
+
+  defp border_class(:none), do: ""
+  defp border_class(:top), do: "border-t border-gray-700/50"
+  defp border_class(:bottom), do: "border-b border-gray-700/50"
+  defp border_class(:both), do: "border-y border-gray-700/50"
+  defp border_class(:all), do: "border border-gray-700/50 rounded-lg"
+
+  defp status_color(:healthy), do: "bg-emerald-400"
+  defp status_color(:degraded), do: "bg-yellow-400"
+  defp status_color(:error), do: "bg-red-400"
+  defp status_color(:warning), do: "bg-orange-400"
+  defp status_color(:info), do: "bg-sky-400"
+
+  defp grid_cols(2), do: "grid-cols-2"
+  defp grid_cols(3), do: "grid-cols-3"
+  defp grid_cols(_), do: "grid-cols-2 md:grid-cols-4"
+
+  defp align_class(:left), do: "justify-start"
+  defp align_class(:right), do: "justify-end"
+  defp align_class(:between), do: "justify-between"
 end

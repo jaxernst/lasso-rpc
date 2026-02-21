@@ -160,6 +160,8 @@ defmodule Lasso.Testing.IntegrationHelper do
   Broadcasts a provider unhealthy event that will trigger the failover flow.
   """
   def trigger_provider_failover(chain, failed_provider_id, reason \\ :simulated_failure) do
+    profile = "default"
+
     event = %Lasso.Events.Provider.Unhealthy{
       chain: chain,
       provider_id: failed_provider_id,
@@ -169,7 +171,7 @@ defmodule Lasso.Testing.IntegrationHelper do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "provider_pool:events:#{chain}",
+      Lasso.Events.Provider.topic(profile, chain),
       event
     )
 
@@ -307,7 +309,8 @@ defmodule Lasso.Testing.IntegrationHelper do
     transports = [:http, :ws]
 
     Enum.each(transports, fn transport ->
-      breaker_id = {profile, chain, provider_id, transport}
+      instance_id = Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id)
+      breaker_id = {instance_id || "#{chain}:#{provider_id}", transport}
 
       case poll_until_deadline(short_deadline, interval, fn ->
              circuit_breaker_exists?(breaker_id)
@@ -356,16 +359,9 @@ defmodule Lasso.Testing.IntegrationHelper do
   end
 
   defp provider_registered?(chain, provider_id, profile) do
-    case Lasso.RPC.ProviderPool.get_status(profile, chain) do
-      {:ok, status} ->
-        # Check if provider exists in the providers list
-        Enum.any?(status.providers, fn p -> p.id == provider_id end)
-
-      {:error, _} ->
-        false
-    end
+    providers = Lasso.Providers.Catalog.get_profile_providers(profile, chain)
+    Enum.any?(providers, fn p -> p.provider_id == provider_id end)
   rescue
-    # Chain might not exist yet or ProviderPool might not be started
     _ -> false
   end
 
@@ -381,16 +377,15 @@ defmodule Lasso.Testing.IntegrationHelper do
   end
 
   defp provider_health_available?(chain, provider_id, profile) do
-    case Lasso.RPC.ProviderPool.get_status(profile, chain) do
-      {:ok, status} ->
-        # Find the provider and check if it has a health status
-        case Enum.find(status.providers, fn p -> p.id == provider_id end) do
-          nil -> false
-          provider -> provider.status in [:healthy, :connecting, :unhealthy, :degraded]
-        end
+    instance_id = Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id)
 
-      {:error, _} ->
-        false
+    if instance_id do
+      case :ets.lookup(:lasso_instance_state, {:health, instance_id}) do
+        [{_, %{status: status}}] -> status in [:healthy, :connecting, :unhealthy, :degraded]
+        [] -> false
+      end
+    else
+      false
     end
   rescue
     _ -> false

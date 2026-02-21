@@ -1,135 +1,133 @@
 defmodule LassoWeb.Dashboard.ProviderConnection do
   @moduledoc """
-  Fetches and builds provider connection data for the Dashboard.
+  Fetches and builds provider connection data for the Dashboard from ETS.
   """
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.RPC.{ChainState, ProviderPool}
+  alias Lasso.Providers.{Catalog, InstanceState}
+  alias Lasso.RPC.ChainState
   require Logger
 
   def fetch_connections(profile) do
     chains = ConfigStore.list_chains_for_profile(profile)
-    provider_ids_by_chain = build_provider_ids_map(profile, chains)
-    consensus_by_chain = build_consensus_map(chains, provider_ids_by_chain)
 
     Enum.flat_map(chains, fn chain_name ->
-      fetch_chain_connections(profile, chain_name, provider_ids_by_chain, consensus_by_chain)
+      fetch_chain_connections(profile, chain_name)
     end)
   end
 
-  defp fetch_chain_connections(profile, chain_name, provider_ids_by_chain, consensus_by_chain) do
-    consensus_height = Map.get(consensus_by_chain, chain_name)
-    provider_ids = Map.get(provider_ids_by_chain, chain_name, [])
+  defp fetch_chain_connections(profile, chain_name) do
+    profile_providers = Catalog.get_profile_providers(profile, chain_name)
 
-    case ProviderPool.get_status(profile, chain_name) do
-      {:ok, pool_status} ->
-        Enum.map(
-          pool_status.providers,
-          &build_provider_connection(&1, chain_name, consensus_height, provider_ids)
-        )
+    instance_ids =
+      profile_providers
+      |> Enum.map(& &1.instance_id)
+      |> Enum.uniq()
 
-      {:error, reason} ->
-        Logger.warning(
-          "Failed to get provider status for chain #{chain_name}: #{inspect(reason)}"
-        )
+    consensus_height =
+      case ChainState.consensus_height(chain_name, provider_ids: instance_ids) do
+        {:ok, h} -> h
+        {:error, _} -> nil
+      end
 
-        []
-    end
+    Enum.map(profile_providers, fn pp ->
+      build_provider_connection(pp, profile, chain_name, consensus_height)
+    end)
   end
 
-  def build_provider_connection(provider_map, chain_name, consensus_height, provider_ids) do
-    provider_type = derive_provider_type(provider_map.config)
+  defp build_provider_connection(profile_provider, _profile, chain_name, consensus_height) do
+    instance_id = profile_provider.instance_id
+    provider_id = profile_provider.provider_id
+
+    instance_config =
+      case Catalog.get_instance(instance_id) do
+        {:ok, config} -> config
+        _ -> %{}
+      end
+
+    url = Map.get(instance_config, :url)
+    ws_url = Map.get(instance_config, :ws_url)
+    provider_name = get_in(instance_config, [:canonical_config, :name]) || provider_id
+
+    provider_type =
+      cond do
+        url && ws_url -> :both
+        ws_url -> :websocket
+        true -> :http
+      end
+
+    health = InstanceState.read_health(instance_id)
+    ws_status = InstanceState.read_ws_status(instance_id)
+    http_circuit = InstanceState.read_circuit(instance_id, :http)
+    ws_circuit = InstanceState.read_circuit(instance_id, :ws)
+    http_rl = InstanceState.read_rate_limit(instance_id, :http)
+    ws_rl = InstanceState.read_rate_limit(instance_id, :ws)
+
+    availability = InstanceState.status_to_availability(health.status)
+
+    circuit_state =
+      cond do
+        http_circuit.state == :open or ws_circuit.state == :open -> :open
+        http_circuit.state == :half_open or ws_circuit.state == :half_open -> :half_open
+        true -> :closed
+      end
+
+    is_in_cooldown = http_rl.rate_limited or ws_rl.rate_limited
+    now_ms = System.monotonic_time(:millisecond)
+
+    cooldown_until =
+      case {http_rl.remaining_ms, ws_rl.remaining_ms} do
+        {nil, nil} -> nil
+        {http_rem, nil} -> now_ms + http_rem
+        {nil, ws_rem} -> now_ms + ws_rem
+        {http_rem, ws_rem} -> now_ms + max(http_rem, ws_rem)
+      end
 
     {block_height, blocks_behind} =
-      calculate_block_sync(chain_name, provider_map.id, consensus_height, provider_ids)
+      calculate_block_sync(chain_name, instance_id, consensus_height)
 
     %{
-      id: provider_map.id,
+      id: provider_id,
       chain: chain_name,
-      name: provider_map.name,
-      status: provider_map.status,
-      health_status: derive_health_status(provider_map.availability),
+      name: provider_name,
+      status: health.status,
+      health_status: derive_health_status(availability),
       type: provider_type,
-      circuit_state: derive_circuit_state(provider_map),
-      http_circuit_state: provider_map.http_cb_state,
-      ws_circuit_state: provider_map.ws_cb_state,
-      http_cb_error: provider_map[:http_cb_error],
-      ws_cb_error: provider_map[:ws_cb_error],
-      consecutive_failures: provider_map.consecutive_failures,
-      consecutive_successes: provider_map.consecutive_successes,
-      last_error: provider_map.last_error,
-      http_rate_limited: provider_map[:http_rate_limited] || false,
-      ws_rate_limited: provider_map[:ws_rate_limited] || false,
-      rate_limit_remaining: provider_map[:rate_limit_remaining] || %{http: nil, ws: nil},
-      is_in_cooldown: provider_map.is_in_cooldown,
-      cooldown_until: provider_map.cooldown_until,
-      reconnect_attempts: 0,
-      ws_connected: ws_connected?(provider_type, provider_map),
+      instance_id: instance_id,
+      circuit_state: circuit_state,
+      http_circuit_state: http_circuit.state,
+      ws_circuit_state: ws_circuit.state,
+      http_cb_error: http_circuit.error,
+      ws_cb_error: ws_circuit.error,
+      consecutive_failures: health.consecutive_failures,
+      consecutive_successes: health.consecutive_successes,
+      last_error: health.last_error,
+      http_rate_limited: http_rl.rate_limited,
+      ws_rate_limited: ws_rl.rate_limited,
+      rate_limit_remaining: %{http: http_rl.remaining_ms, ws: ws_rl.remaining_ms},
+      is_in_cooldown: is_in_cooldown,
+      cooldown_until: cooldown_until,
+      reconnect_attempts: ws_status.reconnect_attempts,
+      ws_connected: provider_type in [:websocket, :both] and ws_status.status == :connected,
+      ws_status: ws_status.status,
       subscriptions: 0,
-      url: provider_map.config.url,
-      ws_url: provider_map.config.ws_url,
+      url: url,
+      ws_url: ws_url,
       block_height: block_height,
       consensus_height: consensus_height,
       blocks_behind: blocks_behind
     }
   end
 
-  defp build_provider_ids_map(profile, chains) do
-    Map.new(chains, fn chain_name ->
-      ids =
-        case ProviderPool.get_status(profile, chain_name) do
-          {:ok, pool_status} -> Enum.map(pool_status.providers, & &1.id)
-          {:error, _} -> []
-        end
-
-      {chain_name, ids}
-    end)
-  end
-
-  defp build_consensus_map(chains, provider_ids_by_chain) do
-    Map.new(chains, fn chain_name ->
-      provider_ids = Map.get(provider_ids_by_chain, chain_name, [])
-
-      height =
-        case ChainState.consensus_height(chain_name, provider_ids) do
-          {:ok, h} -> h
-          {:error, _} -> nil
-        end
-
-      {chain_name, height}
-    end)
-  end
-
-  defp derive_circuit_state(%{http_cb_state: http, ws_cb_state: ws}) do
-    cond do
-      http == :open or ws == :open -> :open
-      http == :half_open or ws == :half_open -> :half_open
-      true -> :closed
-    end
-  end
-
-  defp derive_provider_type(%{url: url, ws_url: ws_url}) do
-    cond do
-      url && ws_url -> :both
-      ws_url -> :websocket
-      true -> :http
-    end
-  end
-
   defp derive_health_status(:up), do: :healthy
   defp derive_health_status(:down), do: :unhealthy
   defp derive_health_status(:limited), do: :rate_limited
-  defp derive_health_status(:misconfigured), do: :misconfigured
   defp derive_health_status(other), do: other
 
-  defp ws_connected?(provider_type, provider_map) do
-    provider_type in [:websocket, :both] and provider_map.ws_status == :healthy
-  end
+  defp calculate_block_sync(_, _, nil), do: {nil, nil}
 
-  defp calculate_block_sync(_, _, nil, _), do: {nil, nil}
-
-  defp calculate_block_sync(chain_name, provider_id, consensus_height, provider_ids) do
-    case ChainState.provider_lag(chain_name, provider_id, provider_ids) do
+  defp calculate_block_sync(chain_name, instance_id, consensus_height) do
+    case ChainState.provider_lag(chain_name, instance_id) do
       {:ok, lag} when is_integer(lag) -> {consensus_height + lag, -lag}
       _ -> {nil, nil}
     end

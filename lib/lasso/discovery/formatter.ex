@@ -331,7 +331,7 @@ defmodule Lasso.Discovery.Formatter do
   # Summary section
 
   defp format_summary(results) do
-    config = Lasso.Discovery.generate_adapter_config(results)
+    config = Lasso.Discovery.generate_capabilities_config(results)
 
     recommendations = []
 
@@ -350,8 +350,8 @@ defmodule Lasso.Discovery.Formatter do
       end
 
     recommendations =
-      if config[:blocked_categories] && length(config.blocked_categories) > 0 do
-        cats = Enum.join(config.blocked_categories, ", ")
+      if config[:unsupported_categories] && length(config.unsupported_categories) > 0 do
+        cats = Enum.join(config.unsupported_categories, ", ")
         recommendations ++ ["- Block categories: #{cats}"]
       else
         recommendations
@@ -380,7 +380,7 @@ defmodule Lasso.Discovery.Formatter do
         divider(),
         "RECOMMENDATIONS",
         divider(),
-        "No custom adapter configuration needed."
+        "No custom capabilities configuration needed."
       ]
       |> Enum.join("\n")
     end

@@ -12,7 +12,7 @@ All HTTP RPC endpoints accept `POST` requests with `Content-Type: application/js
 POST /rpc/:chain
 ```
 
-Routes using the default strategy (configurable, defaults to `:round_robin`).
+Routes using the default strategy (configurable, defaults to `:load_balanced`).
 
 **Example:**
 
@@ -26,7 +26,7 @@ curl -X POST http://localhost:4000/rpc/ethereum \
 
 ```
 POST /rpc/fastest/:chain
-POST /rpc/round-robin/:chain
+POST /rpc/load-balanced/:chain
 POST /rpc/latency-weighted/:chain
 ```
 
@@ -46,7 +46,7 @@ All routes above are available under a profile namespace:
 ```
 POST /rpc/profile/:profile/:chain
 POST /rpc/profile/:profile/fastest/:chain
-POST /rpc/profile/:profile/round-robin/:chain
+POST /rpc/profile/:profile/load-balanced/:chain
 POST /rpc/profile/:profile/latency-weighted/:chain
 POST /rpc/profile/:profile/provider/:provider_id/:chain
 ```
@@ -314,10 +314,13 @@ All errors follow JSON-RPC 2.0 format:
   "error": {
     "code": -32601,
     "message": "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
-    "data": {"websocket_url": "/socket/websocket"}
+    "data": {"websocket_url": "/ws/rpc/ethereum"}
   }
 }
 ```
+
+The `websocket_url` mirrors the HTTP request path — for example, a request to
+`/rpc/profile/default/fastest/ethereum` returns `/ws/rpc/profile/default/fastest/ethereum`.
 
 ### Error Codes
 

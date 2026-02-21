@@ -19,9 +19,9 @@ defmodule Mix.Tasks.Lasso.Probe do
       - websocket: WebSocket connection and subscription support
 
     * `--level <level>` - Method probe level (default: standard)
-      - critical: Core methods only (~10 methods)
+      - critical (alias: minimal): Core methods only (~10 methods)
       - standard: Common methods (~25 methods)
-      - full: All standard methods (~70 methods)
+      - full (alias: comprehensive): All standard methods (~70+ methods)
 
     * `--timeout <ms>` - Request timeout in milliseconds (default: 10000)
 
@@ -149,15 +149,16 @@ defmodule Mix.Tasks.Lasso.Probe do
   end
 
   @level_map %{
-    "minimal" => :minimal,
+    "critical" => :critical,
+    "minimal" => :critical,
     "standard" => :standard,
-    "comprehensive" => :comprehensive
+    "comprehensive" => :full,
+    "full" => :full
   }
 
   @output_map %{
     "table" => :table,
-    "json" => :json,
-    "verbose" => :verbose
+    "json" => :json
   }
 
   defp parse_level(level_str) do

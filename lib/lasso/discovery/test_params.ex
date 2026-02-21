@@ -197,17 +197,74 @@ defmodule Lasso.Discovery.TestParams do
   def minimal_params_for("eth_getFilterLogs"), do: ["0x1"]
   def minimal_params_for("eth_uninstallFilter"), do: ["0x1"]
 
-  # Debug/trace methods
+  # Debug methods
   def minimal_params_for("debug_traceTransaction") do
     [@zero_hash, %{}]
   end
 
   def minimal_params_for("debug_traceBlockByNumber"), do: ["latest", %{}]
+
+  def minimal_params_for("debug_traceBlockByHash") do
+    [@zero_hash, %{}]
+  end
+
+  def minimal_params_for("debug_traceCall") do
+    [%{to: @zero_address, data: "0x"}, "latest", %{}]
+  end
+
+  def minimal_params_for("debug_getBadBlocks"), do: []
+
+  def minimal_params_for("debug_storageRangeAt") do
+    [@zero_hash, 0, @zero_address, 1]
+  end
+
+  def minimal_params_for("debug_getModifiedAccountsByNumber") do
+    ["latest", "latest"]
+  end
+
+  def minimal_params_for("debug_getModifiedAccountsByHash") do
+    [@zero_hash, @zero_hash]
+  end
+
+  # Trace methods
   def minimal_params_for("trace_block"), do: ["latest"]
 
   def minimal_params_for("trace_transaction") do
     [@zero_hash]
   end
+
+  def minimal_params_for("trace_call") do
+    [%{to: @zero_address, data: "0x"}, ["trace"], "latest"]
+  end
+
+  def minimal_params_for("trace_callMany") do
+    [[[%{to: @zero_address, data: "0x"}, ["trace"]]], "latest"]
+  end
+
+  def minimal_params_for("trace_rawTransaction") do
+    ["0x", ["trace"]]
+  end
+
+  def minimal_params_for("trace_replayBlockTransactions") do
+    ["latest", ["trace"]]
+  end
+
+  def minimal_params_for("trace_replayTransaction") do
+    [@zero_hash, ["trace"]]
+  end
+
+  def minimal_params_for("trace_filter") do
+    [%{"fromBlock" => "latest", "toBlock" => "latest"}]
+  end
+
+  def minimal_params_for("trace_get") do
+    [@zero_hash, ["0x0"]]
+  end
+
+  # Txpool methods
+  def minimal_params_for("txpool_status"), do: []
+  def minimal_params_for("txpool_content"), do: []
+  def minimal_params_for("txpool_inspect"), do: []
 
   # Subscription methods (WS only)
   def minimal_params_for("eth_subscribe"), do: ["newHeads"]

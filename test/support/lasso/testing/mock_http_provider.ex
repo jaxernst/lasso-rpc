@@ -9,7 +9,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
   - ✅ Behavior-based responses (healthy, failing, degraded, etc.)
   - ✅ Stateful behaviors (call counting, time-based transitions)
-  - ✅ Integrates with ProviderPool and CircuitBreaker
+  - ✅ Integrates with Catalog and CircuitBreaker
   - ✅ Automatic cleanup on test exit
 
   ## Usage
@@ -68,9 +68,10 @@ defmodule Lasso.Testing.MockHTTPProvider do
     # Ensure chain exists and register provider
     with :ok <- ChainHelper.ensure_chain_exists(chain, profile: profile),
          :ok <-
-           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
-         :ok <-
-           Lasso.RPC.ProviderPool.register_provider(profile, chain, provider_id, provider_config) do
+           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config) do
+      # Rebuild catalog so the new provider is visible
+      Lasso.Providers.Catalog.build_from_config()
+
       Logger.info("MockHTTPProvider: registered #{provider_id}, initializing channels...")
 
       result =
@@ -85,17 +86,31 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
       case result do
         :ok ->
+          instance_id = Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id)
+
           # Ensure circuit breaker exists for HTTP transport
-          ensure_circuit_breaker(profile, chain, provider_id, :http)
+          if instance_id do
+            ensure_circuit_breaker(instance_id, :http)
+          end
 
-          # Mark as healthy so it can be selected
-          Lasso.RPC.ProviderPool.report_success(profile, chain, provider_id, nil)
-
-          # Give report_success (async cast) time to complete
-          Process.sleep(50)
+          # Mark as healthy in ETS
+          if instance_id do
+            :ets.insert(:lasso_instance_state, {
+              {:health, instance_id},
+              %{
+                status: :healthy,
+                http_status: :healthy,
+                ws_status: nil,
+                consecutive_failures: 0,
+                consecutive_successes: 1,
+                last_error: nil,
+                last_health_check: System.monotonic_time(:millisecond)
+              }
+            })
+          end
 
           # Set up cleanup callback
-          setup_cleanup(profile, chain, provider_id)
+          setup_cleanup(profile, chain, provider_id, instance_id)
 
           Logger.debug("Started mock HTTP provider #{provider_id} for #{chain}")
           {:ok, provider_id}
@@ -153,24 +168,16 @@ defmodule Lasso.Testing.MockHTTPProvider do
     :ok
   end
 
-  # Private helper to ensure circuit breaker exists
-  defp ensure_circuit_breaker(profile, chain, provider_id, transport) do
-    breaker_id = {profile, chain, provider_id, transport}
+  defp ensure_circuit_breaker(instance_id, transport) do
+    breaker_id = {instance_id, transport}
 
     try do
       case Lasso.Core.Support.CircuitBreaker.get_state(breaker_id) do
-        %{} ->
-          # Circuit breaker already exists
-          :ok
-
-        _ ->
-          # Circuit breaker doesn't exist, create it
-          start_circuit_breaker(breaker_id)
+        %{} -> :ok
+        _ -> start_circuit_breaker(breaker_id)
       end
     catch
-      :exit, _ ->
-        # Circuit breaker doesn't exist, create it
-        start_circuit_breaker(breaker_id)
+      :exit, _ -> start_circuit_breaker(breaker_id)
     end
   end
 
@@ -250,20 +257,21 @@ defmodule Lasso.Testing.MockHTTPProvider do
     {:reply, response, state}
   end
 
-  defp setup_cleanup(profile, chain, provider_id) do
+  defp setup_cleanup(_profile, chain, provider_id, instance_id) do
     ExUnit.Callbacks.on_exit({:cleanup_mock_http, provider_id}, fn ->
       Logger.debug("Test cleanup: stopping mock HTTP provider #{provider_id}")
       stop_mock(chain, provider_id)
 
-      # Clean up circuit breakers
-      for transport <- [:http, :ws] do
-        breaker_id = {profile, chain, provider_id, transport}
-
-        try do
-          Lasso.Core.Support.CircuitBreaker.close(breaker_id)
-        catch
-          :exit, _ -> :ok
+      if instance_id do
+        for transport <- [:http, :ws] do
+          try do
+            Lasso.Core.Support.CircuitBreaker.close({instance_id, transport})
+          catch
+            :exit, _ -> :ok
+          end
         end
+
+        :ets.delete(:lasso_instance_state, {:health, instance_id})
       end
     end)
   end

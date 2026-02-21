@@ -15,6 +15,7 @@ defmodule Lasso.Events.RoutingDecision do
   @type t :: %__MODULE__{
           ts: pos_integer(),
           request_id: String.t(),
+          account_id: String.t() | nil,
           profile: String.t(),
           source_node: node(),
           source_node_id: String.t(),
@@ -22,6 +23,7 @@ defmodule Lasso.Events.RoutingDecision do
           method: String.t(),
           strategy: String.t(),
           provider_id: String.t(),
+          instance_id: String.t() | nil,
           transport: atom(),
           duration_ms: non_neg_integer(),
           result: :success | :error,
@@ -31,6 +33,7 @@ defmodule Lasso.Events.RoutingDecision do
   defstruct [
     :ts,
     :request_id,
+    :account_id,
     :profile,
     :source_node,
     :source_node_id,
@@ -38,6 +41,7 @@ defmodule Lasso.Events.RoutingDecision do
     :method,
     :strategy,
     :provider_id,
+    :instance_id,
     :transport,
     :duration_ms,
     :result,
@@ -52,6 +56,7 @@ defmodule Lasso.Events.RoutingDecision do
     %__MODULE__{
       ts: attrs[:ts] || System.system_time(:millisecond),
       request_id: attrs[:request_id],
+      account_id: attrs[:account_id],
       profile: attrs[:profile] || "default",
       source_node: node(),
       source_node_id: get_source_node_id(),
@@ -59,6 +64,7 @@ defmodule Lasso.Events.RoutingDecision do
       method: attrs[:method],
       strategy: to_string(attrs[:strategy]),
       provider_id: attrs[:provider_id],
+      instance_id: attrs[:instance_id],
       transport: attrs[:transport],
       duration_ms: attrs[:duration_ms],
       result: attrs[:result],

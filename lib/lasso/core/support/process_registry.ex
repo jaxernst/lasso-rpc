@@ -162,11 +162,6 @@ defmodule Lasso.Core.Support.ProcessRegistry do
     via_name(Lasso.Core.Support.ProcessRegistry, :message_aggregator, chain_name)
   end
 
-  @spec provider_pool_name(String.t()) :: {:via, module(), {atom(), tuple()}}
-  def provider_pool_name(chain_name) do
-    via_name(Lasso.Core.Support.ProcessRegistry, :provider_pool, chain_name)
-  end
-
   @spec ws_connection_name(String.t()) :: {:via, module(), {atom(), tuple()}}
   def ws_connection_name(connection_id) do
     via_name(Lasso.Core.Support.ProcessRegistry, :ws_connection, connection_id)

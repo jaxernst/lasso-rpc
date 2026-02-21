@@ -13,7 +13,7 @@ defmodule LassoWeb.Endpoint do
 
   # LiveView socket for real-time updates
   socket("/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
+    websocket: [compress: true, connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
   )
 
@@ -28,7 +28,7 @@ defmodule LassoWeb.Endpoint do
   # routes (with literal segments) must be defined LAST
 
   # Supported routing strategies for provider selection
-  @rpc_strategies ~w(fastest round-robin latency-weighted)
+  @rpc_strategies ~w(fastest load-balanced round-robin latency-weighted)
 
   # Socket configuration shared across all endpoints
   @socket_config [
@@ -113,7 +113,8 @@ defmodule LassoWeb.Endpoint do
   plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
-    json_decoder: Phoenix.json_library()
+    json_decoder: Phoenix.json_library(),
+    body_reader: {LassoWeb.Plugs.CacheBodyReader, :read_body, []}
   )
 
   # JSON parse error handling is now handled by LassoWeb.ErrorJSON

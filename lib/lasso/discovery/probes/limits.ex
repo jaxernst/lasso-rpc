@@ -12,6 +12,16 @@ defmodule Lasso.Discovery.Probes.Limits do
 
   alias Lasso.Discovery.{ErrorClassifier, TestParams}
 
+  @chain_archive_blocks %{
+    "ethereum" => 100,
+    "sepolia" => 100,
+    "arbitrum" => 5_000_000,
+    "optimism" => 5_000_000,
+    "base" => 5_000_000,
+    "polygon" => 1_000_000,
+    "bsc" => 1_000_000
+  }
+
   @available_tests [
     :block_range,
     :address_count,
@@ -92,8 +102,8 @@ defmodule Lasso.Discovery.Probes.Limits do
     test_block_params(url, timeout)
   end
 
-  defp run_test(:archive_support, url, _chain, _current_block, timeout) do
-    test_archive_support(url, timeout)
+  defp run_test(:archive_support, url, chain, _current_block, timeout) do
+    test_archive_support(url, chain, timeout)
   end
 
   defp run_test(:rate_limit, url, _chain, _current_block, timeout) do
@@ -104,7 +114,7 @@ defmodule Lasso.Discovery.Probes.Limits do
   # Uses a fake address filter to minimize results and test true block range limits
   # (not result-size limits)
   defp test_block_range(url, current_block, timeout) do
-    test_ranges = [100, 500, 1000, 2000, 5000, 10_000]
+    test_ranges = [100, 500, 1000, 2000, 5000, 10_000, 25_000, 50_000, 100_000]
 
     # Find first failure
     first_failure =
@@ -134,7 +144,7 @@ defmodule Lasso.Discovery.Probes.Limits do
         %{
           status: :unlimited,
           value: nil,
-          recommendation: "No block range limit detected (tested up to 10000)"
+          recommendation: "No block range limit detected (tested up to 100000)"
         }
 
       limit ->
@@ -146,7 +156,7 @@ defmodule Lasso.Discovery.Probes.Limits do
         %{
           status: :limited,
           value: refined,
-          recommendation: "Set adapter_config: max_block_range: #{refined}"
+          recommendation: "Set capabilities.limits.max_block_range: #{refined}"
         }
     end
   end
@@ -222,7 +232,7 @@ defmodule Lasso.Discovery.Probes.Limits do
         %{
           status: :limited,
           value: max_addresses,
-          recommendation: "Set adapter_config: max_addresses: #{max_addresses}"
+          recommendation: "Set capabilities.limits.max_addresses: #{max_addresses}"
         }
 
       true ->
@@ -332,10 +342,9 @@ defmodule Lasso.Discovery.Probes.Limits do
     }
   end
 
-  # Archive node support test
-  defp test_archive_support(url, timeout) do
-    # Query block 100 (very old)
-    old_block = "0x64"
+  defp test_archive_support(url, chain, timeout) do
+    block_num = Map.get(@chain_archive_blocks, chain, 100)
+    old_block = TestParams.int_to_hex(block_num)
 
     case make_request(url, "eth_getBlockByNumber", [old_block, false], timeout) do
       {:ok, %{"result" => block}} when is_map(block) ->
@@ -414,6 +423,7 @@ defmodule Lasso.Discovery.Probes.Limits do
           case make_request(url, "eth_blockNumber", [], timeout) do
             {:ok, %{"result" => _}} -> :ok
             {:ok, %{"error" => error}} -> {:error, error}
+            {:rate_limited, _} -> :rate_limited
             {:server_error, status} -> {:server_error, status}
             {:error, reason} -> {:error, reason}
           end
@@ -433,6 +443,7 @@ defmodule Lasso.Discovery.Probes.Limits do
 
     rate_limited =
       Enum.count(results, fn
+        {:ok, :rate_limited} -> true
         {:ok, {:error, error}} when is_map(error) -> ErrorClassifier.rate_limit_error?(error)
         _ -> false
       end)
@@ -501,6 +512,9 @@ defmodule Lasso.Discovery.Probes.Limits do
       {:ok, %{status: 200, body: response_body}} ->
         Jason.decode(response_body)
 
+      {:ok, %{status: 429, body: body}} ->
+        {:rate_limited, try_decode_body(body)}
+
       {:ok, %{status: status}} when status >= 500 ->
         {:server_error, status}
 
@@ -512,5 +526,12 @@ defmodule Lasso.Discovery.Probes.Limits do
     end
   rescue
     e -> {:error, e}
+  end
+
+  defp try_decode_body(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> decoded
+      _ -> body
+    end
   end
 end

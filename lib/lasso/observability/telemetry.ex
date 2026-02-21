@@ -43,7 +43,7 @@ defmodule Lasso.Telemetry do
         measurement: :admit_call_ms,
         unit: {:native, :millisecond},
         description: "Circuit breaker admission call latency",
-        tags: [:chain, :provider_id, :transport, :decision],
+        tags: [:instance_id, :transport, :decision],
         reporter_options: [
           buckets: [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000]
         ]
@@ -53,7 +53,7 @@ defmodule Lasso.Telemetry do
       counter("lasso.circuit_breaker.admit.count",
         event_name: [:lasso, :circuit_breaker, :admit],
         description: "Circuit breaker admission decisions",
-        tags: [:chain, :provider_id, :transport, :decision]
+        tags: [:instance_id, :transport, :decision]
       ),
 
       # HTTP transport I/O latency (actual network time)
@@ -103,32 +103,32 @@ defmodule Lasso.Telemetry do
       counter("lasso.circuit_breaker.open.count",
         event_name: [:lasso, :circuit_breaker, :open],
         description: "Circuit breaker openings",
-        tags: [:chain, :provider_id, :transport, :reason]
+        tags: [:instance_id, :transport, :reason]
       ),
       counter("lasso.circuit_breaker.close.count",
         event_name: [:lasso, :circuit_breaker, :close],
         description: "Circuit breaker closings",
-        tags: [:chain, :provider_id, :transport, :reason]
+        tags: [:instance_id, :transport, :reason]
       ),
       counter("lasso.circuit_breaker.half_open.count",
         event_name: [:lasso, :circuit_breaker, :half_open],
         description: "Circuit breaker half-open transitions",
-        tags: [:chain, :provider_id, :transport, :reason]
+        tags: [:instance_id, :transport, :reason]
       ),
       counter("lasso.circuit_breaker.proactive_recovery.count",
         event_name: [:lasso, :circuit_breaker, :proactive_recovery],
         description: "Circuit breaker proactive recovery attempts",
-        tags: [:chain, :provider_id, :transport]
+        tags: [:instance_id, :transport]
       ),
       counter("lasso.circuit_breaker.failure.count",
         event_name: [:lasso, :circuit_breaker, :failure],
         description: "Circuit breaker failures by category and state",
-        tags: [:chain, :provider_id, :transport, :error_category, :circuit_state]
+        tags: [:instance_id, :transport, :error_category, :circuit_state]
       ),
       counter("lasso.circuit_breaker.timeout.count",
         event_name: [:lasso, :circuit_breaker, :timeout],
         description: "Circuit breaker request timeouts",
-        tags: [:chain, :provider_id, :transport]
+        tags: [:instance_id, :transport]
       ),
 
       # WebSocket connection events

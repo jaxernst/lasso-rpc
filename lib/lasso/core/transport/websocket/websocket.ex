@@ -13,6 +13,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
   require Logger
   alias Lasso.Core.Support.ErrorNormalizer
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.Providers.Catalog
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
 
@@ -43,9 +44,12 @@ defmodule Lasso.RPC.Transports.WebSocket do
          )}
 
       ws_url ->
-        case GenServer.whereis(
-               {:via, Registry, {Lasso.Registry, {:ws_conn, profile, chain, provider_id}}}
-             ) do
+        instance_id = resolve_instance_id(profile, chain, provider_id)
+
+        connection_pid =
+          GenServer.whereis(WSConnection.via_instance_name(instance_id))
+
+        case connection_pid do
           nil ->
             {:error,
              JError.new(-32_000, "WebSocket connection not available",
@@ -59,6 +63,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
               chain: chain,
               ws_url: ws_url,
               provider_id: provider_id,
+              instance_id: instance_id,
               connection_pid: connection_pid,
               config: provider_config
             }
@@ -98,7 +103,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
     result =
       case WSConnection.request(
-             {profile, chain, provider_id},
+             resolve_instance_id(profile, chain, provider_id),
              method,
              params,
              timeout,
@@ -142,7 +147,12 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
     case method do
       "eth_subscribe" ->
-        case WSConnection.request({profile, chain, provider_id}, method, params, 30_000) do
+        case WSConnection.request(
+               resolve_instance_id(profile, chain, provider_id),
+               method,
+               params,
+               30_000
+             ) do
           {:ok, %Response.Success{} = response} ->
             case Response.Success.decode_result(response) do
               {:ok, subscription_id} ->
@@ -185,6 +195,10 @@ defmodule Lasso.RPC.Transports.WebSocket do
   end
 
   # Private functions
+
+  defp resolve_instance_id(profile, chain, provider_id) do
+    Catalog.lookup_instance_id(profile, chain, provider_id) || "#{chain}:#{provider_id}"
+  end
 
   defp get_ws_url(provider_config) do
     Map.get(provider_config, :ws_url)

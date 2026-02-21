@@ -9,54 +9,96 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   alias LassoWeb.Dashboard.{EndpointHelpers, Formatting, Helpers, StatusHelpers}
 
   @impl true
+  def update(%{_metrics_only: true} = assigns, socket) do
+    live_provider_metrics = assigns[:live_provider_metrics] || %{}
+
+    if socket.assigns[:live_provider_metrics] != live_provider_metrics do
+      selected_region = socket.assigns[:chain_metrics_region] || "aggregate"
+      chain = socket.assigns[:chain]
+      chain_connections = socket.assigns[:chain_connections] || []
+      aggregate_cached = socket.assigns[:aggregate_cached] || %{}
+      cached_fallback = if selected_region == "aggregate", do: aggregate_cached, else: %{}
+
+      filtered_metrics =
+        compute_filtered_chain_metrics(
+          selected_region,
+          live_provider_metrics,
+          chain,
+          cached_fallback,
+          chain_connections
+        )
+
+      {:ok,
+       socket
+       |> assign(:live_provider_metrics, live_provider_metrics)
+       |> assign(:filtered_chain_metrics, filtered_metrics)}
+    else
+      {:ok, socket}
+    end
+  end
+
   def update(assigns, socket) do
     chain = assigns.chain
     chain_connections = Enum.filter(assigns.connections, &(&1.chain == chain))
 
-    # Get live provider metrics from aggregator
     live_provider_metrics = assigns[:live_provider_metrics] || %{}
-
-    # Cached metrics
     aggregate_cached = assigns[:selected_chain_metrics] || %{}
-
-    # Regions come from aggregator's cluster-wide tracking (single source of truth)
     available_node_ids = assigns[:available_node_ids] || []
-
-    selected_region = socket.assigns[:chain_metrics_region] || "aggregate"
     chain_events = assigns[:selected_chain_events] || []
+    cluster_block_heights = assigns[:cluster_block_heights] || %{}
 
-    # Only use cached aggregate metrics when viewing aggregate
-    # For per-region views, don't fall back to aggregate - show empty if no data
-    cached_fallback = if selected_region == "aggregate", do: aggregate_cached, else: %{}
+    inputs_changed =
+      socket.assigns[:chain] != chain or
+        socket.assigns[:chain_connections] != chain_connections or
+        socket.assigns[:live_provider_metrics] != live_provider_metrics or
+        socket.assigns[:cluster_block_heights] != cluster_block_heights or
+        socket.assigns[:chain_events] != chain_events or
+        socket.assigns[:selected_chain_metrics] != aggregate_cached
 
-    # Compute metrics from live data with cached fallback
-    filtered_metrics =
-      compute_filtered_chain_metrics(
-        selected_region,
-        live_provider_metrics,
-        chain,
-        cached_fallback,
-        chain_connections
-      )
+    if inputs_changed do
+      selected_region = socket.assigns[:chain_metrics_region] || "aggregate"
+      cached_fallback = if selected_region == "aggregate", do: aggregate_cached, else: %{}
 
-    # Get region-specific decision to prevent flickering
-    filtered_decision = get_region_decision(chain_events, chain, selected_region)
+      filtered_metrics =
+        compute_filtered_chain_metrics(
+          selected_region,
+          live_provider_metrics,
+          chain,
+          cached_fallback,
+          chain_connections
+        )
 
-    socket =
-      socket
-      |> assign(assigns)
-      |> assign(:chain_connections, chain_connections)
-      |> assign(:consensus_height, find_consensus_height(chain_connections))
-      |> assign(:chain_events, chain_events)
-      |> assign(:available_node_ids, available_node_ids)
-      |> assign(:show_region_tabs, length(available_node_ids) > 1)
-      |> assign(:live_provider_metrics, live_provider_metrics)
-      |> assign(:aggregate_cached, aggregate_cached)
-      |> assign_new(:chain_metrics_region, fn -> "aggregate" end)
-      |> assign(:filtered_chain_metrics, filtered_metrics)
-      |> assign(:filtered_last_decision, filtered_decision)
+      filtered_decision = get_region_decision(chain_events, chain, selected_region)
 
-    {:ok, socket}
+      socket =
+        socket
+        |> assign(:chain, chain)
+        |> assign(:connections, assigns.connections)
+        |> assign(:selected_profile, assigns.selected_profile)
+        |> assign(:selected_chain_metrics, assigns[:selected_chain_metrics])
+        |> assign(:selected_chain_events, chain_events)
+        |> assign(:selected_chain_unified_events, assigns[:selected_chain_unified_events])
+        |> assign(:selected_chain_endpoints, assigns[:selected_chain_endpoints])
+        |> assign(:selected_chain_provider_events, assigns[:selected_chain_provider_events])
+        |> assign(:chain_connections, chain_connections)
+        |> assign(:available_node_ids, available_node_ids)
+        |> assign(:show_region_tabs, length(available_node_ids) > 1)
+        |> assign(:live_provider_metrics, live_provider_metrics)
+        |> assign(:aggregate_cached, aggregate_cached)
+        |> assign(:cluster_block_heights, cluster_block_heights)
+        |> assign_new(:chain_metrics_region, fn -> "aggregate" end)
+        |> assign(
+          :consensus_height,
+          find_consensus_height(chain_connections, cluster_block_heights)
+        )
+        |> assign(:chain_events, chain_events)
+        |> assign(:filtered_chain_metrics, filtered_metrics)
+        |> assign(:filtered_last_decision, filtered_decision)
+
+      {:ok, socket}
+    else
+      {:ok, socket}
+    end
   end
 
   @impl true
@@ -88,8 +130,17 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     {:noreply, socket}
   end
 
-  defp find_consensus_height(connections) do
-    Enum.find_value(connections, fn conn -> Map.get(conn, :consensus_height) end)
+  defp find_consensus_height(chain_connections, cluster_block_heights) do
+    chain_provider_ids = MapSet.new(chain_connections, & &1.id)
+
+    realtime_max =
+      cluster_block_heights
+      |> Enum.filter(fn {{pid, _node}, _} -> pid in chain_provider_ids end)
+      |> Enum.map(fn {_, %{height: h}} -> h end)
+      |> Enum.max(fn -> nil end)
+
+    realtime_max ||
+      Enum.find_value(chain_connections, fn conn -> Map.get(conn, :consensus_height) end)
   end
 
   @impl true
@@ -206,7 +257,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
 
     ~H"""
     <DetailPanelComponents.panel_section border={false} class="px-6">
-      <DetailPanelComponents.section_header title="Performance" />
+      <h4 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">Performance</h4>
       <DetailPanelComponents.metrics_strip class="border-x rounded">
         <:metric label="Latency p50" value={@p50} />
         <:metric label="Latency p95" value={@p95} />
@@ -217,21 +268,9 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     """
   end
 
-  defp format_latency(nil), do: "—"
-  defp format_latency(ms), do: "#{ms}ms"
-
-  defp format_rps(rps) when rps > 0, do: "#{rps}"
-  defp format_rps(_), do: "0"
-
-  defp success_color(rate) when rate >= 95.0, do: "text-emerald-400"
-  defp success_color(rate) when rate >= 80.0, do: "text-yellow-400"
-  defp success_color(_), do: "text-red-400"
-
-  @strategy_labels %{
-    "round-robin" => "Load Balanced",
-    "latency-weighted" => "Latency Weighted",
-    "fastest" => "Fastest"
-  }
+  defdelegate format_latency(ms), to: Formatting
+  defdelegate format_rps(rps), to: Formatting
+  defp success_color(rate), do: Formatting.success_rate_color(rate)
 
   attr(:chain, :string, required: true)
   attr(:selected_profile, :string, required: true)
@@ -309,12 +348,13 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   defp strategy_button(assigns) do
     assigns =
       assigns
-      |> assign(:label, Map.get(@strategy_labels, assigns.strategy, assigns.strategy))
+      |> assign(:label, EndpointHelpers.strategy_display_name(assigns.strategy))
 
     ~H"""
     <button
       data-strategy={@strategy}
-      class="px-3 py-1.5 rounded-md text-xs font-medium transition-all border border-gray-700 bg-gray-800/50 text-gray-400 hover:border-gray-600 hover:text-gray-300"
+      data-state="inactive"
+      class="px-3 py-1.5 rounded-md text-xs font-medium border bg-gray-800/50"
     >
       {@label}
     </button>
@@ -362,7 +402,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     assigns = assign(assigns, :decision_share, decision_share)
 
     ~H"""
-    <div class="flex-1 overflow-y-auto px-6 space-y-6 custom-scrollbar">
+    <div class="flex-1 overflow-y-auto px-6 pb-6 space-y-6 custom-scrollbar">
       <div>
         <DetailPanelComponents.section_header title="Routing Decisions" />
         <div class="grid grid-cols-1 gap-4">
@@ -380,7 +420,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     ~H"""
     <div class="bg-gray-800/20 border border-gray-800 rounded-lg p-4">
       <div class="flex justify-between items-center mb-3">
-        <div class="text-[11px] text-gray-400">Distribution (Last 5m)</div>
+        <span class="text-[11px] text-gray-400">Distribution (Last 5m)</span>
         <div class="text-[10px] text-gray-600 uppercase tracking-wide">Req Share</div>
       </div>
       <div class="space-y-2">
@@ -648,17 +688,15 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     end
   end
 
-  # Find the most recent decision for a specific region
-  # This prevents flickering when events from other regions push old events off the list
+  defp routing_decision?(e), do: e[:type] != :ws_lifecycle and is_binary(e[:method])
+
   defp get_region_decision(events, chain, "aggregate") do
-    # For aggregate, return the most recent decision for this chain
-    Enum.find(events, fn e -> e[:chain] == chain end)
+    Enum.find(events, fn e -> e[:chain] == chain and routing_decision?(e) end)
   end
 
   defp get_region_decision(events, chain, region) do
-    # For specific region, find most recent decision FROM that node
     Enum.find(events, fn e ->
-      e[:chain] == chain and e[:source_node_id] == region
+      e[:chain] == chain and e[:source_node_id] == region and routing_decision?(e)
     end)
   end
 end

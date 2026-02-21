@@ -4,7 +4,7 @@ defmodule Lasso.ProfileChainSupervisor do
 
   Manages ChainSupervisor processes for each (profile, chain) pair. Each profile
   gets its own set of chain supervisors with full isolation. All components
-  (BlockSync, HealthProbe, ProviderPool) are scoped per (profile, chain).
+  (BlockSync, WebSocket connections) are scoped per (profile, chain).
 
   ## Architecture
 

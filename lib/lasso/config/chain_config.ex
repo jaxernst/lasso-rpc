@@ -39,9 +39,10 @@ defmodule Lasso.Config.ChainConfig do
             priority: non_neg_integer(),
             url: String.t(),
             ws_url: String.t() | nil,
-            adapter_config: %{atom() => any()} | nil,
+            capabilities: map() | nil,
             subscribe_new_heads: boolean() | nil,
-            archival: boolean()
+            archival: boolean(),
+            sharing_mode: :auto | :isolated
           }
 
     defstruct [
@@ -50,10 +51,11 @@ defmodule Lasso.Config.ChainConfig do
       :priority,
       :url,
       :ws_url,
-      :adapter_config,
+      :capabilities,
       :subscribe_new_heads,
       :__mock__,
-      archival: true
+      archival: true,
+      sharing_mode: :auto
     ]
   end
 

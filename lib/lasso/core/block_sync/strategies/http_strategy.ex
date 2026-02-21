@@ -2,19 +2,13 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   @moduledoc """
   HTTP polling strategy for block sync.
 
-  Polls `eth_blockNumber` at a configurable interval and reports:
-  - Block heights to the parent Worker
+  Polls `eth_blockNumber` at a configurable interval and reports block heights
+  to the parent Worker. Uses a reference profile and Channel for auth injection.
 
   ## Circuit Breaker Integration
 
-  This strategy goes through the HTTP circuit breaker. When the circuit is open,
-  polling is skipped. HealthProbe (which bypasses the circuit breaker) is responsible
-  for detecting when the provider recovers and closing the circuit.
-
-  ## Messages sent to parent
-
-  - `{:block_height, height, %{latency_ms: ms}}`
-  - `{:status, :healthy | :degraded}`
+  Goes through the shared HTTP circuit breaker keyed by `{instance_id, :http}`.
+  When the circuit is open, polling is skipped.
   """
 
   @behaviour Lasso.BlockSync.Strategy
@@ -22,6 +16,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   require Logger
 
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Providers.Catalog
   alias Lasso.RPC.{Channel, Response, TransportRegistry}
 
   @default_poll_interval_ms 15_000
@@ -29,9 +24,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   @max_consecutive_failures 3
 
   defstruct [
-    :profile,
+    :instance_id,
     :chain,
-    :provider_id,
     :parent,
     :poll_interval_ms,
     :timer_ref,
@@ -41,9 +35,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   ]
 
   @type t :: %__MODULE__{
-          profile: String.t(),
+          instance_id: String.t(),
           chain: String.t(),
-          provider_id: String.t(),
           parent: pid(),
           poll_interval_ms: non_neg_integer(),
           timer_ref: reference() | nil,
@@ -55,15 +48,13 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   ## Strategy Callbacks
 
   @impl true
-  def start(chain, provider_id, opts) do
-    profile = Keyword.fetch!(opts, :profile)
+  def start(chain, instance_id, opts) do
     parent = Keyword.get(opts, :parent, self())
     poll_interval = Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms)
 
     state = %__MODULE__{
-      profile: profile,
+      instance_id: instance_id,
       chain: chain,
-      provider_id: provider_id,
       parent: parent,
       poll_interval_ms: poll_interval,
       consecutive_failures: 0,
@@ -72,7 +63,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       timer_ref: nil
     }
 
-    # Start the polling loop
     state = schedule_poll(state, 0)
 
     {:ok, state}
@@ -114,11 +104,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     {:ok, state}
   end
 
-  ## Public API (for use by Worker)
-
-  @doc """
-  Execute an immediate poll (for use during initialization).
-  """
   @spec poll_now(t()) :: t()
   def poll_now(%__MODULE__{} = state) do
     execute_poll(state)
@@ -127,20 +112,19 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   ## Private Functions
 
   defp schedule_poll(state, delay_ms) do
-    ref = Process.send_after(state.parent, {:http_strategy, :poll, state.provider_id}, delay_ms)
+    ref = Process.send_after(state.parent, {:http_strategy, :poll, state.instance_id}, delay_ms)
     %{state | timer_ref: ref}
   end
 
   defp execute_poll(%__MODULE__{} = state) do
     start_time = System.monotonic_time(:millisecond)
 
-    result = do_poll(state.profile, state.chain, state.provider_id)
+    result = do_poll(state.instance_id, state.chain)
     latency_ms = System.monotonic_time(:millisecond) - start_time
 
     case result do
       {:ok, height} ->
-        # Report success (latency included in metadata)
-        send(state.parent, {:block_height, state.provider_id, height, %{latency_ms: latency_ms}})
+        send(state.parent, {:block_height, state.instance_id, height, %{latency_ms: latency_ms}})
 
         new_state = %{
           state
@@ -149,31 +133,27 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
             last_poll_time: System.system_time(:millisecond)
         }
 
-        # Notify if recovering from failures
         if state.consecutive_failures >= @max_consecutive_failures do
-          send(state.parent, {:status, state.provider_id, :http, :healthy})
+          send(state.parent, {:status, state.instance_id, :http, :healthy})
         end
 
         new_state
 
       {:error, :circuit_open} ->
-        # Circuit is open - skip this poll cycle without incrementing failures
-        # HealthProbe handles recovery detection independently
         state
 
       {:error, reason} ->
         failures = state.consecutive_failures + 1
 
-        # Log appropriately based on failure count
         if failures == @max_consecutive_failures do
           Logger.warning("HTTP polling degraded",
             chain: state.chain,
-            provider_id: state.provider_id,
+            instance_id: state.instance_id,
             consecutive_failures: failures,
             error: inspect(reason)
           )
 
-          send(state.parent, {:status, state.provider_id, :http, :degraded})
+          send(state.parent, {:status, state.instance_id, :http, :degraded})
         end
 
         %{
@@ -184,11 +164,10 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     end
   end
 
-  defp do_poll(profile, chain, provider_id) do
-    cb_id = {profile, chain, provider_id, :http}
+  defp do_poll(instance_id, chain) do
+    cb_id = {instance_id, :http}
 
-    # Go through circuit breaker - when open, HealthProbe handles recovery detection
-    case CircuitBreaker.call(cb_id, fn -> do_poll_request(profile, chain, provider_id) end) do
+    case CircuitBreaker.call(cb_id, fn -> do_poll_request(instance_id, chain) end) do
       {:executed, {:ok, height}} ->
         {:ok, height}
 
@@ -201,7 +180,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       {:executed, {:exception, _}} ->
         {:error, :exception}
 
-      # Circuit breaker rejected execution
       {:rejected, :circuit_open} ->
         {:error, :circuit_open}
 
@@ -213,8 +191,9 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     end
   end
 
-  defp do_poll_request(profile, chain, provider_id) do
-    case TransportRegistry.get_channel(profile, chain, provider_id, :http) do
+  # Use a reference profile + Channel for auth header injection
+  defp do_poll_request(instance_id, chain) do
+    case resolve_channel(instance_id, chain) do
       {:ok, channel} ->
         rpc_request = %{
           "jsonrpc" => "2.0",
@@ -247,10 +226,26 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     e ->
       Logger.error("HTTP polling crashed",
         chain: chain,
-        provider_id: provider_id,
+        instance_id: instance_id,
         error: Exception.format(:error, e, __STACKTRACE__)
       )
 
       {:error, {:exception, Exception.message(e)}}
+  end
+
+  defp resolve_channel(instance_id, chain) do
+    case Catalog.get_instance_refs(instance_id) do
+      [ref_profile | _] ->
+        provider_id = Catalog.reverse_lookup_provider_id(ref_profile, chain, instance_id)
+
+        if provider_id do
+          TransportRegistry.get_channel(ref_profile, chain, provider_id, :http)
+        else
+          {:error, :no_provider_id}
+        end
+
+      [] ->
+        {:error, :no_refs}
+    end
   end
 end

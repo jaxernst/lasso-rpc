@@ -11,8 +11,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   Per-chain topics:
   - `circuit:events:{profile}:{chain}` - circuit breaker state changes
   - `block_sync:{profile}:{chain}` - block height updates from probes
-  - `provider_pool:events:{profile}:{chain}` - provider health events
-  - `health_probe:{profile}:{chain}` - health probe recovery events
+  - `provider:events:{profile}:{chain}` - provider health events
 
   Profile-scoped global topics:
   - `cluster:topology` - cluster membership changes
@@ -30,23 +29,14 @@ defmodule LassoWeb.Dashboard.EventStream do
   On subscribe (initial state):
   - `{:dashboard_snapshot, %{metrics, circuits, health_counters, cluster, events}}`
 
-  Processed updates (state tracking):
-  - `{:metrics_update, %{metrics: provider_metrics}}` - batched routing metrics
-  - `{:cluster_update, %{connected, responding, regions, last_update}}` - topology changes
-  - `{:circuit_update, %{provider_id, region, circuit}}` - circuit state changes
-  - `{:health_pulse, %{provider_id, region, counters}}` - health counter updates
-  - `{:block_update, %{provider_id, region, height, lag}}` - block height state
-  - `{:region_added, %{region: region}}` - new region discovered
-  - `{:heartbeat, %{ts: timestamp}}` - keepalive (every 2s)
+  Batched updates (coalesced per 175ms tick):
+  - `{:dashboard_batch, %{health, circuit_states, block_states, cluster, metrics, node_ids,
+     heartbeat, routing_events, circuit_events, provider_events, subscription_events,
+     block_events, sync_updates, block_cache_updates}}`
 
-  Forwarded events (for UI display):
-  - `{:events_batch, %{events: [...]}}` - batched routing events
-  - `{:circuit_breaker_event, event_data}` - raw circuit event
-  - `{:block_height_update, {profile, provider_id}, height, source, ts}` - raw block event
-  - `{:provider_event, evt}` - provider health events (Healthy, Unhealthy, etc.)
-  - `{:health_probe_recovery, ...}` - health probe recovery
-  - `{:sync_update, evt}` - sync status update
-  - `{:block_cache_update, evt}` - block cache update
+  All event types are buffered and flushed as a single structured batch per tick.
+  Latest-wins coalescing applies to health, circuit_states, block_states, cluster, and metrics.
+  List events are accumulated in order. Account filtering applies to routing_events only.
   """
 
   use GenServer, restart: :transient
@@ -54,7 +44,7 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   alias Lasso.Cluster.Topology
   alias Lasso.Config.ConfigStore
-  alias Lasso.Events.RoutingDecision
+  alias Lasso.Events.{Provider, RoutingDecision, Subscription}
 
   @batch_interval_ms 175
   @max_batch_size 100
@@ -63,6 +53,8 @@ defmodule LassoWeb.Dashboard.EventStream do
   @cleanup_interval_ms 30_000
   @seen_ids_cleanup_interval_ms 5_000
   @stale_block_height_ms 300_000
+  @max_circuit_entries 500
+  @max_block_height_entries 500
   @seen_request_id_ttl_ms 120_000
   @max_seen_request_ids 50_000
   @heartbeat_interval_ms 2_000
@@ -92,6 +84,8 @@ defmodule LassoWeb.Dashboard.EventStream do
     },
     # Subscriber management
     subscribers: MapSet.new(),
+    # Account filtering: pid -> account_id (nil = no filter, sees all events)
+    subscriber_accounts: %{},
     # Timing
     last_tick: 0,
     last_cleanup: 0,
@@ -102,7 +96,25 @@ defmodule LassoWeb.Dashboard.EventStream do
     # Tick scheduling - only tick when subscribers exist
     tick_scheduled: false,
     # Idle termination - timer ref for delayed shutdown when no subscribers
-    idle_timer_ref: nil
+    idle_timer_ref: nil,
+    # Coalesced pending buffers — flushed as a single batch per tick
+    # Latest-wins maps (keyed by identity, only most recent value kept)
+    pending_health: %{},
+    pending_circuit_states: %{},
+    pending_block_states: %{},
+    pending_cluster: nil,
+    pending_metrics: nil,
+    # Accumulated lists
+    pending_routing_events: [],
+    pending_circuit_events: [],
+    pending_provider_events: [],
+    pending_subscription_events: [],
+    pending_block_events: [],
+    pending_node_ids: [],
+    pending_sync_updates: [],
+    pending_block_cache_updates: [],
+    # Flags
+    pending_heartbeat: false
   ]
 
   # Client API
@@ -132,20 +144,33 @@ defmodule LassoWeb.Dashboard.EventStream do
         {:ok, pid}
 
       [] ->
-        DynamicSupervisor.start_child(
-          Lasso.Dashboard.StreamSupervisor,
-          {__MODULE__, profile}
-        )
+        case DynamicSupervisor.start_child(
+               Lasso.Dashboard.StreamSupervisor,
+               {__MODULE__, profile}
+             ) do
+          {:ok, pid} -> {:ok, pid}
+          {:error, {:already_started, pid}} -> {:ok, pid}
+          error -> error
+        end
     end
   end
 
   @doc """
   Subscribe the calling process to receive updates.
+
+  ## Options
+  - `account_id` - Filter routing events to only show this account's traffic.
+    Events with nil account_id are visible to all. Subscribers with nil
+    account_id see all events (no filtering).
   """
-  def subscribe(profile) do
+  def subscribe(profile, account_id \\ nil) do
     case ensure_started(profile) do
-      {:ok, pid} -> GenServer.call(pid, {:subscribe, self()})
-      {:error, reason} -> {:error, reason}
+      {:ok, pid} ->
+        GenServer.cast(pid, {:subscribe, self(), account_id})
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -198,9 +223,9 @@ defmodule LassoWeb.Dashboard.EventStream do
       Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events:#{profile}:#{chain}")
       Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{profile}:#{chain}")
       # Provider health events (Healthy, Unhealthy, WSConnected, etc.)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "provider_pool:events:#{profile}:#{chain}")
-      # Health probe recovery events
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "health_probe:#{profile}:#{chain}")
+      Phoenix.PubSub.subscribe(Lasso.PubSub, Provider.topic(profile, chain))
+      # Subscription lifecycle events (Established, Failed, Failover, Stale)
+      Phoenix.PubSub.subscribe(Lasso.PubSub, Subscription.topic(profile, chain))
     end
 
     # Profile-scoped global topics
@@ -226,12 +251,10 @@ defmodule LassoWeb.Dashboard.EventStream do
     {:noreply, %{state | cluster_state: cluster_state}}
   end
 
-  # Tick handler
+  # Tick handler — process routing batch, then flush all pending as one message per subscriber
   @impl true
   def handle_info(:tick, state) do
     now = now()
-
-    # Mark tick as not scheduled before processing (so schedule_tick can reschedule)
     state = %{state | tick_scheduled: false}
 
     state =
@@ -239,9 +262,9 @@ defmodule LassoWeb.Dashboard.EventStream do
       |> maybe_process_batch()
       |> maybe_cleanup(now)
       |> maybe_cleanup_seen_request_ids(now)
-      |> maybe_send_heartbeat(now)
+      |> maybe_set_heartbeat(now)
+      |> flush_pending()
 
-    # Only reschedule if we have subscribers
     state = schedule_tick(state)
     {:noreply, %{state | last_tick: now}}
   end
@@ -280,15 +303,15 @@ defmodule LassoWeb.Dashboard.EventStream do
     end
   end
 
-  # Circuit breaker events - process immediately, broadcast both state and raw event
+  # Circuit breaker events - buffer state + raw event for next batch flush
   def handle_info({:circuit_breaker_event, event_data}, state) do
     state = update_circuit_state(state, event_data)
-    broadcast_circuit_update(state, event_data)
-    broadcast_to_subscribers(state, {:circuit_breaker_event, event_data})
+    state = queue_circuit_update(state, event_data)
+    state = %{state | pending_circuit_events: [event_data | state.pending_circuit_events]}
     {:noreply, state}
   end
 
-  # Block height updates - only broadcast when height actually changes
+  # Block height updates - buffer when height changes for next batch flush
   def handle_info(
         {:block_height_update, {profile, provider_id}, height, source, timestamp},
         state
@@ -305,7 +328,7 @@ defmodule LassoWeb.Dashboard.EventStream do
           {:noreply, state}
 
         {:changed, state} ->
-          broadcast_block_update(state, provider_id, node_id, height, chain)
+          state = queue_block_update(state, provider_id, node_id, height, chain)
           {:noreply, state}
       end
     else
@@ -322,14 +345,17 @@ defmodule LassoWeb.Dashboard.EventStream do
       ts: data.ts
     }
 
-    health_counters = Map.put(state.health_counters, key, health_data)
+    current = Map.get(state.health_counters, key)
 
-    broadcast_to_subscribers(
-      state,
-      {:health_pulse, %{provider_id: pid, node_id: node_id, counters: health_data}}
-    )
-
-    {:noreply, %{state | health_counters: health_counters}}
+    if current &&
+         current.consecutive_failures == health_data.consecutive_failures &&
+         current.consecutive_successes == health_data.consecutive_successes do
+      {:noreply, state}
+    else
+      health_counters = Map.put(state.health_counters, key, health_data)
+      pending_health = Map.put(state.pending_health, key, health_data)
+      {:noreply, %{state | health_counters: health_counters, pending_health: pending_health}}
+    end
   end
 
   # Topology events - health update
@@ -344,8 +370,7 @@ defmodule LassoWeb.Dashboard.EventStream do
       last_update: now()
     }
 
-    broadcast_to_subscribers(state, {:cluster_update, cluster_state})
-    {:noreply, %{state | cluster_state: cluster_state}}
+    {:noreply, %{state | cluster_state: cluster_state, pending_cluster: cluster_state}}
   end
 
   # Topology events - node connected/disconnected (coverage and node_ids included)
@@ -361,8 +386,7 @@ defmodule LassoWeb.Dashboard.EventStream do
       last_update: now()
     }
 
-    broadcast_to_subscribers(state, {:cluster_update, cluster_state})
-    {:noreply, %{state | cluster_state: cluster_state}}
+    {:noreply, %{state | cluster_state: cluster_state, pending_cluster: cluster_state}}
   end
 
   # Topology events - node ID discovered
@@ -372,9 +396,15 @@ defmodule LassoWeb.Dashboard.EventStream do
         state
       ) do
     cluster_state = %{state.cluster_state | node_ids: node_ids}
+    pending_node_ids = [node_info.node_id | state.pending_node_ids]
 
-    broadcast_to_subscribers(state, {:node_id_added, %{node_id: node_info.node_id}})
-    {:noreply, %{state | cluster_state: cluster_state}}
+    {:noreply,
+     %{
+       state
+       | cluster_state: cluster_state,
+         pending_cluster: cluster_state,
+         pending_node_ids: pending_node_ids
+     }}
   end
 
   # Ignore other topology events
@@ -382,39 +412,42 @@ defmodule LassoWeb.Dashboard.EventStream do
     {:noreply, state}
   end
 
-  # Provider health events - forward to subscribers
+  # Provider health events - buffer for next batch flush
   def handle_info(evt, state)
       when is_struct(evt, Lasso.Events.Provider.Healthy) or
              is_struct(evt, Lasso.Events.Provider.Unhealthy) or
              is_struct(evt, Lasso.Events.Provider.HealthCheckFailed) or
              is_struct(evt, Lasso.Events.Provider.WSConnected) or
-             is_struct(evt, Lasso.Events.Provider.WSClosed) do
-    broadcast_to_subscribers(state, {:provider_event, evt})
-    {:noreply, state}
+             is_struct(evt, Lasso.Events.Provider.WSClosed) or
+             is_struct(evt, Lasso.Events.Provider.WSDisconnected) do
+    {:noreply, %{state | pending_provider_events: [evt | state.pending_provider_events]}}
   end
 
-  # Health probe recovery - forward to subscribers
-  def handle_info({:health_probe_recovery, _key, _transport, _old, _new, _ts} = evt, state) do
-    broadcast_to_subscribers(state, evt)
-    {:noreply, state}
+  # Subscription lifecycle events - buffer for next batch flush
+  def handle_info(evt, state)
+      when is_struct(evt, Subscription.Established) or
+             is_struct(evt, Subscription.Failed) or
+             is_struct(evt, Subscription.Failover) or
+             is_struct(evt, Subscription.Stale) do
+    {:noreply, %{state | pending_subscription_events: [evt | state.pending_subscription_events]}}
   end
 
-  # Sync updates - forward to subscribers
+  # Sync updates - buffer for next batch flush
   def handle_info(%{chain: _, provider_id: _, block_height: _} = evt, state) do
-    broadcast_to_subscribers(state, {:sync_update, evt})
-    {:noreply, state}
+    {:noreply, %{state | pending_sync_updates: [evt | state.pending_sync_updates]}}
   end
 
-  # Block cache updates - forward to subscribers
+  # Block cache updates - buffer for next batch flush
   def handle_info(%{type: :block_update, provider_id: _} = evt, state) do
-    broadcast_to_subscribers(state, {:block_cache_update, evt})
-    {:noreply, state}
+    {:noreply, %{state | pending_block_cache_updates: [evt | state.pending_block_cache_updates]}}
   end
 
   # Subscriber died
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
     new_subscribers = MapSet.delete(state.subscribers, pid)
-    state = %{state | subscribers: new_subscribers}
+    new_accounts = Map.delete(state.subscriber_accounts, pid)
+
+    state = %{state | subscribers: new_subscribers, subscriber_accounts: new_accounts}
 
     state =
       if MapSet.size(new_subscribers) == 0 do
@@ -441,21 +474,23 @@ defmodule LassoWeb.Dashboard.EventStream do
     {:noreply, state}
   end
 
-  # Subscribe a process
+  # Subscribe a process with optional account filtering
   @impl true
-  def handle_call({:subscribe, pid}, _from, state) do
+  def handle_cast({:subscribe, pid, account_id}, state) do
     Process.monitor(pid)
 
-    # Cancel any pending idle termination
     state = cancel_idle_termination(state)
 
     was_empty = MapSet.size(state.subscribers) == 0
     subscribers = MapSet.put(state.subscribers, pid)
+    subscriber_accounts = Map.put(state.subscriber_accounts, pid, account_id)
 
-    # Send current state as a single batched snapshot (reduces message copies 5x -> 1x)
     recent_events =
       state.event_windows
       |> get_recent_events(100)
+      |> Enum.filter(fn event ->
+        filter_event_for_account(event, account_id)
+      end)
       |> Enum.map(&struct_to_map/1)
 
     snapshot = %{
@@ -468,27 +503,18 @@ defmodule LassoWeb.Dashboard.EventStream do
 
     send(pid, {:dashboard_snapshot, snapshot})
 
-    state = %{state | subscribers: subscribers}
+    state = %{state | subscribers: subscribers, subscriber_accounts: subscriber_accounts}
 
-    # Start tick timer if this is the first subscriber (lazy ticking)
     state = if was_empty, do: schedule_tick(state), else: state
 
-    {:reply, :ok, state}
+    {:noreply, state}
   end
 
-  def handle_call({:get_provider_metrics, provider_id}, _from, state) do
-    metrics = Map.get(state.provider_metrics, provider_id, default_provider_metrics())
-    {:reply, {:ok, metrics}, state}
-  end
-
-  def handle_call(:get_all_provider_metrics, _from, state) do
-    {:reply, {:ok, state.provider_metrics}, state}
-  end
-
-  @impl true
   def handle_cast({:unsubscribe, pid}, state) do
     new_subscribers = MapSet.delete(state.subscribers, pid)
-    state = %{state | subscribers: new_subscribers}
+    new_accounts = Map.delete(state.subscriber_accounts, pid)
+
+    state = %{state | subscribers: new_subscribers, subscriber_accounts: new_accounts}
 
     state =
       if MapSet.size(new_subscribers) == 0 do
@@ -498,6 +524,16 @@ defmodule LassoWeb.Dashboard.EventStream do
       end
 
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:get_provider_metrics, provider_id}, _from, state) do
+    metrics = Map.get(state.provider_metrics, provider_id, default_provider_metrics())
+    {:reply, {:ok, metrics}, state}
+  end
+
+  def handle_call(:get_all_provider_metrics, _from, state) do
+    {:reply, {:ok, state.provider_metrics}, state}
   end
 
   # Private helpers
@@ -541,8 +577,8 @@ defmodule LassoWeb.Dashboard.EventStream do
       |> Enum.reduce(state, &add_event_to_window/2)
       |> recompute_all_metrics()
 
-    broadcast_metrics_update(state)
-    broadcast_events_batch(state, events)
+    state = queue_metrics_update(state)
+    state = queue_routing_events(state, events)
 
     %{state | pending_events: [], pending_count: 0}
   end
@@ -562,10 +598,9 @@ defmodule LassoWeb.Dashboard.EventStream do
     end
   end
 
-  defp maybe_send_heartbeat(state, now) do
+  defp maybe_set_heartbeat(state, now) do
     if now - state.last_heartbeat >= @heartbeat_interval_ms do
-      broadcast_to_subscribers(state, {:heartbeat, %{ts: now}})
-      %{state | last_heartbeat: now}
+      %{state | last_heartbeat: now, pending_heartbeat: true}
     else
       state
     end
@@ -618,11 +653,13 @@ defmodule LassoWeb.Dashboard.EventStream do
       state.block_heights
       |> Enum.reject(fn {_, %{timestamp: ts}} -> ts < stale_cutoff end)
       |> Map.new()
+      |> truncate_by_recency(@max_block_height_entries, & &1.timestamp)
 
     new_circuit_states =
       state.circuit_states
       |> Enum.reject(fn {_, %{updated_at: ts}} -> ts < stale_cutoff end)
       |> Map.new()
+      |> truncate_by_recency(@max_circuit_entries, & &1.updated_at)
 
     active_provider_regions =
       new_windows
@@ -643,6 +680,15 @@ defmodule LassoWeb.Dashboard.EventStream do
         health_counters: new_health_counters
     }
     |> recompute_all_metrics()
+  end
+
+  defp truncate_by_recency(map, max, _ts_fn) when map_size(map) <= max, do: map
+
+  defp truncate_by_recency(map, max, ts_fn) do
+    map
+    |> Enum.sort_by(fn {_, v} -> ts_fn.(v) end, :desc)
+    |> Enum.take(max)
+    |> Map.new()
   end
 
   defp recompute_all_metrics(state) do
@@ -914,26 +960,27 @@ defmodule LassoWeb.Dashboard.EventStream do
     Map.get(state.circuit_states, {provider_id, node_id}, %{http: :closed, ws: :closed})
   end
 
-  # Broadcasting
+  # Queue helpers — accumulate into pending buffers for batch flush
 
-  defp broadcast_metrics_update(state) do
+  defp queue_metrics_update(state) do
     if map_size(state.provider_metrics) > 0 do
-      broadcast_to_subscribers(state, {:metrics_update, %{metrics: state.provider_metrics}})
+      %{state | pending_metrics: state.provider_metrics}
+    else
+      state
     end
   end
 
-  defp broadcast_events_batch(state, events) do
-    unless events == [] do
-      # Convert structs to maps for consistent Access behaviour in consumers
-      map_events = Enum.map(events, &struct_to_map/1)
-      broadcast_to_subscribers(state, {:events_batch, %{events: map_events}})
-    end
+  defp queue_routing_events(state, events) when events == [], do: state
+
+  defp queue_routing_events(state, events) do
+    map_events = Enum.map(events, &struct_to_map/1)
+    %{state | pending_routing_events: Enum.reverse(map_events) ++ state.pending_routing_events}
   end
 
   defp struct_to_map(%{__struct__: _} = struct), do: Map.from_struct(struct)
   defp struct_to_map(map) when is_map(map), do: map
 
-  defp broadcast_circuit_update(state, event_data) do
+  defp queue_circuit_update(state, event_data) do
     %{provider_id: provider_id} = event_data
 
     node_id =
@@ -941,27 +988,111 @@ defmodule LassoWeb.Dashboard.EventStream do
         state.cluster_state.node_ids |> List.first() ||
         get_self_node_id()
 
+    key = {provider_id, node_id}
     circuit = get_circuit_state(state, provider_id, node_id)
 
-    broadcast_to_subscribers(
-      state,
-      {:circuit_update, %{provider_id: provider_id, node_id: node_id, circuit: circuit}}
-    )
+    %{state | pending_circuit_states: Map.put(state.pending_circuit_states, key, circuit)}
   end
 
-  defp broadcast_block_update(state, provider_id, node_id, height, chain) do
+  defp queue_block_update(state, provider_id, node_id, height, chain) do
+    key = {provider_id, node_id}
     lag = get_block_lag(state, provider_id, chain, node_id)
 
-    broadcast_to_subscribers(
-      state,
-      {:block_update, %{provider_id: provider_id, node_id: node_id, height: height, lag: lag}}
-    )
+    block_data = %{provider_id: provider_id, node_id: node_id, height: height, lag: lag}
+
+    block_event = %{
+      chain: chain,
+      block_number: height,
+      provider_first: provider_id,
+      margin_ms: nil
+    }
+
+    %{
+      state
+      | pending_block_states: Map.put(state.pending_block_states, key, block_data),
+        pending_block_events: [block_event | state.pending_block_events]
+    }
   end
 
-  defp broadcast_to_subscribers(state, message) do
-    for pid <- state.subscribers do
-      send(pid, message)
+  # Batch flush — send one {:dashboard_batch, batch} per subscriber per tick
+
+  defp flush_pending(state) do
+    batch = build_batch(state)
+
+    if batch_empty?(batch) do
+      reset_pending(state)
+    else
+      for pid <- state.subscribers do
+        account_filter = Map.get(state.subscriber_accounts, pid)
+        send(pid, {:dashboard_batch, filter_batch(batch, account_filter)})
+      end
+
+      reset_pending(state)
     end
+  end
+
+  defp build_batch(state) do
+    %{
+      health: state.pending_health,
+      circuit_states: state.pending_circuit_states,
+      block_states: state.pending_block_states,
+      cluster: state.pending_cluster,
+      metrics: state.pending_metrics,
+      node_ids: Enum.reverse(state.pending_node_ids),
+      heartbeat: state.pending_heartbeat,
+      routing_events: Enum.reverse(state.pending_routing_events),
+      circuit_events: Enum.reverse(state.pending_circuit_events),
+      provider_events: Enum.reverse(state.pending_provider_events),
+      subscription_events: Enum.reverse(state.pending_subscription_events),
+      block_events: Enum.reverse(state.pending_block_events),
+      sync_updates: Enum.reverse(state.pending_sync_updates),
+      block_cache_updates: Enum.reverse(state.pending_block_cache_updates)
+    }
+  end
+
+  defp batch_empty?(batch) do
+    map_size(batch.health) == 0 and
+      map_size(batch.circuit_states) == 0 and
+      map_size(batch.block_states) == 0 and
+      is_nil(batch.cluster) and
+      is_nil(batch.metrics) and
+      batch.node_ids == [] and
+      batch.heartbeat == false and
+      batch.routing_events == [] and
+      batch.circuit_events == [] and
+      batch.provider_events == [] and
+      batch.subscription_events == [] and
+      batch.block_events == [] and
+      batch.sync_updates == [] and
+      batch.block_cache_updates == []
+  end
+
+  defp filter_batch(batch, account_filter) do
+    %{
+      batch
+      | routing_events:
+          Enum.filter(batch.routing_events, &filter_event_for_account(&1, account_filter))
+    }
+  end
+
+  defp reset_pending(state) do
+    %{
+      state
+      | pending_health: %{},
+        pending_circuit_states: %{},
+        pending_block_states: %{},
+        pending_cluster: nil,
+        pending_metrics: nil,
+        pending_routing_events: [],
+        pending_circuit_events: [],
+        pending_provider_events: [],
+        pending_subscription_events: [],
+        pending_block_events: [],
+        pending_node_ids: [],
+        pending_sync_updates: [],
+        pending_block_cache_updates: [],
+        pending_heartbeat: false
+    }
   end
 
   defp get_recent_events(windows, limit) do
@@ -1033,4 +1164,18 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp now do
     System.monotonic_time(:millisecond)
   end
+
+  # Filter events by account_id for account-scoped dashboard visibility.
+  # - subscriber_account_id nil = no filter, see all events
+  # - event account_id nil = visible to all (infrastructure events)
+  # - otherwise, must match
+  defp filter_event_for_account(_event, nil), do: true
+
+  defp filter_event_for_account(event, subscriber_account_id) do
+    event_account_id = get_event_account_id(event)
+    event_account_id == nil or event_account_id == subscriber_account_id
+  end
+
+  defp get_event_account_id(%{account_id: account_id}), do: account_id
+  defp get_event_account_id(_), do: nil
 end

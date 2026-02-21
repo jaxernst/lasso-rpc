@@ -20,7 +20,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
 
   describe "circuit breaker :failure event" do
     test "includes required metadata" do
-      id = {"default", "telemetry_contract", "cb_failure_test", :http}
+      id = {"cb_failure_test", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -35,8 +35,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
         )
 
       assert Map.has_key?(measurements, :count)
-      assert metadata.chain == "telemetry_contract"
-      assert metadata.provider_id == "cb_failure_test"
+      assert metadata.instance_id == "cb_failure_test"
       assert metadata.transport == :http
       assert Map.has_key?(metadata, :error_category)
       assert Map.has_key?(metadata, :circuit_state)
@@ -45,7 +44,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
 
   describe "circuit breaker :open event" do
     test "includes required metadata with reason and error context" do
-      id = {"default", "telemetry_contract", "cb_open_test", :http}
+      id = {"cb_open_test", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -62,8 +61,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
         TelemetrySync.await_event(collector, timeout: 2_000)
 
       assert Map.has_key?(measurements, :count)
-      assert metadata.chain == "telemetry_contract"
-      assert metadata.provider_id == "cb_open_test"
+      assert metadata.instance_id == "cb_open_test"
       assert metadata.transport == :http
       assert metadata.from_state == :closed
       assert metadata.to_state == :open
@@ -76,7 +74,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
 
   describe "circuit breaker :half_open event" do
     test "via proactive recovery includes required metadata" do
-      id = {"default", "telemetry_contract", "cb_half_open_test", :http}
+      id = {"cb_half_open_test", :http}
 
       # Attach collector BEFORE starting the breaker to catch proactive recovery
       {:ok, collector} =
@@ -96,8 +94,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
         TelemetrySync.await_event(collector, timeout: 2_000)
 
       assert Map.has_key?(measurements, :count)
-      assert metadata.chain == "telemetry_contract"
-      assert metadata.provider_id == "cb_half_open_test"
+      assert metadata.instance_id == "cb_half_open_test"
       assert metadata.transport == :http
       assert metadata.from_state == :open
       assert metadata.to_state == :half_open
@@ -105,7 +102,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
     end
 
     test "via traffic recovery includes required metadata" do
-      id = {"default", "telemetry_contract", "cb_half_open_traffic", :http}
+      id = {"cb_half_open_traffic", :http}
 
       {:ok, pid} =
         CircuitBreaker.start_link(
@@ -130,8 +127,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
         TelemetrySync.await_event(collector, timeout: 2_000)
 
       assert Map.has_key?(measurements, :count)
-      assert metadata.chain == "telemetry_contract"
-      assert metadata.provider_id == "cb_half_open_traffic"
+      assert metadata.instance_id == "cb_half_open_traffic"
       assert metadata.transport == :http
       assert metadata.from_state == :open
       assert metadata.to_state == :half_open
@@ -141,7 +137,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
 
   describe "circuit breaker :close event" do
     test "includes required metadata" do
-      id = {"default", "telemetry_contract", "cb_close_test", :http}
+      id = {"cb_close_test", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -167,8 +163,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
         TelemetrySync.await_event(collector, timeout: 2_000)
 
       assert Map.has_key?(measurements, :count)
-      assert metadata.chain == "telemetry_contract"
-      assert metadata.provider_id == "cb_close_test"
+      assert metadata.instance_id == "cb_close_test"
       assert metadata.transport == :http
       assert metadata.from_state in [:half_open, :open]
       assert metadata.to_state == :closed
