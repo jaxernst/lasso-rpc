@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Multi-provider, multi-chain Ethereum JSON-RPC proxy for HTTP and WebSocket
-- Intelligent routing strategies: fastest, round-robin, latency-weighted
+- Intelligent routing strategies: fastest, load-balanced, latency-weighted
 - Per-method, per-transport latency benchmarking
 - Profile system for isolated routing configurations (dev/staging/prod/multi-tenant)
 - Circuit breakers with per-provider, per-transport state

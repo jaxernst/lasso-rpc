@@ -123,9 +123,9 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       assert penalty == false
     end
 
-    test "rate limits do penalize circuit breaker" do
+    test "rate limits do not penalize circuit breaker" do
       penalty = ErrorClassification.breaker_penalty?(:rate_limit)
-      assert penalty == true
+      assert penalty == false
     end
 
     test "server errors do penalize circuit breaker" do

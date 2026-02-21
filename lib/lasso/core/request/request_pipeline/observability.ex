@@ -57,6 +57,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     # Publish routing decision for dashboard/analytics (profile-scoped)
     publish_routing_decision(
       request_id: ctx.request_id,
+      account_id: ctx.account_id,
       profile: profile,
       chain: ctx.chain,
       method: method,
@@ -116,6 +117,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     # Publish routing decision (profile-scoped)
     publish_routing_decision(
       request_id: ctx.request_id,
+      account_id: ctx.account_id,
       profile: profile,
       chain: ctx.chain,
       method: method,
@@ -168,14 +170,18 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   @doc """
   Records a fast-fail event when failing over to next channel.
 
-  Emits telemetry for failover events with error categorization.
+  Emits telemetry for failover events with error categorization,
+  and records the failure in metrics so per-provider success rates
+  reflect all attempts (not just final responses).
   """
-  @spec record_fast_fail(RequestContext.t(), Channel.t(), atom(), term()) :: :ok
+  @spec record_fast_fail(RequestContext.t(), Channel.t(), atom(), term(), non_neg_integer()) ::
+          :ok
   def record_fast_fail(
         ctx,
         %Channel{provider_id: provider_id, transport: transport},
         failover_reason,
-        error_reason
+        error_reason,
+        duration_ms
       ) do
     profile = ctx.opts.profile
 
@@ -191,6 +197,11 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         error_category: extract_error_category(error_reason),
         failover_reason: failover_reason
       }
+    )
+
+    # Record failure in metrics so dashboard success rates reflect this attempt
+    Metrics.record_failure(profile, ctx.chain, provider_id, ctx.method, duration_ms,
+      transport: transport
     )
 
     # Report failure to ProviderPool (which will update circuit breaker)
@@ -327,6 +338,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     event =
       RoutingDecision.new(
         request_id: opts[:request_id],
+        account_id: opts[:account_id],
         profile: opts[:profile],
         chain: opts[:chain],
         method: opts[:method],

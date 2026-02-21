@@ -33,7 +33,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -63,7 +63,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -88,7 +88,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -100,7 +100,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -115,7 +115,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
           "ethereum",
           "eth_getBalance",
           ["0x123", "latest"],
-          %RequestOptions{profile: "default", strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{profile: "default", strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       ctx = extract_context(result)
@@ -148,11 +148,11 @@ defmodule Lasso.RPC.RequestPipelineTest do
       assert_result_valid(result)
     end
 
-    test ":round_robin strategy" do
+    test ":load_balanced strategy" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -179,7 +179,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
           profile: "default",
           transport: :http,
           timeout_ms: 30_000,
-          strategy: :round_robin
+          strategy: :load_balanced
         })
 
       assert_result_valid(result)
@@ -191,7 +191,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
           profile: "default",
           transport: :ws,
           timeout_ms: 30_000,
-          strategy: :round_robin
+          strategy: :load_balanced
         })
 
       assert_result_valid(result)
@@ -201,7 +201,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -216,7 +216,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
           timeout_ms: 5000,
-          strategy: :round_robin
+          strategy: :load_balanced
         })
 
       assert_result_valid(result)
@@ -226,7 +226,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -243,7 +243,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
           "ethereum",
           "eth_getBalance",
           params,
-          %RequestOptions{profile: "default", strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{profile: "default", strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       ctx = extract_context(result)
@@ -254,7 +254,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", nil, %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -268,7 +268,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -280,7 +280,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -293,7 +293,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 
@@ -378,7 +378,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
           profile: "default",
-          strategy: :round_robin,
+          strategy: :load_balanced,
           timeout_ms: 30_000
         })
 

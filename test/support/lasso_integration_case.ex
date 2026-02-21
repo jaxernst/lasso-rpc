@@ -224,7 +224,7 @@ defmodule Lasso.Test.LassoIntegrationCase do
 
         request_opts = %RequestOptions{
           transport: Keyword.get(opts, :transport),
-          strategy: Keyword.get(opts, :strategy, :round_robin),
+          strategy: Keyword.get(opts, :strategy, :load_balanced),
           provider_override: Keyword.get(opts, :provider_override),
           failover_on_override: Keyword.get(opts, :failover_on_override, false),
           timeout_ms: Keyword.get(opts, :timeout, 30_000)

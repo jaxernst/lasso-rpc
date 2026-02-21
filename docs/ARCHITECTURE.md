@@ -8,7 +8,7 @@ Elixir/OTP application providing RPC provider orchestration and routing for bloc
 
 - **Multi-profile isolation**: Independent routing configurations per profile with isolated metrics and circuit breakers
 - **Transport-agnostic routing**: Unified pipeline routes across HTTP and WebSocket based on real-time performance
-- **Provider orchestration**: Pluggable selection strategies (`:fastest`, `:latency_weighted`, `:round_robin`)
+- **Provider orchestration**: Pluggable selection strategies (`:fastest`, `:latency_weighted`, `:load_balanced`)
 - **WebSocket subscription management**: Intelligent multiplexing with automatic failover and gap-filling
 - **Circuit breaker protection**: Per-provider, per-transport breakers prevent cascade failures
 - **Method-specific benchmarking**: Passive latency measurement per-chain, per-method, per-transport
@@ -526,17 +526,17 @@ Health probes implement exponential backoff for degraded providers to reduce pro
 
 ### Available Strategies
 
-**:fastest** (default)
+**:load_balanced** (default)
+
+- Distributes requests across healthy providers with health-aware tiering
+
+**:fastest**
 
 - Lowest latency provider for method (passive benchmarking via BenchmarkStore)
 
 **:latency_weighted**
 
 - Weighted random selection by latency scores
-
-**:round_robin**
-
-- Simple rotation through healthy providers
 
 ### Selection API
 

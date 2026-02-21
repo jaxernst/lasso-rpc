@@ -9,6 +9,8 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   All categorization logic is delegated to ErrorClassification for maintainability.
   """
 
+  require Logger
+
   alias Lasso.Core.Support.ErrorClassifier
   alias Lasso.JSONRPC.Error, as: JError
 
@@ -124,7 +126,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     transport = Keyword.get(opts, :transport)
 
     # Try to extract nested JSON-RPC error from response body for better classification
-    {code, message} = extract_nested_error(payload, -32_002, "Server error")
+    {_, code, message} = extract_nested_error(payload, -32_002, "Server error")
 
     # Unified classification with adapter priority
     %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
@@ -156,31 +158,55 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     context = Keyword.get(opts, :context, :transport)
     transport = Keyword.get(opts, :transport)
 
-    # Try to extract nested JSON-RPC error from response body for better classification
-    {code, message} = extract_nested_error(payload, -32_003, "Client error")
+    case extract_nested_error(payload, -32_003, "Client error") do
+      {:json_rpc, code, message} ->
+        # Body is a valid JSON-RPC error envelope — classify normally
+        %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+          ErrorClassifier.classify(code, message, provider_id: provider_id)
 
-    # Unified classification with adapter priority
-    %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-      ErrorClassifier.classify(code, message, provider_id: provider_id)
+        data =
+          if category == :rate_limit do
+            add_retry_after(payload, payload)
+          else
+            payload
+          end
 
-    # Extract retry-after hint if this is a rate limit error (e.g., 429)
-    data =
-      if category == :rate_limit do
-        add_retry_after(payload, payload)
-      else
-        payload
-      end
+        JError.new(code, message,
+          data: data,
+          provider_id: provider_id,
+          source: context,
+          transport: transport,
+          category: category,
+          retriable?: retriable?,
+          breaker_penalty?: breaker_penalty?,
+          original_code: code
+        )
 
-    JError.new(code, message,
-      data: data,
-      provider_id: provider_id,
-      source: context,
-      transport: transport,
-      category: category,
-      retriable?: retriable?,
-      breaker_penalty?: breaker_penalty?,
-      original_code: code
-    )
+      {:raw, _code, _message} ->
+        # Body is NOT a JSON-RPC error envelope (e.g. gateway/proxy/CDN rejection).
+        # A compliant JSON-RPC provider would return errors in JSON-RPC format.
+        # Non-JSON-RPC 4xx means the RPC handler never processed the request.
+        status = Map.get(payload, :status, "4xx")
+        body = Map.get(payload, :body)
+        body_snippet = if is_binary(body), do: String.slice(body, 0, 200), else: ""
+
+        Logger.warning("Reclassifying non-JSON-RPC 4xx as server_error",
+          provider_id: provider_id,
+          status: status,
+          body: body_snippet
+        )
+
+        JError.new(-32_002, "Provider infrastructure error (HTTP #{status})",
+          data: payload,
+          provider_id: provider_id,
+          source: context,
+          transport: transport,
+          category: :server_error,
+          retriable?: true,
+          breaker_penalty?: true,
+          original_code: -32_003
+        )
+    end
   end
 
   # Timeout errors
@@ -650,25 +676,26 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
 
   defp maybe_add_transport(jerr, _transport), do: jerr
 
-  # Extract nested JSON-RPC error from HTTP error payload (e.g., 4xx/5xx with JSON body)
+  # Extract nested JSON-RPC error from HTTP error payload (e.g., 4xx/5xx with JSON body).
+  #
+  # Returns a tagged tuple:
+  #   {:json_rpc, code, message} — body contained a JSON-RPC error envelope
+  #   {:raw, code, message}      — body was not JSON-RPC; code/message are fallbacks
   defp extract_nested_error(%{body: body} = _payload, fallback_code, fallback_message)
        when is_binary(body) do
     case Jason.decode(body) do
       {:ok, %{"error" => %{"code" => code, "message" => message}}} when is_integer(code) ->
-        {code, message}
+        {:json_rpc, code, message}
 
       {:ok, %{"error" => %{"message" => message}}} ->
-        # Error without code - use fallback code but preserve message
-        {fallback_code, message}
+        {:json_rpc, fallback_code, message}
 
       _ ->
-        # Not a JSON-RPC error or invalid JSON - use fallback
-        {fallback_code, fallback_message}
+        {:raw, fallback_code, fallback_message}
     end
   end
 
   defp extract_nested_error(_payload, fallback_code, fallback_message) do
-    # No body or non-map payload - use fallback
-    {fallback_code, fallback_message}
+    {:raw, fallback_code, fallback_message}
   end
 end

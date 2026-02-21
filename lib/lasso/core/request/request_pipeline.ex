@@ -65,7 +65,7 @@ defmodule Lasso.RPC.RequestPipeline do
   ## Options
 
   Takes a `RequestOptions` struct with:
-  - `strategy` - Routing strategy (:fastest, :round_robin, :latency_weighted, :priority)
+  - `strategy` - Routing strategy (:fastest, :load_balanced, :latency_weighted, :priority)
   - `provider_override` - Force specific provider (optional)
   - `transport` - Transport preference (:http, :ws, :both)
   - `failover_on_override` - Retry on other providers if override fails
@@ -368,7 +368,7 @@ defmodule Lasso.RPC.RequestPipeline do
           |> RequestContext.increment_retries()
           |> RequestContext.track_error_category(error_category)
 
-        Observability.record_fast_fail(ctx, channel, failover_reason, reason)
+        Observability.record_fast_fail(ctx, channel, failover_reason, reason, latency_ms)
 
         attempt_channels(rest_channels, ctx)
 
@@ -505,7 +505,8 @@ defmodule Lasso.RPC.RequestPipeline do
         transport: opts.transport || :http,
         strategy: opts.strategy,
         request_id: opts.request_id,
-        plug_start_time: opts.plug_start_time
+        plug_start_time: opts.plug_start_time,
+        account_id: opts.account_id
       )
   end
 

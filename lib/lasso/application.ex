@@ -112,7 +112,11 @@ defmodule Lasso.Application do
         {Lasso.Config.ConfigStore, get_config_store_opts()},
 
         # Start Phoenix endpoint
-        LassoWeb.Endpoint
+        LassoWeb.Endpoint,
+
+        # Drain in-flight HTTP requests on shutdown (SIGTERM during deploys).
+        # Must be AFTER the endpoint so it starts after and stops before it.
+        {Plug.Cowboy.Drainer, refs: [LassoWeb.Endpoint.HTTP], shutdown: 30_000}
       ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

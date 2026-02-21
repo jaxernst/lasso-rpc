@@ -348,11 +348,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   defp do_init(profile, chain, provider_id, transport, config) do
-    # Default category-specific thresholds
-    # Rate limits should open circuit quickly (2 failures)
-    # Server errors are more tolerant (5 failures) as they may be transient
     default_category_thresholds = %{
-      rate_limit: 2,
       server_error: 5,
       network_error: 3,
       timeout: 2,

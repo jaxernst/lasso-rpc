@@ -28,7 +28,7 @@ defmodule Lasso.RPC.HttpInclusionWithWsDisconnectIntegrationTest do
         chain,
         "eth_blockNumber",
         [],
-        %RequestOptions{transport: :http, strategy: :round_robin, timeout_ms: 30_000}
+        %RequestOptions{transport: :http, strategy: :load_balanced, timeout_ms: 30_000}
       )
 
     # HTTP candidates should include the provider

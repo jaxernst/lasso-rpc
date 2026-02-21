@@ -1,6 +1,8 @@
 ---
-name: Lasso Public
+name: Lasso Free
 slug: default
+rps_limit: 100
+burst_limit: 500
 ---
 # Lasso RPC Profile Configuration
 # Frontmatter: Profile metadata (name, slug)
@@ -61,12 +63,14 @@ chains:
         url: "https://eth.drpc.org"
         ws_url: "wss://eth.drpc.org"
         archival: true
+        subscribe_new_heads: true
 
       - id: "ethereum_publicnode"
         name: "PublicNode Ethereum"
         priority: 3
         url: "https://ethereum-rpc.publicnode.com"
         ws_url: "wss://ethereum-rpc.publicnode.com"
+        subscribe_new_heads: true
         archival: false # PHE: Returns blocks but not historical logs (inverted index error)
 
       # Temporarily disable: Uses a proxied backend with some nodes using PHE and some not (create inconsistency in log responses)
@@ -97,18 +101,23 @@ chains:
         url: "https://eth.llamarpc.com"
         ws_url: "wss://eth.llamarpc.com"
         archival: false # Mixed PHE nodes - default to false to avoid inverted index errors
+        subscribe_new_heads: false
 
       - id: "ethereum_blockpi"
         name: "BlockPI Ethereum"
         priority: 7
         url: "https://ethereum.public.blockpi.network/v1/rpc/public"
         archival: true
+        adapter_config:
+          max_block_range: 1024
 
       - id: "ethereum_nodies"
         name: "Nodies Ethereum"
         priority: 8
         url: "https://ethereum-public.nodies.app"
         archival: true
+        adapter_config:
+          max_block_range: 500
 
       - id: "ethereum_onfinality"
         name: "OnFinality Ethereum"
@@ -178,7 +187,7 @@ chains:
 
     ui-topology:
       color: "#0052FF"
-      size: md
+      size: lg
 
     providers:
       - id: "base_llamarpc"
@@ -186,6 +195,7 @@ chains:
         priority: 2
         url: "https://base.llamarpc.com"
         ws_url: "wss://base.llamarpc.com"
+        subscribe_new_heads: true
         archival: true
 
       - id: "base_official"
@@ -199,13 +209,17 @@ chains:
         priority: 4
         url: "https://base.publicnode.com"
         ws_url: "wss://base.publicnode.com"
+        subscribe_new_heads: false
         archival: true
 
       - id: "base_drpc"
         name: "dRPC Base"
         priority: 5
+        type: "public"
         url: "https://base.drpc.org"
         ws_url: "wss://base.drpc.org"
+        subscribe_new_heads: false
+        api_key_required: false
         archival: true
 
       - id: "base_lava"
@@ -239,7 +253,7 @@ chains:
 
     ui-topology:
       color: "#28A0F0"
-      size: md
+      size: lg
 
     providers:
       - id: "arbitrum_drpc"
@@ -248,6 +262,7 @@ chains:
         url: "https://arbitrum.drpc.org"
         ws_url: "wss://arbitrum.drpc.org"
         archival: true
+        subscribe_new_heads: false
 
       - id: "arbitrum_lava"
         name: "Lava Arbitrum"
@@ -261,7 +276,7 @@ chains:
         url: "https://arbitrum-one-rpc.publicnode.com"
         ws_url: "wss://arbitrum-one-rpc.publicnode.com"
         archival: true
-        subscribe_new_heads: false
+        subscribe_new_heads: true
 
       - id: "arbitrum_meowrpc"
         name: "Meow RPC Arbitrum"
@@ -274,9 +289,187 @@ chains:
         priority: 6
         url: "https://arb-one.api.pocket.network"
         archival: true
-# Tuning guidelines:
-# L1: probe_interval_ms ~12s, max_lag_blocks 1-2, new_heads_timeout_ms ~35-42s
-# L2: probe_interval_ms ~3-4s, max_lag_blocks 3-5, new_heads_timeout_ms ~15-20s
-# Testnets: Use more lenient thresholds
-#
-# Provider adapter_config: See docs/ADAPTERS.md for provider-specific options
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # ETHEREUM SEPOLIA (Testnet)
+  # ──────────────────────────────────────────────────────────────────────────
+  ethereum-sepolia:
+    chain_id: 11155111
+    name: "Ethereum Sepolia"
+    block_time_ms: 12000
+
+    monitoring:
+      probe_interval_ms: 15000
+      lag_alert_threshold_blocks: 5
+
+    selection:
+      max_lag_blocks: 3
+      archival_threshold: 128
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 42000
+      failover:
+        max_backfill_blocks: 50
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#627EEA"
+      size: sm
+
+    providers:
+      - id: "sepolia_drpc"
+        name: "dRPC Sepolia"
+        priority: 2
+        url: "https://sepolia.drpc.org"
+        ws_url: "wss://sepolia.drpc.org"
+        subscribe_new_heads: true
+        archival: true
+
+      - id: "sepolia_publicnode"
+        name: "PublicNode Sepolia"
+        priority: 3
+        url: "https://ethereum-sepolia-rpc.publicnode.com"
+        ws_url: "wss://ethereum-sepolia-rpc.publicnode.com"
+        subscribe_new_heads: true
+        archival: false
+
+      - id: "sepolia_1rpc"
+        name: "1RPC Sepolia"
+        priority: 4
+        url: "https://1rpc.io/sepolia"
+        archival: false
+
+      - id: "sepolia_onfinality"
+        name: "OnFinality Sepolia"
+        priority: 5
+        url: "https://eth-sepolia.api.onfinality.io/public"
+        archival: true
+
+      - id: "sepolia_nodies"
+        name: "Nodies Sepolia"
+        priority: 6
+        url: "https://ethereum-sepolia-public.nodies.app"
+        archival: true
+        adapter_config:
+          max_block_range: 500
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # BASE SEPOLIA (Testnet, L2)
+  # ──────────────────────────────────────────────────────────────────────────
+  base-sepolia:
+    chain_id: 84532
+    name: "Base Sepolia"
+    block_time_ms: 2000
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 5
+
+    selection:
+      max_lag_blocks: 5
+      archival_threshold: 750
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 20000
+      failover:
+        max_backfill_blocks: 50
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#0052FF"
+      size: sm
+
+    providers:
+      - id: "base_sepolia_drpc"
+        name: "dRPC Base Sepolia"
+        priority: 2
+        url: "https://base-sepolia.drpc.org"
+        ws_url: "wss://base-sepolia.drpc.org"
+        subscribe_new_heads: true
+        archival: true
+
+      - id: "base_sepolia_publicnode"
+        name: "PublicNode Base Sepolia"
+        priority: 3
+        url: "https://base-sepolia-rpc.publicnode.com"
+        ws_url: "wss://base-sepolia-rpc.publicnode.com"
+        subscribe_new_heads: true
+        archival: true
+
+      - id: "base_sepolia_official"
+        name: "Base Official Sepolia"
+        priority: 4
+        url: "https://sepolia.base.org"
+        archival: true
+
+      - id: "base_sepolia_onfinality"
+        name: "OnFinality Base Sepolia"
+        priority: 5
+        url: "https://base-sepolia.api.onfinality.io/public"
+        archival: true
+
+      - id: "base_sepolia_nodies"
+        name: "Nodies Base Sepolia"
+        priority: 6
+        url: "https://base-sepolia-public.nodies.app"
+        archival: true
+        adapter_config:
+          max_block_range: 500
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # ARBITRUM SEPOLIA (Testnet, L2)
+  # ──────────────────────────────────────────────────────────────────────────
+  arbitrum-sepolia:
+    chain_id: 421614
+    name: "Arbitrum Sepolia"
+    block_time_ms: 250
+
+    monitoring:
+      probe_interval_ms: 2000
+      lag_alert_threshold_blocks: 15
+
+    selection:
+      max_lag_blocks: 10
+      archival_threshold: 6000
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 15000
+      failover:
+        max_backfill_blocks: 50
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#28A0F0"
+      size: sm
+
+    providers:
+      - id: "arb_sepolia_drpc"
+        name: "dRPC Arbitrum Sepolia"
+        priority: 2
+        url: "https://arbitrum-sepolia.drpc.org"
+        ws_url: "wss://arbitrum-sepolia.drpc.org"
+        subscribe_new_heads: true
+        archival: true
+
+      - id: "arb_sepolia_publicnode"
+        name: "PublicNode Arbitrum Sepolia"
+        priority: 3
+        url: "https://arbitrum-sepolia-rpc.publicnode.com"
+        ws_url: "wss://arbitrum-sepolia-rpc.publicnode.com"
+        subscribe_new_heads: true
+        archival: true
+
+      - id: "arb_sepolia_official"
+        name: "Arbitrum Official Sepolia"
+        priority: 4
+        url: "https://sepolia-rollup.arbitrum.io/rpc"
+        archival: true
+
+      - id: "arb_sepolia_onfinality"
+        name: "OnFinality Arbitrum Sepolia"
+        priority: 5
+        url: "https://arbitrum-sepolia.api.onfinality.io/public"
+        archival: true

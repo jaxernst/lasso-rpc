@@ -36,7 +36,7 @@ defmodule Lasso.RPC.TransportFailureReportingIntegrationTest do
           %RequestOptions{
             provider_override: "fail_http",
             failover_on_override: false,
-            strategy: :round_robin,
+            strategy: :load_balanced,
             timeout_ms: 30_000
           }
         )

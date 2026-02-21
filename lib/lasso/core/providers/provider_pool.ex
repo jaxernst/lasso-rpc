@@ -15,6 +15,7 @@ defmodule Lasso.RPC.ProviderPool do
   require Logger
 
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.ErrorClassification
   alias Lasso.Events.Provider
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.{ChainState, RateLimitState, SelectionFilters}
@@ -118,7 +119,7 @@ defmodule Lasso.RPC.ProviderPool do
   @type profile :: String.t()
   @type chain_name :: String.t()
   @type provider_id :: String.t()
-  @type strategy :: :priority | :round_robin | :fastest | :latency_weighted
+  @type strategy :: :priority | :load_balanced | :fastest | :latency_weighted
   # Note: :rate_limited is NOT a health status - rate limits are tracked via RateLimitState
   @type health_status ::
           :healthy
@@ -478,25 +479,30 @@ defmodule Lasso.RPC.ProviderPool do
   end
 
   @doc """
-  Reports probe results from ProviderProbe (called by ProviderProbe).
-  Results are processed in batch to maintain consistency.
+  Updates a provider's health status based on probe results.
 
-  Accepts optional profile as first argument (defaults to "default").
+  This is called by BatchCoordinator to report individual probe outcomes.
+  Only updates ProviderPool health state (http_status/ws_status) — does NOT
+  interact with CircuitBreaker (avoids double-reporting).
+
+  Probe success transitions :connecting → :healthy. For providers already in
+  a live-traffic-derived state, probe success only updates last_health_check.
+  Probe failure transitions :connecting → :degraded/:unhealthy based on
+  consecutive failures.
   """
-  @deprecated "Use report_probe_results(profile, chain_name, results) instead with explicit profile parameter"
-  @spec report_probe_results(chain_name, [map()]) :: :ok
-  def report_probe_results(chain_name, results) when is_list(results) do
-    IO.warn(
-      "ProviderPool.report_probe_results/2 defaults to 'default' profile. Pass profile explicitly."
+  @spec update_probe_health(
+          profile,
+          chain_name,
+          provider_id,
+          :http | :ws,
+          :success | {:failure, term()}
+        ) :: :ok
+  def update_probe_health(profile, chain_name, provider_id, transport, result)
+      when is_binary(profile) and transport in [:http, :ws] do
+    GenServer.cast(
+      via_name(profile, chain_name),
+      {:update_probe_health, provider_id, transport, result}
     )
-
-    report_probe_results("default", chain_name, results)
-  end
-
-  @spec report_probe_results(profile, chain_name, [map()]) :: :ok
-  def report_probe_results(profile, chain_name, results)
-      when is_binary(profile) and is_list(results) do
-    GenServer.cast(via_name(profile, chain_name), {:probe_results, results})
   end
 
   @doc """
@@ -867,17 +873,6 @@ defmodule Lasso.RPC.ProviderPool do
   def handle_cast({:report_success, provider_id, nil}, state),
     do: {:noreply, update_provider_success(state, provider_id)}
 
-  @impl true
-  def handle_cast({:probe_results, results}, state) do
-    # Process ALL results in batch (avoid race conditions)
-    state = apply_probe_batch(state, results)
-
-    # Broadcast health pulse for dashboard cluster sync
-    broadcast_health_pulses(state, results)
-
-    {:noreply, state}
-  end
-
   # Handle newHeads update from WebSocket subscriptions (via BlockHeightMonitor)
   @impl true
   def handle_cast({:newheads, provider_id, block_height}, state) do
@@ -927,6 +922,65 @@ defmodule Lasso.RPC.ProviderPool do
 
   def handle_cast({:report_failure, provider_id, error, nil}, state),
     do: {:noreply, update_provider_failure(state, provider_id, error)}
+
+  @impl true
+  def handle_cast({:update_probe_health, provider_id, transport, result}, state) do
+    case Map.get(state.providers, provider_id) do
+      nil ->
+        {:noreply, state}
+
+      provider ->
+        status_field = if transport == :http, do: :http_status, else: :ws_status
+        current_transport_status = Map.get(provider, status_field)
+        now = System.system_time(:millisecond)
+
+        updated =
+          case result do
+            :success ->
+              cond do
+                current_transport_status in [:connecting, :degraded] ->
+                  provider
+                  |> Map.put(status_field, :healthy)
+                  |> Map.put(:consecutive_successes, provider.consecutive_successes + 1)
+                  |> Map.put(:consecutive_failures, 0)
+                  |> Map.put(:last_health_check, now)
+                  |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
+
+                current_transport_status == :unhealthy ->
+                  provider
+                  |> Map.put(status_field, :degraded)
+                  |> Map.put(:consecutive_successes, provider.consecutive_successes + 1)
+                  |> Map.put(:consecutive_failures, @failure_threshold - 1)
+                  |> Map.put(:last_health_check, now)
+                  |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
+
+                true ->
+                  Map.put(provider, :last_health_check, now)
+              end
+
+            {:failure, reason} ->
+              new_failures = provider.consecutive_failures + 1
+              new_status = if new_failures >= @failure_threshold, do: :unhealthy, else: :degraded
+
+              if current_transport_status == :connecting do
+                provider
+                |> Map.put(status_field, new_status)
+                |> Map.put(:consecutive_failures, new_failures)
+                |> Map.put(:consecutive_successes, 0)
+                |> Map.put(:last_error, reason)
+                |> Map.put(:last_health_check, now)
+                |> then(&Map.put(&1, :status, derive_aggregate_status(&1)))
+              else
+                provider
+                |> Map.put(:last_error, reason)
+                |> Map.put(:last_health_check, now)
+              end
+          end
+
+        new_state = put_provider_and_refresh(state, provider_id, updated)
+        {:noreply, new_state}
+    end
+  end
 
   # Async recovery time update from background Task (spawned in update_recovery_time_for_circuit)
   @impl true
@@ -1752,10 +1806,6 @@ defmodule Lasso.RPC.ProviderPool do
             # Provider stays healthy - RateLimitState is the authoritative source for rate limit status
             retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
 
-            # Report to circuit breaker (rate limit threshold is lower than other errors)
-            cb_id = {state.profile, state.chain_name, provider_id, transport}
-            CircuitBreaker.record_failure(cb_id, jerr)
-
             # Only update last_error for debugging - don't change health status
             updated =
               provider
@@ -1766,8 +1816,7 @@ defmodule Lasso.RPC.ProviderPool do
             |> put_provider_and_refresh(provider_id, updated)
             |> record_rate_limit_for_provider(provider_id, transport, retry_after_ms)
 
-          jerr.category == :client_error ->
-            # Client errors don't affect provider health status
+          not ErrorClassification.breaker_penalty?(jerr.category) ->
             updated =
               provider
               |> Map.put(:last_error, jerr)
@@ -1779,7 +1828,6 @@ defmodule Lasso.RPC.ProviderPool do
             new_failures = provider.consecutive_failures + 1
             new_status = derive_failure_status(new_failures)
 
-            # Report to circuit breaker
             cb_id = {state.profile, state.chain_name, provider_id, transport}
             CircuitBreaker.record_failure(cb_id, jerr)
 
@@ -1814,7 +1862,7 @@ defmodule Lasso.RPC.ProviderPool do
         state
 
       provider ->
-        {jerr, context} = normalize_error_for_pool(error, provider_id)
+        {jerr, _context} = normalize_error_for_pool(error, provider_id)
 
         cond do
           jerr.category == :rate_limit ->
@@ -1835,8 +1883,7 @@ defmodule Lasso.RPC.ProviderPool do
             |> put_provider_and_refresh(provider_id, updated_provider)
             |> record_rate_limit_for_provider(provider_id, transport, retry_after_ms)
 
-          jerr.category == :client_error and context == :live_traffic ->
-            # Client errors from live traffic don't affect provider health status
+          not ErrorClassification.breaker_penalty?(jerr.category) ->
             updated_provider =
               provider
               |> Map.merge(%{
@@ -2099,140 +2146,8 @@ defmodule Lasso.RPC.ProviderPool do
     Map.put(circuit_errors, provider_id, updated_errors)
   end
 
-  # Processes a batch of probe results
-  defp apply_probe_batch(state, results) do
-    # First pass: Update sync state for all successful probes
-    state =
-      Enum.reduce(results, state, fn result, acc_state ->
-        if result.success? do
-          # Store: height, timestamp, sequence number
-          :ets.insert(
-            acc_state.table,
-            {{:provider_sync, acc_state.chain_name, result.provider_id},
-             {result.block_height, result.timestamp, result.sequence}}
-          )
-
-          # Update HTTP transport availability for health policy (probe uses HTTP)
-          update_provider_success_http(acc_state, result.provider_id)
-        else
-          # Tag failures as coming from health_check context for policy handling
-          update_provider_failure_http(
-            acc_state,
-            result.provider_id,
-            {:health_check, result.error}
-          )
-        end
-      end)
-
-    # Second pass: Calculate lag for successful providers only
-    # NOTE: Consensus is calculated lazily by ChainState
-    update_provider_lags(state, results)
-
-    state
-  end
-
-  defp update_provider_lags(state, probe_results) do
-    # Get consensus height (lazy calculation from ChainState)
-    case ChainState.consensus_height(state.chain_name) do
-      {:ok, consensus_height} ->
-        # Calculate lag only for successful probes
-        Enum.each(probe_results, fn result ->
-          if result.success? do
-            lag = result.block_height - consensus_height
-
-            # Store lag
-            :ets.insert(
-              state.table,
-              {{:provider_lag, state.chain_name, result.provider_id}, lag}
-            )
-
-            # Broadcast sync update for dashboard live updates
-            Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates:#{state.profile}", %{
-              chain: state.chain_name,
-              provider_id: result.provider_id,
-              block_height: result.block_height,
-              consensus_height: consensus_height,
-              lag: lag
-            })
-
-            # Emit telemetry when lagging beyond threshold
-            threshold = get_lag_threshold_for_chain(state.profile, state.chain_name)
-
-            if lag < -threshold do
-              emit_lag_telemetry(state.chain_name, result.provider_id, lag)
-            end
-          end
-        end)
-
-      {:error, _reason} ->
-        # No consensus available - don't calculate lag
-        :ok
-    end
-  end
-
   defp get_current_sequence(_state) do
-    # For newHeads, use timestamp-based pseudo-sequence
-    # In the future, could maintain a sequence counter
     div(System.system_time(:millisecond), 1000)
-  end
-
-  defp get_lag_threshold_for_chain(profile, chain) do
-    # Get lag threshold from chain configuration (chains.yml)
-    # Falls back to application config if chain not found
-    case Lasso.Config.ConfigStore.get_chain(profile, chain) do
-      {:ok, chain_config} ->
-        chain_config.monitoring.lag_alert_threshold_blocks
-
-      {:error, _} ->
-        # Fallback to application config for backwards compatibility
-        thresholds =
-          Application.get_env(:lasso, :provider_probe, [])
-          |> Keyword.get(:lag_threshold_by_chain, %{})
-
-        Map.get(thresholds, chain) ||
-          Application.get_env(:lasso, :provider_probe, [])
-          |> Keyword.get(:default_lag_threshold, 10)
-    end
-  end
-
-  defp emit_lag_telemetry(chain, provider_id, lag) do
-    :telemetry.execute(
-      [:lasso, :provider_probe, :lag_detected],
-      %{lag_blocks: lag},
-      %{chain: chain, provider_id: provider_id}
-    )
-  end
-
-  defp broadcast_health_pulses(state, results) do
-    node_id = get_local_node_id()
-    ts = System.system_time(:millisecond)
-    topic = "block_sync:#{state.profile}:#{state.chain_name}"
-
-    for result <- results do
-      case Map.get(state.providers, result.provider_id) do
-        %{consecutive_failures: failures, consecutive_successes: successes} ->
-          msg =
-            {:provider_health_pulse,
-             %{
-               profile: state.profile,
-               chain: state.chain_name,
-               provider_id: result.provider_id,
-               node_id: node_id,
-               consecutive_failures: failures,
-               consecutive_successes: successes,
-               ts: ts
-             }}
-
-          Phoenix.PubSub.broadcast(Lasso.PubSub, topic, msg)
-
-        _ ->
-          :ok
-      end
-    end
-  end
-
-  defp get_local_node_id do
-    Lasso.Cluster.Topology.get_self_node_id()
   end
 
   @doc """

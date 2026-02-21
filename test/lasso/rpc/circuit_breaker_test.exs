@@ -122,7 +122,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     assert CircuitBreaker.get_state(id).state == :closed
   end
 
-  test "rate limit errors open circuit after 2 failures (lower threshold)" do
+  test "rate limit errors do not open circuit (handled by RateLimitState tiering)" do
     alias Lasso.JSONRPC.Error, as: JError
     id = {"default", "test_chain", "cb_rate_limit", :http}
 
@@ -131,7 +131,6 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         {id, %{failure_threshold: 5, recovery_timeout: 100, success_threshold: 2}}
       )
 
-    # Rate limit error should use threshold of 2, not 5
     rate_limit_error = JError.new(-32_005, "Rate limited", category: :rate_limit)
 
     assert {:executed, {:error, _}} =
@@ -142,7 +141,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
-    assert state.state == :open, "Circuit should open after 2 rate limit errors"
+    assert state.state == :closed, "Circuit should remain closed for rate limit errors"
   end
 
   test "server errors use default threshold of 5" do
@@ -165,7 +164,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     assert state.state == :closed, "Circuit should remain closed after 2 server errors"
   end
 
-  test "retry-after header adjusts recovery timeout for rate limits" do
+  test "rate limit errors with retry-after do not open circuit" do
     alias Lasso.JSONRPC.Error, as: JError
     id = {"default", "test_chain", "cb_retry_after", :http}
 
@@ -174,8 +173,6 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         {id, %{failure_threshold: 2, recovery_timeout: 60_000, success_threshold: 2}}
       )
 
-    # Rate limit error with retry-after in data (populated by ErrorNormalizer)
-    # :retry_after_ms is in milliseconds
     rate_limit_error =
       JError.new(-32_005, "Rate limited",
         category: :rate_limit,
@@ -190,22 +187,14 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
-    assert state.state == :open
-
-    # Should use 2 second timeout instead of default 60 seconds
-    # Wait 2.1 seconds and verify circuit attempts recovery
-    Process.sleep(2100)
-    result = CircuitBreaker.call(id, fn -> {:ok, :success} end)
-
-    assert match?({:executed, {:ok, :success}}, result),
-           "Circuit should attempt recovery after 2 seconds"
+    assert state.state == :closed, "Rate limits should not open circuit"
   end
 
   test "custom category thresholds can be configured" do
     alias Lasso.JSONRPC.Error, as: JError
     id = {"default", "test_chain", "cb_custom_threshold", :http}
 
-    # Override rate_limit threshold to 3 instead of default 2
+    # Override auth_error threshold to 3 instead of default 2
     {:ok, _pid} =
       CircuitBreaker.start_link(
         {id,
@@ -213,18 +202,23 @@ defmodule Lasso.RPC.CircuitBreakerTest do
            failure_threshold: 5,
            recovery_timeout: 100,
            success_threshold: 2,
-           category_thresholds: %{rate_limit: 3}
+           category_thresholds: %{auth_error: 3}
          }}
       )
 
-    rate_limit_error = JError.new(-32_005, "Rate limited", category: :rate_limit)
+    auth_error =
+      JError.new(-32_000, "Unauthorized",
+        category: :auth_error,
+        retriable?: true,
+        breaker_penalty?: true
+      )
 
     # Should not open after 2 failures (needs 3 now)
     assert {:executed, {:error, _}} =
-             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+             CircuitBreaker.call(id, fn -> {:error, auth_error} end)
 
     assert {:executed, {:error, _}} =
-             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+             CircuitBreaker.call(id, fn -> {:error, auth_error} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)
@@ -232,7 +226,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
     # Should open after 3rd failure
     assert {:executed, {:error, _}} =
-             CircuitBreaker.call(id, fn -> {:error, rate_limit_error} end)
+             CircuitBreaker.call(id, fn -> {:error, auth_error} end)
 
     Process.sleep(20)
     state = CircuitBreaker.get_state(id)

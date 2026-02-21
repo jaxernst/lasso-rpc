@@ -36,7 +36,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Verify request succeeded (using backup)
@@ -63,7 +63,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             "eth_blockNumber",
             [],
             %RequestOptions{
-              strategy: :round_robin,
+              strategy: :load_balanced,
               timeout_ms: 30_000,
               provider_override: "failing_provider"
             }
@@ -92,7 +92,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "failing_provider",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -137,7 +137,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "flaky",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -169,7 +169,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "flaky",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -237,7 +237,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Request should succeed via backup - now returns Response.Success
@@ -269,7 +269,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "backup",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -296,7 +296,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "preferred",
             failover_on_override: true,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -324,7 +324,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # In a real scenario with provider-specific adapter logic:
@@ -346,7 +346,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Execute with nil params
@@ -355,7 +355,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           nil,
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Both should succeed
@@ -386,7 +386,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "provider",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -415,7 +415,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "slow",
             failover_on_override: false,
             timeout_ms: 100,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -438,7 +438,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "nonexistent",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -462,7 +462,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{transport: :http, timeout_ms: 30_000, strategy: :round_robin}
+          %RequestOptions{transport: :http, timeout_ms: 30_000, strategy: :load_balanced}
         )
 
       # Execute with WS transport override (if supported)
@@ -502,7 +502,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Wait for start event
@@ -547,7 +547,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Verify telemetry shows success
@@ -582,7 +582,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "failing",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :round_robin
+            strategy: :load_balanced
           }
         )
 
@@ -618,7 +618,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Should have emitted at least one start event
@@ -631,7 +631,6 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     test "rate-limited provider triggers automatic failover to healthy provider", %{chain: chain} do
       profile = "default"
 
-      # Setup: Primary provider that rate limits, backup that's healthy
       rate_limit_error =
         %Lasso.JSONRPC.Error{
           code: 429,
@@ -650,11 +649,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         %{id: "healthy_backup", priority: 20, behavior: :healthy, profile: profile}
       ])
 
-      # Ensure circuit breakers exist
       CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "rate_limited", :http)
       CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, "healthy_backup", :http)
 
-      # CRITICAL TEST: Request should automatically failover to healthy backup
+      # Request should failover to healthy backup via normal retry logic
       {:ok, result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,
@@ -663,13 +661,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           %RequestOptions{strategy: :priority, timeout_ms: 30_000}
         )
 
-      # Verify we got a successful response (failover worked)
       assert %Response.Success{} = result
       {:ok, block_number} = Response.Success.decode_result(result)
       assert String.starts_with?(block_number, "0x")
 
-      # To trigger circuit breaker opening, we need to directly target the rate-limited
-      # provider without failover, so the circuit breaker sees the failures
+      # Send rate limit errors directly to the rate-limited provider
       for _ <- 1..2 do
         {:error, _, _} =
           RequestPipeline.execute_via_channels(
@@ -686,24 +682,13 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         Process.sleep(100)
       end
 
-      # Wait for circuit breaker to process the failures and open
       Process.sleep(500)
 
-      # Wait for circuit breaker to open (rate limit threshold is 2)
+      # Rate limits are handled by RateLimitState tiering, not circuit breakers
       breaker_id = {profile, chain, "rate_limited", :http}
+      CircuitBreakerHelper.assert_circuit_breaker_state(breaker_id, :closed)
 
-      {:ok, _state} =
-        CircuitBreakerHelper.wait_for_circuit_breaker_state(
-          breaker_id,
-          fn state -> state.state == :open end,
-          timeout: 10_000,
-          interval: 100
-        )
-
-      # Verify rate-limited provider's circuit is now open
-      CircuitBreakerHelper.assert_circuit_breaker_state(breaker_id, :open)
-
-      # Now verify that subsequent requests with priority strategy use backup
+      # Subsequent requests still succeed via failover
       {:ok, result2, _ctx2} =
         RequestPipeline.execute_via_channels(
           chain,
@@ -712,14 +697,14 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           %RequestOptions{strategy: :priority, timeout_ms: 30_000}
         )
 
-      # Should still succeed using backup since primary's circuit is open
       assert %Response.Success{} = result2
     end
 
-    test "rate limit error opens circuit breaker faster than normal errors", %{chain: chain} do
+    test "rate limit errors do not open circuit breaker (handled by RateLimitState tiering)", %{
+      chain: chain
+    } do
       profile = "default"
 
-      # Setup provider that rate limits
       rate_limit_error =
         %Lasso.JSONRPC.Error{
           code: 429,
@@ -744,7 +729,6 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         :http
       )
 
-      # Execute 2 requests (rate limit threshold is 2, vs 5 for normal errors)
       for _ <- 1..2 do
         {:error, _error, _ctx} =
           RequestPipeline.execute_via_channels(
@@ -761,20 +745,20 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         Process.sleep(50)
       end
 
-      # Give circuit breaker time to open
       Process.sleep(500)
 
-      # Verify circuit opened after only 2 rate limit errors (not 5)
+      # Circuit should remain closed — rate limits don't trip circuit breakers
       CircuitBreakerHelper.assert_circuit_breaker_state(
         {profile, chain, "rate_limited_fast", :http},
-        :open
+        :closed
       )
     end
 
-    test "multiple providers can be rate-limited independently", %{chain: chain} do
+    test "multiple providers can be rate-limited independently without opening circuits", %{
+      chain: chain
+    } do
       profile = "default"
 
-      # Setup: Multiple providers, all rate-limited
       rate_limit_error =
         %Lasso.JSONRPC.Error{
           code: 429,
@@ -789,7 +773,6 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         %{id: "provider_c", priority: 30, behavior: :healthy, profile: profile}
       ])
 
-      # Ensure circuit breakers exist
       for provider_id <- ["provider_a", "provider_b", "provider_c"] do
         CircuitBreakerHelper.ensure_circuit_breaker_started(profile, chain, provider_id, :http)
       end
@@ -830,15 +813,15 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
       Process.sleep(300)
 
-      # Verify both a and b are open, but c is still closed
+      # All circuits remain closed — rate limits are handled by RateLimitState tiering
       CircuitBreakerHelper.assert_circuit_breaker_state(
         {profile, chain, "provider_a", :http},
-        :open
+        :closed
       )
 
       CircuitBreakerHelper.assert_circuit_breaker_state(
         {profile, chain, "provider_b", :http},
-        :open
+        :closed
       )
 
       CircuitBreakerHelper.assert_circuit_breaker_state(
@@ -846,7 +829,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         :closed
       )
 
-      # Request with priority strategy should use provider_c (only healthy one)
+      # Request with priority strategy should still succeed via failover
       {:ok, result, _ctx} =
         RequestPipeline.execute_via_channels(
           chain,

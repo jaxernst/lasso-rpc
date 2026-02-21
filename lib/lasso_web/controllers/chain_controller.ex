@@ -19,9 +19,4 @@ defmodule LassoWeb.ChainController do
 
     json(conn, %{chains: chains})
   end
-
-  @spec status(Plug.Conn.t(), map()) :: Plug.Conn.t()
-  def status(conn, %{"chain_id" => _chain_id}) do
-    json(conn, %{status: "not implemented"})
-  end
 end

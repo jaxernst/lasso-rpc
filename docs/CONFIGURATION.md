@@ -163,7 +163,7 @@ Strategies control how providers are selected for each request. Set via URL path
 |----------|----------|-------------|
 | **Priority** | `/rpc/:chain` | Select by `priority` field (lowest first). Default strategy |
 | **Fastest** | `/rpc/fastest/:chain` | Lowest latency provider for the method (passive benchmarking) |
-| **Round Robin** | `/rpc/round-robin/:chain` | Rotate through healthy providers |
+| **Load Balanced** | `/rpc/load-balanced/:chain` | Distribute requests across healthy providers with health-aware tiering |
 | **Latency Weighted** | `/rpc/latency-weighted/:chain` | Weighted random selection by latency scores |
 
 ### When to Use Each Strategy
@@ -172,9 +172,22 @@ Strategies control how providers are selected for each request. Set via URL path
 
 **Fastest** — Optimal latency. Benchmarks are tracked per provider, per method, per transport. Best for latency-sensitive reads. May concentrate load on one provider.
 
-**Round Robin** — Even distribution. Spreads load across all healthy providers. Good for throughput maximization and avoiding rate limits.
+**Load Balanced** — Even distribution with health-aware tiering. Spreads load across all healthy providers, deprioritizing those with tripped circuit breakers or rate limits. Good for throughput maximization and avoiding rate limits.
 
 **Latency Weighted** — Balanced approach. Routes more traffic to faster providers while still using slower ones. Prevents single-provider concentration while favoring performance.
+
+### Health-Based Tiering
+
+All strategies are subject to health-based tiering after initial ranking. The pipeline reorders providers into 4 tiers based on circuit breaker state and rate limit status:
+
+1. **Tier 1**: Closed circuit + not rate-limited (preferred)
+2. **Tier 2**: Closed circuit + rate-limited
+3. **Tier 3**: Half-open circuit + not rate-limited
+4. **Tier 4**: Half-open circuit + rate-limited
+
+Open-circuit providers are excluded entirely. Within each tier, the strategy's original ranking is preserved.
+
+This ensures healthy providers receive traffic first while allowing recovering providers to gradually reintegrate. See [ROUTING.md](ROUTING.md#health-based-tiering) for detailed behavior and examples.
 
 ### Provider Override
 
@@ -273,5 +286,5 @@ config :lasso, :circuit_breaker,
 ### Default Strategy
 
 ```elixir
-config :lasso, :provider_selection_strategy, :round_robin
+config :lasso, :provider_selection_strategy, :load_balanced
 ```

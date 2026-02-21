@@ -17,7 +17,7 @@ defmodule Lasso.RPC.Providers.Adapters.Merkle do
 
   @behaviour Lasso.RPC.ProviderAdapter
 
-  alias Lasso.RPC.{ChainState, MethodRegistry}
+  alias Lasso.RPC.MethodRegistry
   alias Lasso.RPC.Providers.Generic
 
   import Lasso.RPC.Providers.AdapterHelpers
@@ -63,53 +63,6 @@ defmodule Lasso.RPC.Providers.Adapters.Merkle do
   end
 
   def validate_params(_method, _params, _t, _ctx), do: :ok
-
-  # Private validation helpers
-
-  defp validate_block_range([%{"fromBlock" => from, "toBlock" => to}], ctx, limit) do
-    with {:ok, range} <- compute_block_range(from, to, ctx),
-         true <- range > limit do
-      {:error, {:param_limit, "max #{limit} block range (got #{range})"}}
-    else
-      _ -> :ok
-    end
-  end
-
-  defp validate_block_range(_params, _ctx, _limit), do: :ok
-
-  defp compute_block_range(from_block, to_block, ctx) do
-    with {:ok, from_num} <- parse_block_number(from_block, ctx),
-         {:ok, to_num} <- parse_block_number(to_block, ctx) do
-      {:ok, abs(to_num - from_num)}
-    else
-      _ -> :error
-    end
-  end
-
-  defp parse_block_number("latest", ctx), do: {:ok, estimate_current_block(ctx)}
-  defp parse_block_number("earliest", _ctx), do: {:ok, 0}
-  defp parse_block_number("pending", ctx), do: {:ok, estimate_current_block(ctx)}
-
-  defp parse_block_number("0x" <> hex, _ctx) do
-    case Integer.parse(hex, 16) do
-      {num, ""} -> {:ok, num}
-      _ -> :error
-    end
-  end
-
-  defp parse_block_number(num, _ctx) when is_integer(num), do: {:ok, num}
-  defp parse_block_number(_value, _ctx), do: :error
-
-  # Estimates current block from cache, skipping validation if unavailable
-  # This allows requests to proceed when consensus is unavailable (fail-open)
-  defp estimate_current_block(ctx) do
-    chain = Map.get(ctx, :chain, "ethereum")
-
-    case ChainState.consensus_height(chain) do
-      {:ok, height} -> height
-      {:error, _} -> 0
-    end
-  end
 
   # Normalization - delegate to Generic adapter
 

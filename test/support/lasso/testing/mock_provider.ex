@@ -24,7 +24,7 @@ defmodule Lasso.Testing.MockProvider do
 
         # Providers are now available for routing
         {:ok, result, _ctx} = RequestPipeline.execute_via_channels(
-          "ethereum", "eth_blockNumber", [], %Lasso.RPC.RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          "ethereum", "eth_blockNumber", [], %Lasso.RPC.RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
         assert result == "0x1000"

@@ -5,11 +5,29 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
   Distributes load across available providers with a probabilistic bias toward
   lower-latency and higher-success providers for the specific RPC method.
 
-  Notes on metrics API inconsistency:
-  - Transport-specific metrics are recorded under augmented method keys
-    (e.g., "eth_getLogs@http"). To avoid key mismatch, this strategy first
-    queries transport-specific metrics for HTTP; if missing, it falls back to
-    WS and finally to transport-agnostic metrics if available.
+  ## Weight Formula
+
+  Each provider receives a weight calculated as:
+
+      weight = (1 / latency^beta) * success_rate * confidence * calls_scale
+      weight = max(weight, explore_floor)
+
+  Higher weights increase selection probability. The formula balances performance
+  (latency), reliability (success rate), data quality (confidence), and exploration
+  (explore_floor ensures all providers receive some traffic).
+
+  ## Staleness Handling
+
+  Metrics older than 10 minutes receive only the `explore_floor` weight, preventing
+  routing decisions based on outdated data while maintaining exploration.
+
+  ## Configuration
+
+  - `LW_BETA`: Latency exponent (default: 3.0, higher = stronger latency preference)
+  - `LW_MS_FLOOR`: Minimum latency denominator (default: 30ms, prevents division by zero)
+  - `LW_EXPLORE_FLOOR`: Minimum weight (default: 0.05, ensures exploration)
+  - `LW_MIN_CALLS`: Minimum calls for stable metrics (default: 3)
+  - `LW_MIN_SR`: Minimum success rate (default: 0.85)
   """
 
   @behaviour Lasso.RPC.Strategy

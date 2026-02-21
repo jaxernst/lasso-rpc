@@ -8,9 +8,6 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   use LassoWeb, :live_component
 
-  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
-  alias Lasso.Config.ConfigStore
-  alias Lasso.RPC.ChainState
   alias LassoWeb.Components.DetailPanelComponents
   alias LassoWeb.Components.RegionSelector
   alias LassoWeb.Dashboard.{Formatting, Helpers, StatusHelpers}
@@ -84,13 +81,16 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     regions_with_issues = find_regions_with_issues(cluster_circuits, provider_id)
 
     # Compute derived data (with cached fallback for metrics)
+    connections = socket.assigns[:connections] || []
+
     sync_data =
       compute_sync_data(
         selected_region,
         region_data,
         provider_connection,
         cluster_block_heights,
-        provider_id
+        provider_id,
+        connections
       )
 
     metrics_data = compute_metrics_data(region_data, cached_fallback)
@@ -144,70 +144,34 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          region_data,
          provider_connection,
          cluster_block_heights,
-         provider_id
+         provider_id,
+         connections
        ) do
     conn = provider_connection || %{}
     chain = Map.get(conn, :chain)
+    chain_consensus = compute_chain_consensus(cluster_block_heights, chain, connections)
 
-    # Get block height data based on mode
     {block_height, block_lag, consensus_height} =
+      resolve_block_heights(
+        selected_region,
+        region_data,
+        conn,
+        cluster_block_heights,
+        provider_id,
+        chain_consensus
+      )
+
+    optimistic_lag =
       if selected_region == "aggregate" do
-        # Aggregate mode: find highest block height across all regions for this provider
-        provider_heights =
-          cluster_block_heights
-          |> Enum.filter(fn {{pid, _region}, _data} -> pid == provider_id end)
-          |> Enum.map(fn {{_pid, _region}, data} -> data end)
-
-        if provider_heights != [] do
-          # Take highest block height and lowest lag (best case from any node)
-          max_height =
-            provider_heights
-            |> Enum.map(& &1[:height])
-            |> Enum.reject(&is_nil/1)
-            |> Enum.max(fn -> nil end)
-
-          min_lag =
-            provider_heights
-            |> Enum.map(& &1[:lag])
-            |> Enum.reject(&is_nil/1)
-            |> Enum.min(fn -> 0 end)
-
-          consensus = region_data[:consensus_height] || Map.get(conn, :consensus_height)
-          {max_height, min_lag, consensus}
-        else
-          # Fall back to local data
-          {
-            region_data[:block_height] || Map.get(conn, :block_height),
-            region_data[:block_lag] || 0,
-            region_data[:consensus_height] || Map.get(conn, :consensus_height)
-          }
+        case StatusHelpers.calculate_optimistic_lag(chain, provider_id) do
+          {:ok, lag} -> lag
+          {:error, _} -> nil
         end
       else
-        # Per-region mode: use region-specific data from cluster_block_heights
-        region_height_data = Map.get(cluster_block_heights, {provider_id, selected_region}, %{})
-
-        {
-          region_height_data[:height] || region_data[:block_height] ||
-            Map.get(conn, :block_height),
-          region_height_data[:lag] || region_data[:block_lag] || 0,
-          region_data[:consensus_height] || Map.get(conn, :consensus_height)
-        }
+        nil
       end
 
-    # Calculate optimistic lag for better UX
-    {optimistic_lag, _raw_lag} =
-      if selected_region == "aggregate" do
-        calculate_optimistic_lag(chain, provider_id)
-      else
-        {nil, nil}
-      end
-
-    effective_lag =
-      cond do
-        is_integer(block_lag) and block_lag > 0 -> block_lag
-        optimistic_lag != nil -> abs(min(0, optimistic_lag))
-        true -> Map.get(conn, :blocks_behind, 0) || 0
-      end
+    effective_lag = resolve_effective_lag(block_lag, optimistic_lag, conn)
 
     %{
       block_height: block_height,
@@ -218,6 +182,82 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       mode: if(selected_region == "aggregate", do: :aggregate, else: :region)
     }
   end
+
+  defp resolve_block_heights(
+         "aggregate",
+         region_data,
+         conn,
+         cluster_block_heights,
+         provider_id,
+         chain_consensus
+       ) do
+    provider_heights =
+      cluster_block_heights
+      |> Enum.filter(fn {{pid, _region}, _data} -> pid == provider_id end)
+      |> Enum.map(fn {{_pid, _region}, data} -> data end)
+
+    consensus =
+      chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
+
+    if provider_heights != [] do
+      max_height =
+        provider_heights
+        |> Enum.map(& &1[:height])
+        |> Enum.reject(&is_nil/1)
+        |> Enum.max(fn -> nil end)
+
+      min_lag =
+        provider_heights
+        |> Enum.map(& &1[:lag])
+        |> Enum.reject(&is_nil/1)
+        |> Enum.min(fn -> 0 end)
+
+      {max_height, min_lag, consensus}
+    else
+      {region_data[:block_height] || Map.get(conn, :block_height), region_data[:block_lag] || 0,
+       consensus}
+    end
+  end
+
+  defp resolve_block_heights(
+         selected_region,
+         region_data,
+         conn,
+         cluster_block_heights,
+         provider_id,
+         chain_consensus
+       ) do
+    region_height_data = Map.get(cluster_block_heights, {provider_id, selected_region}, %{})
+
+    {
+      region_height_data[:height] || region_data[:block_height] || Map.get(conn, :block_height),
+      region_height_data[:lag] || region_data[:block_lag] || 0,
+      chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
+    }
+  end
+
+  defp resolve_effective_lag(block_lag, optimistic_lag, conn) do
+    cond do
+      is_integer(block_lag) and block_lag > 0 -> block_lag
+      optimistic_lag != nil -> abs(min(0, optimistic_lag))
+      true -> Map.get(conn, :blocks_behind, 0) || 0
+    end
+  end
+
+  defp compute_chain_consensus(cluster_block_heights, chain, connections)
+       when is_binary(chain) do
+    chain_provider_ids =
+      connections
+      |> Enum.filter(&(&1.chain == chain))
+      |> MapSet.new(& &1.id)
+
+    cluster_block_heights
+    |> Enum.filter(fn {{pid, _node}, _} -> pid in chain_provider_ids end)
+    |> Enum.map(fn {_, %{height: h}} -> h end)
+    |> Enum.max(fn -> nil end)
+  end
+
+  defp compute_chain_consensus(_, _, _), do: nil
 
   defp compute_metrics_data(region_data, cached_metrics) do
     # Prefer live data for real-time metrics, fall back to cached
@@ -530,7 +570,12 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
     ~H"""
     <DetailPanelComponents.panel_section border={false} class="pt-1 pb-2">
-      <DetailPanelComponents.section_header title="Performance" />
+      <div class="flex items-center gap-2 mb-4">
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-gray-500">Performance</h4>
+        <span class="text-[9px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 font-medium">
+          Profile
+        </span>
+      </div>
       <DetailPanelComponents.metrics_strip class="border-x rounded">
         <:metric label="Latency p50" value={@p50} />
         <:metric label="Latency p95" value={@p95} />
@@ -1005,50 +1050,6 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   # --- Helper Functions ---
 
-  defp calculate_optimistic_lag(chain, provider_id)
-       when is_binary(chain) and is_binary(provider_id) do
-    with {:ok, {height, timestamp, _source, _meta}} <-
-           BlockSyncRegistry.get_height(chain, provider_id),
-         {:ok, consensus} <- ChainState.consensus_height(chain) do
-      block_time_ms = get_block_time_ms(chain)
-      now = System.system_time(:millisecond)
-      elapsed_ms = now - timestamp
-      raw_lag = height - consensus
-
-      staleness_credit =
-        if block_time_ms > 0 do
-          div(elapsed_ms, block_time_ms)
-        else
-          0
-        end
-
-      max_credit = div(30_000, max(block_time_ms, 1))
-      capped_credit = min(staleness_credit, max_credit)
-
-      optimistic_height = height + capped_credit
-      optimistic_lag = optimistic_height - consensus
-
-      {optimistic_lag, raw_lag}
-    else
-      _ -> {nil, nil}
-    end
-  end
-
-  defp calculate_optimistic_lag(_, _), do: {nil, nil}
-
-  defp get_block_time_ms(chain) do
-    case ConfigStore.list_profiles_for_chain(chain) do
-      [profile | _] ->
-        case ConfigStore.get_chain(profile, chain) do
-          {:ok, config} -> config.block_time_ms || 12_000
-          _ -> 12_000
-        end
-
-      [] ->
-        12_000
-    end
-  end
-
   defp sync_status_level(blocks_behind) when blocks_behind <= 2, do: :healthy
   defp sync_status_level(blocks_behind) when blocks_behind <= 10, do: :degraded
   defp sync_status_level(_), do: :down
@@ -1078,31 +1079,16 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   defp sync_progress(block_height, consensus_height),
     do: min(100, block_height / consensus_height * 100)
 
-  defp format_latency(nil), do: "—"
-  defp format_latency(ms), do: "#{round(ms)}ms"
+  defdelegate format_latency(ms), to: Formatting
+  defdelegate format_time_ago(ts_ms), to: Formatting
+  defdelegate success_rate_color(rate), to: Formatting
 
   defp format_traffic(nil), do: "—"
   defp format_traffic(value), do: "#{value |> Helpers.to_float() |> Float.round(1)}%"
 
-  defp success_rate_color(rate) when rate >= 99.0, do: "text-emerald-400"
-  defp success_rate_color(rate) when rate >= 95.0, do: "text-yellow-400"
-  defp success_rate_color(_), do: "text-red-400"
-
   defp severity_dot_color(:error), do: "bg-red-500"
   defp severity_dot_color(:warn), do: "bg-yellow-500"
   defp severity_dot_color(_), do: "bg-blue-500"
-
-  defp format_time_ago(nil), do: "—"
-
-  defp format_time_ago(ts_ms) do
-    diff_ms = System.system_time(:millisecond) - ts_ms
-
-    cond do
-      diff_ms < 60_000 -> "now"
-      diff_ms < 3_600_000 -> "#{div(diff_ms, 60_000)}m ago"
-      true -> "#{div(diff_ms, 3_600_000)}h ago"
-    end
-  end
 
   defp truncate_message(message, max_length) when byte_size(message) > max_length do
     String.slice(message, 0, max_length - 3) <> "..."
