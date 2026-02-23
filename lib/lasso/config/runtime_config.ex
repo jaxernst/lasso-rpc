@@ -85,7 +85,7 @@ defmodule Lasso.Config.RuntimeConfig do
   """
   @spec get_default_strategy() :: atom()
   def get_default_strategy do
-    Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
+    Application.get_env(:lasso, :provider_selection_strategy, :load_balanced)
   end
 
   @doc """

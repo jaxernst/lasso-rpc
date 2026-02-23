@@ -798,7 +798,7 @@ const DraggableNetworkViewport = {
 // Endpoint Selector Hook for Chain Details
 const EndpointSelector = {
   mounted() {
-    this.selectedStrategy = "round-robin"; // default strategy
+    this.selectedStrategy = "load-balanced"; // default strategy
     this.selectedProvider = null; // no provider selected by default
     this.mode = "strategy"; // 'strategy' or 'provider'
     this.selectedProviderSupportsWs = false; // default to false
@@ -1069,7 +1069,7 @@ const EndpointSelector = {
 
     if (this.mode === "strategy" && this.selectedStrategy) {
       const descriptions = {
-        "round-robin":
+        "load-balanced":
           "Distributes requests evenly across all available providers — good for general purpose workloads",
         "latency-weighted":
           "Load balanced favoring faster providers — good for high-throughput workloads like indexing and backfilling",

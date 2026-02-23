@@ -506,7 +506,7 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
 
   describe "rate limit handling" do
     @tag :integration
-    test "rate limit opens circuit with lower threshold", %{chain: chain} do
+    test "rate limit does not open circuit (handled by RateLimitState tiering)", %{chain: chain} do
       profile = "default"
 
       provider_spec = %{
@@ -526,23 +526,17 @@ defmodule Lasso.Integration.HealthProbeIntegrationTest do
       cb_id = {profile, chain, provider_id, :http}
       wait_for_circuit_breaker(cb_id)
 
-      # Rate limit errors should open circuit faster (threshold: 2)
       rate_limit_error = {:rate_limit, %{retry_after: 60}}
 
-      # First rate limit
       CircuitBreaker.call(cb_id, fn -> {:error, rate_limit_error} end)
       Process.sleep(20)
 
-      # May still be closed after 1 (depends on threshold)
-      _state = CircuitBreaker.get_state(cb_id)
-
-      # Second rate limit
       CircuitBreaker.call(cb_id, fn -> {:error, rate_limit_error} end)
       Process.sleep(50)
 
-      # Should be open now (rate limit threshold is 2)
+      # Circuit should remain closed — rate limits don't trip circuit breakers
       state = CircuitBreaker.get_state(cb_id)
-      assert state.state == :open
+      assert state.state == :closed
     end
   end
 

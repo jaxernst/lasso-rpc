@@ -98,10 +98,16 @@ defmodule Lasso.JSONRPC.Error do
       Keyword.get(opts, :category) || ErrorClassification.categorize(normalized_code, message)
 
     retriable? =
-      Keyword.get(opts, :retriable?) || ErrorClassification.retriable?(normalized_code, message)
+      case Keyword.get(opts, :retriable?) do
+        nil -> ErrorClassification.retriable?(normalized_code, message)
+        value -> value
+      end
 
     breaker_penalty? =
-      Keyword.get(opts, :breaker_penalty?) || ErrorClassification.breaker_penalty?(category)
+      case Keyword.get(opts, :breaker_penalty?) do
+        nil -> ErrorClassification.breaker_penalty?(category)
+        value -> value
+      end
 
     %__MODULE__{
       code: normalized_code,

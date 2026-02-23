@@ -439,7 +439,7 @@ Development log of implemented features, moved from active roadmap.
 - `:fastest` - Performance-based via benchmarking
 - `:cheapest` - Cost-optimized (public providers first)
 - `:priority` - Static config-based ordering
-- `:round_robin` - Load balancing across healthy providers
+- `:load_balanced` - Load balancing across healthy providers
 - Strategy selection per endpoint: `/rpc/fastest/:chain`, etc.
 
 ### ✅ Request Observability (Sept 2025)

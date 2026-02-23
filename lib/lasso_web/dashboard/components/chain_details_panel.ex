@@ -46,7 +46,10 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       socket
       |> assign(assigns)
       |> assign(:chain_connections, chain_connections)
-      |> assign(:consensus_height, find_consensus_height(chain_connections))
+      |> assign(
+        :consensus_height,
+        find_consensus_height(chain_connections, assigns[:cluster_block_heights] || %{})
+      )
       |> assign(:chain_events, chain_events)
       |> assign(:available_node_ids, available_node_ids)
       |> assign(:show_region_tabs, length(available_node_ids) > 1)
@@ -88,8 +91,17 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     {:noreply, socket}
   end
 
-  defp find_consensus_height(connections) do
-    Enum.find_value(connections, fn conn -> Map.get(conn, :consensus_height) end)
+  defp find_consensus_height(chain_connections, cluster_block_heights) do
+    chain_provider_ids = MapSet.new(chain_connections, & &1.id)
+
+    realtime_max =
+      cluster_block_heights
+      |> Enum.filter(fn {{pid, _node}, _} -> pid in chain_provider_ids end)
+      |> Enum.map(fn {_, %{height: h}} -> h end)
+      |> Enum.max(fn -> nil end)
+
+    realtime_max ||
+      Enum.find_value(chain_connections, fn conn -> Map.get(conn, :consensus_height) end)
   end
 
   @impl true
@@ -217,21 +229,9 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     """
   end
 
-  defp format_latency(nil), do: "—"
-  defp format_latency(ms), do: "#{ms}ms"
-
-  defp format_rps(rps) when rps > 0, do: "#{rps}"
-  defp format_rps(_), do: "0"
-
-  defp success_color(rate) when rate >= 95.0, do: "text-emerald-400"
-  defp success_color(rate) when rate >= 80.0, do: "text-yellow-400"
-  defp success_color(_), do: "text-red-400"
-
-  @strategy_labels %{
-    "round-robin" => "Load Balanced",
-    "latency-weighted" => "Latency Weighted",
-    "fastest" => "Fastest"
-  }
+  defdelegate format_latency(ms), to: Formatting
+  defdelegate format_rps(rps), to: Formatting
+  defp success_color(rate), do: Formatting.success_rate_color(rate)
 
   attr(:chain, :string, required: true)
   attr(:selected_profile, :string, required: true)
@@ -309,7 +309,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   defp strategy_button(assigns) do
     assigns =
       assigns
-      |> assign(:label, Map.get(@strategy_labels, assigns.strategy, assigns.strategy))
+      |> assign(:label, EndpointHelpers.strategy_display_name(assigns.strategy))
 
     ~H"""
     <button
