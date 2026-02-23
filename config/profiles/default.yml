@@ -1,6 +1,7 @@
 ---
 name: Lasso Free
 slug: default
+logo: lasso_hat_white.png
 rps_limit: 100
 burst_limit: 500
 ---
@@ -50,13 +51,7 @@ chains:
       color: "#627EEA"
       size: xl # sm | md | lg | xl
 
-    # Providers: Upstream RPC endpoints with priority-based routing
     providers:
-      # Per-provider overrides:
-      # - subscribe_new_heads: true/false (overrides chain-level setting)
-      # - archival: true/false (supports historical data, default: true)
-      # - adapter_config: {} (provider-specific tuning, see docs/ADAPTERS.md)
-
       - id: "ethereum_drpc"
         name: "dRPC Ethereum"
         priority: 2
@@ -64,6 +59,17 @@ chains:
         ws_url: "wss://eth.drpc.org"
         archival: true
         subscribe_new_heads: true
+        capabilities:
+          limits:
+            max_block_range: 10000
+          error_rules:
+            - code: 30
+              message_contains: "timeout on the free tier"
+              category: rate_limit
+            - code: 30
+              category: rate_limit
+            - code: 35
+              category: capability_violation
 
       - id: "ethereum_publicnode"
         name: "PublicNode Ethereum"
@@ -71,53 +77,71 @@ chains:
         url: "https://ethereum-rpc.publicnode.com"
         ws_url: "wss://ethereum-rpc.publicnode.com"
         subscribe_new_heads: true
-        archival: false # PHE: Returns blocks but not historical logs (inverted index error)
+        archival: false
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, eip4844, filters]
+          limits:
+            max_block_age: 1000
+            block_age_methods:
+              [
+                eth_call,
+                eth_getBalance,
+                eth_getCode,
+                eth_getStorageAt,
+                eth_getTransactionCount,
+              ]
+          error_rules:
+            - code: -32701
+              category: capability_violation
+            - message_contains: "pruned"
+              category: requires_archival
 
-      # Temporarily disable: Uses a proxied backend with some nodes using PHE and some not (create inconsistency in log responses)
       - id: "ethereum_merkle"
         name: "Merkle Ethereum"
         priority: 4
         url: "https://eth.merkle.io"
-        archival: false # Mixed PHE nodes - default to false to avoid inverted index errors
-
-      # Removed: 0xRPC - domain (0xrpc.io) does not resolve DNS
-      # - id: "0xrpc_ethereum"
-      #   name: "0xRPC Ethereum"
-      #   priority: 5
-      #   url: "https://0xrpc.io/eth"
-      #   ws_url: "wss://0xrpc.io/eth"
-      #   archival: false
+        archival: false
+        capabilities:
+          limits:
+            max_block_range: 1000
 
       - id: "ethereum_1rpc"
         name: "1RPC Ethereum"
         priority: 4
         url: "https://1rpc.io/eth"
-        archival: false # PHE: Returns blocks but returns empty array for historical logs
+        archival: false
+        capabilities:
+          limits:
+            max_block_range: 10000
 
-      # Mixed backend with some nodes using PHE and some not (create inconsistency in log responses)
       - id: "ethereum_llamarpc"
         name: "LlamaRPC Ethereum"
         priority: 5
         url: "https://eth.llamarpc.com"
         ws_url: "wss://eth.llamarpc.com"
-        archival: false # Mixed PHE nodes - default to false to avoid inverted index errors
+        archival: false
         subscribe_new_heads: false
+        capabilities:
+          limits:
+            max_block_range: 1000
 
       - id: "ethereum_blockpi"
         name: "BlockPI Ethereum"
         priority: 7
         url: "https://ethereum.public.blockpi.network/v1/rpc/public"
         archival: true
-        adapter_config:
-          max_block_range: 1024
+        capabilities:
+          limits:
+            max_block_range: 1024
 
       - id: "ethereum_nodies"
         name: "Nodies Ethereum"
         priority: 8
         url: "https://ethereum-public.nodies.app"
         archival: true
-        adapter_config:
-          max_block_range: 500
+        capabilities:
+          limits:
+            max_block_range: 500
 
       - id: "ethereum_onfinality"
         name: "OnFinality Ethereum"
@@ -161,6 +185,9 @@ chains:
         priority: 16
         url: "https://rpc.mevblocker.io"
         archival: true
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, eip4844, subscriptions]
+          unsupported_methods: ["eth_newPendingTransactionFilter"]
 
   # ──────────────────────────────────────────────────────────────────────────
   # BASE MAINNET (L2)
@@ -197,12 +224,18 @@ chains:
         ws_url: "wss://base.llamarpc.com"
         subscribe_new_heads: true
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
+          limits:
+            max_block_range: 1000
 
       - id: "base_official"
         name: "Base Official"
         priority: 3
         url: "https://mainnet.base.org"
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "base_publicnode"
         name: "PublicNode Base"
@@ -211,6 +244,9 @@ chains:
         ws_url: "wss://base.publicnode.com"
         subscribe_new_heads: false
         archival: true
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "base_drpc"
         name: "dRPC Base"
@@ -221,12 +257,18 @@ chains:
         subscribe_new_heads: false
         api_key_required: false
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
+          limits:
+            max_block_range: 10000
 
       - id: "base_lava"
         name: "Lava Base"
         priority: 6
         url: "https://base.lava.build"
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
 
   # ──────────────────────────────────────────────────────────────────────────
   # ARBITRUM ONE (L2)
@@ -263,12 +305,17 @@ chains:
         ws_url: "wss://arbitrum.drpc.org"
         archival: true
         subscribe_new_heads: false
+        capabilities:
+          limits:
+            max_block_range: 10000
 
       - id: "arbitrum_lava"
         name: "Lava Arbitrum"
         priority: 3
         url: "https://arb1.lava.build"
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "arbitrum_publicnode"
         name: "PublicNode Arbitrum"
@@ -277,18 +324,25 @@ chains:
         ws_url: "wss://arbitrum-one-rpc.publicnode.com"
         archival: true
         subscribe_new_heads: true
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "arbitrum_meowrpc"
         name: "Meow RPC Arbitrum"
         priority: 5
         url: "https://arbitrum.meowrpc.com"
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "arbitrum_pocket"
         name: "Pocket Network Arbitrum"
         priority: 6
         url: "https://arb-one.api.pocket.network"
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
 
   # ──────────────────────────────────────────────────────────────────────────
   # ETHEREUM SEPOLIA (Testnet)
@@ -325,6 +379,9 @@ chains:
         ws_url: "wss://sepolia.drpc.org"
         subscribe_new_heads: true
         archival: true
+        capabilities:
+          limits:
+            max_block_range: 10000
 
       - id: "sepolia_publicnode"
         name: "PublicNode Sepolia"
@@ -333,12 +390,28 @@ chains:
         ws_url: "wss://ethereum-sepolia-rpc.publicnode.com"
         subscribe_new_heads: true
         archival: false
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, eip4844, filters]
+          unsupported_methods: ["eth_protocolVersion"]
+          limits:
+            max_block_age: 1000
+            block_age_methods:
+              [
+                eth_call,
+                eth_getBalance,
+                eth_getCode,
+                eth_getStorageAt,
+                eth_getTransactionCount,
+              ]
 
       - id: "sepolia_1rpc"
         name: "1RPC Sepolia"
         priority: 4
         url: "https://1rpc.io/sepolia"
         archival: false
+        capabilities:
+          limits:
+            max_block_range: 10000
 
       - id: "sepolia_onfinality"
         name: "OnFinality Sepolia"
@@ -351,8 +424,10 @@ chains:
         priority: 6
         url: "https://ethereum-sepolia-public.nodies.app"
         archival: true
-        adapter_config:
-          max_block_range: 500
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
+          limits:
+            max_block_range: 500
 
   # ──────────────────────────────────────────────────────────────────────────
   # BASE SEPOLIA (Testnet, L2)
@@ -389,6 +464,10 @@ chains:
         ws_url: "wss://base-sepolia.drpc.org"
         subscribe_new_heads: true
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
+          limits:
+            max_block_range: 10000
 
       - id: "base_sepolia_publicnode"
         name: "PublicNode Base Sepolia"
@@ -397,26 +476,35 @@ chains:
         ws_url: "wss://base-sepolia-rpc.publicnode.com"
         subscribe_new_heads: true
         archival: true
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "base_sepolia_official"
         name: "Base Official Sepolia"
         priority: 4
         url: "https://sepolia.base.org"
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "base_sepolia_onfinality"
         name: "OnFinality Base Sepolia"
         priority: 5
         url: "https://base-sepolia.api.onfinality.io/public"
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "base_sepolia_nodies"
         name: "Nodies Base Sepolia"
         priority: 6
         url: "https://base-sepolia-public.nodies.app"
         archival: true
-        adapter_config:
-          max_block_range: 500
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
+          limits:
+            max_block_range: 500
 
   # ──────────────────────────────────────────────────────────────────────────
   # ARBITRUM SEPOLIA (Testnet, L2)
@@ -453,6 +541,9 @@ chains:
         ws_url: "wss://arbitrum-sepolia.drpc.org"
         subscribe_new_heads: true
         archival: true
+        capabilities:
+          limits:
+            max_block_range: 10000
 
       - id: "arb_sepolia_publicnode"
         name: "PublicNode Arbitrum Sepolia"
@@ -461,15 +552,22 @@ chains:
         ws_url: "wss://arbitrum-sepolia-rpc.publicnode.com"
         subscribe_new_heads: true
         archival: true
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "arb_sepolia_official"
         name: "Arbitrum Official Sepolia"
         priority: 4
         url: "https://sepolia-rollup.arbitrum.io/rpc"
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
 
       - id: "arb_sepolia_onfinality"
         name: "OnFinality Arbitrum Sepolia"
         priority: 5
         url: "https://arbitrum-sepolia.api.onfinality.io/public"
         archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]

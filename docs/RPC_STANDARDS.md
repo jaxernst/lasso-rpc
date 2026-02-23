@@ -329,9 +329,9 @@ Lasso.RPC.MethodRegistry.default_support_assumption("debug_traceTransaction")
 - `:subscriptions` - WebSocket-only: `eth_subscribe`, `eth_unsubscribe`
 - `:eip1559`, `:eip4844`, `:batch`, `:mempool`, `:network`, `:txpool` - Specialized categories
 
-**Usage in adapters:**
+**Usage in capabilities system:**
 
-Provider adapters use the MethodRegistry to make intelligent routing decisions and set conservative default assumptions for method support validation.
+The capabilities engine uses MethodRegistry to map methods to categories for filtering. When a provider declares `unsupported_categories: [debug, trace]`, the engine checks each method against MethodRegistry to determine if it should be blocked.
 
 ---
 

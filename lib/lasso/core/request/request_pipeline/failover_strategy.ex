@@ -8,10 +8,12 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
 
   ## Decision Priority (clause ordering)
 
+  Category-specific handlers run first, then generic retriability as fallback:
+
   1. No channels remaining → terminal
   2. `:client_error` → conditional failover (threshold 1)
-  3. `retriable? = false` → terminal
-  4. `:capability_violation` → conditional failover (threshold 2)
+  3. `:capability_violation` → conditional failover (threshold 2)
+  4. `:method_not_found` → conditional failover (threshold 2)
   5. `:rate_limit` → failover
   6. `:server_error` → failover
   7. `:network_error` → failover
@@ -19,7 +21,8 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
   9. `:timeout` → failover
   10. `retriable? = true` (generic) → failover
   11. `:circuit_open` → failover
-  12. Unknown format → terminal
+  12. `retriable? = false` (generic fallback) → terminal
+  13. Unknown format → terminal
 
   ## Smart Failover Detection
 
@@ -110,12 +113,6 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
     end
   end
 
-  defp should_failover?(%JError{retriable?: false, category: category}, _rest, _ctx)
-       when category != :client_error,
-       do: {false, :non_retriable_error}
-
-  # Smart detection for capability violations (result size, block range, etc.)
-  # If we've seen this error N times already, assume it's universal and stop
   defp should_failover?(%JError{category: :capability_violation} = error, _rest, ctx) do
     repeated_count = RequestContext.get_error_category_count(ctx, :capability_violation)
 
@@ -132,6 +129,25 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
       {false, :universal_capability_violation}
     else
       {true, :capability_violation_detected}
+    end
+  end
+
+  defp should_failover?(%JError{category: :method_not_found} = error, _rest, ctx) do
+    repeated_count = RequestContext.get_error_category_count(ctx, :method_not_found)
+
+    if repeated_count >= @repeated_capability_violation_threshold do
+      Logger.warning("Repeated method_not_found - assuming universal unsupported method",
+        request_id: ctx.request_id,
+        error_message: error.message,
+        method: ctx.method,
+        repeated_count: repeated_count,
+        threshold: @repeated_capability_violation_threshold,
+        chain: ctx.chain
+      )
+
+      {false, :universal_method_not_found}
+    else
+      {true, :method_not_found_detected}
     end
   end
 
@@ -154,6 +170,9 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
     do: {true, :retriable_error}
 
   defp should_failover?(:circuit_open, _rest, _ctx), do: {true, :circuit_open}
+
+  defp should_failover?(%JError{retriable?: false}, _rest, _ctx),
+    do: {false, :non_retriable_error}
 
   defp should_failover?(_reason, _rest, _ctx), do: {false, :unknown_error_format}
 end

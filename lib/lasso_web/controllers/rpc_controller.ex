@@ -385,11 +385,13 @@ defmodule LassoWeb.RPCController do
 
     cond do
       MethodConstraints.ws_only?(method) ->
+        ws_path = "/ws" <> conn.request_path
+
         {:error,
          JError.new(
            -32_601,
            "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
-           data: %{websocket_url: "/socket/websocket"}
+           data: %{websocket_url: ws_path}
          )}
 
       MethodConstraints.disallowed?(method) ->

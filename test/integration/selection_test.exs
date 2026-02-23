@@ -5,7 +5,7 @@ defmodule Lasso.RPC.SelectionTest do
   Tests the core coordinator responsibilities:
   - Context validation
   - Filter handling (exclude, protocol)
-  - ProviderPool integration
+  - CandidateListing integration
   - Error handling
   - Telemetry emission
   - Metadata enrichment

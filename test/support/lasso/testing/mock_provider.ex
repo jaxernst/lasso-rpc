@@ -8,7 +8,7 @@ defmodule Lasso.Testing.MockProvider do
   ## Key Features
 
   - ✅ **Real HTTP server** - Uses actual network stack (no process mocking)
-  - ✅ **Integrates with Providers API** - Works with existing ChainSupervisor/ProviderPool
+  - ✅ **Integrates with Providers API** - Works with existing ChainSupervisor
   - ✅ **Configurable behavior** - Set latency, reliability, custom responses
   - ✅ **Automatic cleanup** - Servers stop when test process exits
   - ✅ **Deterministic responses** - Predictable block numbers for assertions
@@ -180,8 +180,6 @@ defmodule Lasso.Testing.MockProvider do
         profile = Map.get(spec, :profile, "default")
 
         with :ok <- Lasso.Testing.ChainHelper.ensure_chain_exists(chain, profile: profile),
-             :ok <-
-               Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
              {:ok, ^provider_id} <- Lasso.Providers.add_provider(chain, provider_config) do
           # Monitor the test process - cleanup on exit
           setup_cleanup_monitor(chain, provider_id, pid)
@@ -201,19 +199,7 @@ defmodule Lasso.Testing.MockProvider do
               {:ok, provider_id}
           end
         else
-          {:error, {:config_store_registration_failed, reason}} ->
-            # Failed to register with ConfigStore
-            Plug.Cowboy.shutdown(provider_id)
-            {:error, {:config_store_registration_failed, reason}}
-
-          {:error, reason} when reason in [:chain_not_found] ->
-            # Chain doesn't exist (shouldn't happen after ensure_chain_exists, but handle gracefully)
-            Plug.Cowboy.shutdown(provider_id)
-            {:error, {:config_store_registration_failed, reason}}
-
           {:error, reason} ->
-            # Failed to register with ChainSupervisor - cleanup ConfigStore
-            Lasso.Config.ConfigStore.unregister_provider_runtime(profile, chain, provider_id)
             Plug.Cowboy.shutdown(provider_id)
             {:error, {:registration_failed, reason}}
         end
@@ -239,7 +225,7 @@ defmodule Lasso.Testing.MockProvider do
   end
 
   def stop_mock(chain, provider_id) do
-    # Remove from Providers (ChainSupervisor/ProviderPool)
+    # Remove from Providers (ChainSupervisor)
     Lasso.Providers.remove_provider(chain, provider_id)
 
     # Remove from ConfigStore

@@ -36,7 +36,11 @@ defmodule Lasso.Config.ConfigStore do
 
   @type profile_meta :: %{
           slug: String.t(),
-          name: String.t()
+          name: String.t(),
+          logo: String.t() | nil,
+          rps_limit: pos_integer(),
+          burst_limit: pos_integer(),
+          unlisted: boolean()
         }
 
   ## Public API - Profile Operations
@@ -318,6 +322,7 @@ defmodule Lasso.Config.ConfigStore do
     case do_load_all_profiles(state) do
       {:ok, _profiles, new_state} ->
         Logger.info("Configuration reloaded successfully")
+        rebuild_shared_infrastructure()
         {:reply, :ok, new_state}
 
       {:error, reason} ->
@@ -484,7 +489,11 @@ defmodule Lasso.Config.ConfigStore do
   defp store_profile(spec) do
     meta = %{
       slug: spec.slug,
-      name: spec.name
+      name: spec.name,
+      logo: Map.get(spec, :logo),
+      rps_limit: spec.rps_limit,
+      burst_limit: spec.burst_limit,
+      unlisted: Map.get(spec, :unlisted, false)
     }
 
     :ets.insert(@config_table, {{:profile, spec.slug, :meta}, meta})
@@ -818,15 +827,98 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   defp normalize_provider_config(attrs) when is_map(attrs) do
+    sharing_mode =
+      case Map.get(attrs, :sharing_mode) || Map.get(attrs, "sharing_mode") do
+        :isolated -> :isolated
+        "isolated" -> :isolated
+        _ -> :auto
+      end
+
+    archival =
+      case Map.get(attrs, :archival, Map.get(attrs, "archival")) do
+        nil -> true
+        val -> val
+      end
+
     %Provider{
       id: Map.get(attrs, :id) || Map.get(attrs, "id"),
       name: Map.get(attrs, :name) || Map.get(attrs, "name"),
       url: Map.get(attrs, :url) || Map.get(attrs, "url"),
       ws_url: Map.get(attrs, :ws_url) || Map.get(attrs, "ws_url"),
       priority: Map.get(attrs, :priority) || Map.get(attrs, "priority") || 100,
-      adapter_config: Map.get(attrs, :adapter_config) || Map.get(attrs, "adapter_config"),
+      capabilities: Map.get(attrs, :capabilities) || Map.get(attrs, "capabilities"),
+      archival: archival,
+      sharing_mode: sharing_mode,
       __mock__: Map.get(attrs, :__mock__)
     }
+  end
+
+  defp rebuild_shared_infrastructure do
+    alias Lasso.Providers.{Catalog, InstanceSupervisor, ProbeCoordinator}
+
+    old_instances = Catalog.list_all_instance_ids()
+    old_chains = list_chains()
+
+    Catalog.build_from_config()
+
+    new_instances = Catalog.list_all_instance_ids()
+    new_chains = list_chains()
+
+    for instance_id <- new_instances do
+      case DynamicSupervisor.start_child(
+             Lasso.Providers.InstanceDynamicSupervisor,
+             {InstanceSupervisor, instance_id}
+           ) do
+        {:ok, _} ->
+          :ok
+
+        :ignore ->
+          :ok
+
+        {:error, {:already_started, _}} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "Failed to start InstanceSupervisor for #{instance_id}: #{inspect(reason)}"
+          )
+      end
+    end
+
+    # Terminate InstanceSupervisors for removed instances
+    removed_instances = old_instances -- new_instances
+
+    for instance_id <- removed_instances do
+      case GenServer.whereis(InstanceSupervisor.via_name(instance_id)) do
+        nil -> :ok
+        pid -> DynamicSupervisor.terminate_child(Lasso.Providers.InstanceDynamicSupervisor, pid)
+      end
+    end
+
+    # Start/reload ProbeCoordinators for current chains
+    for chain <- new_chains do
+      case DynamicSupervisor.start_child(
+             Lasso.Providers.ProbeSupervisor,
+             {ProbeCoordinator, chain}
+           ) do
+        {:ok, _} -> :ok
+        {:error, {:already_started, _}} -> ProbeCoordinator.reload_instances(chain)
+        _ -> :ok
+      end
+    end
+
+    # Terminate ProbeCoordinators for removed chains
+    removed_chains = old_chains -- new_chains
+
+    for chain <- removed_chains do
+      case GenServer.whereis(ProbeCoordinator.via_name(chain)) do
+        nil -> :ok
+        pid -> DynamicSupervisor.terminate_child(Lasso.Providers.ProbeSupervisor, pid)
+      end
+    end
+  rescue
+    e ->
+      Logger.warning("Failed to rebuild shared infrastructure on config reload: #{inspect(e)}")
   end
 
   defp validate_provider_not_exists(chain_config, provider_id) do

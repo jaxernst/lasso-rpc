@@ -134,80 +134,117 @@ Lasso.Application
 ├── Cluster.Supervisor (libcluster node discovery)
 ├── Task.Supervisor (async operations)
 ├── Lasso.Cluster.Topology (cluster membership & health)
-├── Lasso.Core.Benchmarking.BenchmarkStore
-├── Lasso.Core.Benchmarking.Persistence
+├── Lasso.Benchmarking.BenchmarkStore
+├── Lasso.Benchmarking.Persistence
 ├── Lasso.Config.ConfigStore
 ├── LassoWeb.Dashboard.MetricsStore (cluster-wide metrics cache)
 ├── Lasso.Dashboard.StreamSupervisor (DynamicSupervisor)
 │   └── EventStream {profile} (real-time dashboard aggregation)
+├── Lasso.Providers.InstanceDynamicSupervisor (shared provider infrastructure)
+│   └── InstanceSupervisor {instance_id} (one per unique upstream)
+│       ├── CircuitBreaker {instance_id, :http}
+│       ├── CircuitBreaker {instance_id, :ws}
+│       ├── WSConnection {instance_id}
+│       └── InstanceSubscriptionManager {instance_id}
+├── Lasso.Providers.ProbeSupervisor (DynamicSupervisor)
+│   └── ProbeCoordinator {chain} (one per unique chain)
+├── Lasso.BlockSync.DynamicSupervisor
+│   └── BlockSync.Worker {chain, instance_id} (one per unique instance per chain)
 ├── ProfileChainSupervisor (DynamicSupervisor)
 │   └── ChainSupervisor {profile, chain}
-│       ├── ProviderPool
 │       ├── TransportRegistry
-│       ├── BlockSync.Supervisor
-│       │   └── BlockSync.Worker
-│       ├── HealthProbe.Supervisor
-│       │   └── HealthProbe.Worker (per provider)
-│       ├── DynamicSupervisor (per-provider)
-│       │   └── ProviderSupervisor
-│       │       ├── CircuitBreaker (HTTP)
-│       │       ├── CircuitBreaker (WS)
-│       │       └── WSConnection
-│       ├── UpstreamSubscriptionManager
+│       ├── ClientSubscriptionRegistry
 │       ├── UpstreamSubscriptionPool
-│       ├── StreamSupervisor
-│       │   └── StreamCoordinator (per subscription key)
-│       └── ClientSubscriptionRegistry
+│       └── StreamSupervisor
+│           └── StreamCoordinator (per subscription key)
 └── LassoWeb.Endpoint
 ```
 
 ### Key Components
+
+**Lasso.Providers.Catalog** (Module, not GenServer)
+
+- Maps profiles to shared provider instances
+- Builds ETS catalog from ConfigStore, swaps via persistent_term atomically
+- Provides O(1) lookups: instance config, instance refs, profile providers
+
+**Lasso.Providers.InstanceSupervisor**
+
+- Per-instance supervisor for shared circuit breakers, WebSocket connection, and upstream subscription manager
+- One supervisor per unique `instance_id` (derived from chain + URL + auth)
+- Started under `InstanceDynamicSupervisor`
+- Children: CircuitBreaker (HTTP), CircuitBreaker (WS), WSConnection, InstanceSubscriptionManager
+
+**Lasso.Providers.ProbeCoordinator**
+
+- Per-chain health probe coordinator (one per unique chain)
+- 200ms tick cycle, probes one instance per tick with exponential backoff
+- Writes results to `:lasso_instance_state` ETS
+- Replaces per-(profile, chain) BatchCoordinator (deleted)
+
+**Lasso.Providers.CandidateListing** (Module, not GenServer)
+
+- Pure ETS reads for provider selection
+- 7-stage filter pipeline: transport availability, WS liveness, circuit state, rate limits, lag, archival, exclusions
+- Replaces ProviderPool.list_candidates (ProviderPool deleted)
 
 **ProfileChainSupervisor** (`Lasso.ProfileChainSupervisor`)
 
 - Top-level dynamic supervisor managing `(profile, chain)` pairs
 - Enables independent lifecycle per configuration
 
-**ChainSupervisor** (`Lasso.ChainSupervisor`)
+**ChainSupervisor** (`Lasso.RPC.ChainSupervisor`)
 
-- Per-(profile, chain) supervisor providing fault isolation
-- Manages provider pool, health monitoring, and subscriptions
-
-**ProviderSupervisor** (`Lasso.ProviderSupervisor`)
-
-- Per-provider supervisor managing circuit breakers and connections
-- One per provider in each (profile, chain)
+- Per-(profile, chain) supervisor providing policy isolation
+- No longer starts per-provider processes (health/CBs/WS/BlockSync are shared at instance level)
+- Children: TransportRegistry, ClientSubscriptionRegistry, UpstreamSubscriptionPool, StreamSupervisor
 
 **CircuitBreaker** (`Lasso.Core.Support.CircuitBreaker`)
 
-- GenServer tracking failures per provider+transport
+- GenServer tracking failures per `{instance_id, transport}`
 - Implements open/half-open/closed state machine
+- Writes state to `:lasso_instance_state` ETS on every transition
+- Shared across all profiles using the same upstream
 
-**WSConnection** (`Lasso.Core.Transport.WebSocket.Connection`)
+**WSConnection** (`Lasso.RPC.Transport.WebSocket.Connection`)
 
-- GenServer managing persistent WebSocket connection to single provider
+- GenServer managing persistent WebSocket connection
+- Started via `start_shared_link/1` under InstanceSupervisor
+- Shared across all profiles using the same upstream
 
-**ProviderPool** (`Lasso.Core.Providers.ProviderPool`)
+**BlockSync.Supervisor** (`Lasso.BlockSync.Supervisor`)
 
-- GenServer tracking provider health and sync state in ETS
+- Singleton interface to `BlockSync.DynamicSupervisor`
+- Manages one Worker per `(chain, instance_id)` pair
+- Workers track block heights via HTTP polling or WebSocket subscriptions
+- Broadcasts block updates to all profiles referencing that instance
 
-**HealthProbe.Worker** (`Lasso.Core.HealthProbe.Worker`)
+**BlockSync.Worker** (`Lasso.BlockSync.Worker`)
 
-- Per-provider worker executing periodic `eth_blockNumber` probes
-- Reports results to ProviderPool
+- Per-(chain, instance_id) GenServer tracking block heights
+- Polls via HTTP or subscribes via WS depending on provider capabilities
+- Fan-out broadcasts to all profiles using this instance
+- Replaces per-(profile, provider_id) workers (migrated from profile-scoped to instance-scoped)
 
-**BlockSync.Worker** (`Lasso.Core.BlockSync.Worker`)
-
-- Tracks block heights from passive traffic and probes
-- Centralized source for consensus height
-
-**TransportRegistry** (`Lasso.Core.Transport.Registry`)
+**TransportRegistry** (`Lasso.RPC.TransportRegistry`)
 
 - Registry for discovering available HTTP/WS channels per provider
+- Caches channel references in `:transport_channel_cache` ETS
+
+**InstanceSubscriptionManager** (`Lasso.Core.Streaming.InstanceSubscriptionManager`)
+
+- Per-instance_id GenServer managing upstream WebSocket subscriptions
+- Handles subscription lifecycle (`eth_subscribe`, `eth_unsubscribe`) with the upstream provider
+- Receives events from WSConnection via PubSub topic `ws:subs:instance:{instance_id}`
+- Dispatches events to consumers via `InstanceSubscriptionRegistry` (duplicate-key Registry)
+- Replaces per-profile `UpstreamSubscriptionManager` (deleted)
 
 **UpstreamSubscriptionPool** (`Lasso.Core.Streaming.UpstreamSubscriptionPool`)
 
-- GenServer multiplexing client subscriptions to minimal upstream connections
+- Per-(profile, chain) GenServer multiplexing client subscriptions to minimal upstream connections
+- Resolves `provider_id` → `instance_id` via Catalog
+- Calls `InstanceSubscriptionManager.ensure_subscription` to share upstream subscriptions across profiles
+- Registers in `InstanceSubscriptionRegistry` to receive events
 
 **StreamCoordinator** (`Lasso.Core.Streaming.StreamCoordinator`)
 
@@ -317,12 +354,12 @@ Record metrics per provider+transport+method
 
 ### Transport Implementations
 
-**HTTP Transport** (`Lasso.Core.Transport.HTTP`)
+**HTTP Transport** (`Lasso.RPC.Transports.HTTP`)
 
 - Uses Finch connection pools for HTTP/2 multiplexing
 - Per-provider circuit breaker wraps all requests
 
-**WebSocket Transport** (`Lasso.Core.Transport.WebSocket`)
+**WebSocket Transport** (`Lasso.RPC.Transports.WebSocket`)
 
 - Uses persistent WSConnection GenServers
 - Supports both unary calls and subscriptions
@@ -394,7 +431,7 @@ HTTP polling provides predictable observation delay, enabling fair lag compariso
 
 ### BlockSync Components
 
-**BlockSync.Worker** (`Lasso.Core.BlockSync.Worker`)
+**BlockSync.Worker** (`Lasso.BlockSync.Worker`)
 
 Per-provider GenServer managing block height tracking:
 
@@ -414,7 +451,7 @@ Per-provider GenServer managing block height tracking:
 - `:http_only` - HTTP polling only
 - `:http_with_ws` - HTTP + WebSocket subscription
 
-**BlockSync.Registry** (`Lasso.Core.BlockSync.Registry`)
+**BlockSync.Registry** (`Lasso.BlockSync.Registry`)
 
 Centralized ETS-based block height storage:
 
@@ -482,13 +519,15 @@ Bounded observation delay from HTTP polling enables accurate credit calculation.
 
 ### Health Probing
 
-**HealthProbe.Worker** (`Lasso.Core.HealthProbe.Worker`)
+**Lasso.Providers.ProbeCoordinator**
 
-Per-provider health monitoring independent of BlockSync:
+Per-chain health probe coordinator (one per unique chain):
 
+- 200ms tick cycle, probes one instance per tick
 - Periodic `eth_chainId` probes (health check + version detection)
-- Bypasses circuit breakers to detect recovery
-- Reports to ProviderPool
+- Exponential backoff on failure (2s base, 30s max, ±20% jitter)
+- Signals recovery to circuit breakers via `CircuitBreaker.signal_recovery_cast/1`
+- Writes health status to `:lasso_instance_state` ETS
 
 **Configuration**:
 
@@ -497,17 +536,18 @@ chains:
   ethereum:
     block_time_ms: 12000 # Optimistic lag calculation
     monitoring:
-      probe_interval_ms: 12000 # HTTP polling interval
       lag_alert_threshold_blocks: 5
 ```
 
+Note: `probe_interval_ms` is no longer configurable per profile. ProbeCoordinator uses a fixed 200ms tick interval with per-instance exponential backoff.
+
 ### Health Probe Backoff
 
-Health probes implement exponential backoff for degraded providers to reduce probe load:
+ProbeCoordinator implements exponential backoff for degraded instances to reduce probe load:
 
 | Consecutive Failures | Backoff |
 |---------------------|---------|
-| 0-1 | 0 (probe normally) |
+| 0-1 | 0 (probe on next tick) |
 | 2 | 2 seconds |
 | 3 | 4 seconds |
 | 4 | 8 seconds |
@@ -515,10 +555,10 @@ Health probes implement exponential backoff for degraded providers to reduce pro
 | 6+ | 30 seconds (capped) |
 
 - Backoff uses monotonic time to avoid wall-clock jump issues
-- ±20% jitter prevents synchronized probe storms across providers
+- ±20% jitter prevents synchronized probe storms across instances
 - Backoff resets immediately on success
-- HTTP and WebSocket probes track backoff independently
-- Round-robin advancement is unaffected (only the individual probe may be skipped)
+- Each instance tracks its own backoff state independently
+- Probes are dispatched as async Tasks to prevent slow instances from blocking the cycle
 
 ---
 
@@ -696,7 +736,7 @@ X-Lasso-Meta: eyJ2ZXJzaW9u... (base64url JSON)
 
 ---
 
-## Provider Adapter System
+## Provider Capabilities System
 
 Adapters validate requests before sending upstream to prevent rejections and unnecessary failovers.
 
@@ -707,51 +747,45 @@ Adapters validate requests before sending upstream to prevent rejections and unn
 3. Validate params for selected channel
 4. On validation failure: failover to next channel
 
-### Adapter Behavior
+### Declarative Capabilities
 
-```elixir
-defmodule Lasso.Core.Providers.ProviderAdapter do
-  @callback supports_method?(method, transport, ctx) :: boolean()
-  @callback validate_params(method, params, transport, ctx) ::
-    :ok | {:error, reason}
-  @callback normalize_request(request, ctx) :: request
-  @callback normalize_response(response, ctx) :: response
-  @callback normalize_error(error, ctx) :: error
-end
-```
-
-### Per-Chain Configuration
-
-Adapters provide defaults, but `adapter_config` in YAML allows per-chain overrides:
+Provider capabilities are declared in YAML and evaluated by a single engine (`Lasso.RPC.Providers.Capabilities`):
 
 ```yaml
 providers:
-  - id: "alchemy_base"
-    url: "https://..."
-    adapter_config:
-      eth_get_logs_block_range: 50 # Override Alchemy's default (10)
+  - id: "ethereum_drpc"
+    url: "https://eth.drpc.org"
+    capabilities:
+      unsupported_categories: []
+      unsupported_methods: []
+      limits:
+        max_block_range: 10000
+      error_rules:
+        - code: 30
+          message_contains: "timeout on the free tier"
+          category: rate_limit
+        - code: 35
+          category: capability_violation
 ```
 
-### Current Adapters
+When `capabilities` is omitted, defaults to permissive behavior (only `:local_only` methods blocked).
 
-- **Alchemy**: `eth_getLogs` block range validation
-- **PublicNode**: Address count limits (HTTP: 25, WS: 20)
-- **LlamaRPC/Merkle**: 1000 block range limit
-- **DRPC/1RPC**: Rate/parameter limit detection
-- **Cloudflare**: No restrictions
-- **Generic**: Fallback adapter
+The capabilities engine handles:
+- **Method filtering**: `unsupported_categories` and `unsupported_methods`
+- **Parameter validation**: `max_block_range` (eth_getLogs), `max_block_age` (state methods)
+- **Error classification**: `error_rules` evaluated top-to-bottom, first match wins
 
 ---
 
 ## Error Classification
 
-Composable error categorization with provider-specific overrides.
+Composable error categorization with per-provider overrides via capabilities.
 
 ### Classification Flow
 
 ```elixir
-# 1. Try adapter override
-case adapter.classify_error(code, message) do
+# 1. Try per-provider error_rules from capabilities
+case Capabilities.classify_error(code, message, capabilities) do
   {:ok, category} -> category
   :default -> ErrorClassification.categorize(code, message)
 end

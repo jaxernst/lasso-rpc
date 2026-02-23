@@ -85,6 +85,36 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategyTest do
     end
   end
 
+  describe "method_not_found failover threshold" do
+    test "failovers before threshold is reached" do
+      error =
+        JError.new(-32_601, "method does not exist",
+          category: :method_not_found,
+          retriable?: true
+        )
+
+      channels = [make_channel("provider-b")]
+      ctx = make_ctx(error_categories: %{method_not_found: 1})
+
+      assert {:failover, :method_not_found_detected} =
+               FailoverStrategy.decide(error, channels, ctx)
+    end
+
+    test "becomes terminal after repeated method_not_found errors" do
+      error =
+        JError.new(-32_601, "method does not exist",
+          category: :method_not_found,
+          retriable?: true
+        )
+
+      channels = [make_channel("provider-b")]
+      ctx = make_ctx(error_categories: %{method_not_found: 2})
+
+      assert {:terminal_error, :universal_method_not_found} =
+               FailoverStrategy.decide(error, channels, ctx)
+    end
+  end
+
   describe "retriable categories still failover (regression)" do
     test "rate_limit → failover" do
       error = JError.new(-32_005, "Rate limited", category: :rate_limit, retriable?: true)

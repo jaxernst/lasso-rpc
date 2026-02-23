@@ -8,8 +8,8 @@ defmodule Lasso.HealthProbe.ProbeClassificationTest do
   mean the provider is broken and should increment consecutive_failures.
 
   These tests validate the classification patterns inline since the logic is embedded
-  in BatchCoordinator's private do_http_probe/do_ws_probe functions. We test the same
-  branching conditions against the same data shapes those functions match on.
+  in ProbeCoordinator's private probe functions. We test the same branching conditions
+  against the same data shapes those functions match on.
   """
 
   use ExUnit.Case, async: true
@@ -17,7 +17,7 @@ defmodule Lasso.HealthProbe.ProbeClassificationTest do
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.Response
 
-  # Replicate the HTTP probe classification logic from BatchCoordinator.do_http_probe
+  # Replicate the HTTP probe classification logic from ProbeCoordinator
   defp classify_http_probe_error(%Response.Error{error: jerror}) do
     if jerror.category == :rate_limit do
       {:ok, :rate_limited}
@@ -26,7 +26,7 @@ defmodule Lasso.HealthProbe.ProbeClassificationTest do
     end
   end
 
-  # Replicate the WS probe classification logic from BatchCoordinator.do_ws_probe
+  # Replicate the WS probe classification logic from ProbeCoordinator
   defp classify_ws_probe_error(error) do
     case error do
       %{category: :rate_limit} ->

@@ -169,9 +169,9 @@ defmodule Lasso.TelemetryLogger do
 
     Logger.log(
       level,
-      "Circuit opened: #{metadata.provider_id}:#{metadata.transport}",
+      "Circuit opened: #{metadata.instance_id}:#{metadata.transport}",
       [
-        chain: metadata.chain,
+        instance_id: metadata.instance_id,
         from: metadata.from_state,
         to: metadata.to_state,
         reason: metadata.reason
@@ -180,8 +180,8 @@ defmodule Lasso.TelemetryLogger do
   end
 
   def handle_cb_close(_event, _measurements, metadata, _config) do
-    Logger.info("Circuit closed: #{metadata.provider_id}:#{metadata.transport}",
-      chain: metadata.chain,
+    Logger.info("Circuit closed: #{metadata.instance_id}:#{metadata.transport}",
+      instance_id: metadata.instance_id,
       reason: metadata.reason
     )
   end
@@ -189,8 +189,8 @@ defmodule Lasso.TelemetryLogger do
   def handle_cb_half_open(_event, _measurements, metadata, _config) do
     level = if Map.get(metadata, :consecutive_open_count, 0) > 1, do: :debug, else: :info
 
-    Logger.log(level, "Circuit half-open: #{metadata.provider_id}:#{metadata.transport}",
-      chain: metadata.chain,
+    Logger.log(level, "Circuit half-open: #{metadata.instance_id}:#{metadata.transport}",
+      instance_id: metadata.instance_id,
       reason: metadata.reason
     )
   end
@@ -198,8 +198,8 @@ defmodule Lasso.TelemetryLogger do
   def handle_cb_recovery(_event, _measurements, metadata, _config) do
     level = if Map.get(metadata, :consecutive_open_count, 0) > 1, do: :debug, else: :info
 
-    Logger.log(level, "Circuit proactive recovery: #{metadata.provider_id}:#{metadata.transport}",
-      chain: metadata.chain
+    Logger.log(level, "Circuit proactive recovery: #{metadata.instance_id}:#{metadata.transport}",
+      instance_id: metadata.instance_id
     )
   end
 

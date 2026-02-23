@@ -15,40 +15,99 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   require Logger
 
   @impl true
+  def update(%{_metrics_only: true} = assigns, socket) do
+    if assigns[:live_provider_metrics] != socket.assigns[:live_provider_metrics] do
+      {:ok,
+       socket
+       |> assign(:live_provider_metrics, assigns[:live_provider_metrics])
+       |> assign_region_data(socket.assigns[:provider_connection])}
+    else
+      {:ok, socket}
+    end
+  end
+
   def update(assigns, socket) do
     provider_connection = Enum.find(assigns.connections, &(&1.id == assigns.provider_id))
-    provider_id = assigns.provider_id
 
-    # Get live metrics from aggregator (single source of truth)
-    live_provider_metrics = assigns[:live_provider_metrics] || %{}
-    live_metrics = Map.get(live_provider_metrics, provider_id)
+    inputs_changed =
+      socket.assigns[:provider_id] != assigns.provider_id or
+        socket.assigns[:provider_connection] != provider_connection or
+        socket.assigns[:live_provider_metrics] != assigns[:live_provider_metrics] or
+        socket.assigns[:cluster_circuit_states] != assigns[:cluster_circuit_states] or
+        socket.assigns[:cluster_block_heights] != assigns[:cluster_block_heights] or
+        socket.assigns[:selected_provider_unified_events] !=
+          assigns[:selected_provider_unified_events]
 
-    # Regions come from aggregator's cluster-wide tracking (single source of truth)
-    available_node_ids = assigns[:available_node_ids] || []
+    if inputs_changed do
+      socket =
+        socket
+        |> assign(:provider_id, assigns.provider_id)
+        |> assign(:connections, assigns.connections)
+        |> assign(:selected_profile, assigns.selected_profile)
+        |> assign(:selected_provider_unified_events, assigns[:selected_provider_unified_events])
+        |> assign(:selected_provider_metrics, assigns[:selected_provider_metrics])
+        |> assign(:live_provider_metrics, assigns[:live_provider_metrics])
+        |> assign(:cluster_circuit_states, assigns[:cluster_circuit_states])
+        |> assign(:cluster_health_counters, assigns[:cluster_health_counters])
+        |> assign(:cluster_block_heights, assigns[:cluster_block_heights])
+        |> assign(:chain_consensus_height, assigns[:chain_consensus_height])
+        |> assign(:available_node_ids, assigns[:available_node_ids])
+        |> assign(:provider_connection, provider_connection)
+        |> assign_new(:selected_region, fn -> "aggregate" end)
 
-    # Get circuit states from aggregator
-    cluster_circuits = assigns[:cluster_circuit_states] || %{}
+      {:ok, assign_region_data(socket, provider_connection)}
+    else
+      {:ok, socket}
+    end
+  end
 
-    # Get health counters (consecutive failures/successes) from aggregator
-    cluster_health_counters = assigns[:cluster_health_counters] || %{}
+  defp assign_region_data(socket, nil) do
+    socket
+    |> assign(:show_region_tabs, false)
+    |> assign(:live_metrics, nil)
+    |> assign(:cluster_circuits, %{})
+    |> assign(:cluster_health_counters, %{})
+    |> assign(:events, [])
+    |> assign(:regions_with_issues, [])
+    |> assign(:sync_data, %{
+      block_height: nil,
+      consensus_height: nil,
+      optimistic_lag: nil,
+      effective_lag: 0,
+      sync_status: :healthy,
+      mode: :aggregate
+    })
+    |> assign(:metrics_data, %{
+      success_rate: nil,
+      p50_latency: nil,
+      p95_latency: nil,
+      pick_share_5m: nil,
+      calls_last_minute: 0,
+      rpc_stats: []
+    })
+    |> assign(:circuit_data, %{
+      mode: :single,
+      http_state: :closed,
+      ws_state: :closed,
+      ws_connected: false,
+      consecutive_failures: 0,
+      consecutive_successes: 0,
+      has_http: false,
+      has_ws: false
+    })
+    |> assign(:filtered_events, [])
+  end
 
-    # Events for the provider
-    events = assigns[:selected_provider_unified_events] || []
+  defp assign_region_data(socket, _provider_connection) do
+    available_node_ids = socket.assigns[:available_node_ids] || []
 
-    socket =
-      socket
-      |> assign(assigns)
-      |> assign(:provider_connection, provider_connection)
-      |> assign(:available_node_ids, available_node_ids)
-      |> assign(:show_region_tabs, length(available_node_ids) > 1)
-      |> assign(:live_metrics, live_metrics)
-      |> assign(:cluster_circuits, cluster_circuits)
-      |> assign(:cluster_health_counters, cluster_health_counters)
-      |> assign(:events, events)
-      |> assign_new(:selected_region, fn -> "aggregate" end)
-      |> compute_region_data()
-
-    {:ok, socket}
+    socket
+    |> assign(:show_region_tabs, length(available_node_ids) > 1)
+    |> assign(:live_metrics, socket.assigns[:live_provider_metrics])
+    |> assign(:cluster_circuits, socket.assigns[:cluster_circuit_states] || %{})
+    |> assign(:cluster_health_counters, socket.assigns[:cluster_health_counters] || %{})
+    |> assign(:events, socket.assigns[:selected_provider_unified_events] || [])
+    |> compute_region_data()
   end
 
   @impl true
@@ -80,8 +139,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     # Find regions with circuit issues
     regions_with_issues = find_regions_with_issues(cluster_circuits, provider_id)
 
-    # Compute derived data (with cached fallback for metrics)
-    connections = socket.assigns[:connections] || []
+    chain_consensus = socket.assigns[:chain_consensus_height]
 
     sync_data =
       compute_sync_data(
@@ -90,7 +148,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         provider_connection,
         cluster_block_heights,
         provider_id,
-        connections
+        chain_consensus
       )
 
     metrics_data = compute_metrics_data(region_data, cached_fallback)
@@ -145,11 +203,10 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          provider_connection,
          cluster_block_heights,
          provider_id,
-         connections
+         chain_consensus
        ) do
     conn = provider_connection || %{}
     chain = Map.get(conn, :chain)
-    chain_consensus = compute_chain_consensus(cluster_block_heights, chain, connections)
 
     {block_height, block_lag, consensus_height} =
       resolve_block_heights(
@@ -243,21 +300,6 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       true -> Map.get(conn, :blocks_behind, 0) || 0
     end
   end
-
-  defp compute_chain_consensus(cluster_block_heights, chain, connections)
-       when is_binary(chain) do
-    chain_provider_ids =
-      connections
-      |> Enum.filter(&(&1.chain == chain))
-      |> MapSet.new(& &1.id)
-
-    cluster_block_heights
-    |> Enum.filter(fn {{pid, _node}, _} -> pid in chain_provider_ids end)
-    |> Enum.map(fn {_, %{height: h}} -> h end)
-    |> Enum.max(fn -> nil end)
-  end
-
-  defp compute_chain_consensus(_, _, _), do: nil
 
   defp compute_metrics_data(region_data, cached_metrics) do
     # Prefer live data for real-time metrics, fall back to cached
@@ -570,12 +612,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
     ~H"""
     <DetailPanelComponents.panel_section border={false} class="pt-1 pb-2">
-      <div class="flex items-center gap-2 mb-4">
-        <h4 class="text-xs font-semibold uppercase tracking-wider text-gray-500">Performance</h4>
-        <span class="text-[9px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 font-medium">
-          Profile
-        </span>
-      </div>
+      <h4 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">Performance</h4>
       <DetailPanelComponents.metrics_strip class="border-x rounded">
         <:metric label="Latency p50" value={@p50} />
         <:metric label="Latency p95" value={@p95} />
@@ -795,9 +832,9 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     case {state, connected} do
       {:open, _} -> {"Open", "text-red-400"}
       {:half_open, _} -> {"Half-open", "text-yellow-400"}
-      {_, true} -> {"Connected", "text-emerald-400"}
-      {_, false} -> {"Disconnected", "text-gray-400"}
-      {:closed, _} -> {"Connected", "text-emerald-400"}
+      {:closed, true} -> {"Connected", "text-emerald-400"}
+      {:closed, false} -> {"Disconnected", "text-gray-400"}
+      {:closed, _} -> {"Healthy", "text-emerald-400"}
       _ -> {"Unknown", "text-gray-400"}
     end
   end
@@ -1074,6 +1111,8 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   defp sync_description(:degraded), do: "(slightly behind)"
   defp sync_description(:down), do: "(significantly behind)"
 
+  defp sync_progress(_, nil), do: 100
+  defp sync_progress(nil, _), do: 0
   defp sync_progress(_, 0), do: 100
 
   defp sync_progress(block_height, consensus_height),
@@ -1090,8 +1129,12 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   defp severity_dot_color(:warn), do: "bg-yellow-500"
   defp severity_dot_color(_), do: "bg-blue-500"
 
-  defp truncate_message(message, max_length) when byte_size(message) > max_length do
-    String.slice(message, 0, max_length - 3) <> "..."
+  defp truncate_message(message, max_length) when is_binary(message) do
+    if String.length(message) > max_length do
+      String.slice(message, 0, max_length - 3) <> "..."
+    else
+      message
+    end
   end
 
   defp truncate_message(message, _), do: message

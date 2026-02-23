@@ -3,23 +3,24 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   Centralized observability for request pipeline events.
 
   Handles all telemetry, metrics recording, and structured logging for the request pipeline.
-  This module consolidates scattered observability concerns into a single source of truth,
-  making it easier to:
-  - Modify telemetry schemas
-  - Add new monitoring dimensions
-  - Test observability in isolation
-  - Maintain consistent event structure
+  This module consolidates scattered observability concerns into a single source of truth.
 
-  Events are published to profile-scoped PubSub topics to support multi-tenant
-  dashboard subscriptions without cross-tenant data leakage.
+  ## ETS Writes
+
+  On success/failure, writes health counters and rate limit state directly to
+  `:lasso_instance_state` ETS. Publishes provider health events to PubSub
+  for dashboard live updates.
   """
 
   require Logger
 
   alias Lasso.Core.Benchmarking.Metrics
+  alias Lasso.Core.Support.ErrorClassification
+  alias Lasso.Events.Provider
   alias Lasso.Events.RoutingDecision
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{Channel, ProviderPool, RequestContext}
+  alias Lasso.Providers.Catalog
+  alias Lasso.RPC.{Channel, RateLimitState, RequestContext}
 
   @type telemetry_metadata :: %{
           chain: String.t(),
@@ -33,8 +34,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
   @doc """
   Records a successful channel request with all observability concerns.
-
-  Emits metrics, telemetry events, and PubSub notifications for successful requests.
   """
   @spec record_success(RequestContext.t(), Channel.t(), String.t(), atom(), non_neg_integer()) ::
           :ok
@@ -47,14 +46,13 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       ) do
     profile = ctx.opts.profile
 
-    # Record metrics with transport dimension
     Metrics.record_success(profile, ctx.chain, provider_id, method, duration_ms,
       transport: transport
     )
 
-    ProviderPool.report_success(profile, ctx.chain, provider_id, transport)
+    instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
+    report_success_to_ets(instance_id, transport)
 
-    # Publish routing decision for dashboard/analytics (profile-scoped)
     publish_routing_decision(
       request_id: ctx.request_id,
       account_id: ctx.account_id,
@@ -69,7 +67,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       failovers: ctx.retries
     )
 
-    # Emit telemetry for observability stack
     emit_request_telemetry(
       ctx.chain,
       method,
@@ -86,9 +83,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
   @doc """
   Records a failed channel request with all observability concerns.
-
-  Emits metrics, telemetry events, and PubSub notifications for failed requests.
-  Handles both variants: with and without transport information.
   """
   @spec record_failure(
           RequestContext.t(),
@@ -100,7 +94,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         ) :: :ok
   def record_failure(ctx, channel_or_provider_id, method, strategy, reason, duration_ms)
 
-  # Variant with full channel info (has transport)
   def record_failure(
         ctx,
         %Channel{provider_id: provider_id, transport: transport} = _channel,
@@ -111,10 +104,14 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       ) do
     profile = ctx.opts.profile
 
-    # Record failure with transport dimension
-    record_rpc_failure(profile, ctx.chain, provider_id, method, reason, duration_ms, transport)
+    Metrics.record_failure(profile, ctx.chain, provider_id, method, duration_ms,
+      transport: transport
+    )
 
-    # Publish routing decision (profile-scoped)
+    instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
+    jerr = JError.from(reason, provider_id: provider_id)
+    report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain, provider_id)
+
     publish_routing_decision(
       request_id: ctx.request_id,
       account_id: ctx.account_id,
@@ -129,7 +126,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       failovers: ctx.retries
     )
 
-    # Emit telemetry
     emit_request_telemetry(
       ctx.chain,
       method,
@@ -144,15 +140,16 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     :ok
   end
 
-  # Variant with just provider_id (no transport info - legacy path)
   def record_failure(ctx, provider_id, method, strategy, reason, duration_ms)
       when is_binary(provider_id) do
     profile = ctx.opts.profile
 
-    # Record failure without transport dimension
-    record_rpc_failure(profile, ctx.chain, provider_id, method, reason, duration_ms, nil)
+    Metrics.record_failure(profile, ctx.chain, provider_id, method, duration_ms, transport: nil)
 
-    # Emit telemetry with unknown transport
+    instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
+    jerr = JError.from(reason, provider_id: provider_id)
+    report_failure_to_ets(instance_id, :http, jerr, profile, ctx.chain, provider_id)
+
     emit_request_telemetry(
       ctx.chain,
       method,
@@ -169,10 +166,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
   @doc """
   Records a fast-fail event when failing over to next channel.
-
-  Emits telemetry for failover events with error categorization,
-  and records the failure in metrics so per-provider success rates
-  reflect all attempts (not just final responses).
   """
   @spec record_fast_fail(RequestContext.t(), Channel.t(), atom(), term(), non_neg_integer()) ::
           :ok
@@ -199,14 +192,13 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       }
     )
 
-    # Record failure in metrics so dashboard success rates reflect this attempt
     Metrics.record_failure(profile, ctx.chain, provider_id, ctx.method, duration_ms,
       transport: transport
     )
 
-    # Report failure to ProviderPool (which will update circuit breaker)
+    instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
     jerr = JError.from(error_reason, provider_id: provider_id)
-    ProviderPool.report_failure(profile, ctx.chain, provider_id, jerr, transport)
+    report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain, provider_id)
 
     :ok
   end
@@ -230,16 +222,9 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   """
   @spec record_request_start(String.t(), String.t(), atom(), String.t() | nil) :: :ok
   def record_request_start(chain, method, strategy, provider_id \\ nil) do
-    metadata = %{
-      chain: chain,
-      method: method,
-      strategy: strategy
-    }
-
+    metadata = %{chain: chain, method: method, strategy: strategy}
     metadata = if provider_id, do: Map.put(metadata, :provider_id, provider_id), else: metadata
-
     :telemetry.execute([:lasso, :rpc, :request, :start], %{count: 1}, metadata)
-
     :ok
   end
 
@@ -301,12 +286,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     :telemetry.execute(
       [:lasso, :request, :slow],
       %{latency_ms: latency_ms},
-      %{
-        chain: chain,
-        method: method,
-        provider: provider_id,
-        transport: transport
-      }
+      %{chain: chain, method: method, provider: provider_id, transport: transport}
     )
 
     :ok
@@ -320,21 +300,128 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     :telemetry.execute(
       [:lasso, :request, :very_slow],
       %{latency_ms: latency_ms},
-      %{
-        chain: chain,
-        method: method,
-        provider: provider_id,
-        transport: transport
-      }
+      %{chain: chain, method: method, provider: provider_id, transport: transport}
     )
 
     :ok
+  end
+
+  # ETS write helpers
+
+  defp report_success_to_ets(nil, _transport), do: :ok
+
+  defp report_success_to_ets(instance_id, transport) do
+    now = System.system_time(:millisecond)
+    ensure_health_record(instance_id)
+
+    # Clear rate limit on success
+    :ets.delete(:lasso_instance_state, {:rate_limit, instance_id, transport})
+
+    # Merge only request-sourced fields, preserving probe-sourced fields (ws_status etc.)
+    existing =
+      case :ets.lookup(:lasso_instance_state, {:health, instance_id}) do
+        [{_, data}] -> data
+        [] -> %{}
+      end
+
+    merged =
+      Map.merge(existing, %{
+        status: :healthy,
+        last_health_check: now,
+        consecutive_failures: 0,
+        consecutive_successes: Map.get(existing, :consecutive_successes, 0) + 1,
+        last_error: nil
+      })
+
+    :ets.insert(:lasso_instance_state, {{:health, instance_id}, merged})
+  end
+
+  defp report_failure_to_ets(nil, _transport, _jerr, _profile, _chain, _provider_id), do: :ok
+
+  defp report_failure_to_ets(instance_id, transport, jerr, profile, chain, provider_id) do
+    cond do
+      jerr.category == :rate_limit ->
+        retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
+        now_ms = System.monotonic_time(:millisecond)
+        expiry = now_ms + (retry_after_ms || 30_000)
+
+        :ets.insert(:lasso_instance_state, {
+          {:rate_limit, instance_id, transport},
+          %{expiry_ms: expiry, retry_after_ms: retry_after_ms || 30_000}
+        })
+
+        publish_provider_event(profile, chain, provider_id, :rate_limited)
+
+      not ErrorClassification.breaker_penalty?(jerr.category) ->
+        :ok
+
+      true ->
+        ensure_health_record(instance_id)
+
+        existing =
+          case :ets.lookup(:lasso_instance_state, {:health, instance_id}) do
+            [{_, data}] -> data
+            [] -> %{}
+          end
+
+        new_failures = Map.get(existing, :consecutive_failures, 0) + 1
+        new_status = if new_failures >= 3, do: :unhealthy, else: :degraded
+        now = System.system_time(:millisecond)
+
+        merged =
+          Map.merge(existing, %{
+            status: new_status,
+            last_health_check: now,
+            consecutive_failures: new_failures,
+            consecutive_successes: 0,
+            last_error: jerr
+          })
+
+        :ets.insert(:lasso_instance_state, {{:health, instance_id}, merged})
+
+        if new_status == :unhealthy do
+          publish_provider_event(profile, chain, provider_id, :unhealthy)
+        end
+    end
+  end
+
+  defp ensure_health_record(instance_id) do
+    :ets.insert_new(:lasso_instance_state, {
+      {:health, instance_id},
+      %{
+        status: :connecting,
+        http_status: :connecting,
+        ws_status: nil,
+        last_health_check: System.system_time(:millisecond),
+        consecutive_failures: 0,
+        consecutive_successes: 0,
+        last_error: nil
+      }
+    })
+  end
+
+  defp publish_provider_event(profile, chain, provider_id, event_type) do
+    ts = System.system_time(:millisecond)
+
+    typed =
+      case event_type do
+        :unhealthy ->
+          %Provider.Unhealthy{ts: ts, chain: chain, provider_id: provider_id, reason: nil}
+
+        :rate_limited ->
+          %Provider.Unhealthy{ts: ts, chain: chain, provider_id: provider_id, reason: :rate_limit}
+      end
+
+    Phoenix.PubSub.broadcast(Lasso.PubSub, Provider.topic(profile, chain), typed)
   end
 
   # Private helpers
 
   @spec publish_routing_decision(keyword()) :: :ok | {:error, term()}
   defp publish_routing_decision(opts) do
+    instance_id =
+      Catalog.lookup_instance_id(opts[:profile], opts[:chain], opts[:provider_id])
+
     event =
       RoutingDecision.new(
         request_id: opts[:request_id],
@@ -344,6 +431,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         method: opts[:method],
         strategy: opts[:strategy],
         provider_id: opts[:provider_id],
+        instance_id: instance_id,
         transport: opts[:transport],
         duration_ms: opts[:duration_ms],
         result: opts[:result],
@@ -390,24 +478,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         failovers: failovers
       }
     )
-  end
-
-  @spec record_rpc_failure(
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          term(),
-          non_neg_integer(),
-          atom() | nil
-        ) :: :ok
-  defp record_rpc_failure(profile, chain, provider_id, method, reason, duration_ms, transport) do
-    # Record failure metrics
-    Metrics.record_failure(profile, chain, provider_id, method, duration_ms, transport: transport)
-
-    # Normalize to JError and report to provider pool
-    jerr = JError.from(reason, provider_id: provider_id)
-    ProviderPool.report_failure(profile, chain, provider_id, jerr, transport)
   end
 
   @spec extract_error_category(term()) :: atom()

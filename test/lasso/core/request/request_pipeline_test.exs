@@ -475,8 +475,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     @tag :pending
-    test "ProviderPool respects include_half_open filter" do
-      # TODO: Implement test to verify ProviderPool behavior
+    test "CandidateListing respects include_half_open filter" do
       assert true
     end
 

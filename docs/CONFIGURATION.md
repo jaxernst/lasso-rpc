@@ -127,8 +127,9 @@ providers:
     ws_url: "wss://eth.llamarpc.com"
     archival: true
     subscribe_new_heads: true
-    adapter_config:
-      eth_get_logs_block_range: 1000
+    capabilities:
+      limits:
+        max_block_range: 1000
 ```
 
 | Field | Type | Required | Description |
@@ -140,7 +141,7 @@ providers:
 | `ws_url` | string | No | WebSocket RPC endpoint URL. Required for subscriptions |
 | `archival` | boolean | No | Whether this provider serves historical data (default: true) |
 | `subscribe_new_heads` | boolean | No | Override chain-level `subscribe_new_heads` for this provider |
-| `adapter_config` | map | No | Provider-specific tuning (see Adapters below) |
+| `capabilities` | map | No | Provider capabilities (see Capabilities below) |
 
 *At least one of `url` or `ws_url` is required.
 
@@ -197,23 +198,35 @@ Route directly to a specific provider, bypassing strategy selection:
 POST /rpc/provider/:provider_id/:chain
 ```
 
-## Adapter Configuration
+## Provider Capabilities
 
-Adapters validate requests before sending upstream. Override adapter defaults per-provider:
+Capabilities declare what a provider supports and its limits. Validated at boot time.
 
 ```yaml
-adapter_config:
-  eth_get_logs_block_range: 50   # Override Alchemy's default (10)
+capabilities:
+  unsupported_categories: [debug, trace]
+  unsupported_methods: [eth_getLogs]
+  limits:
+    max_block_range: 10000
+    max_block_age: 1000
+    block_age_methods: [eth_call, eth_getBalance]
+  error_rules:
+    - code: 35
+      category: capability_violation
+    - message_contains: "timeout on the free tier"
+      category: rate_limit
 ```
 
-| Adapter | Provider | Key Constraints |
-|---------|----------|-----------------|
-| Alchemy | Alchemy | `eth_getLogs` block range (default: 10) |
-| PublicNode | PublicNode | Address count limits (HTTP: 25, WS: 20) |
-| LlamaRPC | LlamaRPC, Merkle | 1000 block range limit |
-| DRPC | dRPC | Rate/parameter limit detection |
-| 1RPC | 1RPC | Rate/parameter limit detection |
-| Generic | All others | No restrictions (fallback) |
+| Field | Type | Description |
+|-------|------|-------------|
+| `unsupported_categories` | list | Method categories this provider doesn't support (e.g., `debug`, `trace`) |
+| `unsupported_methods` | list | Specific methods this provider doesn't support |
+| `limits.max_block_range` | integer | Max block range for `eth_getLogs` |
+| `limits.max_block_age` | integer | Max block age for state methods (pruned provider) |
+| `limits.block_age_methods` | list | Methods subject to `max_block_age` limit |
+| `error_rules` | list | Provider-specific error classification overrides (first match wins) |
+
+When `capabilities` is omitted, defaults to permissive (only `local_only` methods blocked, no limits).
 
 ## BYOK (Bring Your Own Keys)
 

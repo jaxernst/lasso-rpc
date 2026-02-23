@@ -10,29 +10,33 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
 
   @impl true
   def update(assigns, socket) do
+    chain_changed =
+      socket.assigns[:metrics_selected_chain] != assigns.metrics_selected_chain or
+        socket.assigns[:selected_profile] != assigns.selected_profile
+
     chain_config =
-      case Lasso.Config.ConfigStore.get_chain(
-             assigns.selected_profile,
-             assigns.metrics_selected_chain
-           ) do
-        {:ok, config} -> config
-        {:error, _} -> %{chain_id: "Unknown"}
+      if chain_changed do
+        case Lasso.Config.ConfigStore.get_chain(
+               assigns.selected_profile,
+               assigns.metrics_selected_chain
+             ) do
+          {:ok, config} -> config
+          {:error, _} -> %{chain_id: "Unknown"}
+        end
+      else
+        socket.assigns[:chain_config] || %{chain_id: "Unknown"}
       end
 
-    # Prefer cluster node IDs from topology (authoritative), fall back to extracting from metrics
     cluster_node_ids = assigns[:cluster_node_ids] || []
     metrics_node_ids = extract_available_node_ids(assigns.provider_metrics)
 
-    # Merge both sources: cluster node IDs are authoritative, but include any additional from metrics
     available_node_ids =
       (cluster_node_ids ++ metrics_node_ids)
       |> Enum.uniq()
       |> Enum.sort()
 
-    # Only show node tabs when there are multiple nodes (single node = no point in tabs)
     show_node_tabs = length(available_node_ids) > 1
 
-    # Preserve selected_node_id if already set and still valid, otherwise default to "all"
     current_node_id = socket.assigns[:selected_node_id] || "all"
 
     selected_node_id =
@@ -44,7 +48,13 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
 
     socket =
       socket
-      |> assign(assigns)
+      |> assign(:available_chains, assigns.available_chains)
+      |> assign(:metrics_selected_chain, assigns.metrics_selected_chain)
+      |> assign(:selected_profile, assigns.selected_profile)
+      |> assign(:provider_metrics, assigns.provider_metrics)
+      |> assign(:method_metrics, assigns.method_metrics)
+      |> assign(:metrics_loading, assigns.metrics_loading)
+      |> assign(:metrics_last_updated, assigns.metrics_last_updated)
       |> assign(:chain_config, chain_config)
       |> assign(:available_node_ids, available_node_ids)
       |> assign(:selected_node_id, selected_node_id)
@@ -111,7 +121,6 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
             metrics_last_updated={@metrics_last_updated}
             available_node_ids={@available_node_ids}
             selected_node_id={@selected_node_id}
-            show_node_filter={false}
             myself={@myself}
           />
           <.method_performance_breakdown
@@ -211,7 +220,6 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
   attr(:metrics_last_updated, :any, default: nil)
   attr(:available_node_ids, :list, default: [])
   attr(:selected_node_id, :string, default: "all")
-  attr(:show_node_filter, :boolean, default: true)
   attr(:myself, :any, required: true)
 
   defp provider_performance_table(assigns) do
@@ -236,13 +244,6 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
           </span>
         </div>
       </div>
-
-      <.node_filter_pills
-        :if={@show_node_filter and @available_node_ids != []}
-        available_node_ids={@available_node_ids}
-        selected_node_id={@selected_node_id}
-        myself={@myself}
-      />
 
       <DetailPanelComponents.empty_state :if={@filtered_metrics == []}>
         <p class="text-sm font-medium text-gray-400 mb-1">No metrics available</p>
@@ -286,46 +287,6 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         </div>
       </div>
     </section>
-    """
-  end
-
-  attr(:available_node_ids, :list, required: true)
-  attr(:selected_node_id, :string, required: true)
-  attr(:myself, :any, required: true)
-
-  defp node_filter_pills(assigns) do
-    ~H"""
-    <div class="flex flex-wrap gap-2 mb-4">
-      <button
-        phx-click="select_node_id"
-        phx-value-node-id="all"
-        phx-target={@myself}
-        class={[
-          "px-3 py-1.5 rounded-full text-sm font-medium transition-all",
-          if(@selected_node_id == "all",
-            do: "bg-sky-500/20 text-sky-300 border border-sky-500/50",
-            else: "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/30"
-          )
-        ]}
-      >
-        All Nodes
-      </button>
-      <button
-        :for={nid <- @available_node_ids}
-        phx-click="select_node_id"
-        phx-value-node-id={nid}
-        phx-target={@myself}
-        class={[
-          "px-3 py-1.5 rounded-full text-sm font-medium transition-all",
-          if(@selected_node_id == nid,
-            do: "bg-sky-500/20 text-sky-300 border border-sky-500/50",
-            else: "bg-gray-800/50 text-gray-400 border border-gray-700 hover:border-sky-500/30"
-          )
-        ]}
-      >
-        {Formatting.format_region_name(nid)}
-      </button>
-    </div>
     """
   end
 

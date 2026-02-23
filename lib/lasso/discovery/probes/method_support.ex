@@ -24,7 +24,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
       :subscriptions,
       :batch,
       :debug,
-      :trace
+      :trace,
+      :txpool
     ]
   }
 

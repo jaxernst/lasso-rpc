@@ -10,35 +10,17 @@ defmodule Lasso.RPC.Strategies.LoadBalanced do
   - Tier 2: Closed circuit, rate-limited
   - Tier 3: Half-open circuit, not rate-limited
   - Tier 4: Half-open circuit, rate-limited
-
-  This ensures healthy providers receive the majority of traffic while
-  recovering providers are gradually reintroduced.
   """
 
   @behaviour Lasso.RPC.Strategy
 
-  alias Lasso.RPC.ProviderPool
-
   @impl true
-  def prepare_context(profile, chain, _method, timeout) do
-    base_ctx = Lasso.RPC.StrategyContext.new(chain, timeout)
-
-    total_requests =
-      case ProviderPool.get_status(profile, chain) do
-        {:ok, %{total_requests: tr}} when is_integer(tr) -> tr
-        {:ok, status} when is_map(status) -> Map.get(status, :total_requests, 0)
-        _ -> base_ctx.total_requests || 0
-      end
-
-    %{base_ctx | total_requests: total_requests}
+  def prepare_context(_profile, chain, _method, timeout) do
+    Lasso.RPC.StrategyContext.new(chain, timeout)
   end
 
-  @doc """
-  Strategy-provided channel ranking: random shuffle per call.
-  """
   @impl true
-  def rank_channels(channels, _method, ctx, _profile, _chain) do
-    _ = ctx
+  def rank_channels(channels, _method, _ctx, _profile, _chain) do
     Enum.shuffle(channels)
   end
 end

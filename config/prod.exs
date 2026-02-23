@@ -5,14 +5,11 @@ import Config
 
 # Phoenix endpoint configuration
 config :lasso, LassoWeb.Endpoint,
+  http: [ip: {0, 0, 0, 0}, port: 4000],
   cache_static_manifest: "priv/static/cache_manifest.json",
-  # Enable server in production (can be overridden by PHX_SERVER env var)
   server: true,
-  # Disable code reloading in production
   code_reloader: false,
-  # Disable debug errors (use JSON error responses)
   debug_errors: false,
-  # Check origin to prevent CSRF attacks
   check_origin: true
 
 # Enhanced logging for production debugging (same as dev)
@@ -32,7 +29,7 @@ config :phoenix, :logger, true
 
 # Observability in production
 config :lasso, :observability,
-  log_level: :info,
+  log_level: :debug,
   max_error_message_chars: 256,
   max_meta_header_bytes: 4096,
   # Request completion log sampling rate

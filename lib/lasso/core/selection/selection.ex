@@ -3,12 +3,12 @@ defmodule Lasso.RPC.Selection do
   Unified provider selection module that handles all provider picking logic.
 
   This module provides a single interface for selecting providers across
-  different protocols (HTTP vs WS) and fallback strategies. It first tries
-  to use the ProviderPool for intelligent selection, then falls back to
-  ConfigStore-based selection if the pool is unavailable.
+  different protocols (HTTP vs WS) and fallback strategies. It uses
+  CandidateListing for ETS-backed health-aware selection, then falls back to
+  ConfigStore-based selection if the catalog is unavailable.
 
   Selection strategies:
-  - Pool-based (preferred): Uses ProviderPool health and performance data
+  - Catalog-based (preferred): Uses CandidateListing health and performance data
   - Config-based (fallback): Uses static configuration priority ordering
 
   This eliminates the need for channels/controllers to load configuration
@@ -17,10 +17,11 @@ defmodule Lasso.RPC.Selection do
 
   require Logger
 
+  alias Lasso.Providers.CandidateListing
+
   alias Lasso.RPC.{
     ChainState,
     Channel,
-    ProviderPool,
     RequestAnalysis,
     SelectionFilters,
     TransportRegistry
@@ -59,7 +60,7 @@ defmodule Lasso.RPC.Selection do
 
   defp do_select_provider(profile, chain, method, params, strategy, protocol, exclude, timeout) do
     filters = build_selection_filters(profile, chain, method, params, exclude, protocol)
-    candidates = ProviderPool.list_candidates(profile, chain, filters)
+    candidates = CandidateListing.list_candidates(profile, chain, filters)
 
     case candidates do
       [] ->
@@ -166,9 +167,9 @@ defmodule Lasso.RPC.Selection do
         requires_archival: requirements.requires_archival
       )
 
-    # Instrument ProviderPool.list_candidates call time
+    # Instrument CandidateListing.list_candidates call time
     pool_start = System.monotonic_time(:microsecond)
-    provider_candidates = ProviderPool.list_candidates(profile, chain, pool_filters)
+    provider_candidates = CandidateListing.list_candidates(profile, chain, pool_filters)
 
     pool_duration_us = System.monotonic_time(:microsecond) - pool_start
 

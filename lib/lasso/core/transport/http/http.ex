@@ -90,14 +90,24 @@ defmodule Lasso.RPC.Transports.HTTP do
               {:error, enriched_jerr}
 
             {:error, parse_reason} ->
-              # EnvelopeParser couldn't parse - invalid JSON-RPC response
+              Logger.warning("Unparseable JSON-RPC envelope from provider",
+                provider_id: provider_id,
+                reason: parse_reason,
+                raw_bytes_size: byte_size(raw_bytes),
+                raw_sample: binary_part(raw_bytes, 0, min(200, byte_size(raw_bytes)))
+              )
+
               {:error,
                JError.new(-32_700, "Invalid JSON-RPC response format",
                  data: %{reason: parse_reason, raw_bytes_size: byte_size(raw_bytes)},
                  provider_id: provider_id,
                  source: :transport,
                  transport: :http,
-                 retriable?: false
+                 # Upstream returned malformed/non-enveloped bytes.
+                 # Treat as provider-side server failure so pipeline can fail over.
+                 category: :server_error,
+                 retriable?: true,
+                 breaker_penalty?: true
                )}
           end
 

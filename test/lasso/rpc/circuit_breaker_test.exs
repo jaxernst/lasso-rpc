@@ -10,7 +10,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   end
 
   test "opens after failure_threshold failures and rejects until recovery timeout" do
-    id = {"default", "test_chain", "cb_provider", :http}
+    id = {"cb_provider", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -36,7 +36,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   end
 
   test "half-open requires success_threshold successes to close; failure re-opens" do
-    id = {"default", "test_chain", "cb_provider2", :http}
+    id = {"cb_provider2", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -57,7 +57,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   end
 
   test "opens after failure_threshold typed errors and rejects until recovery" do
-    id = {"default", "test_chain", "cb_provider_typed", :http}
+    id = {"cb_provider_typed", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -100,7 +100,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   end
 
   test "record_failure increments failures and can open the circuit" do
-    id = {"default", "test_chain", "cb_provider_record", :http}
+    id = {"cb_provider_record", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -124,7 +124,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
   test "rate limit errors do not open circuit (handled by RateLimitState tiering)" do
     alias Lasso.JSONRPC.Error, as: JError
-    id = {"default", "test_chain", "cb_rate_limit", :http}
+    id = {"cb_rate_limit", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -146,7 +146,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
   test "server errors use default threshold of 5" do
     alias Lasso.JSONRPC.Error, as: JError
-    id = {"default", "test_chain", "cb_server_error", :http}
+    id = {"cb_server_error", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -166,7 +166,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
   test "rate limit errors with retry-after do not open circuit" do
     alias Lasso.JSONRPC.Error, as: JError
-    id = {"default", "test_chain", "cb_retry_after", :http}
+    id = {"cb_retry_after", :http}
 
     {:ok, _pid} =
       CircuitBreaker.start_link(
@@ -192,7 +192,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
   test "custom category thresholds can be configured" do
     alias Lasso.JSONRPC.Error, as: JError
-    id = {"default", "test_chain", "cb_custom_threshold", :http}
+    id = {"cb_custom_threshold", :http}
 
     # Override auth_error threshold to 3 instead of default 2
     {:ok, _pid} =
@@ -233,9 +233,107 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     assert state.state == :open
   end
 
+  describe "shared penalty policy" do
+    test "shared mode does not penalize timeout errors" do
+      alias Lasso.JSONRPC.Error, as: JError
+
+      id = {"cb_shared_timeout", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id,
+           %{
+             shared_mode: true,
+             failure_threshold: 1,
+             recovery_timeout: 100,
+             success_threshold: 1,
+             category_thresholds: %{timeout: 1}
+           }}
+        )
+
+      timeout_error =
+        JError.new(-32_007, "Request timeout",
+          category: :timeout,
+          retriable?: true,
+          breaker_penalty?: true
+        )
+
+      assert {:executed, {:error, _}} =
+               CircuitBreaker.call(id, fn -> {:error, timeout_error} end)
+
+      assert {:executed, {:error, _}} =
+               CircuitBreaker.call(id, fn -> {:error, timeout_error} end)
+
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :closed
+    end
+
+    test "shared mode penalizes server errors" do
+      alias Lasso.JSONRPC.Error, as: JError
+
+      id = {"cb_shared_server", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id,
+           %{
+             shared_mode: true,
+             failure_threshold: 5,
+             recovery_timeout: 100,
+             success_threshold: 1,
+             category_thresholds: %{server_error: 1}
+           }}
+        )
+
+      server_error =
+        JError.new(-32_000, "Upstream server error",
+          category: :server_error,
+          retriable?: true,
+          breaker_penalty?: false
+        )
+
+      assert {:executed, {:error, _}} =
+               CircuitBreaker.call(id, fn -> {:error, server_error} end)
+
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+    end
+
+    test "shared mode penalizes network errors" do
+      alias Lasso.JSONRPC.Error, as: JError
+
+      id = {"cb_shared_network", :http}
+
+      {:ok, _pid} =
+        CircuitBreaker.start_link(
+          {id,
+           %{
+             shared_mode: true,
+             failure_threshold: 5,
+             recovery_timeout: 100,
+             success_threshold: 1,
+             category_thresholds: %{network_error: 1}
+           }}
+        )
+
+      network_error =
+        JError.new(-32_000, "Connection reset by peer",
+          category: :network_error,
+          retriable?: true,
+          breaker_penalty?: false
+        )
+
+      assert {:executed, {:error, _}} =
+               CircuitBreaker.call(id, fn -> {:error, network_error} end)
+
+      Process.sleep(20)
+      assert CircuitBreaker.get_state(id).state == :open
+    end
+  end
+
   describe "proactive recovery" do
     test "timer automatically transitions open -> half_open after recovery_timeout" do
-      id = {"default", "test_chain", "cb_proactive_1", :http}
+      id = {"cb_proactive_1", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -258,7 +356,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "proactive recovery allows circuit to recover without traffic" do
-      id = {"default", "test_chain", "cb_proactive_2", :http}
+      id = {"cb_proactive_2", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -282,7 +380,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "manual close cancels proactive recovery timer" do
-      id = {"default", "test_chain", "cb_proactive_3", :http}
+      id = {"cb_proactive_3", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -308,7 +406,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "traffic-triggered recovery cancels proactive timer" do
-      id = {"default", "test_chain", "cb_proactive_4", :http}
+      id = {"cb_proactive_4", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -335,7 +433,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "failed half_open recovery reschedules proactive timer with backoff" do
-      id = {"default", "test_chain", "cb_proactive_5", :http}
+      id = {"cb_proactive_5", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -365,7 +463,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "consecutive_open_count increments on half_open -> open and resets on close" do
-      id = {"default", "test_chain", "cb_open_count", :http}
+      id = {"cb_open_count", :http}
 
       {:ok, pid} =
         CircuitBreaker.start_link(
@@ -405,7 +503,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "backoff caps at max_recovery_timeout" do
-      id = {"default", "test_chain", "cb_backoff_cap", :http}
+      id = {"cb_backoff_cap", :http}
 
       {:ok, pid} =
         CircuitBreaker.start_link(
@@ -427,7 +525,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "manual open schedules proactive recovery timer" do
-      id = {"default", "test_chain", "cb_proactive_6", :http}
+      id = {"cb_proactive_6", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -448,7 +546,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "traffic respects backed-off deadline" do
-      id = {"default", "test_chain", "cb_backoff_gate", :http}
+      id = {"cb_backoff_gate", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(
@@ -480,7 +578,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "stale timer message is ignored" do
-      id = {"default", "test_chain", "cb_stale_timer", :http}
+      id = {"cb_stale_timer", :http}
 
       {:ok, pid} =
         CircuitBreaker.start_link(
@@ -506,7 +604,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     end
 
     test "get_recovery_time_remaining returns accurate value under backoff" do
-      id = {"default", "test_chain", "cb_remaining_backoff", :http}
+      id = {"cb_remaining_backoff", :http}
 
       {:ok, _pid} =
         CircuitBreaker.start_link(

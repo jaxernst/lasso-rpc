@@ -133,7 +133,7 @@ const ActivityFeed = {
         // We saved an anchor element from the previous render
         // Find it in the current DOM
         const anchorElement = this.el.querySelector(
-          `[data-event-id="${this.anchorElementId}"]`
+          `[data-event-id="${this.anchorElementId}"]`,
         );
 
         if (anchorElement && this.anchorOffsetTop !== undefined) {
@@ -289,7 +289,7 @@ const SimulatorControl = {
           "Available chains changed from",
           this.availableChains,
           "to",
-          newAvailableChains
+          newAvailableChains,
         );
         this.availableChains = newAvailableChains;
         LassoSim.setAvailableChains(this.availableChains);
@@ -407,7 +407,7 @@ const DraggableNetworkViewport = {
     this.networkContainer = this.el.querySelector("[data-draggable-content]");
     if (!this.networkContainer) {
       console.warn(
-        "DraggableNetworkViewport: No element with data-draggable-content found"
+        "DraggableNetworkViewport: No element with data-draggable-content found",
       );
       return;
     }
@@ -450,7 +450,7 @@ const DraggableNetworkViewport = {
       this.canvasEl.addEventListener(
         "click",
         this.boundHandleCanvasClick,
-        true
+        true,
       );
     }
 
@@ -502,7 +502,7 @@ const DraggableNetworkViewport = {
         this.canvasEl.removeEventListener(
           "click",
           this.boundHandleCanvasClick,
-          true
+          true,
         );
       }
       // Attach to new element
@@ -510,14 +510,14 @@ const DraggableNetworkViewport = {
       this.canvasEl.addEventListener(
         "click",
         this.boundHandleCanvasClick,
-        true
+        true,
       );
     } else if (!this.canvasEl && newCanvasEl) {
       this.canvasEl = newCanvasEl;
       this.canvasEl.addEventListener(
         "click",
         this.boundHandleCanvasClick,
-        true
+        true,
       );
     }
 
@@ -653,7 +653,7 @@ const DraggableNetworkViewport = {
   centerOnFirstChain() {
     setTimeout(() => {
       const firstChain = this.networkContainer?.querySelector(
-        "[data-chain-center]"
+        "[data-chain-center]",
       );
       if (firstChain) {
         const center = firstChain.getAttribute("data-chain-center");
@@ -668,7 +668,7 @@ const DraggableNetworkViewport = {
   // Center viewport on a specific chain
   centerOnChain(chainName, opts = {}) {
     const chainElement = this.networkContainer?.querySelector(
-      `[data-chain="${chainName}"]`
+      `[data-chain="${chainName}"]`,
     );
     if (chainElement) {
       const center = chainElement.getAttribute("data-chain-center");
@@ -683,7 +683,7 @@ const DraggableNetworkViewport = {
   // Center viewport on a specific provider
   centerOnProvider(providerId, opts = {}) {
     const providerElement = this.networkContainer?.querySelector(
-      `[data-provider="${providerId}"]`
+      `[data-provider="${providerId}"]`,
     );
     if (providerElement) {
       const center = providerElement.getAttribute("data-provider-center");
@@ -789,7 +789,7 @@ const DraggableNetworkViewport = {
       this.canvasEl.removeEventListener(
         "click",
         this.boundHandleCanvasClick,
-        true
+        true,
       );
     }
   },
@@ -802,7 +802,6 @@ const EndpointSelector = {
     this.selectedProvider = null; // no provider selected by default
     this.mode = "strategy"; // 'strategy' or 'provider'
     this.selectedProviderSupportsWs = false; // default to false
-
     // Read chain info from server-provided data attributes
     this.readChainFromDataset();
 
@@ -855,16 +854,14 @@ const EndpointSelector = {
     // Use chain name (string like "ethereum", "base") not chain_id (numeric)
     this.chain = this.el.getAttribute("data-chain") || this.chain || "ethereum";
     this.chainId = this.el.getAttribute("data-chain-id") || this.chainId || "1";
-    this.profile = this.el.getAttribute("data-profile") || this.profile || "default";
+    this.profile =
+      this.el.getAttribute("data-profile") || this.profile || "default";
   },
 
   detectActiveSelection() {
-    // Try to detect which button is currently selected based on CSS classes
-    // This helps sync state after LiveView updates
-
-    // Check for active strategy button
+    // Detect active selection via data-state attributes
     const activeStrategy = this.el.querySelector(
-      "[data-strategy].border-sky-500"
+      '[data-strategy][data-state="active"]',
     );
     if (activeStrategy && activeStrategy.dataset.strategy) {
       this.selectedStrategy = activeStrategy.dataset.strategy;
@@ -874,17 +871,14 @@ const EndpointSelector = {
       return;
     }
 
-    // Check for active provider button
     const activeProvider = this.el.querySelector(
-      "[data-provider].border-indigo-500"
+      '[data-provider][data-state="active"]',
     );
     if (activeProvider && activeProvider.dataset.provider) {
-      const providerId = activeProvider.dataset.provider;
-      this.selectedProvider = providerId;
+      this.selectedProvider = activeProvider.dataset.provider;
       this.selectedStrategy = null;
       this.mode = "provider";
 
-      // Read WebSocket support from the button
       const supportsWsAttr =
         activeProvider.dataset.providerSupportsWs ||
         activeProvider.getAttribute("data-provider-supports-ws");
@@ -908,7 +902,7 @@ const EndpointSelector = {
 
     // Get provider capabilities from the button data attributes
     const providerButton = this.el.querySelector(
-      `[data-provider="${provider}"]`
+      `[data-provider="${provider}"]`,
     );
 
     if (providerButton) {
@@ -930,7 +924,7 @@ const EndpointSelector = {
     // If we're in provider mode, make sure we have the latest WebSocket support info
     if (this.mode === "provider" && this.selectedProvider) {
       const providerButton = this.el.querySelector(
-        `[data-provider="${this.selectedProvider}"]`
+        `[data-provider="${this.selectedProvider}"]`,
       );
       if (providerButton) {
         const supportsWsAttr =
@@ -941,44 +935,20 @@ const EndpointSelector = {
       }
     }
 
-    // Update strategy pills with specific colors
+    // Update strategy button states via data attributes (CSS handles styling)
     this.el.querySelectorAll("[data-strategy]").forEach((btn) => {
       const strategy = btn.dataset.strategy;
       const isActive =
         strategy === this.selectedStrategy && this.mode === "strategy";
-
-      // Remove all possible color classes
-      btn.className = btn.className.replace(
-        /border-(sky|emerald|purple|orange)-[0-9]+|bg-(sky|emerald|purple|orange)-[0-9]+\/20|text-(sky|emerald|purple|orange)-[0-9]+|border-gray-[0-9]+|text-gray-[0-9]+|hover:border-(sky|emerald|purple|orange)-[0-9]+|hover:text-(sky|emerald|purple|orange)-[0-9]+/g,
-        ""
-      );
-
-      if (isActive) {
-        // Active: sky blue for all strategies
-        btn.className += " border-sky-500 bg-sky-500/20 text-sky-300";
-      } else {
-        // Inactive: gray with sky hover
-        btn.className +=
-          " border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300";
-      }
+      btn.dataset.state = isActive ? "active" : "inactive";
     });
 
-    // Update provider buttons
+    // Update provider button states via data attributes
     this.el.querySelectorAll("[data-provider]").forEach((btn) => {
       const isActive =
         btn.dataset.provider === this.selectedProvider &&
         this.mode === "provider";
-      btn.className = btn.className.replace(
-        /border-indigo-[0-9]+|bg-indigo-[0-9]+\/20|text-indigo-[0-9]+|border-gray-[0-9]+|text-gray-[0-9]+|hover:border-indigo-[0-9]+|hover:text-indigo-[0-9]+/g,
-        ""
-      );
-
-      if (isActive) {
-        btn.className += " border-indigo-500 bg-indigo-500/20 text-indigo-300";
-      } else {
-        btn.className +=
-          " border-gray-600 text-gray-300 hover:border-indigo-400 hover:text-indigo-300";
-      }
+      btn.dataset.state = isActive ? "active" : "inactive";
     });
 
     // Update URLs and description
@@ -1024,8 +994,12 @@ const EndpointSelector = {
       }
 
       httpUrl.textContent = newHttpUrl;
+      httpUrl.classList.remove("text-gray-500", "text-amber-400", "italic");
+      httpUrl.classList.add("text-gray-300");
       if (wsUrl) {
         wsUrl.textContent = newWsUrl;
+        wsUrl.classList.remove("text-gray-500", "text-amber-400", "italic");
+        wsUrl.classList.add("text-gray-300");
       }
 
       // Show/hide WebSocket row based on provider support
@@ -1041,22 +1015,20 @@ const EndpointSelector = {
 
       // Update copy button data attributes
       httpCopyBtns.forEach((btn) => {
-        if (btn.dataset.copyText && btn.dataset.copyText.includes("http")) {
-          btn.dataset.copyText = newHttpUrl;
-        } else if (
-          btn.dataset.copyText &&
-          (btn.dataset.copyText.includes("ws://") ||
-            btn.dataset.copyText.includes("wss://") ||
-            btn.dataset.copyText === "")
-        ) {
-          // Only allow copying if it's a valid WebSocket URL
-          if (this.selectedProviderSupportsWs || this.mode === "strategy") {
-            btn.dataset.copyText = newWsUrl;
+        if (btn.dataset.copyText !== undefined) {
+          if (btn.closest("#http-row")) {
+            btn.dataset.copyText = newHttpUrl;
             btn.disabled = false;
             btn.classList.remove("opacity-50", "cursor-not-allowed");
-          } else {
-            btn.disabled = true;
-            btn.classList.add("opacity-50", "cursor-not-allowed");
+          } else if (btn.closest("#ws-row")) {
+            if (this.selectedProviderSupportsWs || this.mode === "strategy") {
+              btn.dataset.copyText = newWsUrl;
+              btn.disabled = false;
+              btn.classList.remove("opacity-50", "cursor-not-allowed");
+            } else {
+              btn.disabled = true;
+              btn.classList.add("opacity-50", "cursor-not-allowed");
+            }
           }
         }
       });
@@ -1078,20 +1050,66 @@ const EndpointSelector = {
       };
       descriptionEl.textContent =
         descriptions[this.selectedStrategy] || "Strategy-based routing";
+      descriptionEl.classList.remove("text-amber-400");
+      descriptionEl.classList.add("text-gray-500");
     } else if (this.mode === "provider" && this.selectedProvider) {
       descriptionEl.textContent = `Direct connection to ${this.selectedProvider} (bypasses routing strategies)`;
+      descriptionEl.classList.remove("text-amber-400");
+      descriptionEl.classList.add("text-gray-500");
     } else {
       descriptionEl.textContent =
         "Distributes requests evenly across all available providers";
+      descriptionEl.classList.remove("text-amber-400");
+      descriptionEl.classList.add("text-gray-500");
     }
   },
 };
 
-// Provider Request Animator Hook (placeholder)
-const ProviderRequestAnimator = {
+// Scroll Reveal Hook
+const ScrollReveal = {
   mounted() {
-    // This hook can be used to animate provider requests in the future
-    // For now it's just a placeholder to prevent the console error
+    this.revealed = false;
+
+    // Check if we should reveal immediately (if already visible or near top)
+    // But usually we trust the observer.
+
+    this.observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            this.reveal();
+            this.observer.unobserve(this.el);
+          }
+        });
+      },
+      {
+        root: null,
+        threshold: 0.1,
+        rootMargin: "0px 0px -50px 0px",
+      },
+    );
+    this.observer.observe(this.el);
+  },
+
+  updated() {
+    // LiveView might have reset the classes to the server-side state (hidden).
+    // If we have already revealed this element, we must force it back to visible.
+    if (this.revealed) {
+      this.el.classList.remove("opacity-0", "translate-y-8");
+      this.el.classList.add("opacity-100", "translate-y-0");
+    }
+  },
+
+  reveal() {
+    this.revealed = true;
+    this.el.classList.remove("opacity-0", "translate-y-8");
+    this.el.classList.add("opacity-100", "translate-y-0");
+  },
+
+  destroyed() {
+    if (this.observer) {
+      this.observer.disconnect();
+    }
   },
 };
 
@@ -1101,7 +1119,7 @@ const ExpandableDetails = {
     // Validate element has an ID for unique storage key
     if (!this.el.id) {
       console.warn(
-        "ExpandableDetails: element must have an id attribute for state persistence"
+        "ExpandableDetails: element must have an id attribute for state persistence",
       );
       return;
     }
@@ -1145,6 +1163,106 @@ const ExpandableDetails = {
   },
 };
 
+// Heatmap Animation Hook - adds dynamic cell highlighting effects
+const HeatmapAnimation = {
+  mounted() {
+    this.cells = [];
+    this.highlightInterval = null;
+
+    // Start random highlight effect when live
+    this.startHighlightEffect();
+  },
+
+  updated() {
+    // Refresh cell references and restart effect
+    this.startHighlightEffect();
+  },
+
+  startHighlightEffect() {
+    // Clear existing interval
+    if (this.highlightInterval) {
+      clearInterval(this.highlightInterval);
+    }
+
+    // Get all heatmap cells
+    this.cells = Array.from(this.el.querySelectorAll(".heatmap-cell"));
+
+    if (this.cells.length === 0) return;
+
+    // Random highlight every 800-1500ms
+    this.highlightInterval = setInterval(
+      () => {
+        this.highlightRandomCell();
+      },
+      800 + Math.random() * 700,
+    );
+  },
+
+  highlightRandomCell() {
+    if (this.cells.length === 0) return;
+
+    const cell = this.cells[Math.floor(Math.random() * this.cells.length)];
+
+    // Add a quick flash effect
+    cell.style.transition = "filter 0.15s ease-out, transform 0.15s ease-out";
+    cell.style.filter = "brightness(1.4)";
+    cell.style.transform = "scale(1.05)";
+
+    // Reset after flash
+    setTimeout(() => {
+      cell.style.filter = "";
+      cell.style.transform = "";
+    }, 150);
+  },
+
+  destroyed() {
+    if (this.highlightInterval) {
+      clearInterval(this.highlightInterval);
+    }
+  },
+};
+
+// Parallax Background Hook
+const ParallaxBackground = {
+  mounted() {
+    this.ticking = false;
+
+    this.handleScroll = () => {
+      if (!this.ticking) {
+        window.requestAnimationFrame(() => {
+          const scrolled = this.el.scrollTop;
+          const blobs = this.el.querySelectorAll("[data-parallax-speed]");
+
+          blobs.forEach((blob) => {
+            const speed = parseFloat(blob.dataset.parallaxSpeed);
+            // Move UP as we scroll down to create depth (background moves slower than foreground)
+            // Since foreground moves at 1px/px, background should move at (1-speed)px/px or similar.
+            // But these are fixed elements. They don't move at all by default.
+            // To make them look like they are "far away", they should move slightly opposite to scroll direction
+            // or slightly WITH scroll direction?
+            // If they are "background", they should move upwards but slower than the content.
+            // Content moves up at speed equal to scroll.
+            // If we want them to appear "behind", they should move up slower.
+            // Since they are FIXED, they effectively move with the camera (0 movement relative to viewport).
+            // To make them look like background, we need to push them UP as we scroll down.
+            const yPos = -(scrolled * speed);
+            blob.style.transform = `translate3d(0, ${yPos}px, 0)`;
+          });
+
+          this.ticking = false;
+        });
+
+        this.ticking = true;
+      }
+    };
+
+    this.el.addEventListener("scroll", this.handleScroll);
+  },
+  destroyed() {
+    this.el.removeEventListener("scroll", this.handleScroll);
+  },
+};
+
 // Profile Persistence Hook - saves selected profile to sessionStorage
 const ProfilePersistence = {
   mounted() {
@@ -1159,6 +1277,106 @@ const ProfilePersistence = {
   },
 };
 
+// Copy to clipboard hook with visual feedback
+const CopyButton = {
+  mounted() {
+    this.el.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-copy-text]");
+      if (btn && btn.dataset.copyText) {
+        navigator.clipboard
+          .writeText(btn.dataset.copyText)
+          .then(() => {
+            const originalHTML = btn.innerHTML;
+            const originalClasses = btn.className;
+
+            // Show "Copied!" feedback
+            btn.innerHTML =
+              '<span class="text-xs text-emerald-400">Copied!</span>';
+
+            setTimeout(() => {
+              btn.innerHTML = originalHTML;
+              btn.className = originalClasses;
+            }, 1500);
+          })
+          .catch((err) => {
+            console.error("Failed to copy:", err);
+          });
+      }
+    });
+  },
+};
+
+// Network Topology Status Hook - applies provider status colors via push_event
+// to avoid 28KB+ LiveView diffs from comprehension re-renders
+const STATUS_COLORS = {
+  healthy:          { line: "#10b981", border: "#4b5563", bg: "rgba(6, 78, 59, 0.3)",   dot: "#34d399" },
+  lagging:          { line: "#38bdf8", border: "#0ea5e9", bg: "rgba(12, 74, 110, 0.3)", dot: "#38bdf8" },
+  recovering:       { line: "#f59e0b", border: "#4b5563", bg: "rgba(120, 53, 15, 0.3)", dot: "#f59e0b" },
+  testing_recovery: { line: "#f59e0b", border: "#4b5563", bg: "rgba(120, 53, 15, 0.3)", dot: "#f59e0b" },
+  degraded:         { line: "#f97316", border: "#f97316", bg: "rgba(124, 45, 18, 0.3)", dot: "#f97316" },
+  rate_limited:     { line: "#8b5cf6", border: "#8b5cf6", bg: "rgba(88, 28, 135, 0.3)", dot: "#a78bfa" },
+  circuit_open:     { line: "#dc2626", border: "#dc2626", bg: "rgba(127, 29, 29, 0.4)", dot: "#dc2626" },
+  unknown:          { line: "#6b7280", border: "#4b5563", bg: "rgba(17, 24, 39, 0.3)",  dot: "#9ca3af" },
+};
+
+const NetworkTopologyStatus = {
+  mounted() {
+    this.currentStatuses = {};
+    this.pendingApply = false;
+    this.handleEvent("provider-statuses", ({ statuses, snapshot }) => {
+      if (snapshot) {
+        this.currentStatuses = statuses;
+      } else {
+        for (const [id, status] of Object.entries(statuses)) {
+          if (status === null) {
+            delete this.currentStatuses[id];
+          } else {
+            this.currentStatuses[id] = status;
+          }
+        }
+      }
+      this.applyStatuses(this.currentStatuses);
+    });
+    this.pushEvent("request_provider_statuses", {});
+  },
+
+  updated() {
+    if (this.pendingApply || Object.keys(this.currentStatuses).length === 0) return;
+    this.pendingApply = true;
+    requestAnimationFrame(() => {
+      this.pendingApply = false;
+      this.applyStatuses(this.currentStatuses);
+    });
+  },
+
+  reconnected() {
+    this.pushEvent("request_provider_statuses", {});
+  },
+
+  applyStatuses(statuses) {
+    for (const [providerId, status] of Object.entries(statuses)) {
+      const colors = STATUS_COLORS[status] || STATUS_COLORS.unknown;
+
+      const lines = this.el.querySelectorAll(`line[data-provider-line="${providerId}"]`);
+      for (const line of lines) {
+        line.setAttribute("stroke", colors.line);
+      }
+
+      const node = this.el.querySelector(`[data-provider="${providerId}"]`);
+      if (node) {
+        node.style.borderColor = colors.border;
+        node.style.backgroundColor = colors.bg;
+
+        const dot = node.querySelector("[data-dot]");
+        if (dot) {
+          dot.style.backgroundColor = colors.dot;
+        }
+      }
+    }
+  },
+};
+
+
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");
@@ -1172,10 +1390,14 @@ let liveSocket = new LiveSocket("/live", Socket, {
     EventsFeed,
     TerminalFeed,
     ActivityFeed,
-    ProviderRequestAnimator,
     TabSwitcher: EndpointSelector,
+    ScrollReveal,
+    ParallaxBackground,
     ExpandableDetails,
+    HeatmapAnimation,
     ProfilePersistence,
+    CopyButton,
+    NetworkTopologyStatus,
   },
 });
 

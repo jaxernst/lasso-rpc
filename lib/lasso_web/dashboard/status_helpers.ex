@@ -5,8 +5,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   """
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
-  alias Lasso.Config.ConfigStore
-  alias Lasso.RPC.ChainState
+  alias Lasso.Providers.LagCalculation
 
   # Configuration: maximum blocks a provider can lag behind before showing as "syncing"
   # Read from application config at runtime
@@ -51,7 +50,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
         :recovering
 
       fields.health_status == :healthy ->
-        block_lag_to_status(fields.chain, fields.provider_id)
+        block_lag_to_status(fields.chain, fields.instance_id || fields.provider_id)
 
       fields.health_status in [:unhealthy, :misconfigured, :degraded] ->
         :degraded
@@ -63,7 +62,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
         :recovering
 
       fields.connection_status == :connected ->
-        block_lag_to_status(fields.chain, fields.provider_id)
+        block_lag_to_status(fields.chain, fields.instance_id || fields.provider_id)
 
       fields.connection_status in [:disconnected, :rate_limited] ->
         :degraded
@@ -81,12 +80,12 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
       consecutive_failures: Map.get(provider, :consecutive_failures, 0),
       chain: Map.get(provider, :chain),
       provider_id: Map.get(provider, :id),
+      instance_id: Map.get(provider, :instance_id),
       http_rate_limited: Map.get(provider, :http_rate_limited, false),
       ws_rate_limited: Map.get(provider, :ws_rate_limited, false),
       is_in_cooldown: Map.get(provider, :is_in_cooldown, false),
       reconnect_attempts: Map.get(provider, :reconnect_attempts, 0),
-      ws_status: Map.get(provider, :ws_status),
-      reconnect_grace_until: Map.get(provider, :reconnect_grace_until)
+      ws_status: Map.get(provider, :ws_status)
     }
   end
 
@@ -99,15 +98,14 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
 
   defp ws_recovering?(fields) do
     fields.reconnect_attempts > 0 and
-      (fields.ws_status in [:disconnected, :connecting] or
-         in_reconnect_grace?(fields.reconnect_grace_until))
+      fields.ws_status in [:disconnected, :reconnecting]
   end
 
   defp block_lag_to_status(chain, provider_id) do
     case check_block_lag(chain, provider_id) do
       :synced -> :healthy
       :lagging -> :lagging
-      :degraded_no_data -> :degraded
+      :degraded_no_data -> :healthy
       :unavailable -> :healthy
     end
   end
@@ -159,29 +157,10 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   The 30s cap prevents runaway values in edge cases.
   """
   def calculate_optimistic_lag(chain, provider_id) do
-    with {:ok, {height, timestamp, _source, _meta}} <-
-           BlockSyncRegistry.get_height(chain, provider_id),
-         {:ok, consensus} <- ChainState.consensus_height(chain) do
-      block_time_ms = get_block_time_ms(chain)
-      now = System.system_time(:millisecond)
-      elapsed_ms = now - timestamp
+    block_time_ms = LagCalculation.get_block_time_ms(chain)
 
-      staleness_credit =
-        if block_time_ms > 0 do
-          div(elapsed_ms, block_time_ms)
-        else
-          0
-        end
-
-      # Cap credit at ~30s worth to prevent runaway values
-      max_credit = div(30_000, max(block_time_ms, 1))
-      capped_credit = min(staleness_credit, max_credit)
-
-      optimistic_height = height + capped_credit
-      {:ok, optimistic_height - consensus}
-    else
-      {:error, :not_found} -> {:error, :no_provider_data}
-      {:error, :no_data} -> {:error, :no_consensus}
+    case LagCalculation.calculate_optimistic_lag(chain, provider_id, block_time_ms) do
+      {:ok, optimistic_lag, _raw_lag} -> {:ok, optimistic_lag}
       error -> error
     end
   end
@@ -190,23 +169,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   Get block_time_ms for a chain. Prefers dynamic measurement, falls back to config.
   """
   def get_block_time_ms(chain) do
-    case BlockSyncRegistry.get_block_time_ms(chain) do
-      ms when is_integer(ms) and ms > 0 ->
-        ms
-
-      _ ->
-        # Fall back to config
-        case ConfigStore.list_profiles_for_chain(chain) do
-          [profile | _] ->
-            case ConfigStore.get_chain(profile, chain) do
-              {:ok, config} -> config.block_time_ms || 12_000
-              _ -> 12_000
-            end
-
-          [] ->
-            12_000
-        end
-    end
+    LagCalculation.get_block_time_ms(chain)
   end
 
   @doc """
@@ -218,9 +181,6 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   """
   def check_block_height_source_status(chain, provider_id)
       when is_binary(chain) and is_binary(provider_id) do
-    alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
-
-    # Check if we have recent height data for this provider
     case BlockSyncRegistry.get_height(chain, provider_id) do
       {:ok, {_height, timestamp, _source, _meta}} ->
         # Check if data is recent (within 60 seconds)
@@ -241,15 +201,6 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   end
 
   def check_block_height_source_status(_chain, _provider_id), do: :ok
-
-  # Check if the provider is still in reconnection grace period.
-  # During this period, we show "Reconnecting" status even if reconnected successfully,
-  # giving the provider time to stabilize.
-  defp in_reconnect_grace?(nil), do: false
-
-  defp in_reconnect_grace?(grace_until) when is_integer(grace_until) do
-    System.monotonic_time(:millisecond) < grace_until
-  end
 
   @doc "Get provider status label with enhanced classifications"
   def provider_status_label(provider) do
@@ -409,97 +360,11 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     end
   end
 
-  @doc "Get human-readable status explanation"
-  def status_explanation(provider) do
-    chain = Map.get(provider, :chain)
-    provider_id = Map.get(provider, :id)
-    circuit_state = Map.get(provider, :circuit_state, :closed)
-
-    # Get rate limit info from new RateLimitState fields
-    http_rate_limited = Map.get(provider, :http_rate_limited, false)
-    ws_rate_limited = Map.get(provider, :ws_rate_limited, false)
-    rate_limit_remaining = Map.get(provider, :rate_limit_remaining, %{})
-
-    case determine_provider_status(provider) do
-      :circuit_open ->
-        # Check if also rate limited
-        if http_rate_limited or ws_rate_limited do
-          "Circuit breaker is open due to rate limiting. Provider is in cooldown and not accepting requests."
-        else
-          "Circuit breaker is open due to repeated failures. Provider is not accepting requests."
-        end
-
-      :testing_recovery ->
-        "Circuit breaker is in half-open state, testing if provider has recovered."
-
-      :rate_limited ->
-        circuit_also_open = circuit_state == :open
-
-        # Build message from rate limit remaining times
-        http_remaining_ms = Map.get(rate_limit_remaining, :http)
-        ws_remaining_ms = Map.get(rate_limit_remaining, :ws)
-
-        base_msg =
-          cond do
-            http_remaining_ms && ws_remaining_ms ->
-              http_sec = div(http_remaining_ms, 1000)
-              ws_sec = div(ws_remaining_ms, 1000)
-              "Provider is rate limited (HTTP: #{http_sec}s, WS: #{ws_sec}s remaining)."
-
-            http_remaining_ms ->
-              remaining_sec = div(http_remaining_ms, 1000)
-              "Provider HTTP is rate limited for #{remaining_sec}s."
-
-            ws_remaining_ms ->
-              remaining_sec = div(ws_remaining_ms, 1000)
-              "Provider WebSocket is rate limited for #{remaining_sec}s."
-
-            true ->
-              "Provider is rate limited."
-          end
-
-        # Note if circuit is also open
-        if circuit_also_open do
-          base_msg <> " Circuit breaker is also open."
-        else
-          base_msg
-        end
-
-      :recovering ->
-        attempts = Map.get(provider, :reconnect_attempts, 0)
-        "WebSocket connection lost. Recovering (attempt #{attempts})..."
-
-      :degraded ->
-        failures = Map.get(provider, :consecutive_failures, 0)
-
-        "Provider is experiencing issues (#{failures} consecutive failures). Still attempting requests."
-
-      :lagging ->
-        case ChainState.provider_lag(chain, provider_id) do
-          {:ok, lag} when lag < 0 ->
-            blocks_behind = abs(lag)
-            "Provider is responsive but lagging #{blocks_behind} blocks behind the network head."
-
-          _ ->
-            "Provider is responsive but lagging behind the network."
-        end
-
-      :healthy ->
-        "All systems operational. Provider is healthy and synced."
-
-      :unknown ->
-        "Status cannot be determined. Check provider configuration and connectivity."
-    end
-  end
-
   @doc "Get provider status breakdown for summary"
   def status_breakdown(providers) when is_list(providers) do
     providers
     |> Enum.group_by(&determine_provider_status/1)
-    |> Enum.map(fn {status, provider_list} ->
-      {status, length(provider_list)}
-    end)
-    |> Enum.into(%{})
+    |> Map.new(fn {status, provider_list} -> {status, length(provider_list)} end)
   end
 
   @doc "Get severity text CSS class"

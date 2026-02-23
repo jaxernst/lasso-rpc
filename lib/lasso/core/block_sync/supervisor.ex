@@ -1,40 +1,22 @@
 defmodule Lasso.BlockSync.Supervisor do
   @moduledoc """
-  Per-profile, per-chain supervisor for BlockSync Workers.
+  Singleton interface to the BlockSync DynamicSupervisor.
 
-  Manages one Worker per provider for a (profile, chain) pair.
-  Started as a child of ChainSupervisor.
-
-  ## Dynamic Children
-
-  Workers are started dynamically when providers are discovered.
-  Each worker handles one provider and orchestrates its sync strategies.
+  Manages one Worker per (chain, instance_id) pair. Workers are started
+  during `start_shared_infrastructure` and can be added/removed at runtime.
   """
 
-  use DynamicSupervisor
   require Logger
 
   alias Lasso.BlockSync.Worker
 
-  ## Client API
+  @dynamic_supervisor Lasso.BlockSync.DynamicSupervisor
 
-  @spec start_link({String.t(), String.t()}) :: Supervisor.on_start()
-  def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
-    DynamicSupervisor.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
-  end
+  @spec start_worker(String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
+  def start_worker(chain, instance_id) when is_binary(chain) and is_binary(instance_id) do
+    spec = {Worker, {chain, instance_id}}
 
-  @spec via(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
-  def via(profile, chain),
-    do: {:via, Registry, {Lasso.Registry, {:block_sync_supervisor, profile, chain}}}
-
-  @doc """
-  Start a worker for a specific provider.
-  """
-  @spec start_worker(String.t(), String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
-  def start_worker(profile, chain, provider_id) when is_binary(profile) and is_binary(chain) do
-    spec = {Worker, {chain, profile, provider_id}}
-
-    case DynamicSupervisor.start_child(via(profile, chain), spec) do
+    case DynamicSupervisor.start_child(@dynamic_supervisor, spec) do
       {:ok, pid} ->
         {:ok, pid}
 
@@ -44,8 +26,7 @@ defmodule Lasso.BlockSync.Supervisor do
       {:error, reason} ->
         Logger.warning("Failed to start BlockSync worker",
           chain: chain,
-          profile: profile,
-          provider_id: provider_id,
+          instance_id: instance_id,
           reason: inspect(reason)
         )
 
@@ -53,60 +34,37 @@ defmodule Lasso.BlockSync.Supervisor do
     end
   end
 
-  @doc """
-  Stop a worker for a specific provider.
-  """
-  @spec stop_worker(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def stop_worker(profile, chain, provider_id) when is_binary(profile) and is_binary(chain) do
-    case GenServer.whereis(Worker.via(chain, profile, provider_id)) do
+  @spec stop_worker(String.t(), String.t()) :: :ok | {:error, term()}
+  def stop_worker(chain, instance_id) when is_binary(chain) and is_binary(instance_id) do
+    case GenServer.whereis(Worker.via(chain, instance_id)) do
       nil ->
         :ok
 
       pid ->
-        case DynamicSupervisor.terminate_child(via(profile, chain), pid) do
+        case DynamicSupervisor.terminate_child(@dynamic_supervisor, pid) do
           :ok -> :ok
           {:error, _} = error -> error
         end
     end
   end
 
-  @doc """
-  Start workers for a profile's providers in the chain.
-  """
-  @spec start_all_workers(String.t(), String.t(), [String.t()]) :: :ok
-  def start_all_workers(profile, chain, provider_ids)
-      when is_binary(profile) and is_binary(chain) and is_list(provider_ids) do
+  @spec start_all_workers(String.t(), [String.t()]) :: :ok
+  def start_all_workers(chain, instance_ids)
+      when is_binary(chain) and is_list(instance_ids) do
     Logger.info("Starting BlockSync workers",
       chain: chain,
-      profile: profile,
-      provider_count: length(provider_ids)
+      instance_count: length(instance_ids)
     )
 
-    Enum.each(provider_ids, fn provider_id ->
-      start_worker(profile, chain, provider_id)
+    Enum.each(instance_ids, fn instance_id ->
+      start_worker(chain, instance_id)
     end)
   end
 
-  @doc """
-  List all running workers for a profile and chain.
-  """
-  @spec list_workers(String.t(), String.t()) :: [pid()]
-  def list_workers(profile, chain) when is_binary(profile) and is_binary(chain) do
-    DynamicSupervisor.which_children(via(profile, chain))
+  @spec list_workers() :: [pid()]
+  def list_workers do
+    DynamicSupervisor.which_children(@dynamic_supervisor)
     |> Enum.map(fn {_, pid, _, _} -> pid end)
     |> Enum.reject(&is_nil/1)
-  end
-
-  ## DynamicSupervisor Callbacks
-
-  @impl true
-  def init({profile, chain}) do
-    Logger.debug("BlockSync.Supervisor starting", profile: profile, chain: chain)
-
-    DynamicSupervisor.init(
-      strategy: :one_for_one,
-      max_restarts: 10,
-      max_seconds: 60
-    )
   end
 end

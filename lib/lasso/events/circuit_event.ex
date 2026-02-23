@@ -68,6 +68,6 @@ defmodule Lasso.Events.CircuitEvent do
   @doc """
   Returns the profile-scoped topic for circuit events.
   """
-  @spec topic(String.t()) :: String.t()
-  def topic(profile), do: "circuit:events:#{profile}"
+  @spec topic(String.t(), String.t()) :: String.t()
+  def topic(profile, chain), do: "circuit:events:#{profile}:#{chain}"
 end

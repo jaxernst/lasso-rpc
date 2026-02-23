@@ -314,10 +314,13 @@ All errors follow JSON-RPC 2.0 format:
   "error": {
     "code": -32601,
     "message": "Method not supported over HTTP. Use WebSocket connection for subscriptions.",
-    "data": {"websocket_url": "/socket/websocket"}
+    "data": {"websocket_url": "/ws/rpc/ethereum"}
   }
 }
 ```
+
+The `websocket_url` mirrors the HTTP request path — for example, a request to
+`/rpc/profile/default/fastest/ethereum` returns `/ws/rpc/profile/default/fastest/ethereum`.
 
 ### Error Codes
 

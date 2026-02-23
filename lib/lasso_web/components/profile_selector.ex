@@ -25,10 +25,17 @@ defmodule LassoWeb.Components.ProfileSelector do
         nil -> assigns.selected_profile
       end
 
+    selected_logo =
+      case Enum.find(profile_data, fn {slug, _} -> slug == assigns.selected_profile end) do
+        {_, data} -> data.logo
+        nil -> nil
+      end
+
     assigns =
       assigns
       |> assign(:profile_data, profile_data)
       |> assign(:selected_display_name, selected_display_name)
+      |> assign(:selected_logo, selected_logo)
 
     ~H"""
     <div class={["relative", @class]} id="profile-selector">
@@ -43,14 +50,22 @@ defmodule LassoWeb.Components.ProfileSelector do
         <div class="flex items-center gap-3">
           <!-- Label & Icon -->
           <div class="flex items-center gap-2 text-gray-400 transition-colors group-hover:text-gray-300">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+            <%= if @selected_logo do %>
+              <img
+                src={"/images/profiles/#{@selected_logo}"}
+                class="h-4 w-4 object-contain"
+                alt=""
               />
-            </svg>
+            <% else %>
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                />
+              </svg>
+            <% end %>
             <span class="text-xs font-medium uppercase tracking-wide text-gray-500 group-hover:text-gray-400">
               Profile
             </span>
@@ -91,7 +106,7 @@ defmodule LassoWeb.Components.ProfileSelector do
         <div class="bg-gray-900/50 border-b border-gray-800 px-3 py-2.5">
           <div class="text-sm font-medium text-gray-200">Routing Profiles</div>
           <div class="mt-0.5 text-xs text-gray-500">
-            Routing profiles define the set of chains and providers available for RPC request routing with per-profile config customization.
+            Switch between different infrastructure configurations. Each profile has its own providers, chains, and usage limits.
           </div>
         </div>
         
@@ -108,7 +123,7 @@ defmodule LassoWeb.Components.ProfileSelector do
         
     <!-- Create Profile CTA -->
         <%= if @show_create_cta do %>
-          <div class="border-t border-gray-800 p-2">
+          <div class="border-t border-gray-800">
             <.create_profile_cta />
           </div>
         <% end %>
@@ -150,49 +165,78 @@ defmodule LassoWeb.Components.ProfileSelector do
     <button
       phx-click={JS.push("select_profile", value: %{profile: @profile}) |> hide_dropdown()}
       class={[
-        "flex w-full items-center gap-3 px-3 py-2.5 text-left",
+        "flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left",
         "transition-colors hover:bg-gray-800",
         @selected && "bg-purple-500/10"
       ]}
     >
-      <!-- Layers icon -->
-      <svg
-        class={[
-          "h-4 w-4 flex-none",
-          if(@selected, do: "text-purple-400", else: "text-gray-600 group-hover:text-gray-500")
-        ]}
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
-        />
-      </svg>
-      <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2">
-          <span class={[
-            "truncate text-sm font-medium",
-            if(@selected, do: "text-white", else: "text-gray-300")
-          ]}>
-            {@data.name}
-          </span>
-          <%= if @selected do %>
-            <svg class="h-3.5 w-3.5 flex-none text-purple-400" fill="currentColor" viewBox="0 0 20 20">
-              <path
-                fill-rule="evenodd"
-                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                clip-rule="evenodd"
-              />
-            </svg>
-          <% end %>
+      <div class="flex items-center gap-3 min-w-0">
+        <%= if @data.logo do %>
+          <img
+            src={"/images/profiles/#{@data.logo}"}
+            class="h-4 w-4 flex-none object-contain"
+            alt=""
+          />
+        <% else %>
+          <svg
+            class={[
+              "h-4 w-4 flex-none",
+              if(@selected, do: "text-purple-400", else: "text-gray-600 group-hover:text-gray-500")
+            ]}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+            />
+          </svg>
+        <% end %>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class={[
+              "truncate text-sm font-medium",
+              if(@selected, do: "text-white", else: "text-gray-300")
+            ]}>
+              {@data.name}
+            </span>
+            <%= if @selected do %>
+              <svg
+                class="h-3.5 w-3.5 flex-none text-purple-400"
+                fill="currentColor"
+                viewBox="0 0 20 20"
+              >
+                <path
+                  fill-rule="evenodd"
+                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                  clip-rule="evenodd"
+                />
+              </svg>
+            <% end %>
+          </div>
+          <div class="text-xs text-gray-500">
+            {@data.chain_count} chains · {@data.provider_count} providers
+          </div>
         </div>
-        <div class="text-xs text-gray-500">
-          {@data.chain_count} chains · {@data.provider_count} providers
-        </div>
+      </div>
+      
+    <!-- Right-aligned badge -->
+      <div class="flex-none">
+        <%= cond do %>
+          <% @data.byok -> %>
+            <div class="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+              BYOK
+            </div>
+          <% @profile == "premium" -> %>
+            <div class="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+              Pro
+            </div>
+          <% true -> %>
+            <div></div>
+        <% end %>
       </div>
     </button>
     """
@@ -201,15 +245,43 @@ defmodule LassoWeb.Components.ProfileSelector do
   defp create_profile_cta(assigns) do
     ~H"""
     <button
-      disabled
-      class="flex w-full cursor-not-allowed items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 opacity-60 transition-colors"
+      phx-click={JS.push("show_upgrade_modal") |> hide_dropdown()}
+      class={[
+        "flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left",
+        "transition-colors hover:bg-gray-800"
+      ]}
     >
-      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-      </svg>
-      <span>
-        Create profile (coming soon)
-      </span>
+      <div class="flex items-center gap-3 min-w-0">
+        <!-- Plus icon -->
+        <svg
+          class="h-4 w-4 flex-none text-amber-500"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 4v16m8-8H4"
+          />
+        </svg>
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-medium text-gray-200">
+            Build Your Own
+          </div>
+          <div class="text-xs text-gray-500">
+            Supercharge your existing node infrastructure with Lasso
+          </div>
+        </div>
+      </div>
+      
+    <!-- Right-aligned BYOK badge -->
+      <div class="flex-none">
+        <div class="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+          BYOK
+        </div>
+      </div>
     </button>
     """
   end
@@ -218,11 +290,10 @@ defmodule LassoWeb.Components.ProfileSelector do
     Enum.map(profiles, fn profile_slug ->
       chains = ConfigStore.list_chains_for_profile(profile_slug)
 
-      # Get display name from profile metadata
-      display_name =
+      {display_name, logo, unlisted} =
         case ConfigStore.get_profile(profile_slug) do
-          {:ok, meta} -> meta.name
-          _ -> profile_slug
+          {:ok, meta} -> {meta.name, meta.logo, meta.unlisted}
+          _ -> {profile_slug, nil, false}
         end
 
       provider_count =
@@ -239,6 +310,8 @@ defmodule LassoWeb.Components.ProfileSelector do
       {profile_slug,
        %{
          name: display_name,
+         logo: logo,
+         byok: unlisted,
          chain_count: length(chains),
          provider_count: provider_count
        }}

@@ -6,7 +6,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/jaxernst/lasso-rpc/releases)
 
-### Smart RPC aggregation for building fault tolerant and performant blockchain apps.
+### Smart RPC aggregation for fault-tolerant and performant blockchain apps.
 
 Lasso is a smart proxy/router that turns your node infrastructure and RPC providers into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
 
@@ -263,7 +263,7 @@ Request pipeline:
 4. On failure: retry/failover
 5. Record benchmarking + telemetry
 
-For deeper implementation details (supervision tree, BenchmarkStore, adapters, streaming internals), start with:
+For deeper implementation details (supervision tree, BenchmarkStore, capabilities system, streaming internals), start with:
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
@@ -282,7 +282,7 @@ Lasso runs on the BEAM (Erlang VM) to take advantage of its strengths for high-c
 
 ## Documentation
 
-- **[CONFIGURATION.md](docs/CONFIGURATION.md)** - Profile YAML reference, strategies, adapters
+- **[CONFIGURATION.md](docs/CONFIGURATION.md)** - Profile YAML reference, strategies, provider capabilities
 - **[API_REFERENCE.md](docs/API_REFERENCE.md)** - HTTP/WebSocket endpoints, headers, errors
 - **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Production deployment, clustering, env vars
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design + components

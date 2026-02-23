@@ -12,8 +12,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Test.TelemetrySync
 
-  @default_profile "default"
-
   setup do
     # Configure test to use MockWSClient
     Application.put_env(:lasso, :ws_client_module, TestSupport.MockWSClient)
@@ -30,13 +28,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
       heartbeat_interval: 5_000
     }
 
-    # Start circuit breaker for the endpoint
+    # Start circuit breaker for the endpoint (keyed by instance_id)
     circuit_breaker_config = %{failure_threshold: 3, recovery_timeout: 200, success_threshold: 1}
+    instance_id = "#{endpoint.chain_name}:#{endpoint.id}"
 
     {:ok, _} =
-      CircuitBreaker.start_link(
-        {{@default_profile, endpoint.chain_name, endpoint.id, :ws}, circuit_breaker_config}
-      )
+      CircuitBreaker.start_link({{instance_id, :ws}, circuit_breaker_config})
 
     on_exit(fn ->
       # Clean up WebSocket connection
@@ -52,7 +49,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
   end
 
   defp cleanup_ws_connection(endpoint) do
-    ws_key = {:ws_conn, endpoint.profile, endpoint.chain_name, endpoint.id}
+    ws_key = {:ws_conn_instance, resolve_instance_id(endpoint)}
 
     case GenServer.whereis({:via, Registry, {Lasso.Registry, ws_key}}) do
       nil -> :ok
@@ -61,8 +58,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
   end
 
   defp cleanup_circuit_breaker(chain_name, provider_id) do
-    # CircuitBreaker.via_name converts tuple to string format: "profile:chain:provider:transport"
-    key = "#{@default_profile}:#{chain_name}:#{provider_id}:ws"
+    instance_id = "#{chain_name}:#{provider_id}"
+    key = "#{instance_id}:ws"
 
     case GenServer.whereis({:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}) do
       nil -> :ok
@@ -70,7 +67,27 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
     end
   end
 
+  defp resolve_instance_id(endpoint) do
+    Lasso.Providers.Catalog.lookup_instance_id(endpoint.profile, endpoint.chain_name, endpoint.id) ||
+      "#{endpoint.chain_name}:#{endpoint.id}"
+  end
+
   describe "connection lifecycle telemetry" do
+    test "registers connections under instance-scoped registry keys only", %{endpoint: endpoint} do
+      {:ok, pid} = Connection.start_link(endpoint)
+      instance_id = resolve_instance_id(endpoint)
+
+      assert GenServer.whereis(Connection.via_instance_name(instance_id)) == pid
+      assert Registry.lookup(Lasso.Registry, {:ws_conn_instance, instance_id}) != []
+
+      assert Registry.lookup(
+               Lasso.Registry,
+               {:ws_conn, endpoint.profile, endpoint.chain_name, endpoint.id}
+             ) == []
+
+      GenServer.stop(pid)
+    end
+
     test "emits connected event on successful connection", %{endpoint: endpoint} do
       # Start collector before triggering action
       conn_collector =
@@ -176,7 +193,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
       # Send a request
       Task.async(fn ->
         Connection.request(
-          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          resolve_instance_id(endpoint),
           "eth_blockNumber",
           [],
           5_000
@@ -208,7 +225,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
       _task =
         Task.async(fn ->
           Connection.request(
-            {endpoint.profile, endpoint.chain_name, endpoint.id},
+            resolve_instance_id(endpoint),
             "eth_blockNumber",
             [],
             5_000
@@ -245,7 +262,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
       # Send request with short timeout
       Task.async(fn ->
         Connection.request(
-          {endpoint.profile, endpoint.chain_name, endpoint.id},
+          resolve_instance_id(endpoint),
           "eth_blockNumber",
           [],
           100

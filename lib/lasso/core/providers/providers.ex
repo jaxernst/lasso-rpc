@@ -2,51 +2,14 @@ defmodule Lasso.Providers do
   @moduledoc """
   Public API for dynamic provider management.
 
-  This module provides a clean interface for adding, removing, and managing
+  Provides a clean interface for adding, removing, and managing
   RPC providers at runtime without requiring application restarts or YAML edits.
-
-  ## Usage
-
-  Add a provider dynamically:
-
-      Lasso.Providers.add_provider("ethereum", %{
-        id: "alchemy_backup",
-        name: "Alchemy Backup",
-        url: "https://eth-mainnet.g.alchemy.com/v2/YOUR-KEY",
-        ws_url: "wss://eth-mainnet.g.alchemy.com/v2/YOUR-KEY",
-        type: "premium",
-        priority: 50
-      })
-
-  Remove a provider:
-
-      Lasso.Providers.remove_provider("ethereum", "alchemy_backup")
-
-  List all providers for a chain:
-
-      Lasso.Providers.list_providers("ethereum")
-
-  ## Persistence
-
-  By default, providers are added only to the running system. To persist
-  changes to the YAML configuration file:
-
-      Lasso.Providers.add_provider("ethereum", provider_config, persist: true)
-
-  ## Architecture
-
-  This module coordinates:
-  - `ChainSupervisor` - Runtime lifecycle (WS connections, circuit breakers)
-  - `ProviderPool` - Health tracking and availability
-  - `TransportRegistry` - Lazy channel opening
-  - `ConfigValidator` - Input validation
-
-  The provider becomes immediately available for request routing after `add_provider/3` returns.
   """
 
   require Logger
   alias Lasso.Config.{ConfigStore, ConfigValidator}
-  alias Lasso.RPC.{ChainSupervisor, ProviderPool}
+  alias Lasso.Providers.{Catalog, InstanceState}
+  alias Lasso.RPC.ChainSupervisor
 
   @default_profile "default"
 
@@ -67,34 +30,6 @@ defmodule Lasso.Providers do
           has_ws: boolean()
         }
 
-  @doc """
-  Adds a provider to a chain dynamically.
-
-  ## Options
-
-  - `:persist` - Whether to save to YAML config file (default: false)
-  - `:start_ws` - WebSocket startup policy: `:auto`, `:force`, or `:skip` (default: `:auto`)
-  - `:validate` - Whether to validate configuration (default: true)
-
-  ## Returns
-
-  - `{:ok, provider_id}` - Provider successfully added
-  - `{:error, reason}` - Validation or startup failed
-
-  ## Example
-
-      # Add provider (runtime only)
-      Lasso.Providers.add_provider("ethereum", %{
-        id: "new_provider",
-        name: "New Provider",
-        url: "https://rpc.example.com",
-        ws_url: "wss://ws.example.com",
-        priority: 100
-      })
-
-      # Add and persist to YAML
-      Lasso.Providers.add_provider("ethereum", provider_config, persist: true)
-  """
   @spec add_provider(String.t(), map(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def add_provider(chain_name, provider_attrs, opts \\ []) do
     add_provider(@default_profile, chain_name, provider_attrs, opts)
@@ -113,6 +48,7 @@ defmodule Lasso.Providers do
     with :ok <- maybe_validate(provider_config, validate?),
          :ok <- ensure_chain_started(profile, chain_name),
          :ok <- check_not_duplicate(profile, chain_name, provider_id),
+         :ok <- ConfigStore.register_provider_runtime(profile, chain_name, provider_config),
          :ok <-
            ChainSupervisor.ensure_provider(profile, chain_name, provider_config,
              start_ws: start_ws
@@ -122,32 +58,15 @@ defmodule Lasso.Providers do
       {:ok, provider_id}
     else
       {:error, reason} = error ->
+        if is_binary(provider_id) do
+          _ = ConfigStore.unregister_provider_runtime(profile, chain_name, provider_id)
+        end
+
         Logger.error("Failed to add provider #{provider_id} to #{chain_name}: #{inspect(reason)}")
         error
     end
   end
 
-  @doc """
-  Removes a provider from a chain.
-
-  ## Options
-
-  - `:persist` - Whether to remove from YAML config file (default: false)
-
-  ## Returns
-
-  - `:ok` - Provider successfully removed
-  - `{:error, reason}` - Provider not found or removal failed
-
-  ## Example
-
-      # Remove provider (runtime only)
-      Lasso.Providers.remove_provider("default", "ethereum", "old_provider")
-
-      # Remove and persist to YAML
-      Lasso.Providers.remove_provider("default", "ethereum", "old_provider", persist: true)
-  """
-  # Backward-compatible wrapper for old 2-arg form
   @spec remove_provider(String.t(), String.t()) :: :ok | {:error, term()}
   def remove_provider(chain_name, provider_id)
       when is_binary(chain_name) and is_binary(provider_id) do
@@ -159,10 +78,15 @@ defmodule Lasso.Providers do
     persist? = Keyword.get(opts, :persist, false)
 
     with :ok <- ChainSupervisor.remove_provider(profile, chain_name, provider_id),
+         :ok <- ConfigStore.unregister_provider_runtime(profile, chain_name, provider_id),
          :ok <- maybe_persist_remove(chain_name, provider_id, persist?) do
       Logger.info("Successfully removed provider #{provider_id} from #{chain_name}")
       :ok
     else
+      {:error, :provider_not_found} ->
+        # It may already be absent from runtime config; treat as successful cleanup.
+        :ok
+
       {:error, reason} = error ->
         Logger.error(
           "Failed to remove provider #{provider_id} from #{chain_name}: #{inspect(reason)}"
@@ -172,23 +96,6 @@ defmodule Lasso.Providers do
     end
   end
 
-  @doc """
-  Updates a provider configuration.
-
-  Note: Currently implemented as remove + add to avoid complex state mutations.
-  The provider will experience brief downtime during the update.
-
-  ## Options
-
-  - `:persist` - Whether to update in YAML config file (default: false)
-
-  ## Example
-
-      Lasso.Providers.update_provider("ethereum", "my_provider", %{
-        url: "https://new-rpc-url.com",
-        priority: 200
-      })
-  """
   @spec update_provider(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
   def update_provider(chain_name, provider_id, updates, opts \\ []) do
     update_provider(@default_profile, chain_name, provider_id, updates, opts)
@@ -199,7 +106,6 @@ defmodule Lasso.Providers do
   def update_provider(profile, chain_name, provider_id, updates, opts) do
     persist? = Keyword.get(opts, :persist, false)
 
-    # Get existing provider config
     with {:ok, existing} <- get_provider(profile, chain_name, provider_id),
          updated_config = Map.merge(existing, normalize_provider_config(updates)),
          :ok <- remove_provider(profile, chain_name, provider_id, persist: false),
@@ -216,85 +122,60 @@ defmodule Lasso.Providers do
     end
   end
 
-  @doc """
-  Lists all providers for a chain with their current status.
-
-  ## Returns
-
-  `{:ok, [provider_summary]}` where each summary includes:
-  - `:id` - Provider identifier
-  - `:name` - Human-readable name
-  - `:status` - Health status (`:healthy`, `:unhealthy`, etc.)
-  - `:availability` - Routing availability (`:up`, `:down`, `:limited`)
-  - `:has_http` - Whether HTTP transport is configured
-  - `:has_ws` - Whether WebSocket transport is configured
-
-  ## Example
-
-      {:ok, providers} = Lasso.Providers.list_providers("ethereum")
-      Enum.each(providers, fn provider ->
-        IO.puts("\#{provider.name}: \#{provider.status} (\#{provider.availability})")
-      end)
-  """
   @spec list_providers(String.t()) :: {:ok, [provider_summary()]} | {:error, term()}
   def list_providers(chain_name) do
-    list_providers("default", chain_name)
+    list_providers(@default_profile, chain_name)
   end
 
   @spec list_providers(String.t(), String.t()) :: {:ok, [provider_summary()]} | {:error, term()}
   def list_providers(profile, chain_name) do
-    case ProviderPool.get_status(profile, chain_name) do
-      {:ok, status} ->
-        summaries =
-          Enum.map(status.providers, fn provider ->
-            %{
-              id: provider.id,
-              name: Map.get(provider, :name, provider.id),
-              status: provider.status,
-              availability: provider.availability,
-              has_http: is_binary(provider.config.url),
-              has_ws: is_binary(provider.config.ws_url),
-              http_status: Map.get(provider, :http_status),
-              ws_status: Map.get(provider, :ws_status),
-              http_availability: Map.get(provider, :http_availability),
-              ws_availability: Map.get(provider, :ws_availability),
-              http_cb_state: Map.get(provider, :http_cb_state),
-              ws_cb_state: Map.get(provider, :ws_cb_state)
-            }
-          end)
+    profile_providers = Catalog.get_profile_providers(profile, chain_name)
 
-        {:ok, summaries}
+    summaries =
+      Enum.map(profile_providers, fn pp ->
+        instance_id = pp.instance_id
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+        instance_config =
+          case Catalog.get_instance(instance_id) do
+            {:ok, config} -> config
+            _ -> %{}
+          end
+
+        health = InstanceState.read_health(instance_id)
+        ws_status = InstanceState.read_ws_status(instance_id)
+        http_cb = InstanceState.read_circuit(instance_id, :http)
+        ws_cb = InstanceState.read_circuit(instance_id, :ws)
+
+        url = Map.get(instance_config, :url)
+        ws_url = Map.get(instance_config, :ws_url)
+
+        %{
+          id: pp.provider_id,
+          name: get_in(instance_config, [:canonical_config, :name]) || pp.provider_id,
+          status: health.status,
+          availability: InstanceState.status_to_availability(health.status),
+          has_http: is_binary(url),
+          has_ws: is_binary(ws_url),
+          http_status: health.http_status,
+          ws_status: ws_status.status,
+          http_availability: InstanceState.status_to_availability(health.http_status),
+          ws_availability: InstanceState.status_to_availability(ws_status.status),
+          http_cb_state: http_cb.state,
+          ws_cb_state: ws_cb.state
+        }
+      end)
+
+    {:ok, summaries}
   end
 
-  @doc """
-  Gets detailed configuration for a specific provider.
-
-  ## Example
-
-      {:ok, config} = Lasso.Providers.get_provider("ethereum", "alchemy")
-      IO.inspect(config.url)
-  """
   @spec get_provider(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def get_provider(chain_name, provider_id) do
-    get_provider("default", chain_name, provider_id)
+    get_provider(@default_profile, chain_name, provider_id)
   end
 
   @spec get_provider(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def get_provider(profile, chain_name, provider_id) do
-    case ProviderPool.get_status(profile, chain_name) do
-      {:ok, status} ->
-        case Enum.find(status.providers, fn p -> p.id == provider_id end) do
-          nil -> {:error, :not_found}
-          provider -> {:ok, Map.get(provider, :config, %{})}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    ConfigStore.get_provider(profile, chain_name, provider_id)
   end
 
   # Private functions
@@ -302,11 +183,9 @@ defmodule Lasso.Providers do
   defp ensure_chain_started(profile, chain_name) do
     case ConfigStore.get_chain(profile, chain_name) do
       {:ok, _chain_config} ->
-        # Chain already exists and is running
         :ok
 
       {:error, :not_found} ->
-        # Chain doesn't exist - create it with sensible defaults
         Logger.info("Chain '#{chain_name}' not found, creating with default configuration")
 
         default_config = create_default_chain_config(chain_name)
@@ -317,7 +196,6 @@ defmodule Lasso.Providers do
           :ok
         else
           {:error, {:already_started, _pid}} ->
-            Logger.debug("Chain supervisor for '#{chain_name}' already started (race condition)")
             :ok
 
           {:error, reason} = error ->
@@ -330,7 +208,6 @@ defmodule Lasso.Providers do
   defp create_default_chain_config(chain_name) do
     %{
       chain_id: nil,
-      # Will be assigned dynamically if needed
       name: chain_name,
       providers: [],
       connection: %{
@@ -347,16 +224,9 @@ defmodule Lasso.Providers do
   end
 
   defp start_chain_supervisor(profile, chain_name, _chain_config_attrs) do
-    # Get the full ChainConfig struct from ConfigStore (it was normalized during registration)
-    case Lasso.Config.ConfigStore.get_chain(profile, chain_name) do
+    case ConfigStore.get_chain(profile, chain_name) do
       {:ok, chain_config} ->
-        # Start profile chain supervisor under the specified profile
-        # This includes BlockSync, HealthProbe, and all provider connections
-        Lasso.ProfileChainSupervisor.start_profile_chain(
-          profile,
-          chain_name,
-          chain_config
-        )
+        Lasso.ProfileChainSupervisor.start_profile_chain(profile, chain_name, chain_config)
 
       {:error, reason} ->
         {:error, {:config_fetch_failed, reason}}

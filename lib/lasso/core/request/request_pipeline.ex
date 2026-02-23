@@ -21,13 +21,12 @@ defmodule Lasso.RPC.RequestPipeline do
 
   require Logger
 
-  alias Lasso.JSONRPC.Error, as: JError
-
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.Providers.{CandidateListing, Catalog}
 
   alias Lasso.RPC.{
     Channel,
-    ProviderPool,
     RequestContext,
     Selection,
     TransportRegistry
@@ -48,10 +47,6 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # Configuration
   @max_channel_candidates 10
-
-  # ============================================================================
-  # Public API
-  # ============================================================================
 
   @doc """
   Execute an RPC request using transport-agnostic channels.
@@ -106,10 +101,6 @@ defmodule Lasso.RPC.RequestPipeline do
     execute_pipeline(channel_source, ctx)
   end
 
-  # ============================================================================
-  # Pipeline Execution
-  # ============================================================================
-
   @spec execute_pipeline(channel_source(), RequestContext.t()) :: result()
   defp execute_pipeline(channel_source, ctx) do
     ctx = RequestContext.mark_request_start(ctx)
@@ -141,10 +132,6 @@ defmodule Lasso.RPC.RequestPipeline do
         attempt_channels(channels, ctx)
     end
   end
-
-  # ============================================================================
-  # Channel Source Builders
-  # ============================================================================
 
   @spec get_channels_from_source(channel_source(), RequestContext.t()) :: [Channel.t()]
   defp get_channels_from_source(channel_source, ctx), do: channel_source.(ctx)
@@ -189,10 +176,6 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  # ============================================================================
-  # Channel Attempts (Tail-Recursive)
-  # ============================================================================
-
   @spec attempt_channels([Channel.t()], RequestContext.t()) :: result()
   defp attempt_channels([], ctx) do
     # All channels exhausted
@@ -231,10 +214,6 @@ defmodule Lasso.RPC.RequestPipeline do
         attempt_channels(rest, ctx)
     end
   end
-
-  # ============================================================================
-  # Single Channel Execution
-  # ============================================================================
 
   @spec execute_on_channel(Channel.t(), [Channel.t()], RequestContext.t()) :: result()
   defp execute_on_channel(channel, rest_channels, ctx) do
@@ -305,10 +284,6 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  # ============================================================================
-  # Result Handlers
-  # ============================================================================
-
   @spec handle_success(any(), number(), Channel.t(), RequestContext.t()) :: result()
   defp handle_success(result, io_ms, channel, ctx) do
     Logger.debug("Request succeeded",
@@ -370,7 +345,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
         Observability.record_fast_fail(ctx, channel, failover_reason, reason, latency_ms)
 
-        attempt_channels(rest_channels, ctx)
+        next_channels =
+          maybe_exclude_provider_for_method_not_found(rest_channels, channel, reason)
+
+        attempt_channels(next_channels, ctx)
 
       {:terminal_error, terminal_reason} ->
         Logger.warning("Terminal error, not retrying",
@@ -431,10 +409,6 @@ defmodule Lasso.RPC.RequestPipeline do
     finalize_error(jerr, ctx)
   end
 
-  # ============================================================================
-  # Finalization
-  # ============================================================================
-
   @spec finalize_error(JError.t(), RequestContext.t()) :: result()
   defp finalize_error(jerr, ctx) do
     ctx =
@@ -444,33 +418,17 @@ defmodule Lasso.RPC.RequestPipeline do
 
     duration_ms = RequestContext.get_duration(ctx)
 
-    # Record observability if we have an executed channel
-    if ctx.executed_channel do
-      Observability.record_failure(
-        ctx,
-        ctx.executed_channel,
-        ctx.method,
-        ctx.opts.strategy,
-        jerr,
-        duration_ms
-      )
-    else
-      Observability.record_failure(
-        ctx,
-        "no_channel",
-        ctx.method,
-        ctx.opts.strategy,
-        jerr,
-        duration_ms
-      )
-    end
+    Observability.record_failure(
+      ctx,
+      ctx.executed_channel || "no_channel",
+      ctx.method,
+      ctx.opts.strategy,
+      jerr,
+      duration_ms
+    )
 
     {:error, jerr, ctx}
   end
-
-  # ============================================================================
-  # Circuit Breaker Execution
-  # ============================================================================
 
   # CircuitBreaker.call returns:
   # - {:executed, fun_result} - Function executed, fun_result is what Channel.request returned
@@ -490,13 +448,25 @@ defmodule Lasso.RPC.RequestPipeline do
           CircuitBreaker.call_result(circuit_breaker_result())
   defp execute_with_circuit_breaker(channel, rpc_request, timeout) do
     attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
-    cb_id = {channel.profile, channel.chain, channel.provider_id, channel.transport}
-    CircuitBreaker.call(cb_id, attempt_fun, timeout)
-  end
+    instance_id = Catalog.lookup_instance_id(channel.profile, channel.chain, channel.provider_id)
 
-  # ============================================================================
-  # Helpers
-  # ============================================================================
+    cb_id =
+      if instance_id do
+        {instance_id, channel.transport}
+      else
+        Logger.warning(
+          "No instance_id found for #{channel.provider_id}, skipping circuit breaker"
+        )
+
+        nil
+      end
+
+    if cb_id do
+      CircuitBreaker.call(cb_id, attempt_fun, timeout)
+    else
+      {:executed, attempt_fun.()}
+    end
+  end
 
   @spec initialize_context(chain(), method(), params(), RequestOptions.t()) :: RequestContext.t()
   defp initialize_context(chain, method, params, opts) do
@@ -564,17 +534,8 @@ defmodule Lasso.RPC.RequestPipeline do
   defp calculate_min_recovery_time(profile, chain, transport_filter) do
     transport = transport_filter || :both
 
-    case ProviderPool.get_min_recovery_time(profile, chain, transport: transport, timeout: 2000) do
-      {:ok, min_time} ->
-        min_time
-
-      {:error, :timeout} ->
-        Logger.warning("Timeout getting recovery time", chain: chain)
-        60_000
-
-      {:error, _reason} ->
-        nil
-    end
+    {:ok, min_time} = CandidateListing.get_min_recovery_time(profile, chain, transport: transport)
+    min_time
   end
 
   @spec extract_error_category(any()) :: atom()
@@ -582,9 +543,17 @@ defmodule Lasso.RPC.RequestPipeline do
   defp extract_error_category(:circuit_open), do: :circuit_open
   defp extract_error_category(_), do: :unknown
 
-  # ============================================================================
-  # Slow Request Logging
-  # ============================================================================
+  @spec maybe_exclude_provider_for_method_not_found([Channel.t()], Channel.t(), any()) :: [
+          Channel.t()
+        ]
+  defp maybe_exclude_provider_for_method_not_found(rest_channels, channel, %JError{
+         category: :method_not_found
+       }) do
+    Enum.reject(rest_channels, &(&1.provider_id == channel.provider_id))
+  end
+
+  defp maybe_exclude_provider_for_method_not_found(rest_channels, _channel, _reason),
+    do: rest_channels
 
   @spec log_slow_request_if_needed(number(), method(), Channel.t(), RequestContext.t()) :: :ok
   defp log_slow_request_if_needed(latency_ms, method, channel, ctx) when latency_ms > 4000 do
