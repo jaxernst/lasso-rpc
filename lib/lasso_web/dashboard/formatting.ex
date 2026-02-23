@@ -90,6 +90,34 @@ defmodule LassoWeb.Dashboard.Formatting do
   def safe_round(value, precision) when is_float(value), do: Float.round(value, precision)
   def safe_round(nil, _precision), do: nil
 
+  @doc """
+  Formats a raw node/region ID into a human-readable display name.
+
+  Extracts the lowercase prefix before the first dash and looks it up
+  in the `:region_display_names` config. Returns the original string
+  if no mapping is found.
+
+  ## Examples
+
+      iex> Formatting.format_region_name("Sjc-080713ea67e778")
+      "San Jose"
+
+      iex> Formatting.format_region_name("unknown-region")
+      "unknown-region"
+  """
+  def format_region_name(region) when is_binary(region) do
+    prefix =
+      region
+      |> String.downcase()
+      |> String.split("-", parts: 2)
+      |> List.first()
+
+    display_names = Application.get_env(:lasso, :region_display_names, %{})
+    Map.get(display_names, prefix, region)
+  end
+
+  def format_region_name(region), do: region
+
   def format_latency(nil), do: "—"
   def format_latency(ms) when is_float(ms), do: "#{round(ms)}ms"
   def format_latency(ms), do: "#{ms}ms"
@@ -97,6 +125,19 @@ defmodule LassoWeb.Dashboard.Formatting do
   def format_rps(rps) when rps == 0 or rps == 0.0, do: "0"
   def format_rps(rps), do: "#{rps}"
 
+  def format_time_ago(nil), do: "—"
+
+  def format_time_ago(ts_ms) do
+    diff_ms = System.system_time(:millisecond) - ts_ms
+
+    cond do
+      diff_ms < 60_000 -> "now"
+      diff_ms < 3_600_000 -> "#{div(diff_ms, 60_000)}m ago"
+      true -> "#{div(diff_ms, 3_600_000)}h ago"
+    end
+  end
+
+  @doc "Tailwind color class for success rate percentage (0-100 scale)."
   def success_rate_color(nil), do: "text-gray-500"
   def success_rate_color(rate) when rate >= 99.0, do: "text-emerald-400"
   def success_rate_color(rate) when rate >= 95.0, do: "text-yellow-400"

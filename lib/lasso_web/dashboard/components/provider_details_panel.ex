@@ -206,7 +206,6 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          chain_consensus
        ) do
     conn = provider_connection || %{}
-    chain = Map.get(conn, :chain)
 
     {block_height, block_lag, consensus_height} =
       resolve_block_heights(
@@ -1118,31 +1117,16 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   defp sync_progress(block_height, consensus_height),
     do: min(100, block_height / consensus_height * 100)
 
-  defp format_latency(nil), do: "—"
-  defp format_latency(ms), do: "#{round(ms)}ms"
+  defdelegate format_latency(ms), to: Formatting
+  defdelegate format_time_ago(ts_ms), to: Formatting
+  defdelegate success_rate_color(rate), to: Formatting
 
   defp format_traffic(nil), do: "—"
   defp format_traffic(value), do: "#{value |> Helpers.to_float() |> Float.round(1)}%"
 
-  defp success_rate_color(rate) when rate >= 99.0, do: "text-emerald-400"
-  defp success_rate_color(rate) when rate >= 95.0, do: "text-yellow-400"
-  defp success_rate_color(_), do: "text-red-400"
-
   defp severity_dot_color(:error), do: "bg-red-500"
   defp severity_dot_color(:warn), do: "bg-yellow-500"
   defp severity_dot_color(_), do: "bg-blue-500"
-
-  defp format_time_ago(nil), do: "—"
-
-  defp format_time_ago(ts_ms) do
-    diff_ms = System.system_time(:millisecond) - ts_ms
-
-    cond do
-      diff_ms < 60_000 -> "now"
-      diff_ms < 3_600_000 -> "#{div(diff_ms, 60_000)}m ago"
-      true -> "#{div(diff_ms, 3_600_000)}h ago"
-    end
-  end
 
   defp truncate_message(message, max_length) when is_binary(message) do
     if String.length(message) > max_length do

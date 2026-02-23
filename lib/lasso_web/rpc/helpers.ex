@@ -12,17 +12,17 @@ defmodule LassoWeb.RPC.Helpers do
   @doc """
   Returns the configured default provider selection strategy.
 
-  This reads from application configuration with a fallback to `:round_robin`.
+  This reads from application configuration with a fallback to `:load_balanced`.
 
   ## Examples
 
       iex> LassoWeb.RPC.Helpers.default_provider_strategy()
-      :round_robin
+      :load_balanced
 
   """
   @spec default_provider_strategy() :: atom()
   def default_provider_strategy do
-    Application.get_env(:lasso, :provider_selection_strategy, :round_robin)
+    Application.get_env(:lasso, :provider_selection_strategy, :load_balanced)
   end
 
   @doc """

@@ -818,6 +818,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         :closed
       )
 
+
       # Request with priority strategy should still succeed via failover
       {:ok, result, _ctx} =
         RequestPipeline.execute_via_channels(

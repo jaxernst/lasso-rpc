@@ -8,6 +8,20 @@ defmodule Lasso.RPC.Providers.AdapterHelpers do
 
   alias Lasso.RPC.ChainState
 
+  @spec get_adapter_config(map(), atom(), any()) :: any()
+  def get_adapter_config(ctx, key, default) when is_map(ctx) and is_atom(key) do
+    adapter_config =
+      ctx
+      |> Map.get(:provider_config, %{})
+      |> Map.get(:adapter_config)
+
+    case adapter_config do
+      nil -> default
+      %{} = config -> Map.get(config, key, default)
+      _ -> default
+    end
+  end
+
   @spec validate_block_range(list(), map(), pos_integer()) :: :ok | {:error, term()}
   def validate_block_range([%{"fromBlock" => from, "toBlock" => to}], ctx, limit) do
     with {:ok, range} <- compute_block_range(from, to, ctx),

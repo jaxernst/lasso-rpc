@@ -33,7 +33,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Result should be a Response.Success struct with passthrough data
@@ -63,7 +63,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       assert %Response.Success{} = result
@@ -90,7 +90,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       assert %Response.Success{} = result
@@ -114,7 +114,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_chainId",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # eth_chainId is handled locally for some chains, but if forwarded,
@@ -146,7 +146,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_getBalance",
           [address, "latest"],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       assert %Response.Success{} = result
@@ -173,7 +173,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Even after failover, should get Response.Success with passthrough
@@ -206,7 +206,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           %RequestOptions{
             provider_override: "error_provider",
             failover_on_override: false,
-            strategy: :round_robin,
+            strategy: :load_balanced,
             timeout_ms: 30_000
           }
         )
@@ -229,7 +229,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       assert %Response.Success{id: response_id} = result
@@ -256,7 +256,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       assert %Response.Success{} = result
@@ -279,7 +279,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       # Upstream latency should be recorded
@@ -308,7 +308,7 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :round_robin, timeout_ms: 30_000}
+          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       assert %Response.Success{raw_bytes: original_bytes} = result

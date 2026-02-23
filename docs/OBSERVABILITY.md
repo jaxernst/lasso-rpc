@@ -96,7 +96,7 @@ Lasso's observability system provides comprehensive visibility into RPC request 
 {
   "event": "rpc.request.completed",
   "request_id": "uuid-v4",
-  "strategy": "fastest|priority|round_robin|latency_weighted",
+  "strategy": "fastest|priority|load_balanced|latency_weighted",
   "chain": "ethereum",
   "transport": "http|ws",
   "jsonrpc_method": "eth_blockNumber",
@@ -153,8 +153,9 @@ Lasso's observability system provides comprehensive visibility into RPC request 
   - **protocol**: Transport protocol used
 - **selection_reason**: Why this provider was selected
   - `"fastest_method_latency"` - Performance-based (fastest strategy)
+
   - `"static_priority"` - Config priority (priority strategy)
-  - `"round_robin_rotation"` - Load balancing (round_robin strategy)
+  - `"load_balanced_rotation"` - Load balancing (load_balanced strategy)
 - **retries**: Number of retry attempts (0 = first try succeeded)
 - **circuit_breaker_state**: CB state when request was made
   - `"closed"` - Healthy, normal operation
@@ -203,7 +204,7 @@ X-Lasso-Meta: eyJ2ZXJzaW9uIjoiMS4wIiwic3RyYXRlZ3kiOiJjaGVh...
 {
   "version": "1.0",
   "request_id": "uuid",
-  "strategy": "round_robin",
+  "strategy": "load_balanced",
   "chain": "ethereum",
   "transport": "http",
   "selected_provider": { "id": "ethereum_llamarpc", "protocol": "http" },
@@ -229,7 +230,7 @@ Standard JSON-RPC response enriched with `lasso_meta` field:
   "lasso_meta": {
     "version": "1.0",
     "request_id": "uuid",
-    "strategy": "round_robin",
+    "strategy": "load_balanced",
     "chain": "ethereum",
     "transport": "http",
     "selected_provider": { "id": "ethereum_llamarpc", "protocol": "http" },
