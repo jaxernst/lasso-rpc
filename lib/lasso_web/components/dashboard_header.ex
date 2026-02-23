@@ -25,7 +25,7 @@ defmodule LassoWeb.Components.DashboardHeader do
     ]}>
       <div class="relative flex items-center justify-between px-6 py-3">
         <!-- Left: Logo -->
-        <a href="/" class="group flex items-center gap-2">
+        <a href="/dashboard" class="group flex items-center gap-2">
           <img
             src={~p"/images/lasso-logo.png"}
             alt="Lasso Logo"

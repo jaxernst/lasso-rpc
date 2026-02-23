@@ -25,7 +25,7 @@ defmodule LassoWeb.Router do
   scope "/", LassoWeb do
     pipe_through(:browser)
 
-    live("/", HomeLive)
+    get("/", PageController, :redirect_to_dashboard)
     live("/dashboard", Dashboard, :index)
     live("/dashboard/:profile", Dashboard, :show)
   end
