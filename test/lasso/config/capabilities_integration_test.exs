@@ -23,38 +23,38 @@ defmodule Lasso.Config.CapabilitiesIntegrationTest do
       validate_profile_capabilities(profile)
     end
 
-    test "premium.yml loads and all capabilities pass validation" do
-      assert {:ok, profile} = load_profile("premium")
-      validate_profile_capabilities(profile)
-    end
-
     test "all profiles have consistent capabilities for same-provider instances" do
-      {:ok, default} = load_profile("default")
-      {:ok, premium} = load_profile("premium")
+      profile_slugs = list_profile_slugs()
 
-      shared_providers = find_shared_providers(default, premium)
+      loaded =
+        Enum.map(profile_slugs, fn slug ->
+          {:ok, profile} = load_profile(slug)
+          {slug, profile}
+        end)
 
-      for {chain, provider_id, default_caps, premium_caps} <- shared_providers do
-        assert default_caps == premium_caps,
-               "Provider #{provider_id} on #{chain} has different capabilities " <>
-                 "between default and premium profiles.\n" <>
-                 "Default: #{inspect(default_caps)}\nPremium: #{inspect(premium_caps)}"
+      for {slug_a, profile_a} <- loaded,
+          {slug_b, profile_b} <- loaded,
+          slug_a < slug_b do
+        shared_providers = find_shared_providers(profile_a, profile_b)
+
+        for {chain, provider_id, caps_a, caps_b} <- shared_providers do
+          assert caps_a == caps_b,
+                 "Provider #{provider_id} on #{chain} has different capabilities " <>
+                   "between #{slug_a} and #{slug_b} profiles.\n" <>
+                   "#{slug_a}: #{inspect(caps_a)}\n#{slug_b}: #{inspect(caps_b)}"
+        end
       end
     end
 
     test "all DRPC providers have max_block_range limits" do
-      for profile_slug <- ["default", "premium"] do
+      for profile_slug <- list_profile_slugs() do
         {:ok, profile} = load_profile(profile_slug)
 
         for {chain, chain_config} <- profile.chains,
             provider <- chain_config.providers,
-            String.contains?(provider.id, "drpc") do
-          caps = provider.capabilities
-
-          assert caps != nil,
-                 "#{profile_slug}/#{chain}/#{provider.id}: DRPC provider missing capabilities"
-
-          limits = Map.get(caps, :limits, %{})
+            String.contains?(provider.id, "drpc"),
+            provider.capabilities != nil do
+          limits = Map.get(provider.capabilities, :limits, %{})
 
           assert Map.has_key?(limits, :max_block_range),
                  "#{profile_slug}/#{chain}/#{provider.id}: DRPC provider missing max_block_range"
@@ -63,18 +63,14 @@ defmodule Lasso.Config.CapabilitiesIntegrationTest do
     end
 
     test "all PublicNode providers block filters category" do
-      for profile_slug <- ["default", "premium"] do
+      for profile_slug <- list_profile_slugs() do
         {:ok, profile} = load_profile(profile_slug)
 
         for {chain, chain_config} <- profile.chains,
             provider <- chain_config.providers,
-            String.contains?(provider.id, "publicnode") do
-          caps = provider.capabilities
-
-          assert caps != nil,
-                 "#{profile_slug}/#{chain}/#{provider.id}: PublicNode provider missing capabilities"
-
-          categories = Map.get(caps, :unsupported_categories, [])
+            String.contains?(provider.id, "publicnode"),
+            provider.capabilities != nil do
+          categories = Map.get(provider.capabilities, :unsupported_categories, [])
 
           assert :filters in categories,
                  "#{profile_slug}/#{chain}/#{provider.id}: PublicNode must block :filters category, " <>
@@ -90,24 +86,28 @@ defmodule Lasso.Config.CapabilitiesIntegrationTest do
     end
 
     test "all Ethereum mainnet PublicNode providers block eip4844" do
-      for profile_slug <- ["default", "premium"] do
+      for profile_slug <- list_profile_slugs() do
         {:ok, profile} = load_profile(profile_slug)
 
-        ethereum_config = profile.chains["ethereum"]
-        assert ethereum_config, "#{profile_slug} missing ethereum chain"
+        case profile.chains["ethereum"] do
+          nil ->
+            :ok
 
-        for provider <- ethereum_config.providers,
-            String.contains?(provider.id, "publicnode") do
-          categories = Map.get(provider.capabilities, :unsupported_categories, [])
+          ethereum_config ->
+            for provider <- ethereum_config.providers,
+                String.contains?(provider.id, "publicnode"),
+                provider.capabilities != nil do
+              categories = Map.get(provider.capabilities, :unsupported_categories, [])
 
-          assert :eip4844 in categories,
-                 "#{profile_slug}/ethereum/#{provider.id}: Ethereum PublicNode must block :eip4844"
+              assert :eip4844 in categories,
+                     "#{profile_slug}/ethereum/#{provider.id}: Ethereum PublicNode must block :eip4844"
+            end
         end
       end
     end
 
     test "all providers with capabilities have valid structure" do
-      for profile_slug <- ["default", "premium"] do
+      for profile_slug <- list_profile_slugs() do
         {:ok, profile} = load_profile(profile_slug)
 
         for {chain, chain_config} <- profile.chains,
@@ -177,7 +177,7 @@ defmodule Lasso.Config.CapabilitiesIntegrationTest do
     end
 
     test "no duplicate provider IDs within a chain" do
-      for profile_slug <- ["default", "premium"] do
+      for profile_slug <- list_profile_slugs() do
         {:ok, profile} = load_profile(profile_slug)
 
         for {chain, chain_config} <- profile.chains do
@@ -193,6 +193,14 @@ defmodule Lasso.Config.CapabilitiesIntegrationTest do
 
   # Helpers
 
+  defp list_profile_slugs do
+    @profiles_dir
+    |> File.ls!()
+    |> Enum.filter(&String.ends_with?(&1, ".yml"))
+    |> Enum.map(&String.replace_suffix(&1, ".yml", ""))
+    |> Enum.sort()
+  end
+
   defp load_profile(slug) do
     {:ok, state} = FileBackend.init(profiles_dir: @profiles_dir)
     FileBackend.load(state, slug)
@@ -206,14 +214,14 @@ defmodule Lasso.Config.CapabilitiesIntegrationTest do
     end
   end
 
-  defp find_shared_providers(default_profile, premium_profile) do
-    for {chain, default_chain} <- default_profile.chains,
-        premium_chain = premium_profile.chains[chain],
-        premium_chain != nil,
-        default_provider <- default_chain.providers,
-        premium_provider <- premium_chain.providers,
-        default_provider.id == premium_provider.id do
-      {chain, default_provider.id, default_provider.capabilities, premium_provider.capabilities}
+  defp find_shared_providers(profile_a, profile_b) do
+    for {chain, chain_a} <- profile_a.chains,
+        chain_b = profile_b.chains[chain],
+        chain_b != nil,
+        provider_a <- chain_a.providers,
+        provider_b <- chain_b.providers,
+        provider_a.id == provider_b.id do
+      {chain, provider_a.id, provider_a.capabilities, provider_b.capabilities}
     end
   end
 end

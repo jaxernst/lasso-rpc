@@ -206,6 +206,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          chain_consensus
        ) do
     conn = provider_connection || %{}
+    chain = Map.get(conn, :chain)
 
     {block_height, block_lag, consensus_height} =
       resolve_block_heights(

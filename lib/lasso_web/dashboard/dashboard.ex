@@ -226,7 +226,78 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_info({:connection_status_update, connections}, socket) do
-    socket = MessageHandlers.handle_connection_status_update(connections, socket, &buffer_event/2)
+    prev = Map.get(socket.assigns, :connections, [])
+    prev_by_id = Map.new(prev, fn c -> {c.id, c} end)
+
+    {socket, batch} =
+      Enum.reduce(connections, {socket, []}, fn c, {sock, acc} ->
+        case Map.get(prev_by_id, c.id) do
+          nil ->
+            {sock, acc}
+
+          prev_c ->
+            new_acc =
+              []
+              |> then(fn lst ->
+                if Map.get(c, :status) != Map.get(prev_c, :status) do
+                  [
+                    Helpers.as_event(:provider,
+                      chain: Map.get(c, :chain),
+                      provider_id: c.id,
+                      severity:
+                        case c.status do
+                          :connected -> :info
+                          _ -> :warn
+                        end,
+                      message: "status #{to_string(prev_c.status)} -> #{to_string(c.status)}",
+                      meta: %{name: c.name}
+                    )
+                    | lst
+                  ]
+                else
+                  lst
+                end
+              end)
+              |> then(fn lst ->
+                prev_attempts = Map.get(prev_c, :reconnect_attempts, 0)
+                attempts = Map.get(c, :reconnect_attempts, 0)
+
+                if attempts > prev_attempts do
+                  [
+                    Helpers.as_event(:provider,
+                      chain: Map.get(c, :chain),
+                      provider_id: c.id,
+                      severity: :warn,
+                      message: "reconnect attempt #{attempts}",
+                      meta: %{delta: attempts - prev_attempts}
+                    )
+                    | lst
+                  ]
+                else
+                  lst
+                end
+              end)
+
+            {sock, acc ++ new_acc}
+        end
+      end)
+
+    socket =
+      socket
+      |> assign(:connections, connections)
+      |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
+      |> (fn s ->
+            if length(batch) > 0 do
+              s
+              |> update(:events, fn list ->
+                Enum.reverse(batch) ++ Enum.take(list, 199 - length(batch))
+              end)
+              |> push_event("events_batch", %{items: batch})
+            else
+              s
+            end
+          end).()
+
     {:noreply, socket}
   end
 
@@ -808,7 +879,14 @@ defmodule LassoWeb.Dashboard do
 
   def dashboard_tab_content(assigns) do
     {center_x, center_y} = TopologyConfig.canvas_center()
-    assigns = assign(assigns, canvas_center: "#{center_x},#{center_y}")
+
+    assigns =
+      assigns
+      |> assign(canvas_center: "#{center_x},#{center_y}")
+      |> assign(
+        topology_data:
+          NetworkTopology.compute_topology_data(assigns.connections, assigns.selected_profile)
+      )
 
     ~H"""
     <div class="relative flex h-full w-full">
@@ -823,11 +901,9 @@ defmodule LassoWeb.Dashboard do
           <div id="provider-request-animator" phx-hook="ProviderRequestAnimator" class="hidden"></div>
           <NetworkTopology.nodes_display
             id="network-topology"
-            connections={@connections}
+            topology_data={@topology_data}
             selected_chain={@selected_chain}
             selected_provider={@selected_provider}
-            selected_profile={@selected_profile}
-            cluster_circuit_states={@cluster_circuit_states}
             on_chain_select="select_chain"
             on_provider_select="select_provider"
           />
