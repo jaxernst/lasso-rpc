@@ -30,7 +30,7 @@ defmodule LassoWeb.TopologyConfig do
   # Hexagonal Layout Configuration
   # ===========================================================================
 
-  def hex_spacing(_chain_count), do: 250
+  def hex_spacing(_chain_count), do: 225
 
   # ===========================================================================
   # Chain Size Configuration

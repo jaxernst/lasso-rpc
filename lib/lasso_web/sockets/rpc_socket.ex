@@ -456,7 +456,7 @@ defmodule LassoWeb.RPCSocket do
   # Map URL strategy strings to atoms (avoids String.to_atom)
   @strategy_map %{
     "fastest" => :fastest,
-    "round-robin" => :round_robin,
+    "round-robin" => :load_balanced,
     "latency-weighted" => :latency_weighted
   }
 

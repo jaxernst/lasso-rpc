@@ -121,21 +121,24 @@ defmodule LassoWeb.CoreComponents do
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
       class={[
-        "fixed top-2 right-2 z-50 mr-2 w-80 rounded-lg p-3 ring-1 sm:w-96",
-        @kind == :info && "bg-emerald-50 fill-cyan-900 text-emerald-800 ring-emerald-500",
-        @kind == :error && "bg-rose-50 fill-rose-900 text-rose-900 shadow-md ring-rose-500"
+        "fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-md px-3 py-2 text-xs shadow-lg cursor-pointer",
+        @kind == :info && "bg-gray-900/95 text-gray-200 border border-gray-700",
+        @kind == :error && "bg-gray-900/95 text-gray-200 border border-red-900/50"
       ]}
       {@rest}
     >
-      <p :if={@title} class="flex items-center gap-1.5 text-sm font-semibold leading-6">
-        <.icon :if={@kind == :info} name="hero-information-circle-mini" class="h-4 w-4" />
-        <.icon :if={@kind == :error} name="hero-exclamation-circle-mini" class="h-4 w-4" />
-        {@title}
-      </p>
-      <p class="mt-2 text-sm leading-5">{msg}</p>
-      <button type="button" class="group absolute top-1 right-1 p-2" aria-label="close">
-        <.icon name="hero-x-mark-solid" class="h-5 w-5 opacity-40 group-hover:opacity-70" />
-      </button>
+      <.icon
+        :if={@kind == :info}
+        name="hero-check-circle-mini"
+        class="h-4 w-4 text-green-500 shrink-0"
+      />
+      <.icon
+        :if={@kind == :error}
+        name="hero-exclamation-circle-mini"
+        class="h-4 w-4 text-red-400 shrink-0"
+      />
+      <span class="text-gray-300">{msg}</span>
+      <.icon name="hero-x-mark-mini" class="h-3 w-3 text-gray-500 hover:text-gray-300 shrink-0" />
     </div>
     """
   end
@@ -161,7 +164,7 @@ defmodule LassoWeb.CoreComponents do
         title="We can't find the internet"
         phx-disconnected={show(".phx-client-error #client-error")}
         phx-connected={hide("#client-error")}
-        hidden
+        style="display:none"
       >
         Attempting to reconnect <.icon name="hero-arrow-path" class="ml-1 h-3 w-3 animate-spin" />
       </.flash>
@@ -172,7 +175,7 @@ defmodule LassoWeb.CoreComponents do
         title="Something went wrong!"
         phx-disconnected={show(".phx-server-error #server-error")}
         phx-connected={hide("#server-error")}
-        hidden
+        style="display:none"
       >
         Hang in there while we get back on track
         <.icon name="hero-arrow-path" class="ml-1 h-3 w-3 animate-spin" />

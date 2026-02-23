@@ -151,7 +151,7 @@ defmodule Lasso.Providers do
 
         %{
           id: pp.provider_id,
-          name: get_in(instance_config, [:canonical_config, :name]) || pp.provider_id,
+          name: pp[:name] || pp.provider_id,
           status: health.status,
           availability: InstanceState.status_to_availability(health.status),
           has_http: is_binary(url),

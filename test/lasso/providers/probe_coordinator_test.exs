@@ -179,6 +179,66 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     end
   end
 
+  describe "minimum probe interval" do
+    test "enforces 10s floor between probes regardless of backoff" do
+      {:ok, pid} = ProbeCoordinator.start_link(@chain)
+      instance_ids = Catalog.list_instances_for_chain(@chain)
+      [first_id | _] = instance_ids
+
+      state = :sys.get_state(pid)
+      inst = Map.get(state.instances, first_id)
+
+      # Set last_probe_monotonic to 5 seconds ago with zero backoff
+      now = System.monotonic_time(:millisecond)
+
+      modified = %{
+        inst
+        | last_probe_monotonic: now - 5_000,
+          current_backoff_ms: 0
+      }
+
+      new_state = %{state | instances: Map.put(state.instances, first_id, modified)}
+      :sys.replace_state(pid, fn _ -> new_state end)
+
+      # Wait for a tick cycle
+      Process.sleep(300)
+
+      # The instance should NOT have been probed (5s < 10s minimum)
+      after_state = :sys.get_state(pid)
+      after_inst = Map.get(after_state.instances, first_id)
+      assert after_inst.last_probe_monotonic == now - 5_000
+    end
+
+    test "allows probing after minimum interval has elapsed" do
+      {:ok, pid} = ProbeCoordinator.start_link(@chain)
+      instance_ids = Catalog.list_instances_for_chain(@chain)
+      [first_id | _] = instance_ids
+
+      state = :sys.get_state(pid)
+      inst = Map.get(state.instances, first_id)
+
+      # Set last_probe_monotonic to 11 seconds ago with zero backoff
+      now = System.monotonic_time(:millisecond)
+
+      modified = %{
+        inst
+        | last_probe_monotonic: now - 11_000,
+          current_backoff_ms: 0
+      }
+
+      new_state = %{state | instances: Map.put(state.instances, first_id, modified)}
+      :sys.replace_state(pid, fn _ -> new_state end)
+
+      # Wait for a tick cycle
+      Process.sleep(300)
+
+      # The instance should have been probed (11s > 10s minimum)
+      after_state = :sys.get_state(pid)
+      after_inst = Map.get(after_state.instances, first_id)
+      assert after_inst.last_probe_monotonic > now - 11_000
+    end
+  end
+
   describe "via_name/1" do
     test "returns a Registry via tuple" do
       {:via, Registry, {Lasso.Registry, key}} = ProbeCoordinator.via_name("ethereum")

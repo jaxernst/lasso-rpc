@@ -100,7 +100,7 @@ defmodule Lasso.Providers.CandidateListing do
       priority: profile_provider.priority,
       capabilities: profile_provider.capabilities,
       archival: profile_provider.archival,
-      name: get_in(instance_config, [:canonical_config, :name]) || profile_provider.provider_id
+      name: profile_provider[:name] || profile_provider.provider_id
     }
 
     http_cb = InstanceState.read_circuit(instance_id, :http)

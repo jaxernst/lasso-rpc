@@ -407,7 +407,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
         <DetailPanelComponents.section_header title="Routing Decisions" />
         <div class="grid grid-cols-1 gap-4">
           <.last_decision_card last_decision={@last_decision} connections={@connections} />
-          <.distribution_card decision_share={@decision_share} />
+          <.distribution_card decision_share={@decision_share} connections={@connections} />
         </div>
       </div>
     </div>
@@ -415,6 +415,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   end
 
   attr(:decision_share, :list, required: true)
+  attr(:connections, :list, required: true)
 
   defp distribution_card(assigns) do
     ~H"""
@@ -424,7 +425,12 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
         <div class="text-[10px] text-gray-600 uppercase tracking-wide">Req Share</div>
       </div>
       <div class="space-y-2">
-        <.distribution_row :for={{pid, pct} <- @decision_share} provider_id={pid} percentage={pct} />
+        <.distribution_row
+          :for={{pid, pct} <- @decision_share}
+          provider_id={pid}
+          provider_name={resolve_provider_name(@connections, pid)}
+          percentage={pct}
+        />
         <div :if={@decision_share == []} class="text-xs text-gray-600 italic pt-2 pb-3 text-center">
           No traffic recorded recently
         </div>
@@ -434,6 +440,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   end
 
   attr(:provider_id, :string, required: true)
+  attr(:provider_name, :string, required: true)
   attr(:percentage, :any, required: true)
 
   defp distribution_row(assigns) do
@@ -444,7 +451,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     <div class="group">
       <div class="flex items-center justify-between text-xs mb-1">
         <span class="text-gray-300 font-medium truncate max-w-[150px] group-hover:text-white transition-colors">
-          {@provider_id}
+          {@provider_name}
         </span>
         <span class="text-gray-500 font-mono group-hover:text-gray-400">{@pct}%</span>
       </div>
@@ -494,13 +501,19 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   defp find_provider_name(_connections, nil), do: nil
 
   defp find_provider_name(connections, decision) when is_list(connections) do
-    case Enum.find(connections, &(&1.id == decision.provider_id)) do
-      %{name: name} -> name
-      _ -> decision.provider_id
-    end
+    resolve_provider_name(connections, decision.provider_id)
   end
 
   defp find_provider_name(_, decision), do: decision.provider_id
+
+  defp resolve_provider_name(connections, provider_id) when is_list(connections) do
+    case Enum.find(connections, &(&1.id == provider_id)) do
+      %{name: name} -> name
+      _ -> provider_id
+    end
+  end
+
+  defp resolve_provider_name(_, provider_id), do: provider_id
 
   defp compute_filtered_chain_metrics(
          "aggregate",

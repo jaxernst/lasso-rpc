@@ -189,13 +189,13 @@ defmodule Lasso.Config.ProfileValidator do
       400
 
       iex> ProfileValidator.error_to_http_status(:profile_not_found)
-      503
+      404
   """
   @spec error_to_http_status(validation_error()) :: integer()
   def error_to_http_status(:profile_nil), do: 400
   def error_to_http_status(:profile_invalid_type), do: 400
   def error_to_http_status(:profile_empty), do: 400
-  def error_to_http_status(:profile_not_found), do: 503
+  def error_to_http_status(:profile_not_found), do: 404
 
   @doc """
   Converts validation error types to JSON-RPC error codes.

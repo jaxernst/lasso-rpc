@@ -8,7 +8,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
   ## Probe Cycle
 
   With a 200ms tick interval and N unique instances for a chain:
-  - Each instance is probed every `200ms × N` on average
+  - Each instance is probed at most every 10s (minimum probe interval floor)
   - Exponential backoff per-instance on failure (2s base, 30s max, ±20% jitter)
 
   ## ETS Write Partitioning
@@ -32,6 +32,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
   @base_backoff_ms 2_000
   @max_backoff_ms 30_000
   @jitter_percent 0.2
+  @min_probe_interval_ms 10_000
 
   @type instance_state :: %{
           instance_id: String.t(),
@@ -161,7 +162,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
   defp should_probe?(inst, now) do
     case inst.last_probe_monotonic do
       nil -> true
-      last -> now - last >= inst.current_backoff_ms
+      last -> now - last >= max(inst.current_backoff_ms, @min_probe_interval_ms)
     end
   end
 

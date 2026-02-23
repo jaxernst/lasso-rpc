@@ -168,8 +168,8 @@ defmodule Lasso.Config.ProfileValidatorTest do
       assert 400 = ProfileValidator.error_to_http_status(:profile_empty)
     end
 
-    test "returns 503 for profile not found" do
-      assert 503 = ProfileValidator.error_to_http_status(:profile_not_found)
+    test "returns 404 for profile not found" do
+      assert 404 = ProfileValidator.error_to_http_status(:profile_not_found)
     end
   end
 

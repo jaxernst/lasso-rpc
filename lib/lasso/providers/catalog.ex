@@ -221,6 +221,7 @@ defmodule Lasso.Providers.Catalog do
         %{
           instance_id: instance_id,
           provider_id: provider.id,
+          name: provider.name,
           priority: provider.priority,
           capabilities: provider.capabilities,
           archival: provider.archival

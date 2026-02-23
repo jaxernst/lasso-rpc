@@ -5,6 +5,13 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   Polls `eth_blockNumber` at a configurable interval and reports block heights
   to the parent Worker. Uses a reference profile and Channel for auth injection.
 
+  ## Health Writes
+
+  Each successful poll writes `http_status: :healthy` to `{:health, instance_id}` in
+  ETS and signals circuit breaker recovery. Failed polls write `http_status` as
+  `:degraded` (2+) or `:unhealthy` (5+). Top-level `status`, `consecutive_failures`,
+  and `last_error` are left to ProbeCoordinator and Observability.
+
   ## Circuit Breaker Integration
 
   Goes through the shared HTTP circuit breaker keyed by `{instance_id, :http}`.
@@ -22,6 +29,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   @default_poll_interval_ms 15_000
   @default_timeout_ms 3_000
   @max_consecutive_failures 3
+  @degraded_threshold 2
+  @unhealthy_threshold 5
 
   defstruct [
     :instance_id,
@@ -109,6 +118,12 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     execute_poll(state)
   end
 
+  @spec set_poll_interval(t(), pos_integer()) :: t()
+  def set_poll_interval(%__MODULE__{} = state, interval_ms)
+      when is_integer(interval_ms) and interval_ms > 0 do
+    %{state | poll_interval_ms: interval_ms}
+  end
+
   ## Private Functions
 
   defp schedule_poll(state, delay_ms) do
@@ -125,6 +140,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     case result do
       {:ok, height} ->
         send(state.parent, {:block_height, state.instance_id, height, %{latency_ms: latency_ms}})
+        write_health_success(state.instance_id)
+        CircuitBreaker.signal_recovery_cast({state.instance_id, :http})
 
         new_state = %{
           state
@@ -144,6 +161,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
       {:error, reason} ->
         failures = state.consecutive_failures + 1
+        write_health_failure(state.instance_id, failures, reason)
 
         if failures == @max_consecutive_failures do
           Logger.warning("HTTP polling degraded",
@@ -162,6 +180,50 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
             last_poll_time: System.system_time(:millisecond)
         }
     end
+  end
+
+  defp write_health_success(instance_id) do
+    existing = read_existing_health(instance_id)
+
+    merged =
+      Map.merge(existing, %{
+        http_status: :healthy,
+        last_health_check: System.system_time(:millisecond)
+      })
+
+    :ets.insert(:lasso_instance_state, {{:health, instance_id}, merged})
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp write_health_failure(instance_id, consecutive_failures, _reason) do
+    existing = read_existing_health(instance_id)
+
+    http_status =
+      cond do
+        consecutive_failures >= @unhealthy_threshold -> :unhealthy
+        consecutive_failures >= @degraded_threshold -> :degraded
+        true -> Map.get(existing, :http_status, :healthy)
+      end
+
+    merged =
+      Map.merge(existing, %{
+        http_status: http_status,
+        last_health_check: System.system_time(:millisecond)
+      })
+
+    :ets.insert(:lasso_instance_state, {{:health, instance_id}, merged})
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp read_existing_health(instance_id) do
+    case :ets.lookup(:lasso_instance_state, {:health, instance_id}) do
+      [{_, data}] -> data
+      [] -> %{}
+    end
+  rescue
+    ArgumentError -> %{}
   end
 
   defp do_poll(instance_id, chain) do
@@ -191,7 +253,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     end
   end
 
-  # Use a reference profile + Channel for auth header injection
   defp do_poll_request(instance_id, chain) do
     case resolve_channel(instance_id, chain) do
       {:ok, channel} ->

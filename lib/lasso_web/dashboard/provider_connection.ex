@@ -47,7 +47,7 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
 
     url = Map.get(instance_config, :url)
     ws_url = Map.get(instance_config, :ws_url)
-    provider_name = get_in(instance_config, [:canonical_config, :name]) || provider_id
+    provider_name = profile_provider[:name] || provider_id
 
     provider_type =
       cond do
