@@ -13,7 +13,6 @@ defmodule Lasso.RPC.RequestOptions do
 
   @enforce_keys [:timeout_ms]
   defstruct profile: "default",
-            account_id: nil,
             strategy: :load_balanced,
             provider_override: nil,
             transport: nil,
@@ -26,7 +25,6 @@ defmodule Lasso.RPC.RequestOptions do
 
   @type t :: %__MODULE__{
           profile: String.t(),
-          account_id: String.t() | nil,
           strategy: strategy,
           provider_override: String.t() | nil,
           transport: transport,
@@ -56,7 +54,7 @@ defmodule Lasso.RPC.RequestOptions do
   end
 
   defp validate_strategy(strategy)
-       when strategy in [:fastest, :priority, :load_balanced, :round_robin, :latency_weighted],
+       when strategy in [:fastest, :priority, :load_balanced, :latency_weighted],
        do: :ok
 
   defp validate_strategy(strategy),
