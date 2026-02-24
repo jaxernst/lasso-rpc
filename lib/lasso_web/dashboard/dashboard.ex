@@ -228,221 +228,26 @@ defmodule LassoWeb.Dashboard do
     |> push_event("persist_profile", %{profile: new_profile})
   end
 
+  # Coalesced batch from EventStream — single message per tick replaces individual handlers
   @impl true
-  def handle_info({:connection_status_update, connections}, socket) do
-    prev = Map.get(socket.assigns, :connections, [])
-    prev_by_id = Map.new(prev, fn c -> {c.id, c} end)
-
-    {socket, batch} =
-      Enum.reduce(connections, {socket, []}, fn c, {sock, acc} ->
-        case Map.get(prev_by_id, c.id) do
-          nil ->
-            {sock, acc}
-
-          prev_c ->
-            new_acc =
-              []
-              |> then(fn lst ->
-                if Map.get(c, :status) != Map.get(prev_c, :status) do
-                  [
-                    Helpers.as_event(:provider,
-                      chain: Map.get(c, :chain),
-                      provider_id: c.id,
-                      severity:
-                        case c.status do
-                          :connected -> :info
-                          _ -> :warn
-                        end,
-                      message: "status #{to_string(prev_c.status)} -> #{to_string(c.status)}",
-                      meta: %{name: c.name}
-                    )
-                    | lst
-                  ]
-                else
-                  lst
-                end
-              end)
-              |> then(fn lst ->
-                prev_attempts = Map.get(prev_c, :reconnect_attempts, 0)
-                attempts = Map.get(c, :reconnect_attempts, 0)
-
-                if attempts > prev_attempts do
-                  [
-                    Helpers.as_event(:provider,
-                      chain: Map.get(c, :chain),
-                      provider_id: c.id,
-                      severity: :warn,
-                      message: "reconnect attempt #{attempts}",
-                      meta: %{delta: attempts - prev_attempts}
-                    )
-                    | lst
-                  ]
-                else
-                  lst
-                end
-              end)
-
-            {sock, acc ++ new_acc}
-        end
-      end)
-
+  def handle_info({:dashboard_batch, batch}, socket) do
     socket =
       socket
-      |> assign(:connections, connections)
-      |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
-      |> recompute_provider_statuses()
-      |> maybe_push_events_batch(batch)
-
-    {:noreply, socket}
-  end
-
-  # Batched events from EventStream
-  @impl true
-  def handle_info({:events_batch, %{events: events}}, socket) do
-    socket =
-      socket
-      |> MessageHandlers.handle_events_batch(events)
-      |> refresh_selected_chain_events()
-      |> mark_not_stale()
-
-    {:noreply, socket}
-  end
-
-  # Provider health events forwarded from EventStream
-  @impl true
-  def handle_info({:provider_event, evt}, socket) do
-    socket =
-      MessageHandlers.handle_provider_event(
-        evt,
-        socket,
-        &buffer_event/2,
-        &fetch_connections/1,
-        &update_selected_chain_metrics/1,
-        &update_selected_provider_data/1
-      )
-
-    {:noreply, socket}
-  end
-
-  # Circuit breaker events - updated to match tuple format
-  @impl true
-  def handle_info({:circuit_breaker_event, event_data}, socket) do
-    %{
-      chain: chain,
-      provider_id: provider_id,
-      transport: transport,
-      from: from_state,
-      to: to_state,
-      reason: reason
-    } = event_data
-
-    # Filter out events for chains not in the selected profile
-    profile_chains = Map.get(socket.assigns, :profile_chains, [])
-
-    if chain in profile_chains do
-      # Extract error details if present (new format includes error info)
-      error_info = Map.get(event_data, :error)
-
-      # Build message with error details when available
-      base_message = "circuit [#{transport}]: #{from_state} -> #{to_state}"
-
-      message =
-        case {reason, error_info} do
-          {r, %{error_code: code, error_category: cat}}
-          when r in [:failure_threshold_exceeded, :reopen_due_to_failure] ->
-            "#{base_message} — #{format_error_code(code)} (#{cat})"
-
-          {reason, _} ->
-            "#{base_message} (#{format_reason(reason)})"
-        end
-
-      # Determine severity based on state transition
-      severity =
-        case to_state do
-          :open -> :error
-          :half_open -> :warn
-          :closed -> :info
-        end
-
-      entry = %{
-        ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
-        ts_ms: System.system_time(:millisecond),
-        chain: chain,
-        provider_id: provider_id,
-        event: message
-      }
-
-      socket =
-        update(socket, :provider_events, fn list ->
-          [entry | Enum.take(list, Constants.provider_events_limit() - 1)]
-        end)
-
-      # Include error details in meta for expanded view
-      meta_base = %{transport: transport, from: from_state, to: to_state, reason: reason}
-
-      meta =
-        if error_info do
-          Map.merge(meta_base, %{
-            error_code: error_info[:error_code],
-            error_category: error_info[:error_category],
-            error_message: error_info[:error_message]
-          })
-        else
-          meta_base
-        end
-
-      uev =
-        Helpers.as_event(:circuit,
-          chain: chain,
-          provider_id: provider_id,
-          severity: severity,
-          message: message,
-          meta: meta
-        )
-
-      socket =
-        socket
-        |> buffer_event(uev)
-        |> fetch_connections()
-        |> maybe_update_selected_provider(provider_id)
-        |> maybe_update_selected_chain(chain)
-
-      {:noreply, socket}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  # Compact block events
-  @impl true
-  def handle_info(%{chain: chain, block_number: bn} = blk, socket) when is_map(blk) do
-    entry = %{
-      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
-      ts_ms: System.system_time(:millisecond),
-      chain: chain,
-      block_number: bn,
-      provider_first: Map.get(blk, :provider_first) || Map.get(blk, "provider_first"),
-      margin_ms: Map.get(blk, :margin_ms) || Map.get(blk, "margin_ms")
-    }
-
-    socket =
-      update(socket, :latest_blocks, fn list ->
-        [entry | Enum.take(list, Constants.recent_blocks_limit() - 1)]
-      end)
-
-    uev =
-      Helpers.as_event(:block,
-        chain: chain,
-        severity: :info,
-        message:
-          "block #{bn} (first: #{entry.provider_first || "n/a"}, +#{entry.margin_ms || 0}ms)",
-        meta: Map.drop(entry, [:ts, :ts_ms])
-      )
-
-    socket =
-      socket
-      |> buffer_event(uev)
-      |> maybe_update_selected_chain(chain)
+      |> apply_health(batch.health)
+      |> apply_circuit_states(batch.circuit_states)
+      |> apply_block_states(batch.block_states)
+      |> apply_cluster(batch.cluster)
+      |> apply_node_ids(batch.node_ids)
+      |> apply_metrics(batch.metrics)
+      |> apply_routing_events(batch.routing_events)
+      |> apply_circuit_events(batch.circuit_events)
+      |> apply_provider_events(batch.provider_events)
+      |> apply_subscription_events(batch.subscription_events)
+      |> apply_block_events(batch.block_events)
+      |> apply_sync_updates(batch.sync_updates)
+      |> apply_block_cache_updates(batch.block_cache_updates)
+      |> apply_heartbeat(batch.heartbeat)
+      |> finalize_batch(batch)
 
     {:noreply, socket}
   end
@@ -557,34 +362,6 @@ defmodule LassoWeb.Dashboard do
     {:noreply, socket}
   end
 
-  # Live sync/block height updates forwarded from EventStream
-  @impl true
-  def handle_info({:sync_update, %{provider_id: pid}}, socket) do
-    socket =
-      socket
-      |> schedule_connection_refresh()
-      |> maybe_refresh_selected_provider(pid)
-
-    {:noreply, socket}
-  end
-
-  # Real-time block updates forwarded from EventStream
-  @impl true
-  def handle_info({:block_cache_update, %{provider_id: pid}}, socket) do
-    socket =
-      socket
-      |> schedule_connection_refresh()
-      |> maybe_refresh_selected_provider(pid)
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_info(:flush_connections, socket) do
-    Process.delete(:pending_connection_update)
-    {:noreply, socket}
-  end
-
   # Chain configuration changes - refresh available chains and connections
   @impl true
   def handle_info({config_event, _arg1, _arg2}, socket)
@@ -596,62 +373,6 @@ defmodule LassoWeb.Dashboard do
 
     {:noreply, socket}
   end
-
-  def handle_info(
-        {:block_height_update, {profile, provider_id}, height, source, timestamp},
-        socket
-      ) do
-    event = %{
-      type: :block_height_update,
-      profile: profile,
-      provider_id: provider_id,
-      height: height,
-      source: source,
-      timestamp: timestamp
-    }
-
-    events = [event | Map.get(socket.assigns, :events, [])] |> Enum.take(100)
-    socket = assign(socket, :events, events)
-
-    # Refresh connections for all providers to update statuses in real-time
-    socket =
-      if profile == socket.assigns[:selected_profile] do
-        socket
-        |> schedule_connection_refresh()
-        |> maybe_refresh_selected_provider(provider_id)
-      else
-        socket
-      end
-
-    {:noreply, socket}
-  end
-
-  def handle_info(
-        {:health_probe_recovery, {profile, provider_id}, transport, old_state, _new_state,
-         timestamp},
-        socket
-      ) do
-    event = %{
-      type: :health_probe_recovery,
-      profile: profile,
-      provider_id: provider_id,
-      transport: transport,
-      after_failures: old_state.consecutive_failures,
-      timestamp: timestamp
-    }
-
-    events = [event | Map.get(socket.assigns, :events, [])] |> Enum.take(100)
-
-    socket =
-      socket
-      |> assign(:events, events)
-      |> schedule_connection_refresh()
-      |> maybe_refresh_selected_provider(provider_id)
-
-    {:noreply, socket}
-  end
-
-  # EventStream messages (new map payload format)
 
   # Batched snapshot on subscribe
   def handle_info({:dashboard_snapshot, snapshot}, socket) do
@@ -671,81 +392,6 @@ defmodule LassoWeb.Dashboard do
       |> mark_not_stale()
 
     {:noreply, socket}
-  end
-
-  def handle_info({:metrics_update, %{metrics: changed_metrics}}, socket) do
-    live_metrics = Map.merge(socket.assigns.live_provider_metrics, changed_metrics)
-
-    socket =
-      socket
-      |> assign(:live_provider_metrics, live_metrics)
-      |> mark_not_stale()
-
-    {:noreply, socket}
-  end
-
-  def handle_info(
-        {:circuit_update, %{provider_id: provider_id, node_id: node_id, circuit: circuit}},
-        socket
-      ) do
-    key = {provider_id, node_id}
-    circuits = Map.put(socket.assigns.cluster_circuit_states, key, circuit)
-
-    {:noreply,
-     socket
-     |> assign(:cluster_circuit_states, circuits)
-     |> recompute_provider_statuses()}
-  end
-
-  def handle_info(
-        {:health_pulse, %{provider_id: provider_id, node_id: node_id, counters: counters}},
-        socket
-      ) do
-    key = {provider_id, node_id}
-    health_counters = Map.put(socket.assigns.cluster_health_counters, key, counters)
-    {:noreply, assign(socket, :cluster_health_counters, health_counters)}
-  end
-
-  def handle_info({:cluster_update, cluster_state}, socket) do
-    socket =
-      socket
-      |> assign(:metrics_coverage, %{
-        responding: cluster_state.responding,
-        total: cluster_state.connected
-      })
-      |> assign(:available_node_ids, cluster_state.node_ids)
-      |> mark_not_stale()
-
-    {:noreply, socket}
-  end
-
-  # Heartbeat from EventStream - keeps connection marked as alive
-  def handle_info({:heartbeat, %{ts: _ts}}, socket) do
-    {:noreply, mark_not_stale(socket)}
-  end
-
-  def handle_info({:node_id_added, %{node_id: node_id}}, socket) do
-    node_ids = [node_id | socket.assigns.available_node_ids] |> Enum.uniq()
-    {:noreply, assign(socket, :available_node_ids, node_ids)}
-  end
-
-  def handle_info(
-        {:block_update, %{provider_id: provider_id, node_id: node_id, height: height, lag: lag}},
-        socket
-      ) do
-    key = {provider_id, node_id}
-    heights = Map.put(socket.assigns.cluster_block_heights, key, %{height: height, lag: lag})
-    {:noreply, assign(socket, :cluster_block_heights, heights)}
-  end
-
-  defp maybe_push_events_batch(socket, []), do: socket
-
-  defp maybe_push_events_batch(socket, batch) do
-    socket
-    |> update(:events, fn list ->
-      Enum.reverse(batch) ++ Enum.take(list, 199 - length(batch))
-    end)
-    |> push_event("events_batch", %{items: batch})
   end
 
   @impl true
@@ -1417,18 +1063,6 @@ defmodule LassoWeb.Dashboard do
     |> assign(:metrics_stale, false)
   end
 
-  defp schedule_connection_refresh(socket, delay \\ 100) do
-    case Process.get(:pending_connection_update) do
-      nil ->
-        Process.put(:pending_connection_update, true)
-        Process.send_after(self(), :flush_connections, delay)
-        fetch_connections(socket)
-
-      _ ->
-        socket
-    end
-  end
-
   defp update_selected_chain_metrics(socket) do
     case socket.assigns[:selected_chain] do
       nil ->
@@ -1533,32 +1167,6 @@ defmodule LassoWeb.Dashboard do
     end
   end
 
-  defp maybe_update_selected_chain(socket, chain) do
-    if socket.assigns[:selected_chain] == chain do
-      update_selected_chain_metrics(socket)
-    else
-      socket
-    end
-  end
-
-  defp maybe_update_selected_provider(socket, provider_id) do
-    if socket.assigns[:selected_provider] == provider_id do
-      update_selected_provider_data(socket)
-    else
-      socket
-    end
-  end
-
-  defp maybe_refresh_selected_provider(socket, provider_id) do
-    if socket.assigns[:selected_provider] == provider_id do
-      socket
-      |> fetch_connections()
-      |> update_selected_provider_data()
-    else
-      socket
-    end
-  end
-
   defp fetch_connections(socket, profile \\ nil) do
     profile = profile || socket.assigns.selected_profile
     connections = ProviderConnection.fetch_connections(profile)
@@ -1604,6 +1212,358 @@ defmodule LassoWeb.Dashboard do
       socket
     end
   end
+
+  # Batch apply helpers — each applies one field from the coalesced batch
+
+  defp apply_health(socket, health) when map_size(health) == 0, do: socket
+
+  defp apply_health(socket, health) do
+    current = socket.assigns.cluster_health_counters
+    merged = Map.merge(current, health)
+    if merged == current, do: socket, else: assign(socket, :cluster_health_counters, merged)
+  end
+
+  defp apply_circuit_states(socket, circuits) when map_size(circuits) == 0, do: socket
+
+  defp apply_circuit_states(socket, circuits) do
+    current = socket.assigns.cluster_circuit_states
+    merged = Map.merge(current, circuits)
+    if merged == current, do: socket, else: assign(socket, :cluster_circuit_states, merged)
+  end
+
+  defp apply_block_states(socket, blocks) when map_size(blocks) == 0, do: socket
+
+  defp apply_block_states(socket, blocks) do
+    current = socket.assigns.cluster_block_heights
+
+    {changed?, merged} =
+      Enum.reduce(blocks, {false, current}, fn {key, data}, {changed, acc} ->
+        new_entry = %{height: data.height, lag: data.lag}
+
+        if Map.get(acc, key) == new_entry do
+          {changed, acc}
+        else
+          {true, Map.put(acc, key, new_entry)}
+        end
+      end)
+
+    if changed?, do: assign(socket, :cluster_block_heights, merged), else: socket
+  end
+
+  defp apply_cluster(socket, nil), do: socket
+
+  defp apply_cluster(socket, cluster_state) do
+    new_coverage = %{responding: cluster_state.responding, total: cluster_state.connected}
+    new_node_ids = cluster_state.node_ids
+
+    socket
+    |> then(fn s ->
+      if s.assigns.metrics_coverage == new_coverage,
+        do: s,
+        else: assign(s, :metrics_coverage, new_coverage)
+    end)
+    |> then(fn s ->
+      if s.assigns.available_node_ids == new_node_ids,
+        do: s,
+        else: assign(s, :available_node_ids, new_node_ids)
+    end)
+    |> mark_not_stale()
+  end
+
+  defp apply_node_ids(socket, []), do: socket
+
+  defp apply_node_ids(socket, new_node_ids) do
+    current = socket.assigns.available_node_ids
+    merged = (new_node_ids ++ current) |> Enum.uniq()
+
+    if length(merged) == length(current),
+      do: socket,
+      else: assign(socket, :available_node_ids, merged)
+  end
+
+  defp apply_metrics(socket, nil), do: socket
+
+  defp apply_metrics(socket, changed_metrics) do
+    current = socket.assigns.live_provider_metrics
+    merged = Map.merge(current, changed_metrics)
+
+    if merged == current do
+      socket
+    else
+      socket
+      |> assign(:live_provider_metrics, merged)
+      |> mark_not_stale()
+    end
+  end
+
+  defp apply_routing_events(socket, []), do: socket
+
+  defp apply_routing_events(socket, events) do
+    socket
+    |> MessageHandlers.handle_events_batch(events)
+    |> assign(:_had_routing_events, true)
+  end
+
+  defp apply_circuit_events(socket, []), do: socket
+
+  defp apply_circuit_events(socket, circuit_events) do
+    profile_chains = Map.get(socket.assigns, :profile_chains, [])
+
+    Enum.reduce(circuit_events, socket, fn event_data, sock ->
+      chain = event_data[:chain]
+      provider_id = event_data[:provider_id]
+
+      if chain in profile_chains and valid_provider?(sock, provider_id) do
+        process_circuit_event(sock, event_data)
+      else
+        sock
+      end
+    end)
+  end
+
+  defp process_circuit_event(socket, event_data) do
+    chain = event_data[:chain]
+    provider_id = event_data[:provider_id]
+    transport = event_data[:transport]
+    from_state = event_data[:from]
+    to_state = event_data[:to]
+    reason = event_data[:reason]
+    error_info = Map.get(event_data, :error)
+
+    base_message = "circuit [#{transport}]: #{from_state} -> #{to_state}"
+
+    message =
+      case {reason, error_info} do
+        {r, %{error_code: code, error_category: cat}}
+        when r in [:failure_threshold_exceeded, :reopen_due_to_failure] ->
+          "#{base_message} — #{format_error_code(code)} (#{cat})"
+
+        {reason, _} ->
+          "#{base_message} (#{format_reason(reason)})"
+      end
+
+    severity =
+      case to_state do
+        :open -> :error
+        :half_open -> :warn
+        :closed -> :info
+      end
+
+    entry = %{
+      ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+      ts_ms: System.system_time(:millisecond),
+      chain: chain,
+      provider_id: provider_id,
+      event: message
+    }
+
+    socket =
+      update(socket, :provider_events, fn list ->
+        [entry | Enum.take(list, Constants.provider_events_limit() - 1)]
+      end)
+
+    meta_base = %{transport: transport, from: from_state, to: to_state, reason: reason}
+
+    meta =
+      if error_info do
+        Map.merge(meta_base, %{
+          error_code: error_info[:error_code],
+          error_category: error_info[:error_category],
+          error_message: error_info[:error_message]
+        })
+      else
+        meta_base
+      end
+
+    uev =
+      Helpers.as_event(:circuit,
+        chain: chain,
+        provider_id: provider_id,
+        severity: severity,
+        message: message,
+        meta: meta
+      )
+
+    buffer_event(socket, uev)
+  end
+
+  defp apply_provider_events(socket, []), do: socket
+
+  defp apply_provider_events(socket, provider_events) do
+    noop = fn s -> s end
+
+    Enum.reduce(provider_events, socket, fn evt, sock ->
+      MessageHandlers.handle_provider_event(
+        evt,
+        sock,
+        &buffer_event/2,
+        noop,
+        noop,
+        noop
+      )
+    end)
+  end
+
+  defp apply_subscription_events(socket, []), do: socket
+
+  defp apply_subscription_events(socket, subscription_events) do
+    Enum.reduce(subscription_events, socket, fn evt, sock ->
+      MessageHandlers.handle_subscription_event(evt, sock, &buffer_event/2)
+    end)
+  end
+
+  defp apply_block_events(socket, []), do: socket
+
+  defp apply_block_events(socket, block_events) do
+    Enum.reduce(block_events, socket, fn blk, sock ->
+      chain = blk[:chain] || blk.chain
+      bn = blk[:block_number] || blk.block_number
+
+      entry = %{
+        ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
+        ts_ms: System.system_time(:millisecond),
+        chain: chain,
+        block_number: bn,
+        provider_first: Map.get(blk, :provider_first),
+        margin_ms: Map.get(blk, :margin_ms)
+      }
+
+      sock =
+        update(sock, :latest_blocks, fn list ->
+          [entry | Enum.take(list, Constants.recent_blocks_limit() - 1)]
+        end)
+
+      uev =
+        Helpers.as_event(:block,
+          chain: chain,
+          severity: :info,
+          message:
+            "block #{bn} (first: #{entry.provider_first || "n/a"}, +#{entry.margin_ms || 0}ms)",
+          meta: Map.drop(entry, [:ts, :ts_ms])
+        )
+
+      buffer_event(sock, uev)
+    end)
+  end
+
+  defp apply_sync_updates(socket, []), do: socket
+  defp apply_sync_updates(socket, _sync_updates), do: socket
+
+  defp apply_block_cache_updates(socket, _block_cache_updates), do: socket
+
+  defp apply_heartbeat(socket, false), do: socket
+  defp apply_heartbeat(socket, true), do: mark_not_stale(socket)
+
+  defp finalize_batch(socket, batch) do
+    has_routing = batch.routing_events != []
+    has_infrastructure = batch.circuit_events != [] or batch.provider_events != []
+    has_provider_data = batch.sync_updates != [] or batch.block_cache_updates != []
+    has_connection_changes = has_infrastructure or has_provider_data
+    has_circuit_changes = map_size(batch.circuit_states) > 0
+
+    socket
+    |> maybe_refresh_connections_once(has_connection_changes)
+    |> maybe_refresh_selection_once(batch)
+    |> maybe_refresh_selected_chain_events(has_routing or has_infrastructure)
+    |> maybe_recompute_topology(has_connection_changes)
+    |> maybe_recompute_provider_statuses(has_connection_changes or has_circuit_changes)
+    |> maybe_send_activity_feed(has_routing)
+    |> maybe_mark_not_stale(
+      batch.heartbeat or has_routing or has_infrastructure or has_provider_data
+    )
+  end
+
+  defp maybe_refresh_connections_once(socket, false), do: socket
+  defp maybe_refresh_connections_once(socket, true), do: fetch_connections(socket)
+
+  defp maybe_refresh_selection_once(socket, batch) do
+    selected_chain = socket.assigns[:selected_chain]
+    selected_provider = socket.assigns[:selected_provider]
+
+    if is_nil(selected_chain) and is_nil(selected_provider) do
+      socket
+    else
+      affected_chains = collect_affected_chains(batch)
+      affected_providers = collect_affected_providers(batch)
+
+      socket
+      |> then(fn s ->
+        if selected_chain && MapSet.member?(affected_chains, selected_chain),
+          do: update_selected_chain_metrics(s),
+          else: s
+      end)
+      |> then(fn s ->
+        if selected_provider && MapSet.member?(affected_providers, selected_provider),
+          do: update_selected_provider_data(s),
+          else: s
+      end)
+    end
+  end
+
+  defp maybe_refresh_selected_chain_events(socket, false), do: socket
+
+  defp maybe_refresh_selected_chain_events(socket, true),
+    do: refresh_selected_chain_events(socket)
+
+  defp maybe_recompute_topology(socket, false), do: socket
+
+  defp maybe_recompute_topology(socket, true) do
+    assigns = socket.assigns
+    {center_x, center_y} = TopologyConfig.canvas_center()
+
+    socket
+    |> assign(canvas_center: "#{center_x},#{center_y}")
+    |> assign(
+      topology_data:
+        NetworkTopology.compute_topology_data(assigns.connections, assigns.selected_profile)
+    )
+  end
+
+  defp maybe_recompute_provider_statuses(socket, false), do: socket
+  defp maybe_recompute_provider_statuses(socket, true), do: recompute_provider_statuses(socket)
+
+  defp maybe_send_activity_feed(socket, false), do: socket
+
+  defp maybe_send_activity_feed(socket, true) do
+    if socket.assigns.details_collapsed do
+      send_update(Components.ActivityFeedPanel,
+        id: "activity-feed-panel",
+        routing_events: socket.assigns.routing_events
+      )
+    end
+
+    socket
+  end
+
+  defp maybe_mark_not_stale(socket, false), do: socket
+  defp maybe_mark_not_stale(socket, true), do: mark_not_stale(socket)
+
+  defp collect_affected_chains(batch) do
+    MapSet.new()
+    |> collect_values(batch.circuit_events, & &1[:chain])
+    |> collect_values(batch.provider_events, &Map.get(&1, :chain))
+    |> collect_values(batch.block_events, &(&1[:chain] || Map.get(&1, :chain)))
+  end
+
+  defp collect_affected_providers(batch) do
+    MapSet.new()
+    |> collect_values(batch.circuit_events, & &1[:provider_id])
+    |> collect_values(batch.provider_events, &Map.get(&1, :provider_id))
+    |> collect_values(batch.sync_updates, & &1.provider_id)
+    |> collect_values(batch.block_cache_updates, & &1.provider_id)
+  end
+
+  defp collect_values(set, events, extractor) do
+    Enum.reduce(events, set, fn e, acc ->
+      case extractor.(e) do
+        nil -> acc
+        val -> MapSet.put(acc, val)
+      end
+    end)
+  end
+
+  defp valid_provider?(socket, provider_id),
+    do: MessageHandlers.valid_provider?(socket, provider_id)
 
   defp fetch_cluster_metrics(profile, chain_name) do
     alias Lasso.Config.ConfigStore
