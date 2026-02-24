@@ -750,9 +750,10 @@ defmodule LassoWeb.Dashboard do
                   data-event-id={e[:ts_ms]}
                   class="text-[9px] text-gray-300 flex items-center gap-1 shrink-0"
                 >
-                  <span class="text-purple-300">{e.chain}</span>
-                  <span class="text-sky-300">{e.method}</span>
-                  → <span class="text-emerald-300">{String.slice(e.provider_id, 0, 14)}…</span>
+                  <span class="text-purple-300">{e[:chain]}</span>
+                  <span class="text-sky-300">{e[:method]}</span>
+                  →
+                  <span class="text-emerald-300">{String.slice(e[:provider_id] || "", 0, 14)}…</span>
                   <span class={[
                     "",
                     if(e[:result] == :error, do: "text-red-400", else: "text-yellow-300")
