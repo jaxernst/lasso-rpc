@@ -105,8 +105,10 @@ defmodule LassoWeb.Dashboard do
       |> assign(:cluster_health_counters, %{})
       |> assign(:cluster_block_heights, %{})
       |> assign(:available_node_ids, [])
+      |> assign(:provider_statuses, %{})
       |> load_profile_meta()
       |> fetch_connections(selected_profile)
+      |> recompute_provider_statuses()
 
     {:ok, initial_state}
   end
@@ -219,8 +221,10 @@ defmodule LassoWeb.Dashboard do
     |> assign(:cluster_circuit_states, %{})
     |> assign(:cluster_block_heights, %{})
     |> assign(:available_node_ids, [])
+    |> assign(:provider_statuses, %{})
     |> load_profile_meta()
     |> fetch_connections(new_profile)
+    |> recompute_provider_statuses()
     |> push_event("persist_profile", %{profile: new_profile})
   end
 
@@ -286,6 +290,7 @@ defmodule LassoWeb.Dashboard do
       socket
       |> assign(:connections, connections)
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
+      |> recompute_provider_statuses()
       |> maybe_push_events_batch(batch)
 
     {:noreply, socket}
@@ -660,6 +665,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:cluster_status, cluster)
       |> assign(:available_node_ids, cluster.node_ids || [])
       |> assign(:metrics_coverage, %{responding: cluster.responding, total: cluster.connected})
+      |> recompute_provider_statuses()
       |> MessageHandlers.handle_events_snapshot(snapshot.events)
       |> refresh_selected_chain_events()
       |> mark_not_stale()
@@ -684,7 +690,11 @@ defmodule LassoWeb.Dashboard do
       ) do
     key = {provider_id, node_id}
     circuits = Map.put(socket.assigns.cluster_circuit_states, key, circuit)
-    {:noreply, assign(socket, :cluster_circuit_states, circuits)}
+
+    {:noreply,
+     socket
+     |> assign(:cluster_circuit_states, circuits)
+     |> recompute_provider_statuses()}
   end
 
   def handle_info(
@@ -1308,8 +1318,20 @@ defmodule LassoWeb.Dashboard do
   end
 
   @impl true
+  def handle_event("request_provider_statuses", _params, socket) do
+    {:noreply,
+     push_event(socket, "provider-statuses", %{
+       statuses: socket.assigns.provider_statuses,
+       snapshot: true
+     })}
+  end
+
+  @impl true
   def handle_event("refresh_connections", _params, socket) do
-    {:noreply, fetch_connections(socket)}
+    {:noreply,
+     socket
+     |> fetch_connections()
+     |> recompute_provider_statuses()}
   end
 
   # Simulator Event Forwarding (only forwards when simulator is active)
@@ -1544,6 +1566,43 @@ defmodule LassoWeb.Dashboard do
     socket
     |> assign(:connections, connections)
     |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
+  end
+
+  defp recompute_provider_statuses(socket) do
+    new_statuses =
+      NetworkTopology.compute_provider_statuses(
+        socket.assigns.connections,
+        socket.assigns.cluster_circuit_states
+      )
+
+    old_statuses = socket.assigns.provider_statuses
+
+    if new_statuses == old_statuses do
+      socket
+    else
+      changed =
+        Map.filter(new_statuses, fn {id, status} -> Map.get(old_statuses, id) != status end)
+
+      removed =
+        old_statuses
+        |> Map.keys()
+        |> Enum.reject(&Map.has_key?(new_statuses, &1))
+        |> Map.new(&{&1, nil})
+
+      delta = Map.merge(changed, removed)
+
+      socket
+      |> assign(:provider_statuses, new_statuses)
+      |> push_provider_delta(delta)
+    end
+  end
+
+  defp push_provider_delta(socket, delta) do
+    if socket.assigns.active_tab == "overview" do
+      push_event(socket, "provider-statuses", %{statuses: delta})
+    else
+      socket
+    end
   end
 
   defp fetch_cluster_metrics(profile, chain_name) do
