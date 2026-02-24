@@ -55,7 +55,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     publish_routing_decision(
       request_id: ctx.request_id,
-      account_id: ctx.account_id,
       profile: profile,
       chain: ctx.chain,
       method: method,
@@ -114,7 +113,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     publish_routing_decision(
       request_id: ctx.request_id,
-      account_id: ctx.account_id,
       profile: profile,
       chain: ctx.chain,
       method: method,
@@ -425,7 +423,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     event =
       RoutingDecision.new(
         request_id: opts[:request_id],
-        account_id: opts[:account_id],
         profile: opts[:profile],
         chain: opts[:chain],
         method: opts[:method],

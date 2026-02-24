@@ -13,6 +13,12 @@ defmodule Lasso.BlockSync.Worker do
   The Worker operates in one of two modes:
   - `:http_only` - HTTP polling only (WS unavailable or disabled)
   - `:http_with_ws` - HTTP polling + WS subscription (real-time layer)
+
+  ## WS-Aware Polling
+
+  When WS subscription is active, HTTP polling interval is reduced (3x normal)
+  to conserve RPC usage while maintaining connection warmth and WS liveness
+  detection. Normal interval is restored when WS degrades or disconnects.
   """
 
   use GenServer
@@ -24,11 +30,13 @@ defmodule Lasso.BlockSync.Worker do
   alias Lasso.Providers.Catalog
 
   @reconnect_delay_ms 5_000
+  @ws_active_poll_multiplier 3
 
   @type mode :: :http_only | :http_with_ws
   @type config :: %{
           subscribe_new_heads: boolean(),
           poll_interval_ms: pos_integer(),
+          ws_active_poll_interval_ms: pos_integer(),
           staleness_threshold_ms: pos_integer()
         }
 
@@ -39,7 +47,8 @@ defmodule Lasso.BlockSync.Worker do
           ws_strategy: pid() | nil,
           http_strategy: pid() | nil,
           config: config(),
-          ws_retry_count: non_neg_integer()
+          ws_retry_count: non_neg_integer(),
+          http_reduced: boolean()
         }
 
   defstruct [
@@ -49,7 +58,8 @@ defmodule Lasso.BlockSync.Worker do
     :ws_strategy,
     :http_strategy,
     :config,
-    :ws_retry_count
+    :ws_retry_count,
+    http_reduced: false
   ]
 
   ## Client API
@@ -75,10 +85,7 @@ defmodule Lasso.BlockSync.Worker do
 
   @impl true
   def init({chain, instance_id}) do
-    # Instance-scoped WS connection events
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:instance:#{instance_id}")
-
-    # Chain-scoped manager restart topic
     Phoenix.PubSub.subscribe(Lasso.PubSub, "instance_sub_manager:restarted:#{chain}")
 
     config = load_config(instance_id, chain)
@@ -90,7 +97,8 @@ defmodule Lasso.BlockSync.Worker do
       ws_strategy: nil,
       http_strategy: nil,
       config: config,
-      ws_retry_count: 0
+      ws_retry_count: 0,
+      http_reduced: false
     }
 
     Process.send_after(self(), :start_strategies, 2_000)
@@ -111,7 +119,8 @@ defmodule Lasso.BlockSync.Worker do
       ws_status: if(state.ws_strategy, do: WsStrategy.get_status(state.ws_strategy), else: nil),
       http_status:
         if(state.http_strategy, do: HttpStrategy.get_status(state.http_strategy), else: nil),
-      config: state.config
+      config: state.config,
+      http_reduced: state.http_reduced
     }
 
     {:reply, {:ok, status}, state}
@@ -262,6 +271,7 @@ defmodule Lasso.BlockSync.Worker do
     default_config = %{
       subscribe_new_heads: has_ws,
       poll_interval_ms: 15_000,
+      ws_active_poll_interval_ms: 15_000 * @ws_active_poll_multiplier,
       staleness_threshold_ms: 35_000
     }
 
@@ -271,9 +281,12 @@ defmodule Lasso.BlockSync.Worker do
         resolve_subscribe_new_heads(chain_config, ref_profile, chain, instance_id) or
           Enum.any?(refs, &check_profile_subscribe_new_heads(&1, chain, instance_id))
 
+      poll_interval_ms = chain_config.monitoring.probe_interval_ms
+
       %{
         subscribe_new_heads: subscribe_new_heads and has_ws,
-        poll_interval_ms: chain_config.monitoring.probe_interval_ms,
+        poll_interval_ms: poll_interval_ms,
+        ws_active_poll_interval_ms: poll_interval_ms * @ws_active_poll_multiplier,
         staleness_threshold_ms: chain_config.websocket.new_heads_timeout_ms
       }
     else
@@ -374,7 +387,8 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp handle_strategy_status(state, :ws, :active) do
-    %{state | mode: :http_with_ws, ws_retry_count: 0}
+    state = %{state | mode: :http_with_ws, ws_retry_count: 0}
+    reduce_http_polling(state)
   end
 
   defp handle_strategy_status(state, :ws, :failed) do
@@ -383,16 +397,16 @@ defmodule Lasso.BlockSync.Worker do
       instance_id: state.instance_id
     )
 
-    state
+    restore_http_polling(state)
   end
 
   defp handle_strategy_status(state, :ws, status) when status in [:stale, :degraded] do
-    Logger.info("WS subscription #{status}, HTTP polling continues",
+    Logger.info("WS subscription #{status}, restoring normal HTTP polling",
       chain: state.chain,
       instance_id: state.instance_id
     )
 
-    state
+    restore_http_polling(state)
   end
 
   defp handle_strategy_status(state, :http, :degraded) do
@@ -415,6 +429,38 @@ defmodule Lasso.BlockSync.Worker do
 
   defp handle_strategy_status(state, _transport, _status) do
     state
+  end
+
+  defp reduce_http_polling(%{http_strategy: nil} = state), do: state
+  defp reduce_http_polling(%{http_reduced: true} = state), do: state
+
+  defp reduce_http_polling(state) do
+    reduced_interval = state.config.ws_active_poll_interval_ms
+    new_http = HttpStrategy.set_poll_interval(state.http_strategy, reduced_interval)
+
+    Logger.debug("HTTP polling reduced (WS active)",
+      chain: state.chain,
+      instance_id: state.instance_id,
+      poll_interval_ms: reduced_interval
+    )
+
+    %{state | http_strategy: new_http, http_reduced: true}
+  end
+
+  defp restore_http_polling(%{http_strategy: nil} = state), do: state
+  defp restore_http_polling(%{http_reduced: false} = state), do: state
+
+  defp restore_http_polling(state) do
+    normal_interval = state.config.poll_interval_ms
+    new_http = HttpStrategy.set_poll_interval(state.http_strategy, normal_interval)
+
+    Logger.debug("HTTP polling restored to normal",
+      chain: state.chain,
+      instance_id: state.instance_id,
+      poll_interval_ms: normal_interval
+    )
+
+    %{state | http_strategy: new_http, http_reduced: false}
   end
 
   defp handle_ws_reconnected(%{mode: nil} = state), do: state
@@ -452,7 +498,7 @@ defmodule Lasso.BlockSync.Worker do
       schedule_ws_reconnect(state.ws_retry_count)
     end
 
-    state
+    restore_http_polling(state)
   end
 
   defp handle_manager_restarted(state) do

@@ -286,17 +286,7 @@ defmodule LassoWeb.Dashboard do
       socket
       |> assign(:connections, connections)
       |> assign(:last_updated, DateTime.utc_now() |> DateTime.to_string())
-      |> (fn s ->
-            if length(batch) > 0 do
-              s
-              |> update(:events, fn list ->
-                Enum.reverse(batch) ++ Enum.take(list, 199 - length(batch))
-              end)
-              |> push_event("events_batch", %{items: batch})
-            else
-              s
-            end
-          end).()
+      |> maybe_push_events_batch(batch)
 
     {:noreply, socket}
   end
@@ -736,6 +726,16 @@ defmodule LassoWeb.Dashboard do
     key = {provider_id, node_id}
     heights = Map.put(socket.assigns.cluster_block_heights, key, %{height: height, lag: lag})
     {:noreply, assign(socket, :cluster_block_heights, heights)}
+  end
+
+  defp maybe_push_events_batch(socket, []), do: socket
+
+  defp maybe_push_events_batch(socket, batch) do
+    socket
+    |> update(:events, fn list ->
+      Enum.reverse(batch) ++ Enum.take(list, 199 - length(batch))
+    end)
+    |> push_event("events_batch", %{items: batch})
   end
 
   @impl true

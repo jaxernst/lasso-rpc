@@ -219,7 +219,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       )
 
     optimistic_lag =
-      if selected_region == "aggregate" do
+      if chain do
         case StatusHelpers.calculate_optimistic_lag(chain, provider_id) do
           {:ok, lag} -> lag
           {:error, _} -> nil
@@ -230,8 +230,15 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
     effective_lag = resolve_effective_lag(block_lag, optimistic_lag, conn)
 
+    display_block_height =
+      if is_integer(optimistic_lag) and is_integer(consensus_height) and is_integer(block_height) do
+        consensus_height + min(0, optimistic_lag)
+      else
+        block_height
+      end
+
     %{
-      block_height: block_height,
+      block_height: display_block_height,
       consensus_height: consensus_height,
       optimistic_lag: optimistic_lag,
       effective_lag: effective_lag,
@@ -293,10 +300,15 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     }
   end
 
-  defp resolve_effective_lag(block_lag, optimistic_lag, conn) do
+  defp resolve_effective_lag(_block_lag, optimistic_lag, _conn)
+       when is_integer(optimistic_lag) do
+    abs(min(0, optimistic_lag))
+  end
+
+  defp resolve_effective_lag(block_lag, _optimistic_lag, conn) do
     cond do
-      is_integer(block_lag) and block_lag > 0 -> block_lag
-      optimistic_lag != nil -> abs(min(0, optimistic_lag))
+      is_integer(block_lag) and block_lag < 0 -> abs(block_lag)
+      is_integer(block_lag) -> 0
       true -> Map.get(conn, :blocks_behind, 0) || 0
     end
   end

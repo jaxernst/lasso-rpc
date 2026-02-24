@@ -61,7 +61,7 @@ defmodule Lasso.RPC.ChainSupervisor do
 
         %{
           id: pp.provider_id,
-          name: get_in(instance_config, [:canonical_config, :name]) || pp.provider_id,
+          name: pp[:name] || pp.provider_id,
           config: instance_config,
           status: health.status,
           http_status: health.http_status,

@@ -475,8 +475,7 @@ defmodule Lasso.RPC.RequestPipeline do
         transport: opts.transport || :http,
         strategy: opts.strategy,
         request_id: opts.request_id,
-        plug_start_time: opts.plug_start_time,
-        account_id: opts.account_id
+        plug_start_time: opts.plug_start_time
       )
   end
 
