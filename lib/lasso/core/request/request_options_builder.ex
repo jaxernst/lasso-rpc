@@ -22,6 +22,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
           failover_on_override: boolean(),
           timeout_ms: non_neg_integer(),
           request_id: String.t(),
+          jsonrpc_id: integer() | String.t() | nil,
           request_context: any()
         ]
 
@@ -53,6 +54,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
         failover_on_override: overrides[:failover_on_override] || false,
         timeout_ms: overrides[:timeout_ms] || MethodPolicy.timeout_for(method),
         request_id: overrides[:request_id] || Logger.metadata()[:request_id],
+        jsonrpc_id: overrides[:jsonrpc_id],
         plug_start_time: RequestTimingPlug.get_start_time(conn)
       },
       overrides[:request_context],
@@ -103,7 +105,8 @@ defmodule Lasso.RPC.RequestOptions.Builder do
         transport: transport,
         failover_on_override: overrides[:failover_on_override] || false,
         timeout_ms: overrides[:timeout_ms] || MethodPolicy.timeout_for(method),
-        request_id: overrides[:request_id]
+        request_id: overrides[:request_id],
+        jsonrpc_id: overrides[:jsonrpc_id]
       },
       overrides[:request_context],
       method

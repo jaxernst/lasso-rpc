@@ -19,6 +19,7 @@ defmodule Lasso.RPC.RequestOptions do
             failover_on_override: false,
             timeout_ms: 30_000,
             request_id: nil,
+            jsonrpc_id: nil,
             request_context: nil,
             # Plug-level start time for accurate E2E measurement (microseconds)
             plug_start_time: nil
@@ -31,6 +32,7 @@ defmodule Lasso.RPC.RequestOptions do
           failover_on_override: boolean,
           timeout_ms: non_neg_integer,
           request_id: String.t() | nil,
+          jsonrpc_id: integer() | String.t() | nil,
           request_context: any() | nil,
           plug_start_time: integer() | nil
         }
@@ -97,6 +99,7 @@ defmodule Lasso.RPC.RequestOptions do
       failover_on_override: o.failover_on_override,
       timeout_ms: o.timeout_ms,
       request_id: o.request_id,
+      jsonrpc_id: o.jsonrpc_id,
       request_context: o.request_context,
       plug_start_time: o.plug_start_time
     ]

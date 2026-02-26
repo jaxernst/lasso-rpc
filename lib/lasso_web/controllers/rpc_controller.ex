@@ -399,13 +399,14 @@ defmodule LassoWeb.RPCController do
 
       true ->
         Logger.debug("Forwarding RPC method", method: method, chain: chain)
-        forward_rpc_request(chain, method, params, conn: conn)
+        forward_rpc_request(chain, method, params, conn: conn, jsonrpc_id: req["id"])
     end
   end
 
   defp forward_rpc_request(chain, method, params, opts) when is_list(opts) do
     strategy = extract_strategy(opts)
     conn = Keyword.get(opts, :conn)
+    jsonrpc_id = Keyword.get(opts, :jsonrpc_id)
 
     provider_override = extract_provider_override(conn, opts)
 
@@ -420,7 +421,8 @@ defmodule LassoWeb.RPCController do
         strategy: strategy,
         provider_override: provider_override,
         transport: transport_override,
-        timeout_ms: MethodPolicy.timeout_for(method)
+        timeout_ms: MethodPolicy.timeout_for(method),
+        jsonrpc_id: jsonrpc_id
       )
 
     RequestPipeline.execute_via_channels(chain, method, params, opts)

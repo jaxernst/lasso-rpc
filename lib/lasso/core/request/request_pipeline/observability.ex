@@ -138,28 +138,12 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     :ok
   end
 
-  def record_failure(ctx, provider_id, method, strategy, reason, duration_ms)
+  def record_failure(ctx, provider_id, _method, _strategy, _reason, _duration_ms)
       when is_binary(provider_id) do
-    profile = ctx.opts.profile
-
-    Metrics.record_failure(profile, ctx.chain, provider_id, method, duration_ms, transport: nil)
-
-    instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
-    jerr = JError.from(reason, provider_id: provider_id)
-    report_failure_to_ets(instance_id, :http, jerr, profile, ctx.chain, provider_id)
-
-    emit_request_telemetry(
-      ctx.chain,
-      method,
-      strategy,
-      provider_id,
-      :unknown,
-      duration_ms,
-      :error,
-      ctx.retries
+    Logger.warning("record_failure called with bare provider_id, skipping metrics",
+      provider_id: provider_id,
+      chain: ctx.chain
     )
-
-    :ok
   end
 
   @doc """

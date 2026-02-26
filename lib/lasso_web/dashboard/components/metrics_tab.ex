@@ -406,6 +406,15 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
+  defp format_method_name(method) when is_binary(method) do
+    case String.split(method, "@", parts: 2) do
+      [name, ""] -> name
+      _ -> method
+    end
+  end
+
+  defp format_method_name(method), do: method
+
   defdelegate format_latency(ms), to: Formatting
 
   defp success_color(nil), do: Formatting.success_rate_color(nil)
@@ -493,7 +502,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     ~H"""
     <div class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-2xl p-4">
       <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-700/50">
-        <h3 class="font-mono text-sm text-sky-400">{@method_data.method}</h3>
+        <h3 class="font-mono text-sm text-sky-400">{format_method_name(@method_data.method)}</h3>
         <span class="text-xs text-gray-500">
           {Formatting.format_number(@method_data.total_calls)} calls
         </span>

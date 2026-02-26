@@ -90,8 +90,8 @@ defmodule Lasso.RPC.RequestPipeline do
     # Initialize context
     ctx = initialize_context(chain, method, params, opts)
 
-    # Build RPC request and set execution params on context
-    rpc_request = build_rpc_request(method, params, ctx)
+    # Build RPC request using client's JSON-RPC ID when available (preserves spec compliance)
+    rpc_request = build_rpc_request(method, params, ctx, opts)
     ctx = RequestContext.set_execution_params(ctx, rpc_request, opts.timeout_ms, opts)
 
     # Build channel source based on options (unifies override vs normal selection)
@@ -416,16 +416,18 @@ defmodule Lasso.RPC.RequestPipeline do
       |> RequestContext.mark_upstream_end()
       |> RequestContext.record_error(jerr)
 
-    duration_ms = RequestContext.get_duration(ctx)
+    if ctx.executed_channel do
+      duration_ms = RequestContext.get_duration(ctx)
 
-    Observability.record_failure(
-      ctx,
-      ctx.executed_channel || "no_channel",
-      ctx.method,
-      ctx.opts.strategy,
-      jerr,
-      duration_ms
-    )
+      Observability.record_failure(
+        ctx,
+        ctx.executed_channel,
+        ctx.method,
+        ctx.opts.strategy,
+        jerr,
+        duration_ms
+      )
+    end
 
     {:error, jerr, ctx}
   end
@@ -479,13 +481,13 @@ defmodule Lasso.RPC.RequestPipeline do
       )
   end
 
-  @spec build_rpc_request(method(), params(), RequestContext.t()) :: map()
-  defp build_rpc_request(method, params, ctx) do
+  @spec build_rpc_request(method(), params(), RequestContext.t(), RequestOptions.t()) :: map()
+  defp build_rpc_request(method, params, ctx, opts) do
     %{
       "jsonrpc" => "2.0",
       "method" => method,
       "params" => params,
-      "id" => ctx.request_id
+      "id" => opts.jsonrpc_id || ctx.request_id
     }
   end
 
