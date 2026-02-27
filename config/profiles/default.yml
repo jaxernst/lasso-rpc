@@ -1,7 +1,6 @@
 ---
-name: Lasso Free
+name: Lasso Public
 slug: default
-logo: lasso_hat_white.png
 rps_limit: 100
 burst_limit: 500
 ---
