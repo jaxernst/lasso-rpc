@@ -185,7 +185,7 @@ Lasso.Application
 **Lasso.Providers.CandidateListing** (Module, not GenServer)
 
 - Pure ETS reads for provider selection
-- 7-stage filter pipeline: transport availability, WS liveness, circuit state, rate limits, lag, archival, exclusions
+- 8-stage filter pipeline: transport availability, WS liveness, circuit state, rate limits, lag, min block height filtering, archival, exclusions
 - Replaces ProviderPool.list_candidates (ProviderPool deleted)
 
 **ProfileChainSupervisor** (`Lasso.ProfileChainSupervisor`)
@@ -488,6 +488,10 @@ Derives per-chain block intervals using Exponential Moving Average (EMA) for opt
 3. After 5 samples: prefer dynamic measurement over config
 
 EMA adapts to variable block production (e.g., Arbitrum's 100ms-5s range) while smoothing noise.
+
+### Consensus Height Derivation
+
+Consensus height is the P75 of fresh provider heights (within the last 30s). With 4+ providers, this is the second-highest height, filtering out one outlier ahead-running provider. With 1–3 providers, it is the MAX height.
 
 ### Optimistic Lag Calculation
 
@@ -803,16 +807,19 @@ end
 **Retriable** (triggers failover):
 
 - `:rate_limit`, `:network_error`, `:server_error`
-- `:capability_violation`, `:method_not_found`
+- `:capability_violation`, `:method_not_found`, `:method_error`
+- `:auth_error`, `:internal_error`, `:chain_error`, `:block_not_available`
 
 **Non-retriable**:
 
-- `:invalid_params`, `:user_error`, `:client_error`
+- `:invalid_params`, `:invalid_request`, `:parse_error`, `:user_error`, `:client_error`
 
 **No circuit breaker penalty**:
 
 - `:rate_limit` - Temporary backpressure with known recovery
 - `:capability_violation` - Permanent constraint, not transient failure
+- `:block_not_available` - Provider healthy but slightly behind chain head
+- `:client_error` - Client fault, not a provider failure
 
 ---
 
@@ -867,7 +874,7 @@ Drop-in replacement for existing RPC URLs.
 **Batch Requests** (HTTP):
 
 - JSON-RPC batch arrays supported (up to 50 requests per batch, configurable)
-- Per-item routing and error handling
+- A single provider is selected upfront for the whole batch for consistency; all items prefer that provider but can failover independently per-item
 - Responses preserve request order
 
 **Not yet supported**:

@@ -17,6 +17,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   both retriability (failover behavior) and circuit breaker penalty semantics.
 
   **Retriable categories** (trigger failover to another provider):
+  - `:block_not_available` - Provider hasn't synced this block yet (try provider at higher height)
   - `:rate_limit` - Provider rate limiting / quota exceeded (temporary backpressure)
   - `:network_error` - Network/connectivity issues (transient failures)
   - `:server_error` - Provider-side server errors (5xx, provider crashes)
@@ -33,6 +34,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   - `:parse_error` - JSON parsing failure
   - `:user_error` - User rejected transaction (EIP-1193)
   - `:client_error` - Generic client error (4xx)
+  - `:execution_revert` - EVM execution revert or transaction validation error (request-caused)
 
   **Special categories**:
   - `:provider_error` - Infrastructure-level provider unavailability (no channels, pool errors)
@@ -40,9 +42,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
   - `:unknown_error` - Unclassified error (fallback category)
 
   **Circuit breaker penalty**:
-  - All categories count against circuit breaker EXCEPT `:capability_violation` and `:rate_limit`
-  - Capability violations represent permanent constraints, not transient failures
-  - Rate limits are temporary backpressure handled by RateLimitState tiering, not circuit breakers
+  - Only true provider health failures penalize circuit breakers: `:server_error`, `:network_error`,
+    `:timeout`, `:internal_error`, `:provider_error`, `:auth_error`, `:chain_error`, `:unknown_error`
+  - Request-caused errors (`:execution_revert`, `:client_error`, `:user_error`, `:invalid_params`,
+    `:invalid_request`, `:parse_error`, `:method_not_found`) do not penalize
+  - Constraint-based errors (`:block_not_available`, `:capability_violation`, `:rate_limit`) do not penalize
   """
 
   # ===========================================================================
@@ -126,6 +130,41 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "too many logs"
   ]
 
+  # Patterns for execution/transaction errors that providers return under -32000.
+  # These are request-caused, not provider health issues.
+  @execution_revert_patterns [
+    "execution reverted",
+    "gas required exceeds allowance",
+    "out of gas",
+    "intrinsic gas too low",
+    "gas limit reached",
+    "exceeds block gas limit",
+    "nonce too low",
+    "nonce too high",
+    "insufficient funds",
+    "already known",
+    "replacement transaction underpriced",
+    "transaction underpriced",
+    "max fee per gas less than block base fee",
+    "fee cap less than block base fee",
+    "max priority fee per gas higher than max fee per gas",
+    "max fee per blob gas",
+    "blob base fee",
+    "too many blobs",
+    "invalid sender",
+    "invalid opcode",
+    "stack underflow",
+    "stack overflow",
+    "invalid jump destination"
+  ]
+
+  @block_not_available_patterns [
+    "header not found",
+    "block not found",
+    "unknown block number",
+    "block is out of range"
+  ]
+
   @capability_violation_patterns [
     "free tier",
     # Address/query limits
@@ -189,7 +228,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "premium plan",
     "paid plan",
     "paid tier",
-    "feature not enabled"
+    "feature not enabled",
+    "node is syncing",
+    "state not available"
   ]
 
   # ===========================================================================
@@ -265,11 +306,34 @@ defmodule Lasso.Core.Support.ErrorClassification do
   circuit breaker, as they represent permanent constraints, not transient failures.
   """
   @spec breaker_penalty?(atom()) :: boolean()
+  def breaker_penalty?(:block_not_available), do: false
   def breaker_penalty?(:capability_violation), do: false
   def breaker_penalty?(:requires_archival), do: false
   def breaker_penalty?(:rate_limit), do: false
   def breaker_penalty?(:client_error), do: false
+  def breaker_penalty?(:execution_revert), do: false
+  def breaker_penalty?(:user_error), do: false
+  def breaker_penalty?(:invalid_request), do: false
+  def breaker_penalty?(:invalid_params), do: false
+  def breaker_penalty?(:parse_error), do: false
+  def breaker_penalty?(:method_not_found), do: false
   def breaker_penalty?(_category), do: true
+
+  @doc """
+  Determines if an error reflects actual provider health/performance degradation.
+
+  Used by BenchmarkStore recording to ensure only provider-attributable failures
+  count against success rates. Client errors, request-specific limitations, and
+  permanent provider constraints should not affect performance metrics.
+  """
+  @spec provider_health_failure?(atom()) :: boolean()
+  def provider_health_failure?(:server_error), do: true
+  def provider_health_failure?(:network_error), do: true
+  def provider_health_failure?(:timeout), do: true
+  def provider_health_failure?(:internal_error), do: true
+  def provider_health_failure?(:provider_error), do: true
+  def provider_health_failure?(:auth_error), do: true
+  def provider_health_failure?(_category), do: false
 
   @doc """
   Determines if an error category should trigger failover to another provider.
@@ -302,6 +366,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
       true  # Another provider might support this method
   """
   @spec retriable_for_category?(atom()) :: boolean()
+  def retriable_for_category?(:block_not_available), do: true
   def retriable_for_category?(:rate_limit), do: true
   def retriable_for_category?(:network_error), do: true
   def retriable_for_category?(:server_error), do: true
@@ -312,11 +377,14 @@ defmodule Lasso.Core.Support.ErrorClassification do
   def retriable_for_category?(:method_error), do: true
   def retriable_for_category?(:internal_error), do: true
   def retriable_for_category?(:chain_error), do: true
+  def retriable_for_category?(:timeout), do: true
+  def retriable_for_category?(:provider_error), do: true
   def retriable_for_category?(:invalid_request), do: false
   def retriable_for_category?(:invalid_params), do: false
   def retriable_for_category?(:parse_error), do: false
   def retriable_for_category?(:user_error), do: false
   def retriable_for_category?(:client_error), do: false
+  def retriable_for_category?(:execution_revert), do: false
   def retriable_for_category?(_category), do: false
 
   # ===========================================================================
@@ -332,6 +400,13 @@ defmodule Lasso.Core.Support.ErrorClassification do
       # Transient/retriable server errors (check before capability violations)
       # Patterns like "please retry" indicate the provider wants a retry
       contains_any?(message_lower, @transient_error_patterns) -> :server_error
+      # Execution/transaction errors — request-caused, not provider health issues.
+      # Must check before block_not_available since some revert messages could
+      # contain "not found" substrings.
+      contains_any?(message_lower, @execution_revert_patterns) -> :execution_revert
+      # Block-not-available errors (check before capability violations to avoid
+      # "not available"/"not found" patterns in @capability_violation_patterns swallowing these)
+      block_not_available_match?(message_lower) -> :block_not_available
       # Result size violations are provider-specific capabilities, not client errors
       # Different providers have different limits (10k free tier, 100k+ premium)
       contains_any?(message_lower, @result_size_violation_patterns) -> :capability_violation
@@ -343,6 +418,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
 
   defp contains_any?(message, patterns) do
     Enum.any?(patterns, &String.contains?(message, &1))
+  end
+
+  defp block_not_available_match?(msg) do
+    contains_any?(msg, @block_not_available_patterns) or
+      (String.contains?(msg, "unknown block") and not String.contains?(msg, "unknown blockchain"))
   end
 
   # ===========================================================================
@@ -373,6 +453,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   ]
 
   @provider_specific_codes %{
+    26 => :block_not_available,
     30 => :rate_limit,
     35 => :capability_violation,
     -32_046 => :rate_limit,
@@ -435,18 +516,39 @@ defmodule Lasso.Core.Support.ErrorClassification do
   defp retriable_by_code?(code) do
     cond do
       # Non-retriable: client/user errors (bad input)
-      code in [@invalid_request, @method_not_found, @invalid_params] -> false
-      code in [@user_rejected, @unauthorized] -> false
+      code in [@invalid_request, @method_not_found, @invalid_params] ->
+        false
+
+      code in [@user_rejected, @unauthorized] ->
+        false
+
+      # Provider-specific codes: check retriability by mapped category
+      Map.has_key?(@provider_specific_codes, code) ->
+        retriable_for_category?(@provider_specific_codes[code])
+
       # Retriable: server/network/transient errors (check before 4xx range)
-      code in [@parse_error, @internal_error, @rate_limit_error] -> true
-      code in [@chain_disconnected, @network_error_code] -> true
-      code >= -32_099 and code <= -32_000 -> true
-      code == 429 -> true
-      code >= 500 -> true
+      code in [@parse_error, @internal_error, @rate_limit_error] ->
+        true
+
+      code in [@chain_disconnected, @network_error_code] ->
+        true
+
+      code >= -32_099 and code <= -32_000 ->
+        true
+
+      code == 429 ->
+        true
+
+      code >= 500 ->
+        true
+
       # Non-retriable 4xx range (after checking 429)
-      code >= 400 and code < 500 -> false
+      code >= 400 and code < 500 ->
+        false
+
       # Conservative default: non-retriable
-      true -> false
+      true ->
+        false
     end
   end
 end

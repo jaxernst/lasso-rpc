@@ -33,6 +33,7 @@ defmodule LassoWeb.RPCController do
   alias Lasso.RPC.RequestOptions.Builder, as: RequestOptionsBuilder
   alias Lasso.RPC.RequestPipeline
   alias Lasso.RPC.Response
+  alias Lasso.RPC.Selection
   alias LassoWeb.Plugs.ObservabilityPlug
   alias LassoWeb.RPC.Helpers
 
@@ -223,6 +224,22 @@ defmodule LassoWeb.RPCController do
       error = JError.new(-32_600, "Invalid Request: batch too large")
       json(conn, JError.to_response(error, nil))
     else
+      # Select a batch provider for consistency across batch items.
+      # All items prefer this provider, but can failover independently.
+      profile = conn.assigns[:profile_slug] || "default"
+      strategy = strategy_from(conn, %{})
+
+      batch_provider =
+        case Selection.select_provider(profile, chain, "eth_blockNumber", strategy: strategy) do
+          {:ok, provider_id} -> provider_id
+          {:error, _} -> nil
+        end
+
+      conn =
+        if batch_provider,
+          do: assign(conn, :batch_provider, batch_provider),
+          else: conn
+
       # Process all requests and collect results with contexts
       {items, contexts} =
         requests
@@ -410,6 +427,16 @@ defmodule LassoWeb.RPCController do
 
     provider_override = extract_provider_override(conn, opts)
 
+    # Batch provider pinning: use the batch-selected provider if no explicit override
+    {provider_override, failover_on_override} =
+      case {provider_override, conn} do
+        {nil, %Plug.Conn{assigns: %{batch_provider: bp}}} when is_binary(bp) ->
+          {bp, true}
+
+        _ ->
+          {provider_override, Keyword.get(opts, :failover_on_override, false)}
+      end
+
     transport_override =
       case conn do
         %Plug.Conn{} -> extract_transport_override(conn, method)
@@ -420,6 +447,7 @@ defmodule LassoWeb.RPCController do
       RequestOptionsBuilder.from_conn(conn, method,
         strategy: strategy,
         provider_override: provider_override,
+        failover_on_override: failover_on_override,
         transport: transport_override,
         timeout_ms: MethodPolicy.timeout_for(method),
         jsonrpc_id: jsonrpc_id

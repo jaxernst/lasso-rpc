@@ -2,20 +2,22 @@ defmodule Lasso.Providers.CandidateListing do
   @moduledoc """
   Pure ETS reads for provider candidate selection.
 
-  Implements a 7-stage filter pipeline using shared ETS state:
+  Implements an 8-stage filter pipeline using shared ETS state:
   1. Transport availability (provider config has url/ws_url)
   2. WS liveness (channel cache for WS presence)
   3. Circuit breaker state
   4. Rate limit state
   5. Lag filtering (BlockSync.Registry + ChainState)
-  6. Archival filtering
-  7. Exclude list
+  6. Min block height filtering (block-height-aware routing)
+  7. Archival filtering
+  8. Exclude list
 
   Return shape: `%{id, config, availability, circuit_state, rate_limited}`.
   """
 
   require Logger
 
+  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Providers.{Catalog, InstanceState, LagCalculation}
   alias Lasso.RPC.SelectionFilters
 
@@ -41,6 +43,7 @@ defmodule Lasso.Providers.CandidateListing do
         rate_limit_ok?(c, protocol, filters)
     end)
     |> filter_by_lag(profile, chain, Map.get(filters, :max_lag_blocks))
+    |> filter_by_min_block(profile, chain, Map.get(filters, :min_block))
     |> filter_by_archival(Map.get(filters, :requires_archival))
     |> filter_excluded(filters)
   end
@@ -206,6 +209,29 @@ defmodule Lasso.Providers.CandidateListing do
     end
 
     filtered
+  end
+
+  defp filter_by_min_block(candidates, _profile, _chain, nil), do: candidates
+
+  defp filter_by_min_block(candidates, profile, chain, min_block) when is_integer(min_block) do
+    block_time_ms = LagCalculation.get_block_time_ms(chain, profile)
+
+    {capable, rest} =
+      Enum.split_with(candidates, fn candidate ->
+        case BlockSyncRegistry.get_height(chain, candidate.instance_id) do
+          {:ok, {height, timestamp, _source, _meta}} ->
+            elapsed_ms = System.system_time(:millisecond) - timestamp
+            staleness_credit = if block_time_ms > 0, do: div(elapsed_ms, block_time_ms), else: 0
+            max_credit = div(30_000, max(block_time_ms, 1))
+            optimistic_height = height + min(staleness_credit, max_credit)
+            optimistic_height >= min_block
+
+          {:error, _} ->
+            true
+        end
+      end)
+
+    capable ++ rest
   end
 
   defp filter_by_archival(candidates, true) do

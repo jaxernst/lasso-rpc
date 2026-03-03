@@ -23,7 +23,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Providers.{CandidateListing, Catalog}
+  alias Lasso.Providers.{CandidateListing, Catalog, InstanceState}
 
   alias Lasso.RPC.{
     Channel,
@@ -217,14 +217,21 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec execute_on_channel(Channel.t(), [Channel.t()], RequestContext.t()) :: result()
   defp execute_on_channel(channel, rest_channels, ctx) do
-    # Update context with current channel selection
+    instance_id = Catalog.lookup_instance_id(channel.profile, channel.chain, channel.provider_id)
+
+    cb_state =
+      case instance_id do
+        nil -> :unknown
+        id -> InstanceState.read_circuit(id, channel.transport) |> Map.get(:state, :unknown)
+      end
+
     ctx = %{
       ctx
       | selected_provider: %{id: channel.provider_id, protocol: channel.transport},
-        circuit_breaker_state: :unknown
+        circuit_breaker_state: cb_state
     }
 
-    case execute_with_circuit_breaker(channel, ctx.rpc_request, ctx.timeout_ms) do
+    case execute_with_circuit_breaker(channel, instance_id, ctx.rpc_request, ctx.timeout_ms) do
       # Function executed - examine what it returned
       {:executed, {:ok, result, io_ms}} ->
         handle_success(result, io_ms, channel, ctx)
@@ -446,11 +453,10 @@ defmodule Lasso.RPC.RequestPipeline do
           | {:error, any(), number()}
           | {:exception, {atom(), any(), list()}}
 
-  @spec execute_with_circuit_breaker(Channel.t(), map(), timeout()) ::
+  @spec execute_with_circuit_breaker(Channel.t(), String.t() | nil, map(), timeout()) ::
           CircuitBreaker.call_result(circuit_breaker_result())
-  defp execute_with_circuit_breaker(channel, rpc_request, timeout) do
+  defp execute_with_circuit_breaker(channel, instance_id, rpc_request, timeout) do
     attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
-    instance_id = Catalog.lookup_instance_id(channel.profile, channel.chain, channel.provider_id)
 
     cb_id =
       if instance_id do
@@ -477,7 +483,8 @@ defmodule Lasso.RPC.RequestPipeline do
         transport: opts.transport || :http,
         strategy: opts.strategy,
         request_id: opts.request_id,
-        plug_start_time: opts.plug_start_time
+        plug_start_time: opts.plug_start_time,
+        account_id: opts.account_id
       )
   end
 

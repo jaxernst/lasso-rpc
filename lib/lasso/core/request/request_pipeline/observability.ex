@@ -55,6 +55,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     publish_routing_decision(
       request_id: ctx.request_id,
+      account_id: ctx.account_id,
       profile: profile,
       chain: ctx.chain,
       method: method,
@@ -102,17 +103,20 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         duration_ms
       ) do
     profile = ctx.opts.profile
+    jerr = JError.from(reason, provider_id: provider_id)
 
-    Metrics.record_failure(profile, ctx.chain, provider_id, method, duration_ms,
-      transport: transport
-    )
+    if ErrorClassification.provider_health_failure?(jerr.category) do
+      Metrics.record_failure(profile, ctx.chain, provider_id, method, duration_ms,
+        transport: transport
+      )
+    end
 
     instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
-    jerr = JError.from(reason, provider_id: provider_id)
     report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain, provider_id)
 
     publish_routing_decision(
       request_id: ctx.request_id,
+      account_id: ctx.account_id,
       profile: profile,
       chain: ctx.chain,
       method: method,
@@ -144,6 +148,8 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       provider_id: provider_id,
       chain: ctx.chain
     )
+
+    :ok
   end
 
   @doc """
@@ -162,7 +168,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     :telemetry.execute(
       [:lasso, :failover, :fast_fail],
-      %{count: 1},
+      %{count: 1, duration: duration_ms},
       %{
         chain: ctx.chain,
         method: ctx.method,
@@ -174,10 +180,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       }
     )
 
-    Metrics.record_failure(profile, ctx.chain, provider_id, ctx.method, duration_ms,
-      transport: transport
-    )
-
+    # Skip BenchmarkStore recording — failover intermediaries should not count against
+    # a provider's success rate. Only requests a provider actually "served" (success or
+    # terminal failure) should be tracked in performance metrics.
+    # ETS health counters still update here (they already filter via breaker_penalty?).
     instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
     jerr = JError.from(error_reason, provider_id: provider_id)
     report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain, provider_id)
@@ -407,6 +413,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     event =
       RoutingDecision.new(
         request_id: opts[:request_id],
+        account_id: opts[:account_id],
         profile: opts[:profile],
         chain: opts[:chain],
         method: opts[:method],

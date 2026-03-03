@@ -780,7 +780,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         GenServer.reply(
           from,
           {:error,
-           JError.new(-32_000, "WebSocket request timeout", provider_id: state.endpoint.id)}
+           JError.new(-32_000, "WebSocket request timeout",
+             category: :timeout,
+             retriable?: true,
+             provider_id: state.endpoint.id
+           )}
         )
 
         {:noreply, %{state | pending_requests: new_pending}}

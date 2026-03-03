@@ -164,6 +164,7 @@ defmodule Lasso.RPC.Selection do
         exclude: exclude,
         include_half_open: include_half_open,
         max_lag_blocks: get_max_lag(profile, chain),
+        min_block: requirements.requested_block,
         requires_archival: requirements.requires_archival
       )
 
@@ -389,6 +390,7 @@ defmodule Lasso.RPC.Selection do
       exclude: exclude,
       protocol: protocol,
       max_lag_blocks: get_max_lag(profile, chain),
+      min_block: requirements.requested_block,
       requires_archival: requirements.requires_archival
     )
   end

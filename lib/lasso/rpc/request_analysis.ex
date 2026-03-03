@@ -11,6 +11,7 @@ defmodule Lasso.RPC.RequestAnalysis do
 
   @type requirements :: %{
           requires_archival: boolean(),
+          requested_block: non_neg_integer() | nil,
           block_range: non_neg_integer() | nil,
           address_count: non_neg_integer() | nil
         }
@@ -38,6 +39,7 @@ defmodule Lasso.RPC.RequestAnalysis do
   def analyze(method, params, opts \\ []) do
     %{
       requires_archival: requires_archival?(method, params, opts),
+      requested_block: extract_requested_block(method, params),
       block_range: extract_block_range(method, params),
       address_count: extract_address_count(method, params)
     }
@@ -100,6 +102,34 @@ defmodule Lasso.RPC.RequestAnalysis do
   end
 
   defp archival_block?(_other, _opts), do: false
+
+  # Extract the specific block number requested (for block-height-aware routing).
+  # Returns nil for block tags like "latest", "safe", etc.
+  # Guard on param count to avoid parsing addresses as block numbers.
+  defp extract_requested_block("eth_getStorageAt", params) when length(params) >= 3 do
+    parse_hex_block(List.last(params))
+  end
+
+  defp extract_requested_block(method, params)
+       when method in ~w(eth_call eth_getBalance eth_getCode eth_getTransactionCount) and
+              length(params) >= 2 do
+    parse_hex_block(List.last(params))
+  end
+
+  defp extract_requested_block("eth_getBlockByNumber", [block_param | _]) do
+    parse_hex_block(block_param)
+  end
+
+  defp extract_requested_block(_method, _params), do: nil
+
+  defp parse_hex_block("0x" <> hex) do
+    case Integer.parse(hex, 16) do
+      {num, ""} -> num
+      _ -> nil
+    end
+  end
+
+  defp parse_hex_block(_), do: nil
 
   defp extract_block_range("eth_getLogs", [filter]) when is_map(filter) do
     with {:ok, from_num} when is_integer(from_num) <- parse_block_number(filter["fromBlock"]),

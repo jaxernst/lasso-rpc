@@ -439,6 +439,11 @@ const DraggableNetworkViewport = {
     this.translateY = viewportRect.height / 2 - canvasHeight / 2;
     this.updateTransform();
 
+    // Reveal canvas now that the centering transform is applied
+    if (this.canvasEl) {
+      this.canvasEl.style.opacity = "1";
+    }
+
     // Mouse events
     this.el.addEventListener("mousedown", this.handleMouseDown.bind(this));
     this.el.addEventListener("mousemove", this.handleMouseMove.bind(this));
@@ -497,7 +502,6 @@ const DraggableNetworkViewport = {
 
     // If canvas element changed, reattach click handler
     if (newCanvasEl && newCanvasEl !== this.canvasEl) {
-      // Remove old listener if it exists
       if (this.canvasEl) {
         this.canvasEl.removeEventListener(
           "click",
@@ -505,7 +509,6 @@ const DraggableNetworkViewport = {
           true,
         );
       }
-      // Attach to new element
       this.canvasEl = newCanvasEl;
       this.canvasEl.addEventListener(
         "click",
@@ -522,6 +525,11 @@ const DraggableNetworkViewport = {
     }
 
     this.updateTransform();
+
+    // Re-apply visibility after LiveView patches (which restore opacity: 0)
+    if (this.canvasEl) {
+      this.canvasEl.style.opacity = "1";
+    }
   },
 
   handleMouseDown(e) {

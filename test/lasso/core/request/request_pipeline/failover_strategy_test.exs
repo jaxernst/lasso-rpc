@@ -115,6 +115,50 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategyTest do
     end
   end
 
+  describe "block_not_available failover threshold" do
+    test "failovers when no prior block_not_available errors" do
+      error =
+        JError.new(-32_000, "header not found",
+          category: :block_not_available,
+          retriable?: true
+        )
+
+      channels = [make_channel("provider-b")]
+      ctx = make_ctx()
+
+      assert {:failover, :block_not_available_failover} =
+               FailoverStrategy.decide(error, channels, ctx)
+    end
+
+    test "failovers with one prior block_not_available error" do
+      error =
+        JError.new(-32_000, "block not found",
+          category: :block_not_available,
+          retriable?: true
+        )
+
+      channels = [make_channel("provider-b")]
+      ctx = make_ctx(error_categories: %{block_not_available: 1})
+
+      assert {:failover, :block_not_available_failover} =
+               FailoverStrategy.decide(error, channels, ctx)
+    end
+
+    test "becomes terminal after threshold (2 prior block_not_available errors)" do
+      error =
+        JError.new(-32_000, "header not found",
+          category: :block_not_available,
+          retriable?: true
+        )
+
+      channels = [make_channel("provider-b")]
+      ctx = make_ctx(error_categories: %{block_not_available: 2})
+
+      assert {:terminal_error, :block_universally_unavailable} =
+               FailoverStrategy.decide(error, channels, ctx)
+    end
+  end
+
   describe "retriable categories still failover (regression)" do
     test "rate_limit → failover" do
       error = JError.new(-32_005, "Rate limited", category: :rate_limit, retriable?: true)

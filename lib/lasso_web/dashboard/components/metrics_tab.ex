@@ -46,6 +46,8 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         "all"
       end
 
+    circuit_states = assigns[:cluster_circuit_states] || %{}
+
     socket =
       socket
       |> assign(:available_chains, assigns.available_chains)
@@ -59,6 +61,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       |> assign(:available_node_ids, available_node_ids)
       |> assign(:selected_node_id, selected_node_id)
       |> assign(:show_node_tabs, show_node_tabs)
+      |> assign(:cluster_circuit_states, circuit_states)
 
     {:ok, socket}
   end
@@ -121,6 +124,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
             metrics_last_updated={@metrics_last_updated}
             available_node_ids={@available_node_ids}
             selected_node_id={@selected_node_id}
+            cluster_circuit_states={@cluster_circuit_states}
             myself={@myself}
           />
           <.method_performance_breakdown
@@ -220,13 +224,26 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
   attr(:metrics_last_updated, :any, default: nil)
   attr(:available_node_ids, :list, default: [])
   attr(:selected_node_id, :string, default: "all")
+  attr(:cluster_circuit_states, :map, default: %{})
   attr(:myself, :any, required: true)
 
   defp provider_performance_table(assigns) do
     filtered_metrics =
       filter_metrics_by_node_id(assigns.provider_metrics, assigns.selected_node_id)
 
-    assigns = assign(assigns, :filtered_metrics, filtered_metrics)
+    open_provider_ids = circuit_open_provider_ids(assigns.cluster_circuit_states)
+
+    {active_metrics, circuit_open_metrics} =
+      Enum.split_with(filtered_metrics, fn provider ->
+        provider_id = Map.get(provider, :id) || Map.get(provider, :provider_id)
+        provider_id not in open_provider_ids
+      end)
+
+    assigns =
+      assigns
+      |> assign(:active_metrics, active_metrics)
+      |> assign(:circuit_open_metrics, circuit_open_metrics)
+      |> assign(:all_active_count, length(active_metrics) + length(circuit_open_metrics))
 
     ~H"""
     <section>
@@ -234,7 +251,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         <h2 class="text-lg font-semibold flex items-center gap-2 text-white">
           <span>Provider Performance</span>
           <span class="text-xs text-gray-500 font-normal">
-            ({length(@filtered_metrics)} providers)
+            ({@all_active_count} providers)
           </span>
         </h2>
         <div :if={@metrics_last_updated} class="flex items-center gap-2 text-xs text-gray-500">
@@ -245,7 +262,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         </div>
       </div>
 
-      <DetailPanelComponents.empty_state :if={@filtered_metrics == []}>
+      <DetailPanelComponents.empty_state :if={@active_metrics == [] and @circuit_open_metrics == []}>
         <p class="text-sm font-medium text-gray-400 mb-1">No metrics available</p>
         <p class="text-xs text-gray-600">
           <%= if @selected_node_id != "all" do %>
@@ -257,7 +274,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
       </DetailPanelComponents.empty_state>
 
       <div
-        :if={@filtered_metrics != []}
+        :if={@active_metrics != []}
         class="bg-gray-900/95 backdrop-blur-lg rounded-xl border border-gray-700/60 shadow-sm overflow-hidden"
       >
         <div class="overflow-x-auto">
@@ -277,16 +294,65 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
             </thead>
             <tbody class="divide-y divide-gray-700/30">
               <.provider_row
-                :for={{provider, index} <- Enum.with_index(@filtered_metrics, 1)}
+                :for={{provider, index} <- Enum.with_index(@active_metrics, 1)}
                 provider={provider}
                 rank={index}
-                provider_metrics={@filtered_metrics}
+                provider_metrics={@active_metrics}
+                circuit_open={false}
               />
             </tbody>
           </table>
         </div>
       </div>
+
+      <.circuit_open_section
+        :if={@circuit_open_metrics != []}
+        circuit_open_metrics={@circuit_open_metrics}
+      />
     </section>
+    """
+  end
+
+  defp circuit_open_section(assigns) do
+    ~H"""
+    <div class="mt-4">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-xs font-medium text-amber-400/80 uppercase tracking-wider">
+          Circuit Open
+        </span>
+        <span class="text-xs text-gray-600">
+          ({length(@circuit_open_metrics)} providers — not receiving traffic)
+        </span>
+      </div>
+      <div class="bg-gray-900/60 rounded-xl border border-amber-500/20 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full">
+            <thead class="bg-gray-800/30 border-b border-gray-700/30">
+              <tr class="text-left text-xs text-gray-500 uppercase tracking-wider">
+                <th class="px-4 py-2"></th>
+                <th class="px-4 py-2">Provider</th>
+                <th class="px-4 py-2 text-right">Avg Latency</th>
+                <th class="px-4 py-2 text-right">P50</th>
+                <th class="px-4 py-2 text-right">P95</th>
+                <th class="px-4 py-2 text-right">P99</th>
+                <th class="px-4 py-2 text-right">P99/P50</th>
+                <th class="px-4 py-2 text-right">Success Rate</th>
+                <th class="px-4 py-2 text-right">Total Calls</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-700/20">
+              <.provider_row
+                :for={{provider, index} <- Enum.with_index(@circuit_open_metrics, 1)}
+                provider={provider}
+                rank={index}
+                provider_metrics={@circuit_open_metrics}
+                circuit_open={true}
+              />
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
     """
   end
 
@@ -335,17 +401,43 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     Map.put(provider, :consistency_ratio, consistency_ratio)
   end
 
+  # Extracts provider IDs that have any open HTTP circuit across any node.
+  # Circuit state keys are {provider_id, node_id} → %{http: state, ws: state}.
+  defp circuit_open_provider_ids(circuit_states) when map_size(circuit_states) == 0,
+    do: MapSet.new()
+
+  defp circuit_open_provider_ids(circuit_states) do
+    circuit_states
+    |> Enum.filter(fn {_key, state} -> state.http in [:open, :half_open] end)
+    |> Enum.map(fn {{provider_id, _node_id}, _state} -> provider_id end)
+    |> MapSet.new()
+  end
+
   attr(:provider, :map, required: true)
   attr(:rank, :integer, required: true)
   attr(:provider_metrics, :list, required: true)
+  attr(:circuit_open, :boolean, default: false)
 
   defp provider_row(assigns) do
+    dim = if assigns.circuit_open, do: "opacity-50", else: ""
+    assigns = assign(assigns, :dim, dim)
+
     ~H"""
-    <tr class="hover:bg-gray-900/30 transition-colors">
+    <tr class={["hover:bg-gray-900/30 transition-colors", @dim]}>
       <td class="px-4 py-3">
         <DetailPanelComponents.rank_badge rank={@rank} />
       </td>
-      <td class="px-4 py-3 font-medium text-white">{@provider.name}</td>
+      <td class="px-4 py-3">
+        <div class="flex items-center gap-2">
+          <span class="font-medium text-white">{@provider.name}</span>
+          <span
+            :if={@circuit_open}
+            class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/25"
+          >
+            CIRCUIT OPEN
+          </span>
+        </div>
+      </td>
       <td class="px-4 py-3 text-right">
         <.latency_bar
           :if={@provider.avg_latency}
@@ -406,6 +498,8 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
     """
   end
 
+  defdelegate format_latency(ms), to: Formatting
+
   defp format_method_name(method) when is_binary(method) do
     case String.split(method, "@", parts: 2) do
       [name, ""] -> name
@@ -414,8 +508,6 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
   end
 
   defp format_method_name(method), do: method
-
-  defdelegate format_latency(ms), to: Formatting
 
   defp success_color(nil), do: Formatting.success_rate_color(nil)
   defp success_color(rate), do: Formatting.success_rate_color(rate * 100)

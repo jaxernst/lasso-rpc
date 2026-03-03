@@ -72,7 +72,11 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   @doc """
-  Get the consensus (max) block height for a chain.
+  Get the consensus block height for a chain using P75 (75th percentile).
+
+  With 1-3 providers, returns MAX (same as before). With 4+ providers, returns
+  the second-highest height — filtering out one outlier fast provider that could
+  make all others appear lagged.
 
   Only considers heights from the last `freshness_ms` milliseconds.
 
@@ -284,8 +288,16 @@ defmodule Lasso.BlockSync.Registry do
       |> Enum.map(fn {_provider_id, {height, _ts, _source, _meta}} -> height end)
 
     case fresh_heights do
-      [] -> {:error, :no_data}
-      list -> {:ok, Enum.max(list)}
+      [] ->
+        {:error, :no_data}
+
+      [single] ->
+        {:ok, single}
+
+      list ->
+        sorted = Enum.sort(list, :desc)
+        idx = max(0, floor(length(sorted) * 0.25))
+        {:ok, Enum.at(sorted, idx)}
     end
   end
 end

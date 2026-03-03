@@ -257,6 +257,80 @@ defmodule Lasso.RPC.RequestAnalysisTest do
     end
   end
 
+  describe "requested_block extraction" do
+    test "extracts hex block number from eth_getBalance" do
+      result = RequestAnalysis.analyze("eth_getBalance", ["0xabc", "0x1312D00"])
+      assert result.requested_block == 20_000_000
+    end
+
+    test "extracts hex block number from eth_call" do
+      result = RequestAnalysis.analyze("eth_call", [%{}, "0xBEBC20"])
+      assert result.requested_block == 12_500_000
+    end
+
+    test "extracts hex block number from eth_getBlockByNumber" do
+      result = RequestAnalysis.analyze("eth_getBlockByNumber", ["0xF4240", false])
+      assert result.requested_block == 1_000_000
+    end
+
+    test "returns nil for 'latest' block tag" do
+      result = RequestAnalysis.analyze("eth_call", [%{}, "latest"])
+      assert result.requested_block == nil
+    end
+
+    test "returns nil for 'safe' block tag" do
+      result = RequestAnalysis.analyze("eth_getBalance", ["0xabc", "safe"])
+      assert result.requested_block == nil
+    end
+
+    test "returns nil for 'pending' block tag" do
+      result = RequestAnalysis.analyze("eth_call", [%{}, "pending"])
+      assert result.requested_block == nil
+    end
+
+    test "returns nil for 'finalized' block tag" do
+      result = RequestAnalysis.analyze("eth_call", [%{}, "finalized"])
+      assert result.requested_block == nil
+    end
+
+    test "returns nil for 'earliest' block tag" do
+      result = RequestAnalysis.analyze("eth_call", [%{}, "earliest"])
+      assert result.requested_block == nil
+    end
+
+    test "returns nil for methods that don't take block params" do
+      result = RequestAnalysis.analyze("eth_blockNumber", [])
+      assert result.requested_block == nil
+    end
+
+    test "returns nil for eth_getLogs" do
+      result = RequestAnalysis.analyze("eth_getLogs", [%{"fromBlock" => "0x100"}])
+      assert result.requested_block == nil
+    end
+
+    test "returns nil for invalid hex" do
+      result = RequestAnalysis.analyze("eth_call", [%{}, "0xGGG"])
+      assert result.requested_block == nil
+    end
+
+    test "returns nil when eth_getBalance has only address (no block param)" do
+      result =
+        RequestAnalysis.analyze("eth_getBalance", ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"])
+
+      assert result.requested_block == nil
+    end
+
+    test "returns nil when eth_call has only call object (no block param)" do
+      result = RequestAnalysis.analyze("eth_call", [%{"to" => "0xabc", "data" => "0x"}])
+      assert result.requested_block == nil
+    end
+
+    test "returns nil when eth_getStorageAt has only address and position (no block param)" do
+      result = RequestAnalysis.analyze("eth_getStorageAt", ["0xabc", "0x0"])
+      assert result.requested_block == nil
+    end
+  end
+
   describe "edge cases" do
     test "handles invalid hex block numbers gracefully" do
       result = RequestAnalysis.analyze("eth_call", [%{}, "0xGGG"])

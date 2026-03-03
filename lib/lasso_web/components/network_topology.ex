@@ -119,7 +119,7 @@ defmodule LassoWeb.NetworkTopology do
       <div
         class="relative cursor-default"
         data-network-canvas
-        style="width: 4000px; height: 3000px;"
+        style="width: 4000px; height: 3000px; opacity: 0;"
         phx-click="deselect_all"
       >
         <!-- Provider connection lines -->
@@ -180,7 +180,7 @@ defmodule LassoWeb.NetworkTopology do
               style={"max-width: #{radius * 1.7}px;"}
               title={"#{chain_data.display_name} (#{chain_data.chain_id_display})"}
             >
-              <div class={"#{if radius < 55, do: "text-xs", else: "text-sm"} w-full truncate font-semibold text-white"}>
+              <div class={"#{if radius < 55, do: "text-xs", else: "text-sm"} w-full font-semibold leading-tight text-white"}>
                 {chain_data.display_name}
               </div>
               <div class={"#{if radius < 55, do: "text-[10px]", else: "text-xs"} text-gray-400"}>

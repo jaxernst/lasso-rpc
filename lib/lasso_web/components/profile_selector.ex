@@ -230,10 +230,6 @@ defmodule LassoWeb.Components.ProfileSelector do
             <div class="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
               BYOK
             </div>
-          <% @profile == "premium" -> %>
-            <div class="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-              Pro
-            </div>
           <% true -> %>
             <div></div>
         <% end %>

@@ -34,6 +34,8 @@ defmodule Lasso.Config.MethodPolicy do
     "eth_getLogs" => 5_000,
     "eth_getFilterLogs" => 5_000,
     "eth_newFilter" => 2_000,
+    # State proof (heavy trie traversal, varies by provider)
+    "eth_getProof" => 10_000,
     # Debug/trace (legitimately slow - full EVM replay)
     "debug_traceTransaction" => 30_000,
     "debug_traceBlock" => 45_000

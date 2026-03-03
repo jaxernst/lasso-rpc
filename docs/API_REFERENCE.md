@@ -265,6 +265,8 @@ curl -X POST http://localhost:4000/rpc/ethereum \
 
 Response preserves request order as a JSON array.
 
+**Provider pinning**: a single provider is selected before routing any batch items, so all items in the batch read from the same upstream. Individual items can still failover to a different provider if the pinned provider returns an error for that specific request.
+
 ---
 
 ## Supported Methods

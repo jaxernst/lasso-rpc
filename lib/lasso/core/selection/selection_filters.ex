@@ -15,6 +15,7 @@ defmodule Lasso.RPC.SelectionFilters do
           include_half_open: boolean(),
           exclude_rate_limited: boolean(),
           max_lag_blocks: non_neg_integer() | nil,
+          min_block: non_neg_integer() | nil,
           requires_archival: boolean()
         }
 
@@ -23,6 +24,7 @@ defmodule Lasso.RPC.SelectionFilters do
             include_half_open: false,
             exclude_rate_limited: false,
             max_lag_blocks: nil,
+            min_block: nil,
             requires_archival: false
 
   @doc """
@@ -35,6 +37,7 @@ defmodule Lasso.RPC.SelectionFilters do
     * `:include_half_open` - Include half-open circuit breaker providers (default: false)
     * `:exclude_rate_limited` - Exclude rate-limited providers (default: false)
     * `:max_lag_blocks` - Maximum acceptable block lag (nil = no limit)
+    * `:min_block` - Minimum block height the provider must have (nil = no filter)
     * `:requires_archival` - Request requires archival data support (default: false)
 
   ## Examples
@@ -53,6 +56,7 @@ defmodule Lasso.RPC.SelectionFilters do
       include_half_open: Keyword.get(opts, :include_half_open, false),
       exclude_rate_limited: Keyword.get(opts, :exclude_rate_limited, false),
       max_lag_blocks: Keyword.get(opts, :max_lag_blocks),
+      min_block: Keyword.get(opts, :min_block),
       requires_archival: Keyword.get(opts, :requires_archival, false)
     }
   end
@@ -71,6 +75,7 @@ defmodule Lasso.RPC.SelectionFilters do
       exclude_rate_limited:
         to_boolean(map[:exclude_rate_limited] || Map.get(map, "exclude_rate_limited")),
       max_lag_blocks: map[:max_lag_blocks] || Map.get(map, "max_lag_blocks"),
+      min_block: map[:min_block] || Map.get(map, "min_block"),
       requires_archival: to_boolean(map[:requires_archival] || Map.get(map, "requires_archival"))
     }
   end
@@ -86,6 +91,7 @@ defmodule Lasso.RPC.SelectionFilters do
       include_half_open: filters.include_half_open,
       exclude_rate_limited: filters.exclude_rate_limited,
       max_lag_blocks: filters.max_lag_blocks,
+      min_block: filters.min_block,
       requires_archival: filters.requires_archival
     }
   end

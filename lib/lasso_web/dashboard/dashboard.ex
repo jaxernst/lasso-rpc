@@ -466,6 +466,7 @@ defmodule LassoWeb.Dashboard do
               metrics_loading={@metrics_loading}
               metrics_last_updated={@metrics_last_updated}
               cluster_node_ids={@available_node_ids}
+              cluster_circuit_states={@cluster_circuit_states}
             />
           <% "benchmarks" -> %>
             <DashboardComponents.benchmarks_tab_content />
