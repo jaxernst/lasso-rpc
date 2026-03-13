@@ -428,11 +428,10 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   end
 
   defp count_circuit_states_with_default(provider_circuits, transport, available_node_ids) do
-    # Build a map of region -> circuit state
     circuit_by_region =
-      provider_circuits
-      |> Enum.map(fn {region, circuit} -> {region, circuit[transport] || :closed} end)
-      |> Enum.into(%{})
+      Map.new(provider_circuits, fn {region, circuit} ->
+        {region, circuit[transport] || :closed}
+      end)
 
     # Count states, defaulting missing regions to :closed
     available_node_ids
@@ -864,7 +863,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       |> Enum.filter(&relevant_event?/1)
       |> Enum.take(15)
 
-    has_content = length(active_alerts) > 0 or length(event_feed) > 0
+    has_content = active_alerts != [] or event_feed != []
 
     assigns =
       assigns

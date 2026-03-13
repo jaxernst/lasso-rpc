@@ -40,6 +40,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   - `:provider_error` - Infrastructure-level provider unavailability (no channels, pool errors)
   - `:timeout` - Request timeout
   - `:unknown_error` - Unclassified error (fallback category)
+  - `:unclassified_server_error` - Unmatched -32000 error (non-retriable, gets 1 failover attempt)
 
   **Circuit breaker penalty**:
   - Only true provider health failures penalize circuit breakers: `:server_error`, `:network_error`,
@@ -61,6 +62,17 @@ defmodule Lasso.Core.Support.ErrorClassification do
 
   # Server error range: -32_000 to -32_099 (reserved by spec)
 
+  # Standard JSON-RPC codes with unambiguous meaning per spec.
+  # These bypass message-based classification entirely — the code is definitive.
+  # Excludes -32603 (internal_error) because providers reuse it for capability violations.
+  # Excludes -32603 (providers reuse for capability violations)
+  # and -32602 (providers like OnFinality use for block-not-found).
+  @jsonrpc_standard_unambiguous [
+    @parse_error,
+    @invalid_request,
+    @method_not_found
+  ]
+
   # ===========================================================================
   # Lasso Custom Error Codes (within server error range)
   # ===========================================================================
@@ -70,6 +82,14 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @network_error_code -32_004
   @client_error_code -32_003
   @server_error_code -32_002
+
+  # ===========================================================================
+  # Ethereum Execution Error Code
+  # ===========================================================================
+
+  # EVM execution error (EIP-3171 / go-ethereum). Returned for reverts,
+  # out-of-gas, invalid opcodes, etc. Always deterministic & non-retriable.
+  @evm_execution_error 3
 
   # ===========================================================================
   # EIP-1193 Provider Error Codes
@@ -103,12 +123,15 @@ defmodule Lasso.Core.Support.ErrorClassification do
   # Patterns indicating transient/retriable server errors
   # These are provider-specific errors that should trigger failover
   @transient_error_patterns [
-    # DRPC error code 19: "Temporary internal error. Please retry"
     "please retry",
     "temporary internal error",
     "try again",
     "service temporarily unavailable",
-    "temporarily unavailable"
+    "temporarily unavailable",
+    "request timeout",
+    "backend timeout",
+    "resource unavailable",
+    "service overloaded"
   ]
 
   @auth_patterns [
@@ -130,6 +153,21 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "too many logs"
   ]
 
+  # Parameter validation errors that providers return (often under -32000 instead of -32602).
+  # These are request-caused — the caller sent malformed or invalid parameters.
+  @invalid_params_patterns [
+    "invalid argument",
+    "cannot unmarshal",
+    "unable to decode",
+    "invalid hex",
+    "odd length hex",
+    "hex string without 0x prefix",
+    "invalid address",
+    "wrong number of arguments",
+    "missing value for required argument",
+    "abi: cannot marshal"
+  ]
+
   # Patterns for execution/transaction errors that providers return under -32000.
   # These are request-caused, not provider health issues.
   @execution_revert_patterns [
@@ -137,8 +175,14 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "gas required exceeds allowance",
     "out of gas",
     "intrinsic gas too low",
+    "gas limit below intrinsic gas",
+    "gas too low",
     "gas limit reached",
+    "gas uint64 overflow",
+    "insufficient gas",
     "exceeds block gas limit",
+    "base fee exceeds gas limit",
+    "transaction gas limit is too low",
     "nonce too low",
     "nonce too high",
     "insufficient funds",
@@ -155,7 +199,15 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "invalid opcode",
     "stack underflow",
     "stack overflow",
-    "invalid jump destination"
+    "invalid jump destination",
+    "revert",
+    "vm exception",
+    "evm error",
+    "contract creation code storage out of gas",
+    "max initcode size exceeded",
+    "upfront cost exceeds",
+    "does not match sender account nonce",
+    "transaction type not supported"
   ]
 
   @block_not_available_patterns [
@@ -258,6 +310,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @spec categorize(integer(), String.t() | nil) :: atom()
   def categorize(code, message)
 
+  def categorize(code, message)
+      when code in @jsonrpc_standard_unambiguous and is_binary(message) do
+    classify_by_code(code)
+  end
+
   def categorize(code, message) when is_binary(message) do
     message
     |> String.downcase()
@@ -269,6 +326,53 @@ defmodule Lasso.Core.Support.ErrorClassification do
   end
 
   def categorize(code, _message), do: classify_by_code(code)
+
+  @spec categorize(integer(), String.t() | nil, binary() | map() | nil) :: atom()
+  def categorize(code, message, data) when is_binary(data) do
+    if revert_data?(data), do: :execution_revert, else: categorize(code, message)
+  end
+
+  def categorize(code, message, %{"data" => inner}) when is_binary(inner) do
+    if revert_data?(inner), do: :execution_revert, else: categorize(code, message)
+  end
+
+  def categorize(code, message, _data), do: categorize(code, message)
+
+  @doc false
+  @spec categorize_with_path(integer(), String.t() | nil, binary() | map() | nil) ::
+          {atom(), atom()}
+  def categorize_with_path(code, message, data \\ nil)
+
+  def categorize_with_path(code, message, data) when is_binary(data) do
+    if revert_data?(data),
+      do: {:execution_revert, :data_selector},
+      else: do_categorize(code, message)
+  end
+
+  def categorize_with_path(code, message, %{"data" => inner}) when is_binary(inner) do
+    if revert_data?(inner),
+      do: {:execution_revert, :data_selector},
+      else: do_categorize(code, message)
+  end
+
+  def categorize_with_path(code, message, _data), do: do_categorize(code, message)
+
+  defp do_categorize(code, message)
+       when code in @jsonrpc_standard_unambiguous and is_binary(message) do
+    {classify_by_code(code), :code_based}
+  end
+
+  defp do_categorize(code, message) when is_binary(message) do
+    message
+    |> String.downcase()
+    |> classify_by_message()
+    |> case do
+      nil -> {classify_by_code(code), :code_based}
+      category -> {category, :message_pattern}
+    end
+  end
+
+  defp do_categorize(code, _message), do: {classify_by_code(code), :code_based}
 
   @doc """
   Determines if an error should trigger failover to another provider.
@@ -287,6 +391,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @spec retriable?(integer(), String.t() | nil) :: boolean()
   def retriable?(code, message)
 
+  def retriable?(code, message)
+      when code in @jsonrpc_standard_unambiguous and is_binary(message) do
+    retriable_by_code?(code)
+  end
+
   def retriable?(code, message) when is_binary(message) do
     message
     |> String.downcase()
@@ -298,6 +407,17 @@ defmodule Lasso.Core.Support.ErrorClassification do
   end
 
   def retriable?(code, _message), do: retriable_by_code?(code)
+
+  @spec retriable?(integer(), String.t() | nil, binary() | map() | nil) :: boolean()
+  def retriable?(code, message, data) when is_binary(data) do
+    if revert_data?(data), do: false, else: retriable?(code, message)
+  end
+
+  def retriable?(code, message, %{"data" => inner}) when is_binary(inner) do
+    if revert_data?(inner), do: false, else: retriable?(code, message)
+  end
+
+  def retriable?(code, message, _data), do: retriable?(code, message)
 
   @doc """
   Determines if an error should count against circuit breaker failure threshold.
@@ -317,6 +437,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   def breaker_penalty?(:invalid_params), do: false
   def breaker_penalty?(:parse_error), do: false
   def breaker_penalty?(:method_not_found), do: false
+  def breaker_penalty?(:unclassified_server_error), do: false
   def breaker_penalty?(_category), do: true
 
   @doc """
@@ -385,7 +506,22 @@ defmodule Lasso.Core.Support.ErrorClassification do
   def retriable_for_category?(:user_error), do: false
   def retriable_for_category?(:client_error), do: false
   def retriable_for_category?(:execution_revert), do: false
+  def retriable_for_category?(:unclassified_server_error), do: false
   def retriable_for_category?(_category), do: false
+
+  # ===========================================================================
+  # Private: ABI Revert Data Detection
+  # ===========================================================================
+
+  @revert_selectors ["0x08c379a0", "0x4e487b71"]
+
+  defp revert_data?(data) when is_binary(data) and byte_size(data) >= 10 do
+    prefix = binary_part(data, 0, 10)
+    lower = String.downcase(prefix)
+    Enum.any?(@revert_selectors, &String.starts_with?(lower, &1))
+  end
+
+  defp revert_data?(_), do: false
 
   # ===========================================================================
   # Private: Message-Based Classification
@@ -400,6 +536,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
       # Transient/retriable server errors (check before capability violations)
       # Patterns like "please retry" indicate the provider wants a retry
       contains_any?(message_lower, @transient_error_patterns) -> :server_error
+      # Parameter validation errors — request-caused, not provider health issues.
+      # Check before execution_revert since "invalid" appears in both contexts.
+      contains_any?(message_lower, @invalid_params_patterns) -> :invalid_params
       # Execution/transaction errors — request-caused, not provider health issues.
       # Must check before block_not_available since some revert messages could
       # contain "not found" substrings.
@@ -437,12 +576,12 @@ defmodule Lasso.Core.Support.ErrorClassification do
     @invalid_params,
     @internal_error
   ]
+
   @lasso_custom_codes [
     @rate_limit_error,
     @network_error_code,
     @client_error_code,
-    @server_error_code,
-    @generic_server_error
+    @server_error_code
   ]
   @eip1193_codes [
     @user_rejected,
@@ -456,16 +595,21 @@ defmodule Lasso.Core.Support.ErrorClassification do
     26 => :block_not_available,
     30 => :rate_limit,
     35 => :capability_violation,
+    -32_010 => :execution_revert,
+    -32_015 => :execution_revert,
+    -32_016 => :execution_revert,
     -32_046 => :rate_limit,
     -32_701 => :capability_violation
   }
 
   defp classify_by_code(code) do
     cond do
+      code == @evm_execution_error -> :execution_revert
       code in @jsonrpc_standard_codes -> classify_jsonrpc_standard(code)
       code in @lasso_custom_codes -> classify_lasso_error(code)
       code in @eip1193_codes -> classify_eip1193_error(code)
       Map.has_key?(@provider_specific_codes, code) -> @provider_specific_codes[code]
+      code == @generic_server_error -> :unclassified_server_error
       jsonrpc_server_range?(code) -> :server_error
       http_status_code?(code) -> classify_http_status(code)
       true -> :unknown_error
@@ -491,7 +635,6 @@ defmodule Lasso.Core.Support.ErrorClassification do
       @network_error_code -> :network_error
       @client_error_code -> :client_error
       @server_error_code -> :server_error
-      @generic_server_error -> :server_error
     end
   end
 
@@ -515,6 +658,10 @@ defmodule Lasso.Core.Support.ErrorClassification do
 
   defp retriable_by_code?(code) do
     cond do
+      # EVM execution error (code 3) — deterministic, never retry
+      code == @evm_execution_error ->
+        false
+
       # Non-retriable: client/user errors (bad input)
       code in [@invalid_request, @method_not_found, @invalid_params] ->
         false
@@ -533,7 +680,10 @@ defmodule Lasso.Core.Support.ErrorClassification do
       code in [@chain_disconnected, @network_error_code] ->
         true
 
-      code >= -32_099 and code <= -32_000 ->
+      code == @generic_server_error ->
+        false
+
+      code >= -32_099 and code <= -32_001 ->
         true
 
       code == 429 ->

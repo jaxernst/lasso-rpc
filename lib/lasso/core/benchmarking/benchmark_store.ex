@@ -639,7 +639,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
             pid == provider_id and m == method and system_ts >= hour_ago
           end)
 
-        if length(hourly_calls) > 0 do
+        if hourly_calls != [] do
           successful_calls =
             Enum.filter(hourly_calls, fn {_monotonic_ts, _system_ts, _pid, _m, _duration, result} ->
               result == :success

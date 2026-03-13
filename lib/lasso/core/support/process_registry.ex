@@ -114,8 +114,7 @@ defmodule Lasso.Core.Support.ProcessRegistry do
     processes =
       state.processes
       |> Enum.filter(fn {{type, _}, _} -> type == process_type end)
-      |> Enum.map(fn {{_type, identifier}, pid} -> {identifier, pid} end)
-      |> Enum.into(%{})
+      |> Map.new(fn {{_type, identifier}, pid} -> {identifier, pid} end)
 
     {:reply, processes, state}
   end

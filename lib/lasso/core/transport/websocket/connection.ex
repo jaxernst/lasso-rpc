@@ -72,7 +72,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.Core.Support.ErrorNormalizer
+  alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
   alias Lasso.RPC.Response
@@ -1008,7 +1008,20 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         Process.cancel_timer(timer)
         duration_ms = div(System.monotonic_time(:microsecond) - sent_at, 1000)
 
-        enriched = %{jerr | provider_id: state.endpoint.id, transport: :ws}
+        %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+          ErrorClassifier.classify(jerr.code, jerr.message,
+            data: jerr.data,
+            provider_id: state.endpoint.id
+          )
+
+        enriched = %{
+          jerr
+          | provider_id: state.endpoint.id,
+            transport: :ws,
+            category: category,
+            retriable?: retriable?,
+            breaker_penalty?: breaker_penalty?
+        }
 
         emit_completion_telemetry(state.endpoint.id, method, id, :error, duration_ms)
         GenServer.reply(from, {:error, enriched})

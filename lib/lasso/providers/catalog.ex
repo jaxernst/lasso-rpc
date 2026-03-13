@@ -63,10 +63,9 @@ defmodule Lasso.Providers.Catalog do
     end)
 
     old_table =
-      try do
-        :persistent_term.get(@persistent_term_key)
-      rescue
-        ArgumentError -> nil
+      case :persistent_term.get(@persistent_term_key, :not_set) do
+        :not_set -> nil
+        table -> table
       end
 
     :persistent_term.put(@persistent_term_key, new_table)

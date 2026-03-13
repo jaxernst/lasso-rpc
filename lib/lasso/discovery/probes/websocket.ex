@@ -82,10 +82,7 @@ defmodule Lasso.Discovery.Probes.WebSocket do
   # Connection management using a simple GenServer wrapper around WebSockex
   defp connect(ws_url, timeout) do
     # Start our probe client
-    case Client.start_link(ws_url, timeout) do
-      {:ok, pid} -> {:ok, pid}
-      {:error, reason} -> {:error, reason}
-    end
+    Client.start_link(ws_url, timeout)
   end
 
   defp disconnect(conn) do

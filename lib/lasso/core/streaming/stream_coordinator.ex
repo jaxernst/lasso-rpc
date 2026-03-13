@@ -595,7 +595,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp drain_event_buffer(state) do
-    if state.failover_context && length(state.failover_context.event_buffer) > 0 do
+    if state.failover_context && state.failover_context.event_buffer != [] do
       Logger.debug(
         "Draining #{length(state.failover_context.event_buffer)} buffered events",
         chain: state.chain,

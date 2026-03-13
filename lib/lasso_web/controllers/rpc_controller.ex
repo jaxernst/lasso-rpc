@@ -320,11 +320,9 @@ defmodule LassoWeb.RPCController do
   defp process_batch_request(req, chain, conn) do
     with {:ok, request} <- validate_json_rpc_request(req),
          {:ok, result, ctx} <- process_json_rpc_request(request, chain, conn) do
-      # Return the Response struct directly for passthrough
       {result, ctx}
     else
       {:error, error, ctx} ->
-        # Error with context
         request_id = Map.get(req, "id")
         jerr = JError.from(error)
 

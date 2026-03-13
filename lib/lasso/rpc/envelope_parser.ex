@@ -91,8 +91,6 @@ defmodule Lasso.RPC.EnvelopeParser do
 
   def parse(_), do: {:error, :invalid_input}
 
-  # Parse a notification message via full JSON decode.
-  # Notifications are server-push messages with method/params, not responses.
   defp parse_notification(json_bytes) do
     case Jason.decode(json_bytes) do
       {:ok, %{"method" => method, "params" => params}} ->

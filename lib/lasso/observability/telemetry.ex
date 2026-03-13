@@ -261,6 +261,13 @@ defmodule Lasso.Telemetry do
         description: "Failed node responses for dashboard metrics"
       ),
 
+      # Error classification
+      counter("lasso.error_classification.classified.count",
+        event_name: [:lasso, :error_classification, :classified],
+        description: "Error classifications by category and path",
+        tags: [:category, :classification_path, :provider_id]
+      ),
+
       # VM metrics
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),

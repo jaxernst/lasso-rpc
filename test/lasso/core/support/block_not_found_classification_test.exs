@@ -148,8 +148,9 @@ defmodule Lasso.Core.Support.BlockNotFoundClassificationTest do
                :block_not_available
     end
 
-    test "actual server error stays as server_error" do
-      assert ErrorClassification.categorize(-32_000, "internal server error") == :server_error
+    test "unmatched -32000 becomes unclassified_server_error" do
+      assert ErrorClassification.categorize(-32_000, "internal server error") ==
+               :unclassified_server_error
     end
 
     test "rate limit with 'not found' stays as rate_limit" do

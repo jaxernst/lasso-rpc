@@ -152,8 +152,6 @@ defmodule Lasso.VMMetricsCollector do
         }
       end
 
-    # Only schedule collection if enabled (lazy collection)
-    # Collection starts when first subscriber joins
     schedule_cleanup()
 
     {:ok, state}
@@ -355,7 +353,7 @@ defmodule Lasso.VMMetricsCollector do
         end
       end)
 
-    if length(utilizations) > 0 do
+    if utilizations != [] do
       Float.round(Enum.sum(utilizations) / length(utilizations), 2)
     else
       nil

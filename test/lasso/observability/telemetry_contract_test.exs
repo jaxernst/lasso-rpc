@@ -201,6 +201,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
           [:lasso, :upstream_subscriptions, :orphaned_event],
           [:lasso_web, :dashboard, :cache],
           [:lasso_web, :dashboard, :cluster_rpc],
+          [:lasso, :error_classification, :classified],
           [:vm, :memory],
           [:vm, :total_run_queue_lengths]
         ])

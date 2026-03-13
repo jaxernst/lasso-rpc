@@ -1,11 +1,13 @@
 defmodule Lasso.Discovery.ErrorClassifier do
   @moduledoc """
-  Unified error classification for provider discovery probing.
+  Error classification for provider discovery probing.
 
-  Analyzes JSON-RPC error responses to identify specific error categories
-  like rate limits, block range limits, and capability violations.
-  Used by both method probing and limit discovery tasks.
+  Delegates core error classification to `Lasso.Core.Support.ErrorClassification`
+  and adds discovery-specific categorization (block range limits, address limits,
+  topic complexity, log volume) with extracted metadata.
   """
+
+  alias Lasso.Core.Support.ErrorClassification
 
   @type error_type ::
           :block_range
@@ -18,22 +20,10 @@ defmodule Lasso.Discovery.ErrorClassifier do
           | :server_error
           | :unknown
 
-  @doc """
-  Classifies an error response into a category with metadata.
-
-  Returns `{error_type, metadata}` where metadata may include extracted limits
-  or additional context.
-
-  ## Examples
-
-      iex> ErrorClassifier.classify(%{"code" => -32601, "message" => "Method not found"})
-      {:method_not_found, %{code: -32601}}
-
-      iex> ErrorClassifier.classify(%{"code" => -32005, "message" => "rate limit exceeded"})
-      {:rate_limit, %{code: -32005}}
-  """
   @spec classify(map()) :: {error_type(), map()}
   def classify(%{"code" => code, "message" => message}) when is_binary(message) do
+    msg = String.downcase(message)
+
     cond do
       code == -32_601 ->
         {:method_not_found, %{code: code}}
@@ -41,54 +31,35 @@ defmodule Lasso.Discovery.ErrorClassifier do
       code == -32_602 ->
         {:invalid_params, %{code: code}}
 
-      code in [429, -32_005] or rate_limit_error?(message) ->
-        {:rate_limit, %{code: code}}
-
-      block_range_error?(message) ->
+      block_range_error?(msg) ->
         {:block_range, %{code: code, limit: extract_numeric_limit(message)}}
 
-      address_limit_error?(message) ->
+      address_limit_error?(msg) ->
         {:address_limit, %{code: code, limit: extract_numeric_limit(message)}}
 
-      topic_complexity_error?(message) ->
+      topic_complexity_error?(msg) ->
         {:topic_complexity, %{code: code}}
 
-      log_volume_error?(message) ->
+      log_volume_error?(msg) ->
         {:log_volume, %{code: code}}
 
-      invalid_param_error?(message) ->
-        {:invalid_params, %{code: code}}
-
-      code >= -32_099 and code <= -32_000 ->
-        {:server_error, %{code: code}}
-
       true ->
-        {:unknown, %{code: code}}
+        map_core_category(ErrorClassification.categorize(code, message), code)
     end
   end
 
   def classify(%{"code" => code}) when is_integer(code) do
-    cond do
-      code == -32_601 -> {:method_not_found, %{code: code}}
-      code == -32_602 -> {:invalid_params, %{code: code}}
-      code in [429, -32_005] -> {:rate_limit, %{code: code}}
-      code >= -32_099 and code <= -32_000 -> {:server_error, %{code: code}}
-      true -> {:unknown, %{code: code}}
-    end
+    map_core_category(ErrorClassification.categorize(code, nil), code)
   end
 
   def classify(_), do: {:unknown, %{}}
 
-  @doc """
-  Checks if an error indicates a block range limit was exceeded.
-  """
   @spec block_range_error?(map() | String.t()) :: boolean()
-  def block_range_error?(%{"message" => message}) when is_binary(message) do
-    block_range_error?(message)
-  end
+  def block_range_error?(%{"message" => message}) when is_binary(message),
+    do: block_range_error?(String.downcase(message))
 
   def block_range_error?(message) when is_binary(message) do
-    msg = String.downcase(message)
+    msg = if message == String.downcase(message), do: message, else: String.downcase(message)
 
     String.contains?(msg, "block range") or
       String.contains?(msg, "range limit") or
@@ -100,15 +71,11 @@ defmodule Lasso.Discovery.ErrorClassifier do
 
   def block_range_error?(_), do: false
 
-  @doc """
-  Checks if an error indicates a rate limit was hit.
-  """
   @spec rate_limit_error?(map() | String.t()) :: boolean()
   def rate_limit_error?(%{"code" => code}) when code in [429, -32_005], do: true
 
-  def rate_limit_error?(%{"message" => message}) when is_binary(message) do
-    rate_limit_error?(message)
-  end
+  def rate_limit_error?(%{"message" => message}) when is_binary(message),
+    do: rate_limit_error?(message)
 
   def rate_limit_error?(message) when is_binary(message) do
     msg = String.downcase(message)
@@ -121,16 +88,12 @@ defmodule Lasso.Discovery.ErrorClassifier do
 
   def rate_limit_error?(_), do: false
 
-  @doc """
-  Checks if an error indicates an address count limit was exceeded.
-  """
   @spec address_limit_error?(map() | String.t()) :: boolean()
-  def address_limit_error?(%{"message" => message}) when is_binary(message) do
-    address_limit_error?(message)
-  end
+  def address_limit_error?(%{"message" => message}) when is_binary(message),
+    do: address_limit_error?(String.downcase(message))
 
   def address_limit_error?(message) when is_binary(message) do
-    msg = String.downcase(message)
+    msg = if message == String.downcase(message), do: message, else: String.downcase(message)
 
     String.contains?(msg, "address") and
       (String.contains?(msg, "limit") or
@@ -140,16 +103,12 @@ defmodule Lasso.Discovery.ErrorClassifier do
 
   def address_limit_error?(_), do: false
 
-  @doc """
-  Checks if an error indicates topic filter complexity limits.
-  """
   @spec topic_complexity_error?(map() | String.t()) :: boolean()
-  def topic_complexity_error?(%{"message" => message}) when is_binary(message) do
-    topic_complexity_error?(message)
-  end
+  def topic_complexity_error?(%{"message" => message}) when is_binary(message),
+    do: topic_complexity_error?(String.downcase(message))
 
   def topic_complexity_error?(message) when is_binary(message) do
-    msg = String.downcase(message)
+    msg = if message == String.downcase(message), do: message, else: String.downcase(message)
 
     String.contains?(msg, "topic") and
       (String.contains?(msg, "limit") or
@@ -160,16 +119,12 @@ defmodule Lasso.Discovery.ErrorClassifier do
 
   def topic_complexity_error?(_), do: false
 
-  @doc """
-  Checks if an error indicates log volume/result size limits.
-  """
   @spec log_volume_error?(map() | String.t()) :: boolean()
-  def log_volume_error?(%{"message" => message}) when is_binary(message) do
-    log_volume_error?(message)
-  end
+  def log_volume_error?(%{"message" => message}) when is_binary(message),
+    do: log_volume_error?(String.downcase(message))
 
   def log_volume_error?(message) when is_binary(message) do
-    msg = String.downcase(message)
+    msg = if message == String.downcase(message), do: message, else: String.downcase(message)
 
     (String.contains?(msg, "log") and String.contains?(msg, "limit")) or
       String.contains?(msg, "too many logs") or
@@ -179,15 +134,11 @@ defmodule Lasso.Discovery.ErrorClassifier do
 
   def log_volume_error?(_), do: false
 
-  @doc """
-  Checks if an error indicates invalid parameters.
-  """
   @spec invalid_param_error?(map() | String.t()) :: boolean()
   def invalid_param_error?(%{"code" => -32_602}), do: true
 
-  def invalid_param_error?(%{"message" => message}) when is_binary(message) do
-    invalid_param_error?(message)
-  end
+  def invalid_param_error?(%{"message" => message}) when is_binary(message),
+    do: invalid_param_error?(message)
 
   def invalid_param_error?(message) when is_binary(message) do
     msg = String.downcase(message)
@@ -200,7 +151,17 @@ defmodule Lasso.Discovery.ErrorClassifier do
 
   def invalid_param_error?(_), do: false
 
-  # Attempts to extract a numeric limit from an error message
+  defp map_core_category(:rate_limit, code), do: {:rate_limit, %{code: code}}
+  defp map_core_category(:invalid_params, code), do: {:invalid_params, %{code: code}}
+  defp map_core_category(:method_not_found, code), do: {:method_not_found, %{code: code}}
+
+  defp map_core_category(category, code)
+       when category in [:server_error, :unclassified_server_error, :internal_error],
+       do: {:server_error, %{code: code}}
+
+  defp map_core_category(:block_not_available, code), do: {:invalid_params, %{code: code}}
+  defp map_core_category(_category, code), do: {:unknown, %{code: code}}
+
   defp extract_numeric_limit(message) do
     case Regex.run(~r/(\d+)/, message) do
       [_, num] -> String.to_integer(num)

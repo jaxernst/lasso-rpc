@@ -220,7 +220,7 @@ defmodule Lasso.RPC.Selection do
     capable_channels =
       case Lasso.RPC.Providers.AdapterFilter.filter_channels(channels, method) do
         {:ok, capable, filtered} ->
-          if length(filtered) > 0 do
+          if filtered != [] do
             Logger.debug(
               "Filtered #{length(filtered)} channels for #{method}: #{inspect(Enum.map(filtered, & &1.provider_id))}"
             )
@@ -265,7 +265,6 @@ defmodule Lasso.RPC.Selection do
     # with load-balanced: if only one provider is in Tier 1, it receives all traffic
     # that succeeds, with lower tiers acting as fallbacks.
 
-    # Step 1: Split by circuit breaker state
     {closed_channels, half_open_channels} =
       Enum.split_with(ordered_channels, fn channel ->
         cb_state = Map.get(circuit_state_map, {channel.provider_id, channel.transport}, :closed)
@@ -274,8 +273,7 @@ defmodule Lasso.RPC.Selection do
 
     tiered_channels = closed_channels ++ half_open_channels
 
-    # Step 2: Within each circuit tier, split by rate limit status
-    # Final order: closed+not-rl, closed+rl, half-open+not-rl, half-open+rl
+    # Order: closed+not-rl, closed+rl, half-open+not-rl, half-open+rl
     {not_rate_limited, rate_limited} =
       Enum.split_with(tiered_channels, fn channel ->
         rl = Map.get(rate_limit_map, channel.provider_id, %{http: false, ws: false})

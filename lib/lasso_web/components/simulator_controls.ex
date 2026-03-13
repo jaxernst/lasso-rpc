@@ -45,7 +45,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   end
 
   defp maybe_update_simulator_running(socket, %{active_runs: runs}) do
-    assign(socket, :simulator_running, length(runs) > 0)
+    assign(socket, :simulator_running, runs != [])
   end
 
   defp maybe_update_simulator_running(socket, _assigns), do: socket
@@ -165,7 +165,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     selected_chains = socket.assigns.selected_chains
 
     chains =
-      if length(selected_chains) > 0 do
+      if selected_chains != [] do
         selected_chains
       else
         Enum.map(socket.assigns.available_chains, & &1.name)
@@ -202,7 +202,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     selected_chains = socket.assigns.selected_chains
 
     chains =
-      if length(selected_chains) > 0 do
+      if selected_chains != [] do
         selected_chains
       else
         Enum.map(socket.assigns.available_chains, & &1.name)
@@ -263,7 +263,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
   @impl true
   def handle_event("active_runs_update", %{"runs" => runs}, socket) do
-    is_running = length(runs) > 0
+    is_running = runs != []
 
     socket =
       socket

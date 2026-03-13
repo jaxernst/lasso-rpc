@@ -286,7 +286,6 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     )
   end
 
-  @doc false
   def fetch_from_cluster(module, function, args) do
     remote_nodes = get_responding_nodes()
     nodes = [node() | remote_nodes] |> Enum.uniq()
@@ -327,7 +326,6 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     :exit, _ -> %{connected: length(Node.list()) + 1, responding: 1}
   end
 
-  @doc false
   def aggregate_results(:get_provider_leaderboard, results) do
     results
     |> List.flatten()
@@ -355,7 +353,6 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     |> Enum.sort_by(& &1.score, :desc)
   end
 
-  @doc false
   def aggregate_results(:get_realtime_stats, results) do
     valid_results = Enum.reject(results, &is_nil/1)
 
@@ -382,7 +379,6 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     }
   end
 
-  @doc false
   def aggregate_results(:get_rpc_method_performance_with_percentiles, results) do
     valid_results = Enum.reject(results, &is_nil/1)
 
@@ -400,7 +396,6 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     end
   end
 
-  @doc false
   def aggregate_results(:get_all_method_performance, results) do
     results
     |> List.flatten()
@@ -424,12 +419,10 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     end)
   end
 
-  @doc false
   def aggregate_results(_function, results) do
     List.first(results)
   end
 
-  @doc false
   def aggregate_provider_entries(provider_id, entries_for_aggregates, all_entries) do
     total_calls = sum_calls(entries_for_aggregates)
 
@@ -484,7 +477,6 @@ defmodule LassoWeb.Dashboard.MetricsStore do
     Enum.reduce(entries, 0, fn entry, acc -> acc + Map.get(entry, :total_calls, 0) end)
   end
 
-  @doc false
   def weighted_average(entries, field, total_weight) do
     entries
     |> Enum.map(fn entry ->

@@ -93,13 +93,15 @@ defmodule Lasso.JSONRPC.Error do
         {code, Keyword.get(opts, :original_code, code)}
       end
 
-    # Auto-classify if not explicitly provided
+    data = Keyword.get(opts, :data)
+
     category =
-      Keyword.get(opts, :category) || ErrorClassification.categorize(normalized_code, message)
+      Keyword.get(opts, :category) ||
+        ErrorClassification.categorize(normalized_code, message, data)
 
     retriable? =
       case Keyword.get(opts, :retriable?) do
-        nil -> ErrorClassification.retriable?(normalized_code, message)
+        nil -> ErrorClassification.retriable?(normalized_code, message, data)
         value -> value
       end
 

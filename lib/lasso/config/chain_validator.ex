@@ -192,7 +192,6 @@ defmodule Lasso.Config.ChainValidator do
         {:error, {:invalid_chain_id, chain_name, chain_id}}
 
       true ->
-        # Verify the custom chain name matches the ID
         expected_name = "custom-#{chain_id}"
 
         if chain_name == expected_name do

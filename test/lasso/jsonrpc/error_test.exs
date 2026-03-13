@@ -51,11 +51,11 @@ defmodule Lasso.JSONRPC.ErrorTest do
       assert jerr.breaker_penalty? == false
     end
 
-    test "server error has correct classification" do
+    test "unmatched -32000 has unclassified_server_error classification" do
       jerr = JError.new(-32_000, "Internal server error")
-      assert jerr.category == :server_error
-      assert jerr.retriable? == true
-      assert jerr.breaker_penalty? == true
+      assert jerr.category == :unclassified_server_error
+      assert jerr.retriable? == false
+      assert jerr.breaker_penalty? == false
     end
 
     test "HTTP 429 is normalized to -32_005 rate limit" do

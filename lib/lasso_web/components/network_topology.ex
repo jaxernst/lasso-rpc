@@ -368,7 +368,7 @@ defmodule LassoWeb.NetworkTopology do
 
         {chain_name, adjusted_chain_data}
       end)
-      |> Enum.into(%{})
+      |> Map.new()
 
     %{chains: centered_chains}
   end

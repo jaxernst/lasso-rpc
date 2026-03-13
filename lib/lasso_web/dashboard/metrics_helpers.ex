@@ -222,7 +222,6 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   def assign_provider_performance_metrics(assigns, provider_id) do
     profile = assigns.selected_profile
 
-    # Get the chain for this provider
     chain =
       case Enum.find(assigns.connections, &(&1.id == provider_id)) do
         %{chain: chain_name} -> chain_name
@@ -246,7 +245,6 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
         routing_events \\ [],
         profile \\ "default"
       ) do
-    # Get the chain for this provider
     chain =
       case Enum.find(connections, &(&1.id == provider_id)) do
         %{chain: chain_name} -> chain_name
@@ -285,7 +283,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
     # Provider pick share from buffer (shows real-time routing patterns)
     pick_share =
-      if length(chain_events) > 0 do
+      if chain_events != [] do
         100.0 * length(provider_events) / length(chain_events)
       else
         0.0
@@ -412,7 +410,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
     sched_util_avg =
       case sched do
-        list when is_list(list) and length(list) > 0 ->
+        list when is_list(list) and list != [] ->
           vals =
             Enum.map(list, fn
               {_id, active, total} when total > 0 -> 100.0 * active / total
@@ -456,16 +454,12 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     if count == 0 do
       0.0
     else
-      # Calculate the actual time span of our data
       oldest_event_time =
         recent_events
         |> Enum.map(&(&1[:ts_ms] || now))
         |> Enum.min()
 
-      # Calculate the actual duration in seconds (minimum of 1 second to avoid division by zero)
       actual_duration_seconds = max(1, (now - oldest_event_time) / 1000)
-
-      # Calculate rate based on actual duration
       Float.round(count / actual_duration_seconds, 1)
     end
   end

@@ -73,12 +73,11 @@ defmodule Lasso.Core.Support.RealProviderBlockErrorsTest do
   end
 
   describe "Lava error falls through to code-based classification" do
-    test "Lava '24578859 could not be found' classified as server_error (code -32000)" do
+    test "Lava '24578859 could not be found' classified as unclassified_server_error (code -32000)" do
       category = ErrorClassification.categorize(-32_000, "24578859 could not be found")
-      assert category == :server_error
-      assert ErrorClassification.retriable?(-32_000, "24578859 could not be found") == true
-      # CB penalty is acceptable — Lava-specific handling can be added via YAML error_rules
-      assert ErrorClassification.breaker_penalty?(category) == true
+      assert category == :unclassified_server_error
+      assert ErrorClassification.retriable?(-32_000, "24578859 could not be found") == false
+      assert ErrorClassification.breaker_penalty?(category) == false
     end
   end
 

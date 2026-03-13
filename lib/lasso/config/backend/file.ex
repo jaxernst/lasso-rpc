@@ -233,10 +233,9 @@ defmodule Lasso.Config.Backend.File do
 
   defp parse_chains_data(%{"chains" => chains_data}) when is_map(chains_data) do
     chains =
-      Enum.map(chains_data, fn {chain_name, chain_data} ->
+      Map.new(chains_data, fn {chain_name, chain_data} ->
         {chain_name, parse_chain_config(chain_name, chain_data)}
       end)
-      |> Enum.into(%{})
 
     {:ok, chains}
   end
@@ -445,7 +444,7 @@ defmodule Lasso.Config.Backend.File do
 
     cond do
       # Already have profiles - nothing to migrate
-      length(profile_files) > 0 ->
+      profile_files != [] ->
         :ok
 
       # No profiles and no legacy file - error

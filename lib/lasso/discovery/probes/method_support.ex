@@ -180,7 +180,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
     |> Enum.filter(fn cat ->
       category_methods = MethodRegistry.category_methods(cat)
 
-      if length(category_methods) > 0 do
+      if category_methods != [] do
         unsupported_in_cat = Enum.count(category_methods, &(&1 in unsupported_methods))
         unsupported_in_cat / length(category_methods) > 0.8
       else

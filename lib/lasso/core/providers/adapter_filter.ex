@@ -91,23 +91,21 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
     ctx = %{provider_id: provider_id, profile: profile, chain: chain}
     caps = lookup_capabilities(profile, chain, provider_id)
 
-    try do
-      Capabilities.validate_params(method, params, caps, ctx)
-      |> handle_validation_result(provider_id, method)
-    rescue
-      e ->
-        Logger.error(
-          "Capabilities crash in validate_params: #{provider_id}, #{Exception.message(e)}, stacktrace: #{Exception.format_stacktrace(__STACKTRACE__)}"
-        )
+    Capabilities.validate_params(method, params, caps, ctx)
+    |> handle_validation_result(provider_id, method)
+  rescue
+    e in [RuntimeError, ArgumentError, FunctionClauseError, MatchError, KeyError] ->
+      Logger.error(
+        "Capabilities crash in validate_params: #{provider_id}, #{Exception.message(e)}, stacktrace: #{Exception.format_stacktrace(__STACKTRACE__)}"
+      )
 
-        :telemetry.execute([:lasso, :capabilities, :crash], %{count: 1}, %{
-          provider_id: provider_id,
-          phase: :param_validation,
-          exception: Exception.format(:error, e, __STACKTRACE__)
-        })
+      :telemetry.execute([:lasso, :capabilities, :crash], %{count: 1}, %{
+        provider_id: provider_id,
+        phase: :param_validation,
+        exception: Exception.format(:error, e, __STACKTRACE__)
+      })
 
-        {:error, :adapter_crash}
-    end
+      {:error, :adapter_crash}
   end
 
   defp lookup_capabilities(profile, chain, provider_id)

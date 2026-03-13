@@ -125,7 +125,7 @@ defmodule Lasso.Discovery.Formatter do
     problem_methods = methods |> Enum.filter(&(&1.status != :supported))
 
     problem_section =
-      if length(problem_methods) > 0 do
+      if problem_methods != [] do
         problem_lines =
           problem_methods
           |> Enum.map(fn m ->
@@ -325,7 +325,7 @@ defmodule Lasso.Discovery.Formatter do
         parts
       end
 
-    if length(parts) > 0, do: " (#{Enum.join(parts, ", ")})", else: ""
+    if parts != [], do: " (#{Enum.join(parts, ", ")})", else: ""
   end
 
   # Summary section
@@ -350,7 +350,7 @@ defmodule Lasso.Discovery.Formatter do
       end
 
     recommendations =
-      if config[:unsupported_categories] && length(config.unsupported_categories) > 0 do
+      if config[:unsupported_categories] && config.unsupported_categories != [] do
         cats = Enum.join(config.unsupported_categories, ", ")
         recommendations ++ ["- Block categories: #{cats}"]
       else
@@ -358,14 +358,14 @@ defmodule Lasso.Discovery.Formatter do
       end
 
     recommendations =
-      if config[:unsupported_methods] && length(config.unsupported_methods) > 0 do
+      if config[:unsupported_methods] && config.unsupported_methods != [] do
         count = length(config.unsupported_methods)
         recommendations ++ ["- #{count} individual unsupported methods"]
       else
         recommendations
       end
 
-    if length(recommendations) > 0 do
+    if recommendations != [] do
       [
         "",
         divider(),

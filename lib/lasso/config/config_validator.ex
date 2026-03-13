@@ -21,11 +21,8 @@ defmodule Lasso.Config.ConfigValidator do
     with :ok <- validate_basic_structure(chain_config),
          :ok <- validate_chain_id(chain_config.chain_id),
          :ok <- validate_providers(chain_config.providers, skip_connectivity),
-         :ok <- validate_provider_priorities(chain_config.providers),
-         :ok <- validate_websocket_settings(chain_config.websocket) do
-      :ok
-    else
-      {:error, reason} -> {:error, reason}
+         :ok <- validate_provider_priorities(chain_config.providers) do
+      validate_websocket_settings(chain_config.websocket)
     end
   end
 
@@ -43,8 +40,6 @@ defmodule Lasso.Config.ConfigValidator do
       else
         validate_provider_connectivity(providers)
       end
-    else
-      {:error, reason} -> {:error, reason}
     end
   end
 

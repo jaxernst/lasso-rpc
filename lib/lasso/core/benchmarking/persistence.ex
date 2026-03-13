@@ -81,10 +81,7 @@ defmodule Lasso.Benchmarking.Persistence do
 
   @impl true
   def init(_opts) do
-    # Ensure the snapshots directory exists
     File.mkdir_p!(@snapshots_dir)
-
-    # Schedule periodic cleanup
     schedule_cleanup()
 
     {:ok, %{}}
@@ -148,7 +145,7 @@ defmodule Lasso.Benchmarking.Persistence do
           end
         end)
 
-        if length(files_to_delete) > 0 do
+        if files_to_delete != [] do
           Logger.info("Cleaned up #{length(files_to_delete)} old benchmark snapshots")
         end
 

@@ -15,7 +15,8 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
   3. `:capability_violation` → conditional failover (threshold 2)
   4. `:method_not_found` → conditional failover (threshold 2)
   5. `:block_not_available` → conditional failover (threshold 2)
-  6. `:rate_limit` → failover
+  6. `:unclassified_server_error` → conditional failover (threshold 1)
+  7. `:rate_limit` → failover
   7. `:server_error` → failover
   7. `:network_error` → failover
   8. `:auth_error` → failover
@@ -159,6 +160,16 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
       {false, :block_universally_unavailable}
     else
       {true, :block_not_available_failover}
+    end
+  end
+
+  defp should_failover?(%JError{category: :unclassified_server_error}, _rest, ctx) do
+    repeated_count = RequestContext.get_error_category_count(ctx, :unclassified_server_error)
+
+    if repeated_count >= 1 do
+      {false, :repeated_unclassified_error}
+    else
+      {true, :unclassified_error_failover}
     end
   end
 

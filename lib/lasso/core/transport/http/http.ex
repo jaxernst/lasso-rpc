@@ -10,7 +10,7 @@ defmodule Lasso.RPC.Transports.HTTP do
   @behaviour Lasso.RPC.Transport
 
   require Logger
-  alias Lasso.Core.Support.ErrorNormalizer
+  alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
@@ -79,12 +79,20 @@ defmodule Lasso.RPC.Transports.HTTP do
               {:ok, resp}
 
             {:ok, %Response.Error{error: jerr}} ->
-              # Error response - add provider context to the error
+              %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+                ErrorClassifier.classify(jerr.code, jerr.message,
+                  data: jerr.data,
+                  provider_id: provider_id
+                )
+
               enriched_jerr = %{
                 jerr
                 | provider_id: provider_id,
                   source: :jsonrpc,
-                  transport: :http
+                  transport: :http,
+                  category: category,
+                  retriable?: retriable?,
+                  breaker_penalty?: breaker_penalty?
               }
 
               {:error, enriched_jerr}
