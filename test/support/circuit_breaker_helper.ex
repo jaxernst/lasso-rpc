@@ -130,23 +130,41 @@ defmodule Lasso.Test.CircuitBreakerHelper do
     end
   end
 
-  @spec assert_circuit_breaker_state(CircuitBreaker.breaker_id(), atom()) :: :ok
-  def assert_circuit_breaker_state(breaker_id, expected_state) do
+  @spec assert_circuit_breaker_state(CircuitBreaker.breaker_id(), atom(), keyword()) :: :ok
+  def assert_circuit_breaker_state(breaker_id, expected_state, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 2_000)
+    interval = Keyword.get(opts, :interval, 50)
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    do_assert_circuit_breaker_state(breaker_id, expected_state, interval, deadline)
+  end
+
+  defp do_assert_circuit_breaker_state(breaker_id, expected_state, interval, deadline) do
     case get_circuit_breaker_state(breaker_id) do
       {:ok, %{state: ^expected_state}} ->
         :ok
 
       {:ok, %{state: actual_state}} ->
-        raise ExUnit.AssertionError,
-          message: """
-          Circuit breaker state mismatch for #{inspect(breaker_id)}
-          Expected: #{expected_state}
-          Got: #{actual_state}
-          """
+        if System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(interval)
+          do_assert_circuit_breaker_state(breaker_id, expected_state, interval, deadline)
+        else
+          raise ExUnit.AssertionError,
+            message: """
+            Circuit breaker state mismatch for #{inspect(breaker_id)}
+            Expected: #{expected_state}
+            Got: #{actual_state}
+            """
+        end
 
       {:error, :not_found} ->
-        raise ExUnit.AssertionError,
-          message: "Circuit breaker not found: #{inspect(breaker_id)}"
+        if System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(interval)
+          do_assert_circuit_breaker_state(breaker_id, expected_state, interval, deadline)
+        else
+          raise ExUnit.AssertionError,
+            message: "Circuit breaker not found: #{inspect(breaker_id)}"
+        end
     end
   end
 

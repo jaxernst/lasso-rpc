@@ -379,15 +379,22 @@ defmodule LassoWeb.RPCController do
 
     case get_chain_id(profile, chain) do
       {:ok, chain_id} ->
-        # Build a Response.Success struct for consistency with passthrough path
         raw_bytes = Jason.encode!(%{"jsonrpc" => "2.0", "id" => req_id, "result" => chain_id})
+
+        ctx =
+          Lasso.RPC.RequestContext.new(chain, "eth_chainId", [],
+            strategy: conn.assigns[:provider_strategy],
+            plug_start_time: conn.private[:plug_start_time]
+          )
+
+        ctx = %{ctx | status: :success}
 
         {:ok,
          %Response.Success{
            id: req_id,
            jsonrpc: "2.0",
            raw_bytes: raw_bytes
-         }, nil}
+         }, ctx}
 
       {:error, reason} ->
         {:error, JError.new(-32_603, "Failed to get chain ID: #{reason}")}

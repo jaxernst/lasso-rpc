@@ -911,7 +911,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
       network_error =
         %Lasso.JSONRPC.Error{
-          code: -32_000,
+          code: -32_004,
           message: "Upstream connection reset",
           category: :network_error,
           retriable?: true,

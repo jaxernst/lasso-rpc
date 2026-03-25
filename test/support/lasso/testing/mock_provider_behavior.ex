@@ -76,10 +76,11 @@ defmodule Lasso.Testing.MockProviderBehavior do
   def execute_behavior(:always_fail, _method, _params, _state) do
     {:error,
      %JError{
-       code: -32_000,
+       code: -32_002,
        message: "Mock provider failure",
-       category: :provider_error,
-       retriable?: true
+       category: :server_error,
+       retriable?: true,
+       breaker_penalty?: true
      }}
   end
 
