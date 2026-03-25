@@ -1,7 +1,6 @@
-<h1 align="left">
-  <img src="priv/static/images/lasso-logo.png" alt="Lasso RPC Logo" width="45" style="margin-right: 10px; margin-top: 5px;">
-  Lasso RPC
-</h1>
+<p align="left">
+  <img src="priv/static/images/lasso-logo-readme.png" alt="Lasso RPC" height="60">
+</p>
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/jaxernst/lasso-rpc/releases)
