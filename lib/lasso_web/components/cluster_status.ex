@@ -88,10 +88,10 @@ defmodule LassoWeb.Components.ClusterStatus do
     ~H"""
     <div class="fixed bottom-2 left-2 z-40 hidden items-center gap-2 lg:flex">
       <div class={[
-        "flex items-center gap-2 px-3 py-2 rounded-lg text-sm",
+        "flex items-center gap-2 px-3 py-2 rounded-lg text-[11px]",
         "transition-colors duration-200"
       ]}>
-        <span class={["h-2 w-2 rounded-full", status_color(compute_status(@responding, @total))]}>
+        <span class={["h-1.5 w-1.5 rounded-full", status_color(compute_status(@responding, @total))]}>
         </span>
         <span class="text-gray-300">
           <%= if @total == 1 do %>

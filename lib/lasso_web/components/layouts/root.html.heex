@@ -1,11 +1,42 @@
 <!DOCTYPE html>
 <html lang="en" class="[scrollbar-gutter:stable] h-full">
   <head>
+    <% page_title = assigns[:page_title] || "Lasso RPC" %>
+    <% page_description =
+      assigns[:page_description] ||
+        "Lasso RPC is a high-performance RPC routing and profile platform for shipping reliable AI infrastructure." %>
+    <% site_url = LassoWeb.Endpoint.url() %>
+    <% page_url = assigns[:page_url] || site_url %>
+    <% robots = assigns[:robots] || "index,follow" %>
+    <% og_image_url = "#{site_url}/images/lasso-og.png" %>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
+    <meta name="description" content={page_description} />
+    <meta name="robots" content={robots} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Lasso RPC" />
+    <meta property="og:url" content={page_url} />
+    <meta property="og:title" content={page_title} />
+    <meta property="og:description" content={page_description} />
+    <meta property="og:image" content={og_image_url} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="2608" />
+    <meta property="og:image:height" content="1438" />
+    <meta property="og:image:alt" content="Lasso RPC dashboard preview" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={page_title} />
+    <meta name="twitter:description" content={page_description} />
+    <meta name="twitter:image" content={og_image_url} />
+    <meta name="twitter:image:alt" content="Lasso RPC dashboard preview" />
+    <link rel="canonical" href={page_url} />
+    <%= if assigns[:structured_data_json] do %>
+      <script type="application/ld+json">
+        {raw(assigns[:structured_data_json])}
+      </script>
+    <% end %>
     <.live_title>
-      {assigns[:page_title] || "Lasso RPC"}
+      {page_title}
     </.live_title>
     <link rel="icon" type="image/x-icon" href={~p"/favicon.ico"} />
     <link rel="apple-touch-icon" sizes="180x180" href={~p"/images/apple-touch-icon.png"} />
@@ -13,7 +44,7 @@
     <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
     </script>
   </head>
-  <body class="h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 antialiased">
+  <body class="h-screen bg-[#171d2b] antialiased">
     {@inner_content}
   </body>
 </html>

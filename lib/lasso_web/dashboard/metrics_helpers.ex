@@ -15,6 +15,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   require Logger
 
   alias Lasso.Benchmarking.BenchmarkStore
+  alias Lasso.Config.ProfileValidator
   alias LassoWeb.Dashboard.{Constants, Helpers}
   alias LassoWeb.Dashboard.Metrics.Calculations
 
@@ -243,7 +244,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
         provider_id,
         connections \\ [],
         routing_events \\ [],
-        profile \\ "default"
+        profile \\ ProfileValidator.default_profile()
       ) do
     chain =
       case Enum.find(connections, &(&1.id == provider_id)) do

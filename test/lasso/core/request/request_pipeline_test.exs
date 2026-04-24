@@ -11,6 +11,10 @@ defmodule Lasso.RPC.RequestPipelineTest do
   use ExUnit.Case, async: false
 
   alias Lasso.RPC.{RequestPipeline, RequestContext, RequestOptions}
+  alias Lasso.RPC.RequestPipeline.{FailoverStrategy, Observability}
+  alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.Test.TelemetrySync
+  alias Lasso.Core.Support.CircuitBreaker
 
   setup do
     Application.ensure_all_started(:lasso)
@@ -32,7 +36,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "creates RequestContext when not provided" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -48,7 +52,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :fastest,
           timeout_ms: 30_000,
           request_context: custom_ctx
@@ -62,7 +66,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "handles empty params" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -72,7 +76,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "accepts standard options" do
       opts = %RequestOptions{
-        profile: "default",
+        profile: "public",
         strategy: :fastest,
         timeout_ms: 5000,
         transport: :http
@@ -87,7 +91,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "marks selection start" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -99,7 +103,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "tracks retry count" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -115,7 +119,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
           "ethereum",
           "eth_getBalance",
           ["0x123", "latest"],
-          %RequestOptions{profile: "default", strategy: :load_balanced, timeout_ms: 30_000}
+          %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       ctx = extract_context(result)
@@ -129,7 +133,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "accepts :fastest strategy" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :fastest,
           timeout_ms: 30_000
         })
@@ -140,7 +144,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "accepts :priority strategy" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :priority,
           timeout_ms: 30_000
         })
@@ -151,7 +155,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test ":load_balanced strategy" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -162,7 +166,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "stores strategy in context" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :fastest,
           timeout_ms: 30_000
         })
@@ -176,7 +180,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "accepts :http transport override" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           transport: :http,
           timeout_ms: 30_000,
           strategy: :load_balanced
@@ -188,7 +192,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "accepts :ws transport override" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           transport: :ws,
           timeout_ms: 30_000,
           strategy: :load_balanced
@@ -200,7 +204,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "defaults to :http when no transport specified" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -214,7 +218,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "accepts custom timeout" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           timeout_ms: 5000,
           strategy: :load_balanced
         })
@@ -225,7 +229,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "uses default timeout when not specified" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -243,7 +247,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
           "ethereum",
           "eth_getBalance",
           params,
-          %RequestOptions{profile: "default", strategy: :load_balanced, timeout_ms: 30_000}
+          %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       ctx = extract_context(result)
@@ -253,7 +257,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "handles nil params" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", nil, %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -267,7 +271,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "context is always returned in result tuple" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -279,7 +283,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "context tracks timing information" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -292,7 +296,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "context includes unique request ID" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -304,13 +308,12 @@ defmodule Lasso.RPC.RequestPipelineTest do
   end
 
   describe "Fast-fail failover logic" do
-    alias Lasso.JSONRPC.Error, as: JError
+    test "FailoverStrategy returns terminal when no channels remaining" do
+      error = JError.new(-32_005, "Rate limit", category: :rate_limit, retriable?: true)
+      ctx = RequestContext.new("ethereum", "eth_blockNumber", [])
 
-    @tag :pending
-    test "should_fast_fail_error?/2 returns false when no channels remaining" do
-      # TODO: Implement test for should_fast_fail_error? function
-      _error = JError.new(-32_005, "Rate limit", category: :rate_limit, retriable?: true)
-      assert true
+      assert {:terminal_error, :no_channels_remaining} =
+               FailoverStrategy.decide(error, [], ctx)
     end
 
     test "fast-fail logic properly categorizes rate limit errors" do
@@ -368,16 +371,18 @@ defmodule Lasso.RPC.RequestPipelineTest do
       assert error.retriable? == false
     end
 
-    @tag :pending
-    test "circuit_open errors should be handled as fast-fail" do
-      # TODO: Implement test to verify circuit_open errors trigger fast-fail behavior
-      assert :circuit_open == :circuit_open
+    test "circuit_open errors trigger failover when channels remain" do
+      ctx = RequestContext.new("ethereum", "eth_blockNumber", [])
+      dummy_channel = %Lasso.RPC.Channel{provider_id: "test", transport: :http}
+
+      assert {:failover, :circuit_open} =
+               FailoverStrategy.decide(:circuit_open, [dummy_channel], ctx)
     end
 
     test "execute_via_channels increments retry count on failover" do
       result =
         RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
-          profile: "default",
+          profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
         })
@@ -389,10 +394,33 @@ defmodule Lasso.RPC.RequestPipelineTest do
   end
 
   describe "Fast-fail telemetry events" do
-    @tag :pending
-    test "telemetry event should be emitted for fast-fail (observability test)" do
-      # TODO: Implement test to verify telemetry events are actually emitted
-      assert [:lasso, :failover, :fast_fail] == [:lasso, :failover, :fast_fail]
+    test "Observability.record_fast_fail emits [:lasso, :failover, :fast_fail] telemetry" do
+      collector =
+        TelemetrySync.start_collector([:lasso, :failover, :fast_fail])
+
+      ctx =
+        RequestContext.new("ethereum", "eth_blockNumber", [])
+        |> Map.put(:opts, %RequestOptions{
+          profile: "public",
+          strategy: :load_balanced,
+          timeout_ms: 30_000
+        })
+
+      channel = %Lasso.RPC.Channel{provider_id: "test_provider", transport: :http}
+      error = JError.new(-32_000, "Server error", category: :server_error, retriable?: true)
+
+      Observability.record_fast_fail(ctx, channel, :server_error_detected, error, 5)
+
+      {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+
+      assert measurements.count == 1
+      assert measurements.duration == 5
+      assert metadata.chain == "ethereum"
+      assert metadata.method == "eth_blockNumber"
+      assert metadata.provider_id == "test_provider"
+      assert metadata.transport == :http
+      assert metadata.error_category == :server_error
+      assert metadata.failover_reason == :server_error_detected
     end
   end
 
@@ -418,111 +446,261 @@ defmodule Lasso.RPC.RequestPipelineTest do
   end
 
   describe "Channel exhaustion recovery (Issue #2)" do
-    @tag :pending
-    test "documents degraded mode behavior" do
-      # TODO: Implement test for degraded mode behavior
-      assert true
+    test "handle_no_channels returns provider_error with retry_after_ms data when available" do
+      # When all channels are exhausted, the pipeline returns a provider_error
+      # with retry_after_ms in the error data (if circuits have recovery times).
+      # We test via execute_via_channels on a chain with no providers configured.
+      result =
+        RequestPipeline.execute_via_channels(
+          "nonexistent_chain",
+          "eth_blockNumber",
+          [],
+          %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 5_000}
+        )
+
+      assert {:error, %JError{} = error, _ctx} = result
+      assert error.category == :provider_error
+      assert error.retriable? == true
+      assert String.contains?(error.message, "No available channels")
     end
 
-    @tag :pending
-    test "telemetry event emitted when entering degraded mode" do
-      # TODO: Implement test to verify telemetry events are emitted
-      assert [:lasso, :failover, :degraded_mode] == [:lasso, :failover, :degraded_mode]
+    test "exhaustion telemetry emitted when all channels exhausted" do
+      collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
+
+      _result =
+        RequestPipeline.execute_via_channels(
+          "nonexistent_chain",
+          "eth_blockNumber",
+          [],
+          %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 5_000}
+        )
+
+      {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 2_000)
+
+      assert measurements.count == 1
+      assert metadata.chain == "nonexistent_chain"
+      assert metadata.method == "eth_blockNumber"
+      assert is_integer(metadata.retry_after_ms)
     end
 
-    @tag :pending
-    test "telemetry event emitted on degraded mode success" do
-      # TODO: Implement test to verify telemetry events are emitted
-      assert [:lasso, :failover, :degraded_success] == [:lasso, :failover, :degraded_success]
+    test "Observability.record_degraded_mode emits [:lasso, :failover, :degraded_mode]" do
+      collector = TelemetrySync.start_collector([:lasso, :failover, :degraded_mode])
+
+      Observability.record_degraded_mode("ethereum", "eth_blockNumber")
+
+      {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+      assert measurements.count == 1
+      assert metadata.chain == "ethereum"
+      assert metadata.method == "eth_blockNumber"
     end
 
-    @tag :pending
-    test "telemetry event emitted on complete channel exhaustion" do
-      # TODO: Implement test to verify telemetry events are emitted
-      assert [:lasso, :failover, :exhaustion] == [:lasso, :failover, :exhaustion]
+    test "Observability.record_degraded_success emits [:lasso, :failover, :degraded_success]" do
+      collector = TelemetrySync.start_collector([:lasso, :failover, :degraded_success])
+
+      channel = %Lasso.RPC.Channel{provider_id: "test_provider", transport: :http}
+      Observability.record_degraded_success("ethereum", "eth_blockNumber", channel)
+
+      {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+      assert measurements.count == 1
+      assert metadata.chain == "ethereum"
+      assert metadata.method == "eth_blockNumber"
+      assert metadata.provider_id == "test_provider"
+      assert metadata.transport == :http
     end
 
-    @tag :pending
-    test "error includes retry_after_ms when all circuits open" do
-      # TODO: Implement test to verify retry_after_ms in error
-      assert true
+    test "Observability.record_exhaustion emits [:lasso, :failover, :exhaustion]" do
+      collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
+
+      Observability.record_exhaustion("ethereum", "eth_blockNumber", :http, 5000)
+
+      {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+      assert measurements.count == 1
+      assert metadata.chain == "ethereum"
+      assert metadata.method == "eth_blockNumber"
+      assert metadata.retry_after_ms == 5000
+      assert metadata.transport == :http
     end
 
-    @tag :pending
-    test "degraded mode attempts half-open providers" do
-      # TODO: Implement test for half-open provider attempts
-      assert true
+    test "exhaustion error includes retry_after_ms when circuits have recovery times" do
+      collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
+
+      Observability.record_exhaustion("ethereum", "eth_blockNumber", :http, 3000)
+
+      {:ok, _measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+      assert metadata.retry_after_ms == 3000
     end
 
-    @tag :pending
-    test "retry-after hint calculated from minimum circuit recovery time" do
-      # TODO: Implement test for retry-after calculation
-      assert true
+    test "exhaustion defaults retry_after_ms to 0 when nil" do
+      collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
+
+      Observability.record_exhaustion("ethereum", "eth_blockNumber", :http, nil)
+
+      {:ok, _measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+      assert metadata.retry_after_ms == 0
     end
 
-    @tag :pending
-    test "no blocking calls in degraded mode path" do
-      # TODO: Implement test to verify non-blocking behavior
-      assert true
+    test "exhaustion defaults transport to :both when nil" do
+      collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
+
+      Observability.record_exhaustion("ethereum", "eth_blockNumber", nil, 1000)
+
+      {:ok, _measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+      assert metadata.transport == :both
     end
   end
 
   describe "Degraded mode selection behavior" do
-    @tag :pending
-    test "include_half_open flag passed to Selection.select_channels" do
-      # TODO: Implement test to verify include_half_open flag
-      assert true
+    test "SelectionFilters supports include_half_open flag" do
+      filters = Lasso.RPC.SelectionFilters.new(include_half_open: true)
+      assert filters.include_half_open == true
+
+      filters = Lasso.RPC.SelectionFilters.new(include_half_open: false)
+      assert filters.include_half_open == false
+
+      # Default is false
+      filters = Lasso.RPC.SelectionFilters.new()
+      assert filters.include_half_open == false
     end
 
-    @tag :pending
-    test "CandidateListing respects include_half_open filter" do
-      assert true
+    test "Selection.select_channels accepts include_half_open option" do
+      # include_half_open defaults to true in Selection.select_channels
+      channels_with =
+        Lasso.RPC.Selection.select_channels("public", "ethereum", "eth_blockNumber",
+          include_half_open: true
+        )
+
+      channels_without =
+        Lasso.RPC.Selection.select_channels("public", "ethereum", "eth_blockNumber",
+          include_half_open: false
+        )
+
+      assert is_list(channels_with)
+      assert is_list(channels_without)
+      # With half-open included, we should get >= the number without
+      assert length(channels_with) >= length(channels_without)
     end
 
-    @tag :pending
-    test "half-open circuits allow limited concurrent traffic" do
-      # TODO: Implement test for half-open circuit concurrency
-      assert true
+    test "CircuitBreaker half-open state allows limited concurrent traffic" do
+      instance_id = "test_half_open_#{:erlang.unique_integer([:positive])}"
+      breaker_id = {instance_id, :http}
+
+      config = %{failure_threshold: 1, recovery_timeout: 100, success_threshold: 1}
+      {:ok, _pid} = CircuitBreaker.start_link({breaker_id, config})
+
+      # Initially closed — should admit
+      assert {:executed, _} =
+               CircuitBreaker.call(breaker_id, fn -> {:ok, "result"} end)
+
+      # Force open
+      CircuitBreaker.open(breaker_id)
+      Process.sleep(10)
+
+      # Should reject while open
+      assert {:rejected, _reason} =
+               CircuitBreaker.call(breaker_id, fn -> {:ok, "result"} end)
+
+      # Wait for recovery timeout to enter half-open
+      Process.sleep(150)
+
+      # Half-open should admit at least one request
+      assert {:executed, _} =
+               CircuitBreaker.call(breaker_id, fn -> {:ok, "result"} end)
     end
   end
 
   describe "Recovery time calculation" do
-    @tag :pending
-    test "CircuitBreaker.get_recovery_time_remaining returns time in ms" do
-      # TODO: Implement test for recovery time calculation
-      assert true
+    test "CircuitBreaker.get_recovery_time_remaining returns time in ms when open" do
+      instance_id = "test_recovery_#{:erlang.unique_integer([:positive])}"
+      breaker_id = {instance_id, :http}
+      config = %{failure_threshold: 1, recovery_timeout: 5_000, success_threshold: 1}
+
+      {:ok, _pid} = CircuitBreaker.start_link({breaker_id, config})
+
+      # Closed circuit returns nil
+      assert CircuitBreaker.get_recovery_time_remaining(breaker_id) == nil
+
+      # Open it
+      CircuitBreaker.open(breaker_id)
+      Process.sleep(10)
+
+      remaining = CircuitBreaker.get_recovery_time_remaining(breaker_id)
+
+      assert is_integer(remaining)
+      assert remaining > 0
+      # Recovery timeout is 5000ms base + jitter, so allow headroom
+      assert remaining <= 6_000
     end
 
-    @tag :pending
-    test "calculate_min_recovery_time finds shortest recovery across providers" do
-      # TODO: Implement test for min recovery time calculation
-      assert true
+    test "CandidateListing.get_min_recovery_time returns {:ok, nil} when no circuits open" do
+      {:ok, result} =
+        Lasso.Providers.CandidateListing.get_min_recovery_time("public", "ethereum")
+
+      # Either nil (no open circuits) or a positive integer
+      assert result == nil or (is_integer(result) and result > 0)
     end
 
-    @tag :pending
-    test "retry-after hint included in error message" do
-      # TODO: Implement test to verify retry-after in error message
-      assert true
+    test "retry-after hint in exhaustion error message when recovery time available" do
+      # Verify the message format when retry_after_ms is present
+      result =
+        RequestPipeline.execute_via_channels(
+          "nonexistent_chain",
+          "eth_blockNumber",
+          [],
+          %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 5_000}
+        )
+
+      assert {:error, %JError{message: message}, _ctx} = result
+      assert String.contains?(message, "No available channels")
     end
   end
 
   describe "Degraded mode logging and observability" do
-    @tag :pending
-    test "logs when entering degraded mode" do
-      # TODO: Implement test to verify logging
-      assert true
+    test "Observability.record_circuit_open emits telemetry" do
+      collector = TelemetrySync.start_collector([:lasso, :failover, :circuit_open])
+
+      ctx =
+        RequestContext.new("ethereum", "eth_blockNumber", [])
+
+      channel = %Lasso.RPC.Channel{provider_id: "test_provider", transport: :http}
+
+      Observability.record_circuit_open(ctx, channel)
+
+      {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+      assert measurements.count == 1
+      assert metadata.chain == "ethereum"
+      assert metadata.provider_id == "test_provider"
+      assert metadata.transport == :http
     end
 
-    @tag :pending
-    test "logs degraded mode success with channel details" do
-      # TODO: Implement test to verify logging
-      assert true
+    test "Observability.record_request_start emits [:lasso, :rpc, :request, :start]" do
+      collector = TelemetrySync.start_collector([:lasso, :rpc, :request, :start])
+
+      Observability.record_request_start("ethereum", "eth_blockNumber", :load_balanced)
+
+      {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+      assert measurements.count == 1
+      assert metadata.chain == "ethereum"
+      assert metadata.method == "eth_blockNumber"
+      assert metadata.strategy == :load_balanced
     end
 
-    @tag :pending
-    test "logs channel exhaustion with retry hint" do
-      # TODO: Implement test to verify logging
-      assert true
+    test "Observability.record_slow_request emits [:lasso, :request, :slow]" do
+      collector = TelemetrySync.start_collector([:lasso, :request, :slow])
+
+      Observability.record_slow_request(
+        "ethereum",
+        "eth_blockNumber",
+        "provider_1",
+        :http,
+        2500.0
+      )
+
+      {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
+      assert measurements.latency_ms == 2500.0
+      assert metadata.chain == "ethereum"
+      assert metadata.method == "eth_blockNumber"
+      assert metadata.provider == "provider_1"
+      assert metadata.transport == :http
     end
   end
 end

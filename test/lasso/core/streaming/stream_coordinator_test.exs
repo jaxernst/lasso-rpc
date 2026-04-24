@@ -32,13 +32,34 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     :sys.get_state(pid)
   end
 
+  defp with_telemetry(event_name, fun) do
+    handler_id = "sc_test_telemetry_#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event_name,
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_event, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
   describe "initialization" do
     test "initializes with correct default state" do
       chain = "test_chain"
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
-      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       state = get_coordinator_state(pid)
 
@@ -48,7 +69,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       assert state.failover_status == :active
       assert state.failover_context == nil
       assert state.failover_history == []
-      assert state.max_failover_attempts == 3
+      assert state.max_failover_attempts == nil
       assert state.failover_cooldown_ms == 5_000
 
       GenServer.stop(pid)
@@ -61,7 +82,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_event_buffer: 10]
 
-      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -171,7 +192,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
-      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -271,7 +292,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         failover_cooldown_ms: 1_000
       ]
 
-      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -328,6 +349,85 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       # History should have grown (new failure recorded)
       assert length(state.failover_history) == 2
     end
+
+    test "resets failover history after entering degraded mode", %{coordinator: pid} do
+      state = get_coordinator_state(pid)
+
+      failure_history = [
+        %{provider_id: "p1", failed_at: now()},
+        %{provider_id: "p2", failed_at: now()}
+      ]
+
+      :sys.replace_state(pid, fn _ -> %{state | failover_history: failure_history} end)
+
+      GenServer.cast(pid, {:provider_unhealthy, "p3", "p4"})
+      Process.sleep(50)
+
+      state = get_coordinator_state(pid)
+      assert state.failover_status == :degraded
+      assert state.failover_history == []
+    end
+
+    test "emits degraded telemetry with failover budget metadata", %{coordinator: pid} do
+      state = get_coordinator_state(pid)
+
+      failure_history = [
+        %{provider_id: "p1", failed_at: now()},
+        %{provider_id: "p2", failed_at: now()}
+      ]
+
+      :sys.replace_state(pid, fn _ -> %{state | failover_history: failure_history} end)
+
+      with_telemetry([:lasso, :subs, :failover, :degraded], fn ->
+        GenServer.cast(pid, {:provider_unhealthy, "p3", "p4"})
+
+        assert_receive {:telemetry_event, [:lasso, :subs, :failover, :degraded], _measurements,
+                        metadata},
+                       300
+
+        assert metadata.failover_budget == 2
+        assert metadata.provider_count == nil
+        assert metadata.budget_source == :override
+      end)
+    end
+  end
+
+  describe "dynamic failover budget" do
+    test "uses default budget when ws provider count is zero" do
+      chain = "test_chain_no_ws_#{:rand.uniform(999_999)}"
+      key = {:newHeads}
+      opts = [primary_provider_id: "provider_1", failover_cooldown_ms: 1_000]
+
+      {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
+
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+      state = get_coordinator_state(pid)
+
+      failure_history = [
+        %{provider_id: "p1", failed_at: now()},
+        %{provider_id: "p2", failed_at: now()},
+        %{provider_id: "p3", failed_at: now()}
+      ]
+
+      :sys.replace_state(pid, fn _ -> %{state | failover_history: failure_history} end)
+
+      with_telemetry([:lasso, :subs, :failover, :degraded], fn ->
+        GenServer.cast(pid, {:provider_unhealthy, "p4", "p5"})
+
+        assert_receive {:telemetry_event, [:lasso, :subs, :failover, :degraded], _measurements,
+                        metadata},
+                       300
+
+        assert metadata.failover_budget == 3
+        assert metadata.provider_count == 0
+        assert metadata.budget_source == :default
+      end)
+
+      state = get_coordinator_state(pid)
+      assert state.failover_status == :degraded
+      assert state.failover_history == []
+    end
   end
 
   describe "state management" do
@@ -336,7 +436,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
-      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       # Initial history empty
       state = get_coordinator_state(pid)
@@ -361,7 +461,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_event_buffer: 3]
 
-      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -476,7 +576,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
-      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
@@ -539,7 +639,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_failover_attempts: 2]
 
-      {:ok, pid} = StreamCoordinator.start_link({"default", chain, key, opts})
+      {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 

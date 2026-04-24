@@ -11,8 +11,11 @@ defmodule Lasso.RPC.RequestOptions do
   @type strategy :: :fastest | :priority | :load_balanced | :latency_weighted
   @type transport :: :http | :ws | :both | nil
 
+  @default_profile Lasso.Config.ProfileValidator.default_profile()
+
   @enforce_keys [:timeout_ms]
-  defstruct profile: "default",
+  defstruct profile: @default_profile,
+            account_id: nil,
             strategy: :load_balanced,
             provider_override: nil,
             transport: nil,
@@ -26,6 +29,7 @@ defmodule Lasso.RPC.RequestOptions do
 
   @type t :: %__MODULE__{
           profile: String.t(),
+          account_id: String.t() | nil,
           strategy: strategy,
           provider_override: String.t() | nil,
           transport: transport,

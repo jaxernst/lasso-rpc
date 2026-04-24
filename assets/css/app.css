@@ -41,7 +41,7 @@ body {
 
 /* Network topology enhancements */
 .network-node {
-  transition: all 0.3s ease;
+  transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease;
 }
 
 .network-node:hover {
@@ -68,4 +68,70 @@ body {
 
 .animate-pulse-custom {
   animation: pulse-custom 2s ease-in-out infinite;
+}
+
+/* Endpoint selector button states (data-attribute driven) */
+[data-strategy] {
+  transition: all 0.15s ease;
+}
+
+[data-strategy] .lock-icon {
+  display: none;
+}
+
+[data-strategy][data-state="active"] {
+  border-color: rgb(14 165 233); /* sky-500 */
+  background-color: rgb(14 165 233 / 0.2);
+  color: rgb(125 211 252); /* sky-300 */
+}
+
+[data-strategy][data-state="locked"] {
+  border-color: rgb(75 85 99); /* gray-600 */
+  color: rgb(209 213 219); /* gray-300 */
+}
+
+[data-strategy][data-state="locked"]:hover {
+  border-color: rgb(251 191 36); /* amber-400 */
+  color: rgb(252 211 77); /* amber-300 */
+}
+
+[data-strategy][data-state="locked"] .lock-icon {
+  display: inline;
+  color: rgb(251 191 36 / 0.6);
+}
+
+[data-strategy][data-state="active-locked"] {
+  border-color: rgb(245 158 11); /* amber-500 */
+  background-color: rgb(245 158 11 / 0.2);
+  color: rgb(252 211 77); /* amber-300 */
+}
+
+[data-strategy][data-state="active-locked"] .lock-icon {
+  display: inline;
+}
+
+[data-strategy][data-state="inactive"] {
+  border-color: rgb(75 85 99); /* gray-600 */
+  color: rgb(209 213 219); /* gray-300 */
+}
+
+[data-strategy][data-state="inactive"]:hover {
+  border-color: rgb(56 189 248); /* sky-400 */
+  color: rgb(125 211 252); /* sky-300 */
+}
+
+[data-provider][data-state="active"] {
+  border-color: rgb(99 102 241); /* indigo-500 */
+  background-color: rgb(99 102 241 / 0.2);
+  color: rgb(165 180 252); /* indigo-300 */
+}
+
+[data-provider][data-state="inactive"] {
+  border-color: rgb(75 85 99); /* gray-600 */
+  color: rgb(209 213 219); /* gray-300 */
+}
+
+[data-provider][data-state="inactive"]:hover {
+  border-color: rgb(129 140 248); /* indigo-400 */
+  color: rgb(165 180 252); /* indigo-300 */
 }

@@ -272,6 +272,17 @@ defmodule Lasso.Providers.CandidateListingTest do
 
       assert c.availability == :limited
     end
+
+    test "misconfigured instance shows :down availability" do
+      instance_id = Catalog.lookup_instance_id(@profile, @chain, "p1")
+      set_health_status(instance_id, :misconfigured)
+
+      [c] =
+        CandidateListing.list_candidates(@profile, @chain, %{protocol: :http})
+        |> Enum.filter(&(&1.id == "p1"))
+
+      assert c.availability == :down
+    end
   end
 
   # Helpers
@@ -308,14 +319,12 @@ defmodule Lasso.Providers.CandidateListingTest do
 
   defp set_health_status(instance_id, status) do
     :ets.insert(@instance_table, {
-      {:health, instance_id},
+      {:health_probe, instance_id},
       %{
         status: status,
         http_status: status,
-        ws_status: nil,
         last_health_check: System.system_time(:millisecond),
         consecutive_failures: 0,
-        consecutive_successes: 0,
         last_error: nil
       }
     })
@@ -329,7 +338,9 @@ defmodule Lasso.Providers.CandidateListingTest do
       :ets.delete(@instance_table, {:circuit, pp.instance_id, :ws})
       :ets.delete(@instance_table, {:rate_limit, pp.instance_id, :http})
       :ets.delete(@instance_table, {:rate_limit, pp.instance_id, :ws})
-      :ets.delete(@instance_table, {:health, pp.instance_id})
+      :ets.delete(@instance_table, {:health_probe, pp.instance_id})
+      :ets.delete(@instance_table, {:health_block_sync, pp.instance_id})
+      :ets.delete(@instance_table, {:health_routing, pp.instance_id})
     end)
   rescue
     ArgumentError -> :ok

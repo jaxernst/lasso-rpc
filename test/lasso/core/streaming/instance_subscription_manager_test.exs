@@ -18,7 +18,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManagerTest do
   alias Lasso.Core.Streaming.{InstanceSubscriptionManager, InstanceSubscriptionRegistry}
   alias Lasso.Testing.MockWSProvider
 
-  @default_profile "default"
+  @default_profile "public"
 
   setup do
     suffix = System.unique_integer([:positive])

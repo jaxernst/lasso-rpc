@@ -30,7 +30,7 @@ defmodule Lasso.Config.ConfigStore do
   alias Lasso.Config.ChainConfig.Provider
 
   @config_table :lasso_config_store
-  @default_profile "default"
+  @default_profile Lasso.Config.ProfileValidator.default_profile()
 
   ## Profile Metadata Type
 
@@ -206,7 +206,7 @@ defmodule Lasso.Config.ConfigStore do
   Find the canonical chain name for a numeric chain ID.
 
   Returns the chain name from the chain_id index without loading the full config.
-  The index prefers "default" profile when multiple profiles define the same chain_id.
+  The index prefers "public" profile when multiple profiles define the same chain_id.
 
   ## Examples
 

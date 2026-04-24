@@ -24,7 +24,7 @@ defmodule Lasso.Config.Backend.File do
   ## Auto-Migration
 
   If the profiles directory is empty but `config/chains.yml` exists, the backend
-  will automatically generate `config/profiles/default.yml` from it during startup.
+  will automatically generate `config/profiles/public.yml` from it during startup.
   This provides seamless migration for existing deployments.
 
   ## File Discovery Rules
@@ -215,8 +215,8 @@ defmodule Lasso.Config.Backend.File do
     # Legacy format: just chains (from chains.yml migration)
     with {:ok, yaml_data} <- YamlElixir.read_from_string(content),
          {:ok, chains} <- parse_chains_data(yaml_data) do
-      # Extract slug from chains or use "default"
-      slug = yaml_data["slug"] || "default"
+      # Extract slug from frontmatter or fall back to "public"
+      slug = yaml_data["slug"] || "public"
 
       {:ok,
        %{
@@ -437,7 +437,7 @@ defmodule Lasso.Config.Backend.File do
     end
   end
 
-  # Auto-migration from legacy chains.yml to profiles/default.yml
+  # Auto-migration from legacy chains.yml to profiles/public.yml
   defp maybe_auto_migrate(%{profiles_dir: profiles_dir, legacy_config_path: legacy_path}) do
     profile_files = list_profile_files(profiles_dir)
     legacy_exists = File.exists?(legacy_path)
@@ -462,13 +462,12 @@ defmodule Lasso.Config.Backend.File do
   end
 
   defp migrate_legacy_config(legacy_path, profiles_dir) do
-    Logger.info("Auto-migrating #{legacy_path} to #{profiles_dir}/default.yml")
+    Logger.info("Auto-migrating #{legacy_path} to #{profiles_dir}/public.yml")
 
     with {:ok, content} <- File.read(legacy_path),
          {:ok, yaml_data} <- YamlElixir.read_from_string(content) do
-      # Generate profile YAML with frontmatter
       profile_yaml = generate_profile_yaml(yaml_data)
-      target_path = Path.join(profiles_dir, "default.yml")
+      target_path = Path.join(profiles_dir, "public.yml")
 
       case File.write(target_path, profile_yaml) do
         :ok ->
@@ -487,11 +486,10 @@ defmodule Lasso.Config.Backend.File do
   end
 
   defp generate_profile_yaml(yaml_data) do
-    # Generate profile YAML with frontmatter format
     """
     ---
-    name: Default
-    slug: default
+    name: Lasso Public
+    slug: public
     rps_limit: 100
     burst_limit: 500
     ---

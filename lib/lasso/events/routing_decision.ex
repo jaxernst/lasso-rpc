@@ -12,9 +12,12 @@ defmodule Lasso.Events.RoutingDecision do
     set via `LASSO_NODE_ID` env var. Used for state partitioning and dashboard filtering.
   """
 
+  alias Lasso.Config.ProfileValidator
+
   @type t :: %__MODULE__{
           ts: pos_integer(),
           request_id: String.t(),
+          account_id: String.t() | nil,
           profile: String.t(),
           source_node: node(),
           source_node_id: String.t(),
@@ -32,6 +35,7 @@ defmodule Lasso.Events.RoutingDecision do
   defstruct [
     :ts,
     :request_id,
+    :account_id,
     :profile,
     :source_node,
     :source_node_id,
@@ -54,7 +58,8 @@ defmodule Lasso.Events.RoutingDecision do
     %__MODULE__{
       ts: attrs[:ts] || System.system_time(:millisecond),
       request_id: attrs[:request_id],
-      profile: attrs[:profile] || "default",
+      account_id: attrs[:account_id],
+      profile: attrs[:profile] || ProfileValidator.default_profile(),
       source_node: node(),
       source_node_id: get_source_node_id(),
       chain: attrs[:chain],

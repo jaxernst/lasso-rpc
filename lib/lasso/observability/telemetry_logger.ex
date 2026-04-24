@@ -147,7 +147,7 @@ defmodule Lasso.TelemetryLogger do
   end
 
   def handle_very_slow_request(_event, measurements, metadata, _config) do
-    Logger.error(
+    Logger.warning(
       "Very slow (>4s): #{metadata.method} #{metadata.provider}:#{metadata.transport} #{round(measurements.latency_ms)}ms",
       chain: metadata.chain
     )

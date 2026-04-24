@@ -21,8 +21,8 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   ## Usage
 
-      {:ok, _pid} = EventStream.ensure_started("default")
-      EventStream.subscribe("default")
+      {:ok, _pid} = EventStream.ensure_started("public")
+      EventStream.subscribe("public")
 
   ## Messages Sent to Subscribers
 
@@ -1167,13 +1167,11 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   # Filter events by account_id for account-scoped dashboard visibility.
   # - subscriber_account_id nil = no filter, see all events
-  # - event account_id nil = visible to all (infrastructure events)
-  # - otherwise, must match
+  # - otherwise, event must belong to the subscriber's account (nil account_id events are excluded)
   defp filter_event_for_account(_event, nil), do: true
 
   defp filter_event_for_account(event, subscriber_account_id) do
-    event_account_id = get_event_account_id(event)
-    event_account_id == nil or event_account_id == subscriber_account_id
+    get_event_account_id(event) == subscriber_account_id
   end
 
   defp get_event_account_id(%{account_id: account_id}), do: account_id

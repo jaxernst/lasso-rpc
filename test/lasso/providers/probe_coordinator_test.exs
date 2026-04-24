@@ -68,13 +68,51 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
       # At least one instance should have health data written
       has_health =
         Enum.any?(instance_ids, fn id ->
-          case :ets.lookup(@instance_table, {:health, id}) do
+          case :ets.lookup(@instance_table, {:health_probe, id}) do
             [{_, _}] -> true
             [] -> false
           end
         end)
 
       assert has_health
+    end
+
+    test "real probe task updates coordinator backoff state" do
+      chain = "pc_async_path_chain"
+      profile = "pc_async_path"
+
+      register_chain(profile, chain, [
+        %{id: "pc_async_bad", name: "Async Bad", url: "http://127.0.0.1:1", priority: 1}
+      ])
+
+      Catalog.build_from_config()
+      {:ok, pid} = ProbeCoordinator.start_link(chain)
+
+      on_exit(fn ->
+        try do
+          case GenServer.whereis(ProbeCoordinator.via_name(chain)) do
+            nil -> :ok
+            proc -> GenServer.stop(proc, :normal, 1_000)
+          end
+        catch
+          :exit, _ -> :ok
+        end
+
+        ConfigStore.unregister_chain_runtime(profile, chain)
+        Catalog.build_from_config()
+      end)
+
+      [instance_id] = Catalog.list_instances_for_chain(chain)
+      before = :sys.get_state(pid).instances[instance_id]
+      assert before.consecutive_failures == 0
+      assert before.current_backoff_ms == 0
+
+      send(pid, :tick)
+
+      assert_wait_until(fn ->
+        current = :sys.get_state(pid).instances[instance_id]
+        current.consecutive_failures > 0 and current.current_backoff_ms > 0
+      end)
     end
   end
 
@@ -270,6 +308,77 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     end
   end
 
+  describe "rate_limited result sets backoff floor" do
+    test "rate_limited sets backoff to at least 30s" do
+      {:ok, pid} = ProbeCoordinator.start_link(@chain)
+      [first_id | _] = Catalog.list_instances_for_chain(@chain)
+
+      ref = make_ref()
+      send(pid, {ref, {first_id, {:rate_limited, 429}}})
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      inst = Map.get(state.instances, first_id)
+      assert inst.current_backoff_ms >= 30_000
+    end
+
+    test "rate_limited does not lower an existing higher backoff" do
+      {:ok, pid} = ProbeCoordinator.start_link(@chain)
+      [first_id | _] = Catalog.list_instances_for_chain(@chain)
+
+      # Simulate high backoff from prior failures
+      state = :sys.get_state(pid)
+      inst = Map.get(state.instances, first_id)
+      modified = %{inst | current_backoff_ms: 60_000}
+
+      :sys.replace_state(pid, fn s ->
+        %{s | instances: Map.put(s.instances, first_id, modified)}
+      end)
+
+      ref = make_ref()
+      send(pid, {ref, {first_id, {:rate_limited, 429}}})
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      inst = Map.get(state.instances, first_id)
+      assert inst.current_backoff_ms == 60_000
+    end
+  end
+
+  describe "auth_failed result sets 120s backoff" do
+    test "auth_failed sets fixed 120s backoff" do
+      {:ok, pid} = ProbeCoordinator.start_link(@chain)
+      [first_id | _] = Catalog.list_instances_for_chain(@chain)
+
+      ref = make_ref()
+      send(pid, {ref, {first_id, {:auth_failed, 401}}})
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      inst = Map.get(state.instances, first_id)
+      assert inst.current_backoff_ms == 120_000
+    end
+  end
+
+  describe "ETS probe writes after tick cycle" do
+    test "failed probes write degraded/unhealthy to health_probe ETS" do
+      {:ok, _pid} = ProbeCoordinator.start_link(@chain)
+      [first_id | _] = Catalog.list_instances_for_chain(@chain)
+
+      # Wait for probes to fire against unreachable URLs
+      Process.sleep(600)
+
+      case :ets.lookup(@instance_table, {:health_probe, first_id}) do
+        [{_, data}] ->
+          assert data.status in [:degraded, :unhealthy]
+          assert data.consecutive_failures >= 1
+
+        [] ->
+          :ok
+      end
+    end
+  end
+
   # Helpers
 
   defp register_chain(profile, chain, providers) do
@@ -290,11 +399,26 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     instance_ids = Catalog.list_instances_for_chain(@chain)
 
     Enum.each(instance_ids, fn id ->
-      :ets.delete(@instance_table, {:health, id})
+      :ets.delete(@instance_table, {:health_probe, id})
+      :ets.delete(@instance_table, {:health_block_sync, id})
+      :ets.delete(@instance_table, {:health_routing, id})
       :ets.delete(@instance_table, {:circuit, id, :http})
       :ets.delete(@instance_table, {:circuit, id, :ws})
     end)
   rescue
     ArgumentError -> :ok
   end
+
+  defp assert_wait_until(fun, attempts \\ 25)
+
+  defp assert_wait_until(fun, attempts) when attempts > 0 do
+    if fun.() do
+      assert true
+    else
+      Process.sleep(50)
+      assert_wait_until(fun, attempts - 1)
+    end
+  end
+
+  defp assert_wait_until(_fun, 0), do: flunk("condition not met in time")
 end

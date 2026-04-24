@@ -21,7 +21,7 @@ defmodule Lasso.RPC.SelectionTest do
 
   describe "select_provider/3 - filter handling" do
     test "respects exclude filter", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile},
@@ -42,7 +42,7 @@ defmodule Lasso.RPC.SelectionTest do
     end
 
     test "respects protocol filter for http", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "http_only", priority: 10, behavior: :healthy, profile: profile}
@@ -56,7 +56,7 @@ defmodule Lasso.RPC.SelectionTest do
     end
 
     test "combines exclude and protocol filters", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile},
@@ -72,11 +72,77 @@ defmodule Lasso.RPC.SelectionTest do
 
       assert selected == "provider_2"
     end
+
+    test "excludes half-open provider when include_half_open is false", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      [provider_1, provider_2] =
+        Enum.map(["provider_1", "provider_2"], fn provider_id ->
+          Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id)
+        end)
+
+      :ets.insert(:lasso_instance_state, {
+        {:circuit, provider_1, :http},
+        %{state: :half_open, error: nil, recovery_deadline_ms: nil}
+      })
+
+      :ets.insert(:lasso_instance_state, {
+        {:circuit, provider_2, :http},
+        %{state: :closed, error: nil, recovery_deadline_ms: nil}
+      })
+
+      assert {:error, :no_providers_available} =
+               Selection.select_provider(profile, chain, "eth_blockNumber",
+                 protocol: :http,
+                 strategy: :priority,
+                 exclude: ["provider_2"],
+                 include_half_open: false
+               )
+    end
+
+    test "includes half-open provider when include_half_open is true", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      [provider_1, provider_2] =
+        Enum.map(["provider_1", "provider_2"], fn provider_id ->
+          Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id)
+        end)
+
+      :ets.insert(:lasso_instance_state, {
+        {:circuit, provider_1, :http},
+        %{state: :half_open, error: nil, recovery_deadline_ms: nil}
+      })
+
+      :ets.insert(:lasso_instance_state, {
+        {:circuit, provider_2, :http},
+        %{state: :closed, error: nil, recovery_deadline_ms: nil}
+      })
+
+      {:ok, selected} =
+        Selection.select_provider(profile, chain, "eth_blockNumber",
+          protocol: :http,
+          strategy: :priority,
+          exclude: ["provider_2"],
+          include_half_open: true
+        )
+
+      assert selected == "provider_1"
+    end
   end
 
   describe "select_provider/3 - error handling" do
     test "returns error when no providers available", %{chain: chain} do
-      profile = "default"
+      profile = "public"
       # Don't setup any providers
 
       assert {:error, :no_providers_available} =
@@ -84,7 +150,7 @@ defmodule Lasso.RPC.SelectionTest do
     end
 
     test "returns error when all providers excluded", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile}
@@ -97,7 +163,7 @@ defmodule Lasso.RPC.SelectionTest do
     end
 
     test "returns error for invalid chain" do
-      profile = "default"
+      profile = "public"
       # Non-existent chain with no providers
       assert {:error, :no_providers_available} =
                Selection.select_provider(profile, "nonexistent_chain", "eth_blockNumber")
@@ -106,7 +172,7 @@ defmodule Lasso.RPC.SelectionTest do
 
   describe "select_provider/3 - telemetry" do
     test "emits telemetry on successful selection", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile}
@@ -134,7 +200,7 @@ defmodule Lasso.RPC.SelectionTest do
 
   describe "select_channels/4 - archival filtering" do
     test "excludes non-archival providers for historical eth_getLogs requests", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup providers with archival: false
       setup_providers([
@@ -152,7 +218,7 @@ defmodule Lasso.RPC.SelectionTest do
     end
 
     test "includes archival providers for historical eth_getLogs requests", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup one archival and one non-archival provider
       setup_providers([
@@ -172,7 +238,7 @@ defmodule Lasso.RPC.SelectionTest do
     end
 
     test "includes all providers for recent eth_getLogs requests", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile, archival: false},

@@ -50,7 +50,7 @@ defmodule Lasso.Testing.IntegrationHelper do
     skip_cb_check = Keyword.get(opts, :skip_circuit_breaker_check, false)
     skip_health_check = Keyword.get(opts, :skip_health_check, false)
     provider_type = Keyword.get(opts, :provider_type, :http)
-    profile = Keyword.get(opts, :profile, "default")
+    profile = Keyword.get(opts, :profile, "public")
 
     # Start all provider mocks (HTTP or WS based on provider_type)
     provider_ids =
@@ -97,7 +97,7 @@ defmodule Lasso.Testing.IntegrationHelper do
     timeout = Keyword.get(opts, :timeout, 5_000)
     skip_cb_check = Keyword.get(opts, :skip_cb_check, false)
     skip_health_check = Keyword.get(opts, :skip_health_check, false)
-    profile = Keyword.get(opts, :profile, "default")
+    profile = Keyword.get(opts, :profile, "public")
 
     deadline = System.monotonic_time(:millisecond) + timeout
 
@@ -142,7 +142,7 @@ defmodule Lasso.Testing.IntegrationHelper do
   """
   def setup_coordinator_with_subscription(chain, key, opts \\ []) do
     wait_ms = Keyword.get(opts, :wait_ms, 100)
-    profile = Keyword.get(opts, :profile, "default")
+    profile = Keyword.get(opts, :profile, "public")
     coordinator_opts = Keyword.drop(opts, [:wait_ms, :profile])
 
     # Start coordinator - it will auto-subscribe via Pool
@@ -160,7 +160,7 @@ defmodule Lasso.Testing.IntegrationHelper do
   Broadcasts a provider unhealthy event that will trigger the failover flow.
   """
   def trigger_provider_failover(chain, failed_provider_id, reason \\ :simulated_failure) do
-    profile = "default"
+    profile = "public"
 
     event = %Lasso.Events.Provider.Unhealthy{
       chain: chain,
@@ -241,7 +241,7 @@ defmodule Lasso.Testing.IntegrationHelper do
 
   This is a convenience wrapper around UpstreamSubscriptionPool.subscribe_client.
   """
-  def subscribe_client(chain, client_pid \\ nil, key, profile \\ "default") do
+  def subscribe_client(chain, client_pid \\ nil, key, profile \\ "public") do
     client_pid = client_pid || self()
     UpstreamSubscriptionPool.subscribe_client(profile, chain, client_pid, key)
   end
@@ -251,7 +251,7 @@ defmodule Lasso.Testing.IntegrationHelper do
 
   This is a convenience wrapper around UpstreamSubscriptionPool.unsubscribe_client.
   """
-  def unsubscribe_client(chain, subscription_id, profile \\ "default") do
+  def unsubscribe_client(chain, subscription_id, profile \\ "public") do
     UpstreamSubscriptionPool.unsubscribe_client(profile, chain, subscription_id)
   end
 
@@ -380,8 +380,8 @@ defmodule Lasso.Testing.IntegrationHelper do
     instance_id = Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id)
 
     if instance_id do
-      case :ets.lookup(:lasso_instance_state, {:health, instance_id}) do
-        [{_, %{status: status}}] -> status in [:healthy, :connecting, :unhealthy, :degraded]
+      case :ets.lookup(:lasso_instance_state, {:health_probe, instance_id}) do
+        [{_, _}] -> true
         [] -> false
       end
     else

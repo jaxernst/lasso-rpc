@@ -1,9 +1,7 @@
 defmodule LassoWeb.Components.ProfileSelector do
   @moduledoc """
   Profile selector dropdown component for switching between RPC profiles.
-
-  Displays the current profile with a health status indicator and provides
-  a dropdown menu for switching between available profiles.
+  Groups profiles into Lasso Managed and Custom sections.
   """
   use Phoenix.Component
 
@@ -12,43 +10,43 @@ defmodule LassoWeb.Components.ProfileSelector do
 
   attr(:profiles, :list, required: true)
   attr(:selected_profile, :string, required: true)
+  attr(:profile_entitlements, :map, default: %{})
   attr(:class, :string, default: "")
   attr(:show_create_cta, :boolean, default: true)
 
   def profile_selector(assigns) do
-    profile_data = get_profile_data(assigns.profiles)
+    profile_data = get_profile_data(assigns.profiles, assigns.profile_entitlements)
 
-    # Get display name for selected profile
-    selected_display_name =
+    selected_data =
       case Enum.find(profile_data, fn {slug, _} -> slug == assigns.selected_profile end) do
-        {_, data} -> data.name
-        nil -> assigns.selected_profile
+        {_, data} ->
+          data
+
+        nil ->
+          %{name: assigns.selected_profile, logo: nil}
       end
 
-    selected_logo =
-      case Enum.find(profile_data, fn {slug, _} -> slug == assigns.selected_profile end) do
-        {_, data} -> data.logo
-        nil -> nil
-      end
+    {lasso_profiles, custom_profiles} =
+      Enum.split_with(profile_data, fn {_slug, data} -> !data.byok end)
 
     assigns =
       assigns
       |> assign(:profile_data, profile_data)
-      |> assign(:selected_display_name, selected_display_name)
-      |> assign(:selected_logo, selected_logo)
+      |> assign(:lasso_profiles, lasso_profiles)
+      |> assign(:custom_profiles, custom_profiles)
+      |> assign(:selected_display_name, selected_data.name)
+      |> assign(:selected_logo, selected_data.logo)
 
     ~H"""
     <div class={["relative", @class]} id="profile-selector">
-      <!-- Trigger Button -->
       <button
         id="profile-selector-trigger"
         phx-click={toggle_dropdown()}
         aria-haspopup="listbox"
         aria-expanded="false"
-        class="group bg-gray-900/60 flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-left transition-all hover:bg-gray-900/50 hover:border-gray-600 focus:ring-purple-500/30 focus:outline-none focus:ring-1"
+        class="group bg-[#121a28] flex items-center justify-between gap-3 rounded-lg border border-gray-600/40 px-3 py-2 text-left transition-all hover:border-gray-500/50 focus:ring-purple-500/30 focus:outline-none focus:ring-1"
       >
         <div class="flex items-center gap-3">
-          <!-- Label & Icon -->
           <div class="flex items-center gap-2 text-gray-400 transition-colors group-hover:text-gray-300">
             <%= if @selected_logo do %>
               <img
@@ -70,17 +68,14 @@ defmodule LassoWeb.Components.ProfileSelector do
               Profile
             </span>
           </div>
-          
-    <!-- Subtle Divider -->
+
           <div class="h-4 w-px bg-gray-800 transition-colors group-hover:bg-gray-700"></div>
-          
-    <!-- Selected Value -->
+
           <span class="text-sm font-semibold text-gray-200 transition-colors group-hover:text-white">
             {@selected_display_name}
           </span>
         </div>
-        
-    <!-- Chevron -->
+
         <svg
           class="h-4 w-4 text-gray-500 transition-colors group-hover:text-gray-400"
           fill="none"
@@ -90,43 +85,53 @@ defmodule LassoWeb.Components.ProfileSelector do
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
         </svg>
       </button>
-      
-    <!-- Dropdown Panel -->
+
       <div
         id="profile-dropdown"
         phx-click-away={hide_dropdown()}
         class={[
           "absolute top-full right-0 mt-2 w-72",
-          "ring-black/50 rounded-lg border border-gray-700 bg-gray-900 shadow-xl ring-1",
+          "ring-black/50 rounded-lg border border-gray-600/40 bg-[#121a28] shadow-xl ring-1",
           "z-50 overflow-hidden",
           "hidden"
         ]}
       >
-        <!-- Header -->
-        <div class="bg-gray-900/50 border-b border-gray-800 px-3 py-2.5">
-          <div class="text-sm font-medium text-gray-200">Routing Profiles</div>
-          <div class="mt-0.5 text-xs text-gray-500">
-            Switch between different infrastructure configurations. Each profile has its own providers, chains, and usage limits.
+        <div class="py-1">
+          <%= if @lasso_profiles != [] do %>
+            <div class="px-3 pt-1.5 pb-1">
+              <span class="text-[9px] font-semibold uppercase tracking-wider text-gray-600">
+                Managed
+              </span>
+            </div>
+            <%= for {profile, data} <- @lasso_profiles do %>
+              <.profile_item
+                profile={profile}
+                data={data}
+                selected={profile == @selected_profile}
+              />
+            <% end %>
+          <% end %>
+
+          <%= if @lasso_profiles != [] do %>
+            <div class="mx-3 my-1 border-t border-gray-800/60"></div>
+          <% end %>
+
+          <div class="px-3 pt-1.5 pb-1">
+            <span class="text-[9px] font-semibold uppercase tracking-wider text-gray-600">
+              Custom
+            </span>
           </div>
-        </div>
-        
-    <!-- Profile List -->
-        <div class="">
-          <%= for {profile, data} <- @profile_data do %>
+          <%= for {profile, data} <- @custom_profiles do %>
             <.profile_item
               profile={profile}
               data={data}
               selected={profile == @selected_profile}
             />
           <% end %>
-        </div>
-        
-    <!-- Create Profile CTA -->
-        <%= if @show_create_cta do %>
-          <div class="border-t border-gray-800">
+          <%= if @show_create_cta do %>
             <.create_profile_cta />
-          </div>
-        <% end %>
+          <% end %>
+        </div>
       </div>
     </div>
     """
@@ -181,7 +186,7 @@ defmodule LassoWeb.Components.ProfileSelector do
           <svg
             class={[
               "h-4 w-4 flex-none",
-              if(@selected, do: "text-purple-400", else: "text-gray-600 group-hover:text-gray-500")
+              if(@selected, do: "text-purple-400", else: "text-gray-600")
             ]}
             fill="none"
             stroke="currentColor"
@@ -217,22 +222,10 @@ defmodule LassoWeb.Components.ProfileSelector do
               </svg>
             <% end %>
           </div>
-          <div class="text-xs text-gray-500">
-            {@data.chain_count} chains · {@data.provider_count} providers
+          <div class="text-[11px] text-gray-500">
+            {@data.chain_count} chains
           </div>
         </div>
-      </div>
-      
-    <!-- Right-aligned badge -->
-      <div class="flex-none">
-        <%= cond do %>
-          <% @data.byok -> %>
-            <div class="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-              BYOK
-            </div>
-          <% true -> %>
-            <div></div>
-        <% end %>
       </div>
     </button>
     """
@@ -242,47 +235,30 @@ defmodule LassoWeb.Components.ProfileSelector do
     ~H"""
     <button
       phx-click={JS.push("show_upgrade_modal") |> hide_dropdown()}
-      class={[
-        "flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left",
-        "transition-colors hover:bg-gray-800"
-      ]}
+      class="flex w-full items-center gap-2.5 mx-3 my-1 px-2.5 py-2 rounded border border-dashed border-gray-700/60 text-left transition-colors hover:border-gray-600 hover:bg-gray-800/30"
+      style="width: calc(100% - 1.5rem)"
     >
-      <div class="flex items-center gap-3 min-w-0">
-        <!-- Plus icon -->
-        <svg
-          class="h-4 w-4 flex-none text-amber-500"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M12 4v16m8-8H4"
-          />
-        </svg>
-        <div class="min-w-0 flex-1">
-          <div class="text-sm font-medium text-gray-200">
-            Build Your Own
-          </div>
-          <div class="text-xs text-gray-500">
-            Supercharge your existing node infrastructure with Lasso
-          </div>
-        </div>
-      </div>
-      
-    <!-- Right-aligned BYOK badge -->
-      <div class="flex-none">
-        <div class="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-          BYOK
-        </div>
-      </div>
+      <svg
+        class="h-3.5 w-3.5 flex-none text-gray-600"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M12 4v16m8-8H4"
+        />
+      </svg>
+      <span class="text-[12px] text-gray-500">
+        Create profile
+      </span>
     </button>
     """
   end
 
-  defp get_profile_data(profiles) do
+  defp get_profile_data(profiles, _profile_entitlements) do
     Enum.map(profiles, fn profile_slug ->
       chains = ConfigStore.list_chains_for_profile(profile_slug)
 
@@ -292,24 +268,12 @@ defmodule LassoWeb.Components.ProfileSelector do
           _ -> {profile_slug, nil, false}
         end
 
-      provider_count =
-        Enum.reduce(chains, 0, fn chain, count ->
-          case ConfigStore.get_chain(profile_slug, chain) do
-            {:ok, chain_config} ->
-              count + length(chain_config.providers)
-
-            _ ->
-              count
-          end
-        end)
-
       {profile_slug,
        %{
          name: display_name,
          logo: logo,
          byok: unlisted,
-         chain_count: length(chains),
-         provider_count: provider_count
+         chain_count: length(chains)
        }}
     end)
   end

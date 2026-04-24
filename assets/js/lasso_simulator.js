@@ -145,14 +145,19 @@ class SimulatorRun {
 
       // Use strategy-specific endpoints as defined in the router
       // strategy is already normalized to null if invalid at the top of _startHttpLoad
-      const profile = this.config.profile || "default";
-      const url = strategy
+      const profile = this.config.profile || "public";
+      const apiKey = this.config.api_key;
+      let url = strategy
         ? `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
             strategy
           )}/${encodeURIComponent(chain)}`
         : `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
             chain
           )}`;
+      // Append API key if available
+      if (apiKey) {
+        url = `${url}?key=${encodeURIComponent(apiKey)}`;
+      }
 
       this.stats.http.inflight++;
       const start = now();
@@ -248,13 +253,18 @@ class SimulatorRun {
 
     for (let i = 0; i < connections; i++) {
       const chain = chains[i % chains.length];
-      const profile = this.config.profile || "default";
-      const url = `${location.origin.replace(
+      const profile = this.config.profile || "public";
+      const apiKey = this.config.api_key;
+      let url = `${location.origin.replace(
         /^http/,
         "ws"
       )}/ws/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
         chain
       )}`;
+      // Append API key if available
+      if (apiKey) {
+        url = `${url}?key=${encodeURIComponent(apiKey)}`;
+      }
       const ws = new WebSocket(url);
 
       ws.onopen = () => {

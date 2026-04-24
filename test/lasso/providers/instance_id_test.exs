@@ -36,8 +36,8 @@ defmodule Lasso.Providers.InstanceIdTest do
 
     test "same URL across profiles produces the same instance_id (sharing_mode: :auto)" do
       config = %{url: "https://eth.drpc.org"}
-      id_default = InstanceId.derive("ethereum", config, profile: "default")
-      id_premium = InstanceId.derive("ethereum", config, profile: "premium")
+      id_default = InstanceId.derive("ethereum", config, profile: "public")
+      id_premium = InstanceId.derive("ethereum", config, profile: "managed")
       assert id_default == id_premium
     end
 
@@ -45,10 +45,10 @@ defmodule Lasso.Providers.InstanceIdTest do
       config = %{url: "https://eth.drpc.org"}
 
       id_default =
-        InstanceId.derive("ethereum", config, profile: "default", sharing_mode: :isolated)
+        InstanceId.derive("ethereum", config, profile: "public", sharing_mode: :isolated)
 
       id_premium =
-        InstanceId.derive("ethereum", config, profile: "premium", sharing_mode: :isolated)
+        InstanceId.derive("ethereum", config, profile: "managed", sharing_mode: :isolated)
 
       assert id_default != id_premium
     end

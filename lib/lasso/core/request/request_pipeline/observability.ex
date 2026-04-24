@@ -300,14 +300,11 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
   defp report_success_to_ets(instance_id, transport) do
     now = System.system_time(:millisecond)
-    ensure_health_record(instance_id)
 
-    # Clear rate limit on success
-    :ets.delete(:lasso_instance_state, {:rate_limit, instance_id, transport})
+    clear_expired_rate_limit(instance_id, transport)
 
-    # Merge only request-sourced fields, preserving probe-sourced fields (ws_status etc.)
     existing =
-      case :ets.lookup(:lasso_instance_state, {:health, instance_id}) do
+      case :ets.lookup(:lasso_instance_state, {:health_routing, instance_id}) do
         [{_, data}] -> data
         [] -> %{}
       end
@@ -321,7 +318,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         last_error: nil
       })
 
-    :ets.insert(:lasso_instance_state, {{:health, instance_id}, merged})
+    :ets.insert(:lasso_instance_state, {{:health_routing, instance_id}, merged})
   end
 
   defp report_failure_to_ets(nil, _transport, _jerr, _profile, _chain, _provider_id), do: :ok
@@ -331,12 +328,18 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       jerr.category == :rate_limit ->
         retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
         now_ms = System.monotonic_time(:millisecond)
-        expiry = now_ms + (retry_after_ms || 30_000)
+        new_expiry = now_ms + (retry_after_ms || 30_000)
 
-        :ets.insert(:lasso_instance_state, {
-          {:rate_limit, instance_id, transport},
-          %{expiry_ms: expiry, retry_after_ms: retry_after_ms || 30_000}
-        })
+        case :ets.lookup(:lasso_instance_state, {:rate_limit, instance_id, transport}) do
+          [{_, %{expiry_ms: existing}}] when existing >= new_expiry ->
+            :ok
+
+          _ ->
+            :ets.insert(:lasso_instance_state, {
+              {:rate_limit, instance_id, transport},
+              %{expiry_ms: new_expiry, retry_after_ms: retry_after_ms || 30_000}
+            })
+        end
 
         publish_provider_event(profile, chain, provider_id, :rate_limited)
 
@@ -344,10 +347,8 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         :ok
 
       true ->
-        ensure_health_record(instance_id)
-
         existing =
-          case :ets.lookup(:lasso_instance_state, {:health, instance_id}) do
+          case :ets.lookup(:lasso_instance_state, {:health_routing, instance_id}) do
             [{_, data}] -> data
             [] -> %{}
           end
@@ -365,7 +366,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
             last_error: jerr
           })
 
-        :ets.insert(:lasso_instance_state, {{:health, instance_id}, merged})
+        :ets.insert(:lasso_instance_state, {{:health_routing, instance_id}, merged})
 
         if new_status == :unhealthy do
           publish_provider_event(profile, chain, provider_id, :unhealthy)
@@ -373,19 +374,16 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     end
   end
 
-  defp ensure_health_record(instance_id) do
-    :ets.insert_new(:lasso_instance_state, {
-      {:health, instance_id},
-      %{
-        status: :connecting,
-        http_status: :connecting,
-        ws_status: nil,
-        last_health_check: System.system_time(:millisecond),
-        consecutive_failures: 0,
-        consecutive_successes: 0,
-        last_error: nil
-      }
-    })
+  defp clear_expired_rate_limit(instance_id, transport) do
+    now_ms = System.monotonic_time(:millisecond)
+
+    case :ets.lookup(:lasso_instance_state, {:rate_limit, instance_id, transport}) do
+      [{_, %{expiry_ms: expiry}}] when expiry <= now_ms ->
+        :ets.delete(:lasso_instance_state, {:rate_limit, instance_id, transport})
+
+      _ ->
+        :ok
+    end
   end
 
   defp publish_provider_event(profile, chain, provider_id, event_type) do

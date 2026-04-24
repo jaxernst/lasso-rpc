@@ -19,7 +19,7 @@ defmodule Lasso.Core.BlockCache do
       heights = BlockCache.get_all_provider_heights("ethereum")
 
       # Subscribe to real-time updates for a profile
-      Phoenix.PubSub.subscribe(Lasso.PubSub, BlockCache.pubsub_topic("default"))
+      Phoenix.PubSub.subscribe(Lasso.PubSub, BlockCache.pubsub_topic("public"))
 
   ## Data Format
 

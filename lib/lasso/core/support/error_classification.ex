@@ -110,6 +110,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "too many requests",
     "throttled",
     "quota exceeded",
+    "reached your quota",
+    "monthly quota",
+    "daily quota",
     "capacity exceeded",
     "request count exceeded",
     "maximum requests",
@@ -117,6 +120,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "requests per second",
     "compute units",
     "cannot fulfill request",
+    "request units",
     "timeout on the free tier"
   ]
 
@@ -591,10 +595,22 @@ defmodule Lasso.Core.Support.ErrorClassification do
     @chain_disconnected
   ]
 
+  # Pocket Network PATH gateway codes
+  @pocket_gateway_internal -31_001
+  @pocket_gateway_backend -31_002
+
+  # DRPC gateway codes
+  @drpc_grpc_cancelled 14
+  @drpc_unsupported_subscription 23
+
   @provider_specific_codes %{
+    @drpc_grpc_cancelled => :server_error,
+    @drpc_unsupported_subscription => :server_error,
     26 => :block_not_available,
     30 => :rate_limit,
     35 => :capability_violation,
+    @pocket_gateway_internal => :server_error,
+    @pocket_gateway_backend => :server_error,
     -32_010 => :execution_revert,
     -32_015 => :execution_revert,
     -32_016 => :execution_revert,

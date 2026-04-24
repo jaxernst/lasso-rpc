@@ -5,6 +5,7 @@ defmodule LassoWeb.MetricsController do
 
   alias Lasso.Benchmarking.BenchmarkStore
   alias Lasso.Config.ConfigStore
+  alias Lasso.Config.ProfileValidator
   alias LassoWeb.Dashboard.MetricsHelpers
 
   @doc """
@@ -13,7 +14,7 @@ defmodule LassoWeb.MetricsController do
   @spec metrics(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def metrics(conn, %{"chain" => chain_name}) do
     Logger.info("Metrics requested for chain: #{chain_name}")
-    profile = "default"
+    profile = ProfileValidator.default_profile()
 
     # Check if chain is configured
     case ConfigStore.get_chain(profile, chain_name) do
@@ -45,7 +46,7 @@ defmodule LassoWeb.MetricsController do
     })
   end
 
-  defp collect_chain_metrics(chain_name, profile \\ "default") do
+  defp collect_chain_metrics(chain_name, profile \\ ProfileValidator.default_profile()) do
     # Get basic chain information
     {:ok, chain_config} = ConfigStore.get_chain(profile, chain_name)
     {:ok, provider_configs} = ConfigStore.get_providers(profile, chain_name)

@@ -2,9 +2,9 @@ defmodule LassoWeb.NetworkTopology do
   @moduledoc """
   Network topology visualization component for RPC providers.
 
-  Displays chains and their providers in a hexagonal packed layout for even
-  spacing and visual consistency. Chains are positioned in a spiral pattern
-  starting from the center, with providers orbiting each chain node.
+  Displays chains and their providers in a golden-angle spiral layout for organic,
+  gap-free spacing at any node count. Chains are sorted by importance (provider count
+  and configured size) with the most significant chains placed near center.
 
   Topology data is pre-computed via `compute_topology_data/3` and passed to
   `nodes_display/1` as a stable assign, keeping the render path zero-cost.
@@ -15,29 +15,20 @@ defmodule LassoWeb.NetworkTopology do
   alias LassoWeb.Dashboard.StatusHelpers
   alias LassoWeb.TopologyConfig
 
-  @doc """
-  Pre-computes the complete topology layout with resolved provider statuses.
-
-  Returns a `%{chains: %{chain_name => chain_data}}` map containing positions,
-  radii, display names, colors, and per-provider visual status classes. This
-  output is designed to be stored in a socket assign and passed directly to
-  `nodes_display/1`, keeping the render path free of computation.
-  """
   def compute_topology_data(connections, profile) do
-    hex_layout = calculate_hexagonal_layout(connections, profile)
+    layout = calculate_spiral_layout(connections, profile)
     profile_chains = get_profile_chain_configs(profile)
 
     chains =
-      Map.new(hex_layout.chains, fn {chain_name, chain_data} ->
+      Map.new(layout.chains, fn {chain_name, chain_data} ->
         providers =
           Enum.map(chain_data.providers, fn {connection, provider_data} ->
             {sx, sy, ex, ey} =
-              calculate_connection_line_with_variance(
+              calculate_connection_line(
                 chain_data.position,
                 provider_data.position,
                 chain_data.radius,
-                provider_data.radius,
-                connection.id
+                provider_data.radius
               )
 
             %{
@@ -53,6 +44,8 @@ defmodule LassoWeb.NetworkTopology do
             }
           end)
 
+        logo = TopologyConfig.chain_logo(chain_name)
+
         {chain_name,
          %{
            position: chain_data.position,
@@ -60,6 +53,8 @@ defmodule LassoWeb.NetworkTopology do
            display_name: get_chain_display_name(chain_name, profile_chains),
            chain_id_display: get_chain_id_display(chain_name, profile_chains),
            color: chain_color(chain_name, profile_chains),
+           provider_count: length(providers),
+           logo: logo,
            providers: providers
          }}
       end)
@@ -67,17 +62,6 @@ defmodule LassoWeb.NetworkTopology do
     %{chains: chains}
   end
 
-  @doc """
-  Computes provider status atoms from connections and cluster circuit states.
-
-  Returns `%{provider_id => status_atom}` where status_atom is one of:
-  :healthy, :rate_limited, :circuit_open, :testing_recovery, :recovering,
-  :degraded, :lagging, :unknown.
-
-  Status-to-color mapping is handled client-side via the NetworkTopologyStatus
-  JS hook, keeping the topology template free of status references for efficient
-  LiveView diffing.
-  """
   def compute_provider_statuses(connections, cluster_circuit_states) do
     merged = merge_worst_case_circuit_states(connections, cluster_circuit_states)
 
@@ -86,28 +70,14 @@ defmodule LassoWeb.NetworkTopology do
     end)
   end
 
-  attr(:id, :string, required: true, doc: "unique identifier for the topology component")
-
-  attr(:topology_data, :map,
-    required: true,
-    doc: "pre-computed topology layout from compute_topology_data/2"
-  )
-
-  attr(:selected_chain, :string, default: nil, doc: "currently selected chain")
-  attr(:selected_provider, :string, default: nil, doc: "currently selected provider")
-  attr(:on_chain_select, :string, default: "select_chain", doc: "event name for chain selection")
-
-  attr(:on_provider_select, :string,
-    default: "select_provider",
-    doc: "event name for provider selection"
-  )
-
-  attr(:class, :string, default: "", doc: "additional CSS classes")
-
-  attr(:preview_mode, :boolean,
-    default: false,
-    doc: "when true, shows nodes in disabled preview state"
-  )
+  attr(:id, :string, required: true)
+  attr(:topology_data, :map, required: true)
+  attr(:selected_chain, :string, default: nil)
+  attr(:selected_provider, :string, default: nil)
+  attr(:on_chain_select, :string, default: "select_chain")
+  attr(:on_provider_select, :string, default: "select_provider")
+  attr(:class, :string, default: "")
+  attr(:preview_mode, :boolean, default: false)
 
   def nodes_display(assigns) do
     ~H"""
@@ -122,53 +92,43 @@ defmodule LassoWeb.NetworkTopology do
         style="width: 4000px; height: 3000px; opacity: 0;"
         phx-click="deselect_all"
       >
-        <!-- Provider connection lines -->
-        <%= for {_chain_name, chain_data} <- @topology_data.chains do %>
-          <%= for provider <- chain_data.providers do %>
-            <svg
-              class="pointer-events-none absolute z-0"
-              style="left: 0; top: 0; width: 100%; height: 100%;"
-            >
+        <svg class="pointer-events-none absolute inset-0 z-0 h-full w-full">
+          <%= for {_chain_name, chain_data} <- @topology_data.chains do %>
+            <%= for provider <- chain_data.providers do %>
               <line
                 x1={provider.line_start_x}
                 y1={provider.line_start_y}
                 x2={provider.line_end_x}
                 y2={provider.line_end_y}
-                stroke="#6b7280"
+                stroke="#4b5563"
                 stroke-width={TopologyConfig.provider_line_width()}
                 opacity={TopologyConfig.provider_line_opacity()}
                 data-provider-line={provider.id}
               />
-            </svg>
+            <% end %>
           <% end %>
-        <% end %>
-        
-    <!-- Chain nodes -->
+        </svg>
+
         <%= for {chain_name, chain_data} <- @topology_data.chains do %>
           <% {x, y} = chain_data.position %>
           <% radius = chain_data.radius %>
-          <div
+          <% selected = @selected_chain == chain_name and not @preview_mode %>
+          <button
+            type="button"
             class={[
-              "absolute z-10 -translate-x-1/2 -translate-y-1/2 transform",
-              "flex items-center justify-center rounded-full border-2 bg-gradient-to-br shadow-xl transition-transform duration-200",
+              "absolute z-10 -translate-x-1/2 -translate-y-1/2",
+              "flex items-center justify-center rounded-full border-[3px] border-gray-700/80 transition-[transform,box-shadow,ring-color] duration-200",
               if(@preview_mode,
-                do: "cursor-default grayscale-[30%]",
-                else: "cursor-pointer hover:scale-110"
+                do: "cursor-default opacity-60",
+                else: "cursor-pointer hover:scale-105"
               ),
-              if(@selected_chain == chain_name and not @preview_mode,
-                do: "ring-purple-400/30 border-purple-400 ring-4",
-                else:
-                  if(@preview_mode,
-                    do: "border-gray-600",
-                    else: "border-gray-500 hover:border-gray-400"
-                  )
-              ),
-              "from-gray-800 to-gray-900"
+              if(selected,
+                do: "ring-2 ring-white/20",
+                else: nil
+              )
             ]}
-            style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(135deg, #{chain_data.color} 0%, #111827 100%); " <>
-              if(@selected_chain == chain_name and not @preview_mode,
-                do: "box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 15px rgba(0, 0, 0, 0.3);",
-                else: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.2), inset 0 0 15px rgba(0, 0, 0, 0.3);")}
+            style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: linear-gradient(145deg, #{chain_data.color}dd 0%, #1a2332 100%); " <>
+              if(selected, do: "box-shadow: 0 0 20px #{chain_data.color}50;", else: "box-shadow: 0 0 10px #{chain_data.color}20;")}
             phx-click={if @preview_mode, do: nil, else: @on_chain_select}
             phx-value-chain={chain_name}
             phx-value-highlight={chain_name}
@@ -176,42 +136,41 @@ defmodule LassoWeb.NetworkTopology do
             data-chain-center={"#{x},#{y}"}
           >
             <div
-              class="flex flex-col items-center justify-center overflow-hidden px-1 text-center"
-              style={"max-width: #{radius * 1.7}px;"}
+              class="flex flex-col items-center justify-center gap-0.5 overflow-hidden text-center"
+              style={"max-width: #{radius * 1.6}px;"}
               title={"#{chain_data.display_name} (#{chain_data.chain_id_display})"}
             >
-              <div class={"#{if radius < 55, do: "text-xs", else: "text-sm"} w-full font-semibold leading-tight text-white"}>
+              <span class={"#{if radius < 65, do: "text-[11px]", else: "text-sm"} font-semibold leading-tight tracking-tight text-white"}>
                 {chain_data.display_name}
-              </div>
-              <div class={"#{if radius < 55, do: "text-[10px]", else: "text-xs"} text-gray-400"}>
-                {chain_data.chain_id_display}
-              </div>
+              </span>
+              <span class={"#{if radius < 65, do: "text-[9px]", else: "text-[11px]"} font-mono text-white/40"}>
+                ID {chain_data.chain_id_display}
+              </span>
             </div>
-          </div>
+          </button>
         <% end %>
-        
-    <!-- Provider nodes -->
+
         <%= for {_chain_name, chain_data} <- @topology_data.chains do %>
           <%= for provider <- chain_data.providers do %>
             <% {x, y} = provider.position %>
             <% radius = provider.radius %>
             <div
               class={[
-                "z-5 absolute -translate-x-1/2 -translate-y-1/2 transform",
-                "flex items-center justify-center rounded-full border-2 border-gray-600 transition-transform duration-150",
+                "z-5 absolute -translate-x-1/2 -translate-y-1/2",
+                "flex items-center justify-center rounded-full border border-gray-600/50 transition-[transform,box-shadow,border-color] duration-150",
                 if(@preview_mode,
-                  do: "cursor-default grayscale-[30%]",
+                  do: "cursor-default opacity-60",
                   else: "cursor-pointer hover:scale-125"
                 ),
                 if(@selected_provider == provider.id and not @preview_mode,
-                  do: "ring-purple-400/30 !border-purple-400 ring-2",
+                  do: "ring-1 ring-white/20 !border-white/30",
                   else: nil
                 )
               ]}
-              style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; " <>
+              style={"left: #{x}px; top: #{y}px; width: #{radius * 2}px; height: #{radius * 2}px; background: rgba(17,24,39,0.6); backdrop-filter: blur(4px); " <>
                 if(@selected_provider == provider.id and not @preview_mode,
-                  do: "box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);",
-                  else: "box-shadow: 0 0 4px rgba(255, 255, 255, 0.15);")}
+                  do: "box-shadow: 0 0 8px rgba(255,255,255,0.15);",
+                  else: "")}
               phx-click={if @preview_mode, do: nil, else: @on_provider_select}
               phx-value-provider={provider.id}
               phx-value-highlight={provider.id}
@@ -223,19 +182,15 @@ defmodule LassoWeb.NetworkTopology do
               <div
                 class="rounded-full"
                 data-dot
-                style={"width: #{max(4, radius - 4)}px; height: #{max(4, radius - 4)}px; background-color: #9ca3af;"}
+                style={"width: #{max(4, radius - 4)}px; height: #{max(4, radius - 4)}px; background-color: #6b7280;"}
               >
               </div>
-              
-    <!-- WebSocket support indicator -->
               <%= if provider.has_ws do %>
                 <div
-                  class="absolute -right-1.5 -bottom-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white shadow-md"
-                  title="WebSocket Support"
+                  class="absolute -right-1 -bottom-1 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-blue-500/30 bg-blue-500/20"
+                  title="WebSocket"
                 >
-                  <svg class="h-2.5 w-2.5 text-white" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
-                  </svg>
+                  <div class="h-1.5 w-1.5 rounded-full bg-blue-400"></div>
                 </div>
               <% end %>
             </div>
@@ -246,176 +201,126 @@ defmodule LassoWeb.NetworkTopology do
     """
   end
 
-  # Layout computation
+  # ── Layout: Golden-Angle Spiral ──
 
-  defp generate_hex_spiral_coordinates(0), do: []
-  defp generate_hex_spiral_coordinates(1), do: [{0, 0}]
-
-  defp generate_hex_spiral_coordinates(count) when count > 1 do
-    rings_needed = calculate_rings_needed(count - 1)
-
-    ring_coords = Enum.flat_map(1..rings_needed, &generate_ring_coordinates/1)
-    Enum.take([{0, 0} | ring_coords], count)
-  end
-
-  defp generate_ring_coordinates(ring) do
-    directions = [{1, 0}, {0, 1}, {-1, 1}, {-1, 0}, {0, -1}, {1, -1}]
-    start_pos = {0, -ring}
-
-    for {dq, dr} <- directions,
-        _step <- 1..ring,
-        reduce: {start_pos, []} do
-      {{q, r}, coords} ->
-        {
-          {q + dq, r + dr},
-          coords ++ [{q, r}]
-        }
-    end
-    |> elem(1)
-  end
-
-  defp calculate_rings_needed(remaining) when remaining <= 0, do: 0
-
-  defp calculate_rings_needed(remaining) do
-    calculate_rings_needed(remaining, 1)
-  end
-
-  defp calculate_rings_needed(remaining, ring) when remaining <= 0, do: ring - 1
-
-  defp calculate_rings_needed(remaining, ring) do
-    hexes_in_ring = 6 * ring
-    calculate_rings_needed(remaining - hexes_in_ring, ring + 1)
-  end
-
-  defp axial_to_pixel(q, r, spacing) do
-    x = spacing * (3.0 / 2.0 * q)
-    y = spacing * (:math.sqrt(3.0) * r + :math.sqrt(3.0) / 2.0 * q)
-    {x, y}
-  end
-
-  defp order_chains_for_hex_layout(chains) do
-    chains
-    |> Map.keys()
-    |> Enum.sort_by(&:erlang.phash2/1)
-  end
-
-  defp group_connections_by_chain(connections) do
-    Enum.group_by(connections, &extract_chain_from_connection(&1))
-  end
-
-  defp calculate_hexagonal_layout(connections, profile) do
+  defp calculate_spiral_layout(connections, profile) do
     chains = group_connections_by_chain(connections)
     {center_x, center_y} = TopologyConfig.canvas_center()
-
     all_chain_configs = get_profile_chain_configs(profile)
-    chain_names = order_chains_for_hex_layout(chains)
 
-    hex_coords = generate_hex_spiral_coordinates(length(chain_names))
-    spacing = TopologyConfig.hex_spacing(map_size(chains))
+    sorted_chains = order_chains_by_importance(chains, all_chain_configs)
+    padding = TopologyConfig.spiral_spacing(map_size(chains))
 
     positioned_chains =
-      chain_names
-      |> Enum.zip(hex_coords)
-      |> Enum.reduce(%{}, fn {chain_name, {q, r}}, acc ->
-        chain_connections = Map.get(chains, chain_name)
-
-        {hex_x, hex_y} = axial_to_pixel(q, r, spacing)
-        chain_x = center_x + hex_x
-        chain_y = center_y + hex_y
-
+      sorted_chains
+      |> Enum.with_index()
+      |> Enum.reduce({%{}, []}, fn {{chain_name, chain_connections}, index}, {acc, placed} ->
         topology = get_chain_topology(chain_name, all_chain_configs)
         chain_radius = calculate_chain_radius_from_config(topology, length(chain_connections))
 
+        footprint =
+          TopologyConfig.provider_orbit_for_radius(chain_radius) +
+            TopologyConfig.provider_node_radius()
+
+        {chain_x, chain_y} =
+          find_non_overlapping_position(index, placed, footprint, padding)
+
         chain_data =
           build_chain_node(
-            chain_name,
             chain_connections,
-            chain_x,
-            chain_y,
+            center_x + chain_x,
+            center_y + chain_y,
             chain_radius,
             TopologyConfig.provider_orbit_for_radius(chain_radius),
             TopologyConfig.provider_node_radius()
           )
 
-        Map.put(acc, chain_name, chain_data)
+        new_placed = [{chain_x, chain_y, footprint} | placed]
+        {Map.put(acc, chain_name, chain_data), new_placed}
       end)
+      |> elem(0)
 
-    {centroid_x, centroid_y} = calculate_layout_centroid(positioned_chains)
-    offset_x = center_x - centroid_x
-    offset_y = center_y - centroid_y
-
-    centered_chains =
-      positioned_chains
-      |> Enum.map(fn {chain_name, chain_data} ->
-        {chain_x, chain_y} = chain_data.position
-        adjusted_chain_x = chain_x + offset_x
-        adjusted_chain_y = chain_y + offset_y
-
-        adjusted_providers =
-          Enum.map(chain_data.providers, fn {connection, provider_data} ->
-            {provider_x, provider_y} = provider_data.position
-            adjusted_provider_x = provider_x + offset_x
-            adjusted_provider_y = provider_y + offset_y
-
-            {connection,
-             Map.put(provider_data, :position, {adjusted_provider_x, adjusted_provider_y})}
-          end)
-
-        adjusted_chain_data =
-          chain_data
-          |> Map.put(:position, {adjusted_chain_x, adjusted_chain_y})
-          |> Map.put(:providers, adjusted_providers)
-
-        {chain_name, adjusted_chain_data}
-      end)
-      |> Map.new()
-
+    centered_chains = center_layout(positioned_chains, center_x, center_y)
     %{chains: centered_chains}
   end
 
-  defp calculate_layout_centroid(positioned_chains) do
-    if map_size(positioned_chains) == 0 do
-      {0, 0}
+  defp find_non_overlapping_position(0, _placed, _footprint, _padding), do: {0.0, 0.0}
+
+  defp find_non_overlapping_position(index, placed, footprint, padding) do
+    angle = index * TopologyConfig.golden_angle()
+    initial_r = :math.sqrt(index) * padding
+
+    push_outward(angle, initial_r, placed, footprint, padding)
+  end
+
+  defp push_outward(angle, r, placed, footprint, step) do
+    x = :math.cos(angle) * r
+    y = :math.sin(angle) * r
+
+    if overlaps_any?(x, y, footprint, placed) do
+      push_outward(angle, r + step * 0.25, placed, footprint, step)
     else
-      {sum_x, sum_y, count} =
-        positioned_chains
-        |> Enum.reduce({0, 0, 0}, fn {_chain_name, chain_data}, {acc_x, acc_y, acc_count} ->
-          {x, y} = chain_data.position
-          {acc_x + x, acc_y + y, acc_count + 1}
-        end)
-
-      {sum_x / count, sum_y / count}
+      {x, y}
     end
   end
 
-  defp get_profile_chain_configs(profile) do
-    case ConfigStore.get_profile_chains(profile) do
-      {:ok, chains} -> chains
-      {:error, :not_found} -> %{}
+  defp overlaps_any?(x, y, footprint, placed) do
+    Enum.any?(placed, fn {px, py, pf} ->
+      dx = x - px
+      dy = y - py
+      min_dist = footprint + pf + 20
+      dx * dx + dy * dy < min_dist * min_dist
+    end)
+  end
+
+  defp order_chains_by_importance(chains, all_chain_configs) do
+    size_priority = %{xl: 0, lg: 1, md: 2, sm: 3}
+
+    chains
+    |> Enum.sort_by(fn {chain_name, connections} ->
+      topology = get_chain_topology(chain_name, all_chain_configs)
+      size = if topology, do: Map.get(topology, :size), else: nil
+      priority = Map.get(size_priority, size, 4)
+      {priority, -length(connections), chain_name}
+    end)
+  end
+
+  defp center_layout(positioned_chains, target_x, target_y) do
+    if map_size(positioned_chains) == 0 do
+      positioned_chains
+    else
+      {centroid_x, centroid_y} = calculate_layout_centroid(positioned_chains)
+      offset_x = target_x - centroid_x
+      offset_y = target_y - centroid_y
+
+      Map.new(positioned_chains, fn {chain_name, chain_data} ->
+        {cx, cy} = chain_data.position
+
+        adjusted_providers =
+          Enum.map(chain_data.providers, fn {connection, pdata} ->
+            {px, py} = pdata.position
+            {connection, %{pdata | position: {px + offset_x, py + offset_y}}}
+          end)
+
+        {chain_name,
+         %{chain_data | position: {cx + offset_x, cy + offset_y}, providers: adjusted_providers}}
+      end)
     end
   end
 
-  defp get_chain_topology(chain_name, all_chain_configs) do
-    case Map.get(all_chain_configs, chain_name) do
-      %{topology: topology} when not is_nil(topology) -> topology
-      _ -> nil
-    end
+  defp calculate_layout_centroid(positioned_chains) do
+    {sum_x, sum_y, count} =
+      Enum.reduce(positioned_chains, {0, 0, 0}, fn {_, chain_data}, {ax, ay, ac} ->
+        {x, y} = chain_data.position
+        {ax + x, ay + y, ac + 1}
+      end)
+
+    {sum_x / count, sum_y / count}
   end
 
-  defp calculate_chain_radius_from_config(topology, provider_count) do
-    size = if topology, do: Map.get(topology, :size), else: nil
-    TopologyConfig.chain_radius(size, provider_count)
-  end
+  # ── Provider Positioning ──
 
-  defp build_chain_node(
-         _chain_name,
-         chain_connections,
-         x,
-         y,
-         chain_radius,
-         provider_orbit,
-         provider_radius
-       ) do
+  defp build_chain_node(chain_connections, x, y, chain_radius, provider_orbit, provider_radius) do
     provider_count = length(chain_connections)
 
     providers =
@@ -453,40 +358,46 @@ defmodule LassoWeb.NetworkTopology do
     2 * :math.pi() * index / count - :math.pi() / 2
   end
 
-  defp calculate_connection_line_with_variance(
-         {chain_x, chain_y},
-         {provider_x, provider_y},
-         chain_radius,
-         provider_radius,
-         _seed_key
-       ) do
+  # ── Connection Lines ──
+
+  defp calculate_connection_line({chain_x, chain_y}, {provider_x, provider_y}, cr, pr) do
     dx = provider_x - chain_x
     dy = provider_y - chain_y
     distance = :math.sqrt(dx * dx + dy * dy)
 
     if distance > 0 do
-      norm_dx = dx / distance
-      norm_dy = dy / distance
-
-      start_x = chain_x + norm_dx * chain_radius
-      start_y = chain_y + norm_dy * chain_radius
-      end_x = provider_x - norm_dx * provider_radius
-      end_y = provider_y - norm_dy * provider_radius
-
-      {start_x, start_y, end_x, end_y}
+      nx = dx / distance
+      ny = dy / distance
+      {chain_x + nx * cr, chain_y + ny * cr, provider_x - nx * pr, provider_y - ny * pr}
     else
       {chain_x, chain_y, provider_x, provider_y}
     end
   end
 
-  defp extract_chain_from_connection(connection) do
-    Map.get(connection, :chain, "unknown")
+  # ── Data Helpers ──
+
+  defp group_connections_by_chain(connections) do
+    Enum.group_by(connections, &Map.get(&1, :chain, "unknown"))
   end
 
-  defp has_websocket_support?(%{type: type}) when type in [:websocket, :both], do: true
-  defp has_websocket_support?(%{type: :http}), do: false
-  defp has_websocket_support?(%{ws_url: ws_url}) when is_binary(ws_url) and ws_url != "", do: true
-  defp has_websocket_support?(_), do: false
+  defp get_profile_chain_configs(profile) do
+    case ConfigStore.get_profile_chains(profile) do
+      {:ok, chains} -> chains
+      {:error, :not_found} -> %{}
+    end
+  end
+
+  defp get_chain_topology(chain_name, all_chain_configs) do
+    case Map.get(all_chain_configs, chain_name) do
+      %{topology: topology} when not is_nil(topology) -> topology
+      _ -> nil
+    end
+  end
+
+  defp calculate_chain_radius_from_config(topology, provider_count) do
+    size = if topology, do: Map.get(topology, :size), else: nil
+    TopologyConfig.chain_radius(size, provider_count)
+  end
 
   defp chain_color(chain_name, profile_chains) do
     topology = get_chain_topology(chain_name, profile_chains)
@@ -515,6 +426,13 @@ defmodule LassoWeb.NetworkTopology do
         chain_name
     end
   end
+
+  defp has_websocket_support?(%{type: type}) when type in [:websocket, :both], do: true
+  defp has_websocket_support?(%{type: :http}), do: false
+  defp has_websocket_support?(%{ws_url: ws_url}) when is_binary(ws_url) and ws_url != "", do: true
+  defp has_websocket_support?(_), do: false
+
+  # ── Circuit State Merging ──
 
   defp merge_worst_case_circuit_states(connections, cluster_circuit_states)
        when map_size(cluster_circuit_states) == 0 do

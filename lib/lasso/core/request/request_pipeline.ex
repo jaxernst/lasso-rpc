@@ -21,6 +21,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   require Logger
 
+  alias Lasso.Config.ProfileValidator
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.{CandidateListing, Catalog, InstanceState}
@@ -391,7 +392,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec handle_no_channels(RequestContext.t()) :: result()
   defp handle_no_channels(ctx) do
-    profile = if ctx.opts, do: ctx.opts.profile, else: "default"
+    profile = if ctx.opts, do: ctx.opts.profile, else: ProfileValidator.default_profile()
 
     retry_after_ms =
       calculate_min_recovery_time(profile, ctx.chain, ctx.opts && ctx.opts.transport)
@@ -565,7 +566,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec log_slow_request_if_needed(number(), method(), Channel.t(), RequestContext.t()) :: :ok
   defp log_slow_request_if_needed(latency_ms, method, channel, ctx) when latency_ms > 4000 do
-    Logger.error("VERY SLOW request (may timeout clients)",
+    Logger.warning("VERY SLOW request (may timeout clients)",
       request_id: ctx.request_id,
       method: method,
       provider: channel.provider_id,

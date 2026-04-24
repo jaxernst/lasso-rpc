@@ -37,13 +37,13 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
   Options:
   - `:id` (required) - Provider identifier
-  - `:profile` - Profile to register provider with (default: "default")
+  - `:profile` - Profile to register provider with (default: "public")
   - `:behavior` - Behavior specification (default: :healthy)
   - `:priority` - Provider priority (default: 100)
   """
   def start_mock(chain, spec) when is_map(spec) do
     provider_id = Map.get(spec, :id) || raise "Mock HTTP provider requires :id field"
-    profile = Map.get(spec, :profile, "default")
+    profile = Map.get(spec, :profile, "public")
 
     # Start the GenServer
     {:ok, pid} =
@@ -96,15 +96,13 @@ defmodule Lasso.Testing.MockHTTPProvider do
           # Mark as healthy in ETS
           if instance_id do
             :ets.insert(:lasso_instance_state, {
-              {:health, instance_id},
+              {:health_probe, instance_id},
               %{
                 status: :healthy,
                 http_status: :healthy,
-                ws_status: nil,
                 consecutive_failures: 0,
-                consecutive_successes: 1,
                 last_error: nil,
-                last_health_check: System.monotonic_time(:millisecond)
+                last_health_check: System.system_time(:millisecond)
               }
             })
           end
@@ -146,7 +144,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
   """
   def stop_mock(chain, provider_id) do
     # Remove from ConfigStore
-    Lasso.Config.ConfigStore.unregister_provider_runtime("default", chain, provider_id)
+    Lasso.Config.ConfigStore.unregister_provider_runtime("public", chain, provider_id)
 
     # Stop the GenServer
     case Registry.lookup(Lasso.Registry, {:http_provider, provider_id}) do
@@ -271,7 +269,9 @@ defmodule Lasso.Testing.MockHTTPProvider do
           end
         end
 
-        :ets.delete(:lasso_instance_state, {:health, instance_id})
+        :ets.delete(:lasso_instance_state, {:health_probe, instance_id})
+        :ets.delete(:lasso_instance_state, {:health_block_sync, instance_id})
+        :ets.delete(:lasso_instance_state, {:health_routing, instance_id})
       end
     end)
   end

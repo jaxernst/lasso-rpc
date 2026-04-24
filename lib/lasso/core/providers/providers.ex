@@ -11,7 +11,7 @@ defmodule Lasso.Providers do
   alias Lasso.Providers.{Catalog, InstanceState}
   alias Lasso.RPC.ChainSupervisor
 
-  @default_profile "default"
+  @default_profile Lasso.Config.ProfileValidator.default_profile()
 
   @type provider_config :: %{
           id: String.t(),

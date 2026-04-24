@@ -2,8 +2,9 @@ defmodule Lasso.BlockSync.Registry do
   @moduledoc """
   Single source of truth for block height data.
 
-  This GenServer owns an ETS table that stores block heights from all
-  providers (WS or HTTP).
+  Stores block heights from all providers (WS or HTTP) in an ETS table
+  owned by the application supervisor. All public functions operate
+  directly on the table — there is no coordinating process.
 
   ## ETS Schema
 
@@ -20,7 +21,6 @@ defmodule Lasso.BlockSync.Registry do
   This module focuses solely on block height tracking.
   """
 
-  use GenServer
   require Logger
 
   alias Lasso.Core.BlockSync.BlockTimeMeasurement
@@ -29,11 +29,6 @@ defmodule Lasso.BlockSync.Registry do
   @default_freshness_ms 30_000
 
   ## Client API
-
-  @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-  end
 
   @doc """
   Store a block height from a provider.
@@ -235,23 +230,6 @@ defmodule Lasso.BlockSync.Registry do
     updated = BlockTimeMeasurement.record(measurement, height)
     :ets.insert(@table, {{:block_time, chain}, updated})
     :ok
-  end
-
-  ## GenServer Callbacks
-
-  @impl true
-  def init(_opts) do
-    table =
-      :ets.new(@table, [
-        :set,
-        :public,
-        :named_table,
-        read_concurrency: true,
-        write_concurrency: true
-      ])
-
-    Logger.info("BlockSync.Registry started", table: table)
-    {:ok, %{table: table}}
   end
 
   ## Private Functions

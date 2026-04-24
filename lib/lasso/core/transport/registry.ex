@@ -60,6 +60,7 @@ defmodule Lasso.RPC.TransportRegistry do
   require Logger
 
   alias Lasso.Config.ConfigStore
+  alias Lasso.Config.ProfileValidator
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.Channel
 
@@ -85,7 +86,7 @@ defmodule Lasso.RPC.TransportRegistry do
   Starts the TransportRegistry for a profile/chain pair.
 
   Accepts either `{profile, chain_name, chain_config}` (profile-aware) or
-  `{chain_name, chain_config}` (backward compatible, uses "default" profile).
+  `{chain_name, chain_config}` (backward compatible, uses default profile).
   """
   @spec start_link({profile, chain_name, map()} | {chain_name, map()}) :: GenServer.on_start()
   def start_link({profile, chain_name, chain_config}) when is_binary(profile) do
@@ -95,7 +96,7 @@ defmodule Lasso.RPC.TransportRegistry do
   end
 
   def start_link({chain_name, chain_config}) do
-    start_link({"default", chain_name, chain_config})
+    start_link({ProfileValidator.default_profile(), chain_name, chain_config})
   end
 
   @doc """
@@ -145,6 +146,9 @@ defmodule Lasso.RPC.TransportRegistry do
   # GenServer call for channel creation/retrieval. Called on cache miss.
   defp do_get_channel(profile, chain_name, provider_id, transport, opts) do
     GenServer.call(via_name(profile, chain_name), {:get_channel, provider_id, transport, opts})
+  catch
+    :exit, {:noproc, _} -> {:error, :registry_unavailable}
+    :exit, {:timeout, _} -> {:error, :registry_timeout}
   end
 
   @doc """
@@ -153,11 +157,16 @@ defmodule Lasso.RPC.TransportRegistry do
   HTTP is created if url/http_url is configured. WS is created only if ws_url is
   configured and the WS connection is currently established.
 
-  Accepts optional profile as first argument (defaults to "default").
+  Accepts optional profile as first argument (defaults to the canonical default profile).
   """
   @spec initialize_provider_channels(chain_name, provider_id, map()) :: :ok | {:error, term()}
   def initialize_provider_channels(chain_name, provider_id, provider_config) do
-    initialize_provider_channels("default", chain_name, provider_id, provider_config)
+    initialize_provider_channels(
+      ProfileValidator.default_profile(),
+      chain_name,
+      provider_id,
+      provider_config
+    )
   end
 
   @spec initialize_provider_channels(profile, chain_name, provider_id, map()) ::
@@ -173,13 +182,13 @@ defmodule Lasso.RPC.TransportRegistry do
   @doc """
   Lists all available channels for a provider.
 
-  Accepts optional profile as first argument (defaults to "default").
+  Accepts optional profile as first argument (defaults to the canonical default profile).
 
   Returns a list of {transport, channel} tuples.
   """
   @spec list_provider_channels(chain_name, provider_id) :: [{transport, Channel.t()}]
   def list_provider_channels(chain_name, provider_id) do
-    list_provider_channels("default", chain_name, provider_id)
+    list_provider_channels(ProfileValidator.default_profile(), chain_name, provider_id)
   end
 
   @spec list_provider_channels(profile, chain_name, provider_id) :: [{transport, Channel.t()}]
@@ -195,13 +204,13 @@ defmodule Lasso.RPC.TransportRegistry do
   - exclude: [provider_id]
   - method: String.t() (for capability filtering)
 
-  Accepts optional profile as first argument (defaults to "default").
+  Accepts optional profile as first argument (defaults to the canonical default profile).
 
   Returns a list of Channel structs with transport and capability information.
   """
   @spec get_candidate_channels(chain_name, map()) :: [Channel.t()]
   def get_candidate_channels(chain_name, filters \\ %{}) do
-    get_candidate_channels("default", chain_name, filters)
+    get_candidate_channels(ProfileValidator.default_profile(), chain_name, filters)
   end
 
   @spec get_candidate_channels(profile, chain_name, map()) :: [Channel.t()]
@@ -213,11 +222,11 @@ defmodule Lasso.RPC.TransportRegistry do
   @doc """
   Forces refresh of capabilities for a provider/transport combination.
 
-  Accepts optional profile as first argument (defaults to "default").
+  Accepts optional profile as first argument (defaults to the canonical default profile).
   """
   @spec refresh_capabilities(chain_name, provider_id, transport) :: :ok
   def refresh_capabilities(chain_name, provider_id, transport) do
-    refresh_capabilities("default", chain_name, provider_id, transport)
+    refresh_capabilities(ProfileValidator.default_profile(), chain_name, provider_id, transport)
   end
 
   @spec refresh_capabilities(profile, chain_name, provider_id, transport) :: :ok
@@ -228,11 +237,11 @@ defmodule Lasso.RPC.TransportRegistry do
   @doc """
   Closes and removes a channel from the registry.
 
-  Accepts optional profile as first argument (defaults to "default").
+  Accepts optional profile as first argument (defaults to the canonical default profile).
   """
   @spec close_channel(chain_name, provider_id, transport) :: :ok
   def close_channel(chain_name, provider_id, transport) do
-    close_channel("default", chain_name, provider_id, transport)
+    close_channel(ProfileValidator.default_profile(), chain_name, provider_id, transport)
   end
 
   @spec close_channel(profile, chain_name, provider_id, transport) :: :ok
@@ -595,11 +604,11 @@ defmodule Lasso.RPC.TransportRegistry do
   @doc """
   Returns the via tuple for the TransportRegistry GenServer.
 
-  Accepts optional profile as first argument (defaults to "default").
+  Accepts optional profile as first argument (defaults to the canonical default profile).
   """
   @spec via_name(String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(chain_name) when is_binary(chain_name) do
-    via_name("default", chain_name)
+    via_name(ProfileValidator.default_profile(), chain_name)
   end
 
   @spec via_name(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
