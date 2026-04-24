@@ -76,6 +76,44 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
 
       assert has_health
     end
+
+    test "real probe task updates coordinator backoff state" do
+      chain = "pc_async_path_chain"
+      profile = "pc_async_path"
+
+      register_chain(profile, chain, [
+        %{id: "pc_async_bad", name: "Async Bad", url: "http://127.0.0.1:1", priority: 1}
+      ])
+
+      Catalog.build_from_config()
+      {:ok, pid} = ProbeCoordinator.start_link(chain)
+
+      on_exit(fn ->
+        try do
+          case GenServer.whereis(ProbeCoordinator.via_name(chain)) do
+            nil -> :ok
+            proc -> GenServer.stop(proc, :normal, 1_000)
+          end
+        catch
+          :exit, _ -> :ok
+        end
+
+        ConfigStore.unregister_chain_runtime(profile, chain)
+        Catalog.build_from_config()
+      end)
+
+      [instance_id] = Catalog.list_instances_for_chain(chain)
+      before = :sys.get_state(pid).instances[instance_id]
+      assert before.consecutive_failures == 0
+      assert before.current_backoff_ms == 0
+
+      send(pid, :tick)
+
+      assert_wait_until(fn ->
+        current = :sys.get_state(pid).instances[instance_id]
+        current.consecutive_failures > 0 and current.current_backoff_ms > 0
+      end)
+    end
   end
 
   describe "reload_instances/1" do
@@ -370,4 +408,17 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
   rescue
     ArgumentError -> :ok
   end
+
+  defp assert_wait_until(fun, attempts \\ 25)
+
+  defp assert_wait_until(fun, attempts) when attempts > 0 do
+    if fun.() do
+      assert true
+    else
+      Process.sleep(50)
+      assert_wait_until(fun, attempts - 1)
+    end
+  end
+
+  defp assert_wait_until(_fun, 0), do: flunk("condition not met in time")
 end

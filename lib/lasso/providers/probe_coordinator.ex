@@ -93,7 +93,20 @@ defmodule Lasso.Providers.ProbeCoordinator do
   @impl true
   def handle_info({ref, {instance_id, result}}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
+    handle_probe_result(instance_id, result, state)
+  end
 
+  @impl true
+  def handle_info({:probe_result, instance_id, result}, state) do
+    handle_probe_result(instance_id, result, state)
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
+    {:noreply, state}
+  end
+
+  defp handle_probe_result(instance_id, result, state) do
     case Map.get(state.instances, instance_id) do
       nil ->
         {:noreply, state}
@@ -118,11 +131,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
         {:noreply, %{state | instances: Map.put(state.instances, instance_id, updated)}}
     end
-  end
-
-  @impl true
-  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
-    {:noreply, state}
   end
 
   defp do_reload_instances(state) do
@@ -181,11 +189,13 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   defp probe_instance(state, instance_id, inst, now) do
     chain = state.chain
+    coordinator = self()
 
     case Catalog.get_instance(instance_id) do
       {:ok, %{url: url}} when is_binary(url) ->
         Task.Supervisor.start_child(Lasso.TaskSupervisor, fn ->
-          do_http_probe(instance_id, url, chain)
+          {^instance_id, result} = do_http_probe(instance_id, url, chain)
+          send(coordinator, {:probe_result, instance_id, result})
         end)
 
       _ ->
