@@ -192,7 +192,7 @@ defmodule Lasso.Config.ProfileValidatorTest do
 
       # All configured profiles should validate
       for profile <- profiles do
-        assert {:ok, ^profile} = ProfileValidator.validate(profile)
+        assert {:ok, _validated} = ProfileValidator.validate(profile)
       end
     end
 

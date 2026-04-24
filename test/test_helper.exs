@@ -11,10 +11,10 @@ defmodule TestStartupValidator do
     # Verify only test profiles loaded
     profiles = Lasso.Config.ConfigStore.list_profiles()
 
-    unless Enum.sort(profiles) == ["default", "testnet"] do
+    unless Enum.sort(profiles) == ["default", "public", "testnet"] do
       raise """
       Test environment loaded unexpected profiles: #{inspect(profiles)}
-      Expected only: ["default", "testnet"]
+      Expected only: ["default", "public", "testnet"]
       Check test/support/profiles/ has only test profiles
       """
     end

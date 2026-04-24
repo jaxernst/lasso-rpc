@@ -17,6 +17,7 @@ defmodule Lasso.RPC.RequestContext do
   @type t :: %__MODULE__{
           # Request identification
           request_id: String.t(),
+          account_id: String.t() | nil,
           chain: String.t(),
           method: String.t(),
           params: list(),
@@ -72,6 +73,7 @@ defmodule Lasso.RPC.RequestContext do
         }
 
   defstruct request_id: nil,
+            account_id: nil,
             chain: nil,
             method: nil,
             params: [],
@@ -123,6 +125,7 @@ defmodule Lasso.RPC.RequestContext do
 
     %__MODULE__{
       request_id: request_id,
+      account_id: Keyword.get(opts, :account_id),
       chain: chain,
       method: method,
       params: params,

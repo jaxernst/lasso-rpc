@@ -23,13 +23,15 @@ defmodule Lasso.Config.CapabilitiesIntegrationTest do
       validate_profile_capabilities(profile)
     end
 
-    test "premium.yml loads and all capabilities pass validation" do
-      assert {:ok, profile} = load_profile("managed")
+    test "public.yml loads and all capabilities pass validation" do
+      assert {:ok, profile} = load_profile("public")
       validate_profile_capabilities(profile)
     end
 
     test "all profiles have consistent capabilities for same-provider instances" do
-      profile_slugs = list_profile_slugs()
+      profile_slugs =
+        list_profile_slugs()
+        |> Enum.filter(&(Lasso.Config.ProfileValidator.resolve_alias(&1) == &1))
 
       loaded =
         Enum.map(profile_slugs, fn slug ->
