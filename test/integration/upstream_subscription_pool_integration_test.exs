@@ -4,7 +4,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
   alias Lasso.Core.Streaming.UpstreamSubscriptionPool
   alias Lasso.Testing.MockWSProvider
 
-  @default_profile "default"
+  @default_profile "public"
 
   setup do
     suffix = System.unique_integer([:positive])

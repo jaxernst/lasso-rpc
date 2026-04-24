@@ -11,6 +11,8 @@ defmodule Lasso.Events.ProviderHealthEvent do
     set via `LASSO_NODE_ID` env var. Used for state partitioning and dashboard filtering.
   """
 
+  alias Lasso.Config.ProfileValidator
+
   @type health_status :: :healthy | :unhealthy | :degraded | :unknown
 
   @type t :: %__MODULE__{
@@ -48,7 +50,7 @@ defmodule Lasso.Events.ProviderHealthEvent do
   def new(attrs) do
     %__MODULE__{
       ts: attrs[:ts] || System.system_time(:millisecond),
-      profile: attrs[:profile] || "default",
+      profile: attrs[:profile] || ProfileValidator.default_profile(),
       source_node: node(),
       source_node_id: get_source_node_id(),
       chain: attrs[:chain],

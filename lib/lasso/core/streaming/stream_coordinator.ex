@@ -12,6 +12,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   alias Lasso.Core.Support.{ContinuityPolicy, GapFiller}
   alias Lasso.Events.Subscription
+  alias Lasso.Providers.Catalog
 
   alias Lasso.RPC.{
     ChainState,
@@ -48,10 +49,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   @type key :: {:newHeads} | {:logs, map()}
 
   # Circuit breaker defaults
-  @max_failover_attempts 3
+  @default_max_failover_attempts 3
+  @max_dynamic_failover_attempts 11
   @failover_cooldown_ms 5_000
   @max_event_buffer 100
-  @degraded_mode_retry_delay_ms 30_000
+  @degraded_mode_retry_delay_ms 60_000
 
   @spec start_link({String.t(), String.t(), term(), keyword()}) :: GenServer.on_start()
   def start_link({profile, chain, key, opts})
@@ -112,7 +114,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       failover_status: :active,
       failover_context: nil,
       failover_history: [],
-      max_failover_attempts: Keyword.get(opts, :max_failover_attempts, @max_failover_attempts),
+      max_failover_attempts: Keyword.get(opts, :max_failover_attempts),
       failover_cooldown_ms: Keyword.get(opts, :failover_cooldown_ms, @failover_cooldown_ms),
       max_event_buffer: Keyword.get(opts, :max_event_buffer, @max_event_buffer)
     }
@@ -318,14 +320,17 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     # Check circuit breaker
     recent_failures = count_recent_failures(state.failover_history, state.failover_cooldown_ms)
 
-    if recent_failures >= state.max_failover_attempts do
+    budget = failover_budget(state)
+    max_failover_attempts = budget.attempts
+
+    if recent_failures >= max_failover_attempts do
       Logger.error(
-        "Circuit breaker triggered: #{recent_failures} attempts in #{state.failover_cooldown_ms}ms",
+        "Circuit breaker triggered: #{recent_failures}/#{max_failover_attempts} attempts in #{state.failover_cooldown_ms}ms",
         chain: state.chain,
         key: inspect(state.key)
       )
 
-      enter_degraded_mode(state)
+      enter_degraded_mode(state, budget)
     else
       # Start backfill task
       profile = state.profile
@@ -371,7 +376,14 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           state.failover_history
         end
 
-      telemetry_failover_initiated(state.chain, state.key, old_provider_id, new_provider_id)
+      telemetry_failover_initiated(
+        state.chain,
+        state.key,
+        old_provider_id,
+        new_provider_id,
+        recent_failures,
+        budget
+      )
 
       broadcast_subscription_event(state, %Subscription.Failover{
         ts: System.system_time(:millisecond),
@@ -585,7 +597,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       new_state
       | primary_provider_id: provider_id,
         failover_status: :active,
-        failover_context: nil
+        failover_context: nil,
+        failover_history: []
     }
 
     duration_ms = System.monotonic_time(:millisecond) - state.failover_context.started_at
@@ -655,21 +668,27 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     # Check if we should cascade to another provider
     recent_failures = count_recent_failures(state.failover_history, state.failover_cooldown_ms)
 
-    if recent_failures >= state.max_failover_attempts do
+    budget = failover_budget(state)
+    max_failover_attempts = budget.attempts
+
+    if recent_failures >= max_failover_attempts do
       Logger.error("Max failover attempts reached, entering degraded mode",
         chain: state.chain,
         key: inspect(state.key)
       )
 
-      enter_degraded_mode(state)
+      enter_degraded_mode(state, budget)
     else
-      # Try next provider
-      excluded = [
-        state.failover_context.old_provider_id,
-        state.failover_context.new_provider_id
-      ]
+      # Try next provider, excluding all previously failed providers
+      excluded =
+        [
+          state.failover_context.new_provider_id
+          | Enum.map(state.failover_history, & &1.provider_id)
+        ]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
 
-      case pick_next_provider(state, excluded) do
+      case pick_next_provider(state, excluded, include_half_open: false) do
         {:ok, next_provider_id} ->
           Logger.info("Cascading to next provider: #{next_provider_id}",
             chain: state.chain,
@@ -696,7 +715,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             key: inspect(state.key)
           )
 
-          enter_degraded_mode(state)
+          enter_degraded_mode(state, budget)
       end
     end
   end
@@ -711,7 +730,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     handle_resubscribe_failure(state, :backfill_failed)
   end
 
-  defp enter_degraded_mode(state) do
+  defp enter_degraded_mode(state, budget) do
     Logger.error("Entering degraded mode",
       chain: state.chain,
       key: inspect(state.key)
@@ -720,13 +739,14 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     # Schedule retry after cooldown
     Process.send_after(self(), :retry_from_degraded, @degraded_mode_retry_delay_ms)
 
-    telemetry_failover_degraded(state.chain, state.key)
+    telemetry_failover_degraded(state.chain, state.key, budget)
 
     {:noreply,
      %{
        state
        | failover_status: :degraded,
-         failover_context: nil
+         failover_context: nil,
+         failover_history: []
      }}
   end
 
@@ -737,17 +757,52 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     Enum.count(history, fn entry -> entry.failed_at > cutoff end)
   end
 
-  defp pick_next_provider(state, excluded) do
+  defp pick_next_provider(state, excluded, opts \\ []) do
+    include_half_open = Keyword.get(opts, :include_half_open, true)
+
     case Selection.select_provider(
            state.profile,
            state.chain,
            "eth_subscribe",
            strategy: :priority,
            protocol: :ws,
+           include_half_open: include_half_open,
            exclude: excluded
          ) do
       {:ok, provider_id} -> {:ok, provider_id}
       _ -> {:error, :no_providers}
+    end
+  end
+
+  defp failover_budget(%{max_failover_attempts: override})
+       when is_integer(override) and override > 0,
+       do: %{attempts: override, provider_count: nil, source: :override}
+
+  defp failover_budget(state) do
+    provider_count = ws_provider_count(state.profile, state.chain)
+
+    if provider_count > 0 do
+      attempts = min(provider_count * 2 + 1, @max_dynamic_failover_attempts)
+      %{attempts: attempts, provider_count: provider_count, source: :dynamic}
+    else
+      %{
+        attempts: @default_max_failover_attempts,
+        provider_count: provider_count,
+        source: :default
+      }
+    end
+  end
+
+  defp ws_provider_count(profile, chain) do
+    profile
+    |> Catalog.get_profile_providers(chain)
+    |> Enum.count(fn %{instance_id: instance_id} -> ws_instance?(instance_id) end)
+  end
+
+  defp ws_instance?(instance_id) do
+    case Catalog.get_instance(instance_id) do
+      {:ok, %{ws_url: ws_url}} when is_binary(ws_url) -> true
+      _ -> false
     end
   end
 
@@ -762,7 +817,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
            exclude: excluded
          ) do
       {:ok, provider_id} -> provider_id
-      _ -> List.first(excluded) || "default"
+      _ -> List.first(excluded)
     end
   end
 
@@ -820,12 +875,16 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     Phoenix.PubSub.broadcast(Lasso.PubSub, topic, event)
   end
 
-  defp telemetry_failover_initiated(chain, key, old_id, new_id) do
+  defp telemetry_failover_initiated(chain, key, old_id, new_id, recent_failures, budget) do
     :telemetry.execute([:lasso, :subs, :failover, :initiated], %{count: 1}, %{
       chain: chain,
       key: inspect(key),
       old_provider: inspect(old_id),
-      new_provider: inspect(new_id)
+      new_provider: inspect(new_id),
+      recent_failures: recent_failures,
+      failover_budget: budget.attempts,
+      provider_count: budget.provider_count,
+      budget_source: budget.source
     })
   end
 
@@ -869,10 +928,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     })
   end
 
-  defp telemetry_failover_degraded(chain, key) do
+  defp telemetry_failover_degraded(chain, key, budget) do
     :telemetry.execute([:lasso, :subs, :failover, :degraded], %{count: 1}, %{
       chain: chain,
-      key: inspect(key)
+      key: inspect(key),
+      failover_budget: budget.attempts,
+      provider_count: budget.provider_count,
+      budget_source: budget.source
     })
   end
 end

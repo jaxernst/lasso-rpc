@@ -214,7 +214,7 @@ defmodule LassoWeb.Components.RegionSelector do
       role="listbox"
       class={[
         "absolute top-full left-0 mt-2 min-w-[160px]",
-        "ring-black/50 rounded-lg border border-gray-700 bg-gray-900 shadow-xl ring-1",
+        "ring-black/50 rounded-lg border border-gray-600/40 bg-[#121a28] shadow-xl ring-1",
         "z-50 overflow-hidden",
         "hidden"
       ]}

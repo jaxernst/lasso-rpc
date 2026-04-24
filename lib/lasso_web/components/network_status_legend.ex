@@ -3,13 +3,12 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
   Network status legend component showing provider health indicators.
 
   Status hierarchy (ordered by severity):
-  1. Rate Limited (🟣) - In cooldown (highest priority)
-  2. Circuit Open (🔴) - Complete failure
-  3. Degraded (🟠) - Has issues but trying
-  4. Testing Recovery (🟡) - Circuit testing recovery
-  5. Recovering (🟡) - WS recovering
-  6. Lagging (🔵) - Lagging blocks
-  7. Healthy (🟢) - Fully operational
+  1. Circuit Open (red) - Complete failure, removed from rotation
+  2. Rate Limited (purple) - Quota or rate cooldown
+  3. Degraded (orange) - Transient issues
+  4. Recovering (amber) - WS recovering or circuit testing recovery
+  5. Lagging (blue) - Lagging blocks
+  6. Healthy (green) - Fully operational
   """
   use Phoenix.Component
 
@@ -57,7 +56,7 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
     <!-- Rate Limited Status -->
           <div
             class="flex items-center space-x-1.5 text-xs text-gray-300"
-            title="Rate limited, in cooldown (takes priority over circuit open)"
+            title="Rate limited or quota exhausted, in cooldown"
           >
             <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-purple-400"></div>
             <span>Rate Limited</span>
@@ -66,7 +65,7 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
     <!-- Circuit Open Status -->
           <div
             class="flex items-center space-x-1.5 text-xs text-gray-300"
-            title="Circuit breaker open, complete failure"
+            title="Circuit breaker open, provider removed from rotation"
           >
             <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-red-500"></div>
             <span>Circuit Open</span>

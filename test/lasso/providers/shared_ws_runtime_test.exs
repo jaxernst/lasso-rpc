@@ -10,7 +10,7 @@ defmodule Lasso.Providers.SharedWSRuntimeTest do
     default_provider_id = "default_ws_#{System.unique_integer([:positive])}"
     premium_provider_id = "premium_ws_#{System.unique_integer([:positive])}"
 
-    default_profile = "default"
+    default_profile = "public"
 
     existing_secondary_profile =
       ConfigStore.list_profiles()

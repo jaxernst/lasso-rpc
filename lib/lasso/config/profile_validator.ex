@@ -29,13 +29,25 @@ defmodule Lasso.Config.ProfileValidator do
         # implementation
       end
 
-  For legacy compatibility where nil should default to "default", use:
+  For legacy compatibility where nil should default to "public", use:
 
       {:ok, profile} = ProfileValidator.validate_with_default(maybe_nil_profile)
   """
 
   require Logger
   alias Lasso.Config.ConfigStore
+
+  @default_profile "public"
+
+  @doc """
+  Canonical slug for the default/fallback profile.
+
+  Single source of truth — the alias system (`resolve_alias/1`) handles
+  legacy-name translation at request boundaries, so this value should only
+  change if the canonical slug itself is renamed again.
+  """
+  @spec default_profile() :: String.t()
+  def default_profile, do: @default_profile
 
   @type validation_error ::
           :profile_nil
@@ -52,8 +64,8 @@ defmodule Lasso.Config.ProfileValidator do
 
   ## Examples
 
-      iex> ProfileValidator.validate("default")
-      {:ok, "default"}
+      iex> ProfileValidator.validate("public")
+      {:ok, "public"}
 
       iex> ProfileValidator.validate(nil)
       {:error, :profile_nil, "Profile parameter is required"}
@@ -82,47 +94,47 @@ defmodule Lasso.Config.ProfileValidator do
     if trimmed == "" do
       {:error, :profile_empty, "Profile cannot be empty"}
     else
-      # Check if profile exists in ConfigStore
-      case ConfigStore.get_profile(trimmed) do
+      canonical = resolve_alias(trimmed)
+
+      case ConfigStore.get_profile(canonical) do
         {:ok, _meta} ->
-          {:ok, trimmed}
+          {:ok, canonical}
 
         {:error, :not_found} ->
           {:error, :profile_not_found, "Profile '#{trimmed}' not found"}
 
         {:error, reason} ->
-          # Handle other ConfigStore errors gracefully
-          Logger.warning("Profile validation failed for '#{trimmed}': #{inspect(reason)}")
-          {:error, :profile_not_found, "Profile '#{trimmed}' not found"}
+          Logger.warning("Profile validation failed for '#{canonical}': #{inspect(reason)}")
+          {:error, :profile_not_found, "Profile '#{canonical}' not found"}
       end
     end
   end
 
   @doc """
-  Validates a profile with fallback to "default" for nil or empty values.
+  Validates a profile with fallback to "public" for nil or empty values.
 
   This is provided for legacy compatibility where nil or empty string should
-  fall back to the "default" profile. New code should prefer explicit profile
+  fall back to the "public" profile. New code should prefer explicit profile
   handling using `validate/1`.
 
   ## Examples
 
       iex> ProfileValidator.validate_with_default(nil)
-      {:ok, "default"}
+      {:ok, "public"}
 
       iex> ProfileValidator.validate_with_default("")
-      {:ok, "default"}
+      {:ok, "public"}
 
       iex> ProfileValidator.validate_with_default("testnet")
       {:ok, "testnet"}
   """
   @spec validate_with_default(term()) :: validation_result()
-  def validate_with_default(nil), do: validate("default")
-  def validate_with_default(""), do: validate("default")
+  def validate_with_default(nil), do: validate(@default_profile)
+  def validate_with_default(""), do: validate(@default_profile)
 
   def validate_with_default(profile) when is_binary(profile) do
     case String.trim(profile) do
-      "" -> validate("default")
+      "" -> validate(@default_profile)
       trimmed -> validate(trimmed)
     end
   end
@@ -140,8 +152,8 @@ defmodule Lasso.Config.ProfileValidator do
 
   ## Examples
 
-      iex> ProfileValidator.validate!("default")
-      "default"
+      iex> ProfileValidator.validate!("public")
+      "public"
 
       iex> ProfileValidator.validate!(nil)
       ** (ArgumentError) Profile parameter is required
@@ -216,4 +228,18 @@ defmodule Lasso.Config.ProfileValidator do
   def error_to_jsonrpc_code(:profile_invalid_type), do: -32_602
   def error_to_jsonrpc_code(:profile_empty), do: -32_602
   def error_to_jsonrpc_code(:profile_not_found), do: -32_000
+
+  @doc """
+  Resolves a profile slug through the configured alias map, returning the
+  canonical name.
+
+  The alias map is read from `config :lasso, :profile_aliases` and defaults
+  to `%{}`. Lasso Cloud configures this to handle the `default`→`public` and
+  `premium`→`managed` rename; OSS deployments are unaffected.
+  """
+  @spec resolve_alias(String.t()) :: String.t()
+  def resolve_alias(slug) when is_binary(slug) do
+    aliases = Application.get_env(:lasso, :profile_aliases, %{})
+    Map.get(aliases, slug, slug)
+  end
 end

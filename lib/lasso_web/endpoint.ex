@@ -43,7 +43,7 @@ defmodule LassoWeb.Endpoint do
   ]
 
   # =========================================================================
-  # Legacy routes (without profile parameter) - use "default" profile
+  # Legacy routes (without profile parameter) - use "public" profile
   # =========================================================================
 
   # Alternative provider override format (least specific - two variables) - defined first!

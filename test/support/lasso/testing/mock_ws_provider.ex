@@ -44,14 +44,14 @@ defmodule Lasso.Testing.MockWSProvider do
   alias Lasso.RPC.Response
   alias Lasso.Testing.ChainHelper
 
-  @test_profile "default"
+  @test_profile "public"
 
   @doc """
   Starts a mock WebSocket provider and registers it with the chain.
 
   Options:
   - `:id` (required) - Provider identifier
-  - `:profile` - Profile to register provider with (default: "default")
+  - `:profile` - Profile to register provider with (default: "public")
   - `:auto_confirm` - Automatically confirm subscriptions (default: true)
   - `:confirm_delay` - Delay before confirming subscriptions in ms (default: 0)
   - `:priority` - Provider priority (default: 100)
@@ -89,15 +89,13 @@ defmodule Lasso.Testing.MockWSProvider do
 
       # Mark as healthy in ETS
       :ets.insert(:lasso_instance_state, {
-        {:health, instance_id},
+        {:health_probe, instance_id},
         %{
           status: :healthy,
           http_status: :healthy,
-          ws_status: :healthy,
           consecutive_failures: 0,
-          consecutive_successes: 1,
           last_error: nil,
-          last_health_check: System.monotonic_time(:millisecond)
+          last_health_check: System.system_time(:millisecond)
         }
       })
 
@@ -221,7 +219,7 @@ defmodule Lasso.Testing.MockWSProvider do
       # Send blocks from backup
       MockWSProvider.send_block_sequence(chain, "backup", 1005, 5)
   """
-  def simulate_provider_failure(chain, provider_id, reason \\ :test_failure, profile \\ "default") do
+  def simulate_provider_failure(chain, provider_id, reason \\ :test_failure, profile \\ "public") do
     # Emit the same WSDisconnected event that real WS connections emit
     event = %Lasso.Events.Provider.WSDisconnected{
       ts: System.system_time(:millisecond),
@@ -597,7 +595,9 @@ defmodule Lasso.Testing.MockWSProvider do
           end
         end
 
-        :ets.delete(:lasso_instance_state, {:health, instance_id})
+        :ets.delete(:lasso_instance_state, {:health_probe, instance_id})
+        :ets.delete(:lasso_instance_state, {:health_block_sync, instance_id})
+        :ets.delete(:lasso_instance_state, {:health_routing, instance_id})
       end
     end)
   end

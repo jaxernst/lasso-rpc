@@ -19,7 +19,12 @@ defmodule Lasso.Config.CapabilitiesIntegrationTest do
 
   describe "YAML profile loading" do
     test "default.yml loads and all capabilities pass validation" do
-      assert {:ok, profile} = load_profile("default")
+      assert {:ok, profile} = load_profile("public")
+      validate_profile_capabilities(profile)
+    end
+
+    test "premium.yml loads and all capabilities pass validation" do
+      assert {:ok, profile} = load_profile("managed")
       validate_profile_capabilities(profile)
     end
 

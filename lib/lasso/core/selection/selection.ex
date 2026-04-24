@@ -39,6 +39,7 @@ defmodule Lasso.RPC.Selection do
   - :strategy => :fastest | :priority | :load_balanced | :latency_weighted (default :load_balanced)
   - :protocol => :http | :ws | :both (default :both)
   - :exclude => [provider_id] (default [])
+  - :include_half_open => boolean (default false)
   - :timeout => ms (default 30_000)
 
   Returns {:ok, provider_id} or {:error, reason}
@@ -48,18 +49,32 @@ defmodule Lasso.RPC.Selection do
   def select_provider(profile, chain, method, opts \\ [])
       when is_binary(profile) and is_binary(chain) and is_binary(method) do
     params = Keyword.get(opts, :params, [])
-    strategy = Keyword.get(opts, :strategy, :load_balanced)
-    protocol = Keyword.get(opts, :protocol, :both)
-    exclude = Keyword.get(opts, :exclude, [])
-    timeout = Keyword.get(opts, :timeout, 30_000)
 
-    do_select_provider(profile, chain, method, params, strategy, protocol, exclude, timeout)
+    selection_opts = %{
+      strategy: Keyword.get(opts, :strategy, :load_balanced),
+      protocol: Keyword.get(opts, :protocol, :both),
+      exclude: Keyword.get(opts, :exclude, []),
+      include_half_open: Keyword.get(opts, :include_half_open, false),
+      timeout: Keyword.get(opts, :timeout, 30_000)
+    }
+
+    do_select_provider(profile, chain, method, params, selection_opts)
   end
 
   # Private implementation
 
-  defp do_select_provider(profile, chain, method, params, strategy, protocol, exclude, timeout) do
-    filters = build_selection_filters(profile, chain, method, params, exclude, protocol)
+  defp do_select_provider(profile, chain, method, params, selection_opts) do
+    filters =
+      build_selection_filters(
+        profile,
+        chain,
+        method,
+        params,
+        selection_opts.exclude,
+        selection_opts.protocol,
+        include_half_open: selection_opts.include_half_open
+      )
+
     candidates = CandidateListing.list_candidates(profile, chain, filters)
 
     case candidates do
@@ -67,14 +82,16 @@ defmodule Lasso.RPC.Selection do
         {:error, :no_providers_available}
 
       _ ->
-        strategy_mod = StrategyRegistry.resolve(strategy)
-        prepared_ctx = strategy_mod.prepare_context(profile, chain, method, timeout)
+        strategy_mod = StrategyRegistry.resolve(selection_opts.strategy)
+
+        prepared_ctx =
+          strategy_mod.prepare_context(profile, chain, method, selection_opts.timeout)
 
         channels =
           candidates
           |> Enum.flat_map(fn %{id: provider_id, config: provider_config} ->
             transports =
-              case protocol do
+              case selection_opts.protocol do
                 :http -> [:http]
                 :ws -> [:ws]
                 :both -> [:http, :ws]
@@ -99,8 +116,8 @@ defmodule Lasso.RPC.Selection do
             :telemetry.execute([:lasso, :selection, :success], %{count: 1}, %{
               chain: chain,
               method: method,
-              strategy: strategy,
-              protocol: protocol,
+              strategy: selection_opts.strategy,
+              protocol: selection_opts.protocol,
               provider_id: pid
             })
 
@@ -372,9 +389,10 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  defp build_selection_filters(profile, chain, method, params, exclude, protocol) do
+  defp build_selection_filters(profile, chain, method, params, exclude, protocol, opts) do
     archival_threshold = get_archival_threshold(profile, chain)
     consensus_height = get_consensus_height(chain)
+    include_half_open = Keyword.get(opts, :include_half_open, false)
 
     requirements =
       RequestAnalysis.analyze(
@@ -387,6 +405,7 @@ defmodule Lasso.RPC.Selection do
     SelectionFilters.new(
       exclude: exclude,
       protocol: protocol,
+      include_half_open: include_half_open,
       max_lag_blocks: get_max_lag(profile, chain),
       min_block: requirements.requested_block,
       requires_archival: requirements.requires_archival

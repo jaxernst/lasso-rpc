@@ -74,7 +74,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Providers.Catalog
+  alias Lasso.Providers.{Catalog, InstanceState}
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.WebSocket.Endpoint
 
@@ -250,17 +250,32 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         {:noreply, state}
 
       %{state: cb_state} when cb_state in [:closed, :half_open] ->
-        # Circuit is closed or half-open - attempt connection
-        do_connect(state, breaker_id)
+        maybe_connect_with_rate_limit_check(state, breaker_id)
 
       {:error, _reason} ->
-        # Circuit breaker not found or error - attempt connection anyway
+        maybe_connect_with_rate_limit_check(state, breaker_id)
+    end
+  end
+
+  @max_rate_limit_delay_ms 300_000
+
+  defp maybe_connect_with_rate_limit_check(state, breaker_id) do
+    case InstanceState.read_rate_limit(state.instance_id, :http) do
+      %{rate_limited: true, remaining_ms: remaining} ->
+        delay = remaining |> max(30_000) |> min(@max_rate_limit_delay_ms)
+
+        Logger.info(
+          "HTTP rate-limited for #{state.endpoint.id}, delaying WS reconnect by #{delay}ms"
+        )
+
+        state = schedule_reconnect_rate_limited(state, delay)
+        {:noreply, state}
+
+      _ ->
         do_connect(state, breaker_id)
     end
   end
 
-  # Attempt WebSocket connection without going through CircuitBreaker.call
-  # This ensures successful connections don't reset the failure count
   defp do_connect(state, breaker_id) do
     ws_connection_pid = self()
 
@@ -274,7 +289,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       {:error, error} ->
         jerr = normalize_connect_error(error, state.endpoint.id)
 
-        Logger.error(
+        Logger.warning(
           "Failed to connect to #{state.endpoint.name} (WebSocket): #{jerr.message} (code=#{inspect(jerr.code)})"
         )
 
@@ -1163,6 +1178,25 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     end
   end
 
+  defp schedule_reconnect_rate_limited(state, delay) do
+    state = cancel_pending_reconnect(state)
+
+    :telemetry.execute(
+      [:lasso, :websocket, :reconnect_scheduled],
+      %{delay_ms: delay, jitter_ms: 0},
+      %{
+        provider_id: state.endpoint.id,
+        attempt: state.reconnect_attempts,
+        max_attempts: state.endpoint.max_reconnect_attempts,
+        reason: :rate_limited
+      }
+    )
+
+    ref = Process.send_after(self(), {:reconnect}, delay)
+    write_ws_status(state.instance_id, :reconnecting, state.reconnect_attempts)
+    %{state | reconnect_ref: ref}
+  end
+
   defp schedule_reconnect(state) do
     state = cancel_pending_reconnect(state)
     max_attempts = state.endpoint.max_reconnect_attempts
@@ -1403,10 +1437,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         end)
 
       _ ->
-        [{"default", instance_id}]
+        [{"public", instance_id}]
     end
   rescue
-    _ -> [{"default", instance_id}]
+    _ -> [{"public", instance_id}]
   end
 
   defp profile_provider_refs(%{profile: profile, endpoint: endpoint})
@@ -1432,7 +1466,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp resolve_chain_id(chain_name) do
-    case ConfigStore.get_chain("default", chain_name) do
+    case ConfigStore.get_chain("public", chain_name) do
       {:ok, chain} when is_integer(chain.chain_id) -> chain.chain_id
       _ -> 0
     end

@@ -6,6 +6,7 @@ defmodule LassoWeb.Components.DashboardComponents do
   use Phoenix.Component
   import LassoWeb.UI.FormComponents
 
+  alias Lasso.Config.ProfileValidator
   alias LassoWeb.Dashboard.Helpers
 
   # Floating Chain Configuration Window (top-left)
@@ -19,7 +20,7 @@ defmodule LassoWeb.Components.DashboardComponents do
       |> assign_new(:config_validation_errors, fn -> [] end)
       |> assign_new(:available_chains, fn -> [] end)
       |> assign_new(:config_expanded_providers, fn -> MapSet.new() end)
-      |> assign_new(:selected_profile, fn -> "default" end)
+      |> assign_new(:selected_profile, fn -> ProfileValidator.default_profile() end)
 
     ~H"""
     <div class={[
@@ -181,7 +182,7 @@ defmodule LassoWeb.Components.DashboardComponents do
       |> assign_new(:form_data, fn -> %{} end)
       |> assign_new(:validation_errors, fn -> [] end)
       |> assign_new(:expanded, fn -> MapSet.new() end)
-      |> assign_new(:selected_profile, fn -> "default" end)
+      |> assign_new(:selected_profile, fn -> ProfileValidator.default_profile() end)
 
     ~H"""
     <form

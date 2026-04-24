@@ -7,7 +7,7 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategyTest do
 
   defp make_channel(provider_id \\ "test-provider") do
     %Channel{
-      profile: "default",
+      profile: "public",
       chain: "ethereum",
       provider_id: provider_id,
       transport: :http,

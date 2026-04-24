@@ -10,7 +10,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "circuit breaker coordination" do
     test "fails over when circuit breaker is open", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup primary and backup providers
       setup_providers([
@@ -47,7 +47,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "opens circuit breaker after repeated failures", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup provider that always fails
       setup_providers([
@@ -101,7 +101,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "circuit breaker respects recovery timeout", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup provider with intermittent failures
       setup_providers([
@@ -174,7 +174,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "provider selection and failover" do
     test "selects provider based on priority", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup providers with different priorities
       setup_providers([
@@ -209,7 +209,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "fails over to backup provider on retriable error", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup primary that fails, backup that succeeds
       setup_providers([
@@ -245,7 +245,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "respects provider override without failover", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup two providers
       setup_providers([
@@ -272,7 +272,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "provider override with failover allows retry", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup override provider that fails, and backup
       setup_providers([
@@ -303,7 +303,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "adapter validation and parameter handling" do
     test "skips providers that reject parameters", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # This test would require a method that some providers don't support
       # For now, we test with a generic method that all providers accept
@@ -328,7 +328,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "handles empty parameters correctly", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
@@ -358,7 +358,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "error handling and classification" do
     test "classifies errors correctly", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup provider with specific error behavior
       setup_providers([
@@ -390,7 +390,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "handles timeout errors", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup provider that times out
       setup_providers([
@@ -443,7 +443,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "transport selection" do
     test "respects transport override", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup providers on multiple transports
       setup_providers([
@@ -471,7 +471,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "telemetry and observability" do
     test "emits request start and stop events", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
@@ -521,7 +521,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "records metrics for successful requests", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
@@ -553,7 +553,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
 
     test "records metrics for failed requests", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       setup_providers([
         %{id: "failing", priority: 10, behavior: :always_fail, profile: profile}
@@ -591,7 +591,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "retry and resilience" do
     test "gives up after max retries", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       # Setup only failing providers
       setup_providers([
@@ -623,7 +623,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
   describe "rate limit failover" do
     test "rate-limited provider triggers automatic failover to healthy provider", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       rate_limit_error =
         %Lasso.JSONRPC.Error{
@@ -697,7 +697,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     test "rate limit errors do not open circuit breaker (handled by RateLimitState tiering)", %{
       chain: chain
     } do
-      profile = "default"
+      profile = "public"
 
       rate_limit_error =
         %Lasso.JSONRPC.Error{
@@ -746,7 +746,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     test "multiple providers can be rate-limited independently without opening circuits", %{
       chain: chain
     } do
-      profile = "default"
+      profile = "public"
 
       rate_limit_error =
         %Lasso.JSONRPC.Error{
@@ -836,7 +836,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
          %{
            chain: chain
          } do
-      primary_profile = "default"
+      primary_profile = "public"
       secondary_profile = "testnet"
       provider_id = "shared_timeout"
 
@@ -905,7 +905,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
          %{
            chain: chain
          } do
-      primary_profile = "default"
+      primary_profile = "public"
       secondary_profile = "testnet"
       provider_id = "shared_network"
 

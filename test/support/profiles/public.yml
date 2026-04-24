@@ -1,0 +1,5 @@
+---
+name: Test Public
+slug: public
+---
+chains: {}  # Empty - tests register chains dynamically

@@ -21,12 +21,8 @@ defmodule Lasso.RPC.OptimisticLagTest do
   @chain "optimistic_lag_test_chain"
 
   setup do
-    # Ensure BlockSyncRegistry is started
-    case Process.whereis(BlockSyncRegistry) do
-      nil -> {:ok, _} = BlockSyncRegistry.start_link([])
-      _pid -> :ok
-    end
-
+    BlockSyncRegistry.clear_chain(@chain)
+    on_exit(fn -> BlockSyncRegistry.clear_chain(@chain) end)
     :ok
   end
 

@@ -177,7 +177,7 @@ defmodule Lasso.Testing.MockProvider do
         }
 
         # Ensure chain exists before registering provider
-        profile = Map.get(spec, :profile, "default")
+        profile = Map.get(spec, :profile, "public")
 
         with :ok <- Lasso.Testing.ChainHelper.ensure_chain_exists(chain, profile: profile),
              {:ok, ^provider_id} <- Lasso.Providers.add_provider(chain, provider_config) do
@@ -229,7 +229,7 @@ defmodule Lasso.Testing.MockProvider do
     Lasso.Providers.remove_provider(chain, provider_id)
 
     # Remove from ConfigStore
-    Lasso.Config.ConfigStore.unregister_provider_runtime("default", chain, provider_id)
+    Lasso.Config.ConfigStore.unregister_provider_runtime("public", chain, provider_id)
 
     # Stop HTTP server
     try do

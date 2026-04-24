@@ -6,13 +6,13 @@ defmodule Lasso.Config.ProfileValidatorTest do
 
   describe "validate/1" do
     test "returns ok for valid existing profile" do
-      # "default" and "testnet" profiles exist in test config
-      assert {:ok, "default"} = ProfileValidator.validate("default")
+      # "public" and "testnet" profiles exist in test config
+      assert {:ok, "public"} = ProfileValidator.validate("public")
       assert {:ok, "testnet"} = ProfileValidator.validate("testnet")
     end
 
     test "trims whitespace from valid profiles" do
-      assert {:ok, "default"} = ProfileValidator.validate("  default  ")
+      assert {:ok, "public"} = ProfileValidator.validate("  public  ")
       assert {:ok, "testnet"} = ProfileValidator.validate("\ttestnet\n")
     end
 
@@ -62,17 +62,17 @@ defmodule Lasso.Config.ProfileValidatorTest do
   end
 
   describe "validate_with_default/1" do
-    test "returns 'default' for nil input" do
-      assert {:ok, "default"} = ProfileValidator.validate_with_default(nil)
+    test "returns 'public' for nil input" do
+      assert {:ok, "public"} = ProfileValidator.validate_with_default(nil)
     end
 
-    test "returns 'default' for empty string" do
-      assert {:ok, "default"} = ProfileValidator.validate_with_default("")
+    test "returns 'public' for empty string" do
+      assert {:ok, "public"} = ProfileValidator.validate_with_default("")
     end
 
-    test "returns 'default' for whitespace-only string" do
-      assert {:ok, "default"} = ProfileValidator.validate_with_default("   ")
-      assert {:ok, "default"} = ProfileValidator.validate_with_default("\t\n")
+    test "returns 'public' for whitespace-only string" do
+      assert {:ok, "public"} = ProfileValidator.validate_with_default("   ")
+      assert {:ok, "public"} = ProfileValidator.validate_with_default("\t\n")
     end
 
     test "returns validated profile for valid non-empty string" do
@@ -93,12 +93,12 @@ defmodule Lasso.Config.ProfileValidatorTest do
 
   describe "validate!/1" do
     test "returns validated profile for valid input" do
-      assert "default" = ProfileValidator.validate!("default")
+      assert "public" = ProfileValidator.validate!("public")
       assert "testnet" = ProfileValidator.validate!("testnet")
     end
 
     test "trims whitespace" do
-      assert "default" = ProfileValidator.validate!("  default  ")
+      assert "public" = ProfileValidator.validate!("  public  ")
     end
 
     test "raises ArgumentError for nil" do
@@ -135,7 +135,7 @@ defmodule Lasso.Config.ProfileValidatorTest do
     defp test_guard(_profile), do: :invalid
 
     test "accepts non-empty strings" do
-      assert :valid = test_guard("default")
+      assert :valid = test_guard("public")
       assert :valid = test_guard("testnet")
       assert :valid = test_guard("x")
     end
@@ -157,7 +157,7 @@ defmodule Lasso.Config.ProfileValidatorTest do
 
     test "accepts strings with whitespace (guard doesn't trim)" do
       # Note: Guard only checks type and size, doesn't trim
-      assert :valid = test_guard("  default  ")
+      assert :valid = test_guard("  public  ")
     end
   end
 
@@ -197,10 +197,33 @@ defmodule Lasso.Config.ProfileValidatorTest do
     end
 
     test "rejects profiles not in ConfigStore" do
-      # Test with a profile that definitely doesn't exist
       fake_profile = "test_profile_#{System.unique_integer([:positive])}"
 
       assert {:error, :profile_not_found, _} = ProfileValidator.validate(fake_profile)
+    end
+  end
+
+  describe "resolve_alias/1" do
+    test "maps old slugs to canonical names" do
+      assert "public" = ProfileValidator.resolve_alias("default")
+      assert "managed" = ProfileValidator.resolve_alias("premium")
+    end
+
+    test "passes through canonical and unknown slugs unchanged" do
+      assert "public" = ProfileValidator.resolve_alias("public")
+      assert "managed" = ProfileValidator.resolve_alias("managed")
+      assert "testnet" = ProfileValidator.resolve_alias("testnet")
+      assert "custom" = ProfileValidator.resolve_alias("custom")
+    end
+  end
+
+  describe "validate/1 with aliases" do
+    test "resolves old slug 'default' to 'public'" do
+      assert {:ok, "public"} = ProfileValidator.validate("default")
+    end
+
+    test "resolves old slug with whitespace" do
+      assert {:ok, "public"} = ProfileValidator.validate("  default  ")
     end
   end
 end

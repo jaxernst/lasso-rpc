@@ -241,7 +241,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   ## Examples
 
-      iex> BenchmarkStore.get_calls_in_window("default", "ethereum", 60)
+      iex> BenchmarkStore.get_calls_in_window("public", "ethereum", 60)
       %{"infura" => 150, "alchemy" => 200}
   """
   @spec get_calls_in_window(profile(), chain_name(), pos_integer()) :: %{
@@ -268,7 +268,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   ## Examples
 
-      iex> BenchmarkStore.record_rpc_call("default", "ethereum", "infura_provider", "eth_getLogs", 150, :success)
+      iex> BenchmarkStore.record_rpc_call("public", "ethereum", "infura_provider", "eth_getLogs", 150, :success)
       :ok
   """
   @spec record_rpc_call(profile(), chain_name(), provider_id(), method(), number(), result()) ::

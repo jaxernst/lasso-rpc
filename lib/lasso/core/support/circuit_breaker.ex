@@ -50,6 +50,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     :base_recovery_timeout,
     :success_threshold,
     :category_thresholds,
+    :category_recovery_timeouts,
     :state,
     :failure_count,
     :last_failure_time,
@@ -208,7 +209,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         nil ->
           Task.shutdown(task, :brutal_kill)
 
-          Logger.error("Request timeout in circuit breaker",
+          Logger.warning("Request timeout in circuit breaker",
             instance_id: instance_id,
             transport: transport,
             timeout_ms: timeout
@@ -394,12 +395,20 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       server_error: 5,
       network_error: 3,
       timeout: 2,
-      auth_error: 2
+      auth_error: 3
     }
 
     category_thresholds =
       Map.get(config, :category_thresholds, %{})
       |> Map.merge(default_category_thresholds, fn _k, v1, _v2 -> v1 end)
+
+    default_category_recovery_timeouts = %{
+      auth_error: 10_000
+    }
+
+    category_recovery_timeouts =
+      Map.get(config, :category_recovery_timeouts, %{})
+      |> Map.merge(default_category_recovery_timeouts, fn _k, v1, _v2 -> v1 end)
 
     half_open_max_inflight = Map.get(config, :half_open_max_inflight, 3)
 
@@ -410,6 +419,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       base_recovery_timeout: Map.get(config, :recovery_timeout, 60_000),
       success_threshold: Map.get(config, :success_threshold, 2),
       category_thresholds: category_thresholds,
+      category_recovery_timeouts: category_recovery_timeouts,
       half_open_max_inflight: half_open_max_inflight,
       inflight_count: 0,
       state: :closed,
@@ -774,10 +784,15 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     threshold = Map.get(state.category_thresholds, error_category, state.failure_threshold)
 
     adjusted_recovery_timeout =
-      if error_category == :rate_limit and is_struct(error, JError) do
-        extract_retry_after(error) || state.base_recovery_timeout
-      else
-        state.base_recovery_timeout
+      cond do
+        error_category == :rate_limit and is_struct(error, JError) ->
+          extract_retry_after(error) || state.base_recovery_timeout
+
+        Map.has_key?(state.category_recovery_timeouts, error_category) ->
+          state.category_recovery_timeouts[error_category]
+
+        true ->
+          state.base_recovery_timeout
       end
 
     :telemetry.execute(

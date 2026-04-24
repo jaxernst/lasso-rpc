@@ -8,7 +8,7 @@ defmodule Lasso.Testing.ChainHelper do
 
   require Logger
 
-  @test_profile "default"
+  @test_profile "public"
 
   @doc """
   Ensures a chain exists and its supervisors are running.
@@ -17,7 +17,7 @@ defmodule Lasso.Testing.ChainHelper do
   If the chain exists but supervisors aren't running, starts them.
 
   ## Options
-  - `:profile` - Profile to use (default: "default")
+  - `:profile` - Profile to use (default: "public")
 
   ## Returns
   - `:ok` on success
@@ -74,7 +74,7 @@ defmodule Lasso.Testing.ChainHelper do
   Checks if the chain supervisor is running for a given profile and chain.
 
   ## Example
-      ChainHelper.chain_supervisor_running?("default", "ethereum")
+      ChainHelper.chain_supervisor_running?("public", "ethereum")
       # => true
   """
   def chain_supervisor_running?(profile, chain_name) do

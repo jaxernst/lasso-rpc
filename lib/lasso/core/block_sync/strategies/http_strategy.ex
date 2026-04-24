@@ -7,10 +7,10 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   ## Health Writes
 
-  Each successful poll writes `http_status: :healthy` to `{:health, instance_id}` in
-  ETS and signals circuit breaker recovery. Failed polls write `http_status` as
-  `:degraded` (2+) or `:unhealthy` (5+). Top-level `status`, `consecutive_failures`,
-  and `last_error` are left to ProbeCoordinator and Observability.
+  Each successful poll writes `http_status: :healthy` to `{:health_block_sync, instance_id}`
+  in ETS and signals circuit breaker recovery. Failed polls write `http_status` as
+  `:degraded` (2+) or `:unhealthy` (5+). This key is exclusively owned by HttpStrategy;
+  ProbeCoordinator writes to `{:health_probe, instance_id}` separately.
 
   ## Circuit Breaker Integration
 
@@ -183,47 +183,26 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   end
 
   defp write_health_success(instance_id) do
-    existing = read_existing_health(instance_id)
-
-    merged =
-      Map.merge(existing, %{
-        http_status: :healthy,
-        last_health_check: System.system_time(:millisecond)
-      })
-
-    :ets.insert(:lasso_instance_state, {{:health, instance_id}, merged})
-  rescue
-    ArgumentError -> :ok
+    :ets.insert(
+      :lasso_instance_state,
+      {{:health_block_sync, instance_id},
+       %{http_status: :healthy, last_health_check: System.system_time(:millisecond)}}
+    )
   end
 
   defp write_health_failure(instance_id, consecutive_failures, _reason) do
-    existing = read_existing_health(instance_id)
-
     http_status =
       cond do
         consecutive_failures >= @unhealthy_threshold -> :unhealthy
         consecutive_failures >= @degraded_threshold -> :degraded
-        true -> Map.get(existing, :http_status, :healthy)
+        true -> :healthy
       end
 
-    merged =
-      Map.merge(existing, %{
-        http_status: http_status,
-        last_health_check: System.system_time(:millisecond)
-      })
-
-    :ets.insert(:lasso_instance_state, {{:health, instance_id}, merged})
-  rescue
-    ArgumentError -> :ok
-  end
-
-  defp read_existing_health(instance_id) do
-    case :ets.lookup(:lasso_instance_state, {:health, instance_id}) do
-      [{_, data}] -> data
-      [] -> %{}
-    end
-  rescue
-    ArgumentError -> %{}
+    :ets.insert(
+      :lasso_instance_state,
+      {{:health_block_sync, instance_id},
+       %{http_status: http_status, last_health_check: System.system_time(:millisecond)}}
+    )
   end
 
   defp do_poll(instance_id, chain) do

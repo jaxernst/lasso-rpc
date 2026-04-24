@@ -489,11 +489,11 @@ defmodule LassoWeb.Dashboard.MetricsStoreTest do
     end
 
     test "returns nil for missing key", %{table: table} do
-      assert :ets.lookup(table, {:provider_leaderboard, "default", "ethereum"}) == []
+      assert :ets.lookup(table, {:provider_leaderboard, "public", "ethereum"}) == []
     end
 
     test "returns data for recent entry", %{table: table} do
-      key = {:provider_leaderboard, "default", "ethereum"}
+      key = {:provider_leaderboard, "public", "ethereum"}
       now = System.monotonic_time(:millisecond)
       data = [%{provider_id: "p1", score: 90.0}]
       coverage = %{responding: 2, total: 2}

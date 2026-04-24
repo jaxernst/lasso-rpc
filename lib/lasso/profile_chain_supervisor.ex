@@ -20,13 +20,13 @@ defmodule Lasso.ProfileChainSupervisor do
 
   ```elixir
   # Start a chain for a profile
-  ProfileChainSupervisor.start_profile_chain("premium", "ethereum", chain_config)
+  ProfileChainSupervisor.start_profile_chain("managed", "ethereum", chain_config)
 
   # Stop a chain for a profile
-  ProfileChainSupervisor.stop_profile_chain("premium", "ethereum")
+  ProfileChainSupervisor.stop_profile_chain("managed", "ethereum")
 
   # List all chains for a profile
-  ProfileChainSupervisor.list_profile_chains("premium")
+  ProfileChainSupervisor.list_profile_chains("managed")
   ```
   """
 

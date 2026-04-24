@@ -37,11 +37,11 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     fields = extract_status_fields(provider)
 
     cond do
-      rate_limited?(fields) ->
-        :rate_limited
-
       fields.circuit_state == :open ->
         :circuit_open
+
+      rate_limited?(fields) ->
+        :rate_limited
 
       fields.circuit_state == :half_open ->
         :testing_recovery
@@ -52,13 +52,13 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
       fields.health_status == :healthy ->
         block_lag_to_status(fields.chain, fields.instance_id || fields.provider_id)
 
-      fields.health_status in [:unhealthy, :misconfigured, :degraded] ->
+      fields.health_status in [:unhealthy, :degraded, :misconfigured] ->
         :degraded
 
-      fields.consecutive_failures in 3..9 ->
+      max(fields.consecutive_failures, fields.probe_consecutive_failures) in 3..9 ->
         :degraded
 
-      fields.health_status == :connecting or fields.connection_status == :connecting ->
+      fields.connection_status == :connecting ->
         :recovering
 
       fields.connection_status == :connected ->
@@ -78,6 +78,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
       health_status: Map.get(provider, :health_status, :unknown),
       connection_status: Map.get(provider, :status, :unknown),
       consecutive_failures: Map.get(provider, :consecutive_failures, 0),
+      probe_consecutive_failures: Map.get(provider, :probe_consecutive_failures, 0),
       chain: Map.get(provider, :chain),
       provider_id: Map.get(provider, :id),
       instance_id: Map.get(provider, :instance_id),
@@ -349,8 +350,8 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   @doc "Get status priority for sorting (lower = more critical)"
   def status_priority(provider) do
     case determine_provider_status(provider) do
-      :rate_limited -> 1
-      :circuit_open -> 2
+      :circuit_open -> 1
+      :rate_limited -> 2
       :degraded -> 3
       :testing_recovery -> 4
       :recovering -> 5

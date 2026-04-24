@@ -27,7 +27,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
 
   describe "WebSocket subscription zero-gap guarantee" do
     test "no duplicate blocks during rapid provider switching", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       {:ok, [p1_id, p2_id]} =
         IntegrationHelper.setup_test_chain_with_providers(
@@ -62,7 +62,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
     end
 
     test "handles out-of-order blocks during failover", %{chain: chain} do
-      profile = "default"
+      profile = "public"
 
       {:ok, [_p1_id, _p2_id]} =
         IntegrationHelper.setup_test_chain_with_providers(

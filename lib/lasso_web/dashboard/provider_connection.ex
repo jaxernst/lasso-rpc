@@ -100,6 +100,7 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
       http_cb_error: http_circuit.error,
       ws_cb_error: ws_circuit.error,
       consecutive_failures: health.consecutive_failures,
+      probe_consecutive_failures: health.probe_consecutive_failures,
       consecutive_successes: health.consecutive_successes,
       last_error: health.last_error,
       http_rate_limited: http_rl.rate_limited,
@@ -121,7 +122,7 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
 
   defp derive_health_status(:up), do: :healthy
   defp derive_health_status(:down), do: :unhealthy
-  defp derive_health_status(:limited), do: :rate_limited
+  defp derive_health_status(:limited), do: :degraded
   defp derive_health_status(other), do: other
 
   defp calculate_block_sync(_, _, nil), do: {nil, nil}

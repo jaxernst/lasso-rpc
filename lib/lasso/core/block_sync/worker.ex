@@ -58,7 +58,7 @@ defmodule Lasso.BlockSync.Worker do
     :ws_strategy,
     :http_strategy,
     :config,
-    :ws_retry_count,
+    ws_retry_count: 0,
     http_reduced: false
   ]
 
@@ -550,7 +550,8 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp schedule_ws_reconnect(retry_count) do
-    delay = min(@reconnect_delay_ms * :math.pow(2, retry_count), 60_000) |> trunc()
+    exponent = min(retry_count, 4)
+    delay = min(@reconnect_delay_ms * Bitwise.bsl(1, exponent), 60_000)
     Process.send_after(self(), :attempt_ws_reconnect, delay)
   end
 end

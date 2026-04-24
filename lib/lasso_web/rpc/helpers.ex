@@ -26,6 +26,20 @@ defmodule LassoWeb.RPC.Helpers do
   end
 
   @doc """
+  Normalizes strategy tokens from params/routes into strategy atoms.
+  """
+  @spec normalize_strategy_token(String.t() | nil) ::
+          :load_balanced | :latency_weighted | :fastest | nil
+  def normalize_strategy_token("fastest"), do: :fastest
+  def normalize_strategy_token("load-balanced"), do: :load_balanced
+  def normalize_strategy_token("load_balanced"), do: :load_balanced
+  def normalize_strategy_token("round-robin"), do: :load_balanced
+  def normalize_strategy_token("round_robin"), do: :load_balanced
+  def normalize_strategy_token("latency-weighted"), do: :latency_weighted
+  def normalize_strategy_token("latency_weighted"), do: :latency_weighted
+  def normalize_strategy_token(_), do: nil
+
+  @doc """
   Gets the hexadecimal chain ID for a given chain name.
 
   Looks up the chain configuration and formats the chain ID as a hex string
@@ -42,10 +56,10 @@ defmodule LassoWeb.RPC.Helpers do
 
   ## Examples
 
-      iex> LassoWeb.RPC.Helpers.get_chain_id("default", "ethereum")
+      iex> LassoWeb.RPC.Helpers.get_chain_id("public", "ethereum")
       {:ok, "0x1"}
 
-      iex> LassoWeb.RPC.Helpers.get_chain_id("default", "unknown")
+      iex> LassoWeb.RPC.Helpers.get_chain_id("public", "unknown")
       {:error, "Chain not configured: unknown"}
 
   """

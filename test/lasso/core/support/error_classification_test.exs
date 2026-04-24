@@ -35,6 +35,11 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       assert category == :internal_error
     end
 
+    test "classifies DRPC unsupported subscription code as server_error" do
+      category = ErrorClassification.categorize(23, "Unsupported subscription: newHeads")
+      assert category == :server_error
+    end
+
     test "classifies rate limit error correctly" do
       category = ErrorClassification.categorize(429, "Rate limit exceeded")
       assert category == :rate_limit
@@ -89,6 +94,11 @@ defmodule Lasso.RPC.ErrorClassificationTest do
 
     test "rate limits are retriable" do
       retriable = ErrorClassification.retriable?(429, "Rate limit exceeded")
+      assert retriable == true
+    end
+
+    test "DRPC unsupported subscription code is retriable" do
+      retriable = ErrorClassification.retriable?(23, "Unsupported subscription: newHeads")
       assert retriable == true
     end
 
