@@ -15,7 +15,9 @@ defmodule LassoWeb.RPCSocketTest do
 
   describe "connect/1 - profile validation" do
     test "accepts when no profile is specified (defaults to public)" do
-      assert {:ok, state} = RPCSocket.connect(transport_info("/ws/rpc/ethereum", %{"chain_id" => "ethereum"}))
+      assert {:ok, state} =
+               RPCSocket.connect(transport_info("/ws/rpc/ethereum", %{"chain_id" => "ethereum"}))
+
       assert state.profile == "public"
       assert state.chain == "ethereum"
     end
