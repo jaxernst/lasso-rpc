@@ -96,8 +96,9 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           }
         )
 
-      # Should get circuit breaker error, not the underlying error
-      assert error != nil
+      assert %Lasso.JSONRPC.Error{} = error
+      assert error.code == -32_000
+      assert error.category in [:provider_error, :circuit_breaker_open, :unknown]
     end
 
     test "circuit breaker respects recovery timeout", %{chain: chain} do
@@ -384,9 +385,9 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           }
         )
 
-      # Verify error is classified
-      assert error != nil
-      # Error should be wrapped in JSONRPC.Error structure
+      assert %Lasso.JSONRPC.Error{} = error
+      assert is_atom(error.category)
+      assert is_integer(error.code)
     end
 
     test "handles timeout errors", %{chain: chain} do

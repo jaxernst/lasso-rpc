@@ -15,32 +15,21 @@ defmodule LassoWeb.Plugs.ProfileResolverPlug do
   Invalid profiles result in appropriate HTTP error responses with JSON-RPC error codes.
 
   ## Assigns
-  - `:profile_slug` - The validated profile slug from the URL (e.g., "default", "testnet")
+  - `:profile_slug` - The validated profile slug from the URL (e.g., "public", "testnet")
   - `:profile` - Full profile metadata from ConfigStore
 
   ## Default Profile Fallback
 
   Routes without an explicit profile slug in the URL (legacy routes) automatically
-  use the "default" profile. This provides backward compatibility for:
-
-  - `POST /rpc/:chain_id` → Uses "default" profile
-  - `POST /rpc/fastest/:chain_id` → Uses "default" profile
-  - `POST /rpc/provider/:provider_id/:chain_id` → Uses "default" profile
-
-  Profile-aware routes explicitly include the profile:
-
-  - `POST /rpc/profile/:profile/:chain_id` → Uses specified profile
-  - `POST /rpc/profile/:profile/fastest/:chain_id` → Uses specified profile
-
-  **Important**: Ensure `config/profiles/default.yml` exists at startup, or default profile
-  routes will fail with 404 errors.
+  use the canonical default profile (`ProfileValidator.default_profile/0`, currently
+  `"public"`). The legacy `"default"` slug remains accepted via the alias system.
   """
 
   import Plug.Conn
 
   alias Lasso.Config.{ConfigStore, ProfileValidator}
 
-  @default_profile "default"
+  @default_profile ProfileValidator.default_profile()
 
   def init(opts), do: opts
 

@@ -14,9 +14,9 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     socket =
       socket
       |> assign(assigns)
-      |> assign_new(:profile_name, fn -> "default" end)
+      |> assign_new(:profile_name, fn -> Lasso.Config.ProfileValidator.default_profile() end)
       |> assign_new(:rps_limit, fn -> nil end)
-      |> assign_new(:selected_profile, fn -> "default" end)
+      |> assign_new(:selected_profile, fn -> Lasso.Config.ProfileValidator.default_profile() end)
       |> assign_new(:sim_stats, fn ->
         %{http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0}, ws: %{open: 0}}
       end)

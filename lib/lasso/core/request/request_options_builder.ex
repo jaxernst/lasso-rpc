@@ -11,7 +11,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   - application defaults
   """
 
-  alias Lasso.Config.{MethodConstraints, MethodPolicy}
+  alias Lasso.Config.{MethodConstraints, MethodPolicy, ProfileValidator}
   alias Lasso.RPC.RequestOptions
   alias LassoWeb.Plugs.RequestTimingPlug
 
@@ -40,7 +40,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   """
   @spec from_conn(Plug.Conn.t(), String.t(), override_opts) :: RequestOptions.t()
   def from_conn(%Plug.Conn{} = conn, method, overrides \\ []) when is_binary(method) do
-    profile = Map.get(conn.assigns, :profile_slug, "default")
+    profile = Map.get(conn.assigns, :profile_slug, ProfileValidator.default_profile())
     strategy = resolve_strategy_from_conn(conn, overrides)
     provider_override = resolve_provider_from_conn(conn, overrides)
     transport = resolve_transport(method, resolve_transport_preference_from_conn(conn, overrides))
@@ -90,7 +90,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   @spec from_map(map(), String.t(), override_opts) :: RequestOptions.t()
   def from_map(params, method, overrides \\ [])
       when is_map(params) and is_binary(method) do
-    profile = overrides[:profile] || params["profile"] || "default"
+    profile = overrides[:profile] || params["profile"] || ProfileValidator.default_profile()
     strategy = resolve_strategy_from_map(params, overrides)
     provider_override = resolve_provider_from_map(params, overrides)
 

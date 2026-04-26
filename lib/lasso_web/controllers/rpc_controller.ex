@@ -29,6 +29,7 @@ defmodule LassoWeb.RPCController do
   alias Lasso.Config.ConfigStore
   alias Lasso.Config.MethodConstraints
   alias Lasso.Config.MethodPolicy
+  alias Lasso.Config.ProfileValidator
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.RequestOptions.Builder, as: RequestOptionsBuilder
   alias Lasso.RPC.RequestPipeline
@@ -226,7 +227,7 @@ defmodule LassoWeb.RPCController do
     else
       # Select a batch provider for consistency across batch items.
       # All items prefer this provider, but can failover independently.
-      profile = conn.assigns[:profile_slug] || "default"
+      profile = conn.assigns[:profile_slug] || ProfileValidator.default_profile()
       strategy = strategy_from(conn, %{})
 
       batch_provider =
@@ -375,7 +376,7 @@ defmodule LassoWeb.RPCController do
          conn
        ) do
     Logger.debug("Getting chain ID", chain: chain)
-    profile = conn.assigns[:profile_slug] || "default"
+    profile = conn.assigns[:profile_slug] || ProfileValidator.default_profile()
 
     case get_chain_id(profile, chain) do
       {:ok, chain_id} ->
