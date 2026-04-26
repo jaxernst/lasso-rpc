@@ -19,7 +19,7 @@ defmodule LassoWeb.RPCSocket do
   @behaviour Phoenix.Socket.Transport
   require Logger
 
-  alias Lasso.Config.ProfileValidator
+  alias Lasso.Config.{ConfigStore, ProfileValidator}
   alias Lasso.Core.Streaming.SubscriptionRouter
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.{Observability, RequestContext, RequestOptions, RequestPipeline, Response}
@@ -43,64 +43,74 @@ defmodule LassoWeb.RPCSocket do
 
   @impl true
   def connect(transport_info) do
-    # Extract client IP for connection tracking
     client_ip = extract_client_ip(transport_info)
     connection_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
-    # Extract routing parameters from path
-    # Paths can be:
-    #   /ws/rpc/:chain_id                           -> base endpoint with default strategy
-    #   /ws/rpc/:strategy/:chain_id                 -> strategy-specific endpoint
-    #   /ws/rpc/provider/:provider_id/:chain_id     -> provider override
-    #   /ws/rpc/:chain_id/:provider_id              -> alternative provider override
     params = transport_info[:params] || %{}
     uri = transport_info[:connect_info][:uri]
     chain = params["chain_id"] || "ethereum"
 
-    # Determine if a strategy or provider override is specified by parsing the URI
     {strategy, provider_id} = extract_routing_params(uri, params)
 
-    # Validate profile parameter, falling back to "default" for WebSocket connections
-    # WebSocket connections should not be rejected for invalid profiles - instead log
-    # a warning and fall back to default profile to maintain connection stability
-    profile =
-      case ProfileValidator.validate_with_default(params["profile"]) do
-        {:ok, validated} ->
-          validated
+    with {:ok, profile} <- validate_profile(params["profile"], connection_id),
+         :ok <- validate_provider_override(profile, chain, provider_id, connection_id) do
+      socket_state = %{
+        profile: profile,
+        chain: chain,
+        strategy: strategy,
+        provider_id: provider_id,
+        subscriptions: %{},
+        client_pid: self(),
+        heartbeat_ref: nil,
+        missed_heartbeats: 0,
+        last_ping_time: nil,
+        connection_id: connection_id,
+        client_ip: client_ip
+      }
 
-        {:error, error_type, message} ->
-          Logger.warning("WebSocket connection profile validation failed: #{message}",
-            error_type: error_type,
-            provided_profile: params["profile"],
-            fallback: "default",
-            connection_id: connection_id
-          )
+      routing_info = build_routing_info(strategy, provider_id)
 
-          # Fall back to default profile to avoid rejecting connection
-          "default"
-      end
+      Logger.info(
+        "JSON-RPC WebSocket client connected: #{profile}:#{chain}#{routing_info} (id: #{connection_id}, ip: #{client_ip})"
+      )
 
-    socket_state = %{
-      profile: profile,
-      chain: chain,
-      strategy: strategy,
-      provider_id: provider_id,
-      subscriptions: %{},
-      client_pid: self(),
-      heartbeat_ref: nil,
-      missed_heartbeats: 0,
-      last_ping_time: nil,
-      connection_id: connection_id,
-      client_ip: client_ip
-    }
+      {:ok, socket_state}
+    end
+  end
 
-    routing_info = build_routing_info(strategy, provider_id)
+  defp validate_profile(profile_param, connection_id) do
+    case ProfileValidator.validate_with_default(profile_param) do
+      {:ok, validated} ->
+        {:ok, validated}
 
-    Logger.info(
-      "JSON-RPC WebSocket client connected: #{profile}:#{chain}#{routing_info} (id: #{connection_id}, ip: #{client_ip})"
-    )
+      {:error, error_type, message} ->
+        Logger.warning("WebSocket connection rejected: #{message}",
+          error_type: error_type,
+          provided_profile: profile_param,
+          connection_id: connection_id
+        )
 
-    {:ok, socket_state}
+        :error
+    end
+  end
+
+  defp validate_provider_override(_profile, _chain, nil, _connection_id), do: :ok
+
+  defp validate_provider_override(profile, chain, provider_id, connection_id) do
+    case ConfigStore.get_provider(profile, chain, provider_id) do
+      {:ok, _provider} ->
+        :ok
+
+      {:error, _} ->
+        Logger.warning("WebSocket connection rejected: provider not found",
+          provided_provider: provider_id,
+          chain: chain,
+          profile: profile,
+          connection_id: connection_id
+        )
+
+        :error
+    end
   end
 
   @impl true

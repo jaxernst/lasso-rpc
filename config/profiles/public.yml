@@ -1,5 +1,5 @@
 ---
-name: Lasso Public
+name: Public RPC
 slug: public
 logo: lasso_hat_white.png
 rps_limit: 100
@@ -121,9 +121,7 @@ chains:
         name: "LlamaRPC Ethereum"
         priority: 5
         url: "https://eth.llamarpc.com"
-        ws_url: "wss://eth.llamarpc.com"
         archival: false
-        subscribe_new_heads: false
         capabilities:
           limits:
             max_block_range: 1000
@@ -228,8 +226,6 @@ chains:
         name: "LlamaRPC Base"
         priority: 2
         url: "https://base.llamarpc.com"
-        ws_url: "wss://base.llamarpc.com"
-        subscribe_new_heads: true
         archival: true
         capabilities:
           unsupported_methods: ["eth_protocolVersion"]
@@ -333,14 +329,6 @@ chains:
         subscribe_new_heads: true
         capabilities:
           unsupported_categories: [debug, trace, txpool, filters]
-          unsupported_methods: ["eth_protocolVersion"]
-
-      - id: "arbitrum_meowrpc"
-        name: "Meow RPC Arbitrum"
-        priority: 5
-        url: "https://arbitrum.meowrpc.com"
-        archival: true
-        capabilities:
           unsupported_methods: ["eth_protocolVersion"]
 
       - id: "arbitrum_pocket"
@@ -491,14 +479,6 @@ chains:
         name: "Base Official Sepolia"
         priority: 4
         url: "https://sepolia.base.org"
-        archival: true
-        capabilities:
-          unsupported_methods: ["eth_protocolVersion"]
-
-      - id: "base_sepolia_onfinality"
-        name: "OnFinality Base Sepolia"
-        priority: 5
-        url: "https://base-sepolia.api.onfinality.io/public"
         archival: true
         capabilities:
           unsupported_methods: ["eth_protocolVersion"]

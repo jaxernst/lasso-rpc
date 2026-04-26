@@ -419,25 +419,34 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       assert duration < 500
     end
 
-    test "handles provider not found error", %{chain: chain} do
-      # Don't setup any providers
+    test "returns provider_not_found when override targets unknown provider", %{chain: chain} do
+      profile = "public"
 
-      # Execute request
-      {:error, error, _ctx} =
+      setup_providers([
+        %{id: "real_provider", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      {:error, error, ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
           [],
           %RequestOptions{
-            provider_override: "nonexistent",
+            provider_override: "ghost_provider",
             failover_on_override: false,
             timeout_ms: 30_000,
             strategy: :load_balanced
           }
         )
 
-      # Should get appropriate error
-      assert error != nil
+      assert %Lasso.JSONRPC.Error{} = error
+      assert error.code == -32_602
+      assert error.category == :invalid_params
+      assert error.retriable? == false
+      assert error.message =~ "ghost_provider"
+      assert error.data.provider_id == "ghost_provider"
+      assert error.data.chain == chain
+      assert ctx.executed_channel == nil
     end
   end
 

@@ -5,6 +5,20 @@ All notable changes to Lasso RPC will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `/api/health` no longer returns 500 on single-node deployments (missing `regions` field on cluster topology)
+- Invalid provider override (e.g. `/rpc/provider/nonexistent/ethereum`) now returns a clean `-32602 "Provider not found"` error instead of a misleading "All circuits open" exhaustion message
+- WebSocket connections to unknown profiles (`/ws/rpc/profile/zzz/...`) and unknown provider overrides (`/ws/rpc/provider/ghost/...`) are now rejected at handshake; previously they silently fell back to default routing and returned subscription IDs that never delivered events
+
+### Changed
+
+- Default profile (`config/profiles/default.yml`) removed in favor of the canonical `public` profile; existing `default` slug requests still work via the alias system, eliminating the `Duplicate chain IDs detected across profiles` startup warning
+- `public` profile pruned of broken provider configurations: removed dead WebSocket URLs from LlamaRPC (Ethereum and Base), removed unreachable `arbitrum_meowrpc` (TLS failure), removed `base_sepolia_onfinality` (returns 401 Unauthorized)
+- `.credo.exs` ExSlop checks made conditional, eliminating "Ignoring an undefined check" noise on every credo run
+
 ## [0.1.0] - 2026-01-06
 
 ### Added

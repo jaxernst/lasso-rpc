@@ -1,3 +1,35 @@
+# ExSlop is a private dep — only present in lasso-cloud. OSS gracefully skips its checks.
+ex_slop_checks =
+  if Code.ensure_loaded?(ExSlop.Check.Warning.BlanketRescue) do
+    [
+      {ExSlop.Check.Warning.BlanketRescue, []},
+      {ExSlop.Check.Warning.RescueWithoutReraise, []},
+      {ExSlop.Check.Warning.RepoAllThenFilter, []},
+      {ExSlop.Check.Warning.QueryInEnumMap, []},
+      {ExSlop.Check.Warning.GenserverAsKvStore, []},
+      {ExSlop.Check.Refactor.FilterNil, []},
+      {ExSlop.Check.Refactor.RejectNil, []},
+      {ExSlop.Check.Refactor.ReduceAsMap, []},
+      {ExSlop.Check.Refactor.MapIntoLiteral, []},
+      {ExSlop.Check.Refactor.IdentityPassthrough, []},
+      {ExSlop.Check.Refactor.IdentityMap, []},
+      {ExSlop.Check.Refactor.CaseTrueFalse, []},
+      {ExSlop.Check.Refactor.TryRescueWithSafeAlternative, []},
+      {ExSlop.Check.Refactor.WithIdentityElse, []},
+      {ExSlop.Check.Refactor.WithIdentityDo, []},
+      {ExSlop.Check.Refactor.SortThenReverse, []},
+      {ExSlop.Check.Refactor.StringConcatInReduce, []},
+      {ExSlop.Check.Readability.NarratorDoc, []},
+      {ExSlop.Check.Readability.DocFalseOnPublicFunction, []},
+      {ExSlop.Check.Readability.BoilerplateDocParams, []},
+      {ExSlop.Check.Readability.ObviousComment, []},
+      {ExSlop.Check.Readability.StepComment, []},
+      {ExSlop.Check.Readability.NarratorComment, []}
+    ]
+  else
+    []
+  end
+
 %{
   configs: [
     %{
@@ -18,7 +50,7 @@
       parse_timeout: 5000,
       color: true,
       checks: %{
-        enabled: [
+        enabled: ex_slop_checks ++ [
           # Consistency Checks
           {Credo.Check.Consistency.ExceptionNames, []},
           {Credo.Check.Consistency.LineEndings, []},
@@ -99,31 +131,6 @@
 
           # Refactoring - additional
           {Credo.Check.Refactor.PipeChainStart, []},
-
-          # ExSlop - AI code quality checks
-          {ExSlop.Check.Warning.BlanketRescue, []},
-          {ExSlop.Check.Warning.RescueWithoutReraise, []},
-          {ExSlop.Check.Warning.RepoAllThenFilter, []},
-          {ExSlop.Check.Warning.QueryInEnumMap, []},
-          {ExSlop.Check.Warning.GenserverAsKvStore, []},
-          {ExSlop.Check.Refactor.FilterNil, []},
-          {ExSlop.Check.Refactor.RejectNil, []},
-          {ExSlop.Check.Refactor.ReduceAsMap, []},
-          {ExSlop.Check.Refactor.MapIntoLiteral, []},
-          {ExSlop.Check.Refactor.IdentityPassthrough, []},
-          {ExSlop.Check.Refactor.IdentityMap, []},
-          {ExSlop.Check.Refactor.CaseTrueFalse, []},
-          {ExSlop.Check.Refactor.TryRescueWithSafeAlternative, []},
-          {ExSlop.Check.Refactor.WithIdentityElse, []},
-          {ExSlop.Check.Refactor.WithIdentityDo, []},
-          {ExSlop.Check.Refactor.SortThenReverse, []},
-          {ExSlop.Check.Refactor.StringConcatInReduce, []},
-          {ExSlop.Check.Readability.NarratorDoc, []},
-          {ExSlop.Check.Readability.DocFalseOnPublicFunction, []},
-          {ExSlop.Check.Readability.BoilerplateDocParams, []},
-          {ExSlop.Check.Readability.ObviousComment, []},
-          {ExSlop.Check.Readability.StepComment, []},
-          {ExSlop.Check.Readability.NarratorComment, []},
 
           # Readability - typespecs (non-blocking, for documentation)
           # Only require specs for core modules; skip UI, helpers, and tooling
