@@ -211,8 +211,9 @@ defmodule Lasso.RPC.PassthroughIntegrationTest do
           }
         )
 
-      # Error should be properly parsed
-      assert error != nil
+      assert %Lasso.JSONRPC.Error{} = error
+      assert is_integer(error.code)
+      assert is_atom(error.category)
     end
   end
 

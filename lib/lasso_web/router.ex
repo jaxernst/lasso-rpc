@@ -15,7 +15,7 @@ defmodule LassoWeb.Router do
     plug(:accepts, ["json"])
   end
 
-  # Profile-aware RPC pipeline (resolves profile from URL or defaults to "default")
+  # Profile-aware RPC pipeline (resolves profile from URL or falls back to ProfileValidator.default_profile/0)
   pipeline :api_with_profile do
     plug(:accepts, ["json"])
     plug(LassoWeb.Plugs.ProfileResolverPlug)
@@ -45,7 +45,7 @@ defmodule LassoWeb.Router do
   scope "/rpc", LassoWeb do
     pipe_through(:api_with_profile)
 
-    # Legacy endpoints (no profile slug - uses "default" profile)
+    # Legacy endpoints (no profile slug - fall back to ProfileValidator.default_profile/0)
     # Strategy-specific endpoints
     post("/fastest/:chain_id", RPCController, :rpc_fastest)
     post("/load-balanced/:chain_id", RPCController, :rpc_load_balanced)

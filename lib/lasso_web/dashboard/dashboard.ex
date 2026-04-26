@@ -131,7 +131,10 @@ defmodule LassoWeb.Dashboard do
 
   defp determine_initial_profile(params, session, profiles) do
     # Ensure we have a fallback if no profiles are configured
-    profiles = if Enum.empty?(profiles), do: ["default"], else: profiles
+    profiles =
+      if Enum.empty?(profiles),
+        do: [Lasso.Config.ProfileValidator.default_profile()],
+        else: profiles
 
     cond do
       profile = Map.get(params, "profile") ->
@@ -512,7 +515,7 @@ defmodule LassoWeb.Dashboard do
   attr(:events, :list)
   attr(:selected_chain, :string)
   attr(:selected_provider, :string)
-  attr(:selected_profile, :string, default: "default")
+  attr(:selected_profile, :string, default: "public")
   attr(:details_collapsed, :boolean)
   attr(:events_collapsed, :boolean)
   attr(:available_chains, :list)
@@ -526,7 +529,7 @@ defmodule LassoWeb.Dashboard do
   attr(:selected_provider_events, :list, default: [])
   attr(:selected_provider_unified_events, :list, default: [])
   attr(:selected_provider_metrics, :map, default: %{})
-  attr(:profile_display_name, :string, default: "default")
+  attr(:profile_display_name, :string, default: "public")
   attr(:effective_rps_limit, :integer, default: nil)
   attr(:live_provider_metrics, :map, default: %{})
   attr(:cluster_circuit_states, :map, default: %{})

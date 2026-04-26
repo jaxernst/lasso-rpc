@@ -21,7 +21,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   require Logger
 
-  alias Lasso.Config.ProfileValidator
+  alias Lasso.Config.{ConfigStore, ProfileValidator}
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.{CandidateListing, Catalog, InstanceState}
@@ -88,18 +88,39 @@ defmodule Lasso.RPC.RequestPipeline do
   """
   @spec execute_via_channels(chain(), method(), params(), RequestOptions.t()) :: result()
   def execute_via_channels(chain, method, params, %RequestOptions{} = opts) do
-    # Initialize context
     ctx = initialize_context(chain, method, params, opts)
-
-    # Build RPC request using client's JSON-RPC ID when available (preserves spec compliance)
     rpc_request = build_rpc_request(method, params, ctx, opts)
     ctx = RequestContext.set_execution_params(ctx, rpc_request, opts.timeout_ms, opts)
 
-    # Build channel source based on options (unifies override vs normal selection)
-    channel_source = build_channel_source(opts)
+    case validate_provider_override(chain, opts) do
+      :ok ->
+        channel_source = build_channel_source(opts)
+        execute_pipeline(channel_source, ctx)
 
-    # Execute the pipeline
-    execute_pipeline(channel_source, ctx)
+      {:error, jerr} ->
+        finalize_error(jerr, ctx)
+    end
+  end
+
+  @spec validate_provider_override(chain(), RequestOptions.t()) :: :ok | {:error, JError.t()}
+  defp validate_provider_override(_chain, %RequestOptions{provider_override: nil}), do: :ok
+
+  defp validate_provider_override(chain, %RequestOptions{
+         provider_override: provider_id,
+         profile: profile
+       }) do
+    case ConfigStore.get_provider(profile, chain, provider_id) do
+      {:ok, _provider} ->
+        :ok
+
+      {:error, _} ->
+        {:error,
+         JError.new(-32_602, "Provider '#{provider_id}' not found",
+           category: :invalid_params,
+           retriable?: false,
+           data: %{provider_id: provider_id, chain: chain, profile: profile}
+         )}
+    end
   end
 
   @spec execute_pipeline(channel_source(), RequestContext.t()) :: result()
