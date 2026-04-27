@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "skills": {
+    "sentry-code-review": {
+      "source": "getsentry/sentry-for-ai",
+      "sourceType": "github",
+      "computedHash": "3f2134bdeffc92ac7cd1d8561f056006cd1908ea87590182cefefdab441ed472"
+    },
+    "sentry-create-alert": {
+      "source": "getsentry/sentry-for-ai",
+      "sourceType": "github",
+      "computedHash": "05f78a17a70f3e38d283fef4f97b013024a01093ef436b96df12d51e2f1a7b00"
+    },
+    "sentry-elixir-sdk": {
+      "source": "getsentry/sentry-for-ai",
+      "sourceType": "github",
+      "computedHash": "98a9be47f556bbde96e8ba3dab6383403b237951dc665484ae70c7cfda09fbbf"
+    },
+    "sentry-feature-setup": {
+      "source": "getsentry/sentry-for-ai",
+      "sourceType": "github",
+      "computedHash": "526bb0e8d8812621cb4051fe12a7125b4a76b592ded7990837c169464e2bdc85"
+    },
+    "sentry-fix-issues": {
+      "source": "getsentry/sentry-for-ai",
+      "sourceType": "github",
+      "computedHash": "0ef2103f20d698acc56d856a07a372a0a68cb02bad654d0dacb4e2ffe87e98b5"
+    },
+    "sentry-sdk-skill-creator": {
+      "source": "getsentry/sentry-for-ai",
+      "sourceType": "github",
+      "computedHash": "fa232b782f4f64e083b67bf23d30977f7e676507879d317d704b550f57c66b1a"
+    },
+    "sentry-workflow": {
+      "source": "getsentry/sentry-for-ai",
+      "sourceType": "github",
+      "computedHash": "00a62d74aa26a9007d74532ab405b16684386e59c4121a5496f0059206683c6e"
+    }
+  }
+}
