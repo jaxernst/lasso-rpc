@@ -138,13 +138,26 @@ defmodule LassoWeb.Dashboard do
 
     cond do
       profile = Map.get(params, "profile") ->
-        if profile in profiles, do: profile, else: List.first(profiles)
+        resolve_profile(profile, profiles)
 
       profile = Map.get(session, "selected_profile") ->
-        if profile in profiles, do: profile, else: List.first(profiles)
+        resolve_profile(profile, profiles)
 
       true ->
         List.first(profiles)
+    end
+  end
+
+  # Resolve a requested profile slug to one of the configured profiles, applying
+  # the alias system so legacy slugs like "default" still land on their canonical
+  # target ("public") even after the legacy profile file has been removed.
+  defp resolve_profile(slug, profiles) do
+    canonical = Lasso.Config.ProfileValidator.resolve_alias(slug)
+
+    cond do
+      slug in profiles -> slug
+      canonical in profiles -> canonical
+      true -> List.first(profiles)
     end
   end
 
