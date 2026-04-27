@@ -81,6 +81,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   @reconnect_log_threshold 5
   @shared_profile "__shared__"
 
+  # Spread initial WS connection attempts across this window at boot to avoid a
+  # thundering herd of simultaneous handshakes against the same upstream CDN
+  # (Cloudflare in front of most providers will rate-limit a synchronized burst).
+  # Configurable so tests can disable jitter; defaults to 3s in dev/prod.
+  @default_startup_jitter_ms 3_000
+
   # Client API
 
   @doc """
@@ -169,8 +175,21 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
     write_ws_status(state.instance_id, :reconnecting, state.reconnect_attempts)
 
-    # Start the connection process
-    {:ok, state, {:continue, :connect}}
+    # Stagger the initial connection attempt with a random delay so we don't
+    # synchronize with sibling WS connections to the same CDN at boot. When the
+    # jitter window is 0 (e.g. in tests) we connect immediately.
+    case startup_jitter_ms() do
+      0 ->
+        {:ok, state, {:continue, :connect}}
+
+      max ->
+        Process.send_after(self(), :initial_connect, :rand.uniform(max))
+        {:ok, state}
+    end
+  end
+
+  defp startup_jitter_ms do
+    Application.get_env(:lasso, :ws_startup_jitter_ms, @default_startup_jitter_ms)
   end
 
   @doc """
@@ -400,6 +419,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   @impl true
+  def handle_info(:initial_connect, state), do: handle_continue(:connect, state)
+
   def handle_info({:ws_connected}, state) do
     # NOTE: We intentionally do NOT call signal_recovery here.
     # Recovery is signaled only after the connection proves stable (see {:connection_stable}).
