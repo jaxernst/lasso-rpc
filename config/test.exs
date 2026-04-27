@@ -54,7 +54,9 @@ config :lasso,
   ],
   # Use real HTTP client (Finch) for integration tests
   # (can be overridden in test_helper.exs for unit tests)
-  http_client: Lasso.RPC.Transport.HTTP.Client.Finch
+  http_client: Lasso.RPC.Transport.HTTP.Client.Finch,
+  # Disable WS startup-jitter so tests aren't waiting on rand-uniform delays.
+  ws_startup_jitter_ms: 0
 
 # Configure Phoenix PubSub for testing
 config :lasso, Lasso.PubSub, adapter: Phoenix.PubSub.PG

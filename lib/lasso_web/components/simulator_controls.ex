@@ -2,6 +2,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   @moduledoc "LiveView component for dashboard simulator controls."
   use LassoWeb, :live_component
   import LassoWeb.Components.FloatingWindow
+  alias Lasso.Config.ProfileValidator
   alias LassoWeb.Dashboard.Helpers
 
   @impl true
@@ -14,9 +15,9 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     socket =
       socket
       |> assign(assigns)
-      |> assign_new(:profile_name, fn -> Lasso.Config.ProfileValidator.default_profile() end)
+      |> assign_new(:profile_name, fn -> ProfileValidator.default_profile() end)
       |> assign_new(:rps_limit, fn -> nil end)
-      |> assign_new(:selected_profile, fn -> Lasso.Config.ProfileValidator.default_profile() end)
+      |> assign_new(:selected_profile, fn -> ProfileValidator.default_profile() end)
       |> assign_new(:sim_stats, fn ->
         %{http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0}, ws: %{open: 0}}
       end)
