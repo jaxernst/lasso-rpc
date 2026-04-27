@@ -488,7 +488,7 @@ defmodule Lasso.Config.Backend.File do
   defp generate_profile_yaml(yaml_data) do
     """
     ---
-    name: Lasso Public
+    name: Public Providers
     slug: public
     rps_limit: 100
     burst_limit: 500
