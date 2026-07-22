@@ -2,8 +2,7 @@ defmodule Lasso.Events.RoutingDecision do
   @moduledoc """
   Typed struct for routing decision events.
 
-  Published to profile-scoped PubSub topics to enable multi-tenant
-  dashboard subscriptions without cross-tenant data leakage.
+  Published to profile-scoped PubSub topics for the read-only dashboard.
 
   ## Event Source Fields
 
@@ -17,11 +16,10 @@ defmodule Lasso.Events.RoutingDecision do
   @type t :: %__MODULE__{
           ts: pos_integer(),
           request_id: String.t(),
-          account_id: String.t() | nil,
           profile: String.t(),
           source_node: node(),
           source_node_id: String.t(),
-          chain: String.t(),
+          chain_id: pos_integer(),
           method: String.t(),
           strategy: String.t(),
           provider_id: String.t(),
@@ -35,11 +33,10 @@ defmodule Lasso.Events.RoutingDecision do
   defstruct [
     :ts,
     :request_id,
-    :account_id,
     :profile,
     :source_node,
     :source_node_id,
-    :chain,
+    :chain_id,
     :method,
     :strategy,
     :provider_id,
@@ -58,11 +55,10 @@ defmodule Lasso.Events.RoutingDecision do
     %__MODULE__{
       ts: attrs[:ts] || System.system_time(:millisecond),
       request_id: attrs[:request_id],
-      account_id: attrs[:account_id],
       profile: attrs[:profile] || ProfileValidator.default_profile(),
       source_node: node(),
       source_node_id: get_source_node_id(),
-      chain: attrs[:chain],
+      chain_id: attrs[:chain_id],
       method: attrs[:method],
       strategy: to_string(attrs[:strategy]),
       provider_id: attrs[:provider_id],

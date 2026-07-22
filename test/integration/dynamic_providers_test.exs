@@ -4,9 +4,9 @@ defmodule Lasso.Integration.DynamicProvidersTest do
   @moduletag :integration
 
   alias Lasso.Providers
-  alias Lasso.Testing.MockProvider
+  alias Lasso.Testing.{ChainHelper, MockProvider}
 
-  @test_chain "ethereum"
+  @test_chain 1
 
   # Use mock providers for deterministic testing
   @test_providers [
@@ -24,6 +24,11 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       priority: 60
     }
   ]
+
+  setup_all do
+    :ok = ChainHelper.ensure_chain_exists(@test_chain)
+    :ok
+  end
 
   describe "Dynamic Provider Management" do
     setup do
@@ -64,18 +69,45 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       assert dynamic_provider.has_ws == true
     end
 
-    test "can remove a provider dynamically", %{provider_config: config, test_id: test_id} do
-      # Add provider first
+    test "removal unregisters before rebuilding routing and reaps an unreferenced instance", %{
+      provider_config: config,
+      test_id: test_id
+    } do
+      alias Lasso.BlockSync.Worker
+      alias Lasso.Providers.{Catalog, InstanceSupervisor}
+
       assert {:ok, _id} = Providers.add_provider(@test_chain, config)
+      instance_id = Catalog.lookup_instance_id("public", @test_chain, test_id)
+      assert is_binary(instance_id)
 
-      # Verify it exists
-      assert {:ok, _provider} = Providers.get_provider(@test_chain, test_id)
+      assert %{provider_id: ^test_id} =
+               Enum.find(
+                 Catalog.get_profile_providers("public", @test_chain),
+                 &(&1.provider_id == test_id)
+               )
 
-      # Remove provider
+      assert eventually(fn ->
+               GenServer.whereis(InstanceSupervisor.via_name(instance_id)) != nil
+             end)
+
+      assert eventually(fn -> GenServer.whereis(Worker.via(@test_chain, instance_id)) != nil end)
+
       assert :ok = Providers.remove_provider(@test_chain, test_id)
 
-      # Verify it's gone
       assert {:error, :not_found} = Providers.get_provider(@test_chain, test_id)
+
+      refute Enum.any?(
+               Catalog.get_profile_providers("public", @test_chain),
+               &(&1.provider_id == test_id)
+             )
+
+      assert Catalog.get_instance_refs(instance_id) == []
+
+      assert eventually(fn ->
+               GenServer.whereis(InstanceSupervisor.via_name(instance_id)) == nil
+             end)
+
+      assert eventually(fn -> GenServer.whereis(Worker.via(@test_chain, instance_id)) == nil end)
     end
 
     test "prevents adding duplicate providers", %{provider_config: config, test_id: test_id} do
@@ -273,6 +305,18 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       assert {:ok, block_number} = Lasso.RPC.Response.Success.decode_result(response)
       assert is_binary(block_number)
       assert String.starts_with?(block_number, "0x")
+    end
+  end
+
+  defp eventually(fun, attempts \\ 40)
+  defp eventually(fun, 0), do: fun.()
+
+  defp eventually(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(25)
+      eventually(fun, attempts - 1)
     end
   end
 end

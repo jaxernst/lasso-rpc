@@ -72,7 +72,7 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
 
   @impl true
   def record_request(profile, chain, provider_id, method, duration_ms, result, opts) do
-    transport = Keyword.get(opts, :transport, :http)
+    transport = Keyword.get(opts, :transport) || :http
 
     method_key = "#{method}@#{transport}"
 

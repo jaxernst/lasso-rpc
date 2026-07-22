@@ -8,7 +8,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
 
   setup do
     suffix = System.unique_integer([:positive])
-    test_chain = "test_ws_subs_#{suffix}"
+    test_chain = suffix
     test_provider = "mock_ws_provider_#{suffix}"
     test_profile = @default_profile
 

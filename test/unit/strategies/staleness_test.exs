@@ -29,19 +29,19 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
     setup do
       # Test parameters
       profile = "test"
-      chain = "ethereum"
+      chain_id = 1
       method = "eth_blockNumber"
       timeout = 5000
 
-      ctx = Fastest.prepare_context(profile, chain, method, timeout)
+      ctx = Fastest.prepare_context(profile, chain_id, method, timeout)
 
-      {:ok, ctx: ctx, profile: profile, chain: chain, method: method}
+      {:ok, ctx: ctx, profile: profile, chain_id: chain_id, method: method}
     end
 
     test "provider with fresh metrics (< 10min) gets normal latency score", %{
       ctx: ctx,
       profile: profile,
-      chain: chain,
+      chain_id: chain_id,
       method: method
     } do
       current_time = System.system_time(:millisecond)
@@ -65,7 +65,7 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
         }
       end)
 
-      ranked = Fastest.rank_channels(channels, method, ctx, profile, chain)
+      ranked = Fastest.rank_channels(channels, method, ctx, profile, chain_id)
 
       # Should use actual latency (implicitly tested by ranking)
       assert length(ranked) == 1
@@ -75,7 +75,7 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
     test "provider with stale metrics (> 10min) gets cold start penalty", %{
       ctx: ctx,
       profile: profile,
-      chain: chain,
+      chain_id: chain_id,
       method: method
     } do
       current_time = System.system_time(:millisecond)
@@ -107,7 +107,7 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
         }
       end)
 
-      ranked = Fastest.rank_channels(channels, method, ctx, profile, chain)
+      ranked = Fastest.rank_channels(channels, method, ctx, profile, chain_id)
 
       # Slow fresh provider should be ranked higher than fast stale provider
       # (200ms fresh < 500ms stale penalty)
@@ -118,7 +118,7 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
     test "missing last_updated_ms treated as cold start", %{
       ctx: ctx,
       profile: profile,
-      chain: chain,
+      chain_id: chain_id,
       method: method
     } do
       channels = [
@@ -141,7 +141,7 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
         }
       end)
 
-      ranked = Fastest.rank_channels(channels, method, ctx, profile, chain)
+      ranked = Fastest.rank_channels(channels, method, ctx, profile, chain_id)
 
       # Provider with timestamp should be ranked first (200ms < 500ms penalty)
       assert length(ranked) == 2
@@ -153,19 +153,19 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
     setup do
       # Test parameters
       profile = "test"
-      chain = "ethereum"
+      chain_id = 1
       method = "eth_blockNumber"
       timeout = 5000
 
-      ctx = LatencyWeighted.prepare_context(profile, chain, method, timeout)
+      ctx = LatencyWeighted.prepare_context(profile, chain_id, method, timeout)
 
-      {:ok, ctx: ctx, profile: profile, chain: chain, method: method}
+      {:ok, ctx: ctx, profile: profile, chain_id: chain_id, method: method}
     end
 
     test "fresh metrics get normal weight calculation", %{
       ctx: ctx,
       profile: profile,
-      chain: chain,
+      chain_id: chain_id,
       method: method
     } do
       current_time = System.system_time(:millisecond)
@@ -188,14 +188,14 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
       end)
 
       # Just verify it doesn't crash and returns the channel
-      ranked = LatencyWeighted.rank_channels(channels, method, ctx, profile, chain)
+      ranked = LatencyWeighted.rank_channels(channels, method, ctx, profile, chain_id)
       assert length(ranked) == 1
     end
 
     test "stale metrics get explore_floor weight", %{
       ctx: ctx,
       profile: profile,
-      chain: chain,
+      chain_id: chain_id,
       method: method
     } do
       current_time = System.system_time(:millisecond)
@@ -217,14 +217,14 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
         }
       end)
 
-      ranked = LatencyWeighted.rank_channels(channels, method, ctx, profile, chain)
+      ranked = LatencyWeighted.rank_channels(channels, method, ctx, profile, chain_id)
       assert length(ranked) == 1
     end
 
     test "multiple providers with mixed freshness sort correctly", %{
       ctx: ctx,
       profile: profile,
-      chain: chain,
+      chain_id: chain_id,
       method: method
     } do
       current_time = System.system_time(:millisecond)
@@ -264,7 +264,7 @@ defmodule Lasso.RPC.Strategies.StalenessTest do
         }
       end)
 
-      ranked = LatencyWeighted.rank_channels(channels, method, ctx, profile, chain)
+      ranked = LatencyWeighted.rank_channels(channels, method, ctx, profile, chain_id)
 
       # Should return all 3 channels, stale one should have lower effective weight
       assert length(ranked) == 3

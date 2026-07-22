@@ -16,7 +16,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   require Logger
 
   @type profile :: String.t()
-  @type chain_name :: String.t()
+  @type chain_name :: pos_integer()
   @type provider_id :: String.t()
   @type method :: String.t()
   @type result :: :success | :error | :timeout | :network_error | :rate_limit | atom()

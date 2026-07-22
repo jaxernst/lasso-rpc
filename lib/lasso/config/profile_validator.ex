@@ -34,7 +34,6 @@ defmodule Lasso.Config.ProfileValidator do
       {:ok, profile} = ProfileValidator.validate_with_default(maybe_nil_profile)
   """
 
-  require Logger
   alias Lasso.Config.ConfigStore
 
   @default_profile "public"
@@ -53,6 +52,7 @@ defmodule Lasso.Config.ProfileValidator do
           :profile_nil
           | :profile_invalid_type
           | :profile_empty
+          | :profile_invalid_format
           | :profile_not_found
 
   @type validation_result ::
@@ -80,33 +80,44 @@ defmodule Lasso.Config.ProfileValidator do
       {:error, :profile_not_found, "Profile 'nonexistent' not found"}
   """
   @spec validate(term()) :: validation_result()
-  def validate(nil) do
+  def validate(profile) do
+    case validate_format(profile) do
+      {:ok, canonical} -> validate_existence(canonical, profile)
+      {:error, _, _} = err -> err
+    end
+  end
+
+  @doc """
+  Format-only validation: checks `nil`, type, and emptiness, then returns
+  the alias-resolved canonical slug. It does not verify existence in
+  `ConfigStore`.
+  """
+  @spec validate_format(term()) :: validation_result()
+  def validate_format(nil) do
     {:error, :profile_nil, "Profile parameter is required"}
   end
 
-  def validate(profile) when not is_binary(profile) do
+  def validate_format(profile) when not is_binary(profile) do
     {:error, :profile_invalid_type, "Profile must be a string, got: #{inspect(profile)}"}
   end
 
-  def validate(profile) when is_binary(profile) do
+  def validate_format(profile) when is_binary(profile) do
     trimmed = String.trim(profile)
 
     if trimmed == "" do
       {:error, :profile_empty, "Profile cannot be empty"}
     else
-      canonical = resolve_alias(trimmed)
+      {:ok, resolve_alias(trimmed)}
+    end
+  end
 
-      case ConfigStore.get_profile(canonical) do
-        {:ok, _meta} ->
-          {:ok, canonical}
+  defp validate_existence(canonical, original) do
+    case ConfigStore.resolve(:system, canonical) do
+      {:ok, _profile_id} ->
+        {:ok, canonical}
 
-        {:error, :not_found} ->
-          {:error, :profile_not_found, "Profile '#{trimmed}' not found"}
-
-        {:error, reason} ->
-          Logger.warning("Profile validation failed for '#{canonical}': #{inspect(reason)}")
-          {:error, :profile_not_found, "Profile '#{canonical}' not found"}
-      end
+      {:error, :not_found} ->
+        {:error, :profile_not_found, "Profile '#{original}' not found"}
     end
   end
 
@@ -203,10 +214,11 @@ defmodule Lasso.Config.ProfileValidator do
       iex> ProfileValidator.error_to_http_status(:profile_not_found)
       404
   """
-  @spec error_to_http_status(validation_error()) :: integer()
+  @spec error_to_http_status(validation_error() | atom()) :: integer()
   def error_to_http_status(:profile_nil), do: 400
   def error_to_http_status(:profile_invalid_type), do: 400
   def error_to_http_status(:profile_empty), do: 400
+  def error_to_http_status(:profile_invalid_format), do: 400
   def error_to_http_status(:profile_not_found), do: 404
 
   @doc """
@@ -223,10 +235,11 @@ defmodule Lasso.Config.ProfileValidator do
       iex> ProfileValidator.error_to_jsonrpc_code(:profile_not_found)
       -32000
   """
-  @spec error_to_jsonrpc_code(validation_error()) :: integer()
+  @spec error_to_jsonrpc_code(validation_error() | atom()) :: integer()
   def error_to_jsonrpc_code(:profile_nil), do: -32_602
   def error_to_jsonrpc_code(:profile_invalid_type), do: -32_602
   def error_to_jsonrpc_code(:profile_empty), do: -32_602
+  def error_to_jsonrpc_code(:profile_invalid_format), do: -32_602
   def error_to_jsonrpc_code(:profile_not_found), do: -32_000
 
   @doc """
@@ -234,8 +247,7 @@ defmodule Lasso.Config.ProfileValidator do
   canonical name.
 
   The alias map is read from `config :lasso, :profile_aliases` and defaults
-  to `%{}`. Lasso Cloud configures this to handle the `default`→`public` and
-  `premium`→`managed` rename; OSS deployments are unaffected.
+  to `%{}`. OSS retains `default` as a compatibility alias for `public`.
   """
   @spec resolve_alias(String.t()) :: String.t()
   def resolve_alias(slug) when is_binary(slug) do

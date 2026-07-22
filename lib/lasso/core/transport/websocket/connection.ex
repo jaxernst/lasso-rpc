@@ -70,7 +70,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   use GenServer, restart: :permanent
   require Logger
 
-  alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
   alias Lasso.JSONRPC.Error, as: JError
@@ -119,8 +118,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
             get_in(instance, [:canonical_config, :name]) ||
               "Shared WebSocket #{instance_id}",
           ws_url: instance.ws_url,
-          chain_id: resolve_chain_id(instance.chain),
-          chain_name: instance.chain
+          chain_id: instance.chain_id
         }
 
         GenServer.start_link(__MODULE__, endpoint, name: via_instance_name(instance_id))
@@ -151,8 +149,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   @impl true
   def init(%Endpoint{} = endpoint) do
-    # Trap exits so we receive :EXIT messages from linked WebSockex processes
-    # This ensures we handle disconnects even if WebSockex crashes abnormally
     Process.flag(:trap_exit, true)
 
     instance_id = endpoint_instance_id(endpoint)
@@ -160,7 +156,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     state = %{
       endpoint: endpoint,
       profile: endpoint.profile,
-      chain_name: endpoint.chain_name,
       instance_id: instance_id,
       connection: nil,
       connected: false,
@@ -253,7 +248,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           %{},
           %{
             provider_id: state.endpoint.id,
-            chain: state.chain_name,
+            chain_id: state.endpoint.chain_id,
             error_code: jerr.code,
             error_message: jerr.message,
             retriable: true,
@@ -321,7 +316,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           %{},
           %{
             provider_id: state.endpoint.id,
-            chain: state.chain_name,
+            chain_id: state.endpoint.chain_id,
             error_code: jerr.code,
             error_message: jerr.message,
             retriable: jerr.retriable?,
@@ -436,7 +431,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       %{},
       %{
         provider_id: state.endpoint.id,
-        chain: state.chain_name,
+        chain_id: state.endpoint.chain_id,
         reconnect_attempt: state.reconnect_attempts,
         connection_id: connection_id
       }
@@ -589,7 +584,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       %{},
       %{
         provider_id: state.endpoint.id,
-        chain: state.chain_name,
+        chain_id: state.endpoint.chain_id,
         reason: reason,
         code: code,
         had_active_traffic: had_pending,
@@ -684,7 +679,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         %{},
         %{
           provider_id: state.endpoint.id,
-          chain: state.chain_name,
+          chain_id: state.endpoint.chain_id,
           reason: reason,
           had_active_traffic: had_pending,
           was_stable: false,
@@ -917,7 +912,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       %{},
       %{
         provider_id: state.endpoint.id,
-        chain: state.chain_name,
+        chain_id: state.endpoint.chain_id,
         reason: {:exit, reason},
         had_active_traffic: had_pending,
         was_stable: was_stable,
@@ -1414,23 +1409,24 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   defp endpoint_instance_id(%Endpoint{profile: @shared_profile, id: instance_id}), do: instance_id
 
-  defp endpoint_instance_id(%Endpoint{profile: profile, chain_name: chain, id: provider_id})
-       when is_binary(profile) and is_binary(chain) and is_binary(provider_id) do
-    Catalog.lookup_instance_id(profile, chain, provider_id) || "#{chain}:#{provider_id}"
+  defp endpoint_instance_id(%Endpoint{profile: profile, chain_id: chain_id, id: provider_id})
+       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and
+              is_binary(provider_id) do
+    Catalog.lookup_instance_id(profile, chain_id, provider_id) || "#{chain_id}:#{provider_id}"
   end
 
   defp broadcast_conn_event(state, event_builder) when is_function(event_builder, 1) do
     for {profile, provider_id} <- profile_provider_refs(state) do
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
-        "ws:conn:#{profile}:#{state.chain_name}",
+        Lasso.Topics.ws_connection(profile, state.endpoint.chain_id),
         event_builder.(provider_id)
       )
     end
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:conn:instance:#{state.instance_id}",
+      Lasso.Topics.ws_conn_instance(state.instance_id),
       event_builder.(state.instance_id)
     )
   end
@@ -1438,21 +1434,21 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   defp broadcast_subscription_event(state, sub_id, payload, received_at) do
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "ws:subs:instance:#{state.instance_id}",
+      Lasso.Topics.ws_subs_instance(state.instance_id),
       {:subscription_event, state.instance_id, sub_id, payload, received_at}
     )
   end
 
   defp profile_provider_refs(%{
          profile: @shared_profile,
-         chain_name: chain_name,
+         endpoint: %Endpoint{chain_id: chain_id},
          instance_id: instance_id
        }) do
     case Catalog.get_instance_refs(instance_id) do
       refs when is_list(refs) and refs != [] ->
         Enum.map(refs, fn profile ->
           provider_id =
-            Catalog.reverse_lookup_provider_id(profile, chain_name, instance_id) || instance_id
+            Catalog.reverse_lookup_provider_id(profile, chain_id, instance_id) || instance_id
 
           {profile, provider_id}
         end)
@@ -1483,13 +1479,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
       {:error, _} = err ->
         err
-    end
-  end
-
-  defp resolve_chain_id(chain_name) do
-    case ConfigStore.get_chain("public", chain_name) do
-      {:ok, chain} when is_integer(chain.chain_id) -> chain.chain_id
-      _ -> 0
     end
   end
 

@@ -11,7 +11,7 @@ defmodule Lasso.Core.Benchmarking.Metrics do
   """
 
   @type profile :: String.t()
-  @type chain :: String.t()
+  @type chain :: pos_integer()
   @type provider_id :: String.t()
   @type method :: String.t()
   @type result :: :success | :error

@@ -89,11 +89,11 @@ defmodule Lasso.Config.ProfileIsolationTest do
       chains_b = ConfigStore.list_chains_for_profile(@profile_b)
 
       # Verify each profile only sees its own chain
-      assert Enum.any?(chains_a, &(&1 == @test_chain <> "_a"))
-      refute Enum.any?(chains_a, &(&1 == @test_chain <> "_b"))
+      assert 1 in chains_a
+      refute 2 in chains_a
 
-      assert Enum.any?(chains_b, &(&1 == @test_chain <> "_b"))
-      refute Enum.any?(chains_b, &(&1 == @test_chain <> "_a"))
+      assert 2 in chains_b
+      refute 1 in chains_b
 
       # Cleanup
       ConfigStore.unregister_chain_runtime(@profile_a, @test_chain <> "_a")
@@ -143,7 +143,7 @@ defmodule Lasso.Config.ProfileIsolationTest do
           "eth_blockNumber"
         )
 
-      # Profile B hasn't recorded any data, so should have zero calls
+      # Profile B has not recorded any data.
       assert metrics_b.total_calls == 0
     end
 

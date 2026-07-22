@@ -18,7 +18,7 @@ defmodule Lasso.RPC.OptimisticLagTest do
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.RPC.ChainState
 
-  @chain "optimistic_lag_test_chain"
+  @chain 9_999_001
 
   setup do
     BlockSyncRegistry.clear_chain(@chain)

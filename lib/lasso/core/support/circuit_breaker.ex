@@ -963,16 +963,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           nil
       end
 
-    {chain, refs} =
+    {chain_id, refs} =
       try do
-        chain =
+        chain_id =
           case Catalog.get_instance(state.instance_id) do
-            {:ok, %{chain: c}} -> c
+            {:ok, %{chain_id: id}} when is_integer(id) and id > 0 -> id
             _ -> nil
           end
 
         refs = Catalog.get_instance_refs(state.instance_id)
-        {chain, refs}
+        {chain_id, refs}
       rescue
         ArgumentError ->
           Logger.debug(
@@ -982,28 +982,35 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           {nil, []}
       end
 
-    Enum.each(refs, fn profile ->
-      provider_id = Catalog.reverse_lookup_provider_id(profile, chain, state.instance_id)
+    if is_integer(chain_id) and chain_id > 0 do
+      Enum.each(refs, fn profile ->
+        provider_id = Catalog.reverse_lookup_provider_id(profile, chain_id, state.instance_id)
 
-      event =
-        {:circuit_breaker_event,
-         %{
-           ts: System.system_time(:millisecond),
-           profile: profile,
-           chain: chain,
-           provider_id: provider_id || state.instance_id,
-           instance_id: state.instance_id,
-           transport: state.transport,
-           from: from,
-           to: to,
-           reason: reason,
-           error: error_info,
-           source_node_id: Lasso.Cluster.Topology.get_self_node_id(),
-           source_node: node()
-         }}
+        event =
+          {:circuit_breaker_event,
+           %{
+             ts: System.system_time(:millisecond),
+             profile: profile,
+             chain: chain_id,
+             chain_id: chain_id,
+             provider_id: provider_id || state.instance_id,
+             instance_id: state.instance_id,
+             transport: state.transport,
+             from: from,
+             to: to,
+             reason: reason,
+             error: error_info,
+             source_node_id: Lasso.Cluster.Topology.get_self_node_id(),
+             source_node: node()
+           }}
 
-      Phoenix.PubSub.broadcast(Lasso.PubSub, "circuit:events:#{profile}:#{chain}", event)
-    end)
+        Phoenix.PubSub.broadcast(
+          Lasso.PubSub,
+          Lasso.Topics.circuit_event(profile, chain_id),
+          event
+        )
+      end)
+    end
   end
 
   defp truncate_error_message(msg) when is_binary(msg) do

@@ -7,15 +7,15 @@ defmodule Lasso.Core.Support.GapFiller do
 
   @type backfill_opts :: [timeout_ms: non_neg_integer()]
 
-  @spec ensure_blocks(String.t(), String.t(), pos_integer(), pos_integer(), backfill_opts) ::
+  @spec ensure_blocks(pos_integer(), String.t(), pos_integer(), pos_integer(), backfill_opts) ::
           {:ok, list()} | {:error, term()}
-  def ensure_blocks(chain, provider_id, from_n, to_n, _opts \\ [])
+  def ensure_blocks(chain_id, provider_id, from_n, to_n, _opts \\ [])
 
-  def ensure_blocks(chain, provider_id, from_n, to_n, _opts) when from_n <= to_n do
+  def ensure_blocks(chain_id, provider_id, from_n, to_n, _opts) when from_n <= to_n do
     blocks =
       Enum.reduce(from_n..to_n, [], fn n, acc ->
         case RequestPipeline.execute_via_channels(
-               chain,
+               chain_id,
                "eth_getBlockByNumber",
                [
                  "0x" <> Integer.to_string(n, 16),
@@ -34,7 +34,7 @@ defmodule Lasso.Core.Support.GapFiller do
       end)
 
     :telemetry.execute([:lasso, :subs, :backfill, :block], %{count: length(blocks)}, %{
-      chain: chain,
+      chain_id: chain_id,
       from: from_n,
       to: to_n,
       provider_id: provider_id
@@ -43,13 +43,20 @@ defmodule Lasso.Core.Support.GapFiller do
     {:ok, blocks}
   end
 
-  def ensure_blocks(_chain, _provider_id, _from, _to, _opts), do: {:ok, []}
+  def ensure_blocks(_chain_id, _provider_id, _from, _to, _opts), do: {:ok, []}
 
-  @spec ensure_logs(String.t(), String.t(), map(), pos_integer(), pos_integer(), backfill_opts) ::
+  @spec ensure_logs(
+          pos_integer(),
+          String.t(),
+          map(),
+          pos_integer(),
+          pos_integer(),
+          backfill_opts
+        ) ::
           {:ok, list()} | {:error, term()}
-  def ensure_logs(chain, provider_id, filter, from_n, to_n, _opts \\ [])
+  def ensure_logs(chain_id, provider_id, filter, from_n, to_n, _opts \\ [])
 
-  def ensure_logs(chain, provider_id, filter, from_n, to_n, _opts) when from_n <= to_n do
+  def ensure_logs(chain_id, provider_id, filter, from_n, to_n, _opts) when from_n <= to_n do
     base_filter = %{
       "fromBlock" => "0x" <> Integer.to_string(from_n, 16),
       "toBlock" => "0x" <> Integer.to_string(to_n, 16)
@@ -58,7 +65,7 @@ defmodule Lasso.Core.Support.GapFiller do
     full_filter = Map.merge(filter, base_filter)
 
     case RequestPipeline.execute_via_channels(
-           chain,
+           chain_id,
            "eth_getLogs",
            [full_filter],
            %RequestOptions{
@@ -75,7 +82,7 @@ defmodule Lasso.Core.Support.GapFiller do
           end)
 
         :telemetry.execute([:lasso, :subs, :backfill, :logs], %{count: length(ordered)}, %{
-          chain: chain,
+          chain_id: chain_id,
           from: from_n,
           to: to_n,
           provider_id: provider_id
@@ -88,7 +95,7 @@ defmodule Lasso.Core.Support.GapFiller do
     end
   end
 
-  def ensure_logs(_chain, _provider_id, _filter, _from, _to, _opts), do: {:ok, []}
+  def ensure_logs(_chain_id, _provider_id, _filter, _from, _to, _opts), do: {:ok, []}
 
   defp decode_hex(nil), do: nil
   defp decode_hex("0x" <> rest), do: String.to_integer(rest, 16)

@@ -16,7 +16,8 @@ defmodule Lasso.RPC.SelectionFilters do
           exclude_rate_limited: boolean(),
           max_lag_blocks: non_neg_integer() | nil,
           min_block: non_neg_integer() | nil,
-          requires_archival: boolean()
+          requires_archival: boolean(),
+          requires_subscribe_new_heads: boolean()
         }
 
   defstruct protocol: nil,
@@ -25,7 +26,8 @@ defmodule Lasso.RPC.SelectionFilters do
             exclude_rate_limited: false,
             max_lag_blocks: nil,
             min_block: nil,
-            requires_archival: false
+            requires_archival: false,
+            requires_subscribe_new_heads: false
 
   @doc """
   Creates a new SelectionFilters struct with validated defaults.
@@ -39,6 +41,8 @@ defmodule Lasso.RPC.SelectionFilters do
     * `:max_lag_blocks` - Maximum acceptable block lag (nil = no limit)
     * `:min_block` - Minimum block height the provider must have (nil = no filter)
     * `:requires_archival` - Request requires archival data support (default: false)
+    * `:requires_subscribe_new_heads` - Request is an `eth_subscribe newHeads`
+      and must route only to providers that declare the capability (default: false)
 
   ## Examples
 
@@ -57,7 +61,8 @@ defmodule Lasso.RPC.SelectionFilters do
       exclude_rate_limited: Keyword.get(opts, :exclude_rate_limited, false),
       max_lag_blocks: Keyword.get(opts, :max_lag_blocks),
       min_block: Keyword.get(opts, :min_block),
-      requires_archival: Keyword.get(opts, :requires_archival, false)
+      requires_archival: Keyword.get(opts, :requires_archival, false),
+      requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false)
     }
   end
 
@@ -76,7 +81,11 @@ defmodule Lasso.RPC.SelectionFilters do
         to_boolean(map[:exclude_rate_limited] || Map.get(map, "exclude_rate_limited")),
       max_lag_blocks: map[:max_lag_blocks] || Map.get(map, "max_lag_blocks"),
       min_block: map[:min_block] || Map.get(map, "min_block"),
-      requires_archival: to_boolean(map[:requires_archival] || Map.get(map, "requires_archival"))
+      requires_archival: to_boolean(map[:requires_archival] || Map.get(map, "requires_archival")),
+      requires_subscribe_new_heads:
+        to_boolean(
+          map[:requires_subscribe_new_heads] || Map.get(map, "requires_subscribe_new_heads")
+        )
     }
   end
 
@@ -92,7 +101,8 @@ defmodule Lasso.RPC.SelectionFilters do
       exclude_rate_limited: filters.exclude_rate_limited,
       max_lag_blocks: filters.max_lag_blocks,
       min_block: filters.min_block,
-      requires_archival: filters.requires_archival
+      requires_archival: filters.requires_archival,
+      requires_subscribe_new_heads: filters.requires_subscribe_new_heads
     }
   end
 

@@ -34,10 +34,11 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   defstruct [
     :instance_id,
-    :chain,
+    :chain_id,
     :parent,
     :poll_interval_ms,
     :timer_ref,
+    :poll_generation,
     :consecutive_failures,
     :last_height,
     :last_poll_time
@@ -45,10 +46,11 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @type t :: %__MODULE__{
           instance_id: String.t(),
-          chain: String.t(),
+          chain_id: pos_integer(),
           parent: pid(),
           poll_interval_ms: non_neg_integer(),
           timer_ref: reference() | nil,
+          poll_generation: reference() | nil,
           consecutive_failures: non_neg_integer(),
           last_height: non_neg_integer() | nil,
           last_poll_time: integer() | nil
@@ -57,19 +59,20 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   ## Strategy Callbacks
 
   @impl true
-  def start(chain, instance_id, opts) do
+  def start(chain_id, instance_id, opts) do
     parent = Keyword.get(opts, :parent, self())
     poll_interval = Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms)
 
     state = %__MODULE__{
       instance_id: instance_id,
-      chain: chain,
+      chain_id: chain_id,
       parent: parent,
       poll_interval_ms: poll_interval,
       consecutive_failures: 0,
       last_height: nil,
       last_poll_time: nil,
-      timer_ref: nil
+      timer_ref: nil,
+      poll_generation: nil
     }
 
     state = schedule_poll(state, 0)
@@ -103,11 +106,13 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   end
 
   @impl true
-  def handle_message(:poll, state) do
+  def handle_message({:poll, generation}, %__MODULE__{poll_generation: generation} = state) do
     new_state = execute_poll(state)
     new_state = schedule_poll(new_state, new_state.poll_interval_ms)
     {:ok, new_state}
   end
+
+  def handle_message({:poll, _stale_generation}, %__MODULE__{} = state), do: {:ok, state}
 
   def handle_message(_other, state) do
     {:ok, state}
@@ -121,20 +126,29 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   @spec set_poll_interval(t(), pos_integer()) :: t()
   def set_poll_interval(%__MODULE__{} = state, interval_ms)
       when is_integer(interval_ms) and interval_ms > 0 do
-    %{state | poll_interval_ms: interval_ms}
+    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+    schedule_poll(%{state | poll_interval_ms: interval_ms}, interval_ms)
   end
 
   ## Private Functions
 
   defp schedule_poll(state, delay_ms) do
-    ref = Process.send_after(state.parent, {:http_strategy, :poll, state.instance_id}, delay_ms)
-    %{state | timer_ref: ref}
+    generation = make_ref()
+
+    ref =
+      Process.send_after(
+        state.parent,
+        {:http_strategy, :poll, state.instance_id, generation},
+        delay_ms
+      )
+
+    %{state | timer_ref: ref, poll_generation: generation}
   end
 
   defp execute_poll(%__MODULE__{} = state) do
     start_time = System.monotonic_time(:millisecond)
 
-    result = do_poll(state.instance_id, state.chain)
+    result = do_poll(state.instance_id, state.chain_id)
     latency_ms = System.monotonic_time(:millisecond) - start_time
 
     case result do
@@ -165,7 +179,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
         if failures == @max_consecutive_failures do
           Logger.warning("HTTP polling degraded",
-            chain: state.chain,
+            chain_id: state.chain_id,
             instance_id: state.instance_id,
             consecutive_failures: failures,
             error: inspect(reason)
@@ -205,10 +219,10 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     )
   end
 
-  defp do_poll(instance_id, chain) do
+  defp do_poll(instance_id, chain_id) do
     cb_id = {instance_id, :http}
 
-    case CircuitBreaker.call(cb_id, fn -> do_poll_request(instance_id, chain) end) do
+    case CircuitBreaker.call(cb_id, fn -> do_poll_request(instance_id, chain_id) end) do
       {:executed, {:ok, height}} ->
         {:ok, height}
 
@@ -232,8 +246,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     end
   end
 
-  defp do_poll_request(instance_id, chain) do
-    case resolve_channel(instance_id, chain) do
+  defp do_poll_request(instance_id, chain_id) do
+    case resolve_channel(instance_id, chain_id) do
       {:ok, channel} ->
         rpc_request = %{
           "jsonrpc" => "2.0",
@@ -265,7 +279,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   rescue
     e ->
       Logger.error("HTTP polling crashed",
-        chain: chain,
+        chain_id: chain_id,
         instance_id: instance_id,
         error: Exception.format(:error, e, __STACKTRACE__)
       )
@@ -273,13 +287,13 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       {:error, {:exception, Exception.message(e)}}
   end
 
-  defp resolve_channel(instance_id, chain) do
+  defp resolve_channel(instance_id, chain_id) do
     case Catalog.get_instance_refs(instance_id) do
       [ref_profile | _] ->
-        provider_id = Catalog.reverse_lookup_provider_id(ref_profile, chain, instance_id)
+        provider_id = Catalog.reverse_lookup_provider_id(ref_profile, chain_id, instance_id)
 
         if provider_id do
-          TransportRegistry.get_channel(ref_profile, chain, provider_id, :http)
+          TransportRegistry.get_channel(ref_profile, chain_id, provider_id, :http)
         else
           {:error, :no_provider_id}
         end

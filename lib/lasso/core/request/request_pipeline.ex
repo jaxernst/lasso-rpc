@@ -38,7 +38,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.RPC.RequestPipeline.{FailoverStrategy, Observability}
 
   # Type definitions
-  @type chain :: String.t()
+  @type chain_id :: pos_integer()
   @type method :: String.t()
   @type params :: list()
   @type result :: {:ok, any(), RequestContext.t()} | {:error, JError.t(), RequestContext.t()}
@@ -72,7 +72,7 @@ defmodule Lasso.RPC.RequestPipeline do
   ## Examples
 
       {:ok, result, ctx} = execute_via_channels(
-        "ethereum",
+        1,
         "eth_blockNumber",
         [],
         %RequestOptions{strategy: :fastest}
@@ -80,19 +80,20 @@ defmodule Lasso.RPC.RequestPipeline do
       # ctx.executed_channel contains the channel that succeeded
 
       {:error, %JError{}, ctx} = execute_via_channels(
-        "ethereum",
+        1,
         "eth_call",
         [],
         %RequestOptions{provider_override: "failing_provider"}
       )
   """
-  @spec execute_via_channels(chain(), method(), params(), RequestOptions.t()) :: result()
-  def execute_via_channels(chain, method, params, %RequestOptions{} = opts) do
-    ctx = initialize_context(chain, method, params, opts)
+  @spec execute_via_channels(chain_id(), method(), params(), RequestOptions.t()) :: result()
+  def execute_via_channels(chain_id, method, params, %RequestOptions{} = opts)
+      when is_integer(chain_id) and chain_id > 0 do
+    ctx = initialize_context(chain_id, method, params, opts)
     rpc_request = build_rpc_request(method, params, ctx, opts)
     ctx = RequestContext.set_execution_params(ctx, rpc_request, opts.timeout_ms, opts)
 
-    case validate_provider_override(chain, opts) do
+    case validate_provider_override(chain_id, opts) do
       :ok ->
         channel_source = build_channel_source(opts)
         execute_pipeline(channel_source, ctx)
@@ -102,14 +103,14 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  @spec validate_provider_override(chain(), RequestOptions.t()) :: :ok | {:error, JError.t()}
-  defp validate_provider_override(_chain, %RequestOptions{provider_override: nil}), do: :ok
+  @spec validate_provider_override(chain_id(), RequestOptions.t()) :: :ok | {:error, JError.t()}
+  defp validate_provider_override(_chain_id, %RequestOptions{provider_override: nil}), do: :ok
 
-  defp validate_provider_override(chain, %RequestOptions{
+  defp validate_provider_override(chain_id, %RequestOptions{
          provider_override: provider_id,
          profile: profile
        }) do
-    case ConfigStore.get_provider(profile, chain, provider_id) do
+    case ConfigStore.get_provider(profile, chain_id, provider_id) do
       {:ok, _provider} ->
         :ok
 
@@ -118,7 +119,7 @@ defmodule Lasso.RPC.RequestPipeline do
          JError.new(-32_602, "Provider '#{provider_id}' not found",
            category: :invalid_params,
            retriable?: false,
-           data: %{provider_id: provider_id, chain: chain, profile: profile}
+           data: %{provider_id: provider_id, chain_id: chain_id, profile: profile}
          )}
     end
   end
@@ -128,7 +129,7 @@ defmodule Lasso.RPC.RequestPipeline do
     ctx = RequestContext.mark_request_start(ctx)
 
     Observability.record_request_start(
-      ctx.chain,
+      ctx.chain_id,
       ctx.method,
       ctx.opts.strategy,
       ctx.opts.provider_override
@@ -162,9 +163,8 @@ defmodule Lasso.RPC.RequestPipeline do
   # Params are extracted from RequestContext - no need to pass separately (prevents closure footgun)
   @spec build_channel_source(RequestOptions.t()) :: channel_source()
   defp build_channel_source(%RequestOptions{provider_override: nil, profile: profile} = opts) do
-    # Normal selection: get best channels via Selection module
-    fn %RequestContext{chain: chain, method: method, params: params} = _ctx ->
-      Selection.select_channels(profile, chain, method,
+    fn %RequestContext{chain_id: chain_id, method: method, params: params} = _ctx ->
+      Selection.select_channels(profile, chain_id, method,
         strategy: opts.strategy,
         transport: opts.transport || :both,
         limit: @max_channel_candidates,
@@ -176,14 +176,12 @@ defmodule Lasso.RPC.RequestPipeline do
   defp build_channel_source(
          %RequestOptions{provider_override: provider_id, profile: profile} = opts
        ) do
-    # Provider override: get channels for specific provider, optionally with failover
-    fn %RequestContext{chain: chain, method: method, params: params} = _ctx ->
-      primary_channels = get_provider_channels(profile, chain, provider_id, opts.transport)
+    fn %RequestContext{chain_id: chain_id, method: method, params: params} = _ctx ->
+      primary_channels = get_provider_channels(profile, chain_id, provider_id, opts.transport)
 
       if opts.failover_on_override do
-        # Append alternative channels for failover
         failover_channels =
-          Selection.select_channels(profile, chain, method,
+          Selection.select_channels(profile, chain_id, method,
             strategy: opts.strategy,
             transport: :both,
             exclude: [provider_id],
@@ -200,9 +198,8 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec attempt_channels([Channel.t()], RequestContext.t()) :: result()
   defp attempt_channels([], ctx) do
-    # All channels exhausted
     Logger.warning("All channels exhausted",
-      chain: ctx.chain,
+      chain_id: ctx.chain_id,
       method: ctx.method,
       request_id: ctx.request_id,
       attempts: length(ctx.attempted_channels)
@@ -239,7 +236,8 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec execute_on_channel(Channel.t(), [Channel.t()], RequestContext.t()) :: result()
   defp execute_on_channel(channel, rest_channels, ctx) do
-    instance_id = Catalog.lookup_instance_id(channel.profile, channel.chain, channel.provider_id)
+    instance_id =
+      Catalog.lookup_instance_id(channel.profile, channel.chain_id, channel.provider_id)
 
     cb_state =
       case instance_id do
@@ -416,9 +414,9 @@ defmodule Lasso.RPC.RequestPipeline do
     profile = if ctx.opts, do: ctx.opts.profile, else: ProfileValidator.default_profile()
 
     retry_after_ms =
-      calculate_min_recovery_time(profile, ctx.chain, ctx.opts && ctx.opts.transport)
+      calculate_min_recovery_time(profile, ctx.chain_id, ctx.opts && ctx.opts.transport)
 
-    {message, data} = build_exhaustion_error_message(ctx.method, retry_after_ms, ctx.chain)
+    {message, data} = build_exhaustion_error_message(ctx.method, retry_after_ms, ctx.chain_id)
 
     jerr =
       JError.new(-32_000, message,
@@ -428,12 +426,12 @@ defmodule Lasso.RPC.RequestPipeline do
       )
 
     Logger.warning("No channels available",
-      chain: ctx.chain,
+      chain_id: ctx.chain_id,
       method: ctx.method,
       retry_after_ms: retry_after_ms
     )
 
-    Observability.record_exhaustion(ctx.chain, ctx.method, ctx.opts.transport, retry_after_ms)
+    Observability.record_exhaustion(ctx.chain_id, ctx.method, ctx.opts.transport, retry_after_ms)
 
     finalize_error(jerr, ctx)
   end
@@ -498,15 +496,15 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  @spec initialize_context(chain(), method(), params(), RequestOptions.t()) :: RequestContext.t()
-  defp initialize_context(chain, method, params, opts) do
+  @spec initialize_context(chain_id(), method(), params(), RequestOptions.t()) ::
+          RequestContext.t()
+  defp initialize_context(chain_id, method, params, opts) do
     opts.request_context ||
-      RequestContext.new(chain, method, params,
+      RequestContext.new(chain_id, method, params,
         transport: opts.transport || :http,
         strategy: opts.strategy,
         request_id: opts.request_id,
-        plug_start_time: opts.plug_start_time,
-        account_id: opts.account_id
+        plug_start_time: opts.plug_start_time
       )
   end
 
@@ -520,19 +518,19 @@ defmodule Lasso.RPC.RequestPipeline do
     }
   end
 
-  @spec get_provider_channels(String.t(), chain(), String.t(), atom() | nil) :: [Channel.t()]
-  defp get_provider_channels(profile, chain, provider_id, transport_override) do
+  @spec get_provider_channels(String.t(), chain_id(), String.t(), atom() | nil) :: [Channel.t()]
+  defp get_provider_channels(profile, chain_id, provider_id, transport_override) do
     transports = if transport_override, do: [transport_override], else: [:http, :ws]
 
     for transport <- transports,
-        channel = fetch_channel_safe(profile, chain, provider_id, transport),
+        channel = fetch_channel_safe(profile, chain_id, provider_id, transport),
         not is_nil(channel),
         do: channel
   end
 
-  @spec fetch_channel_safe(String.t(), chain(), String.t(), atom()) :: Channel.t() | nil
-  defp fetch_channel_safe(profile, chain, provider_id, transport) do
-    case TransportRegistry.get_channel(profile, chain, provider_id, transport) do
+  @spec fetch_channel_safe(String.t(), chain_id(), String.t(), atom()) :: Channel.t() | nil
+  defp fetch_channel_safe(profile, chain_id, provider_id, transport) do
+    case TransportRegistry.get_channel(profile, chain_id, provider_id, transport) do
       {:ok, channel} -> channel
       {:error, _} -> nil
     end
@@ -540,13 +538,13 @@ defmodule Lasso.RPC.RequestPipeline do
     :exit, _ -> nil
   end
 
-  @spec build_exhaustion_error_message(method(), non_neg_integer() | nil, chain()) ::
+  @spec build_exhaustion_error_message(method(), non_neg_integer() | nil, chain_id()) ::
           {String.t(), map()}
-  defp build_exhaustion_error_message(method, nil, _chain) do
+  defp build_exhaustion_error_message(method, nil, _chain_id) do
     {"No available channels for method: #{method}. All circuit breakers are open.", %{}}
   end
 
-  defp build_exhaustion_error_message(method, ms, _chain) when is_integer(ms) and ms > 0 do
+  defp build_exhaustion_error_message(method, ms, _chain_id) when is_integer(ms) and ms > 0 do
     seconds = div(ms, 1000)
 
     message =
@@ -555,16 +553,19 @@ defmodule Lasso.RPC.RequestPipeline do
     {message, %{retry_after_ms: ms}}
   end
 
-  defp build_exhaustion_error_message(method, retry_after_ms, chain) do
-    Logger.warning("Invalid recovery time: #{inspect(retry_after_ms)}", chain: chain)
+  defp build_exhaustion_error_message(method, retry_after_ms, chain_id) do
+    Logger.warning("Invalid recovery time: #{inspect(retry_after_ms)}", chain_id: chain_id)
     {"No available channels for method: #{method}. All circuit breakers are open.", %{}}
   end
 
-  @spec calculate_min_recovery_time(String.t(), chain(), atom() | nil) :: non_neg_integer() | nil
-  defp calculate_min_recovery_time(profile, chain, transport_filter) do
+  @spec calculate_min_recovery_time(String.t(), chain_id(), atom() | nil) ::
+          non_neg_integer() | nil
+  defp calculate_min_recovery_time(profile, chain_id, transport_filter) do
     transport = transport_filter || :both
 
-    {:ok, min_time} = CandidateListing.get_min_recovery_time(profile, chain, transport: transport)
+    {:ok, min_time} =
+      CandidateListing.get_min_recovery_time(profile, chain_id, transport: transport)
+
     min_time
   end
 
@@ -595,7 +596,7 @@ defmodule Lasso.RPC.RequestPipeline do
     )
 
     Observability.record_very_slow_request(
-      ctx.chain,
+      ctx.chain_id,
       method,
       channel.provider_id,
       channel.transport,
@@ -612,7 +613,7 @@ defmodule Lasso.RPC.RequestPipeline do
     )
 
     Observability.record_slow_request(
-      ctx.chain,
+      ctx.chain_id,
       method,
       channel.provider_id,
       channel.transport,

@@ -44,14 +44,13 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
   @default_explore_floor 0.05
 
   @impl true
-  def prepare_context(profile, chain, method, timeout) do
-    base = StrategyContext.new(chain, timeout)
+  def prepare_context(profile, chain_id, method, timeout) do
+    base = StrategyContext.new(chain_id, timeout)
 
-    # Calculate fallback latency for providers with no data
     fallback_latency =
       StrategyContext.calculate_fallback_latency(
         profile,
-        chain,
+        chain_id,
         method
       )
 
@@ -76,22 +75,19 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
   probabilistic weighting based on latency, success rate, and confidence.
   """
   @impl true
-  def rank_channels(channels, method, ctx, profile, chain) do
+  def rank_channels(channels, method, ctx, profile, chain_id) do
     current_time = System.system_time(:millisecond)
 
-    # Fetch strategy-specific tuning params from app config
     beta = Application.get_env(:lasso, :lw_beta, @default_beta)
     ms_floor = Application.get_env(:lasso, :lw_ms_floor, @default_ms_floor)
     explore_floor = Application.get_env(:lasso, :lw_explore_floor, @default_explore_floor)
 
-    # Use context fields populated in prepare_context
     min_calls = ctx.min_calls || @default_min_calls
     min_sr = ctx.min_success_rate || @default_min_sr
     freshness_cutoff = ctx.freshness_cutoff_ms || 10 * 60 * 1000
 
-    # Batch fetch all metrics (eliminates N sequential GenServer calls)
     requests = Enum.map(channels, fn ch -> {ch.provider_id, method, ch.transport} end)
-    metrics_map = Metrics.batch_get_transport_performance(profile, chain, requests)
+    metrics_map = Metrics.batch_get_transport_performance(profile, chain_id, requests)
 
     weight_fn = fn ch ->
       key = {ch.provider_id, method, ch.transport}

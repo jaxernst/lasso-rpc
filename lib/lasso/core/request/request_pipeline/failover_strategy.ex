@@ -106,7 +106,7 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
         error_message: error.message,
         method: ctx.method,
         repeated_count: repeated_count,
-        chain: ctx.chain
+        chain_id: ctx.chain_id
       )
 
       {false, :repeated_client_error}
@@ -125,7 +125,7 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
         method: ctx.method,
         repeated_count: repeated_count,
         threshold: @repeated_capability_violation_threshold,
-        chain: ctx.chain
+        chain_id: ctx.chain_id
       )
 
       {false, :universal_capability_violation}
@@ -144,7 +144,7 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategy do
         method: ctx.method,
         repeated_count: repeated_count,
         threshold: @repeated_capability_violation_threshold,
-        chain: ctx.chain
+        chain_id: ctx.chain_id
       )
 
       {false, :universal_method_not_found}

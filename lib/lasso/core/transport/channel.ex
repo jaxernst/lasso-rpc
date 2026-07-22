@@ -16,7 +16,7 @@ defmodule Lasso.RPC.Channel do
 
   @type t :: %__MODULE__{
           profile: String.t(),
-          chain: String.t(),
+          chain_id: pos_integer(),
           provider_id: String.t(),
           transport: :http | :ws,
           raw_channel: term(),
@@ -24,10 +24,10 @@ defmodule Lasso.RPC.Channel do
           capabilities: map() | nil
         }
 
-  @derive {Jason.Encoder, only: [:profile, :chain, :provider_id, :transport]}
+  @derive {Jason.Encoder, only: [:profile, :chain_id, :provider_id, :transport]}
   defstruct [
     :profile,
-    :chain,
+    :chain_id,
     :provider_id,
     :transport,
     :raw_channel,
@@ -38,16 +38,15 @@ defmodule Lasso.RPC.Channel do
   @doc """
   Creates a new Channel wrapper.
   """
-  @spec new(String.t(), String.t(), String.t(), :http | :ws, term(), module()) :: t()
-  def new(profile, chain, provider_id, transport, raw_channel, transport_module) do
+  @spec new(String.t(), pos_integer(), String.t(), :http | :ws, term(), module()) :: t()
+  def new(profile, chain_id, provider_id, transport, raw_channel, transport_module) do
     %__MODULE__{
       profile: profile,
-      chain: chain,
+      chain_id: chain_id,
       provider_id: provider_id,
       transport: transport,
       raw_channel: raw_channel,
       transport_module: transport_module,
-      # Lazily loaded
       capabilities: nil
     }
   end
@@ -119,7 +118,6 @@ defmodule Lasso.RPC.Channel do
     case Map.get(capabilities, :methods) do
       :all -> true
       method_set when is_struct(method_set, MapSet) -> MapSet.member?(method_set, method)
-      # Default to true if capabilities are unclear
       _ -> true
     end
   end
@@ -147,6 +145,6 @@ defmodule Lasso.RPC.Channel do
   """
   @spec to_string(t()) :: String.t()
   def to_string(%__MODULE__{} = channel) do
-    "#{channel.chain}:#{channel.provider_id}:#{channel.transport}"
+    "#{channel.chain_id}:#{channel.provider_id}:#{channel.transport}"
   end
 end

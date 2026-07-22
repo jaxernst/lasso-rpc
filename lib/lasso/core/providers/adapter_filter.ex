@@ -57,7 +57,7 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
       method,
       params,
       channel.profile,
-      channel.chain
+      channel.chain_id
     )
   end
 
@@ -65,8 +65,8 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
 
   defp do_filter_channels(channels, method) do
     {capable, filtered} =
-      Enum.split_with(channels, fn %{provider_id: id, profile: profile, chain: chain} ->
-        caps = lookup_capabilities(profile, chain, id)
+      Enum.split_with(channels, fn %{provider_id: id, profile: profile, chain_id: chain_id} ->
+        caps = lookup_capabilities(profile, chain_id, id)
 
         try do
           :ok == Capabilities.supports_method?(method, caps)
@@ -87,9 +87,9 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
     apply_safety_check(capable, filtered, channels, method)
   end
 
-  defp safe_validate_params?(provider_id, method, params, profile, chain) do
-    ctx = %{provider_id: provider_id, profile: profile, chain: chain}
-    caps = lookup_capabilities(profile, chain, provider_id)
+  defp safe_validate_params?(provider_id, method, params, profile, chain_id) do
+    ctx = %{provider_id: provider_id, profile: profile, chain_id: chain_id}
+    caps = lookup_capabilities(profile, chain_id, provider_id)
 
     Capabilities.validate_params(method, params, caps, ctx)
     |> handle_validation_result(provider_id, method)
@@ -108,15 +108,16 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
       {:error, :adapter_crash}
   end
 
-  defp lookup_capabilities(profile, chain, provider_id)
-       when is_binary(profile) and is_binary(chain) and is_binary(provider_id) do
-    case Lasso.Config.ConfigStore.get_provider(profile, chain, provider_id) do
+  defp lookup_capabilities(profile, chain_id, provider_id)
+       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and
+              is_binary(provider_id) do
+    case Lasso.Config.ConfigStore.get_provider(profile, chain_id, provider_id) do
       {:ok, provider_config} -> provider_config.capabilities
       _ -> nil
     end
   end
 
-  defp lookup_capabilities(_profile, _chain, _provider_id), do: nil
+  defp lookup_capabilities(_profile, _chain_id, _provider_id), do: nil
 
   defp handle_validation_result(:ok, _provider_id, _method), do: :ok
 

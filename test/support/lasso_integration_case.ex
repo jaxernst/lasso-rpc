@@ -64,8 +64,8 @@ defmodule Lasso.Test.LassoIntegrationCase do
       @moduletag :integration
 
       setup do
-        # Generate unique chain ID for this test
-        chain = "test_#{:rand.uniform(999_999_999)}"
+        # Generate a unique positive EVM chain ID for this test.
+        chain = :rand.uniform(999_999_999)
 
         # Store chain in process dictionary for helper access
         # This avoids var! hygiene issues while maintaining convenience

@@ -40,7 +40,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
 
   defstruct [
     :instance_id,
-    :chain,
+    :chain_id,
     active_subscriptions: %{},
     upstream_index: %{},
     connection_state: nil,
@@ -50,9 +50,10 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
 
   # Client API
 
-  @spec start_link({String.t(), String.t()}) :: GenServer.on_start()
-  def start_link({chain, instance_id}) when is_binary(chain) and is_binary(instance_id) do
-    GenServer.start_link(__MODULE__, {chain, instance_id}, name: via(instance_id))
+  @spec start_link({pos_integer(), String.t()}) :: GenServer.on_start()
+  def start_link({chain_id, instance_id})
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) do
+    GenServer.start_link(__MODULE__, {chain_id, instance_id}, name: via(instance_id))
   end
 
   @spec via(String.t()) :: {:via, Registry, {atom(), tuple()}}
@@ -91,24 +92,24 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
   # GenServer Callbacks
 
   @impl true
-  def init({chain, instance_id}) do
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:subs:instance:#{instance_id}")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:instance:#{instance_id}")
+  def init({chain_id, instance_id}) do
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_subs_instance(instance_id))
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_conn_instance(instance_id))
 
     Process.send_after(self(), :cleanup_check, @cleanup_interval_ms)
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      "instance_sub_manager:restarted:#{chain}",
+      Lasso.Topics.instance_sub_manager_restarted(chain_id),
       {:instance_sub_manager_restarted, instance_id}
     )
 
-    new_heads_staleness_threshold_ms = calculate_staleness_threshold(instance_id, chain)
+    new_heads_staleness_threshold_ms = calculate_staleness_threshold(instance_id, chain_id)
 
     {:ok,
      %__MODULE__{
        instance_id: instance_id,
-       chain: chain,
+       chain_id: chain_id,
        new_heads_staleness_threshold_ms: new_heads_staleness_threshold_ms
      }}
   end
@@ -131,7 +132,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
   def handle_call(:get_status, _from, state) do
     status = %{
       instance_id: state.instance_id,
-      chain: state.chain,
+      chain_id: state.chain_id,
       connection_state: state.connection_state,
       active_subscriptions:
         Map.new(state.active_subscriptions, fn {sub_key, info} ->
@@ -523,14 +524,14 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
     :telemetry.execute(
       [:lasso, :upstream_subscriptions, event],
       %{count: 1},
-      %{instance_id: state.instance_id, chain: state.chain, sub_key: inspect(sub_key)}
+      %{instance_id: state.instance_id, chain_id: state.chain_id, sub_key: inspect(sub_key)}
     )
   end
 
-  defp calculate_staleness_threshold(instance_id, chain) do
+  defp calculate_staleness_threshold(instance_id, chain_id) do
     case Catalog.get_instance_refs(instance_id) do
       [ref_profile | _] ->
-        case ConfigStore.get_chain(ref_profile, chain) do
+        case ConfigStore.get_chain(ref_profile, chain_id) do
           {:ok, config} -> config.websocket.new_heads_timeout_ms
           _ -> @default_new_heads_staleness_threshold_ms
         end
@@ -593,7 +594,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
     :telemetry.execute(
       [:lasso, :upstream_subscriptions, :staleness_detected],
       %{count: 1, stale_duration_ms: stale_duration_ms},
-      %{instance_id: state.instance_id, chain: state.chain, sub_key: inspect(sub_key)}
+      %{instance_id: state.instance_id, chain_id: state.chain_id, sub_key: inspect(sub_key)}
     )
 
     # Fan out Subscription.Stale to all profiles referencing this instance
@@ -622,18 +623,18 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
 
     for profile <- profiles do
       provider_id =
-        Catalog.reverse_lookup_provider_id(profile, state.chain, state.instance_id) ||
+        Catalog.reverse_lookup_provider_id(profile, state.chain_id, state.instance_id) ||
           state.instance_id
 
       event = %Subscription.Stale{
         ts: System.system_time(:millisecond),
-        chain: state.chain,
+        chain_id: state.chain_id,
         provider_id: provider_id,
         subscription_type: Subscription.subscription_type(sub_key),
         stale_duration_ms: stale_duration_ms
       }
 
-      topic = Subscription.topic(profile, state.chain)
+      topic = Lasso.Topics.subscription_event(profile, state.chain_id)
       Phoenix.PubSub.broadcast(Lasso.PubSub, topic, event)
     end
   end

@@ -30,7 +30,7 @@ defmodule Lasso.RPC.Strategy do
   """
   @callback prepare_context(
               profile :: String.t(),
-              chain :: String.t(),
+              chain_id :: pos_integer(),
               method :: String.t(),
               timeout :: non_neg_integer()
             ) :: StrategyContext.t()
@@ -46,6 +46,6 @@ defmodule Lasso.RPC.Strategy do
               method :: String.t(),
               ctx :: context(),
               profile :: String.t(),
-              chain :: String.t()
+              chain_id :: pos_integer()
             ) :: [Channel.t()]
 end

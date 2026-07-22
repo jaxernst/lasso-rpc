@@ -35,7 +35,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "execute_via_channels/4 - parameter validation" do
     test "creates RequestContext when not provided" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -43,15 +43,15 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       ctx = extract_context(result)
       assert %RequestContext{} = ctx
-      assert ctx.chain == "ethereum"
+      assert ctx.chain_id == 1
       assert ctx.method == "eth_blockNumber"
     end
 
     test "uses provided RequestContext" do
-      custom_ctx = RequestContext.new("ethereum", "eth_call", [], strategy: :fastest)
+      custom_ctx = RequestContext.new(1, "eth_call", [], strategy: :fastest)
 
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_call", [], %RequestOptions{
           profile: "public",
           strategy: :fastest,
           timeout_ms: 30_000,
@@ -65,7 +65,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "handles empty params" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -82,7 +82,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
         transport: :http
       }
 
-      result = RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], opts)
+      result = RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], opts)
       assert_result_valid(result)
     end
   end
@@ -90,7 +90,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "execute_via_channels/4 - observability" do
     test "marks selection start" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -102,7 +102,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "tracks retry count" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -116,14 +116,14 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "stores request metadata in context" do
       result =
         RequestPipeline.execute_via_channels(
-          "ethereum",
+          1,
           "eth_getBalance",
           ["0x123", "latest"],
           %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 30_000}
         )
 
       ctx = extract_context(result)
-      assert ctx.chain == "ethereum"
+      assert ctx.chain_id == 1
       assert ctx.method == "eth_getBalance"
       assert ctx.params == ["0x123", "latest"]
     end
@@ -132,7 +132,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "execute_via_channels/4 - strategy support" do
     test "accepts :fastest strategy" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :fastest,
           timeout_ms: 30_000
@@ -143,7 +143,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "accepts :priority strategy" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :priority,
           timeout_ms: 30_000
@@ -154,7 +154,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test ":load_balanced strategy" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -165,7 +165,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "stores strategy in context" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_call", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_call", [], %RequestOptions{
           profile: "public",
           strategy: :fastest,
           timeout_ms: 30_000
@@ -179,7 +179,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "execute_via_channels/4 - transport preferences" do
     test "accepts :http transport override" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           transport: :http,
           timeout_ms: 30_000,
@@ -191,7 +191,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "accepts :ws transport override" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           transport: :ws,
           timeout_ms: 30_000,
@@ -203,7 +203,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "defaults to :http when no transport specified" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -217,7 +217,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "execute_via_channels/4 - timeout handling" do
     test "accepts custom timeout" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           timeout_ms: 5000,
           strategy: :load_balanced
@@ -228,7 +228,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "uses default timeout when not specified" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -244,7 +244,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       result =
         RequestPipeline.execute_via_channels(
-          "ethereum",
+          1,
           "eth_getBalance",
           params,
           %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 30_000}
@@ -256,7 +256,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "handles nil params" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", nil, %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", nil, %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -270,7 +270,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "RequestContext lifecycle" do
     test "context is always returned in result tuple" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_test", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -282,7 +282,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "context tracks timing information" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -295,7 +295,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "context includes unique request ID" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_test", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_test", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -310,7 +310,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
   describe "Fast-fail failover logic" do
     test "FailoverStrategy returns terminal when no channels remaining" do
       error = JError.new(-32_005, "Rate limit", category: :rate_limit, retriable?: true)
-      ctx = RequestContext.new("ethereum", "eth_blockNumber", [])
+      ctx = RequestContext.new(1, "eth_blockNumber", [])
 
       assert {:terminal_error, :no_channels_remaining} =
                FailoverStrategy.decide(error, [], ctx)
@@ -372,7 +372,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
 
     test "circuit_open errors trigger failover when channels remain" do
-      ctx = RequestContext.new("ethereum", "eth_blockNumber", [])
+      ctx = RequestContext.new(1, "eth_blockNumber", [])
       dummy_channel = %Lasso.RPC.Channel{provider_id: "test", transport: :http}
 
       assert {:failover, :circuit_open} =
@@ -381,7 +381,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "execute_via_channels increments retry count on failover" do
       result =
-        RequestPipeline.execute_via_channels("ethereum", "eth_blockNumber", [], %RequestOptions{
+        RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
           timeout_ms: 30_000
@@ -399,7 +399,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
         TelemetrySync.start_collector([:lasso, :failover, :fast_fail])
 
       ctx =
-        RequestContext.new("ethereum", "eth_blockNumber", [])
+        RequestContext.new(1, "eth_blockNumber", [])
         |> Map.put(:opts, %RequestOptions{
           profile: "public",
           strategy: :load_balanced,
@@ -415,7 +415,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       assert measurements.count == 1
       assert measurements.duration == 5
-      assert metadata.chain == "ethereum"
+      assert metadata.chain_id == 1
       assert metadata.method == "eth_blockNumber"
       assert metadata.provider_id == "test_provider"
       assert metadata.transport == :http
@@ -452,7 +452,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       # We test via execute_via_channels on a chain with no providers configured.
       result =
         RequestPipeline.execute_via_channels(
-          "nonexistent_chain",
+          9_999_999,
           "eth_blockNumber",
           [],
           %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 5_000}
@@ -469,7 +469,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       _result =
         RequestPipeline.execute_via_channels(
-          "nonexistent_chain",
+          9_999_999,
           "eth_blockNumber",
           [],
           %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 5_000}
@@ -478,7 +478,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 2_000)
 
       assert measurements.count == 1
-      assert metadata.chain == "nonexistent_chain"
+      assert metadata.chain_id == 9_999_999
       assert metadata.method == "eth_blockNumber"
       assert is_integer(metadata.retry_after_ms)
     end
@@ -486,11 +486,11 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "Observability.record_degraded_mode emits [:lasso, :failover, :degraded_mode]" do
       collector = TelemetrySync.start_collector([:lasso, :failover, :degraded_mode])
 
-      Observability.record_degraded_mode("ethereum", "eth_blockNumber")
+      Observability.record_degraded_mode(1, "eth_blockNumber")
 
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
       assert measurements.count == 1
-      assert metadata.chain == "ethereum"
+      assert metadata.chain_id == 1
       assert metadata.method == "eth_blockNumber"
     end
 
@@ -498,11 +498,11 @@ defmodule Lasso.RPC.RequestPipelineTest do
       collector = TelemetrySync.start_collector([:lasso, :failover, :degraded_success])
 
       channel = %Lasso.RPC.Channel{provider_id: "test_provider", transport: :http}
-      Observability.record_degraded_success("ethereum", "eth_blockNumber", channel)
+      Observability.record_degraded_success(1, "eth_blockNumber", channel)
 
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
       assert measurements.count == 1
-      assert metadata.chain == "ethereum"
+      assert metadata.chain_id == 1
       assert metadata.method == "eth_blockNumber"
       assert metadata.provider_id == "test_provider"
       assert metadata.transport == :http
@@ -511,11 +511,11 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "Observability.record_exhaustion emits [:lasso, :failover, :exhaustion]" do
       collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
 
-      Observability.record_exhaustion("ethereum", "eth_blockNumber", :http, 5000)
+      Observability.record_exhaustion(1, "eth_blockNumber", :http, 5000)
 
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
       assert measurements.count == 1
-      assert metadata.chain == "ethereum"
+      assert metadata.chain_id == 1
       assert metadata.method == "eth_blockNumber"
       assert metadata.retry_after_ms == 5000
       assert metadata.transport == :http
@@ -524,7 +524,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "exhaustion error includes retry_after_ms when circuits have recovery times" do
       collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
 
-      Observability.record_exhaustion("ethereum", "eth_blockNumber", :http, 3000)
+      Observability.record_exhaustion(1, "eth_blockNumber", :http, 3000)
 
       {:ok, _measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
       assert metadata.retry_after_ms == 3000
@@ -533,7 +533,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "exhaustion defaults retry_after_ms to 0 when nil" do
       collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
 
-      Observability.record_exhaustion("ethereum", "eth_blockNumber", :http, nil)
+      Observability.record_exhaustion(1, "eth_blockNumber", :http, nil)
 
       {:ok, _measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
       assert metadata.retry_after_ms == 0
@@ -542,7 +542,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "exhaustion defaults transport to :both when nil" do
       collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
 
-      Observability.record_exhaustion("ethereum", "eth_blockNumber", nil, 1000)
+      Observability.record_exhaustion(1, "eth_blockNumber", nil, 1000)
 
       {:ok, _measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
       assert metadata.transport == :both
@@ -565,12 +565,12 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "Selection.select_channels accepts include_half_open option" do
       # include_half_open defaults to true in Selection.select_channels
       channels_with =
-        Lasso.RPC.Selection.select_channels("public", "ethereum", "eth_blockNumber",
+        Lasso.RPC.Selection.select_channels("public", 1, "eth_blockNumber",
           include_half_open: true
         )
 
       channels_without =
-        Lasso.RPC.Selection.select_channels("public", "ethereum", "eth_blockNumber",
+        Lasso.RPC.Selection.select_channels("public", 1, "eth_blockNumber",
           include_half_open: false
         )
 
@@ -633,7 +633,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
     test "CandidateListing.get_min_recovery_time returns {:ok, nil} when no circuits open" do
       {:ok, result} =
-        Lasso.Providers.CandidateListing.get_min_recovery_time("public", "ethereum")
+        Lasso.Providers.CandidateListing.get_min_recovery_time("public", 1)
 
       # Either nil (no open circuits) or a positive integer
       assert result == nil or (is_integer(result) and result > 0)
@@ -643,7 +643,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       # Verify the message format when retry_after_ms is present
       result =
         RequestPipeline.execute_via_channels(
-          "nonexistent_chain",
+          9_999_999,
           "eth_blockNumber",
           [],
           %RequestOptions{profile: "public", strategy: :load_balanced, timeout_ms: 5_000}
@@ -659,7 +659,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       collector = TelemetrySync.start_collector([:lasso, :failover, :circuit_open])
 
       ctx =
-        RequestContext.new("ethereum", "eth_blockNumber", [])
+        RequestContext.new(1, "eth_blockNumber", [])
 
       channel = %Lasso.RPC.Channel{provider_id: "test_provider", transport: :http}
 
@@ -667,7 +667,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
       assert measurements.count == 1
-      assert metadata.chain == "ethereum"
+      assert metadata.chain_id == 1
       assert metadata.provider_id == "test_provider"
       assert metadata.transport == :http
     end
@@ -675,11 +675,11 @@ defmodule Lasso.RPC.RequestPipelineTest do
     test "Observability.record_request_start emits [:lasso, :rpc, :request, :start]" do
       collector = TelemetrySync.start_collector([:lasso, :rpc, :request, :start])
 
-      Observability.record_request_start("ethereum", "eth_blockNumber", :load_balanced)
+      Observability.record_request_start(1, "eth_blockNumber", :load_balanced)
 
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
       assert measurements.count == 1
-      assert metadata.chain == "ethereum"
+      assert metadata.chain_id == 1
       assert metadata.method == "eth_blockNumber"
       assert metadata.strategy == :load_balanced
     end
@@ -688,7 +688,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       collector = TelemetrySync.start_collector([:lasso, :request, :slow])
 
       Observability.record_slow_request(
-        "ethereum",
+        1,
         "eth_blockNumber",
         "provider_1",
         :http,
@@ -697,7 +697,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1_000)
       assert measurements.latency_ms == 2500.0
-      assert metadata.chain == "ethereum"
+      assert metadata.chain_id == 1
       assert metadata.method == "eth_blockNumber"
       assert metadata.provider == "provider_1"
       assert metadata.transport == :http

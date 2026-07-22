@@ -5,8 +5,8 @@ defmodule Lasso.RPC.ChainStateTest do
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
 
   setup do
-    # Generate unique chain name for each test to avoid conflicts
-    chain = "test_chain_#{System.unique_integer([:positive])}"
+    # Generate a unique chain ID for each test to avoid conflicts
+    chain = System.unique_integer([:positive])
 
     # Clear any existing data for this chain
     BlockSyncRegistry.clear_chain(chain)

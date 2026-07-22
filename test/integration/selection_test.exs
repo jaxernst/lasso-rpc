@@ -166,7 +166,7 @@ defmodule Lasso.RPC.SelectionTest do
       profile = "public"
       # Non-existent chain with no providers
       assert {:error, :no_providers_available} =
-               Selection.select_provider(profile, "nonexistent_chain", "eth_blockNumber")
+               Selection.select_provider(profile, 999_999_999, "eth_blockNumber")
     end
   end
 
@@ -182,7 +182,7 @@ defmodule Lasso.RPC.SelectionTest do
       {:ok, collector} =
         TelemetrySync.attach_collector(
           [:lasso, :selection, :success],
-          match: [chain: chain, method: "eth_blockNumber"]
+          match: [chain_id: chain, method: "eth_blockNumber"]
         )
 
       # Perform selection
@@ -192,7 +192,7 @@ defmodule Lasso.RPC.SelectionTest do
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1000)
 
       assert measurements.count == 1
-      assert metadata.chain == chain
+      assert metadata.chain_id == chain
       assert metadata.method == "eth_blockNumber"
       assert metadata.provider_id in ["provider_1"]
     end

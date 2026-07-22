@@ -159,11 +159,12 @@ defmodule Lasso.Testing.IntegrationHelper do
 
   Broadcasts a provider unhealthy event that will trigger the failover flow.
   """
-  def trigger_provider_failover(chain, failed_provider_id, reason \\ :simulated_failure) do
+  def trigger_provider_failover(chain_id, failed_provider_id, reason \\ :simulated_failure)
+      when is_integer(chain_id) and chain_id > 0 do
     profile = "public"
 
     event = %Lasso.Events.Provider.Unhealthy{
-      chain: chain,
+      chain_id: chain_id,
       provider_id: failed_provider_id,
       reason: reason,
       ts: System.monotonic_time(:millisecond)
@@ -171,7 +172,7 @@ defmodule Lasso.Testing.IntegrationHelper do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      Lasso.Events.Provider.topic(profile, chain),
+      Lasso.Topics.provider_event(profile, chain_id),
       event
     )
 

@@ -4,7 +4,7 @@ defmodule Lasso.BlockSync.ConsensusP75Test do
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
 
   setup do
-    chain = "test_p75_#{System.unique_integer([:positive])}"
+    chain = System.unique_integer([:positive])
     BlockSyncRegistry.clear_chain(chain)
     on_exit(fn -> BlockSyncRegistry.clear_chain(chain) end)
     {:ok, chain: chain}

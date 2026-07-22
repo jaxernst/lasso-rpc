@@ -42,8 +42,8 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
       id: "ws_#{chain}_#{id_suffix}",
       name: "Test WebSocket #{id_suffix}",
       ws_url: "ws://test.local/ws",
-      chain_name: chain,
-      chain_id: 1,
+      chain_name: Integer.to_string(chain),
+      chain_id: chain,
       reconnect_interval: Keyword.get(opts, :reconnect_interval, 100),
       max_reconnect_attempts: Keyword.get(opts, :max_reconnect_attempts, 3),
       heartbeat_interval: 10_000,
@@ -84,8 +84,8 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
   end
 
   defp resolve_instance_id(endpoint) do
-    Lasso.Providers.Catalog.lookup_instance_id(endpoint.profile, endpoint.chain_name, endpoint.id) ||
-      "#{endpoint.chain_name}:#{endpoint.id}"
+    Lasso.Providers.Catalog.lookup_instance_id(endpoint.profile, endpoint.chain_id, endpoint.id) ||
+      "#{endpoint.chain_id}:#{endpoint.id}"
   end
 
   describe "connection timeouts" do

@@ -19,7 +19,7 @@ defmodule Lasso.Core.BlockCache do
       heights = BlockCache.get_all_provider_heights("ethereum")
 
       # Subscribe to real-time updates for a profile
-      Phoenix.PubSub.subscribe(Lasso.PubSub, BlockCache.pubsub_topic("public"))
+      Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.block_cache_updates("public"))
 
   ## Data Format
 
@@ -39,13 +39,12 @@ defmodule Lasso.Core.BlockCache do
   require Logger
 
   @table_name :lasso_block_cache
-  @pubsub_topic_base "block_cache:updates"
 
   # Data freshness window (15 seconds)
   @freshness_window_ms 15_000
 
   # Types
-  @type chain :: String.t()
+  @type chain :: pos_integer()
   @type provider_id :: String.t()
   @type block_data :: %{
           number: non_neg_integer(),
@@ -71,12 +70,6 @@ defmodule Lasso.Core.BlockCache do
   """
   @spec table_name() :: atom()
   def table_name, do: @table_name
-
-  @doc """
-  Get the PubSub topic for subscribing to block updates for a specific profile.
-  """
-  @spec pubsub_topic(String.t()) :: String.t()
-  def pubsub_topic(profile), do: "#{@pubsub_topic_base}:#{profile}"
 
   @doc """
   Store a new block from a provider's newHeads subscription.
@@ -245,7 +238,7 @@ defmodule Lasso.Core.BlockCache do
         end
 
         # Broadcast update to profile-scoped topic
-        Phoenix.PubSub.broadcast(Lasso.PubSub, pubsub_topic(profile), %{
+        Phoenix.PubSub.broadcast(Lasso.PubSub, Lasso.Topics.block_cache_updates(profile), %{
           type: :block_update,
           chain: chain,
           provider_id: provider_id,

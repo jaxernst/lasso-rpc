@@ -2,14 +2,14 @@ defmodule Lasso.RPC.ChainSupervisor do
   @moduledoc """
   Profile-scoped supervisor for RPC provider connections on a single blockchain.
 
-  Manages profile-scoped runtime for a specific (profile, chain) pair.
+  Manages profile-scoped runtime for a specific (profile, chain_id) pair.
   Multiple profiles can use the same chain with independent policy/selection
   and shared provider infrastructure.
 
   ## Architecture
 
   ```
-  ChainSupervisor {profile, chain}
+  ChainSupervisor {profile, chain_id}
   ├── TransportRegistry (Transport Channel Management)
   ├── ClientSubscriptionRegistry
   ├── UpstreamSubscriptionPool
@@ -30,19 +30,21 @@ defmodule Lasso.RPC.ChainSupervisor do
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
   alias Lasso.RPC.TransportRegistry
 
-  @spec start_link({String.t(), String.t(), map()}) :: Supervisor.on_start()
-  def start_link({profile, chain_name, chain_config}) do
-    Supervisor.start_link(__MODULE__, {profile, chain_name, chain_config},
-      name: via_name(profile, chain_name)
+  @spec start_link({String.t(), pos_integer(), map()}) :: Supervisor.on_start()
+  def start_link({profile, chain_id, chain_config})
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    Supervisor.start_link(__MODULE__, {profile, chain_id, chain_config},
+      name: via_name(profile, chain_id)
     )
   end
 
   @doc """
   Gets the status of all providers for a chain from ETS.
   """
-  @spec get_chain_status(String.t(), String.t()) :: map()
-  def get_chain_status(profile, chain_name) do
-    profile_providers = Catalog.get_profile_providers(profile, chain_name)
+  @spec get_chain_status(String.t(), pos_integer()) :: map()
+  def get_chain_status(profile, chain_id)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    profile_providers = Catalog.get_profile_providers(profile, chain_id)
 
     providers =
       Enum.map(profile_providers, fn pp ->
@@ -77,10 +79,10 @@ defmodule Lasso.RPC.ChainSupervisor do
 
     healthy_count = Enum.count(providers, &(&1.status == :healthy))
 
-    ws_connections = collect_ws_connection_status(profile, chain_name, providers)
+    ws_connections = collect_ws_connection_status(profile, chain_id, providers)
 
     %{
-      chain_name: chain_name,
+      chain_id: chain_id,
       total_providers: length(providers),
       healthy_providers: healthy_count,
       active_providers: length(providers),
@@ -92,38 +94,40 @@ defmodule Lasso.RPC.ChainSupervisor do
   @doc """
   Gets active provider connections for a chain.
   """
-  @spec get_active_providers(String.t(), String.t()) :: [String.t()]
-  def get_active_providers(profile, chain_name) do
-    Catalog.get_profile_providers(profile, chain_name)
+  @spec get_active_providers(String.t(), pos_integer()) :: [String.t()]
+  def get_active_providers(profile, chain_id)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    Catalog.get_profile_providers(profile, chain_id)
     |> Enum.map(& &1.provider_id)
   end
 
   @doc """
   Dynamically adds a provider to a running chain supervisor.
   """
-  @spec ensure_provider(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
-  def ensure_provider(profile, chain_name, provider_config, _opts \\ []) do
+  @spec ensure_provider(String.t(), pos_integer(), map(), keyword()) :: :ok | {:error, term()}
+  def ensure_provider(profile, chain_id, provider_config, _opts \\ [])
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
     case TransportRegistry.initialize_provider_channels(
            profile,
-           chain_name,
+           chain_id,
            provider_config.id,
            provider_config
          ) do
       :ok ->
         Catalog.build_from_config()
-        instance_id = Catalog.lookup_instance_id(profile, chain_name, provider_config.id)
+        instance_id = Catalog.lookup_instance_id(profile, chain_id, provider_config.id)
 
         if instance_id do
           start_instance_supervisor(instance_id)
-          BlockSync.Supervisor.start_worker(chain_name, instance_id)
-          Lasso.Providers.ProbeCoordinator.reload_instances(chain_name)
+          BlockSync.Supervisor.start_worker(chain_id, instance_id)
+          Lasso.Providers.ProbeCoordinator.reload_instances(chain_id)
         end
 
         :ok
 
       {:error, reason} = error ->
         Logger.error(
-          "Failed to add provider #{provider_config.id} to #{chain_name}: #{inspect(reason)}"
+          "Failed to add provider #{provider_config.id} to chain #{chain_id}: #{inspect(reason)}"
         )
 
         error
@@ -133,39 +137,50 @@ defmodule Lasso.RPC.ChainSupervisor do
   @doc """
   Removes a provider from a running chain supervisor.
   """
-  @spec remove_provider(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def remove_provider(profile, chain_name, provider_id) do
-    # Resolve instance_id BEFORE rebuilding catalog
-    instance_id = Catalog.lookup_instance_id(profile, chain_name, provider_id)
+  @spec remove_provider(String.t(), pos_integer(), String.t()) :: :ok | {:error, term()}
+  def remove_provider(profile, chain_id, provider_id)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    remove_provider(
+      profile,
+      chain_id,
+      provider_id,
+      Catalog.lookup_instance_id(profile, chain_id, provider_id)
+    )
+  end
 
-    TransportRegistry.close_channel(profile, chain_name, provider_id, :http)
-    TransportRegistry.close_channel(profile, chain_name, provider_id, :ws)
+  @spec remove_provider(String.t(), pos_integer(), String.t(), String.t() | nil) ::
+          :ok | {:error, term()}
+  def remove_provider(profile, chain_id, provider_id, instance_id)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    TransportRegistry.close_channel(profile, chain_id, provider_id, :http)
+    TransportRegistry.close_channel(profile, chain_id, provider_id, :ws)
 
+    # The ConfigStore mutation has already completed. Rebuilding now makes the
+    # removed provider unavailable to routing before shared-instance cleanup
+    # decides whether its physical state is still referenced by another profile.
     Catalog.build_from_config()
 
-    if instance_id do
-      remaining_refs = Catalog.get_instance_refs(instance_id)
-
-      if remaining_refs == [] do
-        BlockSync.Supervisor.stop_worker(chain_name, instance_id)
-      end
+    if instance_id && Catalog.get_instance_refs(instance_id) == [] do
+      BlockSync.Supervisor.stop_worker(chain_id, instance_id)
+      stop_instance_supervisor(instance_id)
+      InstanceState.clear(instance_id)
     end
 
-    Lasso.Providers.ProbeCoordinator.reload_instances(chain_name)
+    Lasso.Providers.ProbeCoordinator.reload_instances(chain_id)
 
-    Logger.info("Successfully removed provider #{provider_id} from #{chain_name}")
+    Logger.info("Successfully removed provider #{provider_id} from chain #{chain_id}")
     :ok
   end
 
   # Supervisor callbacks
 
   @impl true
-  def init({profile, chain_name, chain_config}) do
+  def init({profile, chain_id, chain_config}) do
     children = [
-      {TransportRegistry, {profile, chain_name, chain_config}},
-      {ClientSubscriptionRegistry, {profile, chain_name}},
-      {UpstreamSubscriptionPool, {profile, chain_name}},
-      {Lasso.Core.Streaming.StreamSupervisor, {profile, chain_name}}
+      {TransportRegistry, {profile, chain_id, chain_config}},
+      {ClientSubscriptionRegistry, {profile, chain_id}},
+      {UpstreamSubscriptionPool, {profile, chain_id}},
+      {Lasso.Core.Streaming.StreamSupervisor, {profile, chain_id}}
     ]
 
     Supervisor.init(children, strategy: :one_for_one)
@@ -173,8 +188,15 @@ defmodule Lasso.RPC.ChainSupervisor do
 
   # Private functions
 
-  defp via_name(profile, chain_name) do
-    {:via, Registry, {Lasso.Registry, {:chain_supervisor, profile, chain_name}}}
+  defp via_name(profile, chain_id) do
+    {:via, Registry, {Lasso.Registry, {:chain_supervisor, profile, chain_id}}}
+  end
+
+  defp stop_instance_supervisor(instance_id) do
+    case GenServer.whereis(Lasso.Providers.InstanceSupervisor.via_name(instance_id)) do
+      nil -> :ok
+      pid -> DynamicSupervisor.terminate_child(Lasso.Providers.InstanceDynamicSupervisor, pid)
+    end
   end
 
   defp start_instance_supervisor(instance_id) do
@@ -188,10 +210,10 @@ defmodule Lasso.RPC.ChainSupervisor do
     end
   end
 
-  defp collect_ws_connection_status(profile, chain, providers) when is_list(providers) do
+  defp collect_ws_connection_status(profile, chain_id, providers) when is_list(providers) do
     Enum.map(providers, fn provider ->
       try do
-        instance_id = Catalog.lookup_instance_id(profile, chain, provider.id)
+        instance_id = Catalog.lookup_instance_id(profile, chain_id, provider.id)
         status = if instance_id, do: WSConnection.status(instance_id), else: %{connected: false}
 
         %{

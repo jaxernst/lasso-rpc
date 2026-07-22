@@ -2,7 +2,7 @@ defmodule Lasso.BlockSync.Supervisor do
   @moduledoc """
   Singleton interface to the BlockSync DynamicSupervisor.
 
-  Manages one Worker per (chain, instance_id) pair. Workers are started
+  Manages one Worker per (chain_id, instance_id) pair. Workers are started
   during `start_shared_infrastructure` and can be added/removed at runtime.
   """
 
@@ -12,9 +12,10 @@ defmodule Lasso.BlockSync.Supervisor do
 
   @dynamic_supervisor Lasso.BlockSync.DynamicSupervisor
 
-  @spec start_worker(String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
-  def start_worker(chain, instance_id) when is_binary(chain) and is_binary(instance_id) do
-    spec = {Worker, {chain, instance_id}}
+  @spec start_worker(pos_integer(), String.t()) :: {:ok, pid()} | {:error, term()}
+  def start_worker(chain_id, instance_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) do
+    spec = {Worker, {chain_id, instance_id}}
 
     case DynamicSupervisor.start_child(@dynamic_supervisor, spec) do
       {:ok, pid} ->
@@ -25,7 +26,7 @@ defmodule Lasso.BlockSync.Supervisor do
 
       {:error, reason} ->
         Logger.warning("Failed to start BlockSync worker",
-          chain: chain,
+          chain_id: chain_id,
           instance_id: instance_id,
           reason: inspect(reason)
         )
@@ -34,9 +35,10 @@ defmodule Lasso.BlockSync.Supervisor do
     end
   end
 
-  @spec stop_worker(String.t(), String.t()) :: :ok | {:error, term()}
-  def stop_worker(chain, instance_id) when is_binary(chain) and is_binary(instance_id) do
-    case GenServer.whereis(Worker.via(chain, instance_id)) do
+  @spec stop_worker(pos_integer(), String.t()) :: :ok | {:error, term()}
+  def stop_worker(chain_id, instance_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) do
+    case GenServer.whereis(Worker.via(chain_id, instance_id)) do
       nil ->
         :ok
 
@@ -48,16 +50,16 @@ defmodule Lasso.BlockSync.Supervisor do
     end
   end
 
-  @spec start_all_workers(String.t(), [String.t()]) :: :ok
-  def start_all_workers(chain, instance_ids)
-      when is_binary(chain) and is_list(instance_ids) do
+  @spec start_all_workers(pos_integer(), [String.t()]) :: :ok
+  def start_all_workers(chain_id, instance_ids)
+      when is_integer(chain_id) and chain_id > 0 and is_list(instance_ids) do
     Logger.info("Starting BlockSync workers",
-      chain: chain,
+      chain_id: chain_id,
       instance_count: length(instance_ids)
     )
 
     Enum.each(instance_ids, fn instance_id ->
-      start_worker(chain, instance_id)
+      start_worker(chain_id, instance_id)
     end)
   end
 

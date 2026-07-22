@@ -16,6 +16,7 @@ defmodule Lasso.RPC.Observability do
   """
 
   require Logger
+  alias Lasso.Config.ChainAlias
   alias Lasso.RPC.RequestContext
 
   @default_config [
@@ -71,7 +72,7 @@ defmodule Lasso.RPC.Observability do
       version: "1.0",
       request_id: ctx.request_id,
       strategy: to_string(ctx.strategy),
-      chain: ctx.chain,
+      chain_id: ctx.chain_id,
       transport: to_string(ctx.transport),
       candidate_providers: format_candidate_providers(ctx.candidate_providers),
       selected_provider: ctx.selected_provider,
@@ -112,7 +113,7 @@ defmodule Lasso.RPC.Observability do
       event: "rpc.request.completed",
       request_id: ctx.request_id,
       strategy: to_string(ctx.strategy),
-      chain: ctx.chain,
+      chain_id: ctx.chain_id,
       transport: to_string(ctx.transport),
       jsonrpc_method: ctx.method,
       params_present: ctx.params != [] and not is_nil(ctx.params)
@@ -180,6 +181,7 @@ defmodule Lasso.RPC.Observability do
 
     retry_str = if ctx.retries > 0, do: " retries=#{ctx.retries}", else: ""
     batch_str = if batch_size, do: " batch=#{batch_size}", else: ""
+    chain = chain_label(ctx.chain_id)
 
     case ctx.status do
       :success ->
@@ -190,7 +192,7 @@ defmodule Lasso.RPC.Observability do
             ""
           end
 
-        "RPC [#{ctx.chain}] #{ctx.method} -> #{provider}#{latency_str}#{retry_str}#{batch_str} OK#{result_info}"
+        "RPC [#{chain}] #{ctx.method} -> #{provider}#{latency_str}#{retry_str}#{batch_str} OK#{result_info}"
 
       :error ->
         error_msg =
@@ -199,12 +201,17 @@ defmodule Lasso.RPC.Observability do
             _ -> ""
           end
 
-        "RPC [#{ctx.chain}] #{ctx.method} -> #{provider}#{latency_str}#{retry_str}#{batch_str} ERR#{error_msg}"
+        "RPC [#{chain}] #{ctx.method} -> #{provider}#{latency_str}#{retry_str}#{batch_str} ERR#{error_msg}"
 
       _ ->
-        "RPC [#{ctx.chain}] #{ctx.method} -> #{provider}#{retry_str}#{batch_str}"
+        "RPC [#{chain}] #{ctx.method} -> #{provider}#{retry_str}#{batch_str}"
     end
   end
+
+  defp chain_label(chain_id) when is_integer(chain_id) and chain_id > 0,
+    do: ChainAlias.canonical_slug(chain_id)
+
+  defp chain_label(_), do: "unknown"
 
   # Format timing in compact notation: (e2e: 45ms, io: 40ms)
   defp format_compact_timing(ctx) do

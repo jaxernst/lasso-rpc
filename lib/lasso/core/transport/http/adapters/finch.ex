@@ -6,6 +6,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   @behaviour Lasso.RPC.Transport.HTTP.Client
   require Logger
 
+  alias Lasso.URLMask
+
   @impl true
   def request(%{url: url} = provider, method, params, opts) do
     # Extract options with defaults
@@ -32,7 +34,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
       # Handle NimblePool checkout errors specifically
       {:error, {:exit, {{:shutdown, :idle_timeout}, {NimblePool, :checkout, _}}}} ->
         Logger.warning("Finch connection pool idle timeout",
-          provider_url: url,
+          provider_url: URLMask.mask(url),
           request_id: request_id
         )
 
@@ -40,7 +42,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
         :telemetry.execute(
           [:lasso, :finch, :pool_idle_timeout],
           %{count: 1},
-          %{provider_url: url, request_id: request_id}
+          %{provider_url: URLMask.mask(url), request_id: request_id}
         )
 
         {:error, {:network_error, "Connection pool idle timeout"}}
@@ -48,7 +50,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
       # Handle other NimblePool errors
       {:error, {:exit, {{:shutdown, reason}, {NimblePool, :checkout, _}}}} ->
         Logger.warning("Finch connection pool checkout failed",
-          provider_url: url,
+          provider_url: URLMask.mask(url),
           request_id: request_id,
           shutdown_reason: reason
         )
@@ -57,14 +59,14 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
         :telemetry.execute(
           [:lasso, :finch, :pool_checkout_failed],
           %{count: 1},
-          %{provider_url: url, request_id: request_id, reason: reason}
+          %{provider_url: URLMask.mask(url), request_id: request_id, reason: reason}
         )
 
         {:error, {:network_error, "Connection pool checkout failed: #{reason}"}}
 
       {:error, %Mint.TransportError{reason: reason}} ->
         Logger.debug("Finch request failed - Mint transport error",
-          provider_url: url,
+          provider_url: URLMask.mask(url),
           request_id: request_id,
           reason: reason
         )
@@ -83,7 +85,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
 
       {:error, reason} ->
         Logger.debug("Finch request failed",
-          provider_url: url,
+          provider_url: URLMask.mask(url),
           request_id: request_id,
           error: inspect(reason)
         )

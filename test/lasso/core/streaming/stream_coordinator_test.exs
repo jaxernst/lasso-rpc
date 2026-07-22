@@ -55,7 +55,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
   describe "initialization" do
     test "initializes with correct default state" do
-      chain = "test_chain"
+      chain = 1
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
@@ -63,7 +63,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       state = get_coordinator_state(pid)
 
-      assert state.chain == chain
+      assert state.chain_id == chain
       assert state.key == key
       assert state.primary_provider_id == "provider_1"
       assert state.failover_status == :active
@@ -78,7 +78,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
   describe "event handling - status routing" do
     setup do
-      chain = "test_chain_#{:rand.uniform(999_999)}"
+      chain = System.unique_integer([:positive])
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_event_buffer: 10]
 
@@ -188,7 +188,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
   describe "provider_unhealthy signal" do
     setup do
-      chain = "test_chain_#{:rand.uniform(999_999)}"
+      chain = System.unique_integer([:positive])
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
@@ -283,7 +283,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
   describe "circuit breaker" do
     setup do
-      chain = "test_chain_#{:rand.uniform(999_999)}"
+      chain = System.unique_integer([:positive])
       key = {:newHeads}
 
       opts = [
@@ -394,7 +394,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
   describe "dynamic failover budget" do
     test "uses default budget when ws provider count is zero" do
-      chain = "test_chain_no_ws_#{:rand.uniform(999_999)}"
+      chain = System.unique_integer([:positive])
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", failover_cooldown_ms: 1_000]
 
@@ -432,7 +432,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
   describe "state management" do
     test "tracks failover history correctly" do
-      chain = "test_chain_#{:rand.uniform(999_999)}"
+      chain = System.unique_integer([:positive])
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
@@ -457,7 +457,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
   describe "event buffer" do
     setup do
-      chain = "test_chain_#{:rand.uniform(999_999)}"
+      chain = System.unique_integer([:positive])
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_event_buffer: 3]
 
@@ -526,14 +526,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         end)
 
       assert log =~ "Event buffer full"
-      assert log =~ "dropping oldest event"
+      assert log =~ "entering degraded mode"
 
-      # Buffer should still be size 3, with event1 dropped
       state = get_coordinator_state(pid)
-      assert length(state.failover_context.event_buffer) == 3
-      # event1 dropped, buffer now has [event2, event3, event4]
-      refute event1 in state.failover_context.event_buffer
-      assert event4 in state.failover_context.event_buffer
+      assert state.failover_status == :degraded
+      assert state.failover_context == nil
     end
 
     test "buffer preserves event ordering during drain", %{coordinator: pid} do
@@ -572,7 +569,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
   describe "stale backfill handling" do
     setup do
-      chain = "test_chain_#{:rand.uniform(999_999)}"
+      chain = System.unique_integer([:positive])
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1"]
 
@@ -635,7 +632,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
   describe "backfill task crash handling" do
     setup do
-      chain = "test_chain_#{:rand.uniform(999_999)}"
+      chain = System.unique_integer([:positive])
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_failover_attempts: 2]
 

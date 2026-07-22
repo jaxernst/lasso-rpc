@@ -36,7 +36,7 @@ defmodule Lasso.Providers.InstanceSupervisor do
           |> maybe_add_circuit(:http, instance_id, instance.url, circuit_config)
           |> maybe_add_circuit(:ws, instance_id, instance.ws_url, circuit_config)
           |> maybe_add_ws_connection(instance_id, instance.ws_url)
-          |> maybe_add_subscription_manager(instance_id, instance.chain, instance.ws_url)
+          |> maybe_add_subscription_manager(instance_id, instance.chain_id, instance.ws_url)
 
         Supervisor.init(children, strategy: :one_for_one)
 
@@ -77,11 +77,11 @@ defmodule Lasso.Providers.InstanceSupervisor do
     children
   end
 
-  defp maybe_add_subscription_manager(children, instance_id, chain, ws_url)
+  defp maybe_add_subscription_manager(children, instance_id, chain_id, ws_url)
        when is_binary(ws_url) do
     child = %{
       id: {:subscription_manager, instance_id},
-      start: {InstanceSubscriptionManager, :start_link, [{chain, instance_id}]},
+      start: {InstanceSubscriptionManager, :start_link, [{chain_id, instance_id}]},
       type: :worker,
       restart: :permanent,
       shutdown: 5_000
@@ -90,7 +90,7 @@ defmodule Lasso.Providers.InstanceSupervisor do
     [child | children]
   end
 
-  defp maybe_add_subscription_manager(children, _instance_id, _chain, _ws_url), do: children
+  defp maybe_add_subscription_manager(children, _instance_id, _chain_id, _ws_url), do: children
 
   @spec via_name(String.t()) :: {:via, Registry, {Lasso.Registry, term()}}
   def via_name(instance_id) do

@@ -15,7 +15,6 @@ defmodule Lasso.RPC.RequestOptions do
 
   @enforce_keys [:timeout_ms]
   defstruct profile: @default_profile,
-            account_id: nil,
             strategy: :load_balanced,
             provider_override: nil,
             transport: nil,
@@ -29,7 +28,6 @@ defmodule Lasso.RPC.RequestOptions do
 
   @type t :: %__MODULE__{
           profile: String.t(),
-          account_id: String.t() | nil,
           strategy: strategy,
           provider_override: String.t() | nil,
           transport: transport,

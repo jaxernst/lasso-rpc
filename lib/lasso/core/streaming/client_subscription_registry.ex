@@ -10,47 +10,54 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
   use GenServer
   require Logger
 
-  @type key :: {:newHeads} | {:logs, map()}
+  alias Lasso.Core.Streaming.UpstreamSubscriptionPool
 
-  @spec start_link({String.t(), String.t()}) :: GenServer.on_start()
-  def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
-    GenServer.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
+  @type subscription_key :: {:newHeads} | {:logs, map()}
+  @type key :: subscription_key() | {:route, String.t() | :routed, subscription_key()}
+
+  @spec start_link({String.t(), pos_integer()}) :: GenServer.on_start()
+  def start_link({profile, chain_id})
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    GenServer.start_link(__MODULE__, {profile, chain_id}, name: via(profile, chain_id))
   end
 
-  @spec via(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
-  def via(profile, chain) when is_binary(profile) and is_binary(chain) do
-    {:via, Registry, {Lasso.Registry, {:client_registry, profile, chain}}}
+  @spec via(String.t(), pos_integer()) :: {:via, Registry, {atom(), tuple()}}
+  def via(profile, chain_id)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    {:via, Registry, {Lasso.Registry, {:client_registry, profile, chain_id}}}
   end
 
-  @spec add_client(String.t(), String.t(), String.t(), pid(), key) :: :ok
-  def add_client(profile, chain, subscription_id, client_pid, key)
-      when is_binary(profile) and is_binary(chain) do
-    GenServer.call(via(profile, chain), {:add, subscription_id, client_pid, key})
+  @spec add_client(String.t(), pos_integer(), String.t(), pid(), key) :: :ok
+  def add_client(profile, chain_id, subscription_id, client_pid, key)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    GenServer.call(via(profile, chain_id), {:add, subscription_id, client_pid, key})
   end
 
-  @spec remove_client(String.t(), String.t(), String.t()) :: {:ok, key | nil}
-  def remove_client(profile, chain, subscription_id)
-      when is_binary(profile) and is_binary(chain) do
-    GenServer.call(via(profile, chain), {:remove, subscription_id})
+  @spec remove_client(String.t(), pos_integer(), String.t()) :: {:ok, key | nil}
+  def remove_client(profile, chain_id, subscription_id)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    GenServer.call(via(profile, chain_id), {:remove, subscription_id})
   end
 
-  @spec list_by_key(String.t(), String.t(), key) :: [String.t()]
-  def list_by_key(profile, chain, key) when is_binary(profile) and is_binary(chain) do
-    GenServer.call(via(profile, chain), {:list_by_key, key})
+  @spec list_by_key(String.t(), pos_integer(), key) :: [String.t()]
+  def list_by_key(profile, chain_id, key)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    GenServer.call(via(profile, chain_id), {:list_by_key, key})
   end
 
-  @spec dispatch(String.t(), String.t(), key, map()) :: :ok
-  def dispatch(profile, chain, key, payload) when is_binary(profile) and is_binary(chain) do
-    GenServer.cast(via(profile, chain), {:dispatch, key, payload})
+  @spec dispatch(String.t(), pos_integer(), key, map()) :: :ok
+  def dispatch(profile, chain_id, key, payload)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    GenServer.cast(via(profile, chain_id), {:dispatch, key, payload})
   end
 
   # GenServer callbacks
 
   @impl true
-  def init({profile, chain}) do
+  def init({profile, chain_id}) do
     state = %{
       profile: profile,
-      chain: chain,
+      chain_id: chain_id,
       by_id: %{},
       by_key: %{}
     }
@@ -68,7 +75,7 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
       Map.update(state.by_key, key, [subscription_id], fn ids -> [subscription_id | ids] end)
 
     :telemetry.execute([:lasso, :subs, :client_subscribe], %{count: 1}, %{
-      chain: state.chain,
+      chain_id: state.chain_id,
       subscription_id: subscription_id
     })
 
@@ -91,7 +98,7 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
             else: Map.put(state.by_key, key, new_ids)
 
         :telemetry.execute([:lasso, :subs, :client_unsubscribe], %{count: 1}, %{
-          chain: state.chain,
+          chain_id: state.chain_id,
           subscription_id: subscription_id
         })
 
@@ -136,10 +143,15 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
 
   @impl true
   def handle_info({:DOWN, _mref, :process, pid, _reason}, state) do
-    # Cleanup any subscriptions tied to this client process
-    {removed, new_state} = remove_by_pid(state, pid)
+    {removed_by_key, new_state} = remove_by_pid(state, pid)
+    removed = removed_by_key |> Map.values() |> Enum.sum()
 
     if removed > 0 do
+      GenServer.cast(
+        UpstreamSubscriptionPool.via(state.profile, state.chain_id),
+        {:clients_removed, removed_by_key}
+      )
+
       Logger.debug("Cleaned up #{removed} subscriptions for dead client pid")
     end
 
@@ -158,6 +170,11 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
         if new_ids == [], do: Map.delete(acc, key), else: Map.put(acc, key, new_ids)
       end)
 
-    {length(to_remove), %{state | by_id: new_by_id, by_key: new_by_key}}
+    removed_by_key =
+      Enum.reduce(to_remove, %{}, fn {_subscription_id, %{key: key}}, acc ->
+        Map.update(acc, key, 1, &(&1 + 1))
+      end)
+
+    {removed_by_key, %{state | by_id: new_by_id, by_key: new_by_key}}
   end
 end

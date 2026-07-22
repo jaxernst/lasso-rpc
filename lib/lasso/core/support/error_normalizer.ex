@@ -165,11 +165,9 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
           ErrorClassifier.classify(code, message, provider_id: provider_id)
 
         data =
-          if category == :rate_limit do
-            add_retry_after(payload, payload)
-          else
-            payload
-          end
+          payload
+          |> public_transport_data()
+          |> maybe_add_retry_after_for_category(category, payload)
 
         JError.new(code, message,
           data: data,
@@ -187,13 +185,10 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
         # A compliant JSON-RPC provider would return errors in JSON-RPC format.
         # Non-JSON-RPC 4xx means the RPC handler never processed the request.
         status = Map.get(payload, :status, "4xx")
-        body = Map.get(payload, :body)
-        body_snippet = if is_binary(body), do: String.slice(body, 0, 200), else: ""
 
         Logger.warning("Reclassifying non-JSON-RPC 4xx as server_error",
           provider_id: provider_id,
-          status: status,
-          body: body_snippet
+          status: status
         )
 
         JError.new(-32_002, "Provider infrastructure error (HTTP #{status})",
@@ -663,6 +658,19 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   defp normalize_code(code) when code >= 400 and code <= 499, do: -32_600
   # JSON-RPC codes pass through
   defp normalize_code(code), do: code
+
+  defp maybe_add_retry_after_for_category(data, :rate_limit, payload),
+    do: add_retry_after(data, payload)
+
+  defp maybe_add_retry_after_for_category(data, _category, _payload), do: data
+
+  defp public_transport_data(payload) when is_map(payload) do
+    payload
+    |> Map.delete(:body)
+    |> Map.delete("body")
+  end
+
+  defp public_transport_data(payload), do: payload
 
   defp maybe_add_provider_id(%JError{provider_id: nil} = jerr, provider_id)
        when is_binary(provider_id),

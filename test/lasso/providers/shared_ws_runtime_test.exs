@@ -6,9 +6,9 @@ defmodule Lasso.Providers.SharedWSRuntimeTest do
   alias Lasso.Providers.InstanceSupervisor
 
   setup do
-    chain = "shared_ws_#{System.unique_integer([:positive])}"
+    chain = System.unique_integer([:positive])
     default_provider_id = "default_ws_#{System.unique_integer([:positive])}"
-    premium_provider_id = "premium_ws_#{System.unique_integer([:positive])}"
+    secondary_provider_id = "secondary_ws_#{System.unique_integer([:positive])}"
 
     default_profile = "public"
 
@@ -26,8 +26,8 @@ defmodule Lasso.Providers.SharedWSRuntimeTest do
       end
 
     chain_config = %{
-      chain_id: 0,
-      name: chain,
+      chain_id: chain,
+      name: "Shared WS Test Chain",
       providers: [],
       websocket: %{
         subscribe_new_heads: true,
@@ -80,14 +80,14 @@ defmodule Lasso.Providers.SharedWSRuntimeTest do
       ConfigStore.register_provider_runtime(
         secondary_profile,
         chain,
-        Map.put(provider_common, :id, premium_provider_id)
+        Map.put(provider_common, :id, secondary_provider_id)
       )
 
     Catalog.build_from_config()
 
     on_exit(fn ->
       _ = ConfigStore.unregister_provider_runtime(default_profile, chain, default_provider_id)
-      _ = ConfigStore.unregister_provider_runtime(secondary_profile, chain, premium_provider_id)
+      _ = ConfigStore.unregister_provider_runtime(secondary_profile, chain, secondary_provider_id)
       _ = ConfigStore.unregister_chain_runtime(default_profile, chain)
       _ = ConfigStore.unregister_chain_runtime(secondary_profile, chain)
 
@@ -111,27 +111,27 @@ defmodule Lasso.Providers.SharedWSRuntimeTest do
     %{
       chain: chain,
       default_profile: default_profile,
-      premium_profile: secondary_profile,
+      secondary_profile: secondary_profile,
       default_provider_id: default_provider_id,
-      premium_provider_id: premium_provider_id
+      secondary_provider_id: secondary_provider_id
     }
   end
 
   test "starts one shared WS connection and fans out profile-local events", ctx do
     default_provider_id = ctx.default_provider_id
-    premium_provider_id = ctx.premium_provider_id
+    secondary_provider_id = ctx.secondary_provider_id
 
     default_instance_id =
       Catalog.lookup_instance_id(ctx.default_profile, ctx.chain, ctx.default_provider_id)
 
-    premium_instance_id =
-      Catalog.lookup_instance_id(ctx.premium_profile, ctx.chain, ctx.premium_provider_id)
+    secondary_instance_id =
+      Catalog.lookup_instance_id(ctx.secondary_profile, ctx.chain, ctx.secondary_provider_id)
 
     assert is_binary(default_instance_id)
-    assert default_instance_id == premium_instance_id
+    assert default_instance_id == secondary_instance_id
 
     Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{ctx.default_profile}:#{ctx.chain}")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{ctx.premium_profile}:#{ctx.chain}")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:#{ctx.secondary_profile}:#{ctx.chain}")
 
     {:ok, supervisor_pid} =
       DynamicSupervisor.start_child(
@@ -140,7 +140,7 @@ defmodule Lasso.Providers.SharedWSRuntimeTest do
       )
 
     assert_receive {:ws_connected, ^default_provider_id, _connection_id}, 2_000
-    assert_receive {:ws_connected, ^premium_provider_id, _connection_id}, 2_000
+    assert_receive {:ws_connected, ^secondary_provider_id, _connection_id}, 2_000
 
     assert [{shared_ws_pid, _}] =
              Registry.lookup(Lasso.Registry, {:ws_conn_instance, default_instance_id})
@@ -157,9 +157,9 @@ defmodule Lasso.Providers.SharedWSRuntimeTest do
 
     assert Registry.lookup(Lasso.Registry, {
              :ws_conn,
-             ctx.premium_profile,
+             ctx.secondary_profile,
              ctx.chain,
-             ctx.premium_provider_id
+             ctx.secondary_provider_id
            }) == []
   end
 end

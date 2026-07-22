@@ -9,30 +9,20 @@ defmodule Lasso.Events.Provider do
   Common fields:
   - v: schema version (integer)
   - ts: event timestamp (ms since UNIX epoch)
-  - chain: chain name (string)
+  - chain_id: EIP-155 chain_id (pos_integer)
   - provider_id: provider identifier (string)
   """
-
-  @provider_topic_prefix "provider:events:"
-
-  @doc """
-  Returns the profile-scoped PubSub topic for provider events.
-  """
-  @spec topic(String.t(), String.t()) :: String.t()
-  def topic(profile, chain) when is_binary(profile) and is_binary(chain) do
-    "#{@provider_topic_prefix}#{profile}:#{chain}"
-  end
 
   defmodule Healthy do
     @moduledoc "Event indicating a provider is healthy."
     @derive Jason.Encoder
-    @enforce_keys [:ts, :chain, :provider_id]
-    defstruct v: 1, ts: nil, chain: nil, provider_id: nil
+    @enforce_keys [:ts, :chain_id, :provider_id]
+    defstruct v: 1, ts: nil, chain_id: nil, provider_id: nil
 
     @type t :: %__MODULE__{
             v: pos_integer(),
             ts: non_neg_integer(),
-            chain: String.t(),
+            chain_id: pos_integer(),
             provider_id: String.t()
           }
   end
@@ -40,13 +30,13 @@ defmodule Lasso.Events.Provider do
   defmodule Unhealthy do
     @moduledoc "Event indicating a provider is unhealthy."
     @derive Jason.Encoder
-    @enforce_keys [:ts, :chain, :provider_id]
-    defstruct v: 1, ts: nil, chain: nil, provider_id: nil, reason: nil
+    @enforce_keys [:ts, :chain_id, :provider_id]
+    defstruct v: 1, ts: nil, chain_id: nil, provider_id: nil, reason: nil
 
     @type t :: %__MODULE__{
             v: pos_integer(),
             ts: non_neg_integer(),
-            chain: String.t(),
+            chain_id: pos_integer(),
             provider_id: String.t(),
             reason: term() | nil
           }
@@ -55,10 +45,10 @@ defmodule Lasso.Events.Provider do
   defmodule HealthCheckFailed do
     @moduledoc "Event indicating a provider health check failed."
     @derive Jason.Encoder
-    @enforce_keys [:ts, :chain, :provider_id]
+    @enforce_keys [:ts, :chain_id, :provider_id]
     defstruct v: 1,
               ts: nil,
-              chain: nil,
+              chain_id: nil,
               provider_id: nil,
               reason: nil,
               consecutive_failures: nil
@@ -66,7 +56,7 @@ defmodule Lasso.Events.Provider do
     @type t :: %__MODULE__{
             v: pos_integer(),
             ts: non_neg_integer(),
-            chain: String.t(),
+            chain_id: pos_integer(),
             provider_id: String.t(),
             reason: term() | nil,
             consecutive_failures: non_neg_integer() | nil
@@ -84,13 +74,13 @@ defmodule Lasso.Events.Provider do
   defmodule WSDisconnected do
     @moduledoc "Event indicating a WebSocket connection was disconnected."
     @derive Jason.Encoder
-    @enforce_keys [:ts, :chain, :provider_id]
-    defstruct v: 1, ts: nil, chain: nil, provider_id: nil, reason: nil
+    @enforce_keys [:ts, :chain_id, :provider_id]
+    defstruct v: 1, ts: nil, chain_id: nil, provider_id: nil, reason: nil
 
     @type t :: %__MODULE__{
             v: pos_integer(),
             ts: non_neg_integer(),
-            chain: String.t(),
+            chain_id: pos_integer(),
             provider_id: String.t(),
             reason: term() | nil
           }
@@ -99,13 +89,13 @@ defmodule Lasso.Events.Provider do
   defmodule WSClosed do
     @moduledoc "Event indicating a WebSocket connection was closed."
     @derive Jason.Encoder
-    @enforce_keys [:ts, :chain, :provider_id, :code]
-    defstruct v: 1, ts: nil, chain: nil, provider_id: nil, code: nil, reason: nil
+    @enforce_keys [:ts, :chain_id, :provider_id, :code]
+    defstruct v: 1, ts: nil, chain_id: nil, provider_id: nil, code: nil, reason: nil
 
     @type t :: %__MODULE__{
             v: pos_integer(),
             ts: non_neg_integer(),
-            chain: String.t(),
+            chain_id: pos_integer(),
             provider_id: String.t(),
             code: integer(),
             reason: term() | nil
@@ -118,16 +108,19 @@ defmodule Lasso.Events.Provider do
   defmodule WSConnected do
     @moduledoc "Event indicating a WebSocket connection was established."
     @derive Jason.Encoder
-    @enforce_keys [:ts, :chain, :provider_id]
-    defstruct v: 1, ts: nil, chain: nil, provider_id: nil
+    @enforce_keys [:ts, :chain_id, :provider_id]
+    defstruct v: 1, ts: nil, chain_id: nil, provider_id: nil
 
     @type t :: %__MODULE__{
             v: pos_integer(),
             ts: non_neg_integer(),
-            chain: String.t(),
+            chain_id: pos_integer(),
             provider_id: String.t()
           }
   end
 
   def kind(%WSConnected{}), do: :ws_connected
+
+  @spec topic(String.t(), pos_integer()) :: String.t()
+  def topic(profile_id, chain_id), do: Lasso.Topics.provider_event(profile_id, chain_id)
 end

@@ -44,10 +44,10 @@ defmodule Lasso.RPC.Selection do
 
   Returns {:ok, provider_id} or {:error, reason}
   """
-  @spec select_provider(String.t(), String.t(), String.t(), keyword()) ::
+  @spec select_provider(String.t(), pos_integer(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def select_provider(profile, chain, method, opts \\ [])
-      when is_binary(profile) and is_binary(chain) and is_binary(method) do
+  def select_provider(profile, chain_id, method, opts \\ [])
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and is_binary(method) do
     params = Keyword.get(opts, :params, [])
 
     selection_opts = %{
@@ -55,27 +55,29 @@ defmodule Lasso.RPC.Selection do
       protocol: Keyword.get(opts, :protocol, :both),
       exclude: Keyword.get(opts, :exclude, []),
       include_half_open: Keyword.get(opts, :include_half_open, false),
-      timeout: Keyword.get(opts, :timeout, 30_000)
+      timeout: Keyword.get(opts, :timeout, 30_000),
+      requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false)
     }
 
-    do_select_provider(profile, chain, method, params, selection_opts)
+    do_select_provider(profile, chain_id, method, params, selection_opts)
   end
 
   # Private implementation
 
-  defp do_select_provider(profile, chain, method, params, selection_opts) do
+  defp do_select_provider(profile, chain_id, method, params, selection_opts) do
     filters =
       build_selection_filters(
         profile,
-        chain,
+        chain_id,
         method,
         params,
         selection_opts.exclude,
         selection_opts.protocol,
-        include_half_open: selection_opts.include_half_open
+        include_half_open: selection_opts.include_half_open,
+        requires_subscribe_new_heads: selection_opts.requires_subscribe_new_heads
       )
 
-    candidates = CandidateListing.list_candidates(profile, chain, filters)
+    candidates = CandidateListing.list_candidates(profile, chain_id, filters)
 
     case candidates do
       [] ->
@@ -85,7 +87,7 @@ defmodule Lasso.RPC.Selection do
         strategy_mod = StrategyRegistry.resolve(selection_opts.strategy)
 
         prepared_ctx =
-          strategy_mod.prepare_context(profile, chain, method, selection_opts.timeout)
+          strategy_mod.prepare_context(profile, chain_id, method, selection_opts.timeout)
 
         channels =
           candidates
@@ -98,7 +100,7 @@ defmodule Lasso.RPC.Selection do
               end
 
             Enum.flat_map(transports, fn t ->
-              case TransportRegistry.get_channel(profile, chain, provider_id, t,
+              case TransportRegistry.get_channel(profile, chain_id, provider_id, t,
                      method: method,
                      provider_config: provider_config
                    ) do
@@ -109,12 +111,12 @@ defmodule Lasso.RPC.Selection do
           end)
 
         ordered =
-          strategy_mod.rank_channels(channels, method, prepared_ctx, profile, chain)
+          strategy_mod.rank_channels(channels, method, prepared_ctx, profile, chain_id)
 
         case List.first(ordered) do
           %Channel{provider_id: pid} ->
             :telemetry.execute([:lasso, :selection, :success], %{count: 1}, %{
-              chain: chain,
+              chain_id: chain_id,
               method: method,
               strategy: selection_opts.strategy,
               protocol: selection_opts.protocol,
@@ -146,9 +148,9 @@ defmodule Lasso.RPC.Selection do
 
   Returns a list of Channel structs ordered by strategy preference.
   """
-  @spec select_channels(String.t(), String.t(), String.t(), keyword()) :: [Channel.t()]
-  def select_channels(profile, chain, method, opts \\ [])
-      when is_binary(profile) and is_binary(chain) and is_binary(method) do
+  @spec select_channels(String.t(), pos_integer(), String.t(), keyword()) :: [Channel.t()]
+  def select_channels(profile, chain_id, method, opts \\ [])
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and is_binary(method) do
     strategy = Keyword.get(opts, :strategy, :load_balanced)
     transport = Keyword.get(opts, :transport, :both)
     exclude = Keyword.get(opts, :exclude, [])
@@ -163,9 +165,8 @@ defmodule Lasso.RPC.Selection do
         _ -> nil
       end
 
-    # Analyze request to determine archival requirements
-    archival_threshold = get_archival_threshold(profile, chain)
-    consensus_height = get_consensus_height(chain)
+    archival_threshold = get_archival_threshold(profile, chain_id)
+    consensus_height = get_consensus_height(chain_id)
 
     requirements =
       Lasso.RPC.RequestAnalysis.analyze(
@@ -180,21 +181,21 @@ defmodule Lasso.RPC.Selection do
         protocol: pool_protocol,
         exclude: exclude,
         include_half_open: include_half_open,
-        max_lag_blocks: get_max_lag(profile, chain),
+        max_lag_blocks: get_max_lag(profile, chain_id),
         min_block: requirements.requested_block,
-        requires_archival: requirements.requires_archival
+        requires_archival: requirements.requires_archival,
+        requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false)
       )
 
-    # Instrument CandidateListing.list_candidates call time
     pool_start = System.monotonic_time(:microsecond)
-    provider_candidates = CandidateListing.list_candidates(profile, chain, pool_filters)
+    provider_candidates = CandidateListing.list_candidates(profile, chain_id, pool_filters)
 
     pool_duration_us = System.monotonic_time(:microsecond) - pool_start
 
     :telemetry.execute(
       [:lasso, :selection, :pool_candidates],
       %{duration_us: pool_duration_us, candidate_count: length(provider_candidates)},
-      %{chain: chain, method: method, strategy: strategy}
+      %{chain_id: chain_id, method: method, strategy: strategy}
     )
 
     # Build circuit state lookup map: {provider_id, transport} => :closed | :half_open
@@ -222,7 +223,7 @@ defmodule Lasso.RPC.Selection do
 
     channels =
       provider_candidates
-      |> Enum.flat_map(&build_provider_channels(&1, transport, profile, chain, method))
+      |> Enum.flat_map(&build_provider_channels(&1, transport, profile, chain_id, method))
       |> Enum.reject(&is_nil/1)
 
     registry_duration_us = System.monotonic_time(:microsecond) - registry_start
@@ -230,7 +231,7 @@ defmodule Lasso.RPC.Selection do
     :telemetry.execute(
       [:lasso, :selection, :channel_building],
       %{duration_us: registry_duration_us, channel_count: length(channels)},
-      %{chain: chain, method: method, provider_count: length(provider_candidates)}
+      %{chain_id: chain_id, method: method, provider_count: length(provider_candidates)}
     )
 
     # Filter channels by method capability (adapter-based filtering)
@@ -257,10 +258,10 @@ defmodule Lasso.RPC.Selection do
     # Strategy delegation: allow strategy modules to rank channels when available.
     strategy_mod = StrategyRegistry.resolve(strategy)
     timeout = Keyword.get(opts, :timeout, 30_000)
-    prepared_ctx = strategy_mod.prepare_context(profile, chain, method, timeout)
+    prepared_ctx = strategy_mod.prepare_context(profile, chain_id, method, timeout)
 
     ordered_channels =
-      strategy_mod.rank_channels(capable_channels, method, prepared_ctx, profile, chain)
+      strategy_mod.rank_channels(capable_channels, method, prepared_ctx, profile, chain_id)
 
     # Health-based tiering: reorder providers by circuit breaker state and rate limit status.
     #
@@ -307,10 +308,11 @@ defmodule Lasso.RPC.Selection do
 
   Returns {:ok, channel} or {:error, reason}.
   """
-  @spec select_provider_channel(String.t(), String.t(), String.t(), :http | :ws, keyword()) ::
+  @spec select_provider_channel(String.t(), pos_integer(), String.t(), :http | :ws, keyword()) ::
           {:ok, Channel.t()} | {:error, term()}
-  def select_provider_channel(profile, chain, provider_id, transport, opts \\ []) do
-    TransportRegistry.get_channel(profile, chain, provider_id, transport, opts)
+  def select_provider_channel(profile, chain_id, provider_id, transport, opts \\ [])
+      when is_integer(chain_id) and chain_id > 0 do
+    TransportRegistry.get_channel(profile, chain_id, provider_id, transport, opts)
   end
 
   ## Private Functions
@@ -321,13 +323,13 @@ defmodule Lasso.RPC.Selection do
          %{id: provider_id, config: config},
          transport,
          profile,
-         chain,
+         chain_id,
          method
        ) do
     transport
     |> transports_to_check()
     |> Enum.filter(fn t -> provider_supports_transport?(config, t) end)
-    |> Enum.flat_map(fn t -> fetch_channel(profile, chain, provider_id, t, method, config) end)
+    |> Enum.flat_map(fn t -> fetch_channel(profile, chain_id, provider_id, t, method, config) end)
   end
 
   defp transports_to_check(:http), do: [:http]
@@ -337,8 +339,8 @@ defmodule Lasso.RPC.Selection do
   defp provider_supports_transport?(config, :http), do: is_binary(Map.get(config, :url))
   defp provider_supports_transport?(config, :ws), do: is_binary(Map.get(config, :ws_url))
 
-  defp fetch_channel(profile, chain, provider_id, transport, method, provider_config) do
-    case TransportRegistry.get_channel(profile, chain, provider_id, transport,
+  defp fetch_channel(profile, chain_id, provider_id, transport, method, provider_config) do
+    case TransportRegistry.get_channel(profile, chain_id, provider_id, transport,
            method: method,
            provider_config: provider_config
          ) do
@@ -347,20 +349,12 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  # Configuration helper: Get max lag threshold for a specific profile/chain
-  # Returns nil if no lag filtering should be applied
-  # Configuration precedence (highest to lowest):
-  # 1. Per-chain default (from profile config)
-  # 2. Global application default
-  defp get_max_lag(profile, chain) do
-    # Try to get chain-specific config from the profile
-    case Lasso.Config.ConfigStore.get_chain(profile, chain) do
+  defp get_max_lag(profile, chain_id) do
+    case Lasso.Config.ConfigStore.get_chain(profile, chain_id) do
       {:ok, %{selection: %{max_lag_blocks: chain_default}}} ->
-        # Use chain-level default
         chain_default || get_global_max_lag()
 
       _ ->
-        # No chain config or selection config, use global default
         get_global_max_lag()
     end
   end
@@ -372,8 +366,8 @@ defmodule Lasso.RPC.Selection do
     |> Keyword.get(:max_lag_blocks)
   end
 
-  defp get_archival_threshold(profile, chain) do
-    case Lasso.Config.ConfigStore.get_chain(profile, chain) do
+  defp get_archival_threshold(profile, chain_id) do
+    case Lasso.Config.ConfigStore.get_chain(profile, chain_id) do
       {:ok, %{selection: %{archival_threshold: threshold}}} when is_integer(threshold) ->
         threshold
 
@@ -382,17 +376,18 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  defp get_consensus_height(chain) do
-    case ChainState.consensus_height(chain) do
+  defp get_consensus_height(chain_id) do
+    case ChainState.consensus_height(chain_id) do
       {:ok, height} -> height
       {:error, _} -> nil
     end
   end
 
-  defp build_selection_filters(profile, chain, method, params, exclude, protocol, opts) do
-    archival_threshold = get_archival_threshold(profile, chain)
-    consensus_height = get_consensus_height(chain)
+  defp build_selection_filters(profile, chain_id, method, params, exclude, protocol, opts) do
+    archival_threshold = get_archival_threshold(profile, chain_id)
+    consensus_height = get_consensus_height(chain_id)
     include_half_open = Keyword.get(opts, :include_half_open, false)
+    requires_subscribe_new_heads = Keyword.get(opts, :requires_subscribe_new_heads, false)
 
     requirements =
       RequestAnalysis.analyze(
@@ -406,9 +401,10 @@ defmodule Lasso.RPC.Selection do
       exclude: exclude,
       protocol: protocol,
       include_half_open: include_half_open,
-      max_lag_blocks: get_max_lag(profile, chain),
+      max_lag_blocks: get_max_lag(profile, chain_id),
       min_block: requirements.requested_block,
-      requires_archival: requirements.requires_archival
+      requires_archival: requirements.requires_archival,
+      requires_subscribe_new_heads: requires_subscribe_new_heads
     )
   end
 end

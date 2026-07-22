@@ -10,9 +10,9 @@ defmodule Lasso.BlockSync.Initializer do
   alias Lasso.BlockSync.Supervisor, as: BlockSyncSupervisor
   alias Lasso.Providers.Catalog
 
-  @spec start_workers_for_chain(String.t()) :: :ok
-  def start_workers_for_chain(chain) do
-    instance_ids = Catalog.list_instances_for_chain(chain)
-    BlockSyncSupervisor.start_all_workers(chain, instance_ids)
+  @spec start_workers_for_chain(pos_integer()) :: :ok
+  def start_workers_for_chain(chain_id) when is_integer(chain_id) and chain_id > 0 do
+    instance_ids = Catalog.list_instances_for_chain(chain_id)
+    BlockSyncSupervisor.start_all_workers(chain_id, instance_ids)
   end
 end
