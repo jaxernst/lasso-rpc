@@ -188,6 +188,10 @@ curl -sS -X POST 'http://localhost:4000/rpc/ethereum?include_meta=headers' \
 
 Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and limits. `${ENV_VAR}` substitution is supported (and unresolved placeholders will fail startup).
 
+A profile's YAML `slug` is its routing identity. Treat it as opaque in integrations. Chain routing accepts the configured name (such as `ethereum`) or its decimal EIP-155 ID (such as `1`); Lasso resolves either form to a positive integer internally. The `default` route remains an alias for the included `public` profile.
+
+Reload configuration with `Lasso.Config.ConfigStore.reload/0`. A malformed YAML reload is rejected and the last known-good configuration continues serving requests. On a cold restart, configuration is loaded from the YAML files before routing starts, so ensure required environment variables and profile files are available first.
+
 For the **full configuration reference (all supported options + tuning notes)**, see [`config/profiles/public.yml`](config/profiles/public.yml).
 
 ### Ready to Use: Public Profile
