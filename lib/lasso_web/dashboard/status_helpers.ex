@@ -124,13 +124,14 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   - :degraded_no_data - Block height polling is failing (distinct from startup transient)
   - :unavailable - No lag data available (fail-open for startup/transient)
   """
-  def check_block_lag(chain, provider_id) when is_binary(chain) and is_binary(provider_id) do
+  def check_block_lag(chain_id, provider_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
     threshold = lag_threshold_blocks()
 
     if threshold == 0 do
       :synced
     else
-      case calculate_optimistic_lag(chain, provider_id) do
+      case calculate_optimistic_lag(chain_id, provider_id) do
         {:ok, optimistic_lag} when optimistic_lag >= -threshold ->
           :synced
 
@@ -138,7 +139,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
           :lagging
 
         {:error, _reason} ->
-          case check_block_height_source_status(chain, provider_id) do
+          case check_block_height_source_status(chain_id, provider_id) do
             :polling_failing -> :degraded_no_data
             _ -> :unavailable
           end
@@ -180,9 +181,9 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   - :ok - Block height tracking is working (has recent height data)
   - :polling_failing - No recent height data
   """
-  def check_block_height_source_status(chain, provider_id)
-      when is_binary(chain) and is_binary(provider_id) do
-    case BlockSyncRegistry.get_height(chain, provider_id) do
+  def check_block_height_source_status(chain_id, provider_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
+    case BlockSyncRegistry.get_height(chain_id, provider_id) do
       {:ok, {_height, timestamp, _source, _meta}} ->
         # Check if data is recent (within 60 seconds)
         age = System.system_time(:millisecond) - timestamp

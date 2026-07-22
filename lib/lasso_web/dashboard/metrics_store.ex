@@ -53,7 +53,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   Gets provider leaderboard aggregated across all cluster nodes.
   Returns cached data with coverage metadata. Reads ETS directly.
   """
-  @spec get_provider_leaderboard(String.t(), String.t()) :: cached_result(list())
+  @spec get_provider_leaderboard(String.t(), pos_integer()) :: cached_result(list())
   def get_provider_leaderboard(profile, chain) do
     key = {:provider_leaderboard, profile, chain}
     ets_read_or_refresh(key, [])
@@ -63,7 +63,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   Gets realtime stats aggregated across all cluster nodes.
   Reads ETS directly.
   """
-  @spec get_realtime_stats(String.t(), String.t()) :: cached_result(map())
+  @spec get_realtime_stats(String.t(), pos_integer()) :: cached_result(map())
   def get_realtime_stats(profile, chain) do
     key = {:realtime_stats, profile, chain}
 
@@ -79,7 +79,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   Gets RPC method performance with percentiles from all nodes.
   Reads ETS directly.
   """
-  @spec get_rpc_method_performance(String.t(), String.t(), String.t(), String.t()) ::
+  @spec get_rpc_method_performance(String.t(), pos_integer(), String.t(), String.t()) ::
           cached_result(map() | nil)
   def get_rpc_method_performance(profile, chain, provider_id, method) do
     key = {:method_perf, profile, chain, provider_id, method}
@@ -90,7 +90,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   Gets all method performance data for a profile/chain in one bulk call.
   Reads ETS directly.
   """
-  @spec get_bulk_method_performance(String.t(), String.t()) :: cached_result(list())
+  @spec get_bulk_method_performance(String.t(), pos_integer()) :: cached_result(list())
   def get_bulk_method_performance(profile, chain) do
     key = {:bulk_method_perf, profile, chain}
     ets_read_or_refresh(key, [])

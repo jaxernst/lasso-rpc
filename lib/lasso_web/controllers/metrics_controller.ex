@@ -4,7 +4,7 @@ defmodule LassoWeb.MetricsController do
   require Logger
 
   alias Lasso.Benchmarking.BenchmarkStore
-  alias Lasso.Config.ConfigStore
+  alias Lasso.Config.{ChainAlias, ConfigStore}
   alias Lasso.Config.ProfileValidator
   alias LassoWeb.Dashboard.MetricsHelpers
 
@@ -16,21 +16,17 @@ defmodule LassoWeb.MetricsController do
     Logger.info("Metrics requested for chain: #{chain_name}")
     profile = ProfileValidator.default_profile()
 
-    # Check if chain is configured
-    case ConfigStore.get_chain(profile, chain_name) do
-      {:ok, _chain_config} ->
-        # Chain exists, collect metrics
-        metrics_data = collect_chain_metrics(chain_name)
-        json(conn, metrics_data)
+    case ConfigStore.lookup_chain_id_in_profile(profile, chain_name) do
+      {:ok, chain_id} ->
+        json(conn, collect_chain_metrics(chain_id))
 
-      {:error, :not_found} ->
-        # Chain not found
+      :not_found ->
         conn
         |> put_status(:not_found)
         |> json(%{
           error: "Chain not found",
           chain: chain_name,
-          available_chains: ConfigStore.list_chains()
+          available_chains: available_chain_aliases(profile)
         })
     end
   end
@@ -42,21 +38,20 @@ defmodule LassoWeb.MetricsController do
     |> json(%{
       error: "Chain parameter required",
       usage: "/api/metrics/{chain_name}",
-      available_chains: ConfigStore.list_chains()
+      available_chains: available_chain_aliases(ProfileValidator.default_profile())
     })
   end
 
-  defp collect_chain_metrics(chain_name, profile \\ ProfileValidator.default_profile()) do
-    # Get basic chain information
-    {:ok, chain_config} = ConfigStore.get_chain(profile, chain_name)
-    {:ok, provider_configs} = ConfigStore.get_providers(profile, chain_name)
+  defp collect_chain_metrics(chain_id, profile \\ ProfileValidator.default_profile()) do
+    {:ok, chain_config} = ConfigStore.get_chain(profile, chain_id)
+    {:ok, provider_configs} = ConfigStore.get_providers(profile, chain_id)
 
     # Get performance data from BenchmarkStore
-    chain_stats = BenchmarkStore.get_chain_wide_stats(profile, chain_name)
-    realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_name)
+    chain_stats = BenchmarkStore.get_chain_wide_stats(profile, chain_id)
+    realtime_stats = BenchmarkStore.get_realtime_stats(profile, chain_id)
 
     # Get provider leaderboard
-    provider_leaderboard = BenchmarkStore.get_provider_leaderboard(profile, chain_name)
+    provider_leaderboard = BenchmarkStore.get_provider_leaderboard(profile, chain_id)
 
     # Calculate VM/system metrics
     vm_metrics = MetricsHelpers.collect_vm_metrics()
@@ -92,7 +87,7 @@ defmodule LassoWeb.MetricsController do
           avg_latency_ms: Float.round(provider.avg_latency_ms || 0.0, 2),
           calls_last_minute:
             Map.get(
-              BenchmarkStore.get_real_time_stats(profile, chain_name, provider.provider_id),
+              BenchmarkStore.get_real_time_stats(profile, chain_id, provider.provider_id),
               :calls_last_minute,
               0
             )
@@ -107,7 +102,7 @@ defmodule LassoWeb.MetricsController do
     rpc_performance_by_provider =
       collect_rpc_performance_by_provider(
         profile,
-        chain_name,
+        chain_id,
         provider_ids,
         rpc_methods,
         provider_configs
@@ -117,7 +112,7 @@ defmodule LassoWeb.MetricsController do
     rpc_performance_by_method =
       collect_rpc_performance_by_method(
         profile,
-        chain_name,
+        chain_id,
         provider_ids,
         rpc_methods,
         provider_configs
@@ -125,7 +120,7 @@ defmodule LassoWeb.MetricsController do
 
     # Build comprehensive response
     %{
-      chain: chain_name,
+      chain: ChainAlias.canonical_slug(chain_id, chain_config.url_aliases),
       chain_id: chain_config.chain_id,
       timestamp: System.system_time(:millisecond),
       system_metrics: %{
@@ -242,6 +237,17 @@ defmodule LassoWeb.MetricsController do
           last_updated: metrics.last_updated
         }
     end
+  end
+
+  defp available_chain_aliases(profile) do
+    profile
+    |> ConfigStore.list_chains_for_profile()
+    |> Enum.map(fn chain_id ->
+      case ConfigStore.get_chain(profile, chain_id) do
+        {:ok, chain_config} -> ChainAlias.canonical_slug(chain_id, chain_config.url_aliases)
+        {:error, :not_found} -> ChainAlias.canonical_slug(chain_id)
+      end
+    end)
   end
 
   defp round_float(nil, _precision), do: nil

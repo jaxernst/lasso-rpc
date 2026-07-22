@@ -82,7 +82,7 @@ defmodule LassoWeb.Dashboard.EventStreamTest do
           event = %RoutingDecision{
             request_id: "req-#{i}",
             provider_id: "provider-1",
-            chain: "ethereum",
+            chain_id: 1,
             method: "eth_blockNumber",
             result: :success,
             duration_ms: 100,
