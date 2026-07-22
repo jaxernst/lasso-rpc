@@ -25,12 +25,43 @@ defmodule Lasso.Integration.DynamicProvidersTest do
     }
   ]
 
-  setup_all do
+  setup do
     :ok = ChainHelper.ensure_chain_exists(@test_chain)
     :ok
   end
 
   describe "Dynamic Provider Management" do
+    test "starts supervision for a runtime-registered chain" do
+      chain_id = 900_000_000 + :rand.uniform(99_999_999)
+      provider_id = "runtime-chain-provider-#{chain_id}"
+
+      :ok =
+        Lasso.Config.ConfigStore.register_chain_runtime("public", chain_id, %{
+          display_name: "Runtime Chain",
+          url_aliases: ["runtime-#{chain_id}"],
+          providers: []
+        })
+
+      on_exit(fn ->
+        Providers.remove_provider(chain_id, provider_id)
+        Lasso.Config.ConfigStore.unregister_chain_runtime("public", chain_id)
+      end)
+
+      assert {:ok, ^provider_id} =
+               Providers.add_provider(
+                 chain_id,
+                 %{
+                   id: provider_id,
+                   name: "Runtime Chain Provider",
+                   url: "http://127.0.0.1:1",
+                   priority: 1
+                 },
+                 validate: false
+               )
+
+      assert Lasso.ProfileChainSupervisor.running?("public", chain_id)
+    end
+
     setup do
       # Use unique provider ID per test to avoid conflicts
       test_id = "test_dynamic_#{:erlang.unique_integer([:positive])}"

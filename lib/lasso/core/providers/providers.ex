@@ -216,8 +216,19 @@ defmodule Lasso.Providers do
 
   defp ensure_chain_started(profile, chain_id) when is_integer(chain_id) and chain_id > 0 do
     case ConfigStore.get_chain(profile, chain_id) do
-      {:ok, _chain_config} -> :ok
-      {:error, :not_found} -> {:error, :chain_not_found}
+      {:ok, chain_config} ->
+        if Lasso.ProfileChainSupervisor.running?(profile, chain_id) do
+          :ok
+        else
+          case Lasso.ProfileChainSupervisor.start_profile_chain(profile, chain_id, chain_config) do
+            {:ok, _pid} -> :ok
+            {:error, {:already_started, _pid}} -> :ok
+            {:error, reason} -> {:error, reason}
+          end
+        end
+
+      {:error, :not_found} ->
+        {:error, :chain_not_found}
     end
   end
 
