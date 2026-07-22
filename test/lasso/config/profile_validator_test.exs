@@ -204,9 +204,9 @@ defmodule Lasso.Config.ProfileValidatorTest do
   end
 
   describe "resolve_alias/1" do
-    test "maps old slugs to canonical names" do
+    test "maps only the retained default alias" do
       assert "public" = ProfileValidator.resolve_alias("default")
-      assert "managed" = ProfileValidator.resolve_alias("premium")
+      assert "premium" = ProfileValidator.resolve_alias("premium")
     end
 
     test "passes through canonical and unknown slugs unchanged" do
