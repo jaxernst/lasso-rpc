@@ -311,16 +311,25 @@ defmodule Lasso.Providers.ProbeCoordinator do
     coordinator = self()
 
     case Catalog.get_instance(instance_id) do
-      {:ok, %{url: url}} when is_binary(url) ->
+      {:ok, %{mock?: true}} ->
+        state
+
+      {:ok, %{url: url} = instance} when is_binary(url) ->
+        headers = Map.get(instance, :headers, [{"content-type", "application/json"}])
+
         Task.Supervisor.start_child(Lasso.TaskSupervisor, fn ->
-          {^instance_id, result} = do_http_probe(instance_id, url, chain_id)
+          {^instance_id, result} = do_http_probe(instance_id, url, chain_id, headers)
           send(coordinator, {:probe_result, instance_id, result})
         end)
 
-      _ ->
-        :skip
-    end
+        mark_probe_attempt(state, instance_id, inst, now)
 
+      _ ->
+        state
+    end
+  end
+
+  defp mark_probe_attempt(state, instance_id, inst, now) do
     effective_ms = effective_probe_interval_ms(state, instance_id)
 
     updated_inst = %{
@@ -333,12 +342,11 @@ defmodule Lasso.Providers.ProbeCoordinator do
     %{state | instances: Map.put(state.instances, instance_id, updated_inst)}
   end
 
-  defp do_http_probe(instance_id, url, chain_id) do
+  defp do_http_probe(instance_id, url, chain_id, headers) do
     body =
       Jason.encode!(%{"jsonrpc" => "2.0", "method" => "eth_chainId", "params" => [], "id" => 1})
 
-    request =
-      Finch.build(:post, url, [{"content-type", "application/json"}], body)
+    request = Finch.build(:post, url, headers, body)
 
     case Finch.request(request, Lasso.Finch, receive_timeout: @default_timeout_ms) do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 ->

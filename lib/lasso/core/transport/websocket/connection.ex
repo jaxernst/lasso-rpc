@@ -118,6 +118,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
             get_in(instance, [:canonical_config, :name]) ||
               "Shared WebSocket #{instance_id}",
           ws_url: instance.ws_url,
+          headers: Map.get(instance, :headers, []),
           chain_id: instance.chain_id
         }
 
@@ -1117,7 +1118,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     # Start a separate WebSocket handler process
     # Pass connection_id in opts for test-mode failure injection (MockWSClient)
     # WebSockex ignores unknown opts, so this is safe for production
-    opts = [connection_id: endpoint.id]
+    opts = [connection_id: endpoint.id, extra_headers: endpoint.headers]
 
     case ws_client().start_link(
            endpoint.ws_url,

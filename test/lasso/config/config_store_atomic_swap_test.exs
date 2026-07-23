@@ -13,6 +13,62 @@ defmodule Lasso.Config.ConfigStoreAtomicSwapTest do
 
   @reads 200
 
+  defmodule BlockingBackend do
+    def load_all({owner, specs}) do
+      send(owner, {:retry_load_started, self()})
+
+      receive do
+        :complete_retry_load -> {:ok, specs}
+      end
+    end
+  end
+
+  test "a degraded retry cannot overwrite runtime mutations made while it loads" do
+    alias Lasso.Config.Backend.File, as: FileBackend
+
+    {:ok, backend_state} =
+      FileBackend.init(
+        profiles_dir: "test/support/profiles",
+        legacy_config_path: "test/support/chains.yml"
+      )
+
+    {:ok, specs} = FileBackend.load_all(backend_state)
+    retry_specs = Enum.reject(specs, &(&1.profile_id == "public"))
+    original_state = :sys.get_state(ConfigStore)
+    owner = self()
+    chain_id = 876_543_210
+
+    on_exit(fn ->
+      ConfigStore.unregister_chain_runtime("public", chain_id)
+      :sys.replace_state(ConfigStore, fn _ -> original_state end)
+    end)
+
+    :sys.replace_state(ConfigStore, fn state ->
+      %{
+        state
+        | backend_module: BlockingBackend,
+          backend_state: {owner, retry_specs},
+          retry_timer: nil,
+          retry_task_ref: nil,
+          retry_task_snapshot: nil
+      }
+    end)
+
+    assert :ok =
+             ConfigStore.register_chain_runtime("public", chain_id, %{
+               display_name: "Retry-Safe Runtime Chain",
+               url_aliases: ["retry-safe-runtime"],
+               providers: []
+             })
+
+    send(ConfigStore, :retry_eager_load)
+    assert_receive {:retry_load_started, retry_task}, 1_000
+    send(retry_task, :complete_retry_load)
+
+    assert eventually(fn -> :sys.get_state(ConfigStore).retry_task_ref == nil end)
+    assert {:ok, _chain} = ConfigStore.get_chain("public", chain_id)
+  end
+
   test "concurrent readers never observe a missing system profile across reload" do
     # The file backend serves `public` and `testnet` from
     # `test/support/profiles/`. Both should be present in every

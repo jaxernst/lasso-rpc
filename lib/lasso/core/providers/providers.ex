@@ -47,26 +47,27 @@ defmodule Lasso.Providers do
     provider_config = normalize_provider_config(provider_attrs)
     provider_id = Map.get(provider_config, :id)
 
-    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier),
-         :ok <- maybe_validate(provider_config, validate?),
-         :ok <- ensure_chain_started(profile, chain_id),
-         :ok <- check_not_duplicate(profile, chain_id, provider_id),
-         :ok <- ConfigStore.register_provider_runtime(profile, chain_id, provider_config),
-         :ok <-
-           ChainSupervisor.ensure_provider(profile, chain_id, provider_config, start_ws: start_ws),
-         :ok <- maybe_persist_add(chain_id, provider_config, persist?) do
-      Logger.info("Successfully added provider #{provider_id} to chain #{chain_id}")
-      {:ok, provider_id}
-    else
+    result =
+      with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier),
+           :ok <- maybe_validate(provider_config, validate?),
+           :ok <- ensure_chain_started(profile, chain_id),
+           :ok <- check_not_duplicate(profile, chain_id, provider_id),
+           :ok <- ConfigStore.register_provider_runtime(profile, chain_id, provider_config) do
+        finish_provider_add(
+          profile,
+          chain_id,
+          provider_config,
+          start_ws,
+          persist?
+        )
+      end
+
+    case result do
+      :ok ->
+        Logger.info("Successfully added provider #{provider_id} to chain #{chain_identifier}")
+        {:ok, provider_id}
+
       {:error, reason} = error ->
-        case resolve_chain_id(profile, chain_identifier) do
-          {:ok, chain_id} when is_binary(provider_id) ->
-            _ = ConfigStore.unregister_provider_runtime(profile, chain_id, provider_id)
-
-          _ ->
-            :ok
-        end
-
         Logger.error(
           "Failed to add provider #{provider_id} to chain #{inspect(chain_identifier)}: #{inspect(reason)}"
         )
@@ -232,14 +233,49 @@ defmodule Lasso.Providers do
     end
   end
 
+  defp finish_provider_add(profile, chain_id, provider_config, start_ws, persist?) do
+    result =
+      case ChainSupervisor.ensure_provider(profile, chain_id, provider_config, start_ws: start_ws) do
+        :ok -> maybe_persist_add(chain_id, provider_config, persist?)
+        {:error, _reason} = error -> error
+      end
+
+    case result do
+      :ok ->
+        :ok
+
+      {:error, _reason} = error ->
+        instance_id = Catalog.lookup_instance_id(profile, chain_id, provider_config.id)
+        _ = ConfigStore.unregister_provider_runtime(profile, chain_id, provider_config.id)
+        _ = ChainSupervisor.remove_provider(profile, chain_id, provider_config.id, instance_id)
+        error
+    end
+  end
+
   defp normalize_provider_config(attrs) when is_map(attrs) do
     %{
-      id: Map.get(attrs, :id) || Map.get(attrs, "id"),
-      name: Map.get(attrs, :name) || Map.get(attrs, "name"),
-      url: Map.get(attrs, :url) || Map.get(attrs, "url"),
-      ws_url: Map.get(attrs, :ws_url) || Map.get(attrs, "ws_url"),
-      priority: Map.get(attrs, :priority) || Map.get(attrs, "priority") || 100
+      id: attr(attrs, :id),
+      name: attr(attrs, :name),
+      url: attr(attrs, :url),
+      ws_url: attr(attrs, :ws_url),
+      priority: attr(attrs, :priority, 100),
+      capabilities: attr(attrs, :capabilities),
+      subscribe_new_heads: attr(attrs, :subscribe_new_heads),
+      archival: attr(attrs, :archival, true),
+      sharing_mode: attr(attrs, :sharing_mode, :auto),
+      api_key: attr(attrs, :api_key),
+      credentials: attr(attrs, :credentials),
+      headers: attr(attrs, :headers),
+      auth_headers: attr(attrs, :auth_headers),
+      __mock__: attr(attrs, :__mock__)
     }
+  end
+
+  defp attr(attrs, key, default \\ nil) do
+    case Map.fetch(attrs, key) do
+      {:ok, value} -> value
+      :error -> Map.get(attrs, Atom.to_string(key), default)
+    end
   end
 
   defp maybe_validate(provider_config, true) do

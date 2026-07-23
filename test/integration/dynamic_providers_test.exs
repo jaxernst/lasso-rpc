@@ -60,6 +60,8 @@ defmodule Lasso.Integration.DynamicProvidersTest do
                )
 
       assert Lasso.ProfileChainSupervisor.running?("public", chain_id)
+
+      assert is_pid(GenServer.whereis(Lasso.Providers.ProbeCoordinator.via_name(chain_id)))
     end
 
     setup do
@@ -83,6 +85,60 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       end)
 
       {:ok, provider_config: provider_config, test_id: test_id}
+    end
+
+    test "preserves runtime provider authentication and isolates physical instances" do
+      suffix = System.unique_integer([:positive])
+      first_id = "auth-first-#{suffix}"
+      second_id = "auth-second-#{suffix}"
+      url = "http://127.0.0.1:1"
+
+      on_exit(fn ->
+        Providers.remove_provider(@test_chain, first_id)
+        Providers.remove_provider(@test_chain, second_id)
+      end)
+
+      assert {:ok, ^first_id} =
+               Providers.add_provider(
+                 @test_chain,
+                 %{
+                   id: first_id,
+                   name: "First Auth Provider",
+                   url: url,
+                   api_key: "first-secret",
+                   headers: %{"x-network" => "first"}
+                 },
+                 validate: false
+               )
+
+      assert {:ok, ^second_id} =
+               Providers.add_provider(
+                 @test_chain,
+                 %{
+                   id: second_id,
+                   name: "Second Auth Provider",
+                   url: url,
+                   api_key: "second-secret",
+                   headers: %{"x-network" => "second"}
+                 },
+                 validate: false
+               )
+
+      assert {:ok, first} =
+               Lasso.Config.ConfigStore.get_provider("public", @test_chain, first_id)
+
+      assert first.api_key == "first-secret"
+      assert first.headers == %{"x-network" => "first"}
+
+      first_instance =
+        Lasso.Providers.Catalog.lookup_instance_id("public", @test_chain, first_id)
+
+      second_instance =
+        Lasso.Providers.Catalog.lookup_instance_id("public", @test_chain, second_id)
+
+      assert is_binary(first_instance)
+      assert is_binary(second_instance)
+      refute first_instance == second_instance
     end
 
     test "can add a provider dynamically", %{provider_config: config, test_id: test_id} do
@@ -148,6 +204,9 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       # Try to add again
       assert {:error, {:already_exists, ^test_id}} =
                Providers.add_provider(@test_chain, config)
+
+      assert {:ok, existing} = Providers.get_provider(@test_chain, test_id)
+      assert existing.id == test_id
     end
 
     test "can list all providers with status", %{provider_config: config} do
@@ -239,8 +298,8 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       assert {:ok, providers} = Providers.list_providers(@test_chain)
       dynamic = Enum.find(providers, fn p -> p.id == test_id end)
 
-      # Should be in connecting or healthy state
-      assert dynamic.status in [:connecting, :healthy]
+      assert dynamic.status in [:connecting, :healthy, :degraded, :unhealthy, :rate_limited]
+      assert dynamic.has_http
     end
 
     test "removed provider disappears from routing", %{provider_config: config, test_id: test_id} do

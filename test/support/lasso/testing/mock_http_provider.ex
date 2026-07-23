@@ -65,62 +65,35 @@ defmodule Lasso.Testing.MockHTTPProvider do
       __mock__: true
     }
 
-    # Ensure chain exists and register provider
     with :ok <- ChainHelper.ensure_chain_exists(chain, profile: profile),
          :ok <-
-           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config) do
-      # Rebuild catalog so the new provider is visible
-      Lasso.Providers.Catalog.build_from_config()
+           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config),
+         :ok <- Lasso.RPC.ChainSupervisor.ensure_provider(profile, chain, provider_config),
+         instance_id when is_binary(instance_id) <-
+           Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id),
+         {:ok, _channel} <-
+           Lasso.RPC.TransportRegistry.get_channel(profile, chain, provider_id, :http) do
+      ensure_circuit_breaker(instance_id, :http)
 
-      Logger.info("MockHTTPProvider: registered #{provider_id}, initializing channels...")
+      :ets.insert(:lasso_instance_state, {
+        {:health_probe, instance_id},
+        %{
+          status: :healthy,
+          http_status: :healthy,
+          consecutive_failures: 0,
+          last_error: nil,
+          last_health_check: System.system_time(:millisecond)
+        }
+      })
 
-      result =
-        Lasso.RPC.TransportRegistry.initialize_provider_channels(
-          profile,
-          chain,
-          provider_id,
-          provider_config
-        )
+      setup_cleanup(profile, chain, provider_id, instance_id)
 
-      Logger.info("MockHTTPProvider: initialize_provider_channels returned: #{inspect(result)}")
-
-      case result do
-        :ok ->
-          instance_id = Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id)
-
-          # Ensure circuit breaker exists for HTTP transport
-          if instance_id do
-            ensure_circuit_breaker(instance_id, :http)
-          end
-
-          # Mark as healthy in ETS
-          if instance_id do
-            :ets.insert(:lasso_instance_state, {
-              {:health_probe, instance_id},
-              %{
-                status: :healthy,
-                http_status: :healthy,
-                consecutive_failures: 0,
-                last_error: nil,
-                last_health_check: System.system_time(:millisecond)
-              }
-            })
-          end
-
-          # Set up cleanup callback
-          setup_cleanup(profile, chain, provider_id, instance_id)
-
-          Logger.debug("Started mock HTTP provider #{provider_id} for #{chain}")
-          {:ok, provider_id}
-
-        error ->
-          GenServer.stop(pid)
-          {:error, {:channel_initialization_failed, error}}
-      end
+      Logger.debug("Started mock HTTP provider #{provider_id} for #{chain}")
+      {:ok, provider_id}
     else
-      {:error, reason} ->
-        GenServer.stop(pid)
-        {:error, {:registration_failed, reason}}
+      error ->
+        rollback_start(profile, chain, provider_id, pid)
+        {:error, {:registration_failed, error}}
     end
   end
 
@@ -142,11 +115,11 @@ defmodule Lasso.Testing.MockHTTPProvider do
   @doc """
   Stops a mock HTTP provider.
   """
-  def stop_mock(chain, provider_id) do
-    # Remove from ConfigStore
-    Lasso.Config.ConfigStore.unregister_provider_runtime("public", chain, provider_id)
+  def stop_mock(chain, provider_id), do: stop_mock("public", chain, provider_id)
 
-    # Stop the GenServer
+  def stop_mock(profile, chain, provider_id) do
+    removal_result = Lasso.Providers.remove_provider(profile, chain, provider_id)
+
     case Registry.lookup(Lasso.Registry, {:http_provider, provider_id}) do
       [{pid, _}] ->
         if Process.alive?(pid) do
@@ -163,7 +136,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
         :ok
     end
 
-    :ok
+    removal_result
   end
 
   defp ensure_circuit_breaker(instance_id, transport) do
@@ -255,10 +228,17 @@ defmodule Lasso.Testing.MockHTTPProvider do
     {:reply, response, state}
   end
 
-  defp setup_cleanup(_profile, chain, provider_id, instance_id) do
+  defp rollback_start(profile, chain, provider_id, pid) do
+    Lasso.Providers.remove_provider(profile, chain, provider_id)
+    if Process.alive?(pid), do: GenServer.stop(pid)
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp setup_cleanup(profile, chain, provider_id, instance_id) do
     ExUnit.Callbacks.on_exit({:cleanup_mock_http, provider_id}, fn ->
       Logger.debug("Test cleanup: stopping mock HTTP provider #{provider_id}")
-      stop_mock(chain, provider_id)
+      stop_mock(profile, chain, provider_id)
 
       if instance_id do
         for transport <- [:http, :ws] do

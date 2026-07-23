@@ -6,6 +6,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Endpoint do
   than HTTP endpoints. This struct includes WebSocket-specific configuration.
   """
 
+  @derive {Inspect, except: [:headers]}
   @type t :: %__MODULE__{
           profile: String.t() | nil,
           id: String.t(),
@@ -15,6 +16,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Endpoint do
 
           # WebSocket specific fields
           ws_url: String.t(),
+          headers: [{String.t(), String.t()}],
           reconnect_interval: non_neg_integer(),
           heartbeat_interval: non_neg_integer(),
           max_reconnect_attempts: non_neg_integer() | :infinity,
@@ -30,6 +32,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Endpoint do
     :chain_id,
     :chain_name,
     :ws_url,
+    headers: [],
 
     # WebSocket specific fields
     reconnect_interval: 5_000,

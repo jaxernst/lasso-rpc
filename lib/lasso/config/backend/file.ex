@@ -251,7 +251,8 @@ defmodule Lasso.Config.Backend.File do
   defp parse_chain_config(chain_name, chain_data) do
     %ChainConfig{
       chain_id: chain_data["chain_id"],
-      display_name: chain_data["name"],
+      name: chain_data["name"] || chain_name,
+      display_name: chain_data["name"] || chain_name,
       url_aliases: parse_url_aliases(chain_name, chain_data),
       block_time_ms: chain_data["block_time_ms"],
       providers: parse_providers(chain_data["providers"] || []),
@@ -287,7 +288,7 @@ defmodule Lasso.Config.Backend.File do
 
   defp parse_url_aliases(chain_name, chain_data) do
     configured = chain_data["url_aliases"] || chain_data["aliases"] || []
-    [chain_name | List.wrap(configured)]
+    Enum.uniq([chain_name | List.wrap(configured)])
   end
 
   defp parse_subscribe_new_heads(nil), do: nil
@@ -481,8 +482,8 @@ defmodule Lasso.Config.Backend.File do
     Logger.info("Auto-migrating #{legacy_path} to #{profiles_dir}/public.yml")
 
     with {:ok, content} <- File.read(legacy_path),
-         {:ok, yaml_data} <- YamlElixir.read_from_string(content) do
-      profile_yaml = generate_profile_yaml(yaml_data)
+         {:ok, _yaml_data} <- YamlElixir.read_from_string(content) do
+      profile_yaml = generate_profile_yaml(%{"__raw__" => content})
       target_path = Path.join(profiles_dir, "public.yml")
 
       case File.write(target_path, profile_yaml) do
@@ -499,6 +500,21 @@ defmodule Lasso.Config.Backend.File do
         Logger.error("Failed to read legacy config: #{inspect(reason)}")
         {:error, {:migration_read_failed, reason}}
     end
+  end
+
+  defp legacy_profile_frontmatter do
+    """
+    ---
+    name: Public Providers
+    slug: public
+    rps_limit: 100
+    burst_limit: 500
+    ---
+    """
+  end
+
+  defp generate_profile_yaml(%{"__raw__" => content}) when is_binary(content) do
+    legacy_profile_frontmatter() <> content
   end
 
   defp generate_profile_yaml(yaml_data) do

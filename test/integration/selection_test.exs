@@ -208,8 +208,7 @@ defmodule Lasso.RPC.SelectionTest do
         %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile, archival: false}
       ])
 
-      # Historical eth_getLogs request (block 12369621 is from 2021)
-      params = [%{"fromBlock" => "0xBCEE25", "toBlock" => "0xBCEE25"}]
+      params = [%{"fromBlock" => "earliest", "toBlock" => "earliest"}]
 
       # Should return empty list - no archival providers available
       channels = Selection.select_channels(profile, chain, "eth_getLogs", params: params)
@@ -226,8 +225,7 @@ defmodule Lasso.RPC.SelectionTest do
         %{id: "non_archival", priority: 20, behavior: :healthy, profile: profile, archival: false}
       ])
 
-      # Historical eth_getLogs request
-      params = [%{"fromBlock" => "0xBCEE25", "toBlock" => "0xBCEE25"}]
+      params = [%{"fromBlock" => "earliest", "toBlock" => "earliest"}]
 
       # Should return only the archival provider
       channels = Selection.select_channels(profile, chain, "eth_getLogs", params: params)

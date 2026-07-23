@@ -75,8 +75,11 @@ defmodule Lasso.RPC.TransportRegistry do
     :capabilities
   ]
 
+  @default_profile "public"
+
   @type profile :: String.t()
   @type chain_id :: pos_integer()
+  @type chain_identifier :: chain_id | String.t()
   @type provider_id :: String.t()
   @type transport :: :http | :ws
   @type channel_map :: %{transport => Channel.t()}
@@ -84,12 +87,35 @@ defmodule Lasso.RPC.TransportRegistry do
   @doc """
   Starts the TransportRegistry for a profile/chain pair.
   """
-  @spec start_link({profile, chain_id, map()}) :: GenServer.on_start()
+  @spec start_link(
+          {profile, chain_id, map()}
+          | {profile, String.t(), map()}
+          | {String.t(), map()}
+        ) :: GenServer.on_start()
   def start_link({profile, chain_id, chain_config})
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    profile = canonical_profile(profile)
+
     GenServer.start_link(__MODULE__, {profile, chain_id, chain_config},
       name: via_name(profile, chain_id)
     )
+  end
+
+  def start_link({profile, chain_identifier, chain_config})
+      when is_binary(profile) and is_binary(chain_identifier) do
+    profile = canonical_profile(profile)
+
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier, chain_config) do
+      GenServer.start_link(
+        __MODULE__,
+        {profile, chain_id, chain_config, chain_identifier},
+        name: via_name(profile, chain_id)
+      )
+    end
+  end
+
+  def start_link({chain_identifier, chain_config}) when is_binary(chain_identifier) do
+    start_link({@default_profile, chain_identifier, chain_config})
   end
 
   @doc """
@@ -120,8 +146,11 @@ defmodule Lasso.RPC.TransportRegistry do
   @spec get_channel(profile, chain_id, provider_id, transport, keyword()) ::
           {:ok, Channel.t()} | {:error, term()}
   def get_channel(profile, chain_id, provider_id, transport, opts \\ [])
+
+  def get_channel(profile, chain_id, provider_id, transport, opts)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and
              is_binary(provider_id) and is_atom(transport) do
+    profile = canonical_profile(profile)
     cache_key = {profile, chain_id, provider_id, transport}
 
     case :ets.lookup(@channel_cache_table, cache_key) do
@@ -130,6 +159,16 @@ defmodule Lasso.RPC.TransportRegistry do
 
       [] ->
         do_get_channel(profile, chain_id, provider_id, transport, opts)
+    end
+  end
+
+  def get_channel(profile, chain_identifier, provider_id, transport, opts)
+      when is_binary(profile) and is_binary(chain_identifier) and is_binary(provider_id) and
+             is_atom(transport) do
+    profile = canonical_profile(profile)
+
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
+      get_channel(profile, chain_id, provider_id, transport, opts)
     end
   end
 
@@ -152,34 +191,123 @@ defmodule Lasso.RPC.TransportRegistry do
           :ok | {:error, term()}
   def initialize_provider_channels(profile, chain_id, provider_id, provider_config)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    profile = canonical_profile(profile)
+
     GenServer.call(
       via_name(profile, chain_id),
       {:initialize_provider_channels, provider_id, provider_config}
     )
   end
 
+  def initialize_provider_channels(profile, chain_identifier, provider_id, provider_config)
+      when is_binary(profile) and is_binary(chain_identifier) do
+    profile = canonical_profile(profile)
+
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
+      initialize_provider_channels(profile, chain_id, provider_id, provider_config)
+    end
+  end
+
+  @spec initialize_provider_channels(pos_integer() | String.t(), provider_id, map()) ::
+          :ok | {:error, term()}
+  def initialize_provider_channels(chain_identifier, provider_id, provider_config) do
+    initialize_provider_channels(@default_profile, chain_identifier, provider_id, provider_config)
+  end
+
   @spec list_provider_channels(profile, chain_id, provider_id) :: [{transport, Channel.t()}]
   def list_provider_channels(profile, chain_id, provider_id)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
-    GenServer.call(via_name(profile, chain_id), {:list_provider_channels, provider_id})
+    GenServer.call(
+      via_name(canonical_profile(profile), chain_id),
+      {:list_provider_channels, provider_id}
+    )
+  end
+
+  def list_provider_channels(profile, chain_identifier, provider_id)
+      when is_binary(profile) and is_binary(chain_identifier) do
+    profile = canonical_profile(profile)
+
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
+      list_provider_channels(profile, chain_id, provider_id)
+    end
+  end
+
+  @spec list_provider_channels(pos_integer() | String.t(), provider_id) ::
+          [{transport, Channel.t()}] | {:error, term()}
+  def list_provider_channels(chain_identifier, provider_id) do
+    list_provider_channels(@default_profile, chain_identifier, provider_id)
   end
 
   @spec get_candidate_channels(profile, chain_id, map()) :: [Channel.t()]
   def get_candidate_channels(profile, chain_id, filters)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and is_map(filters) do
-    GenServer.call(via_name(profile, chain_id), {:get_candidate_channels, filters})
+    GenServer.call(
+      via_name(canonical_profile(profile), chain_id),
+      {:get_candidate_channels, filters}
+    )
+  end
+
+  def get_candidate_channels(profile, chain_identifier, filters)
+      when is_binary(profile) and is_binary(chain_identifier) and is_map(filters) do
+    profile = canonical_profile(profile)
+
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
+      get_candidate_channels(profile, chain_id, filters)
+    end
+  end
+
+  @spec get_candidate_channels(pos_integer() | String.t(), map()) ::
+          [Channel.t()] | {:error, term()}
+  def get_candidate_channels(chain_identifier, filters \\ %{}) do
+    get_candidate_channels(@default_profile, chain_identifier, filters)
   end
 
   @spec refresh_capabilities(profile, chain_id, provider_id, transport) :: :ok
   def refresh_capabilities(profile, chain_id, provider_id, transport)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
-    GenServer.cast(via_name(profile, chain_id), {:refresh_capabilities, provider_id, transport})
+    GenServer.cast(
+      via_name(canonical_profile(profile), chain_id),
+      {:refresh_capabilities, provider_id, transport}
+    )
+  end
+
+  def refresh_capabilities(profile, chain_identifier, provider_id, transport)
+      when is_binary(profile) and is_binary(chain_identifier) do
+    profile = canonical_profile(profile)
+
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
+      refresh_capabilities(profile, chain_id, provider_id, transport)
+    end
+  end
+
+  @spec refresh_capabilities(pos_integer() | String.t(), provider_id, transport) ::
+          :ok | {:error, term()}
+  def refresh_capabilities(chain_identifier, provider_id, transport) do
+    refresh_capabilities(@default_profile, chain_identifier, provider_id, transport)
   end
 
   @spec close_channel(profile, chain_id, provider_id, transport) :: :ok
   def close_channel(profile, chain_id, provider_id, transport)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
-    GenServer.cast(via_name(profile, chain_id), {:close_channel, provider_id, transport})
+    GenServer.cast(
+      via_name(canonical_profile(profile), chain_id),
+      {:close_channel, provider_id, transport}
+    )
+  end
+
+  def close_channel(profile, chain_identifier, provider_id, transport)
+      when is_binary(profile) and is_binary(chain_identifier) do
+    profile = canonical_profile(profile)
+
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
+      close_channel(profile, chain_id, provider_id, transport)
+    end
+  end
+
+  @spec close_channel(pos_integer() | String.t(), provider_id, transport) ::
+          :ok | {:error, term()}
+  def close_channel(chain_identifier, provider_id, transport) do
+    close_channel(@default_profile, chain_identifier, provider_id, transport)
   end
 
   @spec close_channel_sync(profile, chain_id, provider_id, transport) :: :ok
@@ -193,6 +321,19 @@ defmodule Lasso.RPC.TransportRegistry do
   # GenServer implementation
 
   @impl true
+  def init({profile, chain_id, chain_config, legacy_chain_name})
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and
+             is_binary(legacy_chain_name) do
+    {:ok, _} =
+      Registry.register(
+        Lasso.Registry,
+        {:transport_registry, profile, legacy_chain_name},
+        nil
+      )
+
+    init({profile, chain_id, chain_config})
+  end
+
   def init({profile, chain_id, _chain_config})
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
     state = %__MODULE__{
@@ -241,16 +382,15 @@ defmodule Lasso.RPC.TransportRegistry do
   @impl true
   def handle_call({:initialize_provider_channels, provider_id, provider_config}, _from, state) do
     # HTTP pre-warm if configured
-    state =
+    {result, state} =
       if is_binary(Map.get(provider_config, :url)) or
            is_binary(Map.get(provider_config, :http_url)) do
         case create_channel(state, provider_id, :http, provider_config: provider_config) do
-          {:ok, _chan, s} ->
+          {:ok, _chan, updated_state} ->
             Logger.info("TransportRegistry: HTTP channel created for #{provider_id}")
-            s
+            {:ok, updated_state}
 
           {:error, reason} ->
-            # Log actual failures as warnings, missing configs as debug
             case reason do
               :no_http_config ->
                 Logger.debug("TransportRegistry: No HTTP URL configured for #{provider_id}")
@@ -261,15 +401,15 @@ defmodule Lasso.RPC.TransportRegistry do
                 )
             end
 
-            state
+            {{:error, reason}, state}
         end
       else
         Logger.debug("TransportRegistry: No HTTP URL configured for #{provider_id}")
-        state
+        {:ok, state}
       end
 
     # WS channels are created on ws_connected events to avoid races
-    {:reply, :ok, state}
+    {:reply, result, state}
   end
 
   @impl true
@@ -546,7 +686,41 @@ defmodule Lasso.RPC.TransportRegistry do
   @spec via_name(String.t(), pos_integer()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(profile, chain_id)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
-    {:via, Registry, {Lasso.Registry, {:transport_registry, profile, chain_id}}}
+    {:via, Registry,
+     {Lasso.Registry, {:transport_registry, canonical_profile(profile), chain_id}}}
+  end
+
+  @spec via_name(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
+  def via_name(profile, chain_identifier)
+      when is_binary(profile) and is_binary(chain_identifier) do
+    profile = canonical_profile(profile)
+
+    case resolve_chain_id(profile, chain_identifier) do
+      {:ok, chain_id} ->
+        via_name(profile, chain_id)
+
+      {:error, :chain_not_found} ->
+        {:via, Registry, {Lasso.Registry, {:transport_registry, profile, chain_identifier}}}
+    end
+  end
+
+  @spec via_name(pos_integer() | String.t()) :: {:via, Registry, {atom(), tuple()}}
+  def via_name(chain_identifier), do: via_name(@default_profile, chain_identifier)
+
+  defp canonical_profile(profile), do: Lasso.Config.ProfileValidator.resolve_alias(profile)
+
+  defp resolve_chain_id(profile, chain_identifier, chain_config) do
+    case Map.get(chain_config, :chain_id) do
+      chain_id when is_integer(chain_id) and chain_id > 0 -> {:ok, chain_id}
+      _ -> resolve_chain_id(profile, chain_identifier)
+    end
+  end
+
+  defp resolve_chain_id(profile, chain_identifier) when is_binary(chain_identifier) do
+    case ConfigStore.lookup_chain_id_in_profile(profile, chain_identifier) do
+      {:ok, chain_id} -> {:ok, chain_id}
+      :not_found -> {:error, :chain_not_found}
+    end
   end
 
   defp cache_channel(state, provider_id, transport, channel) do

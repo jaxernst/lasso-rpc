@@ -33,7 +33,7 @@ defmodule Lasso.Providers.Catalog do
   require Logger
 
   alias Lasso.Config.{ChainConfig, ConfigStore}
-  alias Lasso.Providers.InstanceId
+  alias Lasso.Providers.{InstanceId, ProviderHeaders}
 
   @persistent_term_key :lasso_catalog_active
 
@@ -253,6 +253,8 @@ defmodule Lasso.Providers.Catalog do
       block_time_ms: chain_config.block_time_ms,
       url: provider.url,
       ws_url: provider.ws_url,
+      headers: ProviderHeaders.build(provider),
+      mock?: provider.__mock__ == true,
       canonical_config: %{
         id: provider.id,
         name: provider.name,

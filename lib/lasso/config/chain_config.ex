@@ -10,6 +10,7 @@ defmodule Lasso.Config.ChainConfig do
 
   @type t :: %__MODULE__{
           chain_id: pos_integer() | nil,
+          name: String.t() | nil,
           display_name: String.t() | nil,
           url_aliases: [String.t()],
           block_time_ms: non_neg_integer() | nil,
@@ -22,6 +23,7 @@ defmodule Lasso.Config.ChainConfig do
 
   defstruct [
     :chain_id,
+    :name,
     :display_name,
     :block_time_ms,
     :providers,

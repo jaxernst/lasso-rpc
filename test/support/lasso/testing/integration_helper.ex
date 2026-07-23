@@ -70,6 +70,9 @@ defmodule Lasso.Testing.IntegrationHelper do
         end
       end)
 
+    # Publish one final catalog snapshot after the complete fixture has been registered.
+    Lasso.Providers.Catalog.build_from_config()
+
     # Wait for all providers to be fully registered
     Enum.each(provider_ids, fn provider_id ->
       wait_for_provider_ready(chain, provider_id,
@@ -295,7 +298,20 @@ defmodule Lasso.Testing.IntegrationHelper do
         :ok
 
       {:error, :timeout} ->
-        raise "Provider #{provider_id} not registered within timeout"
+        config_provider =
+          Lasso.Config.ConfigStore.get_provider(profile, chain, provider_id)
+
+        config_provider_ids =
+          Lasso.Config.ConfigStore.get_provider_ids(profile, chain)
+
+        catalog_provider_ids =
+          Lasso.Providers.Catalog.get_profile_providers(profile, chain)
+          |> Enum.map(& &1.provider_id)
+
+        raise "Provider #{provider_id} not registered within timeout; " <>
+                "config_provider=#{inspect(config_provider)} " <>
+                "config_provider_ids=#{inspect(config_provider_ids)} " <>
+                "catalog_provider_ids=#{inspect(catalog_provider_ids)}"
     end
   end
 

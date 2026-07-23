@@ -31,7 +31,7 @@ defmodule Lasso.Config.ConfigStore do
   require Logger
 
   alias Lasso.Config.Backend
-  alias Lasso.Config.ChainConfig
+  alias Lasso.Config.{ChainAlias, ChainConfig}
   alias Lasso.Config.ChainConfig.Provider
   alias Lasso.Config.ConfigStore.Owner
   alias Lasso.Config.ProfileMeta
@@ -222,6 +222,33 @@ defmodule Lasso.Config.ConfigStore do
         :not_found
     end
   end
+
+  @doc """
+  Returns a configured URL alias for a numeric chain ID.
+
+  The public profile is preferred for compatibility with the legacy global
+  chain-ID index. Other loaded profiles are consulted when the chain is not in
+  public.
+  """
+  @spec find_chain_name_by_id(integer()) :: {:ok, String.t()} | {:error, :not_found}
+  def find_chain_name_by_id(chain_id) when is_integer(chain_id) and chain_id > 0 do
+    profiles = list_profiles()
+
+    profiles =
+      if "public" in profiles, do: ["public" | List.delete(profiles, "public")], else: profiles
+
+    Enum.find_value(profiles, {:error, :not_found}, fn profile_id ->
+      case get_chain(profile_id, chain_id) do
+        {:ok, chain_config} ->
+          {:ok, ChainAlias.canonical_slug(chain_id, chain_config.url_aliases)}
+
+        {:error, :not_found} ->
+          false
+      end
+    end)
+  end
+
+  def find_chain_name_by_id(_chain_id), do: {:error, :not_found}
 
   @doc """
   Returns true when the profile contains a chain with the given `chain_id`.
@@ -431,8 +458,11 @@ defmodule Lasso.Config.ConfigStore do
     GenServer.call(__MODULE__, {:register_chain_runtime, profile_id, chain_id, chain_attrs})
   end
 
-  def register_chain_runtime(profile_id, _legacy_alias, %{chain_id: chain_id} = chain_attrs)
-      when is_binary(profile_id) and is_integer(chain_id) and chain_id > 0 do
+  def register_chain_runtime(profile_id, legacy_alias, %{chain_id: chain_id} = chain_attrs)
+      when is_binary(profile_id) and is_binary(legacy_alias) and is_integer(chain_id) and
+             chain_id > 0 do
+    aliases = Map.get(chain_attrs, :url_aliases, [])
+    chain_attrs = Map.put(chain_attrs, :url_aliases, Enum.uniq([legacy_alias | aliases]))
     register_chain_runtime(profile_id, chain_id, chain_attrs)
   end
 
@@ -567,6 +597,7 @@ defmodule Lasso.Config.ConfigStore do
       retry_task_ref: nil,
       retry_task_snapshot: nil,
       db_degraded: false,
+      runtime_dirty_profiles: MapSet.new(),
       last_good_specs: snapshot_profile_specs()
     }
 
@@ -577,7 +608,8 @@ defmodule Lasso.Config.ConfigStore do
   def handle_call(:load_all_profiles, _from, state) do
     case do_load_all_profiles(state) do
       {:ok, profiles, new_state} ->
-        {:reply, {:ok, profiles}, %{new_state | db_degraded: false}}
+        {:reply, {:ok, profiles},
+         %{new_state | db_degraded: false, runtime_dirty_profiles: MapSet.new()}}
 
       {:degraded, profiles, new_state} ->
         Logger.warning("Initial configuration load was degraded; scheduling retry")
@@ -605,7 +637,7 @@ defmodule Lasso.Config.ConfigStore do
         sync_chain_supervisors(old_pairs)
         reconcile_transport_channels_all(old_endpoints)
         Enum.each(profiles, &broadcast_profile_updated/1)
-        {:reply, :ok, %{new_state | db_degraded: false}}
+        {:reply, :ok, %{new_state | db_degraded: false, runtime_dirty_profiles: MapSet.new()}}
 
       {:degraded, _profiles, new_state} ->
         # Keep serving the last good snapshot and retry in the background.
@@ -622,7 +654,7 @@ defmodule Lasso.Config.ConfigStore do
   @impl true
   def handle_call({:inject_profile, profile_spec}, _from, state) do
     reply = do_inject_profile(profile_spec)
-    {:reply, reply, refresh_last_good_specs(state, reply)}
+    {:reply, reply, mark_runtime_dirty(state, profile_spec.profile_id, reply)}
   end
 
   @impl true
@@ -634,13 +666,13 @@ defmodule Lasso.Config.ConfigStore do
   @impl true
   def handle_call({:update_profile, profile_spec}, _from, state) do
     reply = do_update_profile(profile_spec)
-    {:reply, reply, refresh_last_good_specs(state, reply)}
+    {:reply, reply, mark_runtime_dirty(state, profile_spec.profile_id, reply)}
   end
 
   @impl true
   def handle_call({:remove_profile, profile_id}, _from, state) do
     reply = do_remove_profile(profile_id)
-    {:reply, reply, refresh_last_good_specs(state, reply)}
+    {:reply, reply, mark_runtime_dirty(state, profile_id, reply)}
   end
 
   @impl true
@@ -654,7 +686,7 @@ defmodule Lasso.Config.ConfigStore do
         chain_config = normalize_chain_config(chain_id, chain_attrs)
         add_chain_to_profile(profile_id, chain_id, chain_config)
         Logger.debug("Registered chain #{chain_id} in profile #{profile_id} (runtime)")
-        {:reply, :ok, refresh_last_good_specs(state, :ok)}
+        {:reply, :ok, mark_runtime_dirty(state, profile_id, :ok)}
     end
   end
 
@@ -665,7 +697,7 @@ defmodule Lasso.Config.ConfigStore do
         remove_chain_from_profile(profile_id, chain_id)
         maybe_remove_profile_from_list(profile_id)
         Logger.debug("Unregistered chain #{chain_id} from profile #{profile_id} (runtime)")
-        {:reply, :ok, refresh_last_good_specs(state, :ok)}
+        {:reply, :ok, mark_runtime_dirty(state, profile_id, :ok)}
 
       {:error, :not_found} ->
         {:reply, {:error, :chain_not_found}, state}
@@ -688,7 +720,7 @@ defmodule Lasso.Config.ConfigStore do
         "Registered provider #{provider_config.id} for chain #{chain_id} in profile #{profile_id} (runtime)"
       )
 
-      {:reply, :ok, refresh_last_good_specs(state, :ok)}
+      {:reply, :ok, mark_runtime_dirty(state, profile_id, :ok)}
     else
       {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
       {:error, :already_exists} -> {:reply, {:error, :already_exists}, state}
@@ -709,7 +741,7 @@ defmodule Lasso.Config.ConfigStore do
         "Unregistered provider #{provider_id} from chain #{chain_id} in profile #{profile_id} (runtime)"
       )
 
-      {:reply, :ok, refresh_last_good_specs(state, :ok)}
+      {:reply, :ok, mark_runtime_dirty(state, profile_id, :ok)}
     else
       {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
       {:error, :provider_not_found} -> {:reply, {:error, :provider_not_found}, state}
@@ -801,7 +833,7 @@ defmodule Lasso.Config.ConfigStore do
               backend_module.load_all(backend_state)
             end)
 
-          snapshot = current_file_profile_ids()
+          snapshot = current_profile_fingerprints()
 
           {:noreply,
            %{
@@ -828,7 +860,7 @@ defmodule Lasso.Config.ConfigStore do
     case result do
       {:ok, specs} ->
         Logger.info("ConfigStore: retry succeeded, exiting degraded mode")
-        apply_retry_deltas(specs, snapshot)
+        apply_retry_deltas(specs, snapshot, state.runtime_dirty_profiles)
         {:noreply, %{state | db_degraded: false, last_loaded: DateTime.utc_now()}}
 
       {:degraded, _specs} ->
@@ -1027,28 +1059,45 @@ defmodule Lasso.Config.ConfigStore do
 
   # Apply a completed retry as deltas. Snapshot bounds removals so runtime
   # updates made while the backend read was running are preserved.
-  defp apply_retry_deltas(loaded_specs, spawn_snapshot) do
-    spawn_snapshot = spawn_snapshot || MapSet.new()
+  defp apply_retry_deltas(loaded_specs, spawn_snapshot, runtime_dirty_profiles) do
+    spawn_snapshot = spawn_snapshot || %{}
+    spawn_ids = MapSet.new(Map.keys(spawn_snapshot))
     loaded_by_id = Map.new(loaded_specs, &{&1.profile_id, &1})
     loaded_ids = MapSet.new(Map.keys(loaded_by_id))
 
     current_ids = current_file_profile_ids()
+    current_fingerprints = current_profile_fingerprints()
 
     to_remove =
-      spawn_snapshot
+      spawn_ids
       |> MapSet.intersection(current_ids)
       |> MapSet.difference(loaded_ids)
+      |> Enum.filter(fn profile_id ->
+        not MapSet.member?(runtime_dirty_profiles, profile_id) and
+          Map.get(current_fingerprints, profile_id) == Map.get(spawn_snapshot, profile_id)
+      end)
 
     old_pairs = collect_profile_chain_pairs()
     old_chain_ids = list_chain_ids()
 
     changed_profile_ids =
       Enum.flat_map(loaded_specs, fn spec ->
+        current_fingerprint = Map.get(current_fingerprints, spec.profile_id)
+        spawn_fingerprint = Map.get(spawn_snapshot, spec.profile_id)
+
         result =
-          if MapSet.member?(current_ids, spec.profile_id) do
-            do_update_profile_without_rebuild(spec)
-          else
-            do_inject_profile_without_rebuild(spec)
+          cond do
+            MapSet.member?(runtime_dirty_profiles, spec.profile_id) ->
+              :runtime_dirty
+
+            not MapSet.member?(current_ids, spec.profile_id) ->
+              do_inject_profile_without_rebuild(spec)
+
+            current_fingerprint == spawn_fingerprint ->
+              do_update_profile_without_rebuild(spec)
+
+            true ->
+              :unchanged_since_retry_started
           end
 
         case result do
@@ -1144,7 +1193,21 @@ defmodule Lasso.Config.ConfigStore do
   # Set of file-backed profile IDs currently in ETS.
   defp current_file_profile_ids, do: list_profiles() |> MapSet.new()
 
+  defp current_profile_fingerprints do
+    case snapshot_profile_specs() do
+      specs when is_list(specs) ->
+        Map.new(specs, fn spec -> {spec.profile_id, :erlang.phash2(spec)} end)
+
+      _ ->
+        %{}
+    end
+  end
+
   # Resolution order: keyword option -> app env -> default.
+  defp retry_opt(opts, _key, app_key, default) when is_binary(opts) do
+    Application.get_env(:lasso, app_key, default)
+  end
+
   defp retry_opt(opts, key, app_key, default) do
     case Keyword.fetch(opts, key) do
       {:ok, value} -> value
@@ -1379,10 +1442,17 @@ defmodule Lasso.Config.ConfigStore do
     ArgumentError -> nil
   end
 
+  defp mark_runtime_dirty(state, profile_id, reply) do
+    if reply == :ok do
+      state = refresh_last_good_specs(state, :ok)
+      %{state | runtime_dirty_profiles: MapSet.put(state.runtime_dirty_profiles, profile_id)}
+    else
+      state
+    end
+  end
+
   defp refresh_last_good_specs(state, :ok),
     do: %{state | last_good_specs: snapshot_profile_specs()}
-
-  defp refresh_last_good_specs(state, _reply), do: state
 
   defp resolve_with_meta(scope, slug) do
     with {:ok, profile_id} <- resolve(scope, slug),
@@ -1721,15 +1791,18 @@ defmodule Lasso.Config.ConfigStore do
     monitoring_attrs = Map.get(attrs, :monitoring) || Map.get(attrs, "monitoring") || %{}
     providers_attrs = Map.get(attrs, :providers) || Map.get(attrs, "providers") || []
 
+    display_name =
+      Map.get(attrs, :display_name) || Map.get(attrs, "display_name") ||
+        Map.get(attrs, :name) || Map.get(attrs, "name")
+
     %ChainConfig{
       chain_id: chain_id,
-      display_name:
-        Map.get(attrs, :display_name) || Map.get(attrs, "display_name") ||
-          Map.get(attrs, :name) || Map.get(attrs, "name"),
+      name: display_name,
+      display_name: display_name,
       url_aliases:
         attrs
         |> Map.get(:url_aliases, Map.get(attrs, "url_aliases"))
-        |> normalize_url_aliases(Map.get(attrs, :name) || Map.get(attrs, "name")),
+        |> normalize_url_aliases(),
       providers: Enum.map(providers_attrs, &normalize_provider_config/1),
       websocket: normalize_websocket_config(websocket_attrs),
       selection: normalize_selection_config(selection_attrs),
@@ -1737,12 +1810,11 @@ defmodule Lasso.Config.ConfigStore do
     }
   end
 
-  defp normalize_url_aliases(aliases, _fallback) when is_list(aliases) do
+  defp normalize_url_aliases(aliases) when is_list(aliases) do
     Enum.filter(aliases, &(is_binary(&1) and String.trim(&1) != ""))
   end
 
-  defp normalize_url_aliases(_aliases, fallback) when is_binary(fallback), do: [fallback]
-  defp normalize_url_aliases(_aliases, _fallback), do: []
+  defp normalize_url_aliases(_aliases), do: []
 
   defp normalize_websocket_config(attrs) when is_map(attrs) do
     failover_attrs = Map.get(attrs, :failover) || Map.get(attrs, "failover") || %{}

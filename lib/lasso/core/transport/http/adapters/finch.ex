@@ -6,6 +6,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   @behaviour Lasso.RPC.Transport.HTTP.Client
   require Logger
 
+  alias Lasso.Providers.ProviderHeaders
   alias Lasso.URLMask
 
   @impl true
@@ -94,15 +95,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     end
   end
 
-  defp base_headers(%{api_key: api_key}) when is_binary(api_key) and byte_size(api_key) > 0 do
-    [
-      {"authorization", "Bearer #{api_key}"},
-      {"content-type", "application/json"},
-      {"accept", "application/json"}
-    ]
-  end
-
-  defp base_headers(_), do: [{"content-type", "application/json"}, {"accept", "application/json"}]
+  defp base_headers(provider), do: ProviderHeaders.build(provider)
 
   defp handle_response(status, body) when status in 200..299 do
     # Return raw bytes for passthrough optimization

@@ -26,7 +26,7 @@ defmodule Lasso.RPC.ChainSupervisor do
 
   alias Lasso.BlockSync
   alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, UpstreamSubscriptionPool}
-  alias Lasso.Providers.{Catalog, InstanceState}
+  alias Lasso.Providers.{Catalog, InstanceState, ProbeCoordinator}
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
   alias Lasso.RPC.TransportRegistry
 
@@ -115,15 +115,23 @@ defmodule Lasso.RPC.ChainSupervisor do
          ) do
       :ok ->
         Catalog.build_from_config()
-        instance_id = Catalog.lookup_instance_id(profile, chain_id, provider_config.id)
 
-        if instance_id do
-          start_instance_supervisor(instance_id)
-          BlockSync.Supervisor.start_worker(chain_id, instance_id)
-          Lasso.Providers.ProbeCoordinator.reload_instances(chain_id)
+        case Catalog.lookup_instance_id(profile, chain_id, provider_config.id) do
+          instance_id when is_binary(instance_id) ->
+            if Map.get(provider_config, :__mock__) == true do
+              :ok
+            else
+              with :ok <- start_instance_supervisor(instance_id),
+                   :ok <- ensure_probe_coordinator(chain_id),
+                   :ok <- start_block_sync_worker(chain_id, instance_id) do
+                ProbeCoordinator.reload_instances(chain_id)
+                :ok
+              end
+            end
+
+          nil ->
+            {:error, :catalog_registration_failed}
         end
-
-        :ok
 
       {:error, reason} = error ->
         Logger.error(
@@ -166,7 +174,11 @@ defmodule Lasso.RPC.ChainSupervisor do
       InstanceState.clear(instance_id)
     end
 
-    Lasso.Providers.ProbeCoordinator.reload_instances(chain_id)
+    if Catalog.list_instances_for_chain(chain_id) == [] do
+      stop_probe_coordinator(chain_id)
+    else
+      ProbeCoordinator.reload_instances(chain_id)
+    end
 
     Logger.info("Successfully removed provider #{provider_id} from chain #{chain_id}")
     :ok
@@ -199,14 +211,51 @@ defmodule Lasso.RPC.ChainSupervisor do
     end
   end
 
+  defp start_block_sync_worker(chain_id, instance_id) do
+    case BlockSync.Supervisor.start_worker(chain_id, instance_id) do
+      {:ok, _pid} -> :ok
+      {:error, reason} -> {:error, {:block_sync_start_failed, reason}}
+    end
+  end
+
+  defp stop_probe_coordinator(chain_id) do
+    case GenServer.whereis(ProbeCoordinator.via_name(chain_id)) do
+      nil ->
+        :ok
+
+      pid ->
+        case DynamicSupervisor.terminate_child(Lasso.Providers.ProbeSupervisor, pid) do
+          :ok -> :ok
+          {:error, :not_found} -> :ok
+        end
+    end
+  end
+
+  defp ensure_probe_coordinator(chain_id) do
+    case DynamicSupervisor.start_child(
+           Lasso.Providers.ProbeSupervisor,
+           {ProbeCoordinator, chain_id}
+         ) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> {:error, {:probe_coordinator_start_failed, reason}}
+    end
+  end
+
   defp start_instance_supervisor(instance_id) do
     case DynamicSupervisor.start_child(
            Lasso.Providers.InstanceDynamicSupervisor,
            {Lasso.Providers.InstanceSupervisor, instance_id}
          ) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> Logger.warning("Failed to start InstanceSupervisor: #{inspect(reason)}")
+      {:ok, _pid} ->
+        :ok
+
+      {:error, {:already_started, _pid}} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to start InstanceSupervisor: #{inspect(reason)}")
+        {:error, {:instance_supervisor_start_failed, reason}}
     end
   end
 
