@@ -26,7 +26,7 @@ jobs:
           otp-version: ${{ matrix.otp }}
 
       - name: Cache dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: deps
           key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
@@ -34,7 +34,7 @@ jobs:
             ${{ runner.os }}-deps-
 
       - name: Cache build
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: _build
           key: ${{ runner.os }}-build-test-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
@@ -67,7 +67,7 @@ jobs:
           otp-version: "28.0"
 
       - name: Cache dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: deps
           key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
@@ -75,7 +75,7 @@ jobs:
             ${{ runner.os }}-deps-
 
       - name: Cache build
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: _build
           key: ${{ runner.os }}-build-dev-28.0-1.18.4-${{ hashFiles('**/mix.lock') }}
@@ -105,7 +105,7 @@ jobs:
           otp-version: "28.0"
 
       - name: Cache dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: deps
           key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
@@ -113,7 +113,7 @@ jobs:
             ${{ runner.os }}-deps-
 
       - name: Cache build
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: _build
           key: ${{ runner.os }}-build-dev-28.0-1.18.4-${{ hashFiles('**/mix.lock') }}
@@ -121,7 +121,7 @@ jobs:
             ${{ runner.os }}-build-dev-28.0-1.18.4-
 
       - name: Cache PLT
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: priv/plts
           key: ${{ runner.os }}-plt-28.0-1.18.4-${{ hashFiles('**/mix.lock') }}
@@ -139,3 +139,38 @@ jobs:
 
       - name: Run Dialyzer
         run: mix dialyzer --format github
+
+  docker:
+    name: Docker build and boot
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image from clean context
+        run: docker build --pull --no-cache --tag lasso-rpc:ci .
+
+      - name: Boot image and verify health
+        shell: bash
+        run: |
+          set -euo pipefail
+          secret_key_base="$(openssl rand -hex 64)"
+          docker run --detach --name lasso-rpc-ci --publish 4000:4000 \
+            --env LASSO_NODE_ID=ci \
+            --env PHX_HOST=localhost \
+            --env PHX_SCHEME=http \
+            --env SECRET_KEY_BASE="$secret_key_base" \
+            lasso-rpc:ci
+
+          trap 'docker logs lasso-rpc-ci || true; docker rm --force lasso-rpc-ci >/dev/null 2>&1 || true' EXIT
+
+          for _ in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:4000/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Container did not become healthy within 60 seconds" >&2
+          exit 1
