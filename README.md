@@ -91,6 +91,8 @@ Profiles (namespaced routing configs):
 - HTTP: `/rpc/profile/:profile/...`
 - WS: `/ws/rpc/profile/:profile/...`
 
+Routes without `/profile/:profile` use the included `public` profile. Use a namespaced route to select any other profile. The legacy `default` profile name remains an alias for `public`.
+
 ---
 
 ## Quick Start
@@ -186,11 +188,11 @@ curl -sS -X POST 'http://localhost:4000/rpc/ethereum?include_meta=headers' \
 
 Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and limits. `${ENV_VAR}` substitution is supported (and unresolved placeholders will fail startup).
 
-For the **full configuration reference (all supported options + tuning notes)**, see `config/profiles/default.yml`.
+For the **full configuration reference (all supported options + tuning notes)**, see [`config/profiles/public.yml`](config/profiles/public.yml).
 
-### Ready to Use: Default Profile
+### Ready to Use: Public Profile
 
-The included `default.yml` profile is configured with free public providers (no API keys required). Start `mix phx.server` and you have a working multi-provider RPC proxy.
+The included `public.yml` profile is configured with free public providers (no API keys required). Start `mix phx.server` and you have a working multi-provider RPC proxy.
 
 Good for:
 
@@ -202,10 +204,10 @@ Good for:
 Minimal example:
 
 ```yaml
-# config/profiles/default.yml
+# config/profiles/public.yml
 ---
-name: "Default"
-slug: "default"
+name: "Public RPC"
+slug: "public"
 type: "standard"
 default_rps_limit: 100
 default_burst_limit: 500
