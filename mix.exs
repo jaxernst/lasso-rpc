@@ -11,7 +11,12 @@ defmodule Lasso.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       releases: releases(),
       deps: deps(),
-      dialyzer: dialyzer()
+      dialyzer: dialyzer(),
+      hex: [
+        # Cowlib has no patched release for these encoder-only advisories. Lasso and its
+        # Cowboy/Plug stack do not call cow_cookie:cookie/1 or Cowlib's structured-header encoders.
+        ignore_advisories: ["CVE-2026-43966", "CVE-2026-43969"]
+      ]
     ]
   end
 
@@ -49,17 +54,17 @@ defmodule Lasso.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:dotenvy, "~> 0.8.0"},
-      {:jason, "~> 1.4"},
+      {:jason, "~> 1.4.5"},
       {:websockex, "~> 0.4"},
       {:phoenix, "~> 1.8"},
       {:phoenix_pubsub, "~> 2.1"},
       {:phoenix_live_view, "~> 1.1"},
       {:phoenix_html, "~> 4.0"},
       {:gettext, "~> 0.20"},
-      {:plug_cowboy, "~> 2.6"},
-      {:decimal, "~> 2.0"},
+      {:plug_cowboy, "~> 2.8"},
+      {:decimal, "~> 3.0"},
       {:yaml_elixir, "~> 2.9"},
-      {:finch, "~> 0.18"},
+      {:finch, "~> 0.22"},
       {:phoenix_live_dashboard, "~> 0.8", only: :dev},
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.2.0", runtime: Mix.env() == :dev},

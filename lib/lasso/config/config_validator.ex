@@ -280,7 +280,7 @@ defmodule Lasso.Config.ConfigValidator do
       {:ok, %Finch.Response{status: status}} ->
         {:error, {:http_error, status}}
 
-      {:error, %Mint.TransportError{reason: reason}} ->
+      {:error, %Finch.TransportError{reason: reason}} ->
         {:error, {:connection_error, reason}}
 
       {:error, reason} ->
