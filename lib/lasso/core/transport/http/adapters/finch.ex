@@ -29,7 +29,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
            Finch.request(req, Lasso.Finch, receive_timeout: timeout_ms) do
       handle_response(status, resp_body)
     else
-      {:error, %Mint.TransportError{reason: :timeout}} ->
+      {:error, %Finch.TransportError{reason: :timeout}} ->
         {:error, {:network_error, "Connection timeout"}}
 
       # Handle NimblePool checkout errors specifically
@@ -65,7 +65,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
 
         {:error, {:network_error, "Connection pool checkout failed: #{reason}"}}
 
-      {:error, %Mint.TransportError{reason: reason}} ->
+      {:error, %Finch.TransportError{reason: reason}} ->
         Logger.debug("Finch request failed - Mint transport error",
           provider_url: URLMask.mask(url),
           request_id: request_id,
@@ -77,7 +77,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
             :timeout -> "Connection timeout"
             :closed -> "Connection closed"
             :econnrefused -> "Connection refused"
-            {:error, :nxdomain} -> "DNS resolution failed"
+            :nxdomain -> "DNS resolution failed"
             {:error, reason} when is_atom(reason) -> "Connection error: #{reason}"
             _ -> "Connection error"
           end

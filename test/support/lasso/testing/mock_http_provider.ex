@@ -178,6 +178,12 @@ defmodule Lasso.Testing.MockHTTPProvider do
   end
 
   @impl true
+  def terminate(_reason, %{provider_id: provider_id}) do
+    Registry.unregister(Lasso.Registry, {:http_provider, provider_id})
+    :ok
+  end
+
+  @impl true
   def handle_call({:execute_request, method, params}, _from, state) do
     # Increment call count
     state = %{state | call_count: state.call_count + 1}
