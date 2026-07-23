@@ -33,17 +33,16 @@ defmodule Lasso.RPC.Strategies.Fastest do
   @min_success_rate 0.9
 
   @impl true
-  def prepare_context(profile, chain, method, timeout) do
-    base_ctx = StrategyContext.new(chain, timeout)
+  def prepare_context(profile, chain_id, method, timeout) do
+    base_ctx = StrategyContext.new(chain_id, timeout)
 
     min_calls = Application.get_env(:lasso, :fastest_min_calls, @min_calls)
     min_success_rate = Application.get_env(:lasso, :fastest_min_success_rate, @min_success_rate)
 
-    # Calculate fallback latency for providers with no data
     fallback_latency =
       StrategyContext.calculate_fallback_latency(
         profile,
-        chain,
+        chain_id,
         method
       )
 
@@ -65,16 +64,15 @@ defmodule Lasso.RPC.Strategies.Fastest do
   - Missing metrics: Use P75 of known providers as dynamic baseline
   """
   @impl true
-  def rank_channels(channels, method, ctx, profile, chain) do
+  def rank_channels(channels, method, ctx, profile, chain_id) do
     current_time = System.system_time(:millisecond)
 
-    # Batch fetch all metrics (eliminates N sequential GenServer calls)
     requests =
       Enum.map(channels, fn ch ->
         {ch.provider_id, method, ch.transport}
       end)
 
-    metrics_map = Metrics.batch_get_transport_performance(profile, chain, requests)
+    metrics_map = Metrics.batch_get_transport_performance(profile, chain_id, requests)
 
     # Sort using pre-fetched metrics with staleness and cold start checks
     Enum.sort_by(channels, fn channel ->

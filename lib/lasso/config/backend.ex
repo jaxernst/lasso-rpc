@@ -7,8 +7,7 @@ defmodule Lasso.Config.Backend do
 
   ## Implementations
 
-  - `Lasso.Config.Backend.File` - File-based YAML profiles (OSS default)
-  - Future: `LassoCloud.Config.Backend.Database` - PostgreSQL-backed profiles (SaaS)
+  - `Lasso.Config.Backend.File` - File-based YAML profiles
 
   ## Profile Specification
 
@@ -18,10 +17,21 @@ defmodule Lasso.Config.Backend do
   - `:chains` - Map of chain_name => chain configuration
   """
 
+  @typedoc """
+  File-backed profile scope. OSS profiles are loaded from YAML and use the
+  single `:system` scope.
+  """
+  @type scope :: :system
+
   @type profile_spec :: %{
-          slug: String.t(),
-          name: String.t(),
-          chains: %{String.t() => map()}
+          required(:scope) => scope(),
+          required(:slug) => String.t(),
+          required(:name) => String.t(),
+          required(:chains) => %{String.t() => map()},
+          optional(:rps_limit) => non_neg_integer(),
+          optional(:burst_limit) => non_neg_integer(),
+          optional(:unlisted) => boolean(),
+          optional(:logo) => String.t() | nil
         }
 
   @type state :: term()
@@ -42,13 +52,19 @@ defmodule Lasso.Config.Backend do
 
   Implementations should fail-fast on the first invalid profile to ensure
   configuration errors are caught at deploy time.
+
+  ## Return values
+
+  - `{:ok, profiles}` — full load succeeded.
+  - `{:error, reason}` — fatal: nothing usable was loaded.
   """
-  @callback load_all(state()) :: {:ok, [profile_spec()]} | {:error, term()}
+  @callback load_all(state()) ::
+              {:ok, [profile_spec()]}
+              | {:degraded, [profile_spec()]}
+              | {:error, term()}
 
   @doc """
-  Load a single profile by slug.
-
-  Returns the profile specification or an error if not found.
+  Load a single system profile by its opaque slug.
   """
   @callback load(state(), slug :: String.t()) ::
               {:ok, profile_spec()} | {:error, :not_found | term()}

@@ -8,7 +8,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
 
   setup do
     suffix = System.unique_integer([:positive])
-    test_chain = "test_ws_subs_#{suffix}"
+    test_chain = suffix
     test_provider = "mock_ws_provider_#{suffix}"
     test_profile = @default_profile
 
@@ -19,7 +19,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
         priority: 1
       })
 
-    Process.sleep(200)
+    assert wait_for_pool(test_profile, test_chain)
 
     on_exit(fn ->
       MockWSProvider.stop_mock(test_chain, test_provider)
@@ -172,5 +172,20 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
 
   defp get_pool_state(profile \\ @default_profile, chain) do
     :sys.get_state(UpstreamSubscriptionPool.via(profile, chain))
+  end
+
+  defp wait_for_pool(profile, chain, attempts \\ 50)
+
+  defp wait_for_pool(_profile, _chain, 0), do: false
+
+  defp wait_for_pool(profile, chain, attempts) do
+    case GenServer.whereis(UpstreamSubscriptionPool.via(profile, chain)) do
+      pid when is_pid(pid) ->
+        true
+
+      nil ->
+        Process.sleep(20)
+        wait_for_pool(profile, chain, attempts - 1)
+    end
   end
 end

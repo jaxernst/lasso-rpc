@@ -23,7 +23,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   alias Lasso.RPC.{Channel, RateLimitState, RequestContext}
 
   @type telemetry_metadata :: %{
-          chain: String.t(),
+          chain_id: pos_integer(),
           method: String.t(),
           strategy: atom(),
           provider_id: String.t(),
@@ -46,18 +46,17 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       ) do
     profile = ctx.opts.profile
 
-    Metrics.record_success(profile, ctx.chain, provider_id, method, duration_ms,
+    Metrics.record_success(profile, ctx.chain_id, provider_id, method, duration_ms,
       transport: transport
     )
 
-    instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
+    instance_id = Catalog.lookup_instance_id(profile, ctx.chain_id, provider_id)
     report_success_to_ets(instance_id, transport)
 
     publish_routing_decision(
       request_id: ctx.request_id,
-      account_id: ctx.account_id,
       profile: profile,
-      chain: ctx.chain,
+      chain_id: ctx.chain_id,
       method: method,
       strategy: strategy,
       provider_id: provider_id,
@@ -68,7 +67,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     )
 
     emit_request_telemetry(
-      ctx.chain,
+      ctx.chain_id,
       method,
       strategy,
       provider_id,
@@ -106,19 +105,18 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     jerr = JError.from(reason, provider_id: provider_id)
 
     if ErrorClassification.provider_health_failure?(jerr.category) do
-      Metrics.record_failure(profile, ctx.chain, provider_id, method, duration_ms,
+      Metrics.record_failure(profile, ctx.chain_id, provider_id, method, duration_ms,
         transport: transport
       )
     end
 
-    instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
-    report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain, provider_id)
+    instance_id = Catalog.lookup_instance_id(profile, ctx.chain_id, provider_id)
+    report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain_id, provider_id)
 
     publish_routing_decision(
       request_id: ctx.request_id,
-      account_id: ctx.account_id,
       profile: profile,
-      chain: ctx.chain,
+      chain_id: ctx.chain_id,
       method: method,
       strategy: strategy,
       provider_id: provider_id,
@@ -129,7 +127,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     )
 
     emit_request_telemetry(
-      ctx.chain,
+      ctx.chain_id,
       method,
       strategy,
       provider_id,
@@ -146,7 +144,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       when is_binary(provider_id) do
     Logger.warning("record_failure called with bare provider_id, skipping metrics",
       provider_id: provider_id,
-      chain: ctx.chain
+      chain_id: ctx.chain_id
     )
 
     :ok
@@ -170,7 +168,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       [:lasso, :failover, :fast_fail],
       %{count: 1, duration: duration_ms},
       %{
-        chain: ctx.chain,
+        chain_id: ctx.chain_id,
         method: ctx.method,
         request_id: ctx.request_id,
         provider_id: provider_id,
@@ -180,13 +178,9 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       }
     )
 
-    # Skip BenchmarkStore recording — failover intermediaries should not count against
-    # a provider's success rate. Only requests a provider actually "served" (success or
-    # terminal failure) should be tracked in performance metrics.
-    # ETS health counters still update here (they already filter via breaker_penalty?).
-    instance_id = Catalog.lookup_instance_id(profile, ctx.chain, provider_id)
+    instance_id = Catalog.lookup_instance_id(profile, ctx.chain_id, provider_id)
     jerr = JError.from(error_reason, provider_id: provider_id)
-    report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain, provider_id)
+    report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain_id, provider_id)
 
     :ok
   end
@@ -199,7 +193,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     :telemetry.execute(
       [:lasso, :failover, :circuit_open],
       %{count: 1},
-      %{chain: ctx.chain, provider_id: provider_id, transport: transport}
+      %{chain_id: ctx.chain_id, provider_id: provider_id, transport: transport}
     )
 
     :ok
@@ -208,9 +202,9 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   @doc """
   Records request start telemetry.
   """
-  @spec record_request_start(String.t(), String.t(), atom(), String.t() | nil) :: :ok
-  def record_request_start(chain, method, strategy, provider_id \\ nil) do
-    metadata = %{chain: chain, method: method, strategy: strategy}
+  @spec record_request_start(pos_integer(), String.t(), atom(), String.t() | nil) :: :ok
+  def record_request_start(chain_id, method, strategy, provider_id \\ nil) do
+    metadata = %{chain_id: chain_id, method: method, strategy: strategy}
     metadata = if provider_id, do: Map.put(metadata, :provider_id, provider_id), else: metadata
     :telemetry.execute([:lasso, :rpc, :request, :start], %{count: 1}, metadata)
     :ok
@@ -219,12 +213,12 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   @doc """
   Records when entering degraded mode (attempting half-open circuits).
   """
-  @spec record_degraded_mode(String.t(), String.t()) :: :ok
-  def record_degraded_mode(chain, method) do
+  @spec record_degraded_mode(pos_integer(), String.t()) :: :ok
+  def record_degraded_mode(chain_id, method) do
     :telemetry.execute(
       [:lasso, :failover, :degraded_mode],
       %{count: 1},
-      %{chain: chain, method: method}
+      %{chain_id: chain_id, method: method}
     )
 
     :ok
@@ -233,15 +227,15 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   @doc """
   Records successful request via degraded mode (half-open circuit).
   """
-  @spec record_degraded_success(String.t(), String.t(), Channel.t()) :: :ok
-  def record_degraded_success(chain, method, %Channel{
+  @spec record_degraded_success(pos_integer(), String.t(), Channel.t()) :: :ok
+  def record_degraded_success(chain_id, method, %Channel{
         provider_id: provider_id,
         transport: transport
       }) do
     :telemetry.execute(
       [:lasso, :failover, :degraded_success],
       %{count: 1},
-      %{chain: chain, method: method, provider_id: provider_id, transport: transport}
+      %{chain_id: chain_id, method: method, provider_id: provider_id, transport: transport}
     )
 
     :ok
@@ -250,13 +244,13 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   @doc """
   Records channel exhaustion (all circuits open).
   """
-  @spec record_exhaustion(String.t(), String.t(), atom(), non_neg_integer() | nil) :: :ok
-  def record_exhaustion(chain, method, transport, retry_after_ms) do
+  @spec record_exhaustion(pos_integer(), String.t(), atom(), non_neg_integer() | nil) :: :ok
+  def record_exhaustion(chain_id, method, transport, retry_after_ms) do
     :telemetry.execute(
       [:lasso, :failover, :exhaustion],
       %{count: 1},
       %{
-        chain: chain,
+        chain_id: chain_id,
         method: method,
         retry_after_ms: retry_after_ms || 0,
         transport: transport || :both
@@ -269,12 +263,12 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   @doc """
   Records slow request (>2000ms) telemetry.
   """
-  @spec record_slow_request(String.t(), String.t(), String.t(), atom(), float()) :: :ok
-  def record_slow_request(chain, method, provider_id, transport, latency_ms) do
+  @spec record_slow_request(pos_integer(), String.t(), String.t(), atom(), float()) :: :ok
+  def record_slow_request(chain_id, method, provider_id, transport, latency_ms) do
     :telemetry.execute(
       [:lasso, :request, :slow],
       %{latency_ms: latency_ms},
-      %{chain: chain, method: method, provider: provider_id, transport: transport}
+      %{chain_id: chain_id, method: method, provider: provider_id, transport: transport}
     )
 
     :ok
@@ -283,12 +277,12 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   @doc """
   Records very slow request (>4000ms) telemetry.
   """
-  @spec record_very_slow_request(String.t(), String.t(), String.t(), atom(), float()) :: :ok
-  def record_very_slow_request(chain, method, provider_id, transport, latency_ms) do
+  @spec record_very_slow_request(pos_integer(), String.t(), String.t(), atom(), float()) :: :ok
+  def record_very_slow_request(chain_id, method, provider_id, transport, latency_ms) do
     :telemetry.execute(
       [:lasso, :request, :very_slow],
       %{latency_ms: latency_ms},
-      %{chain: chain, method: method, provider: provider_id, transport: transport}
+      %{chain_id: chain_id, method: method, provider: provider_id, transport: transport}
     )
 
     :ok
@@ -321,9 +315,9 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     :ets.insert(:lasso_instance_state, {{:health_routing, instance_id}, merged})
   end
 
-  defp report_failure_to_ets(nil, _transport, _jerr, _profile, _chain, _provider_id), do: :ok
+  defp report_failure_to_ets(nil, _transport, _jerr, _profile, _chain_id, _provider_id), do: :ok
 
-  defp report_failure_to_ets(instance_id, transport, jerr, profile, chain, provider_id) do
+  defp report_failure_to_ets(instance_id, transport, jerr, profile, chain_id, provider_id) do
     cond do
       jerr.category == :rate_limit ->
         retry_after_ms = RateLimitState.extract_retry_after(jerr.data)
@@ -341,7 +335,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
             })
         end
 
-        publish_provider_event(profile, chain, provider_id, :rate_limited)
+        publish_provider_event(profile, chain_id, provider_id, :rate_limited)
 
       not ErrorClassification.breaker_penalty?(jerr.category) ->
         :ok
@@ -369,7 +363,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         :ets.insert(:lasso_instance_state, {{:health_routing, instance_id}, merged})
 
         if new_status == :unhealthy do
-          publish_provider_event(profile, chain, provider_id, :unhealthy)
+          publish_provider_event(profile, chain_id, provider_id, :unhealthy)
         end
     end
   end
@@ -386,19 +380,24 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     end
   end
 
-  defp publish_provider_event(profile, chain, provider_id, event_type) do
+  defp publish_provider_event(profile, chain_id, provider_id, event_type) do
     ts = System.system_time(:millisecond)
 
     typed =
       case event_type do
         :unhealthy ->
-          %Provider.Unhealthy{ts: ts, chain: chain, provider_id: provider_id, reason: nil}
+          %Provider.Unhealthy{ts: ts, chain_id: chain_id, provider_id: provider_id, reason: nil}
 
         :rate_limited ->
-          %Provider.Unhealthy{ts: ts, chain: chain, provider_id: provider_id, reason: :rate_limit}
+          %Provider.Unhealthy{
+            ts: ts,
+            chain_id: chain_id,
+            provider_id: provider_id,
+            reason: :rate_limit
+          }
       end
 
-    Phoenix.PubSub.broadcast(Lasso.PubSub, Provider.topic(profile, chain), typed)
+    Phoenix.PubSub.broadcast(Lasso.PubSub, Lasso.Topics.provider_event(profile, chain_id), typed)
   end
 
   # Private helpers
@@ -406,14 +405,13 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   @spec publish_routing_decision(keyword()) :: :ok | {:error, term()}
   defp publish_routing_decision(opts) do
     instance_id =
-      Catalog.lookup_instance_id(opts[:profile], opts[:chain], opts[:provider_id])
+      Catalog.lookup_instance_id(opts[:profile], opts[:chain_id], opts[:provider_id])
 
     event =
       RoutingDecision.new(
         request_id: opts[:request_id],
-        account_id: opts[:account_id],
         profile: opts[:profile],
-        chain: opts[:chain],
+        chain_id: opts[:chain_id],
         method: opts[:method],
         strategy: opts[:strategy],
         provider_id: opts[:provider_id],
@@ -426,13 +424,13 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      RoutingDecision.topic(opts[:profile]),
+      Lasso.Topics.routing_decision(opts[:profile]),
       event
     )
   end
 
   @spec emit_request_telemetry(
-          String.t(),
+          pos_integer(),
           String.t(),
           atom(),
           String.t(),
@@ -442,7 +440,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
           non_neg_integer()
         ) :: :ok
   defp emit_request_telemetry(
-         chain,
+         chain_id,
          method,
          strategy,
          provider_id,
@@ -455,7 +453,7 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       [:lasso, :rpc, :request, :stop],
       %{duration: duration_ms},
       %{
-        chain: chain,
+        chain_id: chain_id,
         method: method,
         strategy: strategy,
         provider_id: provider_id,

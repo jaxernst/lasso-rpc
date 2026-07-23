@@ -15,8 +15,8 @@ defmodule Lasso.RPC.Strategies.LoadBalanced do
   @behaviour Lasso.RPC.Strategy
 
   @impl true
-  def prepare_context(_profile, chain, _method, timeout) do
-    Lasso.RPC.StrategyContext.new(chain, timeout)
+  def prepare_context(_profile, chain_id, _method, timeout) do
+    Lasso.RPC.StrategyContext.new(chain_id, timeout)
   end
 
   @impl true

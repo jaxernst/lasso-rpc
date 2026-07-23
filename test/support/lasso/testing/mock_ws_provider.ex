@@ -56,38 +56,32 @@ defmodule Lasso.Testing.MockWSProvider do
   - `:confirm_delay` - Delay before confirming subscriptions in ms (default: 0)
   - `:priority` - Provider priority (default: 100)
   """
-  def start_mock(chain, spec) when is_map(spec) do
+  def start_mock(chain_id, spec) when is_integer(chain_id) and chain_id > 0 and is_map(spec) do
     provider_id = Map.get(spec, :id) || raise "Mock WS provider requires :id field"
     profile = Map.get(spec, :profile, @test_profile)
 
-    # Create provider config
     provider_config = %{
       id: provider_id,
       name: "Mock WS Provider #{provider_id}",
       url: "http://mock-#{provider_id}.test",
-      # Mock HTTP endpoint
       ws_url: "ws://mock-#{provider_id}.test",
       type: "test",
       priority: Map.get(spec, :priority, 100)
     }
 
-    # Ensure chain exists (auto-create if needed) and register provider
-    with :ok <- ChainHelper.ensure_chain_exists(chain, profile: profile),
+    with :ok <- ChainHelper.ensure_chain_exists(chain_id, profile: profile),
          :ok <-
-           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain, provider_config) do
-      # Rebuild catalog so the new provider is visible
+           Lasso.Config.ConfigStore.register_provider_runtime(profile, chain_id, provider_config) do
       Lasso.Providers.Catalog.build_from_config()
-      instance_id = instance_id_for(profile, chain, provider_id)
+      instance_id = instance_id_for(profile, chain_id, provider_id)
 
-      # Start the mock WS connection GenServer with the shared WSConnection registry key
       {:ok, _pid} =
         GenServer.start_link(
           __MODULE__,
-          {chain, spec},
+          {chain_id, spec},
           name: {:via, Registry, {Lasso.Registry, ws_instance_key(instance_id)}}
         )
 
-      # Mark as healthy in ETS
       :ets.insert(:lasso_instance_state, {
         {:health_probe, instance_id},
         %{
@@ -99,30 +93,26 @@ defmodule Lasso.Testing.MockWSProvider do
         }
       })
 
-      # Start InstanceSubscriptionManager for this instance (if not already running).
-      # Must happen BEFORE ws_connected broadcast so the manager receives it.
-      start_instance_subscription_manager(chain, instance_id)
+      start_instance_subscription_manager(chain_id, instance_id)
 
-      # Generate connection_id and broadcast ws_connected event
       connection_id =
         "conn_mock_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
 
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
-        "ws:conn:#{profile}:#{chain}",
+        Lasso.Topics.ws_connection(profile, chain_id),
         {:ws_connected, provider_id, connection_id}
       )
 
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
-        "ws:conn:instance:#{instance_id}",
+        Lasso.Topics.ws_conn_instance(instance_id),
         {:ws_connected, instance_id, connection_id}
       )
 
-      # Set up cleanup callback
-      setup_cleanup(profile, chain, provider_id)
+      setup_cleanup(profile, chain_id, provider_id)
 
-      Logger.debug("Started mock WS provider #{provider_id} for #{chain}")
+      Logger.debug("Started mock WS provider #{provider_id} for chain_id #{chain_id}")
       {:ok, provider_id}
     else
       {:error, reason} ->
@@ -134,10 +124,10 @@ defmodule Lasso.Testing.MockWSProvider do
   Sends a subscription request to the mock provider.
   Used internally by WSConnection.
   """
-  def send_message(profile \\ @test_profile, chain, provider_id, message) do
+  def send_message(profile \\ @test_profile, chain_id, provider_id, message) do
     case Registry.lookup(
            Lasso.Registry,
-           ws_instance_key(instance_id_for(profile, chain, provider_id))
+           ws_instance_key(instance_id_for(profile, chain_id, provider_id))
          ) do
       [{pid, _}] -> GenServer.cast(pid, {:send_message, message})
       [] -> {:error, :not_found}
@@ -147,14 +137,14 @@ defmodule Lasso.Testing.MockWSProvider do
   @doc """
   Sends a mock newHeads block to all subscribers.
   """
-  def send_block(chain, provider_id, block_header, opts \\ []) when is_map(block_header) do
+  def send_block(chain_id, provider_id, block_header, opts \\ []) when is_map(block_header) do
     profile = Keyword.get(opts, :profile, @test_profile)
 
     case Registry.lookup(
            Lasso.Registry,
-           ws_instance_key(instance_id_for(profile, chain, provider_id))
+           ws_instance_key(instance_id_for(profile, chain_id, provider_id))
          ) do
-      [{pid, _}] -> GenServer.cast(pid, {:broadcast_block, chain, block_header})
+      [{pid, _}] -> GenServer.cast(pid, {:broadcast_block, chain_id, block_header})
       [] -> {:error, :not_found}
     end
   end
@@ -164,13 +154,13 @@ defmodule Lasso.Testing.MockWSProvider do
 
   Useful for testing ordered delivery and backfill scenarios.
   """
-  def send_block_sequence(chain, provider_id, start_block, count, opts \\ []) do
+  def send_block_sequence(chain_id, provider_id, start_block, count, opts \\ []) do
     delay_ms = Keyword.get(opts, :delay_ms, 10)
     profile = Keyword.get(opts, :profile, @test_profile)
 
     Enum.each(start_block..(start_block + count - 1), fn block_num ->
       send_block(
-        chain,
+        chain_id,
         provider_id,
         %{
           "number" => "0x" <> String.downcase(Integer.to_string(block_num, 16)),
@@ -191,8 +181,8 @@ defmodule Lasso.Testing.MockWSProvider do
   @doc """
   Simulates a disconnect by stopping the mock provider.
   """
-  def simulate_disconnect(chain, provider_id, opts \\ []) do
-    stop_mock(chain, provider_id, opts)
+  def simulate_disconnect(chain_id, provider_id, opts \\ []) do
+    stop_mock(chain_id, provider_id, opts)
   end
 
   @doc """
@@ -219,23 +209,28 @@ defmodule Lasso.Testing.MockWSProvider do
       # Send blocks from backup
       MockWSProvider.send_block_sequence(chain, "backup", 1005, 5)
   """
-  def simulate_provider_failure(chain, provider_id, reason \\ :test_failure, profile \\ "public") do
-    # Emit the same WSDisconnected event that real WS connections emit
+  def simulate_provider_failure(
+        chain_id,
+        provider_id,
+        reason \\ :test_failure,
+        profile \\ "public"
+      )
+      when is_integer(chain_id) and chain_id > 0 do
     event = %Lasso.Events.Provider.WSDisconnected{
       ts: System.system_time(:millisecond),
-      chain: chain,
+      chain_id: chain_id,
       provider_id: provider_id,
       reason: reason
     }
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      Lasso.Events.Provider.topic(profile, chain),
+      Lasso.Topics.provider_event(profile, chain_id),
       event
     )
 
     Logger.debug(
-      "Simulated provider failure: #{provider_id} on #{chain} (reason: #{inspect(reason)})"
+      "Simulated provider failure: #{provider_id} on chain_id #{chain_id} (reason: #{inspect(reason)})"
     )
 
     :ok
@@ -244,14 +239,14 @@ defmodule Lasso.Testing.MockWSProvider do
   @doc """
   Sends a mock log event to all log subscribers.
   """
-  def send_log(chain, provider_id, log, opts \\ []) when is_map(log) do
+  def send_log(chain_id, provider_id, log, opts \\ []) when is_map(log) do
     profile = Keyword.get(opts, :profile, @test_profile)
 
     case Registry.lookup(
            Lasso.Registry,
-           ws_instance_key(instance_id_for(profile, chain, provider_id))
+           ws_instance_key(instance_id_for(profile, chain_id, provider_id))
          ) do
-      [{pid, _}] -> GenServer.cast(pid, {:broadcast_log, chain, log})
+      [{pid, _}] -> GenServer.cast(pid, {:broadcast_log, chain_id, log})
       [] -> {:error, :not_found}
     end
   end
@@ -259,12 +254,11 @@ defmodule Lasso.Testing.MockWSProvider do
   @doc """
   Stops a mock WebSocket provider.
   """
-  def stop_mock(chain, provider_id, opts \\ []) do
+  def stop_mock(chain_id, provider_id, opts \\ []) do
     profile = Keyword.get(opts, :profile, @test_profile)
-    instance_id = instance_id_for(profile, chain, provider_id)
+    instance_id = instance_id_for(profile, chain_id, provider_id)
 
-    # Remove from ConfigStore
-    Lasso.Config.ConfigStore.unregister_provider_runtime(profile, chain, provider_id)
+    Lasso.Config.ConfigStore.unregister_provider_runtime(profile, chain_id, provider_id)
 
     # Stop the InstanceSubscriptionManager if running
     case Registry.lookup(Lasso.Registry, {:instance_sub_manager, instance_id}) do
@@ -579,12 +573,12 @@ defmodule Lasso.Testing.MockWSProvider do
     "0x" <> Integer.to_string(state.next_sub_id, 16)
   end
 
-  defp setup_cleanup(profile, chain, provider_id) do
-    instance_id = instance_id_for(profile, chain, provider_id)
+  defp setup_cleanup(profile, chain_id, provider_id) do
+    instance_id = instance_id_for(profile, chain_id, provider_id)
 
     ExUnit.Callbacks.on_exit({:cleanup_mock_ws, provider_id}, fn ->
       Logger.debug("Test cleanup: stopping mock WS provider #{provider_id}")
-      stop_mock(chain, provider_id, profile: profile)
+      stop_mock(chain_id, provider_id, profile: profile)
 
       if instance_id do
         for transport <- [:http, :ws] do
@@ -602,13 +596,13 @@ defmodule Lasso.Testing.MockWSProvider do
     end)
   end
 
-  defp start_instance_subscription_manager(chain, instance_id) do
+  defp start_instance_subscription_manager(chain_id, instance_id) do
     case Registry.lookup(Lasso.Registry, {:instance_sub_manager, instance_id}) do
       [{_pid, _}] ->
         :ok
 
       [] ->
-        case Lasso.Core.Streaming.InstanceSubscriptionManager.start_link({chain, instance_id}) do
+        case Lasso.Core.Streaming.InstanceSubscriptionManager.start_link({chain_id, instance_id}) do
           {:ok, _pid} ->
             :ok
 
@@ -627,8 +621,8 @@ defmodule Lasso.Testing.MockWSProvider do
 
   defp ws_instance_key(instance_id), do: {:ws_conn_instance, instance_id}
 
-  defp instance_id_for(profile, chain, provider_id) do
-    Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id) ||
-      "#{chain}:#{provider_id}"
+  defp instance_id_for(profile, chain_id, provider_id) do
+    Lasso.Providers.Catalog.lookup_instance_id(profile, chain_id, provider_id) ||
+      "#{chain_id}:#{provider_id}"
   end
 end

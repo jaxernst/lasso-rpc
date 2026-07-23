@@ -2,8 +2,8 @@ defmodule Lasso.Config.MethodConstraints do
   @moduledoc """
   Public facade for method constraints (ws-only, disallowed, transports).
 
-  Delegates to TransportPolicy for now to preserve backward compatibility,
-  allowing future renaming without widespread churn.
+  Delegates to TransportPolicy to preserve the existing public interface
+  while keeping transport policy definitions in one place.
   """
 
   alias Lasso.Config.TransportPolicy

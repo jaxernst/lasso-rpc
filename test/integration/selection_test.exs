@@ -166,7 +166,7 @@ defmodule Lasso.RPC.SelectionTest do
       profile = "public"
       # Non-existent chain with no providers
       assert {:error, :no_providers_available} =
-               Selection.select_provider(profile, "nonexistent_chain", "eth_blockNumber")
+               Selection.select_provider(profile, 999_999_999, "eth_blockNumber")
     end
   end
 
@@ -182,7 +182,7 @@ defmodule Lasso.RPC.SelectionTest do
       {:ok, collector} =
         TelemetrySync.attach_collector(
           [:lasso, :selection, :success],
-          match: [chain: chain, method: "eth_blockNumber"]
+          match: [chain_id: chain, method: "eth_blockNumber"]
         )
 
       # Perform selection
@@ -192,7 +192,7 @@ defmodule Lasso.RPC.SelectionTest do
       {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1000)
 
       assert measurements.count == 1
-      assert metadata.chain == chain
+      assert metadata.chain_id == chain
       assert metadata.method == "eth_blockNumber"
       assert metadata.provider_id in ["provider_1"]
     end
@@ -208,8 +208,7 @@ defmodule Lasso.RPC.SelectionTest do
         %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile, archival: false}
       ])
 
-      # Historical eth_getLogs request (block 12369621 is from 2021)
-      params = [%{"fromBlock" => "0xBCEE25", "toBlock" => "0xBCEE25"}]
+      params = [%{"fromBlock" => "earliest", "toBlock" => "earliest"}]
 
       # Should return empty list - no archival providers available
       channels = Selection.select_channels(profile, chain, "eth_getLogs", params: params)
@@ -226,8 +225,7 @@ defmodule Lasso.RPC.SelectionTest do
         %{id: "non_archival", priority: 20, behavior: :healthy, profile: profile, archival: false}
       ])
 
-      # Historical eth_getLogs request
-      params = [%{"fromBlock" => "0xBCEE25", "toBlock" => "0xBCEE25"}]
+      params = [%{"fromBlock" => "earliest", "toBlock" => "earliest"}]
 
       # Should return only the archival provider
       channels = Selection.select_channels(profile, chain, "eth_getLogs", params: params)

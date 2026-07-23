@@ -28,7 +28,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
   defstruct [
     :instance_id,
-    :chain,
+    :chain_id,
     :parent,
     :staleness_threshold_ms,
     :staleness_timer_ref,
@@ -40,7 +40,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
   @type t :: %__MODULE__{
           instance_id: String.t(),
-          chain: String.t(),
+          chain_id: pos_integer(),
           parent: pid(),
           staleness_threshold_ms: non_neg_integer(),
           staleness_timer_ref: reference() | nil,
@@ -53,7 +53,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   ## Strategy Callbacks
 
   @impl true
-  def start(chain, instance_id, opts) do
+  def start(chain_id, instance_id, opts) do
     parent = Keyword.get(opts, :parent, self())
 
     staleness_threshold =
@@ -61,7 +61,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
     state = %__MODULE__{
       instance_id: instance_id,
-      chain: chain,
+      chain_id: chain_id,
       parent: parent,
       staleness_threshold_ms: staleness_threshold,
       staleness_timer_ref: nil,
@@ -134,7 +134,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   @spec handle_invalidation(t(), term()) :: t()
   def handle_invalidation(%__MODULE__{} = state, reason) do
     Logger.debug("WS subscription invalidated",
-      chain: state.chain,
+      chain_id: state.chain_id,
       instance_id: state.instance_id,
       reason: inspect(reason)
     )
@@ -165,7 +165,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
     case InstanceSubscriptionManager.ensure_subscription(state.instance_id, {:newHeads}) do
       {:ok, status} ->
         Logger.debug("WS newHeads subscription registered",
-          chain: state.chain,
+          chain_id: state.chain_id,
           instance_id: state.instance_id,
           status: status
         )
@@ -175,7 +175,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
       {:error, reason} ->
         Logger.debug("WS subscription failed",
-          chain: state.chain,
+          chain_id: state.chain_id,
           instance_id: state.instance_id,
           reason: inspect(reason)
         )
@@ -204,7 +204,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
     cond do
       first_block ->
         Logger.debug("WS subscription active (first block received)",
-          chain: state.chain,
+          chain_id: state.chain_id,
           instance_id: state.instance_id,
           height: height
         )
@@ -213,7 +213,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
       state.status == :stale ->
         Logger.debug("WS subscription recovered from stale",
-          chain: state.chain,
+          chain_id: state.chain_id,
           instance_id: state.instance_id,
           height: height
         )
@@ -269,7 +269,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
   defp mark_stale(state) do
     Logger.warning("WS subscription stale (no events)",
-      chain: state.chain,
+      chain_id: state.chain_id,
       instance_id: state.instance_id,
       threshold_ms: state.staleness_threshold_ms
     )

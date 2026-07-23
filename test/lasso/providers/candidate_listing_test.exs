@@ -5,13 +5,10 @@ defmodule Lasso.Providers.CandidateListingTest do
   alias Lasso.Providers.{Catalog, CandidateListing}
 
   @profile "cl_test"
-  @chain "cl_test_chain"
-  @config_table :lasso_config_store
+  @chain 99
   @instance_table :lasso_instance_state
 
   setup do
-    original_profiles = ConfigStore.list_profiles()
-
     register_chain(@profile, @chain, [
       %{id: "p1", name: "P1", url: "https://cl-test-1.example.com", priority: 1},
       %{
@@ -32,7 +29,6 @@ defmodule Lasso.Providers.CandidateListingTest do
     on_exit(fn ->
       clean_instance_state()
       ConfigStore.unregister_chain_runtime(@profile, @chain)
-      :ets.insert(@config_table, {{:profile_list}, original_profiles})
       Catalog.build_from_config()
     end)
 
@@ -70,7 +66,7 @@ defmodule Lasso.Providers.CandidateListingTest do
     end
 
     test "returns empty list for unknown chain" do
-      assert CandidateListing.list_candidates(@profile, "nonexistent", %{}) == []
+      assert CandidateListing.list_candidates(@profile, 98, %{}) == []
     end
   end
 
@@ -288,15 +284,9 @@ defmodule Lasso.Providers.CandidateListingTest do
   # Helpers
 
   defp register_chain(profile, chain, providers) do
-    current = ConfigStore.list_profiles()
-
-    unless profile in current do
-      :ets.insert(@config_table, {{:profile_list}, [profile | current]})
-    end
-
     ConfigStore.register_chain_runtime(profile, chain, %{
-      chain_id: 99,
-      name: chain,
+      chain_id: chain,
+      name: "cl_test_chain",
       providers: providers
     })
   end

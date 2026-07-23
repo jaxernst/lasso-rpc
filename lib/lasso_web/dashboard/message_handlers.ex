@@ -26,14 +26,14 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
       when is_struct(evt, Provider.Healthy) or is_struct(evt, Provider.Unhealthy) or
              is_struct(evt, Provider.HealthCheckFailed) or is_struct(evt, Provider.WSConnected) or
              is_struct(evt, Provider.WSClosed) or is_struct(evt, Provider.WSDisconnected) do
-    {chain, pid, event_type, details, ts} = extract_provider_event_data(evt)
+    {chain_id, pid, event_type, details, ts} = extract_provider_event_data(evt)
 
-    if chain in Map.get(socket.assigns, :profile_chains, []) and
+    if chain_id in Map.get(socket.assigns, :profile_chains, []) and
          valid_provider?(socket, pid) do
       entry = %{
         ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
         ts_ms: ts,
-        chain: chain,
+        chain_id: chain_id,
         provider_id: pid,
         event: event_type,
         details: details
@@ -41,7 +41,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
 
       uev =
         Helpers.as_event(:provider,
-          chain: chain,
+          chain_id: chain_id,
           provider_id: pid,
           severity: :info,
           message: to_string(event_type),
@@ -52,7 +52,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
       |> update(:provider_events, &[entry | Enum.take(&1, Constants.provider_events_limit() - 1)])
       |> buffer_event_fn.(uev)
       |> maybe_refresh_provider(pid, fetch_connections_fn, update_provider_fn)
-      |> maybe_update_chain(chain, update_chain_fn)
+      |> maybe_update_chain(chain_id, update_chain_fn)
     else
       socket
     end
@@ -60,22 +60,22 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
 
   defp extract_provider_event_data(evt) do
     case evt do
-      %Provider.Healthy{chain: c, provider_id: p, ts: t} ->
+      %Provider.Healthy{chain_id: c, provider_id: p, ts: t} ->
         {c, p, :healthy, nil, t}
 
-      %Provider.Unhealthy{chain: c, provider_id: p, ts: t} ->
+      %Provider.Unhealthy{chain_id: c, provider_id: p, ts: t} ->
         {c, p, :unhealthy, nil, t}
 
-      %Provider.HealthCheckFailed{chain: c, provider_id: p, reason: r, ts: t} ->
+      %Provider.HealthCheckFailed{chain_id: c, provider_id: p, reason: r, ts: t} ->
         {c, p, :health_check_failed, %{reason: r}, t}
 
-      %Provider.WSConnected{chain: c, provider_id: p, ts: t} ->
+      %Provider.WSConnected{chain_id: c, provider_id: p, ts: t} ->
         {c, p, :ws_connected, nil, t}
 
-      %Provider.WSClosed{chain: c, provider_id: p, code: code, reason: r, ts: t} ->
+      %Provider.WSClosed{chain_id: c, provider_id: p, code: code, reason: r, ts: t} ->
         {c, p, :ws_closed, %{code: code, reason: r}, t}
 
-      %Provider.WSDisconnected{chain: c, provider_id: p, reason: r, ts: t} ->
+      %Provider.WSDisconnected{chain_id: c, provider_id: p, reason: r, ts: t} ->
         {c, p, :ws_disconnected, %{reason: r}, t}
     end
   end
@@ -114,22 +114,20 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
 
     events
     |> Enum.filter(fn e ->
-      # Include routing-decision style events with either atom or string keys.
-      # Be tolerant of chain field shapes to avoid dropping valid HTTP events.
       method = normalize_string(field(e, :method))
-      chain = normalize_string(field(e, :chain))
+      chain_id = extract_chain_id(e)
 
-      is_binary(method) and is_binary(chain) and
-        (MapSet.size(profile_chains_set) == 0 or MapSet.member?(profile_chains_set, chain))
+      is_binary(method) and is_integer(chain_id) and
+        (MapSet.size(profile_chains_set) == 0 or MapSet.member?(profile_chains_set, chain_id))
     end)
     |> Enum.map(fn e ->
-      chain = normalize_string(field(e, :chain))
+      chain_id = extract_chain_id(e)
       method = normalize_string(field(e, :method))
 
       %{
         ts: format_time(field(e, :ts)),
         ts_ms: normalize_timestamp(field(e, :ts)),
-        chain: chain,
+        chain_id: chain_id,
         method: method,
         strategy: field(e, :strategy),
         provider_id: field(e, :provider_id),
@@ -142,6 +140,13 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
     end)
   end
 
+  defp extract_chain_id(event) do
+    case field(event, :chain_id) do
+      id when is_integer(id) and id > 0 -> id
+      _ -> nil
+    end
+  end
+
   defp field(map, key) when is_map(map) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
@@ -151,15 +156,15 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
   defp normalize_string(_), do: nil
 
   def handle_subscription_event(evt, socket, buffer_event_fn) do
-    {chain, provider_id, event_kind, sub_type, details, ts} =
+    {chain_id, provider_id, event_kind, sub_type, details, ts} =
       extract_subscription_event_data(evt)
 
-    if chain in Map.get(socket.assigns, :profile_chains, []) do
+    if chain_id in Map.get(socket.assigns, :profile_chains, []) do
       entry = %{
         type: :ws_lifecycle,
         ts: format_time(ts),
         ts_ms: ts,
-        chain: chain,
+        chain_id: chain_id,
         provider_id: provider_id,
         event: event_kind,
         subscription_type: sub_type,
@@ -168,7 +173,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
 
       uev =
         Helpers.as_event(:subscription,
-          chain: chain,
+          chain_id: chain_id,
           provider_id: provider_id,
           severity: subscription_event_severity(event_kind),
           message: subscription_event_label(event_kind, sub_type),
@@ -184,21 +189,21 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
   end
 
   defp extract_subscription_event_data(%Subscription.Established{} = evt) do
-    {evt.chain, evt.provider_id, :subscription_established, evt.subscription_type, %{}, evt.ts}
+    {evt.chain_id, evt.provider_id, :subscription_established, evt.subscription_type, %{}, evt.ts}
   end
 
   defp extract_subscription_event_data(%Subscription.Failed{} = evt) do
-    {evt.chain, evt.provider_id, :subscription_failed, evt.subscription_type,
+    {evt.chain_id, evt.provider_id, :subscription_failed, evt.subscription_type,
      %{reason: evt.reason}, evt.ts}
   end
 
   defp extract_subscription_event_data(%Subscription.Failover{} = evt) do
-    {evt.chain, evt.to_provider_id, :subscription_failover, evt.subscription_type,
+    {evt.chain_id, evt.to_provider_id, :subscription_failover, evt.subscription_type,
      %{from_provider_id: evt.from_provider_id, to_provider_id: evt.to_provider_id}, evt.ts}
   end
 
   defp extract_subscription_event_data(%Subscription.Stale{} = evt) do
-    {evt.chain, evt.provider_id, :subscription_stale, evt.subscription_type,
+    {evt.chain_id, evt.provider_id, :subscription_stale, evt.subscription_type,
      %{stale_duration_ms: evt.stale_duration_ms}, evt.ts}
   end
 

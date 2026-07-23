@@ -77,10 +77,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       Process.sleep(500)
 
       # Verify circuit breaker is now open
-      CircuitBreakerHelper.assert_circuit_breaker_state(
-        {"#{chain}:failing_provider", :http},
-        :open
-      )
+      instance_id = Lasso.Providers.Catalog.lookup_instance_id(profile, chain, "failing_provider")
+      CircuitBreakerHelper.assert_circuit_breaker_state({instance_id, :http}, :open)
 
       # Next request should fail immediately with :circuit_open
       {:error, error, _ctx} =
@@ -119,7 +117,8 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         Lasso.Testing.TelemetrySync.attach_collector([:lasso, :circuit_breaker, :open])
 
       # Force circuit breaker open
-      CircuitBreakerHelper.force_open({"#{chain}:flaky", :http})
+      instance_id = Lasso.Providers.Catalog.lookup_instance_id(profile, chain, "flaky")
+      CircuitBreakerHelper.force_open({instance_id, :http})
 
       # Wait for telemetry event
       {:ok, _measurements, _metadata} =
@@ -147,7 +146,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       {:ok, close_collector} =
         Lasso.Testing.TelemetrySync.attach_collector([:lasso, :circuit_breaker, :close])
 
-      CircuitBreakerHelper.reset_to_closed({"#{chain}:flaky", :http})
+      CircuitBreakerHelper.reset_to_closed({instance_id, :http})
 
       # Wait for telemetry event
       {:ok, _measurements, _metadata} =
@@ -446,7 +445,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       assert error.retriable? == false
       assert error.message =~ "ghost_provider"
       assert error.data.provider_id == "ghost_provider"
-      assert error.data.chain == chain
+      assert error.data.chain_id == chain
       assert ctx.executed_channel == nil
     end
   end
@@ -516,7 +515,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           timeout: 1000
         )
 
-      assert metadata.chain == chain
+      assert metadata.chain_id == chain
       assert metadata.method == "eth_blockNumber"
 
       # Wait for stop event

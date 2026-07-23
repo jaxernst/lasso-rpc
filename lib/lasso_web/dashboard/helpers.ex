@@ -3,7 +3,7 @@ defmodule LassoWeb.Dashboard.Helpers do
   General utility functions for the Dashboard LiveView.
   """
 
-  alias Lasso.Config.ConfigStore
+  alias Lasso.Config.{ChainAlias, ConfigStore}
 
   @doc "Convert various number types to float"
   def to_float(value) when is_integer(value), do: value * 1.0
@@ -101,24 +101,29 @@ defmodule LassoWeb.Dashboard.Helpers do
   @doc "Get available chains from configuration"
   def get_available_chains do
     ConfigStore.get_all_chains()
-    |> Enum.map(fn {chain_name, chain_config} ->
+    |> Enum.map(fn {chain_id, chain_config} ->
       %{
-        id: to_string(chain_config.chain_id),
-        name: chain_name,
-        display_name: chain_config.name
+        id: to_string(chain_id),
+        name: ChainAlias.canonical_slug(chain_id, chain_config.url_aliases),
+        display_name: chain_config.display_name || ChainAlias.display_name(chain_id)
       }
     end)
   end
 
   @doc "Get human-readable display name for a chain from config"
-  def get_chain_display_name(profile, chain_name) do
-    case ConfigStore.get_chain(profile, chain_name) do
-      {:ok, %{name: display_name}} when is_binary(display_name) ->
+  def get_chain_display_name(profile, chain_identifier) do
+    case ConfigStore.get_chain(profile, chain_identifier) do
+      {:ok, %{display_name: display_name}} when is_binary(display_name) ->
         display_name
 
+      {:ok, %{chain_id: chain_id}} when is_integer(chain_id) ->
+        ChainAlias.display_name(chain_id)
+
+      _ when is_binary(chain_identifier) ->
+        String.capitalize(chain_identifier)
+
       _ ->
-        # Fallback to capitalized chain name if not found in config
-        chain_name |> String.capitalize()
+        to_string(chain_identifier)
     end
   end
 

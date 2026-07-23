@@ -17,8 +17,7 @@ defmodule Lasso.RPC.RequestContext do
   @type t :: %__MODULE__{
           # Request identification
           request_id: String.t(),
-          account_id: String.t() | nil,
-          chain: String.t(),
+          chain_id: pos_integer(),
           method: String.t(),
           params: list(),
           transport: :http | :ws,
@@ -73,8 +72,7 @@ defmodule Lasso.RPC.RequestContext do
         }
 
   defstruct request_id: nil,
-            account_id: nil,
-            chain: nil,
+            chain_id: nil,
             method: nil,
             params: [],
             transport: :http,
@@ -115,18 +113,16 @@ defmodule Lasso.RPC.RequestContext do
   If :request_id is provided in opts, it will be used (typically from Phoenix's Plug.RequestId).
   Otherwise, a new request_id will be generated.
   """
-  @spec new(String.t(), String.t(), list(), keyword()) :: t()
-  def new(chain, method, params, opts \\ []) do
+  @spec new(pos_integer(), String.t(), list(), keyword()) :: t()
+  def new(chain_id, method, params, opts \\ []) do
     request_id = Keyword.get(opts, :request_id) || generate_request_id()
 
-    # Use plug_start_time if available for accurate E2E, otherwise use current time
     plug_start = Keyword.get(opts, :plug_start_time)
     start_time = plug_start || System.monotonic_time(:microsecond)
 
     %__MODULE__{
       request_id: request_id,
-      account_id: Keyword.get(opts, :account_id),
-      chain: chain,
+      chain_id: chain_id,
       method: method,
       params: params,
       transport: Keyword.get(opts, :transport, :http),

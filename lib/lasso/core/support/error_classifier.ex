@@ -21,7 +21,7 @@ defmodule Lasso.Core.Support.ErrorClassifier do
   def classify(code, message, opts \\ []) do
     provider_id = Keyword.get(opts, :provider_id)
     profile = Keyword.get(opts, :profile)
-    chain = Keyword.get(opts, :chain)
+    chain = Keyword.get(opts, :chain_id) || Keyword.get(opts, :chain)
     data = Keyword.get(opts, :data)
 
     {category, classification_path} =
@@ -100,7 +100,7 @@ defmodule Lasso.Core.Support.ErrorClassifier do
   defp truncate_data(_), do: nil
 
   defp lookup_capabilities(profile, chain, provider_id)
-       when is_binary(profile) and is_binary(chain) do
+       when is_binary(profile) and is_integer(chain) do
     case Lasso.Config.ConfigStore.get_provider(profile, chain, provider_id) do
       {:ok, provider_config} -> provider_config.capabilities
       {:error, :not_found} -> nil

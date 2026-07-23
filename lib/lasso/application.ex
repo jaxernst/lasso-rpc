@@ -21,12 +21,6 @@ defmodule Lasso.Application do
     # TransportRegistry channel cache - enables lockless reads in Selection hot path
     :ets.new(:transport_channel_cache, [:named_table, :public, :set, read_concurrency: true])
 
-    # Profile and chain configuration storage (written by ConfigStore)
-    # Keys: {:profile, slug, :meta}, {:profile, slug, :chains}, {:profile_list}, etc.
-    # Note: :public access is required because ConfigStore GenServer writes to this table
-    # but the table is owned by Application process for stability
-    :ets.new(:lasso_config_store, [:named_table, :public, :set, read_concurrency: true])
-
     # Shared provider instance state (health, circuit, rate limits)
     # Written by ProbeCoordinator, CircuitBreaker, Observability; read by CandidateListing
     :ets.new(:lasso_instance_state, [
@@ -137,11 +131,15 @@ defmodule Lasso.Application do
         # Profile-scoped chain supervisor for (profile, chain) pairs
         Lasso.ProfileChainSupervisor,
 
+        # Stable owners retain ETS snapshots across ConfigStore/Catalog restarts.
+        Lasso.Providers.Catalog.Owner,
+        Lasso.Config.ConfigStore.Owner,
+
         # Start configuration store for centralized config caching
         {Lasso.Config.ConfigStore, get_config_store_opts()},
 
-        # Supervised provider initialization (profiles, catalog, probes, chains)
-        Lasso.ProviderInitializer,
+        # Supervised bootstrap loads profiles and starts shared infrastructure.
+        Lasso.Boot.InfrastructureStarter,
 
         # Start Phoenix endpoint
         LassoWeb.Endpoint,

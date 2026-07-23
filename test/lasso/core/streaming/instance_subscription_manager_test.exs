@@ -22,7 +22,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManagerTest do
 
   setup do
     suffix = System.unique_integer([:positive])
-    test_chain = "test_manager_#{suffix}"
+    test_chain = suffix
     test_provider = "mock_manager_provider_#{suffix}"
 
     {:ok, ^test_provider} =
@@ -371,7 +371,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManagerTest do
 
     test "returns error when connection state is unknown" do
       fake_instance_id = "unknown_instance_#{System.unique_integer([:positive])}"
-      {:ok, pid} = InstanceSubscriptionManager.start_link({"fake_chain", fake_instance_id})
+      {:ok, pid} = InstanceSubscriptionManager.start_link({1, fake_instance_id})
 
       result = InstanceSubscriptionManager.ensure_subscription(fake_instance_id, {:newHeads})
       assert result == {:error, :connection_unknown}

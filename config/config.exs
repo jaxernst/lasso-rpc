@@ -16,7 +16,7 @@ config :lasso, LassoWeb.Endpoint,
 # Options: :fastest, :load_balanced, :latency_weighted
 config :lasso, :provider_selection_strategy, :load_balanced
 
-config :lasso, :profile_aliases, %{"default" => "public", "premium" => "managed"}
+config :lasso, :profile_aliases, %{"default" => "public"}
 
 # Default HTTP client adapter
 config :lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch

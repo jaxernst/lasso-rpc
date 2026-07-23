@@ -5,15 +5,11 @@ defmodule Lasso.Providers.InstanceSupervisorTest do
   alias Lasso.Providers.{Catalog, InstanceSupervisor}
 
   @profile "is_test"
-  @chain "is_test_chain"
-  @config_table :lasso_config_store
+  @chain 99
 
   setup do
-    original_profiles = ConfigStore.list_profiles()
-
     on_exit(fn ->
       ConfigStore.unregister_chain_runtime(@profile, @chain)
-      :ets.insert(@config_table, {{:profile_list}, original_profiles})
       Catalog.build_from_config()
     end)
 
@@ -130,15 +126,9 @@ defmodule Lasso.Providers.InstanceSupervisorTest do
   # Helpers
 
   defp register_chain(profile, chain, providers) do
-    current = ConfigStore.list_profiles()
-
-    unless profile in current do
-      :ets.insert(@config_table, {{:profile_list}, [profile | current]})
-    end
-
     ConfigStore.register_chain_runtime(profile, chain, %{
-      chain_id: 99,
-      name: chain,
+      chain_id: chain,
+      name: "is_test_chain",
       providers: providers
     })
   end

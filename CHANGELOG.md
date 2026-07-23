@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Profiles are now loaded exclusively from YAML files in `config/profiles/`; profile slugs are opaque routing IDs, chain aliases resolve to positive integer EIP-155 IDs internally, and `default` remains an alias for `public`
+- Configuration reloads publish a complete new snapshot only after validation; malformed YAML or invalid chain IDs leave the last known-good snapshot active. A cold restart loads profiles from disk before routing begins
+- Dashboard and RPC routes accept both configured chain aliases and decimal chain IDs, while WebSocket startup attempts are jittered to avoid synchronized upstream handshakes
 - Default profile (`config/profiles/default.yml`) removed in favor of the canonical `public` profile; existing `default` slug requests still work via the alias system, eliminating the `Duplicate chain IDs detected across profiles` startup warning
 - `public` profile pruned of broken provider configurations: removed dead WebSocket URLs from LlamaRPC (Ethereum and Base), removed unreachable `arbitrum_meowrpc` (TLS failure), removed `base_sepolia_onfinality` (returns 401 Unauthorized)
 - `.credo.exs` ExSlop checks made conditional, eliminating "Ignoring an undefined check" noise on every credo run

@@ -40,7 +40,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   """
   @spec from_conn(Plug.Conn.t(), String.t(), override_opts) :: RequestOptions.t()
   def from_conn(%Plug.Conn{} = conn, method, overrides \\ []) when is_binary(method) do
-    profile = Map.get(conn.assigns, :profile_slug, ProfileValidator.default_profile())
+    profile = routing_profile_from_conn(conn)
     strategy = resolve_strategy_from_conn(conn, overrides)
     provider_override = resolve_provider_from_conn(conn, overrides)
     transport = resolve_transport(method, resolve_transport_preference_from_conn(conn, overrides))
@@ -111,6 +111,14 @@ defmodule Lasso.RPC.RequestOptions.Builder do
       overrides[:request_context],
       method
     )
+  end
+
+  # ProfileResolverPlug establishes the opaque runtime identity at the HTTP
+  # boundary. The slug fallback preserves direct/internal callers because file
+  # profiles use the slug as their system profile ID.
+  defp routing_profile_from_conn(conn) do
+    Map.get(conn.assigns, :profile_id) ||
+      Map.get(conn.assigns, :profile_slug, ProfileValidator.default_profile())
   end
 
   # Strategy resolution

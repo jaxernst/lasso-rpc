@@ -12,22 +12,24 @@ defmodule Lasso.Core.Streaming.SubscriptionRouter do
 
   @type key :: {:newHeads} | {:logs, map()}
 
-  @spec subscribe(String.t(), String.t(), {:newHeads}) :: {:ok, String.t()} | {:error, term()}
-  def subscribe(profile, chain, {:newHeads})
-      when is_binary(profile) and is_binary(chain) do
-    UpstreamSubscriptionPool.subscribe_client(profile, chain, self(), {:newHeads})
+  @spec subscribe(String.t(), pos_integer(), key(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def subscribe(profile, chain_id, key, opts \\ [])
+
+  def subscribe(profile, chain_id, {:newHeads}, opts)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    UpstreamSubscriptionPool.subscribe_client(profile, chain_id, self(), {:newHeads}, opts)
   end
 
-  @spec subscribe(String.t(), String.t(), {:logs, map()}) :: {:ok, String.t()} | {:error, term()}
-  def subscribe(profile, chain, {:logs, filter})
-      when is_binary(profile) and is_binary(chain) and is_map(filter) do
+  def subscribe(profile, chain_id, {:logs, filter}, opts)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and is_map(filter) do
     norm = FilterNormalizer.normalize(filter)
-    UpstreamSubscriptionPool.subscribe_client(profile, chain, self(), {:logs, norm})
+    UpstreamSubscriptionPool.subscribe_client(profile, chain_id, self(), {:logs, norm}, opts)
   end
 
-  @spec unsubscribe(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def unsubscribe(profile, chain, subscription_id)
-      when is_binary(profile) and is_binary(chain) do
-    UpstreamSubscriptionPool.unsubscribe_client(profile, chain, subscription_id)
+  @spec unsubscribe(String.t(), pos_integer(), String.t()) :: :ok | {:error, term()}
+  def unsubscribe(profile, chain_id, subscription_id)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    UpstreamSubscriptionPool.unsubscribe_client(profile, chain_id, subscription_id)
   end
 end

@@ -29,7 +29,7 @@ defmodule LassoWeb.RPC.Helpers do
   Normalizes strategy tokens from params/routes into strategy atoms.
   """
   @spec normalize_strategy_token(String.t() | nil) ::
-          :load_balanced | :latency_weighted | :fastest | nil
+          :load_balanced | :latency_weighted | :fastest | :priority | nil
   def normalize_strategy_token("fastest"), do: :fastest
   def normalize_strategy_token("load-balanced"), do: :load_balanced
   def normalize_strategy_token("load_balanced"), do: :load_balanced
@@ -37,6 +37,7 @@ defmodule LassoWeb.RPC.Helpers do
   def normalize_strategy_token("round_robin"), do: :load_balanced
   def normalize_strategy_token("latency-weighted"), do: :latency_weighted
   def normalize_strategy_token("latency_weighted"), do: :latency_weighted
+  def normalize_strategy_token("priority"), do: :priority
   def normalize_strategy_token(_), do: nil
 
   @doc """
@@ -63,7 +64,8 @@ defmodule LassoWeb.RPC.Helpers do
       {:error, "Chain not configured: unknown"}
 
   """
-  @spec get_chain_id(String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  @spec get_chain_id(String.t(), pos_integer() | String.t()) ::
+          {:ok, String.t()} | {:error, String.t()}
   def get_chain_id(profile, chain_name) do
     case ConfigStore.get_chain(profile, chain_name) do
       {:ok, %{chain_id: chain_id}} when is_integer(chain_id) ->

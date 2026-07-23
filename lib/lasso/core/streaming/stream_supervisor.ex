@@ -7,14 +7,16 @@ defmodule Lasso.Core.Streaming.StreamSupervisor do
 
   alias Lasso.Core.Streaming.StreamCoordinator
 
-  @spec start_link({String.t(), String.t()}) :: Supervisor.on_start()
-  def start_link({profile, chain}) when is_binary(profile) and is_binary(chain) do
-    DynamicSupervisor.start_link(__MODULE__, {profile, chain}, name: via(profile, chain))
+  @spec start_link({String.t(), pos_integer()}) :: Supervisor.on_start()
+  def start_link({profile, chain_id})
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    DynamicSupervisor.start_link(__MODULE__, {profile, chain_id}, name: via(profile, chain_id))
   end
 
-  @spec via(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
-  def via(profile, chain) when is_binary(profile) and is_binary(chain) do
-    {:via, Registry, {Lasso.Registry, {:stream_supervisor, profile, chain}}}
+  @spec via(String.t(), pos_integer()) :: {:via, Registry, {atom(), tuple()}}
+  def via(profile, chain_id)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    {:via, Registry, {Lasso.Registry, {:stream_supervisor, profile, chain_id}}}
   end
 
   @impl true
@@ -22,17 +24,17 @@ defmodule Lasso.Core.Streaming.StreamSupervisor do
     DynamicSupervisor.init(strategy: :one_for_one)
   end
 
-  @spec ensure_coordinator(String.t(), String.t(), term(), keyword()) ::
+  @spec ensure_coordinator(String.t(), pos_integer(), term(), keyword()) ::
           {:ok, pid()} | {:error, term()}
-  def ensure_coordinator(profile, chain, key, opts)
-      when is_binary(profile) and is_binary(chain) do
-    name = StreamCoordinator.via(profile, chain, key)
+  def ensure_coordinator(profile, chain_id, key, opts)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    name = StreamCoordinator.via(profile, chain_id, key)
 
     case GenServer.whereis(name) do
       nil ->
-        spec = {StreamCoordinator, {profile, chain, key, opts}}
+        spec = {StreamCoordinator, {profile, chain_id, key, opts}}
 
-        case DynamicSupervisor.start_child(via(profile, chain), spec) do
+        case DynamicSupervisor.start_child(via(profile, chain_id), spec) do
           {:ok, pid} -> {:ok, pid}
           {:error, {:already_started, pid}} -> {:ok, pid}
           other -> other
@@ -43,16 +45,17 @@ defmodule Lasso.Core.Streaming.StreamSupervisor do
     end
   end
 
-  @spec stop_coordinator(String.t(), String.t(), term()) :: :ok | {:error, :not_found}
-  def stop_coordinator(profile, chain, key) when is_binary(profile) and is_binary(chain) do
-    name = StreamCoordinator.via(profile, chain, key)
+  @spec stop_coordinator(String.t(), pos_integer(), term()) :: :ok | {:error, :not_found}
+  def stop_coordinator(profile, chain_id, key)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    name = StreamCoordinator.via(profile, chain_id, key)
 
     case GenServer.whereis(name) do
       nil ->
         :ok
 
       pid ->
-        DynamicSupervisor.terminate_child(via(profile, chain), pid)
+        DynamicSupervisor.terminate_child(via(profile, chain_id), pid)
     end
   end
 end

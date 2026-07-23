@@ -2,7 +2,7 @@ defmodule Lasso.Providers.CandidateListing do
   @moduledoc """
   Pure ETS reads for provider candidate selection.
 
-  Implements an 8-stage filter pipeline using shared ETS state:
+  Implements a 9-stage filter pipeline using shared ETS state:
   1. Transport availability (provider config has url/ws_url)
   2. WS liveness (channel cache for WS presence)
   3. Circuit breaker state
@@ -10,7 +10,8 @@ defmodule Lasso.Providers.CandidateListing do
   5. Lag filtering (BlockSync.Registry + ChainState)
   6. Min block height filtering (block-height-aware routing)
   7. Archival filtering
-  8. Exclude list
+  8. `subscribe_new_heads` capability filtering (newHeads-only)
+  9. Exclude list
 
   Return shape: `%{id, config, availability, circuit_state, rate_limited}`.
   """
@@ -22,40 +23,43 @@ defmodule Lasso.Providers.CandidateListing do
   alias Lasso.RPC.SelectionFilters
 
   @doc """
-  Lists provider candidates for a (profile, chain) pair, filtered by selection criteria.
+  Lists provider candidates for a (profile, chain_id) pair, filtered by selection criteria.
   """
-  @spec list_candidates(String.t(), String.t(), SelectionFilters.t() | map()) :: [map()]
-  def list_candidates(profile, chain, %SelectionFilters{} = filters) do
-    list_candidates(profile, chain, SelectionFilters.to_map(filters))
+  @spec list_candidates(String.t(), pos_integer(), SelectionFilters.t() | map()) :: [map()]
+  def list_candidates(profile, chain_id, %SelectionFilters{} = filters) do
+    list_candidates(profile, chain_id, SelectionFilters.to_map(filters))
   end
 
-  def list_candidates(profile, chain, filters) when is_map(filters) do
+  def list_candidates(profile, chain_id, filters)
+      when is_map(filters) and is_integer(chain_id) and chain_id > 0 do
     protocol = Map.get(filters, :protocol)
     include_half_open = Map.get(filters, :include_half_open, false)
 
-    profile_providers = Catalog.get_profile_providers(profile, chain)
+    profile_providers = Catalog.get_profile_providers(profile, chain_id)
 
     profile_providers
     |> Enum.map(&build_candidate/1)
     |> Enum.filter(fn c ->
-      transport_available?(c, protocol, profile, chain) and
+      transport_available?(c, protocol, profile, chain_id) and
         circuit_breaker_ready?(c, protocol, include_half_open) and
         rate_limit_ok?(c, protocol, filters)
     end)
-    |> filter_by_lag(profile, chain, Map.get(filters, :max_lag_blocks))
-    |> filter_by_min_block(profile, chain, Map.get(filters, :min_block))
+    |> filter_by_lag(profile, chain_id, Map.get(filters, :max_lag_blocks))
+    |> filter_by_min_block(profile, chain_id, Map.get(filters, :min_block))
     |> filter_by_archival(Map.get(filters, :requires_archival))
+    |> filter_by_subscribe_new_heads(Map.get(filters, :requires_subscribe_new_heads))
     |> filter_excluded(filters)
   end
 
   @doc """
-  Returns the minimum recovery time across all open circuits for a (profile, chain) pair.
+  Returns the minimum recovery time across all open circuits for a (profile, chain_id) pair.
   """
-  @spec get_min_recovery_time(String.t(), String.t(), keyword()) ::
+  @spec get_min_recovery_time(String.t(), pos_integer(), keyword()) ::
           {:ok, non_neg_integer() | nil} | {:error, term()}
-  def get_min_recovery_time(profile, chain, opts \\ []) do
+  def get_min_recovery_time(profile, chain_id, opts \\ [])
+      when is_integer(chain_id) and chain_id > 0 do
     transport_filter = Keyword.get(opts, :transport, :both)
-    profile_providers = Catalog.get_profile_providers(profile, chain)
+    profile_providers = Catalog.get_profile_providers(profile, chain_id)
     now_ms = System.monotonic_time(:millisecond)
 
     times =
@@ -103,6 +107,7 @@ defmodule Lasso.Providers.CandidateListing do
       priority: profile_provider.priority,
       capabilities: profile_provider.capabilities,
       archival: profile_provider.archival,
+      subscribe_new_heads: Map.get(profile_provider, :subscribe_new_heads, false),
       name: profile_provider[:name] || profile_provider.provider_id
     }
 
@@ -121,7 +126,7 @@ defmodule Lasso.Providers.CandidateListing do
     }
   end
 
-  defp transport_available?(candidate, protocol, profile, chain) do
+  defp transport_available?(candidate, protocol, profile, chain_id) do
     config = candidate.config
 
     case protocol do
@@ -129,19 +134,19 @@ defmodule Lasso.Providers.CandidateListing do
         is_binary(config.url)
 
       :ws ->
-        is_binary(config.ws_url) and ws_channel_live?(profile, chain, candidate.id)
+        is_binary(config.ws_url) and ws_channel_live?(profile, chain_id, candidate.id)
 
       :both ->
         is_binary(config.url) or
-          (is_binary(config.ws_url) and ws_channel_live?(profile, chain, candidate.id))
+          (is_binary(config.ws_url) and ws_channel_live?(profile, chain_id, candidate.id))
 
       nil ->
         is_binary(config.url) or is_binary(config.ws_url)
     end
   end
 
-  defp ws_channel_live?(profile, chain, provider_id) do
-    case :ets.lookup(:transport_channel_cache, {profile, chain, provider_id, :ws}) do
+  defp ws_channel_live?(profile, chain_id, provider_id) do
+    case :ets.lookup(:transport_channel_cache, {profile, chain_id, provider_id, :ws}) do
       [{_, _channel}] -> true
       [] -> false
     end
@@ -188,15 +193,19 @@ defmodule Lasso.Providers.CandidateListing do
     end
   end
 
-  defp filter_by_lag(candidates, _profile, _chain, nil), do: candidates
+  defp filter_by_lag(candidates, _profile, _chain_id, nil), do: candidates
 
-  defp filter_by_lag(candidates, profile, chain, max_lag_blocks)
+  defp filter_by_lag(candidates, profile, chain_id, max_lag_blocks)
        when is_integer(max_lag_blocks) do
-    block_time_ms = LagCalculation.get_block_time_ms(chain, profile)
+    block_time_ms = LagCalculation.get_block_time_ms(chain_id, profile)
 
     filtered =
       Enum.filter(candidates, fn candidate ->
-        case LagCalculation.calculate_optimistic_lag(chain, candidate.instance_id, block_time_ms) do
+        case LagCalculation.calculate_optimistic_lag(
+               chain_id,
+               candidate.instance_id,
+               block_time_ms
+             ) do
           {:ok, optimistic_lag, _raw_lag} -> optimistic_lag >= -max_lag_blocks
           {:error, _} -> true
         end
@@ -204,21 +213,21 @@ defmodule Lasso.Providers.CandidateListing do
 
     if candidates != [] and filtered == [] do
       Logger.warning(
-        "All providers for #{chain} excluded due to lag (threshold: -#{max_lag_blocks} blocks)"
+        "All providers for chain_id #{chain_id} excluded due to lag (threshold: -#{max_lag_blocks} blocks)"
       )
     end
 
     filtered
   end
 
-  defp filter_by_min_block(candidates, _profile, _chain, nil), do: candidates
+  defp filter_by_min_block(candidates, _profile, _chain_id, nil), do: candidates
 
-  defp filter_by_min_block(candidates, profile, chain, min_block) when is_integer(min_block) do
-    block_time_ms = LagCalculation.get_block_time_ms(chain, profile)
+  defp filter_by_min_block(candidates, profile, chain_id, min_block) when is_integer(min_block) do
+    block_time_ms = LagCalculation.get_block_time_ms(chain_id, profile)
 
     {capable, rest} =
       Enum.split_with(candidates, fn candidate ->
-        case BlockSyncRegistry.get_height(chain, candidate.instance_id) do
+        case BlockSyncRegistry.get_height(chain_id, candidate.instance_id) do
           {:ok, {height, timestamp, _source, _meta}} ->
             elapsed_ms = System.system_time(:millisecond) - timestamp
             staleness_credit = if block_time_ms > 0, do: div(elapsed_ms, block_time_ms), else: 0
@@ -239,6 +248,12 @@ defmodule Lasso.Providers.CandidateListing do
   end
 
   defp filter_by_archival(candidates, _), do: candidates
+
+  defp filter_by_subscribe_new_heads(candidates, true) do
+    Enum.filter(candidates, fn c -> c.config.subscribe_new_heads == true end)
+  end
+
+  defp filter_by_subscribe_new_heads(candidates, _), do: candidates
 
   defp filter_excluded(candidates, filters) do
     case Map.get(filters, :exclude) do

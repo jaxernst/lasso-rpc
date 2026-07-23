@@ -36,7 +36,7 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   All event types are buffered and flushed as a single structured batch per tick.
   Latest-wins coalescing applies to health, circuit_states, block_states, cluster, and metrics.
-  List events are accumulated in order. Account filtering applies to routing_events only.
+  List events are accumulated in order for each read-only dashboard profile.
   """
 
   use GenServer, restart: :transient
@@ -44,7 +44,7 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   alias Lasso.Cluster.Topology
   alias Lasso.Config.ConfigStore
-  alias Lasso.Events.{Provider, RoutingDecision, Subscription}
+  alias Lasso.Events.{RoutingDecision, Subscription}
 
   @batch_interval_ms 175
   @max_batch_size 100
@@ -62,6 +62,8 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   defstruct [
     :profile,
+    # Subscribed chains (for detecting config changes)
+    subscribed_chains: MapSet.new(),
     # Event processing
     event_windows: %{},
     pending_events: [],
@@ -84,8 +86,8 @@ defmodule LassoWeb.Dashboard.EventStream do
     },
     # Subscriber management
     subscribers: MapSet.new(),
-    # Account filtering: pid -> account_id (nil = no filter, sees all events)
-    subscriber_accounts: %{},
+    # Activity feed scope: pid -> :profile
+    subscriber_scopes: %{},
     # Timing
     last_tick: 0,
     last_cleanup: 0,
@@ -158,15 +160,20 @@ defmodule LassoWeb.Dashboard.EventStream do
   @doc """
   Subscribe the calling process to receive updates.
 
-  ## Options
-  - `account_id` - Filter routing events to only show this account's traffic.
-    Events with nil account_id are visible to all. Subscribers with nil
-    account_id see all events (no filtering).
+  The read-only dashboard receives sanitized profile-wide activity.
   """
-  def subscribe(profile, account_id \\ nil) do
+  @spec subscribe(String.t()) :: :ok | {:error, term()}
+  def subscribe(profile), do: subscribe(profile, :profile)
+
+  def subscribe(profile, :profile) do
     case ensure_started(profile) do
       {:ok, pid} ->
-        GenServer.cast(pid, {:subscribe, self(), account_id})
+        :telemetry.execute([:lasso, :dashboard, :event_stream, :subscribe], %{}, %{
+          profile: profile,
+          subscriber: self()
+        })
+
+        GenServer.cast(pid, {:subscribe, self(), :profile})
         :ok
 
       {:error, reason} ->
@@ -211,26 +218,21 @@ defmodule LassoWeb.Dashboard.EventStream do
     Logger.info("[EventStream] Starting for profile: #{profile}")
 
     # Subscribe to topology events (NOT net_kernel directly)
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "cluster:topology")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.cluster_topology())
 
     # Subscribe to routing decisions for this profile
-    Phoenix.PubSub.subscribe(Lasso.PubSub, RoutingDecision.topic(profile))
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.routing_decision(profile))
+
+    # Subscribe to per-profile config update notifications
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.config_profile_updated(profile))
 
     # Subscribe to circuit and block events for each chain
     chains = ConfigStore.list_chains_for_profile(profile)
-
-    for chain <- chains do
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "circuit:events:#{profile}:#{chain}")
-      Phoenix.PubSub.subscribe(Lasso.PubSub, "block_sync:#{profile}:#{chain}")
-      # Provider health events (Healthy, Unhealthy, WSConnected, etc.)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, Provider.topic(profile, chain))
-      # Subscription lifecycle events (Established, Failed, Failover, Stale)
-      Phoenix.PubSub.subscribe(Lasso.PubSub, Subscription.topic(profile, chain))
-    end
+    subscribed_chains = subscribe_to_chains(profile, chains)
 
     # Profile-scoped global topics
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "sync:updates:#{profile}")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "block_cache:updates:#{profile}")
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.sync_updates(profile))
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.block_cache_updates(profile))
 
     # Don't start tick timer until subscribers join (lazy ticking)
     now = now()
@@ -238,6 +240,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     {:ok,
      %__MODULE__{
        profile: profile,
+       subscribed_chains: subscribed_chains,
        cluster_state: default_cluster_state(),
        last_tick: now,
        last_heartbeat: now - @heartbeat_interval_ms,
@@ -433,7 +436,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   # Sync updates - buffer for next batch flush
-  def handle_info(%{chain: _, provider_id: _, block_height: _} = evt, state) do
+  def handle_info(%{chain_id: _, provider_id: _, block_height: _} = evt, state) do
     {:noreply, %{state | pending_sync_updates: [evt | state.pending_sync_updates]}}
   end
 
@@ -445,9 +448,9 @@ defmodule LassoWeb.Dashboard.EventStream do
   # Subscriber died
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
     new_subscribers = MapSet.delete(state.subscribers, pid)
-    new_accounts = Map.delete(state.subscriber_accounts, pid)
+    new_scopes = Map.delete(state.subscriber_scopes, pid)
 
-    state = %{state | subscribers: new_subscribers, subscriber_accounts: new_accounts}
+    state = %{state | subscribers: new_subscribers, subscriber_scopes: new_scopes}
 
     state =
       if MapSet.size(new_subscribers) == 0 do
@@ -469,29 +472,46 @@ defmodule LassoWeb.Dashboard.EventStream do
     end
   end
 
+  # Profile config updated — re-subscribe to any new chain topics
+  def handle_info({:profile_config_updated, profile}, %{profile: profile} = state) do
+    current_chains = ConfigStore.list_chains_for_profile(profile)
+    new_chains = MapSet.difference(MapSet.new(current_chains), state.subscribed_chains)
+
+    if MapSet.size(new_chains) > 0 do
+      new_chain_list = MapSet.to_list(new_chains)
+
+      Logger.info(
+        "[EventStream] Subscribing to #{length(new_chain_list)} new chain(s) for #{profile}"
+      )
+
+      subscribe_to_chains(profile, new_chain_list)
+      {:noreply, %{state | subscribed_chains: MapSet.union(state.subscribed_chains, new_chains)}}
+    else
+      {:noreply, state}
+    end
+  end
+
   # Ignore unknown messages
   def handle_info(_msg, state) do
     {:noreply, state}
   end
 
-  # Subscribe a process with optional account filtering
+  # Subscribe a process with an explicit activity feed scope
   @impl true
-  def handle_cast({:subscribe, pid, account_id}, state) do
+  def handle_cast({:subscribe, pid, scope}, state) do
     Process.monitor(pid)
 
     state = cancel_idle_termination(state)
 
     was_empty = MapSet.size(state.subscribers) == 0
     subscribers = MapSet.put(state.subscribers, pid)
-    subscriber_accounts = Map.put(state.subscriber_accounts, pid, account_id)
+    subscriber_scopes = Map.put(state.subscriber_scopes, pid, scope)
 
     recent_events =
       state.event_windows
       |> get_recent_events(100)
-      |> Enum.filter(fn event ->
-        filter_event_for_account(event, account_id)
-      end)
-      |> Enum.map(&struct_to_map/1)
+      |> Enum.filter(&event_visible_for_scope?(&1, scope))
+      |> Enum.map(&sanitize_routing_event/1)
 
     snapshot = %{
       metrics: state.provider_metrics,
@@ -503,7 +523,7 @@ defmodule LassoWeb.Dashboard.EventStream do
 
     send(pid, {:dashboard_snapshot, snapshot})
 
-    state = %{state | subscribers: subscribers, subscriber_accounts: subscriber_accounts}
+    state = %{state | subscribers: subscribers, subscriber_scopes: subscriber_scopes}
 
     state = if was_empty, do: schedule_tick(state), else: state
 
@@ -512,9 +532,9 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   def handle_cast({:unsubscribe, pid}, state) do
     new_subscribers = MapSet.delete(state.subscribers, pid)
-    new_accounts = Map.delete(state.subscriber_accounts, pid)
+    new_scopes = Map.delete(state.subscriber_scopes, pid)
 
-    state = %{state | subscribers: new_subscribers, subscriber_accounts: new_accounts}
+    state = %{state | subscribers: new_subscribers, subscriber_scopes: new_scopes}
 
     state =
       if MapSet.size(new_subscribers) == 0 do
@@ -584,7 +604,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   defp add_event_to_window(event, state) do
-    key = {event.provider_id, event.chain, event.source_node_id}
+    key = {event.provider_id, event.chain_id, event.source_node_id}
     window = Map.get(state.event_windows, key, [])
     new_window = [event | window] |> Enum.take(@max_events_per_key)
     %{state | event_windows: Map.put(state.event_windows, key, new_window)}
@@ -741,7 +761,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   defp compute_provider_metrics(provider_id, all_events, _windows, chain_totals, state) do
-    chain = all_events |> List.first() |> then(&(&1 && &1.chain))
+    chain = all_events |> List.first() |> then(&(&1 && Map.get(&1, :chain_id)))
 
     events_by_region = Enum.group_by(all_events, & &1.source_node_id)
 
@@ -794,7 +814,7 @@ defmodule LassoWeb.Dashboard.EventStream do
 
     %{
       provider_id: provider_id,
-      chain: chain,
+      chain_id: chain,
       aggregate: aggregate,
       by_region: by_region,
       updated_at: System.system_time(:millisecond)
@@ -854,11 +874,11 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp find_chain_from_config(profile, provider_id) do
     case ConfigStore.get_profile_chains(profile) do
       {:ok, chains} ->
-        Enum.find_value(chains, fn {chain_name, chain_config} ->
+        Enum.find_value(chains, fn {chain_id, chain_config} ->
           providers = chain_config.providers || []
 
           if Enum.any?(providers, fn p -> p.id == provider_id end) do
-            chain_name
+            chain_id
           end
         end)
 
@@ -973,8 +993,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp queue_routing_events(state, events) when events == [], do: state
 
   defp queue_routing_events(state, events) do
-    map_events = Enum.map(events, &struct_to_map/1)
-    %{state | pending_routing_events: Enum.reverse(map_events) ++ state.pending_routing_events}
+    %{state | pending_routing_events: Enum.reverse(events) ++ state.pending_routing_events}
   end
 
   defp struct_to_map(%{__struct__: _} = struct), do: Map.from_struct(struct)
@@ -994,14 +1013,14 @@ defmodule LassoWeb.Dashboard.EventStream do
     %{state | pending_circuit_states: Map.put(state.pending_circuit_states, key, circuit)}
   end
 
-  defp queue_block_update(state, provider_id, node_id, height, chain) do
+  defp queue_block_update(state, provider_id, node_id, height, chain_id) do
     key = {provider_id, node_id}
-    lag = get_block_lag(state, provider_id, chain, node_id)
+    lag = get_block_lag(state, provider_id, chain_id, node_id)
 
     block_data = %{provider_id: provider_id, node_id: node_id, height: height, lag: lag}
 
     block_event = %{
-      chain: chain,
+      chain_id: chain_id,
       block_number: height,
       provider_first: provider_id,
       margin_ms: nil
@@ -1023,8 +1042,8 @@ defmodule LassoWeb.Dashboard.EventStream do
       reset_pending(state)
     else
       for pid <- state.subscribers do
-        account_filter = Map.get(state.subscriber_accounts, pid)
-        send(pid, {:dashboard_batch, filter_batch(batch, account_filter)})
+        scope = Map.get(state.subscriber_scopes, pid)
+        send(pid, {:dashboard_batch, filter_batch(batch, scope)})
       end
 
       reset_pending(state)
@@ -1067,11 +1086,14 @@ defmodule LassoWeb.Dashboard.EventStream do
       batch.block_cache_updates == []
   end
 
-  defp filter_batch(batch, account_filter) do
+  defp filter_batch(batch, scope) do
     %{
       batch
       | routing_events:
-          Enum.filter(batch.routing_events, &filter_event_for_account(&1, account_filter))
+          batch.routing_events
+          |> Enum.filter(&event_visible_for_scope?(&1, scope))
+          |> Enum.map(&sanitize_routing_event/1),
+        subscription_events: batch.subscription_events
     }
   end
 
@@ -1105,7 +1127,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp default_provider_metrics do
     %{
       provider_id: nil,
-      chain: nil,
+      chain_id: nil,
       aggregate: %{
         total_calls: 0,
         success_rate: 0.0,
@@ -1165,15 +1187,39 @@ defmodule LassoWeb.Dashboard.EventStream do
     System.monotonic_time(:millisecond)
   end
 
-  # Filter events by account_id for account-scoped dashboard visibility.
-  # - subscriber_account_id nil = no filter, see all events
-  # - otherwise, event must belong to the subscriber's account (nil account_id events are excluded)
-  defp filter_event_for_account(_event, nil), do: true
+  defp event_visible_for_scope?(_event, :profile), do: true
+  defp event_visible_for_scope?(_event, _scope), do: false
 
-  defp filter_event_for_account(event, subscriber_account_id) do
-    get_event_account_id(event) == subscriber_account_id
+  defp sanitize_routing_event(event) do
+    event
+    |> struct_to_map()
+    |> Map.take([
+      :request_id,
+      :chain_id,
+      :method,
+      :strategy,
+      :provider_id,
+      :source_node_id,
+      :duration_ms,
+      :result,
+      :failovers,
+      :failover_count,
+      :ts,
+      :ts_ms,
+      :type,
+      :event,
+      :subscription_type
+    ])
   end
 
-  defp get_event_account_id(%{account_id: account_id}), do: account_id
-  defp get_event_account_id(_), do: nil
+  defp subscribe_to_chains(profile, chains) do
+    for chain <- chains do
+      Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.circuit_event(profile, chain))
+      Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.block_sync(profile, chain))
+      Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.provider_event(profile, chain))
+      Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.subscription_event(profile, chain))
+    end
+
+    MapSet.new(chains)
+  end
 end

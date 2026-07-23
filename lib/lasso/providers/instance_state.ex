@@ -159,6 +159,37 @@ defmodule Lasso.Providers.InstanceState do
   def status_to_availability(:disconnected), do: :down
   def status_to_availability(_), do: :up
 
+  @doc """
+  Deletes every `:lasso_instance_state` row for the given `instance_id`.
+
+  Called when the last `Catalog` reference to an instance is removed (instance
+  is being torn down). Without this, deterministic-instance-id rebinding on
+  re-activation would resurrect stale health/circuit/rate-limit verdicts —
+  e.g. a previously-`:unhealthy` instance would start life unhealthy on the
+  next activation, before any probe has run.
+  """
+  @spec clear(String.t()) :: :ok
+  def clear(instance_id) when is_binary(instance_id) do
+    keys = [
+      {:health_probe, instance_id},
+      {:health_block_sync, instance_id},
+      {:health_routing, instance_id},
+      {:circuit, instance_id, :http},
+      {:circuit, instance_id, :ws},
+      {:rate_limit, instance_id, :http},
+      {:rate_limit, instance_id, :ws},
+      {:ws_status, instance_id}
+    ]
+
+    Enum.each(keys, fn key ->
+      try do
+        :ets.delete(:lasso_instance_state, key)
+      rescue
+        ArgumentError -> :ok
+      end
+    end)
+  end
+
   defp safe_lookup(key) do
     :ets.lookup(:lasso_instance_state, key)
   rescue

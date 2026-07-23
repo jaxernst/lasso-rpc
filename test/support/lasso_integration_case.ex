@@ -64,8 +64,8 @@ defmodule Lasso.Test.LassoIntegrationCase do
       @moduletag :integration
 
       setup do
-        # Generate unique chain ID for this test
-        chain = "test_#{:rand.uniform(999_999_999)}"
+        # Generate a unique positive EVM chain ID for this test.
+        chain = 1_000_000_000 + System.unique_integer([:positive, :monotonic])
 
         # Store chain in process dictionary for helper access
         # This avoids var! hygiene issues while maintaining convenience
@@ -108,12 +108,14 @@ defmodule Lasso.Test.LassoIntegrationCase do
       end
 
       defp cleanup_test_resources(chain) do
-        # Clean up chain-specific resources
-        # This includes stopping any supervisors, cleaning registries, etc.
+        profiles = Lasso.Config.ConfigStore.list_profiles_for_chain(chain)
 
-        # Give async cleanup a moment to complete
-        Process.sleep(50)
+        Enum.each(profiles, fn profile ->
+          Lasso.ProfileChainSupervisor.stop_profile_chain(profile, chain)
+          Lasso.Config.ConfigStore.unregister_chain_runtime(profile, chain)
+        end)
 
+        Lasso.Providers.Catalog.build_from_config()
         :ok
       end
 

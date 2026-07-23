@@ -26,8 +26,8 @@ defmodule Lasso.BlockSync.Worker do
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.BlockSync.Strategies.{HttpStrategy, WsStrategy}
-  alias Lasso.Config.{ChainConfig, ConfigStore}
-  alias Lasso.Providers.Catalog
+  alias Lasso.Config.{ChainConfig, ConfigStore, MonitoringDefaults}
+  alias Lasso.Providers.{Catalog, RestartCounter}
 
   @reconnect_delay_ms 5_000
   @ws_active_poll_multiplier 3
@@ -40,43 +40,55 @@ defmodule Lasso.BlockSync.Worker do
           staleness_threshold_ms: pos_integer()
         }
 
+  @type auth_scope :: :system
+
   @type t :: %__MODULE__{
-          chain: String.t(),
+          chain_id: pos_integer(),
           instance_id: String.t(),
           mode: mode() | nil,
           ws_strategy: pid() | nil,
           http_strategy: pid() | nil,
           config: config(),
           ws_retry_count: non_neg_integer(),
-          http_reduced: boolean()
+          http_reduced: boolean(),
+          auth_scope: auth_scope() | nil,
+          last_emitted_coalesced: tuple() | nil,
+          start_timer_ref: reference() | nil,
+          restart_count_cleared: boolean()
         }
 
   defstruct [
-    :chain,
+    :chain_id,
     :instance_id,
     :mode,
     :ws_strategy,
     :http_strategy,
     :config,
+    :auth_scope,
+    :last_emitted_coalesced,
+    :start_timer_ref,
     ws_retry_count: 0,
-    http_reduced: false
+    http_reduced: false,
+    restart_count_cleared: false
   ]
 
   ## Client API
 
-  @spec start_link({String.t(), String.t()}) :: GenServer.on_start()
-  def start_link({chain, instance_id}) when is_binary(chain) and is_binary(instance_id) do
-    GenServer.start_link(__MODULE__, {chain, instance_id}, name: via(chain, instance_id))
+  @spec start_link({pos_integer(), String.t()}) :: GenServer.on_start()
+  def start_link({chain_id, instance_id})
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) do
+    GenServer.start_link(__MODULE__, {chain_id, instance_id}, name: via(chain_id, instance_id))
   end
 
-  @spec via(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
-  def via(chain, instance_id) when is_binary(instance_id) do
-    {:via, Registry, {Lasso.Registry, {:block_sync_worker, chain, instance_id}}}
+  @spec via(pos_integer(), String.t()) :: {:via, Registry, {atom(), tuple()}}
+  def via(chain_id, instance_id) when is_integer(chain_id) and is_binary(instance_id) do
+    {:via, Registry, {Lasso.Registry, {:block_sync_worker, chain_id, instance_id}}}
   end
 
-  @spec get_status(String.t(), String.t()) :: map() | {:error, :not_running}
-  def get_status(chain, instance_id) when is_binary(instance_id) do
-    GenServer.call(via(chain, instance_id), :get_status)
+  @spec get_status(pos_integer(), String.t()) :: map() | {:error, :not_running}
+  def get_status(chain_id, instance_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) do
+    GenServer.call(via(chain_id, instance_id), :get_status)
   catch
     :exit, _ -> {:error, :not_running}
   end
@@ -84,32 +96,61 @@ defmodule Lasso.BlockSync.Worker do
   ## GenServer Callbacks
 
   @impl true
-  def init({chain, instance_id}) do
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "ws:conn:instance:#{instance_id}")
-    Phoenix.PubSub.subscribe(Lasso.PubSub, "instance_sub_manager:restarted:#{chain}")
-
-    config = load_config(instance_id, chain)
-
+  def init({chain_id, instance_id}) do
     state = %__MODULE__{
-      chain: chain,
+      chain_id: chain_id,
       instance_id: instance_id,
       mode: nil,
       ws_strategy: nil,
       http_strategy: nil,
-      config: config,
+      config: nil,
+      auth_scope: nil,
+      last_emitted_coalesced: nil,
+      start_timer_ref: nil,
       ws_retry_count: 0,
-      http_reduced: false
+      http_reduced: false,
+      restart_count_cleared: false
     }
 
-    Process.send_after(self(), :start_strategies, 2_000)
+    {:ok, state, {:continue, :deferred_start}}
+  end
 
-    Logger.debug("BlockSync.Worker started",
-      chain: chain,
-      instance_id: instance_id,
-      subscribe_new_heads: config.subscribe_new_heads
+  @impl true
+  def handle_continue(:deferred_start, state) do
+    Phoenix.PubSub.subscribe(
+      Lasso.PubSub,
+      Lasso.Topics.instance_config_updated(state.instance_id)
     )
 
-    {:ok, state}
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_conn_instance(state.instance_id))
+
+    Phoenix.PubSub.subscribe(
+      Lasso.PubSub,
+      Lasso.Topics.instance_sub_manager_restarted(state.chain_id)
+    )
+
+    {config, auth_scope, last_emitted_coalesced} =
+      load_config_with_telemetry(state.instance_id, state.chain_id, nil, nil)
+
+    state = %{
+      state
+      | config: config,
+        auth_scope: auth_scope,
+        last_emitted_coalesced: last_emitted_coalesced
+    }
+
+    backoff = RestartCounter.backoff_for(RestartCounter.bump({:block_sync, state.instance_id}))
+    start_timer_ref = Process.send_after(self(), :start_strategies, backoff)
+    state = %{state | start_timer_ref: start_timer_ref}
+
+    Logger.debug("BlockSync.Worker started",
+      chain_id: state.chain_id,
+      instance_id: state.instance_id,
+      subscribe_new_heads: config.subscribe_new_heads,
+      start_backoff_ms: backoff
+    )
+
+    {:noreply, state}
   end
 
   @impl true
@@ -127,7 +168,41 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   @impl true
+  def terminate(_reason, state) do
+    if state.start_timer_ref, do: Process.cancel_timer(state.start_timer_ref)
+
+    # Release strategy resources on supervised shutdown (auth rotation,
+    # provider removal, profile suspension). Without this, WS subscriptions
+    # leak on the InstanceSubscriptionManager and pending HTTP poll timers
+    # remain associated with a dead pid (cosmetically benign but obscures
+    # the supervision tree's reaper accounting).
+    if state.ws_strategy, do: WsStrategy.stop(state.ws_strategy)
+    if state.http_strategy, do: HttpStrategy.stop(state.http_strategy)
+    :ok
+  end
+
+  @impl true
+  def handle_info(:instance_config_updated, state) do
+    {new_config, auth_scope, last_emitted_coalesced} =
+      load_config_with_telemetry(
+        state.instance_id,
+        state.chain_id,
+        state.auth_scope,
+        state.last_emitted_coalesced
+      )
+
+    state =
+      state
+      |> Map.put(:auth_scope, auth_scope)
+      |> Map.put(:last_emitted_coalesced, last_emitted_coalesced)
+      |> apply_config_reload(new_config)
+
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(:start_strategies, state) do
+    state = %{state | start_timer_ref: nil}
     state = start_strategies(state)
     {:noreply, state}
   end
@@ -137,9 +212,10 @@ defmodule Lasso.BlockSync.Worker do
       when instance_id == state.instance_id do
     source = if metadata[:latency_ms], do: :http, else: :ws
 
-    BlockSyncRegistry.put_height(state.chain, instance_id, height, source, metadata)
+    BlockSyncRegistry.put_height(state.chain_id, instance_id, height, source, metadata)
     broadcast_height_update(state, height, source)
 
+    state = maybe_clear_restart_count(state)
     {:noreply, state}
   end
 
@@ -151,13 +227,13 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   # HTTP strategy poll timer
-  def handle_info({:http_strategy, :poll, instance_id}, state)
+  def handle_info({:http_strategy, :poll, instance_id, generation}, state)
       when instance_id == state.instance_id and state.http_strategy != nil do
-    {:ok, new_http_state} = HttpStrategy.handle_message(:poll, state.http_strategy)
+    {:ok, new_http_state} = HttpStrategy.handle_message({:poll, generation}, state.http_strategy)
     {:noreply, %{state | http_strategy: new_http_state}}
   end
 
-  def handle_info({:http_strategy, :poll, instance_id}, state)
+  def handle_info({:http_strategy, :poll, instance_id, _generation}, state)
       when instance_id == state.instance_id and state.http_strategy == nil do
     {:noreply, state}
   end
@@ -246,52 +322,204 @@ defmodule Lasso.BlockSync.Worker do
 
   ## Private Functions
 
+  # First successful block-height after a (re)start clears the
+  # restart counter so a worker that runs healthy for any meaningful
+  # interval no longer carries crash-loop debt. A worker that crashes
+  # between handle_continue and the first :block_height keeps its
+  # count — that's the desired flapping signal.
+  defp maybe_clear_restart_count(%{restart_count_cleared: true} = state), do: state
+
+  defp maybe_clear_restart_count(state) do
+    RestartCounter.clear({:block_sync, state.instance_id})
+    %{state | restart_count_cleared: true}
+  end
+
   defp broadcast_height_update(state, height, source) do
     profiles = Catalog.get_instance_refs(state.instance_id)
     timestamp = System.system_time(:millisecond)
 
     for profile <- profiles do
       provider_id =
-        Catalog.reverse_lookup_provider_id(profile, state.chain, state.instance_id) ||
+        Catalog.reverse_lookup_provider_id(profile, state.chain_id, state.instance_id) ||
           state.instance_id
 
       provider_key = {profile, provider_id}
       msg = {:block_height_update, provider_key, height, source, timestamp}
-      Phoenix.PubSub.broadcast(Lasso.PubSub, "block_sync:#{profile}:#{state.chain}", msg)
 
-      sync_msg = %{chain: state.chain, provider_id: provider_id, block_height: height}
-      Phoenix.PubSub.broadcast(Lasso.PubSub, "sync:updates:#{profile}", sync_msg)
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        Lasso.Topics.block_sync(profile, state.chain_id),
+        msg
+      )
+
+      sync_msg = %{chain_id: state.chain_id, provider_id: provider_id, block_height: height}
+      Phoenix.PubSub.broadcast(Lasso.PubSub, Lasso.Topics.sync_updates(profile), sync_msg)
     end
   end
 
-  defp load_config(instance_id, chain) do
+  defp load_config_with_telemetry(instance_id, chain_id, existing_auth_scope, last_emitted) do
+    config = load_config(instance_id, chain_id)
+    refs = Catalog.get_instance_refs(instance_id)
+    auth_scope = existing_auth_scope || compute_auth_scope(refs)
+
+    ref_configs =
+      refs
+      |> Enum.map(fn ref -> ConfigStore.get_chain(ref, chain_id) end)
+      |> Enum.filter(&match?({:ok, _}, &1))
+      |> Enum.map(fn {:ok, cc} -> cc end)
+
+    ref_count = length(refs)
+    ref_count_with_config = length(ref_configs)
+
+    poll_intervals =
+      Enum.map(ref_configs, & &1.monitoring.probe_interval_ms)
+
+    coalesced_tuple =
+      {config.poll_interval_ms, config.staleness_threshold_ms, config.subscribe_new_heads,
+       Map.get(config, :max_backfill_blocks), Map.get(config, :backfill_timeout_ms)}
+
+    new_last_emitted =
+      if coalesced_tuple != last_emitted do
+        {p50, p99} = percentiles(poll_intervals)
+
+        :telemetry.execute(
+          [:lasso, :block_sync, :worker, :coalesced_config],
+          %{
+            coalesced_poll_interval_ms: config.poll_interval_ms,
+            ref_count: ref_count,
+            ref_count_with_config: ref_count_with_config,
+            poll_interval_p50_ms: p50,
+            poll_interval_p99_ms: p99
+          },
+          %{
+            instance_id: instance_id,
+            chain_id: chain_id,
+            auth_scope: auth_scope
+          }
+        )
+
+        coalesced_tuple
+      else
+        last_emitted
+      end
+
+    {config, auth_scope, new_last_emitted}
+  end
+
+  @doc "Loads and coalesces block-sync configuration for an instance."
+  @spec load_config(String.t(), pos_integer()) :: map()
+  def load_config(instance_id, chain_id) do
     refs = Catalog.get_instance_refs(instance_id)
     has_ws = instance_has_ws?(instance_id)
 
-    default_config = %{
-      subscribe_new_heads: has_ws,
-      poll_interval_ms: 15_000,
-      ws_active_poll_interval_ms: 15_000 * @ws_active_poll_multiplier,
-      staleness_threshold_ms: 35_000
-    }
+    ref_configs =
+      refs
+      |> Enum.map(fn ref -> {ref, ConfigStore.get_chain(ref, chain_id)} end)
+      |> Enum.filter(fn {_, result} -> match?({:ok, _}, result) end)
+      |> Enum.map(fn {ref, {:ok, cc}} -> {ref, cc} end)
 
-    with [ref_profile | _] <- refs,
-         {:ok, chain_config} <- ConfigStore.get_chain(ref_profile, chain) do
-      subscribe_new_heads =
-        resolve_subscribe_new_heads(chain_config, ref_profile, chain, instance_id) or
-          Enum.any?(refs, &check_profile_subscribe_new_heads(&1, chain, instance_id))
-
-      poll_interval_ms = chain_config.monitoring.probe_interval_ms
-
-      %{
-        subscribe_new_heads: subscribe_new_heads and has_ws,
-        poll_interval_ms: poll_interval_ms,
-        ws_active_poll_interval_ms: poll_interval_ms * @ws_active_poll_multiplier,
-        staleness_threshold_ms: chain_config.websocket.new_heads_timeout_ms
-      }
-    else
-      _ -> default_config
+    case ref_configs do
+      [] -> default_config(instance_id, has_ws)
+      _ -> coalesce_config(ref_configs, instance_id, chain_id, has_ws)
     end
+  end
+
+  @doc "Builds default block-sync configuration for an instance."
+  @spec default_config(String.t(), boolean()) :: map()
+  def default_config(instance_id, has_ws) do
+    block_time_ms = instance_block_time_ms(instance_id)
+    poll_interval_ms = MonitoringDefaults.default_probe_interval_ms(block_time_ms)
+
+    %{
+      subscribe_new_heads: has_ws,
+      poll_interval_ms: poll_interval_ms,
+      ws_active_poll_interval_ms: poll_interval_ms * @ws_active_poll_multiplier,
+      staleness_threshold_ms: 35_000,
+      max_backfill_blocks: nil,
+      backfill_timeout_ms: nil
+    }
+  end
+
+  @doc "Coalesces block-sync configuration across profile references."
+  @spec coalesce_config([{term(), term()}], String.t(), pos_integer(), boolean()) :: map()
+  def coalesce_config(ref_configs, instance_id, chain_id, has_ws) do
+    poll_interval_ms =
+      ref_configs
+      |> Enum.map(fn {_, cc} -> cc.monitoring.probe_interval_ms end)
+      |> Enum.min()
+
+    staleness_threshold_ms =
+      ref_configs
+      |> Enum.map(fn {_, cc} -> cc.websocket.new_heads_timeout_ms end)
+      |> Enum.max()
+
+    subscribe_new_heads =
+      Enum.any?(ref_configs, fn {ref, cc} ->
+        resolve_subscribe_new_heads(cc, ref, chain_id, instance_id)
+      end)
+
+    max_backfill_blocks =
+      ref_configs
+      |> Enum.map(fn {_, cc} ->
+        get_in(cc, [
+          Access.key(:websocket),
+          Access.key(:failover),
+          Access.key(:max_backfill_blocks)
+        ])
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> nil
+        values -> Enum.min(values)
+      end
+
+    backfill_timeout_ms =
+      ref_configs
+      |> Enum.map(fn {_, cc} ->
+        get_in(cc, [
+          Access.key(:websocket),
+          Access.key(:failover),
+          Access.key(:backfill_timeout_ms)
+        ])
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> nil
+        values -> Enum.min(values)
+      end
+
+    %{
+      subscribe_new_heads: subscribe_new_heads and has_ws,
+      poll_interval_ms: poll_interval_ms,
+      ws_active_poll_interval_ms: poll_interval_ms * @ws_active_poll_multiplier,
+      staleness_threshold_ms: staleness_threshold_ms,
+      max_backfill_blocks: max_backfill_blocks,
+      backfill_timeout_ms: backfill_timeout_ms
+    }
+  end
+
+  defp instance_block_time_ms(instance_id) do
+    case Catalog.get_instance(instance_id) do
+      {:ok, %{block_time_ms: bt}} when is_integer(bt) and bt > 0 -> bt
+      _ -> nil
+    end
+  end
+
+  defp compute_auth_scope(_refs), do: :system
+
+  defp percentiles([] = _values) do
+    default_ms = MonitoringDefaults.default_probe_interval_ms(nil)
+    {default_ms, default_ms}
+  end
+
+  defp percentiles(values) do
+    sorted = Enum.sort(values)
+    n = length(sorted)
+
+    p50 = Enum.at(sorted, div(n - 1, 2))
+    p99 = Enum.at(sorted, round((n - 1) * 0.99))
+
+    {p50, p99}
   end
 
   defp instance_has_ws?(instance_id) do
@@ -301,8 +529,8 @@ defmodule Lasso.BlockSync.Worker do
     end
   end
 
-  defp resolve_subscribe_new_heads(chain_config, profile, chain, instance_id) do
-    provider_id = Catalog.reverse_lookup_provider_id(profile, chain, instance_id)
+  defp resolve_subscribe_new_heads(chain_config, profile, chain_id, instance_id) do
+    provider_id = Catalog.reverse_lookup_provider_id(profile, chain_id, instance_id)
 
     if provider_id do
       case ChainConfig.get_provider_by_id(chain_config, provider_id) do
@@ -314,14 +542,53 @@ defmodule Lasso.BlockSync.Worker do
     end
   end
 
-  defp check_profile_subscribe_new_heads(profile, chain, instance_id) do
-    case ConfigStore.get_chain(profile, chain) do
-      {:ok, chain_config} ->
-        resolve_subscribe_new_heads(chain_config, profile, chain, instance_id)
+  defp apply_config_reload(state, new_config) do
+    old_config = state.config
+    old_subscribe = old_config.subscribe_new_heads
+    new_subscribe = new_config.subscribe_new_heads
 
-      _ ->
-        false
+    state = %{state | config: new_config}
+
+    state =
+      cond do
+        old_subscribe and not new_subscribe ->
+          Logger.info("Config reload: subscribe_new_heads disabled, tearing down WS subscription",
+            chain_id: state.chain_id,
+            instance_id: state.instance_id
+          )
+
+          state = teardown_ws_subscription(state)
+          restore_http_polling(state)
+
+        not old_subscribe and new_subscribe ->
+          Logger.info("Config reload: subscribe_new_heads enabled, establishing WS subscription",
+            chain_id: state.chain_id,
+            instance_id: state.instance_id
+          )
+
+          add_ws_subscription(state)
+
+        true ->
+          state
+      end
+
+    if state.http_strategy && old_config.poll_interval_ms != new_config.poll_interval_ms do
+      new_interval =
+        if state.http_reduced,
+          do: new_config.ws_active_poll_interval_ms,
+          else: new_config.poll_interval_ms
+
+      %{state | http_strategy: HttpStrategy.set_poll_interval(state.http_strategy, new_interval)}
+    else
+      state
     end
+  end
+
+  defp teardown_ws_subscription(%{ws_strategy: nil} = state), do: state
+
+  defp teardown_ws_subscription(state) do
+    WsStrategy.stop(state.ws_strategy)
+    %{state | ws_strategy: nil, mode: :http_only, ws_retry_count: 0}
   end
 
   defp start_strategies(state) do
@@ -341,10 +608,10 @@ defmodule Lasso.BlockSync.Worker do
       poll_interval_ms: state.config.poll_interval_ms
     ]
 
-    {:ok, http_state} = HttpStrategy.start(state.chain, state.instance_id, http_opts)
+    {:ok, http_state} = HttpStrategy.start(state.chain_id, state.instance_id, http_opts)
 
     Logger.debug("HTTP polling started",
-      chain: state.chain,
+      chain_id: state.chain_id,
       instance_id: state.instance_id,
       poll_interval_ms: state.config.poll_interval_ms
     )
@@ -359,13 +626,13 @@ defmodule Lasso.BlockSync.Worker do
       staleness_threshold_ms: state.config.staleness_threshold_ms
     ]
 
-    case WsStrategy.start(state.chain, state.instance_id, ws_opts) do
+    case WsStrategy.start(state.chain_id, state.instance_id, ws_opts) do
       {:ok, ws_state} ->
         %{state | mode: :http_with_ws, ws_strategy: ws_state, ws_retry_count: 0}
 
       {:error, :connection_unknown} ->
         Logger.debug("WS connection state unknown, will retry shortly",
-          chain: state.chain,
+          chain_id: state.chain_id,
           instance_id: state.instance_id
         )
 
@@ -376,7 +643,7 @@ defmodule Lasso.BlockSync.Worker do
         level = if state.ws_retry_count > 0, do: :debug, else: :warning
 
         Logger.log(level, "WS subscription failed to start, HTTP polling continues",
-          chain: state.chain,
+          chain_id: state.chain_id,
           instance_id: state.instance_id,
           reason: inspect(reason)
         )
@@ -387,13 +654,15 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp handle_strategy_status(state, :ws, :active) do
+    state = maybe_clear_restart_count(state)
     state = %{state | mode: :http_with_ws, ws_retry_count: 0}
+
     reduce_http_polling(state)
   end
 
   defp handle_strategy_status(state, :ws, :failed) do
     Logger.debug("WS subscription failed, HTTP polling continues",
-      chain: state.chain,
+      chain_id: state.chain_id,
       instance_id: state.instance_id
     )
 
@@ -402,7 +671,7 @@ defmodule Lasso.BlockSync.Worker do
 
   defp handle_strategy_status(state, :ws, status) when status in [:stale, :degraded] do
     Logger.info("WS subscription #{status}, restoring normal HTTP polling",
-      chain: state.chain,
+      chain_id: state.chain_id,
       instance_id: state.instance_id
     )
 
@@ -411,7 +680,7 @@ defmodule Lasso.BlockSync.Worker do
 
   defp handle_strategy_status(state, :http, :degraded) do
     Logger.warning("HTTP polling degraded",
-      chain: state.chain,
+      chain_id: state.chain_id,
       instance_id: state.instance_id
     )
 
@@ -420,11 +689,11 @@ defmodule Lasso.BlockSync.Worker do
 
   defp handle_strategy_status(state, :http, :healthy) do
     Logger.debug("HTTP polling recovered",
-      chain: state.chain,
+      chain_id: state.chain_id,
       instance_id: state.instance_id
     )
 
-    state
+    maybe_clear_restart_count(state)
   end
 
   defp handle_strategy_status(state, _transport, _status) do
@@ -439,7 +708,7 @@ defmodule Lasso.BlockSync.Worker do
     new_http = HttpStrategy.set_poll_interval(state.http_strategy, reduced_interval)
 
     Logger.debug("HTTP polling reduced (WS active)",
-      chain: state.chain,
+      chain_id: state.chain_id,
       instance_id: state.instance_id,
       poll_interval_ms: reduced_interval
     )
@@ -455,7 +724,7 @@ defmodule Lasso.BlockSync.Worker do
     new_http = HttpStrategy.set_poll_interval(state.http_strategy, normal_interval)
 
     Logger.debug("HTTP polling restored to normal",
-      chain: state.chain,
+      chain_id: state.chain_id,
       instance_id: state.instance_id,
       poll_interval_ms: normal_interval
     )
@@ -491,7 +760,7 @@ defmodule Lasso.BlockSync.Worker do
   defp handle_ws_disconnected(state) do
     if state.ws_strategy do
       Logger.info("WS subscription disconnected, HTTP polling continues",
-        chain: state.chain,
+        chain_id: state.chain_id,
         instance_id: state.instance_id
       )
 
@@ -524,10 +793,10 @@ defmodule Lasso.BlockSync.Worker do
         staleness_threshold_ms: state.config.staleness_threshold_ms
       ]
 
-      case WsStrategy.start(state.chain, state.instance_id, ws_opts) do
+      case WsStrategy.start(state.chain_id, state.instance_id, ws_opts) do
         {:ok, ws_state} ->
           Logger.info("WS subscription reconnected",
-            chain: state.chain,
+            chain_id: state.chain_id,
             instance_id: state.instance_id
           )
 
@@ -535,7 +804,7 @@ defmodule Lasso.BlockSync.Worker do
 
         {:error, reason} ->
           Logger.debug("WS subscription reconnect failed, will retry",
-            chain: state.chain,
+            chain_id: state.chain_id,
             instance_id: state.instance_id,
             reason: inspect(reason),
             retry_count: state.ws_retry_count + 1

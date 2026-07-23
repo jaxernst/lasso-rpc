@@ -27,9 +27,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
   use GenServer
   require Logger
 
-  alias Lasso.Config.ChainValidator
+  alias Lasso.Config.{ConfigStore, MonitoringDefaults}
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.Providers.Catalog
+  alias Lasso.Providers.{Catalog, RestartCounter}
 
   @tick_interval_ms 200
   @default_timeout_ms 5_000
@@ -37,7 +37,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
   @max_backoff_ms 30_000
   @rate_limit_backoff_ms 30_000
   @auth_backoff_ms 120_000
-  @min_probe_interval_ms 10_000
   @probe_rate_limit_ttl_ms 60_000
   @jitter_percent 0.2
 
@@ -45,42 +44,63 @@ defmodule Lasso.Providers.ProbeCoordinator do
           instance_id: String.t(),
           consecutive_failures: non_neg_integer(),
           last_probe_monotonic: integer() | nil,
-          current_backoff_ms: non_neg_integer()
+          current_backoff_ms: non_neg_integer(),
+          cached_interval_ms: pos_integer() | nil,
+          cached_at: integer() | nil
         }
 
   defstruct [
-    :chain,
+    :chain_id,
     :tick_ref,
     instances: %{},
     probe_order: [],
-    probe_index: 0
+    probe_index: 0,
+    last_reload_at: 0,
+    subscribed_instances: [],
+    restart_count_cleared: false
   ]
 
-  @spec start_link(String.t()) :: GenServer.on_start()
-  def start_link(chain) do
-    GenServer.start_link(__MODULE__, chain, name: via_name(chain))
+  @spec start_link(pos_integer()) :: GenServer.on_start()
+  def start_link(chain_id) when is_integer(chain_id) and chain_id > 0 do
+    GenServer.start_link(__MODULE__, chain_id, name: via_name(chain_id))
   end
 
   @doc """
   Tells the coordinator to reload its instance list from the catalog.
   """
-  @spec reload_instances(String.t()) :: :ok
-  def reload_instances(chain) do
-    GenServer.cast(via_name(chain), :reload_instances)
+  @spec reload_instances(pos_integer()) :: :ok
+  def reload_instances(chain_id) when is_integer(chain_id) and chain_id > 0 do
+    GenServer.cast(via_name(chain_id), :reload_instances)
   end
 
   @impl true
-  def init(chain) do
-    state = %__MODULE__{chain: chain}
-    state = do_reload_instances(state)
-    tick_ref = schedule_tick()
+  def init(chain_id) do
+    state = %__MODULE__{chain_id: chain_id, last_reload_at: System.monotonic_time(:millisecond)}
+    {:ok, state, {:continue, :deferred_start}}
+  end
 
-    {:ok, %{state | tick_ref: tick_ref}}
+  @impl true
+  def handle_continue(:deferred_start, state) do
+    backoff = RestartCounter.backoff_for(RestartCounter.bump({:probe_coord, state.chain_id}))
+    Process.send_after(self(), :load_instances, backoff)
+    {:noreply, state}
   end
 
   @impl true
   def handle_cast(:reload_instances, state) do
     {:noreply, do_reload_instances(state)}
+  end
+
+  @impl true
+  def handle_info(:instance_config_updated, state) do
+    {:noreply, %{state | last_reload_at: System.monotonic_time(:millisecond)}}
+  end
+
+  @impl true
+  def handle_info(:load_instances, state) do
+    state = do_reload_instances(state)
+    tick_ref = schedule_tick()
+    {:noreply, %{state | tick_ref: tick_ref}}
   end
 
   @impl true
@@ -129,12 +149,30 @@ defmodule Lasso.Providers.ProbeCoordinator do
               %{inst | consecutive_failures: new_failures, current_backoff_ms: backoff}
           end
 
-        {:noreply, %{state | instances: Map.put(state.instances, instance_id, updated)}}
+        state =
+          state
+          |> Map.put(:instances, Map.put(state.instances, instance_id, updated))
+          |> maybe_clear_restart_count(result)
+
+        {:noreply, state}
     end
   end
 
+  # First successful probe after a (re)start clears the restart
+  # counter. A coordinator that crashes before any provider responds
+  # keeps its count (genuine flap signal).
+  defp maybe_clear_restart_count(%{restart_count_cleared: true} = state, _result), do: state
+
+  defp maybe_clear_restart_count(state, :success) do
+    RestartCounter.clear({:probe_coord, state.chain_id})
+    %{state | restart_count_cleared: true}
+  end
+
+  defp maybe_clear_restart_count(state, _result), do: state
+
   defp do_reload_instances(state) do
-    instance_ids = Catalog.list_instances_for_chain(state.chain)
+    instance_ids = Catalog.list_instances_for_chain(state.chain_id)
+    now = System.monotonic_time(:millisecond)
 
     new_instances =
       Map.new(instance_ids, fn id ->
@@ -146,13 +184,39 @@ defmodule Lasso.Providers.ProbeCoordinator do
               instance_id: id,
               consecutive_failures: 0,
               last_probe_monotonic: nil,
-              current_backoff_ms: 0
+              current_backoff_ms: 0,
+              cached_interval_ms: nil,
+              cached_at: nil
             }
 
         {id, inst_state}
       end)
 
-    %{state | instances: new_instances, probe_order: instance_ids, probe_index: 0}
+    state = manage_instance_subscriptions(state, instance_ids)
+
+    %{
+      state
+      | instances: new_instances,
+        probe_order: instance_ids,
+        probe_index: 0,
+        last_reload_at: now
+    }
+  end
+
+  defp manage_instance_subscriptions(state, new_instance_ids) do
+    old_subscribed = state.subscribed_instances
+    added = new_instance_ids -- old_subscribed
+    removed = old_subscribed -- new_instance_ids
+
+    for id <- added do
+      Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.instance_config_updated(id))
+    end
+
+    for id <- removed do
+      Phoenix.PubSub.unsubscribe(Lasso.PubSub, Lasso.Topics.instance_config_updated(id))
+    end
+
+    %{state | subscribed_instances: new_instance_ids}
   end
 
   defp do_tick(state) do
@@ -167,55 +231,126 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
         inst = Map.get(state.instances, instance_id)
 
+        {probe?, effective_ms} = should_probe?(inst, now, state)
+
         state =
-          if should_probe?(inst, now) do
-            probe_instance(state, instance_id, inst, now)
-          else
-            state
+          cond do
+            probe? ->
+              probe_instance(state, instance_id, inst, now)
+
+            not is_nil(effective_ms) and not is_nil(inst) and
+                (is_nil(inst.cached_interval_ms) or
+                   is_nil(inst.cached_at) or
+                   inst.cached_at < state.last_reload_at) ->
+              updated_inst = %{inst | cached_interval_ms: effective_ms, cached_at: now}
+              %{state | instances: Map.put(state.instances, instance_id, updated_inst)}
+
+            true ->
+              state
           end
 
         %{state | probe_index: index + 1}
     end
   end
 
-  defp should_probe?(nil, _now), do: false
+  defp should_probe?(nil, _now, _state), do: {false, nil}
 
-  defp should_probe?(inst, now) do
+  defp should_probe?(inst, now, state) do
+    effective_ms = effective_probe_interval_ms(state, inst.instance_id)
+
     case inst.last_probe_monotonic do
-      nil -> true
-      last -> now - last >= max(inst.current_backoff_ms, @min_probe_interval_ms)
+      nil -> {true, effective_ms}
+      last -> {now - last >= max(inst.current_backoff_ms, effective_ms), effective_ms}
+    end
+  end
+
+  defp effective_probe_interval_ms(state, instance_id) do
+    inst = Map.get(state.instances, instance_id)
+
+    cached_valid =
+      not is_nil(inst) and
+        not is_nil(inst.cached_interval_ms) and
+        not is_nil(inst.cached_at) and
+        inst.cached_at >= state.last_reload_at
+
+    if cached_valid do
+      inst.cached_interval_ms
+    else
+      compute_interval(state, instance_id)
+    end
+  end
+
+  defp compute_interval(state, instance_id) do
+    refs = Catalog.get_instance_refs(instance_id)
+
+    intervals =
+      refs
+      |> Enum.map(&ConfigStore.get_chain(&1, state.chain_id))
+      |> Enum.filter(&match?({:ok, _}, &1))
+      |> Enum.map(fn {:ok, cc} -> cc.monitoring.probe_interval_ms end)
+
+    case intervals do
+      [] ->
+        block_time_ms = instance_block_time_ms(instance_id)
+        MonitoringDefaults.default_probe_interval_ms(block_time_ms)
+
+      _ ->
+        Enum.min(intervals)
+    end
+  end
+
+  defp instance_block_time_ms(instance_id) do
+    case Catalog.get_instance(instance_id) do
+      {:ok, %{block_time_ms: bt}} when is_integer(bt) and bt > 0 -> bt
+      _ -> nil
     end
   end
 
   defp probe_instance(state, instance_id, inst, now) do
-    chain = state.chain
+    chain_id = state.chain_id
     coordinator = self()
 
     case Catalog.get_instance(instance_id) do
-      {:ok, %{url: url}} when is_binary(url) ->
+      {:ok, %{mock?: true}} ->
+        state
+
+      {:ok, %{url: url} = instance} when is_binary(url) ->
+        headers = Map.get(instance, :headers, [{"content-type", "application/json"}])
+
         Task.Supervisor.start_child(Lasso.TaskSupervisor, fn ->
-          {^instance_id, result} = do_http_probe(instance_id, url, chain)
+          {^instance_id, result} = do_http_probe(instance_id, url, chain_id, headers)
           send(coordinator, {:probe_result, instance_id, result})
         end)
 
-      _ ->
-        :skip
-    end
+        mark_probe_attempt(state, instance_id, inst, now)
 
-    updated_inst = %{inst | last_probe_monotonic: now}
+      _ ->
+        state
+    end
+  end
+
+  defp mark_probe_attempt(state, instance_id, inst, now) do
+    effective_ms = effective_probe_interval_ms(state, instance_id)
+
+    updated_inst = %{
+      inst
+      | last_probe_monotonic: now,
+        cached_interval_ms: effective_ms,
+        cached_at: now
+    }
+
     %{state | instances: Map.put(state.instances, instance_id, updated_inst)}
   end
 
-  defp do_http_probe(instance_id, url, chain) do
+  defp do_http_probe(instance_id, url, chain_id, headers) do
     body =
       Jason.encode!(%{"jsonrpc" => "2.0", "method" => "eth_chainId", "params" => [], "id" => 1})
 
-    request =
-      Finch.build(:post, url, [{"content-type", "application/json"}], body)
+    request = Finch.build(:post, url, headers, body)
 
     case Finch.request(request, Lasso.Finch, receive_timeout: @default_timeout_ms) do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 ->
-        case classify_response_body(resp_body, chain) do
+        case classify_response_body(resp_body, chain_id) do
           :ok ->
             write_probe_success(instance_id)
             CircuitBreaker.signal_recovery_cast({instance_id, :http})
@@ -257,9 +392,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
     end
   end
 
-  @rate_limit_codes [-32_005, -32_097]
+  @rate_limit_codes [-32_005, -32_007, -32_029]
 
-  defp classify_response_body(body, chain) when is_binary(body) do
+  defp classify_response_body(body, chain_id) when is_binary(body) do
     case Jason.decode(body) do
       {:ok, %{"error" => %{"code" => code, "message" => msg}}} when code in @rate_limit_codes ->
         {:rate_limited, "#{code}: #{msg}"}
@@ -271,7 +406,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
         {:error, msg}
 
       {:ok, %{"result" => hex_chain_id}} ->
-        validate_chain_id(hex_chain_id, chain)
+        validate_chain_id_response(hex_chain_id, chain_id)
 
       {:ok, _} ->
         {:error, "unexpected JSON-RPC response shape"}
@@ -281,23 +416,18 @@ defmodule Lasso.Providers.ProbeCoordinator do
     end
   end
 
-  defp classify_response_body(_, _chain), do: {:error, "empty response body"}
+  defp classify_response_body(_, _chain_id), do: {:error, "empty response body"}
 
-  defp validate_chain_id(hex, chain) when is_binary(hex) do
-    case ChainValidator.expected_chain_id(chain) do
-      nil ->
-        :ok
-
-      expected ->
-        case Integer.parse(String.trim_leading(hex, "0x"), 16) do
-          {actual, ""} when actual == expected -> :ok
-          {actual, ""} -> {:error, "wrong chain_id: got #{actual}, expected #{expected}"}
-          _ -> {:error, "invalid chain_id response: #{hex}"}
-        end
+  defp validate_chain_id_response(hex, expected_chain_id)
+       when is_binary(hex) and is_integer(expected_chain_id) do
+    case Integer.parse(String.trim_leading(hex, "0x"), 16) do
+      {actual, ""} when actual == expected_chain_id -> :ok
+      {actual, ""} -> {:error, "wrong chain_id: got #{actual}, expected #{expected_chain_id}"}
+      _ -> {:error, "invalid chain_id response: #{hex}"}
     end
   end
 
-  defp validate_chain_id(_, _chain), do: :ok
+  defp validate_chain_id_response(_, _), do: :ok
 
   defp rate_limit_in_body?(body) when is_binary(body) do
     lower = String.downcase(body)
@@ -305,10 +435,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
   end
 
   defp rate_limit_in_body?(_), do: false
-
-  # ETS writers — write to {:health_probe, instance_id} (exclusively owned by ProbeCoordinator).
-  # HttpStrategy writes to {:health_block_sync, instance_id} separately.
-  # Runs inside Task.Supervisor children; if ETS is missing, the task crashes (expected).
 
   defp write_probe_success(instance_id) do
     existing = read_existing_probe(instance_id)
@@ -413,8 +539,8 @@ defmodule Lasso.Providers.ProbeCoordinator do
     Process.send_after(self(), :tick, @tick_interval_ms)
   end
 
-  @spec via_name(String.t()) :: {:via, Registry, {Lasso.Registry, term()}}
-  def via_name(chain) do
-    {:via, Registry, {Lasso.Registry, {:probe_coordinator, chain}}}
+  @spec via_name(pos_integer()) :: {:via, Registry, {Lasso.Registry, term()}}
+  def via_name(chain_id) when is_integer(chain_id) and chain_id > 0 do
+    {:via, Registry, {Lasso.Registry, {:probe_coordinator, chain_id}}}
   end
 end

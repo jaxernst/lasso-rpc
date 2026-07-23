@@ -60,17 +60,19 @@ defmodule LassoWeb.RPCController do
         |> json(JError.to_response(error, nil))
 
       chain_id ->
-        # ProfileResolverPlug guarantees :profile_slug is set and validated
-        # No fallback needed - if plug didn't run, we should fail fast
-        profile = conn.assigns.profile_slug
+        profile = routing_profile(conn)
 
-        case resolve_chain_name(profile, chain_id) do
-          {:ok, chain_name} ->
-            strategy = strategy_from(conn, params)
-            conn = assign(conn, :provider_strategy, strategy)
+        with {:ok, resolved_chain_id} <- resolve_chain(profile, chain_id),
+             :ok <- validate_provider_override(profile, resolved_chain_id, conn, params) do
+          requested_strategy = strategy_from(conn, params)
 
-            handle_chain_rpc(conn, chain_name)
+          conn =
+            conn
+            |> assign(:requested_provider_strategy, requested_strategy)
+            |> assign(:provider_strategy, requested_strategy)
 
+          handle_chain_rpc(conn, resolved_chain_id)
+        else
           {:error, reason} ->
             error = JError.new(-32_602, "Unsupported chain: #{reason}")
 
@@ -227,8 +229,8 @@ defmodule LassoWeb.RPCController do
     else
       # Select a batch provider for consistency across batch items.
       # All items prefer this provider, but can failover independently.
-      profile = conn.assigns[:profile_slug] || ProfileValidator.default_profile()
-      strategy = strategy_from(conn, %{})
+      profile = routing_profile(conn)
+      strategy = conn.assigns[:provider_strategy] || strategy_from(conn, %{})
 
       batch_provider =
         case Selection.select_provider(profile, chain, "eth_blockNumber", strategy: strategy) do
@@ -371,34 +373,29 @@ defmodule LassoWeb.RPCController do
   defp validate_json_rpc_request(_), do: {:error, JError.new(-32_600, "Invalid Request")}
 
   defp process_json_rpc_request(
-         %{"method" => "eth_chainId", "params" => [], "id" => req_id},
-         chain,
+         %{"method" => "eth_chainId", "params" => [], "id" => req_id} = request,
+         chain_id,
          conn
-       ) do
-    Logger.debug("Getting chain ID", chain: chain)
-    profile = conn.assigns[:profile_slug] || ProfileValidator.default_profile()
+       )
+       when is_integer(chain_id) and chain_id > 0 do
+    if provider_override_requested?(conn) do
+      forward_rpc_request(chain_id, "eth_chainId", Map.get(request, "params", []),
+        conn: conn,
+        jsonrpc_id: req_id
+      )
+    else
+      Logger.debug("Getting chain ID", chain_id: chain_id)
+      hex_chain_id = "0x" <> Integer.to_string(chain_id, 16)
+      raw_bytes = Jason.encode!(%{"jsonrpc" => "2.0", "id" => req_id, "result" => hex_chain_id})
 
-    case get_chain_id(profile, chain) do
-      {:ok, chain_id} ->
-        raw_bytes = Jason.encode!(%{"jsonrpc" => "2.0", "id" => req_id, "result" => chain_id})
+      ctx =
+        Lasso.RPC.RequestContext.new(chain_id, "eth_chainId", [],
+          strategy: conn.assigns[:provider_strategy],
+          plug_start_time: conn.private[:plug_start_time]
+        )
 
-        ctx =
-          Lasso.RPC.RequestContext.new(chain, "eth_chainId", [],
-            strategy: conn.assigns[:provider_strategy],
-            plug_start_time: conn.private[:plug_start_time]
-          )
-
-        ctx = %{ctx | status: :success}
-
-        {:ok,
-         %Response.Success{
-           id: req_id,
-           jsonrpc: "2.0",
-           raw_bytes: raw_bytes
-         }, ctx}
-
-      {:error, reason} ->
-        {:error, JError.new(-32_603, "Failed to get chain ID: #{reason}")}
+      {:ok, %Response.Success{id: req_id, jsonrpc: "2.0", raw_bytes: raw_bytes},
+       %{ctx | status: :success}}
     end
   end
 
@@ -480,19 +477,10 @@ defmodule LassoWeb.RPCController do
   end
 
   defp strategy_from(conn, params) do
-    case conn.assigns[:provider_strategy] do
-      nil ->
-        case params["strategy"] do
-          "load_balanced" -> :load_balanced
-          "round_robin" -> :load_balanced
-          "fastest" -> :fastest
-          "latency_weighted" -> :latency_weighted
-          _ -> default_provider_strategy()
-        end
-
-      existing_strategy ->
-        existing_strategy
-    end
+    conn.assigns[:requested_provider_strategy] ||
+      conn.assigns[:provider_strategy] ||
+      Helpers.normalize_strategy_token(params["strategy"]) ||
+      default_provider_strategy()
   end
 
   # Determine provider override from opts, params, or header.
@@ -542,41 +530,40 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  defp resolve_chain_name(profile, chain_identifier) do
-    # Try to get chain by name from the specified profile
-    case ConfigStore.get_chain(profile, chain_identifier) do
-      {:ok, _chain_config} ->
-        {:ok, chain_identifier}
+  defp routing_profile(conn) do
+    conn.assigns[:profile_id] || conn.assigns[:profile_slug] || ProfileValidator.default_profile()
+  end
 
-      {:error, :not_found} ->
-        # Not found by name - try parsing as numeric chain ID and search within profile
-        case Integer.parse(chain_identifier) do
-          {chain_id, ""} ->
-            find_chain_by_id_in_profile(profile, chain_id)
+  defp resolve_chain(profile, chain_identifier) when is_binary(chain_identifier) do
+    case ConfigStore.lookup_chain_id_in_profile(profile, chain_identifier) do
+      {:ok, chain_id} ->
+        {:ok, chain_id}
 
-          _ ->
-            {:error, "Chain '#{chain_identifier}' not found in profile '#{profile}'"}
+      :not_found ->
+        {:error, "Unknown chain '#{chain_identifier}' in profile '#{profile}'"}
+    end
+  end
+
+  defp validate_provider_override(_profile, _chain_id, _conn, %{"provider_override" => nil}),
+    do: :ok
+
+  defp validate_provider_override(profile, chain_id, conn, _params) do
+    case extract_provider_override(conn, []) do
+      nil ->
+        :ok
+
+      provider_id ->
+        case ConfigStore.get_provider(profile, chain_id, provider_id) do
+          {:ok, _provider} ->
+            :ok
+
+          {:error, :not_found} ->
+            {:error, "Provider '#{provider_id}' is not configured for this chain"}
         end
     end
   end
 
-  # Find a chain by numeric ID within a specific profile (never crosses profiles)
-  defp find_chain_by_id_in_profile(profile, chain_id) do
-    case ConfigStore.get_profile_chains(profile) do
-      {:ok, chains} ->
-        case Enum.find(chains, fn {_name, config} -> config.chain_id == chain_id end) do
-          {chain_name, _config} -> {:ok, chain_name}
-          nil -> {:error, "Chain ID #{chain_id} not found in profile '#{profile}'"}
-        end
-
-      {:error, :not_found} ->
-        {:error, "Profile '#{profile}' not found"}
-    end
-  end
-
-  defp get_chain_id(profile, chain_name) do
-    Helpers.get_chain_id(profile, chain_name)
-  end
+  defp provider_override_requested?(conn), do: not is_nil(extract_provider_override(conn, []))
 
   defp maybe_inject_observability_metadata(conn, ctx) do
     case conn.assigns[:include_meta] do

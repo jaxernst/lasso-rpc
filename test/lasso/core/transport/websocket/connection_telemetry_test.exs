@@ -30,7 +30,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
 
     # Start circuit breaker for the endpoint (keyed by instance_id)
     circuit_breaker_config = %{failure_threshold: 3, recovery_timeout: 200, success_threshold: 1}
-    instance_id = "#{endpoint.chain_name}:#{endpoint.id}"
+    instance_id = "#{endpoint.chain_id}:#{endpoint.id}"
 
     {:ok, _} =
       CircuitBreaker.start_link({{instance_id, :ws}, circuit_breaker_config})
@@ -39,7 +39,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
       # Clean up WebSocket connection
       cleanup_ws_connection(endpoint)
       # Clean up circuit breaker
-      cleanup_circuit_breaker(endpoint.chain_name, endpoint.id)
+      cleanup_circuit_breaker(endpoint.chain_id, endpoint.id)
       # Clean up application config
       Application.delete_env(:lasso, :ws_client_module)
       Application.delete_env(:lasso, :ws_client_opts)
@@ -57,8 +57,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
     end
   end
 
-  defp cleanup_circuit_breaker(chain_name, provider_id) do
-    instance_id = "#{chain_name}:#{provider_id}"
+  defp cleanup_circuit_breaker(chain_id, provider_id) do
+    instance_id = "#{chain_id}:#{provider_id}"
     key = "#{instance_id}:ws"
 
     case GenServer.whereis({:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}) do
@@ -68,8 +68,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
   end
 
   defp resolve_instance_id(endpoint) do
-    Lasso.Providers.Catalog.lookup_instance_id(endpoint.profile, endpoint.chain_name, endpoint.id) ||
-      "#{endpoint.chain_name}:#{endpoint.id}"
+    Lasso.Providers.Catalog.lookup_instance_id(endpoint.profile, endpoint.chain_id, endpoint.id) ||
+      "#{endpoint.chain_id}:#{endpoint.id}"
   end
 
   describe "connection lifecycle telemetry" do
@@ -82,7 +82,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
 
       assert Registry.lookup(
                Lasso.Registry,
-               {:ws_conn, endpoint.profile, endpoint.chain_name, endpoint.id}
+               {:ws_conn, endpoint.profile, endpoint.chain_id, endpoint.id}
              ) == []
 
       GenServer.stop(pid)
@@ -104,7 +104,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
       # Verify telemetry data
       assert measurements == %{}
       assert metadata.provider_id == endpoint.id
-      assert metadata.chain == endpoint.chain_name
+      assert metadata.chain_id == endpoint.chain_id
       assert metadata.reconnect_attempt == 0
 
       GenServer.stop(pid)
@@ -156,7 +156,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
             TelemetrySync.await_event(failed_collector, timeout: 3_000)
 
           assert metadata.provider_id == endpoint.id
-          assert metadata.chain == endpoint.chain_name
+          assert metadata.chain_id == endpoint.chain_id
           assert is_binary(metadata.error_message) or is_atom(metadata.error_message)
           assert is_boolean(metadata.will_reconnect)
 

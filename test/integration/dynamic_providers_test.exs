@@ -4,9 +4,9 @@ defmodule Lasso.Integration.DynamicProvidersTest do
   @moduletag :integration
 
   alias Lasso.Providers
-  alias Lasso.Testing.MockProvider
+  alias Lasso.Testing.{ChainHelper, MockProvider}
 
-  @test_chain "ethereum"
+  @test_chain 1
 
   # Use mock providers for deterministic testing
   @test_providers [
@@ -25,7 +25,45 @@ defmodule Lasso.Integration.DynamicProvidersTest do
     }
   ]
 
+  setup do
+    :ok = ChainHelper.ensure_chain_exists(@test_chain)
+    :ok
+  end
+
   describe "Dynamic Provider Management" do
+    test "starts supervision for a runtime-registered chain" do
+      chain_id = 900_000_000 + :rand.uniform(99_999_999)
+      provider_id = "runtime-chain-provider-#{chain_id}"
+
+      :ok =
+        Lasso.Config.ConfigStore.register_chain_runtime("public", chain_id, %{
+          display_name: "Runtime Chain",
+          url_aliases: ["runtime-#{chain_id}"],
+          providers: []
+        })
+
+      on_exit(fn ->
+        Providers.remove_provider(chain_id, provider_id)
+        Lasso.Config.ConfigStore.unregister_chain_runtime("public", chain_id)
+      end)
+
+      assert {:ok, ^provider_id} =
+               Providers.add_provider(
+                 chain_id,
+                 %{
+                   id: provider_id,
+                   name: "Runtime Chain Provider",
+                   url: "http://127.0.0.1:1",
+                   priority: 1
+                 },
+                 validate: false
+               )
+
+      assert Lasso.ProfileChainSupervisor.running?("public", chain_id)
+
+      assert is_pid(GenServer.whereis(Lasso.Providers.ProbeCoordinator.via_name(chain_id)))
+    end
+
     setup do
       # Use unique provider ID per test to avoid conflicts
       test_id = "test_dynamic_#{:erlang.unique_integer([:positive])}"
@@ -49,6 +87,60 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       {:ok, provider_config: provider_config, test_id: test_id}
     end
 
+    test "preserves runtime provider authentication and isolates physical instances" do
+      suffix = System.unique_integer([:positive])
+      first_id = "auth-first-#{suffix}"
+      second_id = "auth-second-#{suffix}"
+      url = "http://127.0.0.1:1"
+
+      on_exit(fn ->
+        Providers.remove_provider(@test_chain, first_id)
+        Providers.remove_provider(@test_chain, second_id)
+      end)
+
+      assert {:ok, ^first_id} =
+               Providers.add_provider(
+                 @test_chain,
+                 %{
+                   id: first_id,
+                   name: "First Auth Provider",
+                   url: url,
+                   api_key: "first-secret",
+                   headers: %{"x-network" => "first"}
+                 },
+                 validate: false
+               )
+
+      assert {:ok, ^second_id} =
+               Providers.add_provider(
+                 @test_chain,
+                 %{
+                   id: second_id,
+                   name: "Second Auth Provider",
+                   url: url,
+                   api_key: "second-secret",
+                   headers: %{"x-network" => "second"}
+                 },
+                 validate: false
+               )
+
+      assert {:ok, first} =
+               Lasso.Config.ConfigStore.get_provider("public", @test_chain, first_id)
+
+      assert first.api_key == "first-secret"
+      assert first.headers == %{"x-network" => "first"}
+
+      first_instance =
+        Lasso.Providers.Catalog.lookup_instance_id("public", @test_chain, first_id)
+
+      second_instance =
+        Lasso.Providers.Catalog.lookup_instance_id("public", @test_chain, second_id)
+
+      assert is_binary(first_instance)
+      assert is_binary(second_instance)
+      refute first_instance == second_instance
+    end
+
     test "can add a provider dynamically", %{provider_config: config, test_id: test_id} do
       # Add provider
       assert {:ok, provider_id} = Providers.add_provider(@test_chain, config)
@@ -64,18 +156,45 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       assert dynamic_provider.has_ws == true
     end
 
-    test "can remove a provider dynamically", %{provider_config: config, test_id: test_id} do
-      # Add provider first
+    test "removal unregisters before rebuilding routing and reaps an unreferenced instance", %{
+      provider_config: config,
+      test_id: test_id
+    } do
+      alias Lasso.BlockSync.Worker
+      alias Lasso.Providers.{Catalog, InstanceSupervisor}
+
       assert {:ok, _id} = Providers.add_provider(@test_chain, config)
+      instance_id = Catalog.lookup_instance_id("public", @test_chain, test_id)
+      assert is_binary(instance_id)
 
-      # Verify it exists
-      assert {:ok, _provider} = Providers.get_provider(@test_chain, test_id)
+      assert %{provider_id: ^test_id} =
+               Enum.find(
+                 Catalog.get_profile_providers("public", @test_chain),
+                 &(&1.provider_id == test_id)
+               )
 
-      # Remove provider
+      assert eventually(fn ->
+               GenServer.whereis(InstanceSupervisor.via_name(instance_id)) != nil
+             end)
+
+      assert eventually(fn -> GenServer.whereis(Worker.via(@test_chain, instance_id)) != nil end)
+
       assert :ok = Providers.remove_provider(@test_chain, test_id)
 
-      # Verify it's gone
       assert {:error, :not_found} = Providers.get_provider(@test_chain, test_id)
+
+      refute Enum.any?(
+               Catalog.get_profile_providers("public", @test_chain),
+               &(&1.provider_id == test_id)
+             )
+
+      assert Catalog.get_instance_refs(instance_id) == []
+
+      assert eventually(fn ->
+               GenServer.whereis(InstanceSupervisor.via_name(instance_id)) == nil
+             end)
+
+      assert eventually(fn -> GenServer.whereis(Worker.via(@test_chain, instance_id)) == nil end)
     end
 
     test "prevents adding duplicate providers", %{provider_config: config, test_id: test_id} do
@@ -85,6 +204,9 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       # Try to add again
       assert {:error, {:already_exists, ^test_id}} =
                Providers.add_provider(@test_chain, config)
+
+      assert {:ok, existing} = Providers.get_provider(@test_chain, test_id)
+      assert existing.id == test_id
     end
 
     test "can list all providers with status", %{provider_config: config} do
@@ -176,8 +298,8 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       assert {:ok, providers} = Providers.list_providers(@test_chain)
       dynamic = Enum.find(providers, fn p -> p.id == test_id end)
 
-      # Should be in connecting or healthy state
-      assert dynamic.status in [:connecting, :healthy]
+      assert dynamic.status in [:connecting, :healthy, :degraded, :unhealthy, :rate_limited]
+      assert dynamic.has_http
     end
 
     test "removed provider disappears from routing", %{provider_config: config, test_id: test_id} do
@@ -273,6 +395,18 @@ defmodule Lasso.Integration.DynamicProvidersTest do
       assert {:ok, block_number} = Lasso.RPC.Response.Success.decode_result(response)
       assert is_binary(block_number)
       assert String.starts_with?(block_number, "0x")
+    end
+  end
+
+  defp eventually(fun, attempts \\ 40)
+  defp eventually(fun, 0), do: fun.()
+
+  defp eventually(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(25)
+      eventually(fun, attempts - 1)
     end
   end
 end

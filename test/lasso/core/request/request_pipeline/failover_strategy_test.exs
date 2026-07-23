@@ -8,7 +8,7 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategyTest do
   defp make_channel(provider_id \\ "test-provider") do
     %Channel{
       profile: "public",
-      chain: "ethereum",
+      chain_id: 1,
       provider_id: provider_id,
       transport: :http,
       raw_channel: nil,
@@ -18,7 +18,7 @@ defmodule Lasso.RPC.RequestPipeline.FailoverStrategyTest do
   end
 
   defp make_ctx(opts \\ []) do
-    ctx = RequestContext.new("ethereum", "eth_call", [])
+    ctx = RequestContext.new(1, "eth_call", [])
     error_categories = Keyword.get(opts, :error_categories, %{})
     %{ctx | repeated_error_categories: error_categories}
   end

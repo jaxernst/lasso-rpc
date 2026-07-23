@@ -26,9 +26,10 @@ defmodule Lasso.Config.RuntimeConfig do
   @doc """
   Gets chain configuration with sensible defaults.
   """
-  @spec get_chain_config(String.t(), String.t()) :: {:ok, chain_config()} | {:error, term()}
-  def get_chain_config(profile, chain_name) do
-    case ConfigStore.get_chain(profile, chain_name) do
+  @spec get_chain_config(String.t(), pos_integer() | String.t()) ::
+          {:ok, chain_config()} | {:error, term()}
+  def get_chain_config(profile, chain_id) do
+    case ConfigStore.get_chain(profile, chain_id) do
       {:ok, config} ->
         {:ok, normalize_chain_config(config)}
 
@@ -40,10 +41,10 @@ defmodule Lasso.Config.RuntimeConfig do
   @doc """
   Gets provider configuration with validation.
   """
-  @spec get_provider_config(String.t(), String.t(), String.t()) ::
+  @spec get_provider_config(String.t(), pos_integer(), String.t()) ::
           {:ok, provider_config()} | {:error, term()}
-  def get_provider_config(profile, chain_name, provider_id) do
-    case ConfigStore.get_provider(profile, chain_name, provider_id) do
+  def get_provider_config(profile, chain_id, provider_id) do
+    case ConfigStore.get_provider(profile, chain_id, provider_id) do
       {:ok, config} ->
         {:ok, normalize_provider_config(config)}
 
@@ -55,10 +56,10 @@ defmodule Lasso.Config.RuntimeConfig do
   @doc """
   Gets all providers for a chain in priority order.
   """
-  @spec get_chain_providers(String.t(), String.t()) ::
+  @spec get_chain_providers(String.t(), pos_integer()) ::
           {:ok, [provider_config()]} | {:error, term()}
-  def get_chain_providers(profile, chain_name) do
-    case ConfigStore.get_providers(profile, chain_name) do
+  def get_chain_providers(profile, chain_id) do
+    case ConfigStore.get_providers(profile, chain_id) do
       {:ok, providers} ->
         normalized =
           providers
@@ -119,12 +120,12 @@ defmodule Lasso.Config.RuntimeConfig do
   @doc """
   Creates a scoped configuration for a specific module/process.
   """
-  @spec create_scoped_config(String.t(), String.t(), keyword()) :: map()
-  def create_scoped_config(profile, chain_name, opts \\ []) do
-    with {:ok, chain_config} <- get_chain_config(profile, chain_name),
-         {:ok, providers} <- get_chain_providers(profile, chain_name) do
+  @spec create_scoped_config(String.t(), pos_integer(), keyword()) :: map()
+  def create_scoped_config(profile, chain_id, opts \\ []) do
+    with {:ok, chain_config} <- get_chain_config(profile, chain_id),
+         {:ok, providers} <- get_chain_providers(profile, chain_id) do
       %{
-        chain: chain_name,
+        chain: chain_id,
         chain_config: chain_config,
         providers: providers,
         metrics_backend: get_metrics_backend(),

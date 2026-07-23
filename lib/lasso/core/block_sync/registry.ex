@@ -9,8 +9,8 @@ defmodule Lasso.BlockSync.Registry do
   ## ETS Schema
 
   Keys are tuples for efficient lookups:
-  - `{:height, chain, provider_id}` => `{height, timestamp_ms, source, metadata}`
-  - `{:block_time, chain}` => `%BlockTimeMeasurement{}`
+  - `{:height, chain_id, provider_id}` => `{height, timestamp_ms, source, metadata}`
+  - `{:block_time, chain_id}` => `%BlockTimeMeasurement{}`
 
   ## Freshness
 
@@ -34,20 +34,20 @@ defmodule Lasso.BlockSync.Registry do
   Store a block height from a provider.
 
   ## Parameters
-  - `chain` - Chain identifier (e.g., "ethereum")
+  - `chain_id` - Chain identifier (EIP-155 integer, e.g. 1 for Ethereum mainnet)
   - `provider_id` - Provider identifier
   - `height` - Block height (integer)
   - `source` - `:ws` or `:http`
   - `metadata` - Optional map with additional data (hash, timestamp, latency_ms)
   """
-  @spec put_height(String.t(), String.t(), integer(), :ws | :http, map()) :: :ok
-  def put_height(chain, provider_id, height, source, metadata \\ %{})
-      when is_binary(chain) and is_binary(provider_id) and is_integer(height) do
+  @spec put_height(pos_integer(), String.t(), integer(), :ws | :http, map()) :: :ok
+  def put_height(chain_id, provider_id, height, source, metadata \\ %{})
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) and
+             is_integer(height) do
     timestamp = System.system_time(:millisecond)
-    :ets.insert(@table, {{:height, chain, provider_id}, {height, timestamp, source, metadata}})
+    :ets.insert(@table, {{:height, chain_id, provider_id}, {height, timestamp, source, metadata}})
 
-    # Update block time measurement (tracks max height seen across all providers)
-    update_block_time(chain, height)
+    update_block_time(chain_id, height)
 
     :ok
   end
@@ -57,10 +57,11 @@ defmodule Lasso.BlockSync.Registry do
 
   Returns `{:ok, {height, timestamp, source, metadata}}` or `{:error, :not_found}`.
   """
-  @spec get_height(String.t(), String.t()) ::
+  @spec get_height(pos_integer(), String.t()) ::
           {:ok, {integer(), integer(), :ws | :http, map()}} | {:error, :not_found}
-  def get_height(chain, provider_id) when is_binary(chain) and is_binary(provider_id) do
-    case :ets.lookup(@table, {:height, chain, provider_id}) do
+  def get_height(chain_id, provider_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
+    case :ets.lookup(@table, {:height, chain_id, provider_id}) do
       [{_key, value}] -> {:ok, value}
       [] -> {:error, :not_found}
     end
@@ -75,43 +76,29 @@ defmodule Lasso.BlockSync.Registry do
 
   Only considers heights from the last `freshness_ms` milliseconds.
 
-  ## Parameters
-  - `chain` - Chain identifier
-  - `freshness_ms` - Maximum age of data to consider (default: 30 seconds)
-
   Returns `{:ok, height}` or `{:error, :no_data}`.
   """
-  @spec get_consensus_height(String.t(), non_neg_integer()) ::
+  @spec get_consensus_height(pos_integer(), non_neg_integer()) ::
           {:ok, integer()} | {:error, :no_data}
-  def get_consensus_height(chain, freshness_ms \\ @default_freshness_ms)
-      when is_binary(chain) do
-    calculate_consensus(chain, nil, freshness_ms)
+  def get_consensus_height(chain_id, freshness_ms \\ @default_freshness_ms)
+      when is_integer(chain_id) and chain_id > 0 do
+    calculate_consensus(chain_id, nil, freshness_ms)
   end
 
   @doc """
   Get consensus height filtered by specific providers.
 
-  ## Parameters
-  - `chain` - Chain identifier
-  - `provider_ids` - List of provider IDs to consider. If nil or empty, uses all providers.
-  - `freshness_ms` - Maximum age of data to consider (default: 30 seconds)
-
   Returns `{:ok, height}` or `{:error, :no_data}`.
   """
-  @spec get_consensus_height_filtered(String.t(), [String.t()] | nil, non_neg_integer()) ::
+  @spec get_consensus_height_filtered(pos_integer(), [String.t()] | nil, non_neg_integer()) ::
           {:ok, integer()} | {:error, :no_data}
-  def get_consensus_height_filtered(chain, provider_ids, freshness_ms \\ @default_freshness_ms)
-      when is_binary(chain) do
-    calculate_consensus(chain, provider_ids, freshness_ms)
+  def get_consensus_height_filtered(chain_id, provider_ids, freshness_ms \\ @default_freshness_ms)
+      when is_integer(chain_id) and chain_id > 0 do
+    calculate_consensus(chain_id, provider_ids, freshness_ms)
   end
 
   @doc """
   Calculate provider's lag compared to consensus height.
-
-  ## Parameters
-  - `chain` - Chain identifier
-  - `provider_id` - Provider to check lag for
-  - `freshness_ms` - Maximum age of data to consider (default: 30 seconds)
 
   Returns:
   - `{:ok, lag}` where lag is `provider_height - consensus_height`
@@ -119,14 +106,14 @@ defmodule Lasso.BlockSync.Registry do
   - `{:error, :no_provider_data}` if provider has no height data
   - `{:error, :no_consensus}` if no consensus can be calculated
   """
-  @spec get_provider_lag(String.t(), String.t(), non_neg_integer()) ::
+  @spec get_provider_lag(pos_integer(), String.t(), non_neg_integer()) ::
           {:ok, integer()} | {:error, :no_provider_data | :no_consensus | :stale_data}
-  def get_provider_lag(chain, provider_id, freshness_ms \\ @default_freshness_ms)
-      when is_binary(chain) and is_binary(provider_id) do
-    with {:ok, {height, timestamp, _source, _meta}} <- get_height(chain, provider_id),
+  def get_provider_lag(chain_id, provider_id, freshness_ms \\ @default_freshness_ms)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
+    with {:ok, {height, timestamp, _source, _meta}} <- get_height(chain_id, provider_id),
          age = System.system_time(:millisecond) - timestamp,
          true <- age <= freshness_ms,
-         {:ok, consensus} <- get_consensus_height(chain, freshness_ms) do
+         {:ok, consensus} <- get_consensus_height(chain_id, freshness_ms) do
       {:ok, height - consensus}
     else
       false -> {:error, :stale_data}
@@ -140,10 +127,12 @@ defmodule Lasso.BlockSync.Registry do
 
   Returns a map of `provider_id => {height, timestamp, source, metadata}`.
   """
-  @spec get_all_heights(String.t()) :: %{String.t() => {integer(), integer(), :ws | :http, map()}}
-  def get_all_heights(chain) when is_binary(chain) do
+  @spec get_all_heights(pos_integer()) :: %{
+          String.t() => {integer(), integer(), :ws | :http, map()}
+        }
+  def get_all_heights(chain_id) when is_integer(chain_id) and chain_id > 0 do
     match_spec = [
-      {{{:height, chain, :"$1"}, :"$2"}, [], [{{:"$1", :"$2"}}]}
+      {{{:height, chain_id, :"$1"}, :"$2"}, [], [{{:"$1", :"$2"}}]}
     ]
 
     :ets.select(@table, match_spec)
@@ -155,14 +144,13 @@ defmodule Lasso.BlockSync.Registry do
 
   Returns a map of provider_id => %{height: ..., source: ..., lag: ..., ...}
   """
-  @spec get_chain_status(String.t()) :: %{String.t() => map()}
-  def get_chain_status(chain) when is_binary(chain) do
-    heights = get_all_heights(chain)
+  @spec get_chain_status(pos_integer()) :: %{String.t() => map()}
+  def get_chain_status(chain_id) when is_integer(chain_id) and chain_id > 0 do
+    heights = get_all_heights(chain_id)
     now = System.system_time(:millisecond)
 
-    # Get consensus for lag calculation
     consensus =
-      case get_consensus_height(chain) do
+      case get_consensus_height(chain_id) do
         {:ok, h} -> h
         _ -> nil
       end
@@ -187,10 +175,10 @@ defmodule Lasso.BlockSync.Registry do
   @doc """
   Clear all data for a chain. Useful for testing.
   """
-  @spec clear_chain(String.t()) :: :ok
-  def clear_chain(chain) when is_binary(chain) do
-    :ets.match_delete(@table, {{:height, chain, :_}, :_})
-    :ets.delete(@table, {:block_time, chain})
+  @spec clear_chain(pos_integer()) :: :ok
+  def clear_chain(chain_id) when is_integer(chain_id) and chain_id > 0 do
+    :ets.match_delete(@table, {{:height, chain_id, :_}, :_})
+    :ets.delete(@table, {:block_time, chain_id})
     :ok
   end
 
@@ -202,10 +190,10 @@ defmodule Lasso.BlockSync.Registry do
   Returns the measured block time if enough samples have been collected,
   otherwise returns nil.
   """
-  @spec get_block_time_ms(String.t()) :: non_neg_integer() | nil
-  def get_block_time_ms(chain) when is_binary(chain) do
-    case :ets.lookup(@table, {:block_time, chain}) do
-      [{{:block_time, ^chain}, measurement}] ->
+  @spec get_block_time_ms(pos_integer()) :: non_neg_integer() | nil
+  def get_block_time_ms(chain_id) when is_integer(chain_id) and chain_id > 0 do
+    case :ets.lookup(@table, {:block_time, chain_id}) do
+      [{{:block_time, ^chain_id}, measurement}] ->
         BlockTimeMeasurement.get_block_time_ms(measurement, nil)
 
       [] ->
@@ -219,27 +207,27 @@ defmodule Lasso.BlockSync.Registry do
   Should be called whenever the consensus height changes to track
   inter-block timing.
   """
-  @spec update_block_time(String.t(), non_neg_integer()) :: :ok
-  def update_block_time(chain, height) when is_binary(chain) and is_integer(height) do
+  @spec update_block_time(pos_integer(), non_neg_integer()) :: :ok
+  def update_block_time(chain_id, height)
+      when is_integer(chain_id) and chain_id > 0 and is_integer(height) do
     measurement =
-      case :ets.lookup(@table, {:block_time, chain}) do
-        [{{:block_time, ^chain}, m}] -> m
+      case :ets.lookup(@table, {:block_time, chain_id}) do
+        [{{:block_time, ^chain_id}, m}] -> m
         [] -> %BlockTimeMeasurement{}
       end
 
     updated = BlockTimeMeasurement.record(measurement, height)
-    :ets.insert(@table, {{:block_time, chain}, updated})
+    :ets.insert(@table, {{:block_time, chain_id}, updated})
     :ok
   end
 
   ## Private Functions
 
-  defp calculate_consensus(chain, provider_ids, freshness_ms) do
+  defp calculate_consensus(chain_id, provider_ids, freshness_ms) do
     now = System.system_time(:millisecond)
     cutoff = now - freshness_ms
 
-    # Find all fresh heights for this chain
-    heights = get_all_heights(chain)
+    heights = get_all_heights(chain_id)
 
     # Filter by provider_ids if specified
     heights_filtered =

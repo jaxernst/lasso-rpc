@@ -31,7 +31,7 @@ defmodule Lasso.Config.Backend.File do
 
   - Load all `*.yml` files in `profiles_dir`
   - Skip files starting with `.` or `_` (backups, templates)
-  - Profile slug must match filename (e.g., `premium.yml` must have `slug: premium`)
+  - Profile slug must match filename (e.g., `archive.yml` must have `slug: archive`)
   - **Fail-fast**: First invalid file fails entire load
   """
 
@@ -39,7 +39,7 @@ defmodule Lasso.Config.Backend.File do
 
   require Logger
 
-  alias Lasso.Config.ChainConfig
+  alias Lasso.Config.{ChainConfig, ProfileId}
   alias Lasso.RPC.Providers.Capabilities
 
   @type state :: %{
@@ -86,7 +86,7 @@ defmodule Lasso.Config.Backend.File do
   end
 
   @impl true
-  def load(%{profiles_dir: profiles_dir}, slug) do
+  def load(%{profiles_dir: profiles_dir}, slug) when is_binary(slug) do
     path = Path.join(profiles_dir, "#{slug}.yml")
 
     if File.exists?(path) do
@@ -95,6 +95,8 @@ defmodule Lasso.Config.Backend.File do
       {:error, :not_found}
     end
   end
+
+  def load(_state, _slug), do: {:error, :not_found}
 
   @impl true
   def save(%{profiles_dir: profiles_dir}, slug, yaml) do
@@ -196,6 +198,8 @@ defmodule Lasso.Config.Backend.File do
              {:ok, chains} <- parse_chains_data(chains_data) do
           {:ok,
            %{
+             scope: :system,
+             profile_id: ProfileId.for_system(meta["slug"]),
              slug: meta["slug"],
              name: meta["name"],
              logo: meta["logo"],
@@ -220,6 +224,8 @@ defmodule Lasso.Config.Backend.File do
 
       {:ok,
        %{
+         scope: :system,
+         profile_id: ProfileId.for_system(slug),
          slug: slug,
          name: yaml_data["name"] || "Default Profile",
          logo: nil,
@@ -246,6 +252,8 @@ defmodule Lasso.Config.Backend.File do
     %ChainConfig{
       chain_id: chain_data["chain_id"],
       name: chain_data["name"] || chain_name,
+      display_name: chain_data["name"] || chain_name,
+      url_aliases: parse_url_aliases(chain_name, chain_data),
       block_time_ms: chain_data["block_time_ms"],
       providers: parse_providers(chain_data["providers"] || []),
       selection: parse_selection(chain_data["selection"]),
@@ -266,12 +274,21 @@ defmodule Lasso.Config.Backend.File do
         capabilities: parse_capabilities(provider_data["capabilities"]),
         subscribe_new_heads: parse_subscribe_new_heads(provider_data["subscribe_new_heads"]),
         archival: parse_archival(provider_data["archival"]),
-        sharing_mode: parse_sharing_mode(provider_data["sharing_mode"])
+        sharing_mode: parse_sharing_mode(provider_data["sharing_mode"]),
+        api_key: ChainConfig.substitute_env_vars(provider_data["api_key"]),
+        credentials: provider_data["credentials"],
+        headers: provider_data["headers"],
+        auth_headers: provider_data["auth_headers"]
       }
 
       Capabilities.validate!(provider.id, provider.capabilities)
       provider
     end)
+  end
+
+  defp parse_url_aliases(chain_name, chain_data) do
+    configured = chain_data["url_aliases"] || chain_data["aliases"] || []
+    Enum.uniq([chain_name | List.wrap(configured)])
   end
 
   defp parse_subscribe_new_heads(nil), do: nil
@@ -465,8 +482,8 @@ defmodule Lasso.Config.Backend.File do
     Logger.info("Auto-migrating #{legacy_path} to #{profiles_dir}/public.yml")
 
     with {:ok, content} <- File.read(legacy_path),
-         {:ok, yaml_data} <- YamlElixir.read_from_string(content) do
-      profile_yaml = generate_profile_yaml(yaml_data)
+         {:ok, _yaml_data} <- YamlElixir.read_from_string(content) do
+      profile_yaml = generate_profile_yaml(%{"__raw__" => content})
       target_path = Path.join(profiles_dir, "public.yml")
 
       case File.write(target_path, profile_yaml) do
@@ -483,6 +500,21 @@ defmodule Lasso.Config.Backend.File do
         Logger.error("Failed to read legacy config: #{inspect(reason)}")
         {:error, {:migration_read_failed, reason}}
     end
+  end
+
+  defp legacy_profile_frontmatter do
+    """
+    ---
+    name: Public Providers
+    slug: public
+    rps_limit: 100
+    burst_limit: 500
+    ---
+    """
+  end
+
+  defp generate_profile_yaml(%{"__raw__" => content}) when is_binary(content) do
+    legacy_profile_frontmatter() <> content
   end
 
   defp generate_profile_yaml(yaml_data) do

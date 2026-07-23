@@ -47,17 +47,28 @@ defmodule LassoWeb.RPCSocket do
     connection_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
     params = transport_info[:params] || %{}
-    uri = transport_info[:connect_info][:uri]
-    chain = params["chain_id"] || "ethereum"
+    connect_info = transport_info[:connect_info] || %{}
+    uri = connect_info[:uri]
+    chain_identifier = params["chain_id"] || "ethereum"
 
     {strategy, provider_id} = extract_routing_params(uri, params)
 
-    with {:ok, profile} <- validate_profile(params["profile"], connection_id),
-         :ok <- validate_provider_override(profile, chain, provider_id, connection_id) do
+    with {:ok, profile_slug} <- validate_profile(params["profile"], connection_id),
+         {:ok, profile_meta} <- ConfigStore.get_profile(profile_slug),
+         {:ok, chain_id} <- resolve_chain_id(profile_meta.profile_id, chain_identifier),
+         :ok <-
+           validate_provider_override(
+             profile_meta.profile_id,
+             chain_id,
+             provider_id,
+             connection_id
+           ) do
       socket_state = %{
-        profile: profile,
-        chain: chain,
-        strategy: strategy,
+        profile: profile_meta.profile_id,
+        profile_slug: profile_slug,
+        chain_id: chain_id,
+        strategy: strategy || default_provider_strategy(),
+        requested_strategy: strategy || default_provider_strategy(),
         provider_id: provider_id,
         subscriptions: %{},
         client_pid: self(),
@@ -71,10 +82,18 @@ defmodule LassoWeb.RPCSocket do
       routing_info = build_routing_info(strategy, provider_id)
 
       Logger.info(
-        "JSON-RPC WebSocket client connected: #{profile}:#{chain}#{routing_info} (id: #{connection_id}, ip: #{client_ip})"
+        "JSON-RPC WebSocket client connected: #{profile_slug}:#{chain_id}#{routing_info} (id: #{connection_id}, ip: #{client_ip})"
       )
 
       {:ok, socket_state}
+    else
+      reason ->
+        Logger.warning("WebSocket connection rejected: #{inspect(reason)}",
+          connection_id: connection_id,
+          client_ip: client_ip
+        )
+
+        :error
     end
   end
 
@@ -96,15 +115,15 @@ defmodule LassoWeb.RPCSocket do
 
   defp validate_provider_override(_profile, _chain, nil, _connection_id), do: :ok
 
-  defp validate_provider_override(profile, chain, provider_id, connection_id) do
-    case ConfigStore.get_provider(profile, chain, provider_id) do
+  defp validate_provider_override(profile, chain_id, provider_id, connection_id) do
+    case ConfigStore.get_provider(profile, chain_id, provider_id) do
       {:ok, _provider} ->
         :ok
 
       {:error, _} ->
         Logger.warning("WebSocket connection rejected: provider not found",
           provided_provider: provider_id,
-          chain: chain,
+          chain_id: chain_id,
           profile: profile,
           connection_id: connection_id
         )
@@ -238,7 +257,7 @@ defmodule LassoWeb.RPCSocket do
 
     # Unsubscribe all active subscriptions
     Enum.each(state.subscriptions, fn {subscription_id, _type} ->
-      SubscriptionRouter.unsubscribe(state.profile, state.chain, subscription_id)
+      SubscriptionRouter.unsubscribe(state.profile, state.chain_id, subscription_id)
     end)
 
     :ok
@@ -255,9 +274,9 @@ defmodule LassoWeb.RPCSocket do
 
     # Create request context for observability
     ctx =
-      RequestContext.new(state.chain, method, params_list,
+      RequestContext.new(state.chain_id, method, params_list,
         transport: :ws,
-        strategy: default_provider_strategy()
+        strategy: state.strategy
       )
 
     case handle_rpc_method(method, params_list, state, ctx) do
@@ -327,7 +346,9 @@ defmodule LassoWeb.RPCSocket do
   defp handle_rpc_method("eth_subscribe", [subscription_type | rest], state, ctx) do
     case subscription_type do
       "newHeads" ->
-        case SubscriptionRouter.subscribe(state.profile, state.chain, {:newHeads}) do
+        case SubscriptionRouter.subscribe(state.profile, state.chain_id, {:newHeads},
+               provider_id: state.provider_id
+             ) do
           {:ok, subscription_id} ->
             new_state = update_subscriptions(state, subscription_id, "newHeads")
             updated_ctx = RequestContext.record_success(ctx, subscription_id)
@@ -342,7 +363,9 @@ defmodule LassoWeb.RPCSocket do
       "logs" ->
         filter = List.first(rest, %{})
 
-        case SubscriptionRouter.subscribe(state.profile, state.chain, {:logs, filter}) do
+        case SubscriptionRouter.subscribe(state.profile, state.chain_id, {:logs, filter},
+               provider_id: state.provider_id
+             ) do
           {:ok, subscription_id} ->
             new_state = update_subscriptions(state, subscription_id, {"logs", filter})
             updated_ctx = RequestContext.record_success(ctx, subscription_id)
@@ -368,7 +391,7 @@ defmodule LassoWeb.RPCSocket do
         {:ok, false, state, updated_ctx}
 
       {_subscription_type, updated_subscriptions} ->
-        SubscriptionRouter.unsubscribe(state.profile, state.chain, subscription_id)
+        SubscriptionRouter.unsubscribe(state.profile, state.chain_id, subscription_id)
         new_state = %{state | subscriptions: updated_subscriptions}
         updated_ctx = RequestContext.record_success(ctx, true)
         {:ok, true, new_state, updated_ctx}
@@ -378,7 +401,7 @@ defmodule LassoWeb.RPCSocket do
   defp handle_rpc_method("eth_chainId", [], state, ctx) do
     # Note: We don't have request_id here, so we can't build a Response.Success
     # This is fine - subscriptions and chainId return plain values, only pipeline results are Response.Success
-    case get_chain_id(state.profile, state.chain) do
+    case get_chain_id(state.profile, state.chain_id) do
       {:ok, chain_id} ->
         updated_ctx = RequestContext.record_success(ctx, chain_id)
         {:ok, chain_id, state, updated_ctx}
@@ -391,18 +414,19 @@ defmodule LassoWeb.RPCSocket do
 
   # Generic read-only method forwarding
   defp handle_rpc_method(method, params, state, ctx) do
-    strategy = state[:strategy] || default_provider_strategy()
+    strategy = state.strategy || default_provider_strategy()
 
     request_opts = %RequestOptions{
+      profile: state.profile,
       strategy: strategy,
       timeout_ms: 10_000,
       request_context: ctx,
-      provider_override: state[:provider_id]
+      provider_override: state.provider_id
     }
 
     # Pass context to RequestPipeline
     case RequestPipeline.execute_via_channels(
-           state.chain,
+           state.chain_id,
            method,
            params,
            request_opts
@@ -424,6 +448,13 @@ defmodule LassoWeb.RPCSocket do
 
   defp get_chain_id(profile, chain_name) do
     Helpers.get_chain_id(profile, chain_name)
+  end
+
+  defp resolve_chain_id(profile, identifier) when is_binary(identifier) do
+    case ConfigStore.lookup_chain_id_in_profile(profile, identifier) do
+      {:ok, chain_id} -> {:ok, chain_id}
+      :not_found -> {:error, "Unknown chain '#{identifier}'"}
+    end
   end
 
   defp default_provider_strategy do
@@ -466,8 +497,10 @@ defmodule LassoWeb.RPCSocket do
   # Map URL strategy strings to atoms (avoids String.to_atom)
   @strategy_map %{
     "fastest" => :fastest,
+    "load-balanced" => :load_balanced,
     "round-robin" => :load_balanced,
-    "latency-weighted" => :latency_weighted
+    "latency-weighted" => :latency_weighted,
+    "priority" => :priority
   }
 
   defp extract_routing_params(nil, _params), do: {nil, nil}
@@ -508,7 +541,13 @@ defmodule LassoWeb.RPCSocket do
   end
 
   defp extract_routing_params(%URI{} = uri, params) do
-    extract_routing_params(uri.path, params)
+    strategy = Helpers.normalize_strategy_token(params["strategy"])
+    provider_id = params["provider_id"]
+
+    case {strategy, provider_id} do
+      {nil, nil} -> extract_routing_params(uri.path, params)
+      routing -> routing
+    end
   end
 
   defp build_routing_info(nil, nil), do: ""
@@ -516,6 +555,10 @@ defmodule LassoWeb.RPCSocket do
 
   defp build_routing_info(nil, provider_id) when is_binary(provider_id),
     do: " [provider: #{provider_id}]"
+
+  defp build_routing_info(strategy, provider_id)
+       when is_atom(strategy) and is_binary(provider_id),
+       do: " [strategy: #{strategy}, provider: #{provider_id}]"
 
   ## Connection tracking helpers
 

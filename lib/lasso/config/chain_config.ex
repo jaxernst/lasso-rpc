@@ -9,8 +9,10 @@ defmodule Lasso.Config.ChainConfig do
   require Logger
 
   @type t :: %__MODULE__{
-          chain_id: non_neg_integer() | nil,
-          name: String.t(),
+          chain_id: pos_integer() | nil,
+          name: String.t() | nil,
+          display_name: String.t() | nil,
+          url_aliases: [String.t()],
           block_time_ms: non_neg_integer() | nil,
           providers: [__MODULE__.Provider.t()],
           selection: __MODULE__.Selection.t() | nil,
@@ -22,17 +24,37 @@ defmodule Lasso.Config.ChainConfig do
   defstruct [
     :chain_id,
     :name,
+    :display_name,
     :block_time_ms,
     :providers,
     :selection,
     :monitoring,
     :websocket,
-    :topology
+    :topology,
+    url_aliases: []
   ]
 
   defmodule Provider do
-    @moduledoc "Configuration for an RPC provider."
-    @derive Jason.Encoder
+    @moduledoc """
+    Configuration for an RPC provider.
+
+    URL fields are treated as sensitive — `Inspect` is derived with
+    `:url` and `:ws_url` excluded so they don't leak through
+    `Logger.inspect`, crash dumps, or LiveDashboard.
+    """
+    @derive {Jason.Encoder,
+             only: [
+               :id,
+               :name,
+               :priority,
+               :url,
+               :ws_url,
+               :capabilities,
+               :subscribe_new_heads,
+               :archival,
+               :sharing_mode
+             ]}
+    @derive {Inspect, except: [:url, :ws_url, :api_key, :credentials, :headers, :auth_headers]}
     @type t :: %__MODULE__{
             id: String.t(),
             name: String.t(),
@@ -42,7 +64,11 @@ defmodule Lasso.Config.ChainConfig do
             capabilities: map() | nil,
             subscribe_new_heads: boolean() | nil,
             archival: boolean(),
-            sharing_mode: :auto | :isolated
+            sharing_mode: :auto | :isolated,
+            api_key: String.t() | nil,
+            credentials: term(),
+            headers: map() | [{String.t(), String.t()}] | nil,
+            auth_headers: map() | [{String.t(), String.t()}] | nil
           }
 
     defstruct [
@@ -53,6 +79,10 @@ defmodule Lasso.Config.ChainConfig do
       :ws_url,
       :capabilities,
       :subscribe_new_heads,
+      :api_key,
+      :credentials,
+      :headers,
+      :auth_headers,
       :__mock__,
       archival: true,
       sharing_mode: :auto
@@ -153,7 +183,7 @@ defmodule Lasso.Config.ChainConfig do
             lag_alert_threshold_blocks: non_neg_integer()
           }
 
-    defstruct probe_interval_ms: 15_000,
+    defstruct probe_interval_ms: 12_000,
               lag_alert_threshold_blocks: 3
   end
 

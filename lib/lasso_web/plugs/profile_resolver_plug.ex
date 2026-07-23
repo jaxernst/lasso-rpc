@@ -16,6 +16,7 @@ defmodule LassoWeb.Plugs.ProfileResolverPlug do
 
   ## Assigns
   - `:profile_slug` - The validated profile slug from the URL (e.g., "public", "testnet")
+  - `:profile_id` - The opaque runtime profile ID used by the pipeline
   - `:profile` - Full profile metadata from ConfigStore
 
   ## Default Profile Fallback
@@ -42,6 +43,7 @@ defmodule LassoWeb.Plugs.ProfileResolverPlug do
           {:ok, profile_meta} ->
             conn
             |> assign(:profile_slug, validated_slug)
+            |> assign(:profile_id, profile_meta.profile_id)
             |> assign(:profile, profile_meta)
 
           {:error, :not_found} ->

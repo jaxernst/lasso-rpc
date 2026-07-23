@@ -3,10 +3,16 @@ defmodule Lasso.Providers.InstanceId do
   Deterministic identity derivation for physical upstream connections.
 
   A `provider_instance_id` uniquely identifies a physical upstream connection.
-  Two profiles using the same URL with the same credentials produce the same
-  instance_id and will share infrastructure in later phases.
+  Identity is keyed by `(chain_id, normalized_url, normalized_ws_url, auth)`.
+  The optional `:isolated` sharing mode additionally salts the identity with a
+  profile ID; otherwise matching authenticated endpoints are shared across
+  profiles.
 
-  Format: `"chain:host_hint:hash_12"` (e.g., `"ethereum:drpc:a3f2b1c4e5d6"`)
+  Format: `"chain_id:host_hint:hash_12"` (e.g., `"1:drpc:a3f2b1c4e5d6"`).
+
+  HTTP and WebSocket endpoint URLs are both identity-relevant, so profiles with
+  the same HTTP endpoint but different WebSocket configuration do not share an
+  instance.
   """
 
   alias Lasso.Config.ChainConfig.Provider
@@ -16,32 +22,33 @@ defmodule Lasso.Providers.InstanceId do
   @doc """
   Derives a deterministic instance_id for a provider.
 
-  Same URL + same auth + same chain = same instance_id.
-  With `sharing_mode: :isolated`, the profile slug is salted in to force uniqueness.
+  Same `(chain_id, URL, WS URL, auth)` tuple → same instance ID → shared worker.
 
   ## Options
-    * `:profile` - Profile slug (required when `sharing_mode` is `:isolated`)
-    * `:sharing_mode` - `:auto` (default) or `:isolated`
+    * `:profile_id` or `:profile` — deterministic profile scope used when
+      `sharing_mode: :isolated` is set.
+    * `:sharing_mode` — `:auto` shares by transport identity; `:isolated`
+      salts the hash with the profile id and forces per-profile isolation.
   """
-  @spec derive(String.t(), Provider.t(), keyword()) :: String.t()
-  def derive(chain, provider_config, opts \\ []) do
+  @spec derive(pos_integer(), Provider.t(), keyword()) :: String.t()
+  def derive(chain_id, provider_config, opts \\ []) when is_integer(chain_id) and chain_id > 0 do
     sharing_mode = Keyword.get(opts, :sharing_mode, :auto)
-    profile = Keyword.get(opts, :profile)
-
-    if sharing_mode == :isolated and not is_binary(profile) do
-      raise ArgumentError, "profile is required when sharing_mode is :isolated"
-    end
+    profile_id = Keyword.get(opts, :profile_id) || Keyword.get(opts, :profile)
 
     url = normalize_url(provider_config.url)
-    auth_fp = auth_fingerprint(provider_config)
+    ws_url = optional_normalize_url(Map.get(provider_config, :ws_url))
+    auth = auth_fingerprint(provider_config)
 
     hash_input =
-      case sharing_mode do
-        :isolated ->
-          :erlang.term_to_binary({chain, url, auth_fp, profile})
+      cond do
+        sharing_mode == :isolated and is_binary(profile_id) ->
+          :erlang.term_to_binary({chain_id, url, ws_url, auth, {:profile, profile_id}})
 
-        _ ->
-          :erlang.term_to_binary({chain, url, auth_fp})
+        sharing_mode == :isolated ->
+          raise ArgumentError, "sharing_mode :isolated requires :profile_id or :profile"
+
+        true ->
+          :erlang.term_to_binary({chain_id, url, ws_url, auth})
       end
 
     hash_suffix =
@@ -51,7 +58,39 @@ defmodule Lasso.Providers.InstanceId do
 
     host_hint = extract_host_hint(provider_config.url)
 
-    "#{chain}:#{host_hint}:#{hash_suffix}"
+    "#{chain_id}:#{host_hint}:#{hash_suffix}"
+  end
+
+  @doc """
+  Returns a stable fingerprint for credentials that affect upstream access.
+
+  The fingerprint intentionally contains no profile or account identity. It is
+  only used to prevent health, circuit, rate-limit, and WebSocket state from
+  being shared by providers configured with different authentication.
+  """
+  @spec auth_fingerprint(Provider.t() | map()) :: String.t() | nil
+  def auth_fingerprint(provider_config) when is_map(provider_config) do
+    auth =
+      provider_config
+      |> Map.take([:api_key, :credentials, :headers, :auth_headers, :authorization])
+      |> Map.merge(%{
+        api_key: Map.get(provider_config, :api_key) || Map.get(provider_config, "api_key"),
+        credentials:
+          Map.get(provider_config, :credentials) || Map.get(provider_config, "credentials"),
+        headers: Map.get(provider_config, :headers) || Map.get(provider_config, "headers"),
+        auth_headers:
+          Map.get(provider_config, :auth_headers) || Map.get(provider_config, "auth_headers"),
+        authorization:
+          Map.get(provider_config, :authorization) || Map.get(provider_config, "authorization")
+      })
+      |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+      |> Enum.map(fn {key, value} -> {key, canonical_auth_value(value)} end)
+      |> Enum.sort()
+
+    case auth do
+      [] -> nil
+      _ -> :crypto.hash(:sha256, :erlang.term_to_binary(auth)) |> Base.encode16(case: :lower)
+    end
   end
 
   @doc """
@@ -80,29 +119,38 @@ defmodule Lasso.Providers.InstanceId do
   end
 
   @doc """
-  Computes a 12-character hex fingerprint of provider auth configuration.
+  Normalizes an optional URL to canonical form for identity comparison.
 
-  Returns `nil` when no explicit auth is configured.
-  Does NOT extract keys from URLs (the URL itself differentiates key-in-path providers).
+  Returns `nil` for nil, non-binary, or blank values.
   """
-  @spec auth_fingerprint(Provider.t()) :: String.t() | nil
-  def auth_fingerprint(%{api_key: key}) when is_binary(key) and key != "" do
-    :crypto.hash(:sha256, key) |> Base.encode16(case: :lower) |> binary_part(0, 12)
+  @spec optional_normalize_url(term()) :: String.t() | nil
+  def optional_normalize_url(url) when is_binary(url) do
+    case String.trim(url) do
+      "" -> nil
+      trimmed -> normalize_url(trimmed)
+    end
   end
 
-  def auth_fingerprint(%{auth_headers: headers})
-      when is_map(headers) and map_size(headers) > 0 do
-    headers
-    |> Enum.sort()
-    |> :erlang.term_to_binary()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
-    |> binary_part(0, 12)
-  end
-
-  def auth_fingerprint(_), do: nil
+  def optional_normalize_url(_), do: nil
 
   # Private helpers
+
+  defp canonical_auth_value(value) when is_map(value) do
+    value
+    |> Enum.map(fn {key, nested} -> {to_string(key), canonical_auth_value(nested)} end)
+    |> Enum.sort()
+  end
+
+  defp canonical_auth_value(value) when is_list(value) do
+    value
+    |> Enum.map(fn
+      {key, nested} -> {to_string(key), canonical_auth_value(nested)}
+      nested -> canonical_auth_value(nested)
+    end)
+    |> Enum.sort()
+  end
+
+  defp canonical_auth_value(value), do: value
 
   defp normalize_port("https", 443), do: nil
   defp normalize_port("https", nil), do: nil

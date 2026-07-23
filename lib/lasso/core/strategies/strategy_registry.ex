@@ -41,6 +41,31 @@ defmodule Lasso.RPC.Strategies.Registry do
     |> Map.keys()
   end
 
+  @doc """
+  Returns the URL-slug form of every registered strategy
+  (`:load_balanced → "load-balanced"`, etc.) in stable order.
+
+  Single source of truth for any UI / docs surface that lists
+  exposed strategies. Adding a strategy in `default_registry/0`
+  (or via the `:strategy_registry` config override) automatically
+  shows up everywhere this function is consumed — no parallel
+  hand-maintained list to drift against.
+  """
+  @spec strategy_slugs() :: [String.t()]
+  def strategy_slugs do
+    strategy_atoms()
+    |> Enum.map(&strategy_atom_to_slug/1)
+    |> Enum.sort()
+  end
+
+  @doc """
+  Converts a strategy atom to its URL-slug form. Defined here so
+  consumers don't reimplement the `_` → `-` convention.
+  """
+  @spec strategy_atom_to_slug(atom()) :: String.t()
+  def strategy_atom_to_slug(atom) when is_atom(atom),
+    do: atom |> Atom.to_string() |> String.replace("_", "-")
+
   @spec default_registry() :: %{strategy => module()}
   def default_registry do
     %{

@@ -70,6 +70,9 @@ defmodule Lasso.Testing.IntegrationHelper do
         end
       end)
 
+    # Publish one final catalog snapshot after the complete fixture has been registered.
+    Lasso.Providers.Catalog.build_from_config()
+
     # Wait for all providers to be fully registered
     Enum.each(provider_ids, fn provider_id ->
       wait_for_provider_ready(chain, provider_id,
@@ -159,11 +162,12 @@ defmodule Lasso.Testing.IntegrationHelper do
 
   Broadcasts a provider unhealthy event that will trigger the failover flow.
   """
-  def trigger_provider_failover(chain, failed_provider_id, reason \\ :simulated_failure) do
+  def trigger_provider_failover(chain_id, failed_provider_id, reason \\ :simulated_failure)
+      when is_integer(chain_id) and chain_id > 0 do
     profile = "public"
 
     event = %Lasso.Events.Provider.Unhealthy{
-      chain: chain,
+      chain_id: chain_id,
       provider_id: failed_provider_id,
       reason: reason,
       ts: System.monotonic_time(:millisecond)
@@ -171,7 +175,7 @@ defmodule Lasso.Testing.IntegrationHelper do
 
     Phoenix.PubSub.broadcast(
       Lasso.PubSub,
-      Lasso.Events.Provider.topic(profile, chain),
+      Lasso.Topics.provider_event(profile, chain_id),
       event
     )
 
@@ -294,7 +298,20 @@ defmodule Lasso.Testing.IntegrationHelper do
         :ok
 
       {:error, :timeout} ->
-        raise "Provider #{provider_id} not registered within timeout"
+        config_provider =
+          Lasso.Config.ConfigStore.get_provider(profile, chain, provider_id)
+
+        config_provider_ids =
+          Lasso.Config.ConfigStore.get_provider_ids(profile, chain)
+
+        catalog_provider_ids =
+          Lasso.Providers.Catalog.get_profile_providers(profile, chain)
+          |> Enum.map(& &1.provider_id)
+
+        raise "Provider #{provider_id} not registered within timeout; " <>
+                "config_provider=#{inspect(config_provider)} " <>
+                "config_provider_ids=#{inspect(config_provider_ids)} " <>
+                "catalog_provider_ids=#{inspect(catalog_provider_ids)}"
     end
   end
 
