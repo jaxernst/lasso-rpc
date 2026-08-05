@@ -39,6 +39,7 @@ defmodule Lasso.RPC.MethodRegistry do
       "eth_estimateGas",
       "eth_getStorageAt",
       "eth_getTransactionCount",
+      "eth_createAccessList",
       # EIP-1186 - archive nodes
       "eth_getProof"
     ],
@@ -46,12 +47,17 @@ defmodule Lasso.RPC.MethodRegistry do
     # Network/utility methods
     network: [
       "net_version",
-      "net_listening",
-      "net_peerCount",
       "web3_clientVersion",
       "web3_sha3",
-      "eth_protocolVersion",
       "eth_syncing"
+    ],
+
+    # Node-operator introspection is separated from application-facing network
+    # methods because hosted providers commonly withhold it by design.
+    node_admin: [
+      "net_listening",
+      "net_peerCount",
+      "eth_protocolVersion"
     ],
 
     # EIP-1559 methods (post-London fork)
@@ -62,7 +68,7 @@ defmodule Lasso.RPC.MethodRegistry do
 
     # EIP-4844 methods (post-Dencun, blob transactions)
     eip4844: [
-      "eth_getBlobBaseFee"
+      "eth_blobBaseFee"
     ],
 
     # Mempool/pending transaction methods

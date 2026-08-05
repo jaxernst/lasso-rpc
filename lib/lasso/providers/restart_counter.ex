@@ -62,7 +62,19 @@ defmodule Lasso.Providers.RestartCounter do
   """
   @spec bump(key()) :: pos_integer()
   def bump(key) do
-    :ets.update_counter(@table, key, 1, {key, 0})
+    update_counter(@table, key)
+  end
+
+  @doc """
+  Increments a restart counter in the given ETS table.
+
+  Returns a conservative fallback count when the table owner is unavailable.
+  """
+  @spec update_counter(atom(), key()) :: pos_integer()
+  def update_counter(table, key) do
+    :ets.update_counter(table, key, 1, {key, 0})
+  rescue
+    ArgumentError -> 10
   end
 
   @doc """
@@ -70,8 +82,18 @@ defmodule Lasso.Providers.RestartCounter do
   """
   @spec clear(key()) :: :ok
   def clear(key) do
-    :ets.delete(@table, key)
+    clear_counter(@table, key)
+  end
+
+  @doc """
+  Clears a counter from the given ETS table, tolerating an unavailable table owner.
+  """
+  @spec clear_counter(atom(), key()) :: :ok
+  def clear_counter(table, key) do
+    :ets.delete(table, key)
     :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   @doc """

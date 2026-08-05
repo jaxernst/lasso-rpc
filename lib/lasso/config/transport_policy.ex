@@ -15,16 +15,14 @@ defmodule Lasso.Config.TransportPolicy do
     "eth_unsubscribe"
   ]
 
-  # Globally disallowed methods (stateful/account management)
+  # Methods that operate on the upstream node's own keystore. Provider
+  # configuration cannot re-enable these methods.
   @disallowed_methods [
     "eth_sendTransaction",
     "personal_sign",
     "eth_sign",
     "eth_signTransaction",
-    "eth_accounts",
-    "txpool_content",
-    "txpool_inspect",
-    "txpool_status"
+    "eth_accounts"
   ]
 
   @doc """

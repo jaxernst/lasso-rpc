@@ -197,7 +197,61 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   @spec attempt_channels([Channel.t()], RequestContext.t()) :: result()
-  defp attempt_channels([], ctx) do
+  defp attempt_channels(channels, ctx), do: attempt_channels(channels, ctx, [])
+
+  @spec attempt_channels([Channel.t()], RequestContext.t(), [Channel.t()]) :: result()
+  defp attempt_channels([], ctx, [_ | _] = param_rejected) do
+    if ctx.attempted_channels == [] do
+      retry_param_rejected(param_rejected, ctx)
+    else
+      exhausted(ctx)
+    end
+  end
+
+  defp attempt_channels([], ctx, _param_rejected), do: exhausted(ctx)
+
+  defp attempt_channels([%Channel{} = channel | rest], %{bypass_param_limits: true} = ctx, _acc) do
+    execute_on_channel(channel, rest, ctx)
+  end
+
+  defp attempt_channels([%Channel{} = channel | rest], ctx, param_rejected)
+       when is_list(rest) do
+    %{"method" => method, "params" => params} = ctx.rpc_request
+
+    case AdapterFilter.validate_params(channel, method, params) do
+      :ok ->
+        execute_on_channel(channel, rest, ctx)
+
+      {:error, reason} ->
+        Logger.debug("Parameters invalid for channel, skipping",
+          channel: Channel.to_string(channel),
+          method: method,
+          reason: inspect(reason)
+        )
+
+        ctx = RequestContext.increment_retries(ctx)
+        attempt_channels(rest, ctx, param_rejected ++ [channel])
+    end
+  end
+
+  defp retry_param_rejected(channels, ctx) do
+    Logger.warning("All channels rejected by parameter limits, attempting anyway",
+      chain_id: ctx.chain_id,
+      method: ctx.method,
+      request_id: ctx.request_id,
+      candidates: length(channels)
+    )
+
+    :telemetry.execute([:lasso, :capabilities, :safety_override], %{count: 1}, %{
+      reason: :all_param_rejected,
+      method: ctx.method,
+      chain_id: ctx.chain_id
+    })
+
+    attempt_channels(channels, %{ctx | bypass_param_limits: true}, [])
+  end
+
+  defp exhausted(ctx) do
     Logger.warning("All channels exhausted",
       chain_id: ctx.chain_id,
       method: ctx.method,
@@ -212,26 +266,6 @@ defmodule Lasso.RPC.RequestPipeline do
       )
 
     finalize_error(jerr, ctx)
-  end
-
-  defp attempt_channels([%Channel{} = channel | rest], ctx) when is_list(rest) do
-    %{"method" => method, "params" => params} = ctx.rpc_request
-
-    # Validate params for this channel first
-    case AdapterFilter.validate_params(channel, method, params) do
-      :ok ->
-        execute_on_channel(channel, rest, ctx)
-
-      {:error, reason} ->
-        Logger.debug("Parameters invalid for channel, skipping",
-          channel: Channel.to_string(channel),
-          method: method,
-          reason: inspect(reason)
-        )
-
-        ctx = RequestContext.increment_retries(ctx)
-        attempt_channels(rest, ctx)
-    end
   end
 
   @spec execute_on_channel(Channel.t(), [Channel.t()], RequestContext.t()) :: result()

@@ -150,6 +150,82 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
     end
   end
 
+  describe "provider readiness recovery" do
+    test "wakes a routed subscription when its provider reconnects", %{
+      chain: chain,
+      provider: provider,
+      profile: profile,
+      instance_id: instance_id
+    } do
+      [{manager_pid, _}] =
+        Registry.lookup(Lasso.Registry, {:instance_sub_manager, instance_id})
+
+      send(manager_pid, {:ws_disconnected, instance_id, %{reason: :readiness_test}})
+
+      assert TestHelper.eventually(fn ->
+               Lasso.Core.Streaming.InstanceSubscriptionManager.ensure_subscription(
+                 instance_id,
+                 {:newHeads}
+               ) == {:error, :not_connected}
+             end)
+
+      assert {:ok, _subscription_id} =
+               UpstreamSubscriptionPool.subscribe_client(profile, chain, self(), {:newHeads})
+
+      Process.sleep(25)
+      assert get_pool_state(chain).keys[{:newHeads}].status == :establishing
+
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        Lasso.Topics.ws_connection(profile, chain),
+        {:ws_connected, provider, "conn-ready-routed"}
+      )
+
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        Lasso.Topics.ws_conn_instance(instance_id),
+        {:ws_connected, instance_id, "conn-ready-routed"}
+      )
+
+      assert TestHelper.eventually(fn ->
+               get_pool_state(chain).keys[{:newHeads}].status == :active
+             end)
+
+      entry = get_pool_state(chain).keys[{:newHeads}]
+      assert entry.primary_provider_id == provider
+      assert entry.provider_constraint == nil
+    end
+
+    test "a stale readiness retry cannot resurrect an unsubscribed key", %{
+      chain: chain,
+      provider: provider,
+      profile: profile
+    } do
+      :ets.delete(:transport_channel_cache, {profile, chain, provider, :ws})
+
+      assert {:ok, subscription_id} =
+               UpstreamSubscriptionPool.subscribe_client(
+                 profile,
+                 chain,
+                 self(),
+                 {:newHeads},
+                 provider_id: provider
+               )
+
+      assert :ok =
+               UpstreamSubscriptionPool.unsubscribe_client(profile, chain, subscription_id)
+
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        Lasso.Topics.ws_connection(profile, chain),
+        {:ws_connected, provider, "conn-after-unsubscribe"}
+      )
+
+      Process.sleep(150)
+      assert get_pool_state(chain).keys == %{}
+    end
+  end
+
   describe "async subscription behavior" do
     test "first subscriber gets immediate response while upstream establishes", %{
       chain: chain,

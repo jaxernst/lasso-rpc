@@ -2,7 +2,7 @@
   <img src="priv/static/images/lasso-logo-readme.png" alt="Lasso RPC" height="60">
 </p>
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/jaxernst/lasso-rpc/releases)
 
 ### Smart RPC aggregation for fault-tolerant and performant blockchain apps.
@@ -322,11 +322,9 @@ For security concerns, please review our [Security Policy](SECURITY.md).
 
 ---
 
-## License: AGPL-3.0
+## License: Apache-2.0
 
-- self-host it freely to make your RPCs better
-- modify it to make Lasso better
-- ⚠️ If you run a modified version as a service, you must publish your modifications
+Lasso RPC is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). It permits use, modification, distribution, self-hosting, and commercial embedding subject to the license terms.
 
 See [LICENSE.md](LICENSE.md) for full terms.
 

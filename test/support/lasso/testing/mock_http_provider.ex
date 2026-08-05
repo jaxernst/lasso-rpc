@@ -61,6 +61,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
       type: "test",
       priority: Map.get(spec, :priority, 100),
       archival: Map.get(spec, :archival, true),
+      capabilities: Map.get(spec, :capabilities),
       # Mark as mock for routing
       __mock__: true
     }

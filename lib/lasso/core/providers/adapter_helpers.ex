@@ -61,11 +61,15 @@ defmodule Lasso.RPC.Providers.AdapterHelpers do
 
   @spec estimate_current_block(map()) :: non_neg_integer()
   def estimate_current_block(ctx) do
-    chain = Map.get(ctx, :chain, "ethereum")
+    case Map.get(ctx, :chain_id) do
+      chain_id when is_integer(chain_id) and chain_id > 0 ->
+        case ChainState.consensus_height(chain_id) do
+          {:ok, height} -> height
+          {:error, _} -> 0
+        end
 
-    case ChainState.consensus_height(chain) do
-      {:ok, height} -> height
-      {:error, _} -> 0
+      _ ->
+        0
     end
   end
 
