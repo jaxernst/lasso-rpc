@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Lasso RPC is now licensed under Apache-2.0 to support broader self-hosting, distribution, and commercial embedding
 - Profiles are now loaded exclusively from YAML files in `config/profiles/`; profile slugs are opaque routing IDs, chain aliases resolve to positive integer EIP-155 IDs internally, and `default` remains an alias for `public`
 - Configuration reloads publish a complete new snapshot only after validation; malformed YAML or invalid chain IDs leave the last known-good snapshot active. A cold restart loads profiles from disk before routing begins
 - Dashboard and RPC routes accept both configured chain aliases and decimal chain IDs, while WebSocket startup attempts are jittered to avoid synchronized upstream handshakes

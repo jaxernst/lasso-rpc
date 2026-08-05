@@ -206,4 +206,4 @@ Key directories:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the same AGPL-3.0 license that covers this project.
+Unless you explicitly state otherwise, contributions you intentionally submit to this project are licensed under Apache-2.0 on the same terms as the project, consistent with Section 5 of the Apache License 2.0.
