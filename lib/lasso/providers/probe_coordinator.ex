@@ -348,7 +348,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
     request = Finch.build(:post, url, headers, body)
 
-    case Finch.request(request, Lasso.Finch, receive_timeout: @default_timeout_ms) do
+    case run_probe_request(fn ->
+           Finch.request(request, Lasso.Finch, receive_timeout: @default_timeout_ms)
+         end) do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 ->
         case classify_response_body(resp_body, chain_id) do
           :ok ->
@@ -390,6 +392,14 @@ defmodule Lasso.Providers.ProbeCoordinator do
         write_probe_failure(instance_id, reason)
         {instance_id, {:failure, reason}}
     end
+  end
+
+  @doc false
+  @spec run_probe_request((-> term())) :: term()
+  def run_probe_request(request_fun) when is_function(request_fun, 0) do
+    request_fun.()
+  catch
+    :exit, reason -> {:error, {:request_exit, reason}}
   end
 
   @rate_limit_codes [-32_005, -32_007, -32_029]

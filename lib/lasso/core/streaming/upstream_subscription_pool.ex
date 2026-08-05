@@ -34,8 +34,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     StreamSupervisor
   }
 
-  @max_readiness_retries 50
-  @readiness_retry_ms 100
+  @readiness_retry_base_ms 100
+  @readiness_retry_cap_ms 5_000
 
   @type profile :: String.t()
   @type chain_id :: pos_integer()
@@ -77,6 +77,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   @impl true
   def init({profile, chain_id}) do
     Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.provider_event(profile, chain_id))
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_connection(profile, chain_id))
     Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.instance_sub_manager_restarted(chain_id))
 
     dedupe_cfg =
@@ -134,6 +135,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
                 provider_constraint: provider_constraint,
                 establishment_generation: generation,
                 readiness_retries: 0,
+                retry_token: nil,
                 transient_excluded_providers: MapSet.new(),
                 markers: %{},
                 dedupe: nil,
@@ -165,6 +167,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
                   status: :establishing,
                   establishment_generation: generation,
                   readiness_retries: 0,
+                  retry_token: nil,
                   transient_excluded_providers: MapSet.new(),
                   noproc_retries: 0
               }
@@ -489,6 +492,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         primary_provider_id: provider_id,
         instance_id: instance_id,
         readiness_retries: 0,
+        retry_token: nil,
         transient_excluded_providers: MapSet.new(),
         noproc_retries: 0
     }
@@ -550,34 +554,22 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
   defp retry_readiness(state, pool_key, generation, excluded_providers) do
     case Map.get(state.keys, pool_key) do
-      %{
-        status: :establishing,
-        establishment_generation: ^generation,
-        readiness_retries: retries
-      } = entry
-      when retries < @max_readiness_retries ->
+      %{status: :establishing, establishment_generation: ^generation, retry_token: nil} = entry ->
+        attempt = entry.readiness_retries
+
+        delay =
+          min(@readiness_retry_base_ms * Integer.pow(2, min(attempt, 6)), @readiness_retry_cap_ms)
+
+        token = make_ref()
+
         Process.send_after(
           self(),
-          {:retry_establish, pool_key, generation, excluded_providers},
-          @readiness_retry_ms
+          {:retry_establish, pool_key, generation, token, excluded_providers},
+          delay
         )
 
-        updated = %{entry | readiness_retries: retries + 1}
+        updated = %{entry | readiness_retries: attempt + 1, retry_token: token}
         {:noreply, %{state | keys: Map.put(state.keys, pool_key, updated)}}
-
-      %{status: :establishing, establishment_generation: ^generation} = entry ->
-        if entry.provider_constraint do
-          Process.send_after(
-            self(),
-            {:retry_establish, pool_key, generation, excluded_providers},
-            1_000
-          )
-
-          updated = %{entry | readiness_retries: 0}
-          {:noreply, %{state | keys: Map.put(state.keys, pool_key, updated)}}
-        else
-          {:noreply, mark_subscription_failed(state, pool_key, "No ready providers")}
-        end
 
       _ ->
         {:noreply, state}
@@ -703,11 +695,53 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     end
   end
 
-  def handle_info({:retry_establish, pool_key, generation, excluded_providers}, state) do
+  def handle_info({:retry_establish, pool_key, generation, token, excluded_providers}, state) do
     case Map.get(state.keys, pool_key) do
-      %{status: :establishing, establishment_generation: ^generation} ->
+      %{status: :establishing, establishment_generation: ^generation, retry_token: ^token} = entry ->
+        updated = %{entry | retry_token: nil}
+        new_state = %{state | keys: Map.put(state.keys, pool_key, updated)}
         GenServer.cast(self(), {:establish_upstream, pool_key, generation, excluded_providers})
+        {:noreply, new_state}
+
+      _ ->
         {:noreply, state}
+    end
+  end
+
+  def handle_info({:ws_connected, provider_id, _connection_id}, state) do
+    new_state =
+      Enum.reduce(state.keys, state, fn {pool_key, entry}, acc ->
+        should_wake? =
+          entry.status == :establishing and entry.retry_token != :wake_pending and
+            (is_nil(entry.provider_constraint) or entry.provider_constraint == provider_id)
+
+        if should_wake? do
+          Process.send_after(
+            self(),
+            {:wake_establish, pool_key, entry.establishment_generation},
+            @readiness_retry_base_ms
+          )
+
+          updated = %{entry | retry_token: :wake_pending}
+          %{acc | keys: Map.put(acc.keys, pool_key, updated)}
+        else
+          acc
+        end
+      end)
+
+    {:noreply, new_state}
+  end
+
+  def handle_info({:wake_establish, pool_key, generation}, state) do
+    case Map.get(state.keys, pool_key) do
+      %{
+        status: :establishing,
+        establishment_generation: ^generation,
+        retry_token: :wake_pending
+      } = entry ->
+        updated = %{entry | retry_token: nil}
+        GenServer.cast(self(), {:establish_upstream, pool_key, generation, []})
+        {:noreply, %{state | keys: Map.put(state.keys, pool_key, updated)}}
 
       _ ->
         {:noreply, state}
@@ -945,18 +979,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     end
   end
 
-  # Routes a failover decision: a valid replacement provider goes to the
-  # StreamCoordinator for handoff; `nil` (no candidate available) marks the
-  # subscription as failed so clients receive a Failed event rather than
-  # silently lingering against a stale upstream.
   defp dispatch_failover(state, pool_key, _failed_provider_id, nil) do
-    case Map.get(state.keys, pool_key) do
-      %{provider_constraint: provider_constraint} when is_binary(provider_constraint) ->
-        retry_constrained_subscription(state, pool_key)
-
-      _ ->
-        mark_subscription_failed(state, pool_key, "No replacement provider available")
-    end
+    retry_pending_subscription(state, pool_key)
   end
 
   defp dispatch_failover(state, key, failed_provider_id, new_provider_id)
@@ -1024,7 +1048,10 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   defp transient_subscription_error?(%JError{retriable?: true}), do: true
   defp transient_subscription_error?(_reason), do: false
 
-  defp retry_constrained_subscription(state, pool_key) do
+  defp retry_constrained_subscription(state, pool_key),
+    do: retry_pending_subscription(state, pool_key)
+
+  defp retry_pending_subscription(state, pool_key) do
     case Map.get(state.keys, pool_key) do
       nil ->
         state
@@ -1040,11 +1067,13 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
             instance_id: nil,
             establishment_generation: generation,
             readiness_retries: 0,
+            retry_token: nil,
             transient_excluded_providers: MapSet.new()
         }
 
-        Process.send_after(self(), {:retry_establish, pool_key, generation, []}, 100)
-        %{state | keys: Map.put(state.keys, pool_key, updated)}
+        new_state = %{state | keys: Map.put(state.keys, pool_key, updated)}
+        {:noreply, scheduled_state} = retry_readiness(new_state, pool_key, generation, [])
+        scheduled_state
     end
   end
 

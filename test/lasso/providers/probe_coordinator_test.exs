@@ -112,6 +112,20 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     end
   end
 
+  describe "run_probe_request/1" do
+    test "converts Finch pool exits into probe errors" do
+      reason = {:shutdown, :idle_timeout}
+
+      assert ProbeCoordinator.run_probe_request(fn -> exit(reason) end) ==
+               {:error, {:request_exit, reason}}
+    end
+
+    test "preserves normal request results" do
+      assert ProbeCoordinator.run_probe_request(fn -> {:error, :timeout} end) ==
+               {:error, :timeout}
+    end
+  end
+
   describe "reload_instances/1" do
     test "picks up new instances after catalog rebuild" do
       {:ok, pid} = start_coordinator(@chain)

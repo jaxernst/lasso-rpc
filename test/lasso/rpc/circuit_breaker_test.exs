@@ -99,6 +99,11 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     assert CircuitBreaker.get_state(id).state in [:half_open, :closed]
   end
 
+  test "registry lookup returns unavailable instead of raising when the registry is absent" do
+    name = {:via, Registry, {:missing_circuit_breaker_registry, {:provider, :http}}}
+    assert CircuitBreaker.safe_whereis(name) == nil
+  end
+
   test "record_failure increments failures and can open the circuit" do
     id = {"cb_provider_record", :http}
 

@@ -68,7 +68,11 @@ defmodule Lasso.RPC.RequestContext do
           # Execution parameters (immutable throughout pipeline)
           rpc_request: map() | nil,
           timeout_ms: timeout() | nil,
-          opts: RequestOptions.t() | nil
+          opts: RequestOptions.t() | nil,
+
+          # Set when declared parameter limits eliminate every candidate so the
+          # safety retry dispatches instead of failing the request outright.
+          bypass_param_limits: boolean()
         }
 
   defstruct request_id: nil,
@@ -105,7 +109,8 @@ defmodule Lasso.RPC.RequestContext do
             error: nil,
             rpc_request: nil,
             timeout_ms: nil,
-            opts: nil
+            opts: nil,
+            bypass_param_limits: false
 
   @doc """
   Creates a new request context with request_id and start_time.

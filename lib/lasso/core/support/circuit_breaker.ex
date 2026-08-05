@@ -321,18 +321,22 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   """
   @spec signal_recovery(breaker_id()) :: :ok | {:error, :not_found}
   def signal_recovery(id) do
-    case GenServer.whereis(via_name(id)) do
+    case safe_whereis(via_name(id)) do
       nil ->
         {:error, :not_found}
 
-      _pid ->
-        case get_state(id) do
-          %{state: state} when state in [:open, :half_open] ->
-            GenServer.cast(via_name(id), {:report_external, {:ok, :success}})
-            :ok
+      pid ->
+        try do
+          case GenServer.call(pid, :get_state, @state_timeout) do
+            %{state: state} when state in [:open, :half_open] ->
+              GenServer.cast(pid, {:report_external, {:ok, :success}})
+              :ok
 
-          _ ->
-            :ok
+            _ ->
+              :ok
+          end
+        catch
+          :exit, _ -> {:error, :not_found}
         end
     end
   end
@@ -342,7 +346,11 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   """
   @spec signal_recovery_cast(breaker_id()) :: :ok
   def signal_recovery_cast(cb_id) do
-    GenServer.cast(via_name(cb_id), {:report_external, {:ok, :success}})
+    case safe_whereis(via_name(cb_id)) do
+      nil -> :ok
+      pid -> GenServer.cast(pid, {:report_external, {:ok, :success}})
+    end
+
     :ok
   end
 
@@ -351,12 +359,12 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   """
   @spec record_failure(breaker_id(), term()) :: :ok | {:error, :not_found}
   def record_failure(id, reason \\ :failure) do
-    case GenServer.whereis(via_name(id)) do
+    case safe_whereis(via_name(id)) do
       nil ->
         {:error, :not_found}
 
-      _pid ->
-        GenServer.cast(via_name(id), {:report_external, {:error, reason}})
+      pid ->
+        GenServer.cast(pid, {:report_external, {:error, reason}})
         :ok
     end
   end
@@ -368,19 +376,32 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @spec record_failure_sync(breaker_id(), term(), timeout()) ::
           {:ok, :closed | :open | :half_open} | {:error, :not_found | :timeout}
   def record_failure_sync(id, reason \\ :failure, timeout \\ 5_000) do
-    case GenServer.whereis(via_name(id)) do
+    case safe_whereis(via_name(id)) do
       nil ->
         {:error, :not_found}
 
-      _pid ->
+      pid ->
         try do
-          state = GenServer.call(via_name(id), {:report_external_sync, {:error, reason}}, timeout)
+          state = GenServer.call(pid, {:report_external_sync, {:error, reason}}, timeout)
           {:ok, state}
         catch
           :exit, {:timeout, _} -> {:error, :timeout}
           :exit, {:noproc, _} -> {:error, :not_found}
+          :exit, _ -> {:error, :not_found}
         end
     end
+  end
+
+  @doc """
+  Resolves a GenServer name without raising when its registry is unavailable.
+  """
+  @spec safe_whereis(GenServer.name()) :: pid() | nil
+  def safe_whereis(name) do
+    GenServer.whereis(name)
+  rescue
+    ArgumentError -> nil
+  catch
+    :exit, _ -> nil
   end
 
   # GenServer callbacks
@@ -1052,7 +1073,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   defp shared_breaker_penalty?(%JError{breaker_penalty?: penalty}, _state), do: penalty
   defp shared_breaker_penalty?(_, _state), do: false
 
-  @doc false
+  @doc """
+  Returns the registry name for a provider transport circuit breaker.
+  """
   @spec via_name({String.t(), atom()}) :: {:via, Registry, {Lasso.Registry, term()}}
   def via_name({instance_id, transport}) when is_binary(instance_id) do
     {:via, Registry, {Lasso.Registry, {:circuit_breaker, "#{instance_id}:#{transport}"}}}
