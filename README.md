@@ -17,7 +17,7 @@ Route every request to the best available provider to handle that request, while
 
 ---
 
-**🐛 [Docs](docs/)**
+**📚 [Docs](docs/)**
 **🐛 [Report Bug](https://github.com/jaxernst/lasso-rpc/issues)**
 **💡 [Request Feature](https://github.com/jaxernst/lasso-rpc/issues)**
 
@@ -119,7 +119,7 @@ mix phx.server
 
 The application will be available at `http://localhost:4000` and the dashboard at `http://localhost:4000/dashboard`.
 
-**Note**: The default profile includes free public providers (no API keys required), so you can start using it immediately.
+**Note**: The included `public` profile has free public providers (no API keys required), so you can start using it immediately.
 
 ### Docker
 
@@ -128,9 +128,9 @@ The application will be available at `http://localhost:4000` and the dashboard a
 ./run-docker.sh
 ```
 
-The application will be available at `http://localhost:4000`.
+The application will be available at `http://localhost:4000`. The helper supplies a local `LASSO_NODE_ID`; set it yourself when you need a stable deployment identity.
 
-For production deployments, see the [Dockerfile](Dockerfile) for customization options.
+For production deployments, see the [deployment guide](docs/DEPLOYMENT.md). Lasso has no built-in client authentication, so expose RPC and the dashboard only behind your preferred authentication or network boundary.
 
 ### Multi-Node Deployment (Cluster)
 
@@ -140,10 +140,12 @@ For geo-distributed deployments with aggregated observability:
 # Node 1 (us-east)
 export LASSO_NODE_ID=us-east
 export CLUSTER_DNS_QUERY="lasso.internal"
+export CLUSTER_NODE_BASENAME="lasso"
 mix phx.server
 
 # Node 2 (eu-west)
 export LASSO_NODE_ID=eu-west
+export CLUSTER_NODE_BASENAME="lasso"
 export CLUSTER_DNS_QUERY="lasso.internal"
 mix phx.server
 ```

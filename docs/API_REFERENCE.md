@@ -28,6 +28,7 @@ curl -X POST http://localhost:4000/rpc/ethereum \
 POST /rpc/fastest/:chain
 POST /rpc/load-balanced/:chain
 POST /rpc/latency-weighted/:chain
+POST /rpc/round-robin/:chain
 ```
 
 ### Provider Override
@@ -51,7 +52,7 @@ POST /rpc/profile/:profile/latency-weighted/:chain
 POST /rpc/profile/:profile/provider/:provider_id/:chain
 ```
 
-Without an explicit profile, requests use the `"default"` profile.
+Without an explicit profile, requests use the included `"public"` profile. `default` remains a compatibility alias for `public`.
 
 ### Chain Identifier
 
@@ -120,33 +121,7 @@ ws://host/ws/rpc/profile/:profile/provider/:provider_id/:chain
 - **Heartbeat**: Server sends ping every 30 seconds
 - **Timeout**: Pong must be received within 5 seconds
 - **Max missed**: Connection closed after 2 missed heartbeats
-- **Session timeout**: 2 hours maximum connection duration
-
----
-
-## Authentication
-
-All RPC endpoints require an API key. Provide it via any of these methods:
-
-| Method | Example |
-|--------|---------|
-| Query parameter | `?key=lasso_abc123` |
-| Header | `X-Lasso-Api-Key: lasso_abc123` |
-| Bearer token | `Authorization: Bearer lasso_abc123` |
-
-**HTTP Example:**
-
-```bash
-curl -X POST 'http://localhost:4000/rpc/ethereum?key=lasso_abc123' \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-```
-
-**WebSocket Example:**
-
-```bash
-wscat -c 'ws://localhost:4000/ws/rpc/ethereum?key=lasso_abc123'
-```
+Lasso OSS does not provide client authentication. Put it behind reverse-proxy authentication or a private network boundary before exposing it outside a trusted environment. See [SECURITY.md](../SECURITY.md).
 
 ---
 
@@ -155,8 +130,6 @@ wscat -c 'ws://localhost:4000/ws/rpc/ethereum?key=lasso_abc123'
 | Header | Description |
 |--------|-------------|
 | `Content-Type` | Must be `application/json` |
-| `X-Lasso-Api-Key` | API key for authentication |
-| `Authorization` | Bearer token authentication (`Bearer lasso_...`) |
 | `X-Lasso-Provider` | Override provider selection (same as `/provider/:id` route) |
 | `X-Lasso-Transport` | Force transport: `http` or `ws` |
 | `X-Lasso-Include-Meta` | Request observability metadata: `headers` or `body` |
@@ -167,10 +140,9 @@ wscat -c 'ws://localhost:4000/ws/rpc/ethereum?key=lasso_abc123'
 
 | Parameter | Values | Description |
 |-----------|--------|-------------|
-| `key` | `lasso_...` | API key |
 | `include_meta` | `headers`, `body` | Return routing metadata with response |
 | `transport` | `http`, `ws` | Force transport selection |
-| `provider` | provider ID | Override provider selection |
+| `provider_override` or `provider_id` | provider ID | Override provider selection |
 
 ---
 
@@ -322,7 +294,7 @@ All errors follow JSON-RPC 2.0 format:
 ```
 
 The `websocket_url` mirrors the HTTP request path — for example, a request to
-`/rpc/profile/default/fastest/ethereum` returns `/ws/rpc/profile/default/fastest/ethereum`.
+`/rpc/profile/public/fastest/ethereum` returns `/ws/rpc/profile/public/fastest/ethereum`.
 
 ### Error Codes
 
@@ -367,10 +339,9 @@ Returns system health status.
 
 ```
 GET /api/chains
-GET /api/chains/:chain_id/status
 ```
 
-Returns available chains and per-chain provider status.
+Returns the configured chains in the included `public` profile.
 
 ### Metrics
 

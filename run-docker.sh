@@ -39,9 +39,14 @@ if [ -z "$SECRET_KEY_BASE" ]; then
     SECRET_KEY_BASE=$(openssl rand -base64 48)
 fi
 
+# Production releases require a stable node identity. Keep local Docker usable
+# without extra setup while allowing callers to supply their own value.
+LASSO_NODE_ID="${LASSO_NODE_ID:-docker-local}"
+
 # Run the container
 docker run --rm \
     -p 4000:4000 \
     -e SECRET_KEY_BASE="$SECRET_KEY_BASE" \
+    -e LASSO_NODE_ID="$LASSO_NODE_ID" \
     --name lasso-rpc \
     lasso-rpc

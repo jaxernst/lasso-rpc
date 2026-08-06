@@ -9,6 +9,7 @@ defmodule Lasso.RPC.RequestOptions do
   alias Lasso.Config.MethodConstraints
 
   @type strategy :: :fastest | :priority | :load_balanced | :latency_weighted
+
   @type transport :: :http | :ws | :both | nil
 
   @default_profile Lasso.Config.ProfileValidator.default_profile()
