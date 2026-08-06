@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Updated Cowboy to 2.18.0 and Cowlib to 2.19.0 to remediate the HTTP header parsing and HPACK/QPACK memory-exhaustion advisories reported by `mix hex.audit`
 - `run-docker.sh` now provides the production-required `LASSO_NODE_ID` for local Docker runs, preventing a startup failure on a clean checkout
 - Added standard `mix assets.setup`, `mix assets.build`, and `mix assets.deploy` aliases so local and release asset builds use the same commands
 
