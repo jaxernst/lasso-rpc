@@ -7,19 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-05
+
 ### Fixed
 
 - Updated Cowboy to 2.18.0 and Cowlib to 2.19.0 to remediate the HTTP header parsing and HPACK/QPACK memory-exhaustion advisories reported by `mix hex.audit`
 - `run-docker.sh` now provides the production-required `LASSO_NODE_ID` for local Docker runs, preventing a startup failure on a clean checkout
 - Added standard `mix assets.setup`, `mix assets.build`, and `mix assets.deploy` aliases so local and release asset builds use the same commands
 
-### Documentation
-
-- Aligned public setup, API, deployment, configuration, and architecture docs with the canonical `public` profile, current routes, and the OSS authentication model
-
 - `/api/health` no longer returns 500 on single-node deployments (missing `regions` field on cluster topology)
 - Invalid provider override (e.g. `/rpc/provider/nonexistent/ethereum`) now returns a clean `-32602 "Provider not found"` error instead of a misleading "All circuits open" exhaustion message
 - WebSocket connections to unknown profiles (`/ws/rpc/profile/zzz/...`) and unknown provider overrides (`/ws/rpc/provider/ghost/...`) are now rejected at handshake; previously they silently fell back to default routing and returned subscription IDs that never delivered events
+
+### Documentation
+
+- Aligned public setup, API, deployment, configuration, and architecture docs with the canonical `public` profile, current routes, and the OSS authentication model
 
 ### Changed
 
@@ -73,5 +75,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jaxernst/lasso-rpc/releases/tag/v0.1.0
