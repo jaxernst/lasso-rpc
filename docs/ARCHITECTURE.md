@@ -71,6 +71,7 @@ Lasso is designed for geo-distributed deployments where each node operates indep
 ```bash
 # Enable clustering with DNS-based node discovery
 export CLUSTER_DNS_QUERY="lasso.internal"
+export CLUSTER_NODE_BASENAME="lasso"
 
 # Unique identifier for this node (typically a region name for geo-distributed deployments)
 export LASSO_NODE_ID="us-east-1"
@@ -85,9 +86,9 @@ Multi-tenancy via profiles: isolated routing configurations with independent cha
 ### Profile Structure
 
 ```yaml
-# config/profiles/default.yml
+# config/profiles/public.yml
 name: "Lasso Public"
-slug: "default"
+slug: "public"
 type: "standard"
 default_rps_limit: 100
 default_burst_limit: 500
@@ -103,7 +104,7 @@ chains:
         ws_url: "wss://eth.llamarpc.com"
 ```
 
-See `config/profiles/default.yml` for complete configuration reference.
+See `config/profiles/public.yml` for complete configuration reference.
 
 ### Profile-Scoped Supervision
 
@@ -116,7 +117,7 @@ Each `(profile, chain)` pair runs in an isolated supervision tree with independe
 /rpc/profile/:profile/:chain
 /rpc/profile/:profile/fastest/:chain
 
-# Default profile (uses "default" profile)
+# Default route (uses the included "public" profile)
 /rpc/:chain
 /rpc/fastest/:chain
 ```
@@ -312,7 +313,7 @@ Caches aggregated metrics from all cluster nodes using stale-while-revalidate:
 
 ```elixir
 # Queries all responding nodes, aggregates results
-MetricsStore.get_provider_leaderboard("default", "ethereum")
+MetricsStore.get_provider_leaderboard("public", "ethereum")
 # => %{data: [...], coverage: %{responding: 3, total: 3}, stale: false}
 ```
 

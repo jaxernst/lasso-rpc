@@ -132,7 +132,8 @@ defmodule LassoWeb.Endpoint do
       "Authorization",
       "X-Requested-With",
       "X-Lasso-Provider",
-      "X-Lasso-Transport"
+      "X-Lasso-Transport",
+      "X-Lasso-Include-Meta"
     ]
   )
 

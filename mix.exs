@@ -10,6 +10,7 @@ defmodule Lasso.MixProject do
       listeners: [Phoenix.CodeReloader],
       elixirc_paths: elixirc_paths(Mix.env()),
       releases: releases(),
+      aliases: aliases(),
       deps: deps(),
       dialyzer: dialyzer(),
       hex: [
@@ -26,6 +27,14 @@ defmodule Lasso.MixProject do
         include_executables_for: [:unix],
         applications: [runtime_tools: :permanent]
       ]
+    ]
+  end
+
+  defp aliases do
+    [
+      "assets.setup": ["tailwind.install", "esbuild.install"],
+      "assets.build": ["tailwind lasso", "esbuild lasso"],
+      "assets.deploy": ["tailwind lasso --minify", "esbuild lasso --minify", "phx.digest"]
     ]
   end
 

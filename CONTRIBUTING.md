@@ -29,7 +29,7 @@ The application will be available at `http://localhost:4000`.
 
 ### Environment Variables
 
-Create a `.env` file for local development (see `.env.example` for template):
+Create a `.env` file for local development (optional; system environment variables take precedence):
 
 ```bash
 # Optional: Add your RPC provider API keys
