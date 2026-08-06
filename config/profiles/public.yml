@@ -1,7 +1,7 @@
 ---
 name: Public RPC
 slug: public
-logo: lasso_hat_white.png
+logo: lasso-logo.png
 rps_limit: 100
 burst_limit: 500
 ---

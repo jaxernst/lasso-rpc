@@ -4,7 +4,7 @@ import Config
 # you can enable the server option below.
 config :lasso, LassoWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
-  secret_key_base: "test_secret_key_base" <> String.duplicate("a", 32),
+  secret_key_base: String.duplicate("a", 64),
   # Enable server for integration/HTTP testing
   server: true
 

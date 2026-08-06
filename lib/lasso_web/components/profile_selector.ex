@@ -34,19 +34,16 @@ defmodule LassoWeb.Components.ProfileSelector do
       |> assign(:selected_logo, selected_data.logo)
 
     ~H"""
-    <div class={["relative", @class]} id="profile-selector">
-      <button
+    <details class={["relative", @class]} id="profile-selector" phx-click-away={close_dropdown()}>
+      <summary
         id="profile-selector-trigger"
-        phx-click={toggle_dropdown()}
-        aria-haspopup="listbox"
-        aria-expanded="false"
-        class="group bg-[#121a28] flex items-center justify-between gap-3 rounded-lg border border-gray-600/40 px-3 py-2 text-left transition-all hover:border-gray-500/50 focus:ring-purple-500/30 focus:outline-none focus:ring-1"
+        class="group bg-[#121a28] flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-gray-600/40 px-3 py-2 text-left transition-all hover:border-gray-500/50 focus:ring-purple-500/30 focus:outline-none focus:ring-1 [&::-webkit-details-marker]:hidden"
       >
         <div class="flex items-center gap-3">
           <div class="flex items-center gap-2 text-gray-400 transition-colors group-hover:text-gray-300">
             <%= if @selected_logo do %>
               <img
-                src={"/images/profiles/#{@selected_logo}"}
+                src={"/images/#{@selected_logo}"}
                 class="h-4 w-4 object-contain"
                 alt=""
               />
@@ -80,16 +77,14 @@ defmodule LassoWeb.Components.ProfileSelector do
         >
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
         </svg>
-      </button>
+      </summary>
 
       <div
         id="profile-dropdown"
-        phx-click-away={hide_dropdown()}
         class={[
           "absolute top-full right-0 mt-2 w-72",
           "ring-black/50 rounded-lg border border-gray-600/40 bg-[#121a28] shadow-xl ring-1",
-          "z-50 overflow-hidden",
-          "hidden"
+          "z-50 overflow-hidden"
         ]}
       >
         <div class="px-2 pt-1.5 pb-2">
@@ -118,7 +113,7 @@ defmodule LassoWeb.Components.ProfileSelector do
             <%= if @show_create_cta do %>
               <button
                 type="button"
-                phx-click={JS.push("show_upgrade_modal") |> hide_dropdown()}
+                phx-click={JS.push("show_upgrade_modal") |> close_dropdown()}
                 class="text-[11px] flex items-center gap-1 text-purple-400 transition-colors hover:text-purple-300"
               >
                 <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -152,7 +147,7 @@ defmodule LassoWeb.Components.ProfileSelector do
           <div class="pb-2"></div>
         <% end %>
       </div>
-    </div>
+    </details>
     """
   end
 
@@ -163,7 +158,7 @@ defmodule LassoWeb.Components.ProfileSelector do
   defp profile_card(assigns) do
     ~H"""
     <button
-      phx-click={JS.push("select_profile", value: %{profile: @profile}) |> hide_dropdown()}
+      phx-click={JS.push("select_profile", value: %{profile: @profile}) |> close_dropdown()}
       class={[
         "group flex w-full items-center gap-2.5 rounded px-2.5 py-2 text-left transition-colors",
         if(@selected,
@@ -174,7 +169,7 @@ defmodule LassoWeb.Components.ProfileSelector do
     >
       <%= if @data.logo do %>
         <img
-          src={"/images/profiles/#{@data.logo}"}
+          src={"/images/#{@data.logo}"}
           class="h-5 w-5 flex-none object-contain"
           alt=""
         />
@@ -227,31 +222,9 @@ defmodule LassoWeb.Components.ProfileSelector do
     """
   end
 
-  defp toggle_dropdown do
-    %JS{}
-    |> JS.toggle(
-      to: "#profile-dropdown",
-      in:
-        {"transition ease-out duration-200", "opacity-0 -translate-y-1",
-         "opacity-100 translate-y-0"},
-      out:
-        {"transition ease-in duration-150", "opacity-100 translate-y-0",
-         "opacity-0 -translate-y-1"}
-    )
-    |> JS.toggle_attribute({"aria-expanded", "true", "false"},
-      to: "#profile-selector-trigger"
-    )
-  end
-
-  defp hide_dropdown(js \\ %JS{}) do
+  defp close_dropdown(js \\ %JS{}) do
     js
-    |> JS.hide(
-      to: "#profile-dropdown",
-      transition:
-        {"transition ease-in duration-150", "opacity-100 translate-y-0",
-         "opacity-0 -translate-y-1"}
-    )
-    |> JS.set_attribute({"aria-expanded", "false"}, to: "#profile-selector-trigger")
+    |> JS.remove_attribute("open", to: "#profile-selector")
     |> JS.dispatch("blur", to: "#profile-selector-trigger")
   end
 

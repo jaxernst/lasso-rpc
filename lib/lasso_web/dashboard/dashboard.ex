@@ -1434,8 +1434,8 @@ defmodule LassoWeb.Dashboard do
 
   defp apply_block_events(socket, block_events) do
     Enum.reduce(block_events, socket, fn blk, sock ->
-      chain = blk[:chain] || blk.chain
-      bn = blk[:block_number] || blk.block_number
+      chain = Map.get(blk, :chain) || Map.get(blk, :chain_id)
+      bn = Map.get(blk, :block_number)
 
       entry = %{
         ts: DateTime.utc_now() |> DateTime.to_time() |> to_string(),
@@ -1560,7 +1560,7 @@ defmodule LassoWeb.Dashboard do
     MapSet.new()
     |> collect_values(batch.circuit_events, & &1[:chain])
     |> collect_values(batch.provider_events, &Map.get(&1, :chain))
-    |> collect_values(batch.block_events, &(&1[:chain] || Map.get(&1, :chain)))
+    |> collect_values(batch.block_events, &(Map.get(&1, :chain) || Map.get(&1, :chain_id)))
   end
 
   defp collect_affected_providers(batch) do
