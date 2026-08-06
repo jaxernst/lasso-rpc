@@ -259,7 +259,7 @@ Create separate profiles for different environments or use cases:
 
 ```
 config/profiles/
-├── default.yml      # Free public providers
+├── public.yml       # Included free public providers
 ├── production.yml   # BYOK + own nodes
 └── staging.yml      # Subset for testing
 ```
@@ -267,7 +267,7 @@ config/profiles/
 Access via URL: `/rpc/profile/:slug/:chain`
 
 ```bash
-# Default profile
+# Included public profile
 curl -X POST http://localhost:4000/rpc/ethereum ...
 
 # Production profile

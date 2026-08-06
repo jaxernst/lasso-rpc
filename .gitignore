@@ -45,5 +45,8 @@ lasso-*.tar
 deployment/.env.production
 deployment/.env.staging
 
+# macOS Finder metadata
+.DS_Store
+
 # Internal working docs (keep local, don't commit)
 /docs/internal/

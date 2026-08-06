@@ -19,7 +19,7 @@ mix phx.server
 
 Available at `http://localhost:4000`. Dashboard at `http://localhost:4000/dashboard`.
 
-The default profile includes free public providers — no API keys required.
+The included `public` profile includes free public providers — no API keys required.
 
 ### `.env` File
 
@@ -37,7 +37,7 @@ ALCHEMY_API_KEY=your-key-here
 ./run-docker.sh
 ```
 
-See the `Dockerfile` for build customization.
+The helper sets `LASSO_NODE_ID=docker-local` unless you provide one. See the `Dockerfile` for build customization.
 
 ---
 
@@ -82,6 +82,8 @@ export ALCHEMY_API_KEY="your-key-here"
 ### Health Check
 
 Lasso exposes `GET /api/health` for liveness/readiness probes. Configure your orchestrator or load balancer to poll this endpoint.
+
+The health endpoint confirms that the application is running and reports cluster topology. It does not make live upstream RPC requests, so pair it with your normal provider and routing monitoring.
 
 ### HTTPS
 
@@ -182,4 +184,5 @@ Any `${VAR_NAME}` in profile YAML is resolved from environment variables at star
 - [ ] Rate limits configured in profile frontmatter
 - [ ] TLS terminated at reverse proxy / load balancer
 - [ ] Structured JSON log drain configured
+- [ ] RPC and dashboard protected by reverse-proxy authentication or a private network boundary (Lasso OSS has no built-in client authentication)
 - [ ] If clustering: `CLUSTER_DNS_QUERY` and `CLUSTER_NODE_BASENAME` set, Erlang distribution ports open between nodes

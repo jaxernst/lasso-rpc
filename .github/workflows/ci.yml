@@ -52,7 +52,10 @@ jobs:
         run: mix format --check-formatted
 
       - name: Run tests
-        run: mix test --include integration
+        # Integration tests are opt-in because they exercise external providers.
+        # Keep the PR gate deterministic; run them explicitly when validating
+        # provider integrations.
+        run: mix test
 
   lint:
     name: Lint (Credo)
