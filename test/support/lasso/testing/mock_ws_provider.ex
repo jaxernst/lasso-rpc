@@ -42,6 +42,7 @@ defmodule Lasso.Testing.MockWSProvider do
   use GenServer
   require Logger
   alias Lasso.RPC.Response
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Testing.ChainHelper
 
   @test_profile "public"
@@ -75,12 +76,27 @@ defmodule Lasso.Testing.MockWSProvider do
       Lasso.Providers.Catalog.build_from_config()
       instance_id = instance_id_for(profile, chain_id, provider_id)
 
-      {:ok, _pid} =
+      {:ok, mock_pid} =
         GenServer.start_link(
           __MODULE__,
           {chain_id, spec},
           name: {:via, Registry, {Lasso.Registry, ws_instance_key(instance_id)}}
         )
+
+      Enum.each([:http, :ws], fn transport ->
+        Snapshot.put(%Snapshot{
+          breaker_id: {instance_id, transport},
+          state: :closed,
+          generation: 1,
+          epoch: System.unique_integer([:positive, :monotonic]),
+          owner_pid: mock_pid,
+          ready?: true,
+          recovery_deadline_us: nil,
+          half_open_capacity: 1,
+          half_open_inflight: 0,
+          control_health: :healthy
+        })
+      end)
 
       :ets.insert(:lasso_instance_state, {
         {:health_probe, instance_id},
