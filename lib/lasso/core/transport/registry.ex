@@ -499,19 +499,29 @@ defmodule Lasso.RPC.TransportRegistry do
 
   defp create_channel(state, provider_id, transport, opts) do
     provider_config_result =
-      case ConfigStore.get_provider(state.profile, state.chain_id, provider_id) do
-        {:ok, _provider_config} = configured ->
-          configured
+      case ConfigStore.get_provider_with_route_generation(
+             state.profile,
+             state.chain_id,
+             provider_id
+           ) do
+        {:ok, provider_config, route_generation} ->
+          {:ok, provider_config, route_generation}
 
         _not_configured ->
           case Keyword.get(opts, :provider_config) do
-            config when is_map(config) -> {:ok, config}
-            _ -> get_provider_config_from_store(state.profile, state.chain_id, provider_id)
+            config when is_map(config) ->
+              {:ok, config, ConfigStore.route_generation()}
+
+            _ ->
+              case get_provider_config_from_store(state.profile, state.chain_id, provider_id) do
+                {:ok, config} -> {:ok, config, ConfigStore.route_generation()}
+                error -> error
+              end
           end
       end
 
     case provider_config_result do
-      {:ok, provider_config} ->
+      {:ok, provider_config, route_generation} ->
         transport_module = get_transport_module(transport)
 
         channel_opts =
@@ -560,7 +570,8 @@ defmodule Lasso.RPC.TransportRegistry do
                 transport,
                 raw_channel,
                 transport_module,
-                instance_id: instance_id
+                instance_id: instance_id,
+                route_generation: route_generation
               )
 
             # Store channel in GenServer state
