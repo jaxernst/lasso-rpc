@@ -58,10 +58,19 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
         tagged
       )
 
-  defp validate_envelope(%{"schema" => @schema, "version" => %{"major" => @major}}), do: :ok
+  defp validate_envelope(%{
+         "schema" => @schema,
+         "version" => %{"major" => @major, "minor" => minor}
+       })
+       when is_integer(minor) and minor >= 0,
+       do: :ok
 
-  defp validate_envelope(%{"schema" => @schema, "version" => %{"major" => _}}),
-    do: {:error, :unsupported_major_version}
+  defp validate_envelope(%{
+         "schema" => @schema,
+         "version" => %{"major" => major, "minor" => minor}
+       })
+       when is_integer(major) and is_integer(minor) and minor >= 0,
+       do: {:error, :unsupported_major_version}
 
   defp validate_envelope(_), do: {:error, :invalid_envelope}
 
@@ -92,7 +101,8 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
       "kind" => Atom.to_string(fact.kind),
       "io_duration_us" => fact.io_duration_us,
       "error_code" => fact.error_code,
-      "error_category" => fact.error_category
+      "error_category" => if(fact.error_category, do: Atom.to_string(fact.error_category)),
+      "retry_after_ms" => fact.retry_after_ms
     })
   end
 
@@ -274,7 +284,8 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
       {:ok,
        AttemptTerminal.Response.new(identity, response_kind(map["kind"]), map["io_duration_us"],
          error_code: map["error_code"],
-         error_category: map["error_category"]
+         error_category: response_category(map["error_category"]),
+         retry_after_ms: map["retry_after_ms"]
        )}
 
   defp decode_attempt("invalid_response", identity, map),
@@ -388,6 +399,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
   defp certainty("not_dispatched"), do: :not_dispatched
   defp certainty("indeterminate"), do: :indeterminate
   defp certainty("dispatched"), do: :dispatched
+  defp response_category(nil), do: nil
   defp transport("http"), do: :http
   defp transport("ws"), do: :ws
   defp circuit_scope("broad"), do: :broad
@@ -430,6 +442,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
           :local
         ],
         response_kind: [:success, :application_error],
+        response_category: [:deterministic, :quota, :capability, :provider_failure],
         invalid_response_reason: [
           :invalid_json,
           :invalid_envelope,

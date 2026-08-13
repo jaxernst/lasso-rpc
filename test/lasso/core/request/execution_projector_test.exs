@@ -43,7 +43,10 @@ defmodule Lasso.RPC.ExecutionProjectorTest do
     facts = [
       AttemptTerminal.PredispatchFailure.new(id, :encode, 0),
       AttemptTerminal.Response.new(id, :success, 1),
-      AttemptTerminal.Response.new(id, :application_error, 1, error_code: -1),
+      AttemptTerminal.Response.new(id, :application_error, 1,
+        error_code: -1,
+        error_category: :deterministic
+      ),
       AttemptTerminal.InvalidResponse.new(id, :invalid_json, 1),
       AttemptTerminal.TransportFailure.new(id, :closed, :dispatched),
       AttemptTerminal.Deadline.new(id, :indeterminate, 10),
@@ -65,6 +68,42 @@ defmodule Lasso.RPC.ExecutionProjectorTest do
 
     assert projection.breaker_effect == :none
     assert projection.evidence_qualification == :neutral
+  end
+
+  test "application error category and safety matrix is exhaustive" do
+    categories = [:deterministic, :quota, :capability, :provider_failure]
+
+    safeties = [
+      :replay_safe,
+      :raw_transaction_broadcast,
+      :upstream_signed,
+      :filter_create,
+      :filter_affine_read,
+      :filter_affine_consume,
+      :filter_affine_uninstall,
+      :subscription,
+      :unknown
+    ]
+
+    for category <- categories, safety <- safeties do
+      projection =
+        identity(safety)
+        |> AttemptTerminal.Response.new(:application_error, 1,
+          error_code: -32_000,
+          error_category: category,
+          retry_after_ms: if(category == :quota, do: 250)
+        )
+        |> ExecutionProjector.project()
+
+      expected_fallback =
+        category in [:quota, :capability] or
+          (category == :provider_failure and safety == :replay_safe)
+
+      assert projection.fallback_eligible == expected_fallback
+
+      assert projection.breaker_effect ==
+               if(category == :provider_failure, do: :failure, else: :none)
+    end
   end
 
   test "unsupported projector versions fail explicitly" do

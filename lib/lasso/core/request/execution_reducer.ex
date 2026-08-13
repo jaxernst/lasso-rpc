@@ -22,7 +22,7 @@ defmodule Lasso.RPC.ExecutionReducer do
     :task_exit
   ]
 
-  @enforce_keys [:identity, :deadline_us]
+  @enforce_keys [:identity, :started_us, :deadline_us]
   defstruct @enforce_keys ++
               [
                 dispatch_certainty: :not_dispatched,
@@ -44,9 +44,10 @@ defmodule Lasso.RPC.ExecutionReducer do
           required(:event_us) => integer()
         }
 
-  @spec new(AttemptIdentity.t(), integer()) :: t()
-  def new(%AttemptIdentity{} = identity, deadline_us) when is_integer(deadline_us) do
-    %__MODULE__{identity: identity, deadline_us: deadline_us}
+  @spec new(AttemptIdentity.t(), integer(), integer()) :: t()
+  def new(%AttemptIdentity{} = identity, started_us, deadline_us)
+      when is_integer(started_us) and is_integer(deadline_us) and deadline_us >= started_us do
+    %__MODULE__{identity: identity, started_us: started_us, deadline_us: deadline_us}
   end
 
   @spec observe(t(), event()) :: t()
@@ -94,6 +95,7 @@ defmodule Lasso.RPC.ExecutionReducer do
       []
       |> maybe_option(:error_code, event)
       |> maybe_option(:error_category, event)
+      |> maybe_option(:retry_after_ms, event)
 
     AttemptTerminal.Response.new(identity, event.response_kind, event.io_duration_us, opts)
   end
@@ -141,13 +143,14 @@ defmodule Lasso.RPC.ExecutionReducer do
         terminal: :deadline,
         identity: identity,
         dispatch_certainty: certainty,
+        started_us: started_us,
         deadline_us: deadline_us
       }),
       do:
         AttemptTerminal.Deadline.new(
           identity,
           certainty,
-          if(certainty == :not_dispatched, do: 0, else: deadline_us)
+          if(certainty == :not_dispatched, do: 0, else: deadline_us - started_us)
         )
 
   def terminal_fact(%__MODULE__{}),
@@ -259,6 +262,7 @@ defmodule Lasso.RPC.ExecutionReducer do
           :response_kind,
           :error_code,
           :error_category,
+          :retry_after_ms,
           :io_duration_us,
           :elapsed_us,
           :censoring_boundary_us
@@ -295,7 +299,7 @@ defmodule Lasso.RPC.ExecutionReducer do
        do: value
 
   defp bounded_metadata(key, value)
-       when key in [:io_duration_us, :elapsed_us, :censoring_boundary_us] do
+       when key in [:io_duration_us, :elapsed_us, :censoring_boundary_us, :retry_after_ms] do
     value = bounded_integer(value, key)
     if value < 0, do: raise(ArgumentError, "invalid #{key}"), else: value
   end

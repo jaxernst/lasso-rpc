@@ -53,7 +53,7 @@ defmodule Lasso.RPC.ExecutionFactTest do
     assert %AttemptTerminal.Response{} =
              AttemptTerminal.Response.new(id, :application_error, 20,
                error_code: -32_000,
-               error_category: "application"
+               error_category: :deterministic
              )
 
     assert %AttemptTerminal.InvalidResponse{} =
@@ -98,6 +98,19 @@ defmodule Lasso.RPC.ExecutionFactTest do
   test "illegal combinations are rejected by tagged constructors" do
     assert_raise ArgumentError, ~r/successful responses/, fn ->
       AttemptTerminal.Response.new(identity(), :success, 20, error_code: -1)
+    end
+
+    assert_raise ArgumentError, ~r/require an error code/, fn ->
+      AttemptTerminal.Response.new(identity(), :application_error, 20,
+        error_category: :deterministic
+      )
+    end
+
+    assert_raise ArgumentError, ~r/invalid error_category/, fn ->
+      AttemptTerminal.Response.new(identity(), :application_error, 20,
+        error_code: -32_000,
+        error_category: :unbounded_other
+      )
     end
 
     assert_raise ArgumentError, ~r/zero censoring/, fn ->

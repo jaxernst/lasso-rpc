@@ -62,7 +62,8 @@ defmodule Lasso.RPC.ExecutionFact.CodecTest do
       response,
       AttemptTerminal.Response.new(id, :application_error, 12,
         error_code: -32_000,
-        error_category: "application"
+        error_category: :quota,
+        retry_after_ms: 250
       ),
       AttemptTerminal.InvalidResponse.new(id, :invalid_json, 12),
       AttemptTerminal.TransportFailure.new(id, :connection, :indeterminate, io_duration_us: 12),
@@ -94,13 +95,36 @@ defmodule Lasso.RPC.ExecutionFact.CodecTest do
     end
   end
 
+  test "version requires non-negative integer major and minor fields" do
+    encoded = Codec.encode!(AttemptTerminal.Response.new(identity(), :success, 1))
+    envelope = Jason.decode!(encoded)
+
+    for version <- [
+          %{"major" => 1},
+          %{"major" => 1, "minor" => "garbage"},
+          %{"major" => 1, "minor" => -1}
+        ] do
+      assert {:error, :invalid_envelope} =
+               envelope
+               |> Map.put("version", version)
+               |> Jason.encode!()
+               |> Codec.decode()
+    end
+
+    assert {:ok, _} =
+             envelope
+             |> Map.put("version", %{"major" => 1, "minor" => 0, "future" => true})
+             |> Jason.encode!()
+             |> Codec.decode()
+  end
+
   test "rejects malformed and unsupported major versions" do
     assert Codec.decode("not-json") == {:error, :malformed_json}
 
     assert Codec.decode(
              ~s({"schema":"lasso.execution-fact","version":{"major":2},"stage":"request"})
            ) ==
-             {:error, :unsupported_major_version}
+             {:error, :invalid_envelope}
 
     assert Codec.decode(~s({"schema":"other","version":{"major":1}})) ==
              {:error, :invalid_envelope}
@@ -179,7 +203,8 @@ defmodule Lasso.RPC.ExecutionFact.CodecTest do
     fact =
       AttemptTerminal.Response.new(identity, :application_error, 9_999_999_999,
         error_code: -32_000,
-        error_category: max
+        error_category: :provider_failure,
+        retry_after_ms: 9_999_999_999
       )
 
     assert {:ok, json} = Codec.encode(fact)

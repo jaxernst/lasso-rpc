@@ -23,7 +23,7 @@ defmodule Lasso.RPC.ExecutionReducerTest do
         dispatch_count: 1
       )
 
-    ExecutionReducer.new(identity, deadline_us)
+    ExecutionReducer.new(identity, 0, deadline_us)
   end
 
   defp response(id, event_us, extra \\ %{}) do
@@ -47,6 +47,18 @@ defmodule Lasso.RPC.ExecutionReducerTest do
       assert [%{event_us: ^stamp}] = reduced.late_observations
       assert ExecutionReducer.close_deadline(reduced).terminal == :deadline
     end
+  end
+
+  test "deadline fact stores elapsed censoring duration, not absolute monotonic time" do
+    origin = -576_460_751_234_567
+
+    reduced =
+      ExecutionReducer.new(state().identity, origin, origin + 50_000)
+      |> ExecutionReducer.observe(%{id: 1, kind: :send_started, event_us: origin + 1})
+      |> ExecutionReducer.close_deadline()
+
+    assert %Lasso.RPC.AttemptTerminal.Deadline{censoring_boundary_us: 50_000} =
+             ExecutionReducer.terminal_fact(reduced)
   end
 
   test "certainty only increases" do

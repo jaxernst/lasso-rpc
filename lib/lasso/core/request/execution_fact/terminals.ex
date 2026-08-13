@@ -102,8 +102,9 @@ defmodule Lasso.RPC.AttemptTerminal.Response do
   alias Lasso.RPC.{AttemptIdentity, ExecutionFact}
 
   @kinds [:success, :application_error]
+  @error_categories [:deterministic, :quota, :capability, :provider_failure]
   @enforce_keys [:identity, :kind, :io_duration_us]
-  defstruct @enforce_keys ++ [:error_code, :error_category]
+  defstruct @enforce_keys ++ [:error_code, :error_category, :retry_after_ms]
   @type t :: %__MODULE__{}
 
   @spec new(AttemptIdentity.t(), atom(), non_neg_integer(), keyword()) :: t()
@@ -111,9 +112,16 @@ defmodule Lasso.RPC.AttemptTerminal.Response do
     kind = ExecutionFact.member!(kind, :kind, @kinds)
     error_code = Keyword.get(opts, :error_code)
     error_category = Keyword.get(opts, :error_category)
+    retry_after_ms = Keyword.get(opts, :retry_after_ms)
 
-    if kind == :success and (error_code != nil or error_category != nil),
+    if kind == :success and (error_code != nil or error_category != nil or retry_after_ms != nil),
       do: raise(ArgumentError, "successful responses cannot carry error classification")
+
+    if kind == :application_error and is_nil(error_code),
+      do: raise(ArgumentError, "application errors require an error code")
+
+    if kind == :application_error and is_nil(error_category),
+      do: raise(ArgumentError, "application errors require a normalized category")
 
     if error_code != nil and
          (not is_integer(error_code) or error_code < -2_147_483_648 or
@@ -125,7 +133,11 @@ defmodule Lasso.RPC.AttemptTerminal.Response do
       kind: kind,
       io_duration_us: ExecutionFact.non_negative!(io_duration_us, :io_duration_us),
       error_code: error_code,
-      error_category: ExecutionFact.optional_bounded!(error_category, :error_category)
+      error_category:
+        if(error_category,
+          do: ExecutionFact.member!(error_category, :error_category, @error_categories)
+        ),
+      retry_after_ms: ExecutionFact.optional_duration!(retry_after_ms, :retry_after_ms)
     }
   end
 end

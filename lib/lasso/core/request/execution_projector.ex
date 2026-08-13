@@ -45,15 +45,9 @@ defmodule Lasso.RPC.ExecutionProjector do
   def project(%AttemptTerminal.Response{kind: :success}, 1),
     do: projection(false, :return_response, :success, :usable_success, :upstream_success)
 
-  def project(%AttemptTerminal.Response{kind: :application_error}, 1),
-    do:
-      projection(
-        false,
-        :return_response,
-        :none,
-        :application_response,
-        :upstream_application_error
-      )
+  def project(%AttemptTerminal.Response{kind: :application_error} = response, 1) do
+    application_error_projection(response.error_category, response.identity.execution_safety)
+  end
 
   def project(%AttemptTerminal.InvalidResponse{identity: identity}, 1) do
     retryable_projection(
@@ -144,4 +138,23 @@ defmodule Lasso.RPC.ExecutionProjector do
       diagnostic: diagnostic
     }
   end
+
+  defp application_error_projection(:deterministic, _safety),
+    do: projection(false, :return_response, :none, :application_response, :deterministic_error)
+
+  defp application_error_projection(:quota, _safety),
+    do: projection(true, :try_next_candidate, :none, :capacity_signal, :upstream_quota)
+
+  defp application_error_projection(:capability, _safety),
+    do: projection(true, :try_next_candidate, :none, :capability_signal, :capability_rejection)
+
+  defp application_error_projection(:provider_failure, safety),
+    do:
+      retryable_projection(
+        safety,
+        :dispatched,
+        :failure,
+        :reliability_failure,
+        :provider_application_failure
+      )
 end
