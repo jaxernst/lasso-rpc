@@ -467,7 +467,10 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
           :send_confirmed,
           :not_dispatched,
           :response,
+          :invalid_response,
           :transport_failure,
+          :predispatch_failure,
+          :cancelled,
           :task_exit
         ]
       ],

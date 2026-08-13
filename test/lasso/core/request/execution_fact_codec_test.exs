@@ -71,7 +71,10 @@ defmodule Lasso.RPC.ExecutionFact.CodecTest do
       RequestTerminal.UpstreamResponse.new(request_attrs(), response),
       RequestTerminal.LocalFailure.new(request_attrs(), :configuration),
       RequestTerminal.Deadline.new(request_attrs(), :indeterminate),
-      RequestTerminal.CallerAbandonment.new(request_attrs(), :not_dispatched),
+      RequestTerminal.CallerAbandonment.new(
+        Keyword.put(request_attrs(), :dispatch_count, 0),
+        :not_dispatched
+      ),
       RequestTerminal.UnsafeIndeterminateExhaustion.new(
         request_attrs(:raw_transaction_broadcast)
       ),

@@ -3,6 +3,7 @@ defmodule Lasso.RPC.ExecutionFactTest do
 
   alias Lasso.RPC.{AdmissionTerminal, AttemptIdentity, AttemptTerminal, LateObservation}
   alias Lasso.RPC.{RequestTerminal, ExecutionPlan, AdmissionLease}
+  alias Lasso.RPC.ExecutionPlan.{Candidate, Policy}
 
   def identity(safety \\ :replay_safe) do
     AttemptIdentity.new(
@@ -80,7 +81,10 @@ defmodule Lasso.RPC.ExecutionFactTest do
              RequestTerminal.Deadline.new(request_attrs(), :indeterminate)
 
     assert %RequestTerminal.CallerAbandonment{} =
-             RequestTerminal.CallerAbandonment.new(request_attrs(), :not_dispatched)
+             RequestTerminal.CallerAbandonment.new(
+               Keyword.put(request_attrs(), :dispatch_count, 0),
+               :not_dispatched
+             )
 
     assert %RequestTerminal.UnsafeIndeterminateExhaustion{} =
              RequestTerminal.UnsafeIndeterminateExhaustion.new(
@@ -102,6 +106,21 @@ defmodule Lasso.RPC.ExecutionFactTest do
 
     assert_raise ArgumentError, ~r/replay-safe/, fn ->
       RequestTerminal.UnsafeIndeterminateExhaustion.new(request_attrs())
+    end
+
+    assert_raise ArgumentError, ~r/attempted dispatch/, fn ->
+      AttemptTerminal.TransportFailure.new(identity(), :connection, :not_dispatched)
+    end
+
+    assert_raise ArgumentError, ~r/dispatch count and certainty disagree/, fn ->
+      RequestTerminal.Deadline.new(request_attrs(), :not_dispatched)
+    end
+
+    assert_raise ArgumentError, ~r/requires a dispatch/, fn ->
+      RequestTerminal.UnsafeIndeterminateExhaustion.new(
+        request_attrs(:raw_transaction_broadcast)
+        |> Keyword.put(:dispatch_count, 0)
+      )
     end
 
     assert_raise ArgumentError, ~r/identity disagree/, fn ->
@@ -154,9 +173,10 @@ defmodule Lasso.RPC.ExecutionFactTest do
       ExecutionPlan.new(
         profile: "public",
         workload_key: "read",
+        workload_class: :read,
         route_generation: 2,
-        candidate: %{upstream_instance_id: "i", transport: :http},
-        policy: %{strategy: "fastest"}
+        candidate: Candidate.new(upstream_instance_id: "i", transport: :http),
+        policy: Policy.new(strategy: :load_balanced)
       )
 
     assert plan.route_generation == 2
@@ -169,7 +189,12 @@ defmodule Lasso.RPC.ExecutionFactTest do
     assert Enum.map(AdmissionLease.rollback_order(lease), & &1.kind) == [:node_bulkhead, :breaker]
 
     assert_raise ArgumentError, ~r/fixed order/, fn ->
-      AdmissionLease.new("lease", self()) |> AdmissionLease.add(:upstream_bulkhead, "bad")
+      AdmissionLease.new("lease", self())
+      |> AdmissionLease.add(:upstream_bulkhead, "upstream")
+      |> AdmissionLease.add(:node_bulkhead, "bad")
     end
+
+    subset = AdmissionLease.new("subset", self()) |> AdmissionLease.add(:workload, "workload")
+    assert Enum.map(subset.fragments, & &1.kind) == [:workload]
   end
 end

@@ -36,7 +36,7 @@ defmodule Lasso.RPC.AdmissionTerminal do
   def new(attrs) do
     terminal = struct!(__MODULE__, attrs)
 
-    %{
+    normalized = %{
       terminal
       | request_id: ExecutionFact.bounded!(terminal.request_id, :request_id),
         profile: ExecutionFact.bounded!(terminal.profile, :profile),
@@ -46,16 +46,18 @@ defmodule Lasso.RPC.AdmissionTerminal do
         workload_key: ExecutionFact.bounded!(terminal.workload_key, :workload_key),
         reason: ExecutionFact.member!(terminal.reason, :reason, @reasons),
         candidate_admission_count:
-          ExecutionFact.non_negative!(
-            terminal.candidate_admission_count,
-            :candidate_admission_count
-          ),
-        dispatch_count: ExecutionFact.non_negative!(terminal.dispatch_count, :dispatch_count),
+          ExecutionFact.candidate_count!(terminal.candidate_admission_count),
+        dispatch_count: ExecutionFact.dispatch_count!(terminal.dispatch_count),
         elapsed_us: ExecutionFact.non_negative!(terminal.elapsed_us, :elapsed_us),
         retry_after_ms:
           ExecutionFact.optional_duration!(terminal.retry_after_ms, :retry_after_ms),
         observed_at: ExecutionFact.optional_bounded!(terminal.observed_at, :observed_at)
     }
+
+    if normalized.dispatch_count > normalized.candidate_admission_count,
+      do: raise(ArgumentError, "dispatch_count cannot exceed candidate admissions")
+
+    normalized
   end
 end
 
@@ -165,10 +167,15 @@ defmodule Lasso.RPC.AttemptTerminal.TransportFailure do
 
   @spec new(AttemptIdentity.t(), atom(), ExecutionFact.dispatch_certainty(), keyword()) :: t()
   def new(%AttemptIdentity{} = identity, reason, certainty, opts \\ []) do
+    certainty = ExecutionFact.certainty!(certainty)
+
+    if certainty == :not_dispatched,
+      do: raise(ArgumentError, "transport failure requires an attempted dispatch")
+
     %__MODULE__{
       identity: identity,
       reason: ExecutionFact.member!(reason, :reason, @reasons),
-      dispatch_certainty: ExecutionFact.certainty!(certainty),
+      dispatch_certainty: certainty,
       io_duration_us:
         ExecutionFact.optional_duration!(Keyword.get(opts, :io_duration_us), :io_duration_us)
     }
@@ -244,7 +251,7 @@ defmodule Lasso.RPC.RequestTerminal.Common do
 
   @spec normalize(keyword()) :: map()
   def normalize(attrs) do
-    %{
+    normalized = %{
       request_id: ExecutionFact.bounded!(Keyword.fetch!(attrs, :request_id), :request_id),
       profile: ExecutionFact.bounded!(Keyword.fetch!(attrs, :profile), :profile),
       subject_token:
@@ -256,14 +263,15 @@ defmodule Lasso.RPC.RequestTerminal.Common do
       workload_key: ExecutionFact.bounded!(Keyword.fetch!(attrs, :workload_key), :workload_key),
       elapsed_us: ExecutionFact.non_negative!(Keyword.fetch!(attrs, :elapsed_us), :elapsed_us),
       candidate_admission_count:
-        ExecutionFact.non_negative!(
-          Keyword.fetch!(attrs, :candidate_admission_count),
-          :candidate_admission_count
-        ),
-      dispatch_count:
-        ExecutionFact.non_negative!(Keyword.fetch!(attrs, :dispatch_count), :dispatch_count),
+        ExecutionFact.candidate_count!(Keyword.fetch!(attrs, :candidate_admission_count)),
+      dispatch_count: ExecutionFact.dispatch_count!(Keyword.fetch!(attrs, :dispatch_count)),
       observed_at: ExecutionFact.optional_bounded!(Keyword.get(attrs, :observed_at), :observed_at)
     }
+
+    if normalized.dispatch_count > normalized.candidate_admission_count,
+      do: raise(ArgumentError, "dispatch_count cannot exceed candidate admissions")
+
+    normalized
   end
 end
 
@@ -359,12 +367,21 @@ defmodule Lasso.RPC.RequestTerminal.Deadline do
   @type t :: %__MODULE__{}
 
   @spec new(keyword(), ExecutionFact.dispatch_certainty()) :: t()
-  def new(attrs, certainty),
-    do:
-      struct!(
-        __MODULE__,
-        Map.put(Common.normalize(attrs), :dispatch_certainty, ExecutionFact.certainty!(certainty))
-      )
+  def new(attrs, certainty) do
+    normalized = Common.normalize(attrs)
+    certainty = ExecutionFact.certainty!(certainty)
+    ensure_request_certainty!(normalized, certainty)
+    struct!(__MODULE__, Map.put(normalized, :dispatch_certainty, certainty))
+  end
+
+  defp ensure_request_certainty!(%{dispatch_count: 0}, :not_dispatched), do: :ok
+
+  defp ensure_request_certainty!(%{dispatch_count: count}, certainty)
+       when count > 0 and certainty != :not_dispatched,
+       do: :ok
+
+  defp ensure_request_certainty!(_, _),
+    do: raise(ArgumentError, "dispatch count and certainty disagree")
 end
 
 defmodule Lasso.RPC.RequestTerminal.CallerAbandonment do
@@ -387,12 +404,21 @@ defmodule Lasso.RPC.RequestTerminal.CallerAbandonment do
   @type t :: %__MODULE__{}
 
   @spec new(keyword(), ExecutionFact.dispatch_certainty()) :: t()
-  def new(attrs, certainty),
-    do:
-      struct!(
-        __MODULE__,
-        Map.put(Common.normalize(attrs), :dispatch_certainty, ExecutionFact.certainty!(certainty))
-      )
+  def new(attrs, certainty) do
+    normalized = Common.normalize(attrs)
+    certainty = ExecutionFact.certainty!(certainty)
+    ensure_request_certainty!(normalized, certainty)
+    struct!(__MODULE__, Map.put(normalized, :dispatch_certainty, certainty))
+  end
+
+  defp ensure_request_certainty!(%{dispatch_count: 0}, :not_dispatched), do: :ok
+
+  defp ensure_request_certainty!(%{dispatch_count: count}, certainty)
+       when count > 0 and certainty != :not_dispatched,
+       do: :ok
+
+  defp ensure_request_certainty!(_, _),
+    do: raise(ArgumentError, "dispatch count and certainty disagree")
 end
 
 defmodule Lasso.RPC.RequestTerminal.UnsafeIndeterminateExhaustion do
@@ -420,6 +446,9 @@ defmodule Lasso.RPC.RequestTerminal.UnsafeIndeterminateExhaustion do
 
     if normalized.execution_safety == :replay_safe,
       do: raise(ArgumentError, "replay-safe work cannot end as unsafe indeterminate exhaustion")
+
+    if normalized.dispatch_count == 0,
+      do: raise(ArgumentError, "unsafe indeterminate exhaustion requires a dispatch")
 
     struct!(__MODULE__, normalized)
   end
@@ -472,7 +501,10 @@ defmodule Lasso.RPC.LateObservation do
     :send_confirmed,
     :not_dispatched,
     :response,
+    :invalid_response,
     :transport_failure,
+    :predispatch_failure,
+    :cancelled,
     :task_exit
   ]
   @enforce_keys [:request_id, :attempt_id, :kind, :elapsed_us]

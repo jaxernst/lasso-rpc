@@ -3,10 +3,47 @@ defmodule Lasso.RPC.ExecutionPlan do
 
   alias Lasso.RPC.ExecutionFact
 
-  @candidate_keys [:upstream_instance_id, :provider_id, :transport]
-  @policy_keys [:strategy, :provider_override, :failover_on_override]
+  defmodule Candidate do
+    @moduledoc false
+    @enforce_keys [:upstream_instance_id, :transport]
+    defstruct @enforce_keys ++ [:provider_id]
 
-  @enforce_keys [:profile, :workload_key, :route_generation, :candidate, :policy]
+    def new(attrs) do
+      candidate = struct!(__MODULE__, attrs)
+
+      %{
+        candidate
+        | upstream_instance_id:
+            ExecutionFact.bounded!(candidate.upstream_instance_id, :upstream_instance_id),
+          provider_id: ExecutionFact.optional_bounded!(candidate.provider_id, :provider_id),
+          transport: ExecutionFact.transport!(candidate.transport)
+      }
+    end
+  end
+
+  defmodule Policy do
+    @moduledoc false
+    @strategies [:fastest, :load_balanced, :latency_weighted, :priority]
+    @enforce_keys [:strategy]
+    defstruct @enforce_keys ++ [provider_override: nil, failover_on_override: false]
+
+    def new(attrs) do
+      policy = struct!(__MODULE__, attrs)
+
+      unless is_boolean(policy.failover_on_override),
+        do: raise(ArgumentError, "failover_on_override must be boolean")
+
+      %{
+        policy
+        | strategy: ExecutionFact.member!(policy.strategy, :strategy, @strategies),
+          provider_override:
+            ExecutionFact.optional_bounded!(policy.provider_override, :provider_override)
+      }
+    end
+  end
+
+  @workload_classes [:read, :transaction, :filter, :subscription, :unknown]
+  @enforce_keys [:profile, :workload_key, :workload_class, :route_generation, :candidate, :policy]
   defstruct @enforce_keys
   @type t :: %__MODULE__{}
 
@@ -14,36 +51,23 @@ defmodule Lasso.RPC.ExecutionPlan do
   def new(attrs) do
     plan = struct!(__MODULE__, attrs)
 
-    unless bounded_fragment?(plan.candidate, @candidate_keys) and
-             bounded_fragment?(plan.policy, @policy_keys),
-           do: raise(ArgumentError, "candidate and policy must be maps")
+    unless match?(%Candidate{}, plan.candidate) and match?(%Policy{}, plan.policy),
+      do: raise(ArgumentError, "candidate and policy must be typed plan fragments")
 
-    if external_size(plan.candidate) > 1_024 or external_size(plan.policy) > 1_024,
-      do: raise(ArgumentError, "execution plan fragments exceed their bounded size")
+    candidate = Candidate.new(Map.to_list(Map.from_struct(plan.candidate)))
+    policy = Policy.new(Map.to_list(Map.from_struct(plan.policy)))
 
     %{
       plan
       | profile: ExecutionFact.bounded!(plan.profile, :profile),
         workload_key: ExecutionFact.bounded!(plan.workload_key, :workload_key),
-        route_generation: ExecutionFact.non_negative!(plan.route_generation, :route_generation)
+        workload_class:
+          ExecutionFact.member!(plan.workload_class, :workload_class, @workload_classes),
+        route_generation: ExecutionFact.non_negative!(plan.route_generation, :route_generation),
+        candidate: candidate,
+        policy: policy
     }
   end
-
-  defp external_size(value), do: value |> :erlang.term_to_binary() |> byte_size()
-
-  defp bounded_fragment?(fragment, allowed_keys) when is_map(fragment) do
-    Enum.all?(fragment, fn {key, value} ->
-      key in allowed_keys and bounded_scalar?(value)
-    end)
-  end
-
-  defp bounded_fragment?(_fragment, _allowed_keys), do: false
-
-  defp bounded_scalar?(value) when is_binary(value),
-    do: byte_size(value) <= 128 and String.valid?(value)
-
-  defp bounded_scalar?(value) when is_atom(value) or is_boolean(value) or is_nil(value), do: true
-  defp bounded_scalar?(_value), do: false
 end
 
 defmodule Lasso.RPC.AdmissionLease do
@@ -64,9 +88,15 @@ defmodule Lasso.RPC.AdmissionLease do
 
   @spec add(t(), atom(), binary()) :: t()
   def add(%__MODULE__{} = lease, kind, token) when kind in @order do
-    expected = Enum.at(@order, length(lease.fragments))
+    previous_index =
+      case List.last(lease.fragments) do
+        nil -> -1
+        fragment -> Enum.find_index(@order, &(&1 == fragment.kind))
+      end
 
-    if kind != expected,
+    next_index = Enum.find_index(@order, &(&1 == kind))
+
+    if next_index <= previous_index,
       do: raise(ArgumentError, "lease fragments must be acquired in fixed order")
 
     fragment = %{kind: kind, token: ExecutionFact.bounded!(token, :fragment_token)}

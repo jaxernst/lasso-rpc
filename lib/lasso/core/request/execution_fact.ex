@@ -54,6 +54,16 @@ defmodule Lasso.RPC.ExecutionFact do
 
   def positive!(_value, field), do: raise(ArgumentError, "#{field} must be positive")
 
+  @spec candidate_count!(term()) :: 0..16
+  def candidate_count!(value) when is_integer(value) and value in 0..16, do: value
+
+  def candidate_count!(_value),
+    do: raise(ArgumentError, "candidate_admission_count must be 0..16")
+
+  @spec dispatch_count!(term()) :: 0..3
+  def dispatch_count!(value) when is_integer(value) and value in 0..3, do: value
+  def dispatch_count!(_value), do: raise(ArgumentError, "dispatch_count must be 0..3")
+
   @spec member!(term(), atom(), [term()]) :: term()
   def member!(value, field, allowed) do
     if value in allowed,
@@ -126,7 +136,7 @@ defmodule Lasso.RPC.AttemptIdentity do
   def new(attrs) when is_list(attrs) do
     identity = struct!(__MODULE__, attrs)
 
-    %{
+    normalized = %{
       identity
       | request_id: ExecutionFact.bounded!(identity.request_id, :request_id),
         attempt_id: ExecutionFact.bounded!(identity.attempt_id, :attempt_id),
@@ -147,11 +157,22 @@ defmodule Lasso.RPC.AttemptIdentity do
         request_budget_ms:
           ExecutionFact.non_negative!(identity.request_budget_ms, :request_budget_ms),
         candidate_admission_count:
-          ExecutionFact.non_negative!(
-            identity.candidate_admission_count,
-            :candidate_admission_count
-          ),
-        dispatch_count: ExecutionFact.positive!(identity.dispatch_count, :dispatch_count)
+          ExecutionFact.candidate_count!(identity.candidate_admission_count),
+        dispatch_count:
+          identity.dispatch_count
+          |> ExecutionFact.dispatch_count!()
+          |> ensure_positive_dispatch!()
     }
+
+    if normalized.candidate_admission_count == 0 or
+         normalized.dispatch_count > normalized.candidate_admission_count,
+       do: raise(ArgumentError, "attempt counts are incoherent")
+
+    normalized
   end
+
+  defp ensure_positive_dispatch!(0),
+    do: raise(ArgumentError, "attempt dispatch_count must be positive")
+
+  defp ensure_positive_dispatch!(value), do: value
 end

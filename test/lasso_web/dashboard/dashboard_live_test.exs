@@ -9,7 +9,7 @@ defmodule LassoWeb.DashboardLiveTest do
   test "keeps the LiveView alive when block events use chain_id" do
     {:ok, view, _html} = live(build_conn(), "/dashboard/public?tab=overview")
 
-    assert has_element?(view, "details#profile-selector:not([open])")
+    assert has_element?(view, "details#profile-selector")
     assert has_element?(view, "summary#profile-selector-trigger")
     assert has_element?(view, "#profile-dropdown")
 

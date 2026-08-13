@@ -26,10 +26,10 @@ defmodule Lasso.RPC.ExecutionProjectorTest do
 
   test "fallback matrix is derived from safety and dispatch certainty" do
     for safety <- [:replay_safe, :raw_transaction_broadcast, :unknown],
-        certainty <- [:not_dispatched, :indeterminate, :dispatched] do
+        certainty <- [:indeterminate, :dispatched] do
       fact = AttemptTerminal.TransportFailure.new(identity(safety), :connection, certainty)
       projection = ExecutionProjector.project(fact)
-      expected = certainty == :not_dispatched or safety == :replay_safe
+      expected = safety == :replay_safe
       assert projection.fallback_eligible == expected
 
       assert projection.recommended_action ==
@@ -121,7 +121,7 @@ defmodule Lasso.RPC.ExecutionProjectorTest do
       RequestTerminal.UpstreamResponse.new(response_attrs, response),
       RequestTerminal.LocalFailure.new(attrs, :configuration),
       RequestTerminal.Deadline.new(attrs, :indeterminate),
-      RequestTerminal.CallerAbandonment.new(attrs, :not_dispatched),
+      RequestTerminal.CallerAbandonment.new(attrs, :indeterminate),
       RequestTerminal.UnsafeIndeterminateExhaustion.new(attrs),
       RequestTerminal.OrdinaryExhaustion.new(attrs, :providers_exhausted)
     ]
@@ -168,7 +168,7 @@ defmodule Lasso.RPC.ExecutionProjectorTest do
     end
   end
 
-  test "deadline and cancellation certainty matrix always finishes terminal request handling" do
+  test "attempt deadline fallback follows safety and certainty while cancellation finishes" do
     for safety <- [
           :replay_safe,
           :raw_transaction_broadcast,
@@ -193,11 +193,16 @@ defmodule Lasso.RPC.ExecutionProjectorTest do
           boundary
         )
 
-      for fact <- [deadline, cancelled] do
-        projection = ExecutionProjector.project(fact)
-        refute projection.fallback_eligible
-        assert projection.recommended_action == :finish_request
-      end
+      deadline_projection = ExecutionProjector.project(deadline)
+      expected_fallback = certainty == :not_dispatched or safety == :replay_safe
+      assert deadline_projection.fallback_eligible == expected_fallback
+
+      assert deadline_projection.recommended_action ==
+               if(expected_fallback, do: :try_next_candidate, else: :finish_unsafe_indeterminate)
+
+      cancellation_projection = ExecutionProjector.project(cancelled)
+      refute cancellation_projection.fallback_eligible
+      assert cancellation_projection.recommended_action == :finish_request
     end
   end
 end

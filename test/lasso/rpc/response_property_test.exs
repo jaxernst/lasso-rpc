@@ -360,8 +360,17 @@ defmodule Lasso.RPC.ResponsePropertyTest do
       response = %{"jsonrpc" => "2.0", "id" => 1, "result" => large_array}
       raw = Jason.encode!(response)
 
-      # Parse should be fast (envelope only)
-      {time_us, {:ok, success}} = :timer.tc(fn -> Response.from_bytes(raw) end)
+      # Warm the parser before measuring so module loading and scheduler startup
+      # are not mistaken for envelope-parsing work.
+      assert {:ok, _} = Response.from_bytes(raw)
+
+      samples =
+        for _ <- 1..20 do
+          {time_us, {:ok, success}} = :timer.tc(fn -> Response.from_bytes(raw) end)
+          {time_us, success}
+        end
+
+      {time_us, success} = samples |> Enum.sort_by(&elem(&1, 0)) |> Enum.at(10)
 
       # Should complete in under 1ms (envelope parsing is O(1))
       assert time_us < 1000, "Envelope parsing took #{time_us}us, expected < 1000us"

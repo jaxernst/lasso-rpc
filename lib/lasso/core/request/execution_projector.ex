@@ -81,7 +81,14 @@ defmodule Lasso.RPC.ExecutionProjector do
 
   def project(%AttemptTerminal.Deadline{} = terminal, 1) do
     breaker = if terminal.dispatch_certainty == :dispatched, do: :failure, else: :none
-    projection(false, :finish_request, breaker, :censored, :deadline)
+
+    retryable_projection(
+      terminal.identity.execution_safety,
+      terminal.dispatch_certainty,
+      breaker,
+      :censored,
+      :deadline
+    )
   end
 
   def project(%AttemptTerminal.Cancelled{}, 1),
