@@ -7,6 +7,8 @@ defmodule Lasso.Providers.InstanceState do
   functions with consistent default shapes and `ArgumentError` guards.
   """
 
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
+
   @default_probe %{
     status: nil,
     http_status: nil,
@@ -23,7 +25,12 @@ defmodule Lasso.Providers.InstanceState do
     last_error: nil
   }
 
-  @default_circuit %{state: :closed, error: nil, recovery_deadline_ms: nil}
+  @default_circuit %{
+    state: :unavailable,
+    error: nil,
+    recovery_deadline_ms: nil,
+    control_health: :degraded
+  }
 
   @status_severity %{
     nil => 0,
@@ -116,11 +123,33 @@ defmodule Lasso.Providers.InstanceState do
   @spec read_circuit(String.t(), :http | :ws) :: map()
   def read_circuit(instance_id, transport)
       when is_binary(instance_id) and transport in [:http, :ws] do
-    case safe_lookup({:circuit, instance_id, transport}) do
-      [{_, data}] -> Map.merge(@default_circuit, data)
-      [] -> @default_circuit
+    case Snapshot.lookup({instance_id, transport}) do
+      {:ok, %{owner_pid: owner_pid, ready?: true} = snapshot} when is_pid(owner_pid) ->
+        if Process.alive?(owner_pid) do
+          state =
+            if snapshot.control_health == :degraded,
+              do: :half_open,
+              else: snapshot.state
+
+          %{
+            state: state,
+            error: nil,
+            recovery_deadline_ms: recovery_deadline_ms(snapshot.recovery_deadline_us),
+            control_health: snapshot.control_health
+          }
+        else
+          @default_circuit
+        end
+
+      _ ->
+        @default_circuit
     end
+  rescue
+    ArgumentError -> @default_circuit
   end
+
+  defp recovery_deadline_ms(nil), do: nil
+  defp recovery_deadline_ms(deadline_us), do: div(deadline_us, 1_000)
 
   @spec read_rate_limit(String.t(), :http | :ws) :: map()
   def read_rate_limit(instance_id, transport)

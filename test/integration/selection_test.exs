@@ -86,15 +86,8 @@ defmodule Lasso.RPC.SelectionTest do
           Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id)
         end)
 
-      :ets.insert(:lasso_instance_state, {
-        {:circuit, provider_1, :http},
-        %{state: :half_open, error: nil, recovery_deadline_ms: nil}
-      })
-
-      :ets.insert(:lasso_instance_state, {
-        {:circuit, provider_2, :http},
-        %{state: :closed, error: nil, recovery_deadline_ms: nil}
-      })
+      set_circuit_snapshot(provider_1, :half_open)
+      set_circuit_snapshot(provider_2, :closed)
 
       assert {:error, :no_providers_available} =
                Selection.select_provider(profile, chain, "eth_blockNumber",
@@ -118,15 +111,8 @@ defmodule Lasso.RPC.SelectionTest do
           Lasso.Providers.Catalog.lookup_instance_id(profile, chain, provider_id)
         end)
 
-      :ets.insert(:lasso_instance_state, {
-        {:circuit, provider_1, :http},
-        %{state: :half_open, error: nil, recovery_deadline_ms: nil}
-      })
-
-      :ets.insert(:lasso_instance_state, {
-        {:circuit, provider_2, :http},
-        %{state: :closed, error: nil, recovery_deadline_ms: nil}
-      })
+      set_circuit_snapshot(provider_1, :half_open)
+      set_circuit_snapshot(provider_2, :closed)
 
       {:ok, selected} =
         Selection.select_provider(profile, chain, "eth_blockNumber",
@@ -254,5 +240,12 @@ defmodule Lasso.RPC.SelectionTest do
       assert "provider_1" in provider_ids
       assert "provider_2" in provider_ids
     end
+  end
+
+  defp set_circuit_snapshot(instance_id, state) do
+    alias Lasso.Core.Support.CircuitBreaker.Snapshot
+
+    {:ok, current} = Snapshot.lookup({instance_id, :http})
+    Snapshot.put(%{current | state: state, control_health: :healthy})
   end
 end

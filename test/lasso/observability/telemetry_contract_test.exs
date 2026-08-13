@@ -118,6 +118,10 @@ defmodule Lasso.Observability.TelemetryContractTest do
         %{state | recovery_deadline_ms: System.monotonic_time(:millisecond) - 1}
       end)
 
+      alias Lasso.Core.Support.CircuitBreaker.Snapshot
+      {:ok, snapshot} = Snapshot.lookup(id)
+      Snapshot.put(%{snapshot | recovery_deadline_us: System.monotonic_time(:microsecond) - 1})
+
       {:ok, collector} =
         TelemetrySync.attach_collector([:lasso, :circuit_breaker, :half_open])
 

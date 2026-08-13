@@ -40,7 +40,15 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   use GenServer
   require Logger
   alias Lasso.Core.Support.{AttemptLifecycle, ErrorNormalizer}
-  alias Lasso.Core.Support.CircuitBreaker.Snapshot
+
+  alias Lasso.Core.Support.CircuitBreaker.{
+    Admission,
+    AdmissionReceipt,
+    ControlRing,
+    Snapshot,
+    Storage
+  }
+
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
 
@@ -71,6 +79,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     process_epoch: nil,
     ready?: false,
     control_health: :healthy,
+    control_ring_capacity: 64,
     shared_mode: false,
     inflight_attempts: %{}
   ]
@@ -120,13 +129,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   - `:circuit_open` - Circuit is open due to failures
   - `:half_open_busy` - Circuit is half-open but at max inflight capacity
   - `:admission_timeout` - Admission check timed out
-  - `:not_found` - Circuit breaker process not found
+  - `:admission_unavailable` - Snapshot or live ready owner is unavailable
   """
-  @admit_timeout 500
   @attempt_state_timeout 500
 
   @typedoc "Reasons why the circuit breaker rejected execution"
-  @type rejection_reason :: :circuit_open | :half_open_busy | :admission_timeout | :not_found
+  @type rejection_reason ::
+          :circuit_open | :half_open_busy | :admission_timeout | :admission_unavailable
 
   @typedoc "Result of a circuit breaker call - separates execution status from function result"
   @type call_result(result) :: {:executed, result} | {:rejected, rejection_reason()}
@@ -136,37 +145,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @spec call(breaker_id(), (-> result), non_neg_integer(), keyword()) :: call_result(result)
         when result: term()
   def call({instance_id, transport} = id, fun, timeout \\ 30_000, opts \\ []) do
-    now_ms = System.monotonic_time(:millisecond)
     admit_start_us = System.monotonic_time(:microsecond)
-    admit_deadline_us = admit_start_us + @admit_timeout * 1_000
-
-    decision =
-      try do
-        GenServer.call(via_name(id), {:admit, now_ms, admit_deadline_us}, @admit_timeout)
-      catch
-        :exit, {:timeout, _} ->
-          Logger.warning("Circuit breaker admission timeout",
-            instance_id: instance_id,
-            transport: transport
-          )
-
-          {:deny, :admission_timeout}
-
-        :exit, {:noproc, _} ->
-          Logger.warning("Circuit breaker not found",
-            instance_id: instance_id,
-            transport: transport
-          )
-
-          {:deny, :not_found}
-      end
+    deadline_us = Keyword.get(opts, :deadline_us, admit_start_us + timeout * 1_000)
+    decision = admit(id, deadline_us)
 
     admit_call_ms = div(System.monotonic_time(:microsecond) - admit_start_us, 1000)
 
     decision_tag =
       case decision do
-        {:allow, _} -> :allow
-        {:deny, reason} -> reason
+        {:ok, _} -> :allow
+        {:error, reason} -> reason
         other -> other
       end
 
@@ -181,28 +169,70 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     )
 
     case decision do
-      {:allow, token} ->
-        execute_with_token(
-          id,
-          token,
+      {:ok, receipt} ->
+        execute_with_receipt(
+          receipt,
           fun,
           timeout,
+          deadline_us,
           Keyword.get(opts, :on_terminal),
           Keyword.get(opts, :on_dispatch),
           Keyword.get(opts, :dispatch, :immediate)
         )
 
-      {:deny, :open} ->
+      {:error, :circuit_open} ->
         {:rejected, :circuit_open}
 
-      {:deny, :half_open_busy} ->
+      {:error, :half_open_busy} ->
         {:rejected, :half_open_busy}
 
-      {:deny, :admission_timeout} ->
+      {:error, :admission_timeout} ->
         {:rejected, :admission_timeout}
 
-      {:deny, :not_found} ->
-        {:rejected, :not_found}
+      {:error, :admission_unavailable} ->
+        Logger.warning("Circuit breaker admission unavailable",
+          instance_id: instance_id,
+          transport: transport
+        )
+
+        {:rejected, :admission_unavailable}
+    end
+  end
+
+  @doc false
+  @spec admit(breaker_id(), integer()) ::
+          {:ok, AdmissionReceipt.t()} | {:error, rejection_reason()}
+  def admit(id, deadline_us) when is_integer(deadline_us) do
+    case Admission.check(id, deadline_us) do
+      {:ok, receipt} -> {:ok, receipt}
+      {:error, reason} -> {:error, reason}
+      {:exceptional, snapshot} -> admit_exceptional(snapshot, deadline_us)
+    end
+  end
+
+  defp admit_exceptional(snapshot, deadline_us) do
+    now_us = System.monotonic_time(:microsecond)
+
+    if now_us >= deadline_us do
+      {:error, :admission_timeout}
+    else
+      token = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+      timeout_ms = max(div(deadline_us - now_us + 999, 1_000), 1)
+
+      request =
+        {:admit_exceptional, token, self(), snapshot.generation, snapshot.epoch, deadline_us}
+
+      try do
+        GenServer.call(snapshot.owner_pid, request, timeout_ms)
+      catch
+        :exit, {:timeout, _} ->
+          GenServer.cast(snapshot.owner_pid, {:release, token})
+          GenServer.cast(via_name(snapshot.breaker_id), {:release, token})
+          {:error, :admission_timeout}
+
+        :exit, _reason ->
+          {:error, :admission_unavailable}
+      end
     end
   end
 
@@ -219,6 +249,12 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @doc false
+  @spec report_closed(AdmissionReceipt.t(), term()) :: :ok | {:error, :saturated | :stale}
+  def report_closed(%AdmissionReceipt{kind: :closed} = receipt, result) do
+    ControlRing.enqueue(receipt, control_signal(result, receipt.breaker_id))
+  end
+
+  @doc false
   @spec report_attempt(breaker_id(), reference(), term()) ::
           :ok | {:error, :not_found | :timeout}
   def report_attempt(id, token, result) do
@@ -228,6 +264,12 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     :exit, {:noproc, _} -> {:error, :not_found}
     :exit, {:normal, _} -> {:error, :not_found}
     :exit, _reason -> {:error, :not_found}
+  end
+
+  @doc false
+  @spec report_half_open(AdmissionReceipt.t(), term()) :: :ok
+  def report_half_open(%AdmissionReceipt{kind: :half_open} = receipt, result) do
+    GenServer.cast(via_name(receipt.breaker_id), {:report, receipt.token, result})
   end
 
   @doc false
@@ -241,27 +283,33 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     :exit, _reason -> {:error, :not_found}
   end
 
-  defp execute_with_token(
-         id,
-         token,
+  @doc false
+  @spec release_half_open(AdmissionReceipt.t()) :: :ok
+  def release_half_open(%AdmissionReceipt{kind: :half_open} = receipt) do
+    GenServer.cast(via_name(receipt.breaker_id), {:release, receipt.token})
+  end
+
+  defp execute_with_receipt(
+         receipt,
          fun,
          timeout,
+         deadline_us,
          terminal_callback,
          dispatch_callback,
          dispatch_mode
        ) do
     case AttemptLifecycle.run(
            self(),
-           id,
-           token,
+           receipt,
            fun,
            timeout,
            terminal_callback,
            dispatch_callback,
-           dispatch_mode
+           dispatch_mode,
+           deadline_us
          ) do
       {:__attempt_lifecycle_rejected__, :timeout} -> {:rejected, :admission_timeout}
-      {:__attempt_lifecycle_rejected__, _reason} -> {:rejected, :not_found}
+      {:__attempt_lifecycle_rejected__, _reason} -> {:rejected, :admission_unavailable}
       result -> {:executed, result}
     end
   end
@@ -334,49 +382,25 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @doc """
-  Signals that external health monitoring has detected the provider is reachable.
+  Accepts a legacy external health signal without changing circuit state.
 
-  Used by health probes to indicate a provider appears to be responding. The
-  circuit breaker uses this signal to attempt recovery when appropriate.
-
-  ## Behavior by Circuit State
-
-  - **Open**: Triggers transition to half-open state (recovery attempt)
-  - **Half-open**: Counts toward success threshold for closing circuit
-  - **Closed**: No-op (circuit doesn't need recovery signals)
+  Recovery authority belongs to the cooldown/probation transition and accepted
+  current-epoch half-open lease outcomes.
   """
   @spec signal_recovery(breaker_id()) :: :ok | {:error, :not_found}
   def signal_recovery(id) do
     case safe_whereis(via_name(id)) do
-      nil ->
-        {:error, :not_found}
-
-      pid ->
-        try do
-          case GenServer.call(pid, :get_state, @state_timeout) do
-            %{state: state} when state in [:open, :half_open] ->
-              GenServer.cast(pid, {:report_external, {:ok, :success}})
-              :ok
-
-            _ ->
-              :ok
-          end
-        catch
-          :exit, _ -> {:error, :not_found}
-        end
+      nil -> {:error, :not_found}
+      _pid -> :ok
     end
   end
 
   @doc """
-  Fire-and-forget version of signal_recovery/1. Does not check current state.
+  Fire-and-forget compatibility form of `signal_recovery/1`.
   """
   @spec signal_recovery_cast(breaker_id()) :: :ok
   def signal_recovery_cast(cb_id) do
-    case safe_whereis(via_name(cb_id)) do
-      nil -> :ok
-      pid -> GenServer.cast(pid, {:report_external, {:ok, :success}})
-    end
-
+    _ = safe_whereis(via_name(cb_id))
     :ok
   end
 
@@ -465,10 +489,18 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         :missing -> nil
       end
 
+    previous_control? = :ets.member(Storage.control_meta_table(), {instance_id, transport})
+
     {initial_state, transition_generation, control_health} =
-      case previous_snapshot do
-        nil -> {:closed, 1, :healthy}
-        %Snapshot{generation: generation} -> {:half_open, generation + 1, :degraded}
+      case {previous_snapshot, previous_control?} do
+        {nil, false} ->
+          {:closed, 1, :healthy}
+
+        {nil, true} ->
+          {:half_open, 1, :degraded}
+
+        {%Snapshot{generation: generation}, _control?} ->
+          {:half_open, generation + 1, :degraded}
       end
 
     state = %__MODULE__{
@@ -491,10 +523,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       process_epoch: System.unique_integer([:positive, :monotonic]),
       ready?: true,
       control_health: control_health,
+      control_ring_capacity: Map.get(config, :control_ring_capacity, 64),
       shared_mode: Map.get(config, :shared_mode, false),
       inflight_attempts: %{}
     }
 
+    state = recover_persisted_lease(state)
+    initialize_control_ring(state)
     write_ets_state(state)
 
     {:ok, state}
@@ -508,6 +543,45 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @impl true
   def handle_call({:admit, now_ms, deadline_us}, from, state) do
     handle_admission(now_ms, deadline_us, from, state)
+  end
+
+  @impl true
+  def handle_call(
+        {:admit_exceptional, token, owner_pid, expected_generation, expected_epoch, deadline_us},
+        _from,
+        state
+      ) do
+    now_us = System.monotonic_time(:microsecond)
+
+    cond do
+      now_us >= deadline_us ->
+        {:reply, {:error, :admission_timeout}, state}
+
+      expected_epoch != state.process_epoch or
+          expected_generation != state.transition_generation ->
+        {:reply, {:error, :admission_unavailable}, state}
+
+      state.state == :open and not recovery_eligible?(state, now_us) ->
+        {:reply, {:error, :circuit_open}, state}
+
+      state.state == :half_open and state.inflight_count >= state.half_open_max_inflight ->
+        {:reply, {:error, :half_open_busy}, state}
+
+      state.state == :closed and state.control_health != :degraded ->
+        {:reply, {:error, :admission_unavailable}, state}
+
+      true ->
+        admitted_state = prepare_exceptional_generation(state)
+
+        case persist_exceptional_lease(admitted_state, token, owner_pid) do
+          {:ok, receipt, new_state} ->
+            write_ets_state(new_state)
+            {:reply, {:ok, receipt}, new_state}
+
+          :busy ->
+            {:reply, {:error, :half_open_busy}, state}
+        end
+    end
   end
 
   @impl true
@@ -534,6 +608,11 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       end
 
     {:reply, {:ok, remaining}, state}
+  end
+
+  @impl true
+  def handle_call({:report_external_sync, {:ok, _result}}, _from, state) do
+    {:reply, state.state, state}
   end
 
   @impl true
@@ -570,12 +649,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   @impl true
   def handle_call({:report_attempt, token, result}, _from, state) do
-    {:reply, :ok, apply_attempt_report(state, token, result)}
+    new_state = apply_attempt_report(state, token, result)
+    write_ets_state(new_state)
+    {:reply, :ok, new_state}
   end
 
   @impl true
   def handle_call({:release_attempt, token}, _from, state) do
-    {:reply, :ok, apply_attempt_release(state, token)}
+    new_state = apply_attempt_release(state, token)
+    write_ets_state(new_state)
+    {:reply, :ok, new_state}
   end
 
   defp handle_admission(now_ms, deadline_us, {caller_pid, _tag} = from, state) do
@@ -637,12 +720,21 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   @impl true
   def handle_cast({:report, token, result}, state) do
-    {:noreply, apply_attempt_report(state, token, result)}
+    new_state = apply_attempt_report(state, token, result)
+    write_ets_state(new_state)
+    {:noreply, new_state}
   end
 
   @impl true
   def handle_cast({:release, token}, state) do
-    {:noreply, apply_attempt_release(state, token)}
+    new_state = apply_attempt_release(state, token)
+    write_ets_state(new_state)
+    {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_cast({:report_external, {:ok, _result}}, state) do
+    {:noreply, state}
   end
 
   @impl true
@@ -719,6 +811,26 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
+  def handle_info(
+        {:breaker_control_ready, breaker_id, generation, epoch},
+        %{instance_id: instance_id, transport: transport} = state
+      )
+      when breaker_id == {instance_id, transport} do
+    state = maybe_enter_control_probation(state, generation, epoch)
+
+    signals =
+      ControlRing.drain(
+        breaker_id,
+        state.control_ring_capacity,
+        generation,
+        epoch
+      )
+
+    new_state = Enum.reduce(signals, state, &apply_control_signal(&1, &2, generation, epoch))
+    {:noreply, new_state}
+  end
+
+  @impl true
   def handle_info({:attempt_proactive_recovery, gen}, state)
       when gen == state.recovery_timer_gen do
     case state.state do
@@ -764,8 +876,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
            _attempt ->
              false
          end) do
-      {token, _attempt} -> {:noreply, apply_attempt_release(state, token)}
-      nil -> {:noreply, state}
+      {token, _attempt} ->
+        new_state = apply_attempt_release(state, token)
+        write_ets_state(new_state)
+        {:noreply, new_state}
+
+      nil ->
+        {:noreply, state}
     end
   end
 
@@ -776,6 +893,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     attempt = %{
       admission_state: admission_state,
       transition_generation: state.transition_generation,
+      counted_generation: state.transition_generation,
       owner_pid: caller_pid,
       owner_monitor: owner_monitor,
       claimed?: false
@@ -790,6 +908,86 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     {token, new_state}
   end
 
+  defp recovery_eligible?(state, now_us) do
+    is_nil(state.recovery_deadline_ms) or now_us >= state.recovery_deadline_ms * 1_000
+  end
+
+  defp prepare_exceptional_generation(%{state: :half_open} = state), do: state
+
+  defp prepare_exceptional_generation(%{state: :open} = state) do
+    :telemetry.execute([:lasso, :circuit_breaker, :half_open], %{count: 1}, %{
+      instance_id: state.instance_id,
+      transport: state.transport,
+      from_state: :open,
+      to_state: :half_open,
+      reason: :attempt_recovery,
+      consecutive_open_count: state.consecutive_open_count
+    })
+
+    prepare_probation(state)
+  end
+
+  defp prepare_exceptional_generation(state), do: prepare_probation(state)
+
+  defp prepare_probation(state) do
+    cancel_recovery_timer(state.recovery_timer_ref)
+
+    %{
+      state
+      | state: :half_open,
+        success_count: 0,
+        inflight_count: 0,
+        recovery_timer_ref: nil,
+        recovery_timer_gen: state.recovery_timer_gen + 1,
+        transition_generation: state.transition_generation + 1,
+        control_health: :healthy
+    }
+  end
+
+  defp persist_exceptional_lease(state, token, owner_pid) do
+    breaker_id = {state.instance_id, state.transport}
+
+    lease = %{
+      token: token,
+      owner_pid: owner_pid,
+      generation: state.transition_generation,
+      epoch: state.process_epoch
+    }
+
+    if :ets.insert_new(Storage.lease_table(), {breaker_id, lease}) do
+      owner_monitor = Process.monitor(owner_pid)
+
+      attempt = %{
+        admission_state: :half_open,
+        transition_generation: state.transition_generation,
+        counted_generation: state.transition_generation,
+        epoch: state.process_epoch,
+        owner_pid: owner_pid,
+        owner_monitor: owner_monitor,
+        claimed?: true
+      }
+
+      new_state = %{
+        state
+        | inflight_attempts: Map.put(state.inflight_attempts, token, attempt),
+          inflight_count: state.inflight_count + 1
+      }
+
+      receipt = %AdmissionReceipt{
+        breaker_id: breaker_id,
+        kind: :half_open,
+        generation: state.transition_generation,
+        epoch: state.process_epoch,
+        owner_pid: self(),
+        token: token
+      }
+
+      {:ok, receipt, new_state}
+    else
+      :busy
+    end
+  end
+
   defp take_attempt(state, token) do
     case Map.pop(state.inflight_attempts, token) do
       {nil, _attempts} ->
@@ -797,6 +995,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
       {attempt, attempts} ->
         demonitor_attempt_owner(attempt)
+        delete_persisted_lease({state.instance_id, state.transport}, token)
         {:ok, attempt, %{state | inflight_attempts: attempts}}
     end
   end
@@ -808,6 +1007,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   defp demonitor_attempt_owner(_attempt), do: :ok
 
+  defp delete_persisted_lease(breaker_id, token) do
+    case :ets.lookup(Storage.lease_table(), breaker_id) do
+      [{^breaker_id, %{token: ^token}}] -> :ets.delete(Storage.lease_table(), breaker_id)
+      _ -> :ok
+    end
+  end
+
   defp apply_attempt_report(state, token, result) do
     case take_attempt(state, token) do
       {:ok, attempt, state_without_attempt} ->
@@ -815,7 +1021,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           neutral_attempt_result?(result) ->
             release_half_open_attempt(state_without_attempt, attempt)
 
-          attempt.transition_generation != state.transition_generation ->
+          attempt.transition_generation != state.transition_generation or
+              (Map.has_key?(attempt, :epoch) and attempt.epoch != state.process_epoch) ->
             release_half_open_attempt(state_without_attempt, attempt)
 
           true ->
@@ -849,7 +1056,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   defp release_half_open_attempt(
          %{transition_generation: generation} = state,
-         %{admission_state: :half_open, transition_generation: generation}
+         %{admission_state: :half_open, counted_generation: generation}
        ) do
     %{state | inflight_count: max(state.inflight_count - 1, 0)}
   end
@@ -862,6 +1069,162 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   defp normalize_transport_result({:error, _reason} = error_tuple), do: error_tuple
   defp normalize_transport_result(:ok), do: {:ok, :ok}
   defp normalize_transport_result(other), do: other
+
+  defp control_signal(result, {instance_id, transport}) do
+    case normalize_transport_result(result) do
+      {:ok, _value} ->
+        :success
+
+      {:error, :unsupported_method} ->
+        :neutral
+
+      {:error, %JError{category: category}}
+      when category in [:local_capacity_rejection, :cancelled] ->
+        :neutral
+
+      {:error, %JError{} = error} ->
+        if error.retriable?,
+          do: {:failure, error.category, error.breaker_penalty?},
+          else: :neutral
+
+      {:error, reason} ->
+        error = ErrorNormalizer.normalize(reason, instance_id: instance_id, transport: transport)
+
+        if error.retriable?,
+          do: {:failure, error.category, error.breaker_penalty?},
+          else: :neutral
+
+      _other ->
+        {:failure, :internal_error, false}
+    end
+  end
+
+  defp initialize_control_ring(state) do
+    ControlRing.initialize(
+      {state.instance_id, state.transport},
+      state.transition_generation,
+      state.process_epoch,
+      self(),
+      capacity: state.control_ring_capacity
+    )
+  end
+
+  defp recover_persisted_lease(state) do
+    breaker_id = {state.instance_id, state.transport}
+
+    case :ets.lookup(Storage.lease_table(), breaker_id) do
+      [
+        {^breaker_id,
+         %{
+           token: token,
+           owner_pid: owner_pid,
+           generation: generation,
+           epoch: epoch
+         }}
+      ]
+      when is_binary(token) and is_pid(owner_pid) and is_integer(generation) and
+             is_integer(epoch) ->
+        if Process.alive?(owner_pid) do
+          owner_monitor = Process.monitor(owner_pid)
+
+          attempt = %{
+            admission_state: :half_open,
+            transition_generation: generation,
+            counted_generation: state.transition_generation,
+            epoch: epoch,
+            owner_pid: owner_pid,
+            owner_monitor: owner_monitor,
+            claimed?: true
+          }
+
+          %{
+            state
+            | inflight_attempts: %{token => attempt},
+              inflight_count: 1,
+              state: :half_open,
+              control_health: :degraded
+          }
+        else
+          :ets.delete(Storage.lease_table(), breaker_id)
+          state
+        end
+
+      [] ->
+        state
+
+      [_corrupt] ->
+        :ets.delete(Storage.lease_table(), breaker_id)
+
+        :telemetry.execute(
+          [:lasso, :circuit_breaker, :lease_corrupt],
+          %{count: 1},
+          %{breaker_id: breaker_id}
+        )
+
+        %{state | state: :half_open, control_health: :degraded}
+    end
+  end
+
+  defp ensure_control_ring_generation(state) do
+    breaker_id = {state.instance_id, state.transport}
+
+    case :ets.lookup(Storage.control_meta_table(), breaker_id) do
+      [{^breaker_id, generation, epoch, owner_pid, _capacity, _wakeup, _diagnostics}]
+      when generation == state.transition_generation and epoch == state.process_epoch and
+             owner_pid == self() ->
+        :ok
+
+      _ ->
+        initialize_control_ring(state)
+    end
+  end
+
+  defp maybe_enter_control_probation(state, generation, epoch) do
+    case Snapshot.lookup({state.instance_id, state.transport}) do
+      {:ok,
+       %Snapshot{
+         generation: ^generation,
+         epoch: ^epoch,
+         control_health: :degraded
+       }} ->
+        probation = %{
+          state
+          | state: :half_open,
+            success_count: 0,
+            inflight_count: 0,
+            transition_generation: state.transition_generation + 1,
+            control_health: :healthy
+        }
+
+        initialize_control_ring(probation)
+        write_ets_state(probation)
+        probation
+
+      _ ->
+        state
+    end
+  end
+
+  defp apply_control_signal(_signal, state, generation, epoch)
+       when state.transition_generation != generation or state.process_epoch != epoch,
+       do: state
+
+  defp apply_control_signal(:neutral, state, _generation, _epoch), do: state
+
+  defp apply_control_signal(:success, state, _generation, _epoch) do
+    classify_and_update_state_for_report({:ok, :control_success}, state)
+  end
+
+  defp apply_control_signal({:failure, category, breaker_penalty?}, state, _generation, _epoch) do
+    error =
+      JError.new(-32_000, "Bounded breaker control failure",
+        category: category,
+        retriable?: true,
+        breaker_penalty?: breaker_penalty?
+      )
+
+    classify_and_update_state_for_report({:error, error}, state)
+  end
 
   defp classify_and_handle_result(result, state) do
     case result do
@@ -1170,6 +1533,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   defp write_ets_state(state) do
+    ensure_control_ring_generation(state)
+
     :ets.insert(:lasso_instance_state, {
       {:circuit, state.instance_id, state.transport},
       %{

@@ -4,6 +4,7 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   require Logger
 
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
   alias Lasso.JSONRPC.Error, as: JError
 
   @dispatch_context_key :lasso_attempt_dispatch_context
@@ -15,6 +16,18 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
 
   @spec run(
           pid(),
+          AdmissionReceipt.t(),
+          (-> term()),
+          non_neg_integer(),
+          terminal_callback()
+        ) :: term()
+  def run(caller_pid, receipt, fun, timeout, terminal_callback) do
+    run(caller_pid, receipt, fun, timeout, terminal_callback, nil, :immediate)
+  end
+
+  @doc false
+  @spec run(
+          pid(),
           CircuitBreaker.breaker_id(),
           reference(),
           (-> term()),
@@ -22,9 +35,102 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
           terminal_callback()
         ) :: term()
   def run(caller_pid, breaker_id, token, fun, timeout, terminal_callback) do
-    run(caller_pid, breaker_id, token, fun, timeout, terminal_callback, nil, :immediate)
+    receipt = legacy_receipt(breaker_id, token)
+    run(caller_pid, receipt, fun, timeout, terminal_callback, nil, :immediate)
   end
 
+  @spec run(
+          pid(),
+          AdmissionReceipt.t(),
+          (-> term()),
+          non_neg_integer(),
+          terminal_callback(),
+          dispatch_callback(),
+          :immediate | :deferred
+        ) :: term()
+  def run(
+        caller_pid,
+        %AdmissionReceipt{} = receipt,
+        fun,
+        timeout,
+        terminal_callback,
+        dispatch_callback,
+        dispatch_mode
+      ) do
+    deadline_us = System.monotonic_time(:microsecond) + timeout * 1_000
+
+    run(
+      caller_pid,
+      receipt,
+      fun,
+      timeout,
+      terminal_callback,
+      dispatch_callback,
+      dispatch_mode,
+      deadline_us
+    )
+  end
+
+  @doc false
+  def run(caller_pid, breaker_id, token, fun, timeout, terminal_callback, dispatch_mode) do
+    receipt = legacy_receipt(breaker_id, token)
+    run(caller_pid, receipt, fun, timeout, terminal_callback, nil, dispatch_mode)
+  end
+
+  @doc false
+  @spec run(
+          pid(),
+          AdmissionReceipt.t(),
+          (-> term()),
+          non_neg_integer(),
+          terminal_callback(),
+          dispatch_callback(),
+          :immediate | :deferred,
+          integer()
+        ) :: term()
+  def run(
+        caller_pid,
+        %AdmissionReceipt{} = receipt,
+        fun,
+        timeout,
+        terminal_callback,
+        dispatch_callback,
+        dispatch_mode,
+        deadline_us
+      ) do
+    lifecycle_ref = make_ref()
+
+    {lifecycle_pid, monitor_ref} =
+      spawn_monitor(fn ->
+        execute(%{
+          caller_pid: caller_pid,
+          lifecycle_ref: lifecycle_ref,
+          receipt: receipt,
+          breaker_id: receipt.breaker_id,
+          fun: fun,
+          timeout: timeout,
+          terminal_callback: terminal_callback,
+          dispatch_callback: dispatch_callback,
+          dispatch_mode: dispatch_mode,
+          deadline_us: deadline_us
+        })
+      end)
+
+    receive do
+      {^lifecycle_ref, result} ->
+        Process.demonitor(monitor_ref, [:flush])
+        result
+
+      {:DOWN, ^monitor_ref, :process, ^lifecycle_pid, reason} ->
+        {:exception, {:exit, reason, []}}
+    after
+      timeout + 5_000 ->
+        Process.exit(lifecycle_pid, :kill)
+        {:exception, {:exit, :attempt_lifecycle_timeout, []}}
+    end
+  end
+
+  @doc false
   @spec run(
           pid(),
           CircuitBreaker.breaker_id(),
@@ -43,37 +149,10 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
         timeout,
         terminal_callback,
         dispatch_callback,
-        dispatch_mode \\ :immediate
+        dispatch_mode
       ) do
-    lifecycle_ref = make_ref()
-
-    {lifecycle_pid, monitor_ref} =
-      spawn_monitor(fn ->
-        execute(%{
-          caller_pid: caller_pid,
-          lifecycle_ref: lifecycle_ref,
-          breaker_id: breaker_id,
-          token: token,
-          fun: fun,
-          timeout: timeout,
-          terminal_callback: terminal_callback,
-          dispatch_callback: dispatch_callback,
-          dispatch_mode: dispatch_mode
-        })
-      end)
-
-    receive do
-      {^lifecycle_ref, result} ->
-        Process.demonitor(monitor_ref, [:flush])
-        result
-
-      {:DOWN, ^monitor_ref, :process, ^lifecycle_pid, reason} ->
-        {:exception, {:exit, reason, []}}
-    after
-      timeout + 5_000 ->
-        Process.exit(lifecycle_pid, :kill)
-        {:exception, {:exit, :attempt_lifecycle_timeout, []}}
-    end
+    receipt = legacy_receipt(breaker_id, token)
+    run(caller_pid, receipt, fun, timeout, terminal_callback, dispatch_callback, dispatch_mode)
   end
 
   @doc false
@@ -169,12 +248,12 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     Process.flag(:trap_exit, true)
     caller_monitor = Process.monitor(context.caller_pid)
 
-    case CircuitBreaker.claim_attempt(context.breaker_id, context.token, context.caller_pid) do
+    case claim_receipt(context.receipt, context.caller_pid) do
       :ok ->
         if Process.alive?(context.caller_pid) do
           start_attempt(Map.put(context, :caller_monitor, caller_monitor))
         else
-          CircuitBreaker.release_attempt(context.breaker_id, context.token)
+          release_receipt(context.receipt)
         end
 
       {:error, reason} ->
@@ -216,7 +295,6 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
         task_monitor: task_monitor,
         phase: phase,
         started_at_us: System.monotonic_time(:microsecond),
-        deadline_us: System.monotonic_time(:microsecond) + context.timeout * 1_000,
         pending_terminal: nil,
         pending_result: nil
       })
@@ -410,12 +488,12 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
 
   defp handle_interruption(%{phase: :predispatch} = state, :caller_down) do
     stop_task(state)
-    CircuitBreaker.release_attempt(state.breaker_id, state.token)
+    release_receipt(state.receipt)
   end
 
   defp handle_interruption(%{phase: :aborted} = state, :caller_down) do
     stop_task(state)
-    CircuitBreaker.release_attempt(state.breaker_id, state.token)
+    release_receipt(state.receipt)
   end
 
   defp handle_interruption(%{phase: :predispatch} = state, :timeout) do
@@ -465,7 +543,7 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
              breaker_penalty?: false
            ), elapsed_ms}
 
-        CircuitBreaker.report_attempt(state.breaker_id, state.token, cancellation)
+        report_receipt(state.receipt, cancellation)
         invoke_terminal_callback(state.terminal_callback, cancellation, elapsed_ms)
 
       :none ->
@@ -509,17 +587,13 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   end
 
   defp finalize_predispatch(state, result) do
-    CircuitBreaker.release_attempt(state.breaker_id, state.token)
+    release_receipt(state.receipt)
     Process.demonitor(state.caller_monitor, [:flush])
     send(state.caller_pid, {state.lifecycle_ref, result})
   end
 
   defp finalize_dispatched(state, result, elapsed_ms) do
-    CircuitBreaker.report_attempt(
-      state.breaker_id,
-      state.token,
-      breaker_result(result, state.terminal_callback)
-    )
+    report_receipt(state.receipt, breaker_result(result, state.terminal_callback))
 
     Process.demonitor(state.caller_monitor, [:flush])
     invoke_terminal_callback(state.terminal_callback, result, elapsed_ms)
@@ -599,6 +673,47 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   defp remaining_ms(deadline_us, minimum) do
     remaining_us = max(deadline_us - System.monotonic_time(:microsecond), 0)
     max(div(remaining_us + 999, 1_000), minimum)
+  end
+
+  defp claim_receipt(%AdmissionReceipt{kind: :closed}, _caller_pid), do: :ok
+
+  defp claim_receipt(%AdmissionReceipt{kind: :half_open}, _caller_pid), do: :ok
+
+  defp claim_receipt(%AdmissionReceipt{kind: :legacy, breaker_id: id, token: token}, caller_pid) do
+    CircuitBreaker.claim_attempt(id, token, caller_pid)
+  end
+
+  defp report_receipt(%AdmissionReceipt{kind: :closed} = receipt, result) do
+    CircuitBreaker.report_closed(receipt, result)
+  end
+
+  defp report_receipt(%AdmissionReceipt{kind: :half_open} = receipt, result) do
+    CircuitBreaker.report_half_open(receipt, result)
+  end
+
+  defp report_receipt(%AdmissionReceipt{kind: :legacy, breaker_id: id, token: token}, result) do
+    CircuitBreaker.report_attempt(id, token, result)
+  end
+
+  defp release_receipt(%AdmissionReceipt{kind: :closed}), do: :ok
+
+  defp release_receipt(%AdmissionReceipt{kind: :half_open} = receipt) do
+    CircuitBreaker.release_half_open(receipt)
+  end
+
+  defp release_receipt(%AdmissionReceipt{kind: :legacy, breaker_id: id, token: token}) do
+    CircuitBreaker.release_attempt(id, token)
+  end
+
+  defp legacy_receipt(breaker_id, token) do
+    %AdmissionReceipt{
+      breaker_id: breaker_id,
+      kind: :legacy,
+      generation: 0,
+      epoch: 1,
+      owner_pid: self(),
+      token: token
+    }
   end
 
   defp invoke_terminal_callback(nil, _result, _elapsed_ms), do: :ok

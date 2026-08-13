@@ -40,7 +40,11 @@ defmodule Lasso.Core.Support.CircuitBreaker.Admission do
       else: {:error, :admission_unavailable}
   end
 
-  defp classify_live(%Snapshot{state: :closed} = snapshot, _deadline_us, _now_us) do
+  defp classify_live(
+         %Snapshot{state: :closed, control_health: :healthy} = snapshot,
+         _deadline_us,
+         _now_us
+       ) do
     {:ok,
      %AdmissionReceipt{
        breaker_id: snapshot.breaker_id,
@@ -49,6 +53,16 @@ defmodule Lasso.Core.Support.CircuitBreaker.Admission do
        epoch: snapshot.epoch,
        owner_pid: snapshot.owner_pid
      }}
+  end
+
+  defp classify_live(
+         %Snapshot{state: :closed, control_health: :degraded} = snapshot,
+         deadline_us,
+         now_us
+       ) do
+    if now_us >= deadline_us,
+      do: {:error, :admission_timeout},
+      else: {:exceptional, snapshot}
   end
 
   defp classify_live(

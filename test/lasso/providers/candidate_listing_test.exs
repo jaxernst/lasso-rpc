@@ -2,6 +2,7 @@ defmodule Lasso.Providers.CandidateListingTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Config.ConfigStore
+  alias Lasso.Core.Support.CircuitBreaker.{Snapshot, Storage}
   alias Lasso.Providers.{Catalog, CandidateListing}
 
   @profile "cl_test"
@@ -25,6 +26,11 @@ defmodule Lasso.Providers.CandidateListingTest do
 
     # Clean any leftover instance state before each test
     clean_instance_state()
+
+    Enum.each(Catalog.get_profile_providers(@profile, @chain), fn provider ->
+      set_circuit_state(provider.instance_id, :http, :closed)
+      set_circuit_state(provider.instance_id, :ws, :closed)
+    end)
 
     on_exit(fn ->
       clean_instance_state()
@@ -292,9 +298,17 @@ defmodule Lasso.Providers.CandidateListingTest do
   end
 
   defp set_circuit_state(instance_id, transport, state, recovery_deadline_ms \\ nil) do
-    :ets.insert(@instance_table, {
-      {:circuit, instance_id, transport},
-      %{state: state, error: nil, recovery_deadline_ms: recovery_deadline_ms}
+    Snapshot.put(%Snapshot{
+      breaker_id: {instance_id, transport},
+      state: state,
+      generation: 1,
+      epoch: 1,
+      owner_pid: self(),
+      ready?: true,
+      recovery_deadline_us: recovery_deadline_ms && recovery_deadline_ms * 1_000,
+      half_open_capacity: 1,
+      half_open_inflight: 0,
+      control_health: :healthy
     })
   end
 
@@ -326,6 +340,8 @@ defmodule Lasso.Providers.CandidateListingTest do
     Enum.each(providers, fn pp ->
       :ets.delete(@instance_table, {:circuit, pp.instance_id, :http})
       :ets.delete(@instance_table, {:circuit, pp.instance_id, :ws})
+      :ets.delete(Storage.snapshot_table(), {pp.instance_id, :http})
+      :ets.delete(Storage.snapshot_table(), {pp.instance_id, :ws})
       :ets.delete(@instance_table, {:rate_limit, pp.instance_id, :http})
       :ets.delete(@instance_table, {:rate_limit, pp.instance_id, :ws})
       :ets.delete(@instance_table, {:health_probe, pp.instance_id})
