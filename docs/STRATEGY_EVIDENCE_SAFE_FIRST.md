@@ -52,7 +52,7 @@ and a seeded weighted-order distribution.
 Environment:
 
 - base revision: `2296965aecbe0aec9fc7cbe49b0409df50c0a213` (`v0.2.0`);
-- candidate: `t3code/strategy-evidence-ranking` working tree;
+- candidate revision: `20a3404298aac601ded5c2a2fcb21b729f07a8d1`;
 - Erlang/OTP 28, Elixir 1.18.4;
 - developer macOS host, not the pinned Linux acceptance host;
 - fixed cardinality: 32 qualified channels for ranking and one evidence key for recording;
