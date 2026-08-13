@@ -24,7 +24,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.Config.{ConfigStore, ProfileValidator}
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Providers.{CandidateListing, Catalog, InstanceState}
+  alias Lasso.Providers.{CandidateListing, InstanceState}
 
   alias Lasso.RPC.{
     Channel,
@@ -270,16 +270,12 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   @spec execute_on_channel(Channel.t(), [Channel.t()], RequestContext.t()) :: result()
-  defp execute_on_channel(channel, rest_channels, ctx) do
-    instance_id =
-      Catalog.lookup_instance_id(channel.profile, channel.chain_id, channel.provider_id) ||
-        channel.instance_id
-
+  defp execute_on_channel(%Channel{instance_id: instance_id} = channel, rest_channels, ctx)
+       when is_binary(instance_id) do
     cb_state =
-      case instance_id do
-        nil -> :unknown
-        id -> InstanceState.read_circuit(id, channel.transport) |> Map.get(:state, :unknown)
-      end
+      instance_id
+      |> InstanceState.read_circuit(channel.transport)
+      |> Map.get(:state, :unknown)
 
     ctx = %{
       ctx
@@ -287,12 +283,21 @@ defmodule Lasso.RPC.RequestPipeline do
         circuit_breaker_state: cb_state
     }
 
-    attempt_boundary_start = System.monotonic_time(:microsecond)
+    on_terminal = fn result, attempt_elapsed_ms ->
+      Observability.record_attempt(ctx, channel, instance_id, result,
+        attempt_elapsed_ms: attempt_elapsed_ms
+      )
+    end
 
-    case execute_with_circuit_breaker(channel, instance_id, ctx.rpc_request, ctx.timeout_ms) do
+    case execute_with_circuit_breaker(
+           channel,
+           instance_id,
+           ctx.rpc_request,
+           ctx.timeout_ms,
+           on_terminal
+         ) do
       # Function executed - examine what it returned
-      {:executed, {:ok, result, io_ms} = attempt_result} ->
-        :ok = Observability.record_attempt(ctx, channel, instance_id, attempt_result)
+      {:executed, {:ok, result, io_ms}} ->
         handle_success(result, io_ms, channel, ctx)
 
       {:executed, {:error, :unsupported_method, _io_ms}} ->
@@ -305,19 +310,14 @@ defmodule Lasso.RPC.RequestPipeline do
 
         attempt_channels(rest_channels, ctx)
 
-      {:executed, {:error, reason, io_ms} = attempt_result} ->
-        :ok = Observability.record_attempt(ctx, channel, instance_id, attempt_result)
+      {:executed, {:error, %JError{category: :local_capacity_rejection} = reason, io_ms}} ->
+        Observability.record_admission_rejection(ctx, channel, :local_capacity_rejection)
         handle_channel_error(reason, io_ms, channel, rest_channels, ctx)
 
-      {:executed, {:exception, {kind, error, _stacktrace}} = attempt_result} ->
-        censoring_boundary_ms =
-          (System.monotonic_time(:microsecond) - attempt_boundary_start) / 1000
+      {:executed, {:error, reason, io_ms}} ->
+        handle_channel_error(reason, io_ms, channel, rest_channels, ctx)
 
-        :ok =
-          Observability.record_attempt(ctx, channel, instance_id, attempt_result,
-            censoring_boundary_ms: censoring_boundary_ms
-          )
-
+      {:executed, {:exception, {kind, error, _stacktrace}}} ->
         Logger.error("Exception during request execution",
           channel: Channel.to_string(channel),
           kind: kind,
@@ -365,6 +365,18 @@ defmodule Lasso.RPC.RequestPipeline do
         ctx = RequestContext.increment_retries(ctx)
         attempt_channels(rest_channels, ctx)
     end
+  end
+
+  defp execute_on_channel(channel, rest_channels, ctx) do
+    Observability.record_admission_rejection(ctx, channel, :missing_instance_identity)
+
+    Logger.error("Channel has no stable upstream instance identity",
+      channel: Channel.to_string(channel),
+      request_id: ctx.request_id
+    )
+
+    ctx = RequestContext.increment_retries(ctx)
+    attempt_channels(rest_channels, ctx)
   end
 
   @spec handle_success(any(), number(), Channel.t(), RequestContext.t()) :: result()
@@ -526,27 +538,35 @@ defmodule Lasso.RPC.RequestPipeline do
           | {:error, any(), number()}
           | {:exception, {atom(), any(), list()}}
 
-  @spec execute_with_circuit_breaker(Channel.t(), String.t() | nil, map(), timeout()) ::
+  @spec execute_with_circuit_breaker(
+          Channel.t(),
+          String.t(),
+          map(),
+          timeout(),
+          CircuitBreaker.terminal_callback()
+        ) ::
           CircuitBreaker.call_result(circuit_breaker_result())
-  defp execute_with_circuit_breaker(channel, instance_id, rpc_request, timeout) do
+  defp execute_with_circuit_breaker(
+         channel,
+         instance_id,
+         rpc_request,
+         timeout,
+         on_terminal
+       ) do
     attempt_fun = fn -> Channel.request(channel, rpc_request, timeout) end
+    cb_id = {instance_id, channel.transport}
 
-    cb_id =
-      if instance_id do
-        {instance_id, channel.transport}
-      else
-        Logger.warning(
-          "No instance_id found for #{channel.provider_id}, skipping circuit breaker"
-        )
+    CircuitBreaker.call(cb_id, attempt_fun, timeout,
+      on_terminal: on_terminal,
+      dispatch: dispatch_mode(channel.transport_module)
+    )
+  end
 
-        nil
-      end
-
-    if cb_id do
-      CircuitBreaker.call(cb_id, attempt_fun, timeout)
-    else
-      {:executed, attempt_fun.()}
-    end
+  defp dispatch_mode(transport_module) do
+    if function_exported?(transport_module, :deferred_dispatch?, 0) and
+         transport_module.deferred_dispatch?(),
+       do: :deferred,
+       else: :immediate
   end
 
   @spec initialize_context(chain_id(), method(), params(), RequestOptions.t()) ::

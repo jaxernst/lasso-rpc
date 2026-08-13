@@ -32,6 +32,7 @@ defmodule Lasso.Testing.BehaviorHttpClient do
 
   require Logger
 
+  alias Lasso.Core.Support.AttemptLifecycle
   alias Lasso.Testing.MockHTTPProvider
 
   @doc """
@@ -51,7 +52,10 @@ defmodule Lasso.Testing.BehaviorHttpClient do
       # Route to mock provider
       Logger.debug("Routing request to mock HTTP provider: #{provider_id}")
 
-      case MockHTTPProvider.execute_request(provider_id, method, params) do
+      with :ok <- AttemptLifecycle.mark_dispatched(Keyword.get(opts, :attempt_dispatch)) do
+        MockHTTPProvider.execute_request(provider_id, method, params)
+      end
+      |> case do
         {:ok, result} ->
           # Wrap the unwrapped result in JSONRPC format and return as raw bytes
           # This matches the production HttpClient interface: {:ok, {:raw, bytes}}

@@ -33,4 +33,20 @@ defmodule Lasso.RPC.Selection.HealthTierTest do
              |> Selection.tier_channels(circuit_states, rate_limits)
              |> Enum.map(& &1.provider_id)
   end
+
+  test "excludes open and unrecognized circuit states" do
+    channels =
+      Enum.map(["closed", "open", "unknown"], fn provider_id ->
+        %Channel{provider_id: provider_id, instance_id: provider_id, transport: :http}
+      end)
+
+    circuit_states = %{
+      {"closed", :http} => :closed,
+      {"open", :http} => :open,
+      {"unknown", :http} => :unknown
+    }
+
+    assert [%Channel{provider_id: "closed"}] =
+             Selection.tier_channels(channels, circuit_states, %{})
+  end
 end

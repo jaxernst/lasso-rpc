@@ -8,6 +8,7 @@ defmodule Lasso.RPC.RoutingEvidence do
 
   alias Lasso.RPC.Channel
   alias Lasso.RPC.RoutingEvidence.{AttemptEvent, Summary, UnavailableReader}
+  require Logger
 
   @type upstream_key :: {String.t(), :http | :ws}
 
@@ -31,7 +32,21 @@ defmodule Lasso.RPC.RoutingEvidence do
       end)
       |> Enum.uniq()
 
-    reader().batch_get_summaries(chain_id, workload_key, upstream_keys)
+    try do
+      reader().batch_get_summaries(chain_id, workload_key, upstream_keys)
+    rescue
+      error ->
+        Logger.warning("Routing evidence reader unavailable", error: Exception.message(error))
+        unavailable_summaries(upstream_keys)
+    catch
+      kind, reason ->
+        Logger.warning("Routing evidence reader unavailable",
+          kind: kind,
+          reason: inspect(reason)
+        )
+
+        unavailable_summaries(upstream_keys)
+    end
   end
 
   @doc false
@@ -65,6 +80,8 @@ defmodule Lasso.RPC.RoutingEvidence do
   defp recorder do
     Application.get_env(:lasso, :attempt_evidence_recorder, __MODULE__.TelemetryRecorder)
   end
+
+  defp unavailable_summaries(upstream_keys), do: Map.new(upstream_keys, &{&1, nil})
 
   defmodule TelemetryRecorder do
     @moduledoc false

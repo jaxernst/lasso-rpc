@@ -4,6 +4,26 @@ defmodule Lasso.Core.Support.ErrorNormalizerTest do
   alias Lasso.Core.Support.ErrorNormalizer
   alias Lasso.JSONRPC.Error, as: JError
 
+  test "normalizes transport timeouts with a distinct timeout category" do
+    jerr = ErrorNormalizer.normalize(:timeout, provider_id: "test", transport: :http)
+
+    assert jerr.category == :timeout
+    assert jerr.retriable?
+    assert jerr.breaker_penalty?
+  end
+
+  test "normalizes local pool rejection without upstream penalty" do
+    jerr =
+      ErrorNormalizer.normalize({:local_capacity_rejection, :pool_checkout_failed},
+        provider_id: "test",
+        transport: :http
+      )
+
+    assert jerr.category == :local_capacity_rejection
+    assert jerr.retriable?
+    refute jerr.breaker_penalty?
+  end
+
   describe "client_error with JSON-RPC body" do
     test "classifies normally when body is a valid JSON-RPC error" do
       payload = %{

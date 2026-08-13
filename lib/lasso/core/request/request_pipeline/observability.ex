@@ -46,11 +46,35 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         :not_dispatched
 
       {:ok, event} ->
-        RoutingEvidence.record(event)
-        record_attempt_analytics(event, ctx.opts.profile, ctx.method)
-        update_live_instance_state(event, result, ctx.opts.profile)
+        run_attempt_sink(:routing_evidence, fn -> RoutingEvidence.record(event) end)
+
+        run_attempt_sink(:compatibility_analytics, fn ->
+          record_attempt_analytics(event, ctx.opts.profile, ctx.method)
+        end)
+
+        run_attempt_sink(:live_instance_state, fn ->
+          update_live_instance_state(event, result, ctx.opts.profile)
+        end)
+
         :ok
     end
+  end
+
+  defp run_attempt_sink(sink, fun) do
+    fun.()
+  rescue
+    error ->
+      Logger.error("Attempt terminal sink failed", sink: sink, error: Exception.message(error))
+      :ok
+  catch
+    kind, reason ->
+      Logger.error("Attempt terminal sink failed",
+        sink: sink,
+        kind: kind,
+        reason: inspect(reason)
+      )
+
+      :ok
   end
 
   @doc """

@@ -2,6 +2,7 @@ defmodule Lasso.RPC.RoutingEvidence.AttemptEventTest do
   use ExUnit.Case, async: false
 
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.Core.Support.ErrorNormalizer
   alias Lasso.RPC.{Channel, RequestContext, RequestOptions}
   alias Lasso.RPC.RequestPipeline.Observability
   alias Lasso.RPC.RoutingEvidence.AttemptEvent
@@ -26,6 +27,23 @@ defmodule Lasso.RPC.RoutingEvidence.AttemptEventTest do
     assert event.elapsed_io_ms == 17
     assert event.censoring_boundary_ms == nil
     assert event.workload_key == :default
+  end
+
+  test "lifecycle timing excludes transport admission time", %{ctx: ctx, channel: channel} do
+    assert {:ok, success} =
+             AttemptEvent.from_result(ctx, channel, "instance", {:ok, :result, 91},
+               attempt_elapsed_ms: 12
+             )
+
+    timeout = JError.new(-32_000, "timeout", category: :timeout)
+
+    assert {:ok, censored} =
+             AttemptEvent.from_result(ctx, channel, "instance", {:error, timeout, 100},
+               attempt_elapsed_ms: 7
+             )
+
+    assert success.elapsed_io_ms == 12
+    assert censored.censoring_boundary_ms == 7
   end
 
   test "separates service failures, timeouts, capacity, neutral errors, and cancellation", %{
@@ -57,6 +75,83 @@ defmodule Lasso.RPC.RoutingEvidence.AttemptEventTest do
                :unsupported_method,
                0
              })
+  end
+
+  test "local transport capacity rejection is admission rather than attempt evidence", %{
+    ctx: ctx,
+    channel: channel
+  } do
+    local_rejection =
+      ErrorNormalizer.normalize({:local_capacity_rejection, :pool_checkout_failed},
+        provider_id: "provider",
+        transport: :http
+      )
+
+    assert :not_dispatched =
+             AttemptEvent.from_result(
+               ctx,
+               channel,
+               "instance",
+               {:error, local_rejection, 2}
+             )
+  end
+
+  test "local connection loss after dispatch remains neutral terminal evidence", %{
+    ctx: ctx,
+    channel: channel
+  } do
+    local_rejection =
+      ErrorNormalizer.normalize({:local_capacity_rejection, :connection_died},
+        provider_id: "provider",
+        transport: :ws
+      )
+
+    assert {:ok, event} =
+             AttemptEvent.from_result(
+               ctx,
+               %{channel | transport: :ws},
+               "instance",
+               {:error, local_rejection, 50},
+               attempt_elapsed_ms: 8
+             )
+
+    assert event.outcome == :neutral_error
+    assert event.elapsed_io_ms == 8
+    assert event.error_category == :local_capacity_rejection
+  end
+
+  test "classifies a normalized native transport timeout as censored", %{
+    ctx: ctx,
+    channel: channel
+  } do
+    timeout = ErrorNormalizer.normalize(:timeout, provider_id: "provider", transport: :http)
+
+    assert {:ok, event} =
+             AttemptEvent.from_result(ctx, channel, "instance", {:error, timeout, 25})
+
+    assert timeout.category == :timeout
+    assert event.outcome == :timeout
+    assert event.elapsed_io_ms == nil
+    assert event.censoring_boundary_ms == 25
+  end
+
+  test "treats local execution exceptions as neutral censored evidence", %{
+    ctx: ctx,
+    channel: channel
+  } do
+    assert {:ok, event} =
+             AttemptEvent.from_result(
+               ctx,
+               channel,
+               "instance",
+               {:exception, {:error, RuntimeError.exception("boom"), []}},
+               censoring_boundary_ms: 4
+             )
+
+    assert event.outcome == :neutral_error
+    assert event.error_category == :internal_error
+    assert event.elapsed_io_ms == nil
+    assert event.censoring_boundary_ms == 4
   end
 
   test "recorder emits exactly one terminal event for every outcome class", %{

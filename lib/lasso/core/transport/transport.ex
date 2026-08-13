@@ -59,6 +59,10 @@ defmodule Lasso.RPC.Transport do
               {:ok, rpc_response, non_neg_integer()}
               | {:error, term(), non_neg_integer()}
 
+  @callback deferred_dispatch?() :: boolean()
+
+  @optional_callbacks deferred_dispatch?: 0
+
   @doc """
   Starts a streaming subscription (WebSocket only).
 

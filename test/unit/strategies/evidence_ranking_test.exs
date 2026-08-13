@@ -14,6 +14,15 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
     end
   end
 
+  defmodule RaisingReader do
+    @behaviour Lasso.RPC.RoutingEvidence.Reader
+
+    @impl true
+    def batch_get_summaries(_chain_id, _workload_key, _upstream_keys) do
+      raise "reader unavailable"
+    end
+  end
+
   setup do
     previous = Application.get_env(:lasso, :routing_evidence_reader)
     Application.put_env(:lasso, :routing_evidence_reader, EvidenceReader)
@@ -77,6 +86,29 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
     ranked = Fastest.rank_channels(channels, "eth_getBalance", ctx, "public", 1)
 
     assert Enum.map(ranked, & &1.provider_id) == ["a", "b"]
+
+    assert_receive {[:lasso, :routing_evidence, :availability_degradation], ^ref,
+                    %{candidate_count: 2}, %{strategy: :fastest}}
+  end
+
+  test "reader failures preserve live candidates through availability degradation" do
+    Application.put_env(:lasso, :routing_evidence_reader, RaisingReader)
+
+    ref =
+      :telemetry_test.attach_event_handlers(
+        self(),
+        [[:lasso, :routing_evidence, :availability_degradation]]
+      )
+
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    channels = channels(["b", "a"])
+    ctx = Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
+
+    assert ["a", "b"] ==
+             channels
+             |> Fastest.rank_channels("eth_getBalance", ctx, "public", 1)
+             |> Enum.map(& &1.provider_id)
 
     assert_receive {[:lasso, :routing_evidence, :availability_degradation], ^ref,
                     %{candidate_count: 2}, %{strategy: :fastest}}

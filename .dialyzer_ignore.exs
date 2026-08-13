@@ -19,9 +19,6 @@
   # defensive programming against unexpected runtime states from external systems
   # (HTTP responses, WebSocket events, config parsing, etc.)
 
-  # HTTP adapter error handling (Finch responses)
-  ~r"lib/lasso/core/transport/http/adapters/finch.ex.*pattern_match",
-
   # WebSocket connection state handling
   ~r"lib/lasso/core/transport/websocket/connection.ex.*pattern_match",
 

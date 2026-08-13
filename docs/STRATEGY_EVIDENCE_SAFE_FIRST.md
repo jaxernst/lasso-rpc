@@ -38,7 +38,7 @@ decisions in lasso-cloud#504 and #501.
 | Timeout | Ordinary failure latency | One reliability failure with a right-censoring boundary |
 | Rate limit/quota | Mixed into failure handling | Capacity-rejection attempt, separate from reliability and successful latency |
 | Client/application/policy error | Implicitly omitted | Explicit reliability-neutral attempt |
-| Cancellation | No typed strategy-evidence outcome | Neutral censored terminal outcome in the attempt interface |
+| Cancellation | No typed strategy-evidence outcome | Neutral censored terminal outcome finalized by the monitored attempt lifecycle |
 | Circuit/parameter rejection | Could be described as a failed try | Admission event; never an attempt or zero-latency observation |
 | Fastest source | BenchmarkStore lifetime averages | Qualified immutable summaries only; explicit availability degradation otherwise |
 | Latency weighted | Absolute floor, success/confidence multipliers, `random * weight` sort | Relative weights and exponential-race permutation |
@@ -52,7 +52,7 @@ and a seeded weighted-order distribution.
 Environment:
 
 - base revision: `2296965aecbe0aec9fc7cbe49b0409df50c0a213` (`v0.2.0`);
-- candidate revision: `20a3404298aac601ded5c2a2fcb21b729f07a8d1`;
+- evidence-sink candidate revision: `20a3404298aac601ded5c2a2fcb21b729f07a8d1`;
 - Erlang/OTP 28, Elixir 1.18.4;
 - developer macOS host, not the pinned Linux acceptance host;
 - fixed cardinality: 32 qualified channels for ranking and one evidence key for recording;
@@ -66,11 +66,19 @@ Raw microseconds per operation:
 | 32-channel latency-weighted ranking | 14.9745, 14.4780, 19.4240, 14.2655, 14.1425 | 33.2450, 32.3630, 32.1805, 32.2595, 32.5220 | 14.4780 → 32.3630 |
 | One bounded evidence record | 2.5625, 2.15345, 1.9542, 1.87975, 1.85215 | 2.27105, 1.87805, 1.88945, 1.80025, 1.81695 | 1.9542 → 1.87805 |
 
+The review-fix working tree measured the complete lifecycle critical path at 7.5341, 7.0639,
+6.8424, 6.8171, and 6.8409 microseconds per call (median 6.8424) on the same developer host.
+
 The qualified weighted-ranking microbenchmark is about 2.24 times the old incorrect algorithm,
 principally because correct exponential-race ordering evaluates a logarithm per candidate. This is
 an explicit input to #504/#501: qualified summary ranking should be compiled or refreshed off the
-request path rather than optimized by weakening the distribution. Recording shows no material
-regression at this scale, but this does not validate mailbox, memory, or high-cardinality bounds.
+request path rather than optimized by weakening the distribution.
+
+The historical recording row measures the evidence sink directly and predates the monitored
+attempt lifecycle. It therefore supports only the sink-local comparison, not the current request
+hot path. The reproducible script also reports the current lifecycle critical-path cost separately;
+that result has no pre-change counterpart and remains developer-host reconnaissance. None of these
+measurements validates mailbox, memory, or high-cardinality bounds.
 
 Reproduce the candidate measurement with:
 
@@ -92,6 +100,5 @@ mix test test/integration/selection_test.exs \
 mix test --include integration
 ```
 
-The first focused group passed 79 tests. The integration group passed 39 tests before the
-compatibility analytics assertion was added; the attempt-evidence subset then passed 9 tests. The
-repository-wide path passed 1,016 tests with zero failures.
+The attempt-evidence integration subset and repository-wide path passed with zero failures after
+the review fixes. Exact counts are intentionally omitted because the suite evolves independently.

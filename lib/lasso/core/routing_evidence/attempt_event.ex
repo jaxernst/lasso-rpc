@@ -63,23 +63,68 @@ defmodule Lasso.RPC.RoutingEvidence.AttemptEvent do
       ),
       do: :not_dispatched
 
+  def from_result(
+        ctx,
+        channel,
+        upstream_instance_id,
+        {:error, %JError{category: :local_capacity_rejection}, _io_ms} = result,
+        opts
+      ) do
+    if Keyword.has_key?(opts, :attempt_elapsed_ms) do
+      from_dispatched_error(ctx, channel, upstream_instance_id, result, opts)
+    else
+      :not_dispatched
+    end
+  end
+
   def from_result(ctx, channel, upstream_instance_id, {:ok, _result, io_ms}, opts) do
     {:ok,
      build(ctx, channel, upstream_instance_id, :usable_success,
-       elapsed_io_ms: io_ms,
+       elapsed_io_ms: Keyword.get(opts, :attempt_elapsed_ms, io_ms),
        workload_key: Keyword.get(opts, :workload_key, :default)
      )}
   end
 
   def from_result(ctx, channel, upstream_instance_id, {:error, reason, io_ms}, opts) do
+    from_dispatched_error(
+      ctx,
+      channel,
+      upstream_instance_id,
+      {:error, reason, io_ms},
+      opts
+    )
+  end
+
+  def from_result(ctx, channel, upstream_instance_id, {:exception, _exception}, opts) do
+    attempt_elapsed_ms =
+      Keyword.get_lazy(opts, :attempt_elapsed_ms, fn ->
+        Keyword.fetch!(opts, :censoring_boundary_ms)
+      end)
+
+    {:ok,
+     build(ctx, channel, upstream_instance_id, :neutral_error,
+       censoring_boundary_ms: attempt_elapsed_ms,
+       error_category: :internal_error,
+       workload_key: Keyword.get(opts, :workload_key, :default)
+     )}
+  end
+
+  defp from_dispatched_error(
+         ctx,
+         channel,
+         upstream_instance_id,
+         {:error, reason, io_ms},
+         opts
+       ) do
     category = error_category(reason)
     outcome = classify_error(category)
+    attempt_elapsed_ms = Keyword.get(opts, :attempt_elapsed_ms, io_ms)
 
     timing =
       if outcome in [:timeout, :cancelled] do
-        [censoring_boundary_ms: io_ms]
+        [censoring_boundary_ms: attempt_elapsed_ms]
       else
-        [elapsed_io_ms: io_ms]
+        [elapsed_io_ms: attempt_elapsed_ms]
       end
 
     {:ok,
@@ -96,15 +141,6 @@ defmodule Lasso.RPC.RoutingEvidence.AttemptEvent do
      )}
   end
 
-  def from_result(ctx, channel, upstream_instance_id, {:exception, _exception}, opts) do
-    {:ok,
-     build(ctx, channel, upstream_instance_id, :service_failure,
-       censoring_boundary_ms: Keyword.fetch!(opts, :censoring_boundary_ms),
-       error_category: :internal_error,
-       workload_key: Keyword.get(opts, :workload_key, :default)
-     )}
-  end
-
   @doc false
   @spec classify_error(atom()) :: outcome()
   def classify_error(category) when category in [:cancelled, :canceled, :client_cancelled],
@@ -112,6 +148,7 @@ defmodule Lasso.RPC.RoutingEvidence.AttemptEvent do
 
   def classify_error(:timeout), do: :timeout
   def classify_error(:rate_limit), do: :capacity_rejection
+  def classify_error(:local_capacity_rejection), do: :neutral_error
 
   def classify_error(category) do
     if ErrorClassification.breaker_penalty?(category),

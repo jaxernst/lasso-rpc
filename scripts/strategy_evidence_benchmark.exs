@@ -12,6 +12,7 @@ alias Lasso.RPC.{Channel, RequestContext, RequestOptions}
 alias Lasso.RPC.RequestPipeline.Observability
 alias Lasso.RPC.RoutingEvidence.Summary
 alias Lasso.RPC.Strategies.LatencyWeighted
+alias Lasso.Core.Support.CircuitBreaker
 
 Application.put_env(:lasso, :routing_evidence_reader, StrategyEvidenceBenchmark.Reader)
 
@@ -99,6 +100,39 @@ record_runs =
     microseconds / 20_000
   end
 
+lifecycle_id = {"strategy-evidence-lifecycle-benchmark", :http}
+
+{:ok, _breaker_pid} =
+  CircuitBreaker.start_link(
+    {lifecycle_id, %{failure_threshold: 5, recovery_timeout: 60_000, success_threshold: 1}}
+  )
+
+terminal_callback = fn _result, _elapsed_ms -> :ok end
+
+for _ <- 1..500 do
+  CircuitBreaker.call(lifecycle_id, fn -> {:ok, :result, 25} end, 5_000,
+    on_terminal: terminal_callback
+  )
+end
+
+:sys.get_state(CircuitBreaker.via_name(lifecycle_id))
+
+lifecycle_runs =
+  for _ <- 1..5 do
+    {microseconds, _result} =
+      :timer.tc(fn ->
+        for _ <- 1..10_000 do
+          CircuitBreaker.call(lifecycle_id, fn -> {:ok, :result, 25} end, 5_000,
+            on_terminal: terminal_callback
+          )
+        end
+
+        :sys.get_state(CircuitBreaker.via_name(lifecycle_id))
+      end)
+
+    microseconds / 10_000
+  end
+
 IO.inspect(
   %{
     revision: System.get_env("LASSO_BENCHMARK_REVISION") || "working-tree",
@@ -106,7 +140,8 @@ IO.inspect(
     elixir: System.version(),
     cardinality: %{ranking_channels: 32, evidence_keys: 1},
     rank_32_us_per_call: rank_runs,
-    record_us_per_event: record_runs
+    record_us_per_event: record_runs,
+    lifecycle_us_per_call: lifecycle_runs
   },
   label: "STRATEGY_EVIDENCE"
 )

@@ -32,6 +32,17 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
   @callback request(provider_config, method, params, opts) ::
               {:ok, raw_response()} | {:error, error_reason}
 
+  @callback deferred_dispatch?() :: boolean()
+
+  @optional_callbacks deferred_dispatch?: 0
+
+  @doc false
+  @spec deferred_dispatch?() :: boolean()
+  def deferred_dispatch? do
+    adapter = adapter()
+    function_exported?(adapter, :deferred_dispatch?, 0) and adapter.deferred_dispatch?()
+  end
+
   # Facade to configured adapter
   @spec request(provider_config, method, params, opts) ::
           {:ok, raw_response()} | {:error, error_reason}

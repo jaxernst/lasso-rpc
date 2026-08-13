@@ -305,7 +305,8 @@ defmodule Lasso.RPC.Selection do
   @doc false
   @spec tier_channels([Channel.t()], map(), map()) :: [Channel.t()]
   def tier_channels(channels, circuit_state_map, rate_limit_map) do
-    Enum.sort_by(channels, fn channel ->
+    channels
+    |> Enum.flat_map(fn channel ->
       circuit_state =
         Map.get(circuit_state_map, {channel.provider_id, channel.transport}, :closed)
 
@@ -315,12 +316,15 @@ defmodule Lasso.RPC.Selection do
         |> Map.get(channel.transport, false)
 
       case {circuit_state, rate_limited} do
-        {:closed, false} -> 1
-        {:half_open, false} -> 2
-        {:closed, true} -> 3
-        {:half_open, true} -> 4
+        {:closed, false} -> [{1, channel}]
+        {:half_open, false} -> [{2, channel}]
+        {:closed, true} -> [{3, channel}]
+        {:half_open, true} -> [{4, channel}]
+        _unavailable -> []
       end
     end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
   end
 
   # Channel building helpers

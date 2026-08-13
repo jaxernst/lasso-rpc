@@ -10,7 +10,7 @@ defmodule Lasso.RPC.Transports.HTTP do
   @behaviour Lasso.RPC.Transport
 
   require Logger
-  alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
+  alias Lasso.Core.Support.{AttemptLifecycle, ErrorClassifier, ErrorNormalizer}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
@@ -58,6 +58,9 @@ defmodule Lasso.RPC.Transports.HTTP do
   end
 
   @impl true
+  def deferred_dispatch?, do: HttpClient.deferred_dispatch?()
+
+  @impl true
   def request(channel, rpc_request, timeout \\ 30_000) do
     %{provider_id: provider_id, config: provider_config} = channel
 
@@ -66,11 +69,13 @@ defmodule Lasso.RPC.Transports.HTTP do
     request_id = Map.get(rpc_request, "id")
 
     io_start_us = System.monotonic_time(:microsecond)
+    dispatch_context = AttemptLifecycle.dispatch_context()
 
     result =
       case HttpClient.request(provider_config, method, params,
              request_id: request_id,
-             timeout: timeout
+             timeout: timeout,
+             attempt_dispatch: dispatch_context
            ) do
         {:ok, {:raw, raw_bytes}} ->
           # Parse raw bytes using envelope parser for passthrough optimization
