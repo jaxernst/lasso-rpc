@@ -1,0 +1,67 @@
+[
+  {
+    "schema": "lasso.execution-fact",
+    "version": {"major": 1, "minor": 0},
+    "stage": "admission",
+    "variant": "rejected",
+    "request": {
+      "request_id": "fixture-admission",
+      "profile": "public",
+      "subject_token": null,
+      "chain_id": 1,
+      "routing_intent": "default",
+      "workload_key": "read"
+    },
+    "reason": "local_capacity",
+    "candidate_admission_count": 1,
+    "dispatch_count": 0,
+    "elapsed_us": 100,
+    "retry_after_ms": 10,
+    "observed_at": "2026-08-13T20:00:00Z"
+  },
+  {
+    "schema": "lasso.execution-fact",
+    "version": {"major": 1, "minor": 0},
+    "stage": "attempt",
+    "variant": "deadline",
+    "identity": {
+      "request_id": "fixture-deadline",
+      "attempt_id": "fixture-attempt-1",
+      "profile": "public",
+      "subject_token": null,
+      "chain_id": 1,
+      "upstream_instance_id": "fixture-instance-1",
+      "transport": "http",
+      "route_generation": 4,
+      "circuit_scope": "broad",
+      "circuit_epoch": 2,
+      "execution_safety": "replay_safe",
+      "routing_intent": "default",
+      "workload_key": "read",
+      "request_budget_ms": 100,
+      "candidate_admission_count": 1,
+      "dispatch_count": 1
+    },
+    "dispatch_certainty": "indeterminate",
+    "censoring_boundary_us": 30000
+  },
+  {
+    "schema": "lasso.execution-fact",
+    "version": {"major": 1, "minor": 0},
+    "stage": "request",
+    "variant": "unsafe_indeterminate_exhaustion",
+    "request": {
+      "request_id": "fixture-unsafe",
+      "profile": "public",
+      "subject_token": "acct-1",
+      "chain_id": 1,
+      "routing_intent": "transaction",
+      "workload_key": "send_raw_transaction",
+      "execution_safety": "raw_transaction_broadcast",
+      "elapsed_us": 40000,
+      "candidate_admission_count": 1,
+      "dispatch_count": 1,
+      "observed_at": null
+    }
+  }
+]

@@ -19,18 +19,21 @@ defmodule Lasso.RPC.Channel do
           chain_id: pos_integer(),
           provider_id: String.t(),
           instance_id: String.t() | nil,
+          route_generation: non_neg_integer(),
           transport: :http | :ws,
           raw_channel: term(),
           transport_module: module(),
           capabilities: map() | nil
         }
 
-  @derive {Jason.Encoder, only: [:profile, :chain_id, :provider_id, :transport]}
+  @derive {Jason.Encoder,
+           only: [:profile, :chain_id, :provider_id, :route_generation, :transport]}
   defstruct [
     :profile,
     :chain_id,
     :provider_id,
     :instance_id,
+    :route_generation,
     :transport,
     :raw_channel,
     :transport_module,
@@ -50,6 +53,10 @@ defmodule Lasso.RPC.Channel do
       instance_id:
         Keyword.get_lazy(opts, :instance_id, fn ->
           Lasso.Providers.Catalog.lookup_instance_id(profile, chain_id, provider_id)
+        end),
+      route_generation:
+        Keyword.get_lazy(opts, :route_generation, fn ->
+          Lasso.Config.ConfigStore.route_generation()
         end),
       transport: transport,
       raw_channel: raw_channel,
