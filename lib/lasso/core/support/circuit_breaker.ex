@@ -184,6 +184,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           fun,
           timeout,
           Keyword.get(opts, :on_terminal),
+          Keyword.get(opts, :on_dispatch),
           Keyword.get(opts, :dispatch, :immediate)
         )
 
@@ -242,6 +243,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
          fun,
          timeout,
          terminal_callback,
+         dispatch_callback,
          dispatch_mode
        ) do
     case AttemptLifecycle.run(
@@ -251,6 +253,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
            fun,
            timeout,
            terminal_callback,
+           dispatch_callback,
            dispatch_mode
          ) do
       {:__attempt_lifecycle_rejected__, :timeout} -> {:rejected, :admission_timeout}

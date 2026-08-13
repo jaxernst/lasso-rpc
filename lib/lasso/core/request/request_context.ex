@@ -10,7 +10,7 @@ defmodule Lasso.RPC.RequestContext do
   - Result or error shapes
   """
 
-  alias Lasso.RPC.{Channel, RequestOptions, Response}
+  alias Lasso.RPC.{Channel, ExecutionEnvelope, RequestOptions, Response}
 
   @type channel_attempt :: {Channel.t(), :success | {:error, term()}}
 
@@ -68,6 +68,7 @@ defmodule Lasso.RPC.RequestContext do
           # Execution parameters (immutable throughout pipeline)
           rpc_request: map() | nil,
           timeout_ms: timeout() | nil,
+          execution_envelope: ExecutionEnvelope.t() | nil,
           opts: RequestOptions.t() | nil,
 
           # Set when declared parameter limits eliminate every candidate so the
@@ -109,6 +110,7 @@ defmodule Lasso.RPC.RequestContext do
             error: nil,
             rpc_request: nil,
             timeout_ms: nil,
+            execution_envelope: nil,
             opts: nil,
             bypass_param_limits: false
 
@@ -151,7 +153,19 @@ defmodule Lasso.RPC.RequestContext do
   @spec set_execution_params(t(), map(), integer(), RequestOptions.t()) :: t()
   def set_execution_params(%__MODULE__{} = ctx, rpc_request, timeout_ms, %RequestOptions{} = opts)
       when is_map(rpc_request) and is_integer(timeout_ms) do
-    %{ctx | rpc_request: rpc_request, timeout_ms: timeout_ms, opts: opts}
+    envelope =
+      ctx.execution_envelope ||
+        ExecutionEnvelope.new(ctx.request_id, ctx.method, timeout_ms,
+          started_at_us: ctx.start_time || System.monotonic_time(:microsecond)
+        )
+
+    %{
+      ctx
+      | rpc_request: rpc_request,
+        timeout_ms: timeout_ms,
+        opts: opts,
+        execution_envelope: envelope
+    }
   end
 
   @doc """
