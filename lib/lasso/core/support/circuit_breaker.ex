@@ -315,6 +315,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @doc false
+  @spec abandon_unclaimed(AdmissionReceipt.t(), pid()) :: :ok
   def abandon_unclaimed(%AdmissionReceipt{kind: :half_open} = receipt, caller_pid) do
     delete_unclaimed_lease(receipt, caller_pid)
 
