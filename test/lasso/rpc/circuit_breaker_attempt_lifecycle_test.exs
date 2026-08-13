@@ -722,7 +722,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     assert_receive {:authorized_for_late_confirm, _context, worker_pid}, 1_000
     Process.exit(caller_pid, :kill)
     send(worker_pid, :confirm)
-    refute_receive {:late_confirmation, _}, 100
+    assert_receive {:late_confirmation, {:error, :cancelled}}, 1_000
     refute_receive {:terminal, _, _}, 100
   end
 
@@ -748,7 +748,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
                end
              )
 
-    refute_receive {:late_deadline_confirmation, _}, 100
+    assert_receive {:late_deadline_confirmation, {:error, :cancelled}}, 1_000
     refute_receive {:terminal, _, _}, 100
 
     breaker_pid = GenServer.whereis(CircuitBreaker.via_name(id))

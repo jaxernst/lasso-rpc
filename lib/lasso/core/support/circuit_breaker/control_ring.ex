@@ -17,8 +17,6 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
           :ok
   def initialize(breaker_id, generation, epoch, owner_pid, opts \\ []) do
     capacity = capacity(Keyword.get(opts, :capacity, @default_capacity))
-    head = :atomics.new(1, signed: false)
-    tail = :atomics.new(1, signed: false)
     wakeup = :atomics.new(1, signed: false)
     diagnostics = :atomics.new(1, signed: false)
     ring_ref = make_ref()
@@ -28,8 +26,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
     true =
       :ets.insert(
         Storage.control_meta_table(),
-        {breaker_id, generation, epoch, owner_pid, capacity, head, tail, wakeup, diagnostics,
-         ring_ref}
+        {breaker_id, generation, epoch, owner_pid, capacity, wakeup, diagnostics, ring_ref}
       )
 
     :ok
@@ -50,23 +47,11 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
   def drain(breaker_id, limit, generation, epoch) do
     case :ets.lookup(Storage.control_meta_table(), breaker_id) do
       [
-        {^breaker_id, ^generation, ^epoch, _owner_pid, capacity, head, tail, wakeup, _diagnostics,
-         ring_ref}
+        {^breaker_id, ^generation, ^epoch, _owner_pid, capacity, wakeup, _diagnostics, ring_ref}
       ] ->
-        signals = take_slots(breaker_id, min(limit, capacity), capacity, head, ring_ref)
+        signals = take_slots(breaker_id, min(limit, capacity), capacity, ring_ref)
         :atomics.put(wakeup, 1, 0)
-
-        maybe_notify_remaining(
-          breaker_id,
-          generation,
-          epoch,
-          capacity,
-          head,
-          tail,
-          wakeup,
-          ring_ref
-        )
-
+        maybe_notify_remaining(breaker_id, generation, epoch, capacity, wakeup, ring_ref)
         signals
 
       _ ->
@@ -80,14 +65,13 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
   def stats(breaker_id) do
     case :ets.lookup(Storage.control_meta_table(), breaker_id) do
       [
-        {^breaker_id, generation, epoch, owner_pid, capacity, head, tail, wakeup, diagnostics,
-         _ring_ref}
+        {^breaker_id, generation, epoch, owner_pid, capacity, wakeup, diagnostics, ring_ref}
       ] ->
         %{
           generation: generation,
           epoch: epoch,
           capacity: capacity,
-          occupied: min(max(:atomics.get(tail, 1) - :atomics.get(head, 1), 0), capacity),
+          occupied: occupied_count(breaker_id, capacity, ring_ref),
           wakeup_pending: :atomics.get(wakeup, 1),
           dropped: :atomics.get(diagnostics, 1),
           owner_pid: owner_pid
@@ -102,23 +86,15 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
          %AdmissionReceipt{breaker_id: breaker_id, generation: generation, epoch: epoch} =
            receipt,
          signal,
-         {breaker_id, generation, epoch, owner_pid, capacity, head, tail, wakeup, diagnostics,
-          ring_ref}
+         {breaker_id, generation, epoch, owner_pid, capacity, wakeup, diagnostics, ring_ref}
        ) do
-    case reserve_ticket(head, tail, capacity) do
-      {:ok, ticket} ->
-        key = {breaker_id, rem(ticket, capacity)}
-        value = {ticket, generation, epoch, signal}
-        match_spec = [{{key, {ring_ref, @empty}}, [], [{:const, {key, {ring_ref, value}}}]}]
+    sequence = System.unique_integer([:positive, :monotonic])
+    start = rem(sequence, capacity)
 
-        case :ets.select_replace(Storage.control_table(), match_spec) do
-          1 ->
-            notify_once(owner_pid, breaker_id, generation, epoch, wakeup)
-            :ok
-
-          0 ->
-            {:error, :stale}
-        end
+    case reserve_slot(breaker_id, signal, generation, epoch, sequence, start, capacity, ring_ref) do
+      :ok ->
+        notify_once(owner_pid, breaker_id, generation, epoch, wakeup)
+        :ok
 
       :full ->
         :atomics.add(diagnostics, 1, 1)
@@ -129,20 +105,18 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
 
   defp enqueue_with_meta(_receipt, _signal, _meta), do: {:error, :stale}
 
-  defp reserve_ticket(head, tail, capacity) do
-    head_value = :atomics.get(head, 1)
-    tail_value = :atomics.get(tail, 1)
+  defp reserve_slot(breaker_id, signal, generation, epoch, sequence, start, capacity, ring_ref) do
+    Enum.reduce_while(0..(capacity - 1), :full, fn offset, _acc ->
+      index = rem(start + offset, capacity)
+      key = {breaker_id, index}
+      value = {sequence, generation, epoch, signal}
+      match_spec = [{{key, {ring_ref, @empty}}, [], [{:const, {key, {ring_ref, value}}}]}]
 
-    cond do
-      tail_value - head_value >= capacity ->
-        :full
-
-      :atomics.compare_exchange(tail, 1, tail_value, tail_value + 1) in [:ok, tail_value] ->
-        {:ok, tail_value}
-
-      true ->
-        reserve_ticket(head, tail, capacity)
-    end
+      case :ets.select_replace(Storage.control_table(), match_spec) do
+        1 -> {:halt, :ok}
+        0 -> {:cont, :full}
+      end
+    end)
   end
 
   defp notify_once(owner_pid, breaker_id, generation, epoch, wakeup) do
@@ -155,52 +129,25 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
     end
   end
 
-  defp take_slots(_breaker_id, 0, _capacity, _head, _ring_ref), do: []
-
-  defp take_slots(breaker_id, limit, capacity, head, ring_ref) do
-    ticket = :atomics.get(head, 1)
-    key = {breaker_id, rem(ticket, capacity)}
-
-    case :ets.lookup(Storage.control_table(), key) do
-      [{^key, {^ring_ref, {^ticket, _generation, _epoch, signal} = value}}] ->
-        match_spec = [{{key, {ring_ref, value}}, [], [{:const, {key, {ring_ref, @empty}}}]}]
-
-        case :ets.select_replace(Storage.control_table(), match_spec) do
-          1 ->
-            :atomics.add(head, 1, 1)
-            [signal | take_slots(breaker_id, limit - 1, capacity, head, ring_ref)]
-
-          0 ->
-            []
-        end
-
-      _ ->
-        []
-    end
+  defp take_slots(breaker_id, limit, capacity, ring_ref) do
+    breaker_id
+    |> occupied_slots(capacity, ring_ref)
+    |> Enum.sort_by(fn {_key, {_ring_ref, {sequence, _generation, _epoch, _signal}}} ->
+      sequence
+    end)
+    |> Enum.take(limit)
+    |> Enum.flat_map(fn {key, {^ring_ref, {_sequence, _generation, _epoch, signal} = value}} ->
+      match_spec = [{{key, {ring_ref, value}}, [], [{:const, {key, {ring_ref, @empty}}}]}]
+      if :ets.select_replace(Storage.control_table(), match_spec) == 1, do: [signal], else: []
+    end)
   end
 
-  defp maybe_notify_remaining(
-         breaker_id,
-         generation,
-         epoch,
-         capacity,
-         head,
-         tail,
-         wakeup,
-         ring_ref
-       ) do
-    ticket = :atomics.get(head, 1)
-    key = {breaker_id, rem(ticket, capacity)}
-
-    if :atomics.get(tail, 1) > ticket and
-         match?(
-           [{^key, {^ring_ref, {^ticket, _, _, _}}}],
-           :ets.lookup(Storage.control_table(), key)
-         ) do
+  defp maybe_notify_remaining(breaker_id, generation, epoch, capacity, wakeup, ring_ref) do
+    if occupied_count(breaker_id, capacity, ring_ref) > 0 do
       case :ets.lookup(Storage.control_meta_table(), breaker_id) do
         [
-          {^breaker_id, ^generation, ^epoch, owner_pid, ^capacity, ^head, ^tail, ^wakeup,
-           _diagnostics, ^ring_ref}
+          {^breaker_id, ^generation, ^epoch, owner_pid, ^capacity, ^wakeup, _diagnostics,
+           ^ring_ref}
         ] ->
           notify_once(owner_pid, breaker_id, generation, epoch, wakeup)
 
@@ -208,6 +155,21 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
           :ok
       end
     end
+  end
+
+  defp occupied_count(breaker_id, capacity, ring_ref) do
+    breaker_id |> occupied_slots(capacity, ring_ref) |> length()
+  end
+
+  defp occupied_slots(breaker_id, capacity, ring_ref) do
+    Enum.flat_map(0..(capacity - 1), fn index ->
+      key = {breaker_id, index}
+
+      case :ets.lookup(Storage.control_table(), key) do
+        [{^key, {^ring_ref, {_sequence, _generation, _epoch, _signal}} = value}] -> [{key, value}]
+        _ -> []
+      end
+    end)
   end
 
   defp degrade(receipt) do
@@ -255,10 +217,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
 
   defp previous_capacity(breaker_id) do
     case :ets.lookup(Storage.control_meta_table(), breaker_id) do
-      [
-        {^breaker_id, _generation, _epoch, _owner, capacity, _head, _tail, _wakeup, _diagnostics,
-         _ring_ref}
-      ]
+      [{^breaker_id, _generation, _epoch, _owner, capacity, _wakeup, _diagnostics, _ring_ref}]
       when is_integer(capacity) and capacity > 0 ->
         min(capacity, @maximum_capacity)
 

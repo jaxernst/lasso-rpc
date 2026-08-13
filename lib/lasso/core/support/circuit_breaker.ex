@@ -237,10 +237,29 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @doc false
-  @spec claim_attempt(breaker_id(), binary() | reference(), pid()) ::
+  @spec claim_attempt(breaker_id(), reference(), pid()) ::
           :ok | {:error, :not_found | :token_not_found | :owner_mismatch | :timeout}
   def claim_attempt(id, token, caller_pid) do
     GenServer.call(via_name(id), {:claim_attempt, token, caller_pid}, @attempt_state_timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+    :exit, {:noproc, _} -> {:error, :not_found}
+    :exit, {:normal, _} -> {:error, :not_found}
+    :exit, _reason -> {:error, :not_found}
+  end
+
+  @doc false
+  @spec claim_attempt(breaker_id(), binary() | reference(), pid(), AdmissionReceipt.t()) ::
+          :ok | {:error, :not_found | :token_not_found | :owner_mismatch | :timeout}
+  def claim_attempt(id, token, caller_pid, receipt) do
+    now_us = System.monotonic_time(:microsecond)
+    timeout_ms = max(div(receipt.deadline_us - now_us + 999, 1_000), 1)
+
+    GenServer.call(
+      via_name(id),
+      {:claim_attempt, token, caller_pid, receipt.generation, receipt.epoch, receipt.deadline_us},
+      timeout_ms
+    )
   catch
     :exit, {:timeout, _} -> {:error, :timeout}
     :exit, {:noproc, _} -> {:error, :not_found}
@@ -269,7 +288,10 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @doc false
   @spec report_half_open(AdmissionReceipt.t(), term()) :: :ok
   def report_half_open(%AdmissionReceipt{kind: :half_open} = receipt, result) do
-    GenServer.cast(via_name(receipt.breaker_id), {:report, receipt.token, result})
+    GenServer.cast(
+      via_name(receipt.breaker_id),
+      {:report, receipt.token, receipt.generation, receipt.epoch, result}
+    )
   end
 
   @doc false
@@ -286,7 +308,20 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @doc false
   @spec release_half_open(AdmissionReceipt.t()) :: :ok
   def release_half_open(%AdmissionReceipt{kind: :half_open} = receipt) do
-    GenServer.cast(via_name(receipt.breaker_id), {:release, receipt.token})
+    GenServer.cast(
+      via_name(receipt.breaker_id),
+      {:release, receipt.token, receipt.generation, receipt.epoch}
+    )
+  end
+
+  @doc false
+  def abandon_unclaimed(%AdmissionReceipt{kind: :half_open} = receipt, caller_pid) do
+    delete_unclaimed_lease(receipt, caller_pid)
+
+    GenServer.cast(
+      via_name(receipt.breaker_id),
+      {:abandon_unclaimed, receipt.token, receipt.generation, receipt.epoch, caller_pid}
+    )
   end
 
   defp execute_with_receipt(
@@ -535,11 +570,27 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       inflight_attempts: %{}
     }
 
-    state = recover_persisted_lease(state)
+    state = state |> recover_persisted_lease() |> restore_recovery_timer()
     initialize_control_ring(state)
     write_ets_state(state)
 
-    {:ok, state}
+    {:ok, state, {:continue, :reconcile_persisted_lease}}
+  end
+
+  @impl true
+  def handle_continue(:reconcile_persisted_lease, state) do
+    breaker_id = {state.instance_id, state.transport}
+
+    new_state =
+      Enum.reduce(state.inflight_attempts, state, fn {token, _attempt}, current_state ->
+        case :ets.lookup(Storage.lease_table(), breaker_id) do
+          [{^breaker_id, %{token: ^token}}] -> current_state
+          _ -> apply_attempt_release(current_state, token)
+        end
+      end)
+
+    write_ets_state(new_state)
+    {:noreply, new_state}
   end
 
   @impl true
@@ -550,6 +601,31 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @impl true
   def handle_call({:admit, now_ms, deadline_us}, from, state) do
     handle_admission(now_ms, deadline_us, from, state)
+  end
+
+  @impl true
+  def handle_call({:claim_attempt, token, caller_pid}, {lifecycle_pid, _tag}, state) do
+    case Map.fetch(state.inflight_attempts, token) do
+      {:ok, %{owner_pid: ^caller_pid, owner_monitor: owner_monitor} = attempt} ->
+        Process.demonitor(owner_monitor, [:flush])
+        lifecycle_monitor = Process.monitor(lifecycle_pid)
+
+        claimed_attempt = %{
+          attempt
+          | owner_pid: lifecycle_pid,
+            owner_monitor: lifecycle_monitor,
+            claimed?: true
+        }
+
+        attempts = Map.put(state.inflight_attempts, token, claimed_attempt)
+        {:reply, :ok, %{state | inflight_attempts: attempts}}
+
+      {:ok, _attempt} ->
+        {:reply, {:error, :owner_mismatch}, state}
+
+      :error ->
+        {:reply, {:error, :token_not_found}, state}
+    end
   end
 
   @impl true
@@ -580,7 +656,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       true ->
         admitted_state = prepare_exceptional_generation(state)
 
-        case persist_exceptional_lease(admitted_state, token, owner_pid) do
+        case persist_exceptional_lease(admitted_state, token, owner_pid, deadline_us) do
           {:ok, receipt, new_state} ->
             write_ets_state(new_state)
             {:reply, {:ok, receipt}, new_state}
@@ -629,29 +705,42 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
-  def handle_call({:claim_attempt, token, caller_pid}, {lifecycle_pid, _tag}, state) do
-    case Map.fetch(state.inflight_attempts, token) do
-      {:ok, %{owner_pid: ^caller_pid, owner_monitor: owner_monitor} = attempt} ->
-        Process.demonitor(owner_monitor, [:flush])
-        lifecycle_monitor = Process.monitor(lifecycle_pid)
+  def handle_call(
+        {:claim_attempt, token, caller_pid, expected_generation, expected_epoch, deadline_us},
+        {lifecycle_pid, _tag},
+        state
+      ) do
+    cond do
+      System.monotonic_time(:microsecond) >= deadline_us ->
+        {:reply, {:error, :timeout}, state}
 
-        claimed_attempt = %{
-          attempt
-          | owner_pid: lifecycle_pid,
-            owner_monitor: lifecycle_monitor,
-            claimed?: true
-        }
+      expected_generation != state.transition_generation or
+          expected_epoch != state.process_epoch ->
+        {:reply, {:error, :not_found}, state}
 
-        attempts = Map.put(state.inflight_attempts, token, claimed_attempt)
-        persist_claimed_owner({state.instance_id, state.transport}, token, lifecycle_pid)
+      true ->
+        case Map.fetch(state.inflight_attempts, token) do
+          {:ok, %{owner_pid: ^caller_pid, owner_monitor: owner_monitor} = attempt} ->
+            persist_claimed_owner({state.instance_id, state.transport}, token, lifecycle_pid)
+            Process.demonitor(owner_monitor, [:flush])
+            lifecycle_monitor = Process.monitor(lifecycle_pid)
 
-        {:reply, :ok, %{state | inflight_attempts: attempts}}
+            claimed_attempt = %{
+              attempt
+              | owner_pid: lifecycle_pid,
+                owner_monitor: lifecycle_monitor,
+                claimed?: true
+            }
 
-      {:ok, _attempt} ->
-        {:reply, {:error, :owner_mismatch}, state}
+            attempts = Map.put(state.inflight_attempts, token, claimed_attempt)
+            {:reply, :ok, %{state | inflight_attempts: attempts}}
 
-      :error ->
-        {:reply, {:error, :token_not_found}, state}
+          {:ok, _attempt} ->
+            {:reply, {:error, :owner_mismatch}, state}
+
+          :error ->
+            {:reply, {:error, :token_not_found}, state}
+        end
     end
   end
 
@@ -727,8 +816,22 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
-  def handle_cast({:report, token, result}, state) do
-    new_state = apply_attempt_report(state, token, result)
+  def handle_cast({:report, token, generation, epoch, result}, state) do
+    new_state = apply_attempt_report(state, token, generation, epoch, result)
+    write_ets_state(new_state)
+    {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_cast({:release, token, generation, epoch}, state) do
+    new_state = apply_attempt_release(state, token, generation, epoch)
+    write_ets_state(new_state)
+    {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_cast({:abandon_unclaimed, token, generation, epoch, caller_pid}, state) do
+    new_state = abandon_unclaimed_attempt(state, token, generation, epoch, caller_pid)
     write_ets_state(new_state)
     {:noreply, new_state}
   end
@@ -952,14 +1055,15 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     }
   end
 
-  defp persist_exceptional_lease(state, token, owner_pid) do
+  defp persist_exceptional_lease(state, token, owner_pid, deadline_us) do
     breaker_id = {state.instance_id, state.transport}
 
     lease = %{
       token: token,
       owner_pid: owner_pid,
       generation: state.transition_generation,
-      epoch: state.process_epoch
+      epoch: state.process_epoch,
+      claimed?: false
     }
 
     if :ets.insert_new(Storage.lease_table(), {breaker_id, lease}) do
@@ -972,7 +1076,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         epoch: state.process_epoch,
         owner_pid: owner_pid,
         owner_monitor: owner_monitor,
-        claimed?: true
+        claimed?: false
       }
 
       new_state = %{
@@ -987,7 +1091,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         generation: state.transition_generation,
         epoch: state.process_epoch,
         owner_pid: self(),
-        token: token
+        token: token,
+        deadline_us: deadline_us
       }
 
       {:ok, receipt, new_state}
@@ -1022,17 +1127,53 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     end
   end
 
+  defp delete_unclaimed_lease(receipt, caller_pid) do
+    case :ets.lookup(Storage.lease_table(), receipt.breaker_id) do
+      [
+        {breaker_id,
+         %{
+           token: token,
+           owner_pid: ^caller_pid,
+           generation: generation,
+           epoch: epoch,
+           claimed?: false
+         } = lease}
+      ]
+      when breaker_id == receipt.breaker_id and token == receipt.token and
+             generation == receipt.generation and epoch == receipt.epoch ->
+        :ets.select_delete(Storage.lease_table(), [{{breaker_id, lease}, [], [true]}])
+
+      _ ->
+        0
+    end
+  rescue
+    ArgumentError -> 0
+  end
+
   defp persist_claimed_owner(breaker_id, token, lifecycle_pid) do
     case :ets.lookup(Storage.lease_table(), breaker_id) do
       [{^breaker_id, %{token: ^token} = lease}] ->
-        :ets.insert(Storage.lease_table(), {breaker_id, %{lease | owner_pid: lifecycle_pid}})
+        :ets.insert(
+          Storage.lease_table(),
+          {breaker_id, lease |> Map.put(:owner_pid, lifecycle_pid) |> Map.put(:claimed?, true)}
+        )
 
       _ ->
         :ok
     end
   end
 
-  defp apply_attempt_report(state, token, result) do
+  defp apply_attempt_report(state, token, result),
+    do:
+      apply_attempt_report(state, token, state.transition_generation, state.process_epoch, result)
+
+  defp apply_attempt_report(state, token, generation, epoch, result) do
+    if generation == state.transition_generation and epoch == state.process_epoch,
+      do: do_apply_attempt_report(state, token, result),
+      else: state
+  end
+
+  defp do_apply_attempt_report(state, token, result) do
     case take_attempt(state, token) do
       {:ok, attempt, state_without_attempt} ->
         cond do
@@ -1068,6 +1209,28 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         release_half_open_attempt(state_without_attempt, attempt)
 
       :error ->
+        state
+    end
+  end
+
+  defp apply_attempt_release(state, token, generation, epoch) do
+    if generation == state.transition_generation and epoch == state.process_epoch,
+      do: apply_attempt_release(state, token),
+      else: state
+  end
+
+  defp abandon_unclaimed_attempt(state, token, generation, epoch, caller_pid) do
+    case Map.fetch(state.inflight_attempts, token) do
+      {:ok,
+       %{
+         transition_generation: ^generation,
+         epoch: ^epoch,
+         owner_pid: ^caller_pid,
+         claimed?: false
+       }} ->
+        apply_attempt_release(state, token)
+
+      _ ->
         state
     end
   end
@@ -1133,7 +1296,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     case :ets.lookup(Storage.lease_table(), breaker_id) do
       [
         {^breaker_id,
-         %{
+         lease = %{
            token: token,
            owner_pid: owner_pid,
            generation: generation,
@@ -1152,7 +1315,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             epoch: epoch,
             owner_pid: owner_pid,
             owner_monitor: owner_monitor,
-            claimed?: true
+            claimed?: Map.get(lease, :claimed?, false)
           }
 
           %{
@@ -1183,14 +1346,25 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     end
   end
 
+  defp restore_recovery_timer(%{state: :open, recovery_deadline_ms: deadline_ms} = state)
+       when is_integer(deadline_ms) do
+    generation = state.recovery_timer_gen + 1
+    remaining_ms = max(deadline_ms - System.monotonic_time(:millisecond), 0)
+
+    %{
+      state
+      | recovery_timer_gen: generation,
+        recovery_timer_ref: schedule_recovery_timer(remaining_ms, generation)
+    }
+  end
+
+  defp restore_recovery_timer(state), do: state
+
   defp ensure_control_ring_generation(state) do
     breaker_id = {state.instance_id, state.transport}
 
     case :ets.lookup(Storage.control_meta_table(), breaker_id) do
-      [
-        {^breaker_id, generation, epoch, owner_pid, _capacity, _head, _tail, _wakeup,
-         _diagnostics, _ring_ref}
-      ]
+      [{^breaker_id, generation, epoch, owner_pid, _capacity, _wakeup, _diagnostics, _ring_ref}]
       when generation == state.transition_generation and epoch == state.process_epoch and
              owner_pid == self() ->
         :ok

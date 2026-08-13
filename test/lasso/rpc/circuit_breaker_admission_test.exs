@@ -1,7 +1,7 @@
 defmodule Lasso.RPC.CircuitBreakerAdmissionTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.{AttemptLifecycle, CircuitBreaker}
   alias Lasso.Core.Support.CircuitBreaker.{Admission, AdmissionReceipt, Snapshot, Storage}
 
   setup do
@@ -94,6 +94,27 @@ defmodule Lasso.RPC.CircuitBreakerAdmissionTest do
 
     assert {:error, :admission_timeout} =
              run_after_admission(id, now_us - 1, fn -> flunk("transport ran after deadline") end)
+  end
+
+  test "a closed receipt cannot dispatch after its captured deadline", %{id: id} do
+    deadline_us = System.monotonic_time(:microsecond) + 1_000
+    assert {:ok, receipt} = Admission.check(id, deadline_us)
+    Process.sleep(2)
+    test_pid = self()
+
+    assert {:__attempt_lifecycle_rejected__, :timeout} =
+             AttemptLifecycle.run(
+               self(),
+               receipt,
+               fn -> send(test_pid, :transport_ran) end,
+               100,
+               nil,
+               nil,
+               :immediate,
+               deadline_us
+             )
+
+    refute_receive :transport_ran, 20
   end
 
   defp run_after_admission(id, deadline_us, fun) do

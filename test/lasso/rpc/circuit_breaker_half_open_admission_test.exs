@@ -72,8 +72,10 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     assert :sys.get_state(restarted_pid).inflight_count == 1
 
     CircuitBreaker.report_half_open(old_receipt, :ok)
-    assert %{state: :half_open, inflight_count: 0} = :sys.get_state(restarted_pid)
-    assert [] = :ets.lookup(Storage.lease_table(), id)
+    CircuitBreaker.release_half_open(old_receipt)
+    assert %{state: :half_open, inflight_count: 1} = :sys.get_state(restarted_pid)
+    assert [{^id, %{token: old_token}}] = :ets.lookup(Storage.lease_table(), id)
+    assert old_token == old_receipt.token
   end
 
   test "a live registered owner is not reclaimed by elapsed wall time" do
@@ -137,6 +139,60 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     assert {:error, :circuit_open} = CircuitBreaker.admit(id, deadline_us())
   end
 
+  test "restart schedules proactive recovery at the preserved open deadline" do
+    id = {"open-timer-#{System.unique_integer([:positive])}", :http}
+    {:ok, pid} = CircuitBreaker.start_link({id, %{recovery_timeout: 20}})
+    CircuitBreaker.open(id)
+    await_snapshot_state(id, :open)
+    :ok = GenServer.stop(pid)
+    {:ok, restarted_pid} = CircuitBreaker.start_link({id, %{recovery_timeout: 20}})
+
+    on_exit(fn ->
+      if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
+      :ets.delete(Storage.snapshot_table(), id)
+      :ets.delete(Storage.lease_table(), id)
+      ControlRing.delete(id)
+    end)
+
+    await_snapshot_state(id, :half_open)
+  end
+
+  test "exceptional claim is bounded by the receipt deadline and cleanup is ordered" do
+    {id, breaker_pid} = start_half_open_breaker()
+    assert {:ok, receipt} = CircuitBreaker.admit(id, System.monotonic_time(:microsecond) + 25_000)
+    :sys.suspend(breaker_pid)
+    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    started_us = System.monotonic_time(:microsecond)
+
+    assert {:__attempt_lifecycle_rejected__, :timeout} =
+             Lasso.Core.Support.AttemptLifecycle.run(
+               self(),
+               receipt,
+               fn -> flunk("transport ran without claim") end,
+               1_000,
+               nil,
+               nil,
+               :immediate,
+               receipt.deadline_us
+             )
+
+    assert System.monotonic_time(:microsecond) - started_us < 100_000
+    :sys.resume(breaker_pid)
+    await_no_lease(id)
+  end
+
+  test "an unclaimed lease abandoned during restart is not recovered" do
+    {id, breaker_pid} = start_half_open_breaker()
+    assert {:ok, receipt} = CircuitBreaker.admit(id, deadline_us())
+    :ok = GenServer.stop(breaker_pid)
+    CircuitBreaker.abandon_unclaimed(receipt, self())
+    assert [] = :ets.lookup(Storage.lease_table(), id)
+
+    {:ok, restarted_pid} = CircuitBreaker.start_link({id, %{success_threshold: 1}})
+    on_exit(fn -> if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid) end)
+    assert %{inflight_count: 0} = :sys.get_state(restarted_pid)
+  end
+
   defp await_lease_owner(id, excluded_pid, attempts \\ 100)
   defp await_lease_owner(_id, _excluded_pid, 0), do: flunk("lease ownership was not transferred")
 
@@ -162,6 +218,20 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
       _ ->
         Process.sleep(5)
         await_snapshot_state(id, state, attempts - 1)
+    end
+  end
+
+  defp await_no_lease(id, attempts \\ 100)
+  defp await_no_lease(_id, 0), do: flunk("lease was not released")
+
+  defp await_no_lease(id, attempts) do
+    case :ets.lookup(Storage.lease_table(), id) do
+      [] ->
+        :ok
+
+      _ ->
+        Process.sleep(5)
+        await_no_lease(id, attempts - 1)
     end
   end
 

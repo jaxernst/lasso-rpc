@@ -251,14 +251,21 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
 
     case claim_receipt(context.receipt, context.caller_pid) do
       :ok ->
-        if Process.alive?(context.caller_pid) do
+        if Process.alive?(context.caller_pid) and
+             System.monotonic_time(:microsecond) < context.deadline_us do
           start_attempt(Map.put(context, :caller_monitor, caller_monitor))
         else
           release_receipt(context.receipt)
+
+          send(context.caller_pid, {
+            context.lifecycle_ref,
+            {:__attempt_lifecycle_rejected__, :timeout}
+          })
         end
 
       {:error, reason} ->
         Process.demonitor(caller_monitor, [:flush])
+        abandon_unclaimed_receipt(context.receipt, context.caller_pid)
 
         send(context.caller_pid, {
           context.lifecycle_ref,
@@ -354,9 +361,7 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
         handle_task_death(state, reason)
 
       {:attempt_caller_timeout, lifecycle_ref} when lifecycle_ref == state.lifecycle_ref ->
-        if is_nil(state.pending_terminal),
-          do: handle_interruption(state, :timeout),
-          else: loop(state)
+        loop(state)
     after
       remaining_timeout(state) ->
         handle_interruption(state, :timeout)
@@ -485,11 +490,14 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   end
 
   defp handle_interruption(%{phase: {:dispatching, _}} = state, terminal) do
-    loop(%{
+    loop(
       state
-      | pending_terminal: terminal,
-        settle_deadline_us: System.monotonic_time(:microsecond) + @dispatch_settle_timeout * 1_000
-    })
+      |> Map.put(:pending_terminal, terminal)
+      |> Map.put(
+        :settle_deadline_us,
+        System.monotonic_time(:microsecond) + @dispatch_settle_timeout * 1_000
+      )
+    )
   end
 
   defp handle_interruption(%{phase: :predispatch} = state, :caller_down) do
@@ -668,13 +676,11 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     max(System.monotonic_time(:microsecond) - dispatched_at_us, 0) / 1000
   end
 
-  defp remaining_timeout(%{pending_terminal: nil, deadline_us: deadline_us}) do
-    remaining_ms(deadline_us, 0)
-  end
-
-  defp remaining_timeout(%{settle_deadline_us: settle_deadline_us})
-       when is_integer(settle_deadline_us) do
-    remaining_ms(settle_deadline_us, 1)
+  defp remaining_timeout(state) do
+    case Map.fetch(state, :settle_deadline_us) do
+      {:ok, settle_deadline_us} -> remaining_ms(settle_deadline_us, 1)
+      :error -> remaining_ms(state.deadline_us, 0)
+    end
   end
 
   defp remaining_ms(deadline_us, minimum) do
@@ -687,10 +693,10 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   defp claim_receipt(%AdmissionReceipt{kind: :closed}, _caller_pid), do: :ok
 
   defp claim_receipt(
-         %AdmissionReceipt{kind: :half_open, breaker_id: id, token: token},
+         %AdmissionReceipt{kind: :half_open, breaker_id: id, token: token} = receipt,
          caller_pid
        ) do
-    CircuitBreaker.claim_attempt(id, token, caller_pid)
+    CircuitBreaker.claim_attempt(id, token, caller_pid, receipt)
   end
 
   defp claim_receipt(%AdmissionReceipt{kind: :legacy, breaker_id: id, token: token}, caller_pid) do
@@ -718,6 +724,12 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   defp release_receipt(%AdmissionReceipt{kind: :legacy, breaker_id: id, token: token}) do
     CircuitBreaker.release_attempt(id, token)
   end
+
+  defp abandon_unclaimed_receipt(%AdmissionReceipt{kind: :half_open} = receipt, caller_pid) do
+    CircuitBreaker.abandon_unclaimed(receipt, caller_pid)
+  end
+
+  defp abandon_unclaimed_receipt(_receipt, _caller_pid), do: :ok
 
   defp legacy_receipt(breaker_id, token) do
     %AdmissionReceipt{

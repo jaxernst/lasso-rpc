@@ -30,10 +30,6 @@ defmodule Lasso.Core.Support.CircuitBreaker.Admission do
   defp classify(%Snapshot{ready?: false}, _deadline_us, _now_us),
     do: {:error, :admission_unavailable}
 
-  defp classify(%Snapshot{owner_pid: owner_pid}, _deadline_us, _now_us)
-       when not is_pid(owner_pid),
-       do: {:error, :admission_unavailable}
-
   defp classify(%Snapshot{owner_pid: owner_pid} = snapshot, deadline_us, now_us) do
     if Process.alive?(owner_pid),
       do: classify_live(snapshot, deadline_us, now_us),
@@ -54,7 +50,8 @@ defmodule Lasso.Core.Support.CircuitBreaker.Admission do
          kind: :closed,
          generation: snapshot.generation,
          epoch: snapshot.epoch,
-         owner_pid: snapshot.owner_pid
+         owner_pid: snapshot.owner_pid,
+         deadline_us: deadline_us
        }}
     end
   end

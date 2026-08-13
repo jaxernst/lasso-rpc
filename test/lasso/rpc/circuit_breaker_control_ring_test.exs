@@ -98,21 +98,21 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     {id, breaker_pid} = start_breaker(control_ring_capacity: 2)
     {:ok, receipt} = Admission.check(id, deadline_us())
 
-    [{^id, _, _, _, 2, _head, old_tail, _wakeup, _diagnostics, old_ring_ref}] =
+    [{^id, _, _, _, 2, _wakeup, _diagnostics, old_ring_ref}] =
       :ets.lookup(Storage.control_meta_table(), id)
 
     ControlRing.initialize(id, receipt.generation + 1, receipt.epoch + 1, breaker_pid,
       capacity: 2
     )
 
-    old_ticket = :atomics.add_get(old_tail, 1, 1) - 1
-    key = {id, rem(old_ticket, 2)}
+    old_sequence = System.unique_integer([:positive, :monotonic])
+    key = {id, rem(old_sequence, 2)}
 
     match_spec = [
       {{key, {old_ring_ref, :empty}}, [],
        [
          {:const,
-          {key, {old_ring_ref, {old_ticket, receipt.generation, receipt.epoch, :success}}}}
+          {key, {old_ring_ref, {old_sequence, receipt.generation, receipt.epoch, :success}}}}
        ]}
     ]
 
