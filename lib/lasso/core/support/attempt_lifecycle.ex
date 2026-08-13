@@ -124,9 +124,10 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
       {:DOWN, ^monitor_ref, :process, ^lifecycle_pid, reason} ->
         {:exception, {:exit, reason, []}}
     after
-      timeout + 5_000 ->
-        Process.exit(lifecycle_pid, :kill)
-        {:exception, {:exit, :attempt_lifecycle_timeout, []}}
+      deadline_wait_ms(deadline_us) ->
+        send(lifecycle_pid, {:attempt_caller_timeout, lifecycle_ref})
+        Process.demonitor(monitor_ref, [:flush])
+        {:__attempt_lifecycle_rejected__, :timeout}
     end
   end
 
@@ -351,6 +352,11 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
 
       {:EXIT, task_pid, reason} when task_pid == state.task_pid ->
         handle_task_death(state, reason)
+
+      {:attempt_caller_timeout, lifecycle_ref} when lifecycle_ref == state.lifecycle_ref ->
+        if is_nil(state.pending_terminal),
+          do: handle_interruption(state, :timeout),
+          else: loop(state)
     after
       remaining_timeout(state) ->
         handle_interruption(state, :timeout)
@@ -482,7 +488,7 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     loop(%{
       state
       | pending_terminal: terminal,
-        deadline_us: System.monotonic_time(:microsecond) + @dispatch_settle_timeout * 1_000
+        settle_deadline_us: System.monotonic_time(:microsecond) + @dispatch_settle_timeout * 1_000
     })
   end
 
@@ -666,8 +672,9 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     remaining_ms(deadline_us, 0)
   end
 
-  defp remaining_timeout(%{deadline_us: deadline_us}) do
-    remaining_ms(deadline_us, 1)
+  defp remaining_timeout(%{settle_deadline_us: settle_deadline_us})
+       when is_integer(settle_deadline_us) do
+    remaining_ms(settle_deadline_us, 1)
   end
 
   defp remaining_ms(deadline_us, minimum) do
@@ -675,9 +682,16 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     max(div(remaining_us + 999, 1_000), minimum)
   end
 
+  defp deadline_wait_ms(deadline_us), do: remaining_ms(deadline_us, 0)
+
   defp claim_receipt(%AdmissionReceipt{kind: :closed}, _caller_pid), do: :ok
 
-  defp claim_receipt(%AdmissionReceipt{kind: :half_open}, _caller_pid), do: :ok
+  defp claim_receipt(
+         %AdmissionReceipt{kind: :half_open, breaker_id: id, token: token},
+         caller_pid
+       ) do
+    CircuitBreaker.claim_attempt(id, token, caller_pid)
+  end
 
   defp claim_receipt(%AdmissionReceipt{kind: :legacy, breaker_id: id, token: token}, caller_pid) do
     CircuitBreaker.claim_attempt(id, token, caller_pid)

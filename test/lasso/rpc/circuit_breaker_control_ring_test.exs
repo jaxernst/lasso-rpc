@@ -65,10 +65,59 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     retained =
       Storage.control_table()
       |> :ets.tab2list()
-      |> Enum.filter(fn {{breaker_id, _index}, value} -> breaker_id == id and value != :empty end)
+      |> Enum.filter(fn
+        {{breaker_id, _index}, {_ring_ref, {_ticket, _generation, _epoch, _signal}}} ->
+          breaker_id == id
+
+        _ ->
+          false
+      end)
 
     assert byte_size(:erlang.term_to_binary(retained)) < 512
     refute inspect(retained) =~ "sensitive-body"
+  end
+
+  test "the ring drains accepted outcomes in linearized producer order" do
+    {id, breaker_pid} = start_breaker(control_ring_capacity: 4)
+    {:ok, receipt} = Admission.check(id, deadline_us())
+    :sys.suspend(breaker_pid)
+    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+
+    assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
+    assert :ok = CircuitBreaker.report_closed(receipt, :ok)
+    assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
+
+    assert [
+             {:failure, :timeout, true},
+             :success,
+             {:failure, :timeout, true}
+           ] = ControlRing.drain(id, 4, receipt.generation, receipt.epoch)
+  end
+
+  test "an old ring reference cannot write into replacement slots" do
+    {id, breaker_pid} = start_breaker(control_ring_capacity: 2)
+    {:ok, receipt} = Admission.check(id, deadline_us())
+
+    [{^id, _, _, _, 2, _head, old_tail, _wakeup, _diagnostics, old_ring_ref}] =
+      :ets.lookup(Storage.control_meta_table(), id)
+
+    ControlRing.initialize(id, receipt.generation + 1, receipt.epoch + 1, breaker_pid,
+      capacity: 2
+    )
+
+    old_ticket = :atomics.add_get(old_tail, 1, 1) - 1
+    key = {id, rem(old_ticket, 2)}
+
+    match_spec = [
+      {{key, {old_ring_ref, :empty}}, [],
+       [
+         {:const,
+          {key, {old_ring_ref, {old_ticket, receipt.generation, receipt.epoch, :success}}}}
+       ]}
+    ]
+
+    assert 0 = :ets.select_replace(Storage.control_table(), match_spec)
+    assert [] = ControlRing.drain(id, 2, receipt.generation, receipt.epoch)
   end
 
   defp start_breaker(config) do

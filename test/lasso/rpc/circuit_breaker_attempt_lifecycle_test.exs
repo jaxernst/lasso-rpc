@@ -373,8 +373,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     id = start_half_open_breaker()
     test_pid = self()
 
-    assert {:executed,
-            {:error, %JError{category: :local_capacity_rejection, breaker_penalty?: false}, 25}} =
+    assert {:rejected, :admission_timeout} =
              CircuitBreaker.call(id, fn -> Process.sleep(:infinity) end, 25,
                dispatch: :deferred,
                on_terminal: fn result, elapsed_ms ->
@@ -675,7 +674,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     id = start_half_open_breaker()
     test_pid = self()
 
-    assert {:executed, {:error, %JError{category: :local_capacity_rejection}, 25}} =
+    assert {:rejected, :admission_timeout} =
              CircuitBreaker.call(
                id,
                fn ->
@@ -693,7 +692,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     refute_receive {:terminal, _, _}, 100
   end
 
-  test "late confirmation after caller death is rejected" do
+  test "caller death stops an authorized but unconfirmed transport" do
     id = start_half_open_breaker()
     test_pid = self()
 
@@ -723,15 +722,15 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     assert_receive {:authorized_for_late_confirm, _context, worker_pid}, 1_000
     Process.exit(caller_pid, :kill)
     send(worker_pid, :confirm)
-    assert_receive {:late_confirmation, {:error, :cancelled}}, 1_000
+    refute_receive {:late_confirmation, _}, 100
     refute_receive {:terminal, _, _}, 100
   end
 
-  test "confirmation after deadline returns a predispatch timeout to a live caller" do
+  test "deadline stops an authorized but unconfirmed transport" do
     id = start_half_open_breaker()
     test_pid = self()
 
-    assert {:executed, {:error, %JError{category: :local_capacity_rejection}, 25}} =
+    assert {:rejected, :admission_timeout} =
              CircuitBreaker.call(
                id,
                fn ->
@@ -749,7 +748,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
                end
              )
 
-    assert_receive {:late_deadline_confirmation, {:error, :cancelled}}, 1_000
+    refute_receive {:late_deadline_confirmation, _}, 100
     refute_receive {:terminal, _, _}, 100
 
     breaker_pid = GenServer.whereis(CircuitBreaker.via_name(id))

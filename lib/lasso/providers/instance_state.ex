@@ -7,7 +7,7 @@ defmodule Lasso.Providers.InstanceState do
   functions with consistent default shapes and `ArgumentError` guards.
   """
 
-  alias Lasso.Core.Support.CircuitBreaker.Snapshot
+  alias Lasso.Core.Support.CircuitBreaker.{ControlRing, Snapshot, Storage}
 
   @default_probe %{
     status: nil,
@@ -217,6 +217,21 @@ defmodule Lasso.Providers.InstanceState do
         ArgumentError -> :ok
       end
     end)
+
+    Enum.each([:http, :ws], fn transport ->
+      breaker_id = {instance_id, transport}
+      clear_breaker_table(Storage.snapshot_table(), breaker_id)
+      clear_breaker_table(Storage.lease_table(), breaker_id)
+      ControlRing.delete(breaker_id)
+    end)
+
+    :ok
+  end
+
+  defp clear_breaker_table(table, breaker_id) do
+    :ets.delete(table, breaker_id)
+  rescue
+    ArgumentError -> :ok
   end
 
   defp safe_lookup(key) do

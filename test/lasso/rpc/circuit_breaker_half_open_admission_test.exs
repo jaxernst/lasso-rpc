@@ -2,7 +2,7 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.Core.Support.CircuitBreaker.{AdmissionReceipt, Snapshot, Storage}
+  alias Lasso.Core.Support.CircuitBreaker.{AdmissionReceipt, ControlRing, Snapshot, Storage}
 
   test "concurrent recovery candidates produce one bounded lease" do
     {id, breaker_pid} = start_half_open_breaker()
@@ -86,6 +86,83 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     assert %{inflight_count: 1} = :sys.get_state(breaker_pid)
     assert [{^id, %{token: token}}] = :ets.lookup(Storage.lease_table(), id)
     assert token == receipt.token
+  end
+
+  test "the attempt lifecycle owns and releases the half-open lease when it dies" do
+    {id, breaker_pid} = start_half_open_breaker()
+    parent = self()
+
+    caller =
+      spawn(fn ->
+        result = CircuitBreaker.call(id, fn -> Process.sleep(:infinity) end, 5_000)
+        send(parent, {:call_result, result})
+        receive do: (:stop -> :ok)
+      end)
+
+    lifecycle_pid = await_lease_owner(id, caller)
+    assert Process.alive?(caller)
+    Process.exit(lifecycle_pid, :kill)
+
+    assert_receive {:call_result, {:executed, {:exception, {:exit, :killed, []}}}}, 1_000
+    assert Process.alive?(caller)
+    assert %{inflight_count: 0, inflight_attempts: %{}} = :sys.get_state(breaker_pid)
+    assert [] = :ets.lookup(Storage.lease_table(), id)
+    send(caller, :stop)
+  end
+
+  test "restart preserves an unexpired open recovery deadline" do
+    id = {"open-restart-#{System.unique_integer([:positive])}", :http}
+    {:ok, pid} = CircuitBreaker.start_link({id, %{recovery_timeout: 60_000}})
+    CircuitBreaker.open(id)
+    await_snapshot_state(id, :open)
+
+    assert {:ok, %Snapshot{state: :open, recovery_deadline_us: old_deadline}} =
+             Snapshot.lookup(id)
+
+    :ok = GenServer.stop(pid)
+
+    {:ok, restarted_pid} = CircuitBreaker.start_link({id, %{recovery_timeout: 60_000}})
+
+    on_exit(fn ->
+      if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
+      :ets.delete(Storage.snapshot_table(), id)
+      :ets.delete(Storage.lease_table(), id)
+      ControlRing.delete(id)
+    end)
+
+    assert {:ok, %Snapshot{state: :open, recovery_deadline_us: new_deadline}} =
+             Snapshot.lookup(id)
+
+    assert new_deadline >= old_deadline
+    assert {:error, :circuit_open} = CircuitBreaker.admit(id, deadline_us())
+  end
+
+  defp await_lease_owner(id, excluded_pid, attempts \\ 100)
+  defp await_lease_owner(_id, _excluded_pid, 0), do: flunk("lease ownership was not transferred")
+
+  defp await_lease_owner(id, excluded_pid, attempts) do
+    case :ets.lookup(Storage.lease_table(), id) do
+      [{^id, %{owner_pid: owner_pid}}] when owner_pid != excluded_pid ->
+        owner_pid
+
+      _ ->
+        Process.sleep(5)
+        await_lease_owner(id, excluded_pid, attempts - 1)
+    end
+  end
+
+  defp await_snapshot_state(id, state, attempts \\ 100)
+  defp await_snapshot_state(_id, _state, 0), do: flunk("snapshot did not transition")
+
+  defp await_snapshot_state(id, state, attempts) do
+    case Snapshot.lookup(id) do
+      {:ok, %Snapshot{state: ^state}} ->
+        :ok
+
+      _ ->
+        Process.sleep(5)
+        await_snapshot_state(id, state, attempts - 1)
+    end
   end
 
   defp start_half_open_breaker do

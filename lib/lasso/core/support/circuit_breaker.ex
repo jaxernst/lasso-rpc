@@ -237,7 +237,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @doc false
-  @spec claim_attempt(breaker_id(), reference(), pid()) ::
+  @spec claim_attempt(breaker_id(), binary() | reference(), pid()) ::
           :ok | {:error, :not_found | :token_not_found | :owner_mismatch | :timeout}
   def claim_attempt(id, token, caller_pid) do
     GenServer.call(via_name(id), {:claim_attempt, token, caller_pid}, @attempt_state_timeout)
@@ -491,16 +491,22 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
     previous_control? = :ets.member(Storage.control_meta_table(), {instance_id, transport})
 
-    {initial_state, transition_generation, control_health} =
+    now_us = System.monotonic_time(:microsecond)
+
+    {initial_state, transition_generation, control_health, recovery_deadline_ms} =
       case {previous_snapshot, previous_control?} do
         {nil, false} ->
-          {:closed, 1, :healthy}
+          {:closed, 1, :healthy, nil}
 
         {nil, true} ->
-          {:half_open, 1, :degraded}
+          {:half_open, 1, :degraded, nil}
+
+        {%Snapshot{state: :open, recovery_deadline_us: deadline_us, generation: generation}, _}
+        when is_integer(deadline_us) and deadline_us > now_us ->
+          {:open, generation + 1, :degraded, div(deadline_us + 999, 1_000)}
 
         {%Snapshot{generation: generation}, _control?} ->
-          {:half_open, generation + 1, :degraded}
+          {:half_open, generation + 1, :degraded, nil}
       end
 
     state = %__MODULE__{
@@ -523,7 +529,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       process_epoch: System.unique_integer([:positive, :monotonic]),
       ready?: true,
       control_health: control_health,
-      control_ring_capacity: Map.get(config, :control_ring_capacity, 64),
+      control_ring_capacity: ControlRing.capacity(Map.get(config, :control_ring_capacity, 64)),
+      recovery_deadline_ms: recovery_deadline_ms,
       shared_mode: Map.get(config, :shared_mode, false),
       inflight_attempts: %{}
     }
@@ -636,6 +643,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         }
 
         attempts = Map.put(state.inflight_attempts, token, claimed_attempt)
+        persist_claimed_owner({state.instance_id, state.transport}, token, lifecycle_pid)
 
         {:reply, :ok, %{state | inflight_attempts: attempts}}
 
@@ -1014,6 +1022,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     end
   end
 
+  defp persist_claimed_owner(breaker_id, token, lifecycle_pid) do
+    case :ets.lookup(Storage.lease_table(), breaker_id) do
+      [{^breaker_id, %{token: ^token} = lease}] ->
+        :ets.insert(Storage.lease_table(), {breaker_id, %{lease | owner_pid: lifecycle_pid}})
+
+      _ ->
+        :ok
+    end
+  end
+
   defp apply_attempt_report(state, token, result) do
     case take_attempt(state, token) do
       {:ok, attempt, state_without_attempt} ->
@@ -1169,7 +1187,10 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     breaker_id = {state.instance_id, state.transport}
 
     case :ets.lookup(Storage.control_meta_table(), breaker_id) do
-      [{^breaker_id, generation, epoch, owner_pid, _capacity, _wakeup, _diagnostics}]
+      [
+        {^breaker_id, generation, epoch, owner_pid, _capacity, _head, _tail, _wakeup,
+         _diagnostics, _ring_ref}
+      ]
       when generation == state.transition_generation and epoch == state.process_epoch and
              owner_pid == self() ->
         :ok

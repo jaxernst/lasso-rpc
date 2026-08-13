@@ -87,6 +87,15 @@ defmodule Lasso.RPC.CircuitBreakerAdmissionTest do
     assert {:error, :admission_timeout} = Admission.check(id, now_us + 1, now_us + 1)
   end
 
+  test "an expired closed snapshot never authorizes transport", %{id: id} do
+    now_us = System.monotonic_time(:microsecond)
+
+    assert {:error, :admission_timeout} = Admission.check(id, now_us, now_us)
+
+    assert {:error, :admission_timeout} =
+             run_after_admission(id, now_us - 1, fn -> flunk("transport ran after deadline") end)
+  end
+
   defp run_after_admission(id, deadline_us, fun) do
     case Admission.check(id, deadline_us) do
       {:ok, _receipt} -> {:transport_ran, fun.()}
