@@ -66,7 +66,7 @@ defmodule Lasso.RPC.RequestPipeline do
   - `provider_override` - Force specific provider (optional)
   - `transport` - Transport preference (:http, :ws, :both)
   - `failover_on_override` - Retry on other providers if override fails
-  - `timeout_ms` - Per-attempt timeout in milliseconds
+  - `timeout_ms` - Total request-envelope timeout in milliseconds
   - `request_id` - Request tracing ID (optional)
   - `request_context` - Pre-created RequestContext (optional)
 

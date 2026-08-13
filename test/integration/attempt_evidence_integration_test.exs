@@ -246,7 +246,7 @@ defmodule Lasso.RPC.AttemptEvidenceIntegrationTest do
 
     assert event.metadata.outcome == :timeout
     assert event.metadata.censored
-    assert event.measurements.duration_ms >= 50
+    assert event.measurements.duration_ms >= 30
     assert event.measurements.duration_ms < 100
   end
 

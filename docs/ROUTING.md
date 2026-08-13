@@ -184,7 +184,7 @@ After tiering, Lasso attempts providers sequentially until success or all provid
 
 **Failure**: Provider is skipped and the next provider in the list is tried. Failures increment circuit breaker counters.
 
-**All Exhausted**: Returns `503 Service Unavailable` with details about which providers were tried and why they failed.
+**All Exhausted**: Returns HTTP `200 OK` with a standard JSON-RPC error response. The error uses code `-32000`, preserves the client's request ID, and does not expose internal provider-attempt details.
 
 See [API_REFERENCE.md](API_REFERENCE.md#error-responses) for error format details.
 

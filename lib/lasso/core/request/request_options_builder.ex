@@ -72,7 +72,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   - `:provider_override` / `:provider_id` - Force specific provider
   - `:transport` - Transport preference (:http, :ws, :both)
   - `:failover_on_override` - Retry on other providers if override fails (default: false)
-  - `:timeout_ms` - Per-attempt timeout (default: method-specific)
+  - `:timeout_ms` - Total request-envelope timeout (default: method-specific)
   - `:request_id` - Request tracing ID
   - `:request_context` - RequestContext for observability
 
