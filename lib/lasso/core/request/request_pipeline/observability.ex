@@ -372,8 +372,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
     )
   end
 
-  defp report_success_to_ets(nil, _transport), do: :ok
-
   defp report_success_to_ets(instance_id, transport) do
     now = System.system_time(:millisecond)
 
@@ -396,8 +394,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     :ets.insert(:lasso_instance_state, {{:health_routing, instance_id}, merged})
   end
-
-  defp report_failure_to_ets(nil, _transport, _jerr, _profile, _chain_id, _provider_id), do: :ok
 
   defp report_failure_to_ets(instance_id, transport, jerr, profile, chain_id, provider_id) do
     cond do
