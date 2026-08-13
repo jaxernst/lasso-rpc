@@ -80,6 +80,72 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     refute_receive :attempt_dispatched, 100
   end
 
+  test "dispatch receipt survives lifecycle death after deferred confirmation" do
+    id = start_half_open_breaker()
+    test_pid = self()
+
+    result =
+      CircuitBreaker.call(
+        id,
+        fn ->
+          :ok = AttemptLifecycle.mark_dispatched(AttemptLifecycle.dispatch_context())
+          Process.sleep(:infinity)
+        end,
+        1_000,
+        dispatch: :deferred,
+        on_dispatch: fn dispatched_at_us ->
+          send(test_pid, {:dispatch_receipt, dispatched_at_us})
+          Process.exit(self(), :kill)
+        end
+      )
+
+    assert_receive {:dispatch_receipt, dispatched_at_us}, 1_000
+    assert is_integer(dispatched_at_us)
+    assert {:executed, {:exception, {:exit, :killed, []}}} = result
+  end
+
+  test "repeated deferred confirmation emits one dispatch receipt" do
+    id = start_half_open_breaker()
+    test_pid = self()
+
+    assert {:executed, :ok} =
+             CircuitBreaker.call(
+               id,
+               fn ->
+                 context = AttemptLifecycle.dispatch_context()
+                 :ok = AttemptLifecycle.mark_dispatched(context)
+                 :ok = AttemptLifecycle.confirm_dispatched(context)
+               end,
+               1_000,
+               dispatch: :deferred,
+               on_dispatch: fn dispatched_at_us ->
+                 send(test_pid, {:dispatch_receipt, dispatched_at_us})
+               end
+             )
+
+    assert_receive {:dispatch_receipt, _dispatched_at_us}, 1_000
+    refute_receive {:dispatch_receipt, _dispatched_at_us}, 100
+  end
+
+  test "immediate dispatch receipt is emitted before the worker becomes runnable" do
+    id = start_half_open_breaker()
+    test_pid = self()
+
+    assert {:executed, :ok} =
+             CircuitBreaker.call(
+               id,
+               fn ->
+                 send(test_pid, :worker_ran)
+                 :ok
+               end,
+               1_000,
+               on_dispatch: fn _dispatched_at_us -> send(test_pid, :dispatch_receipt) end
+             )
+
+    assert_receive :dispatch_receipt, 1_000
+    assert_receive :worker_ran, 1_000
+  end
+
   test "a completed operation wins over caller death" do
     id = start_half_open_breaker()
     test_pid = self()

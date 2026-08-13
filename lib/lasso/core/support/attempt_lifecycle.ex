@@ -10,6 +10,7 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   @dispatch_settle_timeout 1_000
 
   @type terminal_callback :: CircuitBreaker.terminal_callback() | nil
+  @type dispatch_callback :: (integer() -> term()) | nil
   @type dispatch_context :: {pid(), reference()}
 
   @spec run(
@@ -18,7 +19,20 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
           reference(),
           (-> term()),
           non_neg_integer(),
+          terminal_callback()
+        ) :: term()
+  def run(caller_pid, breaker_id, token, fun, timeout, terminal_callback) do
+    run(caller_pid, breaker_id, token, fun, timeout, terminal_callback, nil, :immediate)
+  end
+
+  @spec run(
+          pid(),
+          CircuitBreaker.breaker_id(),
+          reference(),
+          (-> term()),
+          non_neg_integer(),
           terminal_callback(),
+          dispatch_callback(),
           :immediate | :deferred
         ) :: term()
   def run(
@@ -28,22 +42,24 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
         fun,
         timeout,
         terminal_callback,
+        dispatch_callback,
         dispatch_mode \\ :immediate
       ) do
     lifecycle_ref = make_ref()
 
     {lifecycle_pid, monitor_ref} =
       spawn_monitor(fn ->
-        execute(
-          caller_pid,
-          lifecycle_ref,
-          breaker_id,
-          token,
-          fun,
-          timeout,
-          terminal_callback,
-          dispatch_mode
-        )
+        execute(%{
+          caller_pid: caller_pid,
+          lifecycle_ref: lifecycle_ref,
+          breaker_id: breaker_id,
+          token: token,
+          fun: fun,
+          timeout: timeout,
+          terminal_callback: terminal_callback,
+          dispatch_callback: dispatch_callback,
+          dispatch_mode: dispatch_mode
+        })
       end)
 
     receive do
@@ -149,40 +165,25 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     with :ok <- authorize_dispatch(context), do: confirm_dispatched(context)
   end
 
-  defp execute(
-         caller_pid,
-         lifecycle_ref,
-         breaker_id,
-         token,
-         fun,
-         timeout,
-         terminal_callback,
-         dispatch_mode
-       ) do
+  defp execute(context) do
     Process.flag(:trap_exit, true)
-    caller_monitor = Process.monitor(caller_pid)
+    caller_monitor = Process.monitor(context.caller_pid)
 
-    case CircuitBreaker.claim_attempt(breaker_id, token, caller_pid) do
+    case CircuitBreaker.claim_attempt(context.breaker_id, context.token, context.caller_pid) do
       :ok ->
-        if Process.alive?(caller_pid) do
-          start_attempt(%{
-            caller_pid: caller_pid,
-            caller_monitor: caller_monitor,
-            lifecycle_ref: lifecycle_ref,
-            breaker_id: breaker_id,
-            token: token,
-            fun: fun,
-            timeout: timeout,
-            terminal_callback: terminal_callback,
-            dispatch_mode: dispatch_mode
-          })
+        if Process.alive?(context.caller_pid) do
+          start_attempt(Map.put(context, :caller_monitor, caller_monitor))
         else
-          CircuitBreaker.release_attempt(breaker_id, token)
+          CircuitBreaker.release_attempt(context.breaker_id, context.token)
         end
 
       {:error, reason} ->
         Process.demonitor(caller_monitor, [:flush])
-        send(caller_pid, {lifecycle_ref, {:__attempt_lifecycle_rejected__, reason}})
+
+        send(context.caller_pid, {
+          context.lifecycle_ref,
+          {:__attempt_lifecycle_rejected__, reason}
+        })
     end
   end
 
@@ -204,12 +205,8 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
         [:link, :monitor]
       )
 
+    phase = initial_phase(context)
     send(task_pid, {:run_attempt, task_ref})
-
-    phase =
-      if context.dispatch_mode == :immediate,
-        do: {:dispatched, System.monotonic_time(:microsecond)},
-        else: :predispatch
 
     loop(
       Map.merge(context, %{
@@ -236,10 +233,12 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
       when dispatch_ref == state.dispatch_ref ->
         case confirmation_rejection(state) do
           nil ->
+            {phase, transition} = confirm_phase(state.phase)
+            maybe_invoke_dispatch_callback(state.dispatch_callback, transition)
             send(requester, {:attempt_dispatch_confirmed, confirmation_ref})
 
             state
-            |> Map.put(:phase, confirm_phase(state.phase))
+            |> Map.put(:phase, phase)
             |> resolve_pending_terminal()
 
           reason ->
@@ -305,11 +304,25 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     end
   end
 
-  defp confirm_phase({:dispatching, _authorized_at_us}),
-    do: {:dispatched, System.monotonic_time(:microsecond)}
+  defp initial_phase(%{dispatch_mode: :immediate} = context) do
+    dispatched_at_us = System.monotonic_time(:microsecond)
+    invoke_dispatch_callback(context.dispatch_callback, dispatched_at_us)
+    {:dispatched, dispatched_at_us}
+  end
 
-  defp confirm_phase({:dispatched, _time} = phase), do: phase
-  defp confirm_phase(:predispatch), do: {:dispatched, System.monotonic_time(:microsecond)}
+  defp initial_phase(_context), do: :predispatch
+
+  defp confirm_phase({:dispatching, _authorized_at_us}) do
+    dispatched_at_us = System.monotonic_time(:microsecond)
+    {{:dispatched, dispatched_at_us}, {:transitioned, dispatched_at_us}}
+  end
+
+  defp confirm_phase({:dispatched, _dispatched_at_us} = phase), do: {phase, :unchanged}
+
+  defp confirm_phase(:predispatch) do
+    dispatched_at_us = System.monotonic_time(:microsecond)
+    {{:dispatched, dispatched_at_us}, {:transitioned, dispatched_at_us}}
+  end
 
   defp confirmation_rejection(%{phase: :aborted}), do: :aborted
 
@@ -509,8 +522,8 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     )
 
     Process.demonitor(state.caller_monitor, [:flush])
-    send(state.caller_pid, {state.lifecycle_ref, result})
     invoke_terminal_callback(state.terminal_callback, result, elapsed_ms)
+    send(state.caller_pid, {state.lifecycle_ref, result})
   end
 
   defp finalize_timeout(state, elapsed_ms) do
@@ -600,4 +613,22 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
 
     :ok
   end
+
+  defp invoke_dispatch_callback(nil, _dispatched_at_us), do: :ok
+
+  defp invoke_dispatch_callback(callback, dispatched_at_us) when is_function(callback, 1) do
+    try do
+      callback.(dispatched_at_us)
+    catch
+      kind, error ->
+        Logger.error("Attempt dispatch callback failed", kind: kind, error: inspect(error))
+    end
+
+    :ok
+  end
+
+  defp maybe_invoke_dispatch_callback(callback, {:transitioned, dispatched_at_us}),
+    do: invoke_dispatch_callback(callback, dispatched_at_us)
+
+  defp maybe_invoke_dispatch_callback(_callback, :unchanged), do: :ok
 end
