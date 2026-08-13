@@ -120,6 +120,34 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     assert [] = ControlRing.drain(id, 2, receipt.generation, receipt.epoch)
   end
 
+  test "saturation wakes the owner to recover a signal whose producer missed notification" do
+    {id, breaker_pid} = start_breaker(control_ring_capacity: 1)
+    {:ok, receipt} = Admission.check(id, deadline_us())
+    :sys.suspend(breaker_pid)
+    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+
+    [{^id, generation, epoch, owner_pid, 1, wakeup, diagnostics, ring_ref}] =
+      :ets.lookup(Storage.control_meta_table(), id)
+
+    sequence = System.unique_integer([:positive, :monotonic])
+    key = {id, 0}
+
+    assert 1 =
+             :ets.select_replace(Storage.control_table(), [
+               {{key, {ring_ref, :empty}}, [],
+                [{:const, {key, {ring_ref, {sequence, generation, epoch, :success}}}}]}
+             ])
+
+    assert %{occupied: 1, wakeup_pending: 0} = ControlRing.stats(id)
+    assert {:error, :saturated} = CircuitBreaker.report_closed(receipt, :ok)
+    assert :atomics.get(wakeup, 1) == 1
+    assert :atomics.get(diagnostics, 1) == 1
+    assert ordinary_wakeup_count(owner_pid, id) == 1
+
+    :sys.resume(breaker_pid)
+    await_empty_ring(id)
+  end
+
   defp start_breaker(config) do
     id = {"control-#{System.unique_integer([:positive])}", :http}
     {:ok, pid} = CircuitBreaker.start_link({id, Map.new(config)})
@@ -141,6 +169,20 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
       {:breaker_control_ready, ^id, _generation, _epoch} -> true
       _ -> false
     end)
+  end
+
+  defp await_empty_ring(id, attempts \\ 100)
+  defp await_empty_ring(_id, 0), do: flunk("ring did not drain")
+
+  defp await_empty_ring(id, attempts) do
+    case ControlRing.stats(id) do
+      %{occupied: 0} ->
+        :ok
+
+      _ ->
+        Process.sleep(5)
+        await_empty_ring(id, attempts - 1)
+    end
   end
 
   defp deadline_us, do: System.monotonic_time(:microsecond) + 100_000

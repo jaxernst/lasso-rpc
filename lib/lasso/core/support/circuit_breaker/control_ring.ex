@@ -99,6 +99,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
       :full ->
         :atomics.add(diagnostics, 1, 1)
         degrade(receipt)
+        notify_once(owner_pid, breaker_id, generation, epoch, wakeup)
         {:error, :saturated}
     end
   end
