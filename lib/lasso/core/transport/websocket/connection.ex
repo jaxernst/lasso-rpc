@@ -70,7 +70,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   use GenServer, restart: :permanent
   require Logger
 
-  alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.{AttemptLifecycle, CircuitBreaker}
   alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.{Catalog, InstanceState}
@@ -207,18 +207,42 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   def request(instance_id, method, params, timeout_ms, request_id)
       when is_binary(instance_id) do
+    request(instance_id, method, params, timeout_ms, request_id, nil)
+  end
+
+  @doc false
+  @spec request(
+          String.t(),
+          String.t(),
+          list() | map() | nil,
+          non_neg_integer(),
+          String.t() | nil,
+          AttemptLifecycle.dispatch_context() | nil
+        ) :: {:ok, Response.Success.t()} | {:error, JError.t()}
+  def request(instance_id, method, params, timeout_ms, request_id, dispatch_context)
+      when is_binary(instance_id) do
+    message =
+      if is_nil(dispatch_context),
+        do: {:request, method, params, timeout_ms, request_id},
+        else: {:request, method, params, timeout_ms, request_id, dispatch_context}
+
     GenServer.call(
       via_instance_name(instance_id),
-      {:request, method, params, timeout_ms, request_id},
+      message,
       timeout_ms + 2_000
     )
   catch
     :exit, {:noproc, _} ->
+      AttemptLifecycle.abort_dispatch(dispatch_context)
+
+      category = if is_nil(dispatch_context), do: :local_capacity_rejection, else: :cancelled
+
       {:error,
        JError.new(-32_000, "WebSocket connection not available",
          provider_id: instance_id,
          retriable?: true,
-         breaker_penalty?: false
+         breaker_penalty?: false,
+         category: category
        )}
 
     :exit, {:timeout, _} ->
@@ -226,7 +250,19 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
        JError.new(-32_000, "WebSocket request timeout",
          provider_id: instance_id,
          retriable?: true,
-         breaker_penalty?: true
+         breaker_penalty?: true,
+         category: :timeout
+       )}
+
+    :exit, _reason when not is_nil(dispatch_context) ->
+      AttemptLifecycle.abort_dispatch(dispatch_context)
+
+      {:error,
+       JError.new(-32_000, "WebSocket connection ended before dispatch",
+         provider_id: instance_id,
+         retriable?: true,
+         breaker_penalty?: false,
+         category: :cancelled
        )}
   end
 
@@ -344,6 +380,15 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   def handle_call(
         {:request, method, params, timeout_ms, provided_id},
         from,
+        state
+      ) do
+    handle_call({:request, method, params, timeout_ms, provided_id, nil}, from, state)
+  end
+
+  @impl true
+  def handle_call(
+        {:request, method, params, timeout_ms, provided_id, dispatch_context},
+        from,
         %{connected: true} = state
       ) do
     # Use provided request_id if available, otherwise generate one
@@ -356,11 +401,89 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       "params" => params || []
     }
 
-    sent_at = System.monotonic_time(:microsecond)
+    case Jason.encode(message) do
+      {:ok, encoded_message} ->
+        caller_pid = elem(from, 0)
 
-    case send_frame(state.connection, {:text, Jason.encode!(message)}) do
-      :ok ->
-        # Emit telemetry event
+        dispatch_result =
+          if Process.alive?(caller_pid),
+            do: AttemptLifecycle.authorize_dispatch(dispatch_context),
+            else: {:error, :cancelled}
+
+        handle_authorized_request(
+          dispatch_result,
+          dispatch_context,
+          encoded_message,
+          from,
+          method,
+          request_id,
+          timeout_ms,
+          state
+        )
+
+      {:error, reason} ->
+        AttemptLifecycle.abort_dispatch(dispatch_context)
+
+        jerr =
+          ErrorNormalizer.normalize({:encode_error, Exception.message(reason)},
+            provider_id: state.endpoint.id,
+            transport: :ws
+          )
+
+        {:reply, {:error, jerr}, state}
+    end
+  end
+
+  def handle_call(
+        {:request, _method, _params, _timeout_ms, _request_id, _dispatch_context},
+        _from,
+        %{connected: false} = state
+      ) do
+    jerr =
+      ErrorNormalizer.normalize(:not_connected, provider_id: state.endpoint.id, transport: :ws)
+
+    {:reply, {:error, jerr}, state}
+  end
+
+  @impl true
+  def handle_call(:status, _from, state) do
+    status = %{
+      connected: state.connected,
+      connection_stable: state.connection_stable,
+      endpoint_id: state.endpoint.id,
+      reconnect_attempts: state.reconnect_attempts,
+      pending_requests: map_size(state.pending_requests)
+    }
+
+    {:reply, status, state}
+  end
+
+  defp handle_authorized_request(
+         :ok,
+         dispatch_context,
+         encoded_message,
+         from,
+         method,
+         request_id,
+         timeout_ms,
+         state
+       ) do
+    sent_at = System.monotonic_time(:microsecond)
+    confirmation = AttemptLifecycle.confirm_dispatched(dispatch_context)
+
+    case {confirmation, send_frame_if_confirmed(confirmation, state.connection, encoded_message)} do
+      {{:error, :cancelled}, _not_sent} ->
+        jerr =
+          JError.new(-32_008, "WebSocket request cancelled before dispatch",
+            provider_id: state.endpoint.id,
+            retriable?: true,
+            breaker_penalty?: false,
+            category: :cancelled
+          )
+
+        {:reply, {:error, jerr}, state}
+
+      {:ok, :ok} ->
         :telemetry.execute(
           [:lasso, :websocket, :request, :sent],
           %{},
@@ -384,35 +507,44 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
         {:noreply, %{state | pending_requests: pending}}
 
-      {:error, reason} ->
-        jerr = ErrorNormalizer.normalize(reason, provider_id: state.endpoint.id, transport: :ws)
+      {:ok, {:error, reason}} ->
+        jerr =
+          ErrorNormalizer.normalize(reason,
+            provider_id: state.endpoint.id,
+            transport: :ws
+          )
+
         {:reply, {:error, jerr}, state}
     end
   end
 
-  def handle_call(
-        {:request, _method, _params, _timeout_ms, _request_id},
-        _from,
-        %{connected: false} = state
-      ) do
+  defp handle_authorized_request(
+         {:error, :cancelled},
+         _dispatch_context,
+         _encoded_message,
+         _from,
+         _method,
+         _request_id,
+         _timeout_ms,
+         state
+       ) do
     jerr =
-      ErrorNormalizer.normalize(:not_connected, provider_id: state.endpoint.id, transport: :ws)
+      JError.new(-32_008, "WebSocket request cancelled before dispatch",
+        provider_id: state.endpoint.id,
+        retriable?: true,
+        breaker_penalty?: false,
+        category: :local_capacity_rejection
+      )
 
     {:reply, {:error, jerr}, state}
   end
 
-  @impl true
-  def handle_call(:status, _from, state) do
-    status = %{
-      connected: state.connected,
-      connection_stable: state.connection_stable,
-      endpoint_id: state.endpoint.id,
-      reconnect_attempts: state.reconnect_attempts,
-      pending_requests: map_size(state.pending_requests)
-    }
-
-    {:reply, status, state}
+  defp send_frame_if_confirmed(:ok, connection, encoded_message) do
+    send_frame(connection, {:text, encoded_message})
   end
+
+  defp send_frame_if_confirmed({:error, :cancelled}, _connection, _encoded_message),
+    do: :not_sent
 
   @impl true
   def handle_info(:initial_connect, state), do: handle_continue(:connect, state)

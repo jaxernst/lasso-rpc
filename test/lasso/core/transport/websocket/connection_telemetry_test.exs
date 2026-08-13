@@ -252,6 +252,25 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
   end
 
   describe "request lifecycle telemetry" do
+    test "invalid request params return a typed preflight error without crashing", %{
+      endpoint: endpoint
+    } do
+      conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
+      {:ok, pid} = Connection.start_link(endpoint)
+      {:ok, _, _} = TelemetrySync.await_event(conn_collector, timeout: 2_000)
+
+      assert {:error, %Lasso.JSONRPC.Error{category: :invalid_params}} =
+               Connection.request(
+                 resolve_instance_id(endpoint),
+                 "eth_call",
+                 [self()],
+                 100
+               )
+
+      assert Process.alive?(pid)
+      GenServer.stop(pid)
+    end
+
     test "emits request sent event", %{endpoint: endpoint} do
       conn_collector = TelemetrySync.start_collector([:lasso, :websocket, :connected])
       {:ok, pid} = Connection.start_link(endpoint)

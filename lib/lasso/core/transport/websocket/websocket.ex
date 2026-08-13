@@ -11,7 +11,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
   @behaviour Lasso.RPC.Transport
 
   require Logger
-  alias Lasso.Core.Support.ErrorNormalizer
+  alias Lasso.Core.Support.{AttemptLifecycle, ErrorNormalizer}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
   alias Lasso.RPC.Response
@@ -91,8 +91,11 @@ defmodule Lasso.RPC.Transports.WebSocket do
   end
 
   @impl true
+  def deferred_dispatch?, do: true
+
+  @impl true
   def request(channel, rpc_request, timeout \\ 30_000) do
-    %{profile: profile, chain_id: chain_id, provider_id: provider_id} = channel
+    %{instance_id: instance_id, provider_id: provider_id} = channel
 
     method = Map.get(rpc_request, "method")
     params = Map.get(rpc_request, "params", [])
@@ -102,11 +105,12 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
     result =
       case WSConnection.request(
-             resolve_instance_id(profile, chain_id, provider_id),
+             instance_id,
              method,
              params,
              timeout,
-             request_id
+             request_id,
+             AttemptLifecycle.dispatch_context()
            ) do
         {:ok, result} ->
           {:ok, result}
@@ -139,7 +143,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
   @impl true
   def subscribe(channel, rpc_request, handler_pid) when is_pid(handler_pid) do
-    %{profile: profile, chain_id: chain_id, provider_id: provider_id} = channel
+    %{instance_id: instance_id, provider_id: provider_id} = channel
 
     method = Map.get(rpc_request, "method")
     params = Map.get(rpc_request, "params", [])
@@ -147,7 +151,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
     case method do
       "eth_subscribe" ->
         case WSConnection.request(
-               resolve_instance_id(profile, chain_id, provider_id),
+               instance_id,
                method,
                params,
                30_000

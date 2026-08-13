@@ -577,11 +577,13 @@ ProbeCoordinator implements exponential backoff for degraded instances to reduce
 
 **:fastest**
 
-- Lowest latency provider for method (passive benchmarking via BenchmarkStore)
+- Lowest recent successful mean among reliability-qualified upstream instances
+- Reads published routing-evidence summaries rather than BenchmarkStore lifetime averages
 
 **:latency_weighted**
 
-- Weighted random selection by latency scores
+- Scale-free relative latency weights with exponential-race permutation
+- Reliability qualification remains separate from the latency weight
 
 ### Selection API
 

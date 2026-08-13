@@ -119,6 +119,54 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
+  def normalize({:local_capacity_rejection, reason}, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+    context = Keyword.get(opts, :context, :transport)
+    transport = Keyword.get(opts, :transport)
+
+    JError.new(-32_008, "Local transport capacity unavailable",
+      data: %{reason: reason},
+      provider_id: provider_id,
+      source: context,
+      transport: transport,
+      category: :local_capacity_rejection,
+      retriable?: true,
+      breaker_penalty?: false
+    )
+  end
+
+  def normalize({:encode_error, reason}, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+    context = Keyword.get(opts, :context, :transport)
+    transport = Keyword.get(opts, :transport)
+
+    JError.new(-32_600, "JSON-RPC request could not be encoded",
+      data: %{reason: reason},
+      provider_id: provider_id,
+      source: context,
+      transport: transport,
+      category: :invalid_params,
+      retriable?: false,
+      breaker_penalty?: false
+    )
+  end
+
+  def normalize({:request_build_error, reason}, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+    context = Keyword.get(opts, :context, :transport)
+    transport = Keyword.get(opts, :transport)
+
+    JError.new(-32_600, "HTTP request configuration is invalid",
+      data: %{reason: reason},
+      provider_id: provider_id,
+      source: context,
+      transport: transport,
+      category: :client_error,
+      retriable?: false,
+      breaker_penalty?: false
+    )
+  end
+
   # Server errors (5xx HTTP, provider issues)
   def normalize({:server_error, payload}, opts) do
     provider_id = Keyword.get(opts, :provider_id)
@@ -214,7 +262,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
       provider_id: provider_id,
       source: context,
       transport: transport,
-      category: :network_error,
+      category: :timeout,
       retriable?: true,
       breaker_penalty?: true
     )
@@ -228,9 +276,9 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
-      category: :network_error,
+      category: :local_capacity_rejection,
       retriable?: true,
-      breaker_penalty?: true
+      breaker_penalty?: false
     )
   end
 

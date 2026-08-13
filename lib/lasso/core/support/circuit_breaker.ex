@@ -39,7 +39,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   use GenServer
   require Logger
-  alias Lasso.Core.Support.ErrorNormalizer
+  alias Lasso.Core.Support.{AttemptLifecycle, ErrorNormalizer}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
 
@@ -66,7 +66,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     recovery_deadline_ms: nil,
     effective_recovery_delay: nil,
     recovery_timer_gen: 0,
-    shared_mode: false
+    transition_generation: 0,
+    shared_mode: false,
+    inflight_attempts: %{}
   ]
 
   @type transport :: :http | :ws
@@ -86,6 +88,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           recovery_deadline_ms: integer() | nil,
           effective_recovery_delay: non_neg_integer() | nil,
           recovery_timer_gen: non_neg_integer(),
+          transition_generation: non_neg_integer(),
           shared_mode: boolean()
         }
 
@@ -116,6 +119,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   - `:not_found` - Circuit breaker process not found
   """
   @admit_timeout 500
+  @attempt_state_timeout 500
 
   @typedoc "Reasons why the circuit breaker rejected execution"
   @type rejection_reason :: :circuit_open | :half_open_busy | :admission_timeout | :not_found
@@ -123,15 +127,18 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @typedoc "Result of a circuit breaker call - separates execution status from function result"
   @type call_result(result) :: {:executed, result} | {:rejected, rejection_reason()}
 
-  @spec call(breaker_id(), (-> result), non_neg_integer()) :: call_result(result)
+  @type terminal_callback :: (term(), number() -> term())
+
+  @spec call(breaker_id(), (-> result), non_neg_integer(), keyword()) :: call_result(result)
         when result: term()
-  def call({instance_id, transport} = id, fun, timeout \\ 30_000) do
+  def call({instance_id, transport} = id, fun, timeout \\ 30_000, opts \\ []) do
     now_ms = System.monotonic_time(:millisecond)
     admit_start_us = System.monotonic_time(:microsecond)
+    admit_deadline_us = admit_start_us + @admit_timeout * 1_000
 
     decision =
       try do
-        GenServer.call(via_name(id), {:admit, now_ms}, @admit_timeout)
+        GenServer.call(via_name(id), {:admit, now_ms, admit_deadline_us}, @admit_timeout)
       catch
         :exit, {:timeout, _} ->
           Logger.warning("Circuit breaker admission timeout",
@@ -171,7 +178,14 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
     case decision do
       {:allow, token} ->
-        execute_with_token(id, token, fun, timeout, instance_id, transport)
+        execute_with_token(
+          id,
+          token,
+          fun,
+          timeout,
+          Keyword.get(opts, :on_terminal),
+          Keyword.get(opts, :dispatch, :immediate)
+        )
 
       {:deny, :open} ->
         {:rejected, :circuit_open}
@@ -187,57 +201,62 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     end
   end
 
-  defp execute_with_token(id, token, fun, timeout, instance_id, transport) do
-    task =
-      Task.async(fn ->
-        try do
-          fun.()
-        catch
-          kind, error ->
-            {:__exception__, {kind, error, __STACKTRACE__}}
-        end
-      end)
+  @doc false
+  @spec claim_attempt(breaker_id(), reference(), pid()) ::
+          :ok | {:error, :not_found | :token_not_found | :owner_mismatch | :timeout}
+  def claim_attempt(id, token, caller_pid) do
+    GenServer.call(via_name(id), {:claim_attempt, token, caller_pid}, @attempt_state_timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+    :exit, {:noproc, _} -> {:error, :not_found}
+    :exit, {:normal, _} -> {:error, :not_found}
+    :exit, _reason -> {:error, :not_found}
+  end
 
-    result =
-      case Task.yield(task, timeout) do
-        {:ok, {:__exception__, exception_info}} ->
-          {:exception, exception_info}
+  @doc false
+  @spec report_attempt(breaker_id(), reference(), term()) ::
+          :ok | {:error, :not_found | :timeout}
+  def report_attempt(id, token, result) do
+    GenServer.call(via_name(id), {:report_attempt, token, result}, @attempt_state_timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+    :exit, {:noproc, _} -> {:error, :not_found}
+    :exit, {:normal, _} -> {:error, :not_found}
+    :exit, _reason -> {:error, :not_found}
+  end
 
-        {:ok, fun_result} ->
-          fun_result
+  @doc false
+  @spec release_attempt(breaker_id(), reference()) :: :ok | {:error, :not_found | :timeout}
+  def release_attempt(id, token) do
+    GenServer.call(via_name(id), {:release_attempt, token}, @attempt_state_timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+    :exit, {:noproc, _} -> {:error, :not_found}
+    :exit, {:normal, _} -> {:error, :not_found}
+    :exit, _reason -> {:error, :not_found}
+  end
 
-        nil ->
-          Task.shutdown(task, :brutal_kill)
-
-          Logger.warning("Request timeout in circuit breaker",
-            instance_id: instance_id,
-            transport: transport,
-            timeout_ms: timeout
-          )
-
-          :telemetry.execute(
-            [:lasso, :circuit_breaker, :timeout],
-            %{timeout_ms: timeout},
-            %{instance_id: instance_id, transport: transport}
-          )
-
-          {:error,
-           JError.new(-32_000, "Request timeout after #{timeout}ms",
-             category: :timeout,
-             retriable?: true,
-             breaker_penalty?: true
-           ), timeout}
-      end
-
-    report_result =
-      case result do
-        {:exception, {kind, error, _stacktrace}} -> {:error, {kind, error}}
-        other -> other
-      end
-
-    GenServer.cast(via_name(id), {:report, token, report_result})
-
-    {:executed, result}
+  defp execute_with_token(
+         id,
+         token,
+         fun,
+         timeout,
+         terminal_callback,
+         dispatch_mode
+       ) do
+    case AttemptLifecycle.run(
+           self(),
+           id,
+           token,
+           fun,
+           timeout,
+           terminal_callback,
+           dispatch_mode
+         ) do
+      {:__attempt_lifecycle_rejected__, :timeout} -> {:rejected, :admission_timeout}
+      {:__attempt_lifecycle_rejected__, _reason} -> {:rejected, :not_found}
+      result -> {:executed, result}
+    end
   end
 
   @state_timeout 2_000
@@ -449,7 +468,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       success_count: 0,
       config: config,
       max_recovery_timeout: Map.get(config, :max_recovery_timeout, 600_000),
-      shared_mode: Map.get(config, :shared_mode, false)
+      transition_generation: 0,
+      shared_mode: Map.get(config, :shared_mode, false),
+      inflight_attempts: %{}
     }
 
     write_ets_state(state)
@@ -458,47 +479,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
-  def handle_call({:admit, now_ms}, _from, state) do
-    case state.state do
-      :closed ->
-        {:reply, {:allow, :closed}, state}
+  def handle_call({:admit, now_ms}, from, state) do
+    handle_admission(now_ms, :infinity, from, state)
+  end
 
-      :open ->
-        if should_attempt_recovery?(state) do
-          cancel_recovery_timer(state.recovery_timer_ref)
-
-          :telemetry.execute([:lasso, :circuit_breaker, :half_open], %{count: 1}, %{
-            instance_id: state.instance_id,
-            transport: state.transport,
-            from_state: :open,
-            to_state: :half_open,
-            reason: :attempt_recovery,
-            consecutive_open_count: state.consecutive_open_count
-          })
-
-          new_state = %{
-            state
-            | state: :half_open,
-              last_failure_time: state.last_failure_time || now_ms,
-              inflight_count: 1,
-              recovery_timer_ref: nil,
-              recovery_timer_gen: state.recovery_timer_gen + 1
-          }
-
-          publish_circuit_event(new_state, :open, :half_open, :attempt_recovery)
-          write_ets_state(new_state)
-          {:reply, {:allow, :half_open}, new_state}
-        else
-          {:reply, {:deny, :open}, state}
-        end
-
-      :half_open ->
-        if state.inflight_count < state.half_open_max_inflight do
-          {:reply, {:allow, :half_open}, %{state | inflight_count: state.inflight_count + 1}}
-        else
-          {:reply, {:deny, :half_open_busy}, state}
-        end
-    end
+  @impl true
+  def handle_call({:admit, now_ms, deadline_us}, from, state) do
+    handle_admission(now_ms, deadline_us, from, state)
   end
 
   @impl true
@@ -534,17 +521,106 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
-  def handle_cast({:report, _token, result}, state) do
-    normalized = normalize_transport_result(result)
-    new_state = classify_and_update_state_for_report(normalized, state)
+  def handle_call({:claim_attempt, token, caller_pid}, {lifecycle_pid, _tag}, state) do
+    case Map.fetch(state.inflight_attempts, token) do
+      {:ok, %{owner_pid: ^caller_pid, owner_monitor: owner_monitor} = attempt} ->
+        Process.demonitor(owner_monitor, [:flush])
+        lifecycle_monitor = Process.monitor(lifecycle_pid)
 
-    final_state =
-      case new_state.state do
-        :half_open -> %{new_state | inflight_count: max(new_state.inflight_count - 1, 0)}
-        _ -> new_state
-      end
+        claimed_attempt = %{
+          attempt
+          | owner_pid: lifecycle_pid,
+            owner_monitor: lifecycle_monitor,
+            claimed?: true
+        }
 
-    {:noreply, final_state}
+        attempts = Map.put(state.inflight_attempts, token, claimed_attempt)
+
+        {:reply, :ok, %{state | inflight_attempts: attempts}}
+
+      {:ok, _attempt} ->
+        {:reply, {:error, :owner_mismatch}, state}
+
+      :error ->
+        {:reply, {:error, :token_not_found}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:report_attempt, token, result}, _from, state) do
+    {:reply, :ok, apply_attempt_report(state, token, result)}
+  end
+
+  @impl true
+  def handle_call({:release_attempt, token}, _from, state) do
+    {:reply, :ok, apply_attempt_release(state, token)}
+  end
+
+  defp handle_admission(now_ms, deadline_us, {caller_pid, _tag} = from, state) do
+    if is_integer(deadline_us) and deadline_us <= System.monotonic_time(:microsecond) do
+      {:reply, {:deny, :admission_timeout}, state}
+    else
+      do_handle_admission(now_ms, from, caller_pid, state)
+    end
+  end
+
+  defp do_handle_admission(now_ms, _from, caller_pid, state) do
+    case state.state do
+      :closed ->
+        {token, new_state} = admit_attempt(state, :closed, caller_pid)
+        {:reply, {:allow, token}, new_state}
+
+      :open ->
+        if should_attempt_recovery?(state) do
+          cancel_recovery_timer(state.recovery_timer_ref)
+
+          :telemetry.execute([:lasso, :circuit_breaker, :half_open], %{count: 1}, %{
+            instance_id: state.instance_id,
+            transport: state.transport,
+            from_state: :open,
+            to_state: :half_open,
+            reason: :attempt_recovery,
+            consecutive_open_count: state.consecutive_open_count
+          })
+
+          recovered_state = %{
+            state
+            | state: :half_open,
+              last_failure_time: state.last_failure_time || now_ms,
+              inflight_count: 0,
+              recovery_timer_ref: nil,
+              recovery_timer_gen: state.recovery_timer_gen + 1,
+              transition_generation: state.transition_generation + 1
+          }
+
+          {token, new_state} = admit_attempt(recovered_state, :half_open, caller_pid)
+
+          publish_circuit_event(new_state, :open, :half_open, :attempt_recovery)
+          write_ets_state(new_state)
+          {:reply, {:allow, token}, new_state}
+        else
+          {:reply, {:deny, :open}, state}
+        end
+
+      :half_open ->
+        if state.inflight_count < state.half_open_max_inflight do
+          {token, new_state} = admit_attempt(state, :half_open, caller_pid)
+
+          {:reply, {:allow, token}, new_state}
+        else
+          {:reply, {:deny, :half_open_busy}, state}
+        end
+    end
+  end
+
+  @impl true
+  def handle_cast({:report, token, result}, state) do
+    {:noreply, apply_attempt_report(state, token, result)}
+  end
+
+  @impl true
+  def handle_cast({:release, token}, state) do
+    {:noreply, apply_attempt_release(state, token)}
   end
 
   @impl true
@@ -574,8 +650,10 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       state
       | state: :open,
         last_failure_time: now,
+        inflight_count: 0,
         recovery_timer_ref: timer_ref,
         recovery_timer_gen: new_gen,
+        transition_generation: state.transition_generation + 1,
         recovery_deadline_ms: now + delay_with_jitter,
         effective_recovery_delay: delay
     }
@@ -602,13 +680,15 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       | state: :closed,
         failure_count: 0,
         success_count: 0,
+        inflight_count: 0,
         last_failure_time: nil,
         opened_by_category: nil,
         recovery_timer_ref: nil,
         last_open_error: nil,
         consecutive_open_count: 0,
         recovery_deadline_ms: nil,
-        effective_recovery_delay: nil
+        effective_recovery_delay: nil,
+        transition_generation: state.transition_generation + 1
     }
 
     publish_circuit_event(new_state, state.state, :closed, :manual_close)
@@ -635,7 +715,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           | state: :half_open,
             success_count: 0,
             inflight_count: 0,
-            recovery_timer_ref: nil
+            recovery_timer_ref: nil,
+            transition_generation: state.transition_generation + 1
         }
 
         publish_circuit_event(new_state, :open, :half_open, :proactive_recovery)
@@ -651,6 +732,107 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   def handle_info({:attempt_proactive_recovery, _stale_gen}, state) do
     {:noreply, state}
   end
+
+  @impl true
+  def handle_info({:DOWN, owner_monitor, :process, owner_pid, _reason}, state) do
+    case Enum.find(state.inflight_attempts, fn
+           {_token, %{owner_monitor: ^owner_monitor, owner_pid: ^owner_pid}} ->
+             true
+
+           _attempt ->
+             false
+         end) do
+      {token, _attempt} -> {:noreply, apply_attempt_release(state, token)}
+      nil -> {:noreply, state}
+    end
+  end
+
+  defp admit_attempt(state, admission_state, caller_pid) do
+    token = make_ref()
+    owner_monitor = Process.monitor(caller_pid)
+
+    attempt = %{
+      admission_state: admission_state,
+      transition_generation: state.transition_generation,
+      owner_pid: caller_pid,
+      owner_monitor: owner_monitor,
+      claimed?: false
+    }
+
+    new_state = %{
+      state
+      | inflight_attempts: Map.put(state.inflight_attempts, token, attempt),
+        inflight_count: state.inflight_count + if(admission_state == :half_open, do: 1, else: 0)
+    }
+
+    {token, new_state}
+  end
+
+  defp take_attempt(state, token) do
+    case Map.pop(state.inflight_attempts, token) do
+      {nil, _attempts} ->
+        :error
+
+      {attempt, attempts} ->
+        demonitor_attempt_owner(attempt)
+        {:ok, attempt, %{state | inflight_attempts: attempts}}
+    end
+  end
+
+  defp demonitor_attempt_owner(%{owner_monitor: owner_monitor})
+       when is_reference(owner_monitor) do
+    Process.demonitor(owner_monitor, [:flush])
+  end
+
+  defp demonitor_attempt_owner(_attempt), do: :ok
+
+  defp apply_attempt_report(state, token, result) do
+    case take_attempt(state, token) do
+      {:ok, attempt, state_without_attempt} ->
+        cond do
+          neutral_attempt_result?(result) ->
+            release_half_open_attempt(state_without_attempt, attempt)
+
+          attempt.transition_generation != state.transition_generation ->
+            release_half_open_attempt(state_without_attempt, attempt)
+
+          true ->
+            result
+            |> normalize_transport_result()
+            |> classify_and_update_state_for_report(state_without_attempt)
+            |> release_half_open_attempt(attempt)
+        end
+
+      :error ->
+        state
+    end
+  end
+
+  defp neutral_attempt_result?({:error, :unsupported_method, _io_ms}), do: true
+
+  defp neutral_attempt_result?({:error, %JError{category: :local_capacity_rejection}, _io_ms}),
+    do: true
+
+  defp neutral_attempt_result?(_result), do: false
+
+  defp apply_attempt_release(state, token) do
+    case take_attempt(state, token) do
+      {:ok, attempt, state_without_attempt} ->
+        release_half_open_attempt(state_without_attempt, attempt)
+
+      :error ->
+        state
+    end
+  end
+
+  defp release_half_open_attempt(
+         %{transition_generation: generation} = state,
+         %{admission_state: :half_open, transition_generation: generation}
+       ) do
+    %{state | inflight_count: max(state.inflight_count - 1, 0)}
+  end
+
+  defp release_half_open_attempt(state, _attempt), do: state
 
   defp normalize_transport_result({:ok, value, _io_ms}), do: {:ok, value}
   defp normalize_transport_result({:error, reason, _io_ms}), do: {:error, reason}
@@ -746,7 +928,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             | state: :half_open,
               success_count: 1,
               failure_count: 0,
-              recovery_timer_ref: nil
+              inflight_count: 0,
+              recovery_timer_ref: nil,
+              transition_generation: state.transition_generation + 1
           }
 
           publish_circuit_event(new_state, :open, :half_open, :recovery_attempt)
@@ -780,13 +964,15 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       | state: :closed,
         failure_count: 0,
         success_count: 0,
+        inflight_count: 0,
         last_failure_time: nil,
         opened_by_category: nil,
         recovery_timer_ref: nil,
         last_open_error: nil,
         consecutive_open_count: 0,
         recovery_deadline_ms: nil,
-        effective_recovery_delay: nil
+        effective_recovery_delay: nil,
+        transition_generation: state.transition_generation + 1
     }
 
     publish_circuit_event(new_state, from_state, :closed, :recovered)
@@ -851,9 +1037,11 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             | state: :open,
               failure_count: new_failure_count,
               last_failure_time: current_time,
+              inflight_count: 0,
               opened_by_category: error_category,
               recovery_timer_ref: timer_ref,
               recovery_timer_gen: new_gen,
+              transition_generation: state.transition_generation + 1,
               recovery_deadline_ms: current_time + delay_with_jitter,
               effective_recovery_delay: delay,
               last_open_error: extract_error_info(error)
@@ -895,8 +1083,10 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             failure_count: new_failure_count,
             last_failure_time: current_time,
             success_count: 0,
+            inflight_count: 0,
             recovery_timer_ref: timer_ref,
             recovery_timer_gen: new_gen,
+            transition_generation: state.transition_generation + 1,
             recovery_deadline_ms: now + delay_with_jitter,
             effective_recovery_delay: delay,
             last_open_error: extract_error_info(error),

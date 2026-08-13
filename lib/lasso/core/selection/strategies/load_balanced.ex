@@ -7,8 +7,8 @@ defmodule Lasso.RPC.Strategies.LoadBalanced do
   state and rate limit status:
 
   - Tier 1: Closed circuit, not rate-limited (preferred)
-  - Tier 2: Closed circuit, rate-limited
-  - Tier 3: Half-open circuit, not rate-limited
+  - Tier 2: Half-open circuit, not rate-limited
+  - Tier 3: Closed circuit, rate-limited
   - Tier 4: Half-open circuit, rate-limited
   """
 

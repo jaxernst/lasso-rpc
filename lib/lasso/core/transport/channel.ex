@@ -18,6 +18,7 @@ defmodule Lasso.RPC.Channel do
           profile: String.t(),
           chain_id: pos_integer(),
           provider_id: String.t(),
+          instance_id: String.t() | nil,
           transport: :http | :ws,
           raw_channel: term(),
           transport_module: module(),
@@ -29,6 +30,7 @@ defmodule Lasso.RPC.Channel do
     :profile,
     :chain_id,
     :provider_id,
+    :instance_id,
     :transport,
     :raw_channel,
     :transport_module,
@@ -38,12 +40,17 @@ defmodule Lasso.RPC.Channel do
   @doc """
   Creates a new Channel wrapper.
   """
-  @spec new(String.t(), pos_integer(), String.t(), :http | :ws, term(), module()) :: t()
-  def new(profile, chain_id, provider_id, transport, raw_channel, transport_module) do
+  @spec new(String.t(), pos_integer(), String.t(), :http | :ws, term(), module(), keyword()) ::
+          t()
+  def new(profile, chain_id, provider_id, transport, raw_channel, transport_module, opts \\ []) do
     %__MODULE__{
       profile: profile,
       chain_id: chain_id,
       provider_id: provider_id,
+      instance_id:
+        Keyword.get_lazy(opts, :instance_id, fn ->
+          Lasso.Providers.Catalog.lookup_instance_id(profile, chain_id, provider_id)
+        end),
       transport: transport,
       raw_channel: raw_channel,
       transport_module: transport_module,

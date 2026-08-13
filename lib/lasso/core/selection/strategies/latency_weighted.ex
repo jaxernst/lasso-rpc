@@ -1,132 +1,89 @@
 defmodule Lasso.RPC.Strategies.LatencyWeighted do
   @moduledoc """
-  Latency-weighted randomized selection.
+  Produces a weighted random permutation of reliability-qualified upstreams.
 
-  Distributes load across available providers with a probabilistic bias toward
-  lower-latency and higher-success providers for the specific RPC method.
-
-  ## Weight Formula
-
-  Each provider receives a weight calculated as:
-
-      weight = (1 / latency^beta) * success_rate * confidence * calls_scale
-      weight = max(weight, explore_floor)
-
-  Higher weights increase selection probability. The formula balances performance
-  (latency), reliability (success rate), data quality (confidence), and exploration
-  (explore_floor ensures all providers receive some traffic).
-
-  ## Staleness Handling
-
-  Metrics older than 10 minutes receive only the `explore_floor` weight, preventing
-  routing decisions based on outdated data while maintaining exploration.
-
-  ## Configuration
-
-  - `LW_BETA`: Latency exponent (default: 3.0, higher = stronger latency preference)
-  - `LW_MS_FLOOR`: Minimum latency denominator (default: 30ms, prevents division by zero)
-  - `LW_EXPLORE_FLOOR`: Minimum weight (default: 0.05, ensures exploration)
-  - `LW_MIN_CALLS`: Minimum calls for stable metrics (default: 3)
-  - `LW_MIN_SR`: Minimum success rate (default: 0.85)
+  Weights are dimensionless latency ratios. Sampling uses exponential-race keys, which produces a
+  correct weighted permutation without a weight floor or hidden success-rate multiplier.
   """
 
   @behaviour Lasso.RPC.Strategy
 
-  alias Lasso.Core.Benchmarking.Metrics
-  alias Lasso.RPC.StrategyContext
+  alias Lasso.RPC.{RoutingEvidence, StrategyContext}
+  alias Lasso.RPC.RoutingEvidence.Summary
 
-  # Default tuning knobs (can be overridden via application config)
-  @freshness_cutoff_ms 10 * 60 * 1000
   @default_beta 3.0
-  @default_ms_floor 30.0
-  @default_min_calls 3
-  @default_min_sr 0.85
-  @default_explore_floor 0.05
 
   @impl true
-  def prepare_context(profile, chain_id, method, timeout) do
-    base = StrategyContext.new(chain_id, timeout)
-
-    fallback_latency =
-      StrategyContext.calculate_fallback_latency(
-        profile,
-        chain_id,
-        method
-      )
-
-    # Return base StrategyContext with populated optional fields
-    # Strategy-specific params (beta, ms_floor, explore_floor) are fetched
-    # directly in rank_channels to maintain type safety
-    %{
-      base
-      | min_calls:
-          base.min_calls || Application.get_env(:lasso, :lw_min_calls, @default_min_calls),
-        min_success_rate:
-          base.min_success_rate || Application.get_env(:lasso, :lw_min_sr, @default_min_sr),
-        freshness_cutoff_ms: base.freshness_cutoff_ms || @freshness_cutoff_ms,
-        cold_start_baseline: fallback_latency
-    }
+  def prepare_context(_profile, chain_id, _method, timeout) do
+    StrategyContext.new(chain_id, timeout)
   end
 
-  @doc """
-  Strategy-provided channel ranking used by Selection.select_channels/3 when present.
-
-  Implements staleness validation and dynamic cold start penalties with
-  probabilistic weighting based on latency, success rate, and confidence.
-  """
   @impl true
-  def rank_channels(channels, method, ctx, profile, chain_id) do
-    current_time = System.system_time(:millisecond)
+  def rank_channels(channels, _method, ctx, _profile, chain_id) do
+    summaries = RoutingEvidence.batch_get_summaries(channels, chain_id, ctx.workload_key)
 
-    beta = Application.get_env(:lasso, :lw_beta, @default_beta)
-    ms_floor = Application.get_env(:lasso, :lw_ms_floor, @default_ms_floor)
-    explore_floor = Application.get_env(:lasso, :lw_explore_floor, @default_explore_floor)
+    {qualified, remaining} =
+      Enum.split_with(channels, fn channel ->
+        summaries
+        |> RoutingEvidence.summary_for_channel(channel)
+        |> qualified?()
+      end)
 
-    min_calls = ctx.min_calls || @default_min_calls
-    min_sr = ctx.min_success_rate || @default_min_sr
-    freshness_cutoff = ctx.freshness_cutoff_ms || 10 * 60 * 1000
+    case qualified do
+      [] ->
+        RoutingEvidence.emit_availability_degradation(
+          :latency_weighted,
+          chain_id,
+          ctx.workload_key,
+          length(channels)
+        )
 
-    requests = Enum.map(channels, fn ch -> {ch.provider_id, method, ch.transport} end)
-    metrics_map = Metrics.batch_get_transport_performance(profile, chain_id, requests)
+        Enum.shuffle(channels)
 
-    weight_fn = fn ch ->
-      key = {ch.provider_id, method, ch.transport}
+      _ ->
+        latencies =
+          Enum.map(qualified, fn channel ->
+            RoutingEvidence.summary_for_channel(summaries, channel).successful_mean_latency_ms
+          end)
 
-      case Map.get(metrics_map, key) do
-        %{
-          latency_ms: ms,
-          success_rate: sr,
-          total_calls: n,
-          confidence_score: conf,
-          last_updated_ms: updated
-        }
-        when is_number(ms) and is_number(sr) and is_number(conf) and is_number(updated) ->
-          # Check staleness
-          age_ms = current_time - updated
+        beta = Application.get_env(:lasso, :lw_beta, @default_beta)
 
-          if age_ms > freshness_cutoff do
-            # Stale metrics - treat as cold start with explore floor
-            explore_floor
-          else
-            # Fresh metrics - normal weight calculation
-            calls_scale = if n >= min_calls, do: 1.0, else: n / max(min_calls, 1)
-            denom = :erlang.max(ms, ms_floor)
-            latency_term = 1.0 / :math.pow(denom, beta)
-            sr_term = max(sr, min_sr)
-            conf_term = conf
-            max(explore_floor, latency_term * sr_term * conf_term * calls_scale)
-          end
-
-        _ ->
-          # Missing data - use fallback latency, transform to weight
-          baseline_latency = ctx.cold_start_baseline || 1000.0
-          denom = :erlang.max(baseline_latency, ms_floor)
-          latency_term = 1.0 / :math.pow(denom, beta)
-          # Conservative weight: use 95% success rate, 0.5 confidence
-          max(explore_floor, latency_term * 0.95 * 0.5)
-      end
+        qualified
+        |> Enum.zip(relative_weights(latencies, beta))
+        |> weighted_permutation()
+        |> Kernel.++(Enum.shuffle(remaining))
     end
-
-    Enum.sort_by(channels, fn ch -> -(:rand.uniform() * weight_fn.(ch)) end)
   end
+
+  @doc false
+  @spec relative_weights([number()], number()) :: [float()]
+  def relative_weights(latencies, beta \\ @default_beta)
+      when is_list(latencies) and is_number(beta) and beta > 0 do
+    best = Enum.min(latencies)
+
+    Enum.map(latencies, fn latency ->
+      :math.pow(best / latency, beta)
+    end)
+  end
+
+  @doc false
+  @spec weighted_permutation([{term(), number()}], (-> float())) :: [term()]
+  def weighted_permutation(weighted_items, uniform_fn \\ &:rand.uniform/0) do
+    weighted_items
+    |> Enum.map(fn {item, weight} when is_number(weight) and weight > 0 ->
+      uniform = uniform_fn.() |> max(:math.pow(2.0, -53)) |> min(1.0)
+      {item, -:math.log(uniform) / weight}
+    end)
+    |> Enum.sort_by(&elem(&1, 1))
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp qualified?(%Summary{
+         state: :qualified,
+         successful_mean_latency_ms: mean
+       })
+       when is_number(mean) and mean > 0,
+       do: true
+
+  defp qualified?(_summary), do: false
 end

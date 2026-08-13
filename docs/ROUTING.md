@@ -1,6 +1,6 @@
 # Routing
 
-Provider selection in Lasso operates as a 4-stage pipeline that transforms a pool of candidate providers into a single execution target. This pipeline balances performance, reliability, and load distribution based on real-time health metrics and historical performance data.
+Provider selection in Lasso operates as a 4-stage pipeline that transforms a pool of candidate providers into an ordered execution plan. Strategy ranking consumes published recent routing evidence, while live admission remains authoritative.
 
 ## Pipeline Overview
 
@@ -41,7 +41,7 @@ Random distribution across available providers. After shuffling, the tiering pip
 **URL**: `/rpc/fastest/:chain`
 **Module**: `Lasso.RPC.Strategies.Fastest`
 
-Selects the lowest-latency provider for the specific RPC method based on passive benchmarking. Latency is tracked per provider, per method, per transport.
+Orders reliability-qualified upstream instances by recent mean successful-attempt latency. Evidence is local to the routing node and keyed by a bounded registered workload key rather than arbitrary RPC method strings.
 
 **Use When**:
 - Latency is the primary concern
@@ -49,21 +49,18 @@ Selects the lowest-latency provider for the specific RPC method based on passive
 - The method being called is latency-sensitive (e.g., `eth_getBlockByNumber`)
 
 **Behavior**:
-- Ranks providers by measured latency (lowest first)
-- Metrics older than 10 minutes are treated as stale and deprioritized
-- Providers with no metrics use a dynamic fallback latency (P75 of known providers)
+- Ranks qualified upstreams by recent successful mean latency (lowest first)
+- Uses successful p95 and deterministic identity to break equal-mean ties
+- Never uses lifetime averages for routing
+- Preserves all live candidates and emits an availability degradation when none qualifies
 - Still subject to health tiering (closed-circuit providers preferred)
-
-**Configuration**:
-- `FASTEST_MIN_CALLS`: Minimum calls for stable metrics (default: 3)
-- `FASTEST_MIN_SUCCESS_RATE`: Minimum success rate filter (default: 0.9)
 
 ### Latency Weighted
 
 **URL**: `/rpc/latency-weighted/:chain`
 **Module**: `Lasso.RPC.Strategies.LatencyWeighted`
 
-Probabilistic selection weighted by latency, success rate, and confidence. Routes more traffic to faster providers while still using slower ones.
+Produces a weighted random permutation of reliability-qualified upstreams using recent successful-attempt latency.
 
 **Use When**:
 - You want a balance between performance and distribution
@@ -71,21 +68,17 @@ Probabilistic selection weighted by latency, success rate, and confidence. Route
 - You have providers with significantly different performance profiles
 
 **Behavior**:
-- Calculates a weight for each provider based on the formula:
+- Calculates dimensionless relative weights:
   ```
-  weight = (1 / latency^beta) * success_rate * confidence * calls_scale
-  weight = max(weight, explore_floor)
+  weight = (best_mean / candidate_mean)^beta
   ```
-- Higher weights = higher selection probability
-- Providers with stale metrics (>10min) receive the `explore_floor` weight
-- Providers with no metrics use fallback latency and conservative confidence
+- Generates the permutation with exponential-race keys: `-log(U) / weight`
+- Applies reliability as a qualification boundary, not a weight multiplier
+- Uses no latency floor, weight floor, or implicit exploration share
+- Falls back to a uniform random permutation when no candidate qualifies
 
 **Configuration**:
 - `LW_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)
-- `LW_MS_FLOOR`: Minimum latency denominator (default: 30ms, prevents division by near-zero)
-- `LW_EXPLORE_FLOOR`: Minimum weight floor (default: 0.05, ensures all providers get some traffic)
-- `LW_MIN_CALLS`: Minimum calls for stable metrics (default: 3)
-- `LW_MIN_SR`: Minimum success rate (default: 0.85)
 
 ### Priority
 
@@ -126,8 +119,8 @@ After strategy ranking, the pipeline applies a 4-tier reordering based on circui
 Providers are reordered into these tiers (descending preference):
 
 1. **Tier 1**: Closed circuit + not rate-limited
-2. **Tier 2**: Closed circuit + rate-limited
-3. **Tier 3**: Half-open circuit + not rate-limited
+2. **Tier 2**: Half-open circuit + not rate-limited
+3. **Tier 3**: Closed circuit + rate-limited
 4. **Tier 4**: Half-open circuit + rate-limited
 
 **Excluded**: Open circuit providers are filtered out entirely.
@@ -148,7 +141,7 @@ Circuit breakers trip based on consecutive failures and success rate thresholds.
 
 Rate limit status is tracked separately from circuit breakers. A provider can be closed-circuit but rate-limited, meaning it's healthy but temporarily throttled.
 
-Rate-limited providers are not excluded but are deprioritized to Tier 2 or Tier 4. This allows Lasso to continue using them while preferring providers with available capacity.
+Rate-limited providers are not excluded but are deprioritized to Tier 3 or Tier 4. This allows Lasso to try a recovering channel with available capacity before one already marked capacity-limited.
 
 ## Example: Why Traffic Distribution May Be Uneven
 
@@ -157,14 +150,14 @@ Even with the load-balanced strategy, traffic may appear concentrated on certain
 **Scenario**: 3 providers (A, B, C)
 
 - Provider A: Closed circuit, not rate-limited → **Tier 1**
-- Provider B: Closed circuit, rate-limited → **Tier 2**
-- Provider C: Half-open circuit, not rate-limited → **Tier 3**
+- Provider B: Closed circuit, rate-limited → **Tier 3**
+- Provider C: Half-open circuit, not rate-limited → **Tier 2**
 
 With load-balanced, Lasso shuffles providers then reorders by tier:
 
 1. Provider A (Tier 1) receives the first attempt on every request
-2. Provider B (Tier 2) receives attempts only if A fails
-3. Provider C (Tier 3) receives attempts only if A and B both fail
+2. Provider C (Tier 2) receives attempts only if A fails
+3. Provider B (Tier 3) receives attempts only if A and C both fail
 
 **Result**: Provider A receives ~100% of traffic as long as it succeeds. This is correct behavior—Lasso routes to the healthiest provider while maintaining fallbacks.
 
@@ -201,13 +194,7 @@ Strategy behavior can be tuned via environment variables:
 
 | Variable | Strategy | Default | Description |
 |----------|----------|---------|-------------|
-| `FASTEST_MIN_CALLS` | Fastest | 3 | Minimum calls for stable metrics |
-| `FASTEST_MIN_SUCCESS_RATE` | Fastest | 0.9 | Minimum success rate filter |
 | `LW_BETA` | Latency Weighted | 3.0 | Latency exponent |
-| `LW_MS_FLOOR` | Latency Weighted | 30.0 | Minimum latency denominator (ms) |
-| `LW_EXPLORE_FLOOR` | Latency Weighted | 0.05 | Minimum selection probability |
-| `LW_MIN_CALLS` | Latency Weighted | 3 | Minimum calls for stable metrics |
-| `LW_MIN_SR` | Latency Weighted | 0.85 | Minimum success rate |
 
 See [CONFIGURATION.md](CONFIGURATION.md#routing-strategies) for profile-level strategy configuration.
 

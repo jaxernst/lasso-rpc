@@ -20,7 +20,8 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
   alias Lasso.Events.RoutingDecision
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
-  alias Lasso.RPC.{Channel, RateLimitState, RequestContext}
+  alias Lasso.RPC.{Channel, RateLimitState, RequestContext, RoutingEvidence}
+  alias Lasso.RPC.RoutingEvidence.AttemptEvent
 
   @type telemetry_metadata :: %{
           chain_id: pos_integer(),
@@ -31,6 +32,50 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
           result: atom(),
           failovers: non_neg_integer()
         }
+
+  @doc """
+  Records the single terminal event for a dispatched upstream attempt.
+
+  Transport preflight failures return `:not_dispatched` and remain admission events.
+  """
+  @spec record_attempt(RequestContext.t(), Channel.t(), String.t(), term(), keyword()) ::
+          :ok | :not_dispatched
+  def record_attempt(ctx, channel, upstream_instance_id, result, opts \\ []) do
+    case AttemptEvent.from_result(ctx, channel, upstream_instance_id, result, opts) do
+      :not_dispatched ->
+        :not_dispatched
+
+      {:ok, event} ->
+        run_attempt_sink(:routing_evidence, fn -> RoutingEvidence.record(event) end)
+
+        run_attempt_sink(:compatibility_analytics, fn ->
+          record_attempt_analytics(event, ctx.opts.profile, ctx.method)
+        end)
+
+        run_attempt_sink(:live_instance_state, fn ->
+          update_live_instance_state(event, result, ctx.opts.profile)
+        end)
+
+        :ok
+    end
+  end
+
+  defp run_attempt_sink(sink, fun) do
+    fun.()
+  rescue
+    error ->
+      Logger.error("Attempt terminal sink failed", sink: sink, error: Exception.message(error))
+      :ok
+  catch
+    kind, reason ->
+      Logger.error("Attempt terminal sink failed",
+        sink: sink,
+        kind: kind,
+        reason: inspect(reason)
+      )
+
+      :ok
+  end
 
   @doc """
   Records a successful channel request with all observability concerns.
@@ -45,13 +90,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         duration_ms
       ) do
     profile = ctx.opts.profile
-
-    Metrics.record_success(profile, ctx.chain_id, provider_id, method, duration_ms,
-      transport: transport
-    )
-
-    instance_id = Catalog.lookup_instance_id(profile, ctx.chain_id, provider_id)
-    report_success_to_ets(instance_id, transport)
 
     publish_routing_decision(
       request_id: ctx.request_id,
@@ -98,20 +136,10 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         %Channel{provider_id: provider_id, transport: transport} = _channel,
         method,
         strategy,
-        reason,
+        _reason,
         duration_ms
       ) do
     profile = ctx.opts.profile
-    jerr = JError.from(reason, provider_id: provider_id)
-
-    if ErrorClassification.provider_health_failure?(jerr.category) do
-      Metrics.record_failure(profile, ctx.chain_id, provider_id, method, duration_ms,
-        transport: transport
-      )
-    end
-
-    instance_id = Catalog.lookup_instance_id(profile, ctx.chain_id, provider_id)
-    report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain_id, provider_id)
 
     publish_routing_decision(
       request_id: ctx.request_id,
@@ -162,8 +190,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
         error_reason,
         duration_ms
       ) do
-    profile = ctx.opts.profile
-
     :telemetry.execute(
       [:lasso, :failover, :fast_fail],
       %{count: 1, duration: duration_ms},
@@ -178,9 +204,24 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
       }
     )
 
-    instance_id = Catalog.lookup_instance_id(profile, ctx.chain_id, provider_id)
-    jerr = JError.from(error_reason, provider_id: provider_id)
-    report_failure_to_ets(instance_id, transport, jerr, profile, ctx.chain_id, provider_id)
+    :ok
+  end
+
+  @doc "Records a pre-dispatch admission rejection separately from attempt evidence."
+  @spec record_admission_rejection(RequestContext.t(), Channel.t(), atom()) :: :ok
+  def record_admission_rejection(ctx, channel, reason) do
+    :telemetry.execute(
+      [:lasso, :rpc, :admission, :rejected],
+      %{count: 1},
+      %{
+        request_id: ctx.request_id,
+        chain_id: ctx.chain_id,
+        provider_id: channel.provider_id,
+        upstream_instance_id: channel.instance_id,
+        transport: channel.transport,
+        reason: reason
+      }
+    )
 
     :ok
   end
@@ -290,7 +331,70 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
   # ETS write helpers
 
-  defp report_success_to_ets(nil, _transport), do: :ok
+  defp record_attempt_analytics(
+         %AttemptEvent{outcome: :usable_success, elapsed_io_ms: elapsed_ms} = event,
+         profile,
+         method
+       ) do
+    Metrics.record_success(profile, event.chain_id, event.provider_id, method, elapsed_ms,
+      transport: event.transport
+    )
+  end
+
+  defp record_attempt_analytics(
+         %AttemptEvent{outcome: outcome} = event,
+         profile,
+         method
+       )
+       when outcome in [:service_failure, :timeout] do
+    duration_ms = event.elapsed_io_ms || event.censoring_boundary_ms
+
+    Metrics.record_failure(profile, event.chain_id, event.provider_id, method, duration_ms,
+      transport: event.transport
+    )
+  end
+
+  defp record_attempt_analytics(_event, _profile, _method), do: :ok
+
+  defp update_live_instance_state(
+         %AttemptEvent{outcome: :usable_success} = event,
+         _result,
+         _profile
+       ) do
+    report_success_to_ets(event.upstream_instance_id, event.transport)
+  end
+
+  defp update_live_instance_state(
+         %AttemptEvent{outcome: outcome} = event,
+         result,
+         profile
+       )
+       when outcome in [:service_failure, :timeout, :capacity_rejection] do
+    jerr = attempt_error(result, event.provider_id)
+
+    report_failure_to_ets(
+      event.upstream_instance_id,
+      event.transport,
+      jerr,
+      profile,
+      event.chain_id,
+      event.provider_id
+    )
+  end
+
+  defp update_live_instance_state(_event, _result, _profile), do: :ok
+
+  defp attempt_error({:error, reason, _io_ms}, provider_id),
+    do: JError.from(reason, provider_id: provider_id)
+
+  defp attempt_error({:exception, _exception}, provider_id) do
+    JError.new(-32_000, "Upstream attempt raised an exception",
+      provider_id: provider_id,
+      category: :internal_error,
+      retriable?: true,
+      breaker_penalty?: true
+    )
+  end
 
   defp report_success_to_ets(instance_id, transport) do
     now = System.system_time(:millisecond)
@@ -314,8 +418,6 @@ defmodule Lasso.RPC.RequestPipeline.Observability do
 
     :ets.insert(:lasso_instance_state, {{:health_routing, instance_id}, merged})
   end
-
-  defp report_failure_to_ets(nil, _transport, _jerr, _profile, _chain_id, _provider_id), do: :ok
 
   defp report_failure_to_ets(instance_id, transport, jerr, profile, chain_id, provider_id) do
     cond do

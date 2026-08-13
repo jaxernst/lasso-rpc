@@ -61,6 +61,7 @@ defmodule Lasso.RPC.TransportRegistry do
 
   alias Lasso.Config.ConfigStore
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.Providers.InstanceId
   alias Lasso.RPC.Channel
 
   # ETS table for lockless channel lookups in hot path
@@ -498,13 +499,13 @@ defmodule Lasso.RPC.TransportRegistry do
 
   defp create_channel(state, provider_id, transport, opts) do
     provider_config_result =
-      case Keyword.get(opts, :provider_config) do
-        config when is_map(config) ->
-          {:ok, config}
+      case ConfigStore.get_provider(state.profile, state.chain_id, provider_id) do
+        {:ok, _provider_config} = configured ->
+          configured
 
-        _ ->
-          case ConfigStore.get_provider(state.profile, state.chain_id, provider_id) do
-            {:ok, _} = ok -> ok
+        _not_configured ->
+          case Keyword.get(opts, :provider_config) do
+            config when is_map(config) -> {:ok, config}
             _ -> get_provider_config_from_store(state.profile, state.chain_id, provider_id)
           end
       end
@@ -537,6 +538,20 @@ defmodule Lasso.RPC.TransportRegistry do
         end
         |> case do
           {:ok, raw_channel} ->
+            identity_config =
+              Map.put(
+                provider_config,
+                :url,
+                Map.get(provider_config, :url) || Map.get(provider_config, :http_url) ||
+                  Map.get(provider_config, "url") || Map.get(provider_config, "http_url")
+              )
+
+            instance_id =
+              InstanceId.derive(state.chain_id, identity_config,
+                profile_id: state.profile,
+                sharing_mode: sharing_mode(provider_config)
+              )
+
             channel =
               Channel.new(
                 state.profile,
@@ -544,7 +559,8 @@ defmodule Lasso.RPC.TransportRegistry do
                 provider_id,
                 transport,
                 raw_channel,
-                transport_module
+                transport_module,
+                instance_id: instance_id
               )
 
             # Store channel in GenServer state
@@ -587,6 +603,14 @@ defmodule Lasso.RPC.TransportRegistry do
     case ConfigStore.get_provider(profile, chain_id, provider_id) do
       {:error, :not_found} -> {:error, :provider_not_found}
       result -> result
+    end
+  end
+
+  defp sharing_mode(provider_config) do
+    case Map.get(provider_config, :sharing_mode) || Map.get(provider_config, "sharing_mode") do
+      :isolated -> :isolated
+      "isolated" -> :isolated
+      _ -> :auto
     end
   end
 

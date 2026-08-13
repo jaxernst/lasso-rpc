@@ -8,7 +8,6 @@ defmodule Lasso.RPC.StrategyContext do
 
   alias Lasso.Core.Benchmarking.Metrics
 
-  # Fallback latency when no provider data exists
   @default_fallback_latency_ms 500.0
   @max_fallback_latency_ms 10_000.0
 
@@ -17,12 +16,12 @@ defmodule Lasso.RPC.StrategyContext do
     :chain_id,
     :now_ms,
     :timeout,
-    # Optional fields populated by strategies
     :total_requests,
     :freshness_cutoff_ms,
     :min_calls,
     :min_success_rate,
-    :cold_start_baseline
+    :cold_start_baseline,
+    workload_key: :default
   ]
 
   @type t :: %__MODULE__{
@@ -33,7 +32,8 @@ defmodule Lasso.RPC.StrategyContext do
           freshness_cutoff_ms: non_neg_integer() | nil,
           min_calls: non_neg_integer() | nil,
           min_success_rate: float() | nil,
-          cold_start_baseline: float() | nil
+          cold_start_baseline: float() | nil,
+          workload_key: atom()
         }
 
   @doc """
@@ -49,11 +49,9 @@ defmodule Lasso.RPC.StrategyContext do
   end
 
   @doc """
-  Calculates fallback latency for providers with no performance data.
+  Calculates the compatibility fallback latency for external strategies.
 
-  Returns the median latency of known providers for the method, or a default
-  if no providers have data. This provides context-aware penalties rather than
-  using a fixed value for all methods.
+  Built-in evidence-backed strategies do not use lifetime benchmark averages.
   """
   @spec calculate_fallback_latency(String.t(), pos_integer(), String.t()) :: float()
   def calculate_fallback_latency(profile, chain_id, method) do
@@ -62,8 +60,6 @@ defmodule Lasso.RPC.StrategyContext do
       latencies -> min(median(latencies), @max_fallback_latency_ms)
     end
   end
-
-  # Private functions
 
   defp get_valid_latencies(profile, chain_id, method) do
     profile

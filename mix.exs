@@ -67,7 +67,7 @@ defmodule Lasso.MixProject do
       {:websockex, "~> 0.4"},
       {:phoenix, "~> 1.8"},
       {:phoenix_pubsub, "~> 2.1"},
-      {:phoenix_live_view, "~> 1.1"},
+      {:phoenix_live_view, "~> 1.1.33"},
       {:phoenix_html, "~> 4.0"},
       {:gettext, "~> 0.20"},
       {:plug_cowboy, "~> 2.8"},
