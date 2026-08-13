@@ -229,6 +229,7 @@ defmodule Lasso.RPC.RequestPipeline do
           reason: inspect(reason)
         )
 
+        Observability.record_admission_rejection(ctx, channel, :parameter_constraint)
         ctx = RequestContext.increment_retries(ctx)
         attempt_channels(rest, ctx, param_rejected ++ [channel])
     end
@@ -271,7 +272,8 @@ defmodule Lasso.RPC.RequestPipeline do
   @spec execute_on_channel(Channel.t(), [Channel.t()], RequestContext.t()) :: result()
   defp execute_on_channel(channel, rest_channels, ctx) do
     instance_id =
-      Catalog.lookup_instance_id(channel.profile, channel.chain_id, channel.provider_id)
+      Catalog.lookup_instance_id(channel.profile, channel.chain_id, channel.provider_id) ||
+        channel.instance_id
 
     cb_state =
       case instance_id do
@@ -285,12 +287,17 @@ defmodule Lasso.RPC.RequestPipeline do
         circuit_breaker_state: cb_state
     }
 
+    attempt_boundary_start = System.monotonic_time(:microsecond)
+
     case execute_with_circuit_breaker(channel, instance_id, ctx.rpc_request, ctx.timeout_ms) do
       # Function executed - examine what it returned
-      {:executed, {:ok, result, io_ms}} ->
+      {:executed, {:ok, result, io_ms} = attempt_result} ->
+        :ok = Observability.record_attempt(ctx, channel, instance_id, attempt_result)
         handle_success(result, io_ms, channel, ctx)
 
       {:executed, {:error, :unsupported_method, _io_ms}} ->
+        Observability.record_admission_rejection(ctx, channel, :unsupported_method)
+
         Logger.debug("Method not supported on channel, skipping",
           channel: Channel.to_string(channel),
           method: ctx.rpc_request["method"]
@@ -298,10 +305,19 @@ defmodule Lasso.RPC.RequestPipeline do
 
         attempt_channels(rest_channels, ctx)
 
-      {:executed, {:error, reason, io_ms}} ->
+      {:executed, {:error, reason, io_ms} = attempt_result} ->
+        :ok = Observability.record_attempt(ctx, channel, instance_id, attempt_result)
         handle_channel_error(reason, io_ms, channel, rest_channels, ctx)
 
-      {:executed, {:exception, {kind, error, _stacktrace}}} ->
+      {:executed, {:exception, {kind, error, _stacktrace}} = attempt_result} ->
+        censoring_boundary_ms =
+          (System.monotonic_time(:microsecond) - attempt_boundary_start) / 1000
+
+        :ok =
+          Observability.record_attempt(ctx, channel, instance_id, attempt_result,
+            censoring_boundary_ms: censoring_boundary_ms
+          )
+
         Logger.error("Exception during request execution",
           channel: Channel.to_string(channel),
           kind: kind,
@@ -318,12 +334,16 @@ defmodule Lasso.RPC.RequestPipeline do
 
       # Circuit breaker rejected execution
       {:rejected, :circuit_open} ->
+        Observability.record_admission_rejection(ctx, channel, :circuit_open)
         handle_circuit_open(channel, rest_channels, ctx)
 
       {:rejected, :half_open_busy} ->
+        Observability.record_admission_rejection(ctx, channel, :half_open_busy)
         handle_circuit_open(channel, rest_channels, ctx)
 
       {:rejected, :admission_timeout} ->
+        Observability.record_admission_rejection(ctx, channel, :admission_timeout)
+
         Logger.warning("Circuit breaker admission timeout",
           channel: Channel.to_string(channel),
           request_id: ctx.request_id
@@ -334,6 +354,8 @@ defmodule Lasso.RPC.RequestPipeline do
         attempt_channels(rest_channels, ctx)
 
       {:rejected, :not_found} ->
+        Observability.record_admission_rejection(ctx, channel, :circuit_breaker_not_found)
+
         Logger.error("Circuit breaker not found",
           channel: Channel.to_string(channel),
           request_id: ctx.request_id
@@ -433,10 +455,7 @@ defmodule Lasso.RPC.RequestPipeline do
       request_id: ctx.request_id
     )
 
-    ctx =
-      ctx
-      |> RequestContext.add_upstream_latency(0)
-      |> RequestContext.increment_retries()
+    ctx = RequestContext.increment_retries(ctx)
 
     Observability.record_circuit_open(ctx, channel)
 

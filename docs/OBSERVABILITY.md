@@ -642,6 +642,18 @@ Metrics defined in `Lasso.Telemetry.metrics/0` for LiveDashboard and reporters.
 | `lasso.rpc.request.duration` | Distribution | chain, method, provider_id, transport, status | End-to-end request duration |
 | `lasso.rpc.request.count` | Counter | chain, method, provider_id, transport, status | Request count |
 
+### Attempt and Admission Events
+
+| Event | Measurements | Metadata | Meaning |
+|-------|--------------|----------|---------|
+| `[:lasso, :rpc, :attempt, :stop]` | `count`, `duration_ms` | request_id, upstream_instance_id, chain_id, provider_id, transport, workload_key, outcome, censored, error_category | Exactly one terminal event for each dispatched upstream attempt |
+| `[:lasso, :rpc, :admission, :rejected]` | `count` | request_id, upstream_instance_id, chain_id, provider_id, transport, reason | Pre-dispatch rejection; never an attempt or a zero-latency observation |
+| `[:lasso, :routing_evidence, :availability_degradation]` | `count`, `candidate_count` | strategy, chain_id, workload_key | No live candidate has qualified evidence, so selection preserves availability |
+
+Attempt outcomes are `usable_success`, `service_failure`, `timeout`, `capacity_rejection`,
+`neutral_error`, or `cancelled`. Client request success, failover recovery, admission, and attempt
+outcomes remain separate signals.
+
 ### Transport Metrics
 
 | Metric | Type | Tags | Description |

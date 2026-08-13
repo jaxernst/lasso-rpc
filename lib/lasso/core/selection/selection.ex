@@ -269,8 +269,8 @@ defmodule Lasso.RPC.Selection do
     # recovering providers to gradually reintegrate:
     #
     # 1. Tier 1: Closed circuit + not rate-limited (preferred)
-    # 2. Tier 2: Closed circuit + rate-limited
-    # 3. Tier 3: Half-open circuit + not rate-limited
+    # 2. Tier 2: Half-open circuit + not rate-limited
+    # 3. Tier 3: Closed circuit + rate-limited
     # 4. Tier 4: Half-open circuit + rate-limited
     #
     # Open-circuit providers are filtered out earlier in the pipeline.
@@ -283,22 +283,7 @@ defmodule Lasso.RPC.Selection do
     # with load-balanced: if only one provider is in Tier 1, it receives all traffic
     # that succeeds, with lower tiers acting as fallbacks.
 
-    {closed_channels, half_open_channels} =
-      Enum.split_with(ordered_channels, fn channel ->
-        cb_state = Map.get(circuit_state_map, {channel.provider_id, channel.transport}, :closed)
-        cb_state == :closed
-      end)
-
-    tiered_channels = closed_channels ++ half_open_channels
-
-    # Order: closed+not-rl, closed+rl, half-open+not-rl, half-open+rl
-    {not_rate_limited, rate_limited} =
-      Enum.split_with(tiered_channels, fn channel ->
-        rl = Map.get(rate_limit_map, channel.provider_id, %{http: false, ws: false})
-        not Map.get(rl, channel.transport, false)
-      end)
-
-    final_channels = not_rate_limited ++ rate_limited
+    final_channels = tier_channels(ordered_channels, circuit_state_map, rate_limit_map)
 
     final_channels |> Enum.take(limit)
   end
@@ -316,6 +301,27 @@ defmodule Lasso.RPC.Selection do
   end
 
   ## Private Functions
+
+  @doc false
+  @spec tier_channels([Channel.t()], map(), map()) :: [Channel.t()]
+  def tier_channels(channels, circuit_state_map, rate_limit_map) do
+    Enum.sort_by(channels, fn channel ->
+      circuit_state =
+        Map.get(circuit_state_map, {channel.provider_id, channel.transport}, :closed)
+
+      rate_limited =
+        rate_limit_map
+        |> Map.get(channel.provider_id, %{http: false, ws: false})
+        |> Map.get(channel.transport, false)
+
+      case {circuit_state, rate_limited} do
+        {:closed, false} -> 1
+        {:half_open, false} -> 2
+        {:closed, true} -> 3
+        {:half_open, true} -> 4
+      end
+    end)
+  end
 
   # Channel building helpers
 

@@ -163,27 +163,27 @@ Strategies control how providers are selected for each request. Set via URL path
 | Strategy | URL Slug | Description |
 |----------|----------|-------------|
 | **Priority** | `/rpc/:chain` | Select by `priority` field (lowest first). Default strategy |
-| **Fastest** | `/rpc/fastest/:chain` | Lowest latency provider for the method (passive benchmarking) |
+| **Fastest** | `/rpc/fastest/:chain` | Lowest recent mean latency among reliability-qualified upstreams |
 | **Load Balanced** | `/rpc/load-balanced/:chain` | Distribute requests across healthy providers with health-aware tiering |
-| **Latency Weighted** | `/rpc/latency-weighted/:chain` | Weighted random selection by latency scores |
+| **Latency Weighted** | `/rpc/latency-weighted/:chain` | Weighted permutation using relative successful-attempt latency |
 
 ### When to Use Each Strategy
 
 **Priority** — Predictable routing order. Use when you have a preferred provider (e.g., your own node) with public providers as fallback.
 
-**Fastest** — Optimal latency. Benchmarks are tracked per provider, per method, per transport. Best for latency-sensitive reads. May concentrate load on one provider.
+**Fastest** — Optimal latency among upstreams with qualified recent evidence. It never ranks from lifetime averages. If none qualifies, all live candidates remain available and the engine emits an explicit degradation.
 
 **Load Balanced** — Even distribution with health-aware tiering. Spreads load across all healthy providers, deprioritizing those with tripped circuit breakers or rate limits. Good for throughput maximization and avoiding rate limits.
 
-**Latency Weighted** — Balanced approach. Routes more traffic to faster providers while still using slower ones. Prevents single-provider concentration while favoring performance.
+**Latency Weighted** — Weighted random ordering of qualified upstreams using scale-free latency ratios. Reliability qualification, capacity policy, and exploration remain separate concerns.
 
 ### Health-Based Tiering
 
 All strategies are subject to health-based tiering after initial ranking. The pipeline reorders providers into 4 tiers based on circuit breaker state and rate limit status:
 
 1. **Tier 1**: Closed circuit + not rate-limited (preferred)
-2. **Tier 2**: Closed circuit + rate-limited
-3. **Tier 3**: Half-open circuit + not rate-limited
+2. **Tier 2**: Half-open circuit + not rate-limited
+3. **Tier 3**: Closed circuit + rate-limited
 4. **Tier 4**: Half-open circuit + rate-limited
 
 Open-circuit providers are excluded entirely. Within each tier, the strategy's original ranking is preserved.
