@@ -147,7 +147,7 @@ defmodule Lasso.RPC.RequestContext do
 
   These are immutable throughout the pipeline execution:
   - rpc_request: The JSON-RPC request map being executed
-  - timeout_ms: Per-attempt timeout in milliseconds
+  - timeout_ms: Total request-envelope timeout in milliseconds
   - opts: The RequestOptions struct with routing configuration
   """
   @spec set_execution_params(t(), map(), integer(), RequestOptions.t()) :: t()

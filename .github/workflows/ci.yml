@@ -52,10 +52,40 @@ jobs:
         run: mix format --check-formatted
 
       - name: Run tests
-        # Integration tests are opt-in because they exercise external providers.
-        # Keep the PR gate deterministic; run them explicitly when validating
-        # provider integrations.
         run: mix test
+
+  integration:
+    name: Hermetic Integration Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "28.0"
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-deps-v2-${{ hashFiles('**/mix.lock') }}
+
+      - name: Cache build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-integration-28.0-1.18.4-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-build-integration-28.0-1.18.4-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Run hermetic integration tests
+        run: mix test --include integration
 
   lint:
     name: Lint (Credo)
