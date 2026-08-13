@@ -40,6 +40,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   use GenServer
   require Logger
   alias Lasso.Core.Support.{AttemptLifecycle, ErrorNormalizer}
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
 
@@ -57,7 +58,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     :success_count,
     :config,
     inflight_count: 0,
-    half_open_max_inflight: 3,
+    half_open_max_inflight: 1,
     opened_by_category: nil,
     recovery_timer_ref: nil,
     last_open_error: nil,
@@ -67,6 +68,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     effective_recovery_delay: nil,
     recovery_timer_gen: 0,
     transition_generation: 0,
+    process_epoch: nil,
+    ready?: false,
+    control_health: :healthy,
     shared_mode: false,
     inflight_attempts: %{}
   ]
@@ -453,7 +457,19 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       Map.get(config, :category_recovery_timeouts, %{})
       |> Map.merge(default_category_recovery_timeouts, fn _k, v1, _v2 -> v1 end)
 
-    half_open_max_inflight = Map.get(config, :half_open_max_inflight, 3)
+    half_open_max_inflight = 1
+
+    previous_snapshot =
+      case Snapshot.lookup({instance_id, transport}) do
+        {:ok, snapshot} -> snapshot
+        :missing -> nil
+      end
+
+    {initial_state, transition_generation, control_health} =
+      case previous_snapshot do
+        nil -> {:closed, 1, :healthy}
+        %Snapshot{generation: generation} -> {:half_open, generation + 1, :degraded}
+      end
 
     state = %__MODULE__{
       instance_id: instance_id,
@@ -465,13 +481,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       category_recovery_timeouts: category_recovery_timeouts,
       half_open_max_inflight: half_open_max_inflight,
       inflight_count: 0,
-      state: :closed,
+      state: initial_state,
       failure_count: 0,
       last_failure_time: nil,
       success_count: 0,
       config: config,
       max_recovery_timeout: Map.get(config, :max_recovery_timeout, 600_000),
-      transition_generation: 0,
+      transition_generation: transition_generation,
+      process_epoch: System.unique_integer([:positive, :monotonic]),
+      ready?: true,
+      control_health: control_health,
       shared_mode: Map.get(config, :shared_mode, false),
       inflight_attempts: %{}
     }
@@ -1159,9 +1178,23 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         recovery_deadline_ms: state.recovery_deadline_ms
       }
     })
-  rescue
-    ArgumentError -> :ok
+
+    Snapshot.put(%Snapshot{
+      breaker_id: {state.instance_id, state.transport},
+      state: state.state,
+      generation: state.transition_generation,
+      epoch: state.process_epoch,
+      owner_pid: self(),
+      ready?: state.ready?,
+      recovery_deadline_us: recovery_deadline_us(state.recovery_deadline_ms),
+      half_open_capacity: state.half_open_max_inflight,
+      half_open_inflight: state.inflight_count,
+      control_health: state.control_health
+    })
   end
+
+  defp recovery_deadline_us(nil), do: nil
+  defp recovery_deadline_us(deadline_ms), do: deadline_ms * 1_000
 
   defp publish_circuit_event(state, from, to, reason, error \\ nil) do
     error_info =
