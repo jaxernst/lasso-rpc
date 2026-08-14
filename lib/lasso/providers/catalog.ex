@@ -34,6 +34,7 @@ defmodule Lasso.Providers.Catalog do
 
   alias Lasso.Config.{ChainConfig, ConfigStore}
   alias Lasso.Providers.{InstanceId, ProviderHeaders}
+  alias Lasso.RPC.RoutingPlan
 
   @persistent_term_key :lasso_catalog_active
 
@@ -58,8 +59,8 @@ defmodule Lasso.Providers.Catalog do
   GenServer so the table belongs to a long-lived process. External
   callers should use `build_from_config/0`.
   """
-  @spec populate(:ets.tid()) :: :ok
-  def populate(new_table) do
+  @spec populate(:ets.tid(), non_neg_integer()) :: :ok
+  def populate(new_table, generation) when is_integer(generation) and generation >= 0 do
     profiles = ConfigStore.list_profiles()
 
     chain_instances_acc =
@@ -71,6 +72,7 @@ defmodule Lasso.Providers.Catalog do
             {:ok, chain_config} ->
               build_chain_entries(
                 new_table,
+                generation,
                 profile,
                 chain_id,
                 chain_config,
@@ -88,6 +90,16 @@ defmodule Lasso.Providers.Catalog do
     end)
 
     :ok
+  end
+
+  @doc false
+  @spec get_routing_plan(snapshot(), String.t(), pos_integer()) ::
+          {:ok, RoutingPlan.t()} | {:error, :not_found}
+  def get_routing_plan(%{table: table}, profile, chain_id) do
+    case safe_lookup(table, {:routing_plan, profile, chain_id}) do
+      [{_, %RoutingPlan{} = plan}] -> {:ok, plan}
+      _other -> {:error, :not_found}
+    end
   end
 
   @doc false
@@ -284,6 +296,7 @@ defmodule Lasso.Providers.Catalog do
 
   defp build_chain_entries(
          ets_table,
+         generation,
          profile,
          chain_id,
          chain_config,
@@ -322,8 +335,72 @@ defmodule Lasso.Providers.Catalog do
 
     :ets.insert(ets_table, {{:profile_providers, profile, chain_id}, provider_entries})
 
+    routing_plan =
+      build_routing_plan(
+        ets_table,
+        generation,
+        profile,
+        chain_id,
+        chain_config,
+        provider_entries
+      )
+
+    :ets.insert(ets_table, {{:routing_plan, profile, chain_id}, routing_plan})
+
     instance_ids = Enum.map(provider_entries, & &1.instance_id)
     Map.update(chain_instances_acc, chain_id, instance_ids, &(&1 ++ instance_ids))
+  end
+
+  defp build_routing_plan(
+         table,
+         generation,
+         profile,
+         chain_id,
+         chain_config,
+         provider_entries
+       ) do
+    providers =
+      Enum.map(provider_entries, fn provider ->
+        {:ok, instance_config} = get_instance_from_table(table, provider.instance_id)
+
+        config =
+          Map.merge(instance_config, %{
+            id: provider.provider_id,
+            priority: provider.priority,
+            capabilities: provider.capabilities,
+            archival: provider.archival,
+            subscribe_new_heads: provider.subscribe_new_heads,
+            name: provider.name || provider.provider_id
+          })
+
+        %{
+          id: provider.provider_id,
+          instance_id: provider.instance_id,
+          config: config,
+          priority: provider.priority,
+          capabilities: provider.capabilities,
+          archival: provider.archival,
+          subscribe_new_heads: provider.subscribe_new_heads,
+          transports: available_transports(config)
+        }
+      end)
+
+    selection = chain_config.selection || %ChainConfig.Selection{}
+
+    max_lag_blocks =
+      selection.max_lag_blocks ||
+        Application.get_env(:lasso, :selection, []) |> Keyword.get(:max_lag_blocks)
+
+    %RoutingPlan{
+      profile: profile,
+      chain_id: chain_id,
+      generation: generation,
+      providers: providers,
+      provider_priorities: Map.new(providers, &{&1.id, &1.priority}),
+      max_lag_blocks: max_lag_blocks,
+      archival_threshold:
+        selection.archival_threshold || ChainConfig.Selection.default_archival_threshold()
+    }
   end
 
   defp insert_instance_config(ets_table, instance_id, profile, chain_id, chain_config, provider) do

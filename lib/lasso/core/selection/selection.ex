@@ -21,9 +21,11 @@ defmodule Lasso.RPC.Selection do
   alias Lasso.Providers.{CandidateListing, Catalog}
 
   alias Lasso.RPC.{
+    AttemptProjection,
     ChainState,
     Channel,
     RequestAnalysis,
+    RoutingPlan,
     SelectionFilters,
     TransportRegistry
   }
@@ -60,26 +62,25 @@ defmodule Lasso.RPC.Selection do
       requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false)
     }
 
-    do_select_provider(profile, chain_id, method, params, selection_opts)
+    select_provider_from_plan(profile, chain_id, method, params, selection_opts)
   end
 
   # Private implementation
 
-  defp do_select_provider(profile, chain_id, method, params, selection_opts) do
-    case capture_selection_snapshot() do
-      {:ok, snapshot} ->
-        do_select_provider(snapshot, profile, chain_id, method, params, selection_opts)
+  defp select_provider_from_plan(profile, chain_id, method, params, selection_opts) do
+    case capture_selection_snapshot(profile, chain_id) do
+      {:ok, snapshot, plan} ->
+        do_select_provider(snapshot, plan, method, params, selection_opts)
 
       :unavailable ->
         {:error, :no_providers_available}
     end
   end
 
-  defp do_select_provider(snapshot, profile, chain_id, method, params, selection_opts) do
+  defp do_select_provider(snapshot, plan, method, params, selection_opts) do
     filters =
       build_selection_filters(
-        profile,
-        chain_id,
+        plan,
         method,
         params,
         selection_opts.exclude,
@@ -88,12 +89,7 @@ defmodule Lasso.RPC.Selection do
         requires_subscribe_new_heads: selection_opts.requires_subscribe_new_heads
       )
 
-    candidates =
-      if selection_snapshot_current?(snapshot) do
-        CandidateListing.list_candidates(profile, chain_id, filters, snapshot)
-      else
-        []
-      end
+    candidates = CandidateListing.list_candidates_from_plan(plan, filters)
 
     case candidates do
       [] ->
@@ -103,7 +99,13 @@ defmodule Lasso.RPC.Selection do
         strategy_mod = StrategyRegistry.resolve(selection_opts.strategy)
 
         prepared_ctx =
-          strategy_mod.prepare_context(profile, chain_id, method, selection_opts.timeout)
+          strategy_mod.prepare_context(
+            plan.profile,
+            plan.chain_id,
+            method,
+            selection_opts.timeout
+          )
+          |> enrich_strategy_context(candidates, plan)
 
         channels =
           candidates
@@ -111,17 +113,17 @@ defmodule Lasso.RPC.Selection do
                                 id: provider_id,
                                 instance_id: instance_id,
                                 config: provider_config,
-                                route_generation: route_generation
+                                route_generation: route_generation,
+                                transports: available_transports
                               } ->
             transports =
-              case selection_opts.protocol do
-                :http -> [:http]
-                :ws -> [:ws]
-                :both -> [:http, :ws]
-              end
+              Enum.filter(
+                available_transports,
+                &(&1 in transports_to_check(selection_opts.protocol))
+              )
 
             Enum.flat_map(transports, fn t ->
-              case TransportRegistry.get_channel(profile, chain_id, provider_id, t,
+              case TransportRegistry.get_channel(plan.profile, plan.chain_id, provider_id, t,
                      method: method,
                      provider_config: provider_config,
                      instance_id: instance_id,
@@ -134,7 +136,13 @@ defmodule Lasso.RPC.Selection do
           end)
 
         ordered =
-          strategy_mod.rank_channels(channels, method, prepared_ctx, profile, chain_id)
+          strategy_mod.rank_channels(
+            channels,
+            method,
+            prepared_ctx,
+            plan.profile,
+            plan.chain_id
+          )
 
         case {selection_snapshot_current?(snapshot, candidates), List.first(ordered)} do
           {true, %Channel{provider_id: pid}} ->
@@ -166,13 +174,13 @@ defmodule Lasso.RPC.Selection do
   @spec select_channels(String.t(), pos_integer(), String.t(), keyword()) :: [Channel.t()]
   def select_channels(profile, chain_id, method, opts \\ [])
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and is_binary(method) do
-    case capture_selection_snapshot() do
-      {:ok, snapshot} -> select_channels(snapshot, profile, chain_id, method, opts)
+    case capture_selection_snapshot(profile, chain_id) do
+      {:ok, snapshot, plan} -> select_channels_from_plan(snapshot, plan, method, opts)
       :unavailable -> []
     end
   end
 
-  defp select_channels(snapshot, profile, chain_id, method, opts) do
+  defp select_channels_from_plan(snapshot, plan, method, opts) do
     strategy = Keyword.get(opts, :strategy, :load_balanced)
     transport = Keyword.get(opts, :transport, :both)
     exclude = Keyword.get(opts, :exclude, [])
@@ -187,15 +195,14 @@ defmodule Lasso.RPC.Selection do
         _ -> nil
       end
 
-    archival_threshold = get_archival_threshold(profile, chain_id)
-    consensus_height = get_consensus_height(chain_id)
+    consensus_height = get_consensus_height(plan.chain_id)
 
     requirements =
       Lasso.RPC.RequestAnalysis.analyze(
         method,
         params,
         consensus_height: consensus_height,
-        archival_threshold: archival_threshold
+        archival_threshold: plan.archival_threshold
       )
 
     pool_filters =
@@ -203,18 +210,13 @@ defmodule Lasso.RPC.Selection do
         protocol: pool_protocol,
         exclude: exclude,
         include_half_open: include_half_open,
-        max_lag_blocks: get_max_lag(profile, chain_id),
+        max_lag_blocks: plan.max_lag_blocks,
         min_block: requirements.requested_block,
         requires_archival: requirements.requires_archival,
         requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false)
       )
 
-    provider_candidates =
-      if selection_snapshot_current?(snapshot) do
-        CandidateListing.list_candidates(profile, chain_id, pool_filters, snapshot)
-      else
-        []
-      end
+    provider_candidates = CandidateListing.list_candidates_from_plan(plan, pool_filters)
 
     # Build circuit state lookup map: {provider_id, transport} => :closed | :half_open
     circuit_state_map =
@@ -239,7 +241,9 @@ defmodule Lasso.RPC.Selection do
     # Map provider list into channels, lazily opening as needed
     channels =
       provider_candidates
-      |> Enum.flat_map(&build_provider_channels(&1, transport, profile, chain_id, method))
+      |> Enum.flat_map(
+        &build_provider_channels(&1, transport, plan.profile, plan.chain_id, method)
+      )
       |> Enum.reject(&is_nil/1)
 
     # Filter channels by method capability (adapter-based filtering)
@@ -253,20 +257,15 @@ defmodule Lasso.RPC.Selection do
           end
 
           capable
-
-        {:error, reason} ->
-          Logger.error(
-            "Adapter filtering failed for #{method}: #{inspect(reason)}, using all channels"
-          )
-
-          # Fail open: use all channels if filtering fails
-          channels
       end
 
     # Strategy delegation: allow strategy modules to rank channels when available.
     strategy_mod = StrategyRegistry.resolve(strategy)
     timeout = Keyword.get(opts, :timeout, 30_000)
-    prepared_ctx = strategy_mod.prepare_context(profile, chain_id, method, timeout)
+
+    prepared_ctx =
+      strategy_mod.prepare_context(plan.profile, plan.chain_id, method, timeout)
+      |> enrich_strategy_context(provider_candidates, plan)
 
     learned_feedback_degraded? =
       Enum.any?(provider_candidates, & &1.learned_feedback_degraded?)
@@ -275,7 +274,13 @@ defmodule Lasso.RPC.Selection do
       if learned_feedback_degraded? and strategy in [:fastest, :latency_weighted] do
         Enum.sort_by(capable_channels, &{&1.provider_id, &1.transport})
       else
-        strategy_mod.rank_channels(capable_channels, method, prepared_ctx, profile, chain_id)
+        strategy_mod.rank_channels(
+          capable_channels,
+          method,
+          prepared_ctx,
+          plan.profile,
+          plan.chain_id
+        )
       end
 
     # Health-based tiering: reorder providers by circuit breaker state and rate limit status.
@@ -353,7 +358,8 @@ defmodule Lasso.RPC.Selection do
            id: provider_id,
            instance_id: instance_id,
            config: config,
-           route_generation: route_generation
+           route_generation: route_generation,
+           transports: available_transports
          },
          transport,
          profile,
@@ -362,7 +368,7 @@ defmodule Lasso.RPC.Selection do
        ) do
     transport
     |> transports_to_check()
-    |> Enum.filter(fn t -> provider_supports_transport?(config, t) end)
+    |> Enum.filter(&(&1 in available_transports))
     |> Enum.flat_map(fn t ->
       fetch_channel(
         profile,
@@ -380,9 +386,6 @@ defmodule Lasso.RPC.Selection do
   defp transports_to_check(:http), do: [:http]
   defp transports_to_check(:ws), do: [:ws]
   defp transports_to_check(_), do: [:http, :ws]
-
-  defp provider_supports_transport?(config, :http), do: is_binary(Map.get(config, :url))
-  defp provider_supports_transport?(config, :ws), do: is_binary(Map.get(config, :ws_url))
 
   defp fetch_channel(
          profile,
@@ -405,10 +408,15 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  defp capture_selection_snapshot do
+  defp capture_selection_snapshot(profile, chain_id) do
     case Catalog.snapshot() do
       %{generation: generation} = snapshot ->
-        if ConfigStore.route_generation() == generation, do: {:ok, snapshot}, else: :unavailable
+        with true <- ConfigStore.route_generation() == generation,
+             {:ok, plan} <- Catalog.get_routing_plan(snapshot, profile, chain_id) do
+          {:ok, snapshot, plan}
+        else
+          _unavailable -> :unavailable
+        end
 
       _unavailable ->
         :unavailable
@@ -425,33 +433,6 @@ defmodule Lasso.RPC.Selection do
       selection_snapshot_current?(snapshot)
   end
 
-  defp get_max_lag(profile, chain_id) do
-    case Lasso.Config.ConfigStore.get_chain(profile, chain_id) do
-      {:ok, %{selection: %{max_lag_blocks: chain_default}}} ->
-        chain_default || get_global_max_lag()
-
-      _ ->
-        get_global_max_lag()
-    end
-  end
-
-  defp get_global_max_lag do
-    # Get global default from application config
-    # Returns nil if not configured (no lag filtering)
-    Application.get_env(:lasso, :selection, [])
-    |> Keyword.get(:max_lag_blocks)
-  end
-
-  defp get_archival_threshold(profile, chain_id) do
-    case Lasso.Config.ConfigStore.get_chain(profile, chain_id) do
-      {:ok, %{selection: %{archival_threshold: threshold}}} when is_integer(threshold) ->
-        threshold
-
-      _ ->
-        Lasso.Config.ChainConfig.Selection.default_archival_threshold()
-    end
-  end
-
   defp get_consensus_height(chain_id) do
     case ChainState.consensus_height(chain_id) do
       {:ok, height} -> height
@@ -459,9 +440,8 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  defp build_selection_filters(profile, chain_id, method, params, exclude, protocol, opts) do
-    archival_threshold = get_archival_threshold(profile, chain_id)
-    consensus_height = get_consensus_height(chain_id)
+  defp build_selection_filters(plan, method, params, exclude, protocol, opts) do
+    consensus_height = get_consensus_height(plan.chain_id)
     include_half_open = Keyword.get(opts, :include_half_open, false)
     requires_subscribe_new_heads = Keyword.get(opts, :requires_subscribe_new_heads, false)
 
@@ -470,17 +450,39 @@ defmodule Lasso.RPC.Selection do
         method,
         params,
         consensus_height: consensus_height,
-        archival_threshold: archival_threshold
+        archival_threshold: plan.archival_threshold
       )
 
     SelectionFilters.new(
       exclude: exclude,
       protocol: protocol,
       include_half_open: include_half_open,
-      max_lag_blocks: get_max_lag(profile, chain_id),
+      max_lag_blocks: plan.max_lag_blocks,
       min_block: requirements.requested_block,
       requires_archival: requirements.requires_archival,
       requires_subscribe_new_heads: requires_subscribe_new_heads
     )
+  end
+
+  defp enrich_strategy_context(ctx, candidates, %RoutingPlan{} = plan) do
+    summaries =
+      Enum.reduce(candidates, %{}, fn candidate, acc ->
+        Enum.reduce(candidate.transports, acc, fn transport, route_acc ->
+          row = Map.get(candidate.routing_states, transport)
+
+          summary =
+            AttemptProjection.summarize_route(
+              row,
+              candidate.instance_id,
+              transport,
+              plan.chain_id,
+              ctx.workload_key
+            )
+
+          Map.put(route_acc, {candidate.instance_id, transport}, summary)
+        end)
+      end)
+
+    %{ctx | routing_summaries: summaries, provider_priorities: plan.provider_priorities}
   end
 end

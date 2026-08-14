@@ -20,7 +20,9 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
 
   @impl true
   def rank_channels(channels, _method, ctx, profile, chain_id) do
-    summaries = RoutingEvidence.batch_get_summaries(profile, channels, chain_id, ctx.workload_key)
+    summaries =
+      ctx.routing_summaries ||
+        RoutingEvidence.batch_get_summaries(profile, channels, chain_id, ctx.workload_key)
 
     {qualified, remaining} =
       Enum.split_with(channels, fn channel ->

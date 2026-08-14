@@ -3,8 +3,6 @@ defmodule Lasso.RPC.Strategies.Priority do
 
   @behaviour Lasso.RPC.Strategy
 
-  alias Lasso.Config.ConfigStore
-
   @impl true
   def prepare_context(_profile, chain_id, _method, timeout) do
     Lasso.RPC.StrategyContext.new(chain_id, timeout)
@@ -15,29 +13,13 @@ defmodule Lasso.RPC.Strategies.Priority do
   Lower numeric priority wins; HTTP preferred over WS for equal priority.
   """
   @impl true
-  def rank_channels(channels, _method, _ctx, profile, chain_id) do
-    priority_by_id = provider_priority_map(profile, chain_id)
+  def rank_channels(channels, _method, ctx, _profile, _chain_id) do
+    priority_by_id = ctx.provider_priorities || %{}
 
     Enum.sort_by(channels, fn ch ->
       provider_priority = Map.get(priority_by_id, ch.provider_id, 1_000_000)
       transport_priority = if ch.transport == :http, do: 0, else: 1
       {provider_priority, transport_priority}
     end)
-  end
-
-  defp provider_priority_map(profile, chain_id) do
-    case ConfigStore.get_chain(profile, chain_id) do
-      {:ok, %{providers: providers}} when is_list(providers) ->
-        providers
-        |> Enum.map(fn p ->
-          {Map.get(p, :id) || Map.get(p, "id"),
-           Map.get(p, :priority) || Map.get(p, "priority") || 1_000_000}
-        end)
-        |> Enum.reject(fn {id, _priority} -> is_nil(id) end)
-        |> Enum.into(%{})
-
-      _ ->
-        %{}
-    end
   end
 end

@@ -135,6 +135,55 @@ defmodule Lasso.Providers.InstanceStateTest do
     end
   end
 
+  test "candidate health reuses one probe and block snapshot without changing merge semantics" do
+    now = System.system_time(:millisecond)
+
+    write_probe(%{
+      status: :healthy,
+      http_status: :healthy,
+      last_health_check: now,
+      consecutive_failures: 1
+    })
+
+    :ets.insert(
+      @table,
+      {{:health_block_sync, @instance_id}, %{http_status: :degraded, last_health_check: now + 1}}
+    )
+
+    http_routing = %{
+      status: :degraded,
+      observed_at_us: (now + 2) * 1_000,
+      consecutive_failures: 2,
+      consecutive_successes: 0,
+      last_error_category: :timeout
+    }
+
+    ws_routing = %{
+      status: :healthy,
+      observed_at_us: (now + 3) * 1_000,
+      consecutive_failures: 0,
+      consecutive_successes: 4,
+      last_error_category: nil
+    }
+
+    candidate =
+      InstanceState.read_candidate_health(@instance_id, http_routing, ws_routing, true)
+
+    assert candidate.base == InstanceState.read_health(@instance_id, include_learned: false)
+
+    assert candidate.http ==
+             InstanceState.read_health(@instance_id,
+               include_learned: true,
+               routing_states: [http_routing]
+             )
+
+    assert candidate.ws ==
+             InstanceState.read_health(@instance_id,
+               include_learned: true,
+               routing_states: [ws_routing]
+             )
+  end
+
   test "clear removes every application-owned breaker row for the instance" do
     id = {@instance_id, :http}
     {:ok, pid} = CircuitBreaker.start_link({id, %{control_ring_capacity: 4}})

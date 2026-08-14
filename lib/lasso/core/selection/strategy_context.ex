@@ -21,6 +21,8 @@ defmodule Lasso.RPC.StrategyContext do
     :min_calls,
     :min_success_rate,
     :cold_start_baseline,
+    :routing_summaries,
+    :provider_priorities,
     workload_key: :default
   ]
 
@@ -33,6 +35,8 @@ defmodule Lasso.RPC.StrategyContext do
           min_calls: non_neg_integer() | nil,
           min_success_rate: float() | nil,
           cold_start_baseline: float() | nil,
+          routing_summaries: map() | nil,
+          provider_priorities: map() | nil,
           workload_key: atom()
         }
 

@@ -107,7 +107,7 @@ defmodule Lasso.Providers.Catalog.Owner do
     generation = ConfigStore.route_generation()
 
     try do
-      Catalog.populate(new_table)
+      Catalog.populate(new_table, generation)
       publication_barrier(:after_catalog_populate, generation)
     rescue
       e ->

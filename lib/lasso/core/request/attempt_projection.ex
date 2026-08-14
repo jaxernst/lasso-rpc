@@ -239,8 +239,17 @@ defmodule Lasso.RPC.AttemptProjection do
     Map.new(channels, fn channel ->
       key = {channel.instance_id, channel.transport}
       row = route_state(scope, channel.instance_id, channel.transport, workload)
-      {key, summary(row, channel, chain_id, workload_key)}
+      {key, summary(row, channel.instance_id, channel.transport, chain_id, workload_key)}
     end)
+  end
+
+  @doc false
+  @spec summarize_route(map() | nil, binary(), :http | :ws, pos_integer(), atom()) ::
+          Summary.t() | nil
+  def summarize_route(row, instance_id, transport, chain_id, workload_key)
+      when is_binary(instance_id) and transport in [:http, :ws] and is_integer(chain_id) and
+             chain_id > 0 and is_atom(workload_key) do
+    summary(row, instance_id, transport, chain_id, workload_key)
   end
 
   @spec prepare_routes(non_neg_integer(), [map()]) :: :ok
@@ -884,9 +893,9 @@ defmodule Lasso.RPC.AttemptProjection do
   defp visible_after_floor?(%{recovery_floor_us: floor_us}, observed_at_us),
     do: observed_at_us > floor_us
 
-  defp summary(nil, _channel, _chain_id, _workload_key), do: nil
+  defp summary(nil, _instance_id, _transport, _chain_id, _workload_key), do: nil
 
-  defp summary(row, channel, chain_id, workload_key) do
+  defp summary(row, instance_id, transport, chain_id, workload_key) do
     state =
       cond do
         row.usable_successes >= 3 and row.consecutive_failures < 3 -> :qualified
@@ -895,9 +904,9 @@ defmodule Lasso.RPC.AttemptProjection do
       end
 
     %Summary{
-      upstream_instance_id: channel.instance_id,
+      upstream_instance_id: instance_id,
       chain_id: chain_id,
-      transport: channel.transport,
+      transport: transport,
       workload_key: workload_key,
       state: state,
       comparable_attempts: row.comparable_attempts,

@@ -157,7 +157,7 @@ defmodule Lasso.RPC.TransportRegistry do
     case :ets.lookup(@channel_cache_table, cache_key) do
       [{^cache_key, channel}] ->
         if route_identity_matches?(channel, opts),
-          do: {:ok, bind_route_generation(channel, opts)},
+          do: {:ok, bind_route_context(channel, opts)},
           else: do_get_channel(profile, chain_id, provider_id, transport, opts)
 
       [] ->
@@ -356,7 +356,7 @@ defmodule Lasso.RPC.TransportRegistry do
     case get_existing_channel(state, provider_id, transport) do
       {:ok, channel} ->
         if route_identity_matches?(channel, opts) and Channel.healthy?(channel) do
-          {:reply, {:ok, bind_route_generation(channel, opts)}, state}
+          {:reply, {:ok, bind_route_context(channel, opts)}, state}
         else
           new_state = remove_channel(state, provider_id, transport)
 
@@ -520,7 +520,8 @@ defmodule Lasso.RPC.TransportRegistry do
               raw_channel,
               transport_module,
               instance_id: instance_id,
-              route_generation: route_generation
+              route_generation: route_generation,
+              provider_capabilities: Map.get(provider_config, :capabilities)
             )
 
           if route_identity_matches?(channel, opts) do
@@ -645,14 +646,27 @@ defmodule Lasso.RPC.TransportRegistry do
     _error -> {:error, :route_identity_mismatch}
   end
 
-  defp bind_route_generation(%Channel{} = channel, opts) do
-    case Keyword.get(opts, :route_generation) do
-      generation when is_integer(generation) and generation >= 0 ->
-        %{channel | route_generation: generation}
+  defp bind_route_context(%Channel{} = channel, opts) do
+    generation =
+      case Keyword.get(opts, :route_generation) do
+        value when is_integer(value) and value >= 0 -> value
+        _other -> channel.route_generation
+      end
 
-      _other ->
-        channel
-    end
+    provider_capabilities =
+      case Keyword.get(opts, :provider_config) do
+        config when is_map(config) ->
+          Map.get(config, :capabilities, channel.provider_capabilities)
+
+        _other ->
+          channel.provider_capabilities
+      end
+
+    %{
+      channel
+      | route_generation: generation,
+        provider_capabilities: provider_capabilities
+    }
   end
 
   defp route_identity_matches?(%Channel{} = channel, opts) do

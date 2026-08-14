@@ -21,7 +21,7 @@ defmodule Lasso.Providers.CandidateListing do
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{Catalog, InstanceState, LagCalculation}
-  alias Lasso.RPC.{AttemptProjection, SelectionFilters}
+  alias Lasso.RPC.{AttemptProjection, RoutingPlan, SelectionFilters}
 
   @doc """
   Lists provider candidates for a (profile, chain_id) pair, filtered by selection criteria.
@@ -70,35 +70,49 @@ defmodule Lasso.Providers.CandidateListing do
       )
       when is_map(filters) and is_integer(chain_id) and chain_id > 0 and
              not is_nil(table) and is_integer(generation) and generation >= 0 do
-    if Catalog.snapshot() == snapshot and ConfigStore.route_generation() == generation,
-      do: do_list_candidates(snapshot, profile, chain_id, filters),
-      else: []
+    with true <- Catalog.snapshot() == snapshot,
+         true <- ConfigStore.route_generation() == generation,
+         {:ok, plan} <- Catalog.get_routing_plan(snapshot, profile, chain_id) do
+      candidates = do_list_candidates(plan, filters)
+
+      if Catalog.snapshot() == snapshot and ConfigStore.route_generation() == generation,
+        do: candidates,
+        else: []
+    else
+      _unavailable -> []
+    end
   end
 
-  defp do_list_candidates(snapshot, profile, chain_id, filters) do
+  @doc false
+  @spec list_candidates_from_plan(RoutingPlan.t(), SelectionFilters.t() | map()) :: [map()]
+  def list_candidates_from_plan(%RoutingPlan{} = plan, %SelectionFilters{} = filters) do
+    list_candidates_from_plan(plan, SelectionFilters.to_map(filters))
+  end
+
+  def list_candidates_from_plan(%RoutingPlan{} = plan, filters) when is_map(filters) do
+    do_list_candidates(plan, filters)
+  end
+
+  defp do_list_candidates(%RoutingPlan{} = plan, filters) do
     protocol = Map.get(filters, :protocol)
     include_half_open = Map.get(filters, :include_half_open, false)
-    learned_scope = AttemptProjection.scope_state(profile, chain_id, snapshot.generation)
-
-    profile_providers = Catalog.get_profile_providers(snapshot, profile, chain_id)
+    learned_scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
 
     candidates =
-      profile_providers
-      |> Enum.map(&build_candidate(&1, learned_scope, snapshot))
+      plan.providers
+      |> Enum.map(&build_candidate(&1, learned_scope, plan, protocol))
       |> Enum.filter(fn c ->
-        transport_available?(c, protocol, profile, chain_id) and
+        transport_available?(c, protocol) and
           circuit_breaker_ready?(c, protocol, include_half_open) and
           rate_limit_ok?(c, protocol, filters)
       end)
-      |> filter_by_lag(profile, chain_id, Map.get(filters, :max_lag_blocks))
-      |> filter_by_min_block(profile, chain_id, Map.get(filters, :min_block))
+      |> filter_by_lag(plan.profile, plan.chain_id, Map.get(filters, :max_lag_blocks))
+      |> filter_by_min_block(plan.profile, plan.chain_id, Map.get(filters, :min_block))
       |> filter_by_archival(Map.get(filters, :requires_archival))
       |> filter_by_subscribe_new_heads(Map.get(filters, :requires_subscribe_new_heads))
       |> filter_excluded(filters)
 
-    if Catalog.snapshot() == snapshot and ConfigStore.route_generation() == snapshot.generation,
-      do: candidates,
-      else: []
+    candidates
   end
 
   @doc """
@@ -139,67 +153,39 @@ defmodule Lasso.Providers.CandidateListing do
     end
   end
 
-  defp build_candidate(profile_provider, learned_scope, snapshot) do
-    instance_id = profile_provider.instance_id
-
-    instance_config =
-      case Catalog.get_instance(snapshot, instance_id) do
-        {:ok, config} -> config
-        _ -> %{}
-      end
+  defp build_candidate(provider, learned_scope, plan, protocol) do
+    instance_id = provider.instance_id
+    transports = live_transports(provider, protocol, plan.profile, plan.chain_id)
 
     include_learned? = not learned_scope.degraded?
-    http_routing = AttemptProjection.route_state(learned_scope, instance_id, :http)
-    ws_routing = AttemptProjection.route_state(learned_scope, instance_id, :ws)
+    http_routing = route_state(learned_scope, instance_id, :http, transports)
+    ws_routing = route_state(learned_scope, instance_id, :ws, transports)
 
-    base_health = InstanceState.read_health(instance_id, include_learned: false)
-
-    http_health =
-      InstanceState.read_health(instance_id,
-        include_learned: include_learned?,
-        routing_states: [http_routing]
+    health =
+      InstanceState.read_candidate_health(
+        instance_id,
+        http_routing,
+        ws_routing,
+        include_learned?
       )
 
-    ws_health =
-      InstanceState.read_health(instance_id,
-        include_learned: include_learned?,
-        routing_states: [ws_routing]
-      )
+    http_cb = circuit_state(instance_id, :http, transports)
+    ws_cb = circuit_state(instance_id, :ws, transports)
 
-    config =
-      Map.merge(instance_config, %{
-        id: profile_provider.provider_id,
-        priority: profile_provider.priority,
-        capabilities: profile_provider.capabilities,
-        archival: profile_provider.archival,
-        subscribe_new_heads: Map.get(profile_provider, :subscribe_new_heads, false),
-        name: profile_provider[:name] || profile_provider.provider_id
-      })
-
-    http_cb = InstanceState.read_circuit(instance_id, :http)
-    ws_cb = InstanceState.read_circuit(instance_id, :ws)
-
-    http_rl =
-      InstanceState.read_rate_limit(instance_id, :http,
-        include_learned: include_learned?,
-        routing_state: http_routing
-      )
-
-    ws_rl =
-      InstanceState.read_rate_limit(instance_id, :ws,
-        include_learned: include_learned?,
-        routing_state: ws_routing
-      )
+    http_rl = rate_limit(instance_id, :http, transports, include_learned?, http_routing)
+    ws_rl = rate_limit(instance_id, :ws, transports, include_learned?, ws_routing)
 
     %{
-      id: profile_provider.provider_id,
+      id: provider.id,
       instance_id: instance_id,
-      route_generation: snapshot.generation,
-      config: config,
-      availability: InstanceState.status_to_availability(base_health.status),
+      route_generation: plan.generation,
+      config: provider.config,
+      transports: transports,
+      routing_states: %{http: http_routing, ws: ws_routing},
+      availability: InstanceState.status_to_availability(health.base.status),
       transport_availability: %{
-        http: InstanceState.status_to_availability(http_health.status),
-        ws: InstanceState.status_to_availability(ws_health.status)
+        http: InstanceState.status_to_availability(health.http.status),
+        ws: InstanceState.status_to_availability(health.ws.status)
       },
       circuit_state: %{http: http_cb.state, ws: ws_cb.state},
       rate_limited: %{http: http_rl.rate_limited, ws: ws_rl.rate_limited},
@@ -207,22 +193,43 @@ defmodule Lasso.Providers.CandidateListing do
     }
   end
 
-  defp transport_available?(candidate, protocol, profile, chain_id) do
-    config = candidate.config
-
+  defp transport_available?(candidate, protocol) do
     case protocol do
-      :http ->
-        is_binary(config.url)
+      :http -> :http in candidate.transports
+      :ws -> :ws in candidate.transports
+      :both -> candidate.transports != []
+      nil -> candidate.transports != []
+    end
+  end
 
-      :ws ->
-        is_binary(config.ws_url) and ws_channel_live?(profile, chain_id, candidate.id)
+  defp live_transports(provider, protocol, profile, chain_id) do
+    provider.transports
+    |> Enum.filter(fn
+      :http -> protocol in [:http, :both, nil]
+      :ws -> protocol in [:ws, :both, nil] and ws_channel_live?(profile, chain_id, provider.id)
+    end)
+  end
 
-      :both ->
-        is_binary(config.url) or
-          (is_binary(config.ws_url) and ws_channel_live?(profile, chain_id, candidate.id))
+  defp route_state(scope, instance_id, transport, transports) do
+    if transport in transports,
+      do: AttemptProjection.route_state(scope, instance_id, transport),
+      else: nil
+  end
 
-      nil ->
-        is_binary(config.url) or is_binary(config.ws_url)
+  defp circuit_state(instance_id, transport, transports) do
+    if transport in transports,
+      do: InstanceState.read_circuit(instance_id, transport),
+      else: %{state: :unavailable}
+  end
+
+  defp rate_limit(instance_id, transport, transports, include_learned?, routing) do
+    if transport in transports do
+      InstanceState.read_rate_limit(instance_id, transport,
+        include_learned: include_learned?,
+        routing_state: routing
+      )
+    else
+      %{rate_limited: false}
     end
   end
 
@@ -244,8 +251,8 @@ defmodule Lasso.Providers.CandidateListing do
         cb_ready?(cs.ws, include_half_open)
 
       p when p in [:both, nil] ->
-        has_http = is_binary(candidate.config.url)
-        has_ws = is_binary(candidate.config.ws_url)
+        has_http = :http in candidate.transports
+        has_ws = :ws in candidate.transports
 
         if include_half_open do
           (has_http and cs.http != :open) or (has_ws and cs.ws != :open)

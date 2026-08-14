@@ -23,7 +23,8 @@ defmodule Lasso.RPC.Channel do
           transport: :http | :ws,
           raw_channel: term(),
           transport_module: module(),
-          capabilities: map() | nil
+          capabilities: map() | nil,
+          provider_capabilities: map() | nil | :unbound
         }
 
   @derive {Jason.Encoder,
@@ -37,7 +38,8 @@ defmodule Lasso.RPC.Channel do
     :transport,
     :raw_channel,
     :transport_module,
-    :capabilities
+    :capabilities,
+    provider_capabilities: :unbound
   ]
 
   @doc """
@@ -61,7 +63,8 @@ defmodule Lasso.RPC.Channel do
       transport: transport,
       raw_channel: raw_channel,
       transport_module: transport_module,
-      capabilities: nil
+      capabilities: nil,
+      provider_capabilities: Keyword.get(opts, :provider_capabilities, :unbound)
     }
   end
 

@@ -65,6 +65,25 @@ defmodule Lasso.Providers.InstanceState do
     merge_health(probe, block_sync, routing)
   end
 
+  @doc false
+  @spec read_candidate_health(String.t(), map() | nil, map() | nil, boolean()) :: %{
+          base: map(),
+          http: map(),
+          ws: map()
+        }
+  def read_candidate_health(instance_id, http_routing, ws_routing, include_learned?)
+      when is_binary(instance_id) and is_boolean(include_learned?) do
+    probe = read_probe_health(instance_id)
+    block_sync = read_block_sync_health(instance_id)
+    base = merge_health(probe, block_sync, @default_routing)
+
+    %{
+      base: base,
+      http: merge_health(probe, block_sync, candidate_routing(http_routing, include_learned?)),
+      ws: merge_health(probe, block_sync, candidate_routing(ws_routing, include_learned?))
+    }
+  end
+
   @spec read_probe_health(String.t()) :: map()
   def read_probe_health(instance_id) when is_binary(instance_id) do
     case safe_lookup({:health_probe, instance_id}) do
@@ -147,6 +166,9 @@ defmodule Lasso.Providers.InstanceState do
       last_error: last_error
     }
   end
+
+  defp candidate_routing(routing_state, true), do: merge_routing_states([routing_state])
+  defp candidate_routing(_routing_state, false), do: @default_routing
 
   defp worse_status(a, b) do
     a_sev = Map.get(@status_severity, a, 0)

@@ -1241,15 +1241,12 @@ defmodule Lasso.RPC.RequestPipeline do
   defp active_catalog_provider(profile, chain_id, provider_id) do
     with %{generation: generation} = snapshot <- Catalog.snapshot(),
          true <- generation == ConfigStore.route_generation(),
+         {:ok, plan} <- Catalog.get_routing_plan(snapshot, profile, chain_id),
          provider when not is_nil(provider) <-
-           Enum.find(
-             Catalog.get_profile_providers(snapshot, profile, chain_id),
-             &(&1.provider_id == provider_id)
-           ),
-         {:ok, instance} <- Catalog.get_instance(snapshot, provider.instance_id),
+           Enum.find(plan.providers, &(&1.id == provider_id)),
          true <- Catalog.snapshot() == snapshot,
          true <- ConfigStore.route_generation() == generation do
-      {:ok, snapshot, provider, instance}
+      {:ok, snapshot, provider, provider.config}
     else
       _unavailable -> {:error, :not_found}
     end

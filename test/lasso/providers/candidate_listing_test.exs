@@ -68,6 +68,17 @@ defmodule Lasso.Providers.CandidateListingTest do
       assert Map.has_key?(c.rate_limited, :ws)
     end
 
+    test "does not read or expose a disconnected WebSocket route" do
+      candidate =
+        @profile
+        |> CandidateListing.list_candidates(@chain, %{})
+        |> Enum.find(&(&1.id == "p2"))
+
+      assert candidate.transports == [:http]
+      assert candidate.circuit_state.ws == :unavailable
+      assert candidate.routing_states.ws == nil
+    end
+
     test "returns empty list for unknown profile" do
       assert CandidateListing.list_candidates("nonexistent", @chain, %{}) == []
     end

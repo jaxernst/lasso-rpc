@@ -25,21 +25,7 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   @spec filter_channels([Channel.t()], String.t()) ::
           {:ok, capable :: [Channel.t()], filtered :: [Channel.t()]} | {:error, term()}
   def filter_channels(channels, method) when is_list(channels) and is_binary(method) do
-    :telemetry.span([:lasso, :capabilities, :filter], %{method: method}, fn ->
-      result = do_filter_channels(channels, method)
-
-      metadata = %{
-        method: method,
-        total_candidates: length(channels),
-        filtered_count:
-          case result do
-            {:ok, _capable, filtered} -> length(filtered)
-            _ -> 0
-          end
-      }
-
-      {result, metadata}
-    end)
+    do_filter_channels(channels, method)
   end
 
   @doc """
@@ -57,7 +43,8 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
       method,
       params,
       channel.profile,
-      channel.chain_id
+      channel.chain_id,
+      provider_capabilities(channel)
     )
   end
 
@@ -65,20 +52,14 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
 
   defp do_filter_channels(channels, method) do
     {capable, filtered} =
-      Enum.split_with(channels, fn %{provider_id: id, profile: profile, chain_id: chain_id} ->
-        caps = lookup_capabilities(profile, chain_id, id)
+      Enum.split_with(channels, fn %{provider_id: id} = channel ->
+        caps = provider_capabilities(channel)
 
         try do
           :ok == Capabilities.supports_method?(method, caps)
         rescue
           e ->
             Logger.error("Capabilities crash in supports_method?: #{id}, #{Exception.message(e)}")
-
-            :telemetry.execute([:lasso, :capabilities, :crash], %{count: 1}, %{
-              provider_id: id,
-              phase: :method_filter,
-              exception: Exception.format(:error, e, __STACKTRACE__)
-            })
 
             true
         end
@@ -87,9 +68,8 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
     apply_safety_check(capable, filtered, channels, method)
   end
 
-  defp safe_validate_params?(provider_id, method, params, profile, chain_id) do
+  defp safe_validate_params?(provider_id, method, params, profile, chain_id, caps) do
     ctx = %{provider_id: provider_id, profile: profile, chain_id: chain_id}
-    caps = lookup_capabilities(profile, chain_id, provider_id)
 
     Capabilities.validate_params(method, params, caps, ctx)
     |> handle_validation_result(provider_id, method)
@@ -99,37 +79,25 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
         "Capabilities crash in validate_params: #{provider_id}, #{Exception.message(e)}, stacktrace: #{Exception.format_stacktrace(__STACKTRACE__)}"
       )
 
-      :telemetry.execute([:lasso, :capabilities, :crash], %{count: 1}, %{
-        provider_id: provider_id,
-        phase: :param_validation,
-        exception: Exception.format(:error, e, __STACKTRACE__)
-      })
-
       {:error, :adapter_crash}
   end
 
-  defp lookup_capabilities(profile, chain_id, provider_id)
-       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and
-              is_binary(provider_id) do
-    case Lasso.Config.ConfigStore.get_provider(profile, chain_id, provider_id) do
+  defp provider_capabilities(%Channel{provider_capabilities: :unbound} = channel) do
+    case Lasso.Config.ConfigStore.get_provider(
+           channel.profile,
+           channel.chain_id,
+           channel.provider_id
+         ) do
       {:ok, provider_config} -> provider_config.capabilities
-      _ -> nil
+      _other -> nil
     end
   end
 
-  defp lookup_capabilities(_profile, _chain_id, _provider_id), do: nil
+  defp provider_capabilities(%Channel{provider_capabilities: capabilities}), do: capabilities
 
   defp handle_validation_result(:ok, _provider_id, _method), do: :ok
 
-  defp handle_validation_result({:error, reason} = err, provider_id, method) do
-    :telemetry.execute([:lasso, :capabilities, :param_reject], %{count: 1}, %{
-      provider_id: provider_id,
-      method: method,
-      reason: reason
-    })
-
-    err
-  end
+  defp handle_validation_result({:error, _reason} = error, _provider_id, _method), do: error
 
   defp handle_validation_result(other, provider_id, _method) do
     Logger.warning("Invalid validation result for #{provider_id}: #{inspect(other)}")
@@ -138,11 +106,6 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
 
   defp apply_safety_check([], _filtered, [_ | _] = all_channels, method) do
     Logger.warning("No providers support #{method}, allowing all (fail-open)")
-
-    :telemetry.execute([:lasso, :capabilities, :safety_override], %{count: 1}, %{
-      reason: :zero_capable,
-      method: method
-    })
 
     {:ok, all_channels, []}
   end

@@ -223,6 +223,42 @@ defmodule Lasso.Providers.CatalogTest do
     end
   end
 
+  describe "compiled routing plans" do
+    test "publishes immutable provider and selection data with the catalog generation" do
+      ConfigStore.register_chain_runtime(@profile_a, @chain_id, %{
+        chain_id: @chain_id,
+        display_name: "Compiled Plan Chain",
+        selection: %{max_lag_blocks: 7, archival_threshold: 64},
+        providers: [
+          %{
+            id: "compiled",
+            name: "Compiled",
+            url: "https://compiled.example.com",
+            api_key: "secret",
+            priority: 3,
+            capabilities: %{methods: ["eth_blockNumber"]}
+          }
+        ]
+      })
+
+      Catalog.build_from_config()
+      snapshot = Catalog.snapshot()
+
+      assert {:ok, plan} = Catalog.get_routing_plan(snapshot, @profile_a, @chain_id)
+      assert plan.generation == snapshot.generation
+      assert plan.max_lag_blocks == 7
+      assert plan.archival_threshold == 64
+      assert plan.provider_priorities == %{"compiled" => 3}
+
+      assert [provider] = plan.providers
+      assert provider.id == "compiled"
+      assert provider.priority == 3
+      assert provider.transports == [:http]
+      assert provider.config.capabilities == %{methods: ["eth_blockNumber"]}
+      assert {"authorization", "Bearer secret"} in provider.config.headers
+    end
+  end
+
   describe "lookup_instance_id/3" do
     test "returns nil for non-existent provider" do
       Catalog.build_from_config()
