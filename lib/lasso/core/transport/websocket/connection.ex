@@ -71,7 +71,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   require Logger
 
   alias Lasso.Core.Support.{AttemptLifecycle, CircuitBreaker}
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
+  alias Lasso.Core.Transport.UpstreamResponse
+  alias Lasso.Core.Transport.UpstreamResponse.Validated
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.{Catalog, InstanceState}
   alias Lasso.RPC.Response
@@ -85,6 +88,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   # (Cloudflare in front of most providers will rate-limit a synchronized burst).
   # Configurable so tests can disable jitter; defaults to 3s in dev/prod.
   @default_startup_jitter_ms 3_000
+  @default_transport_pending_limit 256
+  @default_send_cleanup_ms 100
+  @max_diagnostic_count 9_223_372_036_854_775_807
 
   # Client API
 
@@ -162,6 +168,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       connected: false,
       reconnect_attempts: 0,
       pending_requests: %{},
+      transport_pending: %{},
+      control_sends: %{},
+      transport_pending_limit: transport_pending_limit(),
+      transport_diagnostics: %{},
       heartbeat_ref: nil,
       reconnect_ref: nil,
       stability_timer_ref: nil,
@@ -184,8 +194,109 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     end
   end
 
+  @doc false
+  @spec transport_snapshot(String.t(), timeout()) ::
+          {:ok, {pid(), term()}} | {:error, :not_connected}
+  def transport_snapshot(instance_id, timeout_ms) do
+    GenServer.call(via_instance_name(instance_id), :transport_snapshot, timeout_ms)
+  end
+
+  @doc false
+  @spec authorize_transport(
+          String.t(),
+          String.t(),
+          pid(),
+          integer(),
+          integer(),
+          binary(),
+          timeout()
+        ) ::
+          {:ok, {pid(), term(), reference()}}
+          | {:error,
+             :authorization_unknown
+             | :capacity
+             | :cancelled
+             | :deadline
+             | :duplicate_transport_id
+             | :invalid_transport_id
+             | :not_connected}
+  def authorize_transport(
+        instance_id,
+        transport_id,
+        owner,
+        decision_deadline_us,
+        settlement_deadline_us,
+        encoded,
+        timeout_ms
+      ) do
+    GenServer.call(
+      via_instance_name(instance_id),
+      {:authorize_transport, transport_id, owner, decision_deadline_us, settlement_deadline_us,
+       encoded},
+      timeout_ms
+    )
+  catch
+    :exit, _reason -> {:error, :authorization_unknown}
+  end
+
+  @doc false
+  @spec register_transport(String.t(), {pid(), term()}, term(), pid(), integer(), timeout()) ::
+          {:ok, reference()}
+          | {:error,
+             :capacity
+             | :deadline
+             | :duplicate_transport_id
+             | :invalid_transport_id
+             | :stale_connection}
+  def register_transport(instance_id, snapshot, transport_id, owner, deadline_us, timeout_ms) do
+    GenServer.call(
+      via_instance_name(instance_id),
+      {:register_transport, snapshot, transport_id, owner, deadline_us},
+      timeout_ms
+    )
+  end
+
+  @doc false
+  @spec queue_transport(
+          String.t(),
+          term(),
+          term(),
+          reference(),
+          binary(),
+          timeout()
+        ) :: :ok | {:error, :cancelled | :deadline | :queue_unknown | :stale_connection}
+  def queue_transport(instance_id, transport_id, generation, token, encoded, timeout_ms) do
+    GenServer.call(
+      via_instance_name(instance_id),
+      {:queue_transport, transport_id, generation, token, encoded},
+      timeout_ms
+    )
+  catch
+    :exit, _reason -> {:error, :queue_unknown}
+  end
+
+  @doc false
+  @spec cancel_transport(String.t(), term(), term(), reference()) :: :ok
+  def cancel_transport(instance_id, transport_id, generation, token) do
+    GenServer.cast(
+      via_instance_name(instance_id),
+      {:cancel_transport, transport_id, generation, token}
+    )
+  end
+
   defp startup_jitter_ms do
     Application.get_env(:lasso, :ws_startup_jitter_ms, @default_startup_jitter_ms)
+  end
+
+  defp transport_pending_limit do
+    case Application.get_env(
+           :lasso,
+           :ws_transport_pending_limit,
+           @default_transport_pending_limit
+         ) do
+      limit when is_integer(limit) and limit > 0 -> limit
+      _invalid -> @default_transport_pending_limit
+    end
   end
 
   @doc """
@@ -329,12 +440,18 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   defp do_connect(state, breaker_id) do
     ws_connection_pid = self()
+    connection_generation = generate_connection_id()
 
-    case connect_to_websocket(state.endpoint, ws_connection_pid) do
+    case connect_to_websocket(state.endpoint, ws_connection_pid, connection_generation) do
       {:ok, connection} ->
         # Success - don't report to circuit breaker yet!
         # Recovery will be signaled when connection proves stable (5s)
-        state = %{state | connection: connection}
+        state = %{
+          state
+          | connection: connection,
+            connection_id: connection_generation
+        }
+
         {:noreply, state}
 
       {:error, error} ->
@@ -345,7 +462,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         )
 
         if jerr.breaker_penalty? do
-          CircuitBreaker.record_failure(breaker_id, jerr)
+          _ = CircuitBreaker.report_external_bounded(breaker_id, {:error, jerr})
         end
 
         :telemetry.execute(
@@ -447,15 +564,221 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   @impl true
   def handle_call(:status, _from, state) do
+    legacy_pending = map_size(state.pending_requests)
+    transport_pending = map_size(state.transport_pending)
+    control_sends = map_size(state.control_sends)
+
     status = %{
       connected: state.connected,
       connection_stable: state.connection_stable,
       endpoint_id: state.endpoint.id,
       reconnect_attempts: state.reconnect_attempts,
-      pending_requests: map_size(state.pending_requests)
+      pending_requests: legacy_pending + transport_pending + control_sends,
+      legacy_pending_requests: legacy_pending,
+      transport_pending_requests: transport_pending,
+      transport_tombstones: count_send_state(state.transport_pending, :tombstone),
+      queued_control_sends: control_sends,
+      transport_pending_limit: state.transport_pending_limit,
+      transport_diagnostics: state.transport_diagnostics
     }
 
     {:reply, status, state}
+  end
+
+  def handle_call(:transport_snapshot, _from, %{connected: true} = state) do
+    {:reply, {:ok, {state.connection, state.connection_id}}, state}
+  end
+
+  def handle_call(:transport_snapshot, _from, state),
+    do: {:reply, {:error, :not_connected}, state}
+
+  def handle_call(
+        {:authorize_transport, transport_id, owner, decision_deadline_us, settlement_deadline_us,
+         encoded},
+        _from,
+        %{connected: true, connection: connection, connection_id: generation} = state
+      )
+      when is_binary(encoded) and is_pid(owner) do
+    now_us = System.monotonic_time(:microsecond)
+
+    cond do
+      now_us >= decision_deadline_us ->
+        {:reply, {:error, :deadline}, state}
+
+      settlement_deadline_us < decision_deadline_us or
+          settlement_deadline_us > decision_deadline_us + 1_000 ->
+        {:reply, {:error, :deadline}, state}
+
+      not Process.alive?(owner) ->
+        {:reply, {:error, :cancelled}, state}
+
+      not UpstreamResponse.transport_id?(transport_id) ->
+        {:reply, {:error, :invalid_transport_id}, state}
+
+      Map.has_key?(state.transport_pending, transport_id) ->
+        {:reply, {:error, :duplicate_transport_id}, state}
+
+      send_capacity_used(state) >= state.transport_pending_limit ->
+        {:reply, {:error, :capacity}, state}
+
+      true ->
+        token = make_ref()
+        cancel_latch = :atomics.new(1, signed: false)
+        monitor = Process.monitor(owner)
+
+        timer =
+          Process.send_after(
+            self(),
+            {:transport_timeout, transport_id, generation, token},
+            ceil_milliseconds(settlement_deadline_us - now_us)
+          )
+
+        pending = %{
+          owner: owner,
+          owner_monitor: monitor,
+          token: token,
+          timer: timer,
+          generation: generation,
+          deadline_us: decision_deadline_us,
+          decision_deadline_us: decision_deadline_us,
+          settlement_deadline_us: settlement_deadline_us,
+          connection: connection,
+          cancel_latch: cancel_latch,
+          send_state: :queued
+        }
+
+        next_state =
+          %{state | transport_pending: Map.put(state.transport_pending, transport_id, pending)}
+
+        case cast_send(
+               next_state,
+               {:transport, transport_id, token},
+               decision_deadline_us,
+               cancel_latch,
+               {:text, encoded}
+             ) do
+          :ok ->
+            {:reply, {:ok, {connection, generation, token}}, next_state}
+
+          {:error, _reason} ->
+            cleanup_send_entry(pending)
+            {:reply, {:error, :cancelled}, state}
+        end
+    end
+  end
+
+  def handle_call(
+        {:authorize_transport, _transport_id, _owner, _decision_deadline, _settlement_deadline,
+         _encoded},
+        _from,
+        state
+      ),
+      do: {:reply, {:error, :not_connected}, state}
+
+  def handle_call(
+        {:register_transport, {connection, generation}, transport_id, owner, deadline_us},
+        _from,
+        %{connected: true, connection: connection, connection_id: generation} = state
+      ) do
+    remaining_us = deadline_us - System.monotonic_time(:microsecond)
+
+    cond do
+      remaining_us <= 0 ->
+        {:reply, {:error, :deadline}, state}
+
+      not transport_id_for_generation?(transport_id, generation) ->
+        {:reply, {:error, :invalid_transport_id}, state}
+
+      Map.has_key?(state.transport_pending, transport_id) ->
+        {:reply, {:error, :duplicate_transport_id}, state}
+
+      send_capacity_used(state) >= state.transport_pending_limit ->
+        {:reply, {:error, :capacity}, state}
+
+      true ->
+        token = make_ref()
+        cancel_latch = :atomics.new(1, signed: false)
+        monitor = Process.monitor(owner)
+        timeout_ms = ceil_milliseconds(remaining_us)
+
+        timer =
+          Process.send_after(
+            self(),
+            {:transport_timeout, transport_id, generation, token},
+            timeout_ms
+          )
+
+        pending = %{
+          owner: owner,
+          owner_monitor: monitor,
+          token: token,
+          timer: timer,
+          generation: generation,
+          deadline_us: deadline_us,
+          decision_deadline_us: deadline_us,
+          settlement_deadline_us: deadline_us,
+          connection: connection,
+          cancel_latch: cancel_latch,
+          send_state: :registered
+        }
+
+        {:reply, {:ok, token},
+         %{state | transport_pending: Map.put(state.transport_pending, transport_id, pending)}}
+    end
+  end
+
+  def handle_call({:register_transport, _snapshot, _id, _owner, _deadline}, _from, state),
+    do: {:reply, {:error, :stale_connection}, state}
+
+  def handle_call(
+        {:queue_transport, transport_id, generation, token, encoded},
+        _from,
+        %{connected: true, connection_id: generation} = state
+      ) do
+    now_us = System.monotonic_time(:microsecond)
+
+    case Map.get(state.transport_pending, transport_id) do
+      %{generation: ^generation, token: ^token, send_state: :registered} = pending ->
+        cond do
+          now_us >= pending.deadline_us ->
+            state = cancel_registered_transport(state, transport_id, pending)
+            {:reply, {:error, :deadline}, state}
+
+          not Process.alive?(pending.owner) ->
+            state = cancel_registered_transport(state, transport_id, pending)
+            {:reply, {:error, :cancelled}, state}
+
+          true ->
+            pending = %{pending | send_state: :queued}
+            state = put_in(state, [:transport_pending, transport_id], pending)
+
+            case cast_send(
+                   state,
+                   {:transport, transport_id, token},
+                   pending.deadline_us,
+                   pending.cancel_latch,
+                   {:text, encoded}
+                 ) do
+              :ok ->
+                {:reply, :ok, state}
+
+              {:error, _reason} ->
+                state = cancel_registered_transport(state, transport_id, pending)
+                {:reply, {:error, :cancelled}, state}
+            end
+        end
+
+      _missing_or_stale ->
+        {:reply, {:error, :cancelled}, state}
+    end
+  end
+
+  def handle_call({:queue_transport, _id, _generation, _token, _encoded}, _from, state),
+    do: {:reply, {:error, :stale_connection}, state}
+
+  @impl true
+  def handle_cast({:cancel_transport, transport_id, generation, token}, state) do
+    {:noreply, cancel_transport_by_key(state, transport_id, generation, token)}
   end
 
   defp handle_authorized_request(
@@ -468,53 +791,72 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
          timeout_ms,
          state
        ) do
-    sent_at = System.monotonic_time(:microsecond)
-    confirmation = AttemptLifecycle.confirm_dispatched(dispatch_context)
+    caller_pid = elem(from, 0)
 
-    case {confirmation, send_frame_if_confirmed(confirmation, state.connection, encoded_message)} do
-      {{:error, :cancelled}, _not_sent} ->
-        jerr =
-          JError.new(-32_008, "WebSocket request cancelled before dispatch",
-            provider_id: state.endpoint.id,
-            retriable?: true,
-            breaker_penalty?: false,
-            category: :cancelled
+    cond do
+      not Process.alive?(caller_pid) ->
+        {:reply, {:error, cancelled_request_error(state)}, state}
+
+      send_capacity_used(state) >= state.transport_pending_limit ->
+        AttemptLifecycle.abort_dispatch(dispatch_context)
+        {:reply, {:error, capacity_error(state)}, state}
+
+      Map.has_key?(state.pending_requests, request_id) ->
+        AttemptLifecycle.abort_dispatch(dispatch_context)
+        {:reply, {:error, capacity_error(state)}, state}
+
+      true ->
+        sent_at = System.monotonic_time(:microsecond)
+        deadline_us = sent_at + timeout_ms * 1_000
+        token = make_ref()
+        cancel_latch = :atomics.new(1, signed: false)
+        owner_monitor = Process.monitor(caller_pid)
+
+        timer =
+          Process.send_after(
+            self(),
+            {:request_timeout, request_id, state.connection_id, token},
+            timeout_ms
           )
 
-        {:reply, {:error, jerr}, state}
+        pending = %{
+          from: from,
+          owner: caller_pid,
+          owner_monitor: owner_monitor,
+          timer: timer,
+          sent_at: sent_at,
+          method: method,
+          timeout_ms: timeout_ms,
+          token: token,
+          generation: state.connection_id,
+          connection: state.connection,
+          deadline_us: deadline_us,
+          cancel_latch: cancel_latch,
+          send_state: :queued
+        }
 
-      {:ok, :ok} ->
-        :telemetry.execute(
-          [:lasso, :websocket, :request, :sent],
-          %{},
-          %{
-            provider_id: state.endpoint.id,
-            method: method,
-            request_id: request_id,
-            timeout_ms: timeout_ms
-          }
-        )
+        state = put_in(state, [:pending_requests, request_id], pending)
 
-        timer = Process.send_after(self(), {:request_timeout, request_id}, timeout_ms)
+        case cast_send(
+               state,
+               {:legacy, request_id, token},
+               deadline_us,
+               cancel_latch,
+               {:text, encoded_message}
+             ) do
+          :ok ->
+            {:noreply, state}
 
-        pending =
-          Map.put(state.pending_requests, request_id, %{
-            from: from,
-            timer: timer,
-            sent_at: sent_at,
-            method: method
-          })
+          {:error, reason} ->
+            state = remove_legacy_pending(state, request_id, pending)
 
-        {:noreply, %{state | pending_requests: pending}}
-
-      {:ok, {:error, reason}} ->
-        jerr =
-          ErrorNormalizer.normalize(reason,
-            provider_id: state.endpoint.id,
-            transport: :ws
-          )
-
-        {:reply, {:error, jerr}, state}
+            {:reply,
+             {:error,
+              ErrorNormalizer.normalize(reason,
+                provider_id: state.endpoint.id,
+                transport: :ws
+              )}, state}
+        end
     end
   end
 
@@ -539,25 +881,108 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     {:reply, {:error, jerr}, state}
   end
 
-  defp send_frame_if_confirmed(:ok, connection, encoded_message) do
-    send_frame(connection, {:text, encoded_message})
+  @impl true
+  def handle_info(
+        {:ws_send_decision, connection, generation, {:transport, transport_id, token}, decision,
+         decided_at_us},
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    case Map.get(state.transport_pending, transport_id) do
+      %{generation: ^generation, token: ^token, send_state: :queued} = pending ->
+        case decision do
+          :accepted ->
+            send(pending.owner, {:ws_transport_send_accepted, token, generation, decided_at_us})
+
+            {:noreply,
+             put_in(state, [:transport_pending, transport_id], %{pending | send_state: :accepted})}
+
+          {:rejected, reason} ->
+            send(pending.owner, {:ws_transport_send_rejected, token, generation, reason})
+            {:noreply, remove_transport_entry(state, transport_id, pending)}
+        end
+
+      %{generation: ^generation, token: ^token, send_state: :tombstone} = pending ->
+        {:noreply, remove_transport_entry(state, transport_id, pending)}
+
+      _missing_or_stale ->
+        {:noreply, increment_transport_diagnostic(state, :stale_send_decision)}
+    end
   end
 
-  defp send_frame_if_confirmed({:error, :cancelled}, _connection, _encoded_message),
-    do: :not_sent
+  def handle_info(
+        {:ws_send_decision, connection, generation, {:legacy, request_id, token}, decision,
+         _decided_at_us},
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    case Map.get(state.pending_requests, request_id) do
+      %{generation: ^generation, token: ^token, send_state: :queued} = pending ->
+        case decision do
+          :accepted ->
+            :telemetry.execute(
+              [:lasso, :websocket, :request, :sent],
+              %{},
+              %{
+                provider_id: state.endpoint.id,
+                method: pending.method,
+                request_id: request_id,
+                timeout_ms: pending.timeout_ms
+              }
+            )
 
-  @impl true
+            {:noreply,
+             put_in(state, [:pending_requests, request_id], %{pending | send_state: :accepted})}
+
+          {:rejected, reason} ->
+            GenServer.reply(
+              pending.from,
+              {:error,
+               ErrorNormalizer.normalize(reason,
+                 provider_id: state.endpoint.id,
+                 transport: :ws
+               )}
+            )
+
+            {:noreply, remove_legacy_pending(state, request_id, pending)}
+        end
+
+      %{generation: ^generation, token: ^token, send_state: :tombstone} = pending ->
+        {:noreply, remove_legacy_pending(state, request_id, pending)}
+
+      _missing_or_stale ->
+        {:noreply, increment_transport_diagnostic(state, :stale_send_decision)}
+    end
+  end
+
+  def handle_info(
+        {:ws_send_decision, connection, generation, {:control, token}, decision, _decided_at_us},
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    case Map.get(state.control_sends, token) do
+      %{generation: ^generation} = control ->
+        state = remove_control_send(state, token, control)
+        {:noreply, handle_control_decision(state, control, decision)}
+
+      _missing_or_stale ->
+        {:noreply, increment_transport_diagnostic(state, :stale_send_decision)}
+    end
+  end
+
+  def handle_info({:ws_send_decision, _connection, _generation, _key, _decision, _at}, state) do
+    {:noreply, increment_transport_diagnostic(state, :stale_send_decision)}
+  end
+
   def handle_info(:initial_connect, state), do: handle_continue(:connect, state)
 
-  def handle_info({:ws_connected}, state) do
+  def handle_info(
+        {:ws_connected, connection, connection_generation},
+        %{connection: connection, connection_id: connection_generation} = state
+      ) do
     # NOTE: We intentionally do NOT call signal_recovery here.
     # Recovery is signaled only after the connection proves stable (see {:connection_stable}).
     # This allows circuit breaker failures to accumulate when providers accept connections
     # but immediately drop them (e.g., dRPC connection limits).
 
-    # Generate new connection_id for this connection instance
-    # This allows consumers to detect when subscriptions are stale (from previous connection)
-    connection_id = generate_connection_id()
+    connection_id = connection_generation
 
     :telemetry.execute(
       [:lasso, :websocket, :connected],
@@ -573,7 +998,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     # Mark as connected but DON'T reset reconnect_attempts yet.
     # Schedule stability timer - only reset attempts after connection proves stable.
     # This prevents thrashing when providers drop connections immediately after connect.
-    state = %{state | connected: true, connection_id: connection_id}
+    state = %{state | connected: true}
 
     # Cancel any pending reconnect timer (stale) now that we're connected
     state =
@@ -610,26 +1035,102 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     {:noreply, state}
   end
 
-  def handle_info({:ws_message, raw_bytes, _frame_received_at}, state) do
-    case Response.from_bytes(raw_bytes) do
-      {:ok, %Response.Success{id: nil}} ->
-        # Safety guard: Response with nil id is likely a misclassified notification.
-        # This shouldn't happen with proper EnvelopeParser method-field detection,
-        # but provides defense-in-depth.
-        handle_non_response_message(raw_bytes, state)
+  def handle_info({:ws_connected, _connection, _connection_generation}, state) do
+    {:noreply, increment_transport_diagnostic(state, :stale_generation)}
+  end
 
-      {:ok, %Response.Success{id: id} = resp} ->
-        handle_response_success(id, resp, state)
+  def handle_info(
+        {:ws_message, connection, generation, parsed, raw_bytes, frame_received_at, validated_at},
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    {:noreply,
+     route_ws_message(
+       state,
+       connection,
+       generation,
+       parsed,
+       raw_bytes,
+       frame_received_at,
+       validated_at
+     )}
+  end
 
-      {:ok, %Response.Error{id: id, error: jerr}} ->
-        handle_response_error(id, jerr, state)
+  def handle_info(
+        {:ws_message, _connection, _generation, _parsed, _raw_bytes, _received_at, _validated_at},
+        state
+      ) do
+    {:noreply, increment_transport_diagnostic(state, :stale_generation)}
+  end
 
-      {:ok, %Response.Notification{} = notification} ->
-        handle_notification(notification, state)
+  def handle_info({:ws_message, _raw_bytes, _frame_received_at}, state) do
+    {:noreply, increment_transport_diagnostic(state, :unstamped_frame)}
+  end
 
-      {:error, _parse_reason} ->
-        handle_non_response_message(raw_bytes, state)
+  def handle_info({:transport_timeout, transport_id, generation, token}, state) do
+    case Map.get(state.transport_pending, transport_id) do
+      %{generation: ^generation, token: ^token, send_state: :tombstone} ->
+        {:noreply, state}
+
+      %{generation: ^generation, token: ^token} = pending ->
+        now_us = System.monotonic_time(:microsecond)
+
+        if now_us < pending.settlement_deadline_us do
+          timer =
+            Process.send_after(
+              self(),
+              {:transport_timeout, transport_id, generation, token},
+              ceil_milliseconds(pending.settlement_deadline_us - now_us)
+            )
+
+          updated = %{pending | timer: timer}
+
+          {:noreply,
+           %{state | transport_pending: Map.put(state.transport_pending, transport_id, updated)}}
+        else
+          case take_eligible_transport_frame(pending, transport_id) do
+            {:ok, parsed, raw_bytes, frame_received_at, validated_at} ->
+              {:noreply,
+               route_ws_message(
+                 state,
+                 pending.connection,
+                 generation,
+                 parsed,
+                 raw_bytes,
+                 frame_received_at,
+                 validated_at
+               )}
+
+            :none ->
+              send(pending.owner, {:ws_transport_timeout, token, generation})
+              {:noreply, retire_transport_send(state, transport_id, pending)}
+          end
+        end
+
+      _ ->
+        {:noreply, state}
     end
+  end
+
+  def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do
+    state =
+      Enum.reduce(state.transport_pending, state, fn {id, entry}, current_state ->
+        if entry.owner_monitor == monitor and entry.owner == owner do
+          retire_transport_send(current_state, id, entry)
+        else
+          current_state
+        end
+      end)
+
+    state =
+      Enum.reduce(state.pending_requests, state, fn {id, entry}, current_state ->
+        if entry.owner_monitor == monitor and entry.owner == owner do
+          retire_legacy_send(current_state, id, entry)
+        else
+          current_state
+        end
+      end)
+
+    {:noreply, state}
   end
 
   def handle_info({:ws_error, error}, state) do
@@ -647,6 +1148,17 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     end)
 
     {:noreply, state}
+  end
+
+  def handle_info(
+        {:ws_disconnect_event, connection, generation, disconnect_info},
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    handle_info(disconnect_info, state)
+  end
+
+  def handle_info({:ws_disconnect_event, _connection, _generation, _disconnect_info}, state) do
+    {:noreply, increment_transport_diagnostic(state, :stale_generation)}
   end
 
   def handle_info({:ws_disconnect, :close_frame, _code, _reason}, %{connected: false} = state) do
@@ -678,7 +1190,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         state
       end
 
-    had_pending = map_size(state.pending_requests) > 0
+    had_pending = active_pending?(state)
 
     jerr =
       ErrorNormalizer.normalize({:ws_close, code, reason},
@@ -707,7 +1219,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     end
 
     # Clean up any pending requests
-    pending_count = map_size(state.pending_requests)
+    pending_count = total_pending_count(state)
     state = cleanup_pending_requests(state, jerr)
     state = %{state | connected: false, connection: nil, connection_stable: false}
 
@@ -729,18 +1241,13 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
     jerr_with_penalty = %{jerr | breaker_penalty?: should_penalize and jerr.breaker_penalty?}
 
-    # Record failure to circuit breaker synchronously when penalizing
-    # This prevents hammering providers that accept connections but immediately drop them
     circuit_state =
       if should_penalize do
         breaker_id = {state.instance_id, :ws}
 
-        case CircuitBreaker.record_failure_sync(breaker_id, jerr_with_penalty) do
-          {:ok, state} -> state
-          {:error, _} -> :closed
-        end
+        CircuitBreaker.report_external_bounded(breaker_id, {:error, jerr_with_penalty})
       else
-        :closed
+        :not_penalized
       end
 
     Logger.debug("Circuit breaker state after close frame",
@@ -788,7 +1295,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           state
         end
 
-      had_pending = map_size(state.pending_requests) > 0
+      had_pending = active_pending?(state)
 
       jerr =
         ErrorNormalizer.normalize({:ws_disconnect, reason},
@@ -802,7 +1309,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       )
 
       # Clean up any pending requests
-      pending_count = map_size(state.pending_requests)
+      pending_count = total_pending_count(state)
       state = cleanup_pending_requests(state, jerr)
       state = %{state | connected: false, connection: nil, connection_stable: false}
 
@@ -824,20 +1331,15 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       # Unexpected disconnects always warrant circuit breaker penalty
       jerr_with_penalty = %{jerr | breaker_penalty?: true}
 
-      Logger.debug("Recording circuit breaker failure (sync)",
+      Logger.debug("Enqueuing circuit breaker failure",
         provider_id: state.endpoint.id,
         breaker_penalty: jerr_with_penalty.breaker_penalty?
       )
 
-      # Record failure to circuit breaker synchronously
-      # This ensures the circuit state is updated before we schedule reconnect
       breaker_id = {state.instance_id, :ws}
 
       circuit_state =
-        case CircuitBreaker.record_failure_sync(breaker_id, jerr_with_penalty) do
-          {:ok, state} -> state
-          {:error, _} -> :closed
-        end
+        CircuitBreaker.report_external_bounded(breaker_id, {:error, jerr_with_penalty})
 
       Logger.debug("Circuit breaker state after disconnect",
         provider_id: state.endpoint.id,
@@ -860,59 +1362,20 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   def handle_info(
         {:heartbeat},
-        %{connected: true, connection: connection, endpoint: endpoint} = state
+        %{connected: true, endpoint: endpoint} = state
       ) do
-    case send_frame(connection, :ping) do
-      :ok ->
-        # Emit telemetry event
-        :telemetry.execute(
-          [:lasso, :websocket, :heartbeat, :sent],
-          %{},
-          %{
-            provider_id: endpoint.id
-          }
-        )
+    case enqueue_control_send(state, :heartbeat, :ping, control_send_timeout_ms()) do
+      {:ok, state} ->
+        {:noreply, %{state | heartbeat_ref: nil}}
 
-        state = schedule_heartbeat(state)
-        {:noreply, state}
-
-      {:error, :timeout} ->
-        Logger.warning(
-          "Heartbeat ping timeout for #{endpoint.id} - connection appears hung, reconnecting"
-        )
-
-        # Emit telemetry event
+      {:error, reason, state} ->
         :telemetry.execute(
           [:lasso, :websocket, :heartbeat, :failed],
           %{},
-          %{
-            provider_id: endpoint.id,
-            reason: :timeout
-          }
+          %{provider_id: endpoint.id, reason: reason}
         )
 
-        # Connection is hung - treat as disconnect and reconnect
-        jerr =
-          JError.new(-32_000, "Heartbeat timeout",
-            provider_id: endpoint.id,
-            retriable?: true
-          )
-
-        state = cleanup_pending_requests(state, jerr)
-        state = %{state | connected: false, connection: nil}
-
-        broadcast_conn_event(state, fn provider_id ->
-          {:ws_disconnected, provider_id, jerr}
-        end)
-
-        state = schedule_reconnect(state)
-        write_ws_status(state.instance_id, :disconnected, state.reconnect_attempts)
-        {:noreply, state}
-
-      {:error, reason} ->
-        Logger.debug("Heartbeat ping failed for #{endpoint.id}: #{inspect(reason)}")
-
-        {:noreply, state}
+        {:noreply, schedule_heartbeat(%{state | heartbeat_ref: nil})}
     end
   end
 
@@ -920,38 +1383,87 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     {:noreply, state}
   end
 
-  def handle_info({:request_timeout, request_id}, state) do
-    case Map.pop(state.pending_requests, request_id) do
-      {nil, _} ->
+  def handle_info({:control_send_timeout, token, generation}, state) do
+    case Map.get(state.control_sends, token) do
+      %{generation: ^generation} = control ->
+        _ = cancel_latch(control.cancel_latch)
+        control = %{control | send_state: :tombstone}
+        state = put_in(state, [:control_sends, token], control)
+
+        if control.kind == :heartbeat and is_pid(state.connection) do
+          Process.exit(state.connection, :kill)
+        end
+
         {:noreply, state}
 
-      {%{from: from, sent_at: sent_at, method: method}, new_pending} ->
-        timeout_ms = div(System.monotonic_time(:microsecond) - sent_at, 1000)
+      _missing_or_stale ->
+        {:noreply, state}
+    end
+  end
 
-        # Emit telemetry event
-        :telemetry.execute(
-          [:lasso, :websocket, :request, :timeout],
-          %{
-            timeout_ms: timeout_ms
-          },
-          %{
-            provider_id: state.endpoint.id,
-            method: method,
-            request_id: request_id
-          }
-        )
+  def handle_info(
+        {:send_cleanup_expired, connection, generation, send_key, token, cleanup_expiry_us},
+        state
+      ) do
+    {:noreply,
+     expire_send_tombstone(
+       state,
+       connection,
+       generation,
+       send_key,
+       token,
+       cleanup_expiry_us
+     )}
+  end
 
-        GenServer.reply(
-          from,
-          {:error,
-           JError.new(-32_000, "WebSocket request timeout",
-             category: :timeout,
-             retriable?: true,
-             provider_id: state.endpoint.id
-           )}
-        )
+  def handle_info({:request_timeout, request_id, generation, token}, state) do
+    case Map.get(state.pending_requests, request_id) do
+      nil ->
+        {:noreply, state}
 
-        {:noreply, %{state | pending_requests: new_pending}}
+      %{generation: ^generation, token: ^token, send_state: :tombstone} ->
+        {:noreply, state}
+
+      %{generation: ^generation, token: ^token} = pending ->
+        now_us = System.monotonic_time(:microsecond)
+
+        if now_us < pending.deadline_us do
+          timer =
+            Process.send_after(
+              self(),
+              {:request_timeout, request_id, generation, token},
+              ceil_milliseconds(pending.deadline_us - now_us)
+            )
+
+          {:noreply, put_in(state, [:pending_requests, request_id, :timer], timer)}
+        else
+          timeout_ms = div(now_us - pending.sent_at, 1000)
+
+          :telemetry.execute(
+            [:lasso, :websocket, :request, :timeout],
+            %{timeout_ms: timeout_ms},
+            %{
+              provider_id: state.endpoint.id,
+              method: pending.method,
+              request_id: request_id
+            }
+          )
+
+          GenServer.reply(
+            pending.from,
+            {:error,
+             JError.new(-32_000, "WebSocket request timeout",
+               category: :timeout,
+               retriable?: true,
+               provider_id: state.endpoint.id
+             )}
+          )
+
+          {:noreply, retire_legacy_send(state, request_id, pending)}
+        end
+
+      _stale_timer ->
+        {:noreply, state}
     end
   end
 
@@ -1022,7 +1534,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         state
       end
 
-    had_pending = map_size(state.pending_requests) > 0
+    had_pending = active_pending?(state)
 
     jerr =
       ErrorNormalizer.normalize({:ws_exit, reason},
@@ -1036,7 +1548,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     )
 
     # Clean up pending requests
-    pending_count = map_size(state.pending_requests)
+    pending_count = total_pending_count(state)
     state = cleanup_pending_requests(state, jerr)
     state = %{state | connected: false, connection: nil, connection_stable: false}
 
@@ -1059,10 +1571,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     breaker_id = {state.instance_id, :ws}
 
     circuit_state =
-      case CircuitBreaker.record_failure_sync(breaker_id, jerr_with_penalty) do
-        {:ok, cb_state} -> cb_state
-        {:error, _} -> :closed
-      end
+      CircuitBreaker.report_external_bounded(breaker_id, {:error, jerr_with_penalty})
 
     Logger.debug("Circuit breaker state after WebSockex exit",
       provider_id: state.endpoint.id,
@@ -1148,29 +1657,33 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   # Private functions
 
   defp handle_response_success(id, resp, state) do
-    case Map.pop(state.pending_requests, id) do
-      {nil, _pending} ->
+    case Map.get(state.pending_requests, id) do
+      nil ->
         {:noreply, state}
 
-      {%{from: from, timer: timer, sent_at: sent_at, method: method}, new_pending} ->
-        Process.cancel_timer(timer)
-        duration_ms = div(System.monotonic_time(:microsecond) - sent_at, 1000)
+      %{send_state: :tombstone} = pending ->
+        {:noreply, remove_legacy_pending(state, id, pending)}
 
-        emit_completion_telemetry(state.endpoint.id, method, id, :success, duration_ms)
-        GenServer.reply(from, {:ok, resp})
+      pending ->
+        duration_ms = div(System.monotonic_time(:microsecond) - pending.sent_at, 1000)
 
-        {:noreply, %{state | pending_requests: new_pending}}
+        emit_completion_telemetry(state.endpoint.id, pending.method, id, :success, duration_ms)
+        GenServer.reply(pending.from, {:ok, resp})
+
+        {:noreply, remove_legacy_pending(state, id, pending)}
     end
   end
 
   defp handle_response_error(id, jerr, state) do
-    case Map.pop(state.pending_requests, id) do
-      {nil, _pending} ->
+    case Map.get(state.pending_requests, id) do
+      nil ->
         {:noreply, state}
 
-      {%{from: from, timer: timer, sent_at: sent_at, method: method}, new_pending} ->
-        Process.cancel_timer(timer)
-        duration_ms = div(System.monotonic_time(:microsecond) - sent_at, 1000)
+      %{send_state: :tombstone} = pending ->
+        {:noreply, remove_legacy_pending(state, id, pending)}
+
+      pending ->
+        duration_ms = div(System.monotonic_time(:microsecond) - pending.sent_at, 1000)
 
         %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
           ErrorClassifier.classify(jerr.code, jerr.message,
@@ -1187,10 +1700,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
             breaker_penalty?: breaker_penalty?
         }
 
-        emit_completion_telemetry(state.endpoint.id, method, id, :error, duration_ms)
-        GenServer.reply(from, {:error, enriched})
+        emit_completion_telemetry(state.endpoint.id, pending.method, id, :error, duration_ms)
+        GenServer.reply(pending.from, {:error, enriched})
 
-        {:noreply, %{state | pending_requests: new_pending}}
+        {:noreply, remove_legacy_pending(state, id, pending)}
     end
   end
 
@@ -1246,7 +1759,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   defp normalize_connect_error(other, endpoint_id),
     do: JError.from(other, provider_id: endpoint_id)
 
-  defp connect_to_websocket(endpoint, parent_pid) do
+  defp connect_to_websocket(endpoint, parent_pid, connection_generation) do
     # Start a separate WebSocket handler process
     # Pass connection_id in opts for test-mode failure injection (MockWSClient)
     # WebSockex ignores unknown opts, so this is safe for production
@@ -1255,7 +1768,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     case ws_client().start_link(
            endpoint.ws_url,
            Lasso.RPC.Transport.WebSocket.Handler,
-           %{endpoint: endpoint, parent: parent_pid},
+           %{
+             endpoint: endpoint,
+             parent: parent_pid,
+             connection_generation: connection_generation
+           },
            opts
          ) do
       {:ok, pid} ->
@@ -1291,8 +1808,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp schedule_reconnect_with_circuit_check(state) do
-    case CircuitBreaker.get_state({state.instance_id, :ws}) do
-      %{state: :open} ->
+    case Snapshot.lookup({state.instance_id, :ws}) do
+      {:ok, %Snapshot{state: :open}} ->
         # Circuit is open - use longer delay before next reconnect attempt
         Logger.debug("Circuit breaker open for #{state.endpoint.id}, delaying reconnect")
 
@@ -1427,7 +1944,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp cleanup_pending_requests(state, error) do
-    pending_count = map_size(state.pending_requests)
+    pending_count = total_pending_count(state)
 
     if pending_count > 0 do
       # Emit telemetry for production visibility (metrics)
@@ -1443,15 +1960,495 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       )
 
       Enum.each(state.pending_requests, fn {_id, req_info} ->
-        Process.cancel_timer(req_info.timer)
-        GenServer.reply(req_info.from, {:error, error})
+        _ = cancel_latch(req_info.cancel_latch)
+        cleanup_send_entry(req_info)
+
+        if req_info.send_state != :tombstone do
+          GenServer.reply(req_info.from, {:error, error})
+        end
       end)
 
-      %{state | pending_requests: %{}}
+      state
+      |> Map.put(:pending_requests, %{})
+      |> cleanup_transport_pending(error)
+      |> cleanup_control_sends()
     else
       state
+      |> cleanup_transport_pending(error)
+      |> cleanup_control_sends()
     end
   end
+
+  defp cleanup_transport_pending(state, error) do
+    Enum.each(state.transport_pending, fn {_id, pending} ->
+      _ = cancel_latch(pending.cancel_latch)
+      cleanup_send_entry(pending)
+
+      if pending.send_state != :tombstone do
+        send(
+          pending.owner,
+          {:ws_transport_disconnected, pending.token, pending.generation, error}
+        )
+      end
+    end)
+
+    %{state | transport_pending: %{}}
+  end
+
+  defp route_ws_message(
+         state,
+         connection,
+         generation,
+         parsed,
+         raw_bytes,
+         frame_received_at,
+         validated_at
+       )
+       when is_binary(raw_bytes) and is_integer(frame_received_at) and is_integer(validated_at) do
+    case parsed do
+      {:transport, %Validated{id: transport_id} = validated} ->
+        route_transport_id(
+          state,
+          connection,
+          generation,
+          transport_id,
+          {:ok, validated},
+          raw_bytes,
+          frame_received_at,
+          validated_at
+        )
+
+      {:transport_invalid, transport_id, reason} ->
+        route_transport_id(
+          state,
+          connection,
+          generation,
+          transport_id,
+          {:invalid, reason},
+          raw_bytes,
+          frame_received_at,
+          validated_at
+        )
+
+      :legacy ->
+        legacy_ws_state(raw_bytes, state)
+
+      {:unattributable, _reason} ->
+        increment_transport_diagnostic(state, :unattributable_frame)
+    end
+  end
+
+  defp route_ws_message(
+         state,
+         _connection,
+         _generation,
+         _parsed,
+         _raw_bytes,
+         _frame_received_at,
+         _validated_at
+       ),
+       do: increment_transport_diagnostic(state, :invalid_frame_stamp)
+
+  defp route_transport_id(
+         state,
+         connection,
+         generation,
+         transport_id,
+         validation,
+         raw_bytes,
+         frame_received_at,
+         validated_at
+       ) do
+    case Map.get(state.transport_pending, transport_id) do
+      %{
+        generation: ^generation,
+        connection: ^connection,
+        send_state: send_state
+      } = pending
+      when send_state != :tombstone ->
+        cleanup_send_entry(pending)
+
+        send(
+          pending.owner,
+          {:ws_transport_response, pending.token, generation, connection, validation, raw_bytes,
+           frame_received_at, validated_at}
+        )
+
+        %{state | transport_pending: Map.delete(state.transport_pending, transport_id)}
+
+      %{generation: ^generation, connection: ^connection} = pending ->
+        state
+        |> remove_transport_entry(transport_id, pending)
+        |> increment_transport_diagnostic(:late_or_uncorrelated_response)
+
+      _missing_or_stale ->
+        increment_transport_diagnostic(state, :late_or_uncorrelated_response)
+    end
+  end
+
+  defp legacy_ws_state(raw_bytes, state) do
+    case handle_legacy_ws_message(raw_bytes, state) do
+      {:noreply, new_state} -> new_state
+    end
+  end
+
+  defp take_eligible_transport_frame(pending, transport_id) do
+    connection = pending.connection
+    generation = pending.generation
+    decision_deadline_us = pending.decision_deadline_us
+
+    receive do
+      {:ws_message, ^connection, ^generation,
+       {:transport, %Validated{id: ^transport_id}} = parsed, raw_bytes, frame_received_at,
+       validated_at}
+      when is_binary(raw_bytes) and is_integer(frame_received_at) and is_integer(validated_at) and
+             validated_at < decision_deadline_us ->
+        {:ok, parsed, raw_bytes, frame_received_at, validated_at}
+
+      {:ws_message, ^connection, ^generation,
+       {:transport_invalid, ^transport_id, _reason} = parsed, raw_bytes, frame_received_at,
+       validated_at}
+      when is_binary(raw_bytes) and is_integer(frame_received_at) and is_integer(validated_at) and
+             validated_at < decision_deadline_us ->
+        {:ok, parsed, raw_bytes, frame_received_at, validated_at}
+    after
+      0 -> :none
+    end
+  end
+
+  defp increment_transport_diagnostic(state, reason) do
+    diagnostics =
+      Map.update(state.transport_diagnostics, reason, 1, fn count ->
+        min(count + 1, @max_diagnostic_count)
+      end)
+
+    %{state | transport_diagnostics: diagnostics}
+  end
+
+  defp transport_id_for_generation?(transport_id, generation)
+       when is_binary(transport_id) and is_binary(generation) do
+    UpstreamResponse.transport_id?(transport_id) and
+      String.starts_with?(transport_id, "lasso-#{generation}-")
+  end
+
+  defp transport_id_for_generation?(_transport_id, _generation), do: false
+
+  defp ceil_milliseconds(remaining_us) when remaining_us > 0,
+    do: div(remaining_us + 999, 1_000)
+
+  defp ceil_milliseconds(_remaining_us), do: 0
+
+  defp handle_legacy_ws_message(raw_bytes, state) do
+    case Response.from_bytes(raw_bytes) do
+      {:ok, %Response.Success{id: nil}} ->
+        handle_non_response_message(raw_bytes, state)
+
+      {:ok, %Response.Success{id: id} = resp} ->
+        handle_response_success(id, resp, state)
+
+      {:ok, %Response.Error{id: id, error: jerr}} ->
+        handle_response_error(id, jerr, state)
+
+      {:ok, %Response.Notification{} = notification} ->
+        handle_notification(notification, state)
+
+      {:error, _parse_reason} ->
+        handle_non_response_message(raw_bytes, state)
+    end
+  end
+
+  defp cancel_transport_by_key(state, transport_id, generation, token) do
+    case Map.get(state.transport_pending, transport_id) do
+      %{generation: ^generation, token: ^token} = pending ->
+        retire_transport_send(state, transport_id, pending)
+
+      _ ->
+        state
+    end
+  end
+
+  defp cancel_registered_transport(state, transport_id, pending) do
+    _ = cancel_latch(pending.cancel_latch)
+    remove_transport_entry(state, transport_id, pending)
+  end
+
+  defp retire_transport_send(state, transport_id, %{send_state: :registered} = pending),
+    do: cancel_registered_transport(state, transport_id, pending)
+
+  defp retire_transport_send(state, transport_id, %{send_state: :queued} = pending) do
+    case cancel_latch(pending.cancel_latch) do
+      :cancelled ->
+        cleanup_send_entry(pending)
+
+        put_in(
+          state,
+          [:transport_pending, transport_id],
+          tombstone(pending, {:transport, transport_id})
+        )
+
+      :accepted ->
+        remove_transport_entry(state, transport_id, pending)
+    end
+  end
+
+  defp retire_transport_send(state, transport_id, pending),
+    do: remove_transport_entry(state, transport_id, pending)
+
+  defp retire_legacy_send(state, request_id, %{send_state: :queued} = pending) do
+    case cancel_latch(pending.cancel_latch) do
+      :cancelled ->
+        cleanup_send_entry(pending)
+
+        put_in(
+          state,
+          [:pending_requests, request_id],
+          tombstone(pending, {:legacy, request_id})
+        )
+
+      :accepted ->
+        remove_legacy_pending(state, request_id, pending)
+    end
+  end
+
+  defp retire_legacy_send(state, request_id, pending),
+    do: remove_legacy_pending(state, request_id, pending)
+
+  defp tombstone(pending, send_key) do
+    cleanup_expiry_us =
+      System.monotonic_time(:microsecond) + send_cleanup_ms() * 1_000
+
+    cleanup_timer =
+      Process.send_after(
+        self(),
+        {:send_cleanup_expired, pending.connection, pending.generation, send_key, pending.token,
+         cleanup_expiry_us},
+        send_cleanup_ms()
+      )
+
+    Map.merge(pending, %{
+      from: nil,
+      owner: nil,
+      owner_monitor: nil,
+      timer: cleanup_timer,
+      cleanup_expiry_us: cleanup_expiry_us,
+      send_state: :tombstone
+    })
+  end
+
+  defp expire_send_tombstone(
+         state,
+         connection,
+         generation,
+         send_key,
+         token,
+         cleanup_expiry_us
+       ) do
+    case tombstone_entry(state, send_key) do
+      %{
+        connection: ^connection,
+        generation: ^generation,
+        token: ^token,
+        cleanup_expiry_us: ^cleanup_expiry_us,
+        send_state: :tombstone
+      } = pending ->
+        now_us = System.monotonic_time(:microsecond)
+
+        if now_us < cleanup_expiry_us do
+          timer =
+            Process.send_after(
+              self(),
+              {:send_cleanup_expired, connection, generation, send_key, token, cleanup_expiry_us},
+              ceil_milliseconds(cleanup_expiry_us - now_us)
+            )
+
+          put_tombstone_entry(state, send_key, %{pending | timer: timer})
+        else
+          terminate_connection_generation(state, connection, generation)
+        end
+
+      _missing_or_stale ->
+        state
+    end
+  end
+
+  defp tombstone_entry(state, {:transport, transport_id}),
+    do: Map.get(state.transport_pending, transport_id)
+
+  defp tombstone_entry(state, {:legacy, request_id}),
+    do: Map.get(state.pending_requests, request_id)
+
+  defp put_tombstone_entry(state, {:transport, transport_id}, pending),
+    do: put_in(state, [:transport_pending, transport_id], pending)
+
+  defp put_tombstone_entry(state, {:legacy, request_id}, pending),
+    do: put_in(state, [:pending_requests, request_id], pending)
+
+  defp terminate_connection_generation(
+         %{connection: connection, connection_id: generation} = state,
+         connection,
+         generation
+       )
+       when is_pid(connection) do
+    Process.exit(connection, :kill)
+    increment_transport_diagnostic(state, :send_cleanup_expired)
+  end
+
+  defp terminate_connection_generation(state, _connection, _generation), do: state
+
+  defp remove_transport_entry(state, transport_id, pending) do
+    cleanup_send_entry(pending)
+    %{state | transport_pending: Map.delete(state.transport_pending, transport_id)}
+  end
+
+  defp remove_legacy_pending(state, request_id, pending) do
+    cleanup_send_entry(pending)
+    %{state | pending_requests: Map.delete(state.pending_requests, request_id)}
+  end
+
+  defp cleanup_send_entry(pending) do
+    if is_reference(pending[:timer]), do: Process.cancel_timer(pending.timer)
+
+    if is_reference(pending[:owner_monitor]),
+      do: Process.demonitor(pending.owner_monitor, [:flush])
+  end
+
+  defp cancel_latch(latch) do
+    case :atomics.compare_exchange(latch, 1, 0, 1) do
+      value when value in [:ok, 0, 1] -> :cancelled
+      2 -> :accepted
+    end
+  rescue
+    ArgumentError -> :cancelled
+  end
+
+  defp cast_send(state, send_key, deadline_us, cancel_latch, frame) do
+    ws_client().cast(
+      state.connection,
+      {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame}
+    )
+  catch
+    :exit, _reason -> {:error, :connection_down}
+  end
+
+  defp enqueue_control_send(state, kind, frame, timeout_ms) do
+    cond do
+      not state.connected or not is_pid(state.connection) ->
+        {:error, :not_connected, state}
+
+      send_capacity_used(state) >= state.transport_pending_limit ->
+        {:error, :capacity, state}
+
+      true ->
+        token = make_ref()
+        latch = :atomics.new(1, signed: false)
+        deadline_us = System.monotonic_time(:microsecond) + timeout_ms * 1_000
+
+        timer =
+          Process.send_after(
+            self(),
+            {:control_send_timeout, token, state.connection_id},
+            timeout_ms
+          )
+
+        control = %{
+          kind: kind,
+          generation: state.connection_id,
+          cancel_latch: latch,
+          timer: timer,
+          send_state: :queued
+        }
+
+        state = put_in(state, [:control_sends, token], control)
+
+        case cast_send(state, {:control, token}, deadline_us, latch, frame) do
+          :ok -> {:ok, state}
+          {:error, reason} -> {:error, reason, remove_control_send(state, token, control)}
+        end
+    end
+  end
+
+  defp remove_control_send(state, token, control) do
+    if is_reference(control.timer), do: Process.cancel_timer(control.timer)
+    %{state | control_sends: Map.delete(state.control_sends, token)}
+  end
+
+  defp cleanup_control_sends(state) do
+    Enum.each(state.control_sends, fn {_token, control} ->
+      _ = cancel_latch(control.cancel_latch)
+      if is_reference(control.timer), do: Process.cancel_timer(control.timer)
+    end)
+
+    %{state | control_sends: %{}}
+  end
+
+  defp handle_control_decision(state, %{kind: :heartbeat}, :accepted) do
+    :telemetry.execute(
+      [:lasso, :websocket, :heartbeat, :sent],
+      %{},
+      %{provider_id: state.endpoint.id}
+    )
+
+    schedule_heartbeat(state)
+  end
+
+  defp handle_control_decision(state, %{kind: :heartbeat}, {:rejected, reason}) do
+    :telemetry.execute(
+      [:lasso, :websocket, :heartbeat, :failed],
+      %{},
+      %{provider_id: state.endpoint.id, reason: reason}
+    )
+
+    schedule_heartbeat(state)
+  end
+
+  defp handle_control_decision(state, _control, _decision), do: state
+
+  defp count_send_state(pending, send_state) do
+    Enum.count(pending, fn {_id, entry} -> entry.send_state == send_state end)
+  end
+
+  defp send_capacity_used(state) do
+    map_size(state.pending_requests) + map_size(state.transport_pending) +
+      map_size(state.control_sends)
+  end
+
+  defp control_send_timeout_ms do
+    case Application.get_env(:lasso, :ws_control_send_timeout_ms, 5_000) do
+      timeout when is_integer(timeout) and timeout > 0 -> timeout
+      _invalid -> 5_000
+    end
+  end
+
+  defp send_cleanup_ms do
+    case Application.get_env(:lasso, :ws_send_cleanup_ms, @default_send_cleanup_ms) do
+      timeout when is_integer(timeout) and timeout >= 0 -> timeout
+      _invalid -> @default_send_cleanup_ms
+    end
+  end
+
+  defp capacity_error(state) do
+    JError.new(-32_008, "WebSocket pending capacity exhausted",
+      provider_id: state.endpoint.id,
+      retriable?: true,
+      breaker_penalty?: false,
+      category: :local_capacity_rejection
+    )
+  end
+
+  defp cancelled_request_error(state) do
+    JError.new(-32_008, "WebSocket request cancelled before dispatch",
+      provider_id: state.endpoint.id,
+      retriable?: true,
+      breaker_penalty?: false,
+      category: :local_capacity_rejection
+    )
+  end
+
+  defp active_pending?(state) do
+    total_pending_count(state) > 0
+  end
+
+  defp total_pending_count(state), do: send_capacity_used(state)
 
   # Provider-emitted JSON-RPC error without correlation id -> treat as connection-level
   defp handle_websocket_message(
@@ -1474,11 +2471,21 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       end)
 
       # Proactively close on timeout-like provider errors to force clean reconnect
-      if (is_integer(code) and code == -32_701) or
-           (is_binary(msg) and String.contains?(String.downcase(msg), "timeout")) do
-        # Ignore result - best effort close
-        _ = send_frame(state.connection, {:close, 1013, "connection timeout"})
-      end
+      state =
+        if (is_integer(code) and code == -32_701) or
+             (is_binary(msg) and String.contains?(String.downcase(msg), "timeout")) do
+          case enqueue_control_send(
+                 state,
+                 :provider_timeout_close,
+                 {:close, 1013, "connection timeout"},
+                 control_send_timeout_ms()
+               ) do
+            {:ok, state} -> state
+            {:error, _reason, state} -> state
+          end
+        else
+          state
+        end
 
       {:ok, state}
     end
@@ -1631,34 +2638,5 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   defp ws_client do
     Application.get_env(:lasso, :ws_client_module, WebSockex)
-  end
-
-  # Wrapper around ws_client().send_frame that converts exits to error tuples
-  #
-  # WebSockex.send_frame normally returns:
-  #   :ok | {:error, %WebSockex.FrameEncodeError{} | %WebSockex.ConnError{} |
-  #                   %WebSockex.NotConnectedError{} | %WebSockex.InvalidFrameError{}}
-  #
-  # But it uses :gen.call internally (with 5s timeout), which can exit if:
-  #   - Process is hung/unresponsive (timeout)
-  #   - Process died (noproc)
-  #   - Process crashed
-  #
-  # This wrapper catches those exits and converts them to {:error, reason} tuples
-  # for consistent error handling.
-  defp send_frame(connection, frame) do
-    ws_client().send_frame(connection, frame)
-  catch
-    # Process is hung/unresponsive - :gen.call timed out (default 5s)
-    :exit, {:timeout, _call_info} ->
-      {:error, :timeout}
-
-    # Process died or noproc
-    :exit, {:noproc, _call_info} ->
-      {:error, :noproc}
-
-    # Other exit reasons (process crash, etc.)
-    :exit, {reason, _call_info} ->
-      {:error, {:exit, reason}}
   end
 end

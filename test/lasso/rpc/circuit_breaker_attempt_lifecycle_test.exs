@@ -3,6 +3,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
 
   alias Lasso.Core.Support.{AttemptLifecycle, CircuitBreaker}
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
+  alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.JSONRPC.Error, as: JError
 
   setup_all do
@@ -10,7 +11,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     :ok
   end
 
-  test "caller death after dispatch finalizes cancellation once and releases half-open admission" do
+  test "caller death after dispatch publishes no terminal fact and releases half-open admission" do
     id = start_half_open_breaker()
     test_pid = self()
 
@@ -35,13 +36,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
 
     Process.exit(caller_pid, :kill)
 
-    assert_receive {:terminal,
-                    {:error, %JError{category: :cancelled, breaker_penalty?: false}, result_ms},
-                    callback_ms},
-                   1_000
-
-    assert result_ms == callback_ms
-    assert result_ms >= 0
+    refute_receive {:terminal, _, _}, 100
 
     eventually(fn ->
       state = :sys.get_state(breaker_pid)
@@ -81,7 +76,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     refute_receive :attempt_dispatched, 100
   end
 
-  test "dispatch receipt survives lifecycle death after deferred confirmation" do
+  test "dispatch receipt survives transport death after deferred confirmation" do
     id = start_half_open_breaker()
     test_pid = self()
 
@@ -90,17 +85,17 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
         id,
         fn ->
           :ok = AttemptLifecycle.mark_dispatched(AttemptLifecycle.dispatch_context())
-          Process.sleep(:infinity)
+          Process.exit(self(), :kill)
         end,
         1_000,
         dispatch: :deferred,
         on_dispatch: fn dispatched_at_us ->
-          send(test_pid, {:dispatch_receipt, dispatched_at_us})
-          Process.exit(self(), :kill)
+          send(test_pid, {:dispatch_receipt, self(), dispatched_at_us})
         end
       )
 
-    assert_receive {:dispatch_receipt, dispatched_at_us}, 1_000
+    assert_receive {:dispatch_receipt, callback_pid, dispatched_at_us}, 1_000
+    assert callback_pid == self()
     assert is_integer(dispatched_at_us)
     assert {:executed, {:exception, {:exit, :killed, []}}} = result
   end
@@ -108,6 +103,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
   test "repeated deferred confirmation emits one dispatch receipt" do
     id = start_half_open_breaker()
     test_pid = self()
+    callback_key = {__MODULE__, make_ref()}
 
     assert {:executed, :ok} =
              CircuitBreaker.call(
@@ -120,12 +116,465 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
                1_000,
                dispatch: :deferred,
                on_dispatch: fn dispatched_at_us ->
-                 send(test_pid, {:dispatch_receipt, dispatched_at_us})
+                 Process.put(callback_key, Process.get(callback_key, 0) + 1)
+                 send(test_pid, {:dispatch_receipt, self(), dispatched_at_us})
                end
              )
 
-    assert_receive {:dispatch_receipt, _dispatched_at_us}, 1_000
-    refute_receive {:dispatch_receipt, _dispatched_at_us}, 100
+    assert_receive {:dispatch_receipt, callback_pid, _dispatched_at_us}, 1_000
+    assert callback_pid == self()
+    assert Process.get(callback_key) == 1
+    refute_receive {:dispatch_receipt, _, _dispatched_at_us}, 100
+    Process.delete(callback_key)
+  end
+
+  test "task death after send start commits dispatch once and terminalizes once" do
+    id = start_half_open_breaker()
+    test_pid = self()
+
+    assert {:executed, {:exception, {:exit, :killed, []}}} =
+             CircuitBreaker.call(
+               id,
+               fn ->
+                 context = AttemptLifecycle.dispatch_context()
+                 :ok = AttemptProtocol.send_started(context)
+                 :ok = AttemptProtocol.send_started(context)
+                 Process.exit(self(), :kill)
+               end,
+               1_000,
+               dispatch: :deferred,
+               on_dispatch: fn started_at_us ->
+                 send(test_pid, {:dispatch_receipt, started_at_us})
+               end,
+               on_terminal: fn result, elapsed_ms ->
+                 send(test_pid, {:terminal, result, elapsed_ms})
+               end
+             )
+
+    assert_receive {:dispatch_receipt, started_at_us}, 1_000
+    assert is_integer(started_at_us)
+    refute_receive {:dispatch_receipt, _}, 100
+
+    assert_receive {:terminal, {:exception, {:exit, :killed, []}}, elapsed_ms}, 1_000
+    assert elapsed_ms >= 0
+    refute_receive {:terminal, _, _}, 100
+
+    breaker_pid = GenServer.whereis(CircuitBreaker.via_name(id))
+
+    eventually(fn ->
+      state = :sys.get_state(breaker_pid)
+      state.inflight_count == 0 and state.inflight_attempts == %{}
+    end)
+  end
+
+  test "caller publishes the latched receipt when the lifecycle owner dies" do
+    id = start_half_open_breaker()
+    test_pid = self()
+
+    caller_pid =
+      spawn(fn ->
+        dispatch_ref = make_ref()
+        caller = self()
+
+        result =
+          CircuitBreaker.call(
+            id,
+            fn ->
+              {lifecycle_pid, _attempt_ref} = context = AttemptLifecycle.dispatch_context()
+              send(test_pid, {:owner_death_ready, lifecycle_pid, self()})
+
+              receive do
+                :cross_send ->
+                  :ok = AttemptProtocol.send_started(context)
+                  send(test_pid, :owner_death_send_crossed)
+                  Process.sleep(:infinity)
+              end
+            end,
+            1_000,
+            dispatch: :deferred,
+            on_dispatch: fn started_at_us ->
+              send(caller, {:pipeline_dispatch_receipt, dispatch_ref, started_at_us})
+            end
+          )
+
+        send(
+          test_pid,
+          {:owner_death_result, result, drain_dispatch_receipts(dispatch_ref, [])}
+        )
+      end)
+
+    caller_monitor = Process.monitor(caller_pid)
+    assert_receive {:owner_death_ready, lifecycle_pid, task_pid}, 1_000
+    send(task_pid, :cross_send)
+    assert_receive :owner_death_send_crossed, 1_000
+
+    Process.exit(lifecycle_pid, :kill)
+
+    assert_receive {:owner_death_result, {:executed, {:exception, {:exit, :killed, []}}},
+                    [started_at_us]},
+                   1_000
+
+    assert is_integer(started_at_us)
+    assert_receive {:DOWN, ^caller_monitor, :process, ^caller_pid, reason}, 1_000
+    assert reason in [:normal, :noproc]
+  end
+
+  test "caller closes a suspended lifecycle without authorizing a late callback" do
+    id = start_half_open_breaker()
+    test_pid = self()
+
+    caller_pid =
+      spawn(fn ->
+        dispatch_ref = make_ref()
+        caller = self()
+
+        result =
+          CircuitBreaker.call(
+            id,
+            fn ->
+              {lifecycle_pid, _attempt_ref} = context = AttemptLifecycle.dispatch_context()
+              send(test_pid, {:ready_to_cross_send, lifecycle_pid, self()})
+
+              receive do
+                :cross_send ->
+                  :ok = AttemptProtocol.send_started(context)
+                  Process.sleep(:infinity)
+              end
+            end,
+            100,
+            dispatch: :deferred,
+            on_dispatch: fn started_at_us ->
+              Process.put({:pipeline_dispatch_receipt, dispatch_ref}, started_at_us)
+              send(caller, {:pipeline_dispatch_receipt, dispatch_ref, started_at_us})
+            end,
+            on_terminal: fn result, elapsed_ms ->
+              send(test_pid, {:suspended_owner_terminal, result, elapsed_ms})
+            end
+          )
+
+        receipts = drain_dispatch_receipts(dispatch_ref, [])
+
+        send(
+          test_pid,
+          {:suspended_owner_result, result, receipts,
+           Process.get({:pipeline_dispatch_receipt, dispatch_ref})}
+        )
+      end)
+
+    caller_monitor = Process.monitor(caller_pid)
+
+    assert_receive {:ready_to_cross_send, lifecycle_pid, task_pid}, 1_000
+    :erlang.suspend_process(lifecycle_pid)
+    send(task_pid, :cross_send)
+
+    assert_receive {:suspended_owner_result,
+                    {:executed, {:error, %JError{category: :timeout, retriable?: true}, 100}},
+                    [started_at_us], callback_started_at_us},
+                   1_000
+
+    assert is_integer(started_at_us)
+    assert callback_started_at_us == started_at_us
+
+    assert_receive {:DOWN, ^caller_monitor, :process, ^caller_pid, reason}, 1_000
+    assert reason in [:normal, :noproc]
+
+    refute_receive {:suspended_owner_terminal, _, _}, 100
+
+    breaker_pid = GenServer.whereis(CircuitBreaker.via_name(id))
+
+    eventually(fn ->
+      state = :sys.get_state(breaker_pid)
+      state.inflight_count == 0 and state.inflight_attempts == %{}
+    end)
+  end
+
+  test "suspended lifecycle accepts D-1 and rejects D and D+1 terminal observations" do
+    Enum.each([-1, 0, 1], fn offset_us ->
+      id = start_half_open_breaker()
+      test_pid = self()
+      terminal_ref = make_ref()
+      client_deadline_us = System.monotonic_time(:microsecond) + 500_000
+
+      transport_error =
+        JError.new(-32_008, "local transport result",
+          category: :local_capacity_rejection,
+          retriable?: true,
+          breaker_penalty?: false
+        )
+
+      caller_pid =
+        spawn(fn ->
+          result =
+            CircuitBreaker.call(
+              id,
+              fn ->
+                {lifecycle_pid, _attempt_ref} = context = AttemptLifecycle.dispatch_context()
+                attempt_deadline_us = AttemptProtocol.deadline_us()
+
+                send(
+                  test_pid,
+                  {:decision_ready, terminal_ref, lifecycle_pid, self(), attempt_deadline_us}
+                )
+
+                receive do
+                  {:emit, ^offset_us} ->
+                    :ok =
+                      AttemptProtocol.terminal_at(
+                        context,
+                        :response,
+                        %{response_kind: :success, io_duration_us: 0},
+                        attempt_deadline_us + offset_us
+                      )
+
+                    {:error, transport_error, 0}
+                end
+              end,
+              25,
+              deadline_us: client_deadline_us,
+              dispatch: :deferred,
+              on_terminal: fn result, elapsed_ms ->
+                send(test_pid, {:decision_terminal, terminal_ref, result, elapsed_ms})
+              end
+            )
+
+          send(test_pid, {:decision_result, terminal_ref, result})
+        end)
+
+      assert_receive {:decision_ready, ^terminal_ref, lifecycle_pid, task_pid,
+                      attempt_deadline_us},
+                     1_000
+
+      :erlang.suspend_process(lifecycle_pid)
+      task_monitor = Process.monitor(task_pid)
+      send(task_pid, {:emit, offset_us})
+      assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :normal}, 1_000
+      wait_until_monotonic(attempt_deadline_us)
+      :erlang.resume_process(lifecycle_pid)
+
+      assert_receive {:decision_result, ^terminal_ref,
+                      {:executed, {:error, ^transport_error, 0}}},
+                     1_000
+
+      if offset_us == -1 do
+        assert_receive {:decision_terminal, ^terminal_ref, {:error, ^transport_error, 0},
+                        elapsed_ms},
+                       1_000
+
+        assert elapsed_ms >= 0
+      else
+        refute_receive {:decision_terminal, ^terminal_ref, _, _}, 50
+      end
+
+      caller_monitor = Process.monitor(caller_pid)
+      assert_receive {:DOWN, ^caller_monitor, :process, ^caller_pid, reason}, 1_000
+      assert reason in [:normal, :noproc]
+    end)
+  end
+
+  test "transport task exposes immutable eligibility and settlement deadlines" do
+    id = start_half_open_breaker()
+    test_pid = self()
+    client_deadline_us = System.monotonic_time(:microsecond) + 500_000
+
+    transport_error =
+      JError.new(-32_008, "local transport result",
+        category: :local_capacity_rejection,
+        retriable?: true,
+        breaker_penalty?: false
+      )
+
+    assert {:executed, {:error, ^transport_error, 0}} =
+             CircuitBreaker.call(
+               id,
+               fn ->
+                 attempt_deadline_us = AttemptProtocol.deadline_us()
+                 settlement_deadline_us = AttemptProtocol.settlement_deadline_us()
+
+                 send(
+                   test_pid,
+                   {:attempt_deadlines, attempt_deadline_us, settlement_deadline_us}
+                 )
+
+                 :ok = AttemptProtocol.predispatch_failure(AttemptProtocol.context(), :local)
+                 {:error, transport_error, 0}
+               end,
+               25,
+               deadline_us: client_deadline_us,
+               dispatch: :deferred
+             )
+
+    assert_receive {:attempt_deadlines, attempt_deadline_us, settlement_deadline_us}, 1_000
+    assert settlement_deadline_us == min(client_deadline_us, attempt_deadline_us + 1_000)
+  end
+
+  test "short attempt settles D-1 after its cutoff and rejects D and D+1" do
+    Enum.each([-1, 0, 1], fn offset_us ->
+      id = start_half_open_breaker()
+      test_pid = self()
+      result_ref = make_ref()
+      client_deadline_us = System.monotonic_time(:microsecond) + 500_000
+
+      transport_error =
+        JError.new(-32_008, "local transport result",
+          category: :local_capacity_rejection,
+          retriable?: true,
+          breaker_penalty?: false
+        )
+
+      spawn(fn ->
+        result =
+          CircuitBreaker.call(
+            id,
+            fn ->
+              {lifecycle_pid, _attempt_ref} = context = AttemptProtocol.context()
+              attempt_deadline_us = AttemptProtocol.deadline_us()
+
+              :ok =
+                AttemptProtocol.terminal_at(
+                  context,
+                  :response,
+                  %{response_kind: :success, io_duration_us: 0},
+                  attempt_deadline_us + offset_us
+                )
+
+              send(
+                test_pid,
+                {:short_attempt_ready, result_ref, lifecycle_pid, self(), attempt_deadline_us}
+              )
+
+              receive do
+                :finish_after_cutoff ->
+                  yield_until_monotonic(attempt_deadline_us + 1)
+                  send(test_pid, {:short_attempt_finished, result_ref})
+                  {:error, transport_error, 0}
+              end
+            end,
+            100,
+            deadline_us: client_deadline_us,
+            dispatch: :deferred
+          )
+
+        send(test_pid, {:short_attempt_result, result_ref, result})
+      end)
+
+      assert_receive {:short_attempt_ready, ^result_ref, lifecycle_pid, task_pid,
+                      attempt_deadline_us},
+                     1_000
+
+      eventually(fn ->
+        match?({:message_queue_len, 0}, Process.info(lifecycle_pid, :message_queue_len))
+      end)
+
+      send(task_pid, :finish_after_cutoff)
+      assert_receive {:short_attempt_finished, ^result_ref}, 1_000
+      assert System.monotonic_time(:microsecond) >= attempt_deadline_us
+
+      if offset_us == -1 do
+        assert_receive {:short_attempt_result, ^result_ref,
+                        {:executed, {:error, ^transport_error, 0}}},
+                       1_000
+      else
+        assert_receive {:short_attempt_result, ^result_ref, {:rejected, :admission_timeout}},
+                       1_000
+      end
+    end)
+  end
+
+  test "caller timeout closes publication before a suspended lifecycle can report late" do
+    id = start_half_open_breaker()
+    test_pid = self()
+    terminal_ref = make_ref()
+
+    caller_pid =
+      spawn(fn ->
+        result =
+          CircuitBreaker.call(
+            id,
+            fn ->
+              {lifecycle_pid, _attempt_ref} = context = AttemptLifecycle.dispatch_context()
+              send(test_pid, {:timeout_close_ready, lifecycle_pid, self()})
+
+              receive do
+                :cross_send ->
+                  :ok = AttemptProtocol.send_started(context)
+                  send(test_pid, :timeout_close_send_started)
+                  Process.sleep(:infinity)
+              end
+            end,
+            50,
+            dispatch: :deferred,
+            on_terminal: fn result, elapsed_ms ->
+              send(test_pid, {:timeout_close_terminal, terminal_ref, result, elapsed_ms})
+            end
+          )
+
+        send(test_pid, {:timeout_close_result, terminal_ref, result})
+      end)
+
+    assert_receive {:timeout_close_ready, lifecycle_pid, task_pid}, 1_000
+    :erlang.suspend_process(lifecycle_pid)
+    send(task_pid, :cross_send)
+    assert_receive :timeout_close_send_started, 1_000
+
+    assert_receive {:timeout_close_result, ^terminal_ref,
+                    {:executed, {:error, %JError{category: :timeout}, 50}}},
+                   1_000
+
+    refute Process.alive?(lifecycle_pid)
+    refute Process.alive?(task_pid)
+    refute_receive {:timeout_close_terminal, ^terminal_ref, _, _}, 100
+
+    caller_monitor = Process.monitor(caller_pid)
+    assert_receive {:DOWN, ^caller_monitor, :process, ^caller_pid, reason}, 1_000
+    assert reason in [:normal, :noproc]
+  end
+
+  test "not-dispatched transport failure releases an open send reservation" do
+    id = start_half_open_breaker()
+    test_pid = self()
+
+    transport_error =
+      JError.new(-32_008, "pool unavailable",
+        category: :local_capacity_rejection,
+        retriable?: true,
+        breaker_penalty?: false
+      )
+
+    assert {:executed, {:error, ^transport_error, 2}} =
+             CircuitBreaker.call(
+               id,
+               fn ->
+                 context = AttemptLifecycle.dispatch_context()
+                 :ok = AttemptProtocol.send_started(context)
+
+                 :ok =
+                   AttemptProtocol.terminal(context, :transport_failure, %{
+                     reason: :network_error,
+                     certainty: :not_dispatched,
+                     elapsed_us: 0
+                   })
+
+                 {:error, transport_error, 2}
+               end,
+               1_000,
+               dispatch: :deferred,
+               on_dispatch: fn started_at_us ->
+                 send(test_pid, {:dispatch_receipt, started_at_us})
+               end,
+               on_terminal: fn result, elapsed_ms ->
+                 send(test_pid, {:terminal, result, elapsed_ms})
+               end
+             )
+
+    refute_receive {:dispatch_receipt, _}, 100
+    refute_receive {:terminal, _, _}, 100
+
+    breaker_pid = GenServer.whereis(CircuitBreaker.via_name(id))
+    state = :sys.get_state(breaker_pid)
+    assert state.state == :half_open
+    assert state.failure_count == 0
+    assert state.inflight_count == 0
+    assert state.inflight_attempts == %{}
   end
 
   test "immediate dispatch receipt is emitted before the worker becomes runnable" do
@@ -136,18 +585,22 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
              CircuitBreaker.call(
                id,
                fn ->
-                 send(test_pid, :worker_ran)
+                 send(test_pid, {:immediate_order, :worker_ran})
                  :ok
                end,
                1_000,
-               on_dispatch: fn _dispatched_at_us -> send(test_pid, :dispatch_receipt) end
+               on_dispatch: fn _dispatched_at_us ->
+                 send(test_pid, {:immediate_order, :dispatch_receipt})
+               end
              )
 
-    assert_receive :dispatch_receipt, 1_000
-    assert_receive :worker_ran, 1_000
+    assert_receive {:immediate_order, first_event}, 1_000
+    assert first_event == :dispatch_receipt
+    assert_receive {:immediate_order, second_event}, 1_000
+    assert second_event == :worker_ran
   end
 
-  test "a completed operation wins over caller death" do
+  test "a completed operation is not published after its caller dies" do
     id = start_half_open_breaker()
     test_pid = self()
 
@@ -157,8 +610,11 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
           id,
           fn ->
             {lifecycle_pid, _dispatch_ref} = AttemptLifecycle.dispatch_context()
-            send(test_pid, {:operation_completed, lifecycle_pid})
-            :ok
+            send(test_pid, {:operation_ready, lifecycle_pid, self()})
+
+            receive do
+              :complete_operation -> :ok
+            end
           end,
           5_000,
           on_terminal: fn result, elapsed_ms ->
@@ -167,18 +623,18 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
         )
       end)
 
-    assert_receive {:operation_completed, lifecycle_pid}, 1_000
+    assert_receive {:operation_ready, lifecycle_pid, task_pid}, 1_000
     :erlang.suspend_process(lifecycle_pid)
-    Process.sleep(20)
+    task_monitor = Process.monitor(task_pid)
+    send(task_pid, :complete_operation)
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :normal}, 1_000
     Process.exit(caller_pid, :kill)
-    :erlang.resume_process(lifecycle_pid)
+    if Process.alive?(lifecycle_pid), do: :erlang.resume_process(lifecycle_pid)
 
-    assert_receive {:terminal, :ok, elapsed_ms}, 1_000
-    assert elapsed_ms >= 0
     refute_receive {:terminal, _, _}, 100
   end
 
-  test "slow terminal work does not block the breaker or fail the completed call" do
+  test "a blocked compatibility terminal callback cannot delay the attempt result" do
     id = {"slow_terminal_#{System.unique_integer([:positive])}", :http}
     test_pid = self()
 
@@ -187,18 +643,30 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
         {id, %{failure_threshold: 2, recovery_timeout: 60_000, success_threshold: 1}}
       )
 
-    assert {:executed, :ok} =
-             CircuitBreaker.call(id, fn -> :ok end, 1_000,
-               on_terminal: fn _result, _elapsed_ms ->
-                 send(test_pid, :callback_started)
-                 Process.sleep(250)
-                 send(test_pid, :callback_finished)
-               end
-             )
+    caller_pid =
+      spawn(fn ->
+        result =
+          CircuitBreaker.call(id, fn -> :ok end, 1_000,
+            on_terminal: fn _result, _elapsed_ms ->
+              send(test_pid, {:callback_started, self()})
 
-    assert_receive :callback_started, 1_000
-    assert {:executed, :ok} = CircuitBreaker.call(id, fn -> :ok end, 1_000)
+              receive do
+                :release_callback -> send(test_pid, :callback_finished)
+              end
+            end
+          )
+
+        send(test_pid, {:attempt_result, result})
+      end)
+
+    assert_receive {:attempt_result, {:executed, :ok}}, 1_000
+    assert_receive {:callback_started, callback_pid}, 1_000
+    refute callback_pid == caller_pid
+    refute_receive :callback_finished, 100
+
+    send(callback_pid, :release_callback)
     assert_receive :callback_finished, 1_000
+    refute_receive :callback_finished, 100
   end
 
   test "unsupported preflight and local capacity rejection do not mutate breaker health" do
@@ -363,10 +831,10 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
 
     assert {:executed, :ok} = CircuitBreaker.call(id, fn -> :ok end)
 
-    state = :sys.get_state(breaker_pid)
-    assert state.state == :closed
-    assert state.inflight_count == 0
-    assert state.inflight_attempts == %{}
+    eventually(fn ->
+      state = :sys.get_state(breaker_pid)
+      state.state == :closed and state.inflight_count == 0 and state.inflight_attempts == %{}
+    end)
   end
 
   test "deferred local queue timeout is admission, not a terminal attempt" do
@@ -496,57 +964,16 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     refute_receive {:terminal, _, _}, 100
   end
 
-  test "dispatch authorization rejects a dead caller even when its message arrives first" do
-    id = start_half_open_breaker()
-    test_pid = self()
+  test "dispatch authorization performs no lifecycle request reply" do
+    lifecycle_pid = spawn(fn -> Process.sleep(:infinity) end)
+    context = {lifecycle_pid, make_ref()}
+    {:message_queue_len, before_count} = Process.info(lifecycle_pid, :message_queue_len)
 
-    caller_pid =
-      spawn(fn ->
-        CircuitBreaker.call(
-          id,
-          fn ->
-            {lifecycle_pid, _dispatch_ref} = context = AttemptLifecycle.dispatch_context()
-            send(test_pid, {:ready_to_authorize, lifecycle_pid, context, self()})
+    assert :ok = AttemptLifecycle.authorize_dispatch(context)
+    {:message_queue_len, after_count} = Process.info(lifecycle_pid, :message_queue_len)
+    assert after_count == before_count
 
-            receive do
-              :authorize -> :ok
-            end
-
-            case AttemptLifecycle.mark_dispatched(context) do
-              :ok ->
-                send(test_pid, {:authorization, :ok})
-                send(test_pid, :ghost_dispatch)
-
-              rejection ->
-                send(test_pid, {:authorization, rejection})
-                rejection
-            end
-          end,
-          1_000,
-          dispatch: :deferred,
-          on_terminal: fn result, elapsed_ms ->
-            send(test_pid, {:terminal, result, elapsed_ms})
-          end
-        )
-      end)
-
-    assert_receive {:ready_to_authorize, lifecycle_pid, _context, worker_pid}, 1_000
-    :erlang.suspend_process(lifecycle_pid)
-    send(worker_pid, :authorize)
-    Process.sleep(20)
-    Process.exit(caller_pid, :kill)
-    :erlang.resume_process(lifecycle_pid)
-
-    assert_receive {:authorization, {:error, :cancelled}}, 1_000
-    refute_receive :ghost_dispatch, 100
-    refute_receive {:terminal, _, _}, 100
-
-    breaker_pid = GenServer.whereis(CircuitBreaker.via_name(id))
-
-    eventually(fn ->
-      state = :sys.get_state(breaker_pid)
-      state.inflight_count == 0 and state.inflight_attempts == %{}
-    end)
+    Process.exit(lifecycle_pid, :kill)
   end
 
   test "an explicitly aborted transport dispatch remains admission evidence" do
@@ -586,57 +1013,15 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     assert state.inflight_attempts == %{}
   end
 
-  test "timed-out dispatch authorization cancels its queued grant" do
-    id = start_half_open_breaker()
-    test_pid = self()
-
-    caller_pid =
-      spawn(fn ->
-        result =
-          CircuitBreaker.call(
-            id,
-            fn ->
-              {lifecycle_pid, _dispatch_ref} = context = AttemptLifecycle.dispatch_context()
-              send(test_pid, {:authorization_ready, lifecycle_pid, self()})
-
-              receive do
-                :authorize -> :ok
-              end
-
-              authorization = AttemptLifecycle.mark_dispatched(context)
-              send(test_pid, {:authorization_result, authorization})
-
-              {:error,
-               JError.new(-32_008, "cancelled locally",
-                 category: :local_capacity_rejection,
-                 retriable?: true,
-                 breaker_penalty?: false
-               ), 1_000}
-            end,
-            1_500,
-            dispatch: :deferred,
-            on_terminal: fn result, elapsed_ms ->
-              send(test_pid, {:terminal, result, elapsed_ms})
-            end
-          )
-
-        send(test_pid, {:caller_result, result})
-      end)
-
-    assert_receive {:authorization_ready, lifecycle_pid, worker_pid}, 1_000
+  test "dispatch confirmation is one-way while the lifecycle owner is suspended" do
+    lifecycle_pid = spawn(fn -> Process.sleep(:infinity) end)
+    context = {lifecycle_pid, make_ref()}
     :erlang.suspend_process(lifecycle_pid)
-    send(worker_pid, :authorize)
-    Process.sleep(1_100)
-    :erlang.resume_process(lifecycle_pid)
 
-    assert_receive {:authorization_result, {:error, :cancelled}}, 500
+    assert :ok = AttemptLifecycle.mark_dispatched(context)
+    assert {:message_queue_len, 2} = Process.info(lifecycle_pid, :message_queue_len)
 
-    assert_receive {:caller_result,
-                    {:executed, {:error, %JError{category: :local_capacity_rejection}, 1_000}}},
-                   500
-
-    refute_receive {:terminal, _, _}, 100
-    refute Process.alive?(caller_pid)
+    Process.exit(lifecycle_pid, :kill)
   end
 
   test "local connection loss after confirmed dispatch invokes one terminal callback" do
@@ -722,7 +1107,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     assert_receive {:authorized_for_late_confirm, _context, worker_pid}, 1_000
     Process.exit(caller_pid, :kill)
     send(worker_pid, :confirm)
-    assert_receive {:late_confirmation, {:error, :cancelled}}, 1_000
+    refute_receive {:late_confirmation, _}, 100
     refute_receive {:terminal, _, _}, 100
   end
 
@@ -748,13 +1133,34 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
                end
              )
 
-    assert_receive {:late_deadline_confirmation, {:error, :cancelled}}, 1_000
+    refute_receive {:late_deadline_confirmation, _}, 100
     refute_receive {:terminal, _, _}, 100
 
     breaker_pid = GenServer.whereis(CircuitBreaker.via_name(id))
     state = :sys.get_state(breaker_pid)
     assert state.inflight_count == 0
     assert state.inflight_attempts == %{}
+  end
+
+  test "attempt timeout stops blocking transport before the shared client deadline" do
+    id = start_half_open_breaker()
+    started_at_ms = System.monotonic_time(:millisecond)
+    client_deadline_us = System.monotonic_time(:microsecond) + 500_000
+
+    assert {:executed, {:error, %JError{category: :timeout, retriable?: true}, 25}} =
+             CircuitBreaker.call(
+               id,
+               fn ->
+                 :ok = AttemptProtocol.send_started(AttemptProtocol.context())
+                 Process.sleep(:infinity)
+               end,
+               25,
+               deadline_us: client_deadline_us,
+               dispatch: :deferred
+             )
+
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at_ms
+    assert elapsed_ms < 250
   end
 
   test "expired queued admission does not create a token for a live caller" do
@@ -834,6 +1240,33 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     })
 
     id
+  end
+
+  defp drain_dispatch_receipts(dispatch_ref, receipts) do
+    receive do
+      {:pipeline_dispatch_receipt, ^dispatch_ref, started_at_us} ->
+        drain_dispatch_receipts(dispatch_ref, [started_at_us | receipts])
+    after
+      0 -> Enum.reverse(receipts)
+    end
+  end
+
+  defp wait_until_monotonic(deadline_us) do
+    remaining_us = deadline_us - System.monotonic_time(:microsecond)
+
+    if remaining_us > 0 do
+      timer_ref = make_ref()
+      Process.send_after(self(), {:monotonic_deadline, timer_ref}, div(remaining_us + 999, 1_000))
+      assert_receive {:monotonic_deadline, ^timer_ref}, 1_000
+      wait_until_monotonic(deadline_us)
+    end
+  end
+
+  defp yield_until_monotonic(deadline_us) do
+    if System.monotonic_time(:microsecond) < deadline_us do
+      :erlang.yield()
+      yield_until_monotonic(deadline_us)
+    end
   end
 
   defp eventually(fun, attempts \\ 50)

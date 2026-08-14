@@ -75,6 +75,11 @@ defmodule Lasso.RPC.ExecutionReducer do
 
   @spec close_deadline(t()) :: t()
   def close_deadline(%__MODULE__{terminal: nil} = state) do
+    state =
+      if unresolved_send?(state, state.deadline_us),
+        do: promote(state, :indeterminate),
+        else: state
+
     %{state | terminal: :deadline, terminal_at_us: state.deadline_us, committed: true}
   end
 
@@ -176,7 +181,7 @@ defmodule Lasso.RPC.ExecutionReducer do
     violation(state, event, :observation_after_terminal)
   end
 
-  defp fold(state, %{kind: :send_started}), do: promote(state, :indeterminate)
+  defp fold(state, %{kind: :send_started}), do: state
   defp fold(state, %{kind: :send_confirmed}), do: promote(state, :dispatched)
 
   defp fold(state, %{kind: :not_dispatched} = event) do
@@ -203,6 +208,8 @@ defmodule Lasso.RPC.ExecutionReducer do
 
   defp fold(state, %{kind: kind, event_us: event_us, certainty: certainty} = event)
        when kind in [:transport_failure, :cancelled] do
+    {certainty, event} = resolve_terminal_certainty(state, event, certainty)
+
     if @certainty_rank[certainty] < @certainty_rank[state.dispatch_certainty] do
       violation(state, event, :certainty_regression)
     else
@@ -425,9 +432,34 @@ defmodule Lasso.RPC.ExecutionReducer do
        when kind in [:response, :invalid_response, :send_confirmed],
        do: :dispatched
 
-  defp event_certainty(%{kind: :send_started}), do: :indeterminate
   defp event_certainty(%{certainty: certainty}), do: certainty
   defp event_certainty(_event), do: nil
+
+  defp resolve_terminal_certainty(state, %{kind: :cancelled} = event, :not_dispatched) do
+    if unresolved_send?(state, event.event_us) do
+      {:indeterminate, %{event | certainty: :indeterminate}}
+    else
+      {:not_dispatched, event}
+    end
+  end
+
+  defp resolve_terminal_certainty(_state, event, certainty), do: {certainty, event}
+
+  defp unresolved_send?(state, boundary_us) do
+    case Map.fetch(state.observations, :send_started) do
+      {:ok, started} when started.event_us <= boundary_us ->
+        case Map.fetch(state.observations, :not_dispatched) do
+          {:ok, proof} ->
+            proof.event_us < started.event_us or proof.event_us > boundary_us
+
+          :error ->
+            true
+        end
+
+      _ ->
+        false
+    end
+  end
 
   defp diagnose_reused_id(state, event) do
     if existing_event(state, event.id) == fingerprint(event),

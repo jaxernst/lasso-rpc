@@ -2,8 +2,15 @@ defmodule Lasso.RPC.Transports.HTTPTest do
   use ExUnit.Case, async: false
   import Mox
 
+  alias Lasso.Core.Support.ErrorClassifier
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.Transports.HTTP
+
+  defmodule LocalRawClient do
+    def request(_config, _method, _params, _opts) do
+      {:ok, {:raw, Process.get({__MODULE__, :raw})}}
+    end
+  end
 
   setup :verify_on_exit!
 
@@ -47,6 +54,138 @@ defmodule Lasso.RPC.Transports.HTTPTest do
     assert error.retriable? == true
     assert error.breaker_penalty? == true
     assert error.provider_id == "sepolia_onfinality"
-    assert error.data[:reason] == :no_result_or_error
+    assert error.data[:reason] == :invalid_envelope
+  end
+
+  test "preserves the original large response binary on the same-id HTTP path" do
+    channel = %{
+      provider_id: "large-response-provider",
+      config: %{id: "large-response-provider", url: "https://example.invalid"}
+    }
+
+    request_id = "large-response"
+    result = String.duplicate("a", 4 * 1_024 * 1_024)
+    raw = ~s({"jsonrpc":"2.0","id":"#{request_id}","result":"#{result}"})
+    Application.put_env(:lasso, :http_client, LocalRawClient)
+    Process.put({LocalRawClient, :raw}, raw)
+
+    on_exit(fn -> Process.delete({LocalRawClient, :raw}) end)
+
+    rpc_request = %{
+      "jsonrpc" => "2.0",
+      "method" => "eth_call",
+      "params" => [],
+      "id" => request_id
+    }
+
+    assert {:ok, %Lasso.RPC.Response.Success{} = response, _io_ms} =
+             HTTP.request(channel, rpc_request, 1_000)
+
+    assert response.id == request_id
+    assert response.raw_bytes == raw
+    assert :erts_debug.same(response.raw_bytes, raw)
+  end
+
+  test "rejects a structurally incomplete response without decoding its result" do
+    channel = %{
+      provider_id: "malformed-provider",
+      config: %{id: "malformed-provider", url: "https://example.invalid"}
+    }
+
+    rpc_request = %{
+      "jsonrpc" => "2.0",
+      "method" => "eth_call",
+      "params" => [],
+      "id" => "malformed-response"
+    }
+
+    raw = ~s({"jsonrpc":"2.0","id":"malformed-response","result":[1}})
+
+    expect(Lasso.RPC.HttpClientMock, :request, fn _config, _method, _params, _opts ->
+      {:ok, {:raw, raw}}
+    end)
+
+    assert {:error, %JError{code: -32_700} = error, _io_ms} =
+             HTTP.request(channel, rpc_request, 1_000)
+
+    assert error.data.reason == :invalid_json
+  end
+
+  test "preserves JSON-RPC error data and existing classification semantics" do
+    provider_id = "classified-error-provider"
+
+    channel = %{
+      provider_id: provider_id,
+      config: %{id: provider_id, url: "https://example.invalid"}
+    }
+
+    error_data = %{"retry_after" => 50, "scope" => "provider"}
+
+    rpc_request = %{
+      "jsonrpc" => "2.0",
+      "method" => "eth_call",
+      "params" => [],
+      "id" => "classified-error"
+    }
+
+    raw =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => "classified-error",
+        "error" => %{"code" => -32_005, "message" => "rate limited", "data" => error_data}
+      })
+
+    expect(Lasso.RPC.HttpClientMock, :request, fn _config, _method, _params, _opts ->
+      {:ok, {:raw, raw}}
+    end)
+
+    expected =
+      ErrorClassifier.classify(-32_005, "rate limited",
+        data: error_data,
+        provider_id: provider_id
+      )
+
+    assert {:error, %JError{} = error, _io_ms} = HTTP.request(channel, rpc_request, 1_000)
+    assert error.data == error_data
+    assert error.category == expected.category
+    assert error.retriable? == expected.retriable?
+    assert error.breaker_penalty? == expected.breaker_penalty?
+  end
+
+  test "composes the per-attempt timeout with the shared decision deadline" do
+    channel = %{
+      provider_id: "deadline-provider",
+      config: %{id: "deadline-provider", url: "https://example.invalid"}
+    }
+
+    rpc_request = %{
+      "jsonrpc" => "2.0",
+      "method" => "eth_blockNumber",
+      "params" => [],
+      "id" => "deadline-response"
+    }
+
+    started_before_us = System.monotonic_time(:microsecond)
+    decision_deadline_us = started_before_us + 100_000
+    previous_deadline = Process.put(:lasso_attempt_deadline_us, decision_deadline_us)
+
+    on_exit(fn ->
+      if is_nil(previous_deadline) do
+        Process.delete(:lasso_attempt_deadline_us)
+      else
+        Process.put(:lasso_attempt_deadline_us, previous_deadline)
+      end
+    end)
+
+    expect(Lasso.RPC.HttpClientMock, :request, fn _config, _method, _params, opts ->
+      deadline_us = Keyword.fetch!(opts, :deadline_us)
+      assert deadline_us >= started_before_us + 25_000
+      assert deadline_us < decision_deadline_us
+
+      {:ok, {:raw, ~s({"jsonrpc":"2.0","id":"deadline-response","result":"0x1"})}}
+    end)
+
+    assert {:ok, %Lasso.RPC.Response.Success{}, _io_ms} =
+             HTTP.request(channel, rpc_request, 25)
   end
 end

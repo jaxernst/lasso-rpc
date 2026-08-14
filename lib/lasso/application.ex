@@ -68,6 +68,9 @@ defmodule Lasso.Application do
         # Error classification sample store (attaches to telemetry)
         Lasso.Core.Support.ErrorClassificationStore,
 
+        # Dispatch truth is boot-critical for tracked HTTP attempts.
+        Lasso.Core.Transport.HTTP.DispatchTracker,
+
         # Start Finch HTTP client for RPC provider requests
         # Pool size tuned for typical RPC proxy workloads:
         # - size: max connections per pool (per unique host)
@@ -79,13 +82,14 @@ defmodule Lasso.Application do
          name: Lasso.Finch,
          pools: %{
            :default => [
+             protocols: [:http1],
              size: 30,
              count: 3,
              pool_max_idle_time: :timer.seconds(60),
              conn_opts: [
-               timeout: 30_000,
                idle_timeout: 60_000,
                transport_opts: [
+                 timeout: 5_000,
                  reuse_sessions: true
                ]
              ]

@@ -87,7 +87,7 @@ defmodule Lasso.Testing.BehaviorHttpClient do
       end
     else
       # Return a mock response as raw bytes to prevent hanging
-      {:ok, {:raw, Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "result" => "0x1"})}}
+      {:ok, {:raw, Jason.encode!(%{"jsonrpc" => "2.0", "id" => request_id, "result" => "0x1"})}}
     end
   end
 

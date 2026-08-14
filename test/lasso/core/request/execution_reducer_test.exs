@@ -55,7 +55,12 @@ defmodule Lasso.RPC.ExecutionReducerTest do
     reduced =
       ExecutionReducer.new(state().identity, origin, origin + 50_000)
       |> ExecutionReducer.observe(%{id: 1, kind: :send_started, event_us: origin + 1})
-      |> ExecutionReducer.close_deadline()
+
+    assert reduced.dispatch_certainty == :not_dispatched
+
+    reduced = ExecutionReducer.close_deadline(reduced)
+
+    assert reduced.dispatch_certainty == :indeterminate
 
     assert %Lasso.RPC.AttemptTerminal.Deadline{censoring_boundary_us: 50_000} =
              ExecutionReducer.terminal_fact(reduced)
@@ -72,17 +77,18 @@ defmodule Lasso.RPC.ExecutionReducerTest do
     assert [%{reason: :certainty_regression}] = reduced.protocol_violations
   end
 
-  test "duplicates are idempotent and contradictions are diagnostic" do
+  test "send start remains open until authoritative predispatch proof" do
     event = %{id: 1, kind: :send_started, event_us: 10}
     once = ExecutionReducer.observe(state(), event)
     assert ExecutionReducer.observe(once, event) == once
 
-    contradicted =
+    resolved =
       once
       |> ExecutionReducer.observe(predispatch(2, 20))
 
-    assert contradicted.terminal == nil
-    assert [%{reason: :predispatch_after_send}] = contradicted.protocol_violations
+    assert resolved.terminal == :predispatch_failure
+    assert resolved.dispatch_certainty == :not_dispatched
+    assert resolved.protocol_violations == []
 
     reused = ExecutionReducer.observe(once, response(1, 10))
     assert [%{reason: :observation_id_reused}] = reused.protocol_violations
@@ -171,7 +177,7 @@ defmodule Lasso.RPC.ExecutionReducerTest do
   test "bounded ID tracking preserves earlier derived protocol violations" do
     contradicted =
       state(1_000)
-      |> ExecutionReducer.observe(%{id: 1, kind: :send_started, event_us: 1})
+      |> ExecutionReducer.observe(%{id: 1, kind: :send_confirmed, event_us: 1})
       |> ExecutionReducer.observe(%{id: 2, kind: :not_dispatched, event_us: 2})
 
     filled =
@@ -184,7 +190,7 @@ defmodule Lasso.RPC.ExecutionReducerTest do
     reasons = Enum.map(overflowed.protocol_violations, & &1.reason)
     assert :certainty_regression in reasons
     assert map_size(overflowed.seen) == 16
-    assert map_size(overflowed.observations) == 2
+    assert map_size(overflowed.observations) == 3
   end
 
   test "terminal linearization is unaffected by mailbox order" do
@@ -215,5 +221,43 @@ defmodule Lasso.RPC.ExecutionReducerTest do
 
     assert %Lasso.RPC.AttemptTerminal.TransportFailure{reason: :unknown} =
              ExecutionReducer.terminal_fact(reduced)
+  end
+
+  test "cancellation during unresolved send is indeterminate" do
+    reduced =
+      state()
+      |> ExecutionReducer.observe(%{id: 1, kind: :send_started, event_us: 10})
+      |> ExecutionReducer.observe(%{
+        id: 2,
+        kind: :cancelled,
+        event_us: 20,
+        reason: :caller_abandoned,
+        certainty: :not_dispatched,
+        censoring_boundary_us: 20
+      })
+
+    assert reduced.terminal == :cancelled
+    assert reduced.dispatch_certainty == :indeterminate
+
+    assert %Lasso.RPC.AttemptTerminal.Cancelled{dispatch_certainty: :indeterminate} =
+             ExecutionReducer.terminal_fact(reduced)
+  end
+
+  test "authoritative not-dispatched proof closes ambiguity before cancellation" do
+    reduced =
+      state()
+      |> ExecutionReducer.observe(%{id: 1, kind: :send_started, event_us: 10})
+      |> ExecutionReducer.observe(%{id: 2, kind: :not_dispatched, event_us: 15})
+      |> ExecutionReducer.observe(%{
+        id: 3,
+        kind: :cancelled,
+        event_us: 20,
+        reason: :caller_abandoned,
+        certainty: :not_dispatched,
+        censoring_boundary_us: 0
+      })
+
+    assert reduced.dispatch_certainty == :not_dispatched
+    assert reduced.protocol_violations == []
   end
 end

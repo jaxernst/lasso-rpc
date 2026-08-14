@@ -1,7 +1,7 @@
 defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.{AttemptLifecycle, CircuitBreaker}
   alias Lasso.Core.Support.CircuitBreaker.{AdmissionReceipt, ControlRing, Snapshot, Storage}
 
   test "concurrent recovery candidates produce one bounded lease" do
@@ -90,18 +90,29 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     assert token == receipt.token
   end
 
-  test "the attempt lifecycle owns and releases the half-open lease when it dies" do
+  test "the caller retains half-open lease ownership when the lifecycle dies" do
     {id, breaker_pid} = start_half_open_breaker()
     parent = self()
 
     caller =
       spawn(fn ->
-        result = CircuitBreaker.call(id, fn -> Process.sleep(:infinity) end, 5_000)
+        result =
+          CircuitBreaker.call(
+            id,
+            fn ->
+              {lifecycle_pid, _attempt_ref} = AttemptLifecycle.dispatch_context()
+              send(parent, {:attempt_started, lifecycle_pid})
+              Process.sleep(:infinity)
+            end,
+            5_000
+          )
+
         send(parent, {:call_result, result})
         receive do: (:stop -> :ok)
       end)
 
-    lifecycle_pid = await_lease_owner(id, caller)
+    assert_receive {:attempt_started, lifecycle_pid}, 1_000
+    assert [{^id, %{owner_pid: ^caller, claimed?: true}}] = :ets.lookup(Storage.lease_table(), id)
     assert Process.alive?(caller)
     Process.exit(lifecycle_pid, :kill)
 
@@ -191,20 +202,6 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     {:ok, restarted_pid} = CircuitBreaker.start_link({id, %{success_threshold: 1}})
     on_exit(fn -> if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid) end)
     assert %{inflight_count: 0} = :sys.get_state(restarted_pid)
-  end
-
-  defp await_lease_owner(id, excluded_pid, attempts \\ 100)
-  defp await_lease_owner(_id, _excluded_pid, 0), do: flunk("lease ownership was not transferred")
-
-  defp await_lease_owner(id, excluded_pid, attempts) do
-    case :ets.lookup(Storage.lease_table(), id) do
-      [{^id, %{owner_pid: owner_pid}}] when owner_pid != excluded_pid ->
-        owner_pid
-
-      _ ->
-        Process.sleep(5)
-        await_lease_owner(id, excluded_pid, attempts - 1)
-    end
   end
 
   defp await_snapshot_state(id, state, attempts \\ 100)
