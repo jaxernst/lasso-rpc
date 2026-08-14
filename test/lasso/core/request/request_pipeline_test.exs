@@ -18,6 +18,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     AttemptTerminal,
     Channel,
     ExecutionProjector,
+    PreparedRequest,
     RequestContext,
     RequestOptions,
     RequestPipeline,
@@ -140,6 +141,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       assert ctx.method == "eth_getBalance"
       assert ctx.params == []
       assert ctx.rpc_request == nil
+      assert ctx.prepared_request == nil
       assert ctx.opts.request_context == nil
     end
 
@@ -194,12 +196,33 @@ defmodule Lasso.RPC.RequestPipelineTest do
       }
 
       rpc_request = %{"jsonrpc" => "2.0", "method" => "eth_call", "params" => [marker], "id" => 1}
-      task = RequestPipeline.build_transport_task(channel, rpc_request, 100)
+      assert {:ok, prepared} = PreparedRequest.new(rpc_request, "lasso-copy-bound")
+      task = RequestPipeline.build_transport_task(channel, prepared, 100)
       {:env, environment} = Function.info(task, :env)
 
       refute Enum.any?(environment, &match?(%RequestContext{}, &1))
-      assert :erlang.term_to_binary(environment) =~ "decoded-params"
-      assert Enum.count(environment, &(&1 == rpc_request)) == 1
+      refute Enum.any?(environment, &(&1 == rpc_request))
+      assert Enum.count(environment, &(&1 == prepared)) == 1
+      assert :erts_debug.flat_size(environment) < 256
+
+      assert :erts_debug.same(
+               prepared.encoded,
+               hd(for %PreparedRequest{encoded: body} <- environment, do: body)
+             )
+    end
+
+    test "unencodable internal params fail before provider selection" do
+      assert {:error, %JError{category: :invalid_params, retriable?: false}, ctx} =
+               RequestPipeline.execute_via_channels(1, "eth_call", [self()], %RequestOptions{
+                 profile: "public",
+                 strategy: :fastest,
+                 timeout_ms: 100
+               })
+
+      assert ctx.execution_envelope.candidate_admission_count == 0
+      assert ctx.execution_envelope.dispatch_count == 0
+      assert ctx.prepared_request == nil
+      assert ctx.rpc_request == nil
     end
   end
 

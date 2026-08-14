@@ -36,6 +36,7 @@ defmodule Lasso.RPC.RequestPipeline do
     Channel,
     ExecutionEnvelope,
     ExecutionProjector,
+    PreparedRequest,
     RequestContext,
     RequestProjection,
     RequestTerminal,
@@ -144,13 +145,30 @@ defmodule Lasso.RPC.RequestPipeline do
     result =
       case request_open(ctx, caller_guard) do
         :ok ->
-          case validate_provider_override(chain_id, opts) do
-            :ok ->
-              channel_source = build_channel_source(opts)
-              execute_pipeline(channel_source, ctx, caller_guard)
+          case prepare_request(ctx, rpc_request) do
+            {:ok, prepared_request} ->
+              ctx = RequestContext.set_prepared_request(ctx, prepared_request)
 
-            {:error, jerr} ->
-              finalize_error(jerr, ctx)
+              case request_open(ctx, caller_guard) do
+                :ok ->
+                  case validate_provider_override(chain_id, opts) do
+                    :ok ->
+                      channel_source = build_channel_source(opts)
+                      execute_pipeline(channel_source, ctx, caller_guard)
+
+                    {:error, jerr} ->
+                      finalize_error(jerr, ctx)
+                  end
+
+                {:error, :caller_abandoned} ->
+                  finalize_caller_abandoned(ctx)
+
+                {:error, :deadline_exhausted} ->
+                  finalize_bounded_error(ctx, :deadline_exhausted)
+              end
+
+            {:error, reason} ->
+              finalize_prepare_error(reason, ctx)
           end
 
         {:error, :caller_abandoned} ->
@@ -470,7 +488,7 @@ defmodule Lasso.RPC.RequestPipeline do
     }
 
     identity = attempt_identity(channel, instance_id, ctx, receipt)
-    rpc_request = ctx.rpc_request
+    prepared_request = ctx.prepared_request
 
     case CircuitBreaker.activate_attempt(receipt, self()) do
       :ok ->
@@ -480,7 +498,7 @@ defmodule Lasso.RPC.RequestPipeline do
           ctx,
           receipt,
           identity,
-          rpc_request,
+          prepared_request,
           attempt_deadline_us,
           caller_guard
         )
@@ -497,7 +515,7 @@ defmodule Lasso.RPC.RequestPipeline do
          ctx,
          receipt,
          identity,
-         rpc_request,
+         prepared_request,
          attempt_deadline_us,
          caller_guard
        ) do
@@ -507,7 +525,7 @@ defmodule Lasso.RPC.RequestPipeline do
       RequestOwner.execute(
         identity,
         attempt_deadline_us,
-        build_transport_task(channel, rpc_request, timeout_ms),
+        build_transport_task(channel, prepared_request, timeout_ms),
         caller_guard_options(caller_guard)
       )
 
@@ -523,10 +541,14 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   @doc false
-  @spec build_transport_task(Channel.t(), map(), timeout()) :: (-> term())
-  def build_transport_task(%Channel{} = channel, rpc_request, timeout_ms)
-      when is_map(rpc_request) and is_integer(timeout_ms) do
-    fn -> Channel.request(channel, rpc_request, timeout_ms) end
+  @spec build_transport_task(Channel.t(), PreparedRequest.t(), timeout()) :: (-> term())
+  def build_transport_task(
+        %Channel{} = channel,
+        %PreparedRequest{} = prepared_request,
+        timeout_ms
+      )
+      when is_integer(timeout_ms) do
+    fn -> Channel.request(channel, prepared_request, timeout_ms) end
   end
 
   defp handle_activation_failure(channel, instance_id, rest_channels, ctx, caller_guard) do
@@ -1110,6 +1132,7 @@ defmodule Lasso.RPC.RequestPipeline do
         selection_reason: bounded_optional(ctx.selection_reason),
         params: [],
         rpc_request: nil,
+        prepared_request: nil,
         opts: opts
     }
   end
@@ -1160,6 +1183,21 @@ defmodule Lasso.RPC.RequestPipeline do
       "params" => params,
       "id" => jsonrpc_id
     }
+  end
+
+  defp prepare_request(%RequestContext{execution_envelope: envelope}, rpc_request) do
+    PreparedRequest.new(rpc_request, "lasso-" <> envelope.execution_nonce)
+  end
+
+  defp finalize_prepare_error(reason, ctx) do
+    error =
+      JError.new(-32_602, "Invalid JSON-RPC request payload",
+        category: :invalid_params,
+        retriable?: false,
+        data: %{reason: inspect(reason, limit: 4, printable_limit: 256)}
+      )
+
+    finalize_error(error, %{ctx | terminal_reason: :invalid_request})
   end
 
   @spec get_provider_channels(String.t(), chain_id(), String.t(), atom() | nil) :: [Channel.t()]

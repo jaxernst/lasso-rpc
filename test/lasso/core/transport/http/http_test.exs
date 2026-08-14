@@ -5,7 +5,7 @@ defmodule Lasso.RPC.Transports.HTTPTest do
   alias Lasso.Core.Request.RequestOwner
   alias Lasso.Core.Support.ErrorClassifier
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal}
+  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal, PreparedRequest}
   alias Lasso.RPC.Transports.HTTP
 
   defmodule LocalRawClient do
@@ -107,6 +107,44 @@ defmodule Lasso.RPC.Transports.HTTPTest do
     assert response.id == request_id
     assert response.raw_bytes == raw
     assert :erts_debug.same(response.raw_bytes, raw)
+  end
+
+  test "prepared requests validate the transport id and restore an escaped client id" do
+    channel = %{
+      provider_id: "prepared-provider",
+      config: %{id: "prepared-provider", url: "https://example.invalid"}
+    }
+
+    client_id = "client-\"\\-id"
+
+    request = %{
+      "jsonrpc" => "2.0",
+      "method" => "eth_call",
+      "params" => [],
+      "id" => client_id
+    }
+
+    assert {:ok, prepared} = PreparedRequest.new(request, "lasso-http-prepared")
+
+    raw =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => prepared.transport_id,
+        "result" => %{"copy" => prepared.transport_id}
+      })
+
+    Application.put_env(:lasso, :http_client, LocalRawClient)
+    Process.put({LocalRawClient, :raw}, raw)
+    on_exit(fn -> Process.delete({LocalRawClient, :raw}) end)
+
+    assert {:ok, %Lasso.RPC.Response.Success{id: ^client_id, raw_bytes: restored}, _io_ms} =
+             HTTP.request_prepared(channel, prepared, 1_000)
+
+    assert {:ok,
+            %{
+              "id" => ^client_id,
+              "result" => %{"copy" => "lasso-http-prepared"}
+            }} = Jason.decode(restored)
   end
 
   test "rejects a structurally incomplete response without decoding its result" do

@@ -10,7 +10,14 @@ defmodule Lasso.RPC.RequestContext do
   - Result or error shapes
   """
 
-  alias Lasso.RPC.{BoundedIdentifier, Channel, ExecutionEnvelope, RequestOptions, Response}
+  alias Lasso.RPC.{
+    BoundedIdentifier,
+    Channel,
+    ExecutionEnvelope,
+    PreparedRequest,
+    RequestOptions,
+    Response
+  }
 
   @type channel_identity :: %{
           provider_id: binary(),
@@ -78,6 +85,7 @@ defmodule Lasso.RPC.RequestContext do
 
           # Execution parameters (immutable throughout pipeline)
           rpc_request: map() | nil,
+          prepared_request: PreparedRequest.t() | nil,
           timeout_ms: timeout() | nil,
           execution_envelope: ExecutionEnvelope.t() | nil,
           opts: RequestOptions.t() | nil,
@@ -125,6 +133,7 @@ defmodule Lasso.RPC.RequestContext do
             result_size_bytes: nil,
             error: nil,
             rpc_request: nil,
+            prepared_request: nil,
             timeout_ms: nil,
             execution_envelope: nil,
             opts: nil,
@@ -161,6 +170,12 @@ defmodule Lasso.RPC.RequestContext do
       plug_start_time: plug_start,
       start_time: start_time
     }
+  end
+
+  @doc false
+  @spec set_prepared_request(t(), PreparedRequest.t()) :: t()
+  def set_prepared_request(%__MODULE__{} = ctx, %PreparedRequest{} = prepared_request) do
+    %{ctx | prepared_request: prepared_request}
   end
 
   @doc false

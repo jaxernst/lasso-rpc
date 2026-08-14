@@ -23,6 +23,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamResponse}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
+  alias Lasso.RPC.PreparedRequest
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.WebSocket.Connection, as: WSConnection
 
@@ -117,13 +118,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
     context = AttemptProtocol.context()
 
-    transport_deadline_us = io_start_us + timeout * 1_000
-
-    deadline_us =
-      case AttemptProtocol.deadline_us() do
-        nil -> transport_deadline_us
-        lifecycle_deadline_us -> min(lifecycle_deadline_us, transport_deadline_us)
-      end
+    deadline_us = request_deadline_us(io_start_us, timeout)
 
     result =
       transport_request(
@@ -135,6 +130,32 @@ defmodule Lasso.RPC.Transports.WebSocket do
         context,
         deadline_us
       )
+
+    io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
+
+    case result do
+      {:ok, response} -> {:ok, response, io_ms}
+      {:error, reason} -> {:error, reason, io_ms}
+    end
+  end
+
+  @impl true
+  def request_prepared(channel, %PreparedRequest{} = prepared, timeout) do
+    %{instance_id: instance_id, provider_id: provider_id} = channel
+    io_start_us = System.monotonic_time(:microsecond)
+    context = AttemptProtocol.context()
+    deadline_us = request_deadline_us(io_start_us, timeout)
+
+    result =
+      authorize_transport_request(%{
+        instance_id: instance_id,
+        provider_id: provider_id,
+        transport_id: prepared.transport_id,
+        encoded: prepared.encoded,
+        client_id: prepared.client_id,
+        context: context,
+        deadline_us: deadline_us
+      })
 
     io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
 
@@ -175,6 +196,15 @@ defmodule Lasso.RPC.Transports.WebSocket do
       {:error, reason} ->
         AttemptProtocol.predispatch_failure(context, :encode_error)
         {:error, normalize_ws_error(reason, provider_id)}
+    end
+  end
+
+  defp request_deadline_us(io_start_us, timeout) do
+    transport_deadline_us = io_start_us + timeout * 1_000
+
+    case AttemptProtocol.deadline_us() do
+      nil -> transport_deadline_us
+      lifecycle_deadline_us -> min(lifecycle_deadline_us, transport_deadline_us)
     end
   end
 

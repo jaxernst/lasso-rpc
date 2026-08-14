@@ -3,6 +3,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
 
   alias Lasso.Core.Transport.HTTP.DispatchTracker
   alias Lasso.Core.Transport.AttemptProtocol
+  alias Lasso.RPC.PreparedRequest
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: FinchClient
 
   @finch_name __MODULE__.Client
@@ -63,6 +64,36 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
                timeout: 100,
                finch_name: @finch_name
              )
+  end
+
+  test "prepared requests send the existing encoded binary unchanged" do
+    request = %{
+      "jsonrpc" => "2.0",
+      "method" => "eth_blockNumber",
+      "params" => [],
+      "id" => "client"
+    }
+
+    assert {:ok, prepared} = PreparedRequest.new(request, "lasso-finch-prepared")
+
+    assert {:ok, {:raw, raw}} =
+             FinchClient.request_prepared(
+               %{url: "http://example.invalid"},
+               prepared,
+               timeout: 100,
+               request_fun: fn finch_request, _name, _options ->
+                 assert finch_request.body === prepared.encoded
+                 assert :erts_debug.same(finch_request.body, prepared.encoded)
+
+                 {:ok,
+                  %Finch.Response{
+                    status: 200,
+                    body: ~s({"jsonrpc":"2.0","id":"lasso-finch-prepared","result":"0x1"})
+                  }}
+               end
+             )
+
+    assert raw =~ "lasso-finch-prepared"
   end
 
   test "predispatch Finch failure is proven only while the tracker remains authoritative" do

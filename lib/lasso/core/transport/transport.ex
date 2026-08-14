@@ -8,6 +8,7 @@ defmodule Lasso.RPC.Transport do
 
   @type channel :: term()
   @type rpc_request :: map()
+  @type prepared_request :: Lasso.RPC.PreparedRequest.t()
   @type rpc_response :: map()
   @type subscription_ref :: term()
   @type provider_config :: map()
@@ -59,9 +60,13 @@ defmodule Lasso.RPC.Transport do
               {:ok, rpc_response, non_neg_integer()}
               | {:error, term(), non_neg_integer()}
 
+  @callback request_prepared(channel, prepared_request, timeout()) ::
+              {:ok, rpc_response, non_neg_integer()}
+              | {:error, term(), non_neg_integer()}
+
   @callback deferred_dispatch?() :: boolean()
 
-  @optional_callbacks deferred_dispatch?: 0
+  @optional_callbacks deferred_dispatch?: 0, request_prepared: 3
 
   @doc """
   Starts a streaming subscription (WebSocket only).

@@ -9,7 +9,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   alias Lasso.Core.Transport.UpstreamResponse.Validated
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.InstanceState
-  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal, Response}
+  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal, PreparedRequest, Response}
   alias Lasso.RPC.Transport.WebSocket.{Connection, Endpoint, Handler}
   alias Lasso.RPC.Transports.WebSocket
 
@@ -100,6 +100,19 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
     assert %{pending_requests: 0, transport_pending_requests: 0} =
              Connection.status(context.instance_id)
+  end
+
+  @tag send_mode: :auto_success
+  test "prepared request sends the existing bytes and restores an explicit null id", context do
+    request = %{"jsonrpc" => "2.0", "id" => nil, "method" => "eth_blockNumber", "params" => []}
+    assert {:ok, prepared} = PreparedRequest.new(request, "lasso-ws-prepared")
+
+    task = Task.async(fn -> WebSocket.request_prepared(context.channel, prepared, 1_000) end)
+
+    assert_receive {:protocol_ws_send, _ws_pid, "lasso-ws-prepared", payload}
+    assert payload === prepared.encoded
+
+    assert {:ok, %Response.Success{id: nil}, _io_ms} = Task.await(task)
   end
 
   @tag pending_limit: 1
