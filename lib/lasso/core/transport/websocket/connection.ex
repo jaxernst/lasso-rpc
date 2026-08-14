@@ -207,7 +207,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           String.t(),
           pid(),
           integer(),
-          integer(),
           binary(),
           timeout()
         ) ::
@@ -224,15 +223,13 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         instance_id,
         transport_id,
         owner,
-        decision_deadline_us,
-        settlement_deadline_us,
+        deadline_us,
         encoded,
         timeout_ms
       ) do
     GenServer.call(
       via_instance_name(instance_id),
-      {:authorize_transport, transport_id, owner, decision_deadline_us, settlement_deadline_us,
-       encoded},
+      {:authorize_transport, transport_id, owner, deadline_us, encoded},
       timeout_ms
     )
   catch
@@ -593,8 +590,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     do: {:reply, {:error, :not_connected}, state}
 
   def handle_call(
-        {:authorize_transport, transport_id, owner, decision_deadline_us, settlement_deadline_us,
-         encoded},
+        {:authorize_transport, transport_id, owner, deadline_us, encoded},
         _from,
         %{connected: true, connection: connection, connection_id: generation} = state
       )
@@ -602,11 +598,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     now_us = System.monotonic_time(:microsecond)
 
     cond do
-      now_us >= decision_deadline_us ->
-        {:reply, {:error, :deadline}, state}
-
-      settlement_deadline_us < decision_deadline_us or
-          settlement_deadline_us > decision_deadline_us + 1_000 ->
+      now_us >= deadline_us ->
         {:reply, {:error, :deadline}, state}
 
       not Process.alive?(owner) ->
@@ -630,7 +622,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           Process.send_after(
             self(),
             {:transport_timeout, transport_id, generation, token},
-            ceil_milliseconds(settlement_deadline_us - now_us)
+            ceil_milliseconds(deadline_us - now_us)
           )
 
         pending = %{
@@ -639,9 +631,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           token: token,
           timer: timer,
           generation: generation,
-          deadline_us: decision_deadline_us,
-          decision_deadline_us: decision_deadline_us,
-          settlement_deadline_us: settlement_deadline_us,
+          deadline_us: deadline_us,
           connection: connection,
           cancel_latch: cancel_latch,
           send_state: :queued
@@ -653,7 +643,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         case cast_send(
                next_state,
                {:transport, transport_id, token},
-               decision_deadline_us,
+               deadline_us,
                cancel_latch,
                {:text, encoded}
              ) do
@@ -668,8 +658,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   def handle_call(
-        {:authorize_transport, _transport_id, _owner, _decision_deadline, _settlement_deadline,
-         _encoded},
+        {:authorize_transport, _transport_id, _owner, _deadline, _encoded},
         _from,
         state
       ),
@@ -715,8 +704,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           timer: timer,
           generation: generation,
           deadline_us: deadline_us,
-          decision_deadline_us: deadline_us,
-          settlement_deadline_us: deadline_us,
           connection: connection,
           cancel_latch: cancel_latch,
           send_state: :registered
@@ -902,7 +889,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         end
 
       %{generation: ^generation, token: ^token, send_state: :tombstone} = pending ->
-        {:noreply, remove_transport_entry(state, transport_id, pending)}
+        case decision do
+          :accepted -> {:noreply, state}
+          {:rejected, _reason} -> {:noreply, remove_transport_entry(state, transport_id, pending)}
+        end
 
       _missing_or_stale ->
         {:noreply, increment_transport_diagnostic(state, :stale_send_decision)}
@@ -946,7 +936,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         end
 
       %{generation: ^generation, token: ^token, send_state: :tombstone} = pending ->
-        {:noreply, remove_legacy_pending(state, request_id, pending)}
+        case decision do
+          :accepted -> {:noreply, state}
+          {:rejected, _reason} -> {:noreply, remove_legacy_pending(state, request_id, pending)}
+        end
 
       _missing_or_stale ->
         {:noreply, increment_transport_diagnostic(state, :stale_send_decision)}
@@ -959,8 +952,20 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       ) do
     case Map.get(state.control_sends, token) do
       %{generation: ^generation} = control ->
-        state = remove_control_send(state, token, control)
-        {:noreply, handle_control_decision(state, control, decision)}
+        case {control.send_state, decision} do
+          {:tombstone, :accepted} ->
+            {:noreply, state}
+
+          {:tombstone, {:rejected, _reason}} ->
+            {:noreply, remove_control_send(state, token, control)}
+
+          {_send_state, :accepted} ->
+            {:noreply, put_in(state, [:control_sends, token], %{control | send_state: :accepted})}
+
+          {_send_state, {:rejected, _reason}} ->
+            state = remove_control_send(state, token, control)
+            {:noreply, handle_control_decision(state, control, decision)}
+        end
 
       _missing_or_stale ->
         {:noreply, increment_transport_diagnostic(state, :stale_send_decision)}
@@ -969,6 +974,64 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   def handle_info({:ws_send_decision, _connection, _generation, _key, _decision, _at}, state) do
     {:noreply, increment_transport_diagnostic(state, :stale_send_decision)}
+  end
+
+  def handle_info(
+        {:ws_send_written, connection, generation, {:transport, transport_id, token},
+         written_at_us},
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    case Map.get(state.transport_pending, transport_id) do
+      %{generation: ^generation, token: ^token, send_state: :accepted} = pending ->
+        send(pending.owner, {:ws_transport_send_confirmed, token, generation, written_at_us})
+
+        {:noreply,
+         put_in(state, [:transport_pending, transport_id], %{pending | send_state: :confirmed})}
+
+      %{generation: ^generation, token: ^token, send_state: :tombstone} = pending ->
+        {:noreply, remove_transport_entry(state, transport_id, pending)}
+
+      _missing_or_stale ->
+        {:noreply, increment_transport_diagnostic(state, :stale_send_confirmation)}
+    end
+  end
+
+  def handle_info(
+        {:ws_send_written, connection, generation, {:legacy, request_id, token}, _written_at_us},
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    case Map.get(state.pending_requests, request_id) do
+      %{generation: ^generation, token: ^token, send_state: :accepted} = pending ->
+        {:noreply,
+         put_in(state, [:pending_requests, request_id], %{pending | send_state: :confirmed})}
+
+      %{generation: ^generation, token: ^token, send_state: :tombstone} = pending ->
+        {:noreply, remove_legacy_pending(state, request_id, pending)}
+
+      _missing_or_stale ->
+        {:noreply, increment_transport_diagnostic(state, :stale_send_confirmation)}
+    end
+  end
+
+  def handle_info(
+        {:ws_send_written, connection, generation, {:control, token}, _written_at_us},
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    case Map.get(state.control_sends, token) do
+      %{generation: ^generation, send_state: :accepted} = control ->
+        state = remove_control_send(state, token, control)
+        {:noreply, handle_control_decision(state, control, :accepted)}
+
+      %{generation: ^generation, send_state: :tombstone} = control ->
+        {:noreply, remove_control_send(state, token, control)}
+
+      _missing_or_stale ->
+        {:noreply, increment_transport_diagnostic(state, :stale_send_confirmation)}
+    end
+  end
+
+  def handle_info({:ws_send_written, _connection, _generation, _key, _at}, state) do
+    {:noreply, increment_transport_diagnostic(state, :stale_send_confirmation)}
   end
 
   def handle_info(:initial_connect, state), do: handle_continue(:connect, state)
@@ -1074,12 +1137,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       %{generation: ^generation, token: ^token} = pending ->
         now_us = System.monotonic_time(:microsecond)
 
-        if now_us < pending.settlement_deadline_us do
+        if now_us < pending.deadline_us do
           timer =
             Process.send_after(
               self(),
               {:transport_timeout, transport_id, generation, token},
-              ceil_milliseconds(pending.settlement_deadline_us - now_us)
+              ceil_milliseconds(pending.deadline_us - now_us)
             )
 
           updated = %{pending | timer: timer}
@@ -1390,7 +1453,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         control = %{control | send_state: :tombstone}
         state = put_in(state, [:control_sends, token], control)
 
-        if control.kind == :heartbeat and is_pid(state.connection) do
+        if is_pid(state.connection) do
           Process.exit(state.connection, :kill)
         end
 
@@ -2095,21 +2158,21 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   defp take_eligible_transport_frame(pending, transport_id) do
     connection = pending.connection
     generation = pending.generation
-    decision_deadline_us = pending.decision_deadline_us
+    deadline_us = pending.deadline_us
 
     receive do
       {:ws_message, ^connection, ^generation,
        {:transport, %Validated{id: ^transport_id}} = parsed, raw_bytes, frame_received_at,
        validated_at}
       when is_binary(raw_bytes) and is_integer(frame_received_at) and is_integer(validated_at) and
-             validated_at < decision_deadline_us ->
+             validated_at < deadline_us ->
         {:ok, parsed, raw_bytes, frame_received_at, validated_at}
 
       {:ws_message, ^connection, ^generation,
        {:transport_invalid, ^transport_id, _reason} = parsed, raw_bytes, frame_received_at,
        validated_at}
       when is_binary(raw_bytes) and is_integer(frame_received_at) and is_integer(validated_at) and
-             validated_at < decision_deadline_us ->
+             validated_at < deadline_us ->
         {:ok, parsed, raw_bytes, frame_received_at, validated_at}
     after
       0 -> :none
@@ -2176,42 +2239,46 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     do: cancel_registered_transport(state, transport_id, pending)
 
   defp retire_transport_send(state, transport_id, %{send_state: :queued} = pending) do
-    case cancel_latch(pending.cancel_latch) do
-      :cancelled ->
-        cleanup_send_entry(pending)
-
-        put_in(
-          state,
-          [:transport_pending, transport_id],
-          tombstone(pending, {:transport, transport_id})
-        )
-
-      :accepted ->
-        remove_transport_entry(state, transport_id, pending)
-    end
+    _ = cancel_latch(pending.cancel_latch)
+    tombstone_transport_send(state, transport_id, pending)
   end
+
+  defp retire_transport_send(state, transport_id, %{send_state: :accepted} = pending),
+    do: tombstone_transport_send(state, transport_id, pending)
 
   defp retire_transport_send(state, transport_id, pending),
     do: remove_transport_entry(state, transport_id, pending)
 
   defp retire_legacy_send(state, request_id, %{send_state: :queued} = pending) do
-    case cancel_latch(pending.cancel_latch) do
-      :cancelled ->
-        cleanup_send_entry(pending)
-
-        put_in(
-          state,
-          [:pending_requests, request_id],
-          tombstone(pending, {:legacy, request_id})
-        )
-
-      :accepted ->
-        remove_legacy_pending(state, request_id, pending)
-    end
+    _ = cancel_latch(pending.cancel_latch)
+    tombstone_legacy_send(state, request_id, pending)
   end
+
+  defp retire_legacy_send(state, request_id, %{send_state: :accepted} = pending),
+    do: tombstone_legacy_send(state, request_id, pending)
 
   defp retire_legacy_send(state, request_id, pending),
     do: remove_legacy_pending(state, request_id, pending)
+
+  defp tombstone_transport_send(state, transport_id, pending) do
+    cleanup_send_entry(pending)
+
+    put_in(
+      state,
+      [:transport_pending, transport_id],
+      tombstone(pending, {:transport, transport_id})
+    )
+  end
+
+  defp tombstone_legacy_send(state, request_id, pending) do
+    cleanup_send_entry(pending)
+
+    put_in(
+      state,
+      [:pending_requests, request_id],
+      tombstone(pending, {:legacy, request_id})
+    )
+  end
 
   defp tombstone(pending, send_key) do
     cleanup_expiry_us =

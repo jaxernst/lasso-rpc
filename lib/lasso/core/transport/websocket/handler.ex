@@ -93,12 +93,31 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
     )
 
     case decision do
-      :accepted -> {:reply, frame, state}
-      {:rejected, _reason} -> {:ok, state}
+      :accepted ->
+        send(self(), {:lasso_ws_send_written, generation, send_key})
+        {:reply, frame, state}
+
+      {:rejected, _reason} ->
+        {:ok, state}
     end
   end
 
   def handle_cast(_message, state), do: {:ok, state}
+
+  @spec handle_info(term(), map()) :: {:ok, map()}
+  def handle_info(
+        {:lasso_ws_send_written, generation, send_key},
+        %{connection_generation: generation} = state
+      ) do
+    send(
+      state.parent,
+      {:ws_send_written, self(), generation, send_key, System.monotonic_time(:microsecond)}
+    )
+
+    {:ok, state}
+  end
+
+  def handle_info(_message, state), do: {:ok, state}
 
   # This fires for ALL disconnection events.
   # WebSockex embeds close frame info directly in the reason parameter,

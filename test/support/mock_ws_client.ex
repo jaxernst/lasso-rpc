@@ -139,7 +139,8 @@ defmodule TestSupport.MockWSClient do
       response_delay: 0,
       pending_responses: %{},
       response_mode: :result,
-      hang_mode: hang_mode
+      hang_mode: hang_mode,
+      successful_writes: MapSet.new()
     }
 
     cond do
@@ -178,6 +179,26 @@ defmodule TestSupport.MockWSClient do
   def handle_info({:"$websockex_send", _ref, :ping}, s) do
     # Pretend the ping was handled; also simulate a pong at handler level
     {:noreply, s}
+  end
+
+  def handle_info(
+        {:lasso_ws_send_written, generation, send_key} = message,
+        %{handler: handler, state: handler_state} = state
+      ) do
+    write_key = {generation, send_key}
+
+    if MapSet.member?(state.successful_writes, write_key) do
+      {:ok, handler_state} = handler.handle_info(message, handler_state)
+
+      {:noreply,
+       %{
+         state
+         | state: handler_state,
+           successful_writes: MapSet.delete(state.successful_writes, write_key)
+       }}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info({:delayed_response, payload}, %{handler: handler, state: st} = s) do
@@ -290,7 +311,14 @@ defmodule TestSupport.MockWSClient do
     case handler.handle_cast(message, handler_state) do
       {:reply, frame, handler_state} ->
         state = %{state | state: handler_state}
-        {:noreply, dispatch_cast_frame(frame, state)}
+
+        case dispatch_cast_frame(frame, state) do
+          {:ok, state} ->
+            {:noreply, mark_write_success(message, state)}
+
+          {:error, reason, state} ->
+            fail_cast_write(message, reason, state)
+        end
 
       {:ok, handler_state} ->
         {:noreply, %{state | state: handler_state}}
@@ -364,7 +392,10 @@ defmodule TestSupport.MockWSClient do
   end
 
   defp dispatch_cast_frame({:text, _payload}, %{failure_mode: :fail_sends} = state),
-    do: state
+    do: {:error, :connection_closed, state}
+
+  defp dispatch_cast_frame(_frame, %{connected: false} = state),
+    do: {:error, :not_connected, state}
 
   defp dispatch_cast_frame(
          {:text, payload},
@@ -380,23 +411,48 @@ defmodule TestSupport.MockWSClient do
 
     if delay > 0 do
       Process.send_after(self(), {:delayed_response, response_payload}, delay)
-      state
+      {:ok, state}
     else
       case handler.handle_frame({:text, response_payload}, handler_state) do
-        {:ok, new_handler_state} -> %{state | state: new_handler_state}
-        other -> %{state | state: elem(other, 1)}
+        {:ok, new_handler_state} -> {:ok, %{state | state: new_handler_state}}
+        other -> {:ok, %{state | state: elem(other, 1)}}
       end
     end
   end
 
-  defp dispatch_cast_frame(:ping, %{failure_mode: :fail_pings} = state), do: state
+  defp dispatch_cast_frame(:ping, %{failure_mode: :fail_pings} = state),
+    do: {:error, :connection_closed, state}
 
   defp dispatch_cast_frame(:ping, %{handler: handler, state: handler_state} = state) do
     {:ok, new_handler_state} = handler.handle_frame({:pong, ""}, handler_state)
-    %{state | state: new_handler_state}
+    {:ok, %{state | state: new_handler_state}}
   end
 
-  defp dispatch_cast_frame(_frame, state), do: state
+  defp dispatch_cast_frame(_frame, state), do: {:ok, state}
+
+  defp mark_write_success(
+         {:send_if_live, generation, send_key, _deadline_us, _cancel_latch, _frame},
+         state
+       ) do
+    %{state | successful_writes: MapSet.put(state.successful_writes, {generation, send_key})}
+  end
+
+  defp fail_cast_write(message, reason, %{handler: handler, state: handler_state} = state) do
+    :ok = drop_post_write_ack(message)
+    {:ok, handler_state} = handler.handle_disconnect(%{reason: {:error, reason}}, handler_state)
+
+    {:stop, {:socket_write_error, reason}, %{state | state: handler_state, connected: false}}
+  end
+
+  defp drop_post_write_ack(
+         {:send_if_live, generation, send_key, _deadline_us, _cancel_latch, _frame}
+       ) do
+    receive do
+      {:lasso_ws_send_written, ^generation, ^send_key} -> :ok
+    after
+      0 -> raise "missing queued post-write acknowledgement"
+    end
+  end
 
   defp response_payload(payload, mode) do
     case Jason.decode(payload) do

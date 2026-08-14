@@ -125,6 +125,39 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert Connection.status(context.instance_id).transport_pending_requests == 0
   end
 
+  test "post-write acknowledgement proves dispatch before the response", context do
+    {task, attempt_ref} = observed_request_task(context.channel)
+
+    assert_receive {:protocol_ws_send, ws_pid, transport_id, _payload}
+    assert_observation(attempt_ref, :send_started)
+    assert %{event_us: confirmed_at_us} = assert_observation(attempt_ref, :send_confirmed)
+    assert is_integer(confirmed_at_us)
+
+    :ok =
+      TestSupport.ProtocolWSClient.acknowledge(
+        ws_pid,
+        transport_id,
+        success_response(transport_id, "0x1")
+      )
+
+    assert_observation(attempt_ref, :response)
+    assert {:ok, %Response.Success{id: "observed"}, _io_ms} = Task.await(task)
+  end
+
+  test "a timeout after the post-write acknowledgement remains dispatched", context do
+    {task, attempt_ref} = observed_request_task(context.channel, 100)
+
+    assert_receive {:protocol_ws_send, _ws_pid, _transport_id, _payload}
+    assert_observation(attempt_ref, :send_started)
+    assert_observation(attempt_ref, :send_confirmed)
+
+    assert_receive {:transport_observation, ^attempt_ref,
+                    %{kind: :transport_failure, certainty: :dispatched}},
+                   1_000
+
+    assert {:error, %JError{category: :timeout}, _io_ms} = Task.await(task, 1_000)
+  end
+
   test "does not register or send at or after the absolute deadline", context do
     {:ok, snapshot = {_ws_pid, generation}} =
       Connection.transport_snapshot(context.instance_id, 1_000)
@@ -153,7 +186,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   @tag pending_limit: 1
   test "an expired queued frame stays bounded and never sends after handler resume", context do
     :sys.suspend(context.ws_pid)
-    on_exit(fn -> if Process.alive?(context.ws_pid), do: :sys.resume(context.ws_pid) end)
+    on_exit(fn -> resume_if_alive(context.ws_pid) end)
 
     {task, attempt_ref} = observed_request_task(context.channel)
 
@@ -191,6 +224,84 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
     :sys.resume(context.ws_pid)
     refute_receive {:protocol_ws_send, _ws_pid, _id, _payload}, 0
+
+    assert eventually(fn ->
+             Connection.status(context.instance_id).transport_pending_requests == 0
+           end)
+  end
+
+  @tag send_mode: :pause_before_write
+  test "timeout retains an accepted send until its post-write acknowledgement", context do
+    {task, attempt_ref} = observed_request_task(context.channel, 100)
+
+    assert_receive {:protocol_ws_accepted_before_write, ws_pid, transport_id, _payload}
+    assert_observation(attempt_ref, :send_started)
+
+    assert eventually(fn ->
+             match?(
+               %{send_state: :accepted},
+               transport_pending(context.connection_pid, transport_id)
+             )
+           end)
+
+    assert {:error, %JError{category: :timeout}, _io_ms} = Task.await(task, 1_000)
+
+    assert %{transport_pending_requests: 1, transport_tombstones: 1} =
+             Connection.status(context.instance_id)
+
+    refute_receive {:protocol_ws_send, ^ws_pid, ^transport_id, _payload}, 0
+    send(ws_pid, :resume_protocol_ws_write)
+    assert_receive {:protocol_ws_send, ^ws_pid, ^transport_id, _payload}
+
+    assert eventually(fn ->
+             Connection.status(context.instance_id).transport_pending_requests == 0
+           end)
+
+    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}, 0
+  end
+
+  @tag send_mode: :pause_before_write
+  @tag pending_limit: 1
+  test "owner death after acceptance kills the exact generation at cleanup expiry", context do
+    task = request_task(context.channel, "accepted-owner-death", 5_000)
+
+    assert_receive {:protocol_ws_accepted_before_write, ws_pid, transport_id, _payload}
+
+    assert eventually(fn ->
+             match?(
+               %{send_state: :accepted},
+               transport_pending(context.connection_pid, transport_id)
+             )
+           end)
+
+    Process.unlink(task.pid)
+    task_monitor = Process.monitor(task.pid)
+    Process.exit(task.pid, :kill)
+    assert_receive {:DOWN, ^task_monitor, :process, _pid, :killed}
+
+    assert eventually(fn ->
+             match?(
+               %{transport_pending_requests: 1, transport_tombstones: 1},
+               Connection.status(context.instance_id)
+             )
+           end)
+
+    pending = transport_pending(context.connection_pid, transport_id)
+    cleanup_expiry_us = expire_send_cleanup(context.connection_pid, transport_id, pending)
+    ws_monitor = Process.monitor(ws_pid)
+
+    send(
+      context.connection_pid,
+      {:send_cleanup_expired, pending.connection, pending.generation, {:transport, transport_id},
+       pending.token, cleanup_expiry_us}
+    )
+
+    assert_receive {:DOWN, ^ws_monitor, :process, ^ws_pid, :killed}
+    refute_receive {:protocol_ws_send, ^ws_pid, ^transport_id, _payload}, 0
+
+    assert_receive {:protocol_ws_connected, new_ws_pid, new_generation}
+    assert new_ws_pid != ws_pid
+    assert new_generation != context.generation
 
     assert eventually(fn ->
              Connection.status(context.instance_id).transport_pending_requests == 0
@@ -247,6 +358,8 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     before_deadline = replace_deadline(context.connection_pid, before_deadline_id)
     raw = success_response(before_deadline_id, "0x1")
 
+    :sys.suspend(context.connection_pid)
+
     send(
       context.connection_pid,
       {:transport_timeout, before_deadline_id, generation, before_token}
@@ -260,6 +373,8 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
       before_deadline - 1,
       before_deadline - 1
     )
+
+    :sys.resume(context.connection_pid)
 
     assert_receive {:ws_transport_response, ^before_token, ^generation, ^ws_pid,
                     {:ok, %Validated{id: ^before_deadline_id}}, ^raw, received_at, validated_at}
@@ -283,6 +398,8 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     at_deadline = replace_deadline(context.connection_pid, at_deadline_id)
     at_raw = success_response(at_deadline_id, "0x2")
 
+    :sys.suspend(context.connection_pid)
+
     send(context.connection_pid, {:transport_timeout, at_deadline_id, generation, at_token})
 
     send_parsed_frame(
@@ -293,6 +410,8 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
       at_deadline,
       at_deadline
     )
+
+    :sys.resume(context.connection_pid)
 
     assert_receive {:ws_transport_timeout, ^at_token, ^generation}
 
@@ -319,6 +438,8 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     after_deadline = replace_deadline(context.connection_pid, after_deadline_id)
     after_raw = success_response(after_deadline_id, "0x3")
 
+    :sys.suspend(context.connection_pid)
+
     send(
       context.connection_pid,
       {:transport_timeout, after_deadline_id, generation, after_token}
@@ -333,6 +454,8 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
       after_deadline + 1
     )
 
+    :sys.resume(context.connection_pid)
+
     assert_receive {:ws_transport_timeout, ^after_token, ^generation}
 
     refute_receive {:ws_transport_response, ^after_token, ^generation, _pid, _validation, _raw,
@@ -344,7 +467,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert status.transport_diagnostics.late_or_uncorrelated_response == 2
   end
 
-  test "settlement drain deterministically accepts only D-1 under mailbox overtaking", context do
+  test "deadline drain accepts only an already-observed D-1 frame", context do
     {:ok, snapshot = {ws_pid, generation}} =
       Connection.transport_snapshot(context.instance_id, 1_000)
 
@@ -367,18 +490,11 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
                  1_000
                )
 
-      decision_deadline_us = System.monotonic_time(:microsecond) - 2_000
-      settlement_deadline_us = System.monotonic_time(:microsecond) - 1
-
-      force_transport_cutoffs(
-        context.connection_pid,
-        id,
-        decision_deadline_us,
-        settlement_deadline_us
-      )
+      deadline_us = System.monotonic_time(:microsecond) - 1_000
+      force_transport_deadline(context.connection_pid, id, deadline_us)
 
       raw = success_response(id, "0x1")
-      validated_at_us = decision_deadline_us + offset
+      validated_at_us = deadline_us + offset
 
       :sys.suspend(context.connection_pid)
 
@@ -415,6 +531,49 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
       assert Connection.status(context.instance_id).transport_pending_requests == 0
     end
+  end
+
+  test "a D-1 frame delivered after deadline closure remains late", context do
+    {:ok, snapshot = {ws_pid, generation}} =
+      Connection.transport_snapshot(context.instance_id, 1_000)
+
+    id = transport_id(generation, "late-d-minus-one")
+    initial_deadline = System.monotonic_time(:microsecond) + 5_000_000
+
+    assert {:ok, token} =
+             Connection.register_transport(
+               context.instance_id,
+               snapshot,
+               id,
+               self(),
+               initial_deadline,
+               1_000
+             )
+
+    deadline_us = System.monotonic_time(:microsecond) - 1_000
+    force_transport_deadline(context.connection_pid, id, deadline_us)
+    send(context.connection_pid, {:transport_timeout, id, generation, token})
+    assert_receive {:ws_transport_timeout, ^token, ^generation}
+
+    raw = success_response(id, "0x1")
+
+    send_parsed_frame(
+      context.connection_pid,
+      ws_pid,
+      generation,
+      raw,
+      deadline_us - 1,
+      deadline_us - 1
+    )
+
+    refute_receive {:ws_transport_response, ^token, ^generation, _pid, _validation, _raw,
+                    _received, _validated},
+                   0
+
+    assert eventually(fn ->
+             diagnostics = Connection.status(context.instance_id).transport_diagnostics
+             Map.get(diagnostics, :late_or_uncorrelated_response, 0) == 1
+           end)
   end
 
   test "ABA-safe cancellation ignores stale timers and late responses", context do
@@ -708,7 +867,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     :ok = TestSupport.ProtocolWSClient.acknowledge(ws_pid, transport_id)
 
     assert_observation(attempt_ref, :send_started)
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}, 0
+    assert_observation(attempt_ref, :send_confirmed)
 
     assert %{event_us: event_us, io_duration_us: io_duration_us} =
              assert_observation(attempt_ref, :response)
@@ -746,7 +905,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
   test "uses one bounded Connection authorization call on the unary hot path", context do
     traced_mfas = [
-      {Connection, :authorize_transport, 7},
+      {Connection, :authorize_transport, 6},
       {Connection, :transport_snapshot, 2},
       {Connection, :register_transport, 6},
       {Connection, :queue_transport, 6}
@@ -780,7 +939,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert {:ok, %Response.Success{id: "one-authorization"}, _io_ms} = Task.await(task)
   end
 
-  test "a response validated before the deadline remains eligible after the task resumes",
+  test "a D-1 response already in the task mailbox remains eligible after D",
        context do
     owner = self()
     attempt_ref = make_ref()
@@ -794,15 +953,22 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
       end)
 
     assert_receive {:protocol_ws_send, ws_pid, transport_id, _payload}
+    pending = transport_pending(context.connection_pid, transport_id)
+    assert pending.deadline_us == deadline_us
+
     true = :erlang.suspend_process(task.pid)
     on_exit(fn -> if Process.alive?(task.pid), do: :erlang.resume_process(task.pid) end)
 
-    :ok =
-      TestSupport.ProtocolWSClient.acknowledge(
-        ws_pid,
-        transport_id,
-        success_response(transport_id, "0x1")
-      )
+    raw = success_response(transport_id, "0x1")
+
+    send_parsed_frame(
+      context.connection_pid,
+      ws_pid,
+      context.generation,
+      raw,
+      deadline_us - 1,
+      deadline_us - 1
+    )
 
     assert Connection.status(context.instance_id).transport_pending_requests == 0
     wait_for_monotonic_deadline(deadline_us)
@@ -836,6 +1002,11 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
     assert_receive {:ws_send_decision, _pid, generation, ^live_key, :accepted, _at}
     assert generation == context.generation
+
+    assert_receive {:lasso_ws_send_written, ^generation, ^live_key} = written
+    assert {:ok, ^state} = Handler.handle_info(written, state)
+    assert_receive {:ws_send_written, _pid, ^generation, ^live_key, written_at_us}
+    assert is_integer(written_at_us)
 
     for {generation, deadline, initial_latch, expected} <- [
           {context.generation <> "-stale", System.monotonic_time(:microsecond) + 1_000_000, 0,
@@ -878,7 +1049,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   test "queued cancellation expiry kills only its stuck connection generation",
        context do
     :sys.suspend(context.ws_pid)
-    on_exit(fn -> if Process.alive?(context.ws_pid), do: :sys.resume(context.ws_pid) end)
+    on_exit(fn -> resume_if_alive(context.ws_pid) end)
 
     task = request_task(context.channel, "cancelled-owner", 5_000)
 
@@ -943,7 +1114,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   @tag pending_limit: 2
   test "a blocked subscription send cannot head-of-line block unary registration", context do
     :sys.suspend(context.ws_pid)
-    on_exit(fn -> if Process.alive?(context.ws_pid), do: :sys.resume(context.ws_pid) end)
+    on_exit(fn -> resume_if_alive(context.ws_pid) end)
 
     subscription =
       Task.async(fn ->
@@ -990,9 +1161,10 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert {:ok, %Response.Success{id: "unary-client"}, _io_ms} = Task.await(unary)
   end
 
-  test "WebSockex death during send remains indeterminate and reconnects", context do
+  @tag send_mode: :pause_before_write
+  test "WebSockex death before the accepted send is written remains indeterminate", context do
     {task, attempt_ref} = observed_request_task(context.channel)
-    assert_receive {:protocol_ws_send, ws_pid, _transport_id, _payload}
+    assert_receive {:protocol_ws_accepted_before_write, ws_pid, _transport_id, _payload}
 
     Process.exit(ws_pid, :kill)
     assert_observation(attempt_ref, :send_started)
@@ -1011,17 +1183,51 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert new_generation != context.generation
   end
 
-  test "a disconnect between registration and send completion cannot be replayed safely",
+  @tag send_mode: :pause_before_write
+  test "socket write failure after acceptance stays indeterminate and reconnects", context do
+    {task, attempt_ref} = observed_request_task(context.channel)
+
+    assert_receive {:protocol_ws_accepted_before_write, ws_pid, transport_id, _payload}
+    assert_observation(attempt_ref, :send_started)
+    ws_monitor = Process.monitor(ws_pid)
+
+    send(ws_pid, {:fail_protocol_ws_write, :econnreset})
+
+    assert_receive {:protocol_ws_write_failed, ^ws_pid, ^transport_id, :econnreset}
+    assert_receive {:DOWN, ^ws_monitor, :process, ^ws_pid, {:socket_write_error, :econnreset}}
+
+    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}, 0
+
+    assert %{certainty: :indeterminate} =
+             assert_observation(attempt_ref, :transport_failure)
+
+    assert {:error, %JError{}, _io_ms} = Task.await(task)
+
+    assert_receive {:protocol_ws_connected, new_ws_pid, new_generation}
+    assert new_ws_pid != ws_pid
+    assert new_generation != context.generation
+
+    assert eventually(fn ->
+             match?(
+               %{transport_pending_requests: 0, transport_tombstones: 0},
+               Connection.status(context.instance_id)
+             )
+           end)
+
+    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}, 0
+  end
+
+  test "a disconnect after write confirmation remains dispatched and cannot be replayed",
        context do
     {task, attempt_ref} = observed_request_task(context.channel)
     assert_receive {:protocol_ws_send, ws_pid, transport_id, _payload}
+    assert_observation(attempt_ref, :send_started)
+    assert_observation(attempt_ref, :send_confirmed)
 
     :ok = TestSupport.ProtocolWSClient.disconnect(ws_pid, :closed)
     :ok = TestSupport.ProtocolWSClient.acknowledge(ws_pid, transport_id)
 
-    assert_observation(attempt_ref, :send_started)
-
-    assert %{certainty: :indeterminate} =
+    assert %{certainty: :dispatched} =
              assert_observation(attempt_ref, :transport_failure)
 
     assert {:error, %JError{}, _io_ms} = Task.await(task)
@@ -1077,15 +1283,22 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     Task.async(fn -> WebSocket.request(channel, rpc_request(client_id), timeout) end)
   end
 
-  defp observed_request_task(channel) do
+  defp observed_request_task(channel, timeout \\ 5_000) do
     owner = self()
     attempt_ref = make_ref()
 
     task =
       Task.async(fn ->
         Process.put(:lasso_attempt_dispatch_context, {owner, attempt_ref})
-        Process.put(:lasso_attempt_deadline_us, System.monotonic_time(:microsecond) + 5_000_000)
-        WebSocket.request(channel, rpc_request("observed"), 5_000)
+
+        attempt_deadline_us = System.monotonic_time(:microsecond) + timeout * 1_000
+
+        Process.put(
+          :lasso_attempt_deadline_us,
+          attempt_deadline_us
+        )
+
+        WebSocket.request(channel, rpc_request("observed"), timeout)
       end)
 
     {task, attempt_ref}
@@ -1135,8 +1348,6 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
         %{
           pending
           | deadline_us: deadline,
-            decision_deadline_us: deadline,
-            settlement_deadline_us: deadline,
             timer: make_ref()
         }
       )
@@ -1153,6 +1364,13 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     |> then(fn [pending] -> pending end)
   end
 
+  defp transport_pending(connection_pid, transport_id) do
+    connection_pid
+    |> :sys.get_state()
+    |> Map.fetch!(:transport_pending)
+    |> Map.get(transport_id)
+  end
+
   defp expire_transport(connection_pid, transport_id, pending) do
     deadline = System.monotonic_time(:microsecond)
     Process.cancel_timer(pending.timer)
@@ -1164,8 +1382,6 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
         %{
           pending
           | deadline_us: deadline,
-            decision_deadline_us: deadline,
-            settlement_deadline_us: deadline,
             timer: make_ref()
         }
       )
@@ -1177,12 +1393,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     )
   end
 
-  defp force_transport_cutoffs(
-         connection_pid,
-         transport_id,
-         decision_deadline_us,
-         settlement_deadline_us
-       ) do
+  defp force_transport_deadline(connection_pid, transport_id, deadline_us) do
     :sys.replace_state(connection_pid, fn state ->
       pending = Map.fetch!(state.transport_pending, transport_id)
       Process.cancel_timer(pending.timer)
@@ -1192,9 +1403,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
         [:transport_pending, transport_id],
         %{
           pending
-          | deadline_us: decision_deadline_us,
-            decision_deadline_us: decision_deadline_us,
-            settlement_deadline_us: settlement_deadline_us,
+          | deadline_us: deadline_us,
             timer: make_ref()
         }
       )
@@ -1250,6 +1459,12 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
   defp stop_if_alive(pid) do
     if Process.alive?(pid), do: GenServer.stop(pid, :normal)
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp resume_if_alive(pid) do
+    if Process.alive?(pid), do: :sys.resume(pid)
   catch
     :exit, _reason -> :ok
   end

@@ -11,8 +11,9 @@ defmodule Lasso.RPC.Transports.WebSocket do
   generation, absolute decision cutoff, and a shared cancellation latch. Direct
   `WebSockex.send_frame/2` is not used because its queued `GenServer.call` may
   send after the waiting task has been cancelled or its deadline has expired.
-  Cast acceptance opens an indeterminate send phase; only a correlated response
-  proves positive dispatch.
+  Cast acceptance opens an indeterminate send phase. A same-process
+  acknowledgement after WebSockex completes its socket write proves dispatch;
+  a correlated response remains independently sufficient proof.
   """
 
   @behaviour Lasso.RPC.Transport
@@ -115,16 +116,10 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
     transport_deadline_us = io_start_us + timeout * 1_000
 
-    decision_deadline_us =
+    deadline_us =
       case AttemptProtocol.deadline_us() do
         nil -> transport_deadline_us
-        decision_deadline_us -> min(decision_deadline_us, transport_deadline_us)
-      end
-
-    settlement_deadline_us =
-      case AttemptProtocol.settlement_deadline_us() do
-        nil -> decision_deadline_us
-        lifecycle_settlement_us -> max(decision_deadline_us, lifecycle_settlement_us)
+        lifecycle_deadline_us -> min(lifecycle_deadline_us, transport_deadline_us)
       end
 
     result =
@@ -135,8 +130,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
         params,
         request_id,
         context,
-        decision_deadline_us,
-        settlement_deadline_us
+        deadline_us
       )
 
     io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
@@ -154,8 +148,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
          params,
          client_id,
          context,
-         decision_deadline_us,
-         settlement_deadline_us
+         deadline_us
        ) do
     transport_id = generate_transport_id()
 
@@ -173,8 +166,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
           encoded: encoded,
           client_id: client_id,
           context: context,
-          decision_deadline_us: decision_deadline_us,
-          settlement_deadline_us: settlement_deadline_us
+          deadline_us: deadline_us
         })
 
       {:error, reason} ->
@@ -190,22 +182,20 @@ defmodule Lasso.RPC.Transports.WebSocket do
          encoded: encoded,
          client_id: client_id,
          context: context,
-         decision_deadline_us: decision_deadline_us,
-         settlement_deadline_us: settlement_deadline_us
+         deadline_us: deadline_us
        }) do
-    with true <- AttemptProtocol.authorized?(context, decision_deadline_us),
+    with true <- AttemptProtocol.authorized?(context, deadline_us),
          :ok <- AttemptProtocol.send_started(context),
          send_started_us = System.monotonic_time(:microsecond),
-         true <- send_started_us < decision_deadline_us,
+         true <- send_started_us < deadline_us,
          {:ok, {connection, generation, token}} <-
            WSConnection.authorize_transport(
              instance_id,
              transport_id,
              self(),
-             decision_deadline_us,
-             settlement_deadline_us,
+             deadline_us,
              encoded,
-             call_timeout_ms(decision_deadline_us)
+             call_timeout_ms(deadline_us)
            ) do
       await_transport_response(%{
         token: token,
@@ -214,9 +204,10 @@ defmodule Lasso.RPC.Transports.WebSocket do
         client_id: client_id,
         provider_id: provider_id,
         context: context,
-        deadline_us: decision_deadline_us,
+        deadline_us: deadline_us,
         started_us: send_started_us,
-        connection: connection
+        connection: connection,
+        certainty: :indeterminate
       })
     else
       false ->
@@ -258,7 +249,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
          context: context,
          deadline_us: deadline_us,
          started_us: started_us,
-         connection: connection
+         connection: connection,
+         certainty: certainty
        }) do
     receive do
       {:ws_transport_send_accepted, ^token, ^generation, accepted_at_us} ->
@@ -271,7 +263,24 @@ defmodule Lasso.RPC.Transports.WebSocket do
           context: context,
           deadline_us: deadline_us,
           started_us: accepted_at_us,
-          connection: connection
+          connection: connection,
+          certainty: certainty
+        })
+
+      {:ws_transport_send_confirmed, ^token, ^generation, written_at_us} ->
+        AttemptProtocol.observe_at(context, :send_confirmed, written_at_us, %{})
+
+        await_transport_response(%{
+          token: token,
+          generation: generation,
+          transport_id: transport_id,
+          client_id: client_id,
+          provider_id: provider_id,
+          context: context,
+          deadline_us: deadline_us,
+          started_us: started_us,
+          connection: connection,
+          certainty: :dispatched
         })
 
       {:ws_transport_send_rejected, ^token, ^generation, reason} ->
@@ -306,7 +315,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
       {:ws_transport_timeout, ^token, ^generation} ->
         AttemptProtocol.terminal(context, :transport_failure, %{
           reason: :timeout,
-          certainty: :indeterminate
+          certainty: certainty
         })
 
         {:error, normalize_ws_error(:timeout, provider_id)}
@@ -314,7 +323,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
       {:ws_transport_disconnected, ^token, ^generation, reason} ->
         AttemptProtocol.terminal(context, :transport_failure, %{
           reason: :connection_error,
-          certainty: :indeterminate
+          certainty: certainty
         })
 
         {:error, normalize_ws_error(reason, provider_id)}

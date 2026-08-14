@@ -288,7 +288,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     end)
   end
 
-  test "suspended lifecycle accepts D-1 and rejects D and D+1 terminal observations" do
+  test "strict cutoff does not wait for a suspended compatibility lifecycle" do
     Enum.each([-1, 0, 1], fn offset_us ->
       id = start_half_open_breaker()
       test_pid = self()
@@ -341,29 +341,24 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
         end)
 
       assert_receive {:decision_ready, ^terminal_ref, lifecycle_pid, task_pid,
-                      attempt_deadline_us},
+                      _attempt_deadline_us},
                      1_000
 
       :erlang.suspend_process(lifecycle_pid)
       task_monitor = Process.monitor(task_pid)
       send(task_pid, {:emit, offset_us})
       assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :normal}, 1_000
-      wait_until_monotonic(attempt_deadline_us)
-      :erlang.resume_process(lifecycle_pid)
-
-      assert_receive {:decision_result, ^terminal_ref,
-                      {:executed, {:error, ^transport_error, 0}}},
-                     1_000
 
       if offset_us == -1 do
-        assert_receive {:decision_terminal, ^terminal_ref, {:error, ^transport_error, 0},
-                        elapsed_ms},
+        assert_receive {:decision_result, ^terminal_ref,
+                        {:executed, {:error, %JError{category: :timeout}, 25}}},
                        1_000
-
-        assert elapsed_ms >= 0
       else
-        refute_receive {:decision_terminal, ^terminal_ref, _, _}, 50
+        assert_receive {:decision_result, ^terminal_ref, {:rejected, :admission_timeout}}, 1_000
       end
+
+      refute Process.alive?(lifecycle_pid)
+      refute_receive {:decision_terminal, ^terminal_ref, _, _}, 50
 
       caller_monitor = Process.monitor(caller_pid)
       assert_receive {:DOWN, ^caller_monitor, :process, ^caller_pid, reason}, 1_000
@@ -371,7 +366,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     end)
   end
 
-  test "transport task exposes immutable eligibility and settlement deadlines" do
+  test "transport task exposes one immutable attempt cutoff" do
     id = start_half_open_breaker()
     test_pid = self()
     client_deadline_us = System.monotonic_time(:microsecond) + 500_000
@@ -388,12 +383,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
                id,
                fn ->
                  attempt_deadline_us = AttemptProtocol.deadline_us()
-                 settlement_deadline_us = AttemptProtocol.settlement_deadline_us()
-
-                 send(
-                   test_pid,
-                   {:attempt_deadlines, attempt_deadline_us, settlement_deadline_us}
-                 )
+                 send(test_pid, {:attempt_deadline, attempt_deadline_us})
 
                  :ok = AttemptProtocol.predispatch_failure(AttemptProtocol.context(), :local)
                  {:error, transport_error, 0}
@@ -403,11 +393,11 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
                dispatch: :deferred
              )
 
-    assert_receive {:attempt_deadlines, attempt_deadline_us, settlement_deadline_us}, 1_000
-    assert settlement_deadline_us == min(client_deadline_us, attempt_deadline_us + 1_000)
+    assert_receive {:attempt_deadline, attempt_deadline_us}, 1_000
+    assert attempt_deadline_us <= client_deadline_us
   end
 
-  test "short attempt settles D-1 after its cutoff and rejects D and D+1" do
+  test "a D-1 observation cannot extend task completion past the strict cutoff" do
     Enum.each([-1, 0, 1], fn offset_us ->
       id = start_half_open_breaker()
       test_pid = self()
@@ -471,7 +461,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
 
       if offset_us == -1 do
         assert_receive {:short_attempt_result, ^result_ref,
-                        {:executed, {:error, ^transport_error, 0}}},
+                        {:executed, {:error, %JError{category: :timeout}, 100}}},
                        1_000
       else
         assert_receive {:short_attempt_result, ^result_ref, {:rejected, :admission_timeout}},
@@ -1248,17 +1238,6 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
         drain_dispatch_receipts(dispatch_ref, [started_at_us | receipts])
     after
       0 -> Enum.reverse(receipts)
-    end
-  end
-
-  defp wait_until_monotonic(deadline_us) do
-    remaining_us = deadline_us - System.monotonic_time(:microsecond)
-
-    if remaining_us > 0 do
-      timer_ref = make_ref()
-      Process.send_after(self(), {:monotonic_deadline, timer_ref}, div(remaining_us + 999, 1_000))
-      assert_receive {:monotonic_deadline, ^timer_ref}, 1_000
-      wait_until_monotonic(deadline_us)
     end
   end
 

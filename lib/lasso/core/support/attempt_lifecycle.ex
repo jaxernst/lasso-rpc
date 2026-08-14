@@ -10,7 +10,6 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
 
   @dispatch_context_key :lasso_attempt_dispatch_context
   @deadline_key :lasso_attempt_deadline_us
-  @settlement_deadline_key :lasso_attempt_settlement_deadline_us
   @dispatch_receipt_key :lasso_attempt_dispatch_receipt
   @dispatch_timestamp_unset -9_223_372_036_854_775_808
   @open_unset 0
@@ -18,8 +17,6 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   @open_not_dispatched 2
   @open_dispatched 3
   @closed_offset 4
-  @settlement_margin_us 1_000
-  @minimum_settlement_budget_ms 25
 
   @type terminal_callback :: CircuitBreaker.terminal_callback() | nil
   @type dispatch_callback :: (integer() -> term()) | nil
@@ -112,11 +109,7 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     lifecycle_ref = make_ref()
     lifecycle_start_ref = make_ref()
     dispatch_latch = new_dispatch_latch()
-    decision_deadline_us = decision_deadline_us(deadline_us, timeout)
-    attempt_deadline_us = attempt_deadline_us(decision_deadline_us, timeout)
-    settlement_deadline_us = min(deadline_us, attempt_deadline_us + @settlement_margin_us)
-
-    lifecycle_deadline_us = settlement_deadline_us
+    attempt_deadline_us = attempt_deadline_us(deadline_us, timeout)
 
     case claim_for_execution(receipt, caller_pid, dispatch_latch, attempt_deadline_us) do
       :ok ->
@@ -130,8 +123,7 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
           legacy_terminal_callback: terminal_callback,
           dispatch_mode: dispatch_mode,
           attempt_deadline_us: attempt_deadline_us,
-          settlement_deadline_us: settlement_deadline_us,
-          lifecycle_deadline_us: lifecycle_deadline_us,
+          lifecycle_deadline_us: attempt_deadline_us,
           dispatch_latch: dispatch_latch
         }
 
@@ -156,7 +148,7 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
             {:DOWN, ^monitor_ref, :process, ^lifecycle_pid, reason} ->
               {:owner_down, reason}
           after
-            deadline_wait_ms(deadline_us) ->
+            deadline_wait_ms(attempt_deadline_us) ->
               :client_timeout
           end
 
@@ -232,10 +224,6 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   @doc false
   @spec deadline_us() :: integer() | nil
   def deadline_us, do: Process.get(@deadline_key)
-
-  @doc false
-  @spec settlement_deadline_us() :: integer() | nil
-  def settlement_deadline_us, do: Process.get(@settlement_deadline_key)
 
   @doc false
   @spec dispatch_owner_alive?() :: boolean()
@@ -393,7 +381,6 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
         fn ->
           Process.put(@dispatch_context_key, {lifecycle_pid, dispatch_ref})
           Process.put(@deadline_key, context.attempt_deadline_us)
-          Process.put(@settlement_deadline_key, context.settlement_deadline_us)
 
           Process.put(@dispatch_receipt_key, %{
             latch: context.dispatch_latch,
@@ -696,11 +683,8 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     end
   end
 
-  defp result_eligible?(state, completed_at_us) do
-    completed_at_us < state.attempt_deadline_us or
-      (is_integer(state.terminal_candidate_at_us) and
-         state.terminal_candidate_at_us < state.attempt_deadline_us)
-  end
+  defp result_eligible?(state, completed_at_us),
+    do: completed_at_us < state.attempt_deadline_us
 
   defp stop_task(state) do
     if Process.alive?(state.task_pid), do: Process.exit(state.task_pid, :kill)
@@ -1118,15 +1102,9 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     :ok
   end
 
-  defp decision_deadline_us(deadline_us, timeout_ms)
-       when timeout_ms >= @minimum_settlement_budget_ms,
-       do: deadline_us - @settlement_margin_us
-
-  defp decision_deadline_us(deadline_us, _timeout_ms), do: deadline_us
-
-  defp attempt_deadline_us(decision_deadline_us, timeout_ms) do
+  defp attempt_deadline_us(deadline_us, timeout_ms) do
     min(
-      decision_deadline_us,
+      deadline_us,
       System.monotonic_time(:microsecond) + timeout_ms * 1_000
     )
   end

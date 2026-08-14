@@ -15,9 +15,6 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
   @spec deadline_us() :: integer() | nil
   def deadline_us, do: AttemptLifecycle.deadline_us()
 
-  @spec settlement_deadline_us() :: integer() | nil
-  def settlement_deadline_us, do: AttemptLifecycle.settlement_deadline_us()
-
   @spec authorized?(context() | nil, integer() | nil) :: boolean()
   def authorized?(nil, deadline_us), do: before_deadline?(deadline_us)
   def authorized?(_context, deadline_us), do: before_deadline?(deadline_us)
