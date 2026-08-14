@@ -57,12 +57,16 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
           {:ok, String.t()} | {:error, term()}
   def subscribe_client(profile, chain_id, client_pid, key, opts \\ [])
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
-    provider_constraint = Keyword.get(opts, :provider_id)
-    pool_key = pool_key(key, provider_constraint)
+    GenServer.call(via(profile, chain_id), subscribe_message(client_pid, key, opts))
+  end
 
-    GenServer.call(
+  @spec subscribe_client_request(profile, chain_id, pid(), key, keyword()) :: term()
+  def subscribe_client_request(profile, chain_id, client_pid, key, opts \\ [])
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    :gen.send_request(
       via(profile, chain_id),
-      {:subscribe, client_pid, pool_key, key, provider_constraint}
+      :"$gen_call",
+      subscribe_message(client_pid, key, opts)
     )
   end
 
@@ -71,6 +75,26 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
     GenServer.call(via(profile, chain_id), {:unsubscribe, subscription_id})
   end
+
+  @spec unsubscribe_client_checked(profile, chain_id, String.t(), keyword()) ::
+          {:ok, boolean()} | {:error, term()}
+  def unsubscribe_client_checked(profile, chain_id, subscription_id, opts \\ [])
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    GenServer.call(via(profile, chain_id), unsubscribe_checked_message(subscription_id, opts))
+  end
+
+  @spec unsubscribe_client_checked_request(profile, chain_id, String.t(), keyword()) :: term()
+  def unsubscribe_client_checked_request(profile, chain_id, subscription_id, opts \\ [])
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    :gen.send_request(
+      via(profile, chain_id),
+      :"$gen_call",
+      unsubscribe_checked_message(subscription_id, opts)
+    )
+  end
+
+  @spec check_response(term(), term()) :: term()
+  def check_response(message, request_id), do: :gen.check_response(message, request_id)
 
   # GenServer callbacks
 
@@ -101,83 +125,38 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
   @impl true
   def handle_call(
-        {:subscribe, client_pid, pool_key, subscription_key, provider_constraint},
+        {:subscribe, client_pid, pool_key, subscription_key, provider_constraint,
+         request_owner_pid, deadline_us},
         _from,
         state
       ) do
-    case validate_provider_constraint(state, subscription_key, provider_constraint) do
-      :ok ->
-        subscription_id = generate_id()
+    with :ok <- authorize_operation(request_owner_pid, client_pid, deadline_us),
+         :ok <- validate_provider_constraint(state, subscription_key, provider_constraint) do
+      subscription_id = generate_id()
 
-        :ok =
-          ClientSubscriptionRegistry.add_client(
-            state.profile,
-            state.chain_id,
-            subscription_id,
-            client_pid,
-            pool_key
-          )
+      case register_owned_client(
+             state,
+             subscription_id,
+             client_pid,
+             pool_key,
+             request_owner_pid,
+             deadline_us
+           ) do
+        :ok ->
+          new_state =
+            publish_client_subscription(
+              state,
+              pool_key,
+              subscription_key,
+              provider_constraint
+            )
 
-        send(self(), {:ensure_coordinator, pool_key})
+          {:reply, {:ok, subscription_id}, new_state}
 
-        new_state =
-          case Map.get(state.keys, pool_key) do
-            nil ->
-              generation = make_ref()
-              GenServer.cast(self(), {:establish_upstream, pool_key, generation, []})
-
-              entry = %{
-                refcount: 1,
-                status: :establishing,
-                primary_provider_id: nil,
-                instance_id: nil,
-                subscription_key: subscription_key,
-                provider_constraint: provider_constraint,
-                establishment_generation: generation,
-                readiness_retries: 0,
-                retry_token: nil,
-                transient_excluded_providers: MapSet.new(),
-                markers: %{},
-                dedupe: nil,
-                noproc_retries: 0
-              }
-
-              telemetry_subscription_status(:establishing, state.chain_id, pool_key, 1)
-              %{state | keys: Map.put(state.keys, pool_key, entry)}
-
-            entry when entry.status in [:establishing, :active] ->
-              updated = %{entry | refcount: entry.refcount + 1}
-
-              telemetry_subscription_status(
-                entry.status,
-                state.chain_id,
-                pool_key,
-                updated.refcount
-              )
-
-              %{state | keys: Map.put(state.keys, pool_key, updated)}
-
-            entry when entry.status == :failed ->
-              generation = make_ref()
-              GenServer.cast(self(), {:establish_upstream, pool_key, generation, []})
-
-              updated = %{
-                entry
-                | refcount: entry.refcount + 1,
-                  status: :establishing,
-                  establishment_generation: generation,
-                  readiness_retries: 0,
-                  retry_token: nil,
-                  transient_excluded_providers: MapSet.new(),
-                  noproc_retries: 0
-              }
-
-              telemetry_subscription_status(:retry, state.chain_id, pool_key, updated.refcount)
-              %{state | keys: Map.put(state.keys, pool_key, updated)}
-          end
-
-        {:reply, {:ok, subscription_id}, new_state}
-
+        {:error, error} ->
+          {:reply, {:error, error}, state}
+      end
+    else
       {:error, error} ->
         {:reply, {:error, error}, state}
     end
@@ -185,14 +164,157 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
   @impl true
   def handle_call({:unsubscribe, subscription_id}, _from, state) do
-    case ClientSubscriptionRegistry.remove_client(state.profile, state.chain_id, subscription_id) do
-      {:ok, nil} ->
-        {:reply, :ok, state}
+    {_removed?, state} = remove_client_subscription(state, subscription_id)
+    {:reply, :ok, state}
+  end
 
-      {:ok, key} ->
-        new_state = maybe_drop_upstream_when_unref(state, key)
-        {:reply, :ok, new_state}
+  @impl true
+  def handle_call(
+        {:unsubscribe_checked, subscription_id, request_owner_pid, client_pid, deadline_us},
+        _from,
+        state
+      ) do
+    case remove_owned_client_subscription(
+           state,
+           subscription_id,
+           request_owner_pid,
+           client_pid,
+           deadline_us
+         ) do
+      {:ok, removed?, state} ->
+        {:reply, {:ok, removed?}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
+  end
+
+  defp authorize_operation(nil, _client_pid, nil), do: :ok
+
+  defp authorize_operation(request_owner_pid, client_pid, deadline_us) do
+    cond do
+      not is_pid(request_owner_pid) or not Process.alive?(request_owner_pid) ->
+        {:error, :owner_down}
+
+      is_pid(client_pid) and not Process.alive?(client_pid) ->
+        {:error, :client_down}
+
+      not is_integer(deadline_us) or System.monotonic_time(:microsecond) >= deadline_us ->
+        {:error, :deadline_expired}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp register_owned_client(
+         state,
+         subscription_id,
+         client_pid,
+         pool_key,
+         nil,
+         nil
+       ) do
+    ClientSubscriptionRegistry.add_client(
+      state.profile,
+      state.chain_id,
+      subscription_id,
+      client_pid,
+      pool_key
+    )
+  end
+
+  defp register_owned_client(
+         state,
+         subscription_id,
+         client_pid,
+         pool_key,
+         request_owner_pid,
+         deadline_us
+       ) do
+    result =
+      ClientSubscriptionRegistry.add_client_owned(
+        state.profile,
+        state.chain_id,
+        subscription_id,
+        client_pid,
+        pool_key,
+        request_owner_pid,
+        deadline_us
+      )
+
+    case {result, authorize_operation(request_owner_pid, client_pid, deadline_us)} do
+      {:ok, :ok} ->
+        :ok
+
+      {_, {:error, reason}} ->
+        ClientSubscriptionRegistry.remove_client(state.profile, state.chain_id, subscription_id)
+        {:error, reason}
+
+      {{:error, reason}, _authorization} ->
+        {:error, reason}
+    end
+  end
+
+  defp publish_client_subscription(state, pool_key, subscription_key, provider_constraint) do
+    send(self(), {:ensure_coordinator, pool_key})
+
+    case Map.get(state.keys, pool_key) do
+      nil ->
+        generation = make_ref()
+        GenServer.cast(self(), {:establish_upstream, pool_key, generation, []})
+
+        entry = %{
+          refcount: 1,
+          status: :establishing,
+          primary_provider_id: nil,
+          instance_id: nil,
+          subscription_key: subscription_key,
+          provider_constraint: provider_constraint,
+          establishment_generation: generation,
+          readiness_retries: 0,
+          retry_token: nil,
+          transient_excluded_providers: MapSet.new(),
+          markers: %{},
+          dedupe: nil,
+          noproc_retries: 0
+        }
+
+        %{state | keys: Map.put(state.keys, pool_key, entry)}
+
+      entry when entry.status in [:establishing, :active] ->
+        updated = %{entry | refcount: entry.refcount + 1}
+        %{state | keys: Map.put(state.keys, pool_key, updated)}
+
+      entry when entry.status == :failed ->
+        generation = make_ref()
+        GenServer.cast(self(), {:establish_upstream, pool_key, generation, []})
+
+        updated = %{
+          entry
+          | refcount: entry.refcount + 1,
+            status: :establishing,
+            establishment_generation: generation,
+            readiness_retries: 0,
+            retry_token: nil,
+            transient_excluded_providers: MapSet.new(),
+            noproc_retries: 0
+        }
+
+        %{state | keys: Map.put(state.keys, pool_key, updated)}
+    end
+  end
+
+  defp subscribe_message(client_pid, key, opts) do
+    provider_constraint = Keyword.get(opts, :provider_id)
+
+    {:subscribe, client_pid, pool_key(key, provider_constraint), key, provider_constraint,
+     Keyword.get(opts, :request_owner_pid), Keyword.get(opts, :deadline_us)}
+  end
+
+  defp unsubscribe_checked_message(subscription_id, opts) do
+    {:unsubscribe_checked, subscription_id, Keyword.get(opts, :request_owner_pid),
+     Keyword.get(opts, :client_pid), Keyword.get(opts, :deadline_us)}
   end
 
   defp validate_provider_constraint(_state, _subscription_key, nil), do: :ok
@@ -299,7 +421,6 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
             new_state = %{state | keys: Map.put(state.keys, pool_key, updated_entry)}
 
             send(coordinator_pid, {:subscription_confirmed, new_provider_id, nil})
-            telemetry_resubscribe_success(state.chain_id, pool_key, new_provider_id)
 
             if old_instance_id && old_instance_id != new_instance_id do
               Process.send_after(
@@ -326,7 +447,6 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
             )
 
             send(coordinator_pid, {:subscription_failed, reason})
-            telemetry_resubscribe_failed(state.chain_id, pool_key, new_provider_id, reason)
             {:noreply, state}
         end
       end
@@ -375,9 +495,6 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         provider_id: provider_id,
         subscription_type: Subscription.subscription_type(entry.subscription_key)
       })
-
-      telemetry_upstream(:subscribe, state.chain_id, provider_id, pool_key)
-      telemetry_subscription_status(:active, state.chain_id, pool_key, entry.refcount)
 
       {:noreply, new_state}
     else
@@ -608,7 +725,6 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
           reason: reason
         })
 
-        telemetry_subscription_status(:failed, state.chain_id, key, entry.refcount)
         Logger.error("Subscription failed for #{inspect(key)}: #{reason}")
         %{state | keys: Map.put(state.keys, key, updated_entry)}
     end
@@ -1014,7 +1130,6 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
       entry ->
         updated = %{entry | refcount: entry.refcount - count}
-        telemetry_subscription_status(entry.status, state.chain_id, key, updated.refcount)
         %{state | keys: Map.put(state.keys, key, updated)}
     end
   end
@@ -1026,10 +1141,6 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
       %{refcount: 1} = entry ->
         release_entry_upstreams(state, pool_key, entry)
-
-        if entry.primary_provider_id do
-          telemetry_upstream(:unsubscribe, state.chain_id, entry.primary_provider_id, pool_key)
-        end
 
         profile = state.profile
         Task.start(fn -> StreamSupervisor.stop_coordinator(profile, state.chain_id, pool_key) end)
@@ -1097,37 +1208,42 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     end)
   end
 
-  defp telemetry_upstream(action, chain_id, provider_id, key) do
-    :telemetry.execute([:lasso, :subs, :upstream, action], %{count: 1}, %{
-      chain_id: chain_id,
-      provider_id: provider_id,
-      key: inspect(key)
-    })
+  defp remove_client_subscription(state, subscription_id) do
+    case ClientSubscriptionRegistry.remove_client(state.profile, state.chain_id, subscription_id) do
+      {:ok, nil} -> {false, state}
+      {:ok, key} -> {true, maybe_drop_upstream_when_unref(state, key)}
+    end
   end
 
-  defp telemetry_resubscribe_success(chain_id, key, provider_id) do
-    :telemetry.execute([:lasso, :subs, :resubscribe, :success], %{count: 1}, %{
-      chain_id: chain_id,
-      key: inspect(key),
-      provider_id: provider_id
-    })
+  defp remove_owned_client_subscription(state, subscription_id, nil, _client_pid, nil) do
+    {removed?, state} = remove_client_subscription(state, subscription_id)
+    {:ok, removed?, state}
   end
 
-  defp telemetry_resubscribe_failed(chain_id, key, provider_id, reason) do
-    :telemetry.execute([:lasso, :subs, :resubscribe, :failed], %{count: 1}, %{
-      chain_id: chain_id,
-      key: inspect(key),
-      provider_id: provider_id,
-      reason: inspect(reason)
-    })
-  end
+  defp remove_owned_client_subscription(
+         state,
+         subscription_id,
+         request_owner_pid,
+         client_pid,
+         deadline_us
+       ) do
+    case ClientSubscriptionRegistry.remove_client_owned(
+           state.profile,
+           state.chain_id,
+           subscription_id,
+           request_owner_pid,
+           client_pid,
+           deadline_us
+         ) do
+      {:ok, nil} ->
+        {:ok, false, state}
 
-  defp telemetry_subscription_status(status, chain_id, key, refcount) do
-    :telemetry.execute([:lasso, :subs, :status], %{refcount: refcount}, %{
-      chain_id: chain_id,
-      key: inspect(key),
-      status: status
-    })
+      {:ok, key} ->
+        {:ok, true, maybe_drop_upstream_when_unref(state, key)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp broadcast_subscription_event(state, event) do

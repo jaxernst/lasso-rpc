@@ -20,10 +20,10 @@ defmodule LassoWeb.RPCSocket do
   require Logger
 
   alias Lasso.Config.{ConfigStore, ProfileValidator}
-  alias Lasso.Core.Streaming.SubscriptionRouter
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{Observability, RequestContext, RequestOptions, RequestPipeline, Response}
+  alias Lasso.RPC.{Observability, RequestContext, Response}
   alias LassoWeb.RPC.Helpers
+  alias LassoWeb.RPCSocket.ItemOwner
 
   # Heartbeat configuration (aggressive keepalive for subscription connections)
   # Send ping every 30 seconds
@@ -32,6 +32,20 @@ defmodule LassoWeb.RPCSocket do
   @heartbeat_timeout 5_000
   # Allow 2 missed heartbeats before closing (stricter than 3)
   @max_missed_heartbeats 2
+  @max_forwarded_items 32
+  @max_subscriptions 128
+  @forward_timeout_ms 10_000
+  @max_item_owner_count 9_223_372_036_854_775_807
+  @item_owner_counts %{
+    capacity_rejected: 0,
+    orphaned_subscription: 0,
+    subscription_capacity_rejected: 0,
+    owner_down: 0,
+    spawn_failed: 0,
+    stale_down: 0,
+    stale_subscription_event: 0,
+    stale_result: 0
+  }
 
   ## Phoenix.Socket.Transport callbacks
 
@@ -71,6 +85,12 @@ defmodule LassoWeb.RPCSocket do
         requested_strategy: strategy || default_provider_strategy(),
         provider_id: provider_id,
         subscriptions: %{},
+        orphaned_subscription_count: 0,
+        pending_subscription_adds: 0,
+        forwarded_items: %{},
+        forwarded_monitors: %{},
+        forwarded_item_counts: @item_owner_counts,
+        item_owner_module: ItemOwner,
         client_pid: self(),
         heartbeat_ref: nil,
         missed_heartbeats: 0,
@@ -142,13 +162,15 @@ defmodule LassoWeb.RPCSocket do
 
   @impl true
   def handle_in({text, [opcode: :text]}, state) do
+    started_at_us = System.monotonic_time(:microsecond)
+
     case Jason.decode(text) do
       {:ok, %{"jsonrpc" => "2.0"} = request} ->
-        handle_json_rpc(request, state)
+        handle_json_rpc(request, state, started_at_us)
 
       {:ok, invalid} ->
         error = JError.new(-32_600, "Invalid Request: missing jsonrpc field")
-        response = JError.to_response(error, Map.get(invalid, "id"))
+        response = JError.to_response(error, request_id(invalid))
         {:reply, :ok, {:text, Jason.encode!(response)}, state}
 
       {:error, _reason} ->
@@ -186,23 +208,64 @@ defmodule LassoWeb.RPCSocket do
   end
 
   @impl true
-  def handle_info({:subscription_event, payload}, state) do
-    # Received from ClientSubscriptionRegistry via StreamCoordinator
-    # Payload is already formatted as JSON-RPC notification
-    case Jason.encode(payload) do
-      {:ok, json} ->
-        {:push, {:text, json}, state}
-
-      {:error, reason} ->
-        Logger.error("Failed to encode subscription event: #{inspect(reason)}")
-        {:ok, state}
+  def handle_info(
+        {:subscription_event, %{"params" => %{"subscription" => subscription_id}} = payload},
+        state
+      ) do
+    if Map.has_key?(state.subscriptions, subscription_id) do
+      push_subscription_event(payload, state)
+    else
+      {:ok, count_item_owner(state, :stale_subscription_event)}
     end
+  end
+
+  def handle_info({:subscription_event, _payload}, state) do
+    {:ok, count_item_owner(state, :stale_subscription_event)}
   end
 
   @impl true
   def handle_info({:send_notification, notification_json}, state) do
     # Send metadata notification as separate WebSocket frame
     {:push, {:text, notification_json}, state}
+  end
+
+  @impl true
+  def handle_info({:rpc_item_result, item_ref, owner_pid, result}, state)
+      when is_reference(item_ref) and is_pid(owner_pid) do
+    case Map.get(state.forwarded_items, item_ref) do
+      %{pid: ^owner_pid} = item ->
+        Process.demonitor(item.monitor, [:flush])
+        state = remove_forwarded_item(state, item_ref, item)
+        handle_forwarded_result(result, item, state)
+
+      _missing_or_stale ->
+        {:ok, count_item_owner(state, :stale_result)}
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, monitor, :process, owner_pid, _reason}, state)
+      when is_reference(monitor) and is_pid(owner_pid) do
+    case Map.get(state.forwarded_monitors, monitor) do
+      nil ->
+        {:ok, count_item_owner(state, :stale_down)}
+
+      item_ref ->
+        case Map.get(state.forwarded_items, item_ref) do
+          %{pid: ^owner_pid, monitor: ^monitor} = item ->
+            state =
+              state
+              |> maybe_record_orphaned_subscription(item)
+              |> remove_forwarded_item(item_ref, item)
+              |> count_item_owner(:owner_down)
+
+            owner_down_response(item, state)
+
+          _missing_or_stale ->
+            state = count_item_owner(state, :stale_down)
+            {:ok, %{state | forwarded_monitors: Map.delete(state.forwarded_monitors, monitor)}}
+        end
+    end
   end
 
   @impl true
@@ -255,152 +318,54 @@ defmodule LassoWeb.RPCSocket do
     # Cancel heartbeat timer
     if state.heartbeat_ref, do: Process.cancel_timer(state.heartbeat_ref)
 
-    # Unsubscribe all active subscriptions
-    Enum.each(state.subscriptions, fn {subscription_id, _type} ->
-      SubscriptionRouter.unsubscribe(state.profile, state.chain_id, subscription_id)
-    end)
-
     :ok
   end
 
   ## JSON-RPC handling
 
-  defp handle_json_rpc(%{"method" => method, "params" => params, "id" => id} = request, state) do
+  defp handle_json_rpc(%{"method" => method} = request, state, started_at_us)
+       when is_binary(method) do
     # Extract lasso_meta preference (notify or nil - inline mode removed)
     {lasso_meta_mode, _clean_request} = extract_lasso_meta(request)
 
     # Normalize params to list (JSON-RPC params can be null)
-    params_list = params || []
+    params = Map.get(request, "params", []) || []
+    id = Map.get(request, "id")
+    respond? = Map.has_key?(request, "id")
 
-    # Create request context for observability
-    ctx =
-      RequestContext.new(state.chain_id, method, params_list,
-        transport: :ws,
-        strategy: state.strategy
+    if local_request?(method, params) do
+      ctx =
+        RequestContext.new(state.chain_id, method, params,
+          transport: :ws,
+          strategy: state.strategy,
+          plug_start_time: started_at_us
+        )
+
+      method
+      |> handle_rpc_method(params, state, ctx)
+      |> handle_local_result(id, respond?, lasso_meta_mode)
+    else
+      start_forwarded_item(
+        state,
+        method,
+        params,
+        id,
+        respond?,
+        lasso_meta_mode,
+        started_at_us
       )
-
-    case handle_rpc_method(method, params_list, state, ctx) do
-      {:ok, result, new_state, updated_ctx} ->
-        Observability.log_request_completed(updated_ctx)
-
-        # Passthrough optimization: send raw bytes directly for Response.Success
-        case result do
-          %Response.Success{raw_bytes: bytes} ->
-            # Zero-copy passthrough - send raw bytes directly
-            case lasso_meta_mode do
-              :notify ->
-                # Send response first, then metadata notification
-                notification = build_metadata_notification(updated_ctx)
-                {:ok, notification_json} = Jason.encode(notification)
-                send(self(), {:send_notification, notification_json})
-                {:reply, :ok, {:text, bytes}, new_state}
-
-              _ ->
-                # No metadata requested - pure passthrough
-                {:reply, :ok, {:text, bytes}, new_state}
-            end
-
-          # Non-passthrough response (subscriptions, eth_chainId, etc.)
-          _ ->
-            response = %{
-              "jsonrpc" => "2.0",
-              "id" => id,
-              "result" => result
-            }
-
-            case lasso_meta_mode do
-              :notify ->
-                {:ok, json} = Jason.encode(response)
-                notification = build_metadata_notification(updated_ctx)
-                {:ok, notification_json} = Jason.encode(notification)
-                send(self(), {:send_notification, notification_json})
-                {:reply, :ok, {:text, json}, new_state}
-
-              _ ->
-                {:reply, :ok, {:text, Jason.encode!(response)}, new_state}
-            end
-        end
-
-      {:error, reason, new_state, updated_ctx} ->
-        Observability.log_request_completed(updated_ctx)
-
-        error = JError.from(reason)
-        response = JError.to_response(error, id)
-        {:reply, :ok, {:text, Jason.encode!(response)}, new_state}
     end
   end
 
-  defp handle_json_rpc(%{"method" => method, "id" => id}, state) do
-    # Params optional (default to [])
-    handle_json_rpc(%{"method" => method, "params" => [], "id" => id}, state)
-  end
-
-  defp handle_json_rpc(invalid, state) do
+  defp handle_json_rpc(invalid, state, _started_at_us) do
     error = JError.new(-32_600, "Invalid Request: missing required fields")
-    response = JError.to_response(error, Map.get(invalid, "id"))
+    response = JError.to_response(error, request_id(invalid))
     {:reply, :ok, {:text, Jason.encode!(response)}, state}
   end
 
   ## RPC method handlers
 
-  defp handle_rpc_method("eth_subscribe", [subscription_type | rest], state, ctx) do
-    case subscription_type do
-      "newHeads" ->
-        case SubscriptionRouter.subscribe(state.profile, state.chain_id, {:newHeads},
-               provider_id: state.provider_id
-             ) do
-          {:ok, subscription_id} ->
-            new_state = update_subscriptions(state, subscription_id, "newHeads")
-            updated_ctx = RequestContext.record_success(ctx, subscription_id)
-            {:ok, subscription_id, new_state, updated_ctx}
-
-          {:error, reason} ->
-            error_msg = "Failed to create newHeads subscription: #{inspect(reason)}"
-            updated_ctx = RequestContext.record_error(ctx, error_msg)
-            {:error, error_msg, state, updated_ctx}
-        end
-
-      "logs" ->
-        filter = List.first(rest, %{})
-
-        case SubscriptionRouter.subscribe(state.profile, state.chain_id, {:logs, filter},
-               provider_id: state.provider_id
-             ) do
-          {:ok, subscription_id} ->
-            new_state = update_subscriptions(state, subscription_id, {"logs", filter})
-            updated_ctx = RequestContext.record_success(ctx, subscription_id)
-            {:ok, subscription_id, new_state, updated_ctx}
-
-          {:error, reason} ->
-            error_msg = "Failed to create logs subscription: #{inspect(reason)}"
-            updated_ctx = RequestContext.record_error(ctx, error_msg)
-            {:error, error_msg, state, updated_ctx}
-        end
-
-      _ ->
-        error_msg = "Unsupported subscription type: #{subscription_type}"
-        updated_ctx = RequestContext.record_error(ctx, error_msg)
-        {:error, error_msg, state, updated_ctx}
-    end
-  end
-
-  defp handle_rpc_method("eth_unsubscribe", [subscription_id], state, ctx) do
-    case Map.pop(state.subscriptions, subscription_id) do
-      {nil, _} ->
-        updated_ctx = RequestContext.record_success(ctx, false)
-        {:ok, false, state, updated_ctx}
-
-      {_subscription_type, updated_subscriptions} ->
-        SubscriptionRouter.unsubscribe(state.profile, state.chain_id, subscription_id)
-        new_state = %{state | subscriptions: updated_subscriptions}
-        updated_ctx = RequestContext.record_success(ctx, true)
-        {:ok, true, new_state, updated_ctx}
-    end
-  end
-
   defp handle_rpc_method("eth_chainId", [], state, ctx) do
-    # Note: We don't have request_id here, so we can't build a Response.Success
-    # This is fine - subscriptions and chainId return plain values, only pipeline results are Response.Success
     case get_chain_id(state.profile, state.chain_id) do
       {:ok, chain_id} ->
         updated_ctx = RequestContext.record_success(ctx, chain_id)
@@ -412,39 +377,269 @@ defmodule LassoWeb.RPCSocket do
     end
   end
 
-  # Generic read-only method forwarding
-  defp handle_rpc_method(method, params, state, ctx) do
-    strategy = state.strategy || default_provider_strategy()
+  ## Helper functions
 
-    request_opts = %RequestOptions{
-      profile: state.profile,
-      strategy: strategy,
-      timeout_ms: 10_000,
-      request_context: ctx,
-      provider_override: state.provider_id
-    }
+  defp push_subscription_event(payload, state) do
+    case Jason.encode(payload) do
+      {:ok, json} ->
+        {:push, {:text, json}, state}
 
-    # Pass context to RequestPipeline
-    case RequestPipeline.execute_via_channels(
-           state.chain_id,
-           method,
-           params,
-           request_opts
-         ) do
-      {:ok, result, updated_ctx} ->
-        {:ok, result, state, updated_ctx}
-
-      {:error, reason, updated_ctx} ->
-        {:error, reason, state, updated_ctx}
+      {:error, reason} ->
+        Logger.error("Failed to encode subscription event: #{inspect(reason)}")
+        {:ok, state}
     end
   end
 
-  ## Helper functions
+  defp start_forwarded_item(state, method, params, id, respond?, lasso_meta_mode, started_at_us) do
+    cond do
+      map_size(state.forwarded_items) >= @max_forwarded_items ->
+        state = count_item_owner(state, :capacity_rejected)
+        capacity_response(id, respond?, state)
 
-  defp update_subscriptions(state, subscription_id, subscription_type) do
-    updated_subscriptions = Map.put(state.subscriptions, subscription_id, subscription_type)
-    %{state | subscriptions: updated_subscriptions}
+      method == "eth_subscribe" and
+          map_size(state.subscriptions) + state.pending_subscription_adds +
+            state.orphaned_subscription_count >= @max_subscriptions ->
+        state = count_item_owner(state, :subscription_capacity_rejected)
+        subscription_capacity_response(id, respond?, state)
+
+      true ->
+        start_forwarded_owner(
+          state,
+          method,
+          params,
+          id,
+          respond?,
+          lasso_meta_mode,
+          started_at_us
+        )
+    end
   end
+
+  defp start_forwarded_owner(
+         state,
+         method,
+         params,
+         id,
+         respond?,
+         lasso_meta_mode,
+         started_at_us
+       ) do
+    item_ref = make_ref()
+    deadline_us = started_at_us + @forward_timeout_ms * 1_000
+    subscription_add? = method == "eth_subscribe"
+
+    work = %ItemOwner.Work{
+      chain_id: state.chain_id,
+      method: method,
+      params: params,
+      profile: state.profile,
+      strategy: state.strategy || default_provider_strategy(),
+      provider_id: state.provider_id,
+      jsonrpc_id: id,
+      jsonrpc_id_present?: respond?,
+      subscription_known?: subscription_known?(state, method, params),
+      started_at_us: started_at_us,
+      deadline_us: deadline_us,
+      timeout_ms: @forward_timeout_ms
+    }
+
+    case state.item_owner_module.start(self(), item_ref, work) do
+      {:ok, owner_pid} ->
+        monitor = Process.monitor(owner_pid)
+
+        item = %{
+          pid: owner_pid,
+          monitor: monitor,
+          id: id,
+          respond?: respond?,
+          subscription_add?: subscription_add?,
+          lasso_meta_mode: lasso_meta_mode
+        }
+
+        state = %{
+          state
+          | forwarded_items: Map.put(state.forwarded_items, item_ref, item),
+            forwarded_monitors: Map.put(state.forwarded_monitors, monitor, item_ref),
+            pending_subscription_adds: increment_pending_subscriptions(state, subscription_add?)
+        }
+
+        {:ok, state}
+
+      {:error, _reason} ->
+        state = count_item_owner(state, :spawn_failed)
+        capacity_response(id, respond?, state)
+    end
+  end
+
+  defp handle_local_result(
+         {:ok, result, new_state, updated_ctx},
+         id,
+         respond?,
+         lasso_meta_mode
+       ) do
+    if respond? do
+      frame = success_frame(result, id)
+      maybe_enqueue_metadata(lasso_meta_mode, updated_ctx)
+      {:reply, :ok, frame, new_state}
+    else
+      {:ok, new_state}
+    end
+  end
+
+  defp handle_local_result(
+         {:error, reason, new_state, _updated_ctx},
+         id,
+         respond?,
+         _lasso_meta_mode
+       ) do
+    if respond? do
+      {:reply, :ok, error_frame(reason, id), new_state}
+    else
+      {:ok, new_state}
+    end
+  end
+
+  defp handle_forwarded_result({:ok, result, updated_ctx}, item, state) do
+    {result, state} = apply_subscription_result(result, state)
+
+    if item.respond? do
+      frame = success_frame(result, item.id)
+      maybe_enqueue_metadata(item.lasso_meta_mode, updated_ctx)
+      {:push, frame, state}
+    else
+      {:ok, state}
+    end
+  end
+
+  defp handle_forwarded_result({:error, reason, _updated_ctx}, item, state) do
+    if item.respond?,
+      do: {:push, error_frame(reason, item.id), state},
+      else: {:ok, state}
+  end
+
+  defp handle_forwarded_result(_invalid_result, item, state) do
+    state = maybe_record_orphaned_subscription(state, item)
+    owner_down_response(item, state)
+  end
+
+  defp success_frame(%Response.Success{raw_bytes: bytes}, _id), do: {:text, bytes}
+
+  defp success_frame(result, id) do
+    {:text, Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => result})}
+  end
+
+  defp error_frame(reason, id) do
+    response = reason |> JError.from() |> JError.to_response(id)
+    {:text, Jason.encode!(response)}
+  end
+
+  defp capacity_response(_id, false, state), do: {:ok, state}
+
+  defp capacity_response(id, true, state) do
+    error =
+      JError.new(-32_008, "Local request capacity unavailable",
+        category: :local_capacity_rejection,
+        retriable?: true,
+        breaker_penalty?: false
+      )
+
+    {:reply, :ok, {:text, Jason.encode!(JError.to_response(error, id))}, state}
+  end
+
+  defp subscription_capacity_response(_id, false, state), do: {:ok, state}
+
+  defp subscription_capacity_response(id, true, state) do
+    error =
+      JError.new(-32_008, "Subscription capacity unavailable",
+        category: :local_capacity_rejection,
+        retriable?: false,
+        breaker_penalty?: false
+      )
+
+    {:reply, :ok, {:text, Jason.encode!(JError.to_response(error, id))}, state}
+  end
+
+  defp owner_down_response(%{respond?: false}, state), do: {:ok, state}
+
+  defp owner_down_response(item, state) do
+    error =
+      JError.new(-32_000, "Request outcome unavailable after owner exit",
+        category: :server_error,
+        retriable?: false,
+        breaker_penalty?: false
+      )
+
+    {:push, {:text, Jason.encode!(JError.to_response(error, item.id))}, state}
+  end
+
+  defp remove_forwarded_item(state, item_ref, item) do
+    %{
+      state
+      | forwarded_items: Map.delete(state.forwarded_items, item_ref),
+        forwarded_monitors: Map.delete(state.forwarded_monitors, item.monitor),
+        pending_subscription_adds:
+          decrement_pending_subscriptions(state, Map.get(item, :subscription_add?, false))
+    }
+  end
+
+  defp count_item_owner(state, event) do
+    counts =
+      Map.update!(state.forwarded_item_counts, event, fn count ->
+        min(count + 1, @max_item_owner_count)
+      end)
+
+    %{state | forwarded_item_counts: counts}
+  end
+
+  defp maybe_enqueue_metadata(:notify, updated_ctx) do
+    notification = build_metadata_notification(updated_ctx)
+    {:ok, notification_json} = Jason.encode(notification)
+    send(self(), {:send_notification, notification_json})
+    :ok
+  end
+
+  defp maybe_enqueue_metadata(_mode, _updated_ctx), do: :ok
+
+  defp local_request?("eth_chainId", []), do: true
+  defp local_request?(_method, _params), do: false
+
+  defp request_id(value) when is_map(value), do: Map.get(value, "id")
+  defp request_id(_value), do: nil
+
+  defp subscription_known?(state, "eth_unsubscribe", [subscription_id]),
+    do: Map.has_key?(state.subscriptions, subscription_id)
+
+  defp subscription_known?(_state, _method, _params), do: false
+
+  defp increment_pending_subscriptions(state, true), do: state.pending_subscription_adds + 1
+  defp increment_pending_subscriptions(state, false), do: state.pending_subscription_adds
+
+  defp decrement_pending_subscriptions(state, true),
+    do: max(state.pending_subscription_adds - 1, 0)
+
+  defp decrement_pending_subscriptions(state, false), do: state.pending_subscription_adds
+
+  defp maybe_record_orphaned_subscription(state, %{subscription_add?: true}) do
+    count = min(state.orphaned_subscription_count + 1, @max_subscriptions)
+
+    state
+    |> Map.put(:orphaned_subscription_count, count)
+    |> count_item_owner(:orphaned_subscription)
+  end
+
+  defp maybe_record_orphaned_subscription(state, _item), do: state
+
+  defp apply_subscription_result({:subscription_added, subscription_id}, state) do
+    {subscription_id,
+     %{state | subscriptions: Map.put(state.subscriptions, subscription_id, true)}}
+  end
+
+  defp apply_subscription_result({:subscription_removed, subscription_id, removed?}, state) do
+    {removed?, %{state | subscriptions: Map.delete(state.subscriptions, subscription_id)}}
+  end
+
+  defp apply_subscription_result({:subscription_missing, false}, state), do: {false, state}
+  defp apply_subscription_result(result, state), do: {result, state}
 
   defp get_chain_id(profile, chain_name) do
     Helpers.get_chain_id(profile, chain_name)

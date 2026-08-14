@@ -179,13 +179,32 @@ defmodule Lasso.RPC.RequestContext do
   @spec set_execution_params(t(), map(), integer(), RequestOptions.t()) :: t()
   def set_execution_params(%__MODULE__{} = ctx, rpc_request, timeout_ms, %RequestOptions{} = opts)
       when is_map(rpc_request) and is_integer(timeout_ms) do
+    set_execution_params(ctx, rpc_request, timeout_ms, opts, nil)
+  end
+
+  @doc false
+  @spec set_execution_params(t(), map(), integer(), RequestOptions.t(), integer() | nil) :: t()
+  def set_execution_params(
+        %__MODULE__{} = ctx,
+        rpc_request,
+        timeout_ms,
+        %RequestOptions{} = opts,
+        deadline_us
+      )
+      when is_map(rpc_request) and is_integer(timeout_ms) do
     ctx = %{ctx | request_id: bounded_request_id(ctx.request_id)}
 
     envelope =
-      ctx.execution_envelope ||
-        ExecutionEnvelope.new(ctx.request_id, ctx.method, timeout_ms,
-          started_at_us: ctx.start_time || System.monotonic_time(:microsecond)
-        )
+      case ctx.execution_envelope do
+        %ExecutionEnvelope{} = envelope ->
+          ExecutionEnvelope.cap_deadline(envelope, deadline_us)
+
+        nil ->
+          ExecutionEnvelope.new(ctx.request_id, ctx.method, timeout_ms,
+            started_at_us: ctx.start_time || System.monotonic_time(:microsecond),
+            deadline_us: deadline_us
+          )
+      end
 
     %{
       ctx
@@ -223,7 +242,8 @@ defmodule Lasso.RPC.RequestContext do
       | selection_end: now,
         selection_latency_ms: selection_latency_ms,
         candidate_providers: Keyword.get(opts, :candidates, ctx.candidate_providers),
-        selected_provider: Keyword.get(opts, :selected, ctx.selected_provider),
+        selected_provider:
+          normalize_selected_provider(Keyword.get(opts, :selected, ctx.selected_provider)),
         selection_reason: Keyword.get(opts, :reason, ctx.selection_reason),
         circuit_breaker_state: Keyword.get(opts, :cb_state, ctx.circuit_breaker_state)
     }
@@ -481,9 +501,20 @@ defmodule Lasso.RPC.RequestContext do
       provider_id: BoundedIdentifier.encode(channel.provider_id),
       instance_id: BoundedIdentifier.encode_optional(channel.instance_id),
       transport: channel.transport,
-      route_generation: channel.route_generation || 0
+      route_generation: channel.route_generation
     }
   end
+
+  defp normalize_selected_provider(%Channel{} = channel) do
+    %{id: BoundedIdentifier.encode(channel.provider_id), protocol: channel.transport}
+  end
+
+  defp normalize_selected_provider(%{id: id, protocol: protocol})
+       when is_binary(id) and protocol in [:http, :ws] do
+    %{id: BoundedIdentifier.encode(id), protocol: protocol}
+  end
+
+  defp normalize_selected_provider(_other), do: nil
 
   defp normalized_error(%{category: category, code: code}) when is_integer(code),
     do: {bounded_category(category), code}

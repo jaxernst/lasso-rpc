@@ -217,7 +217,7 @@ defmodule Lasso.Providers.Catalog do
     for {{:profile_providers, profile, chain_id}, providers} <-
           :ets.match_object(table, {{:profile_providers, :_, :_}, :_}),
         provider <- providers,
-        {:ok, instance} <- [get_instance(%{table: table}, provider.instance_id)],
+        {:ok, instance} <- [get_instance_from_table(table, provider.instance_id)],
         transport <- available_transports(instance) do
       %{
         profile: profile,
@@ -375,6 +375,13 @@ defmodule Lasso.Providers.Catalog do
   end
 
   defp normalize_endpoint_url(url), do: InstanceId.optional_normalize_url(url)
+
+  defp get_instance_from_table(table, instance_id) do
+    case safe_lookup(table, {:instance, instance_id}) do
+      [{_, config}] -> {:ok, config}
+      _other -> {:error, :not_found}
+    end
+  end
 
   defp available_transports(instance) do
     []

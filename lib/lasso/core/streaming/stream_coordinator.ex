@@ -14,11 +14,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   alias Lasso.Events.Subscription
   alias Lasso.Providers.Catalog
 
-  alias Lasso.RPC.{
-    ChainState,
-    RequestOptions,
-    Selection
-  }
+  alias Lasso.RPC.Selection
 
   alias Lasso.Core.Streaming.{
     ClientSubscriptionRegistry,
@@ -33,7 +29,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       :max_backfill,
       :backfill_timeout,
       :continuity_policy,
-      :excluded_providers
+      :excluded_providers,
+      :plan
     ]
 
     @type t :: %__MODULE__{
@@ -42,7 +39,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             max_backfill: non_neg_integer(),
             backfill_timeout: non_neg_integer(),
             continuity_policy: atom(),
-            excluded_providers: [String.t()]
+            excluded_providers: [String.t()],
+            plan: GapFiller.Plan.t()
           }
   end
 
@@ -113,6 +111,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       max_backfill_blocks: Keyword.get(opts, :max_backfill_blocks, 32),
       backfill_timeout: Keyword.get(opts, :backfill_timeout, 30_000),
       continuity_policy: Keyword.get(opts, :continuity_policy, :best_effort),
+      backfill_requester:
+        Keyword.get(opts, :backfill_requester, &Lasso.RPC.RequestPipeline.execute_owned/5),
+      backfill_provider_selector:
+        Keyword.get(opts, :backfill_provider_selector, &pick_best_http_provider/3),
       # Failover state machine
       failover_status: :active,
       failover_context: nil,
@@ -123,6 +125,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     }
 
     {:ok, state}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    cancel_backfill_owner(state)
+    :ok
   end
 
   @impl true
@@ -206,23 +214,46 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  # Backfill task completion
   @impl true
-  def handle_info({ref, :backfill_complete}, state) when is_reference(ref) do
-    Process.demonitor(ref, [:flush])
+  def handle_info(
+        {:backfill_event, owner_id, owner_pid, _provider_id, payload, _received_at},
+        %{failover_status: :backfilling, failover_context: context} = state
+      )
+      when context.backfill_owner_id == owner_id and context.backfill_owner_pid == owner_pid do
+    buffer_event(state, payload)
+  end
 
-    if state.failover_status == :backfilling do
-      transition_to_switching(state)
-    else
-      {:noreply, state}
+  def handle_info({:backfill_event, _owner_id, _owner_pid, _provider_id, _payload, _at}, state) do
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(
+        {:backfill_result, owner_id, owner_pid, result},
+        %{failover_status: :backfilling, failover_context: context} = state
+      )
+      when context.backfill_owner_id == owner_id and context.backfill_owner_pid == owner_pid do
+    Process.demonitor(context.backfill_owner_ref, [:flush])
+
+    case result do
+      :ok -> transition_to_switching(state)
+      {:error, reason} -> handle_backfill_failure(state, reason)
     end
   end
 
-  # Backfill task crashed
+  def handle_info({:backfill_result, _owner_id, _owner_pid, _result}, state),
+    do: {:noreply, state}
+
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
-    if state.failover_context && state.failover_context.backfill_task_ref == ref do
-      Logger.error("Backfill task crashed: #{inspect(reason)}",
+  def handle_info({ref, :backfill_complete}, state) when is_reference(ref),
+    do: {:noreply, state}
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, pid, reason}, state) do
+    if state.failover_context &&
+         Map.get(state.failover_context, :backfill_owner_ref) == ref &&
+         Map.get(state.failover_context, :backfill_owner_pid) == pid do
+      Logger.error("Backfill owner crashed: #{inspect(reason)}",
         chain_id: state.chain_id,
         key: inspect(state.key)
       )
@@ -345,232 +376,247 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       enter_degraded_mode(state, budget)
     else
-      profile = state.profile
-      chain_id = state.chain_id
-      key = state.key
-      max_backfill = state.max_backfill_blocks
-      backfill_timeout = state.backfill_timeout
-      continuity_policy = state.continuity_policy
-      stream_state = state.state
+      excluded_providers = [old_provider_id, new_provider_id] |> Enum.reject(&is_nil/1)
 
-      backfill_ctx = %BackfillContext{
-        profile: profile,
-        chain_id: chain_id,
-        max_backfill: max_backfill,
-        backfill_timeout: backfill_timeout,
-        continuity_policy: continuity_policy,
-        excluded_providers: [old_provider_id, new_provider_id]
-      }
+      case state.backfill_provider_selector.(state.profile, state.chain_id, excluded_providers) do
+        {:ok, http_provider} ->
+          start_backfill_owner(
+            state,
+            old_provider_id,
+            new_provider_id,
+            http_provider,
+            initial_buffer,
+            recent_failures,
+            budget
+          )
 
-      task =
-        Task.async(fn ->
-          execute_backfill(backfill_ctx, key, new_provider_id, stream_state)
-          :backfill_complete
-        end)
+        {:error, reason} ->
+          Logger.error("Unable to select an HTTP provider for backfill: #{inspect(reason)}",
+            chain_id: state.chain_id,
+            key: inspect(state.key)
+          )
 
-      failover_context = %{
-        old_provider_id: old_provider_id,
-        new_provider_id: new_provider_id,
-        backfill_task_ref: task.ref,
-        started_at: System.monotonic_time(:millisecond),
-        # Preserve events from previous cascade attempt
-        event_buffer: initial_buffer,
-        event_buffer_count: length(initial_buffer),
-        attempt_count: recent_failures + 1
-      }
+          enter_degraded_mode(state, budget)
+      end
+    end
+  end
 
-      new_history =
-        if old_provider_id do
-          [
-            %{provider_id: old_provider_id, failed_at: System.monotonic_time(:millisecond)}
-            | state.failover_history
-          ]
-        else
-          state.failover_history
-        end
+  defp start_backfill_owner(
+         state,
+         old_provider_id,
+         new_provider_id,
+         http_provider,
+         initial_buffer,
+         recent_failures,
+         budget
+       ) do
+    started_at_us = System.monotonic_time(:microsecond)
 
-      telemetry_failover_initiated(
+    plan =
+      GapFiller.Plan.new(
+        state.profile,
         state.chain_id,
-        state.key,
-        old_provider_id,
-        new_provider_id,
-        recent_failures,
-        budget
+        http_provider,
+        self(),
+        state.backfill_timeout,
+        started_at_us: started_at_us,
+        requester: state.backfill_requester
       )
 
-      broadcast_subscription_event(state, %Subscription.Failover{
-        ts: System.system_time(:millisecond),
-        chain_id: state.chain_id,
-        subscription_type: Subscription.subscription_type(state.key),
-        from_provider_id: old_provider_id,
-        to_provider_id: new_provider_id
-      })
+    backfill_ctx = %BackfillContext{
+      profile: state.profile,
+      chain_id: state.chain_id,
+      max_backfill: state.max_backfill_blocks,
+      backfill_timeout: state.backfill_timeout,
+      continuity_policy: state.continuity_policy,
+      excluded_providers: [old_provider_id, new_provider_id],
+      plan: plan
+    }
 
-      {:noreply,
-       %{
-         state
-         | failover_status: :backfilling,
-           failover_context: failover_context,
-           failover_history: new_history
-       }}
-    end
+    owner_id = make_ref()
+    coordinator_pid = self()
+    key = state.key
+    continuity_marker = continuity_marker(state.state, key)
+
+    {owner_pid, owner_ref} =
+      spawn_monitor(fn ->
+        result = safely_execute_backfill(backfill_ctx, key, continuity_marker, owner_id)
+        send(coordinator_pid, {:backfill_result, owner_id, self(), result})
+      end)
+
+    failover_context = %{
+      old_provider_id: old_provider_id,
+      new_provider_id: new_provider_id,
+      http_provider_id: http_provider,
+      backfill_owner_id: owner_id,
+      backfill_owner_pid: owner_pid,
+      backfill_owner_ref: owner_ref,
+      backfill_task_ref: owner_ref,
+      backfill_plan: plan,
+      started_at: div(started_at_us, 1_000),
+      event_buffer: initial_buffer,
+      event_buffer_count: length(initial_buffer),
+      attempt_count: recent_failures + 1
+    }
+
+    new_history =
+      if old_provider_id do
+        [
+          %{provider_id: old_provider_id, failed_at: System.monotonic_time(:millisecond)}
+          | state.failover_history
+        ]
+      else
+        state.failover_history
+      end
+
+    telemetry_failover_initiated(
+      state.chain_id,
+      state.key,
+      old_provider_id,
+      new_provider_id,
+      recent_failures,
+      budget
+    )
+
+    broadcast_subscription_event(state, %Subscription.Failover{
+      ts: System.system_time(:millisecond),
+      chain_id: state.chain_id,
+      subscription_type: Subscription.subscription_type(state.key),
+      from_provider_id: old_provider_id,
+      to_provider_id: new_provider_id
+    })
+
+    {:noreply,
+     %{
+       state
+       | failover_status: :backfilling,
+         failover_context: failover_context,
+         failover_history: new_history
+     }}
   end
 
-  defp execute_backfill(ctx, key, new_provider_id, stream_state) do
+  defp safely_execute_backfill(ctx, key, continuity_marker, owner_id) do
+    execute_backfill(ctx, key, continuity_marker, owner_id)
+  rescue
+    error ->
+      Logger.error("Backfill error: #{inspect(error)}",
+        chain_id: ctx.chain_id,
+        key: inspect(key)
+      )
+
+      {:error, {:exception, Exception.message(error)}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp execute_backfill(ctx, key, continuity_marker, owner_id) do
     case subscription_key(key) do
       {:newHeads} ->
-        backfill_blocks(ctx, key, new_provider_id, stream_state)
+        backfill_blocks(ctx, key, continuity_marker, owner_id)
 
       {:logs, filter} ->
-        backfill_logs(ctx, key, filter, new_provider_id, stream_state)
+        backfill_logs(ctx, key, filter, continuity_marker, owner_id)
     end
-  rescue
-    e ->
-      Logger.error("Backfill error: #{inspect(e)}", chain_id: ctx.chain_id, key: inspect(key))
-      :error
   end
 
-  defp backfill_blocks(ctx, key, _new_ws_provider_id, stream_state) do
-    last = StreamState.last_block_num(stream_state)
+  defp backfill_blocks(ctx, key, last, owner_id) do
+    with {:ok, head} <- GapFiller.fetch_head(ctx.plan) do
+      case ContinuityPolicy.needed_block_range(
+             last,
+             head,
+             ctx.max_backfill,
+             ctx.continuity_policy
+           ) do
+        {:none} ->
+          :ok
 
-    # Use decoupled HTTP provider selection for backfill
-    http_provider = pick_best_http_provider(ctx.profile, ctx.chain_id, ctx.excluded_providers)
-    head = fetch_head(ctx.chain_id, http_provider)
+        {:range, from_n, to_n} ->
+          backfill_block_range(ctx, key, from_n, to_n, owner_id)
 
-    case ContinuityPolicy.needed_block_range(
-           last,
-           head,
-           ctx.max_backfill,
-           ctx.continuity_policy
-         ) do
-      {:none} ->
-        :ok
-
-      {:range, from_n, to_n} ->
-        telemetry_backfill_started(ctx.chain_id, from_n, to_n, http_provider)
-
-        {:ok, blocks} =
-          GapFiller.ensure_blocks(ctx.chain_id, http_provider, from_n, to_n,
-            timeout_ms: ctx.backfill_timeout
+        {:exceeded, from_n, to_n} ->
+          Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
+            chain_id: ctx.chain_id,
+            key: inspect(key)
           )
 
-        # Send blocks to coordinator via cast
-        coordinator_pid = via(ctx.profile, ctx.chain_id, key)
+          if ctx.continuity_policy == :best_effort,
+            do: backfill_block_range(ctx, key, from_n, to_n, owner_id),
+            else: {:error, :gap_exceeded}
+      end
+    end
+  end
 
-        Enum.each(blocks, fn block ->
-          GenServer.cast(
-            coordinator_pid,
-            {:upstream_event, http_provider, nil, block, System.monotonic_time(:millisecond)}
-          )
-        end)
+  defp backfill_block_range(ctx, key, from_n, to_n, owner_id) do
+    provider_id = ctx.plan.provider_id
 
-        telemetry_backfill_completed(ctx.chain_id, from_n, to_n, length(blocks))
+    case GapFiller.ensure_blocks(ctx.plan, from_n, to_n) do
+      {:ok, blocks} ->
+        emit_backfill_events(ctx.plan, owner_id, provider_id, blocks)
         :ok
 
-      {:exceeded, from_n, to_n} ->
-        Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
+      {:error, reason} ->
+        Logger.error("Block backfill failed: #{inspect(reason)}",
           chain_id: ctx.chain_id,
           key: inspect(key)
         )
 
-        case ctx.continuity_policy do
-          :best_effort ->
-            # Fill what we can
-            telemetry_backfill_started(ctx.chain_id, from_n, to_n, http_provider)
-
-            {:ok, blocks} =
-              GapFiller.ensure_blocks(ctx.chain_id, http_provider, from_n, to_n,
-                timeout_ms: ctx.backfill_timeout
-              )
-
-            coordinator_pid = via(ctx.profile, ctx.chain_id, key)
-
-            Enum.each(blocks, fn block ->
-              GenServer.cast(
-                coordinator_pid,
-                {:upstream_event, http_provider, nil, block, System.monotonic_time(:millisecond)}
-              )
-            end)
-
-            telemetry_backfill_completed(ctx.chain_id, from_n, to_n, length(blocks))
-            :ok
-
-          :strict_abort ->
-            :error
-        end
+        {:error, reason}
     end
   end
 
-  defp backfill_logs(ctx, key, filter, _new_ws_provider_id, stream_state) do
-    last = StreamState.last_log_block(stream_state) || StreamState.last_block_num(stream_state)
+  defp backfill_logs(ctx, key, filter, last, owner_id) do
+    with {:ok, head} <- GapFiller.fetch_head(ctx.plan) do
+      case ContinuityPolicy.needed_block_range(
+             last,
+             head,
+             ctx.max_backfill,
+             ctx.continuity_policy
+           ) do
+        {:none} ->
+          :ok
 
-    # Use decoupled HTTP provider selection for backfill
-    http_provider = pick_best_http_provider(ctx.profile, ctx.chain_id, ctx.excluded_providers)
-    head = fetch_head(ctx.chain_id, http_provider)
+        {:range, from_n, to_n} ->
+          backfill_log_range(ctx, key, filter, from_n, to_n, owner_id)
 
-    case ContinuityPolicy.needed_block_range(
-           last,
-           head,
-           ctx.max_backfill,
-           ctx.continuity_policy
-         ) do
-      {:none} ->
+        {:exceeded, from_n, to_n} ->
+          Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
+            chain_id: ctx.chain_id,
+            key: inspect(key)
+          )
+
+          if ctx.continuity_policy == :strict_abort,
+            do: {:error, :gap_exceeded},
+            else: backfill_log_range(ctx, key, filter, from_n, to_n, owner_id)
+      end
+    end
+  end
+
+  defp backfill_log_range(ctx, key, filter, from_n, to_n, owner_id) do
+    provider_id = ctx.plan.provider_id
+
+    case GapFiller.ensure_logs(ctx.plan, filter, from_n, to_n) do
+      {:ok, logs} ->
+        emit_backfill_events(ctx.plan, owner_id, provider_id, logs)
         :ok
 
-      {:range, from_n, to_n} ->
-        telemetry_backfill_started(ctx.chain_id, from_n, to_n, http_provider)
-
-        case GapFiller.ensure_logs(ctx.chain_id, http_provider, filter, from_n, to_n,
-               timeout_ms: ctx.backfill_timeout
-             ) do
-          {:ok, logs} ->
-            coordinator_pid = via(ctx.profile, ctx.chain_id, key)
-
-            Enum.each(logs, fn log ->
-              GenServer.cast(
-                coordinator_pid,
-                {:upstream_event, http_provider, nil, log, System.monotonic_time(:millisecond)}
-              )
-            end)
-
-            telemetry_backfill_completed(ctx.chain_id, from_n, to_n, length(logs))
-            :ok
-
-          {:error, reason} ->
-            Logger.error("Log backfill failed: #{inspect(reason)}")
-            :error
-        end
-
-      {:exceeded, from_n, to_n} ->
-        Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
+      {:error, reason} ->
+        Logger.error("Log backfill failed: #{inspect(reason)}",
           chain_id: ctx.chain_id,
           key: inspect(key)
         )
 
-        # For logs, best effort fill
-        telemetry_backfill_started(ctx.chain_id, from_n, to_n, http_provider)
-
-        case GapFiller.ensure_logs(ctx.chain_id, http_provider, filter, from_n, to_n,
-               timeout_ms: ctx.backfill_timeout
-             ) do
-          {:ok, logs} ->
-            coordinator_pid = via(ctx.profile, ctx.chain_id, key)
-
-            Enum.each(logs, fn log ->
-              GenServer.cast(
-                coordinator_pid,
-                {:upstream_event, http_provider, nil, log, System.monotonic_time(:millisecond)}
-              )
-            end)
-
-            telemetry_backfill_completed(ctx.chain_id, from_n, to_n, length(logs))
-            :ok
-
-          {:error, reason} ->
-            Logger.error("Log backfill failed: #{inspect(reason)}")
-            :error
-        end
+        {:error, reason}
     end
+  end
+
+  defp emit_backfill_events(plan, owner_id, provider_id, events) do
+    Enum.each(events, fn event ->
+      send(
+        plan.caller_pid,
+        {:backfill_event, owner_id, self(), provider_id, event,
+         System.monotonic_time(:millisecond)}
+      )
+    end)
   end
 
   defp transition_to_switching(state) do
@@ -744,6 +790,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp enter_degraded_mode(state, budget) do
+    cancel_backfill_owner(state)
+
     tried_providers =
       state.failover_history
       |> Enum.map(& &1.provider_id)
@@ -808,6 +856,16 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp subscription_key({:route, _route, key}), do: key
   defp subscription_key(key), do: key
 
+  defp continuity_marker(stream_state, key) do
+    case subscription_key(key) do
+      {:newHeads} ->
+        StreamState.last_block_num(stream_state)
+
+      {:logs, _filter} ->
+        StreamState.last_log_block(stream_state) || StreamState.last_block_num(stream_state)
+    end
+  end
+
   defp failover_budget(%{max_failover_attempts: override})
        when is_integer(override) and override > 0,
        do: %{attempts: override, provider_count: nil, source: :override}
@@ -849,47 +907,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
            protocol: :http,
            exclude: excluded
          ) do
-      {:ok, provider_id} -> provider_id
-      _ -> List.first(excluded)
-    end
-  end
-
-  defp fetch_head(chain_id, _provider_id) do
-    case ChainState.consensus_height(chain_id) do
-      {:ok, height} ->
-        Logger.debug("Using consensus height for failover gap calculation",
-          chain_id: chain_id,
-          height: height
-        )
-
-        height
-
-      {:error, reason} ->
-        Logger.warning("Consensus unavailable during failover, using blocking request",
-          chain_id: chain_id,
-          reason: reason
-        )
-
-        fetch_head_blocking(chain_id)
-    end
-  end
-
-  defp fetch_head_blocking(chain_id) do
-    case Lasso.RPC.RequestPipeline.execute_via_channels(
-           chain_id,
-           "eth_blockNumber",
-           [],
-           %RequestOptions{
-             strategy: :priority,
-             failover_on_override: false,
-             timeout_ms: 3_000
-           }
-         ) do
-      {:ok, "0x" <> _ = hex, _ctx} ->
-        String.to_integer(String.trim_leading(hex, "0x"), 16)
+      {:ok, provider_id} ->
+        {:ok, provider_id}
 
       _ ->
-        0
+        {:error, :no_http_provider}
     end
   end
 
@@ -897,6 +919,17 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp decode_hex("0x" <> rest), do: String.to_integer(rest, 16)
   defp decode_hex(num) when is_integer(num), do: num
   defp decode_hex(_), do: 0
+
+  defp cancel_backfill_owner(%{failover_context: context}) when is_map(context) do
+    owner_ref = Map.get(context, :backfill_owner_ref)
+    owner_pid = Map.get(context, :backfill_owner_pid)
+
+    if is_reference(owner_ref), do: Process.demonitor(owner_ref, [:flush])
+    if is_pid(owner_pid) and Process.alive?(owner_pid), do: Process.exit(owner_pid, :kill)
+    :ok
+  end
+
+  defp cancel_backfill_owner(_state), do: :ok
 
   # Telemetry helpers
 
@@ -916,31 +949,6 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       provider_count: budget.provider_count,
       budget_source: budget.source
     })
-  end
-
-  defp telemetry_backfill_started(chain_id, from_n, to_n, provider_id) do
-    :telemetry.execute(
-      [:lasso, :subs, :failover, :backfill_started],
-      %{count: to_n - from_n + 1},
-      %{
-        chain_id: chain_id,
-        provider_id: provider_id,
-        from_block: from_n,
-        to_block: to_n
-      }
-    )
-  end
-
-  defp telemetry_backfill_completed(chain_id, from_n, to_n, fetched_count) do
-    :telemetry.execute(
-      [:lasso, :subs, :failover, :backfill_completed],
-      %{count: fetched_count},
-      %{
-        chain_id: chain_id,
-        from_block: from_n,
-        to_block: to_n
-      }
-    )
   end
 
   defp telemetry_resubscribe_initiated(chain_id, key, provider_id) do

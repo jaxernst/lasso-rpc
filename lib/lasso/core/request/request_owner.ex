@@ -1,6 +1,7 @@
 defmodule Lasso.Core.Request.RequestOwner do
   @moduledoc false
 
+  alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.RPC.{AttemptIdentity, ExecutionProjector, ExecutionReducer}
 
@@ -25,7 +26,8 @@ defmodule Lasso.Core.Request.RequestOwner do
           }
   end
 
-  @type option :: {:caller_pid, pid()} | {:test_before_restore, (-> term())}
+  @type option ::
+          {:caller_guard, ExecutionScope.CallerGuard.t()} | {:test_before_restore, (-> term())}
 
   @spec execute(AttemptIdentity.t(), integer(), (-> term()), [option()]) :: Outcome.t()
   def execute(%AttemptIdentity{} = identity, deadline_us, fun, opts \\ [])
@@ -51,12 +53,11 @@ defmodule Lasso.Core.Request.RequestOwner do
   defp do_execute(identity, started_us, deadline_us, fun, opts, previous_trap_exit) do
     attempt_ref = make_ref()
     context = AttemptProtocol.new_context(self(), attempt_ref, deadline_us)
-    caller_state = monitor_caller(Keyword.get(opts, :caller_pid))
+    caller_guard = Keyword.get(opts, :caller_guard)
+    caller_state = caller_state(caller_guard)
     reducer = ExecutionReducer.new(identity, started_us, deadline_us)
 
     if caller_state.status == :down do
-      cleanup_monitor(caller_state.monitor)
-
       context
       |> preflight_cancellation(reducer, started_us)
       |> build_outcome()
@@ -66,7 +67,6 @@ defmodule Lasso.Core.Request.RequestOwner do
 
       if now_us() >= deadline_us do
         cancel_cutoff(cutoff_timer, attempt_ref, cutoff_token)
-        cleanup_monitor(caller_state.monitor)
         AttemptProtocol.close(context)
         deadline_outcome(reducer)
       else
@@ -75,6 +75,7 @@ defmodule Lasso.Core.Request.RequestOwner do
         %{
           attempt_ref: attempt_ref,
           caller_monitor: caller_state.monitor,
+          caller_pid: caller_state.pid,
           context: context,
           cutoff_timer: cutoff_timer,
           cutoff_token: cutoff_token,
@@ -131,8 +132,8 @@ defmodule Lasso.Core.Request.RequestOwner do
       {:DOWN, ^task_ref, :process, ^task_pid, reason} ->
         handle_task_down(state, reason)
 
-      {:DOWN, caller_ref, :process, _caller_pid, _reason}
-      when caller_ref == state.caller_monitor ->
+      {:DOWN, caller_ref, :process, caller_pid, _reason}
+      when caller_ref == state.caller_monitor and caller_pid == state.caller_pid ->
         handle_caller_down(state)
 
       {:EXIT, _pid, :normal} when state.previous_trap_exit == false ->
@@ -449,7 +450,6 @@ defmodule Lasso.Core.Request.RequestOwner do
   defp finish(state) do
     cancel_cutoff(state)
     cleanup_task(state.task)
-    cleanup_monitor(state.caller_monitor)
     drain_retired_attempt(state)
     build_outcome(state)
   end
@@ -571,27 +571,15 @@ defmodule Lasso.Core.Request.RequestOwner do
     end
   end
 
-  defp monitor_caller(nil), do: %{monitor: nil, status: :alive}
+  defp caller_state(nil), do: %{monitor: nil, pid: nil, status: :alive}
 
-  defp monitor_caller(caller_pid) when is_pid(caller_pid) do
-    if Process.alive?(caller_pid) do
-      monitor = Process.monitor(caller_pid)
-
-      status =
-        receive do
-          {:DOWN, ^monitor, :process, ^caller_pid, _reason} -> :down
-        after
-          0 -> if(Process.alive?(caller_pid), do: :alive, else: :down)
-        end
-
-      %{monitor: monitor, status: status}
-    else
-      %{monitor: nil, status: :down}
-    end
+  defp caller_state(%ExecutionScope.CallerGuard{} = caller_guard) do
+    %{
+      monitor: ExecutionScope.caller_monitor(caller_guard),
+      pid: ExecutionScope.caller_pid(caller_guard),
+      status: if(ExecutionScope.caller_alive?(caller_guard), do: :alive, else: :down)
+    }
   end
-
-  defp cleanup_monitor(nil), do: :ok
-  defp cleanup_monitor(reference), do: Process.demonitor(reference, [:flush])
 
   defp propagate_pending_exits(true), do: :ok
 

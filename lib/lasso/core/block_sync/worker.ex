@@ -233,9 +233,29 @@ defmodule Lasso.BlockSync.Worker do
     {:noreply, %{state | http_strategy: new_http_state}}
   end
 
+  def handle_info(
+        {:http_strategy, :poll_result, instance_id, owner_id, owner_pid, result},
+        state
+      )
+      when instance_id == state.instance_id and state.http_strategy != nil do
+    {:ok, new_http_state} =
+      HttpStrategy.handle_message(
+        {:poll_result, owner_id, owner_pid, result},
+        state.http_strategy
+      )
+
+    {:noreply, %{state | http_strategy: new_http_state}}
+  end
+
   def handle_info({:http_strategy, :poll, instance_id, _generation}, state)
       when instance_id == state.instance_id and state.http_strategy == nil do
     {:noreply, state}
+  end
+
+  def handle_info({:DOWN, _ref, :process, _pid, _reason} = message, state)
+      when state.http_strategy != nil do
+    {:ok, new_http_state} = HttpStrategy.handle_message(message, state.http_strategy)
+    {:noreply, %{state | http_strategy: new_http_state}}
   end
 
   # WS strategy staleness check timer

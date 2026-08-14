@@ -46,7 +46,13 @@ defmodule Lasso.RPC.AttemptProjection do
           degraded?: boolean(),
           degraded_at_us: integer() | nil,
           recovery_floor_us: integer() | nil,
-          probation_remaining: non_neg_integer()
+          probation_remaining: non_neg_integer(),
+          publication_loss_generation: non_neg_integer() | nil,
+          publication_loss_at_us: integer() | nil,
+          stale_drops: non_neg_integer(),
+          missing_drops: non_neg_integer(),
+          contention_drops: non_neg_integer(),
+          availability_degradations: map()
         }
 
   @spec new(AttemptTerminal.t(), binary(), binary()) :: t()
@@ -363,12 +369,7 @@ defmodule Lasso.RPC.AttemptProjection do
   end
 
   defp update_route(_key, _generation, event, _delta, 0, _barrier) do
-    degrade_scope(
-      identity(event.fact),
-      event.emitted_at_us,
-      :contention_drops,
-      @control_retries
-    )
+    degrade_scope(identity(event.fact), event.emitted_at_us, :contention_drops)
 
     :degraded
   end
@@ -550,7 +551,7 @@ defmodule Lasso.RPC.AttemptProjection do
   end
 
   defp advance_scope(identity, emitted_at_us, 0) do
-    degrade_scope(identity, emitted_at_us, :contention_drops, @control_retries)
+    degrade_scope(identity, emitted_at_us, :contention_drops)
   end
 
   defp advance_probation(%{probation_remaining: 1} = state) do
@@ -570,14 +571,12 @@ defmodule Lasso.RPC.AttemptProjection do
 
   defp advance_probation(state), do: state
 
-  defp degrade_scope(identity, emitted_at_us, counter, retries) when retries > 0 do
+  defp degrade_scope(identity, emitted_at_us, counter) do
     key = scope_key(identity.profile, identity.chain_id)
-    degrade_scope_key(key, identity.route_generation, emitted_at_us, counter, retries)
+    degrade_scope_key(key, identity.route_generation, emitted_at_us, counter, @control_retries)
   rescue
     ArgumentError -> :ok
   end
-
-  defp degrade_scope(_identity, _emitted_at_us, _counter, 0), do: :ok
 
   defp record_stale(identity, current_generation, emitted_at_us) do
     degrade_scope_key(
