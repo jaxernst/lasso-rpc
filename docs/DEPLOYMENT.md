@@ -5,7 +5,7 @@
 ### Prerequisites
 
 - **Elixir**: 1.17+
-- **Erlang/OTP**: 26+
+- **Erlang/OTP**: 27+
 - **Node.js**: 18+ (asset compilation)
 
 ### Setup
