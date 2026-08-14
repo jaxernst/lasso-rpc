@@ -1,36 +1,22 @@
 defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.Config.ConfigStore
+  alias Lasso.Providers.Catalog
+  alias Lasso.RPC.AttemptProjection
   alias Lasso.RPC.RoutingEvidence.Summary
   alias Lasso.RPC.Strategies.{Fastest, LatencyWeighted}
 
-  defmodule EvidenceReader do
-    @behaviour Lasso.RPC.RoutingEvidence.Reader
-
-    @impl true
-    def batch_get_summaries(_chain_id, _workload_key, upstream_keys) do
-      summaries = Process.get(:routing_evidence_summaries, %{})
-      Map.new(upstream_keys, &{&1, Map.get(summaries, &1)})
-    end
-  end
-
-  defmodule RaisingReader do
-    @behaviour Lasso.RPC.RoutingEvidence.Reader
-
-    @impl true
-    def batch_get_summaries(_chain_id, _workload_key, _upstream_keys) do
-      raise "reader unavailable"
-    end
-  end
-
   setup do
-    previous = Application.get_env(:lasso, :routing_evidence_reader)
-    Application.put_env(:lasso, :routing_evidence_reader, EvidenceReader)
+    clear_test_control()
 
     on_exit(fn ->
-      if previous,
-        do: Application.put_env(:lasso, :routing_evidence_reader, previous),
-        else: Application.delete_env(:lasso, :routing_evidence_reader)
+      clear_test_control()
+
+      AttemptProjection.reconcile_routes(
+        ConfigStore.route_generation(),
+        Catalog.routing_control_routes()
+      )
     end)
 
     :ok
@@ -53,13 +39,13 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
              |> Enum.map(& &1.provider_id)
   end
 
-  test "fastest uses p95 and identity as deterministic ties" do
+  test "fastest falls back to mean and identity when p95 is unavailable" do
     channels = channels(["b", "a", "c"])
 
     put_summaries(%{
-      {"a-instance", :http} => summary("a", :qualified, 50.0, 90.0),
-      {"b-instance", :http} => summary("b", :qualified, 50.0, 90.0),
-      {"c-instance", :http} => summary("c", :qualified, 50.0, 70.0)
+      {"a-instance", :http} => summary("a", :qualified, 50.0, nil),
+      {"b-instance", :http} => summary("b", :qualified, 50.0, nil),
+      {"c-instance", :http} => summary("c", :qualified, 40.0, nil)
     })
 
     ctx = Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
@@ -70,48 +56,35 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
              |> Enum.map(& &1.provider_id)
   end
 
-  test "fastest preserves availability and emits degradation when nothing qualifies" do
-    ref =
-      :telemetry_test.attach_event_handlers(
-        self(),
-        [[:lasso, :routing_evidence, :availability_degradation]]
-      )
-
-    on_exit(fn -> :telemetry.detach(ref) end)
-
+  test "fastest preserves availability and counts degradation when nothing qualifies" do
     channels = channels(["b", "a"])
     put_summaries(%{{"b-instance", :http} => summary("b", :stale, 1.0, 1.0)})
     ctx = Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
+    before_count = degradation_count(:fastest)
 
     ranked = Fastest.rank_channels(channels, "eth_getBalance", ctx, "public", 1)
 
     assert Enum.map(ranked, & &1.provider_id) == ["a", "b"]
-
-    assert_receive {[:lasso, :routing_evidence, :availability_degradation], ^ref,
-                    %{candidate_count: 2}, %{strategy: :fastest}}
+    assert degradation_count(:fastest) == before_count + 1
   end
 
-  test "reader failures preserve live candidates through availability degradation" do
-    Application.put_env(:lasso, :routing_evidence_reader, RaisingReader)
-
-    ref =
-      :telemetry_test.attach_event_handlers(
-        self(),
-        [[:lasso, :routing_evidence, :availability_degradation]]
-      )
-
-    on_exit(fn -> :telemetry.detach(ref) end)
-
+  test "missing direct control rows preserve live candidates through degradation" do
     channels = channels(["b", "a"])
     ctx = Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
+    before_count = degradation_count(:fastest)
 
     assert ["a", "b"] ==
              channels
              |> Fastest.rank_channels("eth_getBalance", ctx, "public", 1)
              |> Enum.map(& &1.provider_id)
 
-    assert_receive {[:lasso, :routing_evidence, :availability_degradation], ^ref,
-                    %{candidate_count: 2}, %{strategy: :fastest}}
+    assert degradation_count(:fastest) == before_count
+
+    assert [] =
+             :ets.lookup(
+               :lasso_instance_state,
+               {:routing_control_scope, "public", 1}
+             )
   end
 
   test "relative latency weights are scale invariant and have no absolute floor" do
@@ -168,6 +141,7 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
   defp channels(provider_ids) do
     Enum.map(provider_ids, fn provider_id ->
       %{
+        profile: "public",
         provider_id: provider_id,
         instance_id: "#{provider_id}-instance",
         transport: :http
@@ -187,9 +161,55 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
       comparable_attempts: 100,
       usable_successes: 99,
       support_source: :direct_local,
-      generation: 1
+      generation: ConfigStore.route_generation()
     }
   end
 
-  defp put_summaries(summaries), do: Process.put(:routing_evidence_summaries, summaries)
+  defp put_summaries(summaries) do
+    generation = ConfigStore.route_generation()
+
+    routes =
+      Enum.map(summaries, fn {{instance_id, transport}, _summary} ->
+        %{profile: "public", chain_id: 1, instance_id: instance_id, transport: transport}
+      end)
+
+    AttemptProjection.reconcile_routes(generation, routes)
+
+    Enum.each(summaries, fn
+      {_key, %Summary{state: :stale}} ->
+        :ok
+
+      {{instance_id, transport}, %Summary{} = summary} ->
+        key = {:routing_control, "public", 1, instance_id, transport, "default"}
+        [{^key, row}] = :ets.lookup(:lasso_instance_state, key)
+        observed_at_us = System.monotonic_time(:microsecond)
+
+        counts =
+          if summary.state == :qualified,
+            do: %{comparable_attempts: 100, usable_successes: 99},
+            else: %{comparable_attempts: 0, usable_successes: 0}
+
+        :ets.insert(
+          :lasso_instance_state,
+          {key,
+           Map.merge(row, counts)
+           |> Map.merge(%{
+             observed_at_us: observed_at_us,
+             oldest_observed_at_us: observed_at_us,
+             successful_mean_latency_ms: summary.successful_mean_latency_ms,
+             successful_p95_latency_ms: summary.successful_p95_latency_ms
+           })}
+        )
+    end)
+  end
+
+  defp degradation_count(strategy),
+    do: AttemptProjection.availability_degradation_count("public", 1, strategy, :default)
+
+  defp clear_test_control do
+    :ets.match_delete(:lasso_instance_state, {{:routing_control_scope, "public", 1}, :_})
+    :ets.match_delete(:lasso_instance_state, {{:routing_control, "public", 1, :_, :_, :_}, :_})
+  rescue
+    ArgumentError -> :ok
+  end
 end

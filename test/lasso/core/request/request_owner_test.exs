@@ -2,6 +2,7 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
   use ExUnit.Case, async: true
 
   alias Lasso.Core.Request.RequestOwner
+  alias Lasso.Core.Support.AttemptLifecycle
   alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.RPC.AttemptIdentity
   alias Lasso.RPC.AttemptTerminal
@@ -132,6 +133,21 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
 
     assert with_gate.fact == without_gate.fact
     assert with_gate.projection == without_gate.projection
+  end
+
+  test "compatibility dispatch confirmation is idempotent for owner contexts" do
+    outcome =
+      RequestOwner.execute(identity(), deadline_after(100), fn ->
+        context = AttemptProtocol.context()
+        assert :ok = AttemptLifecycle.mark_dispatched(context)
+        assert :ok = AttemptLifecycle.mark_dispatched(context)
+        success_terminal(context, 7)
+        {:ok, :response}
+      end)
+
+    assert outcome.result == {:ok, :response}
+    assert %AttemptTerminal.Response{io_duration_us: 7} = outcome.fact
+    assert outcome.projection.recommended_action == :return_response
   end
 
   test "missing, conflicting, mismatched, and malformed terminals fail conservatively" do

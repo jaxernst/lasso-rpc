@@ -1,8 +1,11 @@
 defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.{AttemptLifecycle, CircuitBreaker}
   alias Lasso.Core.Support.CircuitBreaker.{AdmissionReceipt, ControlRing, Snapshot, Storage}
+
+  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal, ExecutionProjector}
 
   test "concurrent recovery candidates produce one bounded lease" do
     {id, breaker_pid} = start_half_open_breaker()
@@ -48,6 +51,60 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     assert [] = :ets.lookup(Storage.lease_table(), id)
   end
 
+  test "request owner activates its half-open lease with one exact local CAS" do
+    {id, breaker_pid} = start_half_open_breaker()
+
+    assert {:ok, %AdmissionReceipt{kind: :half_open} = receipt} =
+             CircuitBreaker.admit(id, deadline_us())
+
+    assert [{^id, %{claimed?: false, owner_pid: owner}}] = :ets.lookup(Storage.lease_table(), id)
+    assert owner == self()
+
+    :sys.suspend(breaker_pid)
+    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+
+    assert :ok = CircuitBreaker.activate_attempt(receipt, self())
+    assert [{^id, %{claimed?: true, owner_pid: owner}}] = :ets.lookup(Storage.lease_table(), id)
+    assert owner == self()
+    assert {:error, :stale} = CircuitBreaker.activate_attempt(receipt, self())
+
+    :sys.resume(breaker_pid)
+    CircuitBreaker.release_half_open(receipt)
+    await_no_lease(id)
+  end
+
+  test "stale route feedback consumes its lease without changing half-open control state" do
+    {id, breaker_pid} = start_half_open_breaker()
+    assert {:ok, receipt} = CircuitBreaker.admit(id, deadline_us())
+    assert :ok = CircuitBreaker.activate_attempt(receipt, self())
+
+    identity =
+      AttemptIdentity.new(
+        request_id: "half-open-route-request",
+        attempt_id: "half-open-route-attempt",
+        profile: "public",
+        chain_id: 1,
+        upstream_instance_id: elem(id, 0),
+        transport: :http,
+        route_generation: ConfigStore.route_generation() + 1,
+        circuit_scope: :broad,
+        circuit_epoch: receipt.epoch,
+        execution_safety: :replay_safe,
+        routing_intent: "default",
+        workload_key: "default",
+        request_budget_ms: 100,
+        candidate_admission_count: 1,
+        dispatch_count: 1
+      )
+
+    fact = AttemptTerminal.Response.new(identity, :success, 10)
+    assert :ok = CircuitBreaker.report_canonical(receipt, fact, ExecutionProjector.project(fact))
+    await_no_lease(id)
+
+    assert %{state: :half_open, inflight_count: 0, success_count: 0, failure_count: 0} =
+             :sys.get_state(breaker_pid)
+  end
+
   test "restart publishes a fresh conservative epoch and recovers a live lease" do
     {id, breaker_pid} = start_half_open_breaker()
 
@@ -73,9 +130,8 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
 
     CircuitBreaker.report_half_open(old_receipt, :ok)
     CircuitBreaker.release_half_open(old_receipt)
-    assert %{state: :half_open, inflight_count: 1} = :sys.get_state(restarted_pid)
-    assert [{^id, %{token: old_token}}] = :ets.lookup(Storage.lease_table(), id)
-    assert old_token == old_receipt.token
+    assert %{state: :half_open, inflight_count: 0} = :sys.get_state(restarted_pid)
+    assert [] = :ets.lookup(Storage.lease_table(), id)
   end
 
   test "a live registered owner is not reclaimed by elapsed wall time" do

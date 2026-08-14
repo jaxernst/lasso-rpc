@@ -1314,8 +1314,16 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert :ok = Task.await(disconnect, 1_000)
 
     assert %{connected: false} = Connection.status(context.instance_id)
-    assert {:message_queue_len, queued} = Process.info(context.breaker_pid, :message_queue_len)
-    assert queued <= 1
+
+    {:messages, queued_messages} = Process.info(context.breaker_pid, :messages)
+
+    assert Enum.all?(queued_messages, fn
+             {:breaker_control_ready, _breaker_id, _generation, _epoch} -> true
+             :breaker_control_audit -> true
+             _other -> false
+           end)
+
+    assert length(queued_messages) <= 2
 
     assert {:ok, %Snapshot{control_health: :degraded}} =
              Snapshot.lookup({context.instance_id, :ws})

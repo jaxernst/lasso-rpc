@@ -18,7 +18,8 @@ defmodule Lasso.Core.Support.CircuitBreaker.Snapshot do
     :half_open_inflight,
     :control_health
   ]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++
+              [failure_count: 0, needs_success?: false]
 
   @type t :: %__MODULE__{
           breaker_id: {String.t(), :http | :ws},
@@ -30,7 +31,9 @@ defmodule Lasso.Core.Support.CircuitBreaker.Snapshot do
           recovery_deadline_us: integer() | nil,
           half_open_capacity: pos_integer(),
           half_open_inflight: non_neg_integer(),
-          control_health: control_health()
+          control_health: control_health(),
+          failure_count: non_neg_integer(),
+          needs_success?: boolean()
         }
 
   @spec lookup({String.t(), :http | :ws}) :: {:ok, t()} | :missing

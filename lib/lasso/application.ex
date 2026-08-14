@@ -101,6 +101,9 @@ defmodule Lasso.Application do
 
         # Start benchmark persistence for historical data
         Lasso.Benchmarking.Persistence,
+        {Lasso.Core.ProjectionDispatcher,
+         name: Lasso.ExecutionProjectionDispatcher,
+         lanes: Lasso.RPC.AttemptProjection.lane_configs()},
 
         # Start centralized VM metrics collector for dashboard
         Lasso.VMMetricsCollector,

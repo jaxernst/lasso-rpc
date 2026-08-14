@@ -19,8 +19,9 @@ defmodule Lasso.Providers.CandidateListing do
   require Logger
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+  alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{Catalog, InstanceState, LagCalculation}
-  alias Lasso.RPC.SelectionFilters
+  alias Lasso.RPC.{AttemptProjection, SelectionFilters}
 
   @doc """
   Lists provider candidates for a (profile, chain_id) pair, filtered by selection criteria.
@@ -32,23 +33,72 @@ defmodule Lasso.Providers.CandidateListing do
 
   def list_candidates(profile, chain_id, filters)
       when is_map(filters) and is_integer(chain_id) and chain_id > 0 do
+    case Catalog.snapshot() do
+      %{generation: generation} = snapshot ->
+        if generation == ConfigStore.route_generation(),
+          do: list_candidates(profile, chain_id, filters, snapshot),
+          else: []
+
+      _unavailable ->
+        []
+    end
+  end
+
+  @doc false
+  @spec list_candidates(String.t(), pos_integer(), map(), non_neg_integer() | Catalog.snapshot()) ::
+          [map()]
+  def list_candidates(profile, chain_id, filters, expected_generation)
+      when is_map(filters) and is_integer(chain_id) and chain_id > 0 and
+             is_integer(expected_generation) and expected_generation >= 0 do
+    case Catalog.snapshot() do
+      %{generation: generation} = snapshot ->
+        if generation == expected_generation and
+             expected_generation == ConfigStore.route_generation(),
+           do: list_candidates(profile, chain_id, filters, snapshot),
+           else: []
+
+      _unavailable ->
+        []
+    end
+  end
+
+  def list_candidates(
+        profile,
+        chain_id,
+        filters,
+        %{table: table, generation: generation} = snapshot
+      )
+      when is_map(filters) and is_integer(chain_id) and chain_id > 0 and
+             not is_nil(table) and is_integer(generation) and generation >= 0 do
+    if Catalog.snapshot() == snapshot and ConfigStore.route_generation() == generation,
+      do: do_list_candidates(snapshot, profile, chain_id, filters),
+      else: []
+  end
+
+  defp do_list_candidates(snapshot, profile, chain_id, filters) do
     protocol = Map.get(filters, :protocol)
     include_half_open = Map.get(filters, :include_half_open, false)
+    learned_scope = AttemptProjection.scope_state(profile, chain_id, snapshot.generation)
 
-    profile_providers = Catalog.get_profile_providers(profile, chain_id)
+    profile_providers = Catalog.get_profile_providers(snapshot, profile, chain_id)
 
-    profile_providers
-    |> Enum.map(&build_candidate/1)
-    |> Enum.filter(fn c ->
-      transport_available?(c, protocol, profile, chain_id) and
-        circuit_breaker_ready?(c, protocol, include_half_open) and
-        rate_limit_ok?(c, protocol, filters)
-    end)
-    |> filter_by_lag(profile, chain_id, Map.get(filters, :max_lag_blocks))
-    |> filter_by_min_block(profile, chain_id, Map.get(filters, :min_block))
-    |> filter_by_archival(Map.get(filters, :requires_archival))
-    |> filter_by_subscribe_new_heads(Map.get(filters, :requires_subscribe_new_heads))
-    |> filter_excluded(filters)
+    candidates =
+      profile_providers
+      |> Enum.map(&build_candidate(&1, learned_scope, snapshot))
+      |> Enum.filter(fn c ->
+        transport_available?(c, protocol, profile, chain_id) and
+          circuit_breaker_ready?(c, protocol, include_half_open) and
+          rate_limit_ok?(c, protocol, filters)
+      end)
+      |> filter_by_lag(profile, chain_id, Map.get(filters, :max_lag_blocks))
+      |> filter_by_min_block(profile, chain_id, Map.get(filters, :min_block))
+      |> filter_by_archival(Map.get(filters, :requires_archival))
+      |> filter_by_subscribe_new_heads(Map.get(filters, :requires_subscribe_new_heads))
+      |> filter_excluded(filters)
+
+    if Catalog.snapshot() == snapshot and ConfigStore.route_generation() == snapshot.generation,
+      do: candidates,
+      else: []
   end
 
   @doc """
@@ -89,40 +139,71 @@ defmodule Lasso.Providers.CandidateListing do
     end
   end
 
-  defp build_candidate(profile_provider) do
+  defp build_candidate(profile_provider, learned_scope, snapshot) do
     instance_id = profile_provider.instance_id
 
     instance_config =
-      case Catalog.get_instance(instance_id) do
+      case Catalog.get_instance(snapshot, instance_id) do
         {:ok, config} -> config
         _ -> %{}
       end
 
-    health = InstanceState.read_health(instance_id)
+    include_learned? = not learned_scope.degraded?
+    http_routing = AttemptProjection.route_state(learned_scope, instance_id, :http)
+    ws_routing = AttemptProjection.route_state(learned_scope, instance_id, :ws)
 
-    config = %{
-      id: profile_provider.provider_id,
-      url: Map.get(instance_config, :url),
-      ws_url: Map.get(instance_config, :ws_url),
-      priority: profile_provider.priority,
-      capabilities: profile_provider.capabilities,
-      archival: profile_provider.archival,
-      subscribe_new_heads: Map.get(profile_provider, :subscribe_new_heads, false),
-      name: profile_provider[:name] || profile_provider.provider_id
-    }
+    base_health = InstanceState.read_health(instance_id, include_learned: false)
+
+    http_health =
+      InstanceState.read_health(instance_id,
+        include_learned: include_learned?,
+        routing_states: [http_routing]
+      )
+
+    ws_health =
+      InstanceState.read_health(instance_id,
+        include_learned: include_learned?,
+        routing_states: [ws_routing]
+      )
+
+    config =
+      Map.merge(instance_config, %{
+        id: profile_provider.provider_id,
+        priority: profile_provider.priority,
+        capabilities: profile_provider.capabilities,
+        archival: profile_provider.archival,
+        subscribe_new_heads: Map.get(profile_provider, :subscribe_new_heads, false),
+        name: profile_provider[:name] || profile_provider.provider_id
+      })
 
     http_cb = InstanceState.read_circuit(instance_id, :http)
     ws_cb = InstanceState.read_circuit(instance_id, :ws)
-    http_rl = InstanceState.read_rate_limit(instance_id, :http)
-    ws_rl = InstanceState.read_rate_limit(instance_id, :ws)
+
+    http_rl =
+      InstanceState.read_rate_limit(instance_id, :http,
+        include_learned: include_learned?,
+        routing_state: http_routing
+      )
+
+    ws_rl =
+      InstanceState.read_rate_limit(instance_id, :ws,
+        include_learned: include_learned?,
+        routing_state: ws_routing
+      )
 
     %{
       id: profile_provider.provider_id,
       instance_id: instance_id,
+      route_generation: snapshot.generation,
       config: config,
-      availability: InstanceState.status_to_availability(health.status),
+      availability: InstanceState.status_to_availability(base_health.status),
+      transport_availability: %{
+        http: InstanceState.status_to_availability(http_health.status),
+        ws: InstanceState.status_to_availability(ws_health.status)
+      },
       circuit_state: %{http: http_cb.state, ws: ws_cb.state},
-      rate_limited: %{http: http_rl.rate_limited, ws: ws_rl.rate_limited}
+      rate_limited: %{http: http_rl.rate_limited, ws: ws_rl.rate_limited},
+      learned_feedback_degraded?: learned_scope.degraded?
     }
   end
 

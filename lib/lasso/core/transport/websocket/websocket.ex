@@ -53,7 +53,10 @@ defmodule Lasso.RPC.Transports.WebSocket do
          )}
 
       ws_url ->
-        instance_id = resolve_instance_id(profile, chain_id, provider_id)
+        instance_id =
+          Keyword.get_lazy(opts, :instance_id, fn ->
+            resolve_instance_id(profile, chain_id, provider_id)
+          end)
 
         connection_pid =
           GenServer.whereis(WSConnection.via_instance_name(instance_id))

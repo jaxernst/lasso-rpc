@@ -40,11 +40,28 @@ defmodule Lasso.Providers.InstanceState do
     :unhealthy => 4
   }
 
-  @spec read_health(String.t()) :: map()
-  def read_health(instance_id) when is_binary(instance_id) do
+  @spec read_health(String.t(), keyword()) :: map()
+  def read_health(instance_id, opts \\ []) when is_binary(instance_id) do
     probe = read_probe_health(instance_id)
     block_sync = read_block_sync_health(instance_id)
-    routing = read_routing_health(instance_id)
+
+    routing =
+      if Keyword.get(opts, :include_learned, true) do
+        case Keyword.fetch(opts, :routing_states) do
+          {:ok, states} ->
+            merge_routing_states(states)
+
+          :error ->
+            read_routing_health(
+              instance_id,
+              Keyword.get(opts, :learned_scope),
+              Keyword.get(opts, :learned_floor_us)
+            )
+        end
+      else
+        @default_routing
+      end
+
     merge_health(probe, block_sync, routing)
   end
 
@@ -69,6 +86,23 @@ defmodule Lasso.Providers.InstanceState do
     case safe_lookup({:health_routing, instance_id}) do
       [{_, data}] -> Map.merge(@default_routing, data)
       [] -> @default_routing
+    end
+  end
+
+  defp read_routing_health(instance_id, nil, _floor_us), do: read_routing_health(instance_id)
+
+  defp read_routing_health(instance_id, {profile, chain_id}, floor_us)
+       when is_binary(profile) and is_integer(chain_id) do
+    key = {:health_routing, profile, chain_id, instance_id}
+
+    case safe_lookup(key) do
+      [{^key, data}] ->
+        if fresh_learned?(data, floor_us),
+          do: Map.merge(@default_routing, data),
+          else: @default_routing
+
+      [] ->
+        @default_routing
     end
   end
 
@@ -151,19 +185,100 @@ defmodule Lasso.Providers.InstanceState do
   defp recovery_deadline_ms(nil), do: nil
   defp recovery_deadline_ms(deadline_us), do: div(deadline_us, 1_000)
 
-  @spec read_rate_limit(String.t(), :http | :ws) :: map()
-  def read_rate_limit(instance_id, transport)
+  @spec read_rate_limit(String.t(), :http | :ws, keyword()) :: map()
+  def read_rate_limit(instance_id, transport, opts \\ [])
       when is_binary(instance_id) and transport in [:http, :ws] do
     now_ms = System.monotonic_time(:millisecond)
+    include_learned? = Keyword.get(opts, :include_learned, true)
 
-    case safe_lookup({:rate_limit, instance_id, transport}) do
-      [{_, %{expiry_ms: expiry}}] when expiry > now_ms ->
-        %{rate_limited: true, remaining_ms: expiry - now_ms, expiry_ms: expiry}
+    direct_expiries =
+      case Keyword.get(opts, :routing_state) do
+        %{rate_limit_expiry_ms: expiry} when include_learned? and expiry > now_ms -> [expiry]
+        _other -> []
+      end
 
-      _ ->
+    expiries =
+      [{{:rate_limit, instance_id, transport}, false}]
+      |> maybe_add_learned_rate_limit(
+        instance_id,
+        transport,
+        include_learned? and not Keyword.has_key?(opts, :routing_state),
+        opts
+      )
+      |> Enum.flat_map(fn {key, learned?} ->
+        case safe_lookup(key) do
+          [{_, %{expiry_ms: expiry} = data}] when expiry > now_ms ->
+            if not learned? or fresh_learned?(data, Keyword.get(opts, :learned_floor_us)),
+              do: [expiry],
+              else: []
+
+          _other ->
+            []
+        end
+      end)
+      |> Kernel.++(direct_expiries)
+
+    case expiries do
+      [] ->
         %{rate_limited: false, remaining_ms: nil, expiry_ms: nil}
+
+      _active ->
+        expiry = Enum.max(expiries)
+        %{rate_limited: true, remaining_ms: expiry - now_ms, expiry_ms: expiry}
     end
   end
+
+  defp maybe_add_learned_rate_limit(keys, instance_id, transport, true, opts) do
+    learned_key =
+      case Keyword.get(opts, :learned_scope) do
+        {profile, chain_id} ->
+          {:rate_limit_routing, profile, chain_id, instance_id, transport}
+
+        nil ->
+          {:rate_limit_routing, instance_id, transport}
+      end
+
+    [{learned_key, true} | keys]
+  end
+
+  defp maybe_add_learned_rate_limit(keys, _instance_id, _transport, false, _opts), do: keys
+
+  defp fresh_learned?(_data, nil), do: true
+
+  defp fresh_learned?(%{observed_at_us: observed_at_us}, floor_us)
+       when is_integer(observed_at_us) and is_integer(floor_us),
+       do: observed_at_us > floor_us
+
+  defp fresh_learned?(_data, _floor_us), do: false
+
+  defp merge_routing_states(states) when is_list(states) do
+    states
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reduce(@default_routing, fn state, merged ->
+      last_health_check = monotonic_us_to_ms(Map.get(state, :observed_at_us))
+
+      %{
+        status: worse_status(merged.status, Map.get(state, :status)),
+        last_health_check: latest(merged.last_health_check, last_health_check),
+        consecutive_failures:
+          max(merged.consecutive_failures, Map.get(state, :consecutive_failures, 0)),
+        consecutive_successes:
+          max(merged.consecutive_successes, Map.get(state, :consecutive_successes, 0)),
+        last_error:
+          case Map.get(state, :last_error_category) do
+            nil -> merged.last_error
+            category -> %{category: category}
+          end
+      }
+    end)
+  end
+
+  defp monotonic_us_to_ms(nil), do: nil
+  defp monotonic_us_to_ms(value), do: div(value, 1_000)
+
+  defp latest(nil, right), do: right
+  defp latest(left, nil), do: left
+  defp latest(left, right), do: max(left, right)
 
   @default_ws_status %{
     status: :disconnected,
@@ -207,6 +322,8 @@ defmodule Lasso.Providers.InstanceState do
       {:circuit, instance_id, :ws},
       {:rate_limit, instance_id, :http},
       {:rate_limit, instance_id, :ws},
+      {:rate_limit_routing, instance_id, :http},
+      {:rate_limit_routing, instance_id, :ws},
       {:ws_status, instance_id}
     ]
 
@@ -217,6 +334,8 @@ defmodule Lasso.Providers.InstanceState do
         ArgumentError -> :ok
       end
     end)
+
+    clear_scoped_routing_state(instance_id)
 
     Enum.each([:http, :ws], fn transport ->
       breaker_id = {instance_id, transport}
@@ -230,6 +349,22 @@ defmodule Lasso.Providers.InstanceState do
 
   defp clear_breaker_table(table, breaker_id) do
     :ets.delete(table, breaker_id)
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp clear_scoped_routing_state(instance_id) do
+    :ets.match_delete(:lasso_instance_state, {{:health_routing, :_, :_, instance_id}, :_})
+
+    :ets.match_delete(
+      :lasso_instance_state,
+      {{:rate_limit_routing, :_, :_, instance_id, :_}, :_}
+    )
+
+    :ets.match_delete(
+      :lasso_instance_state,
+      {{:routing_control, :_, :_, instance_id, :_, :_}, :_}
+    )
   rescue
     ArgumentError -> :ok
   end

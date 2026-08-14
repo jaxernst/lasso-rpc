@@ -6,9 +6,8 @@ defmodule Lasso.RPC.RoutingEvidence do
   by a later measured backend rather than by the request pipeline.
   """
 
-  alias Lasso.RPC.Channel
-  alias Lasso.RPC.RoutingEvidence.{AttemptEvent, Summary, UnavailableReader}
-  require Logger
+  alias Lasso.RPC.{AttemptProjection, Channel}
+  alias Lasso.RPC.RoutingEvidence.{AttemptEvent, Summary}
 
   @type upstream_key :: {String.t(), :http | :ws}
 
@@ -22,32 +21,19 @@ defmodule Lasso.RPC.RoutingEvidence do
   @spec batch_get_summaries([Channel.t() | map()], pos_integer(), atom()) ::
           %{upstream_key() => Summary.t() | nil}
   def batch_get_summaries(channels, chain_id, workload_key) do
-    upstream_keys =
+    profile =
       channels
-      |> Enum.flat_map(fn channel ->
-        case Map.get(channel, :instance_id) do
-          instance_id when is_binary(instance_id) -> [{instance_id, channel.transport}]
-          _ -> []
-        end
-      end)
-      |> Enum.uniq()
+      |> List.first()
+      |> then(&if(&1, do: Map.get(&1, :profile, "public"), else: "public"))
 
-    try do
-      reader().batch_get_summaries(chain_id, workload_key, upstream_keys)
-    rescue
-      error ->
-        Logger.warning("Routing evidence reader unavailable", error: Exception.message(error))
-        unavailable_summaries(upstream_keys)
-    catch
-      kind, reason ->
-        Logger.warning("Routing evidence reader unavailable",
-          kind: kind,
-          reason: inspect(reason)
-        )
-
-        unavailable_summaries(upstream_keys)
-    end
+    batch_get_summaries(profile, channels, chain_id, workload_key)
   end
+
+  @doc false
+  @spec batch_get_summaries(binary(), [Channel.t() | map()], pos_integer(), atom()) ::
+          %{upstream_key() => Summary.t() | nil}
+  def batch_get_summaries(profile, channels, chain_id, workload_key),
+    do: AttemptProjection.batch_summaries(profile, channels, chain_id, workload_key)
 
   @doc false
   @spec summary_for_channel(map(), map()) :: Summary.t() | nil
@@ -62,26 +48,34 @@ defmodule Lasso.RPC.RoutingEvidence do
   end
 
   @doc false
-  @spec emit_availability_degradation(atom(), pos_integer(), atom(), non_neg_integer()) :: :ok
-  def emit_availability_degradation(strategy, chain_id, workload_key, candidate_count) do
-    :telemetry.execute(
-      [:lasso, :routing_evidence, :availability_degradation],
-      %{count: 1, candidate_count: candidate_count},
-      %{strategy: strategy, chain_id: chain_id, workload_key: workload_key}
-    )
+  @spec emit_availability_degradation(
+          binary(),
+          atom(),
+          pos_integer(),
+          atom(),
+          non_neg_integer()
+        ) :: :ok
+  def emit_availability_degradation(
+        profile,
+        strategy,
+        chain_id,
+        workload_key,
+        _candidate_count
+      ) do
+    _result =
+      AttemptProjection.record_availability_degradation(
+        profile,
+        chain_id,
+        strategy,
+        workload_key
+      )
 
     :ok
-  end
-
-  defp reader do
-    Application.get_env(:lasso, :routing_evidence_reader, UnavailableReader)
   end
 
   defp recorder do
     Application.get_env(:lasso, :attempt_evidence_recorder, __MODULE__.TelemetryRecorder)
   end
-
-  defp unavailable_summaries(upstream_keys), do: Map.new(upstream_keys, &{&1, nil})
 
   defmodule TelemetryRecorder do
     @moduledoc false

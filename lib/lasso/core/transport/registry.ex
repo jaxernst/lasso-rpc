@@ -156,7 +156,9 @@ defmodule Lasso.RPC.TransportRegistry do
 
     case :ets.lookup(@channel_cache_table, cache_key) do
       [{^cache_key, channel}] ->
-        {:ok, channel}
+        if route_identity_matches?(channel, opts),
+          do: {:ok, bind_route_generation(channel, opts)},
+          else: do_get_channel(profile, chain_id, provider_id, transport, opts)
 
       [] ->
         do_get_channel(profile, chain_id, provider_id, transport, opts)
@@ -353,11 +355,9 @@ defmodule Lasso.RPC.TransportRegistry do
   def handle_call({:get_channel, provider_id, transport, opts}, _from, state) do
     case get_existing_channel(state, provider_id, transport) do
       {:ok, channel} ->
-        # Verify channel is still healthy
-        if Channel.healthy?(channel) do
-          {:reply, {:ok, channel}, state}
+        if route_identity_matches?(channel, opts) and Channel.healthy?(channel) do
+          {:reply, {:ok, bind_route_generation(channel, opts)}, state}
         else
-          # Channel is unhealthy, remove and create new one
           new_state = remove_channel(state, provider_id, transport)
 
           case create_channel(new_state, provider_id, transport, opts) do
@@ -498,29 +498,7 @@ defmodule Lasso.RPC.TransportRegistry do
   end
 
   defp create_channel(state, provider_id, transport, opts) do
-    provider_config_result =
-      case ConfigStore.get_provider_with_route_generation(
-             state.profile,
-             state.chain_id,
-             provider_id
-           ) do
-        {:ok, provider_config, route_generation} ->
-          {:ok, provider_config, route_generation}
-
-        _not_configured ->
-          case Keyword.get(opts, :provider_config) do
-            config when is_map(config) ->
-              {:ok, config, ConfigStore.route_generation()}
-
-            _ ->
-              case get_provider_config_from_store(state.profile, state.chain_id, provider_id) do
-                {:ok, config} -> {:ok, config, ConfigStore.route_generation()}
-                error -> error
-              end
-          end
-      end
-
-    case provider_config_result do
+    case resolve_provider_config(state, provider_id, opts) do
       {:ok, provider_config, route_generation} ->
         transport_module = get_transport_module(transport)
 
@@ -530,51 +508,22 @@ defmodule Lasso.RPC.TransportRegistry do
           |> Keyword.put(:profile, state.profile)
           |> Keyword.put(:chain_id, state.chain_id)
 
-        case transport do
-          :http ->
-            if is_binary(Map.get(provider_config, :url)) or
-                 is_binary(Map.get(provider_config, :http_url)) do
-              transport_module.open(provider_config, channel_opts)
-            else
-              {:error, :no_http_config}
-            end
+        with {:ok, instance_id} <- physical_instance_id(state, provider_config, opts),
+             {:ok, raw_channel} <-
+               open_transport(transport, transport_module, provider_config, channel_opts) do
+          channel =
+            Channel.new(
+              state.profile,
+              state.chain_id,
+              provider_id,
+              transport,
+              raw_channel,
+              transport_module,
+              instance_id: instance_id,
+              route_generation: route_generation
+            )
 
-          :ws ->
-            if is_binary(Map.get(provider_config, :ws_url)) do
-              transport_module.open(provider_config, channel_opts)
-            else
-              {:error, :no_ws_config}
-            end
-        end
-        |> case do
-          {:ok, raw_channel} ->
-            identity_config =
-              Map.put(
-                provider_config,
-                :url,
-                Map.get(provider_config, :url) || Map.get(provider_config, :http_url) ||
-                  Map.get(provider_config, "url") || Map.get(provider_config, "http_url")
-              )
-
-            instance_id =
-              InstanceId.derive(state.chain_id, identity_config,
-                profile_id: state.profile,
-                sharing_mode: sharing_mode(provider_config)
-              )
-
-            channel =
-              Channel.new(
-                state.profile,
-                state.chain_id,
-                provider_id,
-                transport,
-                raw_channel,
-                transport_module,
-                instance_id: instance_id,
-                route_generation: route_generation
-              )
-
-            # Store channel in GenServer state
+          if route_identity_matches?(channel, opts) do
             updated_channels =
               Map.update(state.channels, provider_id, %{}, fn provider_channels ->
                 Map.put(provider_channels, transport, channel)
@@ -582,17 +531,19 @@ defmodule Lasso.RPC.TransportRegistry do
 
             new_state = %{state | channels: updated_channels}
 
-            # Cache capabilities
             capabilities = Channel.get_capabilities(channel)
             cap_key = {provider_id, transport}
             new_capabilities = Map.put(state.capabilities, cap_key, capabilities)
             final_state = %{new_state | capabilities: new_capabilities}
 
-            # Update ETS cache for lockless hot-path reads
             cache_channel(state, provider_id, transport, channel)
 
             {:ok, channel, final_state}
-
+          else
+            Channel.close(channel)
+            {:error, :route_identity_mismatch}
+          end
+        else
           {:error, reason} ->
             # Don't spam logs for missing transport configs (expected for HTTP-only/WS-only providers)
             unless reason in [:no_ws_config, :no_http_config] do
@@ -607,6 +558,107 @@ defmodule Lasso.RPC.TransportRegistry do
       {:error, reason} ->
         {:error,
          JError.new(-32_000, "Provider not found: #{inspect(reason)}", provider_id: provider_id)}
+    end
+  end
+
+  defp resolve_provider_config(state, provider_id, opts) do
+    case {
+      Keyword.get(opts, :provider_config),
+      Keyword.get(opts, :instance_id),
+      Keyword.get(opts, :route_generation)
+    } do
+      {config, instance_id, route_generation}
+      when is_map(config) and is_binary(instance_id) and is_integer(route_generation) ->
+        {:ok, config, route_generation}
+
+      _legacy_or_unscoped ->
+        resolve_unscoped_provider_config(state, provider_id, opts)
+    end
+  end
+
+  defp resolve_unscoped_provider_config(state, provider_id, opts) do
+    case ConfigStore.get_provider_with_route_generation(
+           state.profile,
+           state.chain_id,
+           provider_id
+         ) do
+      {:ok, provider_config, route_generation} ->
+        {:ok, provider_config, route_generation}
+
+      _not_configured ->
+        resolve_fallback_provider_config(state, provider_id, opts)
+    end
+  end
+
+  defp resolve_fallback_provider_config(state, provider_id, opts) do
+    case Keyword.get(opts, :provider_config) do
+      config when is_map(config) ->
+        {:ok, config, ConfigStore.route_generation()}
+
+      _other ->
+        case get_provider_config_from_store(state.profile, state.chain_id, provider_id) do
+          {:ok, config} -> {:ok, config, ConfigStore.route_generation()}
+          error -> error
+        end
+    end
+  end
+
+  defp open_transport(:http, transport_module, provider_config, channel_opts) do
+    if is_binary(Map.get(provider_config, :url)) or
+         is_binary(Map.get(provider_config, :http_url)) do
+      transport_module.open(provider_config, channel_opts)
+    else
+      {:error, :no_http_config}
+    end
+  end
+
+  defp open_transport(:ws, transport_module, provider_config, channel_opts) do
+    if is_binary(Map.get(provider_config, :ws_url)) do
+      transport_module.open(provider_config, channel_opts)
+    else
+      {:error, :no_ws_config}
+    end
+  end
+
+  defp physical_instance_id(state, provider_config, opts) do
+    identity_config =
+      provider_config
+      |> Map.get(:identity_config, provider_config)
+      |> Map.put(
+        :url,
+        Map.get(provider_config, :url) || Map.get(provider_config, :http_url) ||
+          Map.get(provider_config, "url") || Map.get(provider_config, "http_url")
+      )
+
+    derived =
+      InstanceId.derive(state.chain_id, identity_config,
+        profile_id: state.profile,
+        sharing_mode: sharing_mode(provider_config)
+      )
+
+    case Keyword.get(opts, :instance_id) do
+      expected when is_binary(expected) and expected == derived -> {:ok, expected}
+      expected when is_binary(expected) -> {:error, :route_identity_mismatch}
+      _unscoped -> {:ok, derived}
+    end
+  rescue
+    _error -> {:error, :route_identity_mismatch}
+  end
+
+  defp bind_route_generation(%Channel{} = channel, opts) do
+    case Keyword.get(opts, :route_generation) do
+      generation when is_integer(generation) and generation >= 0 ->
+        %{channel | route_generation: generation}
+
+      _other ->
+        channel
+    end
+  end
+
+  defp route_identity_matches?(%Channel{} = channel, opts) do
+    case Keyword.get(opts, :instance_id) do
+      expected when is_binary(expected) -> channel.instance_id == expected
+      _other -> true
     end
   end
 

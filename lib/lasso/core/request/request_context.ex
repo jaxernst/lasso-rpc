@@ -10,9 +10,20 @@ defmodule Lasso.RPC.RequestContext do
   - Result or error shapes
   """
 
-  alias Lasso.RPC.{Channel, ExecutionEnvelope, RequestOptions, Response}
+  alias Lasso.RPC.{BoundedIdentifier, Channel, ExecutionEnvelope, RequestOptions, Response}
 
-  @type channel_attempt :: {Channel.t(), :success | {:error, term()}}
+  @type channel_identity :: %{
+          provider_id: binary(),
+          instance_id: binary() | nil,
+          transport: :http | :ws,
+          route_generation: non_neg_integer()
+        }
+  @type channel_attempt :: %{
+          channel: channel_identity(),
+          outcome: :success | :error,
+          category: atom() | nil,
+          code: integer() | nil
+        }
 
   @type t :: %__MODULE__{
           # Request identification
@@ -37,7 +48,7 @@ defmodule Lasso.RPC.RequestContext do
           repeated_error_categories: %{atom() => non_neg_integer()},
 
           # Channel execution tracking (for observability without polluting return types)
-          executed_channel: Channel.t() | nil,
+          executed_channel: channel_identity() | nil,
           attempted_channels: [channel_attempt()],
 
           # Timing
@@ -70,6 +81,11 @@ defmodule Lasso.RPC.RequestContext do
           timeout_ms: timeout() | nil,
           execution_envelope: ExecutionEnvelope.t() | nil,
           opts: RequestOptions.t() | nil,
+          terminal_attempt_fact: struct() | nil,
+          terminal_attempt_projection: struct() | nil,
+          public_response_attempt: struct() | nil,
+          request_dispatch_certainty: :not_dispatched | :indeterminate | :dispatched,
+          terminal_reason: atom() | nil,
 
           # Set when declared parameter limits eliminate every candidate so the
           # safety retry dispatches instead of failing the request outright.
@@ -112,6 +128,11 @@ defmodule Lasso.RPC.RequestContext do
             timeout_ms: nil,
             execution_envelope: nil,
             opts: nil,
+            terminal_attempt_fact: nil,
+            terminal_attempt_projection: nil,
+            public_response_attempt: nil,
+            request_dispatch_certainty: :not_dispatched,
+            terminal_reason: nil,
             bypass_param_limits: false
 
   @doc """
@@ -122,7 +143,7 @@ defmodule Lasso.RPC.RequestContext do
   """
   @spec new(pos_integer(), String.t(), list(), keyword()) :: t()
   def new(chain_id, method, params, opts \\ []) do
-    request_id = Keyword.get(opts, :request_id) || generate_request_id()
+    request_id = bounded_request_id(Keyword.get(opts, :request_id))
 
     plug_start = Keyword.get(opts, :plug_start_time)
     start_time = plug_start || System.monotonic_time(:microsecond)
@@ -142,6 +163,11 @@ defmodule Lasso.RPC.RequestContext do
     }
   end
 
+  @doc false
+  @spec bound_request_id(t()) :: t()
+  def bound_request_id(%__MODULE__{} = ctx),
+    do: %{ctx | request_id: bounded_request_id(ctx.request_id)}
+
   @doc """
   Sets the execution parameters for pipeline processing.
 
@@ -153,6 +179,8 @@ defmodule Lasso.RPC.RequestContext do
   @spec set_execution_params(t(), map(), integer(), RequestOptions.t()) :: t()
   def set_execution_params(%__MODULE__{} = ctx, rpc_request, timeout_ms, %RequestOptions{} = opts)
       when is_map(rpc_request) and is_integer(timeout_ms) do
+    ctx = %{ctx | request_id: bounded_request_id(ctx.request_id)}
+
     envelope =
       ctx.execution_envelope ||
         ExecutionEnvelope.new(ctx.request_id, ctx.method, timeout_ms,
@@ -297,18 +325,16 @@ defmodule Lasso.RPC.RequestContext do
 
     error_map =
       case error do
-        %{code: code, message: message} = e ->
+        %{code: code} = e ->
           %{
             code: code,
-            message: truncate_string(message, 256),
-            data_present: Map.has_key?(e, :data) and not is_nil(Map.get(e, :data))
+            category: bounded_category(Map.get(e, :category))
           }
 
         _ ->
           %{
             code: -32_000,
-            message: truncate_string(inspect(error), 256),
-            data_present: false
+            category: :unknown
           }
       end
 
@@ -366,8 +392,11 @@ defmodule Lasso.RPC.RequestContext do
   def set_executed_channel(%__MODULE__{} = ctx, %Channel{} = channel) do
     %{
       ctx
-      | executed_channel: channel,
-        selected_provider: %{id: channel.provider_id, protocol: channel.transport}
+      | executed_channel: channel_identity(channel),
+        selected_provider: %{
+          id: BoundedIdentifier.encode(channel.provider_id),
+          protocol: channel.transport
+        }
     }
   end
 
@@ -377,7 +406,15 @@ defmodule Lasso.RPC.RequestContext do
   """
   @spec record_channel_attempt(t(), Channel.t(), term()) :: t()
   def record_channel_attempt(%__MODULE__{} = ctx, %Channel{} = channel, error) do
-    attempt = {channel, {:error, error}}
+    {category, code} = normalized_error(error)
+
+    attempt = %{
+      channel: channel_identity(channel),
+      outcome: :error,
+      category: category,
+      code: code
+    }
+
     %{ctx | attempted_channels: ctx.attempted_channels ++ [attempt]}
   end
 
@@ -387,11 +424,24 @@ defmodule Lasso.RPC.RequestContext do
   """
   @spec record_channel_success(t(), Channel.t()) :: t()
   def record_channel_success(%__MODULE__{} = ctx, %Channel{} = channel) do
-    attempt = {channel, :success}
+    attempt = %{
+      channel: channel_identity(channel),
+      outcome: :success,
+      category: nil,
+      code: nil
+    }
+
     %{ctx | attempted_channels: ctx.attempted_channels ++ [attempt]}
   end
 
   # Private helpers
+
+  defp bounded_request_id(nil), do: generate_request_id()
+
+  defp bounded_request_id(request_id) when is_binary(request_id),
+    do: BoundedIdentifier.encode(request_id)
+
+  defp bounded_request_id(_request_id), do: generate_request_id()
 
   defp generate_request_id do
     :crypto.strong_rand_bytes(16)
@@ -426,13 +476,21 @@ defmodule Lasso.RPC.RequestContext do
     {result_type, result_size}
   end
 
-  defp truncate_string(str, max_length) when is_binary(str) do
-    if String.length(str) > max_length do
-      String.slice(str, 0, max_length) <> "..."
-    else
-      str
-    end
+  defp channel_identity(channel) do
+    %{
+      provider_id: BoundedIdentifier.encode(channel.provider_id),
+      instance_id: BoundedIdentifier.encode_optional(channel.instance_id),
+      transport: channel.transport,
+      route_generation: channel.route_generation || 0
+    }
   end
 
-  defp truncate_string(other, _max_length), do: inspect(other)
+  defp normalized_error(%{category: category, code: code}) when is_integer(code),
+    do: {bounded_category(category), code}
+
+  defp normalized_error(error) when is_atom(error), do: {bounded_category(error), nil}
+  defp normalized_error(_error), do: {:unknown, nil}
+
+  defp bounded_category(category) when is_atom(category), do: category
+  defp bounded_category(_category), do: :unknown
 end

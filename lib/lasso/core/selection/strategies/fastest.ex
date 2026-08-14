@@ -18,8 +18,8 @@ defmodule Lasso.RPC.Strategies.Fastest do
   end
 
   @impl true
-  def rank_channels(channels, _method, ctx, _profile, chain_id) do
-    summaries = RoutingEvidence.batch_get_summaries(channels, chain_id, ctx.workload_key)
+  def rank_channels(channels, _method, ctx, profile, chain_id) do
+    summaries = RoutingEvidence.batch_get_summaries(profile, channels, chain_id, ctx.workload_key)
 
     {qualified, remaining} =
       Enum.split_with(channels, fn channel ->
@@ -31,6 +31,7 @@ defmodule Lasso.RPC.Strategies.Fastest do
     case qualified do
       [] ->
         RoutingEvidence.emit_availability_degradation(
+          profile,
           :fastest,
           chain_id,
           ctx.workload_key,

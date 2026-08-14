@@ -61,8 +61,12 @@ defmodule Lasso.Bench.RoutingKernelDiagnosticTest do
     assert structural.messages.sent_by_tag_raw["run_attempt"] == 3
     assert structural.messages.sent_by_tag_raw["attempt_task_result"] == 3
     assert structural.messages.sent_by_tag_raw["routing_kernel_dispatch"] == 3
-    assert structural.ets.reads in [9, 12]
-    assert structural.ets.writes == 6
+    assert structural.ets.reads in [15, 18]
+    assert structural.ets.writes == 3
+    assert structural.ets.other == 0
+    assert structural.ets.by_operation["insert_new/2"] == 3
+    assert structural.ets.by_operation["lookup_element/4"] == 3
+    assert structural.ets.by_operation["lookup/2"] in [12, 15]
     assert structural.ets.total == structural.ets.reads + structural.ets.writes
   end
 

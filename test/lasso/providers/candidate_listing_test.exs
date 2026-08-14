@@ -4,6 +4,7 @@ defmodule Lasso.Providers.CandidateListingTest do
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker.{Snapshot, Storage}
   alias Lasso.Providers.{Catalog, CandidateListing}
+  alias Lasso.RPC.{AttemptIdentity, AttemptProjection, AttemptTerminal}
 
   @profile "cl_test"
   @chain 99
@@ -73,6 +74,316 @@ defmodule Lasso.Providers.CandidateListingTest do
 
     test "returns empty list for unknown chain" do
       assert CandidateListing.list_candidates(@profile, 98, %{}) == []
+    end
+
+    test "desired configuration is fail-closed until its catalog generation publishes" do
+      active = Catalog.snapshot()
+
+      assert :ok =
+               ConfigStore.register_provider_runtime(@profile, @chain, %{
+                 id: "pending",
+                 name: "Pending",
+                 url: "https://pending.example.com",
+                 priority: 10
+               })
+
+      desired_generation = ConfigStore.route_generation()
+      assert desired_generation > active.generation
+      assert Catalog.snapshot() == active
+      assert CandidateListing.list_candidates(@profile, @chain, %{}) == []
+
+      assert :ok = Catalog.build_from_config()
+      assert Catalog.active_generation() == desired_generation
+
+      assert Enum.any?(
+               Catalog.get_profile_providers(@profile, @chain),
+               &(&1.provider_id == "pending")
+             )
+    end
+
+    test "catalog publication exposes no generation before all direct rows exist" do
+      active = Catalog.snapshot()
+
+      assert :ok =
+               ConfigStore.register_provider_runtime(@profile, @chain, %{
+                 id: "barrier",
+                 name: "Barrier",
+                 url: "https://barrier.example.com",
+                 priority: 11
+               })
+
+      desired_generation = ConfigStore.route_generation()
+      ref = make_ref()
+      Application.put_env(:lasso, :catalog_publication_barrier, {self(), ref})
+
+      on_exit(fn ->
+        Application.delete_env(:lasso, :catalog_publication_barrier)
+
+        for phase <- [:after_catalog_populate, :after_control_populate, :before_pointer_swap] do
+          send(Process.whereis(Catalog.Owner), {:catalog_publication_continue, ref, phase})
+        end
+      end)
+
+      task = Task.async(&Catalog.build_from_config/0)
+
+      assert_publication_phase(ref, :after_catalog_populate, desired_generation)
+      assert Catalog.snapshot() == active
+      assert CandidateListing.list_candidates(@profile, @chain, %{}) == []
+      continue_publication(ref, :after_catalog_populate)
+
+      assert_publication_phase(ref, :after_control_populate, desired_generation)
+      assert Catalog.snapshot() == active
+
+      [{_, scope}] =
+        :ets.lookup(:lasso_instance_state, {:routing_control_scope, @profile, @chain})
+
+      assert scope.generation == desired_generation
+      continue_publication(ref, :after_control_populate)
+
+      assert_publication_phase(ref, :before_pointer_swap, desired_generation)
+      assert Catalog.snapshot() == active
+      continue_publication(ref, :before_pointer_swap)
+
+      assert :ok = Task.await(task)
+      Application.delete_env(:lasso, :catalog_publication_barrier)
+      assert Catalog.active_generation() == desired_generation
+    end
+
+    test "generation change after catalog population retries without publishing partial control" do
+      active = Catalog.snapshot()
+      owner = Process.whereis(Catalog.Owner)
+      instance_id = Catalog.lookup_instance_id(@profile, @chain, "p1")
+
+      assert :ok =
+               ConfigStore.register_provider_runtime(@profile, @chain, %{
+                 id: "superseded-one",
+                 name: "Superseded One",
+                 url: "https://superseded-one.example.com",
+                 priority: 12
+               })
+
+      generation_one = ConfigStore.route_generation()
+      ref = make_ref()
+      Application.put_env(:lasso, :catalog_publication_barrier, {self(), ref})
+
+      on_exit(fn ->
+        Application.delete_env(:lasso, :catalog_publication_barrier)
+
+        for phase <- [:after_catalog_populate, :after_control_populate, :before_pointer_swap] do
+          send(Process.whereis(Catalog.Owner), {:catalog_publication_continue, ref, phase})
+        end
+      end)
+
+      task = Task.async(&Catalog.build_from_config/0)
+      assert_publication_phase(ref, :after_catalog_populate, generation_one)
+
+      assert :ok =
+               ConfigStore.register_provider_runtime(@profile, @chain, %{
+                 id: "superseding-two",
+                 name: "Superseding Two",
+                 url: "https://superseding-two.example.com",
+                 priority: 13
+               })
+
+      generation_two = ConfigStore.route_generation()
+      assert generation_two > generation_one
+
+      stale_fact =
+        AttemptTerminal.Response.new(
+          attempt_identity(instance_id, active.generation),
+          :success,
+          10
+        )
+
+      stale_event = AttemptProjection.new(stale_fact, "p1", "eth_call")
+      assert :stale = AttemptProjection.apply_control(stale_event)
+
+      [{_, tombstone}] =
+        :ets.lookup(:lasso_instance_state, {:routing_control_scope, @profile, @chain})
+
+      assert tombstone.generation == active.generation
+      assert tombstone.publication_loss_generation == generation_two
+
+      continue_publication(ref, :after_catalog_populate)
+      assert_publication_phase(ref, :after_catalog_populate, generation_two)
+
+      refute_receive {:catalog_publication_phase, ^owner, ^ref, :after_control_populate,
+                      ^generation_one},
+                     0
+
+      assert Process.whereis(Catalog.Owner) == owner
+      assert Process.alive?(owner)
+      assert Catalog.snapshot() == active
+
+      [{_, unchanged}] =
+        :ets.lookup(:lasso_instance_state, {:routing_control_scope, @profile, @chain})
+
+      assert unchanged.generation == active.generation
+      assert unchanged.publication_loss_generation == generation_two
+
+      continue_publication(ref, :after_catalog_populate)
+      assert_publication_phase(ref, :after_control_populate, generation_two)
+
+      scope = AttemptProjection.scope_state(@profile, @chain, generation_two)
+      assert scope.degraded?
+      assert scope.publication_loss_generation == generation_two
+      assert scope.stale_drops >= 1
+
+      continue_publication(ref, :after_control_populate)
+      assert_publication_phase(ref, :before_pointer_swap, generation_two)
+      continue_publication(ref, :before_pointer_swap)
+
+      assert :ok = Task.await(task)
+      Application.delete_env(:lasso, :catalog_publication_barrier)
+
+      assert Process.whereis(Catalog.Owner) == owner
+      assert Process.alive?(owner)
+      assert Catalog.active_generation() == generation_two
+    end
+
+    test "a loss tombstone survives a superseded prepared generation" do
+      active_generation = Catalog.active_generation()
+      instance_id = Catalog.lookup_instance_id(@profile, @chain, "p1")
+
+      assert :ok =
+               ConfigStore.register_provider_runtime(@profile, @chain, %{
+                 id: "generation-one",
+                 name: "Generation One",
+                 url: "https://generation-one.example.com",
+                 priority: 12
+               })
+
+      generation_one = ConfigStore.route_generation()
+      ref = make_ref()
+      Application.put_env(:lasso, :catalog_publication_barrier, {self(), ref})
+
+      on_exit(fn ->
+        Application.delete_env(:lasso, :catalog_publication_barrier)
+
+        for phase <- [:after_catalog_populate, :after_control_populate, :before_pointer_swap] do
+          send(Process.whereis(Catalog.Owner), {:catalog_publication_continue, ref, phase})
+        end
+      end)
+
+      task = Task.async(&Catalog.build_from_config/0)
+      assert_publication_phase(ref, :after_catalog_populate, generation_one)
+      continue_publication(ref, :after_catalog_populate)
+      assert_publication_phase(ref, :after_control_populate, generation_one)
+
+      stale_fact =
+        AttemptTerminal.Response.new(
+          attempt_identity(instance_id, active_generation),
+          :success,
+          10
+        )
+
+      stale_event = %{AttemptProjection.new(stale_fact, "p1", "eth_call") | emitted_at_us: 100}
+      assert :stale = AttemptProjection.apply_control(stale_event)
+
+      assert :ok =
+               ConfigStore.register_provider_runtime(@profile, @chain, %{
+                 id: "generation-two",
+                 name: "Generation Two",
+                 url: "https://generation-two.example.com",
+                 priority: 13
+               })
+
+      generation_two = ConfigStore.route_generation()
+      assert generation_two > generation_one
+      continue_publication(ref, :after_control_populate)
+
+      assert_publication_phase(ref, :after_catalog_populate, generation_two)
+      continue_publication(ref, :after_catalog_populate)
+      assert_publication_phase(ref, :after_control_populate, generation_two)
+
+      scope = AttemptProjection.scope_state(@profile, @chain, generation_two)
+      assert scope.degraded?
+      assert scope.publication_loss_generation == generation_one
+      assert scope.stale_drops >= 1
+
+      continue_publication(ref, :after_control_populate)
+      assert_publication_phase(ref, :before_pointer_swap, generation_two)
+      continue_publication(ref, :before_pointer_swap)
+
+      assert :ok = Task.await(task)
+      Application.delete_env(:lasso, :catalog_publication_barrier)
+
+      for stamp <- 101..132 do
+        fact =
+          AttemptTerminal.Response.new(
+            attempt_identity(instance_id, generation_two),
+            :success,
+            10
+          )
+
+        event = %{AttemptProjection.new(fact, "p1", "eth_call") | emitted_at_us: stamp}
+        assert :ok = AttemptProjection.apply_control(event)
+      end
+
+      recovered = AttemptProjection.scope_state(@profile, @chain, generation_two)
+      refute recovered.degraded?
+      assert recovered.publication_loss_generation == nil
+    end
+
+    test "a same-generation catalog rebuild preserves learned control" do
+      generation = Catalog.active_generation()
+      instance_id = Catalog.lookup_instance_id(@profile, @chain, "p1")
+
+      fact =
+        AttemptTerminal.Response.new(attempt_identity(instance_id, generation), :success, 10)
+
+      event = %{AttemptProjection.new(fact, "p1", "eth_call") | emitted_at_us: 100}
+      assert :ok = AttemptProjection.apply_control(event)
+
+      key = {:routing_control, @profile, @chain, instance_id, :http, "default"}
+      [{^key, before_row}] = :ets.lookup(:lasso_instance_state, key)
+      assert before_row.revision == 1
+
+      assert :ok = Catalog.build_from_config()
+
+      [{^key, after_row}] = :ets.lookup(:lasso_instance_state, key)
+      assert after_row == before_row
+      assert Catalog.active_generation() == generation
+    end
+
+    test "a generation change between control precheck and CAS is stale" do
+      generation = Catalog.active_generation()
+      instance_id = Catalog.lookup_instance_id(@profile, @chain, "p1")
+
+      fact = AttemptTerminal.Response.new(attempt_identity(instance_id, generation), :success, 10)
+      event = %{AttemptProjection.new(fact, "p1", "eth_call") | emitted_at_us: 100}
+      release_ref = make_ref()
+      parent = self()
+
+      task =
+        Task.async(fn ->
+          AttemptProjection.apply_control_after_barrier(event, parent, release_ref)
+        end)
+
+      assert_receive {:attempt_projection_before_cas, producer, ^release_ref}
+      assert producer == task.pid
+
+      assert :ok =
+               ConfigStore.register_provider_runtime(@profile, @chain, %{
+                 id: "cas-generation",
+                 name: "CAS Generation",
+                 url: "https://cas-generation.example.com",
+                 priority: 14
+               })
+
+      next_generation = ConfigStore.route_generation()
+      assert next_generation > generation
+      send(task.pid, release_ref)
+      assert :stale = Task.await(task)
+
+      assert :ok = Catalog.build_from_config()
+      scope = AttemptProjection.scope_state(@profile, @chain, next_generation)
+      assert scope.degraded?
+      assert scope.stale_drops >= 1
+
+      key = {:routing_control, @profile, @chain, instance_id, :http, "default"}
+      [{^key, row}] = :ets.lookup(:lasso_instance_state, key)
+      assert row.comparable_attempts == 0
     end
   end
 
@@ -285,6 +596,44 @@ defmodule Lasso.Providers.CandidateListingTest do
 
       assert c.availability == :down
     end
+
+    test "learned HTTP failure does not poison WebSocket availability" do
+      instance_id = Catalog.lookup_instance_id(@profile, @chain, "p2")
+      generation = ConfigStore.route_generation()
+
+      identity =
+        AttemptIdentity.new(
+          request_id: "transport-isolation",
+          attempt_id: "transport-isolation-http",
+          profile: @profile,
+          chain_id: @chain,
+          upstream_instance_id: instance_id,
+          transport: :http,
+          route_generation: generation,
+          circuit_scope: :broad,
+          circuit_epoch: 1,
+          execution_safety: :replay_safe,
+          routing_intent: "default",
+          workload_key: "default",
+          request_budget_ms: 100,
+          candidate_admission_count: 1,
+          dispatch_count: 1
+        )
+
+      for stamp <- 1..3 do
+        fact = AttemptTerminal.InvalidResponse.new(identity, :invalid_json, 10)
+        event = %{AttemptProjection.new(fact, "p2", "eth_call") | emitted_at_us: stamp}
+        assert :ok = AttemptProjection.apply_control(event)
+      end
+
+      [candidate] =
+        CandidateListing.list_candidates(@profile, @chain, %{protocol: :http})
+        |> Enum.filter(&(&1.id == "p2"))
+
+      assert candidate.availability == :up
+      assert candidate.transport_availability.http == :down
+      assert candidate.transport_availability.ws == :up
+    end
   end
 
   # Helpers
@@ -350,5 +699,34 @@ defmodule Lasso.Providers.CandidateListingTest do
     end)
   rescue
     ArgumentError -> :ok
+  end
+
+  defp attempt_identity(instance_id, generation) do
+    AttemptIdentity.new(
+      request_id: "catalog-generation-test",
+      attempt_id: "catalog-attempt-#{generation}",
+      profile: @profile,
+      chain_id: @chain,
+      upstream_instance_id: instance_id,
+      transport: :http,
+      route_generation: generation,
+      circuit_scope: :broad,
+      circuit_epoch: 1,
+      execution_safety: :replay_safe,
+      routing_intent: "default",
+      workload_key: "default",
+      request_budget_ms: 100,
+      candidate_admission_count: 1,
+      dispatch_count: 1
+    )
+  end
+
+  defp assert_publication_phase(ref, phase, generation) do
+    assert_receive {:catalog_publication_phase, owner, ^ref, ^phase, ^generation}, 1_000
+    assert owner == Process.whereis(Catalog.Owner)
+  end
+
+  defp continue_publication(ref, phase) do
+    send(Process.whereis(Catalog.Owner), {:catalog_publication_continue, ref, phase})
   end
 end

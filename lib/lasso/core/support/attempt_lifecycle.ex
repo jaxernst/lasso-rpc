@@ -261,12 +261,25 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   @spec authorize_dispatch(dispatch_context() | nil) :: :ok | {:error, :cancelled}
   def authorize_dispatch(nil), do: :ok
 
+  def authorize_dispatch(%AttemptProtocol.Context{} = context) do
+    if AttemptProtocol.authorized?(context, context.deadline_us),
+      do: :ok,
+      else: {:error, :cancelled}
+  end
+
   def authorize_dispatch({lifecycle_pid, _dispatch_ref}),
     do: if(Process.alive?(lifecycle_pid), do: :ok, else: {:error, :cancelled})
 
   @doc false
   @spec confirm_dispatched(dispatch_context() | nil) :: :ok | {:error, :cancelled}
   def confirm_dispatched(nil), do: :ok
+
+  def confirm_dispatched(%AttemptProtocol.Context{} = context) do
+    case AttemptProtocol.send_started(context) do
+      :ok -> AttemptProtocol.send_confirmed(context)
+      {:error, _reason} -> {:error, :cancelled}
+    end
+  end
 
   def confirm_dispatched({lifecycle_pid, _dispatch_ref} = context) do
     if Process.alive?(lifecycle_pid) do
@@ -282,6 +295,14 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   @doc false
   @spec abort_dispatch(dispatch_context() | nil) :: :ok | {:error, :cancelled}
   def abort_dispatch(nil), do: :ok
+
+  def abort_dispatch(%AttemptProtocol.Context{} = context) do
+    if AttemptProtocol.authorized?(context, context.deadline_us) do
+      AttemptProtocol.predispatch_failure(context, :local)
+    else
+      {:error, :cancelled}
+    end
+  end
 
   def abort_dispatch({lifecycle_pid, _dispatch_ref} = context) do
     if Process.alive?(lifecycle_pid) do

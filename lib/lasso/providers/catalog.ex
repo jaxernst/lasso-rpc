@@ -37,6 +37,8 @@ defmodule Lasso.Providers.Catalog do
 
   @persistent_term_key :lasso_catalog_active
 
+  @type snapshot :: %{table: :ets.tid(), generation: non_neg_integer()}
+
   @doc """
   Atomically rebuilds the catalog from ConfigStore.
 
@@ -106,6 +108,15 @@ defmodule Lasso.Providers.Catalog do
     end
   end
 
+  @doc false
+  @spec get_instance(snapshot(), String.t()) :: {:ok, map()} | {:error, :not_found}
+  def get_instance(%{table: table}, instance_id) do
+    case safe_lookup(table, {:instance, instance_id}) do
+      [{_, config}] -> {:ok, config}
+      _ -> {:error, :not_found}
+    end
+  end
+
   @doc """
   Gets the list of profiles that reference an instance.
   """
@@ -123,6 +134,15 @@ defmodule Lasso.Providers.Catalog do
   @spec get_profile_providers(String.t(), pos_integer()) :: [map()]
   def get_profile_providers(profile, chain_id) do
     case safe_lookup({:profile_providers, profile, chain_id}) do
+      [{_, providers}] -> providers
+      _ -> []
+    end
+  end
+
+  @doc false
+  @spec get_profile_providers(snapshot(), String.t(), pos_integer()) :: [map()]
+  def get_profile_providers(%{table: table}, profile, chain_id) do
+    case safe_lookup(table, {:profile_providers, profile, chain_id}) do
       [{_, providers}] -> providers
       _ -> []
     end
@@ -182,6 +202,32 @@ defmodule Lasso.Providers.Catalog do
     list_all_instance_ids() |> length()
   end
 
+  @doc false
+  @spec routing_control_routes() :: [map()]
+  def routing_control_routes do
+    case table() do
+      nil -> []
+      table -> routing_control_routes(table)
+    end
+  end
+
+  @doc false
+  @spec routing_control_routes(:ets.tid()) :: [map()]
+  def routing_control_routes(table) do
+    for {{:profile_providers, profile, chain_id}, providers} <-
+          :ets.match_object(table, {{:profile_providers, :_, :_}, :_}),
+        provider <- providers,
+        {:ok, instance} <- [get_instance(%{table: table}, provider.instance_id)],
+        transport <- available_transports(instance) do
+      %{
+        profile: profile,
+        chain_id: chain_id,
+        instance_id: provider.instance_id,
+        transport: transport
+      }
+    end
+  end
+
   @doc """
   Returns the active ETS table reference.
 
@@ -189,7 +235,34 @@ defmodule Lasso.Providers.Catalog do
   """
   @spec table() :: :ets.tid() | nil
   def table do
-    :persistent_term.get(@persistent_term_key, nil)
+    case snapshot() do
+      %{table: table} -> table
+      nil -> nil
+    end
+  end
+
+  @doc false
+  @spec snapshot() :: snapshot() | nil
+  def snapshot do
+    case :persistent_term.get(@persistent_term_key, nil) do
+      {table, generation} when is_integer(generation) and generation >= 0 ->
+        %{table: table, generation: generation}
+
+      table when not is_nil(table) ->
+        %{table: table, generation: 0}
+
+      nil ->
+        nil
+    end
+  end
+
+  @doc false
+  @spec active_generation() :: non_neg_integer() | nil
+  def active_generation do
+    case snapshot() do
+      %{generation: generation} -> generation
+      nil -> nil
+    end
   end
 
   # Private
@@ -199,6 +272,12 @@ defmodule Lasso.Providers.Catalog do
       nil -> []
       t -> :ets.lookup(t, key)
     end
+  rescue
+    ArgumentError -> []
+  end
+
+  defp safe_lookup(table, key) do
+    :ets.lookup(table, key)
   rescue
     ArgumentError -> []
   end
@@ -248,20 +327,33 @@ defmodule Lasso.Providers.Catalog do
   end
 
   defp insert_instance_config(ets_table, instance_id, profile, chain_id, chain_config, provider) do
-    config = %{
-      chain_id: chain_id,
-      block_time_ms: chain_config.block_time_ms,
-      url: provider.url,
-      ws_url: provider.ws_url,
-      headers: ProviderHeaders.build(provider),
-      mock?: provider.__mock__ == true,
-      canonical_config: %{
-        id: provider.id,
-        name: provider.name,
-        url: provider.url,
-        ws_url: provider.ws_url
-      }
-    }
+    identity_config =
+      Map.take(provider, [
+        :url,
+        :ws_url,
+        :api_key,
+        :credentials,
+        :headers,
+        :auth_headers,
+        :authorization
+      ])
+
+    config =
+      provider
+      |> Map.from_struct()
+      |> Map.merge(%{
+        chain_id: chain_id,
+        block_time_ms: chain_config.block_time_ms,
+        headers: ProviderHeaders.build(provider),
+        mock?: provider.__mock__ == true,
+        identity_config: identity_config,
+        canonical_config: %{
+          id: provider.id,
+          name: provider.name,
+          url: provider.url,
+          ws_url: provider.ws_url
+        }
+      })
 
     case :ets.lookup(ets_table, {:instance, instance_id}) do
       [] ->
@@ -283,6 +375,17 @@ defmodule Lasso.Providers.Catalog do
   end
 
   defp normalize_endpoint_url(url), do: InstanceId.optional_normalize_url(url)
+
+  defp available_transports(instance) do
+    []
+    |> maybe_add_transport(:http, Map.get(instance, :url))
+    |> maybe_add_transport(:ws, Map.get(instance, :ws_url))
+  end
+
+  defp maybe_add_transport(transports, transport, url) when is_binary(url),
+    do: [transport | transports]
+
+  defp maybe_add_transport(transports, _transport, _url), do: transports
 
   defp emit_identity_collision(instance_id, profile, chain_id, provider, existing, new) do
     Logger.error("Provider instance identity collision; keeping existing catalog entry",
