@@ -149,11 +149,14 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
     DispatchTracker.clear_attempt(context)
   end
 
-  test "restart keeps a session with no observations conservatively unproven" do
+  test "restart keeps unobserved certainty, reclaims handlers, and returns ready" do
     attempt_ref = make_ref()
     context = {self(), attempt_ref}
     {:ok, old_token} = DispatchTracker.ready_token()
     DispatchTracker.begin_attempt(context, old_token)
+
+    confirmed_owner = start_confirmed_session(old_token)
+    assert_receive {:confirmed_session_ready, ^confirmed_owner}, 1_000
 
     old_pid = Process.whereis(DispatchTracker)
     monitor = Process.monitor(old_pid)
@@ -164,58 +167,14 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
     assert {:ok, new_token} = DispatchTracker.ready_token()
     assert new_token != old_token
     refute DispatchTracker.session_healthy?(old_token)
-    assert DispatchTracker.attempt_state(context) == :not_started
-    DispatchTracker.clear_attempt(context)
-  end
-
-  test "confirmed attempt certainty survives tracker restart" do
-    attempt_ref = make_ref()
-    context = {self(), attempt_ref}
-    {:ok, old_token} = DispatchTracker.ready_token()
-
-    request =
-      Finch.build(:post, "http://localhost", [], "{}")
-      |> Finch.Request.put_private(:lasso_attempt, context)
-
-    DispatchTracker.begin_attempt(context, old_token)
-    :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
-
-    :telemetry.execute([:finch, :send, :stop], %{duration: 1}, %{request: request})
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}
-    assert DispatchTracker.attempt_state(context) == :confirmed
-
-    old_pid = Process.whereis(DispatchTracker)
-    monitor = Process.monitor(old_pid)
-    Process.exit(old_pid, :kill)
-    assert_receive {:DOWN, ^monitor, :process, ^old_pid, :killed}
-
-    _new_pid = await_restarted_tracker(old_pid)
-    assert {:ok, new_token} = DispatchTracker.ready_token()
-    assert new_token != old_token
-    refute DispatchTracker.session_healthy?(old_token)
-    assert DispatchTracker.attempt_state(context) == :confirmed
-
-    :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
-    assert DispatchTracker.attempt_state(context) == :confirmed
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
-    DispatchTracker.clear_attempt(context)
-  end
-
-  test "tracker crash reclaims its stale handler and restarts ready" do
-    old_pid = Process.whereis(DispatchTracker)
-    {:ok, old_token} = DispatchTracker.ready_token()
-    monitor = Process.monitor(old_pid)
-
-    Process.exit(old_pid, :kill)
-    assert_receive {:DOWN, ^monitor, :process, ^old_pid, :killed}
-
-    new_pid = await_restarted_tracker(old_pid)
-    assert is_pid(new_pid)
-    assert new_pid != old_pid
-    assert {:ok, new_token} = DispatchTracker.ready_token()
-    assert new_token != old_token
     assert DispatchTracker.session_healthy?(new_token)
+    assert DispatchTracker.attempt_state(context) == :not_started
+
+    send(confirmed_owner, {:read_state, self()})
+    assert_receive {:confirmed_session_state, ^confirmed_owner, :confirmed}, 1_000
+
+    send(confirmed_owner, :stop)
+    DispatchTracker.clear_attempt(context)
   end
 
   defp await_restarted_tracker(old_pid, attempts \\ 100)
@@ -225,13 +184,64 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
   defp await_restarted_tracker(old_pid, attempts) do
     case Process.whereis(DispatchTracker) do
       pid when is_pid(pid) and pid != old_pid ->
-        pid
+        case DispatchTracker.ready_token() do
+          {:ok, token} ->
+            if DispatchTracker.session_healthy?(token) do
+              pid
+            else
+              wait_for_restarted_tracker(old_pid, attempts)
+            end
+
+          {:error, :unavailable} ->
+            wait_for_restarted_tracker(old_pid, attempts)
+        end
 
       _ ->
-        receive do
-        after
-          10 -> await_restarted_tracker(old_pid, attempts - 1)
-        end
+        wait_for_restarted_tracker(old_pid, attempts)
+    end
+  end
+
+  defp wait_for_restarted_tracker(old_pid, attempts) do
+    receive do
+    after
+      10 -> await_restarted_tracker(old_pid, attempts - 1)
+    end
+  end
+
+  defp start_confirmed_session(token) do
+    parent = self()
+
+    spawn_link(fn ->
+      attempt_ref = make_ref()
+      context = {self(), attempt_ref}
+
+      request =
+        Finch.build(:post, "http://localhost", [], "{}")
+        |> Finch.Request.put_private(:lasso_attempt, context)
+
+      DispatchTracker.begin_attempt(context, token)
+      :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
+      receive_observation(attempt_ref, :send_started)
+      :telemetry.execute([:finch, :send, :stop], %{duration: 1}, %{request: request})
+      receive_observation(attempt_ref, :send_confirmed)
+      send(parent, {:confirmed_session_ready, self()})
+
+      receive do
+        {:read_state, caller} ->
+          send(caller, {:confirmed_session_state, self(), DispatchTracker.attempt_state(context)})
+
+          receive do
+            :stop -> DispatchTracker.clear_attempt(context)
+          end
+      end
+    end)
+  end
+
+  defp receive_observation(attempt_ref, kind) do
+    receive do
+      {:transport_observation, ^attempt_ref, %{kind: ^kind}} -> :ok
+    after
+      1_000 -> exit({:missing_transport_observation, kind})
     end
   end
 end

@@ -24,7 +24,7 @@ defmodule Lasso.Core.Transport.AttemptProtocolTest do
                     }}
   end
 
-  test "not-dispatched transport failure remains authoritative" do
+  test "proven not-dispatched transport failure becomes a predispatch fact" do
     attempt_ref = make_ref()
     context = {self(), attempt_ref}
 
@@ -38,10 +38,10 @@ defmodule Lasso.Core.Transport.AttemptProtocolTest do
 
     assert_receive {:transport_observation, ^attempt_ref,
                     %{
-                      kind: :transport_failure,
+                      kind: :predispatch_failure,
                       event_us: 42,
-                      certainty: :not_dispatched,
-                      reason: :connection
+                      reason: :not_connected,
+                      elapsed_us: 0
                     }}
   end
 
@@ -58,8 +58,9 @@ defmodule Lasso.Core.Transport.AttemptProtocolTest do
   end
 
   test "send start rejects a dead lifecycle owner" do
-    lifecycle_pid = spawn(fn -> :ok end)
+    lifecycle_pid = spawn(fn -> receive do: (:stop -> :ok) end)
     monitor = Process.monitor(lifecycle_pid)
+    send(lifecycle_pid, :stop)
     assert_receive {:DOWN, ^monitor, :process, ^lifecycle_pid, :normal}
 
     assert {:error, :owner_down} =

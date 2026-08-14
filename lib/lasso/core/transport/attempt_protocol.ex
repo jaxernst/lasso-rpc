@@ -50,6 +50,19 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
   end
 
   @spec terminal_at(context() | nil, atom(), map(), integer()) :: :ok
+  def terminal_at(
+        context,
+        :transport_failure,
+        %{certainty: :not_dispatched, reason: reason} = fields,
+        event_us
+      )
+      when is_integer(event_us) do
+    observe_at(context, :predispatch_failure, event_us, %{
+      reason: transport_predispatch_reason(reason),
+      elapsed_us: Map.get(fields, :elapsed_us, 0)
+    })
+  end
+
   def terminal_at(context, kind, fields, event_us)
       when kind in @terminal_kinds and is_map(fields) and is_integer(event_us) do
     observe_at(context, kind, event_us, normalize_terminal(kind, fields))
@@ -164,6 +177,23 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
 
   defp predispatch_reason(:stale_connection), do: :not_connected
   defp predispatch_reason(_reason), do: :local
+
+  defp transport_predispatch_reason(reason)
+       when reason in [
+              :network_error,
+              :connection_error,
+              :not_connected,
+              :closed,
+              :tls,
+              :dns
+            ],
+       do: :not_connected
+
+  defp transport_predispatch_reason(reason)
+       when reason in [:local_capacity, :pool_unavailable],
+       do: :pool_unavailable
+
+  defp transport_predispatch_reason(reason), do: predispatch_reason(reason)
 
   defp transport_reason(reason) when reason in [:timeout, :closed, :tls, :dns, :protocol],
     do: reason

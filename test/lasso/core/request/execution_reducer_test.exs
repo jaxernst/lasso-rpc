@@ -99,6 +99,31 @@ defmodule Lasso.RPC.ExecutionReducerTest do
     assert Enum.any?(persisted.protocol_violations, &(&1.reason == :observation_id_reused))
   end
 
+  test "protocol-normalized no-send transport failure constructs a predispatch terminal" do
+    attempt_ref = make_ref()
+    context = {self(), attempt_ref}
+
+    assert :ok =
+             Lasso.Core.Transport.AttemptProtocol.terminal_at(
+               context,
+               :transport_failure,
+               %{reason: :network_error, certainty: :not_dispatched, elapsed_us: 7},
+               20
+             )
+
+    assert_receive {:transport_observation, ^attempt_ref, observation}
+
+    reduced = ExecutionReducer.observe(state(), observation)
+
+    assert reduced.terminal == :predispatch_failure
+    assert reduced.dispatch_certainty == :not_dispatched
+
+    assert %Lasso.RPC.AttemptTerminal.PredispatchFailure{
+             reason: :not_connected,
+             elapsed_us: 7
+           } = ExecutionReducer.terminal_fact(reduced)
+  end
+
   test "hostile observation payloads are never retained" do
     secret = String.duplicate("credential", 1_000)
 
