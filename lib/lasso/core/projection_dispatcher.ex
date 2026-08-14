@@ -51,6 +51,18 @@ defmodule Lasso.Core.ProjectionDispatcher do
     end
   end
 
+  @doc "Reserves bounded capacity before encoding an optional payload."
+  @spec enqueue_lazy(atom(), sink_class(), ProjectionLane.scope(), (-> {:ok, binary()}
+                                                                       | {:error, term()})) ::
+          ProjectionLane.enqueue_result()
+  def enqueue_lazy(dispatcher, sink_class, scope, encoder)
+      when is_atom(dispatcher) and is_function(encoder, 0) do
+    case lookup_lane(dispatcher, sink_class) do
+      {:ok, metadata} -> ProjectionLane.enqueue_lazy(metadata, scope, encoder)
+      {:error, reason} -> {:drop, reason, :untracked}
+    end
+  end
+
   @doc "Encodes and enqueues a tagged canonical execution fact."
   @spec enqueue_fact(atom(), sink_class(), ProjectionLane.scope(), struct()) ::
           ProjectionLane.enqueue_result()

@@ -99,6 +99,29 @@ defmodule Lasso.Core.ProjectionLane do
     ArgumentError -> {:drop, :unavailable, :untracked}
   end
 
+  @doc "Reserves a fixed slot before invoking a bounded payload encoder."
+  @spec enqueue_lazy(Metadata.t(), scope(), (-> {:ok, binary()} | {:error, term()})) ::
+          enqueue_result()
+  def enqueue_lazy(%Metadata{coalesce: :none} = metadata, scope, encoder)
+      when is_function(encoder, 0) do
+    with {:ok, normalized_scope} <- normalize_scope(scope),
+         {:ok, runtime} <- runtime_for_scope(metadata, normalized_scope) do
+      reserve_and_encode(metadata, runtime, normalized_scope, encoder)
+    else
+      {:error, :invalid_scope} -> untracked_drop(metadata, :invalid_scope)
+      {:error, :unavailable} -> untracked_drop(metadata, :unavailable)
+    end
+  rescue
+    ArgumentError -> {:drop, :unavailable, :untracked}
+  end
+
+  def enqueue_lazy(%Metadata{} = metadata, scope, encoder) when is_function(encoder, 0) do
+    case encode_lazy(encoder) do
+      {:ok, payload} -> enqueue(metadata, scope, payload)
+      {:error, _reason} -> untracked_drop(metadata, :invalid_payload)
+    end
+  end
+
   @doc "Encodes a canonical tagged execution fact before bounded enqueue."
   @spec enqueue_fact(Metadata.t(), scope(), struct()) :: enqueue_result()
   def enqueue_fact(%Metadata{} = metadata, scope, fact) do
@@ -308,6 +331,95 @@ defmodule Lasso.Core.ProjectionLane do
     end
   end
 
+  defp reserve_and_encode(metadata, runtime, scope, encoder) do
+    sequence = System.unique_integer([:positive, :monotonic])
+    first_offset = rem(sequence, metadata.scope_capacity)
+    token = token(metadata, runtime, first_offset, sequence)
+    reserved = row(:preparing, token, scope, metadata.now.(), <<>>)
+
+    case reserve_with_fixed_probe(metadata, runtime, reserved, first_offset) do
+      {:ok, reserved, slot_operations} ->
+        token = elem(reserved, 2)
+        metadata.test_hook.({:reserved, token})
+        finalize_reserved(metadata, runtime, reserved, slot_operations, encoder)
+
+      :full ->
+        degradation = degrade(metadata, runtime, runtime.bucket, :bucket_contended)
+        {:drop, :bucket_contended, degradation}
+    end
+  end
+
+  defp reserve_with_fixed_probe(metadata, runtime, row, first_offset) do
+    if :ets.insert_new(runtime.table, row) do
+      {:ok, row, 1}
+    else
+      reserve_second(metadata, runtime, row, first_offset)
+    end
+  end
+
+  defp reserve_second(%Metadata{scope_capacity: 1}, _runtime, _row, _first_offset), do: :full
+
+  defp reserve_second(metadata, runtime, row, first_offset) do
+    second_offset = rem(first_offset + 1, metadata.scope_capacity)
+    token = elem(row, 2)
+    second_token = %{token | slot: slot(token.bucket, second_offset, metadata.scope_capacity)}
+    second_row = put_elem(row, 2, second_token) |> put_elem(0, second_token.slot)
+
+    if :ets.insert_new(runtime.table, second_row),
+      do: {:ok, second_row, 2},
+      else: :full
+  end
+
+  defp finalize_reserved(metadata, runtime, reserved, slot_operations, encoder) do
+    case encode_lazy(encoder) do
+      {:ok, payload} ->
+        if validate_payload(metadata, payload) == :ok do
+          publish_reserved(metadata, runtime, reserved, payload, slot_operations)
+        else
+          delete_exact(runtime.table, reserved)
+          untracked_drop(metadata, :invalid_payload)
+        end
+
+      {:error, _reason} ->
+        delete_exact(runtime.table, reserved)
+        untracked_drop(metadata, :invalid_payload)
+    end
+  end
+
+  defp publish_reserved(metadata, runtime, reserved, payload, slot_operations) do
+    queued =
+      row(
+        :queued,
+        elem(reserved, 2),
+        elem(reserved, 3),
+        elem(reserved, 4),
+        payload
+      )
+
+    if replace_exact(runtime.table, reserved, queued) do
+      token = elem(queued, 2)
+      metadata.test_hook.({:before_lazy_ready, token})
+      :ets.insert(runtime.table, indexed_row(queued))
+      metadata.test_hook.({:published, token})
+      metadata.test_hook.({:enqueue_ops, token, 3 + slot_operations})
+      schedule_bucket(metadata, runtime, token.bucket)
+      {:ok, token}
+    else
+      {:drop, :expired, :untracked}
+    end
+  end
+
+  defp encode_lazy(encoder) do
+    case encoder.() do
+      {:ok, payload} when is_binary(payload) -> {:ok, payload}
+      _other -> {:error, :invalid_payload}
+    end
+  rescue
+    _exception -> {:error, :invalid_payload}
+  catch
+    _kind, _reason -> {:error, :invalid_payload}
+  end
+
   defp publish_new(metadata, runtime, row, first_offset) do
     case insert_with_fixed_probe(metadata, runtime, row, first_offset) do
       {:ok, token, slot_operations} ->
@@ -491,11 +603,13 @@ defmodule Lasso.Core.ProjectionLane do
 
       :audit ->
         state.hook.({:audit, state.shard, state.generation})
+        repair_worker_rows(state)
         schedule_all_worker(state)
         schedule_audit(state.audit_interval_ms)
         worker_loop(state)
 
       :audit_now ->
+        repair_worker_rows(state)
         schedule_all_worker(state)
         worker_loop(state)
 
@@ -628,6 +742,26 @@ defmodule Lasso.Core.ProjectionLane do
     Enum.each(0..(state.buckets_per_shard - 1), fn bucket ->
       if bucket_has_queued?(state, bucket),
         do: repair_bucket_wake(state, bucket)
+    end)
+  end
+
+  defp repair_worker_rows(state) do
+    max_slots = state.buckets_per_shard * state.scope_capacity
+    now = state.now.()
+
+    Enum.each(0..(max_slots - 1), fn slot ->
+      case lookup_slot(state.table, slot) do
+        {:ok, row} when elem(row, 1) == :preparing ->
+          if now - elem(row, 4) >= state.max_age_ms and delete_exact(state.table, row) do
+            record_worker(state, elem(row, 2).bucket, :expired)
+          end
+
+        {:ok, row} when elem(row, 1) == :queued ->
+          :ets.insert_new(state.table, indexed_row(row))
+
+        _other ->
+          :ok
+      end
     end)
   end
 

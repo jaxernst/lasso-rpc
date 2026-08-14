@@ -62,14 +62,12 @@ defmodule Lasso.RPC.RequestProjection do
 
   @spec enqueue(t(), atom()) :: term()
   def enqueue(%__MODULE__{} = event, dispatcher \\ @dispatcher) when is_atom(dispatcher) do
-    with {:ok, payload} <- encode(event) do
-      ProjectionDispatcher.enqueue(
-        dispatcher,
-        :diagnostics,
-        {Map.fetch!(event.fact, :profile), Map.fetch!(event.fact, :chain_id)},
-        payload
-      )
-    end
+    ProjectionDispatcher.enqueue_lazy(
+      dispatcher,
+      :diagnostics,
+      {Map.fetch!(event.fact, :profile), Map.fetch!(event.fact, :chain_id)},
+      fn -> encode(event) end
+    )
   end
 
   @spec encode(t()) :: {:ok, binary()} | {:error, atom()}

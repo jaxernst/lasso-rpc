@@ -54,6 +54,109 @@ defmodule Lasso.Core.ProjectionLaneTest do
     resume(worker)
   end
 
+  test "lazy enqueue does not encode when its fixed scope slots are full" do
+    parent = self()
+    {lane, metadata} = start_lane(capacity: 1, scope_capacity: 1)
+    worker = worker(lane)
+    suspend(worker)
+
+    assert {:ok, token} = ProjectionLane.enqueue(metadata, @scope_a, "occupied")
+
+    assert {:drop, :bucket_contended, %ProjectionLane.Degradation{}} =
+             ProjectionLane.enqueue_lazy(metadata, @scope_a, fn ->
+               send(parent, :encoded)
+               {:ok, "unreachable"}
+             end)
+
+    refute_received :encoded
+    assert :cancelled = ProjectionLane.cancel(metadata, token)
+    resume(worker)
+  end
+
+  test "lazy encoder failure releases its reservation" do
+    {lane, metadata} = start_lane(capacity: 1, scope_capacity: 1)
+    worker = worker(lane)
+    suspend(worker)
+
+    assert {:drop, :invalid_payload, :untracked} =
+             ProjectionLane.enqueue_lazy(metadata, @scope_a, fn ->
+               raise "cannot encode"
+             end)
+
+    assert %{retained_items: 0, queued_items: 0, bytes: 0} = ProjectionLane.stats(lane)
+    assert {:ok, token} = ProjectionLane.enqueue(metadata, @scope_a, "replacement")
+    assert :cancelled = ProjectionLane.cancel(metadata, token)
+    resume(worker)
+  end
+
+  test "lazy enqueue publishes the encoded payload and repairs a lost ready entry" do
+    parent = self()
+
+    hook = fn
+      {:before_lazy_ready, token} ->
+        send(parent, {:before_lazy_ready, self(), token})
+        receive do: (:never -> :ok)
+
+      event ->
+        send(parent, event)
+    end
+
+    {lane, metadata} =
+      start_lane(
+        capacity: 1,
+        scope_capacity: 1,
+        test_hook: hook,
+        sink: fn _scope, payload -> send(parent, {:delivered, payload}) end
+      )
+
+    producer =
+      spawn(fn -> ProjectionLane.enqueue_lazy(metadata, @scope_a, fn -> {:ok, "encoded"} end) end)
+
+    assert_receive {:before_lazy_ready, ^producer, token}
+    Process.exit(producer, :kill)
+    assert ProjectionLane.stats(lane).queued_items == 1
+
+    assert :ok = ProjectionLane.audit(lane)
+    assert_receive {:delivered, "encoded"}
+    assert_receive {:completed, ^token, :ok}
+  end
+
+  test "audit retires a lazy reservation abandoned by its producer" do
+    parent = self()
+    {:ok, clock} = Agent.start_link(fn -> 10 end)
+
+    hook = fn
+      {:reserved, token} ->
+        send(parent, {:reserved, self(), token})
+        receive do: (:never -> :ok)
+
+      event ->
+        send(parent, event)
+    end
+
+    {lane, metadata} =
+      start_lane(
+        capacity: 1,
+        scope_capacity: 1,
+        max_age_ms: 5,
+        now: fn -> Agent.get(clock, & &1) end,
+        test_hook: hook
+      )
+
+    producer =
+      spawn(fn -> ProjectionLane.enqueue_lazy(metadata, @scope_a, fn -> {:ok, "encoded"} end) end)
+
+    assert_receive {:reserved, ^producer, _token}
+    Process.exit(producer, :kill)
+    assert ProjectionLane.stats(lane).retained_items == 1
+    Agent.update(clock, fn _ -> 15 end)
+
+    assert :ok = ProjectionLane.audit(lane)
+    barrier(worker(lane))
+    assert ProjectionLane.stats(lane).retained_items == 0
+    assert ProjectionLane.stats(lane).counters.expired == 1
+  end
+
   test "a cancelled row is never reinserted by a stale worker claim" do
     parent = self()
 
