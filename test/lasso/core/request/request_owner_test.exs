@@ -2,7 +2,6 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
   use ExUnit.Case, async: true
 
   alias Lasso.Core.Request.{ExecutionScope, RequestOwner}
-  alias Lasso.Core.Support.AttemptLifecycle
   alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.RPC.AttemptIdentity
   alias Lasso.RPC.AttemptTerminal
@@ -181,8 +180,8 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
     outcome =
       RequestOwner.execute(identity(), deadline_after(100), fn ->
         context = AttemptProtocol.context()
-        assert :ok = AttemptLifecycle.mark_dispatched(context)
-        assert :ok = AttemptLifecycle.mark_dispatched(context)
+        assert :ok = AttemptProtocol.send_confirmed(context)
+        assert :ok = AttemptProtocol.send_confirmed(context)
         success_terminal(context, 7)
         {:ok, :response}
       end)

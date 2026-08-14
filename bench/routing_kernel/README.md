@@ -7,7 +7,7 @@ The current scenario begins with a prepared request identity and returns a prepa
 success. It includes:
 
 - closed-breaker admission;
-- the current compatibility lifecycle owner and transport task;
+- the request owner and its single transport task;
 - breaker success reporting;
 - canonical terminal-fact construction and policy projection;
 - one bounded projection-lane enqueue attempt.
@@ -37,9 +37,9 @@ item capacity. Any projection drop in warmup or measurement fails the normal sce
 belongs in a separate diagnostic.
 
 The counter and timing passes run without call tracing. Counter attribution is synchronous and
-limited to checkpoints in the request owner, compatibility lifecycle, and transport task.
+limited to checkpoints in the request owner and transport task.
 Asynchronous breaker-owner and projection-worker work is excluded. Checkpoints omit the small
-lifecycle/task tails after their final report and disclose the two accounting messages they add.
+transport-task tail after its final report and disclose the accounting message it adds.
 No garbage collection is forced inside a measured window.
 
 ERTS does not expose cumulative allocated or reclaimed words for this arbitrary process tree. The
@@ -47,19 +47,18 @@ output therefore marks both unavailable instead of deriving them from VM-global 
 reports live heap capacity at explicit process checkpoints and attributable minor-GC counts as
 separate metrics; neither is labeled as allocation.
 
-Timing samples are collected in their own pass. Each timed success adds one dispatch-stamp message
-and one decision-stamp message, and the output discloses that instrumentation. The structural pass
+Timing samples are collected in their own pass. Each timed success adds one synthetic
+transport-start stamp message, and the output discloses that instrumentation. The structural pass
 separately traces the warmed request-owner process tree and reports messages, process spawns, and
-ETS calls. Raw stable protocol-tag counts are retained. Aggregate receives include scheduler- and
-monitor-order-sensitive `DOWN`, `EXIT`, and reference messages, so they are diagnostic rather than
-an exact topology contract.
+ETS calls. Raw stable protocol-tag counts are retained. ERTS receive-timeout trace events are
+reported separately as scheduling events rather than mailbox messages. Aggregate mailbox receives
+still include scheduler- and monitor-order-sensitive `DOWN`, `EXIT`, and reference messages, so
+they are diagnostic rather than an exact topology contract.
 
 Layer 2 must use equal raw-HTTP semantics and fixed transport capacity for Lasso and eRPC. Layer 3
 must exercise the complete production union. Neither extension may reuse Layer 1 results as an
 acceptance verdict.
 
-On the current compatibility slice, the process-tree trace should expose two process spawns per
-success: one lifecycle process and one transport task. The owner cutover should remove the
-lifecycle spawn while retaining the transport task until cancellation and deadline tests justify a
-different topology. Message totals may change with the stamped transport protocol, so compare the
+The process-tree trace should expose one transport-task spawn per success and no intermediate
+lifecycle process. Message totals may change with the stamped transport protocol, so compare the
 machine-readable message tags rather than requiring a lower aggregate count.

@@ -4,7 +4,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.AdmissionReceipt do
   @enforce_keys [:breaker_id, :kind, :generation, :epoch, :owner_pid]
   defstruct @enforce_keys ++ [token: nil, deadline_us: nil]
 
-  @type kind :: :closed | :half_open | :legacy
+  @type kind :: :closed | :half_open
   @type t :: %__MODULE__{
           breaker_id: {String.t(), :http | :ws},
           kind: kind(),

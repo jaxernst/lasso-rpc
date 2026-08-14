@@ -37,25 +37,6 @@ defmodule Lasso.Telemetry do
   """
   def metrics do
     [
-      # Circuit breaker admission latency (new admit/report flow)
-      distribution("lasso.circuit_breaker.admit.latency",
-        event_name: [:lasso, :circuit_breaker, :admit],
-        measurement: :admit_call_ms,
-        unit: {:native, :millisecond},
-        description: "Circuit breaker admission call latency",
-        tags: [:instance_id, :transport, :decision],
-        reporter_options: [
-          buckets: [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000]
-        ]
-      ),
-
-      # Circuit breaker decision counts
-      counter("lasso.circuit_breaker.admit.count",
-        event_name: [:lasso, :circuit_breaker, :admit],
-        description: "Circuit breaker admission decisions",
-        tags: [:instance_id, :transport, :decision]
-      ),
-
       # HTTP transport I/O latency (actual network time)
       distribution("lasso.http.request.io.latency",
         event_name: [:lasso, :http, :request, :io],

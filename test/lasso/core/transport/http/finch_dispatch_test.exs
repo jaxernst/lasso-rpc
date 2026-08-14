@@ -2,6 +2,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Transport.HTTP.DispatchTracker
+  alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: FinchClient
 
   @finch_name __MODULE__.Client
@@ -65,8 +66,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
   end
 
   test "predispatch Finch failure is proven only while the tracker remains authoritative" do
-    attempt_ref = make_ref()
-    context = {self(), attempt_ref}
+    context = attempt_context()
 
     assert {:error, {:network_error, _message}} =
              FinchClient.request(
@@ -80,15 +80,14 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
                end
              )
 
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
+    assert %{certainty: :not_dispatched} = AttemptProtocol.close(context)
 
-    assert_receive {:transport_observation, ^attempt_ref,
-                    %{kind: :predispatch_failure, reason: :pool_unavailable}}
+    assert {:ok, %{kind: :predispatch_failure, reason: :pool_unavailable}} =
+             AttemptProtocol.take_terminal_candidate(context)
   end
 
   test "send start followed by handler loss and timeout remains indeterminate" do
-    attempt_ref = make_ref()
-    context = {self(), attempt_ref}
+    context = attempt_context()
 
     assert {:error, :timeout} =
              FinchClient.request(
@@ -104,18 +103,17 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
                end
              )
 
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
+    assert %{certainty: :indeterminate} = AttemptProtocol.close(context)
 
-    assert_receive {:transport_observation, ^attempt_ref,
-                    %{kind: :transport_failure, certainty: :indeterminate, reason: :timeout}}
+    assert {:ok, %{kind: :transport_failure, certainty: :indeterminate, reason: :timeout}} =
+             AttemptProtocol.take_terminal_candidate(context)
 
     assert :ok = DispatchTracker.audit_now()
     assert DispatchTracker.ready?()
   end
 
   test "missing tracker at the Finch boundary prevents a false not-dispatched claim" do
-    attempt_ref = make_ref()
-    context = {self(), attempt_ref}
+    context = attempt_context()
 
     assert {:error, {:network_error, _message}} =
              FinchClient.request(
@@ -130,10 +128,10 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
                end
              )
 
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
+    assert %{certainty: :indeterminate} = AttemptProtocol.close(context)
 
-    assert_receive {:transport_observation, ^attempt_ref,
-                    %{kind: :transport_failure, certainty: :indeterminate, reason: :closed}}
+    assert {:ok, %{kind: :transport_failure, certainty: :indeterminate, reason: :closed}} =
+             AttemptProtocol.take_terminal_candidate(context)
 
     assert :ok = DispatchTracker.audit_now()
   end
@@ -174,8 +172,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
 
   test "deadline recheck after receipt prevents entering Finch" do
     test_pid = self()
-    attempt_ref = make_ref()
-    context = {self(), attempt_ref}
+    context = attempt_context()
     counter = :counters.new(1, [])
 
     monotonic_now = fn ->
@@ -197,8 +194,8 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
                end
              )
 
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :predispatch_failure}}
+    assert %{certainty: :not_dispatched} = AttemptProtocol.close(context)
+    assert {:ok, %{kind: :predispatch_failure}} = AttemptProtocol.take_terminal_candidate(context)
     refute_receive :deadline_recheck_request_ran
   end
 
@@ -208,8 +205,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
 
     {:ok, port} = :inet.port(listener)
     test_pid = self()
-    attempt_ref = make_ref()
-    context = {self(), attempt_ref}
+    context = attempt_context()
     response_body = ~s({"jsonrpc":"2.0","id":"physical-one","result":"0x1"})
 
     server =
@@ -240,9 +236,16 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
                attempt_dispatch: context
              )
 
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
+    assert %{
+             certainty: :dispatched,
+             started_at_us: started_at_us,
+             confirmed_at_us: confirmed_at_us
+           } =
+             AttemptProtocol.close(context)
+
+    assert is_integer(started_at_us)
+    assert is_integer(confirmed_at_us)
+    assert confirmed_at_us >= started_at_us
 
     assert_receive {:physical_request, request, ""}, 1_000
     assert length(:binary.matches(request, "POST ")) == 1
@@ -272,6 +275,14 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
       :nomatch ->
         receive_more(socket, acc)
     end
+  end
+
+  defp attempt_context do
+    AttemptProtocol.new_context(
+      self(),
+      make_ref(),
+      System.monotonic_time(:microsecond) + 5_000_000
+    )
   end
 
   defp receive_more(socket, acc) do

@@ -1,8 +1,9 @@
 defmodule Lasso.RPC.CircuitBreakerAdmissionTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.Core.Support.{AttemptLifecycle, CircuitBreaker}
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.{Admission, AdmissionReceipt, Snapshot, Storage}
+  alias Lasso.Core.Transport.AttemptProtocol
 
   setup do
     id = {"admission-#{System.unique_integer([:positive])}", :http}
@@ -31,6 +32,44 @@ defmodule Lasso.RPC.CircuitBreakerAdmissionTest do
     assert {:message_queue_len, ^queued_before} = Process.info(breaker_pid, :message_queue_len)
   end
 
+  test "closed call does not wait for the suspended breaker owner", %{
+    id: id,
+    breaker_pid: breaker_pid
+  } do
+    :sys.suspend(breaker_pid)
+    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    started_us = System.monotonic_time(:microsecond)
+
+    assert {:executed, :ok} = CircuitBreaker.call(id, fn -> :ok end, 100)
+    assert System.monotonic_time(:microsecond) - started_us < 100_000
+  end
+
+  test "a positive one millisecond budget can execute eligible work", %{id: id} do
+    results =
+      for _attempt <- 1..100 do
+        CircuitBreaker.call(id, fn -> :ok end, 1)
+      end
+
+    assert Enum.any?(results, &(&1 == {:executed, :ok}))
+  end
+
+  test "a successful call leaves no linked-task exit in a trapping caller", %{id: id} do
+    parent = self()
+
+    caller =
+      spawn(fn ->
+        Process.flag(:trap_exit, true)
+        result = CircuitBreaker.call(id, fn -> :ok end, 100)
+        Process.sleep(10)
+        send(parent, {:successful_call, result, Process.info(self(), :messages)})
+      end)
+
+    caller_monitor = Process.monitor(caller)
+
+    assert_receive {:successful_call, {:executed, :ok}, {:messages, []}}, 1_000
+    assert_receive {:DOWN, ^caller_monitor, :process, ^caller, :normal}, 1_000
+  end
+
   test "snapshot admission invokes no telemetry consumer", %{id: id} do
     test_pid = self()
     handler_id = "admission-consumer-#{System.unique_integer([:positive])}"
@@ -49,6 +88,35 @@ defmodule Lasso.RPC.CircuitBreakerAdmissionTest do
 
     assert {:ok, %AdmissionReceipt{kind: :closed}} = Admission.check(id, deadline_us())
     refute_receive :unexpected_snapshot_admission_telemetry, 0
+  end
+
+  test "call does not invoke an admission telemetry consumer", %{id: id} do
+    test_pid = self()
+    handler_id = "call-admission-consumer-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:lasso, :circuit_breaker, :admit],
+        fn _event, _measurements, _metadata, _config ->
+          send(test_pid, {:admission_handler_entered, self()})
+          receive do: (:release_admission_handler -> :ok)
+        end,
+        nil
+      )
+
+    on_exit(fn ->
+      :telemetry.detach(handler_id)
+
+      receive do
+        {:admission_handler_entered, caller} -> send(caller, :release_admission_handler)
+      after
+        0 -> :ok
+      end
+    end)
+
+    assert {:executed, :ok} = CircuitBreaker.call(id, fn -> :ok end, 100)
+    refute_receive {:admission_handler_entered, _caller}, 0
   end
 
   test "open admission denies while its owner is suspended", %{
@@ -102,31 +170,26 @@ defmodule Lasso.RPC.CircuitBreakerAdmissionTest do
   end
 
   test "a closed receipt cannot dispatch after its captured deadline", %{id: id} do
-    deadline_us = System.monotonic_time(:microsecond) + 1_000
-    assert {:ok, receipt} = Admission.check(id, deadline_us)
-    Process.sleep(2)
-    test_pid = self()
+    deadline_us = System.monotonic_time(:microsecond) + 10_000
+    assert {:ok, _receipt} = Admission.check(id, deadline_us)
+    context = AttemptProtocol.new_context(self(), make_ref(), deadline_us)
+    wait_until(deadline_us)
 
-    assert {:__attempt_lifecycle_rejected__, :timeout} =
-             AttemptLifecycle.run(
-               self(),
-               receipt,
-               fn -> send(test_pid, :transport_ran) end,
-               100,
-               nil,
-               fn _dispatched_at_us -> send(test_pid, :dispatch_receipt) end,
-               :immediate,
-               deadline_us
-             )
-
-    refute_receive :transport_ran, 20
-    refute_receive :dispatch_receipt, 20
+    assert {:error, :deadline_expired} = AttemptProtocol.send_started(context)
+    assert AttemptProtocol.close(context).certainty == :not_dispatched
   end
 
   defp run_after_admission(id, deadline_us, fun) do
     case Admission.check(id, deadline_us) do
       {:ok, _receipt} -> {:transport_ran, fun.()}
       other -> other
+    end
+  end
+
+  defp wait_until(deadline_us) do
+    if System.monotonic_time(:microsecond) < deadline_us do
+      Process.sleep(1)
+      wait_until(deadline_us)
     end
   end
 

@@ -9,7 +9,7 @@ defmodule Lasso.RPC.Transports.HTTP do
 
   @behaviour Lasso.RPC.Transport
 
-  alias Lasso.Core.Support.{AttemptLifecycle, ErrorClassifier, ErrorNormalizer}
+  alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamResponse}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
@@ -68,7 +68,7 @@ defmodule Lasso.RPC.Transports.HTTP do
     request_id = Map.get(rpc_request, "id")
 
     io_start_us = System.monotonic_time(:microsecond)
-    dispatch_context = AttemptLifecycle.dispatch_context()
+    dispatch_context = AttemptProtocol.context()
     deadline_us = request_deadline_us(io_start_us, timeout, AttemptProtocol.deadline_us())
 
     result =

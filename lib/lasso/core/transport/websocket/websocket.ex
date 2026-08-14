@@ -187,8 +187,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
          context: context,
          deadline_us: deadline_us
        }) do
-    with true <- AttemptProtocol.authorized?(context, deadline_us),
-         :ok <- AttemptProtocol.send_started(context),
+    with :ok <- AttemptProtocol.send_started(context),
          send_started_us = System.monotonic_time(:microsecond),
          true <- send_started_us < deadline_us,
          {:ok, {connection, generation, token}} <-

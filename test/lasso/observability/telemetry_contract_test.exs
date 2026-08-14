@@ -179,7 +179,6 @@ defmodule Lasso.Observability.TelemetryContractTest do
     test "all Lasso.Telemetry metrics reference events that have defined emitters" do
       known_emitted_events =
         MapSet.new([
-          [:lasso, :circuit_breaker, :admit],
           [:lasso, :circuit_breaker, :open],
           [:lasso, :circuit_breaker, :close],
           [:lasso, :circuit_breaker, :half_open],

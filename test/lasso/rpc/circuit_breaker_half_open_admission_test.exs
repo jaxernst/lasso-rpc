@@ -2,7 +2,7 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.Core.Support.{AttemptLifecycle, CircuitBreaker}
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.{AdmissionReceipt, ControlRing, Snapshot, Storage}
 
   alias Lasso.RPC.{AttemptIdentity, AttemptTerminal, ExecutionProjector}
@@ -146,19 +146,20 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     assert token == receipt.token
   end
 
-  test "the caller retains half-open lease ownership when the lifecycle dies" do
+  test "the caller directly owns its half-open lease until the call reports" do
     {id, breaker_pid} = start_half_open_breaker()
     parent = self()
 
     caller =
       spawn(fn ->
+        Process.flag(:trap_exit, true)
+
         result =
           CircuitBreaker.call(
             id,
             fn ->
-              {lifecycle_pid, _attempt_ref} = AttemptLifecycle.dispatch_context()
-              send(parent, {:attempt_started, lifecycle_pid})
-              Process.sleep(:infinity)
+              send(parent, {:attempt_started, self()})
+              receive do: (:finish_attempt -> :ok)
             end,
             5_000
           )
@@ -167,16 +168,121 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
         receive do: (:stop -> :ok)
       end)
 
-    assert_receive {:attempt_started, lifecycle_pid}, 1_000
+    assert_receive {:attempt_started, worker}, 1_000
+    assert worker != caller
     assert [{^id, %{owner_pid: ^caller, claimed?: true}}] = :ets.lookup(Storage.lease_table(), id)
     assert Process.alive?(caller)
-    Process.exit(lifecycle_pid, :kill)
+    send(worker, :finish_attempt)
 
-    assert_receive {:call_result, {:executed, {:exception, {:exit, :killed, []}}}}, 1_000
+    assert_receive {:call_result, {:executed, :ok}}, 1_000
     assert Process.alive?(caller)
+    await_no_lease(id)
     assert %{inflight_count: 0, inflight_attempts: %{}} = :sys.get_state(breaker_pid)
     assert [] = :ets.lookup(Storage.lease_table(), id)
     send(caller, :stop)
+  end
+
+  test "call timeout terminates admitted work and releases half-open capacity" do
+    {id, breaker_pid} = start_half_open_breaker()
+    parent = self()
+
+    caller =
+      spawn(fn ->
+        Process.flag(:trap_exit, true)
+
+        result =
+          CircuitBreaker.call(
+            id,
+            fn ->
+              send(parent, {:blocked_worker, self()})
+              receive do: (:never -> :ok)
+            end,
+            25
+          )
+
+        Process.sleep(10)
+        send(parent, {:blocked_call_result, result, Process.info(self(), :messages)})
+      end)
+
+    caller_monitor = Process.monitor(caller)
+    assert_receive {:blocked_worker, worker}, 1_000
+
+    assert_receive {
+                     :blocked_call_result,
+                     {:rejected, :admission_timeout},
+                     {:messages, []}
+                   },
+                   1_000
+
+    assert_receive {:DOWN, ^caller_monitor, :process, ^caller, :normal}, 1_000
+    refute Process.alive?(worker)
+    await_no_lease(id)
+
+    assert %{state: :half_open, inflight_count: 0, inflight_attempts: %{}} =
+             :sys.get_state(breaker_pid)
+
+    assert [] = :ets.lookup(Storage.lease_table(), id)
+    assert {:executed, :ok} = CircuitBreaker.call(id, fn -> :ok end, 100)
+  end
+
+  test "call worker and half-open lease are released when the caller dies" do
+    {id, breaker_pid} = start_half_open_breaker()
+    parent = self()
+
+    caller =
+      spawn(fn ->
+        CircuitBreaker.call(
+          id,
+          fn ->
+            send(parent, {:caller_owned_worker, self()})
+            receive do: (:never -> :ok)
+          end,
+          5_000
+        )
+      end)
+
+    assert_receive {:caller_owned_worker, worker}, 1_000
+    worker_monitor = Process.monitor(worker)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :killed}, 1_000
+    await_no_lease(id)
+    assert %{inflight_count: 0, inflight_attempts: %{}} = :sys.get_state(breaker_pid)
+  end
+
+  test "an admitted worker exit is reported truthfully without caller mailbox residue" do
+    {id, _breaker_pid} = start_half_open_breaker()
+    parent = self()
+
+    caller =
+      spawn(fn ->
+        Process.flag(:trap_exit, true)
+
+        result =
+          CircuitBreaker.call(
+            id,
+            fn ->
+              send(parent, {:kill_worker, self()})
+              receive do: (:never -> :ok)
+            end,
+            1_000
+          )
+
+        send(parent, {:worker_exit_result, result, Process.info(self(), :messages)})
+      end)
+
+    caller_monitor = Process.monitor(caller)
+    assert_receive {:kill_worker, worker}, 1_000
+    Process.exit(worker, :kill)
+
+    assert_receive {
+                     :worker_exit_result,
+                     {:executed, {:exception, {:exit, :killed, []}}},
+                     {:messages, []}
+                   },
+                   1_000
+
+    assert_receive {:DOWN, ^caller_monitor, :process, ^caller, :normal}, 1_000
+    await_no_lease(id)
   end
 
   test "restart preserves an unexpired open recovery deadline" do
@@ -224,27 +330,19 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     await_snapshot_state(id, :half_open)
   end
 
-  test "exceptional claim is bounded by the receipt deadline and cleanup is ordered" do
+  test "exceptional activation is local while the breaker owner is suspended" do
     {id, breaker_pid} = start_half_open_breaker()
     assert {:ok, receipt} = CircuitBreaker.admit(id, System.monotonic_time(:microsecond) + 25_000)
     :sys.suspend(breaker_pid)
     on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
     started_us = System.monotonic_time(:microsecond)
 
-    assert {:__attempt_lifecycle_rejected__, :timeout} =
-             Lasso.Core.Support.AttemptLifecycle.run(
-               self(),
-               receipt,
-               fn -> flunk("transport ran without claim") end,
-               1_000,
-               nil,
-               nil,
-               :immediate,
-               receipt.deadline_us
-             )
+    assert :ok = CircuitBreaker.activate_attempt(receipt, self())
 
     assert System.monotonic_time(:microsecond) - started_us < 100_000
+    assert [{^id, %{claimed?: true}}] = :ets.lookup(Storage.lease_table(), id)
     :sys.resume(breaker_pid)
+    CircuitBreaker.release_half_open(receipt)
     await_no_lease(id)
   end
 
