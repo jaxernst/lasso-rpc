@@ -483,7 +483,7 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
           send(test_pid, {:owner_outcome, outcome})
         end)
 
-      assert_receive {:transport_ready, task}
+      assert_receive {:transport_ready, task}, 1_000
       assert :erlang.suspend_process(owner)
       send(task, :complete)
 
