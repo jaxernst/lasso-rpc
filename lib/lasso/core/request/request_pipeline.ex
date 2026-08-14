@@ -352,6 +352,7 @@ defmodule Lasso.RPC.RequestPipeline do
         instance_id,
         ctx.rpc_request,
         attempt_timeout_ms,
+        ctx.execution_envelope.deadline_us,
         on_terminal,
         on_dispatch
       )
@@ -435,10 +436,10 @@ defmodule Lasso.RPC.RequestPipeline do
         ctx = RequestContext.increment_retries(ctx)
         attempt_channels(rest_channels, ctx)
 
-      {:rejected, :not_found} ->
-        Observability.record_admission_rejection(ctx, channel, :circuit_breaker_not_found)
+      {:rejected, :admission_unavailable} ->
+        Observability.record_admission_rejection(ctx, channel, :admission_unavailable)
 
-        Logger.error("Circuit breaker not found",
+        Logger.error("Circuit breaker admission unavailable",
           channel: Channel.to_string(channel),
           request_id: ctx.request_id
         )
@@ -649,6 +650,7 @@ defmodule Lasso.RPC.RequestPipeline do
           String.t(),
           map(),
           timeout(),
+          integer(),
           CircuitBreaker.terminal_callback(),
           (integer() -> term())
         ) ::
@@ -658,6 +660,7 @@ defmodule Lasso.RPC.RequestPipeline do
          instance_id,
          rpc_request,
          timeout,
+         deadline_us,
          on_terminal,
          on_dispatch
        ) do
@@ -665,6 +668,7 @@ defmodule Lasso.RPC.RequestPipeline do
     cb_id = {instance_id, channel.transport}
 
     CircuitBreaker.call(cb_id, attempt_fun, timeout,
+      deadline_us: deadline_us,
       on_terminal: on_terminal,
       on_dispatch: on_dispatch,
       dispatch: dispatch_mode(channel.transport_module)

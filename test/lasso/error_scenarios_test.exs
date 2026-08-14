@@ -12,6 +12,9 @@ defmodule Lasso.ErrorScenariosTest do
   require Logger
 
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker.ControlRing
+  alias Lasso.Core.Support.CircuitBreaker.Storage
+  alias Lasso.Test.Eventually
 
   @moduletag :error_scenarios
   @moduletag :fault_tolerance
@@ -23,6 +26,7 @@ defmodule Lasso.ErrorScenariosTest do
         {"test_provider_recovery", :http}
       ]
       |> Enum.each(fn {instance_id, transport} ->
+        breaker_id = {instance_id, transport}
         key = "#{instance_id}:#{transport}"
         via_name = {:via, Registry, {Lasso.Registry, {:circuit_breaker, key}}}
 
@@ -37,6 +41,11 @@ defmodule Lasso.ErrorScenariosTest do
               :exit, _ -> :ok
             end
         end
+
+        :ets.delete(:lasso_instance_state, {:circuit, instance_id, transport})
+        :ets.delete(Storage.snapshot_table(), breaker_id)
+        :ets.delete(Storage.lease_table(), breaker_id)
+        ControlRing.delete(breaker_id)
       end)
     end)
 
@@ -61,7 +70,12 @@ defmodule Lasso.ErrorScenariosTest do
         assert {:executed, {:exception, _}} = result
       end
 
-      # Circuit should be open
+      Eventually.assert_eventually(
+        fn -> CircuitBreaker.get_state(breaker_id).state == :open end,
+        timeout: 1_000,
+        interval: 1
+      )
+
       state = CircuitBreaker.get_state(breaker_id)
       assert state.state == :open
       assert state.failure_count >= 3
@@ -78,7 +92,12 @@ defmodule Lasso.ErrorScenariosTest do
         CircuitBreaker.call(breaker_id, fn -> raise "test error" end)
       end
 
-      # Verify circuit is open
+      Eventually.assert_eventually(
+        fn -> CircuitBreaker.get_state(breaker_id).state == :open end,
+        timeout: 1_000,
+        interval: 1
+      )
+
       state = CircuitBreaker.get_state(breaker_id)
       assert state.state == :open
 

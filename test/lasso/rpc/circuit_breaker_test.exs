@@ -120,11 +120,11 @@ defmodule Lasso.RPC.CircuitBreakerTest do
     Process.sleep(20)
     assert CircuitBreaker.get_state(id).state == :open
 
-    # After recovery timeout, half-open then success should close
+    # External health success cannot close recovery probation.
     Process.sleep(60)
     assert :ok = CircuitBreaker.signal_recovery(id)
     Process.sleep(20)
-    assert CircuitBreaker.get_state(id).state == :closed
+    assert CircuitBreaker.get_state(id).state == :half_open
   end
 
   test "rate limit errors do not open circuit (handled by RateLimitState tiering)" do

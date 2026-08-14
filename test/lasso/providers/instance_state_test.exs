@@ -1,6 +1,8 @@
 defmodule Lasso.Providers.InstanceStateTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker.{ControlRing, Storage}
   alias Lasso.Providers.InstanceState
 
   @table :lasso_instance_state
@@ -131,6 +133,19 @@ defmodule Lasso.Providers.InstanceStateTest do
     test "degraded maps to :limited" do
       assert InstanceState.status_to_availability(:degraded) == :limited
     end
+  end
+
+  test "clear removes every application-owned breaker row for the instance" do
+    id = {@instance_id, :http}
+    {:ok, pid} = CircuitBreaker.start_link({id, %{control_ring_capacity: 4}})
+    :ets.insert(Storage.lease_table(), {id, %{token: "stale"}})
+    :ok = GenServer.stop(pid)
+
+    assert :ok = InstanceState.clear(@instance_id)
+    assert [] = :ets.lookup(Storage.snapshot_table(), id)
+    assert [] = :ets.lookup(Storage.lease_table(), id)
+    assert {:error, :not_found} = ControlRing.stats(id)
+    assert [] = :ets.match_object(Storage.control_table(), {{id, :_}, :_})
   end
 
   # Helpers

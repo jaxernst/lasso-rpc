@@ -5,6 +5,8 @@ defmodule Lasso.Application do
 
   use Application
 
+  alias Lasso.Core.Support.CircuitBreaker.Storage, as: CircuitBreakerStorage
+
   @impl true
   def start(_type, _args) do
     # Store application start time for uptime calculation
@@ -30,6 +32,8 @@ defmodule Lasso.Application do
       read_concurrency: true,
       write_concurrency: true
     ])
+
+    CircuitBreakerStorage.create_tables!()
 
     :ets.new(:block_sync_registry, [
       :set,

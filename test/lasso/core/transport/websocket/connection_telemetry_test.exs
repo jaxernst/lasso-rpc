@@ -10,6 +10,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
 
   alias Lasso.RPC.Transport.WebSocket.{Connection, Endpoint}
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Providers.InstanceState
   alias Lasso.Test.TelemetrySync
 
   setup do
@@ -65,6 +66,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
       nil -> :ok
       pid -> catch_exit(GenServer.stop(pid, :normal))
     end
+
+    InstanceState.clear(instance_id)
   end
 
   defp resolve_instance_id(endpoint) do

@@ -2,6 +2,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Support.{AttemptLifecycle, CircuitBreaker}
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.JSONRPC.Error, as: JError
 
   setup_all do
@@ -372,8 +373,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     id = start_half_open_breaker()
     test_pid = self()
 
-    assert {:executed,
-            {:error, %JError{category: :local_capacity_rejection, breaker_penalty?: false}, 25}} =
+    assert {:rejected, :admission_timeout} =
              CircuitBreaker.call(id, fn -> Process.sleep(:infinity) end, 25,
                dispatch: :deferred,
                on_terminal: fn result, elapsed_ms ->
@@ -674,7 +674,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     id = start_half_open_breaker()
     test_pid = self()
 
-    assert {:executed, {:error, %JError{category: :local_capacity_rejection}, 25}} =
+    assert {:rejected, :admission_timeout} =
              CircuitBreaker.call(
                id,
                fn ->
@@ -692,7 +692,7 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     refute_receive {:terminal, _, _}, 100
   end
 
-  test "late confirmation after caller death is rejected" do
+  test "caller death stops an authorized but unconfirmed transport" do
     id = start_half_open_breaker()
     test_pid = self()
 
@@ -726,11 +726,11 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     refute_receive {:terminal, _, _}, 100
   end
 
-  test "confirmation after deadline returns a predispatch timeout to a live caller" do
+  test "deadline stops an authorized but unconfirmed transport" do
     id = start_half_open_breaker()
     test_pid = self()
 
-    assert {:executed, {:error, %JError{category: :local_capacity_rejection}, 25}} =
+    assert {:rejected, :admission_timeout} =
              CircuitBreaker.call(
                id,
                fn ->
@@ -762,18 +762,18 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
     breaker_pid = GenServer.whereis(CircuitBreaker.via_name(id))
     test_pid = self()
 
-    :erlang.suspend_process(breaker_pid)
+    :sys.suspend(breaker_pid)
 
     caller_pid =
       spawn(fn ->
-        result = CircuitBreaker.call(id, fn -> send(test_pid, :admission_attempt_ran) end)
+        result = CircuitBreaker.call(id, fn -> send(test_pid, :admission_attempt_ran) end, 25)
         send(test_pid, {:admission_result, result})
         Process.sleep(:infinity)
       end)
 
     assert_receive {:admission_result, {:rejected, :admission_timeout}}, 1_000
     assert Process.alive?(caller_pid)
-    :erlang.resume_process(breaker_pid)
+    :sys.resume(breaker_pid)
     Process.sleep(50)
 
     state = :sys.get_state(breaker_pid)
@@ -818,7 +818,21 @@ defmodule Lasso.RPC.CircuitBreakerAttemptLifecycleTest do
         {id, %{failure_threshold: 1, recovery_timeout: 60_000, success_threshold: 1}}
       )
 
-    :sys.replace_state(breaker_pid, fn state -> %{state | state: :half_open} end)
+    state = :sys.replace_state(breaker_pid, fn state -> %{state | state: :half_open} end)
+
+    Snapshot.put(%Snapshot{
+      breaker_id: id,
+      state: :half_open,
+      generation: state.transition_generation,
+      epoch: state.process_epoch,
+      owner_pid: breaker_pid,
+      ready?: true,
+      recovery_deadline_us: nil,
+      half_open_capacity: 1,
+      half_open_inflight: 0,
+      control_health: :healthy
+    })
+
     id
   end
 
