@@ -24,4 +24,17 @@ defmodule Lasso.RPC.RequestOptions.BuilderTest do
     assert Keyword.fetch!(RequestOptions.to_keyword(options), :jsonrpc_id) == nil
     assert Keyword.fetch!(RequestOptions.to_keyword(options), :jsonrpc_id_present?)
   end
+
+  test "request origin defaults to client and accepts explicit system ownership" do
+    assert Builder.from_map(%{}, "eth_blockNumber").request_origin == :client
+
+    assert Builder.from_map(%{}, "eth_blockNumber", request_origin: :system).request_origin ==
+             :system
+
+    assert {:error, _reason} =
+             RequestOptions.validate(
+               %RequestOptions{timeout_ms: 100, request_origin: :unknown},
+               "eth_blockNumber"
+             )
+  end
 end

@@ -24,6 +24,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
           request_id: String.t(),
           jsonrpc_id: integer() | String.t() | nil,
           jsonrpc_id_present?: boolean(),
+          request_origin: RequestOptions.request_origin(),
           request_context: any()
         ]
 
@@ -57,6 +58,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
         request_id: overrides[:request_id] || Logger.metadata()[:request_id],
         jsonrpc_id: overrides[:jsonrpc_id],
         jsonrpc_id_present?: jsonrpc_id_present?(overrides),
+        request_origin: overrides[:request_origin] || :client,
         plug_start_time: RequestTimingPlug.get_start_time(conn)
       },
       overrides[:request_context],
@@ -109,7 +111,8 @@ defmodule Lasso.RPC.RequestOptions.Builder do
         timeout_ms: overrides[:timeout_ms] || MethodPolicy.timeout_for(method),
         request_id: overrides[:request_id],
         jsonrpc_id: overrides[:jsonrpc_id],
-        jsonrpc_id_present?: jsonrpc_id_present?(overrides)
+        jsonrpc_id_present?: jsonrpc_id_present?(overrides),
+        request_origin: overrides[:request_origin] || :client
       },
       overrides[:request_context],
       method

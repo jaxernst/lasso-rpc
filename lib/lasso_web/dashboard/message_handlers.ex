@@ -133,6 +133,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
         provider_id: field(e, :provider_id),
         duration_ms: field(e, :duration_ms) || 0,
         result: field(e, :result) || :unknown,
+        request_origin: field(e, :request_origin) || :client,
         failovers: field(e, :failover_count) || 0,
         source_node: field(e, :source_node),
         source_node_id: field(e, :source_node_id)

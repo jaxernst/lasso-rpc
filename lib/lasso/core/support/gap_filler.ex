@@ -4,7 +4,7 @@ defmodule Lasso.Core.Support.GapFiller do
   """
 
   alias Lasso.Core.Request.ExecutionScope
-  alias Lasso.RPC.{RequestOptions, RequestPipeline}
+  alias Lasso.RPC.{RequestOptions, RequestPipeline, Response}
 
   defmodule Plan do
     @moduledoc false
@@ -155,11 +155,13 @@ defmodule Lasso.Core.Support.GapFiller do
         transport: :http,
         failover_on_override: false,
         timeout_ms: timeout_ms,
+        request_origin: :system,
         request_id:
           "backfill:#{plan.started_at_us}:#{System.unique_integer([:positive, :monotonic])}"
       }
 
       case plan.requester.(scope, plan.chain_id, method, params, opts) do
+        {:ok, %Response.Success{} = response, _ctx} -> Response.Success.decode_result(response)
         {:ok, result, _ctx} -> {:ok, result}
         {:error, reason, _ctx} -> {:error, reason}
         other -> {:error, {:unexpected_request_result, other}}

@@ -3,6 +3,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
 
   alias Lasso.BlockSync.Strategies.HttpStrategy
   alias Lasso.BlockSync.Worker
+  alias Lasso.RPC.Response
 
   setup do
     Application.ensure_all_started(:lasso)
@@ -13,6 +14,16 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     end)
 
     {:ok, instance_id: instance_id}
+  end
+
+  test "canonical passthrough responses decode into block heights" do
+    response = %Response.Success{
+      id: "block-sync-request",
+      jsonrpc: "2.0",
+      raw_bytes: ~s({"jsonrpc":"2.0","id":"block-sync-request","result":"0x188fc2e"})
+    }
+
+    assert {:ok, 0x188FC2E} = HttpStrategy.decode_poll_response(response)
   end
 
   test "polling uses one unlinked owner and applies interval changes to the next timer", %{

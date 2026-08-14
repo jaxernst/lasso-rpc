@@ -27,6 +27,7 @@ defmodule Lasso.Events.RoutingDecision do
           transport: atom(),
           duration_ms: non_neg_integer(),
           result: :success | :error,
+          request_origin: :client | :system,
           failover_count: non_neg_integer()
         }
 
@@ -44,6 +45,7 @@ defmodule Lasso.Events.RoutingDecision do
     :transport,
     :duration_ms,
     :result,
+    request_origin: :client,
     failover_count: 0
   ]
 
@@ -66,6 +68,7 @@ defmodule Lasso.Events.RoutingDecision do
       transport: attrs[:transport],
       duration_ms: attrs[:duration_ms],
       result: attrs[:result],
+      request_origin: attrs[:request_origin] || :client,
       failover_count: attrs[:failover_count] || 0
     }
   end

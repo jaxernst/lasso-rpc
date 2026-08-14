@@ -31,7 +31,7 @@ defmodule LassoWeb.Dashboard do
 
     socket = assign(socket, :active_tab, Map.get(params, "tab", "overview"))
 
-    profiles = ConfigStore.list_profiles()
+    profiles = available_profiles(ConfigStore.list_profiles())
     selected_profile = determine_initial_profile(params, session, profiles)
 
     if connected?(socket) do
@@ -130,12 +130,6 @@ defmodule LassoWeb.Dashboard do
   end
 
   defp determine_initial_profile(params, session, profiles) do
-    # Ensure we have a fallback if no profiles are configured
-    profiles =
-      if Enum.empty?(profiles),
-        do: [Lasso.Config.ProfileValidator.default_profile()],
-        else: profiles
-
     cond do
       profile = Map.get(params, "profile") ->
         resolve_profile(profile, profiles)
@@ -147,6 +141,9 @@ defmodule LassoWeb.Dashboard do
         List.first(profiles)
     end
   end
+
+  defp available_profiles([]), do: [Lasso.Config.ProfileValidator.default_profile()]
+  defp available_profiles(profiles), do: profiles
 
   # Resolve a requested profile slug to one of the configured profiles, applying
   # the alias system so legacy slugs like "default" still land on their canonical

@@ -37,6 +37,7 @@ defmodule Lasso.RPC.RequestPipeline do
     ExecutionEnvelope,
     ExecutionProjector,
     RequestContext,
+    RequestProjection,
     RequestTerminal,
     Selection,
     TransportRegistry
@@ -958,8 +959,27 @@ defmodule Lasso.RPC.RequestPipeline do
   defp finalize_request_terminal({status, value, %RequestContext{} = ctx})
        when status in [:ok, :error] do
     request_terminal = build_request_terminal(status, value, ctx)
-    _enqueue_result = AttemptProjection.enqueue_request_terminal(request_terminal)
+
+    request_projection =
+      RequestProjection.new(
+        request_terminal,
+        ctx.method,
+        request_projection_route(ctx),
+        ctx.retries,
+        ctx.opts.request_origin
+      )
+
+    _enqueue_result = RequestProjection.enqueue(request_projection)
     {status, value, release_execution_payloads(ctx)}
+  end
+
+  defp request_projection_route(%RequestContext{executed_channel: %{} = route}), do: route
+
+  defp request_projection_route(%RequestContext{attempted_channels: attempted_channels}) do
+    case List.last(attempted_channels) do
+      %{channel: %{} = route} -> route
+      _other -> nil
+    end
   end
 
   @doc false

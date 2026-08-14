@@ -3,6 +3,29 @@ defmodule Lasso.Core.Support.GapFillerTest do
 
   alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Core.Support.GapFiller
+  alias Lasso.RPC.Response
+
+  test "canonical passthrough responses are decoded for internal backfill" do
+    requester = fn _scope, _chain_id, method, _params, _opts ->
+      result =
+        case method do
+          "eth_blockNumber" -> "0x3"
+          "eth_getBlockByNumber" -> %{"number" => "0x3"}
+          "eth_getLogs" -> [%{"blockNumber" => "0x3", "logIndex" => "0x0"}]
+        end
+
+      raw_bytes = Jason.encode!(%{"jsonrpc" => "2.0", "id" => method, "result" => result})
+      {:ok, %Response.Success{id: method, jsonrpc: "2.0", raw_bytes: raw_bytes}, %{}}
+    end
+
+    plan = GapFiller.Plan.new("tenant", 1, "provider", self(), 5_000, requester: requester)
+
+    assert {:ok, 3} = GapFiller.fetch_head(plan)
+    assert {:ok, [%{"number" => "0x3"}]} = GapFiller.ensure_blocks(plan, 3, 3)
+
+    assert {:ok, [%{"blockNumber" => "0x3", "logIndex" => "0x0"}]} =
+             GapFiller.ensure_logs(plan, %{}, 3, 3)
+  end
 
   test "one plan pins profile, provider, caller, and absolute deadline across the gap" do
     test_pid = self()

@@ -9,6 +9,7 @@ defmodule Lasso.RPC.AttemptProjection do
     BoundedIdentifier,
     Channel,
     ExecutionProjector,
+    RequestProjection,
     RequestTerminal
   }
 
@@ -934,6 +935,16 @@ defmodule Lasso.RPC.AttemptProjection do
   end
 
   defp deliver_request_payload(payload) do
+    case RequestProjection.decode(payload) do
+      {:ok, event} ->
+        RequestProjection.deliver(event)
+
+      {:error, _reason} ->
+        deliver_legacy_request_payload(payload)
+    end
+  end
+
+  defp deliver_legacy_request_payload(payload) do
     with {:ok, request_terminal} <- Codec.decode(payload) do
       projection = ExecutionProjector.project(request_terminal)
       identity = request_identity(request_terminal)

@@ -26,7 +26,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Providers.Catalog
-  alias Lasso.RPC.{RequestOptions, RequestPipeline}
+  alias Lasso.RPC.{RequestOptions, RequestPipeline, Response}
 
   @default_poll_interval_ms 15_000
   @default_timeout_ms 3_000
@@ -392,16 +392,30 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         transport: :http,
         failover_on_override: false,
         timeout_ms: timeout_ms,
+        request_origin: :system,
         request_id: "block-sync:#{plan.instance_id}:#{plan.started_at_us}"
       }
 
       case RequestPipeline.execute_owned(scope, plan.chain_id, "eth_blockNumber", [], opts) do
-        {:ok, "0x" <> hex, _ctx} -> {:ok, String.to_integer(hex, 16)}
-        {:ok, other, _ctx} -> {:error, {:unexpected_result, other}}
+        {:ok, response, _ctx} -> decode_poll_response(response)
         {:error, reason, _ctx} -> {:error, reason}
       end
     end
   end
+
+  @doc false
+  @spec decode_poll_response(term()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def decode_poll_response(response) do
+    with {:ok, result} <- decode_result(response) do
+      case result do
+        "0x" <> hex -> {:ok, String.to_integer(hex, 16)}
+        other -> {:error, {:unexpected_result, other}}
+      end
+    end
+  end
+
+  defp decode_result(%Response.Success{} = response), do: Response.Success.decode_result(response)
+  defp decode_result(result), do: {:ok, result}
 
   defp resolve_route(instance_id, chain_id) do
     snapshot = Catalog.snapshot()

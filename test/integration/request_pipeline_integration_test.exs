@@ -4,9 +4,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag :integration
   @moduletag timeout: 10_000
 
+  alias Lasso.Events.RoutingDecision
   alias Lasso.RPC.{RequestPipeline, RequestOptions, Response}
   alias Lasso.Test.CircuitBreakerHelper
   alias Lasso.Testing.MockProviderBehavior
+  alias LassoWeb.Dashboard.EventStream
 
   describe "circuit breaker coordination" do
     test "fails over when circuit breaker is open", %{chain: chain} do
@@ -455,6 +457,163 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   end
 
   describe "bounded request diagnostics" do
+    test "canonical request projection reaches the dashboard event stream", %{chain: chain} do
+      profile = "public"
+      request_id = "dashboard-routing-#{System.unique_integer([:positive])}"
+
+      setup_providers([
+        %{id: "dashboard-route", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      :ok = EventStream.subscribe(profile)
+      on_exit(fn -> EventStream.unsubscribe(profile) end)
+      assert_receive {:dashboard_snapshot, _snapshot}, 1_000
+      :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.routing_decision(profile))
+
+      assert {:ok, _result, _ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{
+                   strategy: :load_balanced,
+                   timeout_ms: 30_000,
+                   request_id: request_id
+                 }
+               )
+
+      assert_receive %RoutingDecision{request_id: ^request_id}, 1_000
+
+      assert %{
+               request_id: ^request_id,
+               chain_id: ^chain,
+               method: "eth_blockNumber",
+               provider_id: "dashboard-route",
+               instance_id: instance_id,
+               transport: :http,
+               request_origin: :client,
+               result: :success,
+               failover_count: 0
+             } = await_dashboard_routing_event(request_id)
+
+      assert is_binary(instance_id)
+    end
+
+    test "fallback publishes only the final routed request decision", %{chain: chain} do
+      profile = "public"
+      request_id = "dashboard-fallback-#{System.unique_integer([:positive])}"
+
+      setup_providers([
+        %{id: "dashboard-failing", priority: 10, behavior: :always_fail, profile: profile},
+        %{id: "dashboard-backup", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      topic = Lasso.Topics.routing_decision(profile)
+      :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, topic)
+
+      assert {:ok, _result, _ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{
+                   strategy: :priority,
+                   timeout_ms: 30_000,
+                   request_id: request_id
+                 }
+               )
+
+      assert_receive %RoutingDecision{
+                       request_id: ^request_id,
+                       provider_id: "dashboard-backup",
+                       result: :success,
+                       failover_count: 1
+                     },
+                     1_000
+
+      refute_receive %RoutingDecision{request_id: ^request_id}, 100
+    end
+
+    test "terminal upstream errors publish one truthful routed decision", %{chain: chain} do
+      profile = "public"
+      request_id = "dashboard-error-#{System.unique_integer([:positive])}"
+
+      setup_providers([
+        %{id: "dashboard-error", priority: 10, behavior: :always_fail, profile: profile}
+      ])
+
+      :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.routing_decision(profile))
+
+      assert {:error, _error, _ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{
+                   provider_override: "dashboard-error",
+                   failover_on_override: false,
+                   strategy: :load_balanced,
+                   timeout_ms: 30_000,
+                   request_id: request_id
+                 }
+               )
+
+      assert_receive %RoutingDecision{
+                       request_id: ^request_id,
+                       provider_id: "dashboard-error",
+                       result: :error,
+                       failover_count: 0
+                     },
+                     1_000
+
+      refute_receive %RoutingDecision{request_id: ^request_id}, 100
+    end
+
+    test "blocking telemetry cannot delay the request response", %{chain: chain} do
+      profile = "public"
+      request_id = "blocked-terminal-sink-#{System.unique_integer([:positive])}"
+
+      setup_providers([
+        %{id: "sink-isolated", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:lasso, :rpc, :request, :terminal],
+          fn _event, _measurements, metadata, _config ->
+            if metadata.request_id == request_id do
+              send(test_pid, {:terminal_sink_blocked, self()})
+              receive do: (:release_terminal_sink -> :ok)
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      request =
+        Task.async(fn ->
+          RequestPipeline.execute_via_channels(
+            chain,
+            "eth_blockNumber",
+            [],
+            %RequestOptions{
+              strategy: :load_balanced,
+              timeout_ms: 30_000,
+              request_id: request_id
+            }
+          )
+        end)
+
+      assert_receive {:terminal_sink_blocked, sink_pid}, 1_000
+      assert {:ok, _result, _ctx} = Task.await(request, 1_000)
+      send(sink_pid, :release_terminal_sink)
+    end
+
     test "emits one asynchronous request terminal", %{chain: chain} do
       profile = "public"
       request_id = "request-terminal-once"
@@ -1018,5 +1177,20 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         Lasso.Providers.Catalog.build_from_config()
       end
     )
+  end
+
+  defp await_dashboard_routing_event(request_id, deadline_ms \\ nil) do
+    deadline_ms = deadline_ms || System.monotonic_time(:millisecond) + 2_000
+    remaining_ms = max(deadline_ms - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:dashboard_batch, %{routing_events: events}} ->
+        case Enum.find(events, &(Map.get(&1, :request_id) == request_id)) do
+          nil -> await_dashboard_routing_event(request_id, deadline_ms)
+          event -> event
+        end
+    after
+      remaining_ms -> flunk("dashboard did not receive routing event #{request_id}")
+    end
   end
 end
