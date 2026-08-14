@@ -59,6 +59,9 @@ defmodule Lasso.Application do
         # Task supervisor for async operations (needed by Topology)
         {Task.Supervisor, name: Lasso.TaskSupervisor},
 
+        # Fixed, sharded admission ledger for aggregate in-flight request bytes.
+        Lasso.Core.Request.ByteBudget,
+
         # Cluster topology - single source of truth for cluster membership
         Lasso.Cluster.Topology,
 

@@ -20,6 +20,7 @@ defmodule LassoWeb.RPCSocket do
   require Logger
 
   alias Lasso.Config.{ConfigStore, ProfileValidator}
+  alias Lasso.Core.Request.ByteBudget
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.{Observability, RequestContext, Response}
   alias LassoWeb.RPC.Helpers
@@ -34,9 +35,11 @@ defmodule LassoWeb.RPCSocket do
   @max_missed_heartbeats 2
   @max_forwarded_items 32
   @max_subscriptions 128
+  @default_forwarded_byte_limit 32 * 1_024 * 1_024
   @forward_timeout_ms 10_000
   @max_item_owner_count 9_223_372_036_854_775_807
   @item_owner_counts %{
+    byte_capacity_rejected: 0,
     capacity_rejected: 0,
     orphaned_subscription: 0,
     subscription_capacity_rejected: 0,
@@ -89,6 +92,13 @@ defmodule LassoWeb.RPCSocket do
         pending_subscription_adds: 0,
         forwarded_items: %{},
         forwarded_monitors: %{},
+        forwarded_bytes: 0,
+        forwarded_byte_limit:
+          Application.get_env(
+            :lasso,
+            :ws_connection_inflight_byte_limit,
+            @default_forwarded_byte_limit
+          ),
         forwarded_item_counts: @item_owner_counts,
         item_owner_module: ItemOwner,
         client_pid: self(),
@@ -164,19 +174,13 @@ defmodule LassoWeb.RPCSocket do
   def handle_in({text, [opcode: :text]}, state) do
     started_at_us = System.monotonic_time(:microsecond)
 
-    case Jason.decode(text) do
-      {:ok, %{"jsonrpc" => "2.0"} = request} ->
-        handle_json_rpc(request, state, started_at_us)
-
-      {:ok, invalid} ->
-        error = JError.new(-32_600, "Invalid Request: missing jsonrpc field")
-        response = JError.to_response(error, request_id(invalid))
-        {:reply, :ok, {:text, Jason.encode!(response)}, state}
+    case ByteBudget.reserve(byte_size(text), self()) do
+      {:ok, reservation} ->
+        handle_budgeted_text(text, state, started_at_us, reservation)
 
       {:error, _reason} ->
-        error = JError.new(-32_700, "Parse error")
-        response = JError.to_response(error, nil)
-        {:reply, :ok, {:text, Jason.encode!(response)}, state}
+        state = count_item_owner(state, :byte_capacity_rejected)
+        capacity_response(nil, true, state)
     end
   end
 
@@ -318,12 +322,35 @@ defmodule LassoWeb.RPCSocket do
     # Cancel heartbeat timer
     if state.heartbeat_ref, do: Process.cancel_timer(state.heartbeat_ref)
 
+    Enum.each(state.forwarded_items, fn {_item_ref, item} ->
+      release_item_reservation(item)
+    end)
+
     :ok
   end
 
   ## JSON-RPC handling
 
-  defp handle_json_rpc(%{"method" => method} = request, state, started_at_us)
+  defp handle_budgeted_text(text, state, started_at_us, reservation) do
+    case Jason.decode(text) do
+      {:ok, %{"jsonrpc" => "2.0"} = request} ->
+        handle_json_rpc(request, state, started_at_us, reservation)
+
+      {:ok, invalid} ->
+        ByteBudget.release(reservation)
+        error = JError.new(-32_600, "Invalid Request: missing jsonrpc field")
+        response = JError.to_response(error, request_id(invalid))
+        {:reply, :ok, {:text, Jason.encode!(response)}, state}
+
+      {:error, _reason} ->
+        ByteBudget.release(reservation)
+        error = JError.new(-32_700, "Parse error")
+        response = JError.to_response(error, nil)
+        {:reply, :ok, {:text, Jason.encode!(response)}, state}
+    end
+  end
+
+  defp handle_json_rpc(%{"method" => method} = request, state, started_at_us, reservation)
        when is_binary(method) do
     # Extract lasso_meta preference (notify or nil - inline mode removed)
     {lasso_meta_mode, _clean_request} = extract_lasso_meta(request)
@@ -334,6 +361,8 @@ defmodule LassoWeb.RPCSocket do
     respond? = Map.has_key?(request, "id")
 
     if local_request?(method, params) do
+      ByteBudget.release(reservation)
+
       ctx =
         RequestContext.new(state.chain_id, method, params,
           transport: :ws,
@@ -352,12 +381,14 @@ defmodule LassoWeb.RPCSocket do
         id,
         respond?,
         lasso_meta_mode,
-        started_at_us
+        started_at_us,
+        reservation
       )
     end
   end
 
-  defp handle_json_rpc(invalid, state, _started_at_us) do
+  defp handle_json_rpc(invalid, state, _started_at_us, reservation) do
+    ByteBudget.release(reservation)
     error = JError.new(-32_600, "Invalid Request: missing required fields")
     response = JError.to_response(error, request_id(invalid))
     {:reply, :ok, {:text, Jason.encode!(response)}, state}
@@ -390,15 +421,31 @@ defmodule LassoWeb.RPCSocket do
     end
   end
 
-  defp start_forwarded_item(state, method, params, id, respond?, lasso_meta_mode, started_at_us) do
+  defp start_forwarded_item(
+         state,
+         method,
+         params,
+         id,
+         respond?,
+         lasso_meta_mode,
+         started_at_us,
+         reservation
+       ) do
     cond do
       map_size(state.forwarded_items) >= @max_forwarded_items ->
+        ByteBudget.release(reservation)
         state = count_item_owner(state, :capacity_rejected)
+        capacity_response(id, respond?, state)
+
+      state.forwarded_bytes + reservation.bytes > state.forwarded_byte_limit ->
+        ByteBudget.release(reservation)
+        state = count_item_owner(state, :byte_capacity_rejected)
         capacity_response(id, respond?, state)
 
       method == "eth_subscribe" and
           map_size(state.subscriptions) + state.pending_subscription_adds +
             state.orphaned_subscription_count >= @max_subscriptions ->
+        ByteBudget.release(reservation)
         state = count_item_owner(state, :subscription_capacity_rejected)
         subscription_capacity_response(id, respond?, state)
 
@@ -410,7 +457,8 @@ defmodule LassoWeb.RPCSocket do
           id,
           respond?,
           lasso_meta_mode,
-          started_at_us
+          started_at_us,
+          reservation
         )
     end
   end
@@ -422,7 +470,8 @@ defmodule LassoWeb.RPCSocket do
          id,
          respond?,
          lasso_meta_mode,
-         started_at_us
+         started_at_us,
+         reservation
        ) do
     item_ref = make_ref()
     deadline_us = started_at_us + @forward_timeout_ms * 1_000
@@ -453,19 +502,22 @@ defmodule LassoWeb.RPCSocket do
           id: id,
           respond?: respond?,
           subscription_add?: subscription_add?,
-          lasso_meta_mode: lasso_meta_mode
+          lasso_meta_mode: lasso_meta_mode,
+          byte_reservation: reservation
         }
 
         state = %{
           state
           | forwarded_items: Map.put(state.forwarded_items, item_ref, item),
             forwarded_monitors: Map.put(state.forwarded_monitors, monitor, item_ref),
+            forwarded_bytes: state.forwarded_bytes + reservation.bytes,
             pending_subscription_adds: increment_pending_subscriptions(state, subscription_add?)
         }
 
         {:ok, state}
 
       {:error, _reason} ->
+        ByteBudget.release(reservation)
         state = count_item_owner(state, :spawn_failed)
         capacity_response(id, respond?, state)
     end
@@ -573,14 +625,26 @@ defmodule LassoWeb.RPCSocket do
   end
 
   defp remove_forwarded_item(state, item_ref, item) do
+    release_item_reservation(item)
+
     %{
       state
       | forwarded_items: Map.delete(state.forwarded_items, item_ref),
         forwarded_monitors: Map.delete(state.forwarded_monitors, item.monitor),
+        forwarded_bytes: max(state.forwarded_bytes - reservation_bytes(item), 0),
         pending_subscription_adds:
           decrement_pending_subscriptions(state, Map.get(item, :subscription_add?, false))
     }
   end
+
+  defp release_item_reservation(%{byte_reservation: reservation}) do
+    ByteBudget.release(reservation)
+  end
+
+  defp release_item_reservation(_item), do: :ok
+
+  defp reservation_bytes(%{byte_reservation: %{bytes: bytes}}), do: bytes
+  defp reservation_bytes(_item), do: 0
 
   defp count_item_owner(state, event) do
     counts =

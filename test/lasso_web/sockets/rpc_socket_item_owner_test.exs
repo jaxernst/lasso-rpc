@@ -1,6 +1,7 @@
 defmodule LassoWeb.RPCSocketItemOwnerTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.Core.Request.ByteBudget
   alias Lasso.RPC.Response
   alias LassoWeb.RPCSocket
   alias LassoWeb.RPCSocket.ItemOwner
@@ -154,6 +155,47 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
     assert map_size(state.forwarded_items) == 32
 
     Enum.each([replacement | owners], &send(&1, :stop))
+  end
+
+  test "a forwarded frame holds exact socket and global bytes until settlement" do
+    before = ByteBudget.stats()
+    state = socket_state()
+    encoded = Jason.encode!(request(101))
+
+    assert {:ok, state} = RPCSocket.handle_in({encoded, [opcode: :text]}, state)
+    assert_receive {:item_owner_started, item_ref, owner, _work}
+    assert state.forwarded_bytes == byte_size(encoded)
+    assert ByteBudget.stats().reservations == before.reservations + 1
+
+    send(owner, {:complete, "settled"})
+    assert_receive result = {:rpc_item_result, ^item_ref, ^owner, _result}
+    assert {:push, {:text, _json}, state} = RPCSocket.handle_info(result, state)
+    assert state.forwarded_bytes == 0
+    assert ByteBudget.stats().reservations == before.reservations
+  end
+
+  test "the per-socket byte limit rejects before spawning and leaves no residue" do
+    before = ByteBudget.stats()
+    state = %{socket_state() | forwarded_byte_limit: 1}
+
+    assert {:reply, :ok, {:text, json}, state} = forward(state, 102)
+    assert %{"error" => %{"code" => -32_008}, "id" => 102} = Jason.decode!(json)
+    refute_receive {:item_owner_started, _item_ref, _owner, _work}
+    assert state.forwarded_bytes == 0
+    assert state.forwarded_item_counts.byte_capacity_rejected == 1
+    assert ByteBudget.stats().reservations == before.reservations
+  end
+
+  test "socket termination releases reservations for every active owner" do
+    before = ByteBudget.stats()
+    state = socket_state()
+    assert {:ok, state} = forward(state, 103)
+    assert_receive {:item_owner_started, _item_ref, owner, _work}
+    assert state.forwarded_bytes > 0
+
+    assert :ok = RPCSocket.terminate(:normal, state)
+    assert ByteBudget.stats().reservations == before.reservations
+    send(owner, :stop)
   end
 
   test "duplicate client IDs remain independent and may complete in reverse order" do
