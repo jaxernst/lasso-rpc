@@ -49,6 +49,16 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     :sys.get_state(pid)
   end
 
+  defp stop_if_alive(pid) do
+    if Process.alive?(pid) do
+      try do
+        GenServer.stop(pid)
+      catch
+        :exit, {:noproc, _call} -> :ok
+      end
+    end
+  end
+
   defp await_coordinator_state(pid, predicate, attempts \\ 1_000)
 
   defp await_coordinator_state(_pid, _predicate, 0),
@@ -122,7 +132,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> stop_if_alive(pid) end)
 
       {:ok, coordinator: pid, chain: chain, key: key}
     end
@@ -237,7 +247,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> stop_if_alive(pid) end)
 
       {:ok, coordinator: pid, chain: chain, key: key}
     end
@@ -339,7 +349,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> stop_if_alive(pid) end)
 
       {:ok, coordinator: pid, chain: chain, key: key}
     end
@@ -445,7 +455,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> stop_if_alive(pid) end)
 
       state = get_coordinator_state(pid)
 
@@ -513,7 +523,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> stop_if_alive(pid) end)
 
       {:ok, coordinator: pid}
     end
@@ -625,7 +635,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> stop_if_alive(pid) end)
 
       {:ok, coordinator: pid}
     end
@@ -703,7 +713,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> stop_if_alive(pid) end)
 
       {:ok, coordinator: pid}
     end
