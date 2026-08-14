@@ -2,7 +2,7 @@ defmodule LassoPrototype.ResponseParser do
   @moduledoc """
   PROTOTYPE: strict, one-pass JSON-RPC unary response validation.
 
-  The parser uses OTP 28's `:json.decode/3` grammar implementation. Container
+  The parser uses OTP 27+'s `:json.decode/3` grammar implementation. Container
   callbacks retain only the top-level JSON-RPC fields and the bounded fields of
   a direct error object. All other arrays and objects collapse to markers.
   Successful correlation returns the original input binary.
@@ -13,6 +13,8 @@ defmodule LassoPrototype.ResponseParser do
   @type validated :: %{
           kind: response_kind(),
           id: integer() | binary() | nil,
+          error_code: integer() | nil,
+          error_message: binary() | nil,
           raw_bytes: binary()
         }
 
@@ -189,8 +191,15 @@ defmodule LassoPrototype.ResponseParser do
          :ok <- matching_id(fields.id, expected_id),
          :ok <- no_method(fields.method_count),
          {:ok, kind} <- response_kind(fields),
-         :ok <- valid_error(kind, fields.error) do
-      {:ok, %{kind: kind, id: fields.id, raw_bytes: raw_bytes}}
+         {:ok, error_fields} <- valid_error(kind, fields.error) do
+      {:ok,
+       %{
+         kind: kind,
+         id: fields.id,
+         error_code: error_fields.code,
+         error_message: error_fields.message,
+         raw_bytes: raw_bytes
+       }}
     end
   end
 
@@ -216,14 +225,14 @@ defmodule LassoPrototype.ResponseParser do
   defp response_kind(%{result_count: 0, error_count: 0}), do: {:error, :missing_result_or_error}
   defp response_kind(_fields), do: {:error, :ambiguous_result_or_error}
 
-  defp valid_error(:result, _error), do: :ok
+  defp valid_error(:result, _error), do: {:ok, %{code: nil, message: nil}}
 
   defp valid_error(
          :error,
          {:container, :object, %{code: code, code_count: 1, message: message, message_count: 1}}
        )
        when is_integer(code) and is_binary(message),
-       do: :ok
+       do: {:ok, %{code: code, message: message}}
 
   defp valid_error(:error, _error), do: {:error, :invalid_error_object}
 end
