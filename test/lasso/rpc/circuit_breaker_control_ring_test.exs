@@ -9,6 +9,20 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     {id, breaker_pid} = start_breaker(control_ring_capacity: 4)
     {other_id, _other_pid} = start_breaker(control_ring_capacity: 4)
     {:ok, receipt} = Admission.check(id, deadline_us())
+    test_pid = self()
+    handler_id = "control-saturation-consumer-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:lasso, :circuit_breaker, :control_saturated],
+        fn _event, _measurements, _metadata, _config ->
+          send(test_pid, :unexpected_control_saturation_telemetry)
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :sys.suspend(breaker_pid)
     on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
@@ -19,6 +33,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     assert Enum.count(results, &(&1 == {:error, :saturated})) == 8
     assert %{capacity: 4, occupied: 4, wakeup_pending: 1, dropped: 8} = ControlRing.stats(id)
     assert ordinary_wakeup_count(breaker_pid, id) == 1
+    refute_receive :unexpected_control_saturation_telemetry, 0
     assert {:ok, %Snapshot{control_health: :degraded}} = Snapshot.lookup(id)
     assert {:ok, %Snapshot{control_health: :healthy, state: :closed}} = Snapshot.lookup(other_id)
 
@@ -146,6 +161,49 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
 
     :sys.resume(breaker_pid)
     await_empty_ring(id)
+  end
+
+  test "an open transition commits before optional observers run" do
+    {id, _breaker_pid} =
+      start_breaker(
+        control_ring_capacity: 4,
+        category_thresholds: %{timeout: 1},
+        recovery_timeout: 60_000
+      )
+
+    {:ok, receipt} = Admission.check(id, deadline_us())
+    test_pid = self()
+    release_ref = make_ref()
+    handler_id = "open-transition-consumer-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:lasso, :circuit_breaker, :open],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.instance_id == elem(id, 0) do
+            send(test_pid, {:open_transition_observer_entered, self()})
+
+            receive do
+              ^release_ref -> :ok
+            after
+              5_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
+    assert_receive {:open_transition_observer_entered, observer_pid}, 1_000
+
+    assert {:ok, %Snapshot{state: :open}} = Snapshot.lookup(id)
+    assert {:error, :circuit_open} = Admission.check(id, deadline_us())
+
+    send(observer_pid, release_ref)
+    assert %{state: :open} = CircuitBreaker.get_state(id)
   end
 
   defp start_breaker(config) do

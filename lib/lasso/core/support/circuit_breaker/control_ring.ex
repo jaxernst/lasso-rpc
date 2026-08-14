@@ -183,12 +183,6 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
           {{receipt.breaker_id, snapshot}, [], [{:const, {receipt.breaker_id, degraded}}]}
         ])
 
-        :telemetry.execute(
-          [:lasso, :circuit_breaker, :control_saturated],
-          %{count: 1},
-          %{breaker_id: receipt.breaker_id, generation: generation, epoch: epoch}
-        )
-
       _ ->
         :ok
     end

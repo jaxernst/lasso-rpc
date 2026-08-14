@@ -857,14 +857,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   @impl true
   def handle_cast(:open, state) do
-    :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
-      instance_id: state.instance_id,
-      transport: state.transport,
-      from_state: state.state,
-      to_state: :open,
-      reason: :manual_open
-    })
-
     cancel_recovery_timer(state.recovery_timer_ref)
     delay = state.base_recovery_timeout
     delay_with_jitter = add_jitter(delay)
@@ -884,21 +876,22 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         effective_recovery_delay: delay
     }
 
-    publish_circuit_event(new_state, state.state, :open, :manual_open)
     write_ets_state(new_state)
+
+    :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
+      instance_id: state.instance_id,
+      transport: state.transport,
+      from_state: state.state,
+      to_state: :open,
+      reason: :manual_open
+    })
+
+    publish_circuit_event(new_state, state.state, :open, :manual_open)
     {:noreply, new_state}
   end
 
   @impl true
   def handle_cast(:close, state) do
-    :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
-      instance_id: state.instance_id,
-      transport: state.transport,
-      from_state: state.state,
-      to_state: :closed,
-      reason: :manual_close
-    })
-
     cancel_recovery_timer(state.recovery_timer_ref)
 
     new_state = %{
@@ -917,8 +910,17 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         transition_generation: state.transition_generation + 1
     }
 
-    publish_circuit_event(new_state, state.state, :closed, :manual_close)
     write_ets_state(new_state)
+
+    :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
+      instance_id: state.instance_id,
+      transport: state.transport,
+      from_state: state.state,
+      to_state: :closed,
+      reason: :manual_close
+    })
+
+    publish_circuit_event(new_state, state.state, :closed, :manual_close)
     {:noreply, new_state}
   end
 
@@ -947,15 +949,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       when gen == state.recovery_timer_gen do
     case state.state do
       :open ->
-        :telemetry.execute([:lasso, :circuit_breaker, :proactive_recovery], %{count: 1}, %{
-          instance_id: state.instance_id,
-          transport: state.transport,
-          from_state: :open,
-          to_state: :half_open,
-          reason: :proactive_recovery,
-          consecutive_open_count: state.consecutive_open_count
-        })
-
         new_state = %{
           state
           | state: :half_open,
@@ -965,8 +958,18 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             transition_generation: state.transition_generation + 1
         }
 
-        publish_circuit_event(new_state, :open, :half_open, :proactive_recovery)
         write_ets_state(new_state)
+
+        :telemetry.execute([:lasso, :circuit_breaker, :proactive_recovery], %{count: 1}, %{
+          instance_id: state.instance_id,
+          transport: state.transport,
+          from_state: :open,
+          to_state: :half_open,
+          reason: :proactive_recovery,
+          consecutive_open_count: state.consecutive_open_count
+        })
+
+        publish_circuit_event(new_state, :open, :half_open, :proactive_recovery)
         {:noreply, new_state}
 
       _other_state ->
@@ -1532,14 +1535,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   defp reset_to_closed(state, from_state, result) do
-    :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
-      instance_id: state.instance_id,
-      transport: state.transport,
-      from_state: from_state,
-      to_state: :closed,
-      reason: :recovered
-    })
-
     new_state = %{
       state
       | state: :closed,
@@ -1556,8 +1551,17 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         transition_generation: state.transition_generation + 1
     }
 
-    publish_circuit_event(new_state, from_state, :closed, :recovered)
     write_ets_state(new_state)
+
+    :telemetry.execute([:lasso, :circuit_breaker, :close], %{count: 1}, %{
+      instance_id: state.instance_id,
+      transport: state.transport,
+      from_state: from_state,
+      to_state: :closed,
+      reason: :recovered
+    })
+
+    publish_circuit_event(new_state, from_state, :closed, :recovered)
     {:reply, {:ok, result}, new_state}
   end
 
@@ -1583,31 +1587,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
           state.base_recovery_timeout
       end
 
-    :telemetry.execute(
-      [:lasso, :circuit_breaker, :failure],
-      %{count: 1},
-      %{
-        instance_id: state.instance_id,
-        transport: state.transport,
-        error_category: error_category,
-        circuit_state: state.state
-      }
-    )
-
     case state.state do
       :closed ->
         if new_failure_count >= threshold do
-          :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
-            instance_id: state.instance_id,
-            transport: state.transport,
-            from_state: :closed,
-            to_state: :open,
-            reason: :failure_threshold_exceeded,
-            error_category: error_category,
-            failure_count: new_failure_count,
-            recovery_timeout_ms: adjusted_recovery_timeout
-          })
-
           delay = adjusted_recovery_timeout
           delay_with_jitter = add_jitter(delay)
           new_gen = state.recovery_timer_gen + 1
@@ -1628,11 +1610,25 @@ defmodule Lasso.Core.Support.CircuitBreaker do
               last_open_error: extract_error_info(error)
           }
 
-          publish_circuit_event(new_state, :closed, :open, :failure_threshold_exceeded, error)
           write_ets_state(new_state)
+          emit_failure_event(state, error_category)
+
+          :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
+            instance_id: state.instance_id,
+            transport: state.transport,
+            from_state: :closed,
+            to_state: :open,
+            reason: :failure_threshold_exceeded,
+            error_category: error_category,
+            failure_count: new_failure_count,
+            recovery_timeout_ms: adjusted_recovery_timeout
+          })
+
+          publish_circuit_event(new_state, :closed, :open, :failure_threshold_exceeded, error)
           {:reply, {:error, :circuit_opening}, new_state}
         else
           new_state = %{state | failure_count: new_failure_count, last_failure_time: current_time}
+          emit_failure_event(state, error_category)
           {:reply, {:error, error}, new_state}
         end
 
@@ -1645,18 +1641,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         new_gen = state.recovery_timer_gen + 1
         now = System.monotonic_time(:millisecond)
         timer_ref = schedule_recovery_timer(delay_with_jitter, new_gen)
-
-        :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
-          instance_id: state.instance_id,
-          transport: state.transport,
-          from_state: :half_open,
-          to_state: :open,
-          reason: :reopen_due_to_failure,
-          error_category: error_category,
-          failure_count: new_failure_count,
-          recovery_timeout_ms: delay,
-          consecutive_open_count: new_consecutive_open_count
-        })
 
         new_state = %{
           state
@@ -1675,8 +1659,22 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             opened_by_category: error_category
         }
 
-        publish_circuit_event(new_state, :half_open, :open, :reopen_due_to_failure, error)
         write_ets_state(new_state)
+        emit_failure_event(state, error_category)
+
+        :telemetry.execute([:lasso, :circuit_breaker, :open], %{count: 1}, %{
+          instance_id: state.instance_id,
+          transport: state.transport,
+          from_state: :half_open,
+          to_state: :open,
+          reason: :reopen_due_to_failure,
+          error_category: error_category,
+          failure_count: new_failure_count,
+          recovery_timeout_ms: delay,
+          consecutive_open_count: new_consecutive_open_count
+        })
+
+        publish_circuit_event(new_state, :half_open, :open, :reopen_due_to_failure, error)
         {:reply, {:error, :circuit_reopening}, new_state}
 
       :open ->
@@ -1686,8 +1684,22 @@ defmodule Lasso.Core.Support.CircuitBreaker do
             last_failure_time: current_time
         }
 
+        emit_failure_event(state, error_category)
         {:reply, {:error, :circuit_open}, new_state}
     end
+  end
+
+  defp emit_failure_event(state, error_category) do
+    :telemetry.execute(
+      [:lasso, :circuit_breaker, :failure],
+      %{count: 1},
+      %{
+        instance_id: state.instance_id,
+        transport: state.transport,
+        error_category: error_category,
+        circuit_state: state.state
+      }
+    )
   end
 
   defp should_attempt_recovery?(state) do

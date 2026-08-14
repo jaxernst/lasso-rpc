@@ -10,19 +10,10 @@ defmodule Lasso.Core.Support.CircuitBreaker.Admission do
           {:ok, AdmissionReceipt.t()} | {:exceptional, Snapshot.t()} | {:error, rejection()}
   def check(breaker_id, deadline_us, now_us \\ System.monotonic_time(:microsecond))
       when is_integer(deadline_us) and is_integer(now_us) do
-    result =
-      case Snapshot.lookup(breaker_id) do
-        {:ok, snapshot} -> classify(snapshot, deadline_us, now_us)
-        :missing -> {:error, :admission_unavailable}
-      end
-
-    :telemetry.execute(
-      [:lasso, :circuit_breaker, :snapshot_admission],
-      %{snapshot_lookups: 1, synchronous_owner_calls: 0},
-      %{breaker_id: breaker_id, decision: decision(result)}
-    )
-
-    result
+    case Snapshot.lookup(breaker_id) do
+      {:ok, snapshot} -> classify(snapshot, deadline_us, now_us)
+      :missing -> {:error, :admission_unavailable}
+    end
   rescue
     ArgumentError -> {:error, :admission_unavailable}
   end
@@ -83,8 +74,4 @@ defmodule Lasso.Core.Support.CircuitBreaker.Admission do
 
   defp classify_live(%Snapshot{}, _deadline_us, _now_us),
     do: {:error, :admission_unavailable}
-
-  defp decision({:ok, _receipt}), do: :allow
-  defp decision({:exceptional, _snapshot}), do: :exceptional
-  defp decision({:error, reason}), do: reason
 end

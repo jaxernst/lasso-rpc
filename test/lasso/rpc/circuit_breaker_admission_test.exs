@@ -16,34 +16,39 @@ defmodule Lasso.RPC.CircuitBreakerAdmissionTest do
     %{id: id, breaker_pid: breaker_pid}
   end
 
-  test "closed admission uses one snapshot lookup and does not cross the owner", %{
+  test "closed admission does not cross the suspended owner", %{
     id: id,
     breaker_pid: breaker_pid
   } do
-    test_pid = self()
-    handler_id = "admission-count-#{System.unique_integer([:positive])}"
-
-    :ok =
-      :telemetry.attach(
-        handler_id,
-        [:lasso, :circuit_breaker, :snapshot_admission],
-        fn _event, measurements, metadata, _config ->
-          send(test_pid, {:admission_measurements, measurements, metadata})
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
     :sys.suspend(breaker_pid)
     on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    {:message_queue_len, queued_before} = Process.info(breaker_pid, :message_queue_len)
 
     deadline_us = System.monotonic_time(:microsecond) + 25_000
 
     assert {:ok, %AdmissionReceipt{kind: :closed}} = Admission.check(id, deadline_us)
     assert {:transport_ran, :ok} = run_after_admission(id, deadline_us, fn -> :ok end)
+    assert {:message_queue_len, ^queued_before} = Process.info(breaker_pid, :message_queue_len)
+  end
 
-    assert_receive {:admission_measurements, %{snapshot_lookups: 1, synchronous_owner_calls: 0},
-                    %{decision: :allow}}
+  test "snapshot admission invokes no telemetry consumer", %{id: id} do
+    test_pid = self()
+    handler_id = "admission-consumer-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:lasso, :circuit_breaker, :snapshot_admission],
+        fn _event, _measurements, _metadata, _config ->
+          send(test_pid, :unexpected_snapshot_admission_telemetry)
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:ok, %AdmissionReceipt{kind: :closed}} = Admission.check(id, deadline_us())
+    refute_receive :unexpected_snapshot_admission_telemetry, 0
   end
 
   test "open admission denies while its owner is suspended", %{
