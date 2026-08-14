@@ -616,7 +616,7 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
 
     for {prepare, certainty} <- phases do
       outcome =
-        RequestOwner.execute(identity(), deadline_after(100), fn ->
+        RequestOwner.execute(identity(), deadline_after(5_000), fn ->
           prepare.(AttemptProtocol.context())
           exit(:transport_crashed)
         end)

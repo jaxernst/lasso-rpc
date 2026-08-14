@@ -960,9 +960,10 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
       Enum.each(traced_mfas, &:erlang.trace_pattern(&1, false, [:local]))
     end)
 
-    task = request_task(context.channel, "one-authorization", 1_000)
+    {task, release_request} = gated_request_task(context.channel, "one-authorization", 1_000)
     task_pid = task.pid
     :erlang.trace(task_pid, true, [:call])
+    release_request.()
 
     assert_receive {:protocol_ws_send, ws_pid, transport_id, _payload}
 
@@ -1324,6 +1325,20 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
   defp request_task(channel, client_id, timeout) do
     Task.async(fn -> WebSocket.request(channel, rpc_request(client_id), timeout) end)
+  end
+
+  defp gated_request_task(channel, client_id, timeout) do
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        receive do
+          {:begin_request, ^parent} ->
+            WebSocket.request(channel, rpc_request(client_id), timeout)
+        end
+      end)
+
+    {task, fn -> send(task.pid, {:begin_request, parent}) end}
   end
 
   defp observed_request_task(channel, timeout \\ 5_000) do
