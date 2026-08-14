@@ -237,7 +237,7 @@ defmodule Lasso.Core.ProjectionLaneTest do
     assert stats.counters.bucket_contended == length(drops)
 
     for {_shard, shard_stats} <- stats.shards do
-      assert :ets.info(shard_stats.table, :size) <= div(metadata.capacity, metadata.shards)
+      assert :ets.info(shard_stats.table, :size) <= div(metadata.capacity, metadata.shards) * 2
       assert shard_stats.message_queue_len <= metadata.buckets_per_shard
     end
 
@@ -273,6 +273,33 @@ defmodule Lasso.Core.ProjectionLaneTest do
 
     assert %{retained_items: 0, queued_items: 0, bytes: 0} = ProjectionLane.stats(lane)
     resume_workers(lane)
+  end
+
+  test "queued payloads and their ready entries remain atomically bounded" do
+    {lane, metadata} = start_lane(capacity: 8, scope_capacity: 4)
+    worker = worker(lane)
+    suspend(worker)
+
+    tokens =
+      for index <- 1..4 do
+        assert {:ok, token} =
+                 ProjectionLane.enqueue(metadata, {"profile-#{index}", 1}, "payload-#{index}")
+
+        token
+      end
+
+    table = ProjectionLane.stats(lane).shards[0].table
+    rows = :ets.tab2list(table)
+
+    assert Enum.count(rows, &match?({slot, :queued, _, _, _, _, _} when is_integer(slot), &1)) ==
+             4
+
+    assert Enum.count(rows, &match?({{:ready, _, _, _}, _, _}, &1)) == 4
+    assert :ets.info(table, :size) == 8
+
+    Enum.each(tokens, fn token -> assert :cancelled = ProjectionLane.cancel(metadata, token) end)
+    assert :ets.info(table, :size) == 0
+    resume(worker)
   end
 
   test "item and retained-byte caps are structural rather than reconciled counters" do

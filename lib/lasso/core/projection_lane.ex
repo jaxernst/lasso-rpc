@@ -145,6 +145,8 @@ defmodule Lasso.Core.ProjectionLane do
   defp cancel_queued(metadata, runtime, token) do
     case lookup_slot(runtime.table, token.slot) do
       {:ok, row} when elem(row, 1) == :queued and elem(row, 2) == token ->
+        delete_ready(runtime.table, row)
+
         if delete_exact(runtime.table, row) do
           record(metadata, runtime, token.bucket, :cancelled)
           :cancelled
@@ -348,7 +350,7 @@ defmodule Lasso.Core.ProjectionLane do
   defp insert_with_fixed_probe(metadata, runtime, row, first_offset) do
     token = elem(row, 2)
 
-    if :ets.insert_new(runtime.table, row) do
+    if insert_queued(runtime.table, row) do
       {:ok, token, 1}
     else
       maybe_insert_second(metadata, runtime, row, first_offset)
@@ -363,7 +365,7 @@ defmodule Lasso.Core.ProjectionLane do
     second_token = %{token | slot: slot(token.bucket, second_offset, metadata.scope_capacity)}
     second_row = put_elem(row, 2, second_token) |> put_elem(0, second_token.slot)
 
-    if :ets.insert_new(runtime.table, second_row),
+    if insert_queued(runtime.table, second_row),
       do: {:ok, second_token, 2},
       else: :full
   end
@@ -448,6 +450,7 @@ defmodule Lasso.Core.ProjectionLane do
       audit_interval_ms: metadata.audit_interval_ms,
       now: metadata.now,
       sink: sink,
+      coalesce: metadata.coalesce,
       hook: metadata.test_hook,
       global_counters: metadata.global_counters
     }
@@ -472,7 +475,7 @@ defmodule Lasso.Core.ProjectionLane do
   end
 
   defp initialize_worker(config) do
-    table = :ets.new(:projection_worker_slots, table_options())
+    table = :ets.new(:projection_worker_slots, worker_table_options())
     send(config.parent, {:projection_worker_ready, self(), table})
     schedule_audit(config.audit_interval_ms)
     worker_loop(Map.merge(config, %{table: table, last_scopes: %{}}))
@@ -554,6 +557,10 @@ defmodule Lasso.Core.ProjectionLane do
     end
   end
 
+  defp next_queued(%{coalesce: :none} = state, bucket) do
+    next_indexed(state, bucket, state.scope_capacity + 1)
+  end
+
   defp next_queued(state, bucket) do
     rows =
       for offset <- 0..(state.scope_capacity - 1),
@@ -562,6 +569,33 @@ defmodule Lasso.Core.ProjectionLane do
           do: row
 
     choose_fair(rows, Map.get(state.last_scopes, bucket))
+  end
+
+  defp next_indexed(_state, _bucket, 0), do: nil
+
+  defp next_indexed(state, bucket, remaining) do
+    last_scope = Map.get(state.last_scopes, bucket)
+
+    case next_ready_key(state.table, bucket, last_scope) do
+      nil ->
+        nil
+
+      key ->
+        case ready_row(state.table, key) do
+          {:ok, slot, token} ->
+            case lookup_slot(state.table, slot) do
+              {:ok, row} when elem(row, 1) == :queued and elem(row, 2) == token ->
+                row
+
+              _stale ->
+                :ets.delete(state.table, key)
+                next_indexed(state, bucket, remaining - 1)
+            end
+
+          :error ->
+            next_indexed(state, bucket, remaining - 1)
+        end
+    end
   end
 
   defp choose_fair([], _last_scope), do: nil
@@ -578,12 +612,12 @@ defmodule Lasso.Core.ProjectionLane do
   end
 
   defp reschedule_or_settle(state, bucket) do
-    if bucket_has_queued?(state.table, bucket, state.scope_capacity) do
+    if bucket_has_queued?(state, bucket) do
       send(self(), {:drain_bucket, state.incarnation, state.generation, bucket})
     else
       settle_wake(state, bucket)
 
-      if bucket_has_queued?(state.table, bucket, state.scope_capacity),
+      if bucket_has_queued?(state, bucket),
         do: schedule_bucket_worker(state, bucket)
     end
   end
@@ -592,7 +626,7 @@ defmodule Lasso.Core.ProjectionLane do
 
   defp schedule_all_worker(state) do
     Enum.each(0..(state.buckets_per_shard - 1), fn bucket ->
-      if bucket_has_queued?(state.table, bucket, state.scope_capacity),
+      if bucket_has_queued?(state, bucket),
         do: repair_bucket_wake(state, bucket)
     end)
   end
@@ -619,9 +653,12 @@ defmodule Lasso.Core.ProjectionLane do
 
   defp schedule_audit(interval), do: Process.send_after(self(), :audit, interval)
 
-  defp bucket_has_queued?(table, bucket, scope_capacity) do
-    Enum.any?(0..(scope_capacity - 1), fn offset ->
-      case lookup_slot(table, slot(bucket, offset, scope_capacity)) do
+  defp bucket_has_queued?(%{coalesce: :none, table: table}, bucket),
+    do: not is_nil(first_ready_key(table, bucket))
+
+  defp bucket_has_queued?(state, bucket) do
+    Enum.any?(0..(state.scope_capacity - 1), fn offset ->
+      case lookup_slot(state.table, slot(bucket, offset, state.scope_capacity)) do
         {:ok, row} -> elem(row, 1) == :queued
         :error -> false
       end
@@ -629,7 +666,11 @@ defmodule Lasso.Core.ProjectionLane do
   end
 
   defp claim(table, row), do: replace_exact(table, row, put_elem(row, 1, :delivering))
-  defp delete_delivering(table, row), do: delete_exact(table, row)
+
+  defp delete_delivering(table, row) do
+    delete_ready(table, row)
+    delete_exact(table, row)
+  end
 
   defp replace_exact(table, old, new) do
     :ets.select_replace(table, [{old, [], [{:const, new}]}]) == 1
@@ -653,6 +694,45 @@ defmodule Lasso.Core.ProjectionLane do
       [] -> :error
     end
   end
+
+  defp insert_queued(table, row), do: :ets.insert_new(table, [row, indexed_row(row)])
+
+  defp indexed_row(row) do
+    token = elem(row, 2)
+    scope = elem(row, 3)
+    {ready_key(token.bucket, scope, token.sequence), token.slot, token}
+  end
+
+  defp delete_ready(table, row) do
+    token = elem(row, 2)
+    :ets.delete(table, ready_key(token.bucket, elem(row, 3), token.sequence))
+  end
+
+  defp ready_row(table, key) do
+    case :ets.lookup(table, key) do
+      [{^key, slot, %Token{} = token}] -> {:ok, slot, token}
+      _other -> :error
+    end
+  end
+
+  defp next_ready_key(table, bucket, nil), do: first_ready_key(table, bucket)
+
+  defp next_ready_key(table, bucket, last_scope) do
+    case :ets.next(table, ready_key_after_scope(bucket, last_scope)) do
+      {:ready, ^bucket, _scope, _sequence} = key -> key
+      _other -> first_ready_key(table, bucket)
+    end
+  end
+
+  defp first_ready_key(table, bucket) do
+    case :ets.next(table, {:ready, bucket}) do
+      {:ready, ^bucket, _scope, _sequence} = key -> key
+      _other -> nil
+    end
+  end
+
+  defp ready_key(bucket, scope, sequence), do: {:ready, bucket, scope, sequence}
+  defp ready_key_after_scope(bucket, scope), do: {:ready, bucket, scope, :end_of_scope}
 
   defp row(state, token, scope, enqueued_at, payload),
     do: {token.slot, state, token, scope, enqueued_at, byte_size(payload), payload}
@@ -877,4 +957,7 @@ defmodule Lasso.Core.ProjectionLane do
 
   defp table_options,
     do: [:set, :public, read_concurrency: true, write_concurrency: true]
+
+  defp worker_table_options,
+    do: [:ordered_set, :public, read_concurrency: true, write_concurrency: true]
 end

@@ -107,6 +107,8 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
   end
 
   setup do
+    await_byte_budget_idle!()
+
     :ok =
       Lasso.Config.ConfigStore.register_chain_runtime("public", @chain_id, %{
         display_name: "Socket Owner Chain",
@@ -154,6 +156,7 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
     assert_receive {:item_owner_started, _item_ref, replacement, _work}
     assert map_size(state.forwarded_items) == 32
 
+    assert :ok = RPCSocket.terminate(:normal, state)
     Enum.each([replacement | owners], &send(&1, :stop))
   end
 
@@ -572,5 +575,18 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
 
   defp set_owner_mode(mode) do
     :persistent_term.put(@test_control_key, %{mode: mode, test_pid: self()})
+  end
+
+  defp await_byte_budget_idle!(deadline_ms \\ System.monotonic_time(:millisecond) + 1_000) do
+    if ByteBudget.stats().reservations == 0 do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) < deadline_ms do
+        Process.sleep(1)
+        await_byte_budget_idle!(deadline_ms)
+      else
+        flunk("byte-budget reservations from the prior test did not retire")
+      end
+    end
   end
 end
