@@ -37,4 +37,38 @@ defmodule Lasso.RPC.RequestOptions.BuilderTest do
                "eth_blockNumber"
              )
   end
+
+  test "explicitly resolved empty preferences do not rescan request headers" do
+    conn =
+      Plug.Test.conn(:post, "/rpc/profile/public/1", "")
+      |> Plug.Conn.put_req_header("x-lasso-provider", "header-provider")
+      |> Plug.Conn.put_req_header("x-lasso-transport", "ws")
+      |> Plug.Conn.assign(:profile_id, "public")
+      |> Map.put(:params, %{})
+
+    options =
+      Builder.from_conn(conn, "eth_blockNumber",
+        strategy: :load_balanced,
+        provider_override: nil,
+        transport: nil,
+        timeout_ms: 1_000
+      )
+
+    assert options.provider_override == nil
+    assert options.transport == nil
+  end
+
+  test "request preferences still resolve from headers without explicit values" do
+    conn =
+      Plug.Test.conn(:post, "/rpc/profile/public/1", "")
+      |> Plug.Conn.put_req_header("x-lasso-provider", "header-provider")
+      |> Plug.Conn.put_req_header("x-lasso-transport", "ws")
+      |> Plug.Conn.assign(:profile_id, "public")
+      |> Map.put(:params, %{})
+
+    options = Builder.from_conn(conn, "eth_blockNumber", timeout_ms: 1_000)
+
+    assert options.provider_override == "header-provider"
+    assert options.transport == :ws
+  end
 end

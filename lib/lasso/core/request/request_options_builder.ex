@@ -145,10 +145,13 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   # Provider resolution
 
   defp resolve_provider_from_conn(conn, overrides) do
-    overrides[:provider_override] ||
+    if Keyword.has_key?(overrides, :provider_override) do
+      overrides[:provider_override]
+    else
       header(conn, "x-lasso-provider") ||
-      conn.params["provider_override"] ||
-      conn.params["provider_id"]
+        conn.params["provider_override"] ||
+        conn.params["provider_id"]
+    end
   end
 
   defp resolve_provider_from_map(params, overrides) do
@@ -158,9 +161,12 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   # Transport resolution
 
   defp resolve_transport_preference_from_conn(conn, overrides) do
-    overrides[:transport] ||
+    if Keyword.has_key?(overrides, :transport) do
+      overrides[:transport]
+    else
       parse_transport(header(conn, "x-lasso-transport")) ||
-      parse_transport(conn.params["transport"])
+        parse_transport(conn.params["transport"])
+    end
   end
 
   defp resolve_transport_preference_from_map(params, overrides) do

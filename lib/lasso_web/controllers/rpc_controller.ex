@@ -62,15 +62,17 @@ defmodule LassoWeb.RPCController do
 
       chain_id ->
         profile = routing_profile(conn)
+        provider_override = extract_provider_override(conn, [])
 
         with {:ok, resolved_chain_id} <- resolve_chain(profile, chain_id),
-             :ok <- validate_provider_override(profile, resolved_chain_id, conn, params) do
+             :ok <- validate_provider_override(profile, resolved_chain_id, provider_override) do
           requested_strategy = strategy_from(conn, params)
 
           conn =
             conn
             |> assign(:requested_provider_strategy, requested_strategy)
             |> assign(:provider_strategy, requested_strategy)
+            |> assign(:resolved_provider_override, provider_override)
 
           handle_chain_rpc(conn, resolved_chain_id)
         else
@@ -620,10 +622,17 @@ defmodule LassoWeb.RPCController do
 
   # Determine provider override from opts, params, or header.
   defp extract_provider_override(%Plug.Conn{} = conn, opts) do
+    case Map.fetch(conn.assigns, :resolved_provider_override) do
+      {:ok, provider_override} -> provider_override
+      :error -> resolve_provider_override(conn, opts)
+    end
+  end
+
+  defp resolve_provider_override(conn, opts) do
     with_opt =
       case Keyword.get(opts, :provider_override) do
-        pid when is_binary(pid) -> pid
-        _ -> nil
+        provider_id when is_binary(provider_id) -> provider_id
+        _other -> nil
       end
 
     with_param =
@@ -679,11 +688,8 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  defp validate_provider_override(_profile, _chain_id, _conn, %{"provider_override" => nil}),
-    do: :ok
-
-  defp validate_provider_override(profile, chain_id, conn, _params) do
-    case extract_provider_override(conn, []) do
+  defp validate_provider_override(profile, chain_id, provider_override) do
+    case provider_override do
       nil ->
         :ok
 
