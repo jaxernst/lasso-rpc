@@ -370,6 +370,18 @@ defmodule Lasso.Bench.RoutingKernel.ClosedBreakerSuccess do
     %{accepted: :atomics.get(state.handoffs, 1), dropped: :atomics.get(state.handoffs, 2)}
   end
 
+  @doc false
+  @spec await_projection_handoffs!(map(), map(), non_neg_integer(), String.t()) :: :ok
+  def await_projection_handoffs!(state, before, expected, label) do
+    await_projection_handoffs!(
+      state,
+      before,
+      expected,
+      label,
+      System.monotonic_time(:millisecond) + @projection_drain_timeout_ms
+    )
+  end
+
   def await_projection_idle!(state) do
     await_projection_idle!(
       state,
@@ -448,6 +460,25 @@ defmodule Lasso.Bench.RoutingKernel.ClosedBreakerSuccess do
         else
           raise "projection lane did not drain: #{inspect(stats)}"
         end
+    end
+  end
+
+  defp await_projection_handoffs!(state, before, expected, label, deadline_ms) do
+    after_handoffs = projection_handoffs(state)
+
+    observed =
+      after_handoffs.accepted - before.accepted + after_handoffs.dropped - before.dropped
+
+    cond do
+      observed >= expected ->
+        :ok
+
+      System.monotonic_time(:millisecond) < deadline_ms ->
+        Process.sleep(1)
+        await_projection_handoffs!(state, before, expected, label, deadline_ms)
+
+      true ->
+        raise "#{label} projection handoff timed out: #{observed}/#{expected}"
     end
   end
 
@@ -655,8 +686,8 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
   defp structural_pass(state, iterations, warmup) do
     tracer = StructuralTrace.start()
 
-    worker =
-      spawn(fn ->
+    {worker, worker_monitor} =
+      spawn_monitor(fn ->
         receive do
           {:warm_structural, caller} ->
             warm_worker!(state, :structural, warmup, "structural warmup")
@@ -677,7 +708,11 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
       send(worker, {:warm_structural, self()})
 
       receive do
-        {:structural_warm, ^worker} -> :ok
+        {:structural_warm, ^worker} ->
+          :ok
+
+        {:DOWN, ^worker_monitor, :process, ^worker, reason} ->
+          raise "structural diagnostic worker exited during warmup: #{inspect(reason)}"
       after
         @structural_timeout_ms -> raise "structural diagnostic warmup timed out"
       end
@@ -698,10 +733,21 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
       send(worker, {:run_structural, self()})
 
       receive do
-        {:structural_complete, ^worker} -> :ok
+        {:structural_complete, ^worker} ->
+          :ok
+
+        {:DOWN, ^worker_monitor, :process, ^worker, reason} ->
+          raise "structural diagnostic worker exited: #{inspect(reason)}"
       after
         @structural_timeout_ms -> raise "structural diagnostic timed out"
       end
+
+      ClosedBreakerSuccess.await_projection_handoffs!(
+        state,
+        projection_before.handoffs,
+        iterations,
+        "structural"
+      )
 
       await_trace_delivery!()
       raw = StructuralTrace.snapshot(tracer)
@@ -739,6 +785,7 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
         }
       }
     after
+      Process.demonitor(worker_monitor, [:flush])
       if Process.alive?(worker), do: :erlang.trace(worker, false, [:all])
       :erlang.trace_pattern({:ets, :_, :_}, false, [:local])
       if Process.alive?(worker), do: Process.exit(worker, :kill)
@@ -900,6 +947,13 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
   end
 
   defp finish_projection_window!(state, before, expected, label) do
+    ClosedBreakerSuccess.await_projection_handoffs!(
+      state,
+      before.handoffs,
+      expected,
+      label
+    )
+
     after_handoffs = ClosedBreakerSuccess.projection_handoffs(state)
 
     handoffs = %{

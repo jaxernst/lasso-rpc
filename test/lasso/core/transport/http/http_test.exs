@@ -2,11 +2,14 @@ defmodule Lasso.RPC.Transports.HTTPTest do
   use ExUnit.Case, async: false
   import Mox
 
+  alias Lasso.Core.Request.RequestOwner
   alias Lasso.Core.Support.ErrorClassifier
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal}
   alias Lasso.RPC.Transports.HTTP
 
   defmodule LocalRawClient do
+    @spec request(term(), term(), term(), term()) :: {:ok, {:raw, term()}}
     def request(_config, _method, _params, _opts) do
       {:ok, {:raw, Process.get({__MODULE__, :raw})}}
     end
@@ -27,6 +30,26 @@ defmodule Lasso.RPC.Transports.HTTPTest do
     end)
 
     :ok
+  end
+
+  defp attempt_identity(provider_id) do
+    AttemptIdentity.new(
+      request_id: "classified-error",
+      attempt_id: "classified-error-attempt",
+      profile: "public",
+      chain_id: 1,
+      upstream_instance_id: provider_id,
+      transport: :http,
+      route_generation: 1,
+      circuit_scope: :broad,
+      circuit_epoch: 1,
+      execution_safety: :replay_safe,
+      routing_intent: "default",
+      workload_key: "eth_call",
+      request_budget_ms: 1_000,
+      candidate_admission_count: 1,
+      dispatch_count: 1
+    )
   end
 
   test "treats malformed upstream response as retriable server error" do
@@ -150,6 +173,57 @@ defmodule Lasso.RPC.Transports.HTTPTest do
     assert error.category == expected.category
     assert error.retriable? == expected.retriable?
     assert error.breaker_penalty? == expected.breaker_penalty?
+  end
+
+  test "request ownership projects production HTTP errors into canonical classes" do
+    provider_id = "owner-classified-provider"
+
+    channel = %{
+      provider_id: provider_id,
+      config: %{id: provider_id, url: "https://example.invalid"}
+    }
+
+    rpc_request = %{
+      "jsonrpc" => "2.0",
+      "method" => "eth_call",
+      "params" => [],
+      "id" => "classified-error"
+    }
+
+    cases = [
+      {-32_602, "invalid params", :deterministic, :return_response, :none},
+      {-32_005, "rate limited", :quota, :try_next_candidate, :none},
+      {-32_601, "method not found", :capability, :try_next_candidate, :none},
+      {-32_002, "provider unavailable", :provider_failure, :try_next_candidate, :failure}
+    ]
+
+    for {code, message, category, action, breaker_effect} <- cases do
+      raw =
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => "classified-error",
+          "error" => %{"code" => code, "message" => message}
+        })
+
+      expect(Lasso.RPC.HttpClientMock, :request, fn _config, _method, _params, _opts ->
+        {:ok, {:raw, raw}}
+      end)
+
+      outcome =
+        RequestOwner.execute(
+          attempt_identity(provider_id),
+          System.monotonic_time(:microsecond) + 1_000_000,
+          fn -> HTTP.request(channel, rpc_request, 1_000) end
+        )
+
+      assert %AttemptTerminal.Response{
+               kind: :application_error,
+               error_category: ^category
+             } = outcome.fact
+
+      assert outcome.projection.recommended_action == action
+      assert outcome.projection.breaker_effect == breaker_effect
+    end
   end
 
   test "composes the per-attempt timeout with the shared decision deadline" do
