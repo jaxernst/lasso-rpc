@@ -50,6 +50,9 @@ defmodule LassoWeb.DashboardRoutingLiveTest do
                event.result == :success
            end)
 
+    assert render(view) =~ "Sampled success ("
+    assert MetricsHelpers.routing_sample_count(state.socket.assigns.routing_events) >= 1
+
     assert Process.alive?(view.pid)
   end
 

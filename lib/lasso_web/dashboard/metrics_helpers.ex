@@ -490,10 +490,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
   @doc "Calculate success rate percentage from routing events (last 1 minute)"
   def success_rate_percent(routing_events) when is_list(routing_events) do
-    routing_events = client_routing_events(routing_events)
-    now = System.system_time(:millisecond)
-    one_minute_ago = now - 60_000
-    recent = Enum.filter(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
+    recent = recent_client_routing_events(routing_events)
 
     case length(recent) do
       0 ->
@@ -502,6 +499,13 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
       total ->
         Float.round((total - Enum.count(recent, &(&1[:result] == :error))) * 100.0 / total, 1)
     end
+  end
+
+  @doc "Count delivered client routing-event samples from the last minute"
+  def routing_sample_count(routing_events) when is_list(routing_events) do
+    routing_events
+    |> recent_client_routing_events()
+    |> length()
   end
 
   @doc "Calculate average latency in ms from routing events (last 1 minute)"
@@ -523,5 +527,13 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
 
   defp client_routing_events(events) do
     Enum.reject(events, fn event -> event[:request_origin] in [:system, "system"] end)
+  end
+
+  defp recent_client_routing_events(events) do
+    one_minute_ago = System.system_time(:millisecond) - 60_000
+
+    events
+    |> client_routing_events()
+    |> Enum.filter(fn event -> (event[:ts_ms] || 0) >= one_minute_ago end)
   end
 end

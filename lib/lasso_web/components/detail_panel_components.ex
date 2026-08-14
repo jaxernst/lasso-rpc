@@ -82,6 +82,7 @@ defmodule LassoWeb.Components.DetailPanelComponents do
     attr(:label, :string, required: true)
     attr(:value, :string, required: true)
     attr(:value_class, :string)
+    attr(:title, :string)
   end
 
   def metrics_strip(assigns) do
@@ -94,7 +95,10 @@ defmodule LassoWeb.Components.DetailPanelComponents do
         @class
       ]}>
         <%= for metric <- @metric do %>
-          <div class="p-3 text-center hover:bg-gray-800/30 transition-colors">
+          <div
+            class="p-3 text-center hover:bg-gray-800/30 transition-colors"
+            title={metric[:title]}
+          >
             <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">
               {metric.label}
             </div>

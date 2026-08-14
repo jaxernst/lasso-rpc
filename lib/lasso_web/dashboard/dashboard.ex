@@ -733,9 +733,10 @@ defmodule LassoWeb.Dashboard do
               value_class="text-sky-400"
             />
             <:metric
-              label="Success"
+              label={"Sampled success (#{MetricsHelpers.routing_sample_count(@routing_events)})"}
               value={format_success_rate(MetricsHelpers.success_rate_percent(@routing_events))}
               value_class={success_rate_class(MetricsHelpers.success_rate_percent(@routing_events))}
+              title="Delivered client routing events from the last 60 seconds. Optional diagnostics may be sampled under load."
             />
             <:metric
               label="Latency"
